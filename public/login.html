@@ -64,10 +64,23 @@
         <label>Password</label>
         <input type="password" id="regPass" autocomplete="new-password" maxlength="100" required>
       </div>
+      <div class="field">
+        <label>Confirm Password</label>
+        <input type="password" id="regPassConfirm" autocomplete="new-password" maxlength="100" required>
+      </div>
       <button class="btn" type="submit">Create Account</button>
       <div class="error" id="regError"></div>
       <div class="hint">First registered user becomes admin</div>
     </form>
+
+    <div id="successOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;display:none;align-items:center;justify-content:center">
+      <div style="background:#17212b;border-radius:12px;padding:32px 40px;text-align:center;max-width:360px">
+        <div style="font-size:48px;margin-bottom:12px">🎉</div>
+        <h2 style="margin-bottom:8px">Registration Successful!</h2>
+        <p style="color:#7e8b99;margin-bottom:20px">Welcome to BananZa. Redirecting to chat...</p>
+        <div class="btn" id="successGoBtn">Go to Chat</div>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -111,15 +124,21 @@
       e.preventDefault();
       const err = document.getElementById('regError');
       err.textContent = '';
+      const pass = document.getElementById('regPass').value;
+      const passConfirm = document.getElementById('regPassConfirm').value;
+      if (pass !== passConfirm) { err.textContent = 'Passwords do not match'; return; }
       try {
         const data = await api('/api/auth/register', {
           username: document.getElementById('regUser').value.trim(),
-          password: document.getElementById('regPass').value,
+          password: pass,
           displayName: document.getElementById('regName').value.trim(),
         });
         localStorage.setItem('token', data.token);
         localStorage.setItem('user', JSON.stringify(data.user));
-        location.href = '/';
+        const overlay = document.getElementById('successOverlay');
+        overlay.style.display = 'flex';
+        document.getElementById('successGoBtn').addEventListener('click', () => { location.href = '/'; });
+        setTimeout(() => { location.href = '/'; }, 3000);
       } catch (ex) { err.textContent = ex.message; }
     });
   </script>

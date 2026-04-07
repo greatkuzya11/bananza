@@ -17,14 +17,17 @@
       </div>
       <div class="sidebar-search">
         <input type="text" id="chatSearch" placeholder="Search chats...">
+        <button id="chatSearchClear" class="search-clear hidden" title="Clear">✕</button>
       </div>
       <div id="chatList" class="chat-list"></div>
       <div class="sidebar-footer">
         <div id="currentUserInfo" class="current-user"></div>
-        <button id="adminBtn" class="icon-btn hidden" title="Admin panel">⚙</button>
+        <button id="settingsBtn" class="icon-btn" title="Settings">⚙</button>
         <button id="logoutBtn" class="icon-btn" title="Logout">⏻</button>
       </div>
     </aside>
+
+    <div id="resizeHandle" class="resize-handle"><div class="resize-handle-line"></div></div>
 
     <!-- Chat area -->
     <main id="chatArea">
@@ -37,10 +40,12 @@
       <div id="chatView" class="chat-view hidden">
         <div class="chat-header">
           <button id="backBtn" class="icon-btn mobile-only">←</button>
+          <div id="chatHeaderAvatar" class="chat-header-avatar" style="display:none"></div>
           <div class="chat-header-info">
             <div id="chatTitle" class="chat-title"></div>
             <div id="chatStatus" class="chat-status"></div>
           </div>
+          <button id="searchBtn" class="icon-btn" title="Search messages">🔍</button>
           <button id="chatInfoBtn" class="icon-btn" title="Chat info">ℹ</button>
         </div>
 
@@ -53,6 +58,13 @@
         <div id="typingBar" class="typing-bar hidden"></div>
 
         <div class="input-area">
+          <div id="replyBar" class="reply-bar hidden">
+            <div class="reply-bar-content">
+              <div class="reply-bar-name" id="replyBarName"></div>
+              <div class="reply-bar-text" id="replyBarText"></div>
+            </div>
+            <button id="replyBarClose" class="reply-bar-close">✕</button>
+          </div>
           <div id="pendingFile" class="pending-file hidden"></div>
           <div class="input-row">
             <button id="attachBtn" class="icon-btn" title="Attach file">📎</button>
@@ -60,6 +72,10 @@
             <textarea id="msgInput" placeholder="Message..." rows="1"></textarea>
             <button id="sendBtn" class="icon-btn send-btn" title="Send">➤</button>
           </div>
+        </div>
+
+        <div id="dragOverlay" class="drag-overlay hidden">
+          <div class="drag-overlay-content">📎 Drop file to upload</div>
         </div>
       </div>
     </main>
@@ -71,7 +87,9 @@
   <!-- Image Viewer -->
   <div id="imageViewer" class="image-viewer hidden">
     <button class="iv-close">✕</button>
+    <button class="iv-arrow iv-prev">&#8249;</button>
     <img id="ivImage" src="" alt="">
+    <button class="iv-arrow iv-next">&#8250;</button>
   </div>
 
   <!-- New Chat Modal -->
@@ -111,6 +129,55 @@
     </div>
   </div>
 
+  <!-- Settings Modal -->
+  <div id="settingsModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Settings</h3>
+        <button class="modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="settings-item settings-toggle-item">
+          <span>⌨ Send by Enter</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="settingsSendEnter" checked>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="settings-hint">When off, press Ctrl+Enter to send. Enter adds a new line.</div>
+        <button id="settingsChangePassword" class="settings-item">🔑 Change Password</button>
+        <button id="settingsAdminPanel" class="settings-item hidden">🛡 Admin Panel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Change Password Modal -->
+  <div id="changePasswordModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Change Password</h3>
+        <button class="modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="field-group">
+          <label>Current Password</label>
+          <input type="password" id="cpOldPass" class="modal-input" maxlength="100">
+        </div>
+        <div class="field-group">
+          <label>New Password</label>
+          <input type="password" id="cpNewPass" class="modal-input" maxlength="100">
+        </div>
+        <div class="field-group">
+          <label>Confirm New Password</label>
+          <input type="password" id="cpNewPassConfirm" class="modal-input" maxlength="100">
+        </div>
+        <div id="cpError" class="cp-error"></div>
+        <div id="cpSuccess" class="cp-success"></div>
+        <button id="cpSaveBtn" class="btn-primary" style="width:100%;margin-top:8px">Change Password</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Chat Info Modal -->
   <div id="chatInfoModal" class="modal hidden">
     <div class="modal-content">
@@ -119,6 +186,29 @@
         <button class="modal-close">✕</button>
       </div>
       <div class="modal-body">
+        <div class="chat-view-toggle" style="margin-bottom:16px">
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;color:var(--text-secondary);font-size:14px">
+            <input type="checkbox" id="compactViewToggle">
+            <span>Compact view (all messages on one side)</span>
+          </label>
+        </div>
+        <div id="chatEditSection" class="hidden">
+          <div class="avatar-upload-wrap center">
+            <div id="chatAvatar" class="avatar-large"></div>
+            <label class="avatar-upload-label" title="Change avatar">📷
+              <input type="file" id="chatAvatarInput" accept=".jpg,.jpeg,.png,.webp" class="hidden">
+            </label>
+          </div>
+          <button id="removeChatAvatar" class="btn-text hidden">Remove avatar</button>
+          <div class="field-group" style="margin-top:12px">
+            <label>Group Name</label>
+            <div class="inline-edit">
+              <input type="text" id="chatNameInput" maxlength="50" class="modal-input" style="margin-bottom:0">
+              <button id="saveChatNameBtn" class="btn-sm">Save</button>
+            </div>
+          </div>
+          <hr class="divider">
+        </div>
         <h4 style="margin-bottom:12px;color:#7e8b99">Members</h4>
         <div id="chatMemberList" class="user-list"></div>
         <div id="addMemberWrap" class="hidden" style="margin-top:16px">
@@ -129,20 +219,50 @@
     </div>
   </div>
 
-  <!-- Menu Drawer -->
+  <!-- Menu Drawer / Profile Editor -->
   <div id="menuDrawer" class="modal hidden">
-    <div class="modal-content narrow">
+    <div class="modal-content">
       <div class="modal-header">
-        <h3>Menu</h3>
+        <h3>Profile</h3>
         <button class="modal-close">✕</button>
       </div>
       <div class="modal-body menu-body">
-        <div id="menuUserInfo" class="menu-user-info"></div>
+        <div class="menu-user-info">
+          <div class="avatar-upload-wrap center">
+            <div id="profileAvatar" class="avatar-large"></div>
+            <label class="avatar-upload-label" title="Change avatar">📷
+              <input type="file" id="profileAvatarInput" accept=".jpg,.jpeg,.png,.webp" hidden>
+            </label>
+          </div>
+          <button id="removeProfileAvatar" class="btn-text hidden">Remove avatar</button>
+          <div class="profile-meta">
+            <span id="profileUsername" class="meta-username"></span>
+          </div>
+        </div>
+        <hr class="divider">
+        <div class="field-group">
+          <label>Display Name</label>
+          <input type="text" id="profileName" maxlength="30" class="modal-input">
+        </div>
+        <div class="field-group">
+          <label>Avatar Color</label>
+          <div id="colorPicker" class="color-picker"></div>
+        </div>
+        <button id="saveProfileBtn" class="btn-primary" style="width:100%;margin-top:8px">Save</button>
       </div>
     </div>
   </div>
 
-  <input type="file" id="fileInput" class="hidden" accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.txt,.doc,.docx,.xls,.xlsx,.zip,.mp3,.wav,.ogg,.m4a,.mp4,.webm,.mov">
+  <!-- Search Panel -->
+  <div id="searchPanel" class="search-panel hidden">
+    <div class="search-panel-header">
+      <input type="text" id="searchInput" placeholder="Search messages..." class="modal-input" autocomplete="off">
+      <button id="searchClose" class="icon-btn">✕</button>
+    </div>
+    <div id="searchResults" class="search-results"></div>
+  </div>
+
+  <input type="file" id="fileInput" class="hidden" multiple accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.txt,.doc,.docx,.xls,.xlsx,.zip,.rar,.exe,.mp3,.wav,.ogg,.m4a,.mp4,.webm,.mov">
 
   <script src="/js/app.js"></script>
 </body>

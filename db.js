@@ -15,6 +15,7 @@ db.exec(`
     is_admin INTEGER DEFAULT 0,
     is_blocked INTEGER DEFAULT 0,
     avatar_color TEXT NOT NULL,
+    avatar_url TEXT DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -23,6 +24,7 @@ db.exec(`
     name TEXT NOT NULL,
     type TEXT NOT NULL CHECK(type IN ('general','group','private')),
     created_by INTEGER REFERENCES users(id),
+    avatar_url TEXT DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -73,6 +75,30 @@ db.exec(`
 const generalChat = db.prepare("SELECT id FROM chats WHERE type = 'general'").get();
 if (!generalChat) {
   db.prepare("INSERT INTO chats (name, type) VALUES ('General', 'general')").run();
+}
+
+// Migrations: add avatar_url columns if missing
+try {
+  db.prepare("SELECT avatar_url FROM users LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT NULL");
+}
+try {
+  db.prepare("SELECT avatar_url FROM chats LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE chats ADD COLUMN avatar_url TEXT DEFAULT NULL");
+}
+// Migration: reply_to_id on messages
+try {
+  db.prepare("SELECT reply_to_id FROM messages LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE messages ADD COLUMN reply_to_id INTEGER DEFAULT NULL REFERENCES messages(id)");
+}
+// Migration: last_read_id on chat_members
+try {
+  db.prepare("SELECT last_read_id FROM chat_members LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE chat_members ADD COLUMN last_read_id INTEGER DEFAULT 0");
 }
 
 module.exports = db;
