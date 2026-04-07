@@ -1,0 +1,5 @@
+node_modules/
+bananza.db
+.secret
+uploads/*
+!uploads/.gitkeep

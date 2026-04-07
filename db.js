@@ -1,0 +1,78 @@
+const Database = require('better-sqlite3');
+const path = require('path');
+
+const db = new Database(path.join(__dirname, 'bananza.db'));
+
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL COLLATE NOCASE,
+    password TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    is_admin INTEGER DEFAULT 0,
+    is_blocked INTEGER DEFAULT 0,
+    avatar_color TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS chats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL CHECK(type IN ('general','group','private')),
+    created_by INTEGER REFERENCES users(id),
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS chat_members (
+    chat_id INTEGER REFERENCES chats(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    joined_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (chat_id, user_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL REFERENCES chats(id),
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    text TEXT,
+    file_id INTEGER REFERENCES files(id),
+    is_deleted INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    original_name TEXT NOT NULL,
+    stored_name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    type TEXT NOT NULL CHECK(type IN ('image','audio','video','document')),
+    uploaded_by INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS link_previews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    url TEXT NOT NULL,
+    title TEXT,
+    description TEXT,
+    image TEXT,
+    hostname TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, id);
+  CREATE INDEX IF NOT EXISTS idx_chat_members_user ON chat_members(user_id);
+  CREATE INDEX IF NOT EXISTS idx_link_previews_msg ON link_previews(message_id);
+`);
+
+// Seed general chat
+const generalChat = db.prepare("SELECT id FROM chats WHERE type = 'general'").get();
+if (!generalChat) {
+  db.prepare("INSERT INTO chats (name, type) VALUES ('General', 'general')").run();
+}
+
+module.exports = db;
