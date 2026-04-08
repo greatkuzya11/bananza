@@ -1789,12 +1789,23 @@
     // Mobile keyboard resize fix
     if (window.visualViewport) {
       const app = document.getElementById('app');
+      let prevVVHeight = window.visualViewport.height;
       const onVVResize = () => {
-        app.style.height = window.visualViewport.height + 'px';
+        const vv = window.visualViewport;
+        const newHeight = vv.height;
+        app.style.height = newHeight + 'px';
+        app.style.top = vv.offsetTop + 'px';
         window.scrollTo(0, 0);
+        // If keyboard appeared (viewport shrunk) — scroll messages to bottom
+        if (newHeight < prevVVHeight) {
+          requestAnimationFrame(() => {
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+          });
+        }
+        prevVVHeight = newHeight;
       };
       window.visualViewport.addEventListener('resize', onVVResize);
-      window.visualViewport.addEventListener('scroll', () => window.scrollTo(0, 0));
+      window.visualViewport.addEventListener('scroll', onVVResize);
     }
 
     // Mobile navigation: set initial history state for chat list

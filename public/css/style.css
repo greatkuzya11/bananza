@@ -32,17 +32,11 @@ html, body {
   font-size: 15px; color: var(--text-primary); background: var(--bg-dark);
 }
 
-button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
-input, textarea { font-family: inherit; font-size: inherit; }
-a { color: var(--link); text-decoration: none; }
-a:hover { text-decoration: underline; }
-
-.hidden { display: none !important; }
-
 /* ── App layout ──────────────────────────────────────────────────────────── */
 #app {
   display: flex; height: 100vh; height: 100dvh; width: 100vw;
   overflow: hidden;
+  position: fixed; top: 0; left: 0;
 }
 
 /* ── Sidebar ─────────────────────────────────────────────────────────────── */
@@ -211,7 +205,8 @@ a:hover { text-decoration: underline; }
 
 .msg-bubble {
   padding: 7px 12px 6px; border-radius: var(--radius-msg); position: relative;
-  word-wrap: break-word; overflow-wrap: break-word; min-width: 80px;
+  word-wrap: break-word; overflow-wrap: break-word; word-break: break-word; min-width: 80px;
+  max-width: 100%;
   line-height: 1.4;
 }
 .msg-row.own .msg-bubble {
@@ -734,8 +729,9 @@ a:hover { text-decoration: underline; }
 
   .messages { padding: 8px; }
 
-  .msg-row { max-width: 90%; }
-  .msg-group { max-width: 90%; }
+  .msg-row { max-width: 90%; min-width: 0; overflow: hidden; }
+  .msg-group { max-width: 90%; min-width: 0; overflow: hidden; }
+  .msg-group-body { min-width: 0; max-width: 100%; }
   .msg-image { max-width: 260px; max-height: 240px; }
   .msg-video { max-width: 280px; }
 
