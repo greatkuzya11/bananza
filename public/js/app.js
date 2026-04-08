@@ -902,18 +902,19 @@
       // Immediately update UI in case WS is slow
       markMessageDeleted(id);
       loadChats();
-    } catch {}
+    } catch (err) { console.error('[delete] failed:', err); }
   }
 
   function markMessageDeleted(msgId) {
     const el = messagesEl.querySelector(`[data-msg-id="${msgId}"]`);
-    if (!el) return;
+    if (!el) { console.warn('[markDeleted] element not found for', msgId); return; }
     const bubble = el.querySelector('.msg-bubble');
-    if (!bubble) return;
-    const timeText = bubble.querySelector('.msg-time')?.textContent || '';
+    if (!bubble) { console.warn('[markDeleted] bubble not found'); return; }
+    const timeEl = bubble.querySelector('.msg-time');
+    const timeText = timeEl ? timeEl.textContent : '';
     bubble.innerHTML = `<span class="msg-deleted">Message deleted</span><span class="msg-time">${esc(timeText)}</span>`;
-    const replyBtn = el.querySelector('.msg-reply-btn');
-    if (replyBtn) replyBtn.remove();
+    el.querySelector('.msg-reply-btn')?.remove();
+    el.querySelector('.msg-react-btn')?.remove();
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
