@@ -1831,12 +1831,12 @@
     await loadAllUsers();
     await loadChats();
 
-    // Open last chat or general
-    const lastChat = +localStorage.getItem('lastChat');
-    if (lastChat && chats.find(c => c.id === lastChat)) {
-      openChat(lastChat);
-    } else if (chats.length > 0) {
-      openChat(chats[0].id);
+    // On mobile: always show chat list first. On desktop: restore last chat.
+    if (window.innerWidth > 768) {
+      const lastChat = +localStorage.getItem('lastChat');
+      if (lastChat && chats.find(c => c.id === lastChat)) {
+        openChat(lastChat);
+      }
     }
   }
 

@@ -32,6 +32,13 @@ html, body {
   font-size: 15px; color: var(--text-primary); background: var(--bg-dark);
 }
 
+button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+input, textarea { font-family: inherit; font-size: inherit; }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.hidden { display: none !important; }
+
 /* ── App layout ──────────────────────────────────────────────────────────── */
 #app {
   display: flex; height: 100vh; height: 100dvh; width: 100vw;
@@ -357,8 +364,9 @@ html, body {
 /* ── Image viewer ────────────────────────────────────────────────────────── */
 .image-viewer {
   position: fixed; inset: 0; background: rgba(0,0,0,.9); z-index: 200;
-  display: flex; align-items: center; justify-content: center;
+  display: none; align-items: center; justify-content: center;
 }
+.image-viewer:not(.hidden) { display: flex; }
 .iv-close {
   position: absolute; top: 16px; right: 16px; color: #fff;
   font-size: 28px; width: 44px; height: 44px; border-radius: 50%;
