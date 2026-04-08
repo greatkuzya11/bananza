@@ -3,3 +3,4 @@ bananza.db
 .secret
 uploads/*
 !uploads/.gitkeep
+bananza.db-shm
