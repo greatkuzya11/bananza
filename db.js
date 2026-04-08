@@ -100,5 +100,33 @@ try {
 } catch {
   db.exec("ALTER TABLE chat_members ADD COLUMN last_read_id INTEGER DEFAULT 0");
 }
+// Migration: reactions table
+try {
+  db.prepare("SELECT 1 FROM reactions LIMIT 1").get();
+  // Migrate PK if old schema (message_id, user_id) — drop and recreate
+  const cols = db.prepare("PRAGMA table_info(reactions)").all().map(c => c.name);
+  if (!cols.includes('emoji') || db.prepare("SELECT sql FROM sqlite_master WHERE name='reactions'").get().sql.includes('PRIMARY KEY (message_id, user_id)')) {
+    db.exec(`DROP TABLE IF EXISTS reactions;
+      CREATE TABLE reactions (
+        message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        emoji TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY (message_id, user_id, emoji)
+      );
+      CREATE INDEX IF NOT EXISTS idx_reactions_msg ON reactions(message_id);`);
+  }
+} catch {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS reactions (
+      message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      emoji TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (message_id, user_id, emoji)
+    );
+    CREATE INDEX IF NOT EXISTS idx_reactions_msg ON reactions(message_id);
+  `);
+}
 
 module.exports = db;

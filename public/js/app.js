@@ -61,6 +61,7 @@
   const emojiPicker = $('#emojiPicker');
   const imageViewer = $('#imageViewer');
   const ivStrip = $('#ivStrip');
+  const reactionPicker = $('#reactionPicker');
   const replyBar = $('#replyBar');
   const replyBarName = $('#replyBarName');
   const replyBarText = $('#replyBarText');
@@ -272,6 +273,10 @@
             }
           });
         }
+        break;
+      }
+      case 'reaction': {
+        updateReactionBar(msg.messageId, msg.reactions);
         break;
       }
       case 'chat_updated': {
@@ -692,11 +697,13 @@
     const statusIcon = isOwn && !msg.is_deleted ? `<span class="msg-status${msg.is_read ? ' read' : ''}">${msg.is_read ? '✓✓' : '✓'}</span>` : '';
     html += `<span class="msg-time">${statusIcon}${formatTime(msg.created_at)}</span>`;
     html += '</div>'; // msg-bubble
+    html += `<div class="msg-reactions">${renderReactions(msg.reactions)}</div>`;
     html += '</div>'; // msg-content
 
-    // Reply button outside bubble
+    // Reply + react buttons outside bubble
     if (!msg.is_deleted) {
       html += '<button class="msg-reply-btn" title="Reply">↩</button>';
+      html += '<button class="msg-react-btn" title="React">🙂</button>';
     }
 
     row.innerHTML = html;
@@ -713,6 +720,11 @@
         e.stopPropagation();
         setReply(msg.id, msg.display_name, (msg.text || '📎').substring(0, 100));
       });
+    }
+
+    const reactBtn = row.querySelector('.msg-react-btn');
+    if (reactBtn) {
+      reactBtn.addEventListener('click', (e) => { e.stopPropagation(); showReactionPicker(row, e); });
     }
 
     // Click reply quote to scroll to original message
@@ -1204,9 +1216,83 @@
   // ═══════════════════════════════════════════════════════════════════════════
   let galleryImages = [];
   let galleryIndex = 0;
+  let ivScale = 1, ivPanX = 0, ivPanY = 0;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // REACTIONS
+  // ═══════════════════════════════════════════════════════════════════════════
+  let reactionPickerMsgId = null;
+
+  function renderReactions(reactions) {
+    if (!reactions || reactions.length === 0) return '';
+    const grouped = {};
+    for (const r of reactions) {
+      if (!grouped[r.emoji]) grouped[r.emoji] = { count: 0, mine: false };
+      grouped[r.emoji].count++;
+      if (+r.user_id === currentUser.id) grouped[r.emoji].mine = true;
+    }
+    return Object.entries(grouped).map(([emoji, { count, mine }]) =>
+      `<button class="reaction-badge${mine ? ' mine' : ''}" data-emoji="${emoji}">${emoji}<span>${count}</span></button>`
+    ).join('');
+  }
+
+  function updateReactionBar(msgId, reactions) {
+    const row = messagesEl.querySelector(`[data-msg-id="${msgId}"]`);
+    if (!row) return;
+    let bar = row.querySelector('.msg-reactions');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'msg-reactions';
+      row.querySelector('.msg-content').appendChild(bar);
+    }
+    bar.innerHTML = renderReactions(reactions);
+  }
+
+  function showReactionPicker(row, e) {
+    reactionPickerMsgId = +row.dataset.msgId;
+    reactionPicker.classList.remove('hidden');
+    // Position near the trigger
+    const rect = e ? e.currentTarget.getBoundingClientRect() : row.getBoundingClientRect();
+    const pw = reactionPicker.offsetWidth || 370;
+    const ph = reactionPicker.offsetHeight || 52;
+    let left = e ? rect.left : rect.left;
+    let top = rect.top - ph - 8;
+    if (top < 8) top = rect.bottom + 8;
+    left = Math.max(8, Math.min(left, window.innerWidth - pw - 8));
+    reactionPicker.style.left = left + 'px';
+    reactionPicker.style.top = top + 'px';
+  }
+
+  function hideReactionPicker() {
+    reactionPicker.classList.add('hidden');
+    reactionPickerMsgId = null;
+  }
+
+  async function toggleReaction(msgId, emoji) {
+    hideReactionPicker();
+    try {
+      const data = await api(`/api/messages/${msgId}/reactions`, { method: 'POST', body: { emoji } });
+      if (data && data.reactions) updateReactionBar(msgId, data.reactions);
+    } catch (err) {
+      console.warn('Reaction failed:', err);
+    }
+  }
 
   function collectGalleryImages() {
     galleryImages = Array.from(messagesEl.querySelectorAll('.msg-image')).map(img => img.src);
+  }
+
+  function ivCurrentImg() {
+    return ivStrip.querySelectorAll('.iv-slide img')[galleryIndex] || null;
+  }
+  function ivApplyTransform() {
+    const img = ivCurrentImg();
+    if (img) img.style.transform = `scale(${ivScale}) translate(${ivPanX}px, ${ivPanY}px)`;
+  }
+  function ivResetZoom() {
+    ivScale = 1; ivPanX = 0; ivPanY = 0;
+    const img = ivCurrentImg();
+    if (img) img.style.transform = '';
   }
 
   function openImageViewer(src) {
@@ -1216,6 +1302,7 @@
     ivStrip.innerHTML = galleryImages.map(s =>
       `<div class="iv-slide"><img src="${esc(s)}" alt=""></div>`
     ).join('');
+    ivScale = 1; ivPanX = 0; ivPanY = 0;
     ivStrip.style.transition = 'none';
     ivStrip.style.transform = `translateX(${-galleryIndex * window.innerWidth}px)`;
     updateGalleryArrows();
@@ -1232,6 +1319,7 @@
   function galleryNav(dir) {
     const newIdx = galleryIndex + dir;
     if (newIdx < 0 || newIdx >= galleryImages.length) return;
+    ivResetZoom();
     galleryIndex = newIdx;
     ivStrip.style.transition = 'transform 0.3s ease';
     ivStrip.style.transform = `translateX(${-galleryIndex * window.innerWidth}px)`;
@@ -1645,39 +1733,123 @@
       else if (e.key === 'Escape') imageViewer.classList.add('hidden');
     });
 
-    // Strip swipe for image viewer
+    // Strip swipe + pinch-zoom for image viewer
     (() => {
       let startX = 0, startY = 0, dragging = false, dx = 0;
+      let panBaseX = 0, panBaseY = 0;
+      let pinching = false, pinchDist0 = 0, scaleBase = 1;
+      const MAX_SCALE = 5;
+
       imageViewer.addEventListener('touchstart', (e) => {
-        if (e.touches.length > 1) return;
-        startX = e.touches[0].clientX;
-        startY = e.touches[0].clientY;
-        dragging = false; dx = 0;
-        ivStrip.style.transition = 'none';
+        if (e.touches.length === 2) {
+          pinching = true; dragging = false;
+          const t = e.touches;
+          pinchDist0 = Math.hypot(t[1].clientX - t[0].clientX, t[1].clientY - t[0].clientY);
+          scaleBase = ivScale;
+          return;
+        }
+        if (e.touches.length === 1) {
+          startX = e.touches[0].clientX;
+          startY = e.touches[0].clientY;
+          panBaseX = ivPanX; panBaseY = ivPanY;
+          dragging = false; dx = 0;
+          if (ivScale === 1) ivStrip.style.transition = 'none';
+        }
       }, { passive: true });
+
       imageViewer.addEventListener('touchmove', (e) => {
-        if (e.touches.length > 1) return;
-        dx = e.touches[0].clientX - startX;
-        const dy = e.touches[0].clientY - startY;
+        if (e.touches.length === 2) {
+          const t = e.touches;
+          const dist = Math.hypot(t[1].clientX - t[0].clientX, t[1].clientY - t[0].clientY);
+          ivScale = Math.min(MAX_SCALE, Math.max(1, scaleBase * dist / pinchDist0));
+          ivApplyTransform();
+          return;
+        }
+        if (pinching || e.touches.length !== 1) return;
+        const cx = e.touches[0].clientX;
+        const cy = e.touches[0].clientY;
+        if (ivScale > 1) {
+          ivPanX = panBaseX + (cx - startX) / ivScale;
+          ivPanY = panBaseY + (cy - startY) / ivScale;
+          ivApplyTransform();
+          return;
+        }
+        dx = cx - startX;
+        const dy = cy - startY;
         if (!dragging && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 6) dragging = true;
         if (!dragging) return;
         ivStrip.style.transform = `translateX(${-galleryIndex * window.innerWidth + dx}px)`;
       }, { passive: true });
-      imageViewer.addEventListener('touchend', () => {
+
+      imageViewer.addEventListener('touchend', (e) => {
+        if (pinching) {
+          if (e.touches.length < 2) pinching = false;
+          return;
+        }
+        if (ivScale > 1) return;
         ivStrip.style.transition = 'transform 0.3s ease';
         if (dragging && Math.abs(dx) > 50) {
           const newIdx = galleryIndex + (dx < 0 ? 1 : -1);
-          if (newIdx >= 0 && newIdx < galleryImages.length) galleryIndex = newIdx;
+          if (newIdx >= 0 && newIdx < galleryImages.length) {
+            ivResetZoom();
+            galleryIndex = newIdx;
+          }
         }
         ivStrip.style.transform = `translateX(${-galleryIndex * window.innerWidth}px)`;
         updateGalleryArrows();
         dragging = false;
       }, { passive: true });
+
       window.addEventListener('resize', () => {
         if (!imageViewer.classList.contains('hidden')) {
           ivStrip.style.transition = 'none';
           ivStrip.style.transform = `translateX(${-galleryIndex * window.innerWidth}px)`;
         }
+      });
+    })();
+
+    // Reaction picker: emoji click
+    reactionPicker.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-emoji]');
+      if (btn && reactionPickerMsgId) toggleReaction(reactionPickerMsgId, btn.dataset.emoji);
+    });
+
+    // Reaction picker: close on outside click
+    document.addEventListener('click', (e) => {
+      if (!reactionPicker.classList.contains('hidden') && !reactionPicker.contains(e.target) && !e.target.closest('.msg-react-btn')) {
+        hideReactionPicker();
+      }
+    });
+
+    // Reaction badge click (delegation)
+    messagesEl.addEventListener('click', (e) => {
+      const badge = e.target.closest('.reaction-badge');
+      if (badge) {
+        const row = badge.closest('.msg-row');
+        if (row) toggleReaction(+row.dataset.msgId, badge.dataset.emoji);
+      }
+    });
+
+    // Long press on message for reaction picker (mobile)
+    (() => {
+      let lpTimer = null;
+      messagesEl.addEventListener('touchstart', (e) => {
+        const row = e.target.closest('.msg-row');
+        if (!row || e.target.closest('.msg-react-btn') || e.target.closest('.reaction-badge')) return;
+        lpTimer = setTimeout(() => {
+          lpTimer = null;
+          navigator.vibrate && navigator.vibrate(30);
+          showReactionPicker(row, null);
+        }, 500);
+      }, { passive: true });
+      messagesEl.addEventListener('touchend', () => { clearTimeout(lpTimer); lpTimer = null; }, { passive: true });
+      messagesEl.addEventListener('touchmove', () => { clearTimeout(lpTimer); lpTimer = null; }, { passive: true });
+      // Desktop right-click
+      messagesEl.addEventListener('contextmenu', (e) => {
+        const row = e.target.closest('.msg-row');
+        if (!row) return;
+        e.preventDefault();
+        showReactionPicker(row, null);
       });
     })();
 

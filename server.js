@@ -317,6 +317,7 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
     : db.prepare(q).all(chatId, limit);
 
   const prevStmt = db.prepare('SELECT * FROM link_previews WHERE message_id=?');
+  const reactStmt = db.prepare('SELECT user_id, emoji FROM reactions WHERE message_id=?');
 
   // Get min last_read_id of OTHER members to determine read status for own messages
   const readInfo = db.prepare(
@@ -324,7 +325,7 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
   ).get(chatId, req.user.id);
   const minRead = readInfo ? readInfo.min_read || 0 : 0;
 
-  const result = msgs.map(m => ({ ...m, previews: prevStmt.all(m.id), is_read: m.id <= minRead }));
+  const result = msgs.map(m => ({ ...m, previews: prevStmt.all(m.id), reactions: reactStmt.all(m.id), is_read: m.id <= minRead }));
   res.json(result.reverse());
 });
 
@@ -362,6 +363,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
     WHERE m.id=?
   `).get(r.lastInsertRowid);
   msg.previews = [];
+  msg.reactions = [];
 
   broadcastToChatAll(chatId, { type: 'message', message: msg });
 
@@ -692,6 +694,34 @@ app.post('/api/chats/:chatId/read', auth, (req, res) => {
     }
   }
   res.json({ ok: true });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REACTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+const ALLOWED_REACTIONS = ['👍','👎','❤️','🔥','😂','😮','😢','💩','🎉','🤡'];
+
+app.post('/api/messages/:id/reactions', auth, (req, res) => {
+  const mid = +req.params.id;
+  const { emoji } = req.body;
+  if (!emoji || typeof emoji !== 'string' || emoji.length > 10 || !ALLOWED_REACTIONS.includes(emoji))
+    return res.status(400).json({ error: 'Invalid emoji' });
+
+  const msg = db.prepare('SELECT chat_id FROM messages WHERE id=? AND is_deleted=0').get(mid);
+  if (!msg) return res.status(404).json({ error: 'Not found' });
+  if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(msg.chat_id, req.user.id))
+    return res.status(403).json({ error: 'Not a member' });
+
+  const existing = db.prepare('SELECT emoji FROM reactions WHERE message_id=? AND user_id=? AND emoji=?').get(mid, req.user.id, emoji);
+  if (existing) {
+    db.prepare('DELETE FROM reactions WHERE message_id=? AND user_id=? AND emoji=?').run(mid, req.user.id, emoji);
+  } else {
+    db.prepare('INSERT INTO reactions(message_id, user_id, emoji) VALUES(?,?,?)').run(mid, req.user.id, emoji);
+  }
+
+  const reactions = db.prepare('SELECT user_id, emoji FROM reactions WHERE message_id=?').all(mid);
+  broadcastToChatAll(msg.chat_id, { type: 'reaction', messageId: mid, reactions });
+  res.json({ ok: true, reactions });
 });
 
 // ── SPA fallback ────────────────────────────────────────────────────────────
