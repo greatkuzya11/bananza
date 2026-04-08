@@ -1620,10 +1620,16 @@
       if (history.state && history.state.chat) history.back();
     });
 
-    // Android back button
-    window.addEventListener('popstate', () => {
+    // Android back gesture / button
+    window.addEventListener('popstate', (e) => {
       if (window.innerWidth <= 768) {
-        sidebar.classList.remove('sidebar-hidden');
+        if (sidebar.classList.contains('sidebar-hidden')) {
+          // Going back from chat to chat list
+          sidebar.classList.remove('sidebar-hidden');
+        } else {
+          // Already on chat list — push state back to prevent exit
+          history.pushState({ view: 'chatlist' }, '');
+        }
       }
     });
 
@@ -1771,6 +1777,11 @@
       };
       window.visualViewport.addEventListener('resize', onVVResize);
       window.visualViewport.addEventListener('scroll', () => window.scrollTo(0, 0));
+    }
+
+    // Mobile navigation: set initial history state for chat list
+    if (window.innerWidth <= 768) {
+      history.replaceState({ view: 'chatlist' }, '');
     }
 
     // Verify token
