@@ -30,6 +30,8 @@
   let compactViewMap = JSON.parse(localStorage.getItem('compactViewMap') || '{}');
   let compactView = false;
   let sendByEnter = localStorage.getItem('sendByEnter') !== '0';
+  let scrollRestoreMode = localStorage.getItem('scrollRestoreMode') || 'bottom'; // 'bottom' | 'restore'
+  let scrollPositions = {}; // chatId -> scrollTop
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DOM
@@ -433,6 +435,11 @@
   // OPEN CHAT
   // ═══════════════════════════════════════════════════════════════════════════
   async function openChat(chatId) {
+    // Save scroll position of previous chat
+    if (currentChatId && currentChatId !== chatId) {
+      scrollPositions[currentChatId] = messagesEl.scrollTop;
+    }
+
     currentChatId = chatId;
     displayedMsgIds.clear();
     hasMore = true;
@@ -492,7 +499,11 @@
       hasMore = msgs.length >= PAGE_SIZE;
       if (hasMore) loadMoreWrap.classList.remove('hidden');
       renderMessages(msgs);
-      scrollToBottom(true);
+      if (scrollRestoreMode === 'restore' && scrollPositions[chatId] != null) {
+        requestAnimationFrame(() => { messagesEl.scrollTop = scrollPositions[chatId]; });
+      } else {
+        scrollToBottom(true);
+      }
     } catch {}
 
     // Mark chat as read
@@ -1328,6 +1339,7 @@
     if (currentUser.is_admin) adminItem.classList.remove('hidden');
     else adminItem.classList.add('hidden');
     $('#settingsSendEnter').checked = sendByEnter;
+    $('#settingsScrollRestore').checked = scrollRestoreMode === 'restore';
   }
 
   function openChangePasswordModal() {
@@ -1678,6 +1690,12 @@
     $('#settingsSendEnter').addEventListener('change', (e) => {
       sendByEnter = e.target.checked;
       localStorage.setItem('sendByEnter', sendByEnter ? '1' : '0');
+    });
+
+    // Scroll restore toggle
+    $('#settingsScrollRestore').addEventListener('change', (e) => {
+      scrollRestoreMode = e.target.checked ? 'restore' : 'bottom';
+      localStorage.setItem('scrollRestoreMode', scrollRestoreMode);
     });
 
     // Change password save
