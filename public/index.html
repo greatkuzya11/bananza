@@ -271,6 +271,18 @@
   </div>
 
   <input type="file" id="fileInput" class="hidden" multiple accept="image/*,video/*,audio/*,.pdf,.txt,.doc,.docx,.xls,.xlsx,.zip,.rar,.exe">
+  <input type="file" id="fileInputGallery" class="hidden" multiple accept="image/*,video/*">
+  <input type="file" id="fileInputCamera" class="hidden" accept="image/*" capture="environment">
+  <input type="file" id="fileInputDocs" class="hidden" multiple accept="audio/*,.pdf,.txt,.doc,.docx,.xls,.xlsx,.zip,.rar,.exe">
+
+  <!-- Mobile attach menu -->
+  <div id="attachMenu" class="attach-menu hidden">
+    <button id="attachMenuGallery">🖼 Gallery</button>
+    <button id="attachMenuCamera">📷 Camera</button>
+    <button id="attachMenuFile">📄 File</button>
+    <button id="attachMenuCancel">Cancel</button>
+  </div>
+  <div id="attachMenuOverlay" class="attach-menu-overlay hidden"></div>
 
   <script src="/js/app.js"></script>
 </body>

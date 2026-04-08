@@ -1589,11 +1589,32 @@
       }
     });
 
-    // File
-    attachBtn.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', () => {
-      if (fileInput.files.length > 0) uploadFiles(fileInput.files);
+    // File attach
+    const fileInputGallery = $('#fileInputGallery');
+    const fileInputCamera = $('#fileInputCamera');
+    const fileInputDocs = $('#fileInputDocs');
+    const attachMenu = $('#attachMenu');
+    const attachMenuOverlay = $('#attachMenuOverlay');
+    const closeAttachMenu = () => { attachMenu.classList.add('hidden'); attachMenuOverlay.classList.add('hidden'); };
+
+    attachBtn.addEventListener('click', () => {
+      if (window.innerWidth <= 768) {
+        attachMenu.classList.remove('hidden');
+        attachMenuOverlay.classList.remove('hidden');
+      } else {
+        fileInput.click();
+      }
     });
+    attachMenuOverlay.addEventListener('click', closeAttachMenu);
+    $('#attachMenuCancel').addEventListener('click', closeAttachMenu);
+    $('#attachMenuGallery').addEventListener('click', () => { closeAttachMenu(); fileInputGallery.click(); });
+    $('#attachMenuCamera').addEventListener('click', () => { closeAttachMenu(); fileInputCamera.click(); });
+    $('#attachMenuFile').addEventListener('click', () => { closeAttachMenu(); fileInputDocs.click(); });
+
+    fileInput.addEventListener('change', () => { if (fileInput.files.length > 0) uploadFiles(fileInput.files); });
+    fileInputGallery.addEventListener('change', () => { if (fileInputGallery.files.length > 0) { uploadFiles(fileInputGallery.files); fileInputGallery.value = ''; } });
+    fileInputCamera.addEventListener('change', () => { if (fileInputCamera.files.length > 0) { uploadFiles(fileInputCamera.files); fileInputCamera.value = ''; } });
+    fileInputDocs.addEventListener('change', () => { if (fileInputDocs.files.length > 0) { uploadFiles(fileInputDocs.files); fileInputDocs.value = ''; } });
 
     // Emoji
     emojiBtn.addEventListener('click', (e) => {
