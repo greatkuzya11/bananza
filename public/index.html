@@ -23,7 +23,13 @@
       <div class="sidebar-footer">
         <div id="currentUserInfo" class="current-user"></div>
         <button id="settingsBtn" class="icon-btn" title="Settings">⚙</button>
-        <button id="logoutBtn" class="icon-btn" title="Logout">⏻</button>
+        <button id="logoutBtn" class="icon-btn" title="Logout">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+            <polyline points="16 17 21 12 16 7"/>
+            <line x1="21" y1="12" x2="9" y2="12"/>
+          </svg>
+        </button>
       </div>
     </aside>
 
@@ -70,7 +76,7 @@
             <button id="attachBtn" class="icon-btn" title="Attach file">📎</button>
             <button id="emojiBtn" class="icon-btn" title="Emoji">😊</button>
             <textarea id="msgInput" placeholder="Message..." rows="1"></textarea>
-            <button id="sendBtn" class="icon-btn send-btn" title="Send">➤</button>
+            <button id="sendBtn" class="icon-btn send-btn" title="Send" onmousedown="event.preventDefault()">➤</button>
           </div>
         </div>
 
@@ -88,7 +94,7 @@
   <div id="imageViewer" class="image-viewer hidden">
     <button class="iv-close">✕</button>
     <button class="iv-arrow iv-prev">&#8249;</button>
-    <img id="ivImage" src="" alt="">
+    <div id="ivStrip"></div>
     <button class="iv-arrow iv-next">&#8250;</button>
   </div>
 

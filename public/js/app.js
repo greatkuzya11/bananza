@@ -60,7 +60,7 @@
   const pendingFileEl = $('#pendingFile');
   const emojiPicker = $('#emojiPicker');
   const imageViewer = $('#imageViewer');
-  const ivImage = $('#ivImage');
+  const ivStrip = $('#ivStrip');
   const replyBar = $('#replyBar');
   const replyBarName = $('#replyBarName');
   const replyBarText = $('#replyBarText');
@@ -1213,7 +1213,11 @@
     collectGalleryImages();
     galleryIndex = galleryImages.indexOf(src);
     if (galleryIndex < 0) galleryIndex = 0;
-    ivImage.src = src;
+    ivStrip.innerHTML = galleryImages.map(s =>
+      `<div class="iv-slide"><img src="${esc(s)}" alt=""></div>`
+    ).join('');
+    ivStrip.style.transition = 'none';
+    ivStrip.style.transform = `translateX(${-galleryIndex * window.innerWidth}px)`;
     updateGalleryArrows();
     imageViewer.classList.remove('hidden');
   }
@@ -1229,7 +1233,8 @@
     const newIdx = galleryIndex + dir;
     if (newIdx < 0 || newIdx >= galleryImages.length) return;
     galleryIndex = newIdx;
-    ivImage.src = galleryImages[galleryIndex];
+    ivStrip.style.transition = 'transform 0.3s ease';
+    ivStrip.style.transform = `translateX(${-galleryIndex * window.innerWidth}px)`;
     updateGalleryArrows();
   }
 
@@ -1573,7 +1578,12 @@
   // ═══════════════════════════════════════════════════════════════════════════
   function setupEvents() {
     // Send message
-    sendBtn.addEventListener('click', sendMessage);
+    sendBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      sendMessage();
+      // Keep keyboard open on mobile
+      if (window.innerWidth <= 768) msgInput.focus();
+    });
     msgInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         if (sendByEnter && !e.shiftKey && !e.ctrlKey) { e.preventDefault(); sendMessage(); }
@@ -1626,7 +1636,7 @@
     imageViewer.addEventListener('click', (e) => {
       if (e.target.closest('.iv-prev')) { galleryNav(-1); return; }
       if (e.target.closest('.iv-next')) { galleryNav(1); return; }
-      if (e.target === imageViewer || e.target.closest('.iv-close')) imageViewer.classList.add('hidden');
+      if (e.target.closest('.iv-close') || e.target.classList.contains('iv-slide')) imageViewer.classList.add('hidden');
     });
     document.addEventListener('keydown', (e) => {
       if (imageViewer.classList.contains('hidden')) return;
@@ -1634,6 +1644,42 @@
       else if (e.key === 'ArrowRight') galleryNav(1);
       else if (e.key === 'Escape') imageViewer.classList.add('hidden');
     });
+
+    // Strip swipe for image viewer
+    (() => {
+      let startX = 0, startY = 0, dragging = false, dx = 0;
+      imageViewer.addEventListener('touchstart', (e) => {
+        if (e.touches.length > 1) return;
+        startX = e.touches[0].clientX;
+        startY = e.touches[0].clientY;
+        dragging = false; dx = 0;
+        ivStrip.style.transition = 'none';
+      }, { passive: true });
+      imageViewer.addEventListener('touchmove', (e) => {
+        if (e.touches.length > 1) return;
+        dx = e.touches[0].clientX - startX;
+        const dy = e.touches[0].clientY - startY;
+        if (!dragging && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 6) dragging = true;
+        if (!dragging) return;
+        ivStrip.style.transform = `translateX(${-galleryIndex * window.innerWidth + dx}px)`;
+      }, { passive: true });
+      imageViewer.addEventListener('touchend', () => {
+        ivStrip.style.transition = 'transform 0.3s ease';
+        if (dragging && Math.abs(dx) > 50) {
+          const newIdx = galleryIndex + (dx < 0 ? 1 : -1);
+          if (newIdx >= 0 && newIdx < galleryImages.length) galleryIndex = newIdx;
+        }
+        ivStrip.style.transform = `translateX(${-galleryIndex * window.innerWidth}px)`;
+        updateGalleryArrows();
+        dragging = false;
+      }, { passive: true });
+      window.addEventListener('resize', () => {
+        if (!imageViewer.classList.contains('hidden')) {
+          ivStrip.style.transition = 'none';
+          ivStrip.style.transform = `translateX(${-galleryIndex * window.innerWidth}px)`;
+        }
+      });
+    })();
 
     // Sidebar search
     chatSearch.addEventListener('input', () => {
