@@ -4,3 +4,4 @@ bananza.db
 uploads/*
 !uploads/.gitkeep
 bananza.db-shm
+bananza.db-wal
