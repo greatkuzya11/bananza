@@ -228,9 +228,10 @@ a:hover { text-decoration: underline; }
 .msg-text a { color: var(--link); }
 
 .msg-time {
-  font-size: 11px; color: var(--text-time); text-align: right;
-  margin-top: 2px; float: right; margin-left: 10px; line-height: 20px;
+  font-size: 11px; color: var(--text-time);
+  margin-left: auto; line-height: 20px;
   display: inline-flex; align-items: center; gap: 3px;
+  margin-bottom: -2px; flex-shrink: 0;
 }
 .msg-status { font-size: 13px; color: var(--text-time); letter-spacing: -3px; margin-right: 1px; }
 .msg-status.read { color: var(--accent); }
@@ -263,9 +264,16 @@ a:hover { text-decoration: underline; }
 .msg-react-btn { font-size: 16px; }
 .msg-react-btn:hover { color: var(--accent); }
 
+.msg-footer {
+  display: flex; align-items: flex-end; justify-content: flex-start;
+  flex-wrap: wrap; margin-top: 4px; gap: 4px;
+  overflow: hidden;
+}
+.msg-footer > div:empty { display: none; }
+
 /* ── Reactions ───────────────────────────────────────────────────────────── */
 .msg-reactions {
-  display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px;
+  display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
 }
 .reaction-badge {
   display: inline-flex; align-items: center; gap: 3px;

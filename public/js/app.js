@@ -695,9 +695,10 @@
     }
 
     const statusIcon = isOwn && !msg.is_deleted ? `<span class="msg-status${msg.is_read ? ' read' : ''}">${msg.is_read ? '✓✓' : '✓'}</span>` : '';
-    html += `<span class="msg-time">${statusIcon}${formatTime(msg.created_at)}</span>`;
+    const reactionsHtml = (!msg.is_deleted && msg.reactions && msg.reactions.length > 0)
+      ? `<div class="msg-reactions">${renderReactions(msg.reactions)}</div>` : '<div></div>';
+    html += `<div class="msg-footer">${reactionsHtml}<span class="msg-time">${statusIcon}${formatTime(msg.created_at)}</span></div>`;
     html += '</div>'; // msg-bubble
-    html += `<div class="msg-reactions">${renderReactions(msg.reactions)}</div>`;
     html += '</div>'; // msg-content
 
     // Reply + react buttons outside bubble
@@ -722,10 +723,7 @@
       });
     }
 
-    const reactBtn = row.querySelector('.msg-react-btn');
-    if (reactBtn) {
-      reactBtn.addEventListener('click', (e) => { e.stopPropagation(); showReactionPicker(row, e); });
-    }
+    // (react button handled via delegation on messagesEl)
 
     // Click reply quote to scroll to original message
     const replyQuote = row.querySelector('.msg-reply');
@@ -737,6 +735,7 @@
     const img = row.querySelector('.msg-image');
     if (img) {
       img.addEventListener('click', () => openImageViewer(img.src));
+      img.addEventListener('load', () => scrollToBottom());
     }
 
     // Audio/video duration
@@ -1239,23 +1238,30 @@
   function updateReactionBar(msgId, reactions) {
     const row = messagesEl.querySelector(`[data-msg-id="${msgId}"]`);
     if (!row) return;
-    let bar = row.querySelector('.msg-reactions');
-    if (!bar) {
-      bar = document.createElement('div');
-      bar.className = 'msg-reactions';
-      row.querySelector('.msg-content').appendChild(bar);
+    const footer = row.querySelector('.msg-footer');
+    if (!footer) return;
+    let bar = footer.querySelector('.msg-reactions');
+    if (reactions.length === 0) {
+      if (bar) { bar.outerHTML = '<div></div>'; }
+    } else {
+      if (!bar) {
+        const placeholder = footer.querySelector('div');
+        if (placeholder) placeholder.outerHTML = `<div class="msg-reactions">${renderReactions(reactions)}</div>`;
+      } else {
+        bar.innerHTML = renderReactions(reactions);
+      }
     }
-    bar.innerHTML = renderReactions(reactions);
   }
 
-  function showReactionPicker(row, e) {
+  function showReactionPicker(row, trigger) {
     reactionPickerMsgId = +row.dataset.msgId;
     reactionPicker.classList.remove('hidden');
     // Position near the trigger
-    const rect = e ? e.currentTarget.getBoundingClientRect() : row.getBoundingClientRect();
+    const triggerEl = (trigger instanceof Element ? trigger : row);
+    const rect = triggerEl.getBoundingClientRect();
     const pw = reactionPicker.offsetWidth || 370;
     const ph = reactionPicker.offsetHeight || 52;
-    let left = e ? rect.left : rect.left;
+    let left = rect.left;
     let top = rect.top - ph - 8;
     if (top < 8) top = rect.bottom + 8;
     left = Math.max(8, Math.min(left, window.innerWidth - pw - 8));
@@ -1270,11 +1276,13 @@
 
   async function toggleReaction(msgId, emoji) {
     hideReactionPicker();
+    console.log('[reaction] sending', msgId, emoji);
     try {
       const data = await api(`/api/messages/${msgId}/reactions`, { method: 'POST', body: { emoji } });
+      console.log('[reaction] response', data);
       if (data && data.reactions) updateReactionBar(msgId, data.reactions);
     } catch (err) {
-      console.warn('Reaction failed:', err);
+      console.warn('[reaction] failed:', err);
     }
   }
 
@@ -1809,7 +1817,12 @@
     })();
 
     // Reaction picker: emoji click
+    reactionPicker.addEventListener('mousedown', (e) => {
+      e.preventDefault(); // prevent blur/focus changes
+      e.stopPropagation();
+    });
     reactionPicker.addEventListener('click', (e) => {
+      e.stopPropagation();
       const btn = e.target.closest('button[data-emoji]');
       if (btn && reactionPickerMsgId) toggleReaction(reactionPickerMsgId, btn.dataset.emoji);
     });
@@ -1821,8 +1834,15 @@
       }
     });
 
-    // Reaction badge click (delegation)
+    // Reaction badge click + react button (delegation)
     messagesEl.addEventListener('click', (e) => {
+      const reactBtn = e.target.closest('.msg-react-btn');
+      if (reactBtn) {
+        e.stopPropagation();
+        const row = reactBtn.closest('.msg-row');
+        if (row) showReactionPicker(row, reactBtn);
+        return;
+      }
       const badge = e.target.closest('.reaction-badge');
       if (badge) {
         const row = badge.closest('.msg-row');
