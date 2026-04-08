@@ -41,7 +41,7 @@ a:hover { text-decoration: underline; }
 
 /* ── App layout ──────────────────────────────────────────────────────────── */
 #app {
-  display: flex; height: 100vh; width: 100vw;
+  display: flex; height: 100vh; height: 100dvh; width: 100vw;
 }
 
 /* ── Sidebar ─────────────────────────────────────────────────────────────── */
@@ -708,6 +708,7 @@ a:hover { text-decoration: underline; }
    ═══════════════════════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
   .resize-handle { display: none; }
+  #app { height: 100vh; height: 100dvh; }
   #sidebar {
     position: fixed; inset: 0; width: 100%; min-width: 0;
     z-index: 20; transition: transform .25s ease;
@@ -716,7 +717,18 @@ a:hover { text-decoration: underline; }
 
   .mobile-only { display: flex !important; }
 
-  .chat-header { padding: 10px 8px; }
+  .chat-header {
+    padding: 8px 6px;
+    min-height: 52px;
+    position: sticky; top: 0; z-index: 15;
+    background: var(--bg-sidebar);
+    border-bottom: 1px solid var(--border-light);
+  }
+  .chat-header .icon-btn { width: 40px; height: 40px; font-size: 20px; }
+  .chat-header-avatar { width: 40px; height: 40px; font-size: 16px; }
+  .chat-title { font-size: 16px; }
+  .chat-status { font-size: 12px; }
+
   .messages { padding: 8px; }
 
   .msg-row { max-width: 90%; }
@@ -726,7 +738,7 @@ a:hover { text-decoration: underline; }
 
   .emoji-picker { width: 300px; bottom: 60px; }
 
-  .modal-content { max-height: 90vh; }
+  .modal-content { max-height: 90vh; max-height: 90dvh; }
   .modal-content.wide { max-width: 95vw; }
 }
 
