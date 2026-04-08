@@ -446,7 +446,10 @@
     });
 
     // Mobile: hide sidebar
-    if (window.innerWidth <= 768) sidebar.classList.add('sidebar-hidden');
+    if (window.innerWidth <= 768) {
+      sidebar.classList.add('sidebar-hidden');
+      history.pushState({ chat: chatId }, '');
+    }
 
     const chat = chats.find(c => c.id === chatId);
     chatTitle.textContent = chat ? chat.name : 'Chat';
@@ -1612,7 +1615,17 @@
     });
 
     // Back button (mobile)
-    $('#backBtn').addEventListener('click', () => sidebar.classList.remove('sidebar-hidden'));
+    $('#backBtn').addEventListener('click', () => {
+      sidebar.classList.remove('sidebar-hidden');
+      if (history.state && history.state.chat) history.back();
+    });
+
+    // Android back button
+    window.addEventListener('popstate', () => {
+      if (window.innerWidth <= 768) {
+        sidebar.classList.remove('sidebar-hidden');
+      }
+    });
 
     // New chat
     $('#newChatBtn').addEventListener('click', openNewChatModal);
@@ -1748,6 +1761,17 @@
   // ═══════════════════════════════════════════════════════════════════════════
   async function init() {
     if (!checkAuth()) return;
+
+    // Mobile keyboard resize fix
+    if (window.visualViewport) {
+      const app = document.getElementById('app');
+      const onVVResize = () => {
+        app.style.height = window.visualViewport.height + 'px';
+        window.scrollTo(0, 0);
+      };
+      window.visualViewport.addEventListener('resize', onVVResize);
+      window.visualViewport.addEventListener('scroll', () => window.scrollTo(0, 0));
+    }
 
     // Verify token
     try {
