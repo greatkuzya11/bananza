@@ -1,7 +1,5 @@
 node_modules/
 bananza.db
-bananza.db-wal
-bananza.db-shm
 .secret
 uploads/*
 !uploads/.gitkeep
