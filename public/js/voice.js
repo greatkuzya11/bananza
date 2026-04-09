@@ -7,6 +7,7 @@
     features: {
       voice_notes_enabled: false,
       auto_transcribe_on_send: false,
+      voice_note_ui_mode: 'compact',
     },
     admin: {
       settings: null,
@@ -27,6 +28,10 @@
       timerId: null,
       sampleRate: 16000,
       uploading: false,
+    },
+    playback: {
+      activeAudio: null,
+      activeButton: null,
     },
   };
 
@@ -122,6 +127,11 @@
                   <input type="checkbox" id="voiceFallbackToggle">
                   <span class="toggle-slider"></span>
                 </label>
+              </div>
+
+              <div class="field-group">
+                <label>Интерфейс голосовых сообщений</label>
+                <select id="voiceNoteUiMode" class="modal-input"></select>
               </div>
 
               <div class="field-group">
@@ -250,6 +260,7 @@
       state.features = {
         voice_notes_enabled: Boolean(data.voice_notes_enabled),
         auto_transcribe_on_send: Boolean(data.auto_transcribe_on_send),
+        voice_note_ui_mode: data.voice_note_ui_mode || 'compact',
       };
     } catch {}
     syncSendButtonState();
@@ -260,9 +271,15 @@
     const { sendBtn } = getDom();
     if (!sendBtn) return;
     sendBtn.classList.toggle('voice-enabled', Boolean(state.features.voice_notes_enabled));
-    sendBtn.title = state.features.voice_notes_enabled
-      ? 'Отправить или удерживать для записи'
-      : 'Send';
+    sendBtn.classList.toggle('is-recording', Boolean(state.recorder.recording));
+    sendBtn.classList.toggle('is-uploading', Boolean(state.recorder.uploading));
+    sendBtn.title = state.recorder.recording
+      ? 'Идет запись'
+      : state.recorder.uploading
+        ? 'Отправка голосового сообщения'
+        : state.features.voice_notes_enabled
+          ? 'Отправить или удерживать для записи'
+          : 'Send';
   }
 
   function syncAdminEntryVisibility() {
@@ -338,6 +355,10 @@
     document.getElementById('voiceEnabledToggle').checked = Boolean(settings.voice_notes_enabled);
     document.getElementById('voiceAutoTranscribeToggle').checked = Boolean(settings.auto_transcribe_on_send);
     document.getElementById('voiceFallbackToggle').checked = Boolean(settings.fallback_to_openai);
+    fillSelect('voiceNoteUiMode', options.ui_modes || [
+      { value: 'compact', label: 'Compact' },
+      { value: 'full', label: 'Full' },
+    ], settings.voice_note_ui_mode || 'compact');
     document.getElementById('voiceMinRecordMs').value = settings.min_record_ms;
     document.getElementById('voiceMaxRecordMs').value = settings.max_record_ms;
     document.getElementById('voiceTimeoutMs').value = settings.transcription_timeout_ms;
@@ -390,6 +411,7 @@
       voice_notes_enabled: document.getElementById('voiceEnabledToggle')?.checked || false,
       auto_transcribe_on_send: document.getElementById('voiceAutoTranscribeToggle')?.checked || false,
       fallback_to_openai: document.getElementById('voiceFallbackToggle')?.checked || false,
+      voice_note_ui_mode: document.getElementById('voiceNoteUiMode')?.value || 'compact',
       active_provider: document.getElementById('voiceActiveProvider')?.value || 'vosk',
       min_record_ms: Number(document.getElementById('voiceMinRecordMs')?.value || 500),
       max_record_ms: Number(document.getElementById('voiceMaxRecordMs')?.value || 120000),
@@ -503,6 +525,7 @@
       state.features = {
         voice_notes_enabled: Boolean(msg.settings?.voice_notes_enabled),
         auto_transcribe_on_send: Boolean(msg.settings?.auto_transcribe_on_send),
+        voice_note_ui_mode: msg.settings?.voice_note_ui_mode || 'compact',
       };
       syncSendButtonState();
       refreshVisibleVoiceRows();
@@ -543,33 +566,145 @@
     });
   }
 
-  function renderVoiceRow(row, message) {
-    if (!row || !message?.is_voice_note) return;
-    const bubble = row.querySelector('.msg-bubble');
-    const audioWrap = row.querySelector('.msg-audio');
-    if (!bubble || !audioWrap) return;
-
+  function ensureVoiceAudioSnapshot(audioWrap) {
+    if (!audioWrap.dataset.originalHtml) {
+      audioWrap.dataset.originalHtml = audioWrap.innerHTML;
+    }
     const titleEl = audioWrap.querySelector('div');
     if (titleEl && !audioWrap.dataset.originalTitle) {
       audioWrap.dataset.originalTitle = titleEl.textContent || '';
     }
+    const sourceEl = audioWrap.querySelector('audio source');
+    const audioEl = audioWrap.querySelector('audio');
+    if (!audioWrap.dataset.voiceSrc) {
+      audioWrap.dataset.voiceSrc = sourceEl?.src || audioEl?.src || '';
+    }
+    if (!audioWrap.dataset.voiceMime) {
+      audioWrap.dataset.voiceMime = sourceEl?.type || '';
+    }
+  }
 
-    let panel = bubble.querySelector('.voice-transcription');
-    if (!state.features.voice_notes_enabled) {
-      row.classList.remove('voice-note-row');
-      if (titleEl && audioWrap.dataset.originalTitle) {
-        titleEl.textContent = audioWrap.dataset.originalTitle;
+  function stopActiveCompactPlayback(exceptAudio = null) {
+    const activeAudio = state.playback.activeAudio;
+    if (!activeAudio || activeAudio === exceptAudio) return;
+    try {
+      activeAudio.pause();
+      activeAudio.currentTime = 0;
+    } catch {}
+    if (state.playback.activeButton) {
+      syncCompactPlayButton(state.playback.activeButton, false);
+    }
+    state.playback.activeAudio = null;
+    state.playback.activeButton = null;
+  }
+
+  function syncCompactPlayButton(button, isPlaying) {
+    if (!button) return;
+    button.textContent = isPlaying ? '❚❚' : '▶';
+    button.classList.toggle('is-playing', isPlaying);
+    button.setAttribute('aria-label', isPlaying ? 'Pause voice note' : 'Play voice note');
+  }
+
+  function bindCompactVoicePlayer(audioWrap, button) {
+    const audioEl = audioWrap.querySelector('.voice-compact-audio');
+    if (!audioEl || !button || audioEl.dataset.bound === '1') return;
+
+    audioEl.dataset.bound = '1';
+    syncCompactPlayButton(button, false);
+
+    button.addEventListener('click', () => {
+      if (audioEl.paused) {
+        stopActiveCompactPlayback(audioEl);
+        audioEl.play().catch(() => {
+          syncCompactPlayButton(button, false);
+        });
+        return;
       }
-      if (panel) panel.remove();
-      return;
+      audioEl.pause();
+    });
+
+    audioEl.addEventListener('play', () => {
+      if (state.playback.activeAudio && state.playback.activeAudio !== audioEl) {
+        stopActiveCompactPlayback(audioEl);
+      }
+      state.playback.activeAudio = audioEl;
+      state.playback.activeButton = button;
+      syncCompactPlayButton(button, true);
+    });
+
+    audioEl.addEventListener('pause', () => {
+      if (state.playback.activeAudio === audioEl) {
+        state.playback.activeAudio = null;
+        state.playback.activeButton = null;
+      }
+      syncCompactPlayButton(button, false);
+    });
+
+    audioEl.addEventListener('ended', () => {
+      if (state.playback.activeAudio === audioEl) {
+        state.playback.activeAudio = null;
+        state.playback.activeButton = null;
+      }
+      audioEl.currentTime = 0;
+      syncCompactPlayButton(button, false);
+    });
+  }
+
+  function restoreVoiceAudioMarkup(audioWrap) {
+    ensureVoiceAudioSnapshot(audioWrap);
+    if (state.playback.activeAudio && audioWrap.contains(state.playback.activeAudio)) {
+      stopActiveCompactPlayback();
+    }
+    if (audioWrap.dataset.renderMode !== 'full' && audioWrap.dataset.originalHtml) {
+      audioWrap.innerHTML = audioWrap.dataset.originalHtml;
+    }
+    audioWrap.dataset.renderMode = 'full';
+  }
+
+  function renderCompactVoiceAudio(audioWrap) {
+    ensureVoiceAudioSnapshot(audioWrap);
+    if (state.playback.activeAudio && audioWrap.contains(state.playback.activeAudio)) {
+      stopActiveCompactPlayback();
     }
 
-    row.classList.add('voice-note-row');
-    if (titleEl) {
-      titleEl.textContent = `Голосовое сообщение · ${formatDurationMs(message.voice_duration_ms)}`;
-      titleEl.classList.add('voice-note-title');
+    if (audioWrap.dataset.renderMode !== 'compact') {
+      const src = audioWrap.dataset.voiceSrc || '';
+      const mime = audioWrap.dataset.voiceMime || 'audio/wav';
+      audioWrap.innerHTML = `
+        <audio class="voice-compact-audio" preload="none">
+          <source src="${escapeHtml(src)}" type="${escapeHtml(mime)}">
+        </audio>
+      `;
+      audioWrap.dataset.renderMode = 'compact';
     }
+  }
 
+  function ensureCompactFooterButton(bubble) {
+    const footer = bubble.querySelector('.msg-footer');
+    if (!footer) return null;
+
+    let button = footer.querySelector('.voice-footer-play');
+    if (!button) {
+      button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'voice-footer-play';
+      button.setAttribute('aria-label', 'Play voice note');
+      footer.insertBefore(button, footer.firstChild);
+    }
+    return button;
+  }
+
+  function removeCompactFooterButton(bubble) {
+    const button = bubble?.querySelector('.voice-footer-play');
+    if (!button) return;
+    if (state.playback.activeButton === button) {
+      stopActiveCompactPlayback();
+    }
+    button.remove();
+  }
+
+  function ensureVoicePanel(bubble) {
+    let panel = bubble.querySelector('.voice-transcription');
     if (!panel) {
       panel = document.createElement('div');
       panel.className = 'voice-transcription';
@@ -577,7 +712,10 @@
       if (footer) bubble.insertBefore(panel, footer);
       else bubble.appendChild(panel);
     }
+    return panel;
+  }
 
+  function renderFullVoicePanel(panel, message, row) {
     const status = message.transcription_status || 'idle';
     if (status === 'pending') {
       panel.innerHTML = '<div class="voice-transcription-status pending">Расшифровка...</div>';
@@ -602,16 +740,84 @@
           <button type="button" class="voice-transcribe-btn retry">Повторить</button>
         </div>
       `;
-      panel.querySelector('.voice-transcribe-btn')?.addEventListener('click', () => {
-        requestManualTranscription(message.id, row);
-      });
       return;
     }
 
     panel.innerHTML = '<button type="button" class="voice-transcribe-btn">В текст</button>';
-    panel.querySelector('.voice-transcribe-btn')?.addEventListener('click', () => {
-      requestManualTranscription(message.id, row);
-    });
+  }
+
+  function renderCompactVoicePanel(panel, message, row) {
+    const status = message.transcription_status || 'idle';
+    if (status === 'pending') {
+      panel.innerHTML = '<div class="voice-transcription-inline pending">Расшифровка...</div>';
+      return;
+    }
+
+    if (status === 'completed' && message.transcription_text) {
+      panel.innerHTML = `
+        <div class="voice-transcription-compact-text">${escapeHtml(message.transcription_text)}</div>
+      `;
+      return;
+    }
+
+    if (status === 'error') {
+      panel.innerHTML = `
+        <div class="voice-transcription-inline error">
+          <span class="voice-transcription-inline-text">${escapeHtml(message.transcription_error || 'Ошибка расшифровки')}</span>
+          <button type="button" class="voice-transcribe-btn compact retry">Повторить</button>
+        </div>
+      `;
+      return;
+    }
+
+    panel.innerHTML = '<button type="button" class="voice-transcribe-btn compact">В текст</button>';
+  }
+
+  function renderVoiceRow(row, message) {
+    if (!row || !message?.is_voice_note) return;
+    const bubble = row.querySelector('.msg-bubble');
+    const audioWrap = row.querySelector('.msg-audio');
+    if (!bubble || !audioWrap) return;
+
+    ensureVoiceAudioSnapshot(audioWrap);
+    let panel = bubble.querySelector('.voice-transcription');
+
+    if (!state.features.voice_notes_enabled) {
+      row.classList.remove('voice-note-row', 'voice-note-compact', 'voice-note-full');
+      restoreVoiceAudioMarkup(audioWrap);
+      removeCompactFooterButton(bubble);
+      const titleEl = audioWrap.querySelector('div');
+      if (titleEl && audioWrap.dataset.originalTitle) {
+        titleEl.textContent = audioWrap.dataset.originalTitle;
+        titleEl.classList.remove('voice-note-title');
+      }
+      if (panel) panel.remove();
+      return;
+    }
+
+    const isCompactMode = (state.features.voice_note_ui_mode || 'compact') === 'compact';
+    row.classList.add('voice-note-row');
+    row.classList.toggle('voice-note-compact', isCompactMode);
+    row.classList.toggle('voice-note-full', !isCompactMode);
+
+    panel = ensureVoicePanel(bubble);
+
+    if (isCompactMode) {
+      renderCompactVoiceAudio(audioWrap);
+      const button = ensureCompactFooterButton(bubble);
+      bindCompactVoicePlayer(audioWrap, button);
+      renderCompactVoicePanel(panel, message, row);
+      return;
+    }
+
+    restoreVoiceAudioMarkup(audioWrap);
+    removeCompactFooterButton(bubble);
+    const titleEl = audioWrap.querySelector('div');
+    if (titleEl) {
+      titleEl.textContent = `Голосовое сообщение · ${formatDurationMs(message.voice_duration_ms)}`;
+      titleEl.classList.add('voice-note-title');
+    }
+    renderFullVoicePanel(panel, message, row);
   }
 
   async function requestManualTranscription(messageId, row) {
@@ -658,6 +864,7 @@
     sendBtn.addEventListener('click', (event) => {
       if (!state.recorder.suppressNextClick) return;
       state.recorder.suppressNextClick = false;
+      sendBtn.blur();
       event.preventDefault();
       event.stopImmediatePropagation();
     }, true);
@@ -671,6 +878,17 @@
 
     messagesEl?.addEventListener('scroll', () => {
       if (state.recorder.recording) updateRecorderBar();
+    });
+
+    messagesEl?.addEventListener('click', (event) => {
+      const transcribeBtn = event.target.closest('.voice-transcribe-btn');
+      if (!transcribeBtn) return;
+      const row = transcribeBtn.closest('.msg-row');
+      const messageId = row?.__voiceMessage?.id || Number(row?.dataset.msgId || 0);
+      if (!messageId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      requestManualTranscription(messageId, row);
     });
   }
 
@@ -691,6 +909,7 @@
   }
 
   function handleSendPointerDown(event) {
+    event.currentTarget?.blur?.();
     if (!canUseVoiceGesture()) return;
     state.recorder.holdTimer = window.setTimeout(() => {
       state.recorder.holdTimer = null;
@@ -703,6 +922,7 @@
   }
 
   function handleSendPointerUp(event) {
+    event.currentTarget?.blur?.();
     if (state.recorder.holdTimer) {
       clearTimeout(state.recorder.holdTimer);
       state.recorder.holdTimer = null;
@@ -760,6 +980,7 @@
     state.recorder.sampleRate = audioContext.sampleRate || 16000;
     state.recorder.timerId = window.setInterval(updateRecorderBar, 200);
 
+    syncSendButtonState();
     setRecorderMessage('Запись...', 'recording');
     updateRecorderBar();
     if (navigator.vibrate) navigator.vibrate(30);
@@ -781,6 +1002,7 @@
     const safeDurationMs = Math.min(durationMs, maxRecordMs);
     const wavBlob = encodeVoiceBlob(state.recorder.chunks, state.recorder.sampleRate, 16000);
     state.recorder.uploading = true;
+    syncSendButtonState();
     setRecorderMessage('Отправка голосового сообщения...', 'pending');
 
     try {
@@ -801,6 +1023,7 @@
     } finally {
       state.recorder.uploading = false;
       state.recorder.chunks = [];
+      syncSendButtonState();
     }
   }
 
@@ -818,6 +1041,7 @@
     state.recorder.source = null;
     state.recorder.stream = null;
     state.recorder.audioContext = null;
+    syncSendButtonState();
   }
 
   function mergeChunks(chunks) {

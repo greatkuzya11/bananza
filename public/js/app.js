@@ -80,6 +80,7 @@
   const appBridge = window.BananzaAppBridge = window.BananzaAppBridge || {};
   Object.assign(appBridge, {
     api: (url, opts) => api(url, opts),
+    animateSendButton: () => animateSendButton(),
     autoResize: () => autoResize(),
     clearReply: () => clearReply(),
     closeAllModals: () => closeAllModals(),
@@ -938,6 +939,7 @@
 
     if (!text && !firstFileId) return;
     if (text.length > MAX_MSG) { alert('Message too long'); return; }
+    animateSendButton();
 
     msgInput.value = '';
     autoResize();
@@ -1791,6 +1793,17 @@
     msgInput.style.height = Math.min(msgInput.scrollHeight, 150) + 'px';
   }
 
+  function animateSendButton() {
+    if (!sendBtn) return;
+    sendBtn.classList.remove('send-fly');
+    void sendBtn.offsetWidth;
+    sendBtn.classList.add('send-fly');
+    clearTimeout(sendBtn.__sendFlyTimer);
+    sendBtn.__sendFlyTimer = setTimeout(() => {
+      sendBtn.classList.remove('send-fly');
+    }, 320);
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // EVENT LISTENERS
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1798,6 +1811,7 @@
     // Send message
     sendBtn.addEventListener('click', (e) => {
       e.preventDefault();
+      sendBtn.blur();
       sendMessage();
       // Keep keyboard open on mobile
       if (window.innerWidth <= 768) msgInput.focus();
@@ -1823,28 +1837,65 @@
     const fileInputDocs = $('#fileInputDocs');
     const attachMenu = $('#attachMenu');
     const attachMenuOverlay = $('#attachMenuOverlay');
+    const isMobileAttachMenu = () => window.innerWidth <= 768;
+    const focusComposerKeepKeyboard = () => {
+      if (!isMobileAttachMenu()) return;
+      requestAnimationFrame(() => {
+        try {
+          msgInput.focus({ preventScroll: true });
+        } catch {
+          msgInput.focus();
+        }
+      });
+    };
+    const positionAttachMenu = () => {
+      if (!attachMenu || attachMenu.classList.contains('hidden')) return;
+      const rect = attachBtn.getBoundingClientRect();
+      const vv = window.visualViewport;
+      const viewportLeft = vv ? vv.offsetLeft : 0;
+      const viewportTop = vv ? vv.offsetTop : 0;
+      const viewportWidth = vv ? vv.width : window.innerWidth;
+      const viewportHeight = vv ? vv.height : window.innerHeight;
+      const mw = attachMenu.offsetWidth || 160;
+      const mh = attachMenu.offsetHeight || 145;
+      let left = rect.left + viewportLeft;
+      left = Math.max(viewportLeft + 8, Math.min(left, viewportLeft + viewportWidth - mw - 8));
+      const preferredTop = rect.top + viewportTop - mh - 8;
+      const fallbackTop = rect.bottom + viewportTop + 8;
+      const maxTop = Math.max(viewportTop + 8, viewportTop + viewportHeight - mh - 8);
+      let top = preferredTop;
+      if (top < viewportTop + 8) top = Math.min(fallbackTop, maxTop);
+      top = Math.max(viewportTop + 8, Math.min(top, maxTop));
+      attachMenu.style.left = left + 'px';
+      attachMenu.style.top = top + 'px';
+    };
     const closeAttachMenu = () => { attachMenu.classList.add('hidden'); };
+    const keepAttachButtonFromBlurringInput = (e) => {
+      if (!isMobileAttachMenu()) return;
+      e.preventDefault();
+    };
+
+    attachBtn.addEventListener('pointerdown', keepAttachButtonFromBlurringInput, { passive: false });
+    attachBtn.addEventListener('mousedown', keepAttachButtonFromBlurringInput);
 
     attachBtn.addEventListener('click', (e) => {
+      e.preventDefault();
       e.stopPropagation();
-      if (window.innerWidth <= 768) {
+      if (isMobileAttachMenu()) {
         if (!attachMenu.classList.contains('hidden')) {
           attachMenu.classList.add('hidden');
           return;
         }
         attachMenu.classList.remove('hidden');
-        // Position above the attach button
-        const rect = attachBtn.getBoundingClientRect();
-        const mw = attachMenu.offsetWidth || 160;
-        const mh = attachMenu.offsetHeight || 145;
-        let left = rect.left;
-        let top = rect.top - mh - 8;
-        if (top < 8) top = rect.bottom + 8;
-        left = Math.max(8, Math.min(left, window.innerWidth - mw - 8));
-        attachMenu.style.left = left + 'px';
-        attachMenu.style.top = top + 'px';
+        positionAttachMenu();
+        focusComposerKeepKeyboard();
       } else {
         fileInput.click();
+      }
+    });
+    window.visualViewport?.addEventListener('resize', () => {
+      if (isMobileAttachMenu() && !attachMenu.classList.contains('hidden')) {
+        positionAttachMenu();
       }
     });
     // Close on outside click (no overlay needed)

@@ -3,6 +3,24 @@
   color: #8fd8ff;
 }
 
+.send-btn.voice-enabled.is-recording::before {
+  width: 12px;
+  height: 12px;
+  border: none;
+  border-top: 0;
+  border-bottom: 0;
+  border-left: 0;
+  border-radius: 999px;
+  background: #ff5f6d;
+  transform: none;
+  box-shadow: 0 0 0 3px rgba(255,95,109,0.14);
+  animation: voiceRecordDotPulse 1s ease-in-out infinite;
+}
+
+.send-btn.voice-enabled.is-recording::after {
+  display: none;
+}
+
 .send-btn.voice-enabled::after {
   content: '🎤';
   position: absolute;
@@ -13,6 +31,21 @@
   background: var(--bg-sidebar);
   border-radius: 999px;
   padding: 1px 2px;
+}
+
+@keyframes voiceRecordDotPulse {
+  0% {
+    transform: scale(0.92);
+    box-shadow: 0 0 0 0 rgba(255,95,109,0.24);
+  }
+  60% {
+    transform: scale(1);
+    box-shadow: 0 0 0 6px rgba(255,95,109,0);
+  }
+  100% {
+    transform: scale(0.92);
+    box-shadow: 0 0 0 0 rgba(255,95,109,0);
+  }
 }
 
 .voice-admin-modal {
@@ -164,7 +197,7 @@
   color: var(--text-secondary);
 }
 
-.voice-note-row .msg-audio {
+.voice-note-row.voice-note-full .msg-audio {
   max-width: 340px;
 }
 
@@ -172,13 +205,111 @@
   font-weight: 700;
 }
 
+.msg-row.own.voice-note-compact .msg-bubble {
+  background: #355f8a;
+  padding-right: 9px;
+  padding-left: 9px;
+  padding-bottom: 4px;
+}
+
+.msg-row.other.voice-note-compact .msg-bubble {
+  background: #223447;
+  padding-right: 9px;
+  padding-left: 9px;
+  padding-bottom: 4px;
+}
+
+.voice-note-row.voice-note-compact .msg-audio {
+  display: none;
+}
+
+.voice-footer-play {
+  border: 1px solid rgba(255,255,255,0.14);
+  padding: 0.02em 0.42em 0.06em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-end;
+  background: rgba(255,255,255,0.09);
+  color: rgba(255,255,255,0.94);
+  font-size: 1.12em;
+  font-family: "Segoe UI Symbol", "Segoe UI", sans-serif;
+  font-weight: 700;
+  line-height: 1.05;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  outline: none;
+  box-shadow: none;
+  -webkit-tap-highlight-color: transparent;
+  border-radius: 999px;
+  width: auto;
+  height: auto;
+  min-width: 1.55em;
+  min-height: 1.45em;
+  margin-right: 0;
+  margin-left: -0.06em;
+  transform: translateY(0.03em);
+  flex: 0 0 auto;
+}
+
+.voice-footer-play:hover {
+  background: rgba(255,255,255,0.14);
+  border-color: rgba(255,255,255,0.2);
+  opacity: 1;
+}
+
+.voice-footer-play:focus,
+.voice-footer-play:focus-visible,
+.voice-footer-play:active {
+  outline: none;
+  box-shadow: none;
+  background: rgba(255,255,255,0.17);
+}
+
+.voice-footer-play.is-playing {
+  color: #d8eeff;
+  border-color: rgba(191,227,255,0.3);
+}
+
+.voice-compact-audio {
+  display: none;
+}
+
 .voice-transcription {
   margin-top: 8px;
+}
+
+.voice-note-row.voice-note-compact .voice-transcription {
+  margin-top: 4px;
 }
 
 .voice-transcription-status {
   font-size: 13px;
   color: var(--accent);
+}
+
+.voice-transcription-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-height: 24px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.voice-transcription-inline.pending {
+  color: var(--accent);
+}
+
+.voice-transcription-inline.error {
+  color: var(--danger);
+}
+
+.voice-transcription-inline-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .voice-transcription-block {
@@ -204,6 +335,22 @@
   white-space: pre-wrap;
 }
 
+.voice-transcription-compact-text {
+  padding: 0;
+  font: inherit;
+  line-height: inherit;
+  color: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.voice-note-row.voice-note-compact .msg-footer {
+  margin-top: 2px;
+  gap: 2px;
+  align-items: center;
+  overflow: visible;
+}
+
 .voice-transcribe-btn {
   padding: 7px 10px;
   border-radius: 8px;
@@ -211,10 +358,38 @@
   color: var(--accent);
   font-size: 13px;
   font-weight: 700;
+  border: 1px solid rgba(94,181,247,0.22);
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+
+.voice-transcribe-btn:hover {
+  background: rgba(94,181,247,0.2);
+  border-color: rgba(94,181,247,0.34);
+}
+
+.voice-transcribe-btn:focus,
+.voice-transcribe-btn:focus-visible,
+.voice-transcribe-btn:active {
+  outline: none;
+  box-shadow: none;
 }
 
 .voice-transcribe-btn.retry {
   margin-top: 8px;
+}
+
+.voice-transcribe-btn.compact {
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.voice-transcription-inline .voice-transcribe-btn.retry {
+  margin-top: 0;
 }
 
 @keyframes voicePulse {

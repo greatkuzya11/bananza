@@ -7,6 +7,10 @@ const VOICE_SETTINGS_OPTIONS = {
     { value: 'vosk', label: 'Vosk (local/free)' },
     { value: 'openai', label: 'OpenAI' },
   ],
+  ui_modes: [
+    { value: 'compact', label: 'Компактный' },
+    { value: 'full', label: 'Полный' },
+  ],
   models: {
     vosk: [
       { value: 'vosk-model-small-ru-0.22', label: 'vosk-model-small-ru-0.22' },
@@ -23,6 +27,7 @@ const VOICE_SETTINGS_OPTIONS = {
 const DEFAULT_VOICE_SETTINGS = {
   voice_notes_enabled: false,
   auto_transcribe_on_send: false,
+  voice_note_ui_mode: 'compact',
   active_provider: 'vosk',
   fallback_to_openai: false,
   min_record_ms: 500,
@@ -75,6 +80,10 @@ function normalizeSettings(raw = {}) {
   next.voice_notes_enabled = normalizeBoolean(next.voice_notes_enabled, DEFAULT_VOICE_SETTINGS.voice_notes_enabled);
   next.auto_transcribe_on_send = normalizeBoolean(next.auto_transcribe_on_send, DEFAULT_VOICE_SETTINGS.auto_transcribe_on_send);
   next.fallback_to_openai = normalizeBoolean(next.fallback_to_openai, DEFAULT_VOICE_SETTINGS.fallback_to_openai);
+  next.voice_note_ui_mode = String(next.voice_note_ui_mode || DEFAULT_VOICE_SETTINGS.voice_note_ui_mode).trim();
+  if (!['compact', 'full'].includes(next.voice_note_ui_mode)) {
+    next.voice_note_ui_mode = DEFAULT_VOICE_SETTINGS.voice_note_ui_mode;
+  }
   next.min_record_ms = clampNumber(next.min_record_ms, DEFAULT_VOICE_SETTINGS.min_record_ms, 300, 10_000);
   next.max_record_ms = clampNumber(next.max_record_ms, DEFAULT_VOICE_SETTINGS.max_record_ms, 5_000, 600_000);
   next.transcription_timeout_ms = clampNumber(
@@ -197,6 +206,7 @@ function getPublicVoiceSettings(db) {
   return {
     voice_notes_enabled: settings.voice_notes_enabled,
     auto_transcribe_on_send: settings.auto_transcribe_on_send,
+    voice_note_ui_mode: settings.voice_note_ui_mode,
   };
 }
 
