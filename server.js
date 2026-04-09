@@ -13,6 +13,7 @@ const helmet = require('helmet');
 const db = require('./db');
 const { setupWebSocket, broadcastToChatAll, sendToUser, clients } = require('./websocket');
 const { extractUrls, fetchPreview } = require('./linkPreview');
+const { createVoiceFeature } = require('./voice');
 
 // ── JWT Secret ──────────────────────────────────────────────────────────────
 const SECRET_PATH = path.join(__dirname, '.secret');
@@ -112,6 +113,19 @@ function adminOnly(req, res, next) {
   if (!req.user.is_admin) return res.status(403).json({ error: 'Admin only' });
   next();
 }
+
+const voiceFeature = createVoiceFeature({
+  app,
+  db,
+  auth,
+  adminOnly,
+  msgLimiter,
+  upLimiter,
+  uploadsDir: UPLOADS_DIR,
+  broadcastToChatAll,
+  clients,
+  secret: JWT_SECRET,
+});
 
 // ═══════════════════════════════════════════════════════════════════════════
 // AUTH ROUTES
@@ -325,7 +339,9 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
   ).get(chatId, req.user.id);
   const minRead = readInfo ? readInfo.min_read || 0 : 0;
 
-  const result = msgs.map(m => ({ ...m, previews: prevStmt.all(m.id), reactions: reactStmt.all(m.id), is_read: m.id <= minRead }));
+  const result = voiceFeature.attachVoiceMetadata(
+    msgs.map(m => ({ ...m, previews: prevStmt.all(m.id), reactions: reactStmt.all(m.id), is_read: m.id <= minRead }))
+  );
   res.json(result.reverse());
 });
 
@@ -364,8 +380,9 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   `).get(r.lastInsertRowid);
   msg.previews = [];
   msg.reactions = [];
+  const hydratedMsg = voiceFeature.attachVoiceMetadata([msg])[0];
 
-  broadcastToChatAll(chatId, { type: 'message', message: msg });
+  broadcastToChatAll(chatId, { type: 'message', message: hydratedMsg });
 
   // Async link previews
   if (cleanText) {
@@ -380,7 +397,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
     }
   }
 
-  res.json(msg);
+  res.json(hydratedMsg);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -637,6 +654,7 @@ app.delete('/api/messages/:id', auth, (req, res) => {
   db.prepare('UPDATE messages SET is_deleted=1, text=NULL, file_id=NULL WHERE id=?').run(mid);
   // Clean up related file and previews
   if (m.file_id) db.prepare('DELETE FROM files WHERE id=?').run(m.file_id);
+  voiceFeature.deleteVoiceMetadata(mid);
   db.prepare('DELETE FROM link_previews WHERE message_id=?').run(mid);
   broadcastToChatAll(m.chat_id, { type: 'message_deleted', messageId: mid, chatId: m.chat_id });
   res.json({ ok: true });

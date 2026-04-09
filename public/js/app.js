@@ -77,6 +77,28 @@
   const settingsModal = $('#settingsModal');
   const changePasswordModal = $('#changePasswordModal');
 
+  const appBridge = window.BananzaAppBridge = window.BananzaAppBridge || {};
+  Object.assign(appBridge, {
+    api: (url, opts) => api(url, opts),
+    autoResize: () => autoResize(),
+    clearReply: () => clearReply(),
+    closeAllModals: () => closeAllModals(),
+    getToken: () => token || localStorage.getItem('token'),
+    getCurrentUser: () => currentUser,
+    getCurrentChatId: () => currentChatId,
+    getPendingFiles: () => [...pendingFiles],
+    getReplyTo: () => replyTo ? { ...replyTo } : null,
+    getDom: () => ({
+      sendBtn,
+      msgInput,
+      messagesEl,
+      pendingFileEl,
+      settingsModal,
+      chatView,
+    }),
+    isMobileLayout: () => window.innerWidth <= 768,
+  });
+
   // ═══════════════════════════════════════════════════════════════════════════
   // UTILS
   // ═══════════════════════════════════════════════════════════════════════════
@@ -216,7 +238,7 @@
         // Only render if we're in the relevant chat
         if (msg.message.chat_id === currentChatId && !displayedMsgIds.has(msg.message.id)) {
           appendMessage(msg.message);
-          scrollToBottom();
+          if (isNearBottom()) scrollToBottom();
           // Mark as read
           api(`/api/chats/${currentChatId}/read`, { method: 'POST' }).catch(() => {});
         }
@@ -277,6 +299,11 @@
       }
       case 'reaction': {
         updateReactionBar(msg.messageId, msg.reactions);
+        break;
+      }
+      case 'message_transcription':
+      case 'voice_settings_updated': {
+        window.BananzaVoiceHooks?.handleWSMessage?.(msg);
         break;
       }
       case 'chat_updated': {
@@ -447,7 +474,7 @@
 
     currentChatId = chatId;
     displayedMsgIds.clear();
-    hasMore = true;
+    hasMore = false; // prevent scroll handler triggering loadMore during DOM clear
 
     emptyState.classList.add('hidden');
     chatView.classList.remove('hidden');
@@ -501,6 +528,10 @@
 
     try {
       const msgs = await api(`/api/chats/${chatId}/messages?limit=${PAGE_SIZE}`);
+      // Re-clear after async gap: WS may have appended messages while we waited
+      if (currentChatId !== chatId) return; // user switched chats
+      messagesEl.querySelectorAll('.msg-row, .msg-group, .date-separator').forEach(el => el.remove());
+      displayedMsgIds.clear();
       hasMore = msgs.length >= PAGE_SIZE;
       if (hasMore) loadMoreWrap.classList.remove('hidden');
       renderMessages(msgs);
@@ -596,10 +627,10 @@
     const isOwn = msg.user_id === currentUser.id;
     const useGroup = !isOwn || compactView;
 
-    // Date separator check
-    const lastRow = messagesEl.querySelector('.msg-row:last-child, .msg-group:last-child');
-    const lastDateStr = lastRow?.dataset?.date || lastRow?.querySelector('.msg-row:last-child')?.dataset?.date;
-    if (lastRow && lastDateStr && lastDateStr !== msgDate) {
+    // Date separator: compare against last separator in DOM
+    const seps = messagesEl.querySelectorAll('.date-separator');
+    const lastSepDate = seps.length ? seps[seps.length - 1].textContent.trim() : null;
+    if (lastSepDate !== msgDate) {
       const sep = document.createElement('div');
       sep.className = 'date-separator';
       sep.innerHTML = `<span>${msgDate}</span>`;
@@ -645,6 +676,16 @@
     row.dataset.msgId = msg.id;
     row.dataset.date = formatDate(msg.created_at);
     row.dataset.userId = msg.user_id;
+    row.__voiceBootstrap = {
+      id: msg.id,
+      is_voice_note: !!msg.is_voice_note,
+      voice_duration_ms: msg.voice_duration_ms || null,
+      transcription_status: msg.transcription_status || 'idle',
+      transcription_text: msg.transcription_text || '',
+      transcription_provider: msg.transcription_provider || '',
+      transcription_model: msg.transcription_model || '',
+      transcription_error: msg.transcription_error || '',
+    };
 
     let html = '';
 
@@ -735,7 +776,8 @@
     const img = row.querySelector('.msg-image');
     if (img) {
       img.addEventListener('click', () => openImageViewer(img.src));
-      img.addEventListener('load', () => scrollToBottom());
+      const wasNearBottom = isNearBottom();
+      img.addEventListener('load', () => { if (wasNearBottom) scrollToBottom(); });
     }
 
     // Audio/video duration
@@ -760,6 +802,8 @@
       });
     }
 
+    window.BananzaVoiceHooks?.decorateMessageRow?.(row, msg);
+
     return row;
   }
 
@@ -774,7 +818,7 @@
     const url = `/uploads/${msg.file_stored}`;
     switch (msg.file_type) {
       case 'image':
-        return `<img class="msg-image" src="${url}" alt="${esc(msg.file_name)}" loading="lazy">`;
+        return `<img class="msg-image" src="${url}" alt="${esc(msg.file_name)}">`;
       case 'audio':
         return `<div class="msg-audio">
           <div style="font-size:13px;margin-bottom:4px">🎵 ${esc(msg.file_name)}</div>
@@ -816,13 +860,16 @@
 
     const firstMsg = messagesEl.querySelector('.msg-row');
     const firstId = firstMsg ? firstMsg.dataset.msgId : null;
-    const scrollH = messagesEl.scrollHeight;
 
     try {
       const url = `/api/chats/${currentChatId}/messages?limit=${PAGE_SIZE}${firstId ? '&before=' + firstId : ''}`;
       const msgs = await api(url);
       hasMore = msgs.length >= PAGE_SIZE;
       if (!hasMore) loadMoreWrap.classList.add('hidden');
+
+      // Capture scroll state RIGHT before DOM mutation (not before async fetch)
+      const scrollTopBefore = messagesEl.scrollTop;
+      const scrollHeightBefore = messagesEl.scrollHeight;
 
       // Insert at top
       let lastDate = null;
@@ -841,12 +888,24 @@
         displayedMsgIds.add(msg.id);
       }
 
-      // Maintain scroll position
-      messagesEl.scrollTop = messagesEl.scrollHeight - scrollH;
+      // Remove duplicate date separators (keep first occurrence of each date)
+      const seenDates = new Set();
+      messagesEl.querySelectorAll('.date-separator').forEach(sep => {
+        const text = sep.textContent.trim();
+        if (seenDates.has(text)) sep.remove();
+        else seenDates.add(text);
+      });
+
+      // Restore scroll position: keep user at the same visual spot
+      messagesEl.scrollTop = scrollTopBefore + (messagesEl.scrollHeight - scrollHeightBefore);
     } catch {}
 
     loadingMore = false;
     loadMoreBtn.textContent = 'Load earlier messages';
+  }
+
+  function isNearBottom(threshold = 150) {
+    return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < threshold;
   }
 
   function scrollToBottom(instant = false) {
@@ -1341,6 +1400,7 @@
   function closeAllModals() {
     [newChatModal, adminModal, chatInfoModal, menuDrawer, emojiPicker, settingsModal, changePasswordModal].forEach(m => m.classList.add('hidden'));
     imageViewer.classList.add('hidden');
+    window.BananzaVoiceHooks?.closeAll?.();
   }
 
   // New chat modal
@@ -1442,6 +1502,7 @@
     else adminItem.classList.add('hidden');
     $('#settingsSendEnter').checked = sendByEnter;
     $('#settingsScrollRestore').checked = scrollRestoreMode === 'restore';
+    window.BananzaVoiceHooks?.onSettingsOpened?.({ currentUser });
   }
 
   function openChangePasswordModal() {
@@ -2098,6 +2159,8 @@
         openChat(lastChat);
       }
     }
+
+    window.dispatchEvent(new Event('bananza:ready'));
   }
 
   init();

@@ -1,0 +1,234 @@
+.send-btn.voice-enabled {
+  position: relative;
+  color: #8fd8ff;
+}
+
+.send-btn.voice-enabled::after {
+  content: '🎤';
+  position: absolute;
+  right: -2px;
+  bottom: -1px;
+  font-size: 11px;
+  line-height: 1;
+  background: var(--bg-sidebar);
+  border-radius: 999px;
+  padding: 1px 2px;
+}
+
+.voice-admin-modal {
+  max-width: 560px;
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.voice-provider-panel {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: rgba(255,255,255,0.02);
+}
+
+.voice-form-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.voice-inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.voice-admin-actions {
+  margin-top: 12px;
+}
+
+.voice-selected-model-meta {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.voice-inline-btn {
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.voice-inline-danger {
+  margin: 0;
+  padding: 8px 10px;
+}
+
+.voice-key-state {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: -4px;
+  margin-bottom: 2px;
+}
+
+.voice-admin-status {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.voice-admin-status.success {
+  background: rgba(123,200,98,0.14);
+  color: var(--success);
+}
+
+.voice-admin-status.error {
+  background: rgba(225,112,118,0.14);
+  color: var(--danger);
+}
+
+.voice-admin-status.pending {
+  background: rgba(94,181,247,0.14);
+  color: var(--accent);
+}
+
+.voice-last-test {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--bg-input);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.voice-last-test.success {
+  border: 1px solid rgba(123,200,98,0.2);
+}
+
+.voice-last-test.error {
+  border: 1px solid rgba(225,112,118,0.2);
+}
+
+.voice-last-test-title {
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.voice-last-test-body {
+  margin-top: 8px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+}
+
+.voice-recorder-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin: 0 0 8px;
+  border-radius: 10px;
+  background: rgba(225,112,118,0.12);
+  color: var(--text-primary);
+}
+
+.voice-recorder-bar.pending {
+  background: rgba(94,181,247,0.12);
+}
+
+.voice-recorder-bar.error {
+  background: rgba(225,112,118,0.18);
+}
+
+.voice-recorder-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ff6a6a;
+  animation: voicePulse 1s infinite;
+}
+
+.voice-recorder-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.voice-recorder-time {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.voice-note-row .msg-audio {
+  max-width: 340px;
+}
+
+.voice-note-title {
+  font-weight: 700;
+}
+
+.voice-transcription {
+  margin-top: 8px;
+}
+
+.voice-transcription-status {
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.voice-transcription-block {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.06);
+}
+
+.voice-transcription-block.error {
+  background: rgba(225,112,118,0.12);
+}
+
+.voice-transcription-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+
+.voice-transcription-text {
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+}
+
+.voice-transcribe-btn {
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(94,181,247,0.14);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.voice-transcribe-btn.retry {
+  margin-top: 8px;
+}
+
+@keyframes voicePulse {
+  0% { opacity: 0.35; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.05); }
+  100% { opacity: 0.35; transform: scale(0.9); }
+}
+
+@media (max-width: 768px) {
+  .field-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .voice-admin-modal {
+    max-width: 100%;
+  }
+}

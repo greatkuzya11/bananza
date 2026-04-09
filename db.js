@@ -1,5 +1,6 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const { initVoiceSchema } = require('./voice/schema');
 
 const db = new Database(path.join(__dirname, 'bananza.db'));
 
@@ -128,5 +129,7 @@ try {
     CREATE INDEX IF NOT EXISTS idx_reactions_msg ON reactions(message_id);
   `);
 }
+
+initVoiceSchema(db);
 
 module.exports = db;
