@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>🍌 BananZa — Login</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍌</text></svg>">
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
     body{background:#0e1621;color:#f5f5f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}
@@ -20,6 +21,11 @@
     .field label{display:block;font-size:12px;color:#7e8b99;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
     .field input{width:100%;padding:12px 14px;background:#242f3d;border:1px solid #3a4a5c;border-radius:8px;color:#f5f5f5;font-size:15px;outline:none;transition:.2s}
     .field input:focus{border-color:#5eb5f7}
+    .pw-wrap{position:relative}
+    .pw-wrap input{padding-right:44px}
+    .pw-toggle{position:absolute;right:8px;top:50%;transform:translateY(-50%);background:transparent;border:none;color:#9fb7cf;cursor:pointer;font-size:16px;padding:6px;border-radius:6px}
+    .pw-toggle:active{color:#5eb5f7}
+    .pw-toggle:focus{outline:2px solid #5eb5f7}
     .btn{width:100%;padding:12px;background:#5eb5f7;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;transition:.2s;margin-top:8px}
     .btn:hover{background:#4aa3e5}
     .btn:disabled{opacity:.5;cursor:not-allowed}
@@ -45,7 +51,10 @@
       </div>
       <div class="field">
         <label>Password</label>
-        <input type="password" id="loginPass" autocomplete="current-password" maxlength="100" required>
+        <div class="pw-wrap">
+          <input type="password" id="loginPass" autocomplete="current-password" maxlength="100" required>
+          <button type="button" class="pw-toggle" data-target="loginPass" aria-label="Show password">👁️</button>
+        </div>
       </div>
       <button class="btn" type="submit">Sign In</button>
       <div class="error" id="loginError"></div>
@@ -62,11 +71,17 @@
       </div>
       <div class="field">
         <label>Password</label>
-        <input type="password" id="regPass" autocomplete="new-password" maxlength="100" required>
+        <div class="pw-wrap">
+          <input type="password" id="regPass" autocomplete="new-password" maxlength="100" required>
+          <button type="button" class="pw-toggle" data-target="regPass" aria-label="Show password">👁️</button>
+        </div>
       </div>
       <div class="field">
         <label>Confirm Password</label>
-        <input type="password" id="regPassConfirm" autocomplete="new-password" maxlength="100" required>
+        <div class="pw-wrap">
+          <input type="password" id="regPassConfirm" autocomplete="new-password" maxlength="100" required>
+          <button type="button" class="pw-toggle" data-target="regPassConfirm" aria-label="Show password">👁️</button>
+        </div>
       </div>
       <button class="btn" type="submit">Create Account</button>
       <div class="error" id="regError"></div>
@@ -141,6 +156,33 @@
         setTimeout(() => { location.href = '/'; }, 3000);
       } catch (ex) { err.textContent = ex.message; }
     });
+
+    // Press-to-show password buttons: show while pressed (pointer/touch), fallback click briefly
+    (function setupPasswordToggles(){
+      function showInput(id){
+        const el = document.getElementById(id); if (!el) return; el.type = 'text';
+      }
+      function hideInput(id){
+        const el = document.getElementById(id); if (!el) return; el.type = 'password';
+      }
+      document.querySelectorAll('.pw-toggle').forEach(btn => {
+        const target = btn.dataset.target;
+        if (!target) return;
+        // pointer events (covers mouse + stylus + touch where supported)
+        btn.addEventListener('pointerdown', (ev) => { ev.preventDefault(); showInput(target); });
+        btn.addEventListener('pointerup', (ev) => { ev.preventDefault(); hideInput(target); });
+        btn.addEventListener('pointercancel', () => hideInput(target));
+        btn.addEventListener('mouseleave', () => hideInput(target));
+        // extra touch handlers for older browsers
+        btn.addEventListener('touchstart', (ev) => { ev.preventDefault(); showInput(target); }, { passive: false });
+        btn.addEventListener('touchend', (ev) => { ev.preventDefault(); hideInput(target); }, { passive: false });
+        // fallback click: toggle briefly for accessibility (500ms)
+        btn.addEventListener('click', (ev) => {
+          ev.preventDefault(); const inp = document.getElementById(target); if (!inp) return;
+          if (inp.type === 'password') { inp.type = 'text'; setTimeout(() => hideInput(target), 500); } else hideInput(target);
+        });
+      });
+    })();
   </script>
 </body>
 </html>

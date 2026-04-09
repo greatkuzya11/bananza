@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
   <title>🍌 BananZa</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍌</text></svg>">
   <link rel="stylesheet" href="/css/style.css">
   <link rel="stylesheet" href="/css/voice.css">
 </head>
@@ -298,10 +299,18 @@
 
   <!-- Mobile attach menu -->
   <div id="attachMenu" class="attach-menu hidden">
-    <button id="attachMenuGallery">🖼 Gallery</button>
-    <button id="attachMenuCamera">📷 Camera</button>
-    <button id="attachMenuFile">📄 File</button>
-    <button id="attachMenuCancel">Cancel</button>
+    <button id="attachMenuGallery" class="attach-menu-item">
+      <span class="attach-menu-icon" style="background:#5b9cf6">🖼</span>
+      <span>Gallery</span>
+    </button>
+    <button id="attachMenuCamera" class="attach-menu-item">
+      <span class="attach-menu-icon" style="background:#4caf7d">📷</span>
+      <span>Camera</span>
+    </button>
+    <button id="attachMenuFile" class="attach-menu-item">
+      <span class="attach-menu-icon" style="background:#f0a24e">📄</span>
+      <span>File</span>
+    </button>
   </div>
   <div id="attachMenuOverlay" class="attach-menu-overlay hidden"></div>
 

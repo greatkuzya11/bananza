@@ -550,7 +550,7 @@
     } catch {}
 
     clearReply();
-    msgInput.focus();
+    if (window.innerWidth > 768) msgInput.focus();
     localStorage.setItem('lastChat', chatId);
   }
 
@@ -780,6 +780,16 @@
       img.addEventListener('load', () => { if (wasNearBottom) scrollToBottom(); });
     }
 
+    const expandBtn = row.querySelector('.msg-expand-btn');
+    if (expandBtn) {
+      expandBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const video = row.querySelector('.msg-video video');
+        const src = video?.querySelector('source')?.getAttribute('src') || '';
+        if (src) openMediaViewer(src, 'video');
+      });
+    }
+
     // Audio/video duration
     const audio = row.querySelector('audio');
     if (audio) {
@@ -827,7 +837,10 @@
         </div>`;
       case 'video':
         return `<div class="msg-video">
-          <video controls preload="metadata" playsinline><source src="${url}" type="${msg.file_mime}"></video>
+          <div class="msg-video-wrap">
+            <video controls preload="metadata" playsinline><source src="${url}" type="${msg.file_mime}"></video>
+            <button class="msg-expand-btn" type="button" title="Fullscreen">&#x26F6;</button>
+          </div>
           <div style="font-size:11px;color:var(--text-secondary);margin-top:4px">${esc(msg.file_name)} · ${formatSize(msg.file_size)} · <a href="${url}" download="${esc(msg.file_name)}">Download</a></div>
         </div>`;
       default:
@@ -1271,11 +1284,13 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // IMAGE VIEWER
+  // MEDIA VIEWER
   // ═══════════════════════════════════════════════════════════════════════════
-  let galleryImages = [];
+  let galleryItems = []; // { src, type: 'image'|'video' }
   let galleryIndex = 0;
   let ivScale = 1, ivPanX = 0, ivPanY = 0;
+  let ivHistoryPushed = false;    // true when we pushed { view: 'mediaviewer' } to history
+  let ivSkipNextPopstate = false; // skip chat-nav after closeMediaViewer calls history.back()
 
   // ═══════════════════════════════════════════════════════════════════════════
   // REACTIONS
@@ -1346,12 +1361,21 @@
     }
   }
 
-  function collectGalleryImages() {
-    galleryImages = Array.from(messagesEl.querySelectorAll('.msg-image')).map(img => img.src);
+  function collectGalleryItems() {
+    galleryItems = [];
+    messagesEl.querySelectorAll('.msg-image, .msg-video video').forEach(el => {
+      if (el.tagName === 'IMG') {
+        galleryItems.push({ src: el.src, type: 'image' });
+      } else if (el.tagName === 'VIDEO') {
+        const src = el.querySelector('source')?.getAttribute('src') || '';
+        if (src) galleryItems.push({ src, type: 'video' });
+      }
+    });
   }
 
   function ivCurrentImg() {
-    return ivStrip.querySelectorAll('.iv-slide img')[galleryIndex] || null;
+    if (galleryItems[galleryIndex]?.type === 'video') return null;
+    return ivStrip.querySelectorAll('.iv-slide')[galleryIndex]?.querySelector('img') || null;
   }
   function ivApplyTransform() {
     const img = ivCurrentImg();
@@ -1363,35 +1387,71 @@
     if (img) img.style.transform = '';
   }
 
-  function openImageViewer(src) {
-    collectGalleryImages();
-    galleryIndex = galleryImages.indexOf(src);
+  function openMediaViewer(src, type = 'image') {
+    collectGalleryItems();
+    galleryIndex = galleryItems.findIndex(item => item.src === src && item.type === type);
     if (galleryIndex < 0) galleryIndex = 0;
-    ivStrip.innerHTML = galleryImages.map(s =>
-      `<div class="iv-slide"><img src="${esc(s)}" alt=""></div>`
-    ).join('');
+    ivStrip.innerHTML = galleryItems.map(item => {
+      if (item.type === 'video') {
+        return `<div class="iv-slide iv-slide-video"><video controls playsinline><source src="${esc(item.src)}"></video></div>`;
+      }
+      return `<div class="iv-slide"><img src="${esc(item.src)}" alt=""></div>`;
+    }).join('');
     ivScale = 1; ivPanX = 0; ivPanY = 0;
     ivStrip.style.transition = 'none';
     ivStrip.style.transform = `translateX(${-galleryIndex * window.innerWidth}px)`;
     updateGalleryArrows();
+    if (window.innerWidth <= 768) {
+      history.pushState({ view: 'mediaviewer' }, '');
+      ivHistoryPushed = true;
+    }
+    // Pause any playing videos in the chat view (user opened fullscreen viewer)
+    try {
+      messagesEl.querySelectorAll('.msg-video video').forEach(v => {
+        try { if (!v.paused) v.pause(); } catch (e) {}
+      });
+    } catch (e) {}
+
     imageViewer.classList.remove('hidden');
+    if (galleryItems[galleryIndex]?.type === 'video') {
+      ivStrip.querySelectorAll('.iv-slide')[galleryIndex]?.querySelector('video')?.play().catch(() => {});
+    }
+  }
+  // Backward-compat alias used by existing image click handlers
+  function openImageViewer(src) { openMediaViewer(src, 'image'); }
+
+  function closeMediaViewer() {
+    if (imageViewer.classList.contains('hidden')) return;
+    ivStrip.querySelectorAll('video').forEach(v => v.pause());
+    imageViewer.classList.add('hidden');
+    if (ivHistoryPushed) {
+      ivHistoryPushed = false;
+      ivSkipNextPopstate = true;
+      history.back();
+    }
   }
 
   function updateGalleryArrows() {
     const prev = imageViewer.querySelector('.iv-prev');
     const next = imageViewer.querySelector('.iv-next');
-    prev.style.display = galleryImages.length > 1 && galleryIndex > 0 ? '' : 'none';
-    next.style.display = galleryImages.length > 1 && galleryIndex < galleryImages.length - 1 ? '' : 'none';
+    prev.style.display = galleryItems.length > 1 && galleryIndex > 0 ? '' : 'none';
+    next.style.display = galleryItems.length > 1 && galleryIndex < galleryItems.length - 1 ? '' : 'none';
   }
 
   function galleryNav(dir) {
     const newIdx = galleryIndex + dir;
-    if (newIdx < 0 || newIdx >= galleryImages.length) return;
+    if (newIdx < 0 || newIdx >= galleryItems.length) return;
+    ivStrip.querySelectorAll('.iv-slide')[galleryIndex]?.querySelector('video')?.pause();
     ivResetZoom();
     galleryIndex = newIdx;
     ivStrip.style.transition = 'transform 0.3s ease';
     ivStrip.style.transform = `translateX(${-galleryIndex * window.innerWidth}px)`;
     updateGalleryArrows();
+    if (galleryItems[galleryIndex]?.type === 'video') {
+      setTimeout(() => {
+        ivStrip.querySelectorAll('.iv-slide')[galleryIndex]?.querySelector('video')?.play().catch(() => {});
+      }, 350);
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1399,7 +1459,7 @@
   // ═══════════════════════════════════════════════════════════════════════════
   function closeAllModals() {
     [newChatModal, adminModal, chatInfoModal, menuDrawer, emojiPicker, settingsModal, changePasswordModal].forEach(m => m.classList.add('hidden'));
-    imageViewer.classList.add('hidden');
+    closeMediaViewer();
     window.BananzaVoiceHooks?.closeAll?.();
   }
 
@@ -1763,18 +1823,38 @@
     const fileInputDocs = $('#fileInputDocs');
     const attachMenu = $('#attachMenu');
     const attachMenuOverlay = $('#attachMenuOverlay');
-    const closeAttachMenu = () => { attachMenu.classList.add('hidden'); attachMenuOverlay.classList.add('hidden'); };
+    const closeAttachMenu = () => { attachMenu.classList.add('hidden'); };
 
-    attachBtn.addEventListener('click', () => {
+    attachBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
       if (window.innerWidth <= 768) {
+        if (!attachMenu.classList.contains('hidden')) {
+          attachMenu.classList.add('hidden');
+          return;
+        }
         attachMenu.classList.remove('hidden');
-        attachMenuOverlay.classList.remove('hidden');
+        // Position above the attach button
+        const rect = attachBtn.getBoundingClientRect();
+        const mw = attachMenu.offsetWidth || 160;
+        const mh = attachMenu.offsetHeight || 145;
+        let left = rect.left;
+        let top = rect.top - mh - 8;
+        if (top < 8) top = rect.bottom + 8;
+        left = Math.max(8, Math.min(left, window.innerWidth - mw - 8));
+        attachMenu.style.left = left + 'px';
+        attachMenu.style.top = top + 'px';
       } else {
         fileInput.click();
       }
     });
+    // Close on outside click (no overlay needed)
+    document.addEventListener('click', (e) => {
+      if (!attachMenu.classList.contains('hidden') && !attachMenu.contains(e.target) && e.target !== attachBtn) {
+        attachMenu.classList.add('hidden');
+      }
+    });
     attachMenuOverlay.addEventListener('click', closeAttachMenu);
-    $('#attachMenuCancel').addEventListener('click', closeAttachMenu);
+    $('#attachMenuCancel') && $('#attachMenuCancel').addEventListener('click', closeAttachMenu);
     $('#attachMenuGallery').addEventListener('click', () => { closeAttachMenu(); fileInputGallery.click(); });
     $('#attachMenuCamera').addEventListener('click', () => { closeAttachMenu(); fileInputCamera.click(); });
     $('#attachMenuFile').addEventListener('click', () => { closeAttachMenu(); fileInputDocs.click(); });
@@ -1790,37 +1870,66 @@
       emojiPicker.classList.toggle('hidden');
     });
 
-    // Image viewer close
+    // Media viewer close
     imageViewer.addEventListener('click', (e) => {
       if (e.target.closest('.iv-prev')) { galleryNav(-1); return; }
       if (e.target.closest('.iv-next')) { galleryNav(1); return; }
-      if (e.target.closest('.iv-close') || e.target.classList.contains('iv-slide')) imageViewer.classList.add('hidden');
+      if (e.target.closest('.iv-close') || e.target.classList.contains('iv-slide')) closeMediaViewer();
     });
     document.addEventListener('keydown', (e) => {
       if (imageViewer.classList.contains('hidden')) return;
       if (e.key === 'ArrowLeft') galleryNav(-1);
       else if (e.key === 'ArrowRight') galleryNav(1);
-      else if (e.key === 'Escape') imageViewer.classList.add('hidden');
+      else if (e.key === 'Escape') closeMediaViewer();
     });
 
-    // Strip swipe + pinch-zoom for image viewer
+    // Strip swipe + pinch-zoom + double-tap for media viewer
     (() => {
       let startX = 0, startY = 0, dragging = false, dx = 0;
       let panBaseX = 0, panBaseY = 0;
       let pinching = false, pinchDist0 = 0, scaleBase = 1;
       const MAX_SCALE = 5;
+      let lastTapTime = 0, lastTapX = 0, lastTapY = 0;
 
       imageViewer.addEventListener('touchstart', (e) => {
         if (e.touches.length === 2) {
-          pinching = true; dragging = false;
-          const t = e.touches;
-          pinchDist0 = Math.hypot(t[1].clientX - t[0].clientX, t[1].clientY - t[0].clientY);
-          scaleBase = ivScale;
+          // Pinch zoom for images only
+          if (galleryItems[galleryIndex]?.type !== 'video') {
+            pinching = true; dragging = false;
+            const t = e.touches;
+            pinchDist0 = Math.hypot(t[1].clientX - t[0].clientX, t[1].clientY - t[0].clientY);
+            scaleBase = ivScale;
+          }
           return;
         }
         if (e.touches.length === 1) {
-          startX = e.touches[0].clientX;
-          startY = e.touches[0].clientY;
+          const now = Date.now();
+          const tx = e.touches[0].clientX;
+          const ty = e.touches[0].clientY;
+          // Double-tap to zoom (images only)
+          if (
+            galleryItems[galleryIndex]?.type !== 'video' &&
+            now - lastTapTime < 300 &&
+            Math.abs(tx - lastTapX) < 40 &&
+            Math.abs(ty - lastTapY) < 40
+          ) {
+            lastTapTime = 0;
+            if (ivScale > 1) {
+              ivResetZoom();
+            } else {
+              const ZOOM = 2.5;
+              ivScale = ZOOM;
+              ivPanX = (tx - window.innerWidth / 2) * (1 / ZOOM - 1);
+              ivPanY = (ty - window.innerHeight / 2) * (1 / ZOOM - 1);
+              ivApplyTransform();
+            }
+            return;
+          }
+          lastTapTime = now;
+          lastTapX = tx;
+          lastTapY = ty;
+          startX = tx;
+          startY = ty;
           panBaseX = ivPanX; panBaseY = ivPanY;
           dragging = false; dx = 0;
           if (ivScale === 1) ivStrip.style.transition = 'none';
@@ -1829,6 +1938,7 @@
 
       imageViewer.addEventListener('touchmove', (e) => {
         if (e.touches.length === 2) {
+          if (galleryItems[galleryIndex]?.type === 'video') return;
           const t = e.touches;
           const dist = Math.hypot(t[1].clientX - t[0].clientX, t[1].clientY - t[0].clientY);
           ivScale = Math.min(MAX_SCALE, Math.max(1, scaleBase * dist / pinchDist0));
@@ -1857,16 +1967,13 @@
           return;
         }
         if (ivScale > 1) return;
-        ivStrip.style.transition = 'transform 0.3s ease';
         if (dragging && Math.abs(dx) > 50) {
-          const newIdx = galleryIndex + (dx < 0 ? 1 : -1);
-          if (newIdx >= 0 && newIdx < galleryImages.length) {
-            ivResetZoom();
-            galleryIndex = newIdx;
-          }
+          galleryNav(dx < 0 ? 1 : -1);
+        } else {
+          ivStrip.style.transition = 'transform 0.3s ease';
+          ivStrip.style.transform = `translateX(${-galleryIndex * window.innerWidth}px)`;
+          updateGalleryArrows();
         }
-        ivStrip.style.transform = `translateX(${-galleryIndex * window.innerWidth}px)`;
-        updateGalleryArrows();
         dragging = false;
       }, { passive: true });
 
@@ -1956,6 +2063,18 @@
     // Android back gesture / button
     window.addEventListener('popstate', (e) => {
       if (window.innerWidth <= 768) {
+        // Skip: popstate was triggered by closeMediaViewer's history.back()
+        if (ivSkipNextPopstate) {
+          ivSkipNextPopstate = false;
+          return;
+        }
+        // Close media viewer if open (back pressed while viewing media)
+        if (!imageViewer.classList.contains('hidden')) {
+          ivStrip.querySelectorAll('video').forEach(v => v.pause());
+          imageViewer.classList.add('hidden');
+          ivHistoryPushed = false;
+          return;
+        }
         if (sidebar.classList.contains('sidebar-hidden')) {
           // Going back from chat to chat list
           sidebar.classList.remove('sidebar-hidden');
