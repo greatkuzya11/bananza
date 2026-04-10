@@ -255,6 +255,28 @@
           </div>
           <hr class="divider">
         </div>
+
+        <div class="field-group" style="margin-top:12px">
+          <label>Chat Background</label>
+          <div class="bg-upload-wrap center" style="margin-top:8px">
+            <div id="chatBackgroundPreview" class="bg-preview"></div>
+            <label class="avatar-upload-label" title="Change background">🖼
+              <input type="file" id="chatBackgroundInput" accept=".jpg,.jpeg,.png,.webp" class="hidden">
+            </label>
+          </div>
+          <button id="removeChatBackground" class="btn-text hidden">Remove background</button>
+          <div class="field-group" style="margin-top:8px">
+            <label>Background Style</label>
+            <select id="chatBackgroundStyle" class="modal-input">
+              <option value="cover">Cover</option>
+              <option value="contain">Contain</option>
+              <option value="100%">100%</option>
+              <option value="tile">Tile</option>
+              <option value="center">Center</option>
+            </select>
+          </div>
+        </div>
+
         <h4 style="margin-bottom:12px;color:#7e8b99">Members</h4>
         <div id="chatMemberList" class="user-list"></div>
         <div id="addMemberWrap" class="hidden" style="margin-top:16px">

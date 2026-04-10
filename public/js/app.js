@@ -314,10 +314,17 @@
       case 'chat_updated': {
         const idx = chats.findIndex(c => c.id === msg.chat.id);
         if (idx >= 0) {
-          chats[idx] = { ...chats[idx], name: msg.chat.name, avatar_url: msg.chat.avatar_url };
+          chats[idx] = {
+            ...chats[idx],
+            name: msg.chat.name,
+            avatar_url: msg.chat.avatar_url,
+            background_url: msg.chat.background_url || null,
+            background_style: msg.chat.background_style || 'cover',
+          };
           renderChatList(chatSearch.value);
           if (currentChatId === msg.chat.id) {
             chatTitle.textContent = msg.chat.name;
+            applyChatBackground(msg.chat);
           }
         }
         break;
@@ -571,6 +578,8 @@
     }
 
     updateChatStatus();
+    // Apply chat background (if present)
+    applyChatBackground(chat);
 
     // Clear and load messages
     messagesEl.querySelectorAll('.msg-row, .msg-group, .date-separator').forEach(el => el.remove());
@@ -619,6 +628,36 @@
       const onlineCount = [...onlineUsers].length;
       chatStatus.textContent = `${onlineCount} online`;
       chatStatus.style.color = '';
+    }
+  }
+
+  // Apply chat background to messages area
+  function applyChatBackground(chat) {
+    if (!messagesEl) return;
+    if (!chat || !chat.background_url) {
+      messagesEl.classList.remove('has-bg');
+      messagesEl.style.backgroundImage = '';
+      messagesEl.style.backgroundSize = '';
+      messagesEl.style.backgroundRepeat = '';
+      messagesEl.style.backgroundPosition = '';
+      return;
+    }
+    messagesEl.classList.add('has-bg');
+    messagesEl.style.backgroundImage = `url(${chat.background_url})`;
+    const style = chat.background_style || 'cover';
+    switch (style) {
+      case 'cover':
+        messagesEl.style.backgroundSize = 'cover'; messagesEl.style.backgroundRepeat = 'no-repeat'; messagesEl.style.backgroundPosition = 'center center'; break;
+      case 'contain':
+        messagesEl.style.backgroundSize = 'contain'; messagesEl.style.backgroundRepeat = 'no-repeat'; messagesEl.style.backgroundPosition = 'center center'; break;
+      case '100%':
+        messagesEl.style.backgroundSize = '100%'; messagesEl.style.backgroundRepeat = 'no-repeat'; messagesEl.style.backgroundPosition = 'center center'; break;
+      case 'tile':
+        messagesEl.style.backgroundSize = 'auto'; messagesEl.style.backgroundRepeat = 'repeat'; messagesEl.style.backgroundPosition = 'left top'; break;
+      case 'center':
+        messagesEl.style.backgroundSize = 'auto'; messagesEl.style.backgroundRepeat = 'no-repeat'; messagesEl.style.backgroundPosition = 'center center'; break;
+      default:
+        messagesEl.style.backgroundSize = 'cover'; messagesEl.style.backgroundRepeat = 'no-repeat'; messagesEl.style.backgroundPosition = 'center center';
     }
   }
 
@@ -1828,6 +1867,62 @@
     } else {
       editSection.classList.add('hidden');
     }
+
+    // Background controls (available for all chats)
+    try {
+      const bgPreviewEl = $('#chatBackgroundPreview');
+      const bgInput = $('#chatBackgroundInput');
+      const removeBgBtn = $('#removeChatBackground');
+      const bgStyleSelect = $('#chatBackgroundStyle');
+
+      if (bgPreviewEl) {
+        if (chat && chat.background_url) {
+          bgPreviewEl.style.backgroundImage = `url(${esc(chat.background_url)})`;
+          removeBgBtn.classList.remove('hidden');
+        } else {
+          bgPreviewEl.style.backgroundImage = '';
+          removeBgBtn.classList.add('hidden');
+        }
+        bgStyleSelect.value = chat && chat.background_style ? chat.background_style : 'cover';
+
+        bgInput.onchange = async (e) => {
+          const file = e.target.files[0];
+          if (!file) return;
+          const fd = new FormData();
+          fd.append('background', file);
+          fd.append('style', bgStyleSelect.value || 'cover');
+          try {
+            await api(`/api/chats/${currentChatId}/background`, { method: 'POST', body: fd });
+            await loadChats();
+            openChatInfoModal();
+            const updated = chats.find(c => c.id === currentChatId);
+            applyChatBackground(updated);
+          } catch (err) { alert(err.message); }
+        };
+
+        removeBgBtn.onclick = async () => {
+          if (!confirm('Remove background?')) return;
+          try {
+            await api(`/api/chats/${currentChatId}/background`, { method: 'DELETE' });
+            await loadChats();
+            openChatInfoModal();
+            const updated = chats.find(c => c.id === currentChatId);
+            applyChatBackground(updated);
+          } catch (err) { alert(err.message); }
+        };
+
+        bgStyleSelect.onchange = async () => {
+          try {
+            const style = bgStyleSelect.value;
+            await api(`/api/chats/${currentChatId}/background-style`, { method: 'PUT', body: { style } });
+            await loadChats();
+            openChatInfoModal();
+            const updated = chats.find(c => c.id === currentChatId);
+            applyChatBackground(updated);
+          } catch (err) { alert(err.message); }
+        };
+      }
+    } catch (e) {}
 
     try {
       const members = await api(`/api/chats/${currentChatId}/members`);

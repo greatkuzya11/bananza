@@ -41,6 +41,9 @@ if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 const AVATARS_DIR = path.join(UPLOADS_DIR, 'avatars');
 if (!fs.existsSync(AVATARS_DIR)) fs.mkdirSync(AVATARS_DIR, { recursive: true });
 
+const BACKGROUNDS_DIR = path.join(UPLOADS_DIR, 'backgrounds');
+if (!fs.existsSync(BACKGROUNDS_DIR)) fs.mkdirSync(BACKGROUNDS_DIR, { recursive: true });
+
 const ALLOWED_MIME = {
   'image/jpeg': 'image', 'image/png': 'image', 'image/webp': 'image', 'image/gif': 'image',
   'application/pdf': 'document', 'text/plain': 'document',
@@ -83,6 +86,19 @@ const avatarStorage = multer.diskStorage({
 });
 const avatarUpload = multer({
   storage: avatarStorage, limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (AVATAR_MIME[file.mimetype]) cb(null, true);
+    else cb(new Error('Only JPG, PNG, WebP allowed'));
+  },
+});
+
+// Background storage (separate from general uploads)
+const backgroundStorage = multer.diskStorage({
+  destination: BACKGROUNDS_DIR,
+  filename: (_req, file, cb) => cb(null, uuidv4() + path.extname(file.originalname).toLowerCase()),
+});
+const backgroundUpload = multer({
+  storage: backgroundStorage, limits: { fileSize: 12 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     if (AVATAR_MIME[file.mimetype]) cb(null, true);
     else cb(new Error('Only JPG, PNG, WebP allowed'));
@@ -581,6 +597,77 @@ app.get('/uploads/avatars/:filename', (req, res) => {
   res.setHeader('Content-Type', mimes[ext] || 'image/jpeg');
   res.setHeader('Cache-Control', 'public, max-age=86400');
   res.sendFile(filePath);
+});
+
+app.get('/uploads/backgrounds/:filename', (req, res) => {
+  const filename = path.basename(req.params.filename);
+  const filePath = path.join(BACKGROUNDS_DIR, filename);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
+  const ext = path.extname(filename).toLowerCase();
+  const mimes = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
+  res.setHeader('Content-Type', mimes[ext] || 'image/jpeg');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.sendFile(filePath);
+});
+
+// Background upload (allowed for any chat member, including private chats)
+app.post('/api/chats/:chatId/background', auth, upLimiter, (req, res) => {
+  const chatId = +req.params.chatId;
+  const chat = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+  if (!chat) return res.status(404).json({ error: 'Chat not found' });
+  if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
+    return res.status(403).json({ error: 'Not a member' });
+
+  backgroundUpload.single('background')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
+    if (!req.file) return res.status(400).json({ error: 'No file' });
+
+    // Remove old background file
+    if (chat.background_url) {
+      const oldFile = path.join(BACKGROUNDS_DIR, path.basename(chat.background_url));
+      if (fs.existsSync(oldFile)) fs.unlinkSync(oldFile);
+    }
+
+    const style = (req.body && typeof req.body.style === 'string') ? req.body.style : 'cover';
+    const bgUrl = '/uploads/backgrounds/' + req.file.filename;
+    db.prepare('UPDATE chats SET background_url=?, background_style=? WHERE id=?').run(bgUrl, style, chatId);
+    const updated = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+    broadcastToChatAll(chatId, { type: 'chat_updated', chat: updated });
+    res.json(updated);
+  });
+});
+
+app.delete('/api/chats/:chatId/background', auth, (req, res) => {
+  const chatId = +req.params.chatId;
+  const chat = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+  if (!chat) return res.status(404).json({ error: 'Chat not found' });
+  if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
+    return res.status(403).json({ error: 'Not a member' });
+
+  if (chat.background_url) {
+    const oldFile = path.join(BACKGROUNDS_DIR, path.basename(chat.background_url));
+    if (fs.existsSync(oldFile)) fs.unlinkSync(oldFile);
+  }
+  db.prepare('UPDATE chats SET background_url=NULL WHERE id=?').run(chatId);
+  const updated = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+  broadcastToChatAll(chatId, { type: 'chat_updated', chat: updated });
+  res.json(updated);
+});
+
+app.put('/api/chats/:chatId/background-style', auth, (req, res) => {
+  const chatId = +req.params.chatId;
+  const { style } = req.body || {};
+  const allowed = new Set(['cover','contain','100%','tile','center']);
+  if (!style || typeof style !== 'string' || !allowed.has(style)) return res.status(400).json({ error: 'Invalid style' });
+  const chat = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+  if (!chat) return res.status(404).json({ error: 'Chat not found' });
+  if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
+    return res.status(403).json({ error: 'Not a member' });
+
+  db.prepare('UPDATE chats SET background_style=? WHERE id=?').run(style, chatId);
+  const updated = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+  broadcastToChatAll(chatId, { type: 'chat_updated', chat: updated });
+  res.json(updated);
 });
 
 app.get('/uploads/:filename', (req, res) => {

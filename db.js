@@ -89,6 +89,17 @@ try {
 } catch {
   db.exec("ALTER TABLE chats ADD COLUMN avatar_url TEXT DEFAULT NULL");
 }
+// Migration: chat background columns
+try {
+  db.prepare("SELECT background_url FROM chats LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE chats ADD COLUMN background_url TEXT DEFAULT NULL");
+}
+try {
+  db.prepare("SELECT background_style FROM chats LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE chats ADD COLUMN background_style TEXT DEFAULT 'cover'");
+}
 // Migration: reply_to_id on messages
 try {
   db.prepare("SELECT reply_to_id FROM messages LIMIT 1").get();

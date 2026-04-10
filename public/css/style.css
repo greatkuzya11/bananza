@@ -273,6 +273,23 @@ a:hover { text-decoration: underline; }
   box-sizing: border-box;
 }
 
+/* Chat background rendering */
+.messages { position: relative; }
+.messages.has-bg { background-position: center center; }
+.messages.has-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.42);
+  pointer-events: none;
+  z-index: 0;
+}
+.bg-preview {
+  width: 220px; height: 120px; border-radius: 8px; background-size: cover;
+  background-position: center; background-repeat: no-repeat; border: 1px solid var(--border-light);
+  margin-bottom: 8px;
+}
+
 .msg-reply-btn, .msg-react-btn {
   opacity: 0; transition: opacity .15s; flex-shrink: 0;
   font-size: 18px; padding: 2px 4px; cursor: pointer;
@@ -777,6 +794,8 @@ a:hover { text-decoration: underline; }
   position: relative; display: inline-block; margin-bottom: 8px;
 }
 .avatar-upload-wrap.center { display: flex; flex-direction: column; align-items: center; }
+.bg-upload-wrap { position: relative; display: inline-block; margin-bottom: 8px; }
+.bg-upload-wrap.center { display: flex; flex-direction: column; align-items: center; }
 .avatar-upload-label {
   position: absolute; bottom: 0; right: 0; width: 28px; height: 28px;
   border-radius: 50%; background: var(--accent); display: flex;
