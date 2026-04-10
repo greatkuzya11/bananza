@@ -43,6 +43,8 @@ db.exec(`
     text TEXT,
     file_id INTEGER REFERENCES files(id),
     is_deleted INTEGER DEFAULT 0,
+    edited_at TEXT DEFAULT NULL,
+    edited_by INTEGER DEFAULT NULL REFERENCES users(id),
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -105,6 +107,17 @@ try {
   db.prepare("SELECT reply_to_id FROM messages LIMIT 1").get();
 } catch {
   db.exec("ALTER TABLE messages ADD COLUMN reply_to_id INTEGER DEFAULT NULL REFERENCES messages(id)");
+}
+// Migration: edited marker on messages
+try {
+  db.prepare("SELECT edited_at FROM messages LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE messages ADD COLUMN edited_at TEXT DEFAULT NULL");
+}
+try {
+  db.prepare("SELECT edited_by FROM messages LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE messages ADD COLUMN edited_by INTEGER DEFAULT NULL REFERENCES users(id)");
 }
 // Migration: last_read_id on chat_members
 try {

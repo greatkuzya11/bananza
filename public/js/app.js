@@ -26,6 +26,7 @@
   let typingDisplayTimeouts = {};
   let displayedMsgIds = new Set();
   let replyTo = null; // { id, display_name, text }
+  let editTo = null; // { id, text, is_voice_note, allowEmpty }
   let allUsers = [];
   let compactViewMap = JSON.parse(localStorage.getItem('compactViewMap') || '{}');
   let compactView = false;
@@ -90,6 +91,13 @@
     getCurrentChatId: () => currentChatId,
     getPendingFiles: () => [...pendingFiles],
     getReplyTo: () => replyTo ? { ...replyTo } : null,
+    getEditTo: () => editTo ? { ...editTo } : null,
+    updateReplyPreview: (messageId, text) => {
+      if (replyTo?.id === messageId && !editTo) {
+        replyTo.text = text || '📎 Attachment';
+        replyBarText.textContent = replyTo.text;
+      }
+    },
     scrollToBottom: (instant = false) => scrollToBottom(instant),
     getDom: () => ({
       sendBtn,
@@ -180,10 +188,27 @@
       opts.body = JSON.stringify(opts.body);
     }
     const res = await fetch(url, { ...opts, headers });
-    const data = await res.json();
+    if (res.status === 204) return null;
+    const contentType = res.headers.get('content-type') || '';
+    let data = null;
+    if (contentType.includes('application/json')) {
+      data = await res.json();
+    } else {
+      const rawText = await res.text();
+      const plainText = rawText
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      data = { error: plainText || res.statusText || 'Unexpected server response' };
+    }
     if (!res.ok) {
       if (res.status === 401) { logout(); return; }
-      throw new Error(data.error || 'Error');
+      throw new Error(data?.error || `HTTP ${res.status}`);
+    }
+    if (!contentType.includes('application/json')) {
+      throw new Error(data?.error || 'Unexpected server response');
     }
     return data;
   }
@@ -250,7 +275,7 @@
         // Browser notification
         if (document.hidden && msg.message.user_id !== currentUser.id && Notification.permission === 'granted') {
           const title = msg.message.display_name;
-          const body = msg.message.text || '📎 File';
+          const body = msg.message.text || (msg.message.is_voice_note ? msg.message.transcription_text : '') || '📎 File';
           new Notification(title, { body: body.substring(0, 100), icon: '/favicon.ico' });
         }
         break;
@@ -261,13 +286,22 @@
           if (el) {
             const bubble = el.querySelector('.msg-bubble');
             const existing = bubble.querySelector('.link-preview');
-            if (!existing) bubble.insertAdjacentHTML('beforeend', renderLinkPreview(msg.preview));
+            if (!existing) {
+              const footer = bubble.querySelector('.msg-footer');
+              if (footer) footer.insertAdjacentHTML('beforebegin', renderLinkPreview(msg.preview));
+              else bubble.insertAdjacentHTML('beforeend', renderLinkPreview(msg.preview));
+            }
           }
         }
         break;
       }
       case 'message_deleted': {
         markMessageDeleted(msg.messageId);
+        loadChats();
+        break;
+      }
+      case 'message_updated': {
+        applyMessageUpdate(msg.message);
         loadChats();
         break;
       }
@@ -455,7 +489,7 @@
   function updateChatListLastMessage(msg) {
     const chat = chats.find(c => c.id === msg.chat_id);
     if (chat) {
-      chat.last_text = msg.text || null;
+      chat.last_text = msg.text || (msg.is_voice_note ? msg.transcription_text || null : null);
       chat.last_time = msg.created_at;
       chat.last_user = msg.display_name;
       chat.last_file_id = msg.file_id;
@@ -612,6 +646,7 @@
     } catch {}
 
     clearReply();
+    if (editTo) clearEdit({ clearInput: true });
     if (window.innerWidth > 768) msgInput.focus();
     window.BananzaVoiceHooks?.refreshComposerState?.();
     updateScrollBottomButton();
@@ -772,6 +807,7 @@
     row.dataset.msgId = msg.id;
     row.dataset.date = formatDate(msg.created_at);
     row.dataset.userId = msg.user_id;
+    row.__messageData = { ...msg };
     row.__replyPayload = {
       id: msg.id,
       display_name: isOwn ? currentUser.display_name : msg.display_name,
@@ -837,16 +873,20 @@
     }
 
     const statusIcon = isOwn && !msg.is_deleted ? `<span class="msg-status${msg.is_read ? ' read' : ''}">${msg.is_read ? '✓✓' : '✓'}</span>` : '';
+    const editedIcon = !msg.is_deleted && msg.edited_at ? '<span class="msg-edited" title="Edited">✎</span>' : '';
     const reactionsHtml = (!msg.is_deleted && msg.reactions && msg.reactions.length > 0)
       ? `<div class="msg-reactions">${renderReactions(msg.reactions)}</div>` : '<div></div>';
-    html += `<div class="msg-footer">${reactionsHtml}<span class="msg-time">${statusIcon}${formatTime(msg.created_at)}</span></div>`;
+    html += `<div class="msg-footer">${reactionsHtml}<span class="msg-time">${statusIcon}${editedIcon}${formatTime(msg.created_at)}</span></div>`;
     html += '</div>'; // msg-bubble
     html += '</div>'; // msg-content
 
-    // Reply + react buttons outside bubble
+    // Reply/edit/react buttons outside bubble
     if (!msg.is_deleted) {
+      html += '<div class="msg-actions">';
       html += '<button class="msg-reply-btn" title="Reply">↩</button>';
+      if (canEditMessage(msg)) html += '<button class="msg-edit-btn" title="Edit">✏️</button>';
       html += '<button class="msg-react-btn" title="React">🙂</button>';
+      html += '</div>';
     }
 
     row.innerHTML = html;
@@ -862,6 +902,14 @@
       replyBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         setReplyFromRow(row);
+      });
+    }
+
+    const editBtn = row.querySelector('.msg-edit-btn');
+    if (editBtn) {
+      editBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setEditFromRow(row);
       });
     }
 
@@ -1034,8 +1082,36 @@
   // ═══════════════════════════════════════════════════════════════════════════
   // SEND MESSAGE
   // ═══════════════════════════════════════════════════════════════════════════
+  async function saveEditedMessage() {
+    if (!editTo) return;
+    const nextText = msgInput.value.trim();
+    if (nextText.length > MAX_MSG) { alert('Message too long'); return; }
+    if (!nextText && !editTo.allowEmpty) { alert('Text cannot be empty'); return; }
+
+    if (nextText === editTo.text.trim()) {
+      clearEdit({ clearInput: true });
+      return;
+    }
+
+    try {
+      const updated = await api(`/api/messages/${editTo.id}`, {
+        method: 'PATCH',
+        body: { text: nextText }
+      });
+      applyMessageUpdate(updated);
+      clearEdit({ clearInput: true });
+      loadChats();
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
   async function sendMessage() {
     if (!currentChatId) return;
+    if (editTo) {
+      await saveEditedMessage();
+      return;
+    }
     const text = msgInput.value.trim();
     const filesToSend = [...pendingFiles];
     const firstFileId = filesToSend.length > 0 ? filesToSend[0].id : null;
@@ -1093,12 +1169,47 @@
     bubble.innerHTML = `<span class="msg-deleted">Message deleted</span><span class="msg-time">${esc(timeText)}</span>`;
     el.querySelector('.msg-reply-btn')?.remove();
     el.querySelector('.msg-react-btn')?.remove();
+    el.querySelector('.msg-edit-btn')?.remove();
+    el.querySelector('.msg-actions')?.remove();
+    if (editTo?.id === msgId) clearEdit({ clearInput: true });
+  }
+
+  function updateVisibleReplyQuotesFromMessage(msg) {
+    if (!msg?.id) return;
+    const text = getReplyPreviewText(msg);
+    if (replyTo?.id === msg.id && !editTo) {
+      replyTo.text = text;
+      replyBarText.textContent = text || '📎 Attachment';
+    }
+    messagesEl.querySelectorAll(`.msg-reply[data-reply-id="${msg.id}"] .msg-reply-text`).forEach((el) => {
+      el.textContent = text;
+    });
+  }
+
+  function applyMessageUpdate(msg) {
+    if (!msg?.id) return;
+    updateVisibleReplyQuotesFromMessage(msg);
+    if (msg.chat_id !== currentChatId) return;
+
+    const row = messagesEl.querySelector(`[data-msg-id="${msg.id}"]`);
+    if (!row) return;
+    const nextMsg = { ...msg };
+    if (row.querySelector('.msg-status.read')) nextMsg.is_read = true;
+    const showName = Boolean(row.querySelector('.msg-sender'));
+    const replacement = createMessageEl(nextMsg, showName);
+    row.replaceWith(replacement);
+    displayedMsgIds.add(nextMsg.id);
+    updateScrollBottomButton();
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // FILE UPLOAD
   // ═══════════════════════════════════════════════════════════════════════════
   async function uploadFiles(fileList) {
+    if (editTo) {
+      alert('Finish editing before attaching files.');
+      return;
+    }
     const files = Array.from(fileList).slice(0, 10);
     if (files.length === 0) return;
     for (const f of files) {
@@ -1189,6 +1300,20 @@
     return isVoiceReply ? 'Голосовое сообщение' : 'Attachment';
   }
 
+  function canEditMessage(msg) {
+    if (!currentUser || !msg || msg.is_deleted) return false;
+    if (!currentUser.is_admin && msg.user_id !== currentUser.id) return false;
+    return Boolean(msg.is_voice_note || msg.file_id || msg.text);
+  }
+
+  function getEditableText(row) {
+    const msg = row?.__messageData || {};
+    if (msg.is_voice_note || row?.__voiceMessage?.is_voice_note) {
+      return (row?.__voiceMessage?.transcription_text || msg.transcription_text || '').trim();
+    }
+    return msg.text || '';
+  }
+
   function setReplyFromRow(row) {
     const payload = row?.__replyPayload;
     if (!payload || row.querySelector('.msg-deleted')) return;
@@ -1196,16 +1321,60 @@
   }
 
   function setReply(id, name, text) {
+    if (editTo) clearEdit({ clearInput: true });
     replyTo = { id, display_name: name, text };
     replyBarName.textContent = name;
     replyBarText.textContent = text || '📎 Attachment';
+    replyBar.classList.remove('edit-bar');
     replyBar.classList.remove('hidden');
     msgInput.focus();
   }
 
   function clearReply() {
     replyTo = null;
+    if (!editTo) replyBar.classList.add('hidden');
+  }
+
+  function setEditFromRow(row) {
+    const msg = row?.__messageData;
+    if (!canEditMessage(msg)) return;
+    if (pendingFiles.length > 0) {
+      alert('Finish or remove pending attachments before editing a message.');
+      return;
+    }
+
+    const text = getEditableText(row);
+    hideReactionPicker();
+    replyTo = null;
+    editTo = {
+      id: msg.id,
+      text,
+      is_voice_note: Boolean(msg.is_voice_note || row.__voiceMessage?.is_voice_note),
+      allowEmpty: Boolean(msg.file_id && !(msg.is_voice_note || row.__voiceMessage?.is_voice_note)),
+    };
+    replyBarName.textContent = 'Редактирование';
+    replyBarText.textContent = editTo.is_voice_note ? 'Текст голосового сообщения' : 'Сообщение';
+    replyBar.classList.add('edit-bar');
+    replyBar.classList.remove('hidden');
+    msgInput.value = text;
+    autoResize();
+    attachBtn.disabled = true;
+    attachBtn.classList.add('disabled');
+    window.BananzaVoiceHooks?.refreshComposerState?.();
+    msgInput.focus();
+  }
+
+  function clearEdit({ clearInput = true } = {}) {
+    editTo = null;
+    replyBar.classList.remove('edit-bar');
     replyBar.classList.add('hidden');
+    attachBtn.disabled = false;
+    attachBtn.classList.remove('disabled');
+    if (clearInput) {
+      msgInput.value = '';
+      autoResize();
+    }
+    window.BananzaVoiceHooks?.refreshComposerState?.();
   }
 
   function setupSwipeReplyGesture() {
@@ -1290,6 +1459,96 @@
       swipe.dx = Math.max(0, Math.min(dx, maxOffset));
       if (swipe.content) swipe.content.style.transform = `translateX(${-swipe.dx}px)`;
       swipe.row.classList.toggle('swipe-reply-ready', dx >= threshold);
+    }, { passive: false });
+
+    messagesEl.addEventListener('touchend', () => {
+      finishSwipe(Boolean(swipe?.locked && swipe.dx >= threshold));
+    }, { passive: true });
+    messagesEl.addEventListener('touchcancel', () => finishSwipe(false), { passive: true });
+  }
+
+  function setupSwipeEditGesture() {
+    const threshold = 42;
+    const maxOffset = 68;
+    const lockStartPx = 8;
+    const verticalCancelPx = 22;
+    let swipe = null;
+
+    const isMobile = () => window.innerWidth <= 768;
+    const isInteractiveTarget = (target) => Boolean(target.closest(
+      'button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-image, .msg-video'
+    ));
+    const ensureIndicator = (row) => {
+      let indicator = row.querySelector('.swipe-edit-indicator');
+      if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.className = 'swipe-edit-indicator';
+        indicator.textContent = '✎';
+        row.appendChild(indicator);
+      }
+      return indicator;
+    };
+    const finishSwipe = (shouldEdit) => {
+      if (!swipe) return;
+      const { row, content } = swipe;
+      row.classList.remove('swipe-edit-active', 'swipe-edit-ready');
+      if (content) content.style.transform = '';
+      const indicator = row.querySelector('.swipe-edit-indicator');
+      setTimeout(() => indicator?.remove(), 180);
+      if (shouldEdit) {
+        navigator.vibrate?.(18);
+        setEditFromRow(row);
+      }
+      swipe = null;
+    };
+
+    messagesEl.addEventListener('touchstart', (e) => {
+      if (!isMobile() || e.touches.length !== 1 || isInteractiveTarget(e.target)) return;
+      const row = e.target.closest('.msg-row');
+      if (!row || !canEditMessage(row.__messageData)) return;
+      const touch = e.touches[0];
+      swipe = {
+        row,
+        content: row.querySelector('.msg-content'),
+        startX: touch.clientX,
+        startY: touch.clientY,
+        dx: 0,
+        locked: false,
+      };
+    }, { passive: true });
+
+    messagesEl.addEventListener('touchmove', (e) => {
+      if (!swipe || e.touches.length !== 1) return;
+      const touch = e.touches[0];
+      const dx = touch.clientX - swipe.startX;
+      const dy = touch.clientY - swipe.startY;
+      const absX = Math.abs(dx);
+      const absY = Math.abs(dy);
+
+      if (!swipe.locked) {
+        if ((absY > verticalCancelPx && absY > absX * 1.35) || dx < -10) {
+          finishSwipe(false);
+          return;
+        }
+        if (dx < lockStartPx || absX < absY * 0.75) return;
+        if (!e.cancelable) {
+          finishSwipe(false);
+          return;
+        }
+        swipe.locked = true;
+        hideReactionPicker();
+        ensureIndicator(swipe.row);
+        swipe.row.classList.add('swipe-edit-active');
+      }
+
+      if (!e.cancelable) {
+        finishSwipe(false);
+        return;
+      }
+      e.preventDefault();
+      swipe.dx = Math.max(0, Math.min(dx, maxOffset));
+      if (swipe.content) swipe.content.style.transform = `translateX(${swipe.dx}px)`;
+      swipe.row.classList.toggle('swipe-edit-ready', dx >= threshold);
     }, { passive: false });
 
     messagesEl.addEventListener('touchend', () => {
@@ -2139,6 +2398,7 @@
   function setupEvents() {
     setupPasswordPreviewToggles();
     setupSwipeReplyGesture();
+    setupSwipeEditGesture();
 
     // Send message
     sendBtn.addEventListener('click', (e) => {
@@ -2214,6 +2474,7 @@
     attachBtn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if (editTo) return;
       if (isMobileAttachMenu()) {
         if (!attachMenu.classList.contains('hidden')) {
           attachMenu.classList.add('hidden');
@@ -2408,7 +2669,7 @@
       let lpTimer = null;
       messagesEl.addEventListener('touchstart', (e) => {
         const row = e.target.closest('.msg-row');
-        if (!row || e.target.closest('.msg-react-btn') || e.target.closest('.reaction-badge')) return;
+        if (!row || e.target.closest('.msg-react-btn, .msg-reply-btn, .msg-edit-btn') || e.target.closest('.reaction-badge')) return;
         lpTimer = setTimeout(() => {
           lpTimer = null;
           navigator.vibrate && navigator.vibrate(30);
@@ -2589,7 +2850,10 @@
     });
 
     // Reply bar close
-    $('#replyBarClose').addEventListener('click', clearReply);
+    $('#replyBarClose').addEventListener('click', () => {
+      if (editTo) clearEdit({ clearInput: true });
+      else clearReply();
+    });
 
     // Search
     $('#searchBtn').addEventListener('click', openSearchPanel);

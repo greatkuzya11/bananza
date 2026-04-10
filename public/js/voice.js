@@ -276,12 +276,14 @@
     const hasText = Boolean(msgInput?.value.trim());
     const hasPendingFiles = Boolean(bridge.getPendingFiles?.().length);
     const hasChat = Boolean(bridge.getCurrentChatId?.());
+    const isEditing = Boolean(bridge.getEditTo?.());
     const keepSendIcon = sendBtn.classList.contains('send-fly');
     const showMicMode = Boolean(
       state.features.voice_notes_enabled &&
       hasChat &&
       !hasText &&
       !hasPendingFiles &&
+      !isEditing &&
       !state.recorder.recording &&
       !state.recorder.uploading &&
       !keepSendIcon
@@ -295,9 +297,11 @@
       ? 'Идет запись'
       : state.recorder.uploading
         ? 'Отправка голосового сообщения'
-        : showMicMode
-          ? 'Удерживайте для записи'
-          : 'Отправить';
+        : isEditing
+          ? 'Сохранить'
+          : showMicMode
+            ? 'Удерживайте для записи'
+            : 'Отправить';
   }
 
   async function ensureRecorderWorklet(audioContext) {
@@ -906,6 +910,7 @@
     const { messagesEl } = getDom();
     if (!messagesEl) return;
     if (msg.status === 'completed' && msg.text) {
+      getBridge()?.updateReplyPreview?.(msg.messageId, msg.text.substring(0, 100));
       messagesEl.querySelectorAll(`.msg-reply[data-reply-id="${msg.messageId}"] .msg-reply-text`).forEach((el) => {
         el.textContent = msg.text.substring(0, 100);
       });
@@ -924,6 +929,14 @@
     };
     if (row.__replyPayload && msg.status === 'completed' && msg.text) {
       row.__replyPayload.text = msg.text.substring(0, 100);
+    }
+    if (row.__messageData) {
+      row.__messageData.is_voice_note = true;
+      row.__messageData.transcription_status = msg.status || 'idle';
+      row.__messageData.transcription_text = msg.text || '';
+      row.__messageData.transcription_provider = msg.provider || '';
+      row.__messageData.transcription_model = msg.model || '';
+      row.__messageData.transcription_error = msg.error || '';
     }
     renderVoiceRow(row, row.__voiceMessage);
   }
@@ -974,6 +987,7 @@
       msgInput &&
       !msgInput.value.trim() &&
       bridge.getPendingFiles?.().length === 0 &&
+      !bridge.getEditTo?.() &&
       !state.recorder.recording &&
       !state.recorder.uploading
     );

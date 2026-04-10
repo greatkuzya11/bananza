@@ -143,6 +143,36 @@ const voiceFeature = createVoiceFeature({
   secret: JWT_SECRET,
 });
 
+const messageByIdStmt = db.prepare(`
+  SELECT m.*, u.username, u.display_name, u.avatar_color, u.avatar_url,
+    f.original_name as file_name, f.stored_name as file_stored,
+    f.mime_type as file_mime, f.size as file_size, f.type as file_type,
+    COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN 'Голосовое сообщение' END) as reply_text,
+    CASE WHEN rvm.message_id IS NOT NULL THEN 1 ELSE 0 END as reply_is_voice_note,
+    ru.display_name as reply_display_name, rm.id as reply_msg_id
+  FROM messages m
+  JOIN users u ON u.id=m.user_id
+  LEFT JOIN files f ON f.id=m.file_id
+  LEFT JOIN messages rm ON rm.id=m.reply_to_id
+  LEFT JOIN voice_messages rvm ON rvm.message_id=rm.id
+  LEFT JOIN users ru ON ru.id=rm.user_id
+  WHERE m.id=?
+`);
+const messagePreviewsStmt = db.prepare('SELECT * FROM link_previews WHERE message_id=?');
+const messageReactionsStmt = db.prepare('SELECT user_id, emoji FROM reactions WHERE message_id=?');
+
+function hydrateMessageById(messageId) {
+  const row = messageByIdStmt.get(messageId);
+  if (!row) return null;
+  row.previews = messagePreviewsStmt.all(row.id);
+  row.reactions = messageReactionsStmt.all(row.id);
+  const readInfo = db.prepare(
+    'SELECT MIN(last_read_id) as min_read FROM chat_members WHERE chat_id=? AND user_id!=?'
+  ).get(row.chat_id, row.user_id);
+  row.is_read = row.id <= (readInfo ? readInfo.min_read || 0 : 0);
+  return voiceFeature.attachVoiceMetadata([row])[0];
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // AUTH ROUTES
 // ═══════════════════════════════════════════════════════════════════════════
@@ -219,7 +249,11 @@ app.get('/api/users', auth, (req, res) => {
 app.get('/api/chats', auth, (req, res) => {
   const rows = db.prepare(`
     SELECT c.*,
-      (SELECT m.text FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) as last_text,
+      (SELECT COALESCE(NULLIF(m.text, ''), NULLIF(vm.transcription_text, ''))
+        FROM messages m
+        LEFT JOIN voice_messages vm ON vm.message_id=m.id
+        WHERE m.chat_id=c.id AND m.is_deleted=0
+        ORDER BY m.id DESC LIMIT 1) as last_text,
       (SELECT m.created_at FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) as last_time,
       (SELECT u.display_name FROM messages m JOIN users u ON u.id=m.user_id WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) as last_user,
       (SELECT m.file_id FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) as last_file_id
@@ -420,6 +454,64 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   }
 
   res.json(hydratedMsg);
+});
+
+app.patch('/api/messages/:id', auth, msgLimiter, (req, res) => {
+  const mid = +req.params.id;
+  const { text } = req.body || {};
+  if (typeof text !== 'string') return res.status(400).json({ error: 'Text is required' });
+  if (text.length > 5000) return res.status(400).json({ error: 'Message too long' });
+
+  const m = db.prepare(`
+    SELECT m.*, vm.message_id as voice_message_id
+    FROM messages m
+    LEFT JOIN voice_messages vm ON vm.message_id=m.id
+    WHERE m.id=? AND m.is_deleted=0
+  `).get(mid);
+  if (!m) return res.status(404).json({ error: 'Not found' });
+  if (!req.user.is_admin && m.user_id !== req.user.id)
+    return res.status(403).json({ error: 'Not allowed' });
+  if (!req.user.is_admin && !db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(m.chat_id, req.user.id))
+    return res.status(403).json({ error: 'Not a member' });
+
+  const cleanText = text.trim();
+  if (m.voice_message_id) {
+    if (!cleanText) return res.status(400).json({ error: 'Voice text cannot be empty' });
+    db.prepare(`
+      UPDATE voice_messages
+      SET transcription_status='completed',
+          transcription_text=?,
+          transcription_provider='manual',
+          transcription_model=NULL,
+          transcription_error=NULL,
+          transcribed_at=datetime('now'),
+          requested_by=?
+      WHERE message_id=?
+    `).run(cleanText, req.user.id, mid);
+    db.prepare('UPDATE messages SET edited_at=datetime(\'now\'), edited_by=? WHERE id=?').run(req.user.id, mid);
+  } else {
+    if (!cleanText && !m.file_id) return res.status(400).json({ error: 'Message text cannot be empty' });
+    db.prepare('UPDATE messages SET text=?, edited_at=datetime(\'now\'), edited_by=? WHERE id=?')
+      .run(cleanText || null, req.user.id, mid);
+    db.prepare('DELETE FROM link_previews WHERE message_id=?').run(mid);
+  }
+
+  const updated = hydrateMessageById(mid);
+  broadcastToChatAll(m.chat_id, { type: 'message_updated', message: updated });
+
+  if (!m.voice_message_id && cleanText) {
+    const urls = extractUrls(cleanText);
+    if (urls.length > 0) {
+      fetchPreview(urls[0]).then(preview => {
+        if (!preview) return;
+        db.prepare('INSERT INTO link_previews(message_id,url,title,description,image,hostname) VALUES(?,?,?,?,?,?)')
+          .run(mid, preview.url, preview.title, preview.description, preview.image, preview.hostname);
+        broadcastToChatAll(m.chat_id, { type: 'link_preview', messageId: mid, preview });
+      }).catch(() => {});
+    }
+  }
+
+  res.json(updated);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -836,6 +928,10 @@ app.post('/api/messages/:id/reactions', auth, (req, res) => {
 });
 
 // ── SPA fallback ────────────────────────────────────────────────────────────
+app.use('/api', (_req, res) => {
+  res.status(404).json({ error: 'API endpoint not found' });
+});
+
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api/') || req.path.startsWith('/uploads/'))
     return res.status(404).json({ error: 'Not found' });
