@@ -2186,6 +2186,10 @@
 
     // New chat
     $('#newChatBtn').addEventListener('click', openNewChatModal);
+    $('#refreshChatsBtn')?.addEventListener('click', async () => {
+      await loadChats();
+      if (currentChatId) updateChatStatus();
+    });
 
     // Create group
     $('#createGroupBtn').addEventListener('click', async () => {
@@ -2376,12 +2380,10 @@
     await loadAllUsers();
     await loadChats();
 
-    // On mobile: always show chat list first. On desktop: restore last chat.
-    if (window.innerWidth > 768) {
-      const lastChat = +localStorage.getItem('lastChat');
-      if (lastChat && chats.find(c => c.id === lastChat)) {
-        openChat(lastChat);
-      }
+    // Restore last opened chat on both desktop and mobile so the composer is ready immediately.
+    const lastChat = +localStorage.getItem('lastChat');
+    if (lastChat && chats.find(c => c.id === lastChat)) {
+      await openChat(lastChat);
     }
 
     window.dispatchEvent(new Event('bananza:ready'));

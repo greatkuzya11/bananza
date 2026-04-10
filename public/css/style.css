@@ -916,6 +916,7 @@ a:hover { text-decoration: underline; }
   }
   .chat-header .icon-btn { width: 40px; height: 40px; font-size: 20px; }
   .chat-header-avatar { width: 40px; height: 40px; font-size: 16px; }
+  #refreshChatsBtn { font-size: 21px; }
   .chat-title { font-size: 16px; }
   .chat-status { font-size: 12px; }
 
