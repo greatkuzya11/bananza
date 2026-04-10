@@ -413,3 +413,12 @@
     max-width: 100%;
   }
 }
+
+/* Ensure voice-related message rows can shrink and avoid mobile horizontal overflow */
+.msg-row, .msg-row.own, .msg-group, .msg-bubble, .msg-group-body, .msg-content {
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* Hide any accidental horizontal overflow in messages container */
+.messages { overflow-x: hidden; }

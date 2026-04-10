@@ -263,6 +263,15 @@ a:hover { text-decoration: underline; }
 .msg-bubble:hover .msg-delete-btn { display: flex; }
 .msg-delete-btn:hover { color: var(--danger); background: rgba(0,0,0,.2); }
 
+/* Prevent horizontal scroll on mobile when compact view aligns messages to one side */
+.messages { overflow-x: hidden; }
+
+/* Allow flex children (rows/groups/bubbles) to shrink and avoid creating overflow */
+.msg-row, .msg-row.own, .msg-group, .msg-bubble, .msg-group-body, .msg-content {
+  min-width: 0;
+  box-sizing: border-box;
+}
+
 .msg-reply-btn, .msg-react-btn {
   opacity: 0; transition: opacity .15s; flex-shrink: 0;
   font-size: 18px; padding: 2px 4px; cursor: pointer;
@@ -958,8 +967,20 @@ a:hover { text-decoration: underline; }
     bottom: calc(100% + 8px);
   }
 
-  .msg-row { max-width: 90%; }
-  .msg-group { max-width: 90%; }
+  .msg-row,
+  .msg-row.own {
+    max-width: calc(100% - 4px);
+  }
+  .msg-group {
+    max-width: 100%;
+  }
+  .msg-group-body {
+    max-width: calc(100% - 40px);
+  }
+  .msg-group .msg-row,
+  .msg-group .msg-row.own {
+    max-width: 100%;
+  }
   .msg-image { max-width: 260px; max-height: 240px; }
   .msg-video { max-width: 280px; }
 
