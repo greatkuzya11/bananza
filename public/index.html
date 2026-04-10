@@ -198,15 +198,24 @@
       <div class="modal-body">
         <div class="field-group">
           <label>Current Password</label>
-          <input type="password" id="cpOldPass" class="modal-input" maxlength="100">
+          <div class="pw-wrap">
+            <input type="password" id="cpOldPass" class="modal-input" maxlength="100">
+            <button type="button" class="pw-toggle" data-target="cpOldPass" aria-label="Show password">👁️</button>
+          </div>
         </div>
         <div class="field-group">
           <label>New Password</label>
-          <input type="password" id="cpNewPass" class="modal-input" maxlength="100">
+          <div class="pw-wrap">
+            <input type="password" id="cpNewPass" class="modal-input" maxlength="100">
+            <button type="button" class="pw-toggle" data-target="cpNewPass" aria-label="Show password">👁️</button>
+          </div>
         </div>
         <div class="field-group">
           <label>Confirm New Password</label>
-          <input type="password" id="cpNewPassConfirm" class="modal-input" maxlength="100">
+          <div class="pw-wrap">
+            <input type="password" id="cpNewPassConfirm" class="modal-input" maxlength="100">
+            <button type="button" class="pw-toggle" data-target="cpNewPassConfirm" aria-label="Show password">👁️</button>
+          </div>
         </div>
         <div id="cpError" class="cp-error"></div>
         <div id="cpSuccess" class="cp-success"></div>

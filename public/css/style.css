@@ -595,6 +595,35 @@ a:hover { text-decoration: underline; }
   border-radius: 8px; color: var(--text-primary); outline: none; margin-bottom: 12px; font-size: 14px;
 }
 .modal-input:focus { border-color: var(--accent); }
+.pw-wrap {
+  position: relative;
+  margin-bottom: 12px;
+}
+.pw-wrap .modal-input {
+  padding-right: 44px;
+  margin-bottom: 0;
+}
+.pw-toggle {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 6px;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: #9fb7cf;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.pw-toggle:active { color: var(--accent); }
+.pw-toggle:focus,
+.pw-toggle:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
 
 .tab-pane { display: none; }
 .tab-pane.active { display: block; }

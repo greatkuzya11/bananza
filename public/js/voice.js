@@ -1077,6 +1077,7 @@
       });
       getBridge().clearReply?.();
       hideRecorderBar();
+      getBridge().scrollToBottom?.();
     } finally {
       state.recorder.uploading = false;
       state.recorder.chunks = [];

@@ -90,6 +90,7 @@
     getCurrentChatId: () => currentChatId,
     getPendingFiles: () => [...pendingFiles],
     getReplyTo: () => replyTo ? { ...replyTo } : null,
+    scrollToBottom: (instant = false) => scrollToBottom(instant),
     getDom: () => ({
       sendBtn,
       msgInput,
@@ -240,8 +241,9 @@
         // Only render if we're in the relevant chat
         if (msg.message.chat_id === currentChatId && !displayedMsgIds.has(msg.message.id)) {
           const wasNearBottom = isNearBottom();
+          const isOwnMessage = msg.message.user_id === currentUser.id;
           appendMessage(msg.message);
-          if (wasNearBottom) scrollToBottom();
+          if (wasNearBottom || isOwnMessage) scrollToBottom();
           // Mark as read
           api(`/api/chats/${currentChatId}/read`, { method: 'POST' }).catch(() => {});
         }
@@ -1613,12 +1615,19 @@
     window.BananzaVoiceHooks?.onSettingsOpened?.({ currentUser });
   }
 
+  function resetChangePasswordFields() {
+    ['cpOldPass', 'cpNewPass', 'cpNewPassConfirm'].forEach(id => {
+      const input = document.getElementById(id);
+      if (!input) return;
+      input.value = '';
+      input.type = 'password';
+    });
+  }
+
   function openChangePasswordModal() {
     closeAllModals();
     changePasswordModal.classList.remove('hidden');
-    $('#cpOldPass').value = '';
-    $('#cpNewPass').value = '';
-    $('#cpNewPassConfirm').value = '';
+    resetChangePasswordFields();
     $('#cpError').textContent = '';
     $('#cpSuccess').textContent = '';
   }
@@ -1851,10 +1860,61 @@
     }, 320);
   }
 
+  function setupPasswordPreviewToggles() {
+    $$('.pw-toggle').forEach(btn => {
+      if (btn.dataset.bound === '1') return;
+      const targetId = btn.dataset.target;
+      const getInput = () => targetId ? document.getElementById(targetId) : null;
+      const setVisible = (visible) => {
+        const input = getInput();
+        if (!input) return;
+        input.type = visible ? 'text' : 'password';
+        btn.setAttribute('aria-pressed', visible ? 'true' : 'false');
+      };
+      let pressPreviewed = false;
+      const show = (e) => {
+        e.preventDefault();
+        pressPreviewed = true;
+        setVisible(true);
+      };
+      const hide = (e) => {
+        e?.preventDefault?.();
+        setVisible(false);
+      };
+
+      btn.dataset.bound = '1';
+      btn.addEventListener('pointerdown', show);
+      btn.addEventListener('pointerup', hide);
+      btn.addEventListener('pointercancel', hide);
+      btn.addEventListener('pointerleave', hide);
+      btn.addEventListener('touchstart', show, { passive: false });
+      btn.addEventListener('touchend', hide, { passive: false });
+      btn.addEventListener('touchcancel', hide, { passive: false });
+      btn.addEventListener('blur', hide);
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (pressPreviewed) {
+          pressPreviewed = false;
+          return;
+        }
+        setVisible(true);
+        setTimeout(() => setVisible(false), 500);
+      });
+      btn.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') show(e);
+      });
+      btn.addEventListener('keyup', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') hide(e);
+      });
+    });
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // EVENT LISTENERS
   // ═══════════════════════════════════════════════════════════════════════════
   function setupEvents() {
+    setupPasswordPreviewToggles();
+
     // Send message
     sendBtn.addEventListener('click', (e) => {
       e.preventDefault();
@@ -2256,9 +2316,7 @@
       try {
         await api('/api/profile/change-password', { method: 'POST', body: { oldPassword: oldPass, newPassword: newPass } });
         cpOk.textContent = 'Password changed successfully!';
-        $('#cpOldPass').value = '';
-        $('#cpNewPass').value = '';
-        $('#cpNewPassConfirm').value = '';
+        resetChangePasswordFields();
       } catch (e) { cpErr.textContent = e.message; }
     });
 
