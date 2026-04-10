@@ -984,7 +984,9 @@ a:hover { text-decoration: underline; }
   .msg-group .msg-row.own {
     max-width: 100%;
   }
-  .msg-row {
+  .msg-row,
+  .msg-content,
+  .msg-bubble {
     touch-action: pan-y;
   }
   .msg-row:not(.swipe-reply-active) .msg-content {

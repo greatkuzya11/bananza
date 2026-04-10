@@ -904,6 +904,12 @@
 
   function applyTranscriptionUpdate(msg) {
     const { messagesEl } = getDom();
+    if (!messagesEl) return;
+    if (msg.status === 'completed' && msg.text) {
+      messagesEl.querySelectorAll(`.msg-reply[data-reply-id="${msg.messageId}"] .msg-reply-text`).forEach((el) => {
+        el.textContent = msg.text.substring(0, 100);
+      });
+    }
     const row = messagesEl?.querySelector(`[data-msg-id="${msg.messageId}"]`);
     if (!row) return;
     row.__voiceMessage = {
@@ -916,6 +922,9 @@
       transcription_model: msg.model || '',
       transcription_error: msg.error || '',
     };
+    if (row.__replyPayload && msg.status === 'completed' && msg.text) {
+      row.__replyPayload.text = msg.text.substring(0, 100);
+    }
     renderVoiceRow(row, row.__voiceMessage);
   }
 

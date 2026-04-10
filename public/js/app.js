@@ -767,7 +767,7 @@
     } else {
       // Reply reference
       if (msg.reply_to_id && msg.reply_display_name) {
-        const replyText = msg.reply_text ? msg.reply_text.substring(0, 100) : '📎 Attachment';
+        const replyText = getReplyQuoteText(msg);
         html += `<div class="msg-reply" data-reply-id="${msg.reply_to_id}">
           <div class="msg-reply-name">${esc(msg.reply_display_name)}</div>
           <div class="msg-reply-text">${esc(replyText)}</div>
@@ -1124,9 +1124,30 @@
   // ═══════════════════════════════════════════════════════════════════════════
   function getReplyPreviewText(msg) {
     if (msg?.text) return msg.text.substring(0, 100);
-    if (msg?.is_voice_note) return 'Voice message';
+    if (msg?.is_voice_note) {
+      const transcript = (msg.transcription_text || '').trim();
+      return transcript ? transcript.substring(0, 100) : 'Голосовое сообщение';
+    }
     if (msg?.file_name) return msg.file_name.substring(0, 100);
     return 'Attachment';
+  }
+
+  function getReplyQuoteText(msg) {
+    const serverText = (msg?.reply_text || '').trim();
+    if (serverText) return serverText.substring(0, 100);
+
+    const sourceRow = msg?.reply_to_id
+      ? messagesEl.querySelector(`[data-msg-id="${msg.reply_to_id}"]`)
+      : null;
+    const sourceText = (sourceRow?.__replyPayload?.text || '').trim();
+    if (sourceText && sourceText !== 'Attachment') return sourceText.substring(0, 100);
+
+    const isVoiceReply = Boolean(
+      msg?.reply_is_voice_note ||
+      sourceRow?.__voiceMessage?.is_voice_note ||
+      sourceRow?.__voiceBootstrap?.is_voice_note
+    );
+    return isVoiceReply ? 'Голосовое сообщение' : 'Attachment';
   }
 
   function setReplyFromRow(row) {
@@ -1149,8 +1170,10 @@
   }
 
   function setupSwipeReplyGesture() {
-    const threshold = 54;
-    const maxOffset = 76;
+    const threshold = 42;
+    const maxOffset = 68;
+    const lockStartPx = 8;
+    const verticalCancelPx = 22;
     let swipe = null;
 
     const isMobile = () => window.innerWidth <= 768;
@@ -1205,11 +1228,11 @@
       const absY = Math.abs(dy);
 
       if (!swipe.locked) {
-        if ((absY > 10 && absY > absX * 1.2) || dx < -10) {
+        if ((absY > verticalCancelPx && absY > absX * 1.35) || dx < -10) {
           finishSwipe(false);
           return;
         }
-        if (dx < 12 || absX < absY * 1.2) return;
+        if (dx < lockStartPx || absX < absY * 0.75) return;
         if (!e.cancelable) {
           finishSwipe(false);
           return;

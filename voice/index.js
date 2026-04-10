@@ -20,11 +20,14 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
     SELECT m.*, u.username, u.display_name, u.avatar_color, u.avatar_url,
       f.original_name as file_name, f.stored_name as file_stored,
       f.mime_type as file_mime, f.size as file_size, f.type as file_type,
-      rm.text as reply_text, ru.display_name as reply_display_name, rm.id as reply_msg_id
+      COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN 'Голосовое сообщение' END) as reply_text,
+      CASE WHEN rvm.message_id IS NOT NULL THEN 1 ELSE 0 END as reply_is_voice_note,
+      ru.display_name as reply_display_name, rm.id as reply_msg_id
     FROM messages m
     JOIN users u ON u.id=m.user_id
     LEFT JOIN files f ON f.id=m.file_id
     LEFT JOIN messages rm ON rm.id=m.reply_to_id
+    LEFT JOIN voice_messages rvm ON rvm.message_id=rm.id
     LEFT JOIN users ru ON ru.id=rm.user_id
     WHERE m.id=?
   `);
