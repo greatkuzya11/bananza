@@ -199,10 +199,11 @@ a:hover { text-decoration: underline; }
 }
 .load-more button:hover { background: var(--bg-hover); }
 
-.msg-row { display: flex; flex-direction: row; align-items: center; max-width: 80%; gap: 4px; }
+.msg-row { display: flex; flex-direction: row; align-items: center; max-width: 80%; gap: 4px; position: relative; }
 .msg-row.own { align-self: flex-end; flex-direction: row-reverse; max-width: 80%; }
 .msg-row.other { align-self: flex-start; }
 .msg-row.other .msg-content { display: flex; flex-direction: column; min-width: 0; }
+.msg-content { position: relative; z-index: 1; max-width: 100%; }
 
 .msg-group {
   display: flex; align-self: flex-start; gap: 8px; align-items: flex-end; max-width: 80%;
@@ -282,6 +283,8 @@ a:hover { text-decoration: underline; }
 .msg-reply-btn:hover { color: var(--accent); }
 .msg-react-btn { font-size: 16px; }
 .msg-react-btn:hover { color: var(--accent); }
+
+.swipe-reply-indicator { display: none; }
 
 .msg-footer {
   display: flex; align-items: flex-end; justify-content: flex-start;
@@ -980,6 +983,45 @@ a:hover { text-decoration: underline; }
   .msg-group .msg-row,
   .msg-group .msg-row.own {
     max-width: 100%;
+  }
+  .msg-row {
+    touch-action: pan-y;
+  }
+  .msg-row:not(.swipe-reply-active) .msg-content {
+    transition: transform .18s cubic-bezier(.2, .8, .2, 1);
+  }
+  .msg-row.swipe-reply-active {
+    z-index: 2;
+  }
+  .msg-row.swipe-reply-active .msg-content {
+    transition: none;
+    will-change: transform;
+  }
+  .swipe-reply-indicator {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    z-index: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: rgba(94, 181, 247, .16);
+    color: var(--accent);
+    font-size: 17px;
+    font-weight: 700;
+    line-height: 1;
+    opacity: .9;
+    pointer-events: none;
+    transform: translateY(-50%) scale(.92);
+    transition: background .12s ease, color .12s ease, transform .12s ease;
+  }
+  .msg-row.swipe-reply-ready .swipe-reply-indicator {
+    background: var(--accent);
+    color: #fff;
+    transform: translateY(-50%) scale(1);
   }
   .msg-image { max-width: 260px; max-height: 240px; }
   .msg-video { max-width: 280px; }

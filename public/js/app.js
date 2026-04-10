@@ -733,6 +733,11 @@
     row.dataset.msgId = msg.id;
     row.dataset.date = formatDate(msg.created_at);
     row.dataset.userId = msg.user_id;
+    row.__replyPayload = {
+      id: msg.id,
+      display_name: isOwn ? currentUser.display_name : msg.display_name,
+      text: getReplyPreviewText(msg),
+    };
     row.__voiceBootstrap = {
       id: msg.id,
       is_voice_note: !!msg.is_voice_note,
@@ -817,7 +822,7 @@
     if (replyBtn) {
       replyBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        setReply(msg.id, msg.display_name, (msg.text || '📎').substring(0, 100));
+        setReplyFromRow(row);
       });
     }
 
@@ -1117,6 +1122,19 @@
   // ═══════════════════════════════════════════════════════════════════════════
   // REPLY
   // ═══════════════════════════════════════════════════════════════════════════
+  function getReplyPreviewText(msg) {
+    if (msg?.text) return msg.text.substring(0, 100);
+    if (msg?.is_voice_note) return 'Voice message';
+    if (msg?.file_name) return msg.file_name.substring(0, 100);
+    return 'Attachment';
+  }
+
+  function setReplyFromRow(row) {
+    const payload = row?.__replyPayload;
+    if (!payload || row.querySelector('.msg-deleted')) return;
+    setReply(payload.id, payload.display_name, payload.text);
+  }
+
   function setReply(id, name, text) {
     replyTo = { id, display_name: name, text };
     replyBarName.textContent = name;
@@ -1128,6 +1146,94 @@
   function clearReply() {
     replyTo = null;
     replyBar.classList.add('hidden');
+  }
+
+  function setupSwipeReplyGesture() {
+    const threshold = 54;
+    const maxOffset = 76;
+    let swipe = null;
+
+    const isMobile = () => window.innerWidth <= 768;
+    const isInteractiveTarget = (target) => Boolean(target.closest(
+      'button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-image, .msg-video'
+    ));
+    const ensureIndicator = (row) => {
+      let indicator = row.querySelector('.swipe-reply-indicator');
+      if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.className = 'swipe-reply-indicator';
+        indicator.textContent = '\u21A9';
+        row.appendChild(indicator);
+      }
+      return indicator;
+    };
+    const finishSwipe = (shouldReply) => {
+      if (!swipe) return;
+      const { row, content } = swipe;
+      row.classList.remove('swipe-reply-active', 'swipe-reply-ready');
+      if (content) content.style.transform = '';
+      const indicator = row.querySelector('.swipe-reply-indicator');
+      setTimeout(() => indicator?.remove(), 180);
+      if (shouldReply) {
+        navigator.vibrate?.(18);
+        setReplyFromRow(row);
+      }
+      swipe = null;
+    };
+
+    messagesEl.addEventListener('touchstart', (e) => {
+      if (!isMobile() || e.touches.length !== 1 || isInteractiveTarget(e.target)) return;
+      const row = e.target.closest('.msg-row');
+      if (!row || row.querySelector('.msg-deleted') || !row.__replyPayload) return;
+      const touch = e.touches[0];
+      swipe = {
+        row,
+        content: row.querySelector('.msg-content'),
+        startX: touch.clientX,
+        startY: touch.clientY,
+        dx: 0,
+        locked: false,
+      };
+    }, { passive: true });
+
+    messagesEl.addEventListener('touchmove', (e) => {
+      if (!swipe || e.touches.length !== 1) return;
+      const touch = e.touches[0];
+      const dx = swipe.startX - touch.clientX;
+      const dy = touch.clientY - swipe.startY;
+      const absX = Math.abs(dx);
+      const absY = Math.abs(dy);
+
+      if (!swipe.locked) {
+        if ((absY > 10 && absY > absX * 1.2) || dx < -10) {
+          finishSwipe(false);
+          return;
+        }
+        if (dx < 12 || absX < absY * 1.2) return;
+        if (!e.cancelable) {
+          finishSwipe(false);
+          return;
+        }
+        swipe.locked = true;
+        hideReactionPicker();
+        ensureIndicator(swipe.row);
+        swipe.row.classList.add('swipe-reply-active');
+      }
+
+      if (!e.cancelable) {
+        finishSwipe(false);
+        return;
+      }
+      e.preventDefault();
+      swipe.dx = Math.max(0, Math.min(dx, maxOffset));
+      if (swipe.content) swipe.content.style.transform = `translateX(${-swipe.dx}px)`;
+      swipe.row.classList.toggle('swipe-reply-ready', dx >= threshold);
+    }, { passive: false });
+
+    messagesEl.addEventListener('touchend', () => {
+      finishSwipe(Boolean(swipe?.locked && swipe.dx >= threshold));
+    }, { passive: true });
+    messagesEl.addEventListener('touchcancel', () => finishSwipe(false), { passive: true });
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1914,6 +2020,7 @@
   // ═══════════════════════════════════════════════════════════════════════════
   function setupEvents() {
     setupPasswordPreviewToggles();
+    setupSwipeReplyGesture();
 
     // Send message
     sendBtn.addEventListener('click', (e) => {
