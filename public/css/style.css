@@ -370,6 +370,7 @@ a:hover { text-decoration: underline; }
 
 /* ── Input area ──────────────────────────────────────────────────────────── */
 .input-area {
+  position: relative;
   background: var(--bg-sidebar); border-top: 1px solid var(--border); padding: 8px 12px;
 }
 
@@ -385,6 +386,49 @@ a:hover { text-decoration: underline; }
 .pending-file-remove:hover { color: var(--danger); }
 
 .input-row { display: flex; align-items: flex-end; gap: 4px; }
+
+.scroll-bottom-btn {
+  position: absolute;
+  right: 14px;
+  bottom: calc(100% + 10px);
+  width: 42px;
+  height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(43, 82, 120, 0.96);
+  color: #e9f6ff;
+  box-shadow: 0 6px 20px rgba(0,0,0,.28);
+  border: 1px solid rgba(255,255,255,.08);
+  appearance: none;
+  -webkit-appearance: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(10px) scale(.92);
+  transition: opacity .18s ease, transform .18s ease, background .15s ease;
+  z-index: 5;
+}
+
+.scroll-bottom-btn.visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+}
+
+.scroll-bottom-btn:hover {
+  background: rgba(58, 104, 149, 0.98);
+}
+
+.scroll-bottom-btn:focus,
+.scroll-bottom-btn:focus-visible,
+.scroll-bottom-btn:active {
+  outline: none;
+  box-shadow: 0 6px 20px rgba(0,0,0,.28);
+  background: rgba(43, 82, 120, 0.96);
+}
 
 #msgInput {
   flex: 1; padding: 10px 14px; background: var(--bg-input); border: none;
@@ -603,7 +647,26 @@ a:hover { text-decoration: underline; }
 }
 .admin-user-row .info { flex: 1; min-width: 0; }
 .admin-user-row .info .name { font-size: 14px; font-weight: 600; }
-.admin-user-row .info .meta { font-size: 12px; color: var(--text-secondary); }
+.admin-user-row .info .meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.admin-user-status {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-weight: 600;
+}
+.admin-user-status .status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.admin-user-status.online { color: var(--success); }
+.admin-user-status.offline { color: var(--text-secondary); }
+.admin-user-joined { color: var(--text-secondary); }
 .admin-user-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .admin-user-row .badge {
   font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600;
@@ -857,6 +920,13 @@ a:hover { text-decoration: underline; }
   .chat-status { font-size: 12px; }
 
   .messages { padding: 8px; }
+
+  .scroll-bottom-btn {
+    right: 12px;
+    width: 40px;
+    height: 40px;
+    bottom: calc(100% + 8px);
+  }
 
   .msg-row { max-width: 90%; }
   .msg-group { max-width: 90%; }

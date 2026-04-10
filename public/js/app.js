@@ -54,6 +54,7 @@
   const typingBar = $('#typingBar');
   const msgInput = $('#msgInput');
   const sendBtn = $('#sendBtn');
+  const scrollBottomBtn = $('#scrollBottomBtn');
   const attachBtn = $('#attachBtn');
   const emojiBtn = $('#emojiBtn');
   const fileInput = $('#fileInput');
@@ -238,8 +239,9 @@
         }
         // Only render if we're in the relevant chat
         if (msg.message.chat_id === currentChatId && !displayedMsgIds.has(msg.message.id)) {
+          const wasNearBottom = isNearBottom();
           appendMessage(msg.message);
-          if (isNearBottom()) scrollToBottom();
+          if (wasNearBottom) scrollToBottom();
           // Mark as read
           api(`/api/chats/${currentChatId}/read`, { method: 'POST' }).catch(() => {});
         }
@@ -462,6 +464,53 @@
   function updateOnlineDisplay() {
     renderChatList(chatSearch.value);
     if (currentChatId) updateChatStatus();
+    refreshAdminUserStatuses();
+  }
+
+  function updateScrollBottomButton() {
+    if (!scrollBottomBtn) return;
+    const hasMessages = Boolean(messagesEl.querySelector('.msg-row'));
+    const shouldShow = Boolean(currentChatId && hasMessages && !isNearBottom(120));
+    scrollBottomBtn.classList.toggle('visible', shouldShow);
+  }
+
+  function renderAdminUserRow(u) {
+    const isOnline = onlineUsers.has(u.id);
+    return `
+      <div class="admin-user-row" data-uid="${u.id}">
+        ${avatarHtml(u.display_name, u.avatar_color, u.avatar_url)}
+        <div class="info">
+          <div class="name">${esc(u.display_name)} <span style="color:var(--text-secondary)">@${esc(u.username)}</span></div>
+          <div class="meta">
+            <div class="admin-user-status ${isOnline ? 'online' : 'offline'}">
+              <span class="status-dot"></span>${isOnline ? 'online' : 'offline'}
+            </div>
+            <div class="admin-user-joined">Joined: ${new Date(u.created_at + 'Z').toLocaleDateString()}</div>
+          </div>
+        </div>
+        ${u.is_admin ? '<span class="badge badge-admin">Admin</span>' : ''}
+        ${u.is_blocked ? '<span class="badge badge-blocked">Blocked</span>' : ''}
+        ${!u.is_admin ? `<div class="admin-user-actions">
+          <button class="reset-btn" data-uid="${u.id}" title="Reset password to 123456">🔑 Reset</button>
+          <button class="block-btn ${u.is_blocked ? 'is-blocked' : ''}" data-uid="${u.id}">${u.is_blocked ? 'Unblock' : 'Block'}</button>
+        </div>` : ''}
+      </div>
+    `;
+  }
+
+  function refreshAdminUserStatuses() {
+    if (adminModal.classList.contains('hidden')) return;
+    const list = $('#adminUserList');
+    if (!list) return;
+    list.querySelectorAll('.admin-user-row').forEach(row => {
+      const uid = +row.dataset.uid;
+      const statusEl = row.querySelector('.admin-user-status');
+      if (!statusEl) return;
+      const isOnline = onlineUsers.has(uid);
+      statusEl.classList.toggle('online', isOnline);
+      statusEl.classList.toggle('offline', !isOnline);
+      statusEl.innerHTML = `<span class="status-dot"></span>${isOnline ? 'online' : 'offline'}`;
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -541,6 +590,7 @@
       } else {
         scrollToBottom(true);
       }
+      requestAnimationFrame(updateScrollBottomButton);
     } catch {}
 
     // Mark chat as read
@@ -552,6 +602,8 @@
 
     clearReply();
     if (window.innerWidth > 768) msgInput.focus();
+    window.BananzaVoiceHooks?.refreshComposerState?.();
+    updateScrollBottomButton();
     localStorage.setItem('lastChat', chatId);
   }
 
@@ -620,6 +672,7 @@
       }
       displayedMsgIds.add(msg.id);
     }
+    updateScrollBottomButton();
   }
 
   function appendMessage(msg) {
@@ -668,6 +721,7 @@
       messagesEl.appendChild(el);
     }
     displayedMsgIds.add(msg.id);
+    updateScrollBottomButton();
   }
 
   function createMessageEl(msg, showName = true) {
@@ -925,6 +979,9 @@
   function scrollToBottom(instant = false) {
     requestAnimationFrame(() => {
       messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: instant ? 'instant' : 'smooth' });
+      if (scrollBottomBtn) scrollBottomBtn.classList.remove('visible');
+      requestAnimationFrame(updateScrollBottomButton);
+      if (!instant) setTimeout(updateScrollBottomButton, 260);
     });
   }
 
@@ -946,6 +1003,7 @@
     clearPendingFile();
     const replyToId = replyTo ? replyTo.id : null;
     clearReply();
+    window.BananzaVoiceHooks?.refreshComposerState?.();
 
     try {
       // First message: text + first file (or just text)
@@ -1017,6 +1075,7 @@
       pendingFile = uploaded[0];
       renderPendingFiles();
       msgInput.focus();
+      window.BananzaVoiceHooks?.refreshComposerState?.();
     } catch (e) {
       alert(e.message);
       clearPendingFile();
@@ -1050,6 +1109,7 @@
     pendingFileEl.classList.add('hidden');
     pendingFileEl.innerHTML = '';
     fileInput.value = '';
+    window.BananzaVoiceHooks?.refreshComposerState?.();
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1519,21 +1579,7 @@
     try {
       const users = await api('/api/admin/users');
       const list = $('#adminUserList');
-      list.innerHTML = users.map(u => `
-        <div class="admin-user-row" data-uid="${u.id}">
-          ${avatarHtml(u.display_name, u.avatar_color, u.avatar_url)}
-          <div class="info">
-            <div class="name">${esc(u.display_name)} <span style="color:var(--text-secondary)">@${esc(u.username)}</span></div>
-            <div class="meta">Joined: ${new Date(u.created_at + 'Z').toLocaleDateString()}</div>
-          </div>
-          ${u.is_admin ? '<span class="badge badge-admin">Admin</span>' : ''}
-          ${u.is_blocked ? '<span class="badge badge-blocked">Blocked</span>' : ''}
-          ${!u.is_admin ? `<div class="admin-user-actions">
-            <button class="reset-btn" data-uid="${u.id}" title="Reset password to 123456">🔑 Reset</button>
-            <button class="block-btn ${u.is_blocked ? 'is-blocked' : ''}" data-uid="${u.id}">${u.is_blocked ? 'Unblock' : 'Block'}</button>
-          </div>` : ''}
-        </div>
-      `).join('');
+      list.innerHTML = users.map(renderAdminUserRow).join('');
 
       list.querySelectorAll('.block-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
@@ -1801,6 +1847,7 @@
     clearTimeout(sendBtn.__sendFlyTimer);
     sendBtn.__sendFlyTimer = setTimeout(() => {
       sendBtn.classList.remove('send-fly');
+      window.BananzaVoiceHooks?.refreshComposerState?.();
     }, 320);
   }
 
@@ -1824,6 +1871,7 @@
     });
     msgInput.addEventListener('input', () => {
       autoResize();
+      window.BananzaVoiceHooks?.refreshComposerState?.();
       // Typing indicator
       if (!typingSendTimeout) {
         sendTyping();
@@ -2234,10 +2282,16 @@
 
     // Load more
     loadMoreBtn.addEventListener('click', loadMore);
+    scrollBottomBtn?.addEventListener('mousedown', (e) => e.preventDefault());
+    scrollBottomBtn?.addEventListener('click', () => {
+      scrollBottomBtn.blur();
+      scrollToBottom();
+    });
 
     // Scroll to load more
     messagesEl.addEventListener('scroll', () => {
       if (messagesEl.scrollTop < 60 && hasMore && !loadingMore) loadMore();
+      updateScrollBottomButton();
     });
 
     // Close emoji picker on outside click

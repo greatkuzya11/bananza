@@ -24,6 +24,7 @@
       audioContext: null,
       source: null,
       processor: null,
+      sink: null,
       chunks: [],
       timerId: null,
       sampleRate: 16000,
@@ -42,6 +43,7 @@
     decorateMessageRow: (row, msg) => decorateMessageRow(row, msg),
     handleWSMessage: (msg) => handleWSMessage(msg),
     onSettingsOpened: () => syncAdminEntryVisibility(),
+    refreshComposerState: () => syncSendButtonState(),
   });
 
   function getBridge() {
@@ -268,18 +270,79 @@
   }
 
   function syncSendButtonState() {
-    const { sendBtn } = getDom();
-    if (!sendBtn) return;
+    const bridge = getBridge();
+    const { sendBtn, msgInput } = getDom();
+    if (!sendBtn || !bridge) return;
+    const hasText = Boolean(msgInput?.value.trim());
+    const hasPendingFiles = Boolean(bridge.getPendingFiles?.().length);
+    const hasChat = Boolean(bridge.getCurrentChatId?.());
+    const keepSendIcon = sendBtn.classList.contains('send-fly');
+    const showMicMode = Boolean(
+      state.features.voice_notes_enabled &&
+      hasChat &&
+      !hasText &&
+      !hasPendingFiles &&
+      !state.recorder.recording &&
+      !state.recorder.uploading &&
+      !keepSendIcon
+    );
     sendBtn.classList.toggle('voice-enabled', Boolean(state.features.voice_notes_enabled));
+    sendBtn.classList.toggle('is-mic-mode', showMicMode);
+    sendBtn.classList.toggle('is-send-mode', !showMicMode && !state.recorder.recording);
     sendBtn.classList.toggle('is-recording', Boolean(state.recorder.recording));
     sendBtn.classList.toggle('is-uploading', Boolean(state.recorder.uploading));
     sendBtn.title = state.recorder.recording
       ? 'Идет запись'
       : state.recorder.uploading
         ? 'Отправка голосового сообщения'
-        : state.features.voice_notes_enabled
-          ? 'Отправить или удерживать для записи'
-          : 'Send';
+        : showMicMode
+          ? 'Удерживайте для записи'
+          : 'Отправить';
+  }
+
+  async function ensureRecorderWorklet(audioContext) {
+    if (!audioContext?.audioWorklet?.addModule) return false;
+    try {
+      await audioContext.audioWorklet.addModule('/js/voice-recorder-worklet.js');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function createRecorderGraph(audioContext, stream, chunks) {
+    const source = audioContext.createMediaStreamSource(stream);
+
+    if (await ensureRecorderWorklet(audioContext)) {
+      const processor = new AudioWorkletNode(audioContext, 'bananza-voice-recorder', {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+        channelCount: 1,
+        channelCountMode: 'explicit',
+      });
+      const sink = audioContext.createGain();
+      sink.gain.value = 0;
+      processor.port.onmessage = (event) => {
+        if (!state.recorder.recording) return;
+        const channelData = event.data;
+        if (!channelData?.length) return;
+        chunks.push(channelData instanceof Float32Array ? channelData : new Float32Array(channelData));
+      };
+      source.connect(processor);
+      processor.connect(sink);
+      sink.connect(audioContext.destination);
+      return { source, processor, sink };
+    }
+
+    const processor = audioContext.createScriptProcessor(4096, 1, 1);
+    processor.onaudioprocess = (audioEvent) => {
+      if (!state.recorder.recording) return;
+      chunks.push(new Float32Array(audioEvent.inputBuffer.getChannelData(0)));
+    };
+    source.connect(processor);
+    processor.connect(audioContext.destination);
+    return { source, processor, sink: null };
   }
 
   function syncAdminEntryVisibility() {
@@ -898,7 +961,6 @@
     return Boolean(
       bridge &&
       state.features.voice_notes_enabled &&
-      bridge.isMobileLayout?.() &&
       bridge.getCurrentChatId?.() &&
       msgInput &&
       !msgInput.value.trim() &&
@@ -909,8 +971,10 @@
   }
 
   function handleSendPointerDown(event) {
+    if (typeof event.button === 'number' && event.button !== 0) return;
     event.currentTarget?.blur?.();
     if (!canUseVoiceGesture()) return;
+    event.currentTarget?.setPointerCapture?.(event.pointerId);
     state.recorder.holdTimer = window.setTimeout(() => {
       state.recorder.holdTimer = null;
       state.recorder.suppressNextClick = true;
@@ -923,6 +987,7 @@
 
   function handleSendPointerUp(event) {
     event.currentTarget?.blur?.();
+    event.currentTarget?.releasePointerCapture?.(event.pointerId);
     if (state.recorder.holdTimer) {
       clearTimeout(state.recorder.holdTimer);
       state.recorder.holdTimer = null;
@@ -958,17 +1023,8 @@
 
     const audioContext = new AudioContextClass();
     await audioContext.resume();
-    const source = audioContext.createMediaStreamSource(stream);
-    const processor = audioContext.createScriptProcessor(4096, 1, 1);
     const chunks = [];
-
-    processor.onaudioprocess = (audioEvent) => {
-      if (!state.recorder.recording) return;
-      chunks.push(new Float32Array(audioEvent.inputBuffer.getChannelData(0)));
-    };
-
-    source.connect(processor);
-    processor.connect(audioContext.destination);
+    const { source, processor, sink } = await createRecorderGraph(audioContext, stream, chunks);
 
     state.recorder.recording = true;
     state.recorder.startAt = Date.now();
@@ -976,6 +1032,7 @@
     state.recorder.audioContext = audioContext;
     state.recorder.source = source;
     state.recorder.processor = processor;
+    state.recorder.sink = sink;
     state.recorder.chunks = chunks;
     state.recorder.sampleRate = audioContext.sampleRate || 16000;
     state.recorder.timerId = window.setInterval(updateRecorderBar, 200);
@@ -1033,11 +1090,16 @@
       clearInterval(state.recorder.timerId);
       state.recorder.timerId = null;
     }
+    if (state.recorder.processor?.port) {
+      state.recorder.processor.port.onmessage = null;
+    }
     state.recorder.processor?.disconnect();
+    state.recorder.sink?.disconnect();
     state.recorder.source?.disconnect();
     state.recorder.stream?.getTracks().forEach((track) => track.stop());
     state.recorder.audioContext?.close().catch(() => {});
     state.recorder.processor = null;
+    state.recorder.sink = null;
     state.recorder.source = null;
     state.recorder.stream = null;
     state.recorder.audioContext = null;
