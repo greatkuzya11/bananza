@@ -401,6 +401,25 @@ a:hover { text-decoration: underline; }
 .msg-row.other { align-self: flex-start; }
 .msg-row.other .msg-content { display: flex; flex-direction: column; min-width: 0; }
 .msg-content { position: relative; z-index: 1; max-width: 100%; }
+.msg-row.media-message,
+.msg-row:has(.msg-image),
+.msg-row:has(.msg-video),
+.msg-row:has(.msg-audio),
+.msg-row:has(.msg-file) {
+  width: fit-content;
+}
+.msg-row.media-message .msg-content,
+.msg-row:has(.msg-image) .msg-content,
+.msg-row:has(.msg-video) .msg-content,
+.msg-row:has(.msg-audio) .msg-content,
+.msg-row:has(.msg-file) .msg-content {
+  flex: 0 1 auto;
+  width: fit-content;
+  max-width: calc(100% - 30px);
+}
+.msg-row.media-message .msg-bubble {
+  width: fit-content;
+}
 .messages:not(.compact-view) .msg-row.own {
   width: fit-content;
 }
@@ -890,6 +909,35 @@ a:hover { text-decoration: underline; }
   display: flex; align-items: center; justify-content: center; border-radius: 50%;
 }
 .modal-close:hover { background: var(--bg-hover); color: var(--text-primary); }
+.forward-modal:not(.hidden) {
+  animation: forwardModalOverlayIn .16s ease both;
+}
+.forward-modal:not(.hidden) .modal-content {
+  animation: forwardModalIn .18s cubic-bezier(.2, .9, .2, 1.08) both;
+}
+.forward-modal.is-closing {
+  pointer-events: none;
+  animation: forwardModalOverlayOut .16s ease both;
+}
+.forward-modal.is-closing .modal-content {
+  animation: forwardModalOut .16s ease both;
+}
+@keyframes forwardModalOverlayIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes forwardModalOverlayOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes forwardModalIn {
+  from { opacity: 0; transform: translateY(14px) scale(.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes forwardModalOut {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(10px) scale(.97); }
+}
 .modal-tabs {
   display: flex; border-bottom: 1px solid var(--border-light);
 }
@@ -1074,6 +1122,44 @@ a:hover { text-decoration: underline; }
   color: var(--text-secondary);
   font-size: 14px;
   text-align: center;
+}
+.center-toast {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  z-index: 520;
+  max-width: min(82vw, 320px);
+  padding: 12px 18px;
+  border-radius: 999px;
+  background: rgba(15, 25, 35, .92);
+  color: #fff;
+  box-shadow: 0 12px 36px rgba(0,0,0,.36);
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(.96);
+  backdrop-filter: blur(10px);
+}
+.center-toast.is-visible {
+  animation: centerToastFade 2s ease forwards;
+}
+@keyframes centerToastFade {
+  0% { opacity: 0; transform: translate(-50%, -48%) scale(.96); }
+  12% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  72% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -52%) scale(.98); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .forward-modal:not(.hidden),
+  .forward-modal:not(.hidden) .modal-content,
+  .forward-modal.is-closing,
+  .forward-modal.is-closing .modal-content,
+  .center-toast.is-visible {
+    animation: none;
+  }
+  .center-toast.is-visible { opacity: 1; }
 }
 .theme-picker {
   display: grid;

@@ -52,6 +52,8 @@
   let weatherSearchTimer = null;
   let forwardMessageState = null;
   let forwardMessageBusy = false;
+  let forwardModalCloseTimer = null;
+  let centerToastTimer = null;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DOM
@@ -549,6 +551,52 @@
     setForwardMessageStatus('');
   }
 
+  function showCenterToast(message) {
+    let toast = document.getElementById('centerToast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'centerToast';
+      toast.className = 'center-toast';
+      document.body.appendChild(toast);
+    }
+    clearTimeout(centerToastTimer);
+    toast.textContent = message;
+    toast.classList.remove('is-visible');
+    void toast.offsetWidth;
+    toast.classList.add('is-visible');
+    centerToastTimer = setTimeout(() => {
+      toast.classList.remove('is-visible');
+    }, 2000);
+  }
+
+  function closeForwardMessageModal({ animate = false } = {}) {
+    if (!forwardMessageModal) {
+      resetForwardMessageModal();
+      return;
+    }
+
+    clearTimeout(forwardModalCloseTimer);
+    if (forwardMessageModal.classList.contains('hidden')) {
+      forwardMessageModal.classList.remove('is-closing');
+      resetForwardMessageModal();
+      return;
+    }
+
+    if (!animate) {
+      forwardMessageModal.classList.add('hidden');
+      forwardMessageModal.classList.remove('is-closing');
+      resetForwardMessageModal();
+      return;
+    }
+
+    forwardMessageModal.classList.add('is-closing');
+    forwardModalCloseTimer = setTimeout(() => {
+      forwardMessageModal.classList.add('hidden');
+      forwardMessageModal.classList.remove('is-closing');
+      resetForwardMessageModal();
+    }, 180);
+  }
+
   function renderForwardChatList(filter = '') {
     if (!forwardChatList) return;
     const query = String(filter || '').trim().toLowerCase();
@@ -586,6 +634,8 @@
     if (!message?.id) return;
     hideReactionPicker();
     closeAllModals();
+    clearTimeout(forwardModalCloseTimer);
+    forwardMessageModal?.classList.remove('is-closing');
     forwardMessageState = { id: message.id };
     renderForwardChatList();
     forwardMessageModal?.classList.remove('hidden');
@@ -602,6 +652,7 @@
         body: { targetChatId },
       });
       closeAllModals();
+      showCenterToast('Сообщение переслано');
       if (targetChatId === currentChatId) scrollToBottom();
     } catch (e) {
       setForwardMessageStatus(e.message || 'Не удалось переслать сообщение', 'error');
@@ -1244,6 +1295,11 @@
 
   function createMessageEl(msg, showName = true) {
     const isOwn = msg.user_id === currentUser.id;
+    const isMediaMessage = Boolean(
+      !msg.is_deleted &&
+      msg.file_id &&
+      ['image', 'audio', 'video', 'document'].includes(msg.file_type)
+    );
     const isEmojiOnly = Boolean(
       !msg.is_deleted &&
       !msg.is_voice_note &&
@@ -1255,7 +1311,7 @@
       isSingleEmojiMessage(msg.text)
     );
     const row = document.createElement('div');
-    row.className = `msg-row ${isOwn ? 'own' : 'other'}${isEmojiOnly ? ' emoji-only-message' : ''}`;
+    row.className = `msg-row ${isOwn ? 'own' : 'other'}${isEmojiOnly ? ' emoji-only-message' : ''}${isMediaMessage ? ' media-message' : ''}`;
     row.dataset.msgId = msg.id;
     row.dataset.date = formatDate(msg.created_at);
     row.dataset.userId = msg.user_id;
@@ -1347,6 +1403,17 @@
     }
 
     row.innerHTML = html;
+    if (isMediaMessage) {
+      const mediaContent = row.querySelector(':scope > .msg-content');
+      const mediaActions = row.querySelector(':scope > .msg-actions');
+      if (mediaContent && mediaActions) {
+        const shell = document.createElement('div');
+        shell.className = 'media-actions-shell';
+        row.insertBefore(shell, mediaContent);
+        shell.appendChild(mediaContent);
+        shell.appendChild(mediaActions);
+      }
+    }
 
     // Event listeners
     const deleteBtn = row.querySelector('.msg-delete-btn');
@@ -1389,11 +1456,17 @@
 
     const img = row.querySelector('.msg-image');
     if (img) {
+      const markWideImage = () => {
+        if (!img.naturalWidth || !img.naturalHeight) return;
+        row.classList.toggle('wide-media-message', img.naturalWidth >= img.naturalHeight);
+      };
       img.addEventListener('click', () => openImageViewer(img.src));
       const wasNearBottom = isNearBottom();
       img.addEventListener('load', () => {
+        markWideImage();
         if (wasNearBottom && (scrollRestoreMode !== 'restore' || isOwn)) scrollToBottom();
       });
+      if (img.complete) markWideImage();
     }
 
     const expandBtn = row.querySelector('.msg-expand-btn');
@@ -1419,13 +1492,19 @@
     }
     const video = row.querySelector('video');
     if (video) {
+      const markWideVideo = () => {
+        if (!video.videoWidth || !video.videoHeight) return;
+        row.classList.toggle('wide-media-message', video.videoWidth >= video.videoHeight);
+      };
       video.addEventListener('loadedmetadata', () => {
+        markWideVideo();
         const dur = formatDuration(video.duration);
         const durEl = document.createElement('span');
         durEl.className = 'media-duration';
         durEl.textContent = dur;
         video.parentElement.querySelector('div:last-child')?.prepend(durEl);
       });
+      if (video.readyState >= 1) markWideVideo();
     }
 
     window.BananzaVoiceHooks?.decorateMessageRow?.(row, msg);
@@ -2419,6 +2498,11 @@
   // MODALS
   // ═══════════════════════════════════════════════════════════════════════════
   function closeAllModals() {
+    const shouldAnimateForwardModal = Boolean(
+      forwardMessageModal &&
+      !forwardMessageModal.classList.contains('hidden') &&
+      !forwardMessageModal.classList.contains('is-closing')
+    );
     [
       newChatModal,
       adminModal,
@@ -2429,9 +2513,8 @@
       themeSettingsModal,
       weatherSettingsModal,
       changePasswordModal,
-      forwardMessageModal,
     ].forEach(m => m.classList.add('hidden'));
-    resetForwardMessageModal();
+    closeForwardMessageModal({ animate: shouldAnimateForwardModal });
     closeMediaViewer();
     window.BananzaVoiceHooks?.closeAll?.();
   }
