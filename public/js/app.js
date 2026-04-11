@@ -825,6 +825,79 @@
     });
   }
 
+  function localChatPreferenceEnabled(value) {
+    return value !== false && value !== 0;
+  }
+
+  function getChatById(chatId) {
+    const id = Number(chatId);
+    return chats.find(c => c.id === id) || null;
+  }
+
+  function isChatNotificationEnabled(chatId) {
+    const chat = getChatById(chatId);
+    return chat ? localChatPreferenceEnabled(chat.notify_enabled) : true;
+  }
+
+  function isChatIncomingSoundEnabled(chatId) {
+    const chat = getChatById(chatId);
+    return Boolean(soundSettings.sounds_enabled && (!chat || localChatPreferenceEnabled(chat.sounds_enabled)));
+  }
+
+  function setChatPreferencesStatus(message, type = '') {
+    const el = $('#chatPreferencesStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function renderChatPreferencesForm(chat) {
+    const notifyToggle = $('#chatNotifyToggle');
+    const soundToggle = $('#chatSoundToggle');
+    if (!notifyToggle || !soundToggle) return;
+    notifyToggle.checked = localChatPreferenceEnabled(chat?.notify_enabled);
+    soundToggle.checked = localChatPreferenceEnabled(chat?.sounds_enabled);
+    $('#chatNotifyHint')?.classList.toggle('hidden', !!notificationSettings.push_enabled);
+    $('#chatSoundHint')?.classList.toggle('hidden', !!soundSettings.sounds_enabled);
+  }
+
+  async function loadChatPreferences(chatId) {
+    const chat = getChatById(chatId);
+    renderChatPreferencesForm(chat);
+    setChatPreferencesStatus('');
+    try {
+      const data = await api(`/api/chats/${chatId}/preferences`);
+      const preferences = data.preferences || data;
+      if (chat) Object.assign(chat, preferences);
+      renderChatPreferencesForm(chat || preferences);
+    } catch (e) {
+      setChatPreferencesStatus(e.message || 'Не удалось загрузить настройки чата', 'error');
+    }
+  }
+
+  async function saveChatPreferences() {
+    if (!currentChatId) return;
+    const chat = getChatById(currentChatId);
+    const next = {
+      notify_enabled: $('#chatNotifyToggle')?.checked ?? true,
+      sounds_enabled: $('#chatSoundToggle')?.checked ?? true,
+    };
+    if (chat) Object.assign(chat, next);
+    renderChatPreferencesForm(chat || next);
+    setChatPreferencesStatus('Сохраняю...');
+    try {
+      const data = await api(`/api/chats/${currentChatId}/preferences`, { method: 'PUT', body: next });
+      const preferences = data.preferences || next;
+      if (chat) Object.assign(chat, preferences);
+      renderChatPreferencesForm(chat || preferences);
+      setChatPreferencesStatus('Сохранено', 'success');
+    } catch (e) {
+      setChatPreferencesStatus(e.message || 'Не удалось сохранить настройки чата', 'error');
+      if (chat) await loadChatPreferences(currentChatId);
+    }
+  }
+
   async function openChatFromPush(chatId) {
     const id = Number(chatId);
     if (!Number.isInteger(id) || id <= 0) return;
@@ -1079,7 +1152,7 @@
     switch (msg.type) {
       case 'message': {
         const isOwnIncomingMessage = msg.message.user_id === currentUser.id;
-        if (!isOwnIncomingMessage && !document.hidden) {
+        if (!isOwnIncomingMessage && !document.hidden && isChatIncomingSoundEnabled(msg.message.chat_id)) {
           playAppSound(msg.message.chat_id === currentChatId ? 'incoming' : 'notification');
         }
         // Update chat list regardless
@@ -1113,6 +1186,7 @@
           Notification.permission === 'granted' &&
           notificationSettings.push_enabled &&
           notificationSettings.notify_messages &&
+          isChatNotificationEnabled(msg.message.chat_id) &&
           !pushDeviceSubscribed
         ) {
           const title = msg.message.display_name;
@@ -1186,7 +1260,8 @@
           msg.action === 'added' &&
           msg.targetUserId === currentUser.id &&
           msg.actorId !== currentUser.id &&
-          !document.hidden
+          !document.hidden &&
+          isChatIncomingSoundEnabled(msg.chatId)
         ) {
           playAppSound('reaction');
         }
@@ -3033,6 +3108,7 @@
 
     // Sync compact view toggle
     $('#compactViewToggle').checked = compactView;
+    await loadChatPreferences(currentChatId);
 
     // Group edit section
     const editSection = $('#chatEditSection');
@@ -3908,6 +3984,8 @@
       // Re-render
       if (currentChatId) openChat(currentChatId);
     });
+    $('#chatNotifyToggle')?.addEventListener('change', () => saveChatPreferences());
+    $('#chatSoundToggle')?.addEventListener('change', () => saveChatPreferences());
 
     // Logout
     $('#logoutBtn').addEventListener('click', () => { if (confirm('Logout?')) logout(); });

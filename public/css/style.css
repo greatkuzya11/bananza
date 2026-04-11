@@ -1416,6 +1416,24 @@ a:hover { text-decoration: underline; }
   }
 }
 
+.chat-preferences-block {
+  margin: 0 0 14px;
+}
+.chat-preferences-block h4 {
+  margin: 0 0 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+}
+.chat-preferences-status {
+  min-height: 18px;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.chat-preferences-status.is-success { color: var(--success); }
+.chat-preferences-status.is-error { color: var(--danger); }
+
 /* Toggle switch */
 .toggle-switch { position: relative; width: 42px; height: 24px; flex-shrink: 0; }
 .toggle-switch input { opacity: 0; width: 0; height: 0; }

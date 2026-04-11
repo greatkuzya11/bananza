@@ -443,6 +443,27 @@
             <span>Compact view (all messages on one side)</span>
           </label>
         </div>
+        <div id="chatPreferencesSection" class="chat-preferences-block">
+          <h4>Уведомления и звуки</h4>
+          <div class="settings-item settings-toggle-item">
+            <span>Уведомления в этом чате</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="chatNotifyToggle">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div id="chatNotifyHint" class="settings-hint hidden">Общие уведомления выключены. Сначала включите их в настройках пользователя.</div>
+          <div class="settings-item settings-toggle-item">
+            <span>Звуки входящих в этом чате</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="chatSoundToggle">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div id="chatSoundHint" class="settings-hint hidden">Общие звуки выключены. Сначала включите их в настройках пользователя.</div>
+          <div id="chatPreferencesStatus" class="chat-preferences-status"></div>
+        </div>
+        <hr class="divider">
         <div id="chatEditSection" class="hidden">
           <div class="avatar-upload-wrap center">
             <div id="chatAvatar" class="avatar-large"></div>

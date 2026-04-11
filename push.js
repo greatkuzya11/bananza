@@ -116,6 +116,10 @@ function createPushFeature({ app, db, auth, rateLimit }) {
     SELECT user_id FROM chat_members
     WHERE chat_id=? AND user_id!=?
   `);
+  const chatNotificationStmt = db.prepare(`
+    SELECT notify_enabled FROM chat_members
+    WHERE chat_id=? AND user_id=?
+  `);
   const reactionMessageStmt = db.prepare(`
     SELECT m.id, m.chat_id, m.user_id, m.text, f.type as file_type,
       vm.message_id as voice_message_id, vm.transcription_text
@@ -180,12 +184,19 @@ function createPushFeature({ app, db, auth, rateLimit }) {
     `).run(reason, endpoint);
   }
 
-  function getSubscriptionsForType(userId, type, { ignoreSettings = false } = {}) {
+  function isChatNotificationEnabled(userId, chatId) {
+    if (!chatId) return true;
+    const row = chatNotificationStmt.get(chatId, userId);
+    return row ? row.notify_enabled !== 0 : false;
+  }
+
+  function getSubscriptionsForType(userId, type, { ignoreSettings = false, chatId = null } = {}) {
     if (!isConfigured) return [];
     if (!ignoreSettings) {
       const settings = getSettings(userId);
       const flag = TYPE_FLAGS[type];
       if (!settings.push_enabled || (flag && !settings[flag])) return [];
+      if ((type === 'messages' || type === 'reactions') && !isChatNotificationEnabled(userId, chatId)) return [];
     }
     return activeSubscriptionsStmt.all(userId);
   }
@@ -268,7 +279,7 @@ function createPushFeature({ app, db, auth, rateLimit }) {
         body: isPrivate ? preview : `${message.display_name || 'User'}: ${preview}`,
         url: `/?chatId=${message.chat_id}`,
         tag: `chat:${message.chat_id}`,
-      });
+      }, { chatId: message.chat_id });
     }
   }
 
@@ -295,7 +306,7 @@ function createPushFeature({ app, db, auth, rateLimit }) {
       body: `${actor.display_name || actor.username || 'Кто-то'} поставил ${emoji} на ваше сообщение`,
       url: `/?chatId=${message.chat_id}`,
       tag: `reaction:${messageId}:${actor.id}:${emoji}`,
-    });
+    }, { chatId: message.chat_id });
   }
 
   app.get('/api/notification-settings', auth, (req, res) => {

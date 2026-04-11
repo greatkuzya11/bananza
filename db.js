@@ -34,6 +34,8 @@ db.exec(`
     chat_id INTEGER REFERENCES chats(id) ON DELETE CASCADE,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     joined_at TEXT DEFAULT (datetime('now')),
+    notify_enabled INTEGER DEFAULT 1,
+    sounds_enabled INTEGER DEFAULT 1,
     PRIMARY KEY (chat_id, user_id)
   );
 
@@ -198,6 +200,16 @@ try {
   db.prepare("SELECT last_read_id FROM chat_members LIMIT 1").get();
 } catch {
   db.exec("ALTER TABLE chat_members ADD COLUMN last_read_id INTEGER DEFAULT 0");
+}
+try {
+  db.prepare("SELECT notify_enabled FROM chat_members LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE chat_members ADD COLUMN notify_enabled INTEGER DEFAULT 1");
+}
+try {
+  db.prepare("SELECT sounds_enabled FROM chat_members LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE chat_members ADD COLUMN sounds_enabled INTEGER DEFAULT 1");
 }
 // Migration: reactions table
 try {

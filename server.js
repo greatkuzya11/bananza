@@ -300,9 +300,25 @@ app.get('/api/users', auth, (req, res) => {
 // CHAT ROUTES
 // ═══════════════════════════════════════════════════════════════════════════
 
+function boolPreferenceValue(value, fallback = true) {
+  if (typeof value === 'boolean') return value;
+  if (value === 0 || value === 1) return !!value;
+  if (value === '0' || value === '1') return value === '1';
+  return fallback;
+}
+
+function chatPreferencesPayload(row) {
+  return {
+    notify_enabled: row ? row.notify_enabled !== 0 : true,
+    sounds_enabled: row ? row.sounds_enabled !== 0 : true,
+  };
+}
+
 app.get('/api/chats', auth, (req, res) => {
   const rows = db.prepare(`
     SELECT c.*,
+      cm.notify_enabled,
+      cm.sounds_enabled,
       (SELECT COALESCE(NULLIF(m.text, ''), NULLIF(vm.transcription_text, ''))
         FROM messages m
         LEFT JOIN voice_messages vm ON vm.message_id=m.id
@@ -317,6 +333,7 @@ app.get('/api/chats', auth, (req, res) => {
   `).all(req.user.id);
 
   for (const chat of rows) {
+    Object.assign(chat, chatPreferencesPayload(chat));
     if (chat.type === 'private') {
       const other = db.prepare(`
         SELECT u.id,u.display_name,u.avatar_color,u.avatar_url FROM users u
@@ -419,6 +436,28 @@ app.get('/api/chats/:chatId/members', auth, (req, res) => {
   if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
   res.json(db.prepare('SELECT u.id,u.username,u.display_name,u.avatar_color,u.avatar_url FROM users u JOIN chat_members cm ON cm.user_id=u.id WHERE cm.chat_id=?').all(chatId));
+});
+
+app.get('/api/chats/:chatId/preferences', auth, (req, res) => {
+  const chatId = +req.params.chatId;
+  const row = db.prepare('SELECT notify_enabled,sounds_enabled FROM chat_members WHERE chat_id=? AND user_id=?')
+    .get(chatId, req.user.id);
+  if (!row) return res.status(403).json({ error: 'Not a member' });
+  res.json({ preferences: chatPreferencesPayload(row) });
+});
+
+app.put('/api/chats/:chatId/preferences', auth, (req, res) => {
+  const chatId = +req.params.chatId;
+  const row = db.prepare('SELECT notify_enabled,sounds_enabled FROM chat_members WHERE chat_id=? AND user_id=?')
+    .get(chatId, req.user.id);
+  if (!row) return res.status(403).json({ error: 'Not a member' });
+  const next = {
+    notify_enabled: boolPreferenceValue(req.body?.notify_enabled, row.notify_enabled !== 0),
+    sounds_enabled: boolPreferenceValue(req.body?.sounds_enabled, row.sounds_enabled !== 0),
+  };
+  db.prepare('UPDATE chat_members SET notify_enabled=?, sounds_enabled=? WHERE chat_id=? AND user_id=?')
+    .run(next.notify_enabled ? 1 : 0, next.sounds_enabled ? 1 : 0, chatId, req.user.id);
+  res.json({ preferences: next });
 });
 
 app.post('/api/chats/:chatId/members', auth, (req, res) => {
@@ -1036,6 +1075,7 @@ app.post('/api/messages/:id/reactions', auth, (req, res) => {
     actorName: req.user.display_name,
     emoji,
     action: reactionAdded ? 'added' : 'removed',
+    chatId: msg.chat_id,
     targetUserId: msg.user_id,
   });
   if (reactionAdded) {
