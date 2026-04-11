@@ -34,6 +34,7 @@
   let audioContext = null;
   let unlocked = false;
   const lastPlayedAt = new Map();
+  const UNLOCK_EVENTS = ['click', 'keydown', 'touchend', 'pointerup'];
 
   function clampVolume(value) {
     const n = Number(value);
@@ -54,19 +55,47 @@
     };
   }
 
-  function ensureContext() {
+  function hasUserActivation() {
+    return !navigator.userActivation || navigator.userActivation.isActive;
+  }
+
+  function removeUnlockListeners() {
+    UNLOCK_EVENTS.forEach((eventName) => {
+      window.removeEventListener(eventName, unlock);
+    });
+  }
+
+  function markUnlocked(ctx) {
+    if (!ctx || ctx.state !== 'running') return;
+    unlocked = true;
+    removeUnlockListeners();
+  }
+
+  function ensureContext({ create = true } = {}) {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextClass) return null;
+    if (!audioContext && !create) return null;
     if (!audioContext) audioContext = new AudioContextClass();
-    if (audioContext.state === 'suspended') audioContext.resume().catch(() => {});
     return audioContext;
   }
 
-  function unlock() {
-    const ctx = ensureContext();
+  function resumeFromGesture(ctx) {
     if (!ctx) return;
-    unlocked = true;
-    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    if (ctx.state === 'running') {
+      markUnlocked(ctx);
+      return;
+    }
+    if (ctx.state !== 'suspended' || !hasUserActivation()) return;
+    ctx.resume()
+      .then(() => markUnlocked(ctx))
+      .catch(() => {});
+  }
+
+  function unlock(event) {
+    if (event?.isTrusted === false || !hasUserActivation()) return;
+    const ctx = ensureContext({ create: true });
+    if (!ctx) return;
+    resumeFromGesture(ctx);
   }
 
   function canPlay(type, options = {}) {
@@ -146,8 +175,13 @@
 
   function playPattern(type, options = {}) {
     if (!canPlay(type, options)) return false;
-    const ctx = ensureContext();
+    const shouldCreateContext = options.preview || unlocked || audioContext?.state === 'running';
+    const ctx = ensureContext({ create: shouldCreateContext });
     if (!ctx) return false;
+    if (ctx.state === 'suspended') {
+      if (!options.preview || !hasUserActivation()) return false;
+      resumeFromGesture(ctx);
+    }
     const now = ctx.currentTime + 0.01;
 
     if (type === 'send') {
@@ -188,8 +222,8 @@
   }
 
   function installUnlockListeners() {
-    ['pointerdown', 'keydown', 'touchstart'].forEach((eventName) => {
-      window.addEventListener(eventName, unlock, { once: true, passive: true });
+    UNLOCK_EVENTS.forEach((eventName) => {
+      window.addEventListener(eventName, unlock, { passive: true });
     });
   }
 

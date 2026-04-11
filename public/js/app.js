@@ -821,6 +821,10 @@
   function previewAllSounds() {
     const sequence = ['send', 'incoming', 'notification', 'reaction', 'invite', 'voice_start', 'voice_stop'];
     sequence.forEach((type, index) => {
+      if (index === 0) {
+        previewSound(type);
+        return;
+      }
       setTimeout(() => previewSound(type), index * 360);
     });
   }
