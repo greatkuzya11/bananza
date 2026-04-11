@@ -234,6 +234,10 @@ a:hover { text-decoration: underline; }
   background: var(--bg-other-msg);
   border-bottom-left-radius: 4px;
 }
+.msg-bubble:has(.msg-image) {
+  max-width: min(340px, 100%);
+  width: fit-content;
+}
 .msg-row.emoji-only-message .msg-bubble {
   background: transparent;
   border-radius: 0;
@@ -409,7 +413,8 @@ a:hover { text-decoration: underline; }
 
 /* ── File attachments ────────────────────────────────────────────────────── */
 .msg-image {
-  max-width: 340px; max-height: 300px; border-radius: 8px; cursor: pointer;
+  width: auto; height: auto;
+  max-width: min(340px, 100%); max-height: 300px; border-radius: 8px; cursor: pointer;
   display: block; margin: 4px 0; object-fit: contain;
 }
 
@@ -1129,7 +1134,8 @@ a:hover { text-decoration: underline; }
     color: #ffd28a;
     transform: translateX(10px) scale(1.28) rotate(-8deg);
   }
-  .msg-image { max-width: 260px; max-height: 240px; }
+  .msg-bubble:has(.msg-image) { max-width: min(260px, 100%); }
+  .msg-image { max-width: min(260px, 100%); max-height: 240px; }
   .msg-video { max-width: 280px; }
 
   .emoji-picker { width: 300px; bottom: 60px; }
