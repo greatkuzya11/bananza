@@ -1,6 +1,6 @@
 .send-btn.voice-enabled {
   position: relative;
-  color: #8fd8ff;
+  color: var(--voice-send-color);
 }
 
 .send-btn.voice-enabled.is-mic-mode::before {
@@ -132,7 +132,7 @@
 }
 
 .voice-admin-status.pending {
-  background: rgba(94,181,247,0.14);
+  background: var(--accent-soft-bg);
   color: var(--accent);
 }
 
@@ -176,7 +176,7 @@
 }
 
 .voice-recorder-bar.pending {
-  background: rgba(94,181,247,0.12);
+  background: var(--accent-softer-bg);
 }
 
 .voice-recorder-bar.error {
@@ -212,14 +212,14 @@
 }
 
 .msg-row.own.voice-note-compact .msg-bubble {
-  background: #355f8a;
+  background: var(--voice-compact-own-bg);
   padding-right: 9px;
   padding-left: 9px;
   padding-bottom: 4px;
 }
 
 .msg-row.other.voice-note-compact .msg-bubble {
-  background: #223447;
+  background: var(--voice-compact-other-bg);
   padding-right: 9px;
   padding-left: 9px;
   padding-bottom: 4px;
@@ -274,8 +274,8 @@
 }
 
 .voice-footer-play.is-playing {
-  color: #d8eeff;
-  border-color: rgba(191,227,255,0.3);
+  color: var(--link);
+  border-color: var(--accent-border-strong);
 }
 
 .voice-compact-audio {
@@ -360,11 +360,11 @@
 .voice-transcribe-btn {
   padding: 7px 10px;
   border-radius: 8px;
-  background: rgba(94,181,247,0.14);
+  background: var(--accent-soft-bg);
   color: var(--accent);
   font-size: 13px;
   font-weight: 700;
-  border: 1px solid rgba(94,181,247,0.22);
+  border: 1px solid var(--accent-border);
   cursor: pointer;
   appearance: none;
   -webkit-appearance: none;
@@ -373,8 +373,8 @@
 }
 
 .voice-transcribe-btn:hover {
-  background: rgba(94,181,247,0.2);
-  border-color: rgba(94,181,247,0.34);
+  background: var(--accent-strong-bg);
+  border-color: var(--accent-border-strong);
 }
 
 .voice-transcribe-btn:focus,

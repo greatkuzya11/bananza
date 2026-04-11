@@ -7,6 +7,15 @@
   const WS_URL = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
   const PAGE_SIZE = 50;
   const MAX_MSG = 5000;
+  const UI_THEMES = [
+    { id: 'bananza', name: 'BananZa', note: 'Classic blue', colors: ['#17212b', '#5eb5f7'], own: '#2b5278', other: '#182533' },
+    { id: 'midnight-ocean', name: 'Midnight Ocean', note: 'Navy + teal', colors: ['#071823', '#2dd4bf'], own: '#14506a', other: '#102434' },
+    { id: 'nord-aurora', name: 'Nord Aurora', note: 'Graphite + aurora', colors: ['#2e3440', '#88c0d0'], own: '#3b5f75', other: '#293340' },
+    { id: 'rose-pine', name: 'Rose Pine', note: 'Plum + rose', colors: ['#191724', '#eb6f92'], own: '#3a2a4a', other: '#221f33' },
+    { id: 'dracula-neon', name: 'Dracula Neon', note: 'Violet + pink', colors: ['#282a36', '#ff79c6'], own: '#4b3a69', other: '#242636' },
+    { id: 'tokyo-night', name: 'Tokyo Night', note: 'Ink + electric blue', colors: ['#1a1b26', '#7aa2f7'], own: '#2b4d7d', other: '#202437' },
+  ];
+  const UI_THEME_IDS = new Set(UI_THEMES.map(t => t.id));
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STATE
@@ -34,6 +43,7 @@
   let scrollRestoreMode = localStorage.getItem('scrollRestoreMode') || 'bottom'; // 'bottom' | 'restore'
   let openLastChatOnReload = localStorage.getItem('openLastChatOnReload') !== '0';
   let scrollPositions = {}; // chatId -> scrollTop
+  let currentUiTheme = 'bananza';
   let weatherSettings = { enabled: false, refresh_minutes: 30, location: null };
   let weatherSettingsLoaded = false;
   let selectedWeatherLocation = null;
@@ -132,6 +142,70 @@
       /https?:\/\/[^\s<>"')\]]+/gi,
       (url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`
     );
+  }
+
+  function normalizeUiTheme(theme) {
+    return UI_THEME_IDS.has(theme) ? theme : 'bananza';
+  }
+
+  function setThemeStatus(message, type = '') {
+    const el = $('#settingsThemeStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function renderThemePicker() {
+    const picker = $('#settingsThemePicker');
+    if (!picker) return;
+    picker.innerHTML = UI_THEMES.map(theme => `
+      <button type="button" class="theme-card${theme.id === currentUiTheme ? ' active' : ''}" data-theme="${theme.id}">
+        <span class="theme-card-swatches">
+          <span style="background:${theme.colors[0]}"></span>
+          <span style="background:${theme.colors[1]}"></span>
+        </span>
+        <span class="theme-card-copy">
+          <strong>${esc(theme.name)}</strong>
+          <small>${esc(theme.note)}</small>
+        </span>
+        <span class="theme-card-preview" aria-hidden="true">
+          <i style="background:${theme.other}"></i>
+          <i style="background:${theme.own}"></i>
+        </span>
+      </button>
+    `).join('');
+  }
+
+  function applyUiTheme(theme, persist = true) {
+    const nextTheme = normalizeUiTheme(theme);
+    currentUiTheme = nextTheme;
+    document.documentElement.dataset.uiTheme = nextTheme;
+    if (currentUser) {
+      currentUser.ui_theme = nextTheme;
+      if (persist) localStorage.setItem('user', JSON.stringify(currentUser));
+    }
+    renderThemePicker();
+  }
+
+  async function selectUiTheme(theme) {
+    const nextTheme = normalizeUiTheme(theme);
+    if (nextTheme === currentUiTheme) return;
+    const prevTheme = currentUiTheme;
+    applyUiTheme(nextTheme);
+    setThemeStatus('Saving...');
+    try {
+      const res = await api('/api/user/theme', { method: 'PATCH', body: { theme: nextTheme } });
+      currentUser = { ...currentUser, ...res.user };
+      applyUiTheme(currentUser.ui_theme);
+      setThemeStatus('Saved', 'success');
+      setTimeout(() => {
+        if ($('#settingsThemeStatus')?.textContent === 'Saved') setThemeStatus('');
+      }, 1200);
+    } catch (e) {
+      applyUiTheme(prevTheme);
+      setThemeStatus(e.message || 'Theme save failed', 'error');
+    }
   }
 
   let singleEmojiPattern = null;
@@ -448,7 +522,10 @@
     token = localStorage.getItem('token');
     const userStr = localStorage.getItem('user');
     if (!token || !userStr) { location.href = '/login.html'; return false; }
-    try { currentUser = JSON.parse(userStr); } catch { logout(); return false; }
+    try {
+      currentUser = JSON.parse(userStr);
+      applyUiTheme(currentUser.ui_theme, false);
+    } catch { logout(); return false; }
     return true;
   }
 
@@ -2275,6 +2352,8 @@
     $('#settingsSendEnter').checked = sendByEnter;
     $('#settingsScrollRestore').checked = scrollRestoreMode === 'restore';
     $('#settingsOpenLastChat').checked = openLastChatOnReload;
+    renderThemePicker();
+    setThemeStatus('');
     renderWeatherSettingsForm();
     if (!weatherSettingsLoaded) loadWeatherSettings().then(renderWeatherSettingsForm);
     window.BananzaVoiceHooks?.onSettingsOpened?.({ currentUser });
@@ -3039,6 +3118,13 @@
       localStorage.setItem('openLastChatOnReload', openLastChatOnReload ? '1' : '0');
     });
 
+    // UI theme picker
+    $('#settingsThemePicker')?.addEventListener('click', (e) => {
+      const card = e.target.closest('.theme-card');
+      if (!card) return;
+      selectUiTheme(card.dataset.theme);
+    });
+
     // Weather settings
     $('#settingsWeatherEnabled')?.addEventListener('change', async (e) => {
       $('#settingsWeatherControls')?.classList.toggle('hidden', !e.target.checked);
@@ -3196,6 +3282,7 @@
     try {
       const data = await api('/api/auth/me');
       currentUser = data.user;
+      applyUiTheme(currentUser.ui_theme);
       localStorage.setItem('user', JSON.stringify(currentUser));
     } catch { return; }
 

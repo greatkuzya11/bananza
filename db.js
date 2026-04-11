@@ -17,6 +17,7 @@ db.exec(`
     is_blocked INTEGER DEFAULT 0,
     avatar_color TEXT NOT NULL,
     avatar_url TEXT DEFAULT NULL,
+    ui_theme TEXT DEFAULT 'bananza',
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -98,6 +99,11 @@ try {
   db.prepare("SELECT avatar_url FROM users LIMIT 1").get();
 } catch {
   db.exec("ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT NULL");
+}
+try {
+  db.prepare("SELECT ui_theme FROM users LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE users ADD COLUMN ui_theme TEXT DEFAULT 'bananza'");
 }
 try {
   db.prepare("SELECT avatar_url FROM chats LIMIT 1").get();

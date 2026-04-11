@@ -113,15 +113,30 @@ const upLimiter   = rateLimit({ windowMs: 60_000, max: 20, message: { error: 'To
 
 // ── Auth middleware ─────────────────────────────────────────────────────────
 const AVATAR_COLORS = ['#e17076','#7bc862','#e5ca77','#65aadd','#a695e7','#ee7aae','#6ec9cb','#faa774'];
+const UI_THEMES = new Set(['bananza', 'midnight-ocean', 'nord-aurora', 'rose-pine', 'dracula-neon', 'tokyo-night']);
+const USER_PUBLIC_FIELDS = 'id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,ui_theme';
+
+function publicUser(u) {
+  return {
+    id: u.id,
+    username: u.username,
+    display_name: u.display_name,
+    is_admin: u.is_admin,
+    is_blocked: u.is_blocked,
+    avatar_color: u.avatar_color,
+    avatar_url: u.avatar_url,
+    ui_theme: UI_THEMES.has(u.ui_theme) ? u.ui_theme : 'bananza',
+  };
+}
 
 function auth(req, res, next) {
   const h = req.headers.authorization;
   if (!h || !h.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const payload = jwt.verify(h.slice(7), JWT_SECRET);
-    const u = db.prepare('SELECT id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url FROM users WHERE id=?').get(payload.id);
+    const u = db.prepare(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id=?`).get(payload.id);
     if (!u || u.is_blocked) return res.status(403).json({ error: 'Blocked' });
-    req.user = u;
+    req.user = publicUser(u);
     next();
   } catch { res.status(401).json({ error: 'Invalid token' }); }
 }
@@ -214,7 +229,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     if (gen) db.prepare('INSERT OR IGNORE INTO chat_members(chat_id,user_id) VALUES(?,?)').run(gen.id, userId);
 
     const token = jwt.sign({ id: userId, username: username.toLowerCase() }, JWT_SECRET, { expiresIn: '30d' });
-    res.json({ token, user: { id: userId, username: username.toLowerCase(), display_name: name, is_admin: isAdmin, avatar_color: color, avatar_url: null } });
+    res.json({ token, user: publicUser({ id: userId, username: username.toLowerCase(), display_name: name, is_admin: isAdmin, is_blocked: 0, avatar_color: color, avatar_url: null, ui_theme: 'bananza' }) });
   } catch (e) { console.error(e); res.status(500).json({ error: 'Server error' }); }
 });
 
@@ -232,7 +247,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
 
     const token = jwt.sign({ id: u.id, username: u.username }, JWT_SECRET, { expiresIn: '30d' });
-    res.json({ token, user: { id: u.id, username: u.username, display_name: u.display_name, is_admin: u.is_admin, avatar_color: u.avatar_color, avatar_url: u.avatar_url } });
+    res.json({ token, user: publicUser(u) });
   } catch (e) { console.error(e); res.status(500).json({ error: 'Server error' }); }
 });
 
@@ -546,8 +561,16 @@ app.put('/api/profile', auth, (req, res) => {
   params.push(req.user.id);
 
   db.prepare(`UPDATE users SET ${updates.join(',')} WHERE id=?`).run(...params);
-  const user = db.prepare('SELECT id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url FROM users WHERE id=?').get(req.user.id);
-  res.json({ user });
+  const user = db.prepare(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id=?`).get(req.user.id);
+  res.json({ user: publicUser(user) });
+});
+
+app.patch('/api/user/theme', auth, (req, res) => {
+  const theme = typeof req.body?.theme === 'string' ? req.body.theme : '';
+  if (!UI_THEMES.has(theme)) return res.status(400).json({ error: 'Unknown theme' });
+  db.prepare('UPDATE users SET ui_theme=? WHERE id=?').run(theme, req.user.id);
+  const user = db.prepare(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id=?`).get(req.user.id);
+  res.json({ user: publicUser(user) });
 });
 
 app.post('/api/profile/avatar', auth, upLimiter, (req, res) => {
@@ -564,8 +587,8 @@ app.post('/api/profile/avatar', auth, upLimiter, (req, res) => {
 
     const avatarUrl = '/uploads/avatars/' + req.file.filename;
     db.prepare('UPDATE users SET avatar_url=? WHERE id=?').run(avatarUrl, req.user.id);
-    const user = db.prepare('SELECT id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url FROM users WHERE id=?').get(req.user.id);
-    res.json({ user });
+    const user = db.prepare(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id=?`).get(req.user.id);
+    res.json({ user: publicUser(user) });
   });
 });
 
