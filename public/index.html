@@ -193,6 +193,7 @@
         <div class="settings-hint">When off, reload opens the chat list instead of the last opened chat.</div>
         <button id="settingsThemePanel" class="settings-item">🎨 Theme</button>
         <button id="settingsWeatherPanel" class="settings-item">⛅ Weather</button>
+        <button id="settingsNotificationsPanel" class="settings-item">🔔 Уведомления</button>
         <button id="settingsChangePassword" class="settings-item">🔑 Change Password</button>
         <button id="settingsAdminPanel" class="settings-item hidden">🛡 Admin Panel</button>
       </div>
@@ -247,6 +248,57 @@
             </div>
             <div id="settingsWeatherStatus" class="weather-settings-status"></div>
           </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notification Settings Modal -->
+  <div id="notificationSettingsModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Уведомления</h3>
+        <button class="modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="settingsNotificationsBlock" class="notification-settings-block">
+          <div id="settingsNotificationsSupport" class="notification-support-status"></div>
+          <div class="notification-device-actions">
+            <button id="settingsPushEnable" type="button" class="weather-action-btn notification-main-btn">Включить на этом устройстве</button>
+            <button id="settingsPushDisable" type="button" class="weather-action-btn">Отключить устройство</button>
+            <button id="settingsPushTest" type="button" class="weather-action-btn">Проверить уведомление</button>
+          </div>
+          <div class="settings-hint notification-hint">Для Android и свернутого веба нужны разрешение браузера и активная подписка этого устройства.</div>
+
+          <div class="settings-item settings-toggle-item">
+            <span>Получать push-уведомления</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="settingsNotificationsEnabled">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="settings-item settings-toggle-item">
+            <span>Новые сообщения</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="settingsNotifyMessages">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="settings-item settings-toggle-item">
+            <span>Приглашения в чат</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="settingsNotifyChatInvites">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="settings-item settings-toggle-item">
+            <span>Реакции на мои сообщения</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="settingsNotifyReactions">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div id="settingsNotificationsStatus" class="notification-settings-status"></div>
         </div>
       </div>
     </div>

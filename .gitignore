@@ -1,6 +1,7 @@
 node_modules/
 bananza.db
 .secret
+.vapid.json
 uploads/*
 !uploads/.gitkeep
 bananza.db-shm

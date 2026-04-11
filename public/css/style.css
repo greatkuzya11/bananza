@@ -1286,6 +1286,49 @@ a:hover { text-decoration: underline; }
 }
 .weather-settings-status.is-success { color: var(--success); }
 .weather-settings-status.is-error { color: var(--danger); }
+.notification-settings-block { margin: 4px 0 12px; }
+.notification-support-status {
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.35;
+}
+.notification-support-status.is-ready { color: var(--success); }
+.notification-support-status.is-error { color: var(--danger); }
+.notification-device-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.notification-main-btn {
+  flex: 0 0 auto;
+}
+.notification-hint {
+  padding-left: 4px;
+  padding-right: 4px;
+}
+.notification-settings-status {
+  min-height: 18px;
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.notification-settings-status.is-success { color: var(--success); }
+.notification-settings-status.is-error { color: var(--danger); }
+@media (max-width: 520px) {
+  .notification-device-actions {
+    align-items: stretch;
+  }
+  .notification-device-actions .weather-action-btn,
+  .notification-main-btn {
+    width: auto;
+  }
+}
 
 /* Toggle switch */
 .toggle-switch { position: relative; width: 42px; height: 24px; flex-shrink: 0; }

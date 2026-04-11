@@ -12,7 +12,7 @@ const MAX_VOICE_FILE_SIZE = 12 * 1024 * 1024;
 const ALLOWED_VOICE_MIME = new Set(['audio/wav', 'audio/x-wav', 'audio/wave']);
 const TEST_AUDIO_PATH = path.join(__dirname, 'test-assets', 'model-test-ru.wav');
 
-function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, uploadsDir, broadcastToChatAll, clients, secret }) {
+function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, uploadsDir, broadcastToChatAll, clients, secret, notifyMessageCreated }) {
   const previewStmt = db.prepare('SELECT * FROM link_previews WHERE message_id=?');
   const reactionStmt = db.prepare('SELECT user_id, emoji FROM reactions WHERE message_id=?');
 
@@ -364,6 +364,7 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
 
         const message = getHydratedMessageById(messageResult.lastInsertRowid);
         broadcastToChatAll(chatId, { type: 'message', message });
+        if (typeof notifyMessageCreated === 'function') notifyMessageCreated(message);
 
         if (settings.auto_transcribe_on_send) {
           scheduleTranscription({

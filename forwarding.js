@@ -13,6 +13,7 @@ function createForwardingFeature({
   hydrateMessageById,
   extractUrls,
   fetchPreview,
+  notifyMessageCreated,
 }) {
   const sourceMessageStmt = db.prepare(`
     SELECT
@@ -254,6 +255,7 @@ function createForwardingFeature({
     }
 
     broadcastToChatAll(targetChatId, { type: 'message', message });
+    if (typeof notifyMessageCreated === 'function') notifyMessageCreated(message);
 
     if (shouldAutoTranscribe && typeof voiceFeature.scheduleTranscription === 'function') {
       voiceFeature.scheduleTranscription({

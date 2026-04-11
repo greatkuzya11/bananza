@@ -50,6 +50,14 @@
   let weatherSearchResults = [];
   let weatherTimer = null;
   let weatherSearchTimer = null;
+  let notificationSettings = {
+    push_enabled: false,
+    notify_messages: true,
+    notify_chat_invites: true,
+    notify_reactions: true,
+  };
+  let notificationSettingsLoaded = false;
+  let pushDeviceSubscribed = false;
   let forwardMessageState = null;
   let forwardMessageBusy = false;
   let forwardModalCloseTimer = null;
@@ -101,6 +109,7 @@
   const settingsModal = $('#settingsModal');
   const themeSettingsModal = $('#themeSettingsModal');
   const weatherSettingsModal = $('#weatherSettingsModal');
+  const notificationSettingsModal = $('#notificationSettingsModal');
   const changePasswordModal = $('#changePasswordModal');
   const forwardMessageModal = $('#forwardMessageModal');
   const forwardChatSearch = $('#forwardChatSearch');
@@ -502,6 +511,217 @@
     }
   }
 
+  function isLocalhost() {
+    return ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+  }
+
+  function isPushSupported() {
+    return Boolean(
+      'serviceWorker' in navigator &&
+      'PushManager' in window &&
+      'Notification' in window &&
+      (location.protocol === 'https:' || isLocalhost())
+    );
+  }
+
+  function setNotificationStatus(message, type = '') {
+    const el = $('#settingsNotificationsStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function notificationPermissionLabel() {
+    if (!('Notification' in window)) return 'не поддерживается';
+    if (Notification.permission === 'granted') return 'разрешены';
+    if (Notification.permission === 'denied') return 'запрещены в браузере';
+    return 'ещё не запрашивались';
+  }
+
+  function renderNotificationSettingsForm() {
+    const supportEl = $('#settingsNotificationsSupport');
+    const enabledInput = $('#settingsNotificationsEnabled');
+    const messagesInput = $('#settingsNotifyMessages');
+    const invitesInput = $('#settingsNotifyChatInvites');
+    const reactionsInput = $('#settingsNotifyReactions');
+    const enableBtn = $('#settingsPushEnable');
+    const disableBtn = $('#settingsPushDisable');
+    const testBtn = $('#settingsPushTest');
+    if (!supportEl || !enabledInput || !messagesInput || !invitesInput || !reactionsInput) return;
+
+    const supported = isPushSupported();
+    supportEl.classList.toggle('is-ready', supported && Notification.permission === 'granted' && pushDeviceSubscribed);
+    supportEl.classList.toggle('is-error', !supported || Notification.permission === 'denied');
+    supportEl.textContent = supported
+      ? `Статус: ${notificationPermissionLabel()}. Это устройство ${pushDeviceSubscribed ? 'подписано' : 'не подписано'}.`
+      : 'Web Push недоступен: нужен HTTPS и браузер с Service Worker/Push API.';
+
+    enabledInput.checked = !!notificationSettings.push_enabled;
+    messagesInput.checked = !!notificationSettings.notify_messages;
+    invitesInput.checked = !!notificationSettings.notify_chat_invites;
+    reactionsInput.checked = !!notificationSettings.notify_reactions;
+
+    if (enableBtn) enableBtn.disabled = !supported || Notification.permission === 'denied';
+    if (disableBtn) disableBtn.disabled = !supported || !pushDeviceSubscribed;
+    if (testBtn) testBtn.disabled = !supported || !pushDeviceSubscribed;
+  }
+
+  function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+    return outputArray;
+  }
+
+  async function ensurePushRegistration() {
+    if (!isPushSupported()) throw new Error('Web Push недоступен в этом браузере или без HTTPS');
+    return navigator.serviceWorker.register('/sw.js');
+  }
+
+  async function refreshPushDeviceState() {
+    if (!isPushSupported()) {
+      pushDeviceSubscribed = false;
+      renderNotificationSettingsForm();
+      return false;
+    }
+    try {
+      const registration = await navigator.serviceWorker.getRegistration('/sw.js');
+      const subscription = await registration?.pushManager.getSubscription();
+      pushDeviceSubscribed = !!subscription;
+    } catch {
+      pushDeviceSubscribed = false;
+    }
+    renderNotificationSettingsForm();
+    return pushDeviceSubscribed;
+  }
+
+  async function loadNotificationSettings() {
+    try {
+      const data = await api('/api/notification-settings');
+      notificationSettings = data.settings || notificationSettings;
+      notificationSettingsLoaded = true;
+    } catch {
+      notificationSettingsLoaded = false;
+    }
+    await refreshPushDeviceState();
+  }
+
+  async function saveNotificationSettings(patch = {}) {
+    const next = {
+      ...notificationSettings,
+      ...patch,
+      notify_messages: $('#settingsNotifyMessages')?.checked ?? notificationSettings.notify_messages,
+      notify_chat_invites: $('#settingsNotifyChatInvites')?.checked ?? notificationSettings.notify_chat_invites,
+      notify_reactions: $('#settingsNotifyReactions')?.checked ?? notificationSettings.notify_reactions,
+    };
+    if (Object.prototype.hasOwnProperty.call(patch, 'push_enabled')) {
+      next.push_enabled = !!patch.push_enabled;
+    } else {
+      next.push_enabled = $('#settingsNotificationsEnabled')?.checked ?? notificationSettings.push_enabled;
+    }
+    setNotificationStatus('Сохраняю...');
+    try {
+      const data = await api('/api/notification-settings', { method: 'PUT', body: next });
+      notificationSettings = data.settings || next;
+      notificationSettingsLoaded = true;
+      renderNotificationSettingsForm();
+      setNotificationStatus('Сохранено', 'success');
+    } catch (e) {
+      setNotificationStatus(e.message || 'Не удалось сохранить уведомления', 'error');
+      renderNotificationSettingsForm();
+    }
+  }
+
+  async function enablePushNotifications() {
+    if (!isPushSupported()) {
+      setNotificationStatus('Web Push недоступен: нужен HTTPS и поддержка браузера', 'error');
+      renderNotificationSettingsForm();
+      return;
+    }
+    try {
+      setNotificationStatus('Запрашиваю разрешение...');
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        setNotificationStatus('Уведомления запрещены в браузере', 'error');
+        renderNotificationSettingsForm();
+        return;
+      }
+
+      const registration = await ensurePushRegistration();
+      const keyData = await api('/api/push/vapid-public-key');
+      let subscription = await registration.pushManager.getSubscription();
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(keyData.publicKey),
+        });
+      }
+      const data = await api('/api/push/subscribe', {
+        method: 'POST',
+        body: { subscription: subscription.toJSON() },
+      });
+      notificationSettings = data.settings || { ...notificationSettings, push_enabled: true };
+      pushDeviceSubscribed = true;
+      renderNotificationSettingsForm();
+      setNotificationStatus('Уведомления включены на этом устройстве', 'success');
+    } catch (e) {
+      setNotificationStatus(e.message || 'Не удалось включить уведомления', 'error');
+      await refreshPushDeviceState();
+    }
+  }
+
+  async function disablePushOnThisDevice() {
+    if (!isPushSupported()) return;
+    try {
+      setNotificationStatus('Отключаю устройство...');
+      const registration = await navigator.serviceWorker.getRegistration('/sw.js');
+      const subscription = await registration?.pushManager.getSubscription();
+      if (subscription) {
+        await api('/api/push/subscribe', {
+          method: 'DELETE',
+          body: { endpoint: subscription.endpoint },
+        });
+        await subscription.unsubscribe();
+      }
+      pushDeviceSubscribed = false;
+      renderNotificationSettingsForm();
+      setNotificationStatus('Это устройство отключено', 'success');
+    } catch (e) {
+      setNotificationStatus(e.message || 'Не удалось отключить устройство', 'error');
+      await refreshPushDeviceState();
+    }
+  }
+
+  async function testPushNotification() {
+    try {
+      setNotificationStatus('Отправляю тест...');
+      const data = await api('/api/push/test', {
+        method: 'POST',
+        body: { chatId: currentChatId || null },
+      });
+      setNotificationStatus(data.sent > 0 ? 'Тестовое уведомление отправлено' : 'Тест не отправлен', data.sent > 0 ? 'success' : 'error');
+    } catch (e) {
+      setNotificationStatus(e.message || 'Не удалось отправить тест', 'error');
+    }
+  }
+
+  async function openChatFromPush(chatId) {
+    const id = Number(chatId);
+    if (!Number.isInteger(id) || id <= 0) return;
+    if (!chats.find(c => c.id === id)) await loadChats();
+    if (chats.find(c => c.id === id)) await openChat(id);
+  }
+
+  function handleServiceWorkerMessage(event) {
+    const data = event.data || {};
+    if (data.type === 'open_chat') {
+      openChatFromPush(data.chatId).catch(() => {});
+    }
+  }
+
   function chatItemAvatarHtml(chat) {
     if (chat.type === 'private' && chat.private_user) {
       const u = chat.private_user;
@@ -764,8 +984,16 @@
           // Mark as read
           api(`/api/chats/${currentChatId}/read`, { method: 'POST' }).catch(() => {});
         }
-        // Browser notification
-        if (document.hidden && msg.message.user_id !== currentUser.id && Notification.permission === 'granted') {
+        // Fallback notification for old/no-push browsers while this page is still running.
+        if (
+          document.hidden &&
+          msg.message.user_id !== currentUser.id &&
+          'Notification' in window &&
+          Notification.permission === 'granted' &&
+          notificationSettings.push_enabled &&
+          notificationSettings.notify_messages &&
+          !pushDeviceSubscribed
+        ) {
           const title = msg.message.display_name;
           const body = msg.message.text || (msg.message.is_voice_note ? msg.message.transcription_text : '') || '📎 File';
           new Notification(title, { body: body.substring(0, 100), icon: '/favicon.ico' });
@@ -2512,6 +2740,7 @@
       settingsModal,
       themeSettingsModal,
       weatherSettingsModal,
+      notificationSettingsModal,
       changePasswordModal,
     ].forEach(m => m.classList.add('hidden'));
     closeForwardMessageModal({ animate: shouldAnimateForwardModal });
@@ -2620,6 +2849,18 @@
     weatherSettingsModal.classList.remove('hidden');
     renderWeatherSettingsForm();
     if (!weatherSettingsLoaded) loadWeatherSettings().then(renderWeatherSettingsForm);
+  }
+
+  function openNotificationSettingsModal() {
+    closeAllModals();
+    notificationSettingsModal.classList.remove('hidden');
+    renderNotificationSettingsForm();
+    setNotificationStatus('');
+    if (!notificationSettingsLoaded) {
+      loadNotificationSettings().catch(() => {});
+    } else {
+      refreshPushDeviceState().catch(() => {});
+    }
   }
 
   function resetChangePasswordFields() {
@@ -3381,6 +3622,7 @@
     // Settings sub-buttons
     $('#settingsThemePanel').addEventListener('click', openThemeSettingsModal);
     $('#settingsWeatherPanel').addEventListener('click', openWeatherSettingsModal);
+    $('#settingsNotificationsPanel')?.addEventListener('click', openNotificationSettingsModal);
     $('#settingsChangePassword').addEventListener('click', openChangePasswordModal);
     $('#settingsAdminPanel').addEventListener('click', openAdminModal);
 
@@ -3442,6 +3684,26 @@
     });
     $('#settingsWeatherSave')?.addEventListener('click', saveWeatherSettings);
     $('#settingsWeatherRefreshNow')?.addEventListener('click', saveWeatherSettings);
+
+    // Notification settings
+    $('#settingsPushEnable')?.addEventListener('click', enablePushNotifications);
+    $('#settingsPushDisable')?.addEventListener('click', disablePushOnThisDevice);
+    $('#settingsPushTest')?.addEventListener('click', testPushNotification);
+    $('#settingsNotificationsEnabled')?.addEventListener('change', async (e) => {
+      await saveNotificationSettings({ push_enabled: e.target.checked });
+      if (e.target.checked && !pushDeviceSubscribed) {
+        if (!isPushSupported()) {
+          setNotificationStatus('Настройки сохранены, но на этом устройстве Web Push недоступен.', 'success');
+        } else if (Notification.permission === 'denied') {
+          setNotificationStatus('Настройки сохранены, но браузер запретил уведомления. Разрешите их в настройках сайта.', 'success');
+        } else {
+          setNotificationStatus('Настройки сохранены. Чтобы получать push на этом устройстве, нажмите «Включить на этом устройстве».', 'success');
+        }
+      }
+    });
+    ['settingsNotifyMessages', 'settingsNotifyChatInvites', 'settingsNotifyReactions'].forEach((id) => {
+      document.getElementById(id)?.addEventListener('change', () => saveNotificationSettings());
+    });
 
     // Change password save
     $('#cpSaveBtn').addEventListener('click', async () => {
@@ -3573,11 +3835,11 @@
     // Update UI
     updateCurrentUserFooter();
     loadWeatherSettings().then(() => loadCurrentWeather(false)).catch(() => {});
-
-    // Request notification permission
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage);
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
+    loadNotificationSettings().catch(() => {});
 
     setupEvents();
     setupProfileEvents();
@@ -3586,8 +3848,12 @@
     await loadAllUsers();
     await loadChats();
 
-    // Optional startup behavior: restore the last opened chat or stay on the chat list.
-    if (openLastChatOnReload) {
+    // Optional startup behavior: push deep-link, restore the last opened chat, or stay on the chat list.
+    const startupChatId = Number(new URLSearchParams(location.search).get('chatId'));
+    if (startupChatId && chats.find(c => c.id === startupChatId)) {
+      await openChat(startupChatId);
+      history.replaceState(history.state || {}, '', location.pathname);
+    } else if (openLastChatOnReload) {
       const lastChat = +localStorage.getItem('lastChat');
       if (lastChat && chats.find(c => c.id === lastChat)) {
         await openChat(lastChat);

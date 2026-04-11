@@ -16,6 +16,7 @@ const { extractUrls, fetchPreview } = require('./linkPreview');
 const { createVoiceFeature } = require('./voice');
 const { createWeatherFeature } = require('./weather');
 const { createForwardingFeature } = require('./forwarding');
+const { createPushFeature } = require('./push');
 
 // ── JWT Secret ──────────────────────────────────────────────────────────────
 const SECRET_PATH = path.join(__dirname, '.secret');
@@ -147,6 +148,13 @@ function adminOnly(req, res, next) {
   next();
 }
 
+const pushFeature = createPushFeature({
+  app,
+  db,
+  auth,
+  rateLimit,
+});
+
 const voiceFeature = createVoiceFeature({
   app,
   db,
@@ -158,6 +166,7 @@ const voiceFeature = createVoiceFeature({
   broadcastToChatAll,
   clients,
   secret: JWT_SECRET,
+  notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),
 });
 
 createWeatherFeature({
@@ -178,6 +187,7 @@ createForwardingFeature({
   hydrateMessageById: (messageId) => hydrateMessageById(messageId),
   extractUrls,
   fetchPreview,
+  notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),
 });
 
 const messageByIdStmt = db.prepare(`
@@ -337,7 +347,16 @@ app.post('/api/chats', auth, (req, res) => {
 
   const chat = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
   const members = db.prepare('SELECT user_id FROM chat_members WHERE chat_id=?').all(chatId);
-  members.forEach(({ user_id }) => sendToUser(user_id, { type: 'chat_created', chat }));
+  members.forEach(({ user_id }) => {
+    sendToUser(user_id, { type: 'chat_created', chat });
+    if (user_id !== req.user.id) {
+      pushFeature.notifyChatInvite(user_id, {
+        chat,
+        actorName: req.user.display_name,
+        body: `${req.user.display_name} добавил(а) вас в чат ${chat.name}`,
+      });
+    }
+  });
   res.json(chat);
 });
 
@@ -367,6 +386,12 @@ app.post('/api/chats/private', auth, (req, res) => {
 
   const chat = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
   sendToUser(targetUserId, { type: 'chat_created', chat: { ...chat, name: req.user.display_name } });
+  pushFeature.notifyChatInvite(targetUserId, {
+    chat: { ...chat, name: req.user.display_name },
+    actorName: req.user.display_name,
+    title: req.user.display_name,
+    body: 'Новый личный чат',
+  });
   res.json(chat);
 });
 
@@ -385,8 +410,15 @@ app.post('/api/chats/:chatId/members', auth, (req, res) => {
   if (chat.type === 'private') return res.status(400).json({ error: 'Cannot add to private chat' });
   if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
-  db.prepare('INSERT OR IGNORE INTO chat_members(chat_id,user_id) VALUES(?,?)').run(chatId, userId);
+  const added = db.prepare('INSERT OR IGNORE INTO chat_members(chat_id,user_id) VALUES(?,?)').run(chatId, userId);
   sendToUser(userId, { type: 'chat_created', chat });
+  if (added.changes > 0 && userId !== req.user.id) {
+    pushFeature.notifyChatInvite(userId, {
+      chat,
+      actorName: req.user.display_name,
+      body: `${req.user.display_name} добавил(а) вас в чат ${chat.name}`,
+    });
+  }
   res.json({ ok: true });
 });
 
@@ -476,6 +508,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   const hydratedMsg = voiceFeature.attachVoiceMetadata([msg])[0];
 
   broadcastToChatAll(chatId, { type: 'message', message: hydratedMsg });
+  pushFeature.notifyMessageCreated(hydratedMsg);
 
   // Async link previews
   if (cleanText) {
@@ -961,14 +994,19 @@ app.post('/api/messages/:id/reactions', auth, (req, res) => {
     return res.status(403).json({ error: 'Not a member' });
 
   const existing = db.prepare('SELECT emoji FROM reactions WHERE message_id=? AND user_id=? AND emoji=?').get(mid, req.user.id, emoji);
+  let reactionAdded = false;
   if (existing) {
     db.prepare('DELETE FROM reactions WHERE message_id=? AND user_id=? AND emoji=?').run(mid, req.user.id, emoji);
   } else {
     db.prepare('INSERT INTO reactions(message_id, user_id, emoji) VALUES(?,?,?)').run(mid, req.user.id, emoji);
+    reactionAdded = true;
   }
 
   const reactions = db.prepare('SELECT user_id, emoji FROM reactions WHERE message_id=?').all(mid);
   broadcastToChatAll(msg.chat_id, { type: 'reaction', messageId: mid, reactions });
+  if (reactionAdded) {
+    pushFeature.notifyReaction({ messageId: mid, emoji, actor: req.user });
+  }
   res.json({ ok: true, reactions });
 });
 
