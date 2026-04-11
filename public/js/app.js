@@ -981,6 +981,23 @@
     }
   }
 
+  function applyBackgroundStyleToElement(el, style) {
+    switch (style) {
+      case 'cover':
+        el.style.backgroundSize = 'cover'; el.style.backgroundRepeat = 'no-repeat'; el.style.backgroundPosition = 'center center'; break;
+      case 'contain':
+        el.style.backgroundSize = 'contain'; el.style.backgroundRepeat = 'no-repeat'; el.style.backgroundPosition = 'center center'; break;
+      case '100%':
+        el.style.backgroundSize = '100%'; el.style.backgroundRepeat = 'no-repeat'; el.style.backgroundPosition = 'center center'; break;
+      case 'tile':
+        el.style.backgroundSize = 'auto'; el.style.backgroundRepeat = 'repeat'; el.style.backgroundPosition = 'left top'; break;
+      case 'center':
+        el.style.backgroundSize = 'contain'; el.style.backgroundRepeat = 'no-repeat'; el.style.backgroundPosition = 'center center'; break;
+      default:
+        el.style.backgroundSize = 'cover'; el.style.backgroundRepeat = 'no-repeat'; el.style.backgroundPosition = 'center center';
+    }
+  }
+
   // Apply chat background to messages area
   function applyChatBackground(chat) {
     if (!messagesEl) return;
@@ -994,35 +1011,37 @@
     }
     messagesEl.classList.add('has-bg');
     messagesEl.style.backgroundImage = `url(${chat.background_url})`;
-    const style = chat.background_style || 'cover';
-    switch (style) {
-      case 'cover':
-        messagesEl.style.backgroundSize = 'cover'; messagesEl.style.backgroundRepeat = 'no-repeat'; messagesEl.style.backgroundPosition = 'center center'; break;
-      case 'contain':
-        messagesEl.style.backgroundSize = 'contain'; messagesEl.style.backgroundRepeat = 'no-repeat'; messagesEl.style.backgroundPosition = 'center center'; break;
-      case '100%':
-        messagesEl.style.backgroundSize = '100%'; messagesEl.style.backgroundRepeat = 'no-repeat'; messagesEl.style.backgroundPosition = 'center center'; break;
-      case 'tile':
-        messagesEl.style.backgroundSize = 'auto'; messagesEl.style.backgroundRepeat = 'repeat'; messagesEl.style.backgroundPosition = 'left top'; break;
-      case 'center':
-        messagesEl.style.backgroundSize = 'auto'; messagesEl.style.backgroundRepeat = 'no-repeat'; messagesEl.style.backgroundPosition = 'center center'; break;
-      default:
-        messagesEl.style.backgroundSize = 'cover'; messagesEl.style.backgroundRepeat = 'no-repeat'; messagesEl.style.backgroundPosition = 'center center';
-    }
+    applyBackgroundStyleToElement(messagesEl, chat.background_style || 'cover');
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // MESSAGES
   // ═══════════════════════════════════════════════════════════════════════════
+  function createMessageGroup(msg, isOwn) {
+    const group = document.createElement('div');
+    group.className = 'msg-group';
+    group.dataset.userId = msg.user_id;
+    const avatarColor = isOwn ? (currentUser.avatar_color || '#65aadd') : (msg.avatar_color || '#65aadd');
+    const avatarUrl = isOwn ? currentUser.avatar_url : msg.avatar_url;
+    const name = isOwn ? currentUser.display_name : msg.display_name;
+    group.innerHTML = `<div class="msg-group-avatar">${avatarHtml(name, avatarColor, avatarUrl, 32)}</div>`;
+    const body = document.createElement('div');
+    body.className = 'msg-group-body';
+    group.appendChild(body);
+    return { group, body };
+  }
+
   function renderMessages(msgs) {
     let lastDate = null;
     const existingFirst = messagesEl.querySelector('.msg-row, .msg-group');
+    let currentGroupBody = null;
 
     for (let i = 0; i < msgs.length; i++) {
       const msg = msgs[i];
       const msgDate = formatDate(msg.created_at);
       if (msgDate !== lastDate) {
         lastDate = msgDate;
+        currentGroupBody = null;
         const sep = document.createElement('div');
         sep.className = 'date-separator';
         sep.innerHTML = `<span>${msgDate}</span>`;
@@ -1035,29 +1054,21 @@
       const isOwn = msg.user_id === currentUser.id;
       const useGroup = !isOwn || compactView;
 
-      if (useGroup && !sameUser) {
-        const group = document.createElement('div');
-        group.className = 'msg-group';
-        group.dataset.userId = msg.user_id;
-        const avatarColor = isOwn ? (currentUser.avatar_color || '#65aadd') : (msg.avatar_color || '#65aadd');
-        const avatarUrl = isOwn ? currentUser.avatar_url : msg.avatar_url;
-        const name = isOwn ? currentUser.display_name : msg.display_name;
-        group.innerHTML = `<div class="msg-group-avatar">${avatarHtml(name, avatarColor, avatarUrl, 32)}</div>`;
-        const body = document.createElement('div');
-        body.className = 'msg-group-body';
-        group.appendChild(body);
+      const startsGroup = useGroup && (!sameUser || !currentGroupBody);
+      if (startsGroup) {
+        const { group, body } = createMessageGroup(msg, isOwn);
+        currentGroupBody = body;
         if (existingFirst) messagesEl.insertBefore(group, existingFirst);
         else messagesEl.appendChild(group);
       }
 
-      const showName = useGroup && !sameUser;
+      const showName = useGroup && startsGroup;
       const el = createMessageEl(msg, showName);
 
       if (useGroup) {
-        const groups = messagesEl.querySelectorAll('.msg-group');
-        const lastGroup = groups[groups.length - 1];
-        if (lastGroup) lastGroup.querySelector('.msg-group-body').appendChild(el);
+        currentGroupBody.appendChild(el);
       } else {
+        currentGroupBody = null;
         if (existingFirst) messagesEl.insertBefore(el, existingFirst);
         else messagesEl.appendChild(el);
       }
@@ -1067,10 +1078,10 @@
   }
 
   function appendMessage(msg) {
-    const lastChild = messagesEl.lastElementChild;
     const msgDate = formatDate(msg.created_at);
     const isOwn = msg.user_id === currentUser.id;
     const useGroup = !isOwn || compactView;
+    let lastChild = messagesEl.lastElementChild;
 
     // Date separator: compare against last separator in DOM
     const seps = messagesEl.querySelectorAll('.date-separator');
@@ -1080,25 +1091,21 @@
       sep.className = 'date-separator';
       sep.innerHTML = `<span>${msgDate}</span>`;
       messagesEl.appendChild(sep);
+      lastChild = null;
     }
 
     // Check if we can append to existing group
     let sameGroup = false;
+    let groupBody = null;
     if (useGroup && lastChild && lastChild.classList.contains('msg-group') && +lastChild.dataset.userId === msg.user_id) {
       sameGroup = true;
+      groupBody = lastChild.querySelector('.msg-group-body');
     }
 
-    if (useGroup && !sameGroup) {
-      const group = document.createElement('div');
-      group.className = 'msg-group';
-      group.dataset.userId = msg.user_id;
-      const avatarColor = isOwn ? (currentUser.avatar_color || '#65aadd') : (msg.avatar_color || '#65aadd');
-      const avatarUrl = isOwn ? currentUser.avatar_url : msg.avatar_url;
-      const name = isOwn ? currentUser.display_name : msg.display_name;
-      group.innerHTML = `<div class="msg-group-avatar">${avatarHtml(name, avatarColor, avatarUrl, 32)}</div>`;
-      const body = document.createElement('div');
-      body.className = 'msg-group-body';
-      group.appendChild(body);
+    if (useGroup && (!sameGroup || !groupBody)) {
+      const { group, body } = createMessageGroup(msg, isOwn);
+      groupBody = body;
+      sameGroup = false;
       messagesEl.appendChild(group);
     }
 
@@ -1106,8 +1113,7 @@
     const el = createMessageEl(msg, showName);
 
     if (useGroup) {
-      const groups = messagesEl.querySelectorAll('.msg-group');
-      groups[groups.length - 1].querySelector('.msg-group-body').appendChild(el);
+      groupBody.appendChild(el);
     } else {
       messagesEl.appendChild(el);
     }
@@ -2476,9 +2482,11 @@
       if (bgPreviewEl) {
         if (chat && chat.background_url) {
           bgPreviewEl.style.backgroundImage = `url(${esc(chat.background_url)})`;
+          applyBackgroundStyleToElement(bgPreviewEl, chat.background_style || 'cover');
           removeBgBtn.classList.remove('hidden');
         } else {
           bgPreviewEl.style.backgroundImage = '';
+          applyBackgroundStyleToElement(bgPreviewEl, 'cover');
           removeBgBtn.classList.add('hidden');
         }
         bgStyleSelect.value = chat && chat.background_style ? chat.background_style : 'cover';
