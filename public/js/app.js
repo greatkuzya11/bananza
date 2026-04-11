@@ -302,8 +302,16 @@
         if (msg.message.chat_id === currentChatId && !displayedMsgIds.has(msg.message.id)) {
           const wasNearBottom = isNearBottom();
           const isOwnMessage = msg.message.user_id === currentUser.id;
+          const shouldPreserveIncomingScroll = scrollRestoreMode === 'restore' && !isOwnMessage;
+          const scrollTopBefore = messagesEl.scrollTop;
           appendMessage(msg.message);
-          if (wasNearBottom || isOwnMessage) scrollToBottom();
+          if (isOwnMessage || (wasNearBottom && !shouldPreserveIncomingScroll)) {
+            scrollToBottom();
+          } else if (shouldPreserveIncomingScroll) {
+            messagesEl.scrollTop = scrollTopBefore;
+            scrollPositions[currentChatId] = scrollTopBefore;
+            updateScrollBottomButton();
+          }
           // Mark as read
           api(`/api/chats/${currentChatId}/read`, { method: 'POST' }).catch(() => {});
         }
@@ -548,7 +556,7 @@
   function updateScrollBottomButton() {
     if (!scrollBottomBtn) return;
     const hasMessages = Boolean(messagesEl.querySelector('.msg-row'));
-    const shouldShow = Boolean(currentChatId && hasMessages && !isNearBottom(120));
+    const shouldShow = Boolean(currentChatId && hasMessages && !isNearBottom(8));
     scrollBottomBtn.classList.toggle('visible', shouldShow);
   }
 
@@ -596,7 +604,7 @@
   // ═══════════════════════════════════════════════════════════════════════════
   async function openChat(chatId) {
     // Save scroll position of previous chat
-    if (currentChatId && currentChatId !== chatId) {
+    if (currentChatId) {
       scrollPositions[currentChatId] = messagesEl.scrollTop;
     }
 
@@ -970,7 +978,9 @@
     if (img) {
       img.addEventListener('click', () => openImageViewer(img.src));
       const wasNearBottom = isNearBottom();
-      img.addEventListener('load', () => { if (wasNearBottom) scrollToBottom(); });
+      img.addEventListener('load', () => {
+        if (wasNearBottom && (scrollRestoreMode !== 'restore' || isOwn)) scrollToBottom();
+      });
     }
 
     const expandBtn = row.querySelector('.msg-expand-btn');
@@ -2870,6 +2880,7 @@
 
     // Scroll to load more
     messagesEl.addEventListener('scroll', () => {
+      if (currentChatId) scrollPositions[currentChatId] = messagesEl.scrollTop;
       if (messagesEl.scrollTop < 60 && hasMore && !loadingMore) loadMore();
       updateScrollBottomButton();
     });
