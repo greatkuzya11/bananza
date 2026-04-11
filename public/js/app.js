@@ -126,6 +126,41 @@
     );
   }
 
+  let singleEmojiPattern = null;
+  function getSingleEmojiPattern() {
+    if (singleEmojiPattern !== null) return singleEmojiPattern;
+    try {
+      singleEmojiPattern = new RegExp(
+        '^(?:' +
+          '(?:\\p{Regional_Indicator}{2})|' +
+          '(?:[0-9#*]\\uFE0F?\\u20E3)|' +
+          '(?:\\p{Extended_Pictographic}(?:\\uFE0F|\\uFE0E)?(?:\\p{Emoji_Modifier})?(?:\\u200D\\p{Extended_Pictographic}(?:\\uFE0F|\\uFE0E)?(?:\\p{Emoji_Modifier})?)*)' +
+        ')$',
+        'u'
+      );
+    } catch {
+      singleEmojiPattern = false;
+    }
+    return singleEmojiPattern;
+  }
+
+  function splitGraphemes(value) {
+    if (window.Intl?.Segmenter) {
+      return Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value), part => part.segment);
+    }
+    return Array.from(value);
+  }
+
+  function isSingleEmojiMessage(text) {
+    const value = String(text || '').trim();
+    if (!value) return false;
+    const graphemes = splitGraphemes(value);
+    if (graphemes.length !== 1) return false;
+    const pattern = getSingleEmojiPattern();
+    if (pattern) return pattern.test(graphemes[0]);
+    return /^(?:[\u00A9\u00AE]|[\u203C-\u3299]\uFE0F?|[\uD800-\uDBFF][\uDC00-\uDFFF])$/.test(graphemes[0]);
+  }
+
   function formatTime(iso) {
     const d = new Date(iso + 'Z');
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -802,8 +837,17 @@
 
   function createMessageEl(msg, showName = true) {
     const isOwn = msg.user_id === currentUser.id;
+    const isEmojiOnly = Boolean(
+      !msg.is_deleted &&
+      !msg.is_voice_note &&
+      !msg.file_id &&
+      !msg.reply_to_id &&
+      msg.text &&
+      !(msg.previews && msg.previews.length) &&
+      isSingleEmojiMessage(msg.text)
+    );
     const row = document.createElement('div');
-    row.className = `msg-row ${isOwn ? 'own' : 'other'}`;
+    row.className = `msg-row ${isOwn ? 'own' : 'other'}${isEmojiOnly ? ' emoji-only-message' : ''}`;
     row.dataset.msgId = msg.id;
     row.dataset.date = formatDate(msg.created_at);
     row.dataset.userId = msg.user_id;
@@ -856,7 +900,7 @@
 
       // Text
       if (msg.text) {
-        html += `<div class="msg-text">${linkify(msg.text)}</div>`;
+        html += `<div class="msg-text">${isEmojiOnly ? esc(msg.text.trim()) : linkify(msg.text)}</div>`;
       }
 
       // Link previews
@@ -1769,6 +1813,7 @@
         const after = msgInput.value.substring(pos);
         msgInput.value = before + item.textContent + after;
         msgInput.selectionStart = msgInput.selectionEnd = pos + item.textContent.length;
+        msgInput.dispatchEvent(new Event('input', { bubbles: true }));
         msgInput.focus();
       }
     });
