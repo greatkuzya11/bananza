@@ -99,6 +99,31 @@
   const weatherSettingsModal = $('#weatherSettingsModal');
   const changePasswordModal = $('#changePasswordModal');
 
+  function isMobileComposerKeyboardOpen() {
+    if (window.innerWidth > 768) return false;
+    if (window.visualViewport) {
+      return window.innerHeight - window.visualViewport.height > 80;
+    }
+    return document.activeElement === msgInput;
+  }
+
+  function focusComposerKeepKeyboard(force = false) {
+    if (!force && !isMobileComposerKeyboardOpen()) return;
+    requestAnimationFrame(() => {
+      try {
+        msgInput.focus({ preventScroll: true });
+      } catch {
+        msgInput.focus();
+      }
+    });
+  }
+
+  function preventMobileComposerBlur(e) {
+    if (!isMobileComposerKeyboardOpen()) return false;
+    e.preventDefault();
+    return true;
+  }
+
   const appBridge = window.BananzaAppBridge = window.BananzaAppBridge || {};
   Object.assign(appBridge, {
     api: (url, opts) => api(url, opts),
@@ -2107,6 +2132,7 @@
   // REACTIONS
   // ═══════════════════════════════════════════════════════════════════════════
   let reactionPickerMsgId = null;
+  let reactionPickerKeepKeyboard = false;
 
   function renderReactions(reactions) {
     if (!reactions || reactions.length === 0) return '';
@@ -2139,7 +2165,8 @@
     }
   }
 
-  function showReactionPicker(row, trigger) {
+  function showReactionPicker(row, trigger, options = {}) {
+    reactionPickerKeepKeyboard = Boolean(options.keepComposerFocus);
     reactionPickerMsgId = +row.dataset.msgId;
     reactionPicker.classList.remove('hidden');
     // Position near the trigger
@@ -2153,15 +2180,19 @@
     left = Math.max(8, Math.min(left, window.innerWidth - pw - 8));
     reactionPicker.style.left = left + 'px';
     reactionPicker.style.top = top + 'px';
+    if (reactionPickerKeepKeyboard) focusComposerKeepKeyboard(true);
   }
 
-  function hideReactionPicker() {
+  function hideReactionPicker(options = {}) {
     reactionPicker.classList.add('hidden');
     reactionPickerMsgId = null;
+    if (!options.keepComposerState) reactionPickerKeepKeyboard = false;
   }
 
-  async function toggleReaction(msgId, emoji) {
-    hideReactionPicker();
+  async function toggleReaction(msgId, emoji, options = {}) {
+    const keepComposerFocus = Boolean(options.keepComposerFocus);
+    hideReactionPicker({ keepComposerState: keepComposerFocus });
+    if (keepComposerFocus) focusComposerKeepKeyboard(true);
     console.log('[reaction] sending', msgId, emoji);
     try {
       const data = await api(`/api/messages/${msgId}/reactions`, { method: 'POST', body: { emoji } });
@@ -2169,6 +2200,9 @@
       if (data && data.reactions) updateReactionBar(msgId, data.reactions);
     } catch (err) {
       console.warn('[reaction] failed:', err);
+    } finally {
+      reactionPickerKeepKeyboard = false;
+      if (keepComposerFocus) focusComposerKeepKeyboard(true);
     }
   }
 
@@ -2778,23 +2812,6 @@
     const attachMenu = $('#attachMenu');
     const attachMenuOverlay = $('#attachMenuOverlay');
     const isMobileAttachMenu = () => window.innerWidth <= 768;
-    const isMobileKeyboardOpen = () => {
-      if (!isMobileAttachMenu()) return false;
-      if (window.visualViewport) {
-        return window.innerHeight - window.visualViewport.height > 80;
-      }
-      return document.activeElement === msgInput;
-    };
-    const focusComposerKeepKeyboard = () => {
-      if (!isMobileKeyboardOpen()) return;
-      requestAnimationFrame(() => {
-        try {
-          msgInput.focus({ preventScroll: true });
-        } catch {
-          msgInput.focus();
-        }
-      });
-    };
     const positionAttachMenu = () => {
       if (!attachMenu || attachMenu.classList.contains('hidden')) return;
       const rect = attachBtn.getBoundingClientRect();
@@ -2830,14 +2847,14 @@
       e.stopPropagation();
       if (editTo) return;
       if (isMobileAttachMenu()) {
-        const keepKeyboardOpen = isMobileKeyboardOpen();
+        const keepKeyboardOpen = isMobileComposerKeyboardOpen();
         if (!attachMenu.classList.contains('hidden')) {
           attachMenu.classList.add('hidden');
           return;
         }
         attachMenu.classList.remove('hidden');
         positionAttachMenu();
-        if (keepKeyboardOpen) focusComposerKeepKeyboard();
+        if (keepKeyboardOpen) focusComposerKeepKeyboard(true);
       } else {
         fileInput.click();
       }
@@ -2986,14 +3003,24 @@
     })();
 
     // Reaction picker: emoji click
+    const keepReactionInteractionFromBlurringInput = (e) => {
+      if (e.type === 'touchstart' && 'PointerEvent' in window) return;
+      if (preventMobileComposerBlur(e)) reactionPickerKeepKeyboard = true;
+    };
+    reactionPicker.addEventListener('pointerdown', keepReactionInteractionFromBlurringInput);
+    reactionPicker.addEventListener('touchstart', keepReactionInteractionFromBlurringInput, { passive: false });
     reactionPicker.addEventListener('mousedown', (e) => {
+      keepReactionInteractionFromBlurringInput(e);
       e.preventDefault(); // prevent blur/focus changes
       e.stopPropagation();
     });
     reactionPicker.addEventListener('click', (e) => {
       e.stopPropagation();
       const btn = e.target.closest('button[data-emoji]');
-      if (btn && reactionPickerMsgId) toggleReaction(reactionPickerMsgId, btn.dataset.emoji);
+      if (btn && reactionPickerMsgId) {
+        const keepComposerFocus = reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen();
+        toggleReaction(reactionPickerMsgId, btn.dataset.emoji, { keepComposerFocus });
+      }
     });
 
     // Reaction picker: close on outside click
@@ -3004,18 +3031,32 @@
     });
 
     // Reaction badge click + react button (delegation)
+    messagesEl.addEventListener('pointerdown', (e) => {
+      if (!e.target.closest('.msg-react-btn, .reaction-badge')) return;
+      keepReactionInteractionFromBlurringInput(e);
+    });
+    messagesEl.addEventListener('touchstart', (e) => {
+      if (!e.target.closest('.msg-react-btn, .reaction-badge')) return;
+      keepReactionInteractionFromBlurringInput(e);
+    }, { passive: false });
     messagesEl.addEventListener('click', (e) => {
       const reactBtn = e.target.closest('.msg-react-btn');
       if (reactBtn) {
         e.stopPropagation();
         const row = reactBtn.closest('.msg-row');
-        if (row) showReactionPicker(row, reactBtn);
+        if (row) {
+          const keepComposerFocus = reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen();
+          showReactionPicker(row, reactBtn, { keepComposerFocus });
+        }
         return;
       }
       const badge = e.target.closest('.reaction-badge');
       if (badge) {
         const row = badge.closest('.msg-row');
-        if (row) toggleReaction(+row.dataset.msgId, badge.dataset.emoji);
+        if (row) {
+          const keepComposerFocus = reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen();
+          toggleReaction(+row.dataset.msgId, badge.dataset.emoji, { keepComposerFocus });
+        }
       }
     });
 
@@ -3028,7 +3069,7 @@
         lpTimer = setTimeout(() => {
           lpTimer = null;
           navigator.vibrate && navigator.vibrate(30);
-          showReactionPicker(row, null);
+          showReactionPicker(row, null, { keepComposerFocus: isMobileComposerKeyboardOpen() });
         }, 500);
       }, { passive: true });
       messagesEl.addEventListener('touchend', () => { clearTimeout(lpTimer); lpTimer = null; }, { passive: true });
