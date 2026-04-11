@@ -14,6 +14,7 @@ const db = require('./db');
 const { setupWebSocket, broadcastToChatAll, sendToUser, clients } = require('./websocket');
 const { extractUrls, fetchPreview } = require('./linkPreview');
 const { createVoiceFeature } = require('./voice');
+const { createWeatherFeature } = require('./weather');
 
 // ── JWT Secret ──────────────────────────────────────────────────────────────
 const SECRET_PATH = path.join(__dirname, '.secret');
@@ -141,6 +142,13 @@ const voiceFeature = createVoiceFeature({
   broadcastToChatAll,
   clients,
   secret: JWT_SECRET,
+});
+
+createWeatherFeature({
+  app,
+  db,
+  auth,
+  rateLimit,
 });
 
 const messageByIdStmt = db.prepare(`

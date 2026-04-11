@@ -69,6 +69,19 @@ db.exec(`
     hostname TEXT
   );
 
+  CREATE TABLE IF NOT EXISTS user_weather_settings (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    enabled INTEGER DEFAULT 0,
+    location_name TEXT DEFAULT NULL,
+    country TEXT DEFAULT NULL,
+    admin1 TEXT DEFAULT NULL,
+    latitude REAL DEFAULT NULL,
+    longitude REAL DEFAULT NULL,
+    timezone TEXT DEFAULT NULL,
+    refresh_minutes INTEGER DEFAULT 30,
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, id);
   CREATE INDEX IF NOT EXISTS idx_chat_members_user ON chat_members(user_id);
   CREATE INDEX IF NOT EXISTS idx_link_previews_msg ON link_previews(message_id);

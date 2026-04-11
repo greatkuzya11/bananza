@@ -25,6 +25,7 @@
       <div id="chatList" class="chat-list"></div>
       <div class="sidebar-footer">
         <div id="currentUserInfo" class="current-user"></div>
+        <button id="weatherWidget" class="weather-widget hidden" type="button" title="Weather" aria-label="Weather"></button>
         <button id="settingsBtn" class="icon-btn" title="Settings">⚙</button>
         <button id="logoutBtn" class="icon-btn" title="Logout">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -190,6 +191,32 @@
           </label>
         </div>
         <div class="settings-hint">When off, reload opens the chat list instead of the last opened chat.</div>
+        <div id="settingsWeatherBlock" class="weather-settings-block">
+          <div class="settings-section-title">Weather</div>
+          <div class="settings-item settings-toggle-item">
+            <span>Show weather</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="settingsWeatherEnabled">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div id="settingsWeatherControls" class="weather-settings-controls hidden">
+            <label class="weather-field-label" for="settingsWeatherSearch">City</label>
+            <div class="weather-search-row">
+              <input type="text" id="settingsWeatherSearch" class="modal-input" placeholder="Type a city..." autocomplete="off">
+              <button id="settingsWeatherSearchBtn" type="button" class="weather-action-btn">Search</button>
+            </div>
+            <div id="settingsWeatherResults" class="weather-search-results hidden"></div>
+            <div id="settingsWeatherSelected" class="weather-selected-city">No city selected</div>
+            <label class="weather-field-label" for="settingsWeatherRefresh">Refresh interval, minutes</label>
+            <input type="number" id="settingsWeatherRefresh" class="modal-input" min="10" max="180" step="5" value="30">
+            <div class="weather-settings-actions">
+              <button id="settingsWeatherSave" type="button" class="btn-primary weather-save-btn">Save weather</button>
+              <button id="settingsWeatherRefreshNow" type="button" class="weather-action-btn">Update now</button>
+            </div>
+            <div id="settingsWeatherStatus" class="weather-settings-status"></div>
+          </div>
+        </div>
         <button id="settingsChangePassword" class="settings-item">🔑 Change Password</button>
         <button id="settingsAdminPanel" class="settings-item hidden">🛡 Admin Panel</button>
       </div>

@@ -34,6 +34,12 @@
   let scrollRestoreMode = localStorage.getItem('scrollRestoreMode') || 'bottom'; // 'bottom' | 'restore'
   let openLastChatOnReload = localStorage.getItem('openLastChatOnReload') !== '0';
   let scrollPositions = {}; // chatId -> scrollTop
+  let weatherSettings = { enabled: false, refresh_minutes: 30, location: null };
+  let weatherSettingsLoaded = false;
+  let selectedWeatherLocation = null;
+  let weatherSearchResults = [];
+  let weatherTimer = null;
+  let weatherSearchTimer = null;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DOM
@@ -77,6 +83,7 @@
   const chatInfoModal = $('#chatInfoModal');
   const menuDrawer = $('#menuDrawer');
   const currentUserInfo = $('#currentUserInfo');
+  const weatherWidget = $('#weatherWidget');
   const settingsModal = $('#settingsModal');
   const changePasswordModal = $('#changePasswordModal');
 
@@ -199,6 +206,191 @@
   function updateCurrentUserFooter() {
     currentUserInfo.innerHTML = avatarHtml(currentUser.display_name, currentUser.avatar_color, currentUser.avatar_url, 28) +
       `<span class="current-user-name">${esc(currentUser.display_name)}</span>`;
+  }
+
+  function weatherLocationLabel(location) {
+    if (!location) return '';
+    return [location.name, location.admin1, location.country].filter(Boolean).join(', ');
+  }
+
+  function weatherIcon(code, isDay) {
+    if (code === 0) return isDay ? '☀️' : '🌙';
+    if (code === 1 || code === 2) return isDay ? '🌤️' : '☁️';
+    if (code === 3) return '☁️';
+    if (code === 45 || code === 48) return '🌫️';
+    if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return '🌧️';
+    if ((code >= 71 && code <= 77) || code === 85 || code === 86) return '❄️';
+    if (code >= 95) return '⛈️';
+    return '🌡️';
+  }
+
+  function formatWeatherValue(value, fallback, precision = 0) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    const rounded = precision ? (Math.round(n * 10) / 10).toFixed(1) : String(Math.round(n));
+    return rounded.replace(/\.0$/, '').replace('.', ',');
+  }
+
+  function renderWeatherWidget(data) {
+    if (!weatherWidget) return;
+    if (!weatherSettings.enabled || !weatherSettings.location) {
+      weatherWidget.classList.add('hidden');
+      return;
+    }
+    const temp = `${formatWeatherValue(data?.temperature, '--')}°`;
+    const wind = `${formatWeatherValue(data?.wind_speed, '--', 1)} м/с`;
+    const icon = data ? weatherIcon(Number(data.weather_code), data.is_day) : '⛅';
+    weatherWidget.classList.remove('hidden', 'is-loading', 'is-error');
+    if (!data) weatherWidget.classList.add('is-error');
+    weatherWidget.title = data
+      ? `Weather: ${weatherLocationLabel(weatherSettings.location)}`
+      : 'Weather unavailable';
+    weatherWidget.innerHTML = `<span class="weather-widget-icon">${icon}</span><span>${temp}</span><span>${wind}</span>`;
+  }
+
+  function setWeatherStatus(message, type = '') {
+    const el = $('#settingsWeatherStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function renderWeatherSettingsForm(draft = {}) {
+    const enabledInput = $('#settingsWeatherEnabled');
+    const controls = $('#settingsWeatherControls');
+    const refreshInput = $('#settingsWeatherRefresh');
+    const selectedEl = $('#settingsWeatherSelected');
+    if (!enabledInput || !controls || !refreshInput || !selectedEl) return;
+    const enabled = draft.enabled ?? weatherSettings.enabled;
+    enabledInput.checked = !!enabled;
+    controls.classList.toggle('hidden', !enabledInput.checked);
+    refreshInput.value = draft.refresh_minutes ?? weatherSettings.refresh_minutes ?? 30;
+    selectedWeatherLocation = selectedWeatherLocation || weatherSettings.location;
+    const label = weatherLocationLabel(selectedWeatherLocation);
+    selectedEl.textContent = label ? `Selected: ${label}` : 'No city selected';
+  }
+
+  function renderWeatherSearchResults(results) {
+    const wrap = $('#settingsWeatherResults');
+    if (!wrap) return;
+    weatherSearchResults = results || [];
+    if (!weatherSearchResults.length) {
+      wrap.classList.add('hidden');
+      wrap.innerHTML = '';
+      return;
+    }
+    wrap.innerHTML = weatherSearchResults.map((item, index) => {
+      const title = esc(weatherLocationLabel(item));
+      const details = [item.country_code, item.population ? `pop. ${item.population}` : '']
+        .filter(Boolean).join(' · ');
+      return `<button type="button" class="weather-result-item" data-index="${index}">
+        <span>${title}</span>
+        ${details ? `<small>${esc(details)}</small>` : ''}
+      </button>`;
+    }).join('');
+    wrap.classList.remove('hidden');
+  }
+
+  function scheduleWeatherRefresh() {
+    clearTimeout(weatherTimer);
+    if (!weatherSettings.enabled || !weatherSettings.location) return;
+    const minutes = Math.min(180, Math.max(10, Number(weatherSettings.refresh_minutes) || 30));
+    weatherTimer = setTimeout(() => {
+      loadCurrentWeather(false);
+    }, minutes * 60 * 1000);
+  }
+
+  async function loadWeatherSettings() {
+    try {
+      const data = await api('/api/weather/settings');
+      weatherSettings = data.settings || weatherSettings;
+      selectedWeatherLocation = weatherSettings.location;
+      weatherSettingsLoaded = true;
+      renderWeatherSettingsForm();
+    } catch {
+      weatherSettingsLoaded = false;
+    }
+  }
+
+  async function loadCurrentWeather(force = false) {
+    clearTimeout(weatherTimer);
+    if (!weatherSettings.enabled || !weatherSettings.location) {
+      renderWeatherWidget(null);
+      return;
+    }
+    weatherWidget?.classList.add('is-loading');
+    try {
+      const data = await api(`/api/weather/current${force ? '?force=1' : ''}`);
+      if (!data || !data.enabled) {
+        weatherSettings = data?.settings || weatherSettings;
+        weatherSettingsLoaded = true;
+        renderWeatherWidget(null);
+        return;
+      }
+      weatherSettings = data.settings || weatherSettings;
+      selectedWeatherLocation = weatherSettings.location;
+      weatherSettingsLoaded = true;
+      renderWeatherWidget(data);
+      renderWeatherSettingsForm();
+      setWeatherStatus(force ? `Updated ${new Date(data.fetched_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '', 'success');
+    } catch (e) {
+      renderWeatherWidget(null);
+      if (force) setWeatherStatus(e.message || 'Weather update failed', 'error');
+    } finally {
+      weatherWidget?.classList.remove('is-loading');
+      scheduleWeatherRefresh();
+    }
+  }
+
+  async function searchWeatherLocations() {
+    const input = $('#settingsWeatherSearch');
+    if (!input) return;
+    const q = input.value.trim();
+    if (q.length < 2) {
+      renderWeatherSearchResults([]);
+      setWeatherStatus('Type at least 2 characters');
+      return;
+    }
+    setWeatherStatus('Searching...');
+    try {
+      const data = await api(`/api/weather/search?q=${encodeURIComponent(q)}`);
+      renderWeatherSearchResults(data.results || []);
+      setWeatherStatus(data.results?.length ? '' : 'No cities found');
+    } catch (e) {
+      renderWeatherSearchResults([]);
+      setWeatherStatus(e.message || 'Weather search failed', 'error');
+    }
+  }
+
+  async function saveWeatherSettings() {
+    const enabled = !!$('#settingsWeatherEnabled')?.checked;
+    const refreshInput = $('#settingsWeatherRefresh');
+    const refreshMinutes = Math.min(180, Math.max(10, Number(refreshInput?.value) || 30));
+    const location = selectedWeatherLocation || weatherSettings.location;
+    if (enabled && !location) {
+      setWeatherStatus('Choose a city first', 'error');
+      return;
+    }
+    setWeatherStatus('Saving...');
+    try {
+      const data = await api('/api/weather/settings', {
+        method: 'PUT',
+        body: { enabled, location, refresh_minutes: refreshMinutes },
+      });
+      weatherSettings = data.settings || weatherSettings;
+      selectedWeatherLocation = weatherSettings.location;
+      weatherSettingsLoaded = true;
+      renderWeatherSettingsForm();
+      setWeatherStatus('Saved', 'success');
+      if (weatherSettings.enabled) await loadCurrentWeather(true);
+      else {
+        clearTimeout(weatherTimer);
+        renderWeatherWidget(null);
+      }
+    } catch (e) {
+      setWeatherStatus(e.message || 'Weather settings save failed', 'error');
+    }
   }
 
   function chatItemAvatarHtml(chat) {
@@ -2083,6 +2275,8 @@
     $('#settingsSendEnter').checked = sendByEnter;
     $('#settingsScrollRestore').checked = scrollRestoreMode === 'restore';
     $('#settingsOpenLastChat').checked = openLastChatOnReload;
+    renderWeatherSettingsForm();
+    if (!weatherSettingsLoaded) loadWeatherSettings().then(renderWeatherSettingsForm);
     window.BananzaVoiceHooks?.onSettingsOpened?.({ currentUser });
   }
 
@@ -2845,6 +3039,44 @@
       localStorage.setItem('openLastChatOnReload', openLastChatOnReload ? '1' : '0');
     });
 
+    // Weather settings
+    weatherWidget?.addEventListener('click', () => {
+      openSettingsModal();
+      requestAnimationFrame(() => $('#settingsWeatherBlock')?.scrollIntoView({ block: 'center' }));
+    });
+    $('#settingsWeatherEnabled')?.addEventListener('change', async (e) => {
+      $('#settingsWeatherControls')?.classList.toggle('hidden', !e.target.checked);
+      if (!e.target.checked) await saveWeatherSettings();
+    });
+    $('#settingsWeatherSearchBtn')?.addEventListener('click', searchWeatherLocations);
+    $('#settingsWeatherSearch')?.addEventListener('input', () => {
+      clearTimeout(weatherSearchTimer);
+      if ($('#settingsWeatherSearch').value.trim().length < 2) {
+        renderWeatherSearchResults([]);
+        return;
+      }
+      weatherSearchTimer = setTimeout(searchWeatherLocations, 350);
+    });
+    $('#settingsWeatherSearch')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        searchWeatherLocations();
+      }
+    });
+    $('#settingsWeatherResults')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.weather-result-item');
+      if (!btn) return;
+      selectedWeatherLocation = weatherSearchResults[+btn.dataset.index] || null;
+      renderWeatherSettingsForm({
+        enabled: $('#settingsWeatherEnabled')?.checked,
+        refresh_minutes: $('#settingsWeatherRefresh')?.value,
+      });
+      renderWeatherSearchResults([]);
+      setWeatherStatus(selectedWeatherLocation ? 'City selected, save settings' : '', selectedWeatherLocation ? 'success' : '');
+    });
+    $('#settingsWeatherSave')?.addEventListener('click', saveWeatherSettings);
+    $('#settingsWeatherRefreshNow')?.addEventListener('click', saveWeatherSettings);
+
     // Change password save
     $('#cpSaveBtn').addEventListener('click', async () => {
       const cpErr = $('#cpError');
@@ -2973,6 +3205,7 @@
 
     // Update UI
     updateCurrentUserFooter();
+    loadWeatherSettings().then(() => loadCurrentWeather(false)).catch(() => {});
 
     // Request notification permission
     if ('Notification' in window && Notification.permission === 'default') {
