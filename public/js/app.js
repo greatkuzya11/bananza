@@ -32,6 +32,7 @@
   let compactView = false;
   let sendByEnter = localStorage.getItem('sendByEnter') !== '0';
   let scrollRestoreMode = localStorage.getItem('scrollRestoreMode') || 'bottom'; // 'bottom' | 'restore'
+  let openLastChatOnReload = localStorage.getItem('openLastChatOnReload') !== '0';
   let scrollPositions = {}; // chatId -> scrollTop
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -2081,6 +2082,7 @@
     else adminItem.classList.add('hidden');
     $('#settingsSendEnter').checked = sendByEnter;
     $('#settingsScrollRestore').checked = scrollRestoreMode === 'restore';
+    $('#settingsOpenLastChat').checked = openLastChatOnReload;
     window.BananzaVoiceHooks?.onSettingsOpened?.({ currentUser });
   }
 
@@ -2837,6 +2839,12 @@
       localStorage.setItem('scrollRestoreMode', scrollRestoreMode);
     });
 
+    // Startup view toggle
+    $('#settingsOpenLastChat').addEventListener('change', (e) => {
+      openLastChatOnReload = e.target.checked;
+      localStorage.setItem('openLastChatOnReload', openLastChatOnReload ? '1' : '0');
+    });
+
     // Change password save
     $('#cpSaveBtn').addEventListener('click', async () => {
       const cpErr = $('#cpError');
@@ -2978,10 +2986,12 @@
     await loadAllUsers();
     await loadChats();
 
-    // Restore last opened chat on both desktop and mobile so the composer is ready immediately.
-    const lastChat = +localStorage.getItem('lastChat');
-    if (lastChat && chats.find(c => c.id === lastChat)) {
-      await openChat(lastChat);
+    // Optional startup behavior: restore the last opened chat or stay on the chat list.
+    if (openLastChatOnReload) {
+      const lastChat = +localStorage.getItem('lastChat');
+      if (lastChat && chats.find(c => c.id === lastChat)) {
+        await openChat(lastChat);
+      }
     }
 
     window.dispatchEvent(new Event('bananza:ready'));
