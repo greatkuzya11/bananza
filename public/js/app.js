@@ -1522,23 +1522,11 @@
     const isInteractiveTarget = (target) => Boolean(target.closest(
       'button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-image, .msg-video'
     ));
-    const ensureIndicator = (row) => {
-      let indicator = row.querySelector('.swipe-edit-indicator');
-      if (!indicator) {
-        indicator = document.createElement('div');
-        indicator.className = 'swipe-edit-indicator';
-        indicator.textContent = '✎';
-        row.appendChild(indicator);
-      }
-      return indicator;
-    };
     const finishSwipe = (shouldEdit) => {
       if (!swipe) return;
       const { row, content } = swipe;
       row.classList.remove('swipe-edit-active', 'swipe-edit-ready');
       if (content) content.style.transform = '';
-      const indicator = row.querySelector('.swipe-edit-indicator');
-      setTimeout(() => indicator?.remove(), 180);
       if (shouldEdit) {
         navigator.vibrate?.(18);
         setEditFromRow(row);
@@ -1581,7 +1569,6 @@
         }
         swipe.locked = true;
         hideReactionPicker();
-        ensureIndicator(swipe.row);
         swipe.row.classList.add('swipe-edit-active');
       }
 

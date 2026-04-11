@@ -363,7 +363,6 @@ a:hover { text-decoration: underline; }
 .msg-react-btn:hover { color: var(--accent); }
 
 .swipe-reply-indicator { display: none; }
-.swipe-edit-indicator { display: none; }
 
 .msg-footer {
   display: flex; align-items: flex-end; justify-content: flex-start;
@@ -1120,31 +1119,15 @@ a:hover { text-decoration: underline; }
     color: #fff;
     transform: translateY(-50%) scale(1);
   }
-  .swipe-edit-indicator {
-    position: absolute;
-    left: 8px;
-    top: 50%;
-    z-index: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    background: rgba(240, 179, 91, .18);
+  .msg-row.swipe-edit-active .msg-edit-btn {
+    opacity: 1;
     color: #f0b35b;
-    font-size: 17px;
-    font-weight: 700;
-    line-height: 1;
-    opacity: .9;
-    pointer-events: none;
-    transform: translateY(-50%) scale(.92);
-    transition: background .12s ease, color .12s ease, transform .12s ease;
+    transform: translateX(6px) scale(1.08);
+    transition: opacity .12s ease, color .12s ease, transform .12s ease;
   }
-  .msg-row.swipe-edit-ready .swipe-edit-indicator {
-    background: #f0b35b;
-    color: #17212b;
-    transform: translateY(-50%) scale(1);
+  .msg-row.swipe-edit-ready .msg-edit-btn {
+    color: #ffd28a;
+    transform: translateX(10px) scale(1.28) rotate(-8deg);
   }
   .msg-image { max-width: 260px; max-height: 240px; }
   .msg-video { max-width: 280px; }
