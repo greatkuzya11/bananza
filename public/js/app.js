@@ -2473,8 +2473,15 @@
     const attachMenu = $('#attachMenu');
     const attachMenuOverlay = $('#attachMenuOverlay');
     const isMobileAttachMenu = () => window.innerWidth <= 768;
+    const isMobileKeyboardOpen = () => {
+      if (!isMobileAttachMenu()) return false;
+      if (window.visualViewport) {
+        return window.innerHeight - window.visualViewport.height > 80;
+      }
+      return document.activeElement === msgInput;
+    };
     const focusComposerKeepKeyboard = () => {
-      if (!isMobileAttachMenu()) return;
+      if (!isMobileKeyboardOpen()) return;
       requestAnimationFrame(() => {
         try {
           msgInput.focus({ preventScroll: true });
@@ -2518,13 +2525,14 @@
       e.stopPropagation();
       if (editTo) return;
       if (isMobileAttachMenu()) {
+        const keepKeyboardOpen = isMobileKeyboardOpen();
         if (!attachMenu.classList.contains('hidden')) {
           attachMenu.classList.add('hidden');
           return;
         }
         attachMenu.classList.remove('hidden');
         positionAttachMenu();
-        focusComposerKeepKeyboard();
+        if (keepKeyboardOpen) focusComposerKeepKeyboard();
       } else {
         fileInput.click();
       }
