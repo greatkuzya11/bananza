@@ -50,6 +50,8 @@
   let weatherSearchResults = [];
   let weatherTimer = null;
   let weatherSearchTimer = null;
+  let forwardMessageState = null;
+  let forwardMessageBusy = false;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DOM
@@ -98,6 +100,10 @@
   const themeSettingsModal = $('#themeSettingsModal');
   const weatherSettingsModal = $('#weatherSettingsModal');
   const changePasswordModal = $('#changePasswordModal');
+  const forwardMessageModal = $('#forwardMessageModal');
+  const forwardChatSearch = $('#forwardChatSearch');
+  const forwardChatList = $('#forwardChatList');
+  const forwardMessageStatus = $('#forwardMessageStatus');
 
   function isMobileComposerKeyboardOpen() {
     if (window.innerWidth > 768) return false;
@@ -509,6 +515,101 @@
     return `<div class="chat-item-avatar" style="background:#5eb5f7">${icon}`;
   }
 
+  function getChatLastPreviewText(chat) {
+    if (chat.last_text) {
+      return (chat.last_user ? chat.last_user + ': ' : '') + chat.last_text;
+    }
+    if (chat.last_file_id) {
+      return (chat.last_user ? chat.last_user + ': ' : '') + '📎 File';
+    }
+    return '';
+  }
+
+  function getChatSearchHaystack(chat) {
+    return [
+      chat?.name || '',
+      chat?.private_user?.display_name || '',
+      chat?.private_user?.username || '',
+    ].join(' ').toLowerCase();
+  }
+
+  function setForwardMessageStatus(message = '', type = '') {
+    if (!forwardMessageStatus) return;
+    forwardMessageStatus.textContent = message;
+    forwardMessageStatus.classList.toggle('hidden', !message);
+    forwardMessageStatus.classList.toggle('is-error', type === 'error');
+    forwardMessageStatus.classList.toggle('is-success', type === 'success');
+  }
+
+  function resetForwardMessageModal() {
+    forwardMessageState = null;
+    forwardMessageBusy = false;
+    if (forwardChatSearch) forwardChatSearch.value = '';
+    if (forwardChatList) forwardChatList.innerHTML = '';
+    setForwardMessageStatus('');
+  }
+
+  function renderForwardChatList(filter = '') {
+    if (!forwardChatList) return;
+    const query = String(filter || '').trim().toLowerCase();
+    const filtered = query
+      ? chats.filter(chat => getChatSearchHaystack(chat).includes(query))
+      : chats;
+
+    if (filtered.length === 0) {
+      forwardChatList.innerHTML = '<div class="forward-empty-state">Подходящих чатов не найдено</div>';
+      return;
+    }
+
+    forwardChatList.innerHTML = filtered.map((chat) => {
+      const isOnline = chat.type === 'private' && chat.private_user && onlineUsers.has(chat.private_user.id);
+      const lastMsg = getChatLastPreviewText(chat);
+      const lastTime = chat.last_time ? formatTime(chat.last_time) : '';
+      return `
+        <button type="button" class="chat-item forward-chat-item${chat.id === currentChatId ? ' is-current' : ''}" data-chat-id="${chat.id}">
+          ${chatItemAvatarHtml(chat)}
+            ${isOnline ? '<div class="online-dot"></div>' : ''}
+          </div>
+          <div class="chat-item-body">
+            <div class="chat-item-top">
+              <span class="chat-item-name">${esc(chat.name)}</span>
+              <span class="chat-item-time">${lastTime}</span>
+            </div>
+            <div class="chat-item-last"><span>${esc(lastMsg).substring(0, 60) || 'Без сообщений'}</span></div>
+          </div>
+        </button>
+      `;
+    }).join('');
+  }
+
+  function openForwardMessageModal(message) {
+    if (!message?.id) return;
+    hideReactionPicker();
+    closeAllModals();
+    forwardMessageState = { id: message.id };
+    renderForwardChatList();
+    forwardMessageModal?.classList.remove('hidden');
+    forwardChatSearch?.focus();
+  }
+
+  async function forwardMessageToChat(targetChatId) {
+    if (!forwardMessageState?.id || !targetChatId || forwardMessageBusy) return;
+    forwardMessageBusy = true;
+    setForwardMessageStatus('Пересылаю...');
+    try {
+      await api(`/api/messages/${forwardMessageState.id}/forward`, {
+        method: 'POST',
+        body: { targetChatId },
+      });
+      closeAllModals();
+      if (targetChatId === currentChatId) scrollToBottom();
+    } catch (e) {
+      setForwardMessageStatus(e.message || 'Не удалось переслать сообщение', 'error');
+    } finally {
+      forwardMessageBusy = false;
+    }
+  }
+
   async function api(url, opts = {}) {
     const headers = { ...opts.headers };
     if (token) headers['Authorization'] = 'Bearer ' + token;
@@ -738,7 +839,7 @@
   function renderChatList(filter = '') {
     chatList.innerHTML = '';
     const filtered = filter
-      ? chats.filter(c => c.name.toLowerCase().includes(filter.toLowerCase()))
+      ? chats.filter(c => getChatSearchHaystack(c).includes(filter.toLowerCase()))
       : chats;
 
     for (const chat of filtered) {
@@ -751,12 +852,7 @@
       const displayName = chat.name;
       const isOnline = chat.type === 'private' && chat.private_user && onlineUsers.has(chat.private_user.id);
 
-      let lastMsg = '';
-      if (chat.last_text) {
-        lastMsg = (chat.last_user ? chat.last_user + ': ' : '') + chat.last_text;
-      } else if (chat.last_file_id) {
-        lastMsg = (chat.last_user ? chat.last_user + ': ' : '') + '📎 File';
-      }
+      const lastMsg = getChatLastPreviewText(chat);
 
       const lastTime = chat.last_time ? formatTime(chat.last_time) : '';
 
@@ -1152,6 +1248,7 @@
       !msg.is_deleted &&
       !msg.is_voice_note &&
       !msg.file_id &&
+      !msg.forwarded_from_display_name &&
       !msg.reply_to_id &&
       msg.text &&
       !(msg.previews && msg.previews.length) &&
@@ -1195,6 +1292,10 @@
     if (msg.is_deleted) {
       html += `<span class="msg-deleted">Message deleted</span>`;
     } else {
+      if (msg.forwarded_from_display_name) {
+        html += `<div class="msg-forwarded">Переслано от ${esc(msg.forwarded_from_display_name)}</div>`;
+      }
+
       // Reply reference
       if (msg.reply_to_id && msg.reply_display_name) {
         const replyText = getReplyQuoteText(msg);
@@ -1240,6 +1341,7 @@
       html += '<div class="msg-actions">';
       html += '<button class="msg-reply-btn" title="Reply">↩</button>';
       if (canEditMessage(msg)) html += '<button class="msg-edit-btn" title="Edit">✏️</button>';
+      if (canForwardMessage(msg)) html += '<button class="msg-forward-btn" title="Forward">📤</button>';
       html += '<button class="msg-react-btn" title="React">🙂</button>';
       html += '</div>';
     }
@@ -1265,6 +1367,14 @@
       editBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         setEditFromRow(row);
+      });
+    }
+
+    const forwardBtn = row.querySelector('.msg-forward-btn');
+    if (forwardBtn) {
+      forwardBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openForwardMessageModal(row.__messageData);
       });
     }
 
@@ -1527,6 +1637,7 @@
     el.querySelector('.msg-reply-btn')?.remove();
     el.querySelector('.msg-react-btn')?.remove();
     el.querySelector('.msg-edit-btn')?.remove();
+    el.querySelector('.msg-forward-btn')?.remove();
     el.querySelector('.msg-actions')?.remove();
     if (editTo?.id === msgId) clearEdit({ clearInput: true });
   }
@@ -1660,6 +1771,11 @@
   function canEditMessage(msg) {
     if (!currentUser || !msg || msg.is_deleted) return false;
     if (!currentUser.is_admin && msg.user_id !== currentUser.id) return false;
+    return Boolean(msg.is_voice_note || msg.file_id || msg.text);
+  }
+
+  function canForwardMessage(msg) {
+    if (!currentUser || !msg || msg.is_deleted) return false;
     return Boolean(msg.is_voice_note || msg.file_id || msg.text);
   }
 
@@ -2313,7 +2429,9 @@
       themeSettingsModal,
       weatherSettingsModal,
       changePasswordModal,
+      forwardMessageModal,
     ].forEach(m => m.classList.add('hidden'));
+    resetForwardMessageModal();
     closeMediaViewer();
     window.BananzaVoiceHooks?.closeAll?.();
   }
@@ -3065,7 +3183,7 @@
       let lpTimer = null;
       messagesEl.addEventListener('touchstart', (e) => {
         const row = e.target.closest('.msg-row');
-        if (!row || e.target.closest('.msg-react-btn, .msg-reply-btn, .msg-edit-btn') || e.target.closest('.reaction-badge')) return;
+        if (!row || e.target.closest('.msg-react-btn, .msg-reply-btn, .msg-edit-btn, .msg-forward-btn') || e.target.closest('.reaction-badge')) return;
         lpTimer = setTimeout(() => {
           lpTimer = null;
           navigator.vibrate && navigator.vibrate(30);
@@ -3162,6 +3280,16 @@
     });
     $$('.modal').forEach(modal => {
       modal.addEventListener('click', (e) => { if (e.target === modal) closeAllModals(); });
+    });
+
+    forwardChatSearch?.addEventListener('input', () => {
+      renderForwardChatList(forwardChatSearch.value);
+      setForwardMessageStatus('');
+    });
+    forwardChatList?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.forward-chat-item');
+      if (!btn) return;
+      forwardMessageToChat(+btn.dataset.chatId);
     });
 
     // Settings button

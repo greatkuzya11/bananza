@@ -424,6 +424,9 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
     getPublicSettings() {
       return getPublicVoiceSettings(db);
     },
+    scheduleTranscription(payload) {
+      scheduleTranscription(payload);
+    },
   };
 }
 

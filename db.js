@@ -43,6 +43,9 @@ db.exec(`
     user_id INTEGER NOT NULL REFERENCES users(id),
     text TEXT,
     file_id INTEGER REFERENCES files(id),
+    forwarded_from_message_id INTEGER DEFAULT NULL REFERENCES messages(id),
+    forwarded_from_user_id INTEGER DEFAULT NULL REFERENCES users(id),
+    forwarded_from_display_name TEXT DEFAULT NULL,
     is_deleted INTEGER DEFAULT 0,
     edited_at TEXT DEFAULT NULL,
     edited_by INTEGER DEFAULT NULL REFERENCES users(id),
@@ -126,6 +129,22 @@ try {
   db.prepare("SELECT reply_to_id FROM messages LIMIT 1").get();
 } catch {
   db.exec("ALTER TABLE messages ADD COLUMN reply_to_id INTEGER DEFAULT NULL REFERENCES messages(id)");
+}
+// Migration: forwarded metadata on messages
+try {
+  db.prepare("SELECT forwarded_from_message_id FROM messages LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE messages ADD COLUMN forwarded_from_message_id INTEGER DEFAULT NULL REFERENCES messages(id)");
+}
+try {
+  db.prepare("SELECT forwarded_from_user_id FROM messages LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE messages ADD COLUMN forwarded_from_user_id INTEGER DEFAULT NULL REFERENCES users(id)");
+}
+try {
+  db.prepare("SELECT forwarded_from_display_name FROM messages LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE messages ADD COLUMN forwarded_from_display_name TEXT DEFAULT NULL");
 }
 // Migration: edited marker on messages
 try {

@@ -15,6 +15,7 @@ const { setupWebSocket, broadcastToChatAll, sendToUser, clients } = require('./w
 const { extractUrls, fetchPreview } = require('./linkPreview');
 const { createVoiceFeature } = require('./voice');
 const { createWeatherFeature } = require('./weather');
+const { createForwardingFeature } = require('./forwarding');
 
 // ── JWT Secret ──────────────────────────────────────────────────────────────
 const SECRET_PATH = path.join(__dirname, '.secret');
@@ -164,6 +165,19 @@ createWeatherFeature({
   db,
   auth,
   rateLimit,
+});
+
+createForwardingFeature({
+  app,
+  db,
+  auth,
+  msgLimiter,
+  uploadsDir: UPLOADS_DIR,
+  broadcastToChatAll,
+  voiceFeature,
+  hydrateMessageById: (messageId) => hydrateMessageById(messageId),
+  extractUrls,
+  fetchPreview,
 });
 
 const messageByIdStmt = db.prepare(`

@@ -545,18 +545,21 @@ a:hover { text-decoration: underline; }
   gap: 1px;
   flex-shrink: 0;
 }
-.msg-reply-btn, .msg-edit-btn, .msg-react-btn {
+.msg-reply-btn, .msg-edit-btn, .msg-forward-btn, .msg-react-btn {
   opacity: 0; transition: opacity .15s; flex-shrink: 0;
   font-size: 18px; padding: 2px 4px; cursor: pointer;
   background: none; border: none; color: var(--text-secondary);
 }
 .msg-row:hover .msg-reply-btn,
 .msg-row:hover .msg-edit-btn,
+.msg-row:hover .msg-forward-btn,
 .msg-row:hover .msg-react-btn { opacity: 1; }
 .msg-reply-btn:focus,
 .msg-reply-btn:focus-visible,
 .msg-edit-btn:focus,
 .msg-edit-btn:focus-visible,
+.msg-forward-btn:focus,
+.msg-forward-btn:focus-visible,
 .msg-react-btn:focus,
 .msg-react-btn:focus-visible {
   outline: none;
@@ -564,8 +567,16 @@ a:hover { text-decoration: underline; }
 }
 .msg-reply-btn:hover { color: var(--accent); }
 .msg-edit-btn:hover { color: var(--accent); }
+.msg-forward-btn:hover { color: var(--accent); }
 .msg-react-btn { font-size: 16px; }
 .msg-react-btn:hover { color: var(--accent); }
+.msg-forwarded {
+  margin-bottom: 6px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+}
 
 .swipe-reply-indicator { display: none; }
 
@@ -1027,6 +1038,43 @@ a:hover { text-decoration: underline; }
   text-transform: uppercase; letter-spacing: .6px;
 }
 .theme-settings-block { margin: 4px 0 12px; }
+.forward-message-status {
+  margin: -4px 0 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.forward-message-status.is-error { color: var(--danger); }
+.forward-message-status.is-success { color: var(--success); }
+.forward-chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.forward-chat-item.chat-item {
+  width: 100%;
+  border: none;
+  text-align: left;
+  background: var(--bg-input);
+}
+.forward-chat-item.chat-item:hover {
+  background: var(--bg-hover);
+}
+.forward-chat-item:focus,
+.forward-chat-item:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--accent-border-strong);
+}
+.forward-chat-item.is-current {
+  box-shadow: inset 0 0 0 1px var(--accent-border-strong);
+}
+.forward-empty-state {
+  padding: 12px 10px;
+  border-radius: 10px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 14px;
+  text-align: center;
+}
 .theme-picker {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
