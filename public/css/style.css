@@ -519,14 +519,6 @@ a:hover { text-decoration: underline; }
 /* Chat background rendering */
 .messages { position: relative; }
 .messages.has-bg { background-position: center center; }
-.messages.has-bg::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: rgba(0,0,0,0.42);
-  pointer-events: none;
-  z-index: 0;
-}
 .bg-preview {
   width: 220px; height: 120px; border-radius: 8px; background-size: cover;
   background-position: center; background-repeat: no-repeat; border: 1px solid var(--border-light);
