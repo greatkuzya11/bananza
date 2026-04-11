@@ -3040,10 +3040,6 @@
     });
 
     // Weather settings
-    weatherWidget?.addEventListener('click', () => {
-      openSettingsModal();
-      requestAnimationFrame(() => $('#settingsWeatherBlock')?.scrollIntoView({ block: 'center' }));
-    });
     $('#settingsWeatherEnabled')?.addEventListener('change', async (e) => {
       $('#settingsWeatherControls')?.classList.toggle('hidden', !e.target.checked);
       if (!e.target.checked) await saveWeatherSettings();

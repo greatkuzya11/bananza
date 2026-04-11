@@ -149,10 +149,9 @@ a:hover { text-decoration: underline; }
 .weather-widget {
   height: 28px; max-width: 128px; display: inline-flex; align-items: center; gap: 4px;
   padding: 0 8px; border: none; border-radius: 999px; background: rgba(94,181,247,.14);
-  color: var(--text-primary); font-size: 12px; line-height: 1; cursor: pointer; flex-shrink: 1;
+  color: var(--text-primary); font-size: 12px; line-height: 1; cursor: default; flex-shrink: 1;
   white-space: nowrap; overflow: hidden; -webkit-tap-highlight-color: transparent;
 }
-.weather-widget:hover { background: rgba(94,181,247,.22); }
 .weather-widget:focus,
 .weather-widget:focus-visible,
 .weather-widget:active {
