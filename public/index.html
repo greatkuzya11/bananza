@@ -191,13 +191,39 @@
           </label>
         </div>
         <div class="settings-hint">When off, reload opens the chat list instead of the last opened chat.</div>
+        <button id="settingsThemePanel" class="settings-item">🎨 Theme</button>
+        <button id="settingsWeatherPanel" class="settings-item">⛅ Weather</button>
+        <button id="settingsChangePassword" class="settings-item">🔑 Change Password</button>
+        <button id="settingsAdminPanel" class="settings-item hidden">🛡 Admin Panel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Theme Settings Modal -->
+  <div id="themeSettingsModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Theme</h3>
+        <button class="modal-close">✕</button>
+      </div>
+      <div class="modal-body">
         <div id="settingsThemeBlock" class="theme-settings-block">
-          <div class="settings-section-title">Theme</div>
           <div id="settingsThemePicker" class="theme-picker"></div>
           <div id="settingsThemeStatus" class="theme-settings-status"></div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Weather Settings Modal -->
+  <div id="weatherSettingsModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Weather</h3>
+        <button class="modal-close">✕</button>
+      </div>
+      <div class="modal-body">
         <div id="settingsWeatherBlock" class="weather-settings-block">
-          <div class="settings-section-title">Weather</div>
           <div class="settings-item settings-toggle-item">
             <span>Show weather</span>
             <label class="toggle-switch">
@@ -222,8 +248,6 @@
             <div id="settingsWeatherStatus" class="weather-settings-status"></div>
           </div>
         </div>
-        <button id="settingsChangePassword" class="settings-item">🔑 Change Password</button>
-        <button id="settingsAdminPanel" class="settings-item hidden">🛡 Admin Panel</button>
       </div>
     </div>
   </div>

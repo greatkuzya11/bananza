@@ -95,6 +95,8 @@
   const currentUserInfo = $('#currentUserInfo');
   const weatherWidget = $('#weatherWidget');
   const settingsModal = $('#settingsModal');
+  const themeSettingsModal = $('#themeSettingsModal');
+  const weatherSettingsModal = $('#weatherSettingsModal');
   const changePasswordModal = $('#changePasswordModal');
 
   const appBridge = window.BananzaAppBridge = window.BananzaAppBridge || {};
@@ -2261,7 +2263,17 @@
   // MODALS
   // ═══════════════════════════════════════════════════════════════════════════
   function closeAllModals() {
-    [newChatModal, adminModal, chatInfoModal, menuDrawer, emojiPicker, settingsModal, changePasswordModal].forEach(m => m.classList.add('hidden'));
+    [
+      newChatModal,
+      adminModal,
+      chatInfoModal,
+      menuDrawer,
+      emojiPicker,
+      settingsModal,
+      themeSettingsModal,
+      weatherSettingsModal,
+      changePasswordModal,
+    ].forEach(m => m.classList.add('hidden'));
     closeMediaViewer();
     window.BananzaVoiceHooks?.closeAll?.();
   }
@@ -2352,11 +2364,21 @@
     $('#settingsSendEnter').checked = sendByEnter;
     $('#settingsScrollRestore').checked = scrollRestoreMode === 'restore';
     $('#settingsOpenLastChat').checked = openLastChatOnReload;
+    window.BananzaVoiceHooks?.onSettingsOpened?.({ currentUser });
+  }
+
+  function openThemeSettingsModal() {
+    closeAllModals();
+    themeSettingsModal.classList.remove('hidden');
     renderThemePicker();
     setThemeStatus('');
+  }
+
+  function openWeatherSettingsModal() {
+    closeAllModals();
+    weatherSettingsModal.classList.remove('hidden');
     renderWeatherSettingsForm();
     if (!weatherSettingsLoaded) loadWeatherSettings().then(renderWeatherSettingsForm);
-    window.BananzaVoiceHooks?.onSettingsOpened?.({ currentUser });
   }
 
   function resetChangePasswordFields() {
@@ -3097,6 +3119,8 @@
     $('#settingsBtn').addEventListener('click', openSettingsModal);
 
     // Settings sub-buttons
+    $('#settingsThemePanel').addEventListener('click', openThemeSettingsModal);
+    $('#settingsWeatherPanel').addEventListener('click', openWeatherSettingsModal);
     $('#settingsChangePassword').addEventListener('click', openChangePasswordModal);
     $('#settingsAdminPanel').addEventListener('click', openAdminModal);
 
