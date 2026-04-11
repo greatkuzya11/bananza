@@ -20,6 +20,7 @@ async function handlePush(event) {
   const options = {
     body: payload.body || '',
     tag: payload.tag || `bananza:${Date.now()}`,
+    silent: !!payload.silent,
     data: {
       url: payload.url || (payload.chatId ? `/?chatId=${payload.chatId}` : '/'),
       chatId: payload.chatId || null,

@@ -95,6 +95,19 @@ db.exec(`
     updated_at TEXT DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS user_sound_settings (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    sounds_enabled INTEGER DEFAULT 1,
+    volume INTEGER DEFAULT 55,
+    play_send INTEGER DEFAULT 1,
+    play_incoming INTEGER DEFAULT 1,
+    play_notifications INTEGER DEFAULT 1,
+    play_reactions INTEGER DEFAULT 1,
+    play_invites INTEGER DEFAULT 1,
+    play_voice INTEGER DEFAULT 1,
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS push_subscriptions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

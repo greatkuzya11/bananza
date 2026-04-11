@@ -1329,6 +1329,92 @@ a:hover { text-decoration: underline; }
     width: auto;
   }
 }
+.sound-settings-block { margin: 4px 0 12px; }
+.sound-volume-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 4px 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.sound-volume-label strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.sound-volume-range {
+  width: 100%;
+  accent-color: var(--accent);
+  margin: 0 0 12px;
+}
+.sound-preview-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sound-toggle-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+.sound-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  cursor: pointer;
+}
+.sound-toggle-label input { accent-color: var(--accent); }
+.sound-preview-btn,
+.sound-preview-all {
+  min-height: 32px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.sound-preview-btn:hover,
+.sound-preview-all:hover { background: var(--accent-soft-bg); color: var(--accent); }
+.sound-preview-btn:focus,
+.sound-preview-btn:focus-visible,
+.sound-preview-btn:active,
+.sound-preview-all:focus,
+.sound-preview-all:focus-visible,
+.sound-preview-all:active {
+  outline: none;
+  box-shadow: none;
+}
+.sound-preview-all {
+  width: auto;
+  margin-top: 10px;
+}
+.sound-settings-status {
+  min-height: 18px;
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.sound-settings-status.is-success { color: var(--success); }
+.sound-settings-status.is-error { color: var(--danger); }
+@media (max-width: 520px) {
+  .sound-toggle-row {
+    grid-template-columns: 1fr;
+  }
+  .sound-preview-btn {
+    justify-self: start;
+  }
+}
 
 /* Toggle switch */
 .toggle-switch { position: relative; width: 42px; height: 24px; flex-shrink: 0; }

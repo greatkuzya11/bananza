@@ -194,6 +194,7 @@
         <button id="settingsThemePanel" class="settings-item">🎨 Theme</button>
         <button id="settingsWeatherPanel" class="settings-item">⛅ Weather</button>
         <button id="settingsNotificationsPanel" class="settings-item">🔔 Уведомления</button>
+        <button id="settingsSoundsPanel" class="settings-item">🔊 Звуки</button>
         <button id="settingsChangePassword" class="settings-item">🔑 Change Password</button>
         <button id="settingsAdminPanel" class="settings-item hidden">🛡 Admin Panel</button>
       </div>
@@ -299,6 +300,79 @@
             </label>
           </div>
           <div id="settingsNotificationsStatus" class="notification-settings-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sound Settings Modal -->
+  <div id="soundSettingsModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Звуки</h3>
+        <button class="modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="settingsSoundsBlock" class="sound-settings-block">
+          <div class="settings-item settings-toggle-item">
+            <span>Включить звуки</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="settingsSoundsEnabled">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <label class="sound-volume-label" for="settingsSoundsVolume">
+            <span>Громкость</span>
+            <strong id="settingsSoundsVolumeValue">55%</strong>
+          </label>
+          <input type="range" id="settingsSoundsVolume" class="sound-volume-range" min="0" max="100" step="5" value="55">
+
+          <div class="sound-preview-grid">
+            <div class="sound-toggle-row">
+              <label class="sound-toggle-label" for="settingsSoundSend">
+                <input type="checkbox" id="settingsSoundSend">
+                <span>Отправка</span>
+              </label>
+              <button type="button" class="sound-preview-btn" data-sound-preview="send">Прослушать</button>
+            </div>
+            <div class="sound-toggle-row">
+              <label class="sound-toggle-label" for="settingsSoundIncoming">
+                <input type="checkbox" id="settingsSoundIncoming">
+                <span>Входящее в чате</span>
+              </label>
+              <button type="button" class="sound-preview-btn" data-sound-preview="incoming">Прослушать</button>
+            </div>
+            <div class="sound-toggle-row">
+              <label class="sound-toggle-label" for="settingsSoundNotifications">
+                <input type="checkbox" id="settingsSoundNotifications">
+                <span>Уведомления</span>
+              </label>
+              <button type="button" class="sound-preview-btn" data-sound-preview="notification">Прослушать</button>
+            </div>
+            <div class="sound-toggle-row">
+              <label class="sound-toggle-label" for="settingsSoundReactions">
+                <input type="checkbox" id="settingsSoundReactions">
+                <span>Реакции</span>
+              </label>
+              <button type="button" class="sound-preview-btn" data-sound-preview="reaction">Прослушать</button>
+            </div>
+            <div class="sound-toggle-row">
+              <label class="sound-toggle-label" for="settingsSoundInvites">
+                <input type="checkbox" id="settingsSoundInvites">
+                <span>Приглашения</span>
+              </label>
+              <button type="button" class="sound-preview-btn" data-sound-preview="invite">Прослушать</button>
+            </div>
+            <div class="sound-toggle-row">
+              <label class="sound-toggle-label" for="settingsSoundVoice">
+                <input type="checkbox" id="settingsSoundVoice">
+                <span>Голосовая запись</span>
+              </label>
+              <button type="button" class="sound-preview-btn" data-sound-preview="voice_start">Прослушать</button>
+            </div>
+          </div>
+          <button id="settingsSoundPreviewAll" type="button" class="weather-action-btn sound-preview-all">Проверить все</button>
+          <div id="settingsSoundsStatus" class="sound-settings-status"></div>
         </div>
       </div>
     </div>
@@ -483,6 +557,7 @@
   </div>
   <div id="attachMenuOverlay" class="attach-menu-overlay hidden"></div>
 
+  <script src="/js/sounds.js"></script>
   <script src="/js/app.js"></script>
   <script src="/js/voice.js"></script>
 </body>

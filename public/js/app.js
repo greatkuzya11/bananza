@@ -58,6 +58,18 @@
   };
   let notificationSettingsLoaded = false;
   let pushDeviceSubscribed = false;
+  let soundSettings = {
+    sounds_enabled: true,
+    volume: 55,
+    play_send: true,
+    play_incoming: true,
+    play_notifications: true,
+    play_reactions: true,
+    play_invites: true,
+    play_voice: true,
+  };
+  let soundSettingsLoaded = false;
+  let soundSettingsSaveTimer = null;
   let forwardMessageState = null;
   let forwardMessageBusy = false;
   let forwardModalCloseTimer = null;
@@ -110,6 +122,7 @@
   const themeSettingsModal = $('#themeSettingsModal');
   const weatherSettingsModal = $('#weatherSettingsModal');
   const notificationSettingsModal = $('#notificationSettingsModal');
+  const soundSettingsModal = $('#soundSettingsModal');
   const changePasswordModal = $('#changePasswordModal');
   const forwardMessageModal = $('#forwardMessageModal');
   const forwardChatSearch = $('#forwardChatSearch');
@@ -161,6 +174,7 @@
       }
     },
     scrollToBottom: (instant = false) => scrollToBottom(instant),
+    playSound: (type, options) => playAppSound(type, options),
     getDom: () => ({
       sendBtn,
       msgInput,
@@ -708,6 +722,109 @@
     }
   }
 
+  function applySoundSettings(next = {}) {
+    soundSettings = {
+      ...soundSettings,
+      ...next,
+      volume: Math.min(100, Math.max(0, Math.round(Number(next.volume ?? soundSettings.volume) || 0))),
+    };
+    window.BananzaSounds?.configure?.(soundSettings);
+    renderSoundSettingsForm();
+  }
+
+  function setSoundStatus(message, type = '') {
+    const el = $('#settingsSoundsStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function renderSoundSettingsForm() {
+    const fields = {
+      settingsSoundsEnabled: soundSettings.sounds_enabled,
+      settingsSoundSend: soundSettings.play_send,
+      settingsSoundIncoming: soundSettings.play_incoming,
+      settingsSoundNotifications: soundSettings.play_notifications,
+      settingsSoundReactions: soundSettings.play_reactions,
+      settingsSoundInvites: soundSettings.play_invites,
+      settingsSoundVoice: soundSettings.play_voice,
+    };
+    Object.entries(fields).forEach(([id, checked]) => {
+      const input = document.getElementById(id);
+      if (input) input.checked = !!checked;
+    });
+    const volumeInput = $('#settingsSoundsVolume');
+    const volumeLabel = $('#settingsSoundsVolumeValue');
+    if (volumeInput) volumeInput.value = soundSettings.volume;
+    if (volumeLabel) volumeLabel.textContent = `${soundSettings.volume}%`;
+  }
+
+  function getSoundSettingsFromForm() {
+    return {
+      sounds_enabled: $('#settingsSoundsEnabled')?.checked ?? soundSettings.sounds_enabled,
+      volume: Number($('#settingsSoundsVolume')?.value ?? soundSettings.volume),
+      play_send: $('#settingsSoundSend')?.checked ?? soundSettings.play_send,
+      play_incoming: $('#settingsSoundIncoming')?.checked ?? soundSettings.play_incoming,
+      play_notifications: $('#settingsSoundNotifications')?.checked ?? soundSettings.play_notifications,
+      play_reactions: $('#settingsSoundReactions')?.checked ?? soundSettings.play_reactions,
+      play_invites: $('#settingsSoundInvites')?.checked ?? soundSettings.play_invites,
+      play_voice: $('#settingsSoundVoice')?.checked ?? soundSettings.play_voice,
+    };
+  }
+
+  async function loadSoundSettings() {
+    try {
+      const data = await api('/api/sound-settings');
+      applySoundSettings(data.settings || soundSettings);
+      soundSettingsLoaded = true;
+    } catch {
+      soundSettingsLoaded = false;
+      window.BananzaSounds?.configure?.(soundSettings);
+    }
+  }
+
+  async function saveSoundSettings(patch = {}, { silent = false } = {}) {
+    clearTimeout(soundSettingsSaveTimer);
+    const next = { ...getSoundSettingsFromForm(), ...patch };
+    applySoundSettings(next);
+    if (!silent) setSoundStatus('Сохраняю...');
+    try {
+      const data = await api('/api/sound-settings', { method: 'PUT', body: next });
+      applySoundSettings(data.settings || next);
+      soundSettingsLoaded = true;
+      if (!silent) setSoundStatus('Сохранено', 'success');
+    } catch (e) {
+      setSoundStatus(e.message || 'Не удалось сохранить звуки', 'error');
+      renderSoundSettingsForm();
+    }
+  }
+
+  function scheduleSoundSettingsSave(patch = {}) {
+    clearTimeout(soundSettingsSaveTimer);
+    applySoundSettings({ ...getSoundSettingsFromForm(), ...patch });
+    soundSettingsSaveTimer = setTimeout(() => {
+      saveSoundSettings({}, { silent: true }).catch(() => {});
+    }, 350);
+  }
+
+  function playAppSound(type, options = {}) {
+    if (document.hidden && !options.allowHidden) return false;
+    return window.BananzaSounds?.play?.(type, options) || false;
+  }
+
+  function previewSound(type) {
+    window.BananzaSounds?.configure?.(getSoundSettingsFromForm());
+    window.BananzaSounds?.preview?.(type);
+  }
+
+  function previewAllSounds() {
+    const sequence = ['send', 'incoming', 'notification', 'reaction', 'invite', 'voice_start', 'voice_stop'];
+    sequence.forEach((type, index) => {
+      setTimeout(() => previewSound(type), index * 360);
+    });
+  }
+
   async function openChatFromPush(chatId) {
     const id = Number(chatId);
     if (!Number.isInteger(id) || id <= 0) return;
@@ -873,6 +990,7 @@
       });
       closeAllModals();
       showCenterToast('Сообщение переслано');
+      playAppSound('send');
       if (targetChatId === currentChatId) scrollToBottom();
     } catch (e) {
       setForwardMessageStatus(e.message || 'Не удалось переслать сообщение', 'error');
@@ -960,6 +1078,10 @@
   function handleWSMessage(msg) {
     switch (msg.type) {
       case 'message': {
+        const isOwnIncomingMessage = msg.message.user_id === currentUser.id;
+        if (!isOwnIncomingMessage && !document.hidden) {
+          playAppSound(msg.message.chat_id === currentChatId ? 'incoming' : 'notification');
+        }
         // Update chat list regardless
         updateChatListLastMessage(msg.message);
         // Track unread for non-current chats
@@ -970,11 +1092,10 @@
         // Only render if we're in the relevant chat
         if (msg.message.chat_id === currentChatId && !displayedMsgIds.has(msg.message.id)) {
           const wasNearBottom = isNearBottom();
-          const isOwnMessage = msg.message.user_id === currentUser.id;
-          const shouldPreserveIncomingScroll = scrollRestoreMode === 'restore' && !isOwnMessage;
+          const shouldPreserveIncomingScroll = scrollRestoreMode === 'restore' && !isOwnIncomingMessage;
           const scrollTopBefore = messagesEl.scrollTop;
           appendMessage(msg.message);
-          if (isOwnMessage || (wasNearBottom && !shouldPreserveIncomingScroll)) {
+          if (isOwnIncomingMessage || (wasNearBottom && !shouldPreserveIncomingScroll)) {
             scrollToBottom();
           } else if (shouldPreserveIncomingScroll) {
             messagesEl.scrollTop = scrollTopBefore;
@@ -1037,6 +1158,9 @@
         break;
       }
       case 'chat_created': {
+        if (msg.is_invite && msg.actorId !== currentUser.id && !document.hidden) {
+          playAppSound('invite');
+        }
         loadChats();
         break;
       }
@@ -1058,6 +1182,14 @@
       }
       case 'reaction': {
         updateReactionBar(msg.messageId, msg.reactions);
+        if (
+          msg.action === 'added' &&
+          msg.targetUserId === currentUser.id &&
+          msg.actorId !== currentUser.id &&
+          !document.hidden
+        ) {
+          playAppSound('reaction');
+        }
         break;
       }
       case 'message_transcription':
@@ -1914,6 +2046,7 @@
           body: { text: null, fileId: filesToSend[i].id, replyToId: null }
         });
       }
+      playAppSound('send');
       scrollToBottom();
     } catch (e) {
       alert(e.message);
@@ -2741,6 +2874,7 @@
       themeSettingsModal,
       weatherSettingsModal,
       notificationSettingsModal,
+      soundSettingsModal,
       changePasswordModal,
     ].forEach(m => m.classList.add('hidden'));
     closeForwardMessageModal({ animate: shouldAnimateForwardModal });
@@ -2861,6 +2995,14 @@
     } else {
       refreshPushDeviceState().catch(() => {});
     }
+  }
+
+  function openSoundSettingsModal() {
+    closeAllModals();
+    soundSettingsModal.classList.remove('hidden');
+    renderSoundSettingsForm();
+    setSoundStatus('');
+    if (!soundSettingsLoaded) loadSoundSettings().catch(() => {});
   }
 
   function resetChangePasswordFields() {
@@ -3623,6 +3765,7 @@
     $('#settingsThemePanel').addEventListener('click', openThemeSettingsModal);
     $('#settingsWeatherPanel').addEventListener('click', openWeatherSettingsModal);
     $('#settingsNotificationsPanel')?.addEventListener('click', openNotificationSettingsModal);
+    $('#settingsSoundsPanel')?.addEventListener('click', openSoundSettingsModal);
     $('#settingsChangePassword').addEventListener('click', openChangePasswordModal);
     $('#settingsAdminPanel').addEventListener('click', openAdminModal);
 
@@ -3704,6 +3847,29 @@
     ['settingsNotifyMessages', 'settingsNotifyChatInvites', 'settingsNotifyReactions'].forEach((id) => {
       document.getElementById(id)?.addEventListener('change', () => saveNotificationSettings());
     });
+
+    // Sound settings
+    [
+      'settingsSoundsEnabled',
+      'settingsSoundSend',
+      'settingsSoundIncoming',
+      'settingsSoundNotifications',
+      'settingsSoundReactions',
+      'settingsSoundInvites',
+      'settingsSoundVoice',
+    ].forEach((id) => {
+      document.getElementById(id)?.addEventListener('change', () => saveSoundSettings());
+    });
+    $('#settingsSoundsVolume')?.addEventListener('input', () => scheduleSoundSettingsSave());
+    $('#settingsSoundsVolume')?.addEventListener('change', () => saveSoundSettings());
+    $('#settingsSoundsBlock')?.addEventListener('click', (event) => {
+      const previewBtn = event.target.closest('[data-sound-preview]');
+      if (!previewBtn) return;
+      event.preventDefault();
+      event.stopPropagation();
+      previewSound(previewBtn.dataset.soundPreview);
+    });
+    $('#settingsSoundPreviewAll')?.addEventListener('click', previewAllSounds);
 
     // Change password save
     $('#cpSaveBtn').addEventListener('click', async () => {
@@ -3835,6 +4001,7 @@
     // Update UI
     updateCurrentUserFooter();
     loadWeatherSettings().then(() => loadCurrentWeather(false)).catch(() => {});
+    await loadSoundSettings().catch(() => {});
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage);
       navigator.serviceWorker.register('/sw.js').catch(() => {});

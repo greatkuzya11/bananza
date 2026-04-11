@@ -17,6 +17,7 @@ const { createVoiceFeature } = require('./voice');
 const { createWeatherFeature } = require('./weather');
 const { createForwardingFeature } = require('./forwarding');
 const { createPushFeature } = require('./push');
+const { createSoundSettingsFeature } = require('./soundSettings');
 
 // ── JWT Secret ──────────────────────────────────────────────────────────────
 const SECRET_PATH = path.join(__dirname, '.secret');
@@ -174,6 +175,12 @@ createWeatherFeature({
   db,
   auth,
   rateLimit,
+});
+
+createSoundSettingsFeature({
+  app,
+  db,
+  auth,
 });
 
 createForwardingFeature({
@@ -348,7 +355,13 @@ app.post('/api/chats', auth, (req, res) => {
   const chat = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
   const members = db.prepare('SELECT user_id FROM chat_members WHERE chat_id=?').all(chatId);
   members.forEach(({ user_id }) => {
-    sendToUser(user_id, { type: 'chat_created', chat });
+    sendToUser(user_id, {
+      type: 'chat_created',
+      chat,
+      actorId: req.user.id,
+      actorName: req.user.display_name,
+      is_invite: user_id !== req.user.id,
+    });
     if (user_id !== req.user.id) {
       pushFeature.notifyChatInvite(user_id, {
         chat,
@@ -385,7 +398,13 @@ app.post('/api/chats/private', auth, (req, res) => {
   db.prepare('INSERT INTO chat_members(chat_id,user_id) VALUES(?,?)').run(chatId, targetUserId);
 
   const chat = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
-  sendToUser(targetUserId, { type: 'chat_created', chat: { ...chat, name: req.user.display_name } });
+  sendToUser(targetUserId, {
+    type: 'chat_created',
+    chat: { ...chat, name: req.user.display_name },
+    actorId: req.user.id,
+    actorName: req.user.display_name,
+    is_invite: true,
+  });
   pushFeature.notifyChatInvite(targetUserId, {
     chat: { ...chat, name: req.user.display_name },
     actorName: req.user.display_name,
@@ -411,7 +430,13 @@ app.post('/api/chats/:chatId/members', auth, (req, res) => {
   if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
   const added = db.prepare('INSERT OR IGNORE INTO chat_members(chat_id,user_id) VALUES(?,?)').run(chatId, userId);
-  sendToUser(userId, { type: 'chat_created', chat });
+  sendToUser(userId, {
+    type: 'chat_created',
+    chat,
+    actorId: req.user.id,
+    actorName: req.user.display_name,
+    is_invite: added.changes > 0 && userId !== req.user.id,
+  });
   if (added.changes > 0 && userId !== req.user.id) {
     pushFeature.notifyChatInvite(userId, {
       chat,
@@ -988,7 +1013,7 @@ app.post('/api/messages/:id/reactions', auth, (req, res) => {
   if (!emoji || typeof emoji !== 'string' || emoji.length > 10 || !ALLOWED_REACTIONS.includes(emoji))
     return res.status(400).json({ error: 'Invalid emoji' });
 
-  const msg = db.prepare('SELECT chat_id FROM messages WHERE id=? AND is_deleted=0').get(mid);
+  const msg = db.prepare('SELECT chat_id,user_id FROM messages WHERE id=? AND is_deleted=0').get(mid);
   if (!msg) return res.status(404).json({ error: 'Not found' });
   if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(msg.chat_id, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
@@ -1003,7 +1028,16 @@ app.post('/api/messages/:id/reactions', auth, (req, res) => {
   }
 
   const reactions = db.prepare('SELECT user_id, emoji FROM reactions WHERE message_id=?').all(mid);
-  broadcastToChatAll(msg.chat_id, { type: 'reaction', messageId: mid, reactions });
+  broadcastToChatAll(msg.chat_id, {
+    type: 'reaction',
+    messageId: mid,
+    reactions,
+    actorId: req.user.id,
+    actorName: req.user.display_name,
+    emoji,
+    action: reactionAdded ? 'added' : 'removed',
+    targetUserId: msg.user_id,
+  });
   if (reactionAdded) {
     pushFeature.notifyReaction({ messageId: mid, emoji, actor: req.user });
   }

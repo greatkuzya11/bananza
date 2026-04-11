@@ -1064,6 +1064,7 @@
     setRecorderMessage('Запись...', 'recording');
     updateRecorderBar();
     if (navigator.vibrate) navigator.vibrate(30);
+    getBridge()?.playSound?.('voice_start');
   }
 
   async function stopRecordingAndSend() {
@@ -1071,6 +1072,7 @@
     const durationMs = Date.now() - state.recorder.startAt;
 
     cleanupRecorderGraph();
+    getBridge()?.playSound?.('voice_stop');
 
     const minRecordMs = Number(state.admin.settings?.min_record_ms || 500);
     const maxRecordMs = Number(state.admin.settings?.max_record_ms || 120000);
@@ -1100,6 +1102,7 @@
       });
       getBridge().clearReply?.();
       hideRecorderBar();
+      getBridge()?.playSound?.('send');
       getBridge().scrollToBottom?.();
     } finally {
       state.recorder.uploading = false;

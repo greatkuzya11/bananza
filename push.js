@@ -105,6 +105,7 @@ function createPushFeature({ app, db, auth, rateLimit }) {
     : (_req, _res, next) => next();
 
   const settingsStmt = db.prepare('SELECT * FROM user_notification_settings WHERE user_id=?');
+  const soundSettingsStmt = db.prepare('SELECT sounds_enabled FROM user_sound_settings WHERE user_id=?');
   const activeSubscriptionsStmt = db.prepare(`
     SELECT * FROM push_subscriptions
     WHERE user_id=? AND disabled_at IS NULL
@@ -189,6 +190,11 @@ function createPushFeature({ app, db, auth, rateLimit }) {
     return activeSubscriptionsStmt.all(userId);
   }
 
+  function shouldUseSilentPush(userId) {
+    const row = soundSettingsStmt.get(userId);
+    return row ? !row.sounds_enabled : false;
+  }
+
   async function sendToSubscription(row, payload) {
     try {
       await webpush.sendNotification(subscriptionFromRow(row), JSON.stringify(payload), {
@@ -213,7 +219,11 @@ function createPushFeature({ app, db, auth, rateLimit }) {
   async function sendUserNotification(userId, type, payload, options = {}) {
     const subscriptions = getSubscriptionsForType(userId, type, options);
     if (subscriptions.length === 0) return { sent: 0, failed: 0, skipped: true };
-    const results = await Promise.all(subscriptions.map(row => sendToSubscription(row, payload)));
+    const userPayload = {
+      ...payload,
+      silent: payload.silent ?? shouldUseSilentPush(userId),
+    };
+    const results = await Promise.all(subscriptions.map(row => sendToSubscription(row, userPayload)));
     return {
       sent: results.filter(r => r.ok).length,
       failed: results.filter(r => !r.ok).length,
