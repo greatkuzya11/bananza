@@ -462,7 +462,10 @@ app.get('/api/chats', auth, (req, res) => {
         ORDER BY m.id DESC LIMIT 1) as last_text,
       (SELECT m.created_at FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) as last_time,
       (SELECT u.display_name FROM messages m JOIN users u ON u.id=m.user_id WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) as last_user,
-      (SELECT m.file_id FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) as last_file_id
+      (SELECT m.file_id FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) as last_file_id,
+      (SELECT MAX(m.id) FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0) as last_message_id,
+      (SELECT MIN(m.id) FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 AND m.id>COALESCE(cm.last_read_id,0) AND m.user_id!=cm.user_id) as first_unread_id,
+      cm.last_read_id
     FROM chats c JOIN chat_members cm ON cm.chat_id=c.id
     WHERE cm.user_id=?
     ORDER BY last_time DESC NULLS LAST, c.created_at DESC
@@ -481,8 +484,7 @@ app.get('/api/chats', auth, (req, res) => {
       chat.avatar_url = chat.avatar_url || null;
     }
     // Unread count
-    const membership = db.prepare('SELECT last_read_id FROM chat_members WHERE chat_id=? AND user_id=?').get(chat.id, req.user.id);
-    const lastRead = membership ? membership.last_read_id : 0;
+    const lastRead = chat.last_read_id || 0;
     const unread = db.prepare('SELECT COUNT(*) as c FROM messages WHERE chat_id=? AND id>? AND is_deleted=0 AND user_id!=?').get(chat.id, lastRead, req.user.id);
     chat.unread_count = unread ? unread.c : 0;
   }
@@ -639,12 +641,13 @@ app.post('/api/chats/:chatId/members', auth, (req, res) => {
 app.get('/api/chats/:chatId/messages', auth, (req, res) => {
   const chatId = +req.params.chatId;
   const before = req.query.before ? +req.query.before : null;
+  const anchor = req.query.anchor ? +req.query.anchor : null;
   const limit = Math.min(+req.query.limit || 50, 100);
 
   if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
 
-  const q = `
+  const selectSql = `
     SELECT m.*, u.username, u.display_name, u.avatar_color, u.avatar_url,
       COALESCE(u.is_ai_bot, 0) as is_ai_bot, ab.mention as ai_bot_mention,
       f.original_name as file_name, f.stored_name as file_stored,
@@ -658,12 +661,31 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
     LEFT JOIN messages rm ON rm.id=m.reply_to_id
     LEFT JOIN voice_messages rvm ON rvm.message_id=rm.id
     LEFT JOIN users ru ON ru.id=rm.user_id
-    WHERE m.chat_id=? ${before ? 'AND m.id<?' : ''}
-    ORDER BY m.id DESC LIMIT ?`;
+  `;
 
-  const msgs = before
-    ? db.prepare(q).all(chatId, before, limit)
-    : db.prepare(q).all(chatId, limit);
+  let msgs;
+  if (anchor) {
+    const anchorMsg = db.prepare(`${selectSql} WHERE m.chat_id=? AND m.id=? AND m.is_deleted=0`).get(chatId, anchor);
+    if (anchorMsg) {
+      const olderLimit = Math.floor((limit - 1) / 2);
+      const newerLimit = Math.max(0, limit - olderLimit - 1);
+      const older = db.prepare(`${selectSql} WHERE m.chat_id=? AND m.id<? AND m.is_deleted=0 ORDER BY m.id DESC LIMIT ?`)
+        .all(chatId, anchor, olderLimit)
+        .reverse();
+      const newer = db.prepare(`${selectSql} WHERE m.chat_id=? AND m.id>? AND m.is_deleted=0 ORDER BY m.id ASC LIMIT ?`)
+        .all(chatId, anchor, newerLimit);
+      msgs = [...older, anchorMsg, ...newer];
+    }
+  }
+
+  if (!msgs) {
+    const q = `${selectSql} WHERE m.chat_id=? ${before ? 'AND m.id<?' : ''} AND m.is_deleted=0 ORDER BY m.id DESC LIMIT ?`;
+    msgs = before
+      ? db.prepare(q).all(chatId, before, limit)
+      : db.prepare(q).all(chatId, limit);
+    msgs = msgs.reverse();
+  }
+
 
   const prevStmt = db.prepare('SELECT * FROM link_previews WHERE message_id=?');
   const reactStmt = db.prepare('SELECT user_id, emoji FROM reactions WHERE message_id=?');
@@ -680,7 +702,7 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
   const result = voiceFeature.attachVoiceMetadata(
     msgs.map(m => attachMessageMentions({ ...m, previews: prevStmt.all(m.id), reactions: reactStmt.all(m.id), is_read: m.id <= minRead }))
   );
-  res.json(result.reverse());
+  res.json(result);
 });
 
 app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
@@ -1203,10 +1225,18 @@ app.post('/api/chats/:chatId/read', auth, (req, res) => {
 
   const last = db.prepare('SELECT MAX(id) as mid FROM messages WHERE chat_id=? AND is_deleted=0').get(chatId);
   if (last && last.mid) {
+    let nextReadId = last.mid;
+    const requestedReadId = Number(req.body?.lastReadId || 0);
+    if (Number.isFinite(requestedReadId) && requestedReadId > 0) {
+      const bounded = db.prepare('SELECT MAX(id) as mid FROM messages WHERE chat_id=? AND is_deleted=0 AND id<=?')
+        .get(chatId, Math.min(requestedReadId, last.mid));
+      nextReadId = bounded?.mid || 0;
+    }
+    if (!nextReadId) return res.json({ ok: true });
     const changed = db.prepare('UPDATE chat_members SET last_read_id=? WHERE chat_id=? AND user_id=? AND last_read_id<?')
-      .run(last.mid, chatId, req.user.id, last.mid);
+      .run(nextReadId, chatId, req.user.id, nextReadId);
     if (changed.changes > 0) {
-      broadcastToChatAll(chatId, { type: 'messages_read', chatId, userId: req.user.id, lastReadId: last.mid });
+      broadcastToChatAll(chatId, { type: 'messages_read', chatId, userId: req.user.id, lastReadId: nextReadId });
     }
   }
   res.json({ ok: true });
