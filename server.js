@@ -643,6 +643,7 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
   const before = req.query.before ? +req.query.before : null;
   const anchor = req.query.anchor ? +req.query.anchor : null;
   const limit = Math.min(+req.query.limit || 50, 100);
+  const includeMeta = req.query.meta === '1';
 
   if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
@@ -711,6 +712,18 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
   const result = voiceFeature.attachVoiceMetadata(
     msgs.map(m => attachMessageMentions({ ...m, previews: prevStmt.all(m.id), reactions: reactStmt.all(m.id), is_read: m.id <= minRead }))
   );
+
+  if (includeMeta) {
+    const firstId = result.reduce((min, msg) => {
+      const id = Number(msg.id) || 0;
+      return id > 0 ? Math.min(min, id) : min;
+    }, Number.MAX_SAFE_INTEGER);
+    const hasMoreBefore = firstId !== Number.MAX_SAFE_INTEGER
+      ? !!db.prepare('SELECT 1 FROM messages WHERE chat_id=? AND id<? AND is_deleted=0 LIMIT 1').get(chatId, firstId)
+      : false;
+    return res.json({ messages: result, has_more_before: hasMoreBefore });
+  }
+
   res.json(result);
 });
 

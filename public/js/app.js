@@ -2223,6 +2223,30 @@
     scrollBottomBtn.classList.toggle('visible', shouldShow);
   }
 
+  function normalizeMessagesPage(data) {
+    if (Array.isArray(data)) return { messages: data, hasMoreBefore: null };
+    if (data && Array.isArray(data.messages)) {
+      return {
+        messages: data.messages,
+        hasMoreBefore: typeof data.has_more_before === 'boolean' ? data.has_more_before : null,
+      };
+    }
+    return { messages: [], hasMoreBefore: false };
+  }
+
+  function setHasMoreBefore(value) {
+    hasMore = Boolean(value);
+    loadMoreWrap.classList.toggle('hidden', !hasMore);
+  }
+
+  function maybeLoadMoreAtTop() {
+    if (!suppressScrollAnchorSave && messagesEl.scrollTop < 60 && hasMore && !loadingMore) {
+      loadMore();
+      return true;
+    }
+    return false;
+  }
+
   function scrollAnchorStorageKey() {
     return currentUser?.id ? `bananza:scrollAnchors:${currentUser.id}` : '';
   }
@@ -2461,8 +2485,7 @@
           : await window.messageCache.readLatest(chatId, { limit: PAGE_SIZE });
         if (Array.isArray(cachedMsgs) && cachedMsgs.length) {
           displayedMsgIds.clear();
-          hasMore = cachedMsgs.length >= PAGE_SIZE;
-          loadMoreWrap.classList.toggle('hidden', !hasMore);
+          setHasMoreBefore(restoreAnchor?.messageId ? cachedMsgs.length > 0 : cachedMsgs.length >= PAGE_SIZE);
           renderMessages(cachedMsgs);
           if (restoreAnchor?.messageId) {
             requestAnimationFrame(() => restoreScrollAnchor(restoreAnchor, 1));
@@ -2488,14 +2511,15 @@
     let scrollRestoreScheduled = false;
     try {
       const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
+      params.set('meta', '1');
       if (restoreAnchor?.messageId) params.set('anchor', String(restoreAnchor.messageId));
-      const msgs = await api(`/api/chats/${chatId}/messages?${params}`);
+      const page = normalizeMessagesPage(await api(`/api/chats/${chatId}/messages?${params}`));
+      const msgs = page.messages;
       // Re-clear after async gap: WS may have appended messages while we waited
       if (currentChatId !== chatId) { suppressScrollAnchorSave = false; return; } // user switched chats
       messagesEl.querySelectorAll('.msg-row, .msg-group, .date-separator').forEach(el => el.remove());
       displayedMsgIds.clear();
-      hasMore = msgs.length >= PAGE_SIZE;
-      loadMoreWrap.classList.toggle('hidden', !hasMore);
+      setHasMoreBefore(page.hasMoreBefore ?? (restoreAnchor?.messageId ? msgs.length > 0 : msgs.length >= PAGE_SIZE));
       renderMessages(msgs);
       // Persist network-fetched messages to IndexedDB (keep last 200)
       try { if (window.messageCache) window.messageCache.writeWindow(chatId, (msgs || []).slice(-200)).catch(()=>{}); } catch (e) {}
@@ -2527,11 +2551,15 @@
           if (currentChatId !== chatId) return;
           suppressScrollAnchorSave = false;
           saveCurrentScrollAnchor(chatId, { force: true });
+          maybeLoadMoreAtTop();
         }, 260);
       });
       scrollRestoreScheduled = true;
     } catch {}
-    if (!scrollRestoreScheduled && currentChatId === chatId && suppressScrollAnchorSave) suppressScrollAnchorSave = false;
+    if (!scrollRestoreScheduled && currentChatId === chatId && suppressScrollAnchorSave) {
+      suppressScrollAnchorSave = false;
+      maybeLoadMoreAtTop();
+    }
 
     clearReply();
     if (editTo) clearEdit({ clearInput: true });
@@ -2982,6 +3010,7 @@
   // Load more messages
   async function loadMore() {
     if (loadingMore || !hasMore || !currentChatId) return;
+    const chatId = currentChatId;
     loadingMore = true;
     loadMoreBtn.textContent = 'Loading...';
 
@@ -2989,10 +3018,12 @@
     const firstId = firstMsg ? firstMsg.dataset.msgId : null;
 
     try {
-      const url = `/api/chats/${currentChatId}/messages?limit=${PAGE_SIZE}${firstId ? '&before=' + firstId : ''}`;
-      const msgs = await api(url);
-      hasMore = msgs.length >= PAGE_SIZE;
-      if (!hasMore) loadMoreWrap.classList.add('hidden');
+      const params = new URLSearchParams({ limit: String(PAGE_SIZE), meta: '1' });
+      if (firstId) params.set('before', firstId);
+      const page = normalizeMessagesPage(await api(`/api/chats/${chatId}/messages?${params}`));
+      const msgs = page.messages;
+      if (currentChatId !== chatId) return;
+      setHasMoreBefore(page.hasMoreBefore ?? msgs.length >= PAGE_SIZE);
 
       // Capture scroll state RIGHT before DOM mutation (not before async fetch)
       const scrollTopBefore = messagesEl.scrollTop;
@@ -3027,9 +3058,10 @@
       messagesEl.scrollTop = scrollTopBefore + (messagesEl.scrollHeight - scrollHeightBefore);
       saveCurrentScrollAnchor(currentChatId, { force: true });
     } catch {}
-
-    loadingMore = false;
-    loadMoreBtn.textContent = 'Load earlier messages';
+    finally {
+      loadingMore = false;
+      loadMoreBtn.textContent = 'Load earlier messages';
+    }
   }
 
   function isNearBottom(threshold = 150) {
@@ -5087,7 +5119,7 @@
     messagesEl.addEventListener('scroll', () => {
       hideAvatarUserMenu();
       if (!suppressScrollAnchorSave && !loadingMore) scheduleScrollAnchorSave();
-      if (!suppressScrollAnchorSave && messagesEl.scrollTop < 60 && hasMore && !loadingMore) loadMore();
+      maybeLoadMoreAtTop();
       if (!suppressScrollAnchorSave && isNearBottom(8)) markCurrentChatReadIfAtBottom();
       updateScrollBottomButton();
     });
