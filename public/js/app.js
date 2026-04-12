@@ -70,6 +70,13 @@
   };
   let soundSettingsLoaded = false;
   let soundSettingsSaveTimer = null;
+  let aiBotState = {
+    settings: { enabled: false, default_response_model: 'gpt-4o-mini', default_summary_model: 'gpt-4o-mini', default_embedding_model: 'text-embedding-3-small', chunk_size: 50, retrieval_top_k: 6 },
+    bots: [],
+    chats: [],
+    chatSettings: [],
+  };
+  let selectedAiBotId = null;
   let forwardMessageState = null;
   let forwardMessageBusy = false;
   let forwardModalCloseTimer = null;
@@ -123,6 +130,7 @@
   const weatherSettingsModal = $('#weatherSettingsModal');
   const notificationSettingsModal = $('#notificationSettingsModal');
   const soundSettingsModal = $('#soundSettingsModal');
+  const aiBotSettingsModal = $('#aiBotSettingsModal');
   const changePasswordModal = $('#changePasswordModal');
   const forwardMessageModal = $('#forwardMessageModal');
   const forwardChatSearch = $('#forwardChatSearch');
@@ -902,6 +910,248 @@
     }
   }
 
+  function setAiBotStatus(message, type = '') {
+    const el = $('#aiBotsStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function mergeAiBotState(data = {}) {
+    if (data.state) {
+      aiBotState = {
+        settings: data.state.settings || aiBotState.settings,
+        bots: data.state.bots || aiBotState.bots,
+        chats: data.state.chats || aiBotState.chats,
+        chatSettings: data.state.chatSettings || aiBotState.chatSettings,
+      };
+    } else if (data.settings) {
+      aiBotState = { ...aiBotState, settings: { ...aiBotState.settings, ...data.settings } };
+    }
+    if (selectedAiBotId && !aiBotState.bots.some(bot => Number(bot.id) === Number(selectedAiBotId))) {
+      selectedAiBotId = null;
+    }
+  }
+
+  function currentAiBot() {
+    return aiBotState.bots.find(bot => bot.id === selectedAiBotId) || null;
+  }
+
+  function getAiChatSetting(chatId, botId) {
+    return aiBotState.chatSettings.find(item => Number(item.chat_id) === Number(chatId) && Number(item.bot_id) === Number(botId)) || null;
+  }
+
+  function fillAiBotForm(bot = null) {
+    const settings = aiBotState.settings || {};
+    selectedAiBotId = bot ? bot.id : null;
+    $('#aiBotName').value = bot?.name || 'Bananza AI';
+    $('#aiBotMention').value = bot?.mention || 'bananza';
+    $('#aiBotEnabled').checked = bot ? !!bot.enabled : true;
+    $('#aiBotResponseModel').value = bot?.response_model || settings.default_response_model || 'gpt-4o-mini';
+    $('#aiBotSummaryModel').value = bot?.summary_model || settings.default_summary_model || 'gpt-4o-mini';
+    $('#aiBotEmbeddingModel').value = bot?.embedding_model || settings.default_embedding_model || 'text-embedding-3-small';
+    $('#aiBotStyle').value = bot?.style || 'Полезный AI-помощник для чата';
+    $('#aiBotTone').value = bot?.tone || 'тёплый, внимательный, краткий';
+    $('#aiBotRules').value = bot?.behavior_rules || '';
+    $('#aiBotSpeech').value = bot?.speech_patterns || '';
+    renderAiBotList();
+    renderAiChatBotSettings();
+  }
+
+  function aiBotFormPayload() {
+    return {
+      name: $('#aiBotName')?.value.trim(),
+      mention: $('#aiBotMention')?.value.trim(),
+      enabled: $('#aiBotEnabled')?.checked,
+      response_model: $('#aiBotResponseModel')?.value.trim(),
+      summary_model: $('#aiBotSummaryModel')?.value.trim(),
+      embedding_model: $('#aiBotEmbeddingModel')?.value.trim(),
+      style: $('#aiBotStyle')?.value.trim(),
+      tone: $('#aiBotTone')?.value.trim(),
+      behavior_rules: $('#aiBotRules')?.value.trim(),
+      speech_patterns: $('#aiBotSpeech')?.value.trim(),
+    };
+  }
+
+  function renderAiBotList() {
+    const list = $('#aiBotList');
+    if (!list) return;
+    if (!aiBotState.bots.length) {
+      list.innerHTML = '<div class="ai-bot-empty">Ботов пока нет. Создайте первого бота.</div>';
+      return;
+    }
+    list.innerHTML = aiBotState.bots.map(bot => `
+      <button type="button" class="ai-bot-list-item${bot.id === selectedAiBotId ? ' active' : ''}" data-bot-id="${bot.id}">
+        <span><strong>${esc(bot.name)}</strong><small>@${esc(bot.mention)} · ${bot.enabled ? 'enabled' : 'disabled'}</small></span>
+        <span>${bot.response_model ? esc(bot.response_model) : ''}</span>
+      </button>
+    `).join('');
+  }
+
+  function renderAiChatBotSettings() {
+    const chatSelect = $('#aiBotChatSelect');
+    const botSelect = $('#aiBotChatBotSelect');
+    if (!chatSelect || !botSelect) return;
+    const currentChatValue = chatSelect.value || String(currentChatId || aiBotState.chats[0]?.id || '');
+    const currentBotValue = botSelect.value || String(selectedAiBotId || aiBotState.bots[0]?.id || '');
+
+    chatSelect.innerHTML = aiBotState.chats.map(chat => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+    botSelect.innerHTML = aiBotState.bots.map(bot => `<option value="${bot.id}">${esc(bot.name)} @${esc(bot.mention)}</option>`).join('');
+    if (aiBotState.chats.some(chat => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
+    if (aiBotState.bots.some(bot => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;
+    if (!botSelect.value && aiBotState.bots[0]) botSelect.value = String(aiBotState.bots[0].id);
+
+    const setting = getAiChatSetting(chatSelect.value, botSelect.value);
+    $('#aiBotChatEnabled').checked = !!setting?.enabled;
+    $('#aiBotChatMode').value = setting?.mode || 'simple';
+    $('#aiBotChatHotLimit').value = setting?.hot_context_limit || 50;
+  }
+
+  function renderAiBotSettings() {
+    const settings = aiBotState.settings || {};
+    $('#aiBotsGlobalEnabled').checked = !!settings.enabled;
+    $('#aiBotsDefaultResponseModel').value = settings.default_response_model || 'gpt-4o-mini';
+    $('#aiBotsDefaultSummaryModel').value = settings.default_summary_model || 'gpt-4o-mini';
+    $('#aiBotsDefaultEmbeddingModel').value = settings.default_embedding_model || 'text-embedding-3-small';
+    $('#aiBotsChunkSize').value = settings.chunk_size || 50;
+    $('#aiBotsRetrievalTopK').value = settings.retrieval_top_k || 6;
+    $('#aiBotsApiKey').value = '';
+    $('#aiBotsKeyStatus').textContent = settings.has_openai_key
+      ? `Ключ сохранён: ${settings.masked_openai_key || '***'}`
+      : 'Ключ не сохранён';
+
+    const selected = currentAiBot() || aiBotState.bots[0] || null;
+    fillAiBotForm(selected);
+    renderAiChatBotSettings();
+  }
+
+  function aiBotSettingsPayload() {
+    const body = {
+      enabled: $('#aiBotsGlobalEnabled')?.checked,
+      default_response_model: $('#aiBotsDefaultResponseModel')?.value.trim(),
+      default_summary_model: $('#aiBotsDefaultSummaryModel')?.value.trim(),
+      default_embedding_model: $('#aiBotsDefaultEmbeddingModel')?.value.trim(),
+      chunk_size: Number($('#aiBotsChunkSize')?.value || 50),
+      retrieval_top_k: Number($('#aiBotsRetrievalTopK')?.value || 6),
+    };
+    const key = $('#aiBotsApiKey')?.value.trim();
+    if (key) body.openai_api_key = key;
+    return body;
+  }
+
+  async function persistAiBotSettings() {
+    const data = await api('/api/admin/ai-bots/settings', {
+      method: 'PUT',
+      body: aiBotSettingsPayload(),
+    });
+    mergeAiBotState(data);
+    return data;
+  }
+
+  async function loadAiBotState() {
+    const data = await api('/api/admin/ai-bots');
+    mergeAiBotState({ state: data });
+    renderAiBotSettings();
+  }
+
+  async function saveAiBotSettings() {
+    setAiBotStatus('Сохраняю...');
+    try {
+      await persistAiBotSettings();
+      renderAiBotSettings();
+      setAiBotStatus('Настройки сохранены', 'success');
+    } catch (e) {
+      setAiBotStatus(e.message || 'Не удалось сохранить настройки', 'error');
+    }
+  }
+
+  async function deleteAiBotKey() {
+    if (!confirm('Удалить OpenAI API key для AI-ботов?')) return;
+    try {
+      const data = await api('/api/admin/ai-bots/openai-key', { method: 'DELETE' });
+      mergeAiBotState(data);
+      renderAiBotSettings();
+      setAiBotStatus('Ключ удалён', 'success');
+    } catch (e) {
+      setAiBotStatus(e.message || 'Не удалось удалить ключ', 'error');
+    }
+  }
+
+  async function saveAiBot() {
+    const payload = aiBotFormPayload();
+    if (!payload.name) { setAiBotStatus('Введите имя бота', 'error'); return; }
+    setAiBotStatus('Сохраняю бота...');
+    try {
+      await persistAiBotSettings();
+      const shouldUpdate = Boolean(selectedAiBotId && aiBotState.bots.some(bot => Number(bot.id) === Number(selectedAiBotId)));
+      const url = shouldUpdate ? `/api/admin/ai-bots/${selectedAiBotId}` : '/api/admin/ai-bots';
+      const method = shouldUpdate ? 'PUT' : 'POST';
+      const data = await api(url, { method, body: payload });
+      mergeAiBotState(data);
+      selectedAiBotId = data.bot?.id || selectedAiBotId;
+      renderAiBotSettings();
+      setAiBotStatus('Бот сохранён', 'success');
+    } catch (e) {
+      setAiBotStatus(e.message || 'Не удалось сохранить бота', 'error');
+    }
+  }
+
+  async function disableAiBot() {
+    if (!selectedAiBotId) return;
+    if (!confirm('Отключить этого бота во всех чатах?')) return;
+    try {
+      const data = await api(`/api/admin/ai-bots/${selectedAiBotId}`, { method: 'DELETE' });
+      mergeAiBotState(data);
+      renderAiBotSettings();
+      setAiBotStatus('Бот отключён', 'success');
+    } catch (e) {
+      setAiBotStatus(e.message || 'Не удалось отключить бота', 'error');
+    }
+  }
+
+  async function testAiBot() {
+    if (!selectedAiBotId) { setAiBotStatus('Сначала сохраните бота', 'error'); return; }
+    setAiBotStatus('Проверяю модель...');
+    try {
+      const data = await api(`/api/admin/ai-bots/${selectedAiBotId}/test`, { method: 'POST', body: {} });
+      const text = data.result?.text ? data.result.text.slice(0, 500) : '';
+      setAiBotStatus(`Успешно (${data.result?.latencyMs || 0} ms): ${text}`, 'success');
+    } catch (e) {
+      setAiBotStatus(e.message || 'Проверка не удалась', 'error');
+    }
+  }
+
+  async function saveAiChatBotSettings() {
+    const chatId = Number($('#aiBotChatSelect')?.value || 0);
+    const botId = Number($('#aiBotChatBotSelect')?.value || 0);
+    const botExists = aiBotState.bots.some(bot => Number(bot.id) === botId);
+    if (!chatId || !botId) { setAiBotStatus('Выберите чат и бота', 'error'); return; }
+    if (!botExists) {
+      setAiBotStatus('Сначала сохраните бота', 'error');
+      await loadAiBotState().catch(() => {});
+      return;
+    }
+    try {
+      await persistAiBotSettings();
+      const data = await api('/api/admin/ai-bots/chat-settings', {
+        method: 'PUT',
+        body: {
+          chatId,
+          botId,
+          enabled: $('#aiBotChatEnabled')?.checked,
+          mode: $('#aiBotChatMode')?.value || 'simple',
+          hot_context_limit: Number($('#aiBotChatHotLimit')?.value || 50),
+        },
+      });
+      mergeAiBotState(data);
+      renderAiChatBotSettings();
+      setAiBotStatus('Настройки чата сохранены', 'success');
+    } catch (e) {
+      setAiBotStatus(e.message || 'Не удалось сохранить настройки чата', 'error');
+    }
+  }
+
   async function openChatFromPush(chatId) {
     const id = Number(chatId);
     if (!Number.isInteger(id) || id <= 0) return;
@@ -1169,7 +1419,8 @@
         // Only render if we're in the relevant chat
         if (msg.message.chat_id === currentChatId && !displayedMsgIds.has(msg.message.id)) {
           const wasNearBottom = isNearBottom();
-          const shouldPreserveIncomingScroll = scrollRestoreMode === 'restore' && !isOwnIncomingMessage;
+          const isAiBotResponse = msg.message.ai_generated || msg.message.ai_bot_id;
+          const shouldPreserveIncomingScroll = scrollRestoreMode === 'restore' && !isOwnIncomingMessage && !isAiBotResponse;
           const scrollTopBefore = messagesEl.scrollTop;
           appendMessage(msg.message);
           if (isOwnIncomingMessage || (wasNearBottom && !shouldPreserveIncomingScroll)) {
@@ -1231,7 +1482,8 @@
       }
       case 'typing': {
         if (msg.chatId === currentChatId && msg.userId !== currentUser.id) {
-          showTyping(msg.username);
+          if (msg.isTyping === false) hideTyping(msg.username);
+          else showTyping(msg.username);
         }
         break;
       }
@@ -2696,16 +2948,34 @@
   // ═══════════════════════════════════════════════════════════════════════════
   // TYPING INDICATOR
   // ═══════════════════════════════════════════════════════════════════════════
-  function showTyping(username) {
+  function renderTypingBar() {
+    const names = Object.keys(typingDisplayTimeouts);
+    if (names.length === 0) {
+      typingBar.classList.add('hidden');
+      typingBar.textContent = '';
+      return;
+    }
     typingBar.classList.remove('hidden');
-    typingBar.textContent = `${username} is typing...`;
-    clearTimeout(typingDisplayTimeouts[username]);
-    typingDisplayTimeouts[username] = setTimeout(() => {
-      delete typingDisplayTimeouts[username];
-      if (Object.keys(typingDisplayTimeouts).length === 0) {
-        typingBar.classList.add('hidden');
-      }
+    typingBar.textContent = names.length === 1
+      ? `${names[0]} печатает...`
+      : `${names.slice(0, 2).join(', ')} печатают...`;
+  }
+
+  function showTyping(username) {
+    const name = username || 'Someone';
+    clearTimeout(typingDisplayTimeouts[name]);
+    typingDisplayTimeouts[name] = setTimeout(() => {
+      delete typingDisplayTimeouts[name];
+      renderTypingBar();
     }, 3000);
+    renderTypingBar();
+  }
+
+  function hideTyping(username) {
+    const name = username || 'Someone';
+    clearTimeout(typingDisplayTimeouts[name]);
+    delete typingDisplayTimeouts[name];
+    renderTypingBar();
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -2954,6 +3224,7 @@
       weatherSettingsModal,
       notificationSettingsModal,
       soundSettingsModal,
+      aiBotSettingsModal,
       changePasswordModal,
     ].forEach(m => m.classList.add('hidden'));
     closeForwardMessageModal({ animate: shouldAnimateForwardModal });
@@ -3044,6 +3315,9 @@
     const adminItem = $('#settingsAdminPanel');
     if (currentUser.is_admin) adminItem.classList.remove('hidden');
     else adminItem.classList.add('hidden');
+    const aiBotsItem = $('#settingsAiBotsPanel');
+    if (currentUser.is_admin) aiBotsItem?.classList.remove('hidden');
+    else aiBotsItem?.classList.add('hidden');
     $('#settingsSendEnter').checked = sendByEnter;
     $('#settingsScrollRestore').checked = scrollRestoreMode === 'restore';
     $('#settingsOpenLastChat').checked = openLastChatOnReload;
@@ -3082,6 +3356,16 @@
     renderSoundSettingsForm();
     setSoundStatus('');
     if (!soundSettingsLoaded) loadSoundSettings().catch(() => {});
+  }
+
+  function openAiBotSettingsModal() {
+    if (!currentUser?.is_admin) return;
+    closeAllModals();
+    aiBotSettingsModal.classList.remove('hidden');
+    setAiBotStatus('Загружаю...');
+    loadAiBotState().then(() => setAiBotStatus('')).catch((e) => {
+      setAiBotStatus(e.message || 'Не удалось загрузить AI-ботов', 'error');
+    });
   }
 
   function resetChangePasswordFields() {
@@ -3846,6 +4130,7 @@
     $('#settingsWeatherPanel').addEventListener('click', openWeatherSettingsModal);
     $('#settingsNotificationsPanel')?.addEventListener('click', openNotificationSettingsModal);
     $('#settingsSoundsPanel')?.addEventListener('click', openSoundSettingsModal);
+    $('#settingsAiBotsPanel')?.addEventListener('click', openAiBotSettingsModal);
     $('#settingsChangePassword').addEventListener('click', openChangePasswordModal);
     $('#settingsAdminPanel').addEventListener('click', openAdminModal);
 
@@ -3950,6 +4235,26 @@
       previewSound(previewBtn.dataset.soundPreview);
     });
     $('#settingsSoundPreviewAll')?.addEventListener('click', previewAllSounds);
+
+    // AI bot admin settings
+    $('#aiBotsSaveSettings')?.addEventListener('click', saveAiBotSettings);
+    $('#aiBotsDeleteKey')?.addEventListener('click', deleteAiBotKey);
+    $('#aiBotCreateNew')?.addEventListener('click', () => {
+      fillAiBotForm(null);
+      setAiBotStatus('Новый бот: заполните поля и сохраните');
+    });
+    $('#aiBotSave')?.addEventListener('click', saveAiBot);
+    $('#aiBotDisable')?.addEventListener('click', disableAiBot);
+    $('#aiBotTest')?.addEventListener('click', testAiBot);
+    $('#aiBotList')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.ai-bot-list-item');
+      if (!btn) return;
+      const bot = aiBotState.bots.find(item => item.id === Number(btn.dataset.botId));
+      if (bot) fillAiBotForm(bot);
+    });
+    $('#aiBotChatSelect')?.addEventListener('change', renderAiChatBotSettings);
+    $('#aiBotChatBotSelect')?.addEventListener('change', renderAiChatBotSettings);
+    $('#aiBotChatSave')?.addEventListener('click', saveAiChatBotSettings);
 
     // Change password save
     $('#cpSaveBtn').addEventListener('click', async () => {

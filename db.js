@@ -1,6 +1,7 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const { initVoiceSchema } = require('./voice/schema');
+const { initAiSchema } = require('./ai/schema');
 
 const db = new Database(path.join(__dirname, 'bananza.db'));
 
@@ -15,6 +16,7 @@ db.exec(`
     display_name TEXT NOT NULL,
     is_admin INTEGER DEFAULT 0,
     is_blocked INTEGER DEFAULT 0,
+    is_ai_bot INTEGER DEFAULT 0,
     avatar_color TEXT NOT NULL,
     avatar_url TEXT DEFAULT NULL,
     ui_theme TEXT DEFAULT 'bananza',
@@ -51,6 +53,8 @@ db.exec(`
     is_deleted INTEGER DEFAULT 0,
     edited_at TEXT DEFAULT NULL,
     edited_by INTEGER DEFAULT NULL REFERENCES users(id),
+    ai_generated INTEGER DEFAULT 0,
+    ai_bot_id INTEGER DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -147,6 +151,11 @@ try {
   db.exec("ALTER TABLE users ADD COLUMN ui_theme TEXT DEFAULT 'bananza'");
 }
 try {
+  db.prepare("SELECT is_ai_bot FROM users LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE users ADD COLUMN is_ai_bot INTEGER DEFAULT 0");
+}
+try {
   db.prepare("SELECT avatar_url FROM chats LIMIT 1").get();
 } catch {
   db.exec("ALTER TABLE chats ADD COLUMN avatar_url TEXT DEFAULT NULL");
@@ -195,6 +204,16 @@ try {
 } catch {
   db.exec("ALTER TABLE messages ADD COLUMN edited_by INTEGER DEFAULT NULL REFERENCES users(id)");
 }
+try {
+  db.prepare("SELECT ai_generated FROM messages LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE messages ADD COLUMN ai_generated INTEGER DEFAULT 0");
+}
+try {
+  db.prepare("SELECT ai_bot_id FROM messages LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE messages ADD COLUMN ai_bot_id INTEGER DEFAULT NULL");
+}
 // Migration: last_read_id on chat_members
 try {
   db.prepare("SELECT last_read_id FROM chat_members LIMIT 1").get();
@@ -241,5 +260,6 @@ try {
 }
 
 initVoiceSchema(db);
+initAiSchema(db);
 
 module.exports = db;

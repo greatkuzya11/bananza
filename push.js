@@ -113,8 +113,10 @@ function createPushFeature({ app, db, auth, rateLimit }) {
   `);
   const chatStmt = db.prepare('SELECT id, name, type FROM chats WHERE id=?');
   const chatMembersExceptStmt = db.prepare(`
-    SELECT user_id FROM chat_members
-    WHERE chat_id=? AND user_id!=?
+    SELECT cm.user_id
+    FROM chat_members cm
+    JOIN users u ON u.id=cm.user_id
+    WHERE cm.chat_id=? AND cm.user_id!=? AND COALESCE(u.is_ai_bot,0)=0
   `);
   const chatNotificationStmt = db.prepare(`
     SELECT notify_enabled FROM chat_members

@@ -197,6 +197,7 @@
         <button id="settingsSoundsPanel" class="settings-item">🔊 Звуки</button>
         <button id="settingsChangePassword" class="settings-item">🔑 Change Password</button>
         <button id="settingsAdminPanel" class="settings-item hidden">🛡 Admin Panel</button>
+        <button id="settingsAiBotsPanel" class="settings-item hidden">🤖 AI-боты</button>
       </div>
     </div>
   </div>
@@ -373,6 +374,96 @@
           </div>
           <button id="settingsSoundPreviewAll" type="button" class="weather-action-btn sound-preview-all">Проверить все</button>
           <div id="settingsSoundsStatus" class="sound-settings-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI Bot Settings Modal -->
+  <div id="aiBotSettingsModal" class="modal hidden">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3>AI-боты</h3>
+        <button class="modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="aiBotSettingsBlock" class="ai-bot-settings-block">
+          <div class="ai-bot-panel">
+            <h4>Глобальные настройки</h4>
+            <div class="settings-item settings-toggle-item">
+              <span>Включить AI-ботов</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="aiBotsGlobalEnabled">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="ai-bot-grid">
+              <label>Response model<input id="aiBotsDefaultResponseModel" class="modal-input" value="gpt-4o-mini"></label>
+              <label>Summary model<input id="aiBotsDefaultSummaryModel" class="modal-input" value="gpt-4o-mini"></label>
+              <label>Embedding model<input id="aiBotsDefaultEmbeddingModel" class="modal-input" value="text-embedding-3-small"></label>
+              <label>Chunk size<input id="aiBotsChunkSize" class="modal-input" type="number" min="20" max="100" value="50"></label>
+              <label>Retrieval top-K<input id="aiBotsRetrievalTopK" class="modal-input" type="number" min="1" max="12" value="6"></label>
+            </div>
+            <label class="ai-bot-field">OpenAI API key
+              <input id="aiBotsApiKey" class="modal-input" type="password" autocomplete="off" placeholder="sk-...">
+            </label>
+            <div id="aiBotsKeyStatus" class="settings-hint"></div>
+            <div class="ai-bot-actions">
+              <button id="aiBotsSaveSettings" type="button" class="btn-primary">Сохранить настройки</button>
+              <button id="aiBotsDeleteKey" type="button" class="weather-action-btn">Удалить ключ</button>
+            </div>
+          </div>
+
+          <div class="ai-bot-panel">
+            <h4>Боты и характер</h4>
+            <div id="aiBotList" class="ai-bot-list"></div>
+            <div class="ai-bot-actions">
+              <button id="aiBotCreateNew" type="button" class="weather-action-btn">Новый бот</button>
+              <button id="aiBotSave" type="button" class="btn-primary">Сохранить бота</button>
+              <button id="aiBotDisable" type="button" class="weather-action-btn">Отключить</button>
+              <button id="aiBotTest" type="button" class="weather-action-btn">Проверить</button>
+            </div>
+            <div class="ai-bot-grid">
+              <label>Name<input id="aiBotName" class="modal-input" value="Bananza AI"></label>
+              <label>Mention<input id="aiBotMention" class="modal-input" value="bananza"></label>
+              <label>Response model<input id="aiBotResponseModel" class="modal-input"></label>
+              <label>Summary model<input id="aiBotSummaryModel" class="modal-input"></label>
+              <label>Embedding model<input id="aiBotEmbeddingModel" class="modal-input"></label>
+              <label class="ai-bot-toggle-label">Enabled
+                <label class="toggle-switch">
+                  <input type="checkbox" id="aiBotEnabled" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+            </div>
+            <label class="ai-bot-field">Style<textarea id="aiBotStyle" class="modal-input" rows="2"></textarea></label>
+            <label class="ai-bot-field">Tone<textarea id="aiBotTone" class="modal-input" rows="2"></textarea></label>
+            <label class="ai-bot-field">Behavior rules<textarea id="aiBotRules" class="modal-input" rows="4"></textarea></label>
+            <label class="ai-bot-field">Speech patterns<textarea id="aiBotSpeech" class="modal-input" rows="3"></textarea></label>
+          </div>
+
+          <div class="ai-bot-panel">
+            <h4>Боты в чатах</h4>
+            <div class="ai-bot-grid">
+              <label>Чат<select id="aiBotChatSelect" class="modal-input"></select></label>
+              <label>Бот<select id="aiBotChatBotSelect" class="modal-input"></select></label>
+              <label>Режим<select id="aiBotChatMode" class="modal-input">
+                <option value="simple">Simple context</option>
+                <option value="hybrid">Hybrid memory</option>
+              </select></label>
+              <label>Контекст<input id="aiBotChatHotLimit" class="modal-input" type="number" min="20" max="100" value="50"></label>
+              <label class="ai-bot-toggle-label">Включён в чате
+                <label class="toggle-switch">
+                  <input type="checkbox" id="aiBotChatEnabled">
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+            </div>
+            <button id="aiBotChatSave" type="button" class="btn-primary">Сохранить для чата</button>
+            <div class="settings-hint">Боты отвечают только на @mention или reply на сообщение конкретного бота.</div>
+          </div>
+
+          <div id="aiBotsStatus" class="ai-bot-status"></div>
         </div>
       </div>
     </div>

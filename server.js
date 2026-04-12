@@ -18,6 +18,7 @@ const { createWeatherFeature } = require('./weather');
 const { createForwardingFeature } = require('./forwarding');
 const { createPushFeature } = require('./push');
 const { createSoundSettingsFeature } = require('./soundSettings');
+const { createAiBotFeature } = require('./ai');
 
 // ── JWT Secret ──────────────────────────────────────────────────────────────
 const SECRET_PATH = path.join(__dirname, '.secret');
@@ -157,6 +158,8 @@ const pushFeature = createPushFeature({
   rateLimit,
 });
 
+let aiBotFeature = null;
+
 const voiceFeature = createVoiceFeature({
   app,
   db,
@@ -169,6 +172,7 @@ const voiceFeature = createVoiceFeature({
   clients,
   secret: JWT_SECRET,
   notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),
+  onMessageTextAvailable: (message) => aiBotFeature?.handleMessageCreated(message),
 });
 
 createWeatherFeature({
@@ -192,6 +196,20 @@ createForwardingFeature({
   uploadsDir: UPLOADS_DIR,
   broadcastToChatAll,
   voiceFeature,
+  hydrateMessageById: (messageId) => hydrateMessageById(messageId),
+  extractUrls,
+  fetchPreview,
+  notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),
+  onMessageCreated: (message) => aiBotFeature?.handleMessageCreated(message),
+});
+
+aiBotFeature = createAiBotFeature({
+  app,
+  db,
+  auth,
+  adminOnly,
+  secret: JWT_SECRET,
+  broadcastToChatAll,
   hydrateMessageById: (messageId) => hydrateMessageById(messageId),
   extractUrls,
   fetchPreview,
@@ -222,9 +240,13 @@ function hydrateMessageById(messageId) {
   row.previews = messagePreviewsStmt.all(row.id);
   row.reactions = messageReactionsStmt.all(row.id);
   const readInfo = db.prepare(
-    'SELECT MIN(last_read_id) as min_read FROM chat_members WHERE chat_id=? AND user_id!=?'
+    `SELECT MIN(cm.last_read_id) as min_read
+     FROM chat_members cm
+     JOIN users u ON u.id=cm.user_id
+     WHERE cm.chat_id=? AND cm.user_id!=? AND COALESCE(u.is_ai_bot,0)=0`
   ).get(row.chat_id, row.user_id);
-  row.is_read = row.id <= (readInfo ? readInfo.min_read || 0 : 0);
+  const minRead = readInfo && readInfo.min_read != null ? readInfo.min_read : row.id;
+  row.is_read = row.id <= minRead;
   return voiceFeature.attachVoiceMetadata([row])[0];
 }
 
@@ -292,7 +314,7 @@ app.get('/api/auth/me', auth, (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 app.get('/api/users', auth, (req, res) => {
-  const users = db.prepare('SELECT id,username,display_name,avatar_color,avatar_url,is_blocked FROM users WHERE id!=?').all(req.user.id);
+  const users = db.prepare('SELECT id,username,display_name,avatar_color,avatar_url,is_blocked FROM users WHERE id!=? AND COALESCE(is_ai_bot,0)=0').all(req.user.id);
   const online = [...clients.keys()];
   res.json(users.map(u => ({ ...u, online: online.includes(u.id) })));
 });
@@ -469,6 +491,9 @@ app.post('/api/chats/:chatId/members', auth, (req, res) => {
   if (chat.type === 'private') return res.status(400).json({ error: 'Cannot add to private chat' });
   if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
+  const user = db.prepare('SELECT id,is_ai_bot FROM users WHERE id=?').get(userId);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (user.is_ai_bot) return res.status(400).json({ error: 'AI bots are managed from the AI bot settings' });
   const added = db.prepare('INSERT OR IGNORE INTO chat_members(chat_id,user_id) VALUES(?,?)').run(chatId, userId);
   sendToUser(userId, {
     type: 'chat_created',
@@ -522,9 +547,12 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
 
   // Get min last_read_id of OTHER members to determine read status for own messages
   const readInfo = db.prepare(
-    'SELECT MIN(last_read_id) as min_read FROM chat_members WHERE chat_id=? AND user_id!=?'
+    `SELECT MIN(cm.last_read_id) as min_read
+     FROM chat_members cm
+     JOIN users u ON u.id=cm.user_id
+     WHERE cm.chat_id=? AND cm.user_id!=? AND COALESCE(u.is_ai_bot,0)=0`
   ).get(chatId, req.user.id);
-  const minRead = readInfo ? readInfo.min_read || 0 : 0;
+  const minRead = readInfo && readInfo.min_read != null ? readInfo.min_read : Number.MAX_SAFE_INTEGER;
 
   const result = voiceFeature.attachVoiceMetadata(
     msgs.map(m => ({ ...m, previews: prevStmt.all(m.id), reactions: reactStmt.all(m.id), is_read: m.id <= minRead }))
@@ -574,6 +602,9 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
 
   broadcastToChatAll(chatId, { type: 'message', message: hydratedMsg });
   pushFeature.notifyMessageCreated(hydratedMsg);
+  aiBotFeature.handleMessageCreated(hydratedMsg).catch((error) => {
+    console.warn('[ai-bot] message hook failed:', error.message);
+  });
 
   // Async link previews
   if (cleanText) {
@@ -633,6 +664,9 @@ app.patch('/api/messages/:id', auth, msgLimiter, (req, res) => {
 
   const updated = hydrateMessageById(mid);
   broadcastToChatAll(m.chat_id, { type: 'message_updated', message: updated });
+  aiBotFeature.handleMessageUpdated(updated).catch((error) => {
+    console.warn('[ai-bot] update hook failed:', error.message);
+  });
 
   if (!m.voice_message_id && cleanText) {
     const urls = extractUrls(cleanText);
@@ -792,6 +826,11 @@ app.delete('/api/chats/:chatId/members/:userId', auth, (req, res) => {
     return res.status(403).json({ error: 'Only creator or admin can remove members' });
 
   db.prepare('DELETE FROM chat_members WHERE chat_id=? AND user_id=?').run(chatId, userId);
+  db.prepare(`
+    UPDATE ai_chat_bots
+    SET enabled=0, updated_at=datetime('now')
+    WHERE chat_id=? AND bot_id IN (SELECT id FROM ai_bots WHERE user_id=?)
+  `).run(chatId, userId);
   sendToUser(userId, { type: 'chat_removed', chatId });
   res.json({ ok: true });
 });
@@ -985,6 +1024,7 @@ app.delete('/api/messages/:id', auth, (req, res) => {
   voiceFeature.deleteVoiceMetadata(mid);
   db.prepare('DELETE FROM link_previews WHERE message_id=?').run(mid);
   broadcastToChatAll(m.chat_id, { type: 'message_deleted', messageId: mid, chatId: m.chat_id });
+  aiBotFeature.handleMessageDeleted(mid);
   res.json({ ok: true });
 });
 

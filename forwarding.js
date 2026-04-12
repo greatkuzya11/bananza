@@ -14,6 +14,7 @@ function createForwardingFeature({
   extractUrls,
   fetchPreview,
   notifyMessageCreated,
+  onMessageCreated,
 }) {
   const sourceMessageStmt = db.prepare(`
     SELECT
@@ -256,6 +257,11 @@ function createForwardingFeature({
 
     broadcastToChatAll(targetChatId, { type: 'message', message });
     if (typeof notifyMessageCreated === 'function') notifyMessageCreated(message);
+    if (typeof onMessageCreated === 'function') {
+      Promise.resolve(onMessageCreated(message)).catch((error) => {
+        console.warn('[forwarding] message hook failed:', error.message);
+      });
+    }
 
     if (shouldAutoTranscribe && typeof voiceFeature.scheduleTranscription === 'function') {
       voiceFeature.scheduleTranscription({
