@@ -78,6 +78,13 @@
     chats: [],
     chatSettings: [],
   };
+  let aiModelCatalog = {
+    source: 'fallback',
+    response: ['gpt-4o-mini'],
+    summary: ['gpt-4o-mini'],
+    embedding: ['text-embedding-3-small'],
+    error: '',
+  };
   let selectedAiBotId = null;
   let forwardMessageState = null;
   let forwardMessageBusy = false;
@@ -975,6 +982,72 @@
     el.classList.toggle('is-success', type === 'success');
   }
 
+  function setAiModelStatus(message, type = '') {
+    const el = $('#aiBotsModelStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function uniqueAiModelValues(values = []) {
+    const seen = new Set();
+    const result = [];
+    values.forEach((value) => {
+      const text = String(value || '').trim();
+      if (!text) return;
+      const key = text.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      result.push(text);
+    });
+    return result;
+  }
+
+  function setAiModelSelectOptions(id, values, currentValue) {
+    const select = document.getElementById(id);
+    if (!select) return;
+    const current = String(currentValue || '').trim();
+    const options = uniqueAiModelValues([current, ...values]);
+    select.innerHTML = options.map(value => `<option value="${esc(value)}">${esc(value)}</option>`).join('');
+    if (current) select.value = current;
+  }
+
+  function renderAiModelOptions(bot = currentAiBot()) {
+    const settings = aiBotState.settings || {};
+    const responseModels = aiModelCatalog.response || [];
+    const summaryModels = aiModelCatalog.summary || responseModels;
+    const embeddingModels = aiModelCatalog.embedding || ['text-embedding-3-small'];
+    setAiModelSelectOptions('aiBotsDefaultResponseModel', responseModels, settings.default_response_model || 'gpt-4o-mini');
+    setAiModelSelectOptions('aiBotsDefaultSummaryModel', summaryModels, settings.default_summary_model || 'gpt-4o-mini');
+    setAiModelSelectOptions('aiBotsDefaultEmbeddingModel', embeddingModels, settings.default_embedding_model || 'text-embedding-3-small');
+    setAiModelSelectOptions('aiBotResponseModel', responseModels, bot?.response_model || settings.default_response_model || 'gpt-4o-mini');
+    setAiModelSelectOptions('aiBotSummaryModel', summaryModels, bot?.summary_model || settings.default_summary_model || 'gpt-4o-mini');
+    const botEmbedding = $('#aiBotEmbeddingModel');
+    if (botEmbedding) botEmbedding.value = settings.default_embedding_model || 'text-embedding-3-small';
+  }
+
+  async function loadAiModelOptions(refresh = false) {
+    const data = await api(`/api/admin/ai-bots/models${refresh ? '?refresh=1' : ''}`);
+    aiModelCatalog = {
+      source: data.source || 'fallback',
+      response: data.response || aiModelCatalog.response,
+      summary: data.summary || data.response || aiModelCatalog.summary,
+      embedding: data.embedding || aiModelCatalog.embedding,
+      error: data.error || '',
+      fetched_at: data.fetched_at || '',
+    };
+    renderAiModelOptions(currentAiBot());
+    if (aiModelCatalog.source === 'openai') {
+      setAiModelStatus(aiModelCatalog.fetched_at ? `Модели загружены: ${aiModelCatalog.fetched_at}` : 'Модели загружены', 'success');
+    } else if (aiModelCatalog.error) {
+      setAiModelStatus(`Fallback models: ${aiModelCatalog.error}`, 'error');
+    } else {
+      setAiModelStatus('Fallback models');
+    }
+    return aiModelCatalog;
+  }
+
   function mergeAiBotState(data = {}) {
     if (data.state) {
       aiBotState = {
@@ -1008,11 +1081,12 @@
     $('#aiBotEnabled').checked = bot ? !!bot.enabled : true;
     $('#aiBotResponseModel').value = bot?.response_model || settings.default_response_model || 'gpt-4o-mini';
     $('#aiBotSummaryModel').value = bot?.summary_model || settings.default_summary_model || 'gpt-4o-mini';
-    $('#aiBotEmbeddingModel').value = bot?.embedding_model || settings.default_embedding_model || 'text-embedding-3-small';
+    $('#aiBotEmbeddingModel').value = settings.default_embedding_model || 'text-embedding-3-small';
     $('#aiBotStyle').value = bot?.style || 'Полезный AI-помощник для чата';
     $('#aiBotTone').value = bot?.tone || 'тёплый, внимательный, краткий';
     $('#aiBotRules').value = bot?.behavior_rules || '';
     $('#aiBotSpeech').value = bot?.speech_patterns || '';
+    renderAiModelOptions(bot);
     renderAiBotList();
     renderAiChatBotSettings();
   }
@@ -1024,7 +1098,6 @@
       enabled: $('#aiBotEnabled')?.checked,
       response_model: $('#aiBotResponseModel')?.value.trim(),
       summary_model: $('#aiBotSummaryModel')?.value.trim(),
-      embedding_model: $('#aiBotEmbeddingModel')?.value.trim(),
       style: $('#aiBotStyle')?.value.trim(),
       tone: $('#aiBotTone')?.value.trim(),
       behavior_rules: $('#aiBotRules')?.value.trim(),
@@ -1080,6 +1153,7 @@
       : 'Ключ не сохранён';
 
     const selected = currentAiBot() || aiBotState.bots[0] || null;
+    renderAiModelOptions(selected);
     fillAiBotForm(selected);
     renderAiChatBotSettings();
   }
@@ -1111,12 +1185,16 @@
     const data = await api('/api/admin/ai-bots');
     mergeAiBotState({ state: data });
     renderAiBotSettings();
+    loadAiModelOptions(false).catch((e) => {
+      setAiModelStatus(e.message || 'Не удалось загрузить список моделей', 'error');
+    });
   }
 
   async function saveAiBotSettings() {
     setAiBotStatus('Сохраняю...');
     try {
       await persistAiBotSettings();
+      await loadAiModelOptions(true).catch(() => {});
       renderAiBotSettings();
       setAiBotStatus('Настройки сохранены', 'success');
     } catch (e) {
@@ -1129,6 +1207,7 @@
     try {
       const data = await api('/api/admin/ai-bots/openai-key', { method: 'DELETE' });
       mergeAiBotState(data);
+      await loadAiModelOptions(true).catch(() => {});
       renderAiBotSettings();
       setAiBotStatus('Ключ удалён', 'success');
     } catch (e) {
@@ -1177,6 +1256,61 @@
       setAiBotStatus(`Успешно (${data.result?.latencyMs || 0} ms): ${text}`, 'success');
     } catch (e) {
       setAiBotStatus(e.message || 'Проверка не удалась', 'error');
+    }
+  }
+
+  function filenameFromContentDisposition(header, fallback) {
+    const match = String(header || '').match(/filename="?([^";]+)"?/i);
+    return match ? match[1] : fallback;
+  }
+
+  async function exportAiBotJson() {
+    if (!selectedAiBotId) { setAiBotStatus('Сначала выберите сохранённого бота', 'error'); return; }
+    setAiBotStatus('Готовлю JSON...');
+    try {
+      const headers = {};
+      if (token) headers.Authorization = 'Bearer ' + token;
+      const res = await fetch(`/api/admin/ai-bots/${selectedAiBotId}/export`, { headers });
+      if (!res.ok) {
+        let data = {};
+        try { data = await res.json(); } catch {}
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const bot = currentAiBot();
+      const fallbackName = `bananza-bot-${bot?.mention || selectedAiBotId}.json`;
+      const filename = filenameFromContentDisposition(res.headers.get('content-disposition'), fallbackName);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setAiBotStatus('JSON выгружен', 'success');
+    } catch (e) {
+      setAiBotStatus(e.message || 'Не удалось выгрузить JSON', 'error');
+    }
+  }
+
+  async function importAiBotJsonFile(file) {
+    if (!file) return;
+    setAiBotStatus('Загружаю JSON...');
+    try {
+      const raw = await file.text();
+      const payload = JSON.parse(raw);
+      const data = await api('/api/admin/ai-bots/import', { method: 'POST', body: payload });
+      mergeAiBotState(data);
+      selectedAiBotId = data.bot?.id || selectedAiBotId;
+      renderAiBotSettings();
+      const warnings = Array.isArray(data.warnings) && data.warnings.length ? ` ${data.warnings.join(' ')}` : '';
+      setAiBotStatus(`Бот импортирован.${warnings}`, warnings ? 'error' : 'success');
+    } catch (e) {
+      setAiBotStatus(e.message || 'Не удалось импортировать JSON', 'error');
+    } finally {
+      const input = $('#aiBotImportFile');
+      if (input) input.value = '';
     }
   }
 
@@ -4643,6 +4777,10 @@
 
     // AI bot admin settings
     $('#aiBotsSaveSettings')?.addEventListener('click', saveAiBotSettings);
+    $('#aiBotsRefreshModels')?.addEventListener('click', () => {
+      setAiModelStatus('Загружаю модели...');
+      loadAiModelOptions(true).catch((e) => setAiModelStatus(e.message || 'Не удалось загрузить модели', 'error'));
+    });
     $('#aiBotsDeleteKey')?.addEventListener('click', deleteAiBotKey);
     $('#aiBotCreateNew')?.addEventListener('click', () => {
       fillAiBotForm(null);
@@ -4651,6 +4789,9 @@
     $('#aiBotSave')?.addEventListener('click', saveAiBot);
     $('#aiBotDisable')?.addEventListener('click', disableAiBot);
     $('#aiBotTest')?.addEventListener('click', testAiBot);
+    $('#aiBotExportJson')?.addEventListener('click', exportAiBotJson);
+    $('#aiBotImportJson')?.addEventListener('click', () => $('#aiBotImportFile')?.click());
+    $('#aiBotImportFile')?.addEventListener('change', (event) => importAiBotJsonFile(event.target.files?.[0]));
     $('#aiBotList')?.addEventListener('click', (e) => {
       const btn = e.target.closest('.ai-bot-list-item');
       if (!btn) return;

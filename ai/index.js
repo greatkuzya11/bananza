@@ -3,9 +3,14 @@ const crypto = require('crypto');
 
 const { AsyncJobQueue } = require('../voice/queue');
 const { getAiSettings, getOpenAIKey, saveAiSettings, deleteOpenAIKey, sanitizeSettings } = require('./settings');
-const { createEmbedding, generateText, generateJson } = require('./openai');
+const { createEmbedding, listModelIds, generateText, generateJson } = require('./openai');
 
 const BOT_COLORS = ['#65aadd', '#7bc862', '#a695e7', '#ee7aae', '#6ec9cb', '#faa774'];
+const AI_BOT_EXPORT_VERSION = 1;
+const MODEL_CACHE_MS = 10 * 60 * 1000;
+const FALLBACK_RESPONSE_MODELS = ['gpt-4o-mini'];
+const FALLBACK_SUMMARY_MODELS = ['gpt-4o-mini'];
+const FALLBACK_EMBEDDING_MODELS = ['text-embedding-3-small'];
 const FACT_TYPES = new Set([
   'user_profile',
   'preference',
@@ -55,6 +60,41 @@ function truncate(value, limit = 500) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   if (text.length <= limit) return text;
   return text.slice(0, Math.max(0, limit - 1)).trimEnd() + '...';
+}
+
+function uniqueList(values = []) {
+  const seen = new Set();
+  const result = [];
+  for (const value of values) {
+    const text = String(value || '').trim();
+    if (!text) continue;
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(text);
+  }
+  return result;
+}
+
+function safeFilenamePart(value, fallback = 'bot') {
+  const text = String(value || '')
+    .trim()
+    .replace(/^@+/, '')
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  return text || fallback;
+}
+
+function isEmbeddingModel(id) {
+  return /embedding/i.test(String(id || ''));
+}
+
+function isLikelyResponseModel(id) {
+  const value = String(id || '').toLowerCase();
+  if (!value || isEmbeddingModel(value)) return false;
+  if (/whisper|tts|audio|transcrib|speech|image|vision|dall|moderation|realtime|search|rerank/.test(value)) return false;
+  return /^(gpt|o\d|chatgpt)/.test(value);
 }
 
 function escapeRegExp(value) {
@@ -168,6 +208,20 @@ function createAiBotFeature({
     WHERE cb.chat_id=? AND cb.enabled=1 AND cb.mode='hybrid' AND b.enabled=1
     LIMIT 1
   `);
+  const hybridChatIdsStmt = db.prepare(`
+    SELECT DISTINCT cb.chat_id
+    FROM ai_chat_bots cb
+    JOIN ai_bots b ON b.id=cb.bot_id
+    WHERE cb.enabled=1 AND cb.mode='hybrid' AND b.enabled=1
+  `);
+  const hybridSummaryModelStmt = db.prepare(`
+    SELECT b.summary_model
+    FROM ai_chat_bots cb
+    JOIN ai_bots b ON b.id=cb.bot_id
+    WHERE cb.chat_id=? AND cb.enabled=1 AND cb.mode='hybrid' AND b.enabled=1
+    ORDER BY b.id ASC
+    LIMIT 1
+  `);
   const replyBotStmt = db.prepare('SELECT ai_bot_id FROM messages WHERE id=? AND ai_generated=1 AND ai_bot_id IS NOT NULL');
   const recentMessagesStmt = db.prepare(`
     SELECT m.*, u.username, u.display_name, f.original_name as file_name, f.type as file_type,
@@ -211,6 +265,8 @@ function createAiBotFeature({
   const removeBotMemberStmt = db.prepare('DELETE FROM chat_members WHERE chat_id=? AND user_id=?');
   const removeBotFromAllChatsStmt = db.prepare('DELETE FROM chat_members WHERE user_id=?');
   const enabledBotChatsStmt = db.prepare('SELECT chat_id FROM ai_chat_bots WHERE bot_id=? AND enabled=1');
+  let modelCatalogCache = null;
+  let modelCatalogFetchedAt = 0;
 
   const memoryQueue = new AsyncJobQueue({
     getConcurrency: () => 1,
@@ -218,6 +274,7 @@ function createAiBotFeature({
       if (job.type === 'embed-message') await embedMessage(job.messageId);
       else if (job.type === 'process-chunks') await processPendingChunks(job.chatId);
       else if (job.type === 'backfill-chat') await backfillChatMemory(job.chatId);
+      else if (job.type === 'refresh-chunks') await refreshChunkEmbeddings(job.chatId);
     },
   });
   const responseLocks = new Set();
@@ -228,6 +285,100 @@ function createAiBotFeature({
 
   function getApiKey() {
     return getOpenAIKey(db, secret);
+  }
+
+  function savedModelHints() {
+    const settings = getGlobalSettings();
+    const bots = allBotsStmt.all();
+    return {
+      response: uniqueList([
+        settings.default_response_model,
+        ...bots.map(bot => bot.response_model),
+      ]),
+      summary: uniqueList([
+        settings.default_summary_model,
+        ...bots.map(bot => bot.summary_model),
+      ]),
+      embedding: uniqueList([
+        settings.default_embedding_model,
+        ...bots.map(bot => bot.embedding_model),
+      ]),
+    };
+  }
+
+  function fallbackModelCatalog(error = '') {
+    const hints = savedModelHints();
+    return {
+      source: 'fallback',
+      fetched_at: modelCatalogFetchedAt ? new Date(modelCatalogFetchedAt).toISOString() : null,
+      response: uniqueList([...hints.response, ...FALLBACK_RESPONSE_MODELS]),
+      summary: uniqueList([...hints.summary, ...FALLBACK_SUMMARY_MODELS, ...FALLBACK_RESPONSE_MODELS]),
+      embedding: uniqueList([...hints.embedding, ...FALLBACK_EMBEDDING_MODELS]),
+      error,
+    };
+  }
+
+  function categorizeModelIds(ids = []) {
+    const hints = savedModelHints();
+    const embeddings = ids.filter(isEmbeddingModel);
+    const response = ids.filter(isLikelyResponseModel);
+    return {
+      source: 'openai',
+      fetched_at: new Date().toISOString(),
+      response: uniqueList([...hints.response, ...response, ...FALLBACK_RESPONSE_MODELS]),
+      summary: uniqueList([...hints.summary, ...response, ...FALLBACK_SUMMARY_MODELS]),
+      embedding: uniqueList([...hints.embedding, ...embeddings, ...FALLBACK_EMBEDDING_MODELS]),
+      error: '',
+    };
+  }
+
+  async function getModelCatalog({ refresh = false } = {}) {
+    const now = Date.now();
+    if (!refresh && modelCatalogCache && now - modelCatalogFetchedAt < MODEL_CACHE_MS) {
+      return modelCatalogCache;
+    }
+
+    const apiKey = getApiKey();
+    if (!apiKey) {
+      modelCatalogCache = fallbackModelCatalog('OpenAI API key is not configured');
+      modelCatalogFetchedAt = now;
+      return modelCatalogCache;
+    }
+
+    try {
+      const ids = await listModelIds({ apiKey });
+      modelCatalogCache = categorizeModelIds(ids);
+      modelCatalogFetchedAt = now;
+      return modelCatalogCache;
+    } catch (error) {
+      modelCatalogCache = fallbackModelCatalog(error.message || 'Could not load OpenAI models');
+      modelCatalogFetchedAt = now;
+      return modelCatalogCache;
+    }
+  }
+
+  function enqueueHybridBackfill(reason = 'settings') {
+    for (const row of hybridChatIdsStmt.all()) {
+      memoryQueue.enqueue(`ai:backfill:${row.chat_id}:${reason}:${Date.now()}`, { type: 'backfill-chat', chatId: row.chat_id });
+    }
+  }
+
+  function markEmbeddingModelChanged(nextModel) {
+    const model = String(nextModel || '').trim();
+    if (!model) return;
+    db.prepare('UPDATE message_embeddings SET is_stale=1, updated_at=datetime(\'now\') WHERE model!=?').run(model);
+    db.prepare(`
+      UPDATE memory_chunks
+      SET embedding_model=NULL, embedding_json=NULL, updated_at=datetime('now')
+      WHERE embedding_model IS NULL OR embedding_model!=?
+    `).run(model);
+    enqueueHybridBackfill('embedding');
+  }
+
+  function getSummaryModelForChat(chatId) {
+    const settings = getGlobalSettings();
+    const row = hybridSummaryModelStmt.get(chatId);
+    return cleanText(row?.summary_model || settings.default_summary_model, 120) || settings.default_summary_model;
   }
 
   function sanitizeBot(row) {
@@ -245,7 +396,7 @@ function createAiBotFeature({
       enabled: row.enabled !== 0,
       response_model: row.response_model || settings.default_response_model,
       summary_model: row.summary_model || settings.default_summary_model,
-      embedding_model: row.embedding_model || settings.default_embedding_model,
+      embedding_model: settings.default_embedding_model,
       created_at: row.created_at,
       updated_at: row.updated_at,
     };
@@ -345,9 +496,30 @@ function createAiBotFeature({
       enabled: boolValue(input.enabled, current.enabled == null ? true : current.enabled !== 0),
       response_model: cleanText(input.response_model ?? current.response_model ?? settings.default_response_model, 120),
       summary_model: cleanText(input.summary_model ?? current.summary_model ?? settings.default_summary_model, 120),
-      embedding_model: cleanText(input.embedding_model ?? current.embedding_model ?? settings.default_embedding_model, 120),
+      embedding_model: settings.default_embedding_model,
     };
   }
+
+  const createBotTx = db.transaction((input) => {
+    const userId = createBackingUser(input);
+    const result = db.prepare(`
+      INSERT INTO ai_bots(user_id, name, mention, style, tone, behavior_rules, speech_patterns, enabled, response_model, summary_model, embedding_model)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      userId,
+      input.name,
+      input.mention,
+      input.style,
+      input.tone,
+      input.behavior_rules,
+      input.speech_patterns,
+      input.enabled ? 1 : 0,
+      input.response_model,
+      input.summary_model,
+      input.embedding_model
+    );
+    return botByIdStmt.get(result.lastInsertRowid);
+  });
 
   function isHybridEnabled(chatId) {
     const settings = getGlobalSettings();
@@ -407,7 +579,45 @@ function createAiBotFeature({
         memoryQueue.enqueue(`ai:embed:${row.id}`, { type: 'embed-message', messageId: row.id });
       }
     }
+    if (rows.length >= 300) {
+      const cursor = rows[rows.length - 1]?.id || Date.now();
+      memoryQueue.enqueue(`ai:backfill:${chatId}:${cursor}`, { type: 'backfill-chat', chatId });
+    }
     memoryQueue.enqueue(`ai:chunks:${chatId}`, { type: 'process-chunks', chatId });
+    memoryQueue.enqueue(`ai:refresh-chunks:${chatId}`, { type: 'refresh-chunks', chatId });
+  }
+
+  async function refreshChunkEmbeddings(chatId) {
+    if (!isHybridEnabled(chatId)) return;
+    const settings = getGlobalSettings();
+    const apiKey = getApiKey();
+    if (!apiKey) return;
+    const model = settings.default_embedding_model;
+    const rows = db.prepare(`
+      SELECT id, summary_short, summary_long
+      FROM memory_chunks
+      WHERE chat_id=? AND status='completed'
+        AND (embedding_json IS NULL OR embedding_model IS NULL OR embedding_model!=?)
+      ORDER BY id ASC
+      LIMIT 50
+    `).all(chatId, model);
+
+    for (const row of rows) {
+      const input = `${row.summary_short || ''}\n${row.summary_long || ''}`.trim();
+      if (!input) continue;
+      const embedding = await createEmbedding({ apiKey, model, input });
+      if (!embedding.length) continue;
+      db.prepare(`
+        UPDATE memory_chunks
+        SET embedding_model=?, embedding_json=?, updated_at=datetime('now')
+        WHERE id=?
+      `).run(model, JSON.stringify(embedding), row.id);
+    }
+
+    if (rows.length >= 50) {
+      const cursor = rows[rows.length - 1]?.id || Date.now();
+      memoryQueue.enqueue(`ai:refresh-chunks:${chatId}:${cursor}`, { type: 'refresh-chunks', chatId });
+    }
   }
 
   async function processPendingChunks(chatId) {
@@ -432,7 +642,7 @@ function createAiBotFeature({
     const usable = rows.filter(row => messageMemoryText(row));
     if (usable.length < chunkSize) return;
 
-    const model = settings.default_summary_model;
+    const model = getSummaryModelForChat(chatId);
     const fromId = usable[0].id;
     const toId = usable[usable.length - 1].id;
     const transcript = usable.map(formatChatLine).filter(Boolean).join('\n');
@@ -604,7 +814,7 @@ function createAiBotFeature({
     const retrieved = await retrieveMemory({
       chatId: message.chat_id,
       queryText: currentText,
-      model: bot.embedding_model || settings.default_embedding_model,
+      model: settings.default_embedding_model,
       excludeMessageId: message.id,
       topK: settings.retrieval_top_k,
     });
@@ -750,37 +960,81 @@ function createAiBotFeature({
     res.json(serializeAdminState());
   });
 
+  app.get('/api/admin/ai-bots/models', auth, adminOnly, async (req, res) => {
+    const catalog = await getModelCatalog({ refresh: req.query?.refresh === '1' });
+    res.json(catalog);
+  });
+
   app.put('/api/admin/ai-bots/settings', auth, adminOnly, (req, res) => {
+    const before = getGlobalSettings();
     const settings = saveAiSettings(db, req.body || {}, secret);
+    const after = getGlobalSettings();
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'openai_api_key')) {
+      modelCatalogCache = null;
+      modelCatalogFetchedAt = 0;
+    }
+    if (before.default_embedding_model !== after.default_embedding_model) {
+      markEmbeddingModelChanged(after.default_embedding_model);
+    }
+    if (!before.enabled && after.enabled) {
+      enqueueHybridBackfill('enabled');
+    }
     res.json({ settings, state: serializeAdminState() });
   });
 
   app.delete('/api/admin/ai-bots/openai-key', auth, adminOnly, (_req, res) => {
     const settings = deleteOpenAIKey(db);
+    modelCatalogCache = null;
+    modelCatalogFetchedAt = 0;
     res.json({ settings, state: serializeAdminState() });
   });
 
   app.post('/api/admin/ai-bots', auth, adminOnly, (req, res) => {
     const input = normalizeBotInput(req.body || {});
-    const userId = createBackingUser(input);
-    const result = db.prepare(`
-      INSERT INTO ai_bots(user_id, name, mention, style, tone, behavior_rules, speech_patterns, enabled, response_model, summary_model, embedding_model)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?)
-    `).run(
-      userId,
-      input.name,
-      input.mention,
-      input.style,
-      input.tone,
-      input.behavior_rules,
-      input.speech_patterns,
-      input.enabled ? 1 : 0,
-      input.response_model,
-      input.summary_model,
-      input.embedding_model
-    );
-    const bot = sanitizeBot(botByIdStmt.get(result.lastInsertRowid));
+    const bot = sanitizeBot(createBotTx(input));
     res.json({ bot, state: serializeAdminState() });
+  });
+
+  app.post('/api/admin/ai-bots/import', auth, adminOnly, async (req, res) => {
+    const source = req.body?.bot && typeof req.body.bot === 'object' ? req.body.bot : (req.body || {});
+    const warnings = [];
+    const settings = getGlobalSettings();
+    const catalog = await getModelCatalog();
+
+    const requestedMention = normalizeMention(source.mention || source.name || 'bot');
+    let responseModel = cleanText(source.response_model || settings.default_response_model, 120);
+    let summaryModel = cleanText(source.summary_model || settings.default_summary_model, 120);
+
+    if (catalog.source === 'openai') {
+      if (responseModel && !catalog.response.includes(responseModel)) {
+        warnings.push(`Response model "${responseModel}" is not available; default model was used.`);
+        responseModel = settings.default_response_model;
+      }
+      if (summaryModel && !catalog.summary.includes(summaryModel)) {
+        warnings.push(`Summary model "${summaryModel}" is not available; default model was used.`);
+        summaryModel = settings.default_summary_model;
+      }
+    } else if (catalog.error) {
+      warnings.push(`Model availability was not verified: ${catalog.error}`);
+    }
+
+    const input = normalizeBotInput({
+      name: source.name,
+      mention: requestedMention,
+      enabled: Object.prototype.hasOwnProperty.call(source, 'enabled') ? source.enabled : true,
+      response_model: responseModel,
+      summary_model: summaryModel,
+      style: source.style,
+      tone: source.tone,
+      behavior_rules: source.behavior_rules,
+      speech_patterns: source.speech_patterns,
+    });
+    if (input.mention !== requestedMention) {
+      warnings.push(`Mention "@${requestedMention}" is already taken; imported as "@${input.mention}".`);
+    }
+
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, warnings, state: serializeAdminState() });
   });
 
   app.put('/api/admin/ai-bots/chat-settings', auth, adminOnly, (req, res) => {
@@ -798,6 +1052,31 @@ function createAiBotFeature({
       memoryQueue.enqueue(`ai:backfill:${chatId}`, { type: 'backfill-chat', chatId });
     }
     res.json({ ok: true, state: serializeAdminState() });
+  });
+
+  app.get('/api/admin/ai-bots/:id(\\d+)/export', auth, adminOnly, (req, res) => {
+    const bot = sanitizeBot(botByIdStmt.get(Number(req.params.id)));
+    if (!bot) return res.status(404).json({ error: 'Bot not found' });
+    const payload = {
+      schema_version: AI_BOT_EXPORT_VERSION,
+      exported_at: new Date().toISOString(),
+      bot: {
+        name: bot.name,
+        mention: bot.mention,
+        enabled: bot.enabled,
+        response_model: bot.response_model,
+        summary_model: bot.summary_model,
+        style: bot.style,
+        tone: bot.tone,
+        behavior_rules: bot.behavior_rules,
+        speech_patterns: bot.speech_patterns,
+      },
+    };
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = `bananza-bot-${safeFilenamePart(bot.mention || bot.name)}-${date}.json`;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(JSON.stringify(payload, null, 2));
   });
 
   app.put('/api/admin/ai-bots/:id(\\d+)', auth, adminOnly, (req, res) => {

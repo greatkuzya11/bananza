@@ -44,6 +44,15 @@ async function createEmbedding({ apiKey, model, input }) {
   return response.data?.[0]?.embedding || [];
 }
 
+async function listModelIds({ apiKey }) {
+  const client = createClient(apiKey);
+  const ids = [];
+  for await (const model of client.models.list()) {
+    if (model?.id) ids.push(String(model.id));
+  }
+  return [...new Set(ids)].sort((a, b) => a.localeCompare(b));
+}
+
 async function generateText({ apiKey, model, system, user, maxOutputTokens = 900, temperature = 0.45 }) {
   const client = createClient(apiKey);
   const response = await client.responses.create({
@@ -72,6 +81,7 @@ async function generateJson({ apiKey, model, system, user, fallback = {}, maxOut
 
 module.exports = {
   createEmbedding,
+  listModelIds,
   generateText,
   generateJson,
 };

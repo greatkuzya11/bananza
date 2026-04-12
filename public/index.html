@@ -412,18 +412,20 @@
               </label>
             </div>
             <div class="ai-bot-grid">
-              <label>Response model<input id="aiBotsDefaultResponseModel" class="modal-input" value="gpt-4o-mini"></label>
-              <label>Summary model<input id="aiBotsDefaultSummaryModel" class="modal-input" value="gpt-4o-mini"></label>
-              <label>Embedding model<input id="aiBotsDefaultEmbeddingModel" class="modal-input" value="text-embedding-3-small"></label>
+              <label>Response model<select id="aiBotsDefaultResponseModel" class="modal-input"></select></label>
+              <label>Summary model<select id="aiBotsDefaultSummaryModel" class="modal-input"></select></label>
+              <label>Embedding model<select id="aiBotsDefaultEmbeddingModel" class="modal-input"></select></label>
               <label>Chunk size<input id="aiBotsChunkSize" class="modal-input" type="number" min="20" max="100" value="50"></label>
               <label>Retrieval top-K<input id="aiBotsRetrievalTopK" class="modal-input" type="number" min="1" max="12" value="6"></label>
             </div>
+            <div id="aiBotsModelStatus" class="settings-hint"></div>
             <label class="ai-bot-field">OpenAI API key
               <input id="aiBotsApiKey" class="modal-input" type="password" autocomplete="off" placeholder="sk-...">
             </label>
             <div id="aiBotsKeyStatus" class="settings-hint"></div>
             <div class="ai-bot-actions">
               <button id="aiBotsSaveSettings" type="button" class="btn-primary">Сохранить настройки</button>
+              <button id="aiBotsRefreshModels" type="button" class="weather-action-btn">Обновить модели</button>
               <button id="aiBotsDeleteKey" type="button" class="weather-action-btn">Удалить ключ</button>
             </div>
           </div>
@@ -436,13 +438,16 @@
               <button id="aiBotSave" type="button" class="btn-primary">Сохранить бота</button>
               <button id="aiBotDisable" type="button" class="weather-action-btn">Отключить</button>
               <button id="aiBotTest" type="button" class="weather-action-btn">Проверить</button>
+              <button id="aiBotExportJson" type="button" class="weather-action-btn">Выгрузить JSON</button>
+              <button id="aiBotImportJson" type="button" class="weather-action-btn">Загрузить JSON</button>
+              <input id="aiBotImportFile" class="hidden" type="file" accept="application/json,.json">
             </div>
             <div class="ai-bot-grid">
               <label>Name<input id="aiBotName" class="modal-input" value="Bananza AI"></label>
               <label>Mention<input id="aiBotMention" class="modal-input" value="bananza"></label>
-              <label>Response model<input id="aiBotResponseModel" class="modal-input"></label>
-              <label>Summary model<input id="aiBotSummaryModel" class="modal-input"></label>
-              <label>Embedding model<input id="aiBotEmbeddingModel" class="modal-input"></label>
+              <label>Response model<select id="aiBotResponseModel" class="modal-input"></select></label>
+              <label>Summary model<select id="aiBotSummaryModel" class="modal-input"></select></label>
+              <label>Embedding model<input id="aiBotEmbeddingModel" class="modal-input" readonly></label>
               <label class="ai-bot-toggle-label">Enabled
                 <label class="toggle-switch">
                   <input type="checkbox" id="aiBotEnabled" checked>
@@ -450,6 +455,7 @@
                 </label>
               </label>
             </div>
+            <div class="settings-hint">Embedding model глобальная для долговременной памяти: все боты используют один vector index.</div>
             <label class="ai-bot-field">Style<textarea id="aiBotStyle" class="modal-input" rows="2"></textarea></label>
             <label class="ai-bot-field">Tone<textarea id="aiBotTone" class="modal-input" rows="2"></textarea></label>
             <label class="ai-bot-field">Behavior rules<textarea id="aiBotRules" class="modal-input" rows="4"></textarea></label>
@@ -475,6 +481,7 @@
             </div>
             <button id="aiBotChatSave" type="button" class="btn-primary">Сохранить для чата</button>
             <div class="settings-hint">Боты отвечают только на @mention или reply на сообщение конкретного бота.</div>
+            <div class="settings-hint">Hybrid memory достраивает долговременную память в фоне. Simple context не удаляет уже созданную память.</div>
           </div>
 
           <div id="aiBotsStatus" class="ai-bot-status"></div>
