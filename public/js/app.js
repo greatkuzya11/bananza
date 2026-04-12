@@ -1867,11 +1867,11 @@
   }
 
   function logout() {
+    try { if (window.clearAssetCache) window.clearAssetCache().catch(()=>{}); } catch (e) {}
+    try { if (window.messageCache && window.messageCache.clearUserCache) window.messageCache.clearUserCache().catch(()=>{}); } catch (e) {}
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     if (ws) ws.close();
-    try { if (window.clearAssetCache) window.clearAssetCache().catch(()=>{}); } catch (e) {}
-    try { if (window.messageCache && window.messageCache.clearUserCache) window.messageCache.clearUserCache().catch(()=>{}); } catch (e) {}
     location.href = '/login.html';
   }
 
@@ -1911,6 +1911,12 @@
         }
         // Update chat list regardless
         updateChatListLastMessage(msg.message);
+        try { if (window.messageCache) window.messageCache.upsertMessage(msg.message).catch(()=>{}); } catch (e) {}
+        try {
+          if (msg.message.file_type === 'image' && msg.message.file_stored && window.cacheAssets) {
+            window.cacheAssets([`/uploads/${msg.message.file_stored}`]).catch(()=>{});
+          }
+        } catch (e) {}
         // Track unread for non-current chats
         if (msg.message.chat_id !== currentChatId && msg.message.user_id !== currentUser.id) {
           const chat = chats.find(c => c.id === msg.message.chat_id);
@@ -1986,7 +1992,7 @@
         break;
       }
       case 'message_deleted': {
-        markMessageDeleted(msg.messageId);
+        markMessageDeleted(msg.messageId, msg.chatId);
         loadChats();
         break;
       }
@@ -2443,15 +2449,25 @@
     applyChatBackground(chat);
 
     // Clear and load messages (show cached messages first if available)
-    let showedCached = false;
+    compactView = !!compactViewMap[chatId];
+    messagesEl.classList.toggle('compact-view', compactView);
+    loadMoreWrap.classList.add('hidden');
+    messagesEl.querySelectorAll('.msg-row, .msg-group, .date-separator').forEach(el => el.remove());
     try {
       if (window.messageCache) {
-        const cachedMsgs = await window.messageCache.readMessages(chatId, { limit: PAGE_SIZE });
+        const cachedMsgs = restoreAnchor?.messageId
+          ? await window.messageCache.readAround(chatId, restoreAnchor.messageId, { limit: PAGE_SIZE })
+          : await window.messageCache.readLatest(chatId, { limit: PAGE_SIZE });
         if (Array.isArray(cachedMsgs) && cachedMsgs.length) {
           displayedMsgIds.clear();
           hasMore = cachedMsgs.length >= PAGE_SIZE;
-          if (hasMore) loadMoreWrap.classList.remove('hidden');
+          loadMoreWrap.classList.toggle('hidden', !hasMore);
           renderMessages(cachedMsgs);
+          if (restoreAnchor?.messageId) {
+            requestAnimationFrame(() => restoreScrollAnchor(restoreAnchor, 1));
+          } else {
+            scrollToBottom(true);
+          }
           // cache assets in background (background, avatars, first 5 images)
           (async () => {
             try {
@@ -2464,17 +2480,9 @@
               await window.cacheAssets(Array.from(assetUrls).slice(0, 12));
             } catch (e) {}
           })();
-          showedCached = true;
         }
       }
     } catch (e) {}
-
-    if (!showedCached) {
-      messagesEl.querySelectorAll('.msg-row, .msg-group, .date-separator').forEach(el => el.remove());
-    }
-    compactView = !!compactViewMap[chatId];
-    messagesEl.classList.toggle('compact-view', compactView);
-    loadMoreWrap.classList.add('hidden');
 
     let scrollRestoreScheduled = false;
     try {
@@ -2486,10 +2494,10 @@
       messagesEl.querySelectorAll('.msg-row, .msg-group, .date-separator').forEach(el => el.remove());
       displayedMsgIds.clear();
       hasMore = msgs.length >= PAGE_SIZE;
-      if (hasMore) loadMoreWrap.classList.remove('hidden');
+      loadMoreWrap.classList.toggle('hidden', !hasMore);
       renderMessages(msgs);
       // Persist network-fetched messages to IndexedDB (keep last 200)
-      try { if (window.messageCache) window.messageCache.writeMessages(chatId, (msgs || []).slice(-200)).catch(()=>{}); } catch (e) {}
+      try { if (window.messageCache) window.messageCache.writeWindow(chatId, (msgs || []).slice(-200)).catch(()=>{}); } catch (e) {}
       // Cache background, avatars, and first 5 images
       (async () => {
         try {
@@ -3118,7 +3126,8 @@
     } catch (err) { console.error('[delete] failed:', err); }
   }
 
-  function markMessageDeleted(msgId) {
+  function markMessageDeleted(msgId, chatId = currentChatId) {
+    try { if (window.messageCache) window.messageCache.deleteMessage(chatId, msgId).catch(()=>{}); } catch (e) {}
     const el = messagesEl.querySelector(`[data-msg-id="${msgId}"]`);
     if (!el) { console.warn('[markDeleted] element not found for', msgId); return; }
     const bubble = el.querySelector('.msg-bubble');
@@ -3132,7 +3141,6 @@
     el.querySelector('.msg-forward-btn')?.remove();
     el.querySelector('.msg-actions')?.remove();
     if (editTo?.id === msgId) clearEdit({ clearInput: true });
-    try { if (window.messageCache) window.messageCache.deleteMessage(msgId).catch(()=>{}); } catch (e) {}
   }
 
   function updateVisibleReplyQuotesFromMessage(msg) {
@@ -3150,6 +3158,7 @@
   function applyMessageUpdate(msg) {
     if (!msg?.id) return;
     updateVisibleReplyQuotesFromMessage(msg);
+    try { if (window.messageCache) window.messageCache.upsertMessage(msg).catch(()=>{}); } catch (e) {}
     if (msg.chat_id !== currentChatId) return;
 
     const row = messagesEl.querySelector(`[data-msg-id="${msg.id}"]`);
@@ -3161,7 +3170,6 @@
     row.replaceWith(replacement);
     displayedMsgIds.add(nextMsg.id);
     updateScrollBottomButton();
-    try { if (window.messageCache) window.messageCache.upsertMessage(nextMsg).catch(()=>{}); } catch (e) {}
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -5153,6 +5161,7 @@
       currentUser = data.user;
       applyUiTheme(currentUser.ui_theme);
       localStorage.setItem('user', JSON.stringify(currentUser));
+      await window.messageCache?.init?.(currentUser.id);
     } catch { return; }
 
     // Update UI

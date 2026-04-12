@@ -1,3 +1,17 @@
+self.addEventListener('install', (event) => {
+  event.waitUntil(self.skipWaiting());
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys()
+      .then((keys) => Promise.all(keys
+        .filter((key) => key === 'bananza-assets-v1')
+        .map((key) => caches.delete(key))))
+      .then(() => self.clients.claim())
+  );
+});
+
 self.addEventListener('push', (event) => {
   event.waitUntil(handlePush(event));
 });
@@ -54,19 +68,31 @@ async function openNotificationTarget(data) {
   await self.clients.openWindow(targetUrl.href);
 }
 
-// Cache-first handler for uploads (avatars, backgrounds, media)
+const ASSET_CACHE = 'bananza-assets-v2';
+
+function isCacheableImageRequest(request, url) {
+  if (request.method !== 'GET') return false;
+  if (request.headers.has('range')) return false;
+  if (url.origin !== self.location.origin) return false;
+  const path = url.pathname.toLowerCase();
+  return path.startsWith('/uploads/avatars/')
+    || path.startsWith('/uploads/backgrounds/')
+    || /\.(png|jpe?g|webp|gif|avif|svg)$/i.test(path);
+}
+
+// Cache-first only for safe image assets. Audio/video/documents keep native network behavior.
 self.addEventListener('fetch', (event) => {
   try {
     const reqUrl = new URL(event.request.url);
-    if (reqUrl.origin === self.location.origin && reqUrl.pathname.startsWith('/uploads/')) {
+    if (isCacheableImageRequest(event.request, reqUrl)) {
       event.respondWith(
-        caches.open('bananza-assets-v1').then(cache =>
-          cache.match(event.request).then(cached => {
+        caches.open(ASSET_CACHE).then(cache =>
+          cache.match(event.request).then(async (cached) => {
             if (cached) return cached;
-            return fetch(event.request).then(resp => {
-              try { if (resp && resp.ok) cache.put(event.request, resp.clone()); } catch (e) {}
-              return resp;
-            }).catch(() => cached || fetch(event.request));
+            const response = await fetch(event.request);
+            const type = response.headers.get('content-type') || '';
+            try { if (response.ok && type.startsWith('image/')) cache.put(event.request, response.clone()); } catch (e) {}
+            return response;
           })
         )
       );
