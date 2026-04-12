@@ -1870,6 +1870,8 @@
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     if (ws) ws.close();
+    try { if (window.clearAssetCache) window.clearAssetCache().catch(()=>{}); } catch (e) {}
+    try { if (window.messageCache && window.messageCache.clearUserCache) window.messageCache.clearUserCache().catch(()=>{}); } catch (e) {}
     location.href = '/login.html';
   }
 
@@ -2437,8 +2439,36 @@
     // Apply chat background (if present)
     applyChatBackground(chat);
 
-    // Clear and load messages
-    messagesEl.querySelectorAll('.msg-row, .msg-group, .date-separator').forEach(el => el.remove());
+    // Clear and load messages (show cached messages first if available)
+    let showedCached = false;
+    try {
+      if (window.messageCache) {
+        const cachedMsgs = await window.messageCache.readMessages(chatId, { limit: PAGE_SIZE });
+        if (Array.isArray(cachedMsgs) && cachedMsgs.length) {
+          displayedMsgIds.clear();
+          hasMore = cachedMsgs.length >= PAGE_SIZE;
+          if (hasMore) loadMoreWrap.classList.remove('hidden');
+          renderMessages(cachedMsgs);
+          // cache assets in background (background, avatars, first 5 images)
+          (async () => {
+            try {
+              const assetUrls = new Set();
+              if (chat?.background_url) assetUrls.add(chat.background_url);
+              for (const m of cachedMsgs) {
+                if (m.avatar_url) assetUrls.add(m.avatar_url);
+                if (m.file_type === 'image' && m.file_stored) assetUrls.add(`/uploads/${m.file_stored}`);
+              }
+              await window.cacheAssets(Array.from(assetUrls).slice(0, 12));
+            } catch (e) {}
+          })();
+          showedCached = true;
+        }
+      }
+    } catch (e) {}
+
+    if (!showedCached) {
+      messagesEl.querySelectorAll('.msg-row, .msg-group, .date-separator').forEach(el => el.remove());
+    }
     compactView = !!compactViewMap[chatId];
     messagesEl.classList.toggle('compact-view', compactView);
     loadMoreWrap.classList.add('hidden');
@@ -2455,6 +2485,20 @@
       hasMore = msgs.length >= PAGE_SIZE;
       if (hasMore) loadMoreWrap.classList.remove('hidden');
       renderMessages(msgs);
+      // Persist network-fetched messages to IndexedDB (keep last 200)
+      try { if (window.messageCache) window.messageCache.writeMessages(chatId, (msgs || []).slice(-200)).catch(()=>{}); } catch (e) {}
+      // Cache background, avatars, and first 5 images
+      (async () => {
+        try {
+          const assetUrls = new Set();
+          if (chat?.background_url) assetUrls.add(chat.background_url);
+          for (const m of msgs) {
+            if (m.avatar_url) assetUrls.add(m.avatar_url);
+            if (m.file_type === 'image' && m.file_stored) assetUrls.add(`/uploads/${m.file_stored}`);
+          }
+          await window.cacheAssets(Array.from(assetUrls).slice(0, 12));
+        } catch (e) {}
+      })();
       if (restoreAnchor?.messageId) {
         requestAnimationFrame(() => {
           if (!restoreScrollAnchor(restoreAnchor)) {
@@ -2636,6 +2680,14 @@
       messagesEl.appendChild(el);
     }
     displayedMsgIds.add(msg.id);
+    try {
+      if (window.messageCache) window.messageCache.upsertMessage(msg).catch(()=>{});
+    } catch (e) {}
+    try {
+      if (msg.file_type === 'image' && msg.file_stored && window.cacheAssets) {
+        window.cacheAssets([`/uploads/${msg.file_stored}`]).catch(()=>{});
+      }
+    } catch (e) {}
     updateScrollBottomButton();
   }
 
@@ -3072,6 +3124,7 @@
     el.querySelector('.msg-forward-btn')?.remove();
     el.querySelector('.msg-actions')?.remove();
     if (editTo?.id === msgId) clearEdit({ clearInput: true });
+    try { if (window.messageCache) window.messageCache.deleteMessage(msgId).catch(()=>{}); } catch (e) {}
   }
 
   function updateVisibleReplyQuotesFromMessage(msg) {
@@ -3100,6 +3153,7 @@
     row.replaceWith(replacement);
     displayedMsgIds.add(nextMsg.id);
     updateScrollBottomButton();
+    try { if (window.messageCache) window.messageCache.upsertMessage(nextMsg).catch(()=>{}); } catch (e) {}
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

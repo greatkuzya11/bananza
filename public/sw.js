@@ -53,3 +53,23 @@ async function openNotificationTarget(data) {
   }
   await self.clients.openWindow(targetUrl.href);
 }
+
+// Cache-first handler for uploads (avatars, backgrounds, media)
+self.addEventListener('fetch', (event) => {
+  try {
+    const reqUrl = new URL(event.request.url);
+    if (reqUrl.origin === self.location.origin && reqUrl.pathname.startsWith('/uploads/')) {
+      event.respondWith(
+        caches.open('bananza-assets-v1').then(cache =>
+          cache.match(event.request).then(cached => {
+            if (cached) return cached;
+            return fetch(event.request).then(resp => {
+              try { if (resp && resp.ok) cache.put(event.request, resp.clone()); } catch (e) {}
+              return resp;
+            }).catch(() => cached || fetch(event.request));
+          })
+        )
+      );
+    }
+  } catch (e) {}
+});
