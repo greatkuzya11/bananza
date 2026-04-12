@@ -1924,7 +1924,10 @@
         if (msg.message.chat_id === currentChatId && !displayedMsgIds.has(msg.message.id)) {
           const wasNearBottom = isNearBottom();
           const isAiBotResponse = msg.message.ai_generated || msg.message.ai_bot_id;
-          const shouldPreserveIncomingScroll = scrollRestoreMode === 'restore' && !isOwnIncomingMessage && !isAiBotResponse;
+          const shouldPreserveIncomingScroll = scrollRestoreMode === 'restore'
+            && !isOwnIncomingMessage
+            && !isAiBotResponse
+            && (!wasNearBottom || document.hidden);
           const scrollTopBefore = messagesEl.scrollTop;
           appendMessage(msg.message);
           if (isOwnIncomingMessage || (!document.hidden && wasNearBottom && !shouldPreserveIncomingScroll)) {
@@ -2502,7 +2505,8 @@
       if (restoreAnchor?.messageId) {
         requestAnimationFrame(() => {
           if (!restoreScrollAnchor(restoreAnchor)) {
-            scrollToBottom(true);
+            messagesEl.scrollTop = 0;
+            updateScrollBottomButton();
           }
         });
       } else {
@@ -2865,7 +2869,9 @@
       img.addEventListener('click', () => openImageViewer(img.src));
       const wasNearBottom = isNearBottom();
       img.addEventListener('load', () => {
+        const anchor = !wasNearBottom && !isNearBottom(8) ? captureScrollAnchor() : null;
         markWideImage();
+        if (anchor) requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
         if (wasNearBottom && (scrollRestoreMode !== 'restore' || isOwn)) scrollToBottom();
       });
       if (img.complete) markWideImage();
@@ -2899,7 +2905,9 @@
         row.classList.toggle('wide-media-message', video.videoWidth >= video.videoHeight);
       };
       video.addEventListener('loadedmetadata', () => {
+        const anchor = !isNearBottom(8) ? captureScrollAnchor() : null;
         markWideVideo();
+        if (anchor) requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
         const dur = formatDuration(video.duration);
         const durEl = document.createElement('span');
         durEl.className = 'media-duration';

@@ -665,15 +665,24 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
 
   let msgs;
   if (anchor) {
-    const anchorMsg = db.prepare(`${selectSql} WHERE m.chat_id=? AND m.id=? AND m.is_deleted=0`).get(chatId, anchor);
+    let anchorMsg = db.prepare(`${selectSql} WHERE m.chat_id=? AND m.id=? AND m.is_deleted=0`).get(chatId, anchor);
+    if (!anchorMsg) {
+      anchorMsg = db.prepare(`${selectSql} WHERE m.chat_id=? AND m.id<? AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1`)
+        .get(chatId, anchor);
+    }
+    if (!anchorMsg) {
+      anchorMsg = db.prepare(`${selectSql} WHERE m.chat_id=? AND m.id>? AND m.is_deleted=0 ORDER BY m.id ASC LIMIT 1`)
+        .get(chatId, anchor);
+    }
     if (anchorMsg) {
+      const anchorId = anchorMsg.id;
       const olderLimit = Math.floor((limit - 1) / 2);
       const newerLimit = Math.max(0, limit - olderLimit - 1);
       const older = db.prepare(`${selectSql} WHERE m.chat_id=? AND m.id<? AND m.is_deleted=0 ORDER BY m.id DESC LIMIT ?`)
-        .all(chatId, anchor, olderLimit)
+        .all(chatId, anchorId, olderLimit)
         .reverse();
       const newer = db.prepare(`${selectSql} WHERE m.chat_id=? AND m.id>? AND m.is_deleted=0 ORDER BY m.id ASC LIMIT ?`)
-        .all(chatId, anchor, newerLimit);
+        .all(chatId, anchorId, newerLimit);
       msgs = [...older, anchorMsg, ...newer];
     }
   }
