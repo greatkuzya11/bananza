@@ -94,7 +94,7 @@
       const btn = document.createElement('button');
       btn.id = 'settingsVoicePanel';
       btn.className = 'settings-item hidden';
-      btn.textContent = 'Голос и расшифровка';
+      btn.textContent = '🎙️ Голос и расшифровка';
       settingsAdminPanel.insertAdjacentElement('afterend', btn);
       btn.addEventListener('click', openVoiceAdminModal);
     }
