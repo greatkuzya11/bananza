@@ -201,6 +201,7 @@ createForwardingFeature({
   fetchPreview,
   notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),
   onMessageCreated: (message) => aiBotFeature?.handleMessageCreated(message),
+  saveMessageMentions: (messageId, chatId, text) => saveMessageMentions(messageId, chatId, text),
 });
 
 aiBotFeature = createAiBotFeature({
@@ -218,6 +219,7 @@ aiBotFeature = createAiBotFeature({
 
 const messageByIdStmt = db.prepare(`
   SELECT m.*, u.username, u.display_name, u.avatar_color, u.avatar_url,
+    COALESCE(u.is_ai_bot, 0) as is_ai_bot, ab.mention as ai_bot_mention,
     f.original_name as file_name, f.stored_name as file_stored,
     f.mime_type as file_mime, f.size as file_size, f.type as file_type,
     COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN 'Голосовое сообщение' END) as reply_text,
@@ -225,6 +227,7 @@ const messageByIdStmt = db.prepare(`
     ru.display_name as reply_display_name, rm.id as reply_msg_id
   FROM messages m
   JOIN users u ON u.id=m.user_id
+  LEFT JOIN ai_bots ab ON ab.user_id=u.id
   LEFT JOIN files f ON f.id=m.file_id
   LEFT JOIN messages rm ON rm.id=m.reply_to_id
   LEFT JOIN voice_messages rvm ON rvm.message_id=rm.id
@@ -233,12 +236,122 @@ const messageByIdStmt = db.prepare(`
 `);
 const messagePreviewsStmt = db.prepare('SELECT * FROM link_previews WHERE message_id=?');
 const messageReactionsStmt = db.prepare('SELECT user_id, emoji FROM reactions WHERE message_id=?');
+const messageMentionsStmt = db.prepare(`
+  SELECT
+    mm.mentioned_user_id as user_id,
+    mm.token,
+    u.username,
+    u.display_name,
+    u.avatar_color,
+    u.avatar_url,
+    COALESCE(u.is_ai_bot, 0) as is_ai_bot,
+    ab.mention as bot_mention
+  FROM message_mentions mm
+  JOIN users u ON u.id=mm.mentioned_user_id
+  LEFT JOIN ai_bots ab ON ab.user_id=u.id
+  WHERE mm.message_id=?
+  ORDER BY mm.created_at ASC, mm.mentioned_user_id ASC
+`);
+const mentionTargetsStmt = db.prepare(`
+  SELECT
+    u.id as user_id,
+    u.username,
+    u.display_name,
+    u.avatar_color,
+    u.avatar_url,
+    COALESCE(u.is_ai_bot, 0) as is_ai_bot,
+    ab.mention as bot_mention
+  FROM chat_members cm
+  JOIN users u ON u.id=cm.user_id
+  LEFT JOIN ai_bots ab ON ab.user_id=u.id
+  WHERE cm.chat_id=?
+  ORDER BY COALESCE(u.is_ai_bot, 0) ASC, u.display_name COLLATE NOCASE ASC
+`);
+const deleteMentionsStmt = db.prepare('DELETE FROM message_mentions WHERE message_id=?');
+const insertMentionStmt = db.prepare(`
+  INSERT OR IGNORE INTO message_mentions(message_id, chat_id, mentioned_user_id, token)
+  VALUES(?,?,?,?)
+`);
+
+function mentionPayload(row) {
+  const isAiBot = Number(row.is_ai_bot) !== 0;
+  const token = (isAiBot ? row.bot_mention : row.username) || row.token || '';
+  return {
+    user_id: row.user_id,
+    display_name: row.display_name,
+    username: row.username,
+    mention: token,
+    token: row.token || token,
+    is_ai_bot: isAiBot,
+    avatar_color: row.avatar_color,
+    avatar_url: row.avatar_url,
+  };
+}
+
+function getMentionTargets(chatId) {
+  const seen = new Set();
+  return mentionTargetsStmt.all(chatId)
+    .map((row) => mentionPayload(row))
+    .filter((row) => {
+      const token = String(row.mention || row.token || '').trim();
+      if (!token) return false;
+      const key = token.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      row.token = token;
+      row.mention = token;
+      return true;
+    });
+}
+
+function extractMentionTokens(text) {
+  const source = String(text || '');
+  const tokens = [];
+  const re = /@([a-zA-Z0-9_][a-zA-Z0-9_-]{0,31})/g;
+  let match;
+  while ((match = re.exec(source))) {
+    const prev = match.index > 0 ? source[match.index - 1] : '';
+    if (prev && /[A-Za-z0-9_.-]/.test(prev)) continue;
+    tokens.push(match[1].toLowerCase());
+  }
+  return [...new Set(tokens)];
+}
+
+function resolveMessageMentions(chatId, text) {
+  const wanted = new Set(extractMentionTokens(text));
+  if (wanted.size === 0) return [];
+  const targets = getMentionTargets(chatId);
+  const byToken = new Map();
+  for (const target of targets) {
+    const token = String(target.token || target.mention || '').toLowerCase();
+    if (token && !byToken.has(token)) byToken.set(token, target);
+  }
+  return [...wanted].map(token => byToken.get(token)).filter(Boolean);
+}
+
+function saveMessageMentions(messageId, chatId, text) {
+  deleteMentionsStmt.run(messageId);
+  const mentions = resolveMessageMentions(chatId, text);
+  const insert = db.transaction((rows) => {
+    rows.forEach((mention) => {
+      insertMentionStmt.run(messageId, chatId, mention.user_id, mention.token || mention.mention);
+    });
+  });
+  insert(mentions);
+  return mentions;
+}
+
+function attachMessageMentions(row) {
+  row.mentions = messageMentionsStmt.all(row.id).map(mentionPayload);
+  return row;
+}
 
 function hydrateMessageById(messageId) {
   const row = messageByIdStmt.get(messageId);
   if (!row) return null;
   row.previews = messagePreviewsStmt.all(row.id);
   row.reactions = messageReactionsStmt.all(row.id);
+  attachMessageMentions(row);
   const readInfo = db.prepare(
     `SELECT MIN(cm.last_read_id) as min_read
      FROM chat_members cm
@@ -461,6 +574,13 @@ app.get('/api/chats/:chatId/members', auth, (req, res) => {
   res.json(db.prepare('SELECT u.id,u.username,u.display_name,u.avatar_color,u.avatar_url FROM users u JOIN chat_members cm ON cm.user_id=u.id WHERE cm.chat_id=?').all(chatId));
 });
 
+app.get('/api/chats/:chatId/mention-targets', auth, (req, res) => {
+  const chatId = +req.params.chatId;
+  if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
+    return res.status(403).json({ error: 'Not a member' });
+  res.json({ targets: getMentionTargets(chatId) });
+});
+
 app.get('/api/chats/:chatId/preferences', auth, (req, res) => {
   const chatId = +req.params.chatId;
   const row = db.prepare('SELECT notify_enabled,sounds_enabled FROM chat_members WHERE chat_id=? AND user_id=?')
@@ -526,12 +646,15 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
 
   const q = `
     SELECT m.*, u.username, u.display_name, u.avatar_color, u.avatar_url,
+      COALESCE(u.is_ai_bot, 0) as is_ai_bot, ab.mention as ai_bot_mention,
       f.original_name as file_name, f.stored_name as file_stored,
       f.mime_type as file_mime, f.size as file_size, f.type as file_type,
       COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN 'Голосовое сообщение' END) as reply_text,
       CASE WHEN rvm.message_id IS NOT NULL THEN 1 ELSE 0 END as reply_is_voice_note,
       ru.display_name as reply_display_name, rm.id as reply_msg_id
-    FROM messages m JOIN users u ON u.id=m.user_id LEFT JOIN files f ON f.id=m.file_id
+    FROM messages m JOIN users u ON u.id=m.user_id
+    LEFT JOIN ai_bots ab ON ab.user_id=u.id
+    LEFT JOIN files f ON f.id=m.file_id
     LEFT JOIN messages rm ON rm.id=m.reply_to_id
     LEFT JOIN voice_messages rvm ON rvm.message_id=rm.id
     LEFT JOIN users ru ON ru.id=rm.user_id
@@ -555,7 +678,7 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
   const minRead = readInfo && readInfo.min_read != null ? readInfo.min_read : Number.MAX_SAFE_INTEGER;
 
   const result = voiceFeature.attachVoiceMetadata(
-    msgs.map(m => ({ ...m, previews: prevStmt.all(m.id), reactions: reactStmt.all(m.id), is_read: m.id <= minRead }))
+    msgs.map(m => attachMessageMentions({ ...m, previews: prevStmt.all(m.id), reactions: reactStmt.all(m.id), is_read: m.id <= minRead }))
   );
   res.json(result.reverse());
 });
@@ -582,15 +705,19 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   const cleanText = text ? text.trim() : null;
   const r = db.prepare('INSERT INTO messages(chat_id,user_id,text,file_id,reply_to_id) VALUES(?,?,?,?,?)')
     .run(chatId, req.user.id, cleanText, fileId || null, validReplyId);
+  if (cleanText) saveMessageMentions(r.lastInsertRowid, chatId, cleanText);
 
   const msg = db.prepare(`
     SELECT m.*, u.username, u.display_name, u.avatar_color, u.avatar_url,
+      COALESCE(u.is_ai_bot, 0) as is_ai_bot, ab.mention as ai_bot_mention,
       f.original_name as file_name, f.stored_name as file_stored,
       f.mime_type as file_mime, f.size as file_size, f.type as file_type,
       COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN 'Голосовое сообщение' END) as reply_text,
       CASE WHEN rvm.message_id IS NOT NULL THEN 1 ELSE 0 END as reply_is_voice_note,
       ru.display_name as reply_display_name, rm.id as reply_msg_id
-    FROM messages m JOIN users u ON u.id=m.user_id LEFT JOIN files f ON f.id=m.file_id
+    FROM messages m JOIN users u ON u.id=m.user_id
+    LEFT JOIN ai_bots ab ON ab.user_id=u.id
+    LEFT JOIN files f ON f.id=m.file_id
     LEFT JOIN messages rm ON rm.id=m.reply_to_id
     LEFT JOIN voice_messages rvm ON rvm.message_id=rm.id
     LEFT JOIN users ru ON ru.id=rm.user_id
@@ -598,6 +725,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   `).get(r.lastInsertRowid);
   msg.previews = [];
   msg.reactions = [];
+  attachMessageMentions(msg);
   const hydratedMsg = voiceFeature.attachVoiceMetadata([msg])[0];
 
   broadcastToChatAll(chatId, { type: 'message', message: hydratedMsg });
@@ -660,6 +788,7 @@ app.patch('/api/messages/:id', auth, msgLimiter, (req, res) => {
     db.prepare('UPDATE messages SET text=?, edited_at=datetime(\'now\'), edited_by=? WHERE id=?')
       .run(cleanText || null, req.user.id, mid);
     db.prepare('DELETE FROM link_previews WHERE message_id=?').run(mid);
+    saveMessageMentions(mid, m.chat_id, cleanText);
   }
 
   const updated = hydrateMessageById(mid);
@@ -1019,6 +1148,7 @@ app.delete('/api/messages/:id', auth, (req, res) => {
 
   // Soft-delete message (keep record for reply_to_id foreign keys)
   db.prepare('UPDATE messages SET is_deleted=1, text=NULL, file_id=NULL WHERE id=?').run(mid);
+  deleteMentionsStmt.run(mid);
   // Clean up related file and previews
   if (m.file_id) db.prepare('DELETE FROM files WHERE id=?').run(m.file_id);
   voiceFeature.deleteVoiceMetadata(mid);

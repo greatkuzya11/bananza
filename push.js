@@ -8,11 +8,13 @@ const DEFAULT_SETTINGS = {
   notify_messages: true,
   notify_chat_invites: true,
   notify_reactions: true,
+  notify_mentions: true,
 };
 const TYPE_FLAGS = {
   messages: 'notify_messages',
   chat_invites: 'notify_chat_invites',
   reactions: 'notify_reactions',
+  mentions: 'notify_mentions',
 };
 const MAX_BODY_LENGTH = 120;
 
@@ -70,6 +72,7 @@ function normalizeSettings(row) {
     notify_messages: !!row.notify_messages,
     notify_chat_invites: !!row.notify_chat_invites,
     notify_reactions: !!row.notify_reactions,
+    notify_mentions: row.notify_mentions == null ? true : !!row.notify_mentions,
   };
 }
 
@@ -130,6 +133,11 @@ function createPushFeature({ app, db, auth, rateLimit }) {
     LEFT JOIN voice_messages vm ON vm.message_id=m.id
     WHERE m.id=? AND m.is_deleted=0
   `);
+  const messageMentionsStmt = db.prepare(`
+    SELECT mentioned_user_id
+    FROM message_mentions
+    WHERE message_id=?
+  `);
 
   function getSettings(userId) {
     return normalizeSettings(settingsStmt.get(userId));
@@ -142,23 +150,26 @@ function createPushFeature({ app, db, auth, rateLimit }) {
       notify_messages: boolValue(input.notify_messages, current.notify_messages),
       notify_chat_invites: boolValue(input.notify_chat_invites, current.notify_chat_invites),
       notify_reactions: boolValue(input.notify_reactions, current.notify_reactions),
+      notify_mentions: boolValue(input.notify_mentions, current.notify_mentions),
     };
     db.prepare(`
       INSERT INTO user_notification_settings (
-        user_id, push_enabled, notify_messages, notify_chat_invites, notify_reactions, updated_at
-      ) VALUES (?, ?, ?, ?, ?, datetime('now'))
+        user_id, push_enabled, notify_messages, notify_chat_invites, notify_reactions, notify_mentions, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(user_id) DO UPDATE SET
         push_enabled=excluded.push_enabled,
         notify_messages=excluded.notify_messages,
         notify_chat_invites=excluded.notify_chat_invites,
         notify_reactions=excluded.notify_reactions,
+        notify_mentions=excluded.notify_mentions,
         updated_at=datetime('now')
     `).run(
       userId,
       next.push_enabled ? 1 : 0,
       next.notify_messages ? 1 : 0,
       next.notify_chat_invites ? 1 : 0,
-      next.notify_reactions ? 1 : 0
+      next.notify_reactions ? 1 : 0,
+      next.notify_mentions ? 1 : 0
     );
     return getSettings(userId);
   }
@@ -271,8 +282,28 @@ function createPushFeature({ app, db, auth, rateLimit }) {
     if (members.length === 0) return;
 
     const preview = messagePreview(message);
+    const mentionedIds = new Set(
+      message.forwarded_from_message_id
+        ? []
+        : ((Array.isArray(message.mentions) ? message.mentions : messageMentionsStmt.all(message.id))
+          .map(row => Number(row.user_id ?? row.mentioned_user_id))
+          .filter(id => Number.isInteger(id) && id !== Number(message.user_id)))
+    );
     for (const { user_id: userId } of members) {
       const isPrivate = chat.type === 'private';
+      if (mentionedIds.has(Number(userId))) {
+        queueUserNotification(userId, 'mentions', {
+          type: 'mention',
+          chatId: message.chat_id,
+          messageId: message.id,
+          title: isPrivate ? (message.display_name || 'BananZa') : (chat.name || 'BananZa'),
+          body: `${message.display_name || 'User'} \u0443\u043f\u043e\u043c\u044f\u043d\u0443\u043b(\u0430) \u0432\u0430\u0441: ${preview}`,
+          url: `/?chatId=${message.chat_id}`,
+          tag: `mention:${message.id}:${userId}`,
+          urgency: 'high',
+        }, { chatId: message.chat_id });
+        continue;
+      }
       queueUserNotification(userId, 'messages', {
         type: 'message',
         chatId: message.chat_id,

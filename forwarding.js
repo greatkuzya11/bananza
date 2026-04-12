@@ -15,6 +15,7 @@ function createForwardingFeature({
   fetchPreview,
   notifyMessageCreated,
   onMessageCreated,
+  saveMessageMentions,
 }) {
   const sourceMessageStmt = db.prepare(`
     SELECT
@@ -209,6 +210,9 @@ function createForwardingFeature({
           forwardMeta.displayName
         );
         const newMessageId = insertedMessage.lastInsertRowid;
+        if (source.text && typeof saveMessageMentions === 'function') {
+          saveMessageMentions(newMessageId, targetChatId, source.text);
+        }
 
         if (source.voice_message_id) {
           const copyCompletedTranscript = source.voice_transcription_status === 'completed';
@@ -258,7 +262,7 @@ function createForwardingFeature({
     broadcastToChatAll(targetChatId, { type: 'message', message });
     if (typeof notifyMessageCreated === 'function') notifyMessageCreated(message);
     if (typeof onMessageCreated === 'function') {
-      Promise.resolve(onMessageCreated(message)).catch((error) => {
+      Promise.resolve(onMessageCreated(message, { skipBotTrigger: true })).catch((error) => {
         console.warn('[forwarding] message hook failed:', error.message);
       });
     }

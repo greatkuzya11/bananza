@@ -6,6 +6,7 @@
     incoming: 'play_incoming',
     notification: 'play_notifications',
     reaction: 'play_reactions',
+    mention: 'play_mentions',
     invite: 'play_invites',
     voice_start: 'play_voice',
     voice_stop: 'play_voice',
@@ -17,6 +18,7 @@
     play_incoming: true,
     play_notifications: true,
     play_reactions: true,
+    play_mentions: true,
     play_invites: true,
     play_voice: true,
   };
@@ -25,6 +27,7 @@
     incoming: 140,
     notification: 420,
     reaction: 180,
+    mention: 260,
     invite: 500,
     voice_start: 80,
     voice_stop: 80,
@@ -50,6 +53,7 @@
       play_incoming: next.play_incoming ?? DEFAULT_SETTINGS.play_incoming,
       play_notifications: next.play_notifications ?? DEFAULT_SETTINGS.play_notifications,
       play_reactions: next.play_reactions ?? DEFAULT_SETTINGS.play_reactions,
+      play_mentions: next.play_mentions ?? DEFAULT_SETTINGS.play_mentions,
       play_invites: next.play_invites ?? DEFAULT_SETTINGS.play_invites,
       play_voice: next.play_voice ?? DEFAULT_SETTINGS.play_voice,
     };
@@ -197,6 +201,10 @@
     } else if (type === 'reaction') {
       tone(ctx, now, 520, 0.11, 0.34, { type: 'triangle', toFreq: 920, attack: 0.003, release: 0.08 });
       noiseTick(ctx, now + 0.055, 0.04, 0.25, { frequency: 1400, q: 5 });
+    } else if (type === 'mention') {
+      tone(ctx, now, 784, 0.08, 0.32, { type: 'sine' });
+      tone(ctx, now + 0.055, 1175, 0.1, 0.28, { type: 'sine' });
+      tone(ctx, now + 0.12, 988, 0.12, 0.24, { type: 'triangle', filter: { frequency: 1800 } });
     } else if (type === 'invite') {
       tone(ctx, now, 392, 0.18, 0.24, { type: 'sine' });
       tone(ctx, now + 0.045, 494, 0.18, 0.22, { type: 'sine' });

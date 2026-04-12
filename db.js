@@ -98,6 +98,7 @@ db.exec(`
     notify_messages INTEGER DEFAULT 1,
     notify_chat_invites INTEGER DEFAULT 1,
     notify_reactions INTEGER DEFAULT 1,
+    notify_mentions INTEGER DEFAULT 1,
     updated_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -111,7 +112,17 @@ db.exec(`
     play_reactions INTEGER DEFAULT 1,
     play_invites INTEGER DEFAULT 1,
     play_voice INTEGER DEFAULT 1,
+    play_mentions INTEGER DEFAULT 1,
     updated_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS message_mentions (
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    mentioned_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (message_id, mentioned_user_id)
   );
 
   CREATE TABLE IF NOT EXISTS push_subscriptions (
@@ -131,6 +142,8 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_chat_members_user ON chat_members(user_id);
   CREATE INDEX IF NOT EXISTS idx_link_previews_msg ON link_previews(message_id);
   CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);
+  CREATE INDEX IF NOT EXISTS idx_message_mentions_user ON message_mentions(mentioned_user_id, chat_id);
+  CREATE INDEX IF NOT EXISTS idx_message_mentions_chat ON message_mentions(chat_id, message_id);
 `);
 
 // Seed general chat
@@ -230,6 +243,28 @@ try {
 } catch {
   db.exec("ALTER TABLE chat_members ADD COLUMN sounds_enabled INTEGER DEFAULT 1");
 }
+try {
+  db.prepare("SELECT notify_mentions FROM user_notification_settings LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE user_notification_settings ADD COLUMN notify_mentions INTEGER DEFAULT 1");
+}
+try {
+  db.prepare("SELECT play_mentions FROM user_sound_settings LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE user_sound_settings ADD COLUMN play_mentions INTEGER DEFAULT 1");
+}
+db.exec(`
+  CREATE TABLE IF NOT EXISTS message_mentions (
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    mentioned_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (message_id, mentioned_user_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_message_mentions_user ON message_mentions(mentioned_user_id, chat_id);
+  CREATE INDEX IF NOT EXISTS idx_message_mentions_chat ON message_mentions(chat_id, message_id);
+`);
 // Migration: reactions table
 try {
   db.prepare("SELECT 1 FROM reactions LIMIT 1").get();

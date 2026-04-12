@@ -285,7 +285,8 @@ function createAiBotFeature({
     let i = 2;
     while (true) {
       const existing = db.prepare('SELECT id FROM ai_bots WHERE mention=?').get(mention);
-      if (!existing || existing.id === botId) return mention;
+      const human = db.prepare('SELECT id FROM users WHERE username=? AND COALESCE(is_ai_bot,0)=0').get(mention);
+      if ((!existing || existing.id === botId) && !human) return mention;
       mention = `${base}_${i++}`;
     }
   }
@@ -627,6 +628,10 @@ function createAiBotFeature({
 
   function shouldBotRespond(bot, message) {
     if (!message || message.ai_generated || message.is_deleted) return false;
+    if (Array.isArray(message.mentions) && message.mentions.some((mention) => (
+      Number(mention.user_id) === Number(bot.user_id) ||
+      (mention.is_ai_bot && String(mention.token || mention.mention || '').toLowerCase() === String(bot.mention || '').toLowerCase())
+    ))) return true;
     const text = String(message.text || message.transcription_text || '').toLowerCase();
     const mention = `@${String(bot.mention || '').toLowerCase()}`;
     const nameMention = `@${String(bot.name || '').toLowerCase()}`;

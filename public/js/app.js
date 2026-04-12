@@ -55,6 +55,7 @@
     notify_messages: true,
     notify_chat_invites: true,
     notify_reactions: true,
+    notify_mentions: true,
   };
   let notificationSettingsLoaded = false;
   let pushDeviceSubscribed = false;
@@ -67,6 +68,7 @@
     play_reactions: true,
     play_invites: true,
     play_voice: true,
+    play_mentions: true,
   };
   let soundSettingsLoaded = false;
   let soundSettingsSaveTimer = null;
@@ -81,6 +83,9 @@
   let forwardMessageBusy = false;
   let forwardModalCloseTimer = null;
   let centerToastTimer = null;
+  let mentionTargetsByChat = new Map();
+  let mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [] };
+  let avatarUserMenuState = null;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DOM
@@ -208,6 +213,43 @@
       /https?:\/\/[^\s<>"')\]]+/gi,
       (url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`
     );
+  }
+
+  function mentionKey(value) {
+    return String(value || '').replace(/^@+/, '').toLowerCase();
+  }
+
+  function renderMessageText(text, mentions = []) {
+    const source = String(text || '');
+    if (!source) return '';
+    const mentionMap = new Map();
+    (Array.isArray(mentions) ? mentions : []).forEach((mention) => {
+      const token = mentionKey(mention.token || mention.mention || mention.username);
+      if (token && !mentionMap.has(token)) mentionMap.set(token, mention);
+    });
+    const re = /(https?:\/\/[^\s<>"')\]]+)|@([a-zA-Z0-9_][a-zA-Z0-9_-]{0,31})/gi;
+    let html = '';
+    let lastIndex = 0;
+    let match;
+    while ((match = re.exec(source))) {
+      html += esc(source.slice(lastIndex, match.index));
+      if (match[1]) {
+        const url = match[1];
+        html += `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>`;
+      } else {
+        const prev = match.index > 0 ? source[match.index - 1] : '';
+        const token = mentionKey(match[2]);
+        const mention = !prev || !/[A-Za-z0-9_.-]/.test(prev) ? mentionMap.get(token) : null;
+        if (mention) {
+          html += `<button type="button" class="mention-link${mention.is_ai_bot ? ' is-bot' : ''}" data-mention-user-id="${Number(mention.user_id) || 0}" data-mention-token="${esc(mention.token || mention.mention || mention.username || token)}" data-mention-bot="${mention.is_ai_bot ? '1' : '0'}">@${esc(match[2])}</button>`;
+        } else {
+          html += esc(match[0]);
+        }
+      }
+      lastIndex = re.lastIndex;
+    }
+    html += esc(source.slice(lastIndex));
+    return html;
   }
 
   function normalizeUiTheme(theme) {
@@ -567,6 +609,7 @@
     const messagesInput = $('#settingsNotifyMessages');
     const invitesInput = $('#settingsNotifyChatInvites');
     const reactionsInput = $('#settingsNotifyReactions');
+    const mentionsInput = $('#settingsNotifyMentions');
     const enableBtn = $('#settingsPushEnable');
     const disableBtn = $('#settingsPushDisable');
     const testBtn = $('#settingsPushTest');
@@ -583,6 +626,7 @@
     messagesInput.checked = !!notificationSettings.notify_messages;
     invitesInput.checked = !!notificationSettings.notify_chat_invites;
     reactionsInput.checked = !!notificationSettings.notify_reactions;
+    if (mentionsInput) mentionsInput.checked = notificationSettings.notify_mentions !== false;
 
     if (enableBtn) enableBtn.disabled = !supported || Notification.permission === 'denied';
     if (disableBtn) disableBtn.disabled = !supported || !pushDeviceSubscribed;
@@ -638,6 +682,7 @@
       notify_messages: $('#settingsNotifyMessages')?.checked ?? notificationSettings.notify_messages,
       notify_chat_invites: $('#settingsNotifyChatInvites')?.checked ?? notificationSettings.notify_chat_invites,
       notify_reactions: $('#settingsNotifyReactions')?.checked ?? notificationSettings.notify_reactions,
+      notify_mentions: $('#settingsNotifyMentions')?.checked ?? notificationSettings.notify_mentions,
     };
     if (Object.prototype.hasOwnProperty.call(patch, 'push_enabled')) {
       next.push_enabled = !!patch.push_enabled;
@@ -757,6 +802,7 @@
       settingsSoundReactions: soundSettings.play_reactions,
       settingsSoundInvites: soundSettings.play_invites,
       settingsSoundVoice: soundSettings.play_voice,
+      settingsSoundMentions: soundSettings.play_mentions,
     };
     Object.entries(fields).forEach(([id, checked]) => {
       const input = document.getElementById(id);
@@ -778,6 +824,7 @@
       play_reactions: $('#settingsSoundReactions')?.checked ?? soundSettings.play_reactions,
       play_invites: $('#settingsSoundInvites')?.checked ?? soundSettings.play_invites,
       play_voice: $('#settingsSoundVoice')?.checked ?? soundSettings.play_voice,
+      play_mentions: $('#settingsSoundMentions')?.checked ?? soundSettings.play_mentions,
     };
   }
 
@@ -827,7 +874,7 @@
   }
 
   function previewAllSounds() {
-    const sequence = ['send', 'incoming', 'notification', 'reaction', 'invite', 'voice_start', 'voice_stop'];
+    const sequence = ['send', 'incoming', 'notification', 'mention', 'reaction', 'invite', 'voice_start', 'voice_stop'];
     sequence.forEach((type, index) => {
       if (index === 0) {
         previewSound(type);
@@ -854,6 +901,16 @@
   function isChatIncomingSoundEnabled(chatId) {
     const chat = getChatById(chatId);
     return Boolean(soundSettings.sounds_enabled && (!chat || localChatPreferenceEnabled(chat.sounds_enabled)));
+  }
+
+  function isMentionSoundEnabled() {
+    return Boolean(soundSettings.sounds_enabled && soundSettings.play_mentions !== false);
+  }
+
+  function isMessageMentioningCurrentUser(message) {
+    if (message?.forwarded_from_message_id) return false;
+    const userId = Number(currentUser?.id);
+    return Boolean(userId && Array.isArray(message?.mentions) && message.mentions.some(mention => Number(mention.user_id) === userId));
   }
 
   function setChatPreferencesStatus(message, type = '') {
@@ -932,6 +989,7 @@
     if (selectedAiBotId && !aiBotState.bots.some(bot => Number(bot.id) === Number(selectedAiBotId))) {
       selectedAiBotId = null;
     }
+    mentionTargetsByChat.clear();
   }
 
   function currentAiBot() {
@@ -1359,6 +1417,303 @@
     return data;
   }
 
+  function normalizeMentionTarget(raw) {
+    if (!raw) return null;
+    const token = String(raw.token || raw.mention || raw.username || '').replace(/^@+/, '').trim();
+    if (!token) return null;
+    return {
+      ...raw,
+      token,
+      mention: token,
+      user_id: Number(raw.user_id) || 0,
+      is_ai_bot: Boolean(raw.is_ai_bot),
+    };
+  }
+
+  async function loadMentionTargets(chatId = currentChatId) {
+    const id = Number(chatId);
+    if (!id) return [];
+    if (mentionTargetsByChat.has(id)) return mentionTargetsByChat.get(id);
+    const data = await api(`/api/chats/${id}/mention-targets`);
+    const targets = (data.targets || []).map(normalizeMentionTarget).filter(Boolean);
+    mentionTargetsByChat.set(id, targets);
+    return targets;
+  }
+
+  function ensureMentionPicker() {
+    let picker = $('#mentionPicker');
+    if (picker) return picker;
+    picker = document.createElement('div');
+    picker.id = 'mentionPicker';
+    picker.className = 'mention-picker hidden';
+    document.body.appendChild(picker);
+    picker.addEventListener('pointerdown', (e) => {
+      const item = e.target.closest('.mention-picker-item');
+      if (!item) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const target = mentionPickerState.targets[Number(item.dataset.index)];
+      if (target) insertMentionTarget(target);
+    }, { passive: false });
+    return picker;
+  }
+
+  function hideMentionPicker() {
+    mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [] };
+    $('#mentionPicker')?.classList.add('hidden');
+  }
+
+  function findMentionTrigger() {
+    if (!currentChatId || !msgInput) return null;
+    const value = msgInput.value || '';
+    const cursor = msgInput.selectionStart ?? value.length;
+    const left = value.slice(0, cursor);
+    const match = left.match(/(^|\s)@([a-zA-Z0-9_-]{0,32})$/);
+    if (!match) return null;
+    const atIndex = cursor - match[2].length - 1;
+    const prev = atIndex > 0 ? value[atIndex - 1] : '';
+    if (prev && !/\s/.test(prev)) return null;
+    return { start: atIndex, end: cursor, query: match[2].toLowerCase() };
+  }
+
+  function positionMentionPicker() {
+    const picker = $('#mentionPicker');
+    if (!picker || picker.classList.contains('hidden')) return;
+    const rect = msgInput.getBoundingClientRect();
+    const vv = window.visualViewport;
+    const viewportLeft = vv ? vv.offsetLeft : 0;
+    const viewportTop = vv ? vv.offsetTop : 0;
+    const viewportWidth = vv ? vv.width : window.innerWidth;
+    const viewportHeight = vv ? vv.height : window.innerHeight;
+    const width = Math.min(Math.max(rect.width, 240), viewportWidth - 16);
+    picker.style.width = `${width}px`;
+    const height = picker.offsetHeight || 180;
+    const left = Math.max(viewportLeft + 8, Math.min(rect.left + viewportLeft, viewportLeft + viewportWidth - width - 8));
+    const top = Math.max(viewportTop + 8, Math.min(rect.top + viewportTop - height - 8, viewportTop + viewportHeight - height - 8));
+    picker.style.left = `${left}px`;
+    picker.style.top = `${top}px`;
+  }
+
+  function renderMentionPicker(targets) {
+    const picker = ensureMentionPicker();
+    if (!targets.length) {
+      hideMentionPicker();
+      return;
+    }
+    mentionPickerState.targets = targets;
+    mentionPickerState.selected = Math.min(mentionPickerState.selected, targets.length - 1);
+    picker.innerHTML = targets.map((target, index) => `
+      <button type="button" class="mention-picker-item${index === mentionPickerState.selected ? ' active' : ''}" data-index="${index}">
+        <span class="mention-picker-avatar" style="background:${esc(target.avatar_color || '#65aadd')}">${target.avatar_url ? `<img src="${esc(target.avatar_url)}" alt="">` : esc((target.display_name || target.token || '?').trim()[0] || '?')}</span>
+        <span class="mention-picker-copy">
+          <strong>${esc(target.display_name || target.token)}</strong>
+          <small>@${esc(target.token)}${target.is_ai_bot ? ' &middot; AI' : ''}</small>
+        </span>
+      </button>
+    `).join('');
+    picker.classList.remove('hidden');
+    mentionPickerState.active = true;
+    positionMentionPicker();
+  }
+
+  async function updateMentionPicker() {
+    const trigger = findMentionTrigger();
+    if (!trigger) {
+      hideMentionPicker();
+      return;
+    }
+    mentionPickerState.start = trigger.start;
+    mentionPickerState.end = trigger.end;
+    const chatId = currentChatId;
+    try {
+      const targets = await loadMentionTargets(chatId);
+      const latest = findMentionTrigger();
+      if (chatId !== currentChatId || !latest || latest.start !== trigger.start || latest.end !== trigger.end || latest.query !== trigger.query) return;
+      const query = trigger.query;
+      const filtered = targets.filter((target) => {
+        const haystack = [
+          target.token,
+          target.username,
+          target.display_name,
+          target.is_ai_bot ? 'ai bot' : '',
+        ].join(' ').toLowerCase();
+        return !query || haystack.includes(query);
+      }).slice(0, 8);
+      renderMentionPicker(filtered);
+    } catch {
+      hideMentionPicker();
+    }
+  }
+
+  function insertMentionTarget(target) {
+    if (!target || !msgInput) return;
+    const tokenValue = `@${String(target.token || target.mention || '').replace(/^@+/, '')} `;
+    const value = msgInput.value || '';
+    const start = mentionPickerState.start ?? (msgInput.selectionStart || 0);
+    const end = mentionPickerState.end ?? (msgInput.selectionEnd || start);
+    msgInput.value = value.slice(0, start) + tokenValue + value.slice(end);
+    const cursor = start + tokenValue.length;
+    msgInput.setSelectionRange(cursor, cursor);
+    hideMentionPicker();
+    autoResize();
+    window.BananzaVoiceHooks?.refreshComposerState?.();
+    focusComposerKeepKeyboard(true);
+    msgInput.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  function insertMentionTokenIntoComposer(token) {
+    const clean = String(token || '').replace(/^@+/, '').trim();
+    if (!clean || !msgInput) return;
+    const value = msgInput.value || '';
+    const cursor = msgInput.selectionStart ?? value.length;
+    const prefix = cursor > 0 && !/\s/.test(value[cursor - 1]) ? ' ' : '';
+    const insertion = `${prefix}@${clean} `;
+    msgInput.value = value.slice(0, cursor) + insertion + value.slice(cursor);
+    const nextCursor = cursor + insertion.length;
+    msgInput.setSelectionRange(nextCursor, nextCursor);
+    autoResize();
+    window.BananzaVoiceHooks?.refreshComposerState?.();
+    focusComposerKeepKeyboard(true);
+    msgInput.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  async function openPrivateChatWithUser(userId) {
+    const id = Number(userId);
+    if (!id || id === currentUser?.id) return;
+    const chat = await api('/api/chats/private', { method: 'POST', body: { targetUserId: id } });
+    await loadChats();
+    if (chat?.id) openChat(chat.id);
+  }
+
+  function handleMentionPickerKeydown(e) {
+    if (!mentionPickerState.active) return false;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      mentionPickerState.selected = (mentionPickerState.selected + 1) % mentionPickerState.targets.length;
+      renderMentionPicker(mentionPickerState.targets);
+      return true;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      mentionPickerState.selected = (mentionPickerState.selected - 1 + mentionPickerState.targets.length) % mentionPickerState.targets.length;
+      renderMentionPicker(mentionPickerState.targets);
+      return true;
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      insertMentionTarget(mentionPickerState.targets[mentionPickerState.selected]);
+      return true;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      hideMentionPicker();
+      return true;
+    }
+    return false;
+  }
+
+  async function handleMentionClick(e, btn) {
+    e.preventDefault();
+    e.stopPropagation();
+    const tokenValue = btn.dataset.mentionToken || '';
+    if (btn.dataset.mentionBot === '1') {
+      insertMentionTokenIntoComposer(tokenValue);
+      return;
+    }
+    const userId = Number(btn.dataset.mentionUserId);
+    if (!userId || userId === currentUser?.id) return;
+    try {
+      await openPrivateChatWithUser(userId);
+    } catch (error) {
+      console.warn('[mentions] private chat failed:', error.message);
+    }
+  }
+
+  function isGroupLikeCurrentChat() {
+    const chat = getChatById(currentChatId);
+    return Boolean(chat && (chat.type === 'group' || chat.type === 'general'));
+  }
+
+  function ensureAvatarUserMenu() {
+    let menu = $('#avatarUserMenu');
+    if (menu) return menu;
+    menu = document.createElement('div');
+    menu.id = 'avatarUserMenu';
+    menu.className = 'avatar-user-menu hidden';
+    menu.addEventListener('pointerdown', (e) => {
+      const action = e.target.closest('[data-avatar-action]')?.dataset.avatarAction;
+      if (!action || !avatarUserMenuState) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const target = avatarUserMenuState.target;
+      hideAvatarUserMenu();
+      if (action === 'mention') {
+        insertMentionTokenIntoComposer(target.token);
+      } else if (action === 'private') {
+        openPrivateChatWithUser(target.userId).catch((error) => {
+          console.warn('[avatar-menu] private chat failed:', error.message);
+        });
+      }
+    }, { passive: false });
+    document.body.appendChild(menu);
+    return menu;
+  }
+
+  function hideAvatarUserMenu() {
+    avatarUserMenuState = null;
+    $('#avatarUserMenu')?.classList.add('hidden');
+  }
+
+  function positionAvatarUserMenu(anchor) {
+    const menu = $('#avatarUserMenu');
+    if (!menu || menu.classList.contains('hidden') || !anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    const vv = window.visualViewport;
+    const viewportLeft = vv ? vv.offsetLeft : 0;
+    const viewportTop = vv ? vv.offsetTop : 0;
+    const viewportWidth = vv ? vv.width : window.innerWidth;
+    const viewportHeight = vv ? vv.height : window.innerHeight;
+    const width = menu.offsetWidth || 190;
+    const height = menu.offsetHeight || 92;
+    let left = rect.left + viewportLeft + rect.width + 8;
+    if (left + width > viewportLeft + viewportWidth - 8) left = rect.left + viewportLeft - width - 8;
+    left = Math.max(viewportLeft + 8, Math.min(left, viewportLeft + viewportWidth - width - 8));
+    let top = rect.top + viewportTop - Math.max(0, (height - rect.height) / 2);
+    top = Math.max(viewportTop + 8, Math.min(top, viewportTop + viewportHeight - height - 8));
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+  }
+
+  function avatarMenuTargetFromEl(avatarEl) {
+    if (!avatarEl) return null;
+    const userId = Number(avatarEl.dataset.userId || 0);
+    const token = String(avatarEl.dataset.mentionToken || '').replace(/^@+/, '').trim();
+    if (!userId || !token) return null;
+    return {
+      userId,
+      token,
+      displayName: avatarEl.dataset.displayName || '',
+      isAiBot: avatarEl.dataset.isAiBot === '1',
+      isSelf: userId === currentUser?.id,
+    };
+  }
+
+  function openAvatarUserMenu(avatarEl) {
+    if (!isGroupLikeCurrentChat()) return;
+    const target = avatarMenuTargetFromEl(avatarEl);
+    if (!target) return;
+    hideMentionPicker();
+    const menu = ensureAvatarUserMenu();
+    const canOpenPrivate = !target.isSelf && !target.isAiBot;
+    menu.innerHTML = `
+      <button type="button" data-avatar-action="mention">&#1059;&#1087;&#1086;&#1084;&#1103;&#1085;&#1091;&#1090;&#1100;</button>
+      ${canOpenPrivate ? '<button type="button" data-avatar-action="private">&#1055;&#1077;&#1088;&#1077;&#1081;&#1090;&#1080; &#1074; &#1083;&#1080;&#1095;&#1085;&#1099;&#1081; &#1095;&#1072;&#1090;</button>' : ''}
+    `;
+    avatarUserMenuState = { target, anchor: avatarEl };
+    menu.classList.remove('hidden');
+    positionAvatarUserMenu(avatarEl);
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // AUTH
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1406,8 +1761,13 @@
     switch (msg.type) {
       case 'message': {
         const isOwnIncomingMessage = msg.message.user_id === currentUser.id;
-        if (!isOwnIncomingMessage && !document.hidden && isChatIncomingSoundEnabled(msg.message.chat_id)) {
-          playAppSound(msg.message.chat_id === currentChatId ? 'incoming' : 'notification');
+        const isMentionForMe = isMessageMentioningCurrentUser(msg.message);
+        if (!isOwnIncomingMessage && !document.hidden) {
+          if (isMentionForMe && isMentionSoundEnabled()) {
+            playAppSound('mention');
+          } else if (isChatIncomingSoundEnabled(msg.message.chat_id)) {
+            playAppSound(msg.message.chat_id === currentChatId ? 'incoming' : 'notification');
+          }
         }
         // Update chat list regardless
         updateChatListLastMessage(msg.message);
@@ -1440,11 +1800,11 @@
           'Notification' in window &&
           Notification.permission === 'granted' &&
           notificationSettings.push_enabled &&
-          notificationSettings.notify_messages &&
-          isChatNotificationEnabled(msg.message.chat_id) &&
+          ((isMentionForMe && notificationSettings.notify_mentions !== false) ||
+            (notificationSettings.notify_messages && isChatNotificationEnabled(msg.message.chat_id))) &&
           !pushDeviceSubscribed
         ) {
-          const title = msg.message.display_name;
+          const title = isMentionForMe ? `${msg.message.display_name} \u0443\u043f\u043e\u043c\u044f\u043d\u0443\u043b(\u0430) \u0432\u0430\u0441` : msg.message.display_name;
           const body = msg.message.text || (msg.message.is_voice_note ? msg.message.transcription_text : '') || '📎 File';
           new Notification(title, { body: body.substring(0, 100), icon: '/favicon.ico' });
         }
@@ -1742,6 +2102,8 @@
     if (currentChatId) {
       scrollPositions[currentChatId] = messagesEl.scrollTop;
     }
+    hideMentionPicker();
+    hideAvatarUserMenu();
 
     currentChatId = chatId;
     displayedMsgIds.clear();
@@ -1887,7 +2249,9 @@
     const avatarColor = isOwn ? (currentUser.avatar_color || '#65aadd') : (msg.avatar_color || '#65aadd');
     const avatarUrl = isOwn ? currentUser.avatar_url : msg.avatar_url;
     const name = isOwn ? currentUser.display_name : msg.display_name;
-    group.innerHTML = `<div class="msg-group-avatar">${avatarHtml(name, avatarColor, avatarUrl, 32)}</div>`;
+    const isAiBot = !isOwn && (Number(msg.is_ai_bot) !== 0 || Number(msg.ai_bot_id) > 0 || Number(msg.ai_generated) > 0);
+    const mentionToken = isAiBot ? (msg.ai_bot_mention || msg.username) : (isOwn ? currentUser.username : msg.username);
+    group.innerHTML = `<div class="msg-group-avatar" role="button" tabindex="0" title="${esc(name)}" data-user-id="${Number(msg.user_id) || 0}" data-display-name="${esc(name)}" data-mention-token="${esc(mentionToken || '')}" data-is-ai-bot="${isAiBot ? '1' : '0'}">${avatarHtml(name, avatarColor, avatarUrl, 32)}</div>`;
     const body = document.createElement('div');
     body.className = 'msg-group-body';
     group.appendChild(body);
@@ -2059,7 +2423,7 @@
 
       // Text
       if (msg.text) {
-        html += `<div class="msg-text">${isEmojiOnly ? esc(msg.text.trim()) : linkify(msg.text)}</div>`;
+        html += `<div class="msg-text">${isEmojiOnly ? esc(msg.text.trim()) : renderMessageText(msg.text, msg.mentions)}</div>`;
       }
 
       // Link previews
@@ -2135,6 +2499,10 @@
         openForwardMessageModal(row.__messageData);
       });
     }
+
+    row.querySelectorAll('.mention-link').forEach((btn) => {
+      btn.addEventListener('click', (e) => handleMentionClick(e, btn));
+    });
 
     // (react button handled via delegation on messagesEl)
 
@@ -3738,6 +4106,7 @@
       if (window.innerWidth <= 768) msgInput.focus();
     });
     msgInput.addEventListener('keydown', (e) => {
+      if (handleMentionPickerKeydown(e)) return;
       if (e.key === 'Enter') {
         if (sendByEnter && !e.shiftKey && !e.ctrlKey) { e.preventDefault(); sendMessage(); }
         else if (!sendByEnter && e.ctrlKey) { e.preventDefault(); sendMessage(); }
@@ -3746,11 +4115,32 @@
     msgInput.addEventListener('input', () => {
       autoResize();
       window.BananzaVoiceHooks?.refreshComposerState?.();
+      updateMentionPicker();
       // Typing indicator
       if (!typingSendTimeout) {
         sendTyping();
         typingSendTimeout = setTimeout(() => { typingSendTimeout = null; }, 2000);
       }
+    });
+    msgInput.addEventListener('click', updateMentionPicker);
+    msgInput.addEventListener('keyup', (e) => {
+      if (!['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(e.key)) updateMentionPicker();
+    });
+    window.visualViewport?.addEventListener('resize', () => {
+      positionMentionPicker();
+      positionAvatarUserMenu(avatarUserMenuState?.anchor);
+    });
+    document.addEventListener('pointerdown', (e) => {
+      const picker = $('#mentionPicker');
+      if (!picker || picker.classList.contains('hidden')) return;
+      if (picker.contains(e.target) || e.target === msgInput) return;
+      hideMentionPicker();
+    });
+    document.addEventListener('pointerdown', (e) => {
+      const menu = $('#avatarUserMenu');
+      if (!menu || menu.classList.contains('hidden')) return;
+      if (menu.contains(e.target) || e.target.closest('.msg-group-avatar')) return;
+      hideAvatarUserMenu();
     });
 
     // File attach
@@ -3846,6 +4236,20 @@
       if (e.key === 'ArrowLeft') galleryNav(-1);
       else if (e.key === 'ArrowRight') galleryNav(1);
       else if (e.key === 'Escape') closeMediaViewer();
+    });
+
+    messagesEl.addEventListener('pointerdown', (e) => {
+      const avatar = e.target.closest('.msg-group-avatar');
+      if (!avatar || !messagesEl.contains(avatar) || !isGroupLikeCurrentChat()) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openAvatarUserMenu(avatar);
+    }, { passive: false });
+    messagesEl.addEventListener('keydown', (e) => {
+      const avatar = e.target.closest('.msg-group-avatar');
+      if (!avatar || !isGroupLikeCurrentChat() || (e.key !== 'Enter' && e.key !== ' ')) return;
+      e.preventDefault();
+      openAvatarUserMenu(avatar);
     });
 
     // Strip swipe + pinch-zoom + double-tap for media viewer
@@ -4013,7 +4417,7 @@
       let lpTimer = null;
       messagesEl.addEventListener('touchstart', (e) => {
         const row = e.target.closest('.msg-row');
-        if (!row || e.target.closest('.msg-react-btn, .msg-reply-btn, .msg-edit-btn, .msg-forward-btn') || e.target.closest('.reaction-badge')) return;
+        if (!row || e.target.closest('.msg-react-btn, .msg-reply-btn, .msg-edit-btn, .msg-forward-btn, .msg-group-avatar') || e.target.closest('.reaction-badge')) return;
         lpTimer = setTimeout(() => {
           lpTimer = null;
           navigator.vibrate && navigator.vibrate(30);
@@ -4209,7 +4613,7 @@
         }
       }
     });
-    ['settingsNotifyMessages', 'settingsNotifyChatInvites', 'settingsNotifyReactions'].forEach((id) => {
+    ['settingsNotifyMessages', 'settingsNotifyChatInvites', 'settingsNotifyReactions', 'settingsNotifyMentions'].forEach((id) => {
       document.getElementById(id)?.addEventListener('change', () => saveNotificationSettings());
     });
 
@@ -4222,6 +4626,7 @@
       'settingsSoundReactions',
       'settingsSoundInvites',
       'settingsSoundVoice',
+      'settingsSoundMentions',
     ].forEach((id) => {
       document.getElementById(id)?.addEventListener('change', () => saveSoundSettings());
     });
@@ -4309,6 +4714,7 @@
 
     // Scroll to load more
     messagesEl.addEventListener('scroll', () => {
+      hideAvatarUserMenu();
       if (currentChatId) scrollPositions[currentChatId] = messagesEl.scrollTop;
       if (messagesEl.scrollTop < 60 && hasMore && !loadingMore) loadMore();
       updateScrollBottomButton();
@@ -4341,6 +4747,7 @@
     // Escape key
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
+        hideAvatarUserMenu();
         closeSearchPanel();
         clearReply();
         closeAllModals();
