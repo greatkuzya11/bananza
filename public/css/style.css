@@ -39,6 +39,52 @@
   --radius-msg: 12px;
 }
 
+html[data-ui-theme="banan-hero"] {
+  --bg-dark: #0b0d0c;
+  --bg-sidebar: #15171a;
+  --bg-input: #23252b;
+  --bg-hover: #2b2f34;
+  --bg-own-msg: #496436;
+  --bg-other-msg: #202228;
+  --bg-modal: #16181d;
+  --text-primary: #f4f6ef;
+  --text-secondary: #9ba596;
+  --text-time: rgba(244,246,239,.44);
+  --accent: #ffd33f;
+  --accent-hover: #e3b932;
+  --link: #00e0bd;
+  --danger: #e13b54;
+  --success: #6b8b4a;
+  --border: #070908;
+  --border-light: #34383d;
+  --bg-app-gradient: var(--bg-dark);
+  --bg-sidebar-gradient: var(--bg-sidebar);
+  --bg-panel-gradient: var(--bg-sidebar);
+  --scroll-fab-bg: rgba(255,211,63,.96);
+  --scroll-fab-bg-hover: rgba(227,185,50,.98);
+  --weather-widget-bg: rgba(0,224,189,.12);
+  --weather-widget-bg-hover: rgba(0,224,189,.2);
+  --accent-soft-bg: rgba(255,211,63,.14);
+  --accent-softer-bg: rgba(255,211,63,.1);
+  --accent-strong-bg: rgba(255,211,63,.2);
+  --accent-border: rgba(255,211,63,.24);
+  --accent-border-strong: rgba(255,211,63,.38);
+  --voice-compact-own-bg: #536f3a;
+  --voice-compact-other-bg: #262a2d;
+  --voice-send-color: #00e0bd;
+}
+
+html[data-ui-theme="banan-hero"] .chat-item.active,
+html[data-ui-theme="banan-hero"] .btn-primary,
+html[data-ui-theme="banan-hero"] .scroll-bottom-btn {
+  color: #12140f;
+}
+
+html[data-ui-theme="banan-hero"] .chat-item.active .chat-item-time,
+html[data-ui-theme="banan-hero"] .chat-item.active .chat-item-last {
+  color: rgba(18,20,15,.72);
+}
+
 html[data-ui-theme="midnight-ocean"] {
   --bg-dark: #06131d;
   --bg-sidebar: #0b1d2a;

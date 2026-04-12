@@ -118,7 +118,7 @@ const upLimiter   = rateLimit({ windowMs: 60_000, max: 20, message: { error: 'To
 
 // ── Auth middleware ─────────────────────────────────────────────────────────
 const AVATAR_COLORS = ['#e17076','#7bc862','#e5ca77','#65aadd','#a695e7','#ee7aae','#6ec9cb','#faa774'];
-const UI_THEMES = new Set(['bananza', 'midnight-ocean', 'nord-aurora', 'rose-pine', 'dracula-neon', 'tokyo-night']);
+const UI_THEMES = new Set(['bananza', 'banan-hero', 'midnight-ocean', 'nord-aurora', 'rose-pine', 'dracula-neon', 'tokyo-night']);
 const USER_PUBLIC_FIELDS = 'id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,ui_theme';
 
 function publicUser(u) {
