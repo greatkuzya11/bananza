@@ -28,6 +28,7 @@
   let ws = null;
   let wsRetry = 1000;
   let onlineUsers = new Set();
+  let chatMembersCache = new Map();
   let loadingMore = false;
   let hasMore = true;
   let pendingFile = null;
@@ -2214,6 +2215,8 @@
     renderChatList(chatSearch.value);
     if (currentChatId) updateChatStatus();
     refreshAdminUserStatuses();
+    try { refreshChatMemberStatuses(); } catch (e) {}
+    try { refreshChatInfoStatus(); } catch (e) {}
   }
 
   function updateScrollBottomButton() {
@@ -2411,6 +2414,45 @@
     });
   }
 
+  function refreshChatMemberStatuses() {
+    if (chatInfoModal.classList.contains('hidden')) return;
+    const list = $('#chatMemberList');
+    if (!list) return;
+    list.querySelectorAll('.user-list-item').forEach(item => {
+      const uid = +item.dataset.uid;
+      const statusEl = item.querySelector('.admin-user-status');
+      if (!statusEl) return;
+      const isOnline = onlineUsers.has(uid);
+      statusEl.classList.toggle('online', isOnline);
+      statusEl.classList.toggle('offline', !isOnline);
+      statusEl.innerHTML = `<span class="status-dot"></span>${isOnline ? 'online' : 'offline'}`;
+    });
+  }
+
+  function refreshChatInfoStatus() {
+    const el = $('#chatInfoStatus');
+    if (!el) return;
+    const memberList = $('#chatMemberList');
+    if (!memberList) {
+      el.classList.remove('online'); el.classList.add('offline');
+      el.innerHTML = `<span class="status-dot"></span>offline`;
+      return;
+    }
+    const items = memberList.querySelectorAll('.user-list-item');
+    const total = items.length;
+    let onlineCount = 0;
+    items.forEach(it => { if (onlineUsers.has(+it.dataset.uid)) onlineCount++; });
+    if (total <= 1) {
+      const isOnline = total === 1 && onlineUsers.has(+items[0].dataset.uid);
+      el.classList.toggle('online', isOnline);
+      el.classList.toggle('offline', !isOnline);
+      el.innerHTML = `<span class="status-dot"></span>${isOnline ? 'online' : 'offline'}`;
+    } else {
+      el.classList.remove('online','offline');
+      el.innerHTML = `${onlineCount}/${total} online`;
+    }
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // OPEN CHAT
   // ═══════════════════════════════════════════════════════════════════════════
@@ -2574,12 +2616,42 @@
     const chat = chats.find(c => c.id === currentChatId);
     if (!chat) return;
     if (chat.type === 'private' && chat.private_user) {
-      chatStatus.textContent = onlineUsers.has(chat.private_user.id) ? 'online' : 'offline';
-      chatStatus.style.color = onlineUsers.has(chat.private_user.id) ? 'var(--success)' : '';
+      const isOnline = onlineUsers.has(chat.private_user.id);
+      chatStatus.textContent = isOnline ? 'online' : 'offline';
+      chatStatus.style.color = isOnline ? 'var(--success)' : '';
     } else {
-      const onlineCount = [...onlineUsers].length;
-      chatStatus.textContent = `${onlineCount} online`;
-      chatStatus.style.color = '';
+      // Prefer counting only members of this chat if we have them cached
+      const members = chatMembersCache.get(chat.id);
+      if (Array.isArray(members)) {
+        const total = members.length;
+        let onlineCount = 0;
+        for (const m of members) if (onlineUsers.has(m.id)) onlineCount++;
+        if (total <= 1) {
+          const isOnline = total === 1 && onlineUsers.has(members[0].id);
+          chatStatus.classList.toggle('online', isOnline);
+          chatStatus.classList.toggle('offline', !isOnline);
+          chatStatus.textContent = isOnline ? 'online' : 'offline';
+          chatStatus.style.color = isOnline ? 'var(--success)' : '';
+        } else {
+          chatStatus.classList.remove('online','offline');
+          chatStatus.textContent = `${onlineCount}/${total} online`;
+          chatStatus.style.color = '';
+        }
+      } else {
+        // Fallback: show global online count, then asynchronously prime the cache
+        const onlineCount = [...onlineUsers].length;
+        chatStatus.textContent = `${onlineCount} online`;
+        chatStatus.style.color = '';
+        (async () => {
+          try {
+            const fetched = await api(`/api/chats/${chat.id}/members`);
+            if (fetched && currentChatId === chat.id) {
+              chatMembersCache.set(chat.id, fetched);
+              updateChatStatus();
+            }
+          } catch (e) {}
+        })();
+      }
     }
   }
 
@@ -4279,6 +4351,8 @@
 
     try {
       const members = await api(`/api/chats/${currentChatId}/members`);
+      // Cache members for this chat so header can count per-chat online users
+      try { chatMembersCache.set(currentChatId, members); } catch (e) {}
       const memberList = $('#chatMemberList');
       const canRemove = chat && chat.type === 'group' && (chat.created_by === currentUser.id || currentUser.is_admin);
 
@@ -4287,11 +4361,17 @@
           ${avatarHtml(u.display_name, u.avatar_color, u.avatar_url)}
           <div>
             <div class="name">${esc(u.display_name)}</div>
-            <div class="status-text">${onlineUsers.has(u.id) ? 'online' : 'offline'}</div>
+            <div class="admin-user-status ${onlineUsers.has(u.id) ? 'online' : 'offline'}">
+              <span class="status-dot"></span>${onlineUsers.has(u.id) ? 'online' : 'offline'}
+            </div>
           </div>
           ${canRemove && u.id !== currentUser.id ? `<button class="member-remove" data-uid="${u.id}" title="Remove">✕</button>` : ''}
         </div>
       `).join('');
+
+      // Update status indicators in modal
+      try { refreshChatMemberStatuses(); } catch (e) {}
+      try { refreshChatInfoStatus(); } catch (e) {}
 
       // Remove member handlers
       memberList.querySelectorAll('.member-remove').forEach(btn => {
