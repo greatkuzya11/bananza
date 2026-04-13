@@ -1233,6 +1233,9 @@ a:hover { text-decoration: underline; }
 }
 .admin-user-status.online { color: var(--success); }
 .admin-user-status.offline { color: var(--text-secondary); }
+/* Bot status style */
+.admin-user-status.bot { color: #8e44ad; }
+.admin-user-status.bot .status-dot { background: currentColor; }
 .admin-user-joined { color: var(--text-secondary); }
 .admin-user-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .admin-user-row .badge {

@@ -574,7 +574,7 @@ app.get('/api/chats/:chatId/members', auth, (req, res) => {
   const chatId = +req.params.chatId;
   if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
-  res.json(db.prepare('SELECT u.id,u.username,u.display_name,u.avatar_color,u.avatar_url FROM users u JOIN chat_members cm ON cm.user_id=u.id WHERE cm.chat_id=?').all(chatId));
+  res.json(db.prepare('SELECT u.id,u.username,u.display_name,u.avatar_color,u.avatar_url,u.is_ai_bot FROM users u JOIN chat_members cm ON cm.user_id=u.id WHERE cm.chat_id=?').all(chatId));
 });
 
 app.get('/api/chats/:chatId/mention-targets', auth, (req, res) => {

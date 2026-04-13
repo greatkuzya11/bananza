@@ -2422,10 +2422,17 @@
       const uid = +item.dataset.uid;
       const statusEl = item.querySelector('.admin-user-status');
       if (!statusEl) return;
-      const isOnline = onlineUsers.has(uid);
-      statusEl.classList.toggle('online', isOnline);
-      statusEl.classList.toggle('offline', !isOnline);
-      statusEl.innerHTML = `<span class="status-dot"></span>${isOnline ? 'online' : 'offline'}`;
+      const isBot = item.dataset.bot === '1';
+      if (isBot) {
+        statusEl.classList.remove('online','offline');
+        statusEl.classList.add('bot');
+        statusEl.innerHTML = `<span class="status-dot"></span>bot`;
+      } else {
+        const isOnline = onlineUsers.has(uid);
+        statusEl.classList.toggle('online', isOnline);
+        statusEl.classList.toggle('offline', !isOnline);
+        statusEl.innerHTML = `<span class="status-dot"></span>${isOnline ? 'online' : 'offline'}`;
+      }
     });
   }
 
@@ -2439,14 +2446,25 @@
       return;
     }
     const items = memberList.querySelectorAll('.user-list-item');
-    const total = items.length;
+    const humanItems = Array.from(items).filter(it => it.dataset.bot !== '1');
+    const botItems = Array.from(items).filter(it => it.dataset.bot === '1');
+    const total = humanItems.length;
     let onlineCount = 0;
-    items.forEach(it => { if (onlineUsers.has(+it.dataset.uid)) onlineCount++; });
+    humanItems.forEach(it => { if (onlineUsers.has(+it.dataset.uid)) onlineCount++; });
     if (total <= 1) {
-      const isOnline = total === 1 && onlineUsers.has(+items[0].dataset.uid);
-      el.classList.toggle('online', isOnline);
-      el.classList.toggle('offline', !isOnline);
-      el.innerHTML = `<span class="status-dot"></span>${isOnline ? 'online' : 'offline'}`;
+      if (total === 1) {
+        const isOnline = onlineUsers.has(+humanItems[0].dataset.uid);
+        el.classList.toggle('online', isOnline);
+        el.classList.toggle('offline', !isOnline);
+        el.innerHTML = `<span class="status-dot"></span>${isOnline ? 'online' : 'offline'}`;
+      } else if (botItems.length === 1 && items.length === 1) {
+        // single bot participant
+        el.classList.remove('online','offline');
+        el.innerHTML = `<span class="status-dot"></span>bot`;
+      } else {
+        el.classList.remove('online','offline');
+        el.innerHTML = `0/${total} online`;
+      }
     } else {
       el.classList.remove('online','offline');
       el.innerHTML = `${onlineCount}/${total} online`;
@@ -2623,11 +2641,12 @@
       // Prefer counting only members of this chat if we have them cached
       const members = chatMembersCache.get(chat.id);
       if (Array.isArray(members)) {
-        const total = members.length;
-        let onlineCount = 0;
-        for (const m of members) if (onlineUsers.has(m.id)) onlineCount++;
+          const humanMembers = members.filter(m => !m.is_ai_bot);
+          const total = humanMembers.length;
+          let onlineCount = 0;
+          for (const m of humanMembers) if (onlineUsers.has(m.id)) onlineCount++;
         if (total <= 1) {
-          const isOnline = total === 1 && onlineUsers.has(members[0].id);
+          const isOnline = total === 1 && onlineUsers.has(humanMembers[0].id);
           chatStatus.classList.toggle('online', isOnline);
           chatStatus.classList.toggle('offline', !isOnline);
           chatStatus.textContent = isOnline ? 'online' : 'offline';
@@ -4357,12 +4376,12 @@
       const canRemove = chat && chat.type === 'group' && (chat.created_by === currentUser.id || currentUser.is_admin);
 
       memberList.innerHTML = members.map(u => `
-        <div class="user-list-item" data-uid="${u.id}">
+        <div class="user-list-item" data-uid="${u.id}" data-bot="${u.is_ai_bot ? 1 : 0}">
           ${avatarHtml(u.display_name, u.avatar_color, u.avatar_url)}
           <div>
             <div class="name">${esc(u.display_name)}</div>
-            <div class="admin-user-status ${onlineUsers.has(u.id) ? 'online' : 'offline'}">
-              <span class="status-dot"></span>${onlineUsers.has(u.id) ? 'online' : 'offline'}
+            <div class="admin-user-status ${u.is_ai_bot ? 'bot' : (onlineUsers.has(u.id) ? 'online' : 'offline')}">
+              <span class="status-dot"></span>${u.is_ai_bot ? 'bot' : (onlineUsers.has(u.id) ? 'online' : 'offline')}
             </div>
           </div>
           ${canRemove && u.id !== currentUser.id ? `<button class="member-remove" data-uid="${u.id}" title="Remove">✕</button>` : ''}
@@ -4380,6 +4399,8 @@
           if (!confirm('Remove this member?')) return;
           try {
             await api(`/api/chats/${currentChatId}/members/${btn.dataset.uid}`, { method: 'DELETE' });
+            // Invalidate cached members for this chat and refresh modal
+            try { chatMembersCache.delete(currentChatId); } catch (e) {}
             openChatInfoModal();
           } catch (e) { alert(e.message); }
         });
@@ -4405,6 +4426,8 @@
           el.addEventListener('click', async () => {
             try {
               await api(`/api/chats/${currentChatId}/members`, { method: 'POST', body: { userId: +el.dataset.uid } });
+              // Invalidate cached members for this chat and refresh modal
+              try { chatMembersCache.delete(currentChatId); } catch (e) {}
               openChatInfoModal();
             } catch {}
           });
