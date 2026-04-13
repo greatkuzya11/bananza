@@ -28,6 +28,11 @@ function setupWebSocket(server, jwtSecret) {
     if (!clients.has(user.id)) clients.set(user.id, new Set());
     clients.get(user.id).add(ws);
 
+    // Update last activity timestamp for user
+    try {
+      db.prepare("UPDATE users SET last_activity = datetime('now') WHERE id = ?").run(user.id);
+    } catch (e) {}
+
     broadcastOnlineUsers();
 
     ws.on('pong', () => { ws.isAlive = true; });

@@ -2383,6 +2383,7 @@
               <span class="status-dot"></span>${isOnline ? 'online' : 'offline'}
             </div>
             <div class="admin-user-joined">Joined: ${new Date(u.created_at + 'Z').toLocaleDateString()}</div>
+            <div class="admin-user-last">Last: ${u.last_activity ? formatDate(u.last_activity) + ' ' + formatTime(u.last_activity) : '—'}</div>
           </div>
         </div>
         ${u.is_admin ? '<span class="badge badge-admin">Admin</span>' : ''}

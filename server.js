@@ -414,6 +414,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
 
     const token = jwt.sign({ id: u.id, username: u.username }, JWT_SECRET, { expiresIn: '30d' });
+    try { db.prepare("UPDATE users SET last_activity = datetime('now') WHERE id = ?").run(u.id); } catch (e) {}
     res.json({ token, user: publicUser(u) });
   } catch (e) { console.error(e); res.status(500).json({ error: 'Server error' }); }
 });
@@ -749,6 +750,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   const cleanText = text ? text.trim() : null;
   const r = db.prepare('INSERT INTO messages(chat_id,user_id,text,file_id,reply_to_id) VALUES(?,?,?,?,?)')
     .run(chatId, req.user.id, cleanText, fileId || null, validReplyId);
+  try { db.prepare("UPDATE users SET last_activity = datetime('now') WHERE id = ?").run(req.user.id); } catch (e) {}
   if (cleanText) saveMessageMentions(r.lastInsertRowid, chatId, cleanText);
 
   const msg = db.prepare(`
@@ -1135,7 +1137,7 @@ app.get('/uploads/:filename', (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 app.get('/api/admin/users', auth, adminOnly, (req, res) => {
-  res.json(db.prepare('SELECT id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,created_at FROM users').all());
+  res.json(db.prepare('SELECT id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,created_at,last_activity FROM users').all());
 });
 
 app.post('/api/admin/users/:id/block', auth, adminOnly, (req, res) => {

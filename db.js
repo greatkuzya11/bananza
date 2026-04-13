@@ -169,6 +169,11 @@ try {
   db.exec("ALTER TABLE users ADD COLUMN is_ai_bot INTEGER DEFAULT 0");
 }
 try {
+  db.prepare("SELECT last_activity FROM users LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE users ADD COLUMN last_activity TEXT DEFAULT NULL");
+}
+try {
   db.prepare("SELECT avatar_url FROM chats LIMIT 1").get();
 } catch {
   db.exec("ALTER TABLE chats ADD COLUMN avatar_url TEXT DEFAULT NULL");
