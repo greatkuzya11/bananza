@@ -211,6 +211,21 @@
     isMobileLayout: () => window.innerWidth <= 768,
   });
 
+  // Weather widget interactivity: click or keyboard activates a forced refresh
+  if (weatherWidget) {
+    weatherWidget.addEventListener('click', (e) => {
+      if (!weatherSettings.enabled || !weatherSettings.location) return;
+      // fire-and-forget; UI shows loading state inside loadCurrentWeather
+      loadCurrentWeather(true).catch(() => {});
+    });
+    weatherWidget.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        weatherWidget.click();
+      }
+    });
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // UTILS
   // ═══════════════════════════════════════════════════════════════════════════
@@ -435,6 +450,10 @@
     const wind = `${formatWeatherValue(data?.wind_speed, '--', 1)} м/с`;
     const icon = data ? weatherIcon(Number(data.weather_code), data.is_day) : '⛅';
     weatherWidget.classList.remove('hidden', 'is-loading', 'is-error');
+    // Make widget accessible / interactive when visible
+    weatherWidget.setAttribute('role', 'button');
+    weatherWidget.tabIndex = 0;
+    weatherWidget.classList.toggle('interactive', !weatherWidget.classList.contains('hidden'));
     if (!data) weatherWidget.classList.add('is-error');
     weatherWidget.title = data
       ? `Weather: ${weatherLocationLabel(weatherSettings.location)}`

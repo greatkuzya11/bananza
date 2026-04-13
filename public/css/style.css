@@ -389,6 +389,10 @@ a:hover { text-decoration: underline; }
 .weather-widget.is-error { color: var(--text-secondary); }
 .weather-widget-icon { font-size: 15px; line-height: 1; }
 
+/* Interactive state when widget can be clicked to refresh */
+.weather-widget.interactive { cursor: pointer; }
+.weather-widget.interactive:hover { background: var(--weather-widget-bg-hover); }
+
 /* ── Icon buttons ────────────────────────────────────────────────────────── */
 .icon-btn {
   width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
