@@ -1858,7 +1858,7 @@ a:hover { text-decoration: underline; }
 .reply-bar {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 12px; background: var(--bg-input); border-left: 3px solid var(--accent);
-  border-radius: 4px; margin: 0 8px;
+  border-radius: 4px; margin: 0 8px 8px;
 }
 .reply-bar-content { flex: 1; min-width: 0; }
 .reply-bar-name { font-size: 13px; font-weight: 600; color: var(--accent); }
@@ -1873,7 +1873,7 @@ a:hover { text-decoration: underline; }
 /* ── Reply inside message ────────────────────────────────────────────────── */
 .msg-reply {
   padding: 6px 10px; background: var(--accent-soft-bg); border-left: 3px solid var(--accent);
-  border-radius: 4px; margin-bottom: 4px; cursor: pointer; font-size: 13px;
+  border-radius: 4px; margin-bottom: 8px; cursor: pointer; font-size: 13px;
 }
 .own .msg-reply { background: rgba(255,255,255,0.1); }
 .msg-reply-name { font-weight: 600; color: var(--accent); font-size: 12px; }
