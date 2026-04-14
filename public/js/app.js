@@ -1918,7 +1918,7 @@
     };
   }
 
-  function handleWSMessage(msg) {
+  async function handleWSMessage(msg) {
     switch (msg.type) {
       case 'message': {
         const isOwnIncomingMessage = msg.message.user_id === currentUser.id;
@@ -2042,8 +2042,14 @@
         break;
       }
       case 'messages_read': {
-        if (msg.chatId === currentChatId && msg.userId !== currentUser.id) {
-          // Update all own messages up to lastReadId to show double checkmark
+        // Always update local cache and UI when a read position is announced.
+        try {
+          if (window.messageCache && typeof window.messageCache.markMessagesRead === 'function') {
+            await window.messageCache.markMessagesRead(msg.chatId, msg.userId, msg.lastReadId);
+          }
+        } catch (e) {}
+        if (msg.chatId === currentChatId) {
+          // Update own messages UI (double-check) if applicable.
           messagesEl.querySelectorAll('.msg-row.own').forEach(row => {
             const msgId = +row.dataset.msgId;
             if (msgId <= msg.lastReadId) {
@@ -2054,6 +2060,18 @@
               }
             }
           });
+        }
+        // Update cached chat object unread info if the event is about the current user
+        if (msg.userId === currentUser.id) {
+          const c = chats.find(c => c.id === msg.chatId);
+          if (c) {
+            c.last_read_id = Math.max(Number(c.last_read_id || 0), Number(msg.lastReadId || 0));
+            if (!c.last_message_id || Number(msg.lastReadId || 0) >= Number(c.last_message_id || 0)) {
+              c.unread_count = 0;
+              c.first_unread_id = null;
+            }
+            renderChatList(chatSearch.value);
+          }
         }
         break;
       }
@@ -2593,14 +2611,74 @@
       const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
       params.set('meta', '1');
       if (restoreAnchor?.messageId) params.set('anchor', String(restoreAnchor.messageId));
-      const page = normalizeMessagesPage(await api(`/api/chats/${chatId}/messages?${params}`));
+      const raw = await api(`/api/chats/${chatId}/messages?${params}`);
+      const page = normalizeMessagesPage(raw);
       const msgs = page.messages;
+      const memberLastReads = raw && raw.member_last_reads ? raw.member_last_reads : null;
+      // Apply server-side per-user last_read positions into local cache so IndexedDB/UI are consistent.
+      if (memberLastReads && window.messageCache && typeof window.messageCache.markMessagesRead === 'function') {
+        try {
+          // Update cache for each member (batched). Await to ensure cache reflects read state before render/writeWindow.
+          for (const [uid, lr] of Object.entries(memberLastReads)) {
+            const uidn = Number(uid) || 0;
+            const lrn = Number(lr) || 0;
+            if (uidn && lrn) {
+              try { await window.messageCache.markMessagesRead(chatId, uidn, lrn); } catch (e) {}
+            }
+          }
+          // Update local chat.last_read_id for current user if provided, so unread counters reflect correctly.
+          const myLast = memberLastReads[String(currentUser.id)];
+          if (myLast) {
+            const chatObj = chats.find(c => c.id === chatId);
+            if (chatObj) chatObj.last_read_id = Math.max(Number(chatObj.last_read_id || 0), Number(myLast));
+          }
+        } catch (e) {}
+      }
       // Re-clear after async gap: WS may have appended messages while we waited
       if (currentChatId !== chatId) { suppressScrollAnchorSave = false; return; } // user switched chats
-      messagesEl.querySelectorAll('.msg-row, .msg-group, .date-separator').forEach(el => el.remove());
-      displayedMsgIds.clear();
-      setHasMoreBefore(page.hasMoreBefore ?? (restoreAnchor?.messageId ? msgs.length > 0 : msgs.length >= PAGE_SIZE));
-      renderMessages(msgs);
+
+      // If DOM already contains the same messages in the same order, skip re-render to avoid blinking.
+      try {
+        const domRows = Array.from(messagesEl.querySelectorAll('.msg-row'));
+        const domIds = domRows.map(el => Number(el.dataset.msgId || 0));
+        const fetchedIds = (msgs || []).map(m => Number(m.id || 0));
+        const same = domIds.length > 0 && domIds.length === fetchedIds.length && domIds.every((id, idx) => id === fetchedIds[idx]);
+        if (same) {
+          // Persist network-fetched messages to IndexedDB (keep last 200)
+          try { if (window.messageCache) window.messageCache.writeWindow(chatId, (msgs || []).slice(-200)).catch(()=>{}); } catch (e) {}
+          setHasMoreBefore(page.hasMoreBefore ?? (restoreAnchor?.messageId ? msgs.length > 0 : msgs.length >= PAGE_SIZE));
+          if (restoreAnchor?.messageId) {
+            requestAnimationFrame(() => {
+              if (!restoreScrollAnchor(restoreAnchor)) {
+                messagesEl.scrollTop = 0;
+                updateScrollBottomButton();
+              }
+            });
+          } else {
+            scrollToBottom(true);
+          }
+          requestAnimationFrame(() => {
+            updateScrollBottomButton();
+            setTimeout(() => {
+              if (currentChatId !== chatId) return;
+              suppressScrollAnchorSave = false;
+              saveCurrentScrollAnchor(chatId, { force: true });
+              maybeLoadMoreAtTop();
+            }, 260);
+          });
+          scrollRestoreScheduled = true;
+        } else {
+          messagesEl.querySelectorAll('.msg-row, .msg-group, .date-separator').forEach(el => el.remove());
+          displayedMsgIds.clear();
+          setHasMoreBefore(page.hasMoreBefore ?? (restoreAnchor?.messageId ? msgs.length > 0 : msgs.length >= PAGE_SIZE));
+          renderMessages(msgs);
+        }
+      } catch (e) {
+        messagesEl.querySelectorAll('.msg-row, .msg-group, .date-separator').forEach(el => el.remove());
+        displayedMsgIds.clear();
+        setHasMoreBefore(page.hasMoreBefore ?? (restoreAnchor?.messageId ? msgs.length > 0 : msgs.length >= PAGE_SIZE));
+        renderMessages(msgs);
+      }
       // Persist network-fetched messages to IndexedDB (keep last 200)
       try { if (window.messageCache) window.messageCache.writeWindow(chatId, (msgs || []).slice(-200)).catch(()=>{}); } catch (e) {}
       // Cache background, avatars, and first 5 images

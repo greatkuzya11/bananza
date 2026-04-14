@@ -275,6 +275,41 @@
     } catch (e) {}
   }
 
+  // Mark messages as read in the IndexedDB cache.
+  // Marks messages in `chatId` authored by `authorUserId` with id <= lastReadId.
+  async function markMessagesRead(chatId, authorUserId, lastReadId) {
+    const cid = normalizeId(chatId);
+    const author = Number(authorUserId || 0);
+    const lid = normalizeId(lastReadId);
+    if (!currentUserId || !cid || !author || !lid) return 0;
+    try {
+      const updated = await withStore('readwrite', (store) => {
+        let count = 0;
+        const index = store.index(INDEX_USER_CHAT_ID);
+        const range = rangeForChat(cid, 0, lid);
+        const req = index.openCursor(range, 'next');
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (!cursor) return;
+          const row = cursor.value || {};
+          const msgAuthor = Number(row.user_id || row.userId || 0);
+          const mid = Number(row.id || 0);
+          if (msgAuthor === author && mid <= lid && !row.is_read) {
+            row.is_read = 1;
+            try { cursor.update(row); } catch (e) {}
+            count++;
+          }
+          cursor.continue();
+        };
+        req.onerror = () => {};
+        return count;
+      });
+      return Number(updated) || 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+
   window.messageCache = {
     init,
     readLatest,
@@ -283,6 +318,7 @@
     upsertMessage,
     deleteMessage,
     clearUserCache,
+    markMessagesRead,
   };
   window.cacheAssets = cacheAssets;
   window.clearAssetCache = clearAssetCache;

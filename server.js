@@ -713,6 +713,10 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
   const result = voiceFeature.attachVoiceMetadata(
     msgs.map(m => attachMessageMentions({ ...m, previews: prevStmt.all(m.id), reactions: reactStmt.all(m.id), is_read: m.id <= minRead }))
   );
+  // Build per-member last-read map so clients can atomically reconcile local cache/UI.
+  const members = db.prepare('SELECT user_id, COALESCE(last_read_id,0) as last_read_id FROM chat_members WHERE chat_id = ?').all(chatId);
+  const member_last_reads = {};
+  members.forEach(m => { member_last_reads[Number(m.user_id) || 0] = Number(m.last_read_id) || 0; });
 
   if (includeMeta) {
     const firstId = result.reduce((min, msg) => {
@@ -722,10 +726,10 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
     const hasMoreBefore = firstId !== Number.MAX_SAFE_INTEGER
       ? !!db.prepare('SELECT 1 FROM messages WHERE chat_id=? AND id<? AND is_deleted=0 LIMIT 1').get(chatId, firstId)
       : false;
-    return res.json({ messages: result, has_more_before: hasMoreBefore });
+    return res.json({ messages: result, has_more_before: hasMoreBefore, member_last_reads });
   }
 
-  res.json(result);
+  return res.json({ messages: result, member_last_reads });
 });
 
 app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
