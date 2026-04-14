@@ -429,7 +429,10 @@ a:hover { text-decoration: underline; }
 }
 .chat-header-info { flex: 1; min-width: 0; }
 .chat-title { font-weight: 600; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chat-status { font-size: 13px; color: var(--text-secondary); }
+.chat-status {
+  font-size: 13px; color: var(--text-secondary);
+  display: inline-flex; align-items: center; gap: 8px;
+}
 
 /* ── Messages ────────────────────────────────────────────────────────────── */
 .messages {
@@ -1234,6 +1237,10 @@ a:hover { text-decoration: underline; }
   width: 8px; height: 8px; border-radius: 50%;
   background: currentColor;
   flex-shrink: 0;
+  box-sizing: border-box;
+  /* subtle ring without shrinking the visible dot */
+  box-shadow: 0 0 0 2px var(--bg-panel-gradient);
+  transform: translateY(2px);
 }
 .admin-user-status.online { color: var(--success); }
 .admin-user-status.offline { color: var(--text-secondary); }

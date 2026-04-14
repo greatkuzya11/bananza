@@ -2672,8 +2672,13 @@
           chatStatus.style.color = isOnline ? 'var(--success)' : '';
         } else {
           chatStatus.classList.remove('online','offline');
-          chatStatus.textContent = `${onlineCount}/${total} online`;
-          chatStatus.style.color = '';
+          if (onlineCount === total && total > 0) {
+            chatStatus.innerHTML = `<span class="admin-user-status online"><span class="status-dot"></span>Все в сборе</span>`;
+            chatStatus.style.color = '';
+          } else {
+            chatStatus.textContent = `${onlineCount}/${total} online`;
+            chatStatus.style.color = '';
+          }
         }
       } else {
         // Fallback: show global online count, then asynchronously prime the cache
