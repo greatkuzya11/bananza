@@ -1451,6 +1451,30 @@
     }, 2000);
   }
 
+  async function copyTextToClipboard(text) {
+    const value = String(text || '');
+    if (!value) return false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+        return true;
+      }
+    } catch (e) {}
+    const area = document.createElement('textarea');
+    area.value = value;
+    area.setAttribute('readonly', 'readonly');
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    area.style.pointerEvents = 'none';
+    document.body.appendChild(area);
+    area.focus();
+    area.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    area.remove();
+    return ok;
+  }
+
   function closeForwardMessageModal({ animate = false } = {}) {
     if (!forwardMessageModal) {
       resetForwardMessageModal();
@@ -3138,6 +3162,7 @@
     // Reply/edit/react buttons outside bubble
     if (!msg.is_deleted) {
       html += '<div class="msg-actions">';
+      html += '<button class="msg-copy-btn" title="Копировать">⧉</button>';
       html += '<button class="msg-reply-btn" title="Reply">↩</button>';
       if (canEditMessage(msg)) html += '<button class="msg-edit-btn" title="Edit">✏️</button>';
       if (canForwardMessage(msg)) html += '<button class="msg-forward-btn" title="Forward">📤</button>';
@@ -3169,6 +3194,15 @@
       replyBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         setReplyFromRow(row);
+      });
+    }
+
+    const copyBtn = row.querySelector('.msg-copy-btn');
+    if (copyBtn) {
+      copyBtn.addEventListener('mousedown', (e) => e.preventDefault());
+      copyBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await copyMessageFromRow(row);
       });
     }
 
@@ -3633,6 +3667,47 @@
       return (row?.__voiceMessage?.transcription_text || msg.transcription_text || '').trim();
     }
     return msg.text || '';
+  }
+
+  function getSelectedMessageFragment(row) {
+    const selection = window.getSelection?.();
+    if (!selection || selection.isCollapsed || !selection.rangeCount) return '';
+    const text = selection.toString();
+    const bubble = row?.querySelector('.msg-bubble');
+    if (!bubble || !text.trim()) return '';
+    const anchorNode = selection.anchorNode;
+    const focusNode = selection.focusNode;
+    if (!anchorNode || !focusNode) return '';
+    return bubble.contains(anchorNode) && bubble.contains(focusNode) ? text.trim() : '';
+  }
+
+  function getMessageCopyText(row) {
+    const msg = row?.__messageData || {};
+    const parts = [];
+    if (msg.forwarded_from_display_name) {
+      parts.push(`Переслано от ${msg.forwarded_from_display_name}`);
+    }
+    if (msg.reply_to_id && msg.reply_display_name) {
+      const replyText = getReplyQuoteText(msg).trim();
+      const replyName = String(msg.reply_display_name || '').trim();
+      if (replyName || replyText) parts.push([replyName, replyText].filter(Boolean).join(': '));
+    }
+    if (msg.file_id && msg.file_name) parts.push(msg.file_name);
+    const mainText = getEditableText(row).trim();
+    if (mainText) parts.push(mainText);
+    if (!parts.length && msg.file_id) parts.push('Вложение');
+    return parts.filter(Boolean).join('\n').trim();
+  }
+
+  async function copyMessageFromRow(row) {
+    if (!row) return;
+    const selectedText = getSelectedMessageFragment(row);
+    const text = selectedText || getMessageCopyText(row);
+    if (!text) return;
+    const copied = await copyTextToClipboard(text);
+    showCenterToast(copied
+      ? (selectedText ? 'Фрагмент скопирован' : 'Сообщение скопировано')
+      : 'Не удалось скопировать');
   }
 
   function setReplyFromRow(row) {
@@ -5164,7 +5239,7 @@
       let lpTimer = null;
       messagesEl.addEventListener('touchstart', (e) => {
         const row = e.target.closest('.msg-row');
-        if (!row || e.target.closest('.msg-react-btn, .msg-reply-btn, .msg-edit-btn, .msg-forward-btn, .msg-group-avatar') || e.target.closest('.reaction-badge')) return;
+        if (!row || e.target.closest('.msg-copy-btn, .msg-react-btn, .msg-reply-btn, .msg-edit-btn, .msg-forward-btn, .msg-group-avatar') || e.target.closest('.reaction-badge')) return;
         lpTimer = setTimeout(() => {
           lpTimer = null;
           navigator.vibrate && navigator.vibrate(30);
@@ -5176,6 +5251,7 @@
       // Desktop right-click
       messagesEl.addEventListener('contextmenu', (e) => {
         const row = e.target.closest('.msg-row');
+        if (e.target.closest('.msg-actions')) return;
         if (!row) return;
         e.preventDefault();
         showReactionPicker(row, null);
