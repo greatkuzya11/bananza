@@ -275,18 +275,27 @@
     } catch (e) {}
   }
 
-  // Mark messages as read in the IndexedDB cache.
-  // Marks messages in `chatId` authored by `authorUserId` with id <= lastReadId.
-  async function markMessagesRead(chatId, authorUserId, lastReadId) {
+  // Sync read state for the current user's own cached messages in a chat.
+  // Own messages with id <= lastReadId become read, later own messages become unread.
+  async function syncOwnMessageReadState(chatId, lastReadId) {
     const cid = normalizeId(chatId);
-    const author = Number(authorUserId || 0);
-    const lid = normalizeId(lastReadId);
-    if (!currentUserId || !cid || !author || !lid) return 0;
+    const lid = Number.isFinite(Number(lastReadId)) ? Math.max(0, Math.floor(Number(lastReadId))) : 0;
+    if (!currentUserId || !cid) return 0;
+    const database = await openDB().catch(() => null);
+    if (!database) return 0;
     try {
-      const updated = await withStore('readwrite', (store) => {
-        let count = 0;
+      return await new Promise((resolve) => {
+        let updated = 0;
+        let settled = false;
+        function finish(value) {
+          if (settled) return;
+          settled = true;
+          resolve(value);
+        }
+        const tx = database.transaction(STORE_MESSAGES, 'readwrite');
+        const store = tx.objectStore(STORE_MESSAGES);
         const index = store.index(INDEX_USER_CHAT_ID);
-        const range = rangeForChat(cid, 0, lid);
+        const range = rangeForChat(cid);
         const req = index.openCursor(range, 'next');
         req.onsuccess = () => {
           const cursor = req.result;
@@ -294,17 +303,21 @@
           const row = cursor.value || {};
           const msgAuthor = Number(row.user_id || row.userId || 0);
           const mid = Number(row.id || 0);
-          if (msgAuthor === author && mid <= lid && !row.is_read) {
-            row.is_read = 1;
-            try { cursor.update(row); } catch (e) {}
-            count++;
+          if (msgAuthor === currentUserId && mid) {
+            const nextReadValue = mid <= lid ? 1 : 0;
+            const prevReadValue = Number(row.is_read) ? 1 : 0;
+            if (prevReadValue !== nextReadValue) {
+              row.is_read = nextReadValue;
+              try { cursor.update(row); updated += 1; } catch (e) {}
+            }
           }
           cursor.continue();
         };
-        req.onerror = () => {};
-        return count;
+        req.onerror = () => finish(0);
+        tx.oncomplete = () => finish(updated);
+        tx.onerror = () => finish(0);
+        tx.onabort = () => finish(0);
       });
-      return Number(updated) || 0;
     } catch (e) {
       return 0;
     }
@@ -318,7 +331,7 @@
     upsertMessage,
     deleteMessage,
     clearUserCache,
-    markMessagesRead,
+    syncOwnMessageReadState,
   };
   window.cacheAssets = cacheAssets;
   window.clearAssetCache = clearAssetCache;

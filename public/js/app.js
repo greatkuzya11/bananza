@@ -98,6 +98,7 @@
   let mentionTargetsByChat = new Map();
   let mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [] };
   let avatarUserMenuState = null;
+  let chatMemberLastReads = new Map();
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DOM
@@ -1914,7 +1915,10 @@
     };
 
     ws.onmessage = (e) => {
-      try { handleWSMessage(JSON.parse(e.data)); } catch {}
+      try {
+        const payload = JSON.parse(e.data);
+        Promise.resolve(handleWSMessage(payload)).catch(() => {});
+      } catch {}
     };
   }
 
@@ -1923,6 +1927,7 @@
       case 'message': {
         const isOwnIncomingMessage = msg.message.user_id === currentUser.id;
         const isMentionForMe = isMessageMentioningCurrentUser(msg.message);
+        applyOwnReadStateToMessage(msg.message, msg.message.chat_id);
         if (!isOwnIncomingMessage && !document.hidden) {
           if (isMentionForMe && isMentionSoundEnabled()) {
             playAppSound('mention');
@@ -2042,13 +2047,12 @@
         break;
       }
       case 'messages_read': {
-        // Always update local cache and UI when a read position is announced.
-        try {
-          if (window.messageCache && typeof window.messageCache.markMessagesRead === 'function') {
-            await window.messageCache.markMessagesRead(msg.chatId, msg.userId, msg.lastReadId);
-          }
-        } catch (e) {}
-        if (msg.chatId === currentChatId) {
+        const readState = await reconcileChatReadState(
+          msg.chatId,
+          { [msg.userId]: msg.lastReadId },
+          { updateVisible: msg.chatId === currentChatId }
+        );
+        if (false && msg.chatId === currentChatId) {
           // Update own messages UI (double-check) if applicable.
           messagesEl.querySelectorAll('.msg-row.own').forEach(row => {
             const msgId = +row.dataset.msgId;
@@ -2062,7 +2066,7 @@
           });
         }
         // Update cached chat object unread info if the event is about the current user
-        if (msg.userId === currentUser.id) {
+        if (false && msg.userId === currentUser.id) {
           const c = chats.find(c => c.id === msg.chatId);
           if (c) {
             c.last_read_id = Math.max(Number(c.last_read_id || 0), Number(msg.lastReadId || 0));
@@ -2073,6 +2077,7 @@
             renderChatList(chatSearch.value);
           }
         }
+        if (readState.chatReadChanged) renderChatList(chatSearch.value);
         break;
       }
       case 'reaction': {
@@ -2112,6 +2117,7 @@
         break;
       }
       case 'chat_removed': {
+        chatMemberLastReads.delete(Number(msg.chatId) || 0);
         chats = chats.filter(c => c.id !== msg.chatId);
         renderChatList(chatSearch.value);
         if (currentChatId === msg.chatId) {
@@ -2261,6 +2267,121 @@
     const hasMessages = Boolean(messagesEl.querySelector('.msg-row'));
     const shouldShow = Boolean(currentChatId && hasMessages && !isNearBottom(8));
     scrollBottomBtn.classList.toggle('visible', shouldShow);
+  }
+
+  function normalizeMemberLastReads(value) {
+    const normalized = {};
+    if (!value || typeof value !== 'object') return normalized;
+    for (const [rawUserId, rawLastReadId] of Object.entries(value)) {
+      const userId = Number(rawUserId);
+      const lastReadId = Number(rawLastReadId);
+      if (!Number.isFinite(userId) || userId <= 0) continue;
+      normalized[userId] = Number.isFinite(lastReadId) && lastReadId > 0 ? Math.floor(lastReadId) : 0;
+    }
+    return normalized;
+  }
+
+  function getChatMemberLastReads(chatId) {
+    const id = Number(chatId || 0);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    return chatMemberLastReads.get(id) || null;
+  }
+
+  function storeChatMemberLastReads(chatId, incomingReads, { replace = false } = {}) {
+    const id = Number(chatId || 0);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    const nextReads = normalizeMemberLastReads(incomingReads);
+    const merged = replace
+      ? nextReads
+      : { ...(chatMemberLastReads.get(id) || {}), ...nextReads };
+    chatMemberLastReads.set(id, merged);
+    return merged;
+  }
+
+  function getChatReadReceiptThreshold(chatId) {
+    const reads = getChatMemberLastReads(chatId);
+    const currentUserId = Number(currentUser?.id || 0);
+    if (!reads || !currentUserId) return null;
+    const otherReads = Object.entries(reads)
+      .filter(([userId]) => Number(userId) !== currentUserId)
+      .map(([, lastReadId]) => Math.max(0, Number(lastReadId) || 0));
+    if (!otherReads.length) return Number.MAX_SAFE_INTEGER;
+    return otherReads.reduce((min, lastReadId) => Math.min(min, lastReadId), Number.MAX_SAFE_INTEGER);
+  }
+
+  function applyOwnReadStateToMessage(msg, chatId = msg?.chat_id || msg?.chatId || currentChatId) {
+    if (!msg || Number(msg.user_id || 0) !== Number(currentUser?.id || 0)) return msg;
+    const threshold = getChatReadReceiptThreshold(chatId);
+    if (threshold == null) return msg;
+    msg.is_read = Number(msg.id || 0) <= threshold ? 1 : 0;
+    return msg;
+  }
+
+  function applyOwnReadStateToMessages(chatId, messages = []) {
+    if (!Array.isArray(messages)) return messages;
+    messages.forEach((msg) => applyOwnReadStateToMessage(msg, chatId));
+    return messages;
+  }
+
+  function updateVisibleOwnReadState(chatId = currentChatId) {
+    const id = Number(chatId || 0);
+    if (!id || id !== Number(currentChatId || 0)) return;
+    const threshold = getChatReadReceiptThreshold(id);
+    if (threshold == null) return;
+    messagesEl.querySelectorAll('.msg-row.own').forEach((row) => {
+      const msgId = Number(row.dataset.msgId || 0);
+      const statusEl = row.querySelector('.msg-status');
+      if (!msgId || !statusEl) return;
+      const isRead = msgId <= threshold;
+      statusEl.classList.toggle('read', isRead);
+      statusEl.textContent = isRead ? '✓✓' : '✓';
+      if (row.__messageData) row.__messageData.is_read = isRead ? 1 : 0;
+    });
+  }
+
+  function updateLocalChatReadProgress(chatId, lastReadId) {
+    const id = Number(chatId || 0);
+    const readId = Number(lastReadId || 0);
+    if (!id || !readId) return false;
+    const chat = chats.find(c => c.id === id);
+    if (!chat) return false;
+    const prevLastReadId = Number(chat.last_read_id || 0);
+    const nextLastReadId = Math.max(prevLastReadId, readId);
+    const prevUnreadCount = Number(chat.unread_count || 0);
+    const prevFirstUnreadId = chat.first_unread_id ?? null;
+    chat.last_read_id = nextLastReadId;
+    if (!chat.last_message_id || nextLastReadId >= Number(chat.last_message_id || 0)) {
+      chat.unread_count = 0;
+      chat.first_unread_id = null;
+    }
+    return prevLastReadId !== chat.last_read_id
+      || prevUnreadCount !== Number(chat.unread_count || 0)
+      || prevFirstUnreadId !== (chat.first_unread_id ?? null);
+  }
+
+  async function reconcileChatReadState(chatId, incomingReads, { replace = false, updateVisible = false } = {}) {
+    const id = Number(chatId || 0);
+    if (!id) return { reads: null, chatReadChanged: false, threshold: null, applied: false };
+    const hadBaseline = chatMemberLastReads.has(id);
+    const reads = storeChatMemberLastReads(id, incomingReads, { replace });
+    if (!reads) return { reads: null, chatReadChanged: false, threshold: null, applied: false };
+
+    const currentUserLastRead = Number(reads[currentUser?.id] || 0);
+    const chatReadChanged = currentUserLastRead > 0 ? updateLocalChatReadProgress(id, currentUserLastRead) : false;
+    const threshold = getChatReadReceiptThreshold(id);
+    const chat = chats.find(c => c.id === id);
+    const safeToApply = threshold != null && (replace || hadBaseline || chat?.type === 'private');
+
+    if (safeToApply) {
+      try {
+        if (window.messageCache && typeof window.messageCache.syncOwnMessageReadState === 'function') {
+          await window.messageCache.syncOwnMessageReadState(id, threshold);
+        }
+      } catch (e) {}
+      if (updateVisible) updateVisibleOwnReadState(id);
+    }
+
+    return { reads, chatReadChanged, threshold, applied: safeToApply };
   }
 
   function normalizeMessagesPage(data) {
@@ -2582,6 +2703,7 @@
           ? await window.messageCache.readAround(chatId, restoreAnchor.messageId, { limit: PAGE_SIZE })
           : await window.messageCache.readLatest(chatId, { limit: PAGE_SIZE });
         if (Array.isArray(cachedMsgs) && cachedMsgs.length) {
+          applyOwnReadStateToMessages(chatId, cachedMsgs);
           displayedMsgIds.clear();
           setHasMoreBefore(restoreAnchor?.messageId ? cachedMsgs.length > 0 : cachedMsgs.length >= PAGE_SIZE);
           renderMessages(cachedMsgs);
@@ -2615,25 +2737,12 @@
       const page = normalizeMessagesPage(raw);
       const msgs = page.messages;
       const memberLastReads = raw && raw.member_last_reads ? raw.member_last_reads : null;
-      // Apply server-side per-user last_read positions into local cache so IndexedDB/UI are consistent.
-      if (memberLastReads && window.messageCache && typeof window.messageCache.markMessagesRead === 'function') {
-        try {
-          // Update cache for each member (batched). Await to ensure cache reflects read state before render/writeWindow.
-          for (const [uid, lr] of Object.entries(memberLastReads)) {
-            const uidn = Number(uid) || 0;
-            const lrn = Number(lr) || 0;
-            if (uidn && lrn) {
-              try { await window.messageCache.markMessagesRead(chatId, uidn, lrn); } catch (e) {}
-            }
-          }
-          // Update local chat.last_read_id for current user if provided, so unread counters reflect correctly.
-          const myLast = memberLastReads[String(currentUser.id)];
-          if (myLast) {
-            const chatObj = chats.find(c => c.id === chatId);
-            if (chatObj) chatObj.last_read_id = Math.max(Number(chatObj.last_read_id || 0), Number(myLast));
-          }
-        } catch (e) {}
-      }
+      const readState = await reconcileChatReadState(chatId, memberLastReads, {
+        replace: true,
+        updateVisible: currentChatId === chatId,
+      });
+      if (readState.chatReadChanged) renderChatList(chatSearch.value);
+      applyOwnReadStateToMessages(chatId, msgs);
       // Re-clear after async gap: WS may have appended messages while we waited
       if (currentChatId !== chatId) { suppressScrollAnchorSave = false; return; } // user switched chats
 
@@ -2927,6 +3036,7 @@
   }
 
   function createMessageEl(msg, showName = true) {
+    applyOwnReadStateToMessage(msg, msg?.chat_id || msg?.chatId || currentChatId);
     const isOwn = msg.user_id === currentUser.id;
     const isMediaMessage = Boolean(
       !msg.is_deleted &&
@@ -3214,8 +3324,16 @@
     try {
       const params = new URLSearchParams({ limit: String(PAGE_SIZE), meta: '1' });
       if (firstId) params.set('before', firstId);
-      const page = normalizeMessagesPage(await api(`/api/chats/${chatId}/messages?${params}`));
+      const raw = await api(`/api/chats/${chatId}/messages?${params}`);
+      const page = normalizeMessagesPage(raw);
       const msgs = page.messages;
+      const memberLastReads = raw && raw.member_last_reads ? raw.member_last_reads : null;
+      const readState = await reconcileChatReadState(chatId, memberLastReads, {
+        replace: true,
+        updateVisible: currentChatId === chatId,
+      });
+      if (readState.chatReadChanged) renderChatList(chatSearch.value);
+      applyOwnReadStateToMessages(chatId, msgs);
       if (currentChatId !== chatId) return;
       setHasMoreBefore(page.hasMoreBefore ?? msgs.length >= PAGE_SIZE);
 
@@ -3385,6 +3503,7 @@
   function applyMessageUpdate(msg) {
     if (!msg?.id) return;
     updateVisibleReplyQuotesFromMessage(msg);
+    applyOwnReadStateToMessage(msg, msg.chat_id || currentChatId);
     try { if (window.messageCache) window.messageCache.upsertMessage(msg).catch(()=>{}); } catch (e) {}
     if (msg.chat_id !== currentChatId) return;
 
@@ -3822,9 +3941,35 @@
     if (!handle) return;
     let dragging = false;
     let startX, startW;
+    const SIDEBAR_WIDTH_KEY = 'sidebarWidth';
+    const MIN_SIDEBAR_WIDTH = 200;
+    const MAX_SIDEBAR_WIDTH = 600;
 
-    const saved = localStorage.getItem('sidebarWidth');
-    if (saved) sidebar.style.width = saved + 'px';
+    function clampSidebarWidth(value) {
+      const width = Number(value || 0);
+      const viewportWidth = Math.max(window.innerWidth || 0, document.documentElement.clientWidth || 0, MIN_SIDEBAR_WIDTH);
+      const maxAllowed = Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, viewportWidth - 80));
+      if (!Number.isFinite(width) || width <= 0) return maxAllowed;
+      return Math.max(MIN_SIDEBAR_WIDTH, Math.min(maxAllowed, Math.round(width)));
+    }
+
+    function applySidebarWidth() {
+      if (window.innerWidth <= 768) {
+        sidebar.style.width = '';
+        return;
+      }
+      const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY) || 0);
+      if (saved > 0) sidebar.style.width = `${clampSidebarWidth(saved)}px`;
+      else sidebar.style.width = `${clampSidebarWidth(sidebar.offsetWidth || 320)}px`;
+    }
+
+    function persistSidebarWidth(width = sidebar.offsetWidth) {
+      if (window.innerWidth <= 768) return;
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(clampSidebarWidth(width)));
+    }
+
+    applySidebarWidth();
+    window.addEventListener('resize', applySidebarWidth);
 
     handle.addEventListener('mousedown', (e) => {
       e.preventDefault();
@@ -3838,7 +3983,7 @@
 
     document.addEventListener('mousemove', (e) => {
       if (!dragging) return;
-      const newW = Math.max(200, Math.min(600, startW + e.clientX - startX));
+      const newW = clampSidebarWidth(startW + e.clientX - startX);
       sidebar.style.width = newW + 'px';
     });
 
@@ -3848,7 +3993,7 @@
       handle.classList.remove('active');
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
-      localStorage.setItem('sidebarWidth', sidebar.offsetWidth);
+      persistSidebarWidth(sidebar.offsetWidth);
     });
 
     // Touch support
@@ -3861,7 +4006,7 @@
 
     document.addEventListener('touchmove', (e) => {
       if (!dragging) return;
-      const newW = Math.max(200, Math.min(600, startW + e.touches[0].clientX - startX));
+      const newW = clampSidebarWidth(startW + e.touches[0].clientX - startX);
       sidebar.style.width = newW + 'px';
     }, { passive: true });
 
@@ -3869,7 +4014,7 @@
       if (!dragging) return;
       dragging = false;
       handle.classList.remove('active');
-      localStorage.setItem('sidebarWidth', sidebar.offsetWidth);
+      persistSidebarWidth(sidebar.offsetWidth);
     });
   })();
 

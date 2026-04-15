@@ -714,7 +714,12 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
     msgs.map(m => attachMessageMentions({ ...m, previews: prevStmt.all(m.id), reactions: reactStmt.all(m.id), is_read: m.id <= minRead }))
   );
   // Build per-member last-read map so clients can atomically reconcile local cache/UI.
-  const members = db.prepare('SELECT user_id, COALESCE(last_read_id,0) as last_read_id FROM chat_members WHERE chat_id = ?').all(chatId);
+  const members = db.prepare(`
+    SELECT cm.user_id, COALESCE(cm.last_read_id,0) as last_read_id
+    FROM chat_members cm
+    JOIN users u ON u.id=cm.user_id
+    WHERE cm.chat_id = ? AND COALESCE(u.is_ai_bot,0)=0
+  `).all(chatId);
   const member_last_reads = {};
   members.forEach(m => { member_last_reads[Number(m.user_id) || 0] = Number(m.last_read_id) || 0; });
 
