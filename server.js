@@ -739,7 +739,7 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
 
 app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   const chatId = +req.params.chatId;
-  const { text, fileId, replyToId } = req.body;
+  const { text, fileId, replyToId, client_id } = req.body;
 
   if (!text && !fileId) return res.status(400).json({ error: 'Empty message' });
   if (text && (typeof text !== 'string' || text.length > 5000))
@@ -782,6 +782,8 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   msg.reactions = [];
   attachMessageMentions(msg);
   const hydratedMsg = voiceFeature.attachVoiceMetadata([msg])[0];
+  // Echo client_id back to clients so optimistic messages can be matched
+  if (client_id) hydratedMsg.client_id = client_id;
 
   broadcastToChatAll(chatId, { type: 'message', message: hydratedMsg });
   pushFeature.notifyMessageCreated(hydratedMsg);

@@ -380,19 +380,34 @@
   }
 
   function formatTime(iso) {
-    const d = new Date(iso + 'Z');
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (!iso) return '';
+    try {
+      const s = String(iso);
+      const needsZ = !(/[zZ]$/.test(s) || /[+\-]\d{2}:?\d{2}$/.test(s));
+      const d = new Date(needsZ ? s + 'Z' : s);
+      if (isNaN(d.getTime())) return 'Invalid Date';
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return 'Invalid Date';
+    }
   }
 
   function formatDate(iso) {
-    const d = new Date(iso + 'Z');
-    const today = new Date();
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-
-    if (d.toDateString() === today.toDateString()) return 'Today';
-    if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
-    return d.toLocaleDateString([], { day: 'numeric', month: 'long', year: 'numeric' });
+    if (!iso) return '';
+    try {
+      const s = String(iso);
+      const needsZ = !(/[zZ]$/.test(s) || /[+\-]\d{2}:?\d{2}$/.test(s));
+      const d = new Date(needsZ ? s + 'Z' : s);
+      if (isNaN(d.getTime())) return 'Invalid Date';
+      const today = new Date();
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      if (d.toDateString() === today.toDateString()) return 'Today';
+      if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+      return d.toLocaleDateString([], { day: 'numeric', month: 'long', year: 'numeric' });
+    } catch {
+      return 'Invalid Date';
+    }
   }
 
   function formatSize(bytes) {
@@ -1959,6 +1974,19 @@
             playAppSound(msg.message.chat_id === currentChatId ? 'incoming' : 'notification');
           }
         }
+        // If this message echoes a client_id, remove optimistic placeholder first
+        try {
+          if (msg.message && msg.message.client_id) {
+            const optimisticEl = messagesEl.querySelector(`[data-client-id="${msg.message.client_id}"]`);
+            if (optimisticEl) {
+              const wasNearBottom = isNearBottom();
+              const anchor = !wasNearBottom && !isNearBottom(8) ? captureScrollAnchor() : null;
+              optimisticEl.remove();
+              displayedMsgIds.delete(optimisticEl.dataset.msgId);
+              if (anchor) requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
+            }
+          }
+        } catch (e) {}
         // Update chat list regardless
         updateChatListLastMessage(msg.message);
         try { if (window.messageCache) window.messageCache.upsertMessage(msg.message).catch(()=>{}); } catch (e) {}
@@ -3080,6 +3108,7 @@
     const row = document.createElement('div');
     row.className = `msg-row ${isOwn ? 'own' : 'other'}${isEmojiOnly ? ' emoji-only-message' : ''}${isMediaMessage ? ' media-message' : ''}`;
     row.dataset.msgId = msg.id;
+    if (msg.client_id) row.dataset.clientId = msg.client_id;
     row.dataset.date = formatDate(msg.created_at);
     row.dataset.userId = msg.user_id;
     row.__messageData = { ...msg };
@@ -3146,12 +3175,19 @@
       }
 
       // Delete button (inside bubble)
-      if (isOwn || currentUser.is_admin) {
-        html += `<button class="msg-delete-btn" data-id="${msg.id}" title="Delete">🗑</button>`;
-      }
+        if (isOwn || currentUser.is_admin) {
+          html += `<button class="msg-delete-btn" data-id="${msg.id}" title="Delete">🗑</button>`;
+        }
     }
 
-    const statusIcon = isOwn && !msg.is_deleted ? `<span class="msg-status${msg.is_read ? ' read' : ''}">${msg.is_read ? '✓✓' : '✓'}</span>` : '';
+    // Client-side status overrides server read icons when present
+    let statusIcon = '';
+    if (isOwn && !msg.is_deleted) {
+      if (msg.client_status === 'sending') statusIcon = `<span class="msg-status sending">⏳</span>`;
+      else if (msg.client_status === 'queued') statusIcon = `<span class="msg-status queued">🕒</span>`;
+      else if (msg.client_status === 'failed') statusIcon = `<span class="msg-status failed">❗</span>`;
+      else statusIcon = `<span class="msg-status${msg.is_read ? ' read' : ''}">${msg.is_read ? '✓✓' : '✓'}</span>`;
+    }
     const editedIcon = !msg.is_deleted && msg.edited_at ? '<span class="msg-edited" title="Edited">✎</span>' : '';
     const reactionsHtml = (!msg.is_deleted && msg.reactions && msg.reactions.length > 0)
       ? `<div class="msg-reactions">${renderReactions(msg.reactions)}</div>` : '<div></div>';
@@ -3171,6 +3207,9 @@
     }
 
     row.innerHTML = html;
+    // Persist client_status on row for CSS/logic; apply class for failed state so retry button can be overlayed
+    if (msg.client_status) row.dataset.clientStatus = msg.client_status;
+    if (msg.client_status === 'failed') row.classList.add('client-failed');
     if (isMediaMessage) {
       const mediaContent = row.querySelector(':scope > .msg-content');
       const mediaActions = row.querySelector(':scope > .msg-actions');
@@ -3220,6 +3259,11 @@
         e.stopPropagation();
         openForwardMessageModal(row.__messageData);
       });
+    }
+
+    const retryBtn = row.querySelector('.msg-retry-btn');
+    if (retryBtn) {
+      retryBtn.addEventListener('click', (e) => { e.stopPropagation(); retrySend(row); });
     }
 
     row.querySelectorAll('.mention-link').forEach((btn) => {
@@ -3293,8 +3337,59 @@
     }
 
     window.BananzaVoiceHooks?.decorateMessageRow?.(row, msg);
+    // Ensure status UI is in sync (adds retry button when failed)
+    updateRowStatus(row);
 
     return row;
+  }
+
+  // Update visible status indicator inside a message row according to __messageData.client_status
+  function updateRowStatus(row) {
+    try {
+      const d = row.__messageData || {};
+      const statusEl = row.querySelector('.msg-status');
+      if (!statusEl) return;
+      if (d.client_status === 'sending') { statusEl.className = 'msg-status sending'; statusEl.textContent = '⏳'; }
+      else if (d.client_status === 'queued') { statusEl.className = 'msg-status queued'; statusEl.textContent = '🕒'; }
+      else if (d.client_status === 'failed') { statusEl.className = 'msg-status failed'; statusEl.textContent = '❗'; }
+      else { statusEl.className = `msg-status${d.is_read ? ' read' : ''}`; statusEl.textContent = d.is_read ? '✓✓' : '✓'; }
+      // Ensure Retry button exists for failed client messages (visible without hover)
+      const deleteBtn = row.querySelector('.msg-delete-btn');
+      let retryBtn = row.querySelector('.msg-retry-btn');
+      if (d.client_status === 'failed') {
+        if (!retryBtn) {
+          retryBtn = document.createElement('button');
+          retryBtn.type = 'button';
+          retryBtn.className = 'msg-retry-btn';
+          retryBtn.title = 'Retry';
+          retryBtn.textContent = '↻';
+          const bubble = row.querySelector('.msg-bubble');
+          if (bubble) bubble.appendChild(retryBtn);
+          else row.appendChild(retryBtn);
+          retryBtn.addEventListener('click', (e) => { e.stopPropagation(); retrySend(row); });
+        }
+      } else {
+        if (retryBtn) retryBtn.remove();
+      }
+    } catch (e) {}
+  }
+
+  async function retrySend(row) {
+    if (!row || !row.__clientPayload) return;
+    const payload = row.__clientPayload;
+    row.__messageData = row.__messageData || {};
+    row.__messageData.client_status = 'sending';
+    updateRowStatus(row);
+    try {
+      await api(`/api/chats/${currentChatId}/messages`, {
+        method: 'POST',
+        body: { text: payload.text || null, fileId: payload.fileId || null, replyToId: payload.replyToId || null, client_id: payload.client_id }
+      });
+      // on success, server will broadcast message with client_id and replace optimistic row
+    } catch (e) {
+      row.__messageData.client_status = 'failed';
+      updateRowStatus(row);
+    }
   }
 
   function formatDuration(seconds) {
@@ -3472,24 +3567,52 @@
     clearReply();
     window.BananzaVoiceHooks?.refreshComposerState?.();
 
-    try {
-      // First message: text + first file (or just text)
-      await api(`/api/chats/${currentChatId}/messages`, {
-        method: 'POST',
-        body: { text: text || null, fileId: firstFileId, replyToId }
-      });
-      // Remaining files: one message per file
-      for (let i = 1; i < filesToSend.length; i++) {
+    // Prepare message list: first message may contain text and first file, then one message per remaining file
+    const toSend = [];
+    toSend.push({ text: text || null, fileId: firstFileId, replyToId });
+    for (let i = 1; i < filesToSend.length; i++) toSend.push({ text: null, fileId: filesToSend[i].id, replyToId: null });
+
+    // Render optimistic messages immediately and attempt send; on failure mark as failed and show retry
+    for (const item of toSend) {
+      const clientId = 'c-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+      const optimisticMsg = {
+        id: clientId,
+        client_id: clientId,
+        client_status: 'sending',
+        chat_id: currentChatId,
+        user_id: currentUser.id,
+        display_name: currentUser.display_name,
+        avatar_color: currentUser.avatar_color,
+        text: item.text,
+        file_id: item.fileId || null,
+        file_stored: null,
+        file_type: (item.fileId && filesToSend.find(f => f.id === item.fileId)) ? (filesToSend.find(f => f.id === item.fileId).type || null) : null,
+        created_at: new Date().toISOString(),
+        is_read: false,
+        reactions: [],
+        previews: [],
+        is_deleted: false,
+      };
+      appendMessage(optimisticMsg);
+      const row = messagesEl.querySelector(`[data-msg-id="${clientId}"]`);
+      if (row) row.__clientPayload = { text: item.text, fileId: item.fileId, replyToId: item.replyToId, client_id: clientId };
+
+      try {
         await api(`/api/chats/${currentChatId}/messages`, {
           method: 'POST',
-          body: { text: null, fileId: filesToSend[i].id, replyToId: null }
+          body: { text: item.text || null, fileId: item.fileId || null, replyToId: item.replyToId || null, client_id: clientId }
         });
+      } catch (e) {
+        // mark optimistic row as failed
+        if (row) {
+          row.__messageData = row.__messageData || {};
+          row.__messageData.client_status = 'failed';
+          updateRowStatus(row);
+        }
       }
-      playAppSound('send');
-      scrollToBottom();
-    } catch (e) {
-      alert(e.message);
     }
+    playAppSound('send');
+    scrollToBottom();
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
