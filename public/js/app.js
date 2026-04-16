@@ -41,6 +41,13 @@
     { id: 'tokyo-night', name: 'Tokyo Night', note: 'Ink + electric blue', colors: ['#1a1b26', '#7aa2f7'], own: '#2b4d7d', other: '#202437' },
   ];
   const UI_THEME_IDS = new Set(UI_THEMES.map(t => t.id));
+  const MODAL_ANIMATION_STYLES = [
+    { id: 'soft', name: 'Soft', note: 'Best default: fade + subtle lift with transform only.' },
+    { id: 'fade', name: 'Fade', note: 'Simpler cross-fade with no movement.' },
+    { id: 'none', name: 'None', note: 'Instant open/close with no animation.' },
+  ];
+  const MODAL_ANIMATION_STYLE_IDS = new Set(MODAL_ANIMATION_STYLES.map(style => style.id));
+  const MODAL_TRANSITION_FALLBACK_MS = 220;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STATE
@@ -78,6 +85,7 @@
   let suppressScrollAnchorSave = false;
   let scrollAnchorSaveTimer = null;
   let currentUiTheme = 'bananza';
+  let currentModalAnimation = 'soft';
   let weatherSettings = { enabled: false, refresh_minutes: 30, location: null };
   let weatherSettingsLoaded = false;
   let selectedWeatherLocation = null;
@@ -122,13 +130,16 @@
   let selectedAiBotId = null;
   let forwardMessageState = null;
   let forwardMessageBusy = false;
-  let forwardModalCloseTimer = null;
   let centerToastTimer = null;
   let mentionTargetsByChat = new Map();
   let mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [] };
   let mentionPickerPointerState = null;
   let avatarUserMenuState = null;
   let chatMemberLastReads = new Map();
+  const modalRegistry = new Map();
+  let modalStack = [];
+  let modalHistoryDepth = 0;
+  let modalSkipPopstateCount = 0;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DOM
@@ -176,6 +187,7 @@
   const weatherWidget = $('#weatherWidget');
   const settingsModal = $('#settingsModal');
   const themeSettingsModal = $('#themeSettingsModal');
+  const animationSettingsModal = $('#animationSettingsModal');
   const weatherSettingsModal = $('#weatherSettingsModal');
   const notificationSettingsModal = $('#notificationSettingsModal');
   const soundSettingsModal = $('#soundSettingsModal');
@@ -218,9 +230,14 @@
     autoResize: () => autoResize(),
     clearReply: () => clearReply(),
     closeAllModals: () => closeAllModals(),
+    registerManagedModal: (id, options) => registerModal(id, options),
+    openManagedModal: (id, options) => openModal(id, options),
+    closeManagedModal: (id, options) => closeModal(id, options),
+    closeTopManagedModal: (options) => closeTopModal(options),
     getToken: () => token || localStorage.getItem('token'),
     getCurrentUser: () => currentUser,
     getCurrentChatId: () => currentChatId,
+    getCurrentModalAnimation: () => currentModalAnimation,
     getPendingFiles: () => [...pendingFiles],
     getReplyTo: () => replyTo ? { ...replyTo } : null,
     getEditTo: () => editTo ? { ...editTo } : null,
@@ -373,6 +390,60 @@
     } catch (e) {
       applyUiTheme(prevTheme);
       setThemeStatus(e.message || 'Theme save failed', 'error');
+    }
+  }
+
+  function normalizeModalAnimationStyle(style) {
+    return MODAL_ANIMATION_STYLE_IDS.has(style) ? style : 'soft';
+  }
+
+  function setModalAnimationStatus(message, type = '') {
+    const el = $('#settingsAnimationStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function renderModalAnimationOptions() {
+    const wrap = $('#settingsAnimationOptions');
+    if (!wrap) return;
+    wrap.innerHTML = MODAL_ANIMATION_STYLES.map((style) => `
+      <button type="button" class="animation-style-card${style.id === currentModalAnimation ? ' active' : ''}" data-modal-animation-style="${style.id}">
+        <strong>${esc(style.name)}</strong>
+        <small>${esc(style.note)}</small>
+      </button>
+    `).join('');
+  }
+
+  function applyModalAnimation(style, persist = true) {
+    const nextStyle = normalizeModalAnimationStyle(style);
+    currentModalAnimation = nextStyle;
+    document.documentElement.dataset.modalAnimation = nextStyle;
+    if (currentUser) {
+      currentUser.ui_modal_animation = nextStyle;
+      if (persist) persistCurrentUser();
+    }
+    renderModalAnimationOptions();
+  }
+
+  async function selectModalAnimation(style) {
+    const nextStyle = normalizeModalAnimationStyle(style);
+    if (nextStyle === currentModalAnimation) return;
+    const prevStyle = currentModalAnimation;
+    applyModalAnimation(nextStyle);
+    setModalAnimationStatus('Saving...');
+    try {
+      const res = await api('/api/user/modal-animation', { method: 'PATCH', body: { style: nextStyle } });
+      currentUser = { ...currentUser, ...res.user };
+      applyModalAnimation(currentUser.ui_modal_animation);
+      setModalAnimationStatus('Saved', 'success');
+      setTimeout(() => {
+        if ($('#settingsAnimationStatus')?.textContent === 'Saved') setModalAnimationStatus('');
+      }, 1200);
+    } catch (e) {
+      applyModalAnimation(prevStyle);
+      setModalAnimationStatus(e.message || 'Animation save failed', 'error');
     }
   }
 
@@ -682,6 +753,10 @@
         ...user,
         avatar_url: user.avatar_url,
       };
+      if (user.ui_theme) applyUiTheme(user.ui_theme, false);
+      if (Object.prototype.hasOwnProperty.call(user, 'ui_modal_animation')) {
+        applyModalAnimation(user.ui_modal_animation, false);
+      }
       persistCurrentUser();
       updateCurrentUserFooter();
       if (!menuDrawer.classList.contains('hidden')) openMenuDrawer();
@@ -1958,32 +2033,252 @@
     return ok;
   }
 
-  function closeForwardMessageModal({ animate = false } = {}) {
+  function modalIdOf(modalOrId) {
+    if (typeof modalOrId === 'string') return modalOrId;
+    return modalOrId?.id || '';
+  }
+
+  function modalEntryOf(modalOrId) {
+    return modalRegistry.get(modalIdOf(modalOrId)) || null;
+  }
+
+  function rememberActiveElement() {
+    return document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
+
+  function focusElementIfPossible(el) {
+    if (!(el instanceof HTMLElement) || !el.isConnected) return false;
+    if (el.matches('[disabled], [aria-hidden="true"]')) return false;
+    if (el.closest('[inert]')) return false;
+    try {
+      el.focus({ preventScroll: true });
+      return true;
+    } catch {
+      try {
+        el.focus();
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
+
+  function getModalFocusableTarget(entry) {
+    return entry?.el?.querySelector?.(
+      '[autofocus], button:not([disabled]), input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+    ) || null;
+  }
+
+  function setModalInertState(entry, disabled) {
+    if (!entry?.el) return;
+    if (disabled) {
+      entry.el.setAttribute('inert', '');
+      entry.el.setAttribute('aria-hidden', 'true');
+      entry.el.removeAttribute('aria-modal');
+    } else {
+      entry.el.removeAttribute('inert');
+      entry.el.setAttribute('aria-hidden', 'false');
+      entry.el.setAttribute('aria-modal', 'true');
+    }
+  }
+
+  function updateModalStackState() {
+    modalStack.forEach((entry, index) => {
+      const isTop = index === modalStack.length - 1;
+      entry.el.style.setProperty('--modal-layer-z', String(150 + index * 4));
+      entry.el.classList.toggle('is-underlay', !isTop && !entry.isClosing);
+      if (isTop && !entry.isClosing) setModalInertState(entry, false);
+      else setModalInertState(entry, true);
+    });
+  }
+
+  function pushModalHistoryState(modalId) {
+    history.pushState({ ...(history.state || {}), modalId, modalDepth: modalHistoryDepth + 1 }, '');
+    modalHistoryDepth += 1;
+  }
+
+  function rewindModalHistory(steps = 1) {
+    const depth = Math.min(Number(steps) || 0, modalHistoryDepth);
+    if (!depth) return;
+    modalSkipPopstateCount += depth;
+    modalHistoryDepth -= depth;
+    history.go(-depth);
+  }
+
+  function finalizeModalClose(entry) {
+    if (!entry?.el) return false;
+    clearTimeout(entry.closeTimer);
+    entry.closeTimer = null;
+    entry.isClosing = false;
+    entry.el.classList.add('hidden');
+    entry.el.classList.remove('is-open', 'is-underlay', 'is-closing');
+    entry.el.style.removeProperty('--modal-layer-z');
+    entry.el.removeAttribute('inert');
+    entry.el.setAttribute('aria-hidden', 'true');
+    entry.el.removeAttribute('aria-modal');
+    modalStack = modalStack.filter((item) => item !== entry);
+    updateModalStackState();
+    try {
+      entry.onAfterClose?.();
+    } catch (e) {}
+    if (!focusElementIfPossible(entry.returnFocusEl)) {
+      focusElementIfPossible(getModalFocusableTarget(getTopModal()));
+    }
+    return true;
+  }
+
+  function beginModalClose(entry, { immediate = false } = {}) {
+    if (!entry?.el || entry.isClosing) return false;
+    entry.isClosing = true;
+    if (entry.openFrame) {
+      cancelAnimationFrame(entry.openFrame);
+      entry.openFrame = null;
+    }
+    entry.el.classList.remove('is-open', 'is-underlay');
+    entry.el.classList.add('is-closing');
+    setModalInertState(entry, true);
+    if (immediate || prefersReducedMotion() || currentModalAnimation === 'none') {
+      return finalizeModalClose(entry);
+    }
+
+    const onTransitionEnd = (event) => {
+      if (event.target !== entry.el || event.propertyName !== 'opacity') return;
+      entry.el.removeEventListener('transitionend', onTransitionEnd);
+      finalizeModalClose(entry);
+    };
+    entry.el.addEventListener('transitionend', onTransitionEnd);
+    clearTimeout(entry.closeTimer);
+    entry.closeTimer = setTimeout(() => {
+      entry.el.removeEventListener('transitionend', onTransitionEnd);
+      finalizeModalClose(entry);
+    }, MODAL_TRANSITION_FALLBACK_MS);
+    return true;
+  }
+
+  function registerModal(modalOrId, options = {}) {
+    const el = typeof modalOrId === 'string' ? document.getElementById(modalOrId) : modalOrId;
+    if (!el?.id) return null;
+    const current = modalRegistry.get(el.id) || {};
+    const entry = {
+      id: el.id,
+      el,
+      closeOnBackdrop: options.closeOnBackdrop !== false,
+      onAfterClose: options.onAfterClose || current.onAfterClose || null,
+      isClosing: false,
+      closeTimer: null,
+      openFrame: null,
+      returnFocusEl: null,
+    };
+    modalRegistry.set(el.id, entry);
+    el.dataset.managedModal = '1';
+    if (!el.hasAttribute('role')) el.setAttribute('role', 'dialog');
+    return entry;
+  }
+
+  function registerBuiltinModals() {
+    [
+      newChatModal,
+      adminModal,
+      chatInfoModal,
+      menuDrawer,
+      settingsModal,
+      themeSettingsModal,
+      animationSettingsModal,
+      weatherSettingsModal,
+      notificationSettingsModal,
+      soundSettingsModal,
+      aiBotSettingsModal,
+      changePasswordModal,
+    ].forEach((modal) => registerModal(modal));
+    registerModal(forwardMessageModal, { onAfterClose: resetForwardMessageModal });
+  }
+
+  function getTopModal() {
+    return modalStack[modalStack.length - 1] || null;
+  }
+
+  function hasOpenModal() {
+    return modalStack.length > 0;
+  }
+
+  function openModal(modalOrId, { replaceStack = false, opener = null } = {}) {
+    const entry = registerModal(modalOrId);
+    if (!entry?.el) return null;
+    const reuseHistoryEntry = replaceStack && modalHistoryDepth === 1;
+    if (replaceStack && modalStack.length) {
+      closeAllModals({ immediate: true, includeMedia: false, syncHistory: !reuseHistoryEntry });
+    }
+    const existingIndex = modalStack.indexOf(entry);
+    if (existingIndex !== -1) {
+      if (existingIndex !== modalStack.length - 1) {
+        const removable = modalStack.slice(existingIndex + 1).reverse();
+        removable.forEach((item) => beginModalClose(item, { immediate: true }));
+      }
+      entry.returnFocusEl = opener instanceof HTMLElement ? opener : entry.returnFocusEl;
+      updateModalStackState();
+      return entry;
+    }
+
+    entry.returnFocusEl = opener instanceof HTMLElement ? opener : rememberActiveElement();
+    entry.isClosing = false;
+    clearTimeout(entry.closeTimer);
+    if (entry.openFrame) cancelAnimationFrame(entry.openFrame);
+    entry.el.classList.remove('hidden', 'is-closing', 'is-underlay');
+    entry.el.classList.remove('is-open');
+    modalStack.push(entry);
+    updateModalStackState();
+    if (reuseHistoryEntry) {
+      history.replaceState({ ...(history.state || {}), modalId: entry.id, modalDepth: 1 }, '');
+      modalHistoryDepth = 1;
+    } else {
+      pushModalHistoryState(entry.id);
+    }
+    entry.openFrame = requestAnimationFrame(() => {
+      entry.openFrame = requestAnimationFrame(() => {
+        entry.el.classList.add('is-open');
+        entry.openFrame = null;
+      });
+    });
+    return entry;
+  }
+
+  function closeModal(modalOrId, { immediate = false, fromHistory = false } = {}) {
+    const entry = modalEntryOf(modalOrId);
+    if (!entry) return false;
+    const index = modalStack.indexOf(entry);
+    if (index === -1) {
+      entry.onAfterClose?.();
+      return false;
+    }
+    const toClose = modalStack.slice(index).reverse();
+    toClose.forEach((item) => beginModalClose(item, { immediate }));
+    if (!fromHistory) rewindModalHistory(toClose.length);
+    else modalHistoryDepth = Math.max(0, modalHistoryDepth - toClose.length);
+    return true;
+  }
+
+  function closeTopModal(options = {}) {
+    const top = getTopModal();
+    if (!top) return false;
+    return closeModal(top.id, options);
+  }
+
+  function closeAllModals({ immediate = false, includeMedia = true, syncHistory = true } = {}) {
+    if (modalStack.length) {
+      [...modalStack].reverse().forEach((entry) => beginModalClose(entry, { immediate }));
+      if (syncHistory) rewindModalHistory(modalHistoryDepth);
+      modalHistoryDepth = 0;
+    }
+    if (includeMedia) closeMediaViewer();
+    return true;
+  }
+
+  function closeForwardMessageModal(options = {}) {
     if (!forwardMessageModal) {
       resetForwardMessageModal();
-      return;
+      return false;
     }
-
-    clearTimeout(forwardModalCloseTimer);
-    if (forwardMessageModal.classList.contains('hidden')) {
-      forwardMessageModal.classList.remove('is-closing');
-      resetForwardMessageModal();
-      return;
-    }
-
-    if (!animate) {
-      forwardMessageModal.classList.add('hidden');
-      forwardMessageModal.classList.remove('is-closing');
-      resetForwardMessageModal();
-      return;
-    }
-
-    forwardMessageModal.classList.add('is-closing');
-    forwardModalCloseTimer = setTimeout(() => {
-      forwardMessageModal.classList.add('hidden');
-      forwardMessageModal.classList.remove('is-closing');
-      resetForwardMessageModal();
-    }, 180);
+    return closeModal(forwardMessageModal, options);
   }
 
   function renderForwardChatList(filter = '') {
@@ -2022,13 +2317,10 @@
   function openForwardMessageModal(message) {
     if (!message?.id) return;
     hideReactionPicker();
-    closeAllModals();
-    clearTimeout(forwardModalCloseTimer);
-    forwardMessageModal?.classList.remove('is-closing');
+    openModal('forwardMessageModal', { replaceStack: true });
     forwardMessageState = { id: message.id };
     renderForwardChatList();
-    forwardMessageModal?.classList.remove('hidden');
-    forwardChatSearch?.focus();
+    requestAnimationFrame(() => forwardChatSearch?.focus());
   }
 
   async function forwardMessageToChat(targetChatId) {
@@ -2423,6 +2715,7 @@
     try {
       currentUser = JSON.parse(userStr);
       applyUiTheme(currentUser.ui_theme, false);
+      applyModalAnimation(currentUser.ui_modal_animation, false);
     } catch { logout(); return false; }
     return true;
   }
@@ -5537,35 +5830,9 @@
   // ═══════════════════════════════════════════════════════════════════════════
   // MODALS
   // ═══════════════════════════════════════════════════════════════════════════
-  function closeAllModals() {
-    const shouldAnimateForwardModal = Boolean(
-      forwardMessageModal &&
-      !forwardMessageModal.classList.contains('hidden') &&
-      !forwardMessageModal.classList.contains('is-closing')
-    );
-    [
-      newChatModal,
-      adminModal,
-      chatInfoModal,
-      menuDrawer,
-      emojiPicker,
-      settingsModal,
-      themeSettingsModal,
-      weatherSettingsModal,
-      notificationSettingsModal,
-      soundSettingsModal,
-      aiBotSettingsModal,
-      changePasswordModal,
-    ].forEach(m => m.classList.add('hidden'));
-    closeForwardMessageModal({ animate: shouldAnimateForwardModal });
-    closeMediaViewer();
-    window.BananzaVoiceHooks?.closeAll?.();
-  }
-
   // New chat modal
   async function openNewChatModal() {
-    closeAllModals();
-    newChatModal.classList.remove('hidden');
+    openModal('newChatModal', { replaceStack: true });
     try {
       const users = await api('/api/users');
       const privateList = $('#userListPrivate');
@@ -5611,8 +5878,7 @@
 
   // Admin modal
   async function openAdminModal() {
-    closeAllModals();
-    adminModal.classList.remove('hidden');
+    openModal('adminModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
     try {
       const users = await api('/api/admin/users');
       const list = $('#adminUserList');
@@ -5640,8 +5906,7 @@
 
   // Settings modal
   function openSettingsModal() {
-    closeAllModals();
-    settingsModal.classList.remove('hidden');
+    openModal('settingsModal', { replaceStack: true });
     const adminItem = $('#settingsAdminPanel');
     if (currentUser.is_admin) adminItem.classList.remove('hidden');
     else adminItem.classList.add('hidden');
@@ -5655,22 +5920,25 @@
   }
 
   function openThemeSettingsModal() {
-    closeAllModals();
-    themeSettingsModal.classList.remove('hidden');
+    openModal('themeSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
     renderThemePicker();
     setThemeStatus('');
   }
 
+  function openAnimationSettingsModal() {
+    openModal('animationSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
+    renderModalAnimationOptions();
+    setModalAnimationStatus('');
+  }
+
   function openWeatherSettingsModal() {
-    closeAllModals();
-    weatherSettingsModal.classList.remove('hidden');
+    openModal('weatherSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
     renderWeatherSettingsForm();
     if (!weatherSettingsLoaded) loadWeatherSettings().then(renderWeatherSettingsForm);
   }
 
   function openNotificationSettingsModal() {
-    closeAllModals();
-    notificationSettingsModal.classList.remove('hidden');
+    openModal('notificationSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
     renderNotificationSettingsForm();
     setNotificationStatus('');
     if (!notificationSettingsLoaded) {
@@ -5681,8 +5949,7 @@
   }
 
   function openSoundSettingsModal() {
-    closeAllModals();
-    soundSettingsModal.classList.remove('hidden');
+    openModal('soundSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
     renderSoundSettingsForm();
     setSoundStatus('');
     if (!soundSettingsLoaded) loadSoundSettings().catch(() => {});
@@ -5690,8 +5957,7 @@
 
   function openAiBotSettingsModal() {
     if (!currentUser?.is_admin) return;
-    closeAllModals();
-    aiBotSettingsModal.classList.remove('hidden');
+    openModal('aiBotSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
     setAiBotStatus('Загружаю...');
     loadAiBotState().then(() => setAiBotStatus('')).catch((e) => {
       setAiBotStatus(e.message || 'Не удалось загрузить AI-ботов', 'error');
@@ -5708,8 +5974,7 @@
   }
 
   function openChangePasswordModal() {
-    closeAllModals();
-    changePasswordModal.classList.remove('hidden');
+    openModal('changePasswordModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
     resetChangePasswordFields();
     $('#cpError').textContent = '';
     $('#cpSuccess').textContent = '';
@@ -5718,8 +5983,7 @@
   // Chat info modal
   async function openChatInfoModal() {
     if (!currentChatId) return;
-    closeAllModals();
-    chatInfoModal.classList.remove('hidden');
+    openModal('chatInfoModal', { replaceStack: true });
 
     const chat = chats.find(c => c.id === currentChatId);
     $('#chatInfoTitle').textContent = chat ? chat.name : 'Chat Info';
@@ -5909,8 +6173,7 @@
   const AVATAR_COLORS = ['#e17076','#7bc862','#e5ca77','#65aadd','#a695e7','#ee7aae','#6ec9cb','#faa774'];
 
   function openMenuDrawer() {
-    closeAllModals();
-    menuDrawer.classList.remove('hidden');
+    openModal('menuDrawer', { replaceStack: true });
 
     // Avatar
     const avatarEl = $('#profileAvatar');
@@ -6464,6 +6727,10 @@
 
     // Back button (mobile)
     backBtn?.addEventListener('click', () => {
+      if (hasOpenModal()) {
+        closeTopModal();
+        return;
+      }
       if (backBtn.__isNavigating) return;
       const finishBackNavigation = () => {
         navigateBackToChatList();
@@ -6482,20 +6749,26 @@
     });
 
     // Android back gesture / button
-    window.addEventListener('popstate', (e) => {
+    window.addEventListener('popstate', () => {
+      if (modalSkipPopstateCount > 0) {
+        modalSkipPopstateCount -= 1;
+        return;
+      }
+      if (ivSkipNextPopstate) {
+        ivSkipNextPopstate = false;
+        return;
+      }
+      if (hasOpenModal()) {
+        closeTopModal({ fromHistory: true });
+        return;
+      }
+      if (!imageViewer.classList.contains('hidden')) {
+        ivStrip.querySelectorAll('video').forEach(v => v.pause());
+        imageViewer.classList.add('hidden');
+        ivHistoryPushed = false;
+        return;
+      }
       if (window.innerWidth <= 768) {
-        // Skip: popstate was triggered by closeMediaViewer's history.back()
-        if (ivSkipNextPopstate) {
-          ivSkipNextPopstate = false;
-          return;
-        }
-        // Close media viewer if open (back pressed while viewing media)
-        if (!imageViewer.classList.contains('hidden')) {
-          ivStrip.querySelectorAll('video').forEach(v => v.pause());
-          imageViewer.classList.add('hidden');
-          ivHistoryPushed = false;
-          return;
-        }
         if (sidebar.classList.contains('sidebar-hidden')) {
           // Going back from chat to chat list
           revealSidebarFromChat();
@@ -6538,10 +6811,18 @@
 
     // Modal close buttons
     $$('.modal-close').forEach(btn => {
-      btn.addEventListener('click', closeAllModals);
+      btn.addEventListener('click', (e) => {
+        const modal = e.currentTarget.closest('.modal');
+        if (!modal) return;
+        closeModal(modal.id);
+      });
     });
     $$('.modal').forEach(modal => {
-      modal.addEventListener('click', (e) => { if (e.target === modal) closeAllModals(); });
+      modal.addEventListener('click', (e) => {
+        const entry = modalEntryOf(modal.id);
+        if (!entry?.closeOnBackdrop) return;
+        if (e.target === modal && getTopModal()?.id === modal.id) closeModal(modal.id);
+      });
     });
 
     forwardChatSearch?.addEventListener('input', () => {
@@ -6559,6 +6840,7 @@
 
     // Settings sub-buttons
     $('#settingsThemePanel').addEventListener('click', openThemeSettingsModal);
+    $('#settingsAnimationPanel')?.addEventListener('click', openAnimationSettingsModal);
     $('#settingsWeatherPanel').addEventListener('click', openWeatherSettingsModal);
     $('#settingsNotificationsPanel')?.addEventListener('click', openNotificationSettingsModal);
     $('#settingsSoundsPanel')?.addEventListener('click', openSoundSettingsModal);
@@ -6589,6 +6871,11 @@
       const card = e.target.closest('.theme-card');
       if (!card) return;
       selectUiTheme(card.dataset.theme);
+    });
+    $('#settingsAnimationOptions')?.addEventListener('click', (e) => {
+      const card = e.target.closest('[data-modal-animation-style]');
+      if (!card) return;
+      selectModalAnimation(card.dataset.modalAnimationStyle);
     });
 
     // Weather settings
@@ -6789,10 +7076,14 @@
     // Escape key
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
+        if (hasOpenModal()) {
+          e.preventDefault();
+          closeTopModal();
+          return;
+        }
         hideAvatarUserMenu();
         closeSearchPanel();
         clearReply();
-        closeAllModals();
       }
     });
   }
@@ -6831,6 +7122,7 @@
       const data = await api('/api/auth/me');
       currentUser = data.user;
       applyUiTheme(currentUser.ui_theme);
+      applyModalAnimation(currentUser.ui_modal_animation);
       localStorage.setItem('user', JSON.stringify(currentUser));
       await window.messageCache?.init?.(currentUser.id);
     } catch { return; }
@@ -6845,6 +7137,7 @@
     }
     loadNotificationSettings().catch(() => {});
 
+    registerBuiltinModals();
     setupEvents();
     setupProfileEvents();
     initEmojiPicker();

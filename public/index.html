@@ -206,6 +206,7 @@
         </div>
         <div class="settings-hint">When off, reload opens the chat list instead of the last opened chat.</div>
         <button id="settingsThemePanel" class="settings-item">🎨 Theme</button>
+        <button id="settingsAnimationPanel" class="settings-item">✨ Animation</button>
         <button id="settingsWeatherPanel" class="settings-item">⛅ Weather</button>
         <button id="settingsNotificationsPanel" class="settings-item">🔔 Уведомления</button>
         <button id="settingsSoundsPanel" class="settings-item">🔊 Звуки</button>
@@ -228,6 +229,20 @@
           <div id="settingsThemePicker" class="theme-picker"></div>
           <div id="settingsThemeStatus" class="theme-settings-status"></div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Animation Settings Modal -->
+  <div id="animationSettingsModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Animation</h3>
+        <button class="modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="settingsAnimationOptions" class="animation-settings-list"></div>
+        <div id="settingsAnimationStatus" class="theme-settings-status"></div>
       </div>
     </div>
   </div>

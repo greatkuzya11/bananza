@@ -39,7 +39,7 @@
   const hooks = window.BananzaVoiceHooks = window.BananzaVoiceHooks || {};
 
   Object.assign(hooks, {
-    closeAll: () => hideVoiceAdminModal(),
+    closeAll: () => hideVoiceAdminModal({ immediate: true }),
     decorateMessageRow: (row, msg) => decorateMessageRow(row, msg),
     handleWSMessage: (msg) => handleWSMessage(msg),
     onSettingsOpened: () => syncAdminEntryVisibility(),
@@ -211,6 +211,8 @@
       document.body.appendChild(wrapper.firstElementChild);
     }
 
+    getBridge()?.registerManagedModal?.('voiceAdminModal');
+
     if (!document.getElementById('voiceRecorderBar')) {
       const inputArea = document.querySelector('.input-area');
       const pendingFile = document.getElementById('pendingFile');
@@ -358,12 +360,16 @@
   async function openVoiceAdminModal() {
     if (!isAdmin()) return;
     ensureVoiceUi();
-    getBridge()?.closeAllModals?.();
-    document.getElementById('voiceAdminModal')?.classList.remove('hidden');
+    if (getBridge()?.openManagedModal) getBridge().openManagedModal('voiceAdminModal');
+    else document.getElementById('voiceAdminModal')?.classList.remove('hidden');
     await loadAdminSettings();
   }
 
-  function hideVoiceAdminModal() {
+  function hideVoiceAdminModal(options = {}) {
+    if (getBridge()?.closeManagedModal) {
+      getBridge().closeManagedModal('voiceAdminModal', options);
+      return;
+    }
     document.getElementById('voiceAdminModal')?.classList.add('hidden');
   }
 

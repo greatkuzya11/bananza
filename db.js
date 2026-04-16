@@ -20,6 +20,7 @@ db.exec(`
     avatar_color TEXT NOT NULL,
     avatar_url TEXT DEFAULT NULL,
     ui_theme TEXT DEFAULT 'bananza',
+    ui_modal_animation TEXT DEFAULT 'soft',
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -163,6 +164,11 @@ try {
   db.prepare("SELECT ui_theme FROM users LIMIT 1").get();
 } catch {
   db.exec("ALTER TABLE users ADD COLUMN ui_theme TEXT DEFAULT 'bananza'");
+}
+try {
+  db.prepare("SELECT ui_modal_animation FROM users LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE users ADD COLUMN ui_modal_animation TEXT DEFAULT 'soft'");
 }
 try {
   db.prepare("SELECT is_ai_bot FROM users LIMIT 1").get();
