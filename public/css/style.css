@@ -788,6 +788,9 @@ a:hover { text-decoration: underline; }
   background: var(--bg-modal);
   border: 1px solid var(--border-light);
   box-shadow: 0 12px 36px rgba(0,0,0,.45);
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
 }
 .mention-picker.hidden { display: none; }
 .mention-picker-item {
@@ -803,6 +806,7 @@ a:hover { text-decoration: underline; }
   color: var(--text-primary);
   text-align: left;
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 .mention-picker-item:hover,
 .mention-picker-item.active {

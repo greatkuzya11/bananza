@@ -7,6 +7,7 @@
   const WS_URL = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
   const PAGE_SIZE = 50;
   const MESSAGE_CACHE_LIMIT = 800;
+  const MENTION_PICKER_TAP_DEAD_ZONE = 10;
   const MAX_MSG = 5000;
   const MAX_ATTACHMENTS = 10;
   const MAX_FILE_SIZE = 25 * 1024 * 1024;
@@ -125,6 +126,7 @@
   let centerToastTimer = null;
   let mentionTargetsByChat = new Map();
   let mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [] };
+  let mentionPickerPointerState = null;
   let avatarUserMenuState = null;
   let chatMemberLastReads = new Map();
 
@@ -2112,11 +2114,42 @@
     picker.className = 'mention-picker hidden';
     document.body.appendChild(picker);
     picker.addEventListener('pointerdown', (e) => {
+      if (typeof e.button === 'number' && e.button !== 0) return;
       const item = e.target.closest('.mention-picker-item');
       if (!item) return;
+      mentionPickerPointerState = {
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        startIndex: Number(item.dataset.index),
+        moved: false,
+      };
+    }, { passive: true });
+    picker.addEventListener('pointermove', (e) => {
+      if (!mentionPickerPointerState || e.pointerId !== mentionPickerPointerState.pointerId || mentionPickerPointerState.moved) return;
+      const dx = e.clientX - mentionPickerPointerState.startX;
+      const dy = e.clientY - mentionPickerPointerState.startY;
+      if ((dx * dx) + (dy * dy) > (MENTION_PICKER_TAP_DEAD_ZONE * MENTION_PICKER_TAP_DEAD_ZONE)) {
+        mentionPickerPointerState.moved = true;
+      }
+    }, { passive: true });
+    picker.addEventListener('scroll', () => {
+      if (mentionPickerPointerState) mentionPickerPointerState.moved = true;
+    }, { passive: true });
+    picker.addEventListener('pointercancel', () => {
+      mentionPickerPointerState = null;
+    }, { passive: true });
+    picker.addEventListener('pointerup', (e) => {
+      const pointerState = mentionPickerPointerState;
+      mentionPickerPointerState = null;
+      if (!pointerState || e.pointerId !== pointerState.pointerId || pointerState.moved) return;
+      const item = e.target.closest('.mention-picker-item');
+      if (!item) return;
+      const index = Number(item.dataset.index);
+      if (!Number.isInteger(index) || index !== pointerState.startIndex) return;
       e.preventDefault();
       e.stopPropagation();
-      const target = mentionPickerState.targets[Number(item.dataset.index)];
+      const target = mentionPickerState.targets[index];
       if (target) insertMentionTarget(target);
     }, { passive: false });
     return picker;
@@ -2124,6 +2157,7 @@
 
   function hideMentionPicker() {
     mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [] };
+    mentionPickerPointerState = null;
     $('#mentionPicker')?.classList.add('hidden');
   }
 
