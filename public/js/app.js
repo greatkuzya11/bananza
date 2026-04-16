@@ -486,6 +486,303 @@
       `<span class="current-user-name">${esc(currentUser.display_name)}</span>`;
   }
 
+  function persistCurrentUser() {
+    if (!currentUser) return;
+    localStorage.setItem('user', JSON.stringify(currentUser));
+  }
+
+  function setAvatarElementVisual(el, { name = '', color = '#65aadd', avatarUrl = '', fallbackText = '' } = {}) {
+    if (!el) return;
+    el.style.background = color || '#65aadd';
+    if (avatarUrl) {
+      el.innerHTML = `<img class="avatar-img" src="${esc(avatarUrl)}" alt="" loading="lazy" onerror="this.remove()">`;
+      return;
+    }
+    el.textContent = fallbackText || initials(name || '?');
+  }
+
+  function renderCurrentChatHeader(chat = chats.find(c => c.id === currentChatId)) {
+    if (!chat) {
+      chatTitle.textContent = 'Chat';
+      chatHeaderAvatar.style.display = 'none';
+      return;
+    }
+    chatTitle.textContent = chat.name || 'Chat';
+    chatHeaderAvatar.style.display = '';
+    if (chat.type === 'private' && chat.private_user) {
+      setAvatarElementVisual(chatHeaderAvatar, {
+        name: chat.name,
+        color: chat.private_user.avatar_color || '#65aadd',
+        avatarUrl: chat.private_user.avatar_url || '',
+        fallbackText: initials(chat.name || '?'),
+      });
+      return;
+    }
+    setAvatarElementVisual(chatHeaderAvatar, {
+      name: chat.name,
+      color: '#5eb5f7',
+      avatarUrl: chat.avatar_url || '',
+      fallbackText: chat.type === 'general' ? '🌐' : '👥',
+    });
+  }
+
+  function refreshChatInfoPresentation(chat = chats.find(c => c.id === currentChatId)) {
+    if (!chat || chatInfoModal?.classList.contains('hidden') || Number(chat.id) !== Number(currentChatId)) return;
+    $('#chatInfoTitle').textContent = chat.name || 'Chat Info';
+
+    const editSection = $('#chatEditSection');
+    if (editSection) {
+      if (chat.type === 'group' || chat.type === 'general') {
+        editSection.classList.remove('hidden');
+        setAvatarElementVisual($('#chatAvatar'), {
+          name: chat.name,
+          color: '#5eb5f7',
+          avatarUrl: chat.avatar_url || '',
+          fallbackText: chat.type === 'general' ? '🌐' : '👥',
+        });
+        $('#removeChatAvatar')?.classList.toggle('hidden', !chat.avatar_url);
+        if ($('#chatNameInput')) $('#chatNameInput').value = chat.name || '';
+      } else {
+        editSection.classList.add('hidden');
+      }
+    }
+
+    const bgPreviewEl = $('#chatBackgroundPreview');
+    const removeBgBtn = $('#removeChatBackground');
+    const bgStyleSelect = $('#chatBackgroundStyle');
+    if (bgPreviewEl) {
+      if (chat.background_url) {
+        bgPreviewEl.style.backgroundImage = `url(${esc(chat.background_url)})`;
+        applyBackgroundStyleToElement(bgPreviewEl, chat.background_style || 'cover');
+        removeBgBtn?.classList.remove('hidden');
+      } else {
+        bgPreviewEl.style.backgroundImage = '';
+        applyBackgroundStyleToElement(bgPreviewEl, 'cover');
+        removeBgBtn?.classList.add('hidden');
+      }
+    }
+    if (bgStyleSelect) bgStyleSelect.value = chat.background_style || 'cover';
+  }
+
+  function updateUserListItemElement(item, user) {
+    if (!item || !user) return;
+    const avatarEl = item.querySelector('.avatar, .chat-item-avatar');
+    if (avatarEl) {
+      setAvatarElementVisual(avatarEl, {
+        name: user.display_name || '',
+        color: user.avatar_color || '#65aadd',
+        avatarUrl: user.avatar_url || '',
+      });
+    }
+    const nameEl = item.querySelector('.name');
+    if (nameEl && user.display_name) nameEl.textContent = user.display_name;
+  }
+
+  function updateAdminUserRowElement(row, user) {
+    if (!row || !user) return;
+    const avatarEl = row.querySelector('.avatar');
+    if (avatarEl) {
+      setAvatarElementVisual(avatarEl, {
+        name: user.display_name || '',
+        color: user.avatar_color || '#65aadd',
+        avatarUrl: user.avatar_url || '',
+      });
+    }
+    const nameEl = row.querySelector('.name');
+    if (nameEl) {
+      const username = user.username || nameEl.querySelector('span')?.textContent?.replace(/^@/, '') || '';
+      nameEl.innerHTML = `${esc(user.display_name || '')}${username ? ` <span style="color:var(--text-secondary)">@${esc(username)}</span>` : ''}`;
+    }
+  }
+
+  function refreshRenderedUserMessages(user) {
+    const userId = Number(user?.id || user?.user_id || 0);
+    if (!userId || !messagesEl) return;
+    const bot = aiBotState?.bots?.find?.((item) => Number(item.user_id) === userId) || null;
+    const mentionToken = bot?.mention || user.username || '';
+
+    messagesEl.querySelectorAll(`.msg-group[data-user-id="${userId}"]`).forEach((group) => {
+      const avatarEl = group.querySelector('.msg-group-avatar');
+      if (avatarEl) {
+        avatarEl.title = user.display_name || avatarEl.title || '';
+        avatarEl.dataset.displayName = user.display_name || avatarEl.dataset.displayName || '';
+        if (mentionToken) avatarEl.dataset.mentionToken = mentionToken;
+        setAvatarElementVisual(avatarEl, {
+          name: user.display_name || '',
+          color: user.avatar_color || '#65aadd',
+          avatarUrl: user.avatar_url || '',
+        });
+      }
+      const senderEl = group.querySelector('.msg-sender');
+      if (senderEl) {
+        senderEl.textContent = user.display_name || senderEl.textContent;
+        senderEl.style.color = user.avatar_color || senderEl.style.color;
+      }
+    });
+
+    messagesEl.querySelectorAll(`.msg-row[data-user-id="${userId}"]`).forEach((row) => {
+      if (row.__messageData) {
+        row.__messageData.display_name = user.display_name || row.__messageData.display_name;
+        row.__messageData.avatar_color = user.avatar_color || row.__messageData.avatar_color;
+        row.__messageData.avatar_url = user.avatar_url || null;
+        if (user.username) row.__messageData.username = user.username;
+      }
+      if (row.__replyPayload && user.display_name) {
+        row.__replyPayload.display_name = user.display_name;
+      }
+      const senderEl = row.querySelector('.msg-sender');
+      if (senderEl) {
+        senderEl.textContent = user.display_name || senderEl.textContent;
+        senderEl.style.color = user.avatar_color || senderEl.style.color;
+      }
+    });
+  }
+
+  function applyChatUpdate(nextChat = {}) {
+    const chatId = Number(nextChat.id || 0);
+    if (!chatId) return null;
+    const idx = chats.findIndex((chat) => Number(chat.id) === chatId);
+    if (idx < 0) return null;
+    const current = chats[idx] || {};
+    chats[idx] = {
+      ...current,
+      ...nextChat,
+      background_url: Object.prototype.hasOwnProperty.call(nextChat, 'background_url')
+        ? (nextChat.background_url || null)
+        : (current.background_url || null),
+      background_style: nextChat.background_style || current.background_style || 'cover',
+    };
+    const updated = chats[idx];
+    renderChatList(chatSearch.value);
+    if (currentChatId === chatId) {
+      renderCurrentChatHeader(updated);
+      applyChatBackground(updated);
+      updateChatStatus();
+    }
+    refreshChatInfoPresentation(updated);
+    return updated;
+  }
+
+  function applyUserUpdate(nextUser = {}) {
+    const userId = Number(nextUser.id || nextUser.user_id || 0);
+    if (!userId) return null;
+    const user = {
+      ...nextUser,
+      id: userId,
+      user_id: userId,
+      avatar_url: nextUser.avatar_url || null,
+    };
+
+    if (currentUser && Number(currentUser.id) === userId) {
+      currentUser = {
+        ...currentUser,
+        ...user,
+        avatar_url: user.avatar_url,
+      };
+      persistCurrentUser();
+      updateCurrentUserFooter();
+      if (!menuDrawer.classList.contains('hidden')) openMenuDrawer();
+    }
+
+    let shouldRenderChats = false;
+    let aiBotChanged = false;
+
+    allUsers = allUsers.map((entry) => {
+      if (Number(entry.id) !== userId) return entry;
+      shouldRenderChats = true;
+      return { ...entry, ...user, avatar_url: user.avatar_url };
+    });
+
+    chats = chats.map((chat) => {
+      if (chat.type === 'private' && chat.private_user && Number(chat.private_user.id) === userId) {
+        shouldRenderChats = true;
+        return {
+          ...chat,
+          name: user.display_name || chat.name,
+          private_user: {
+            ...chat.private_user,
+            ...user,
+            avatar_url: user.avatar_url,
+          },
+        };
+      }
+      return chat;
+    });
+
+    chatMembersCache.forEach((members, chatId) => {
+      let changed = false;
+      const nextMembers = members.map((member) => {
+        if (Number(member.id) !== userId) return member;
+        changed = true;
+        return {
+          ...member,
+          ...user,
+          avatar_url: user.avatar_url,
+        };
+      });
+      if (changed) chatMembersCache.set(chatId, nextMembers);
+    });
+
+    mentionTargetsByChat.forEach((targets, chatId) => {
+      let changed = false;
+      const nextTargets = targets.map((target) => {
+        if (Number(target.user_id) !== userId) return target;
+        changed = true;
+        return {
+          ...target,
+          display_name: user.display_name || target.display_name,
+          avatar_color: user.avatar_color || target.avatar_color,
+          avatar_url: user.avatar_url,
+          username: user.username || target.username,
+        };
+      });
+      if (changed) mentionTargetsByChat.set(chatId, nextTargets);
+    });
+
+    aiBotState.bots = aiBotState.bots.map((bot) => {
+      if (Number(bot.user_id) !== userId) return bot;
+      aiBotChanged = true;
+      return {
+        ...bot,
+        name: user.display_name || bot.name,
+        avatar_color: user.avatar_color || bot.avatar_color,
+        avatar_url: user.avatar_url,
+      };
+    });
+
+    if (aiBotChanged) {
+      renderAiBotList();
+      renderAiBotAvatar(currentAiBot());
+    }
+
+    refreshRenderedUserMessages(user);
+    document.querySelectorAll(`.user-list-item[data-uid="${userId}"]`).forEach((item) => updateUserListItemElement(item, user));
+    document.querySelectorAll(`.admin-user-row[data-uid="${userId}"]`).forEach((row) => updateAdminUserRowElement(row, user));
+    if (!chatInfoModal.classList.contains('hidden')) {
+      refreshChatMemberStatuses();
+      refreshChatInfoStatus();
+    }
+
+    if (shouldRenderChats) renderChatList(chatSearch.value);
+    if (currentChatId) {
+      const currentChat = chats.find((chat) => Number(chat.id) === Number(currentChatId));
+      if (currentChat) {
+        renderCurrentChatHeader(currentChat);
+        refreshChatInfoPresentation(currentChat);
+        updateChatStatus();
+      }
+    }
+
+    if (mentionPickerState.active && mentionTargetsByChat.has(Number(currentChatId))) {
+      const targets = mentionTargetsByChat.get(Number(currentChatId)) || [];
+      if (targets.length) renderMentionPicker(targets);
+      else hideMentionPicker();
+    }
+
+    try { window.messageCache?.updateMessagesByUser?.(user).catch(() => {}); } catch (e) {}
+    return user;
+  }
+
   function weatherLocationLabel(location) {
     if (!location) return '';
     return [location.name, location.admin1, location.country].filter(Boolean).join(', ');
@@ -1166,6 +1463,41 @@
     return aiBotState.chatSettings.find(item => Number(item.chat_id) === Number(chatId) && Number(item.bot_id) === Number(botId)) || null;
   }
 
+  function renderAiBotAvatar(bot = currentAiBot()) {
+    const avatarEl = $('#aiBotAvatar');
+    if (!avatarEl) return;
+    const name = bot?.name || $('#aiBotName')?.value.trim() || 'Bananza AI';
+    const color = bot?.avatar_color || '#65aadd';
+    avatarEl.style.background = color;
+    if (bot?.avatar_url) {
+      avatarEl.innerHTML = `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="">`;
+    } else {
+      avatarEl.textContent = initials(name);
+    }
+
+    const hasSavedBot = Boolean(bot?.id);
+    const input = $('#aiBotAvatarInput');
+    const label = $('#aiBotAvatarLabel');
+    if (input) {
+      input.disabled = !hasSavedBot;
+      input.value = '';
+    }
+    if (label) {
+      label.classList.toggle('ai-bot-avatar-label-disabled', !hasSavedBot);
+      label.title = hasSavedBot ? 'Сменить аватар' : 'Сначала сохраните бота';
+    }
+    $('#removeAiBotAvatar')?.classList.toggle('hidden', !hasSavedBot || !bot?.avatar_url);
+  }
+
+  function refreshRenderedAiBotAvatar(bot) {
+    if (!bot?.user_id || !messagesEl) return;
+    messagesEl.querySelectorAll(`.msg-group-avatar[data-user-id="${Number(bot.user_id)}"]`).forEach((avatarEl) => {
+      avatarEl.title = bot.name || avatarEl.title || '';
+      avatarEl.dataset.displayName = bot.name || avatarEl.dataset.displayName || '';
+      avatarEl.innerHTML = avatarHtml(bot.name || 'AI', bot.avatar_color || '#65aadd', bot.avatar_url, 32);
+    });
+  }
+
 
   function fillAiBotForm(bot = null) {
     const settings = aiBotState.settings || {};
@@ -1180,6 +1512,7 @@
     $('#aiBotTone').value = bot?.tone || 'тёплый, внимательный, краткий';
     $('#aiBotRules').value = bot?.behavior_rules || '';
     $('#aiBotSpeech').value = bot?.speech_patterns || '';
+    renderAiBotAvatar(bot);
     renderAiModelOptions(bot);
     renderAiBotList();
     renderAiChatBotSettings();
@@ -1208,8 +1541,16 @@
     }
     list.innerHTML = aiBotState.bots.map(bot => `
       <button type="button" class="ai-bot-list-item${bot.id === selectedAiBotId ? ' active' : ''}" data-bot-id="${bot.id}">
-        <span><strong>${esc(bot.name)}</strong><small>@${esc(bot.mention)} · ${bot.enabled ? 'enabled' : 'disabled'}</small></span>
-        <span>${bot.response_model ? esc(bot.response_model) : ''}</span>
+        <span class="ai-bot-list-main">
+          <span class="ai-bot-list-avatar" style="background:${esc(bot.avatar_color || '#65aadd')}">
+            ${bot.avatar_url ? `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">` : esc(initials(bot.name || '?'))}
+          </span>
+          <span class="ai-bot-list-copy">
+            <strong>${esc(bot.name)}</strong>
+            <small>@${esc(bot.mention)} · ${bot.enabled ? 'enabled' : 'disabled'}</small>
+          </span>
+        </span>
+        <span class="ai-bot-list-model">${bot.response_model ? esc(bot.response_model) : ''}</span>
       </button>
     `).join('');
   }
@@ -1321,10 +1662,81 @@
       const data = await api(url, { method, body: payload });
       mergeAiBotState(data);
       selectedAiBotId = data.bot?.id || selectedAiBotId;
+      if (data.bot?.user_id) {
+        applyUserUpdate({
+          id: data.bot.user_id,
+          user_id: data.bot.user_id,
+          display_name: data.bot.name,
+          avatar_color: data.bot.avatar_color,
+          avatar_url: data.bot.avatar_url,
+          is_ai_bot: 1,
+        });
+      }
       renderAiBotSettings();
       setAiBotStatus('Бот сохранён', 'success');
     } catch (e) {
       setAiBotStatus(e.message || 'Не удалось сохранить бота', 'error');
+    }
+  }
+
+  async function uploadAiBotAvatar(file) {
+    if (!file) return;
+    if (!selectedAiBotId) {
+      setAiBotStatus('Сначала сохраните бота, потом добавьте аватар', 'error');
+      renderAiBotAvatar(null);
+      return;
+    }
+    const fd = new FormData();
+    fd.append('avatar', file);
+    setAiBotStatus('Загружаю аватар...');
+    try {
+      const data = await api(`/api/admin/ai-bots/${selectedAiBotId}/avatar`, { method: 'POST', body: fd });
+      mergeAiBotState(data);
+      selectedAiBotId = data.bot?.id || selectedAiBotId;
+      if (data.bot?.user_id) {
+        applyUserUpdate({
+          id: data.bot.user_id,
+          user_id: data.bot.user_id,
+          display_name: data.bot.name,
+          avatar_color: data.bot.avatar_color,
+          avatar_url: data.bot.avatar_url,
+          is_ai_bot: 1,
+        });
+      }
+      renderAiBotList();
+      renderAiBotAvatar(currentAiBot());
+      refreshRenderedAiBotAvatar(data.bot);
+      renderAiChatBotSettings();
+      setAiBotStatus('Аватар сохранён', 'success');
+    } catch (e) {
+      setAiBotStatus(e.message || 'Не удалось загрузить аватар', 'error');
+      renderAiBotAvatar(currentAiBot());
+    }
+  }
+
+  async function removeAiBotAvatar() {
+    if (!selectedAiBotId) return;
+    try {
+      const data = await api(`/api/admin/ai-bots/${selectedAiBotId}/avatar`, { method: 'DELETE' });
+      mergeAiBotState(data);
+      selectedAiBotId = data.bot?.id || selectedAiBotId;
+      if (data.bot?.user_id) {
+        applyUserUpdate({
+          id: data.bot.user_id,
+          user_id: data.bot.user_id,
+          display_name: data.bot.name,
+          avatar_color: data.bot.avatar_color,
+          avatar_url: data.bot.avatar_url,
+          is_ai_bot: 1,
+        });
+      }
+      renderAiBotList();
+      renderAiBotAvatar(currentAiBot());
+      refreshRenderedAiBotAvatar(data.bot);
+      renderAiChatBotSettings();
+      setAiBotStatus('Аватар удалён', 'success');
+    } catch (e) {
+      setAiBotStatus(e.message || 'Не удалось удалить аватар', 'error');
     }
   }
 
@@ -2207,22 +2619,12 @@
         window.BananzaVoiceHooks?.handleWSMessage?.(msg);
         break;
       }
+      case 'user_updated': {
+        applyUserUpdate(msg.user || {});
+        break;
+      }
       case 'chat_updated': {
-        const idx = chats.findIndex(c => c.id === msg.chat.id);
-        if (idx >= 0) {
-          chats[idx] = {
-            ...chats[idx],
-            name: msg.chat.name,
-            avatar_url: msg.chat.avatar_url,
-            background_url: msg.chat.background_url || null,
-            background_style: msg.chat.background_style || 'cover',
-          };
-          renderChatList(chatSearch.value);
-          if (currentChatId === msg.chat.id) {
-            chatTitle.textContent = msg.chat.name;
-            applyChatBackground(msg.chat);
-          }
-        }
+        applyChatUpdate(msg.chat || {});
         break;
       }
       case 'chat_removed': {
@@ -2639,6 +3041,66 @@
     return Array.from(messagesEl.querySelectorAll('.msg-row[data-msg-id]'));
   }
 
+  function isDeletedMessageRow(row) {
+    return Boolean(row?.__messageData?.is_deleted);
+  }
+
+  function pickScrollAnchorRow(rows, atBottom, containerRect) {
+    const isVisible = (row) => {
+      const rect = row.getBoundingClientRect();
+      return rect.bottom >= containerRect.top + 6 && rect.top <= containerRect.bottom - 6;
+    };
+    const visibleRows = rows.filter(isVisible);
+    const liveRows = rows.filter((row) => !isDeletedMessageRow(row));
+    const visibleLiveRows = visibleRows.filter((row) => !isDeletedMessageRow(row));
+
+    if (visibleLiveRows.length) {
+      return atBottom ? visibleLiveRows[visibleLiveRows.length - 1] : visibleLiveRows[0];
+    }
+    if (liveRows.length) {
+      if (atBottom) {
+        return [...liveRows].reverse().find((row) => {
+          const rect = row.getBoundingClientRect();
+          return rect.top <= containerRect.bottom - 6;
+        }) || liveRows[liveRows.length - 1];
+      }
+      return liveRows.find((row) => {
+        const rect = row.getBoundingClientRect();
+        return rect.bottom >= containerRect.top + 6;
+      }) || liveRows[0];
+    }
+    if (visibleRows.length) {
+      return atBottom ? visibleRows[visibleRows.length - 1] : visibleRows[0];
+    }
+    return atBottom ? rows[rows.length - 1] : rows[0];
+  }
+
+  function findRestorableAnchorRow(anchor) {
+    const messageId = Number(anchor?.messageId || 0);
+    if (!messageId) return null;
+    const exact = messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
+    if (exact) return exact;
+
+    const liveRows = getRenderedMessageRows().filter((row) => !isDeletedMessageRow(row));
+    if (!liveRows.length) return null;
+
+    let before = null;
+    let after = null;
+    for (const row of liveRows) {
+      const rowId = Number(row.dataset.msgId) || 0;
+      if (!rowId) continue;
+      if (rowId < messageId) before = row;
+      else if (rowId > messageId) {
+        after = row;
+        break;
+      }
+    }
+
+    return anchor?.atBottom
+      ? before || after || liveRows[liveRows.length - 1]
+      : after || before || liveRows[0];
+  }
+
   function getMaxRenderedMessageId() {
     return getRenderedMessageRows().reduce((max, row) => Math.max(max, Number(row.dataset.msgId) || 0), 0);
   }
@@ -2647,13 +3109,8 @@
     const rows = getRenderedMessageRows();
     if (!rows.length) return null;
     const containerRect = messagesEl.getBoundingClientRect();
-    const visibleRows = rows.filter((row) => {
-      const rect = row.getBoundingClientRect();
-      return rect.bottom >= containerRect.top + 6 && rect.top <= containerRect.bottom - 6;
-    });
-    const candidates = visibleRows.length ? visibleRows : rows;
     const atBottom = isNearBottom(8);
-    const row = atBottom ? candidates[candidates.length - 1] : candidates[0];
+    const row = pickScrollAnchorRow(rows, atBottom, containerRect);
     if (!row) return null;
     const rect = row.getBoundingClientRect();
     return {
@@ -2681,7 +3138,7 @@
 
   function restoreScrollAnchor(anchor, attempts = 3) {
     if (!anchor?.messageId) return false;
-    const row = messagesEl.querySelector(`[data-msg-id="${anchor.messageId}"]`);
+    const row = findRestorableAnchorRow(anchor);
     if (!row) return false;
     const apply = () => {
       const containerRect = messagesEl.getBoundingClientRect();
@@ -2867,32 +3324,7 @@
 
     const chat = chats.find(c => c.id === chatId);
     const restoreAnchor = anchorForChatOpen(chat);
-    chatTitle.textContent = chat ? chat.name : 'Chat';
-
-    // Header avatar
-    if (chat) {
-      chatHeaderAvatar.style.display = '';
-      if (chat.type === 'private' && chat.private_user) {
-        const u = chat.private_user;
-        if (u.avatar_url) {
-          chatHeaderAvatar.style.background = u.avatar_color;
-          chatHeaderAvatar.innerHTML = `<img class="avatar-img" src="${esc(u.avatar_url)}" alt="">`;
-        } else {
-          chatHeaderAvatar.style.background = u.avatar_color;
-          chatHeaderAvatar.innerHTML = initials(chat.name);
-        }
-      } else {
-        const bg = chat.avatar_url ? '#5eb5f7' : '#5eb5f7';
-        chatHeaderAvatar.style.background = bg;
-        if (chat.avatar_url) {
-          chatHeaderAvatar.innerHTML = `<img class="avatar-img" src="${esc(chat.avatar_url)}" alt="">`;
-        } else {
-          chatHeaderAvatar.innerHTML = chat.type === 'general' ? '🌐' : '👥';
-        }
-      }
-    } else {
-      chatHeaderAvatar.style.display = 'none';
-    }
+    renderCurrentChatHeader(chat);
 
     updateChatStatus();
     // Apply chat background (if present)
@@ -4168,19 +4600,53 @@
 
   function markMessageDeleted(msgId, chatId = currentChatId) {
     try { if (window.messageCache) window.messageCache.deleteMessage(chatId, msgId).catch(()=>{}); } catch (e) {}
+    ensureScrollAnchorsLoaded();
+    const activeChatId = Number(currentChatId || 0);
+    const targetChatId = Number(chatId || activeChatId || 0);
+    const savedAnchor = targetChatId ? scrollPositions[targetChatId] : null;
+    const deletedAnchorWasSaved = Boolean(savedAnchor?.messageId && Number(savedAnchor.messageId) === Number(msgId));
+    const isActiveChat = targetChatId > 0 && targetChatId === activeChatId;
+    const preserveAnchor = isActiveChat ? captureScrollAnchor() : null;
     const el = messagesEl.querySelector(`[data-msg-id="${msgId}"]`);
-    if (!el) { console.warn('[markDeleted] element not found for', msgId); return; }
+    if (!el) {
+      if (deletedAnchorWasSaved && targetChatId) {
+        delete scrollPositions[targetChatId];
+        persistScrollAnchors();
+      }
+      console.warn('[markDeleted] element not found for', msgId);
+      return;
+    }
     const bubble = el.querySelector('.msg-bubble');
     if (!bubble) { console.warn('[markDeleted] bubble not found'); return; }
     const timeEl = bubble.querySelector('.msg-time');
     const timeText = timeEl ? timeEl.textContent : '';
     bubble.innerHTML = `<span class="msg-deleted">Message deleted</span><span class="msg-time">${esc(timeText)}</span>`;
+    if (el.__messageData) {
+      el.__messageData = {
+        ...el.__messageData,
+        is_deleted: true,
+        text: null,
+        file_id: null,
+        file_name: null,
+        file_stored: null,
+        file_type: null,
+        file_mime: null,
+        previews: [],
+        reactions: [],
+        edited_at: null,
+      };
+    }
+    if (el.__replyPayload) el.__replyPayload.text = 'Message deleted';
     el.querySelector('.msg-reply-btn')?.remove();
     el.querySelector('.msg-react-btn')?.remove();
     el.querySelector('.msg-edit-btn')?.remove();
     el.querySelector('.msg-forward-btn')?.remove();
     el.querySelector('.msg-actions')?.remove();
     if (editTo?.id === msgId) clearEdit({ clearInput: true });
+    requestAnimationFrame(() => {
+      if (isActiveChat && preserveAnchor?.messageId) restoreScrollAnchor(preserveAnchor, 1);
+      if (targetChatId) saveCurrentScrollAnchor(targetChatId, { force: true });
+    });
   }
 
   function updateVisibleReplyQuotesFromMessage(msg) {
@@ -5249,10 +5715,9 @@
         const name = $('#chatNameInput').value.trim();
         if (!name) return;
         try {
-          await api(`/api/chats/${currentChatId}`, { method: 'PUT', body: { name } });
-          await loadChats();
+          const updated = await api(`/api/chats/${currentChatId}`, { method: 'PUT', body: { name } });
+          applyChatUpdate(updated || {});
           closeAllModals();
-          chatTitle.textContent = name;
         } catch (e) { alert(e.message); }
       };
 
@@ -5263,18 +5728,18 @@
         const fd = new FormData();
         fd.append('avatar', file);
         try {
-          await api(`/api/chats/${currentChatId}/avatar`, { method: 'POST', body: fd });
-          await loadChats();
-          openChatInfoModal();
+          const updated = await api(`/api/chats/${currentChatId}/avatar`, { method: 'POST', body: fd });
+          applyChatUpdate(updated || {});
+          refreshChatInfoPresentation(updated || {});
         } catch (e) { alert(e.message); }
       };
 
       // Remove chat avatar
       removeChatAvatarBtn.onclick = async () => {
         try {
-          await api(`/api/chats/${currentChatId}/avatar`, { method: 'DELETE' });
-          await loadChats();
-          openChatInfoModal();
+          const updated = await api(`/api/chats/${currentChatId}/avatar`, { method: 'DELETE' });
+          applyChatUpdate(updated || {});
+          refreshChatInfoPresentation(updated || {});
         } catch (e) { alert(e.message); }
       };
     } else {
@@ -5307,33 +5772,27 @@
           fd.append('background', file);
           fd.append('style', bgStyleSelect.value || 'cover');
           try {
-            await api(`/api/chats/${currentChatId}/background`, { method: 'POST', body: fd });
-            await loadChats();
-            openChatInfoModal();
-            const updated = chats.find(c => c.id === currentChatId);
-            applyChatBackground(updated);
+            const updated = await api(`/api/chats/${currentChatId}/background`, { method: 'POST', body: fd });
+            applyChatUpdate(updated || {});
+            refreshChatInfoPresentation(updated || {});
           } catch (err) { alert(err.message); }
         };
 
         removeBgBtn.onclick = async () => {
           if (!confirm('Remove background?')) return;
           try {
-            await api(`/api/chats/${currentChatId}/background`, { method: 'DELETE' });
-            await loadChats();
-            openChatInfoModal();
-            const updated = chats.find(c => c.id === currentChatId);
-            applyChatBackground(updated);
+            const updated = await api(`/api/chats/${currentChatId}/background`, { method: 'DELETE' });
+            applyChatUpdate(updated || {});
+            refreshChatInfoPresentation(updated || {});
           } catch (err) { alert(err.message); }
         };
 
         bgStyleSelect.onchange = async () => {
           try {
             const style = bgStyleSelect.value;
-            await api(`/api/chats/${currentChatId}/background-style`, { method: 'PUT', body: { style } });
-            await loadChats();
-            openChatInfoModal();
-            const updated = chats.find(c => c.id === currentChatId);
-            applyChatBackground(updated);
+            const updated = await api(`/api/chats/${currentChatId}/background-style`, { method: 'PUT', body: { style } });
+            applyChatUpdate(updated || {});
+            refreshChatInfoPresentation(updated || {});
           } catch (err) { alert(err.message); }
         };
       }
@@ -5447,21 +5906,15 @@
       fd.append('avatar', file);
       try {
         const res = await api('/api/profile/avatar', { method: 'POST', body: fd });
-        currentUser.avatar_url = res.user.avatar_url;
-        localStorage.setItem('user', JSON.stringify(currentUser));
-        updateCurrentUserFooter();
-        openMenuDrawer();
+        applyUserUpdate(res.user || {});
       } catch (e) { alert(e.message); }
     });
 
     // Remove avatar
     $('#removeProfileAvatar').addEventListener('click', async () => {
       try {
-        await api('/api/profile/avatar', { method: 'DELETE' });
-        currentUser.avatar_url = null;
-        localStorage.setItem('user', JSON.stringify(currentUser));
-        updateCurrentUserFooter();
-        openMenuDrawer();
+        const res = await api('/api/profile/avatar', { method: 'DELETE' });
+        applyUserUpdate(res.user || { id: currentUser.id, avatar_url: null });
       } catch (e) { alert(e.message); }
     });
 
@@ -5481,11 +5934,7 @@
       const color = activeSwatch ? activeSwatch.dataset.color : currentUser.avatar_color;
       try {
         const res = await api('/api/profile', { method: 'PUT', body: { displayName: name, avatarColor: color } });
-        currentUser.display_name = res.user.display_name;
-        currentUser.avatar_color = res.user.avatar_color;
-        localStorage.setItem('user', JSON.stringify(currentUser));
-        updateCurrentUserFooter();
-        await loadChats();
+        applyUserUpdate(res.user || {});
         closeAllModals();
       } catch (e) { alert(e.message); }
     });
@@ -6132,6 +6581,11 @@
     $('#aiBotExportJson')?.addEventListener('click', exportAiBotJson);
     $('#aiBotImportJson')?.addEventListener('click', () => $('#aiBotImportFile')?.click());
     $('#aiBotImportFile')?.addEventListener('change', (event) => importAiBotJsonFile(event.target.files?.[0]));
+    $('#aiBotAvatarInput')?.addEventListener('change', (event) => uploadAiBotAvatar(event.target.files?.[0]));
+    $('#removeAiBotAvatar')?.addEventListener('click', removeAiBotAvatar);
+    $('#aiBotName')?.addEventListener('input', () => {
+      if (!currentAiBot()?.avatar_url) renderAiBotAvatar(currentAiBot());
+    });
     $('#aiBotList')?.addEventListener('click', (e) => {
       const btn = e.target.closest('.ai-bot-list-item');
       if (!btn) return;

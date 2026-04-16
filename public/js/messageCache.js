@@ -524,6 +524,66 @@
     }
   }
 
+  async function updateMessagesByUser(user) {
+    const targetId = normalizeId(user?.id || user?.user_id);
+    if (!currentUserId || !targetId) return 0;
+    const database = await openDB().catch(() => null);
+    if (!database) return 0;
+    try {
+      return await new Promise((resolve) => {
+        let updated = 0;
+        let settled = false;
+        function finish(value) {
+          if (settled) return;
+          settled = true;
+          resolve(value);
+        }
+        const tx = database.transaction(STORE_MESSAGES, 'readwrite');
+        const store = tx.objectStore(STORE_MESSAGES);
+        const index = store.index(INDEX_USER_CHAT_ID);
+        const range = IDBKeyRange.bound(
+          [currentUserId, 0, 0],
+          [currentUserId, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER]
+        );
+        const req = index.openCursor(range, 'next');
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (!cursor) return;
+          const row = cursor.value || {};
+          if (normalizeId(row.user_id || row.userId) === targetId) {
+            let changed = false;
+            if (typeof user.display_name === 'string' && row.display_name !== user.display_name) {
+              row.display_name = user.display_name;
+              changed = true;
+            }
+            if (typeof user.avatar_color === 'string' && row.avatar_color !== user.avatar_color) {
+              row.avatar_color = user.avatar_color;
+              changed = true;
+            }
+            if ((user.avatar_url || null) !== (row.avatar_url || null)) {
+              row.avatar_url = user.avatar_url || null;
+              changed = true;
+            }
+            if (typeof user.username === 'string' && row.username !== user.username) {
+              row.username = user.username;
+              changed = true;
+            }
+            if (changed) {
+              try { cursor.update(row); updated += 1; } catch (e) {}
+            }
+          }
+          cursor.continue();
+        };
+        req.onerror = () => finish(0);
+        tx.oncomplete = () => finish(updated);
+        tx.onerror = () => finish(0);
+        tx.onabort = () => finish(0);
+      });
+    } catch (e) {
+      return 0;
+    }
+  }
+
   window.messageCache = {
     init,
     readLatest,
@@ -539,6 +599,7 @@
     deleteOutboxItem,
     clearUserCache,
     syncOwnMessageReadState,
+    updateMessagesByUser,
   };
   window.cacheAssets = cacheAssets;
   window.clearAssetCache = clearAssetCache;

@@ -1,5 +1,7 @@
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
 const { AsyncJobQueue } = require('../voice/queue');
 const { getAiSettings, getOpenAIKey, saveAiSettings, deleteOpenAIKey, sanitizeSettings } = require('./settings');
@@ -185,14 +187,28 @@ function createAiBotFeature({
   auth,
   adminOnly,
   secret,
+  avatarUpload,
+  upLimiter,
+  avatarsDir,
+  notifyUserUpdated,
   broadcastToChatAll,
   hydrateMessageById,
   extractUrls,
   fetchPreview,
   notifyMessageCreated,
 }) {
-  const botByIdStmt = db.prepare('SELECT * FROM ai_bots WHERE id=?');
-  const allBotsStmt = db.prepare('SELECT * FROM ai_bots ORDER BY enabled DESC, id ASC');
+  const botByIdStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE b.id=?
+  `);
+  const allBotsStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    ORDER BY b.enabled DESC, b.id ASC
+  `);
   const chatSettingsStmt = db.prepare('SELECT * FROM ai_chat_bots ORDER BY chat_id ASC, bot_id ASC');
   const activeChatBotsStmt = db.prepare(`
     SELECT b.*, cb.chat_id, cb.mode, cb.hot_context_limit, cb.trigger_mode, cb.enabled as chat_enabled
@@ -265,6 +281,8 @@ function createAiBotFeature({
   const removeBotMemberStmt = db.prepare('DELETE FROM chat_members WHERE chat_id=? AND user_id=?');
   const removeBotFromAllChatsStmt = db.prepare('DELETE FROM chat_members WHERE user_id=?');
   const enabledBotChatsStmt = db.prepare('SELECT chat_id FROM ai_chat_bots WHERE bot_id=? AND enabled=1');
+  const passThroughLimiter = (_req, _res, next) => next();
+  const botAvatarLimiter = upLimiter || passThroughLimiter;
   let modelCatalogCache = null;
   let modelCatalogFetchedAt = 0;
 
@@ -397,6 +415,8 @@ function createAiBotFeature({
       response_model: row.response_model || settings.default_response_model,
       summary_model: row.summary_model || settings.default_summary_model,
       embedding_model: settings.default_embedding_model,
+      avatar_color: row.avatar_color || BOT_COLORS[0],
+      avatar_url: row.avatar_url || null,
       created_at: row.created_at,
       updated_at: row.updated_at,
     };
@@ -461,6 +481,23 @@ function createAiBotFeature({
       VALUES(?,?,?,?,?,?,?)
     `).run(username, password, name, 0, 0, color, 1);
     return result.lastInsertRowid;
+  }
+
+  function ensureBackingUser(bot) {
+    if (bot?.user_id && db.prepare('SELECT 1 FROM users WHERE id=?').get(bot.user_id)) {
+      return bot.user_id;
+    }
+    const userId = createBackingUser({ name: bot.name, mention: bot.mention });
+    db.prepare('UPDATE ai_bots SET user_id=?, updated_at=datetime(\'now\') WHERE id=?').run(userId, bot.id);
+    const updated = botByIdStmt.get(bot.id);
+    syncBotMemberships(updated, updated?.enabled !== 0);
+    return userId;
+  }
+
+  function removeAvatarFile(avatarUrl) {
+    if (!avatarsDir || !avatarUrl) return;
+    const oldFile = path.join(avatarsDir, path.basename(avatarUrl));
+    if (fs.existsSync(oldFile)) fs.unlinkSync(oldFile);
   }
 
   function syncBotMemberships(bot, isEnabled = true) {
@@ -995,6 +1032,44 @@ function createAiBotFeature({
     res.json({ bot, state: serializeAdminState() });
   });
 
+  app.post('/api/admin/ai-bots/:id(\\d+)/avatar', auth, adminOnly, botAvatarLimiter, (req, res) => {
+    if (!avatarUpload?.single) return res.status(500).json({ error: 'Avatar upload is not configured' });
+    const botId = Number(req.params.id);
+    const bot = botByIdStmt.get(botId);
+    if (!bot) return res.status(404).json({ error: 'Bot not found' });
+
+    avatarUpload.single('avatar')(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
+      if (!req.file) return res.status(400).json({ error: 'No file' });
+
+      const userId = ensureBackingUser(bot);
+      const old = db.prepare('SELECT avatar_url FROM users WHERE id=?').get(userId);
+      removeAvatarFile(old?.avatar_url);
+
+      const avatarUrl = '/uploads/avatars/' + req.file.filename;
+      db.prepare('UPDATE users SET avatar_url=?, display_name=? WHERE id=?').run(avatarUrl, bot.name, userId);
+      db.prepare('UPDATE ai_bots SET updated_at=datetime(\'now\') WHERE id=?').run(botId);
+      const updated = sanitizeBot(botByIdStmt.get(botId));
+      if (typeof notifyUserUpdated === 'function') notifyUserUpdated(userId);
+      res.json({ bot: updated, state: serializeAdminState() });
+    });
+  });
+
+  app.delete('/api/admin/ai-bots/:id(\\d+)/avatar', auth, adminOnly, (req, res) => {
+    const botId = Number(req.params.id);
+    const bot = botByIdStmt.get(botId);
+    if (!bot) return res.status(404).json({ error: 'Bot not found' });
+
+    const userId = ensureBackingUser(bot);
+    const old = db.prepare('SELECT avatar_url FROM users WHERE id=?').get(userId);
+    removeAvatarFile(old?.avatar_url);
+    db.prepare('UPDATE users SET avatar_url=NULL WHERE id=?').run(userId);
+    db.prepare('UPDATE ai_bots SET updated_at=datetime(\'now\') WHERE id=?').run(botId);
+    const updated = sanitizeBot(botByIdStmt.get(botId));
+    if (typeof notifyUserUpdated === 'function') notifyUserUpdated(userId);
+    res.json({ bot: updated, state: serializeAdminState() });
+  });
+
   app.post('/api/admin/ai-bots/import', auth, adminOnly, async (req, res) => {
     const source = req.body?.bot && typeof req.body.bot === 'object' ? req.body.bot : (req.body || {});
     const warnings = [];
@@ -1104,6 +1179,7 @@ function createAiBotFeature({
     );
     if (current.user_id) {
       db.prepare('UPDATE users SET display_name=? WHERE id=?').run(input.name, current.user_id);
+      if (typeof notifyUserUpdated === 'function') notifyUserUpdated(current.user_id);
     }
     const updated = botByIdStmt.get(botId);
     syncBotMemberships(updated, updated.enabled !== 0);

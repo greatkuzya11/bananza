@@ -454,6 +454,19 @@
               <button id="aiBotImportJson" type="button" class="weather-action-btn">Загрузить JSON</button>
               <input id="aiBotImportFile" class="hidden" type="file" accept="application/json,.json">
             </div>
+            <div class="ai-bot-avatar-row">
+              <div class="avatar-upload-wrap ai-bot-avatar-wrap">
+                <div id="aiBotAvatar" class="avatar-large"></div>
+                <label class="avatar-upload-label" id="aiBotAvatarLabel" title="Сменить аватар">📷
+                  <input type="file" id="aiBotAvatarInput" accept=".jpg,.jpeg,.png,.webp" class="hidden">
+                </label>
+              </div>
+              <div class="ai-bot-avatar-copy">
+                <strong>Аватар бота</strong>
+                <span>Картинка хранится отдельно от характера и не попадает в JSON.</span>
+                <button id="removeAiBotAvatar" class="btn-text hidden" type="button">Удалить аватар</button>
+              </div>
+            </div>
             <div class="ai-bot-grid">
               <label>Name<input id="aiBotName" class="modal-input" value="Bananza AI"></label>
               <label>Mention<input id="aiBotMention" class="modal-input" value="bananza"></label>

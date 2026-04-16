@@ -120,6 +120,7 @@ const upLimiter   = rateLimit({ windowMs: 60_000, max: 20, message: { error: 'To
 const AVATAR_COLORS = ['#e17076','#7bc862','#e5ca77','#65aadd','#a695e7','#ee7aae','#6ec9cb','#faa774'];
 const UI_THEMES = new Set(['bananza', 'banan-hero', 'midnight-ocean', 'nord-aurora', 'rose-pine', 'dracula-neon', 'tokyo-night']);
 const USER_PUBLIC_FIELDS = 'id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,ui_theme';
+const USER_REALTIME_FIELDS = `${USER_PUBLIC_FIELDS},is_ai_bot`;
 
 function publicUser(u) {
   return {
@@ -131,6 +132,13 @@ function publicUser(u) {
     avatar_color: u.avatar_color,
     avatar_url: u.avatar_url,
     ui_theme: UI_THEMES.has(u.ui_theme) ? u.ui_theme : 'bananza',
+  };
+}
+
+function realtimeUser(u) {
+  return {
+    ...publicUser(u),
+    is_ai_bot: Number(u?.is_ai_bot) || 0,
   };
 }
 
@@ -149,6 +157,24 @@ function auth(req, res, next) {
 function adminOnly(req, res, next) {
   if (!req.user.is_admin) return res.status(403).json({ error: 'Admin only' });
   next();
+}
+
+const sharedUserIdsStmt = db.prepare(`
+  SELECT DISTINCT cm2.user_id
+  FROM chat_members cm1
+  JOIN chat_members cm2 ON cm2.chat_id=cm1.chat_id
+  WHERE cm1.user_id=?
+`);
+
+function notifyUserUpdated(userId) {
+  const id = Number(userId);
+  if (!id) return;
+  const user = db.prepare(`SELECT ${USER_REALTIME_FIELDS} FROM users WHERE id=?`).get(id);
+  if (!user) return;
+  const payload = { type: 'user_updated', user: realtimeUser(user) };
+  const targets = new Set(sharedUserIdsStmt.all(id).map((row) => Number(row.user_id) || 0).filter(Boolean));
+  targets.add(id);
+  for (const targetId of targets) sendToUser(targetId, payload);
 }
 
 const pushFeature = createPushFeature({
@@ -210,6 +236,10 @@ aiBotFeature = createAiBotFeature({
   auth,
   adminOnly,
   secret: JWT_SECRET,
+  avatarUpload,
+  upLimiter,
+  avatarsDir: AVATARS_DIR,
+  notifyUserUpdated,
   broadcastToChatAll,
   hydrateMessageById: (messageId) => hydrateMessageById(messageId),
   extractUrls,
@@ -916,6 +946,7 @@ app.put('/api/profile', auth, (req, res) => {
 
   db.prepare(`UPDATE users SET ${updates.join(',')} WHERE id=?`).run(...params);
   const user = db.prepare(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id=?`).get(req.user.id);
+  notifyUserUpdated(req.user.id);
   res.json({ user: publicUser(user) });
 });
 
@@ -942,6 +973,7 @@ app.post('/api/profile/avatar', auth, upLimiter, (req, res) => {
     const avatarUrl = '/uploads/avatars/' + req.file.filename;
     db.prepare('UPDATE users SET avatar_url=? WHERE id=?').run(avatarUrl, req.user.id);
     const user = db.prepare(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id=?`).get(req.user.id);
+    notifyUserUpdated(req.user.id);
     res.json({ user: publicUser(user) });
   });
 });
@@ -953,7 +985,9 @@ app.delete('/api/profile/avatar', auth, (req, res) => {
     if (fs.existsSync(oldFile)) fs.unlinkSync(oldFile);
   }
   db.prepare('UPDATE users SET avatar_url=NULL WHERE id=?').run(req.user.id);
-  res.json({ ok: true });
+  notifyUserUpdated(req.user.id);
+  const user = db.prepare(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id=?`).get(req.user.id);
+  res.json({ ok: true, user: publicUser(user) });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
