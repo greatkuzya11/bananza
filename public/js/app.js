@@ -6,6 +6,7 @@
   // ═══════════════════════════════════════════════════════════════════════════
   const WS_URL = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
   const PAGE_SIZE = 50;
+  const MESSAGE_CACHE_LIMIT = 800;
   const MAX_MSG = 5000;
   const MAX_ATTACHMENTS = 10;
   const MAX_FILE_SIZE = 25 * 1024 * 1024;
@@ -52,7 +53,9 @@
   let onlineUsers = new Set();
   let chatMembersCache = new Map();
   let loadingMore = false;
+  let loadingMoreAfter = false;
   let hasMore = true;
+  let hasMoreAfter = false;
   let pendingFile = null;
   let pendingFiles = []; // queue for multi-file upload
   let outboxObjectUrls = new Map();
@@ -2035,7 +2038,7 @@
               const wasNearBottom = isNearBottom();
               const anchor = !wasNearBottom && !isNearBottom(8) ? captureScrollAnchor() : null;
               optimisticEl.remove();
-              displayedMsgIds.delete(optimisticEl.dataset.msgId);
+              forgetDisplayedMessage(optimisticEl.dataset.msgId);
               cleanupEmptyMessageGroups();
               if (anchor) requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
             }
@@ -2059,7 +2062,7 @@
           }
         }
         // Only render if we're in the relevant chat
-        if (msg.message.chat_id === currentChatId && !displayedMsgIds.has(msg.message.id)) {
+        if (msg.message.chat_id === currentChatId && !isMessageDisplayed(msg.message.id)) {
           const wasNearBottom = isNearBottom();
           const isAiBotResponse = msg.message.ai_generated || msg.message.ai_bot_id;
           const shouldPreserveIncomingScroll = scrollRestoreMode === 'restore'
@@ -2371,7 +2374,7 @@
   function updateScrollBottomButton() {
     if (!scrollBottomBtn) return;
     const hasMessages = Boolean(messagesEl.querySelector('.msg-row'));
-    const shouldShow = Boolean(currentChatId && hasMessages && !isNearBottom(8));
+    const shouldShow = Boolean(currentChatId && hasMessages && (!isNearBottom(8) || hasMoreAfter));
     scrollBottomBtn.classList.toggle('visible', shouldShow);
   }
 
@@ -2491,14 +2494,15 @@
   }
 
   function normalizeMessagesPage(data) {
-    if (Array.isArray(data)) return { messages: data, hasMoreBefore: null };
+    if (Array.isArray(data)) return { messages: data, hasMoreBefore: null, hasMoreAfter: null };
     if (data && Array.isArray(data.messages)) {
       return {
         messages: data.messages,
         hasMoreBefore: typeof data.has_more_before === 'boolean' ? data.has_more_before : null,
+        hasMoreAfter: typeof data.has_more_after === 'boolean' ? data.has_more_after : null,
       };
     }
-    return { messages: [], hasMoreBefore: false };
+    return { messages: [], hasMoreBefore: false, hasMoreAfter: false };
   }
 
   function setHasMoreBefore(value) {
@@ -2506,9 +2510,104 @@
     loadMoreWrap.classList.toggle('hidden', !hasMore);
   }
 
+  function setHasMoreAfter(value) {
+    hasMoreAfter = Boolean(value);
+    updateScrollBottomButton();
+  }
+
+  function messageIdKey(id) {
+    const key = String(id ?? '').trim();
+    return key || '';
+  }
+
+  function rememberDisplayedMessage(id) {
+    const key = messageIdKey(id);
+    if (key) displayedMsgIds.add(key);
+  }
+
+  function forgetDisplayedMessage(id) {
+    const key = messageIdKey(id);
+    if (key) displayedMsgIds.delete(key);
+  }
+
+  function isMessageDisplayed(id) {
+    const key = messageIdKey(id);
+    return key ? displayedMsgIds.has(key) : false;
+  }
+
+  function getMessageIdNumber(msg) {
+    const id = Number(msg?.id || 0);
+    return Number.isFinite(id) && id > 0 ? id : 0;
+  }
+
+  function minMessageId(messages = []) {
+    return messages.reduce((min, msg) => {
+      const id = getMessageIdNumber(msg);
+      return id ? Math.min(min, id) : min;
+    }, Number.MAX_SAFE_INTEGER);
+  }
+
+  function maxMessageId(messages = []) {
+    return messages.reduce((max, msg) => Math.max(max, getMessageIdNumber(msg)), 0);
+  }
+
+  function filterNewMessages(messages = []) {
+    const seen = new Set();
+    return (Array.isArray(messages) ? messages : []).filter((msg) => {
+      const key = messageIdKey(msg?.id);
+      if (!key || seen.has(key) || isMessageDisplayed(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function cacheMessages(chatId, messages = []) {
+    if (!Array.isArray(messages) || !messages.length) return;
+    try {
+      window.messageCache?.writeWindow?.(chatId, messages, { limit: MESSAGE_CACHE_LIMIT }).catch(() => {});
+    } catch (e) {}
+  }
+
+  function cacheCursorPage(chatId, direction, cursor, messages = [], page = {}) {
+    if (!Array.isArray(messages) || !messages.length || !cursor) return;
+    try {
+      window.messageCache?.writePage?.(chatId, {
+        direction,
+        cursor,
+        messages,
+        hasMoreBefore: page.hasMoreBefore,
+        hasMoreAfter: page.hasMoreAfter,
+        limit: MESSAGE_CACHE_LIMIT,
+      }).catch(() => {});
+    } catch (e) {}
+  }
+
+  async function readCachedCursorPage(chatId, direction, cursor) {
+    try {
+      const page = await window.messageCache?.readPage?.(chatId, direction, cursor);
+      if (page?.complete && Array.isArray(page.messages) && page.messages.length) return page;
+    } catch (e) {}
+    return null;
+  }
+
+  function updateHasMoreAfterFromChat(chatId = currentChatId) {
+    const chat = chats.find(c => Number(c.id) === Number(chatId));
+    const lastMessageId = Number(chat?.last_message_id || 0);
+    const maxRenderedId = getMaxRenderedMessageId();
+    setHasMoreAfter(Boolean(lastMessageId && maxRenderedId && maxRenderedId < lastMessageId));
+  }
+
   function maybeLoadMoreAtTop() {
-    if (!suppressScrollAnchorSave && messagesEl.scrollTop < 60 && hasMore && !loadingMore) {
+    if (!suppressScrollAnchorSave && messagesEl.scrollTop < 60 && hasMore && !loadingMore && !loadingMoreAfter) {
       loadMore();
+      return true;
+    }
+    return false;
+  }
+
+  function maybeLoadMoreAtBottom() {
+    if (!suppressScrollAnchorSave && hasMoreAfter && !loadingMoreAfter && !loadingMore && isNearBottom(80)) {
+      loadMoreAfter();
       return true;
     }
     return false;
@@ -2749,6 +2848,7 @@
     currentChatId = chatId;
     displayedMsgIds.clear();
     hasMore = false; // prevent scroll handler triggering loadMore during DOM clear
+    setHasMoreAfter(false);
     suppressScrollAnchorSave = true;
 
     emptyState.classList.add('hidden');
@@ -2811,7 +2911,10 @@
         if (Array.isArray(cachedMsgs) && cachedMsgs.length) {
           applyOwnReadStateToMessages(chatId, cachedMsgs);
           displayedMsgIds.clear();
-          setHasMoreBefore(restoreAnchor?.messageId ? cachedMsgs.length > 0 : cachedMsgs.length >= PAGE_SIZE);
+          const cachedFirstId = minMessageId(cachedMsgs);
+          const cachedLastId = maxMessageId(cachedMsgs);
+          setHasMoreBefore(cachedFirstId !== Number.MAX_SAFE_INTEGER && cachedFirstId > 1 && (restoreAnchor?.messageId ? true : cachedMsgs.length >= PAGE_SIZE));
+          setHasMoreAfter(Boolean(restoreAnchor?.messageId && chat?.last_message_id && cachedLastId < Number(chat.last_message_id || 0)));
           renderMessages(cachedMsgs);
           await renderOutboxForChat(chatId);
           if (restoreAnchor?.messageId) {
@@ -2860,9 +2963,10 @@
         const fetchedIds = (msgs || []).map(m => Number(m.id || 0));
         const same = domIds.length > 0 && domIds.length === fetchedIds.length && domIds.every((id, idx) => id === fetchedIds[idx]);
         if (same) {
-          // Persist network-fetched messages to IndexedDB (keep last 200)
-          try { if (window.messageCache) window.messageCache.writeWindow(chatId, (msgs || []).slice(-200)).catch(()=>{}); } catch (e) {}
+          // Persist network-fetched messages to IndexedDB for offline/low-traffic history reuse.
+          cacheMessages(chatId, msgs || []);
           setHasMoreBefore(page.hasMoreBefore ?? (restoreAnchor?.messageId ? msgs.length > 0 : msgs.length >= PAGE_SIZE));
+          setHasMoreAfter(page.hasMoreAfter ?? Boolean(restoreAnchor?.messageId && chat?.last_message_id && maxMessageId(msgs) < Number(chat.last_message_id || 0)));
           if (restoreAnchor?.messageId) {
             requestAnimationFrame(() => {
               if (!restoreScrollAnchor(restoreAnchor)) {
@@ -2880,6 +2984,7 @@
               suppressScrollAnchorSave = false;
               saveCurrentScrollAnchor(chatId, { force: true });
               maybeLoadMoreAtTop();
+              maybeLoadMoreAtBottom();
             }, 260);
           });
           scrollRestoreScheduled = true;
@@ -2887,16 +2992,18 @@
           messagesEl.querySelectorAll('.msg-row, .msg-group, .date-separator').forEach(el => el.remove());
           displayedMsgIds.clear();
           setHasMoreBefore(page.hasMoreBefore ?? (restoreAnchor?.messageId ? msgs.length > 0 : msgs.length >= PAGE_SIZE));
+          setHasMoreAfter(page.hasMoreAfter ?? Boolean(restoreAnchor?.messageId && chat?.last_message_id && maxMessageId(msgs) < Number(chat.last_message_id || 0)));
           renderMessages(msgs);
         }
       } catch (e) {
         messagesEl.querySelectorAll('.msg-row, .msg-group, .date-separator').forEach(el => el.remove());
         displayedMsgIds.clear();
         setHasMoreBefore(page.hasMoreBefore ?? (restoreAnchor?.messageId ? msgs.length > 0 : msgs.length >= PAGE_SIZE));
+        setHasMoreAfter(page.hasMoreAfter ?? Boolean(restoreAnchor?.messageId && chat?.last_message_id && maxMessageId(msgs) < Number(chat.last_message_id || 0)));
         renderMessages(msgs);
       }
-      // Persist network-fetched messages to IndexedDB (keep last 200)
-      try { if (window.messageCache) window.messageCache.writeWindow(chatId, (msgs || []).slice(-200)).catch(()=>{}); } catch (e) {}
+      // Persist network-fetched messages to IndexedDB for offline/low-traffic history reuse.
+      cacheMessages(chatId, msgs || []);
       // Cache background, avatars, and first 5 images
       (async () => {
         try {
@@ -2927,6 +3034,7 @@
           suppressScrollAnchorSave = false;
           saveCurrentScrollAnchor(chatId, { force: true });
           maybeLoadMoreAtTop();
+          maybeLoadMoreAtBottom();
         }, 260);
       });
       scrollRestoreScheduled = true;
@@ -2936,6 +3044,7 @@
     if (!scrollRestoreScheduled && currentChatId === chatId && suppressScrollAnchorSave) {
       suppressScrollAnchorSave = false;
       maybeLoadMoreAtTop();
+      maybeLoadMoreAtBottom();
     }
 
     clearReply();
@@ -3049,11 +3158,12 @@
 
   function renderMessages(msgs) {
     let lastDate = null;
-    const existingFirst = messagesEl.querySelector('.msg-row, .msg-group');
+    const existingFirst = messagesEl.querySelector('.date-separator, .msg-row, .msg-group');
     let currentGroupBody = null;
 
     for (let i = 0; i < msgs.length; i++) {
       const msg = msgs[i];
+      if (isMessageDisplayed(msg?.id)) continue;
       const msgDate = formatDate(msg.created_at);
       if (msgDate !== lastDate) {
         lastDate = msgDate;
@@ -3088,7 +3198,7 @@
         if (existingFirst) messagesEl.insertBefore(el, existingFirst);
         else messagesEl.appendChild(el);
       }
-      displayedMsgIds.add(msg.id);
+      rememberDisplayedMessage(msg.id);
     }
     updateScrollBottomButton();
   }
@@ -3133,7 +3243,7 @@
     } else {
       messagesEl.appendChild(el);
     }
-    displayedMsgIds.add(msg.id);
+    rememberDisplayedMessage(msg.id);
     try {
       if (window.messageCache) window.messageCache.upsertMessage(msg).catch(()=>{});
     } catch (e) {}
@@ -3142,6 +3252,7 @@
         window.cacheAssets([`/uploads/${msg.file_stored}`]).catch(()=>{});
       }
     } catch (e) {}
+    if (!loadingMoreAfter) updateHasMoreAfterFromChat(currentChatId);
     updateScrollBottomButton();
   }
 
@@ -3502,28 +3613,45 @@
     return html;
   }
 
+  function cleanupDuplicateDateSeparators() {
+    const seenDates = new Set();
+    messagesEl.querySelectorAll('.date-separator').forEach(sep => {
+      const text = sep.textContent.trim();
+      if (seenDates.has(text)) sep.remove();
+      else seenDates.add(text);
+    });
+  }
+
   // Load more messages
   async function loadMore() {
-    if (loadingMore || !hasMore || !currentChatId) return;
+    if (loadingMore || loadingMoreAfter || !hasMore || !currentChatId) return;
     const chatId = currentChatId;
+    const firstMsg = messagesEl.querySelector('.msg-row[data-msg-id]');
+    const firstId = firstMsg ? Number(firstMsg.dataset.msgId || 0) : 0;
+    if (!firstId) {
+      setHasMoreBefore(false);
+      return;
+    }
+
     loadingMore = true;
     loadMoreBtn.textContent = 'Loading...';
 
-    const firstMsg = messagesEl.querySelector('.msg-row');
-    const firstId = firstMsg ? firstMsg.dataset.msgId : null;
-
     try {
-      const params = new URLSearchParams({ limit: String(PAGE_SIZE), meta: '1' });
-      if (firstId) params.set('before', firstId);
-      const raw = await api(`/api/chats/${chatId}/messages?${params}`);
-      const page = normalizeMessagesPage(raw);
-      const msgs = page.messages;
-      const memberLastReads = raw && raw.member_last_reads ? raw.member_last_reads : null;
-      const readState = await reconcileChatReadState(chatId, memberLastReads, {
-        replace: true,
-        updateVisible: currentChatId === chatId,
-      });
-      if (readState.chatReadChanged) renderChatList(chatSearch.value);
+      let page = await readCachedCursorPage(chatId, 'before', firstId);
+      let msgs = page?.messages || [];
+      if (!page) {
+        const params = new URLSearchParams({ limit: String(PAGE_SIZE), meta: '1', before: String(firstId) });
+        const raw = await api(`/api/chats/${chatId}/messages?${params}`);
+        page = normalizeMessagesPage(raw);
+        msgs = page.messages;
+        const memberLastReads = raw && raw.member_last_reads ? raw.member_last_reads : null;
+        const readState = await reconcileChatReadState(chatId, memberLastReads, {
+          replace: true,
+          updateVisible: currentChatId === chatId,
+        });
+        if (readState.chatReadChanged) renderChatList(chatSearch.value);
+        cacheCursorPage(chatId, 'before', firstId, msgs, page);
+      }
       applyOwnReadStateToMessages(chatId, msgs);
       if (currentChatId !== chatId) return;
       setHasMoreBefore(page.hasMoreBefore ?? msgs.length >= PAGE_SIZE);
@@ -3531,31 +3659,13 @@
       // Capture scroll state RIGHT before DOM mutation (not before async fetch)
       const scrollTopBefore = messagesEl.scrollTop;
       const scrollHeightBefore = messagesEl.scrollHeight;
+      const newMessages = filterNewMessages(msgs);
 
-      // Insert at top
-      let lastDate = null;
-      const insertBefore = messagesEl.querySelector('.date-separator, .msg-row');
-      for (const msg of msgs) {
-        const msgDate = formatDate(msg.created_at);
-        if (msgDate !== lastDate) {
-          lastDate = msgDate;
-          const sep = document.createElement('div');
-          sep.className = 'date-separator';
-          sep.innerHTML = `<span>${msgDate}</span>`;
-          messagesEl.insertBefore(sep, insertBefore);
-        }
-        const el = createMessageEl(msg);
-        messagesEl.insertBefore(el, insertBefore);
-        displayedMsgIds.add(msg.id);
+      if (newMessages.length) {
+        renderMessages(newMessages);
+        cleanupDuplicateDateSeparators();
+        cacheMessages(chatId, msgs);
       }
-
-      // Remove duplicate date separators (keep first occurrence of each date)
-      const seenDates = new Set();
-      messagesEl.querySelectorAll('.date-separator').forEach(sep => {
-        const text = sep.textContent.trim();
-        if (seenDates.has(text)) sep.remove();
-        else seenDates.add(text);
-      });
 
       // Restore scroll position: keep user at the same visual spot
       messagesEl.scrollTop = scrollTopBefore + (messagesEl.scrollHeight - scrollHeightBefore);
@@ -3564,6 +3674,50 @@
     finally {
       loadingMore = false;
       loadMoreBtn.textContent = 'Load earlier messages';
+    }
+  }
+
+  async function loadMoreAfter() {
+    if (loadingMoreAfter || loadingMore || !hasMoreAfter || !currentChatId) return;
+    const chatId = currentChatId;
+    const lastId = getMaxRenderedMessageId();
+    if (!lastId) {
+      setHasMoreAfter(false);
+      return;
+    }
+
+    loadingMoreAfter = true;
+    try {
+      let page = await readCachedCursorPage(chatId, 'after', lastId);
+      let msgs = page?.messages || [];
+      if (!page) {
+        const params = new URLSearchParams({ limit: String(PAGE_SIZE), meta: '1', after: String(lastId) });
+        const raw = await api(`/api/chats/${chatId}/messages?${params}`);
+        page = normalizeMessagesPage(raw);
+        msgs = page.messages;
+        const memberLastReads = raw && raw.member_last_reads ? raw.member_last_reads : null;
+        const readState = await reconcileChatReadState(chatId, memberLastReads, {
+          replace: true,
+          updateVisible: currentChatId === chatId,
+        });
+        if (readState.chatReadChanged) renderChatList(chatSearch.value);
+        cacheCursorPage(chatId, 'after', lastId, msgs, page);
+      }
+
+      applyOwnReadStateToMessages(chatId, msgs);
+      if (currentChatId !== chatId) return;
+      setHasMoreAfter(page.hasMoreAfter ?? msgs.length >= PAGE_SIZE);
+
+      const newMessages = filterNewMessages(msgs);
+      if (newMessages.length) {
+        for (const msg of newMessages) appendMessage(msg);
+        cacheMessages(chatId, msgs);
+        saveCurrentScrollAnchor(currentChatId, { force: true });
+      }
+    } catch {}
+    finally {
+      loadingMoreAfter = false;
+      updateScrollBottomButton();
     }
   }
 
@@ -3577,6 +3731,7 @@
       if (scrollBottomBtn) scrollBottomBtn.classList.remove('visible');
       requestAnimationFrame(updateScrollBottomButton);
       if (!instant) setTimeout(updateScrollBottomButton, 260);
+      if (hasMoreAfter) setTimeout(() => maybeLoadMoreAtBottom(), instant ? 0 : 320);
       if (markRead) setTimeout(() => markCurrentChatReadIfAtBottom(true), instant ? 0 : 320);
     });
   }
@@ -3640,7 +3795,7 @@
 
   function removeOutboxRows() {
     messagesEl.querySelectorAll('.msg-row[data-outbox="1"]').forEach((row) => {
-      displayedMsgIds.delete(row.dataset.msgId);
+      forgetDisplayedMessage(row.dataset.msgId);
       revokeOutboxObjectUrls(row.dataset.clientId || row.dataset.msgId);
       row.remove();
     });
@@ -3700,7 +3855,7 @@
 
   function renderOutboxItem(item) {
     if (!item || Number(item.chatId) !== Number(currentChatId)) return null;
-    if (displayedMsgIds.has(item.clientId)) return findOutboxRow(item.clientId);
+    if (isMessageDisplayed(item.clientId)) return findOutboxRow(item.clientId);
     const localMsg = buildLocalMessageFromOutbox(item);
     appendMessage(localMsg);
     const row = findOutboxRow(item.clientId);
@@ -3829,9 +3984,9 @@
     updateChatListLastMessage(serverMsg);
 
     const row = findOutboxRow(item.clientId);
-    const alreadyDisplayed = displayedMsgIds.has(serverMsg.id);
+    const alreadyDisplayed = isMessageDisplayed(serverMsg.id);
     if (row) {
-      displayedMsgIds.delete(row.dataset.msgId);
+      forgetDisplayedMessage(row.dataset.msgId);
       if (alreadyDisplayed) {
         row.remove();
         cleanupEmptyMessageGroups();
@@ -3839,7 +3994,7 @@
         const showName = Boolean(row.querySelector('.msg-sender'));
         const replacement = createMessageEl(serverMsg, showName);
         row.replaceWith(replacement);
-        displayedMsgIds.add(serverMsg.id);
+        rememberDisplayedMessage(serverMsg.id);
       }
     } else if (Number(serverMsg.chat_id) === Number(currentChatId) && !alreadyDisplayed) {
       appendMessage(serverMsg);
@@ -4054,7 +4209,7 @@
     const showName = Boolean(row.querySelector('.msg-sender'));
     const replacement = createMessageEl(nextMsg, showName);
     row.replaceWith(replacement);
-    displayedMsgIds.add(nextMsg.id);
+    rememberDisplayedMessage(nextMsg.id);
     updateScrollBottomButton();
   }
 
@@ -6041,8 +6196,9 @@
     // Scroll to load more
     messagesEl.addEventListener('scroll', () => {
       hideAvatarUserMenu();
-      if (!suppressScrollAnchorSave && !loadingMore) scheduleScrollAnchorSave();
+      if (!suppressScrollAnchorSave && !loadingMore && !loadingMoreAfter) scheduleScrollAnchorSave();
       maybeLoadMoreAtTop();
+      maybeLoadMoreAtBottom();
       if (!suppressScrollAnchorSave && isNearBottom(8)) markCurrentChatReadIfAtBottom();
       updateScrollBottomButton();
     });

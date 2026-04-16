@@ -1,15 +1,16 @@
 // User-scoped IndexedDB message cache and safe image asset cache helpers.
 (function () {
   const DB_NAME = 'bananza-cache-v2';
-  const DB_VERSION = 2;
+  const DB_VERSION = 3;
   const STORE_MESSAGES = 'messages';
+  const STORE_PAGES = 'message_pages';
   const STORE_OUTBOX = 'outbox';
   const INDEX_USER_CHAT_ID = 'by_user_chat_id';
   const INDEX_OUTBOX_USER_CHAT_CREATED = 'by_user_chat_created';
   const ASSET_CACHE = 'bananza-assets-v2';
   const OLD_ASSET_CACHES = ['bananza-assets-v1'];
   const OLD_DB_NAMES = ['bananza-cache-v1'];
-  const DEFAULT_MESSAGE_LIMIT = 200;
+  const DEFAULT_MESSAGE_LIMIT = 800;
   const MAX_PREFETCH_ASSETS = 24;
 
   let currentUserId = null;
@@ -24,7 +25,7 @@
 
   function clampLimit(limit, fallback = DEFAULT_MESSAGE_LIMIT) {
     const n = Number(limit || fallback);
-    return Math.min(500, Math.max(1, Number.isFinite(n) ? n : fallback));
+    return Math.min(2000, Math.max(1, Number.isFinite(n) ? n : fallback));
   }
 
   function openDB() {
@@ -39,6 +40,9 @@
         if (!nextDb.objectStoreNames.contains(STORE_MESSAGES)) {
           const store = nextDb.createObjectStore(STORE_MESSAGES, { keyPath: ['userId', 'chatId', 'id'] });
           store.createIndex(INDEX_USER_CHAT_ID, ['userId', 'chatId', 'id']);
+        }
+        if (!nextDb.objectStoreNames.contains(STORE_PAGES)) {
+          nextDb.createObjectStore(STORE_PAGES, { keyPath: ['userId', 'chatId', 'direction', 'cursor'] });
         }
         if (!nextDb.objectStoreNames.contains(STORE_OUTBOX)) {
           const outbox = nextDb.createObjectStore(STORE_OUTBOX, { keyPath: ['userId', 'chatId', 'clientId'] });
@@ -95,6 +99,15 @@
   function normalizeClientId(value) {
     const id = String(value || '').trim();
     return id ? id : '';
+  }
+
+  function normalizePageDirection(value) {
+    return value === 'after' ? 'after' : 'before';
+  }
+
+  function normalizePageCursor(value) {
+    const cursor = Number(value || 0);
+    return Number.isFinite(cursor) && cursor > 0 ? Math.floor(cursor) : 0;
   }
 
   function normalizeOutboxItem(item) {
@@ -195,6 +208,26 @@
     }
   }
 
+  async function readMessagesByIds(chatId, ids = []) {
+    const cid = normalizeId(chatId);
+    const messageIds = [...new Set((ids || []).map(normalizeId).filter(Boolean))];
+    if (!currentUserId || !cid || !messageIds.length) return [];
+    const database = await openDB().catch(() => null);
+    if (!database) return [];
+    try {
+      const tx = database.transaction(STORE_MESSAGES, 'readonly');
+      const store = tx.objectStore(STORE_MESSAGES);
+      const rows = await Promise.all(messageIds.map((id) => new Promise((resolve) => {
+        const req = store.get([currentUserId, cid, id]);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      })));
+      return rows.filter(Boolean).sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+    } catch {
+      return [];
+    }
+  }
+
   async function trimChat(chatId, limit = DEFAULT_MESSAGE_LIMIT) {
     const cid = normalizeId(chatId);
     const max = clampLimit(limit);
@@ -226,6 +259,60 @@
     });
     if (ok) await trimChat(cid, limit);
     return !!ok;
+  }
+
+  async function writePage(chatId, { direction = 'before', cursor = 0, messages = [], hasMoreBefore = null, hasMoreAfter = null, limit = DEFAULT_MESSAGE_LIMIT } = {}) {
+    const cid = normalizeId(chatId);
+    const pageCursor = normalizePageCursor(cursor);
+    const pageDirection = normalizePageDirection(direction);
+    if (!Array.isArray(messages) || !messages.length || !cid || !pageCursor || !currentUserId) return false;
+    const messageIds = [...new Set(messages.map((msg) => normalizeId(msg?.id)).filter(Boolean))].sort((a, b) => a - b);
+    if (!messageIds.length) return false;
+    const wroteMessages = await writeWindow(cid, messages, { limit });
+    const wrotePage = await withObjectStore(STORE_PAGES, 'readwrite', (store) => {
+      store.put({
+        userId: currentUserId,
+        chatId: cid,
+        direction: pageDirection,
+        cursor: pageCursor,
+        messageIds,
+        hasMoreBefore: typeof hasMoreBefore === 'boolean' ? hasMoreBefore : null,
+        hasMoreAfter: typeof hasMoreAfter === 'boolean' ? hasMoreAfter : null,
+        savedAt: Date.now(),
+      });
+      return true;
+    });
+    return !!(wroteMessages && wrotePage);
+  }
+
+  async function readPage(chatId, direction = 'before', cursor = 0) {
+    const cid = normalizeId(chatId);
+    const pageCursor = normalizePageCursor(cursor);
+    const pageDirection = normalizePageDirection(direction);
+    if (!currentUserId || !cid || !pageCursor) return null;
+    const database = await openDB().catch(() => null);
+    if (!database) return null;
+    try {
+      const page = await new Promise((resolve) => {
+        const tx = database.transaction(STORE_PAGES, 'readonly');
+        const req = tx.objectStore(STORE_PAGES).get([currentUserId, cid, pageDirection, pageCursor]);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      });
+      const messageIds = page && Array.isArray(page.messageIds) ? page.messageIds.map(normalizeId).filter(Boolean) : [];
+      if (!messageIds.length) return null;
+      const messages = await readMessagesByIds(cid, messageIds);
+      const complete = messages.length === messageIds.length;
+      return {
+        messages,
+        complete,
+        hasMoreBefore: typeof page.hasMoreBefore === 'boolean' ? page.hasMoreBefore : null,
+        hasMoreAfter: typeof page.hasMoreAfter === 'boolean' ? page.hasMoreAfter : null,
+        savedAt: page.savedAt || 0,
+      };
+    } catch {
+      return null;
+    }
   }
 
   async function upsertMessage(msg) {
@@ -340,7 +427,18 @@
       };
       return true;
     });
-    return !!(clearMessages || clearOutbox);
+    const clearPages = await withObjectStore(STORE_PAGES, 'readwrite', (store) => {
+      const range = IDBKeyRange.bound([uid, 0, '', 0], [uid, Number.MAX_SAFE_INTEGER, '\uffff', Number.MAX_SAFE_INTEGER]);
+      const req = store.openCursor(range);
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (!cursor) return;
+        store.delete(cursor.primaryKey);
+        cursor.continue();
+      };
+      return true;
+    });
+    return !!(clearMessages || clearOutbox || clearPages);
   }
 
   function isCacheableAsset(url) {
@@ -431,6 +529,8 @@
     readLatest,
     readAround,
     writeWindow,
+    writePage,
+    readPage,
     upsertMessage,
     deleteMessage,
     upsertOutboxItem,

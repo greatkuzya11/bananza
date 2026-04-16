@@ -649,6 +649,7 @@ app.post('/api/chats/:chatId/members', auth, (req, res) => {
 app.get('/api/chats/:chatId/messages', auth, (req, res) => {
   const chatId = +req.params.chatId;
   const before = req.query.before ? +req.query.before : null;
+  const after = req.query.after ? +req.query.after : null;
   const anchor = req.query.anchor ? +req.query.anchor : null;
   const limit = Math.min(+req.query.limit || 50, 100);
   const includeMeta = req.query.meta === '1';
@@ -697,11 +698,16 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
   }
 
   if (!msgs) {
-    const q = `${selectSql} WHERE m.chat_id=? ${before ? 'AND m.id<?' : ''} AND m.is_deleted=0 ORDER BY m.id DESC LIMIT ?`;
-    msgs = before
-      ? db.prepare(q).all(chatId, before, limit)
-      : db.prepare(q).all(chatId, limit);
-    msgs = msgs.reverse();
+    if (after) {
+      msgs = db.prepare(`${selectSql} WHERE m.chat_id=? AND m.id>? AND m.is_deleted=0 ORDER BY m.id ASC LIMIT ?`)
+        .all(chatId, after, limit);
+    } else {
+      const q = `${selectSql} WHERE m.chat_id=? ${before ? 'AND m.id<?' : ''} AND m.is_deleted=0 ORDER BY m.id DESC LIMIT ?`;
+      msgs = before
+        ? db.prepare(q).all(chatId, before, limit)
+        : db.prepare(q).all(chatId, limit);
+      msgs = msgs.reverse();
+    }
   }
 
 
@@ -738,7 +744,11 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
     const hasMoreBefore = firstId !== Number.MAX_SAFE_INTEGER
       ? !!db.prepare('SELECT 1 FROM messages WHERE chat_id=? AND id<? AND is_deleted=0 LIMIT 1').get(chatId, firstId)
       : false;
-    return res.json({ messages: result, has_more_before: hasMoreBefore, member_last_reads });
+    const lastId = result.reduce((max, msg) => Math.max(max, Number(msg.id) || 0), 0);
+    const hasMoreAfter = lastId
+      ? !!db.prepare('SELECT 1 FROM messages WHERE chat_id=? AND id>? AND is_deleted=0 LIMIT 1').get(chatId, lastId)
+      : false;
+    return res.json({ messages: result, has_more_before: hasMoreBefore, has_more_after: hasMoreAfter, member_last_reads });
   }
 
   return res.json({ messages: result, member_last_reads });
