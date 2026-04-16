@@ -142,6 +142,7 @@
   const chatArea = $('#chatArea');
   const emptyState = $('#emptyState');
   const chatView = $('#chatView');
+  const backBtn = $('#backBtn');
   const chatTitle = $('#chatTitle');
   const chatHeaderAvatar = $('#chatHeaderAvatar');
   const chatStatus = $('#chatStatus');
@@ -3352,6 +3353,8 @@
 
     // Mobile: hide sidebar
     if (window.innerWidth <= 768) {
+      cancelPendingSidebarReveal();
+      sidebar.classList.remove('sidebar-no-transition');
       sidebar.classList.add('sidebar-hidden');
       history.pushState({ chat: chatId }, '');
     }
@@ -5994,6 +5997,61 @@
     }, 320);
   }
 
+  function animateBackButton() {
+    if (!backBtn) return;
+    backBtn.classList.remove('is-spinning');
+    void backBtn.offsetWidth;
+    backBtn.classList.add('is-spinning');
+    clearTimeout(backBtn.__spinTimer);
+    backBtn.__spinTimer = setTimeout(() => {
+      backBtn.classList.remove('is-spinning');
+    }, 230);
+  }
+
+  function prefersReducedMotion() {
+    return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  function cancelPendingSidebarReveal() {
+    if (!sidebar?.__revealFrame) return;
+    cancelAnimationFrame(sidebar.__revealFrame);
+    sidebar.__revealFrame = 0;
+  }
+
+  function revealSidebarFromChat({ forceAnimation = false } = {}) {
+    if (!sidebar) return;
+    cancelPendingSidebarReveal();
+    sidebar.classList.remove('sidebar-no-transition');
+
+    if (prefersReducedMotion()) {
+      sidebar.classList.remove('sidebar-hidden');
+      return;
+    }
+
+    if (!sidebar.classList.contains('sidebar-hidden')) {
+      if (!forceAnimation) return;
+      sidebar.classList.add('sidebar-no-transition');
+      sidebar.classList.add('sidebar-hidden');
+      void sidebar.offsetWidth;
+      sidebar.classList.remove('sidebar-no-transition');
+    } else {
+      void sidebar.offsetWidth;
+    }
+
+    sidebar.__revealFrame = requestAnimationFrame(() => {
+      sidebar.classList.remove('sidebar-hidden');
+      sidebar.__revealFrame = 0;
+    });
+  }
+
+  function navigateBackToChatList() {
+    if (history.state && history.state.chat) {
+      history.back();
+      return;
+    }
+    revealSidebarFromChat({ forceAnimation: true });
+  }
+
   function setupPasswordPreviewToggles() {
     $$('.pw-toggle').forEach(btn => {
       if (btn.dataset.bound === '1') return;
@@ -6405,9 +6463,22 @@
     });
 
     // Back button (mobile)
-    $('#backBtn').addEventListener('click', () => {
-      sidebar.classList.remove('sidebar-hidden');
-      if (history.state && history.state.chat) history.back();
+    backBtn?.addEventListener('click', () => {
+      if (backBtn.__isNavigating) return;
+      const finishBackNavigation = () => {
+        navigateBackToChatList();
+        clearTimeout(backBtn.__spinTimer);
+        backBtn.classList.remove('is-spinning');
+        backBtn.__isNavigating = false;
+      };
+      backBtn.__isNavigating = true;
+      clearTimeout(backBtn.__navTimer);
+      if (prefersReducedMotion()) {
+        finishBackNavigation();
+        return;
+      }
+      animateBackButton();
+      backBtn.__navTimer = setTimeout(finishBackNavigation, 120);
     });
 
     // Android back gesture / button
@@ -6427,7 +6498,7 @@
         }
         if (sidebar.classList.contains('sidebar-hidden')) {
           // Going back from chat to chat list
-          sidebar.classList.remove('sidebar-hidden');
+          revealSidebarFromChat();
         } else {
           // Already on chat list — push state back to prevent exit
           history.pushState({ view: 'chatlist' }, '');

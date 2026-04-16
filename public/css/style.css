@@ -410,6 +410,67 @@ a:hover { text-decoration: underline; }
   box-shadow: none;
 }
 
+.chat-back-btn {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 12px;
+  box-shadow: none;
+  transition:
+    transform .16s ease,
+    background .16s ease,
+    box-shadow .16s ease,
+    filter .16s ease;
+}
+
+.chat-back-btn:hover {
+  background: transparent;
+  box-shadow: none;
+  filter: brightness(1.06);
+}
+
+.chat-back-btn:focus-visible {
+  background: var(--accent-softer-bg);
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,.04),
+    0 0 0 4px var(--accent-softer-bg);
+}
+
+.chat-back-btn:active {
+  transform: scale(.94);
+  background: transparent;
+  box-shadow: none;
+}
+
+.chat-back-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  line-height: 1;
+  transform-origin: 50% 50%;
+  will-change: transform;
+  filter: drop-shadow(0 1px 1px rgba(0,0,0,.22));
+}
+
+.chat-back-btn.is-spinning .chat-back-btn-icon {
+  animation: chatBackBtnSpin 210ms cubic-bezier(.22,.88,.34,1);
+}
+
+@keyframes chatBackBtnSpin {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+  45% {
+    transform: rotate(-190deg) scale(1.12);
+  }
+  100% {
+    transform: rotate(-360deg) scale(1);
+  }
+}
+
 /* ── Chat area ───────────────────────────────────────────────────────────── */
 #chatArea { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 
@@ -1457,7 +1518,8 @@ a:hover { text-decoration: underline; }
   .forward-modal:not(.hidden) .modal-content,
   .forward-modal.is-closing,
   .forward-modal.is-closing .modal-content,
-  .center-toast.is-visible {
+  .center-toast.is-visible,
+  .chat-back-btn.is-spinning .chat-back-btn-icon {
     animation: none;
   }
   .center-toast.is-visible { opacity: 1; }
@@ -2132,6 +2194,7 @@ a:hover { text-decoration: underline; }
     position: fixed; inset: 0; width: 100%; min-width: 0; max-width: 100vw;
     z-index: 20; transition: transform .25s ease;
   }
+  #sidebar.sidebar-no-transition { transition: none !important; }
   #sidebar.sidebar-hidden { transform: translateX(-100%); }
 
   .mobile-only { display: flex !important; }
