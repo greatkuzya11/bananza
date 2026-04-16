@@ -579,11 +579,19 @@ a:hover { text-decoration: underline; }
   display: inline-flex; align-items: center; gap: 3px;
   margin-bottom: -2px; flex-shrink: 0;
 }
-.msg-status { font-size: 13px; color: var(--text-time); letter-spacing: -3px; margin-right: 1px; }
+.msg-status {
+  display: inline-flex;
+  justify-content: center;
+  min-width: 16px;
+  font-size: 13px;
+  color: var(--text-time);
+  letter-spacing: -3px;
+  margin-right: 1px;
+}
 .msg-status.read { color: var(--accent); }
-.msg-status.sending { color: var(--text-time); }
+.msg-status.sending { color: var(--text-time); letter-spacing: 0; }
 .msg-status.queued { color: var(--text-time); }
-.msg-status.failed { color: var(--danger); }
+.msg-status.failed { color: var(--danger); letter-spacing: 0; font-weight: 700; }
 .msg-edited {
   font-size: 11px;
   color: var(--text-time);
@@ -611,14 +619,52 @@ a:hover { text-decoration: underline; }
   display: inline-flex; align-items: center; justify-content: center; font-size: 0.9rem;
   color: var(--text-secondary); background: none; border: none; width: 1.4em; height: 1.4em;
   border-radius: 0.35em; margin: 0; cursor: pointer; padding: 0;
+  outline: none; box-shadow: none;
+  appearance: none; -webkit-appearance: none; -webkit-tap-highlight-color: transparent;
+  user-select: none; -webkit-user-select: none;
 }
 .msg-retry-btn:hover { color: var(--accent); background: rgba(255,255,255,0.03); }
+.msg-retry-btn:focus,
+.msg-retry-btn:focus-visible,
+.msg-retry-btn:active {
+  outline: none !important;
+  box-shadow: none !important;
+  background: none !important;
+}
+.msg-retry-btn::selection {
+  background: transparent;
+  color: inherit;
+}
+.msg-retry-btn::-moz-selection {
+  background: transparent;
+  color: inherit;
+}
+.msg-retry-btn::-moz-focus-inner {
+  border: 0;
+}
 
 /* Position retry button to the left of the bubble using relative units */
 .msg-row .msg-bubble { position: relative; }
 .msg-row .msg-bubble .msg-retry-btn {
   position: absolute; left: -1.6em; top: 50%; transform: translateY(-50%);
   z-index: 3; display: inline-flex;
+}
+.msg-row .msg-bubble .msg-retry-btn.inline {
+  position: static;
+  left: auto;
+  top: auto;
+  bottom: auto;
+  transform: none;
+  background: rgba(0,0,0,.16);
+}
+.msg-row .msg-bubble .msg-retry-btn.inline:focus,
+.msg-row .msg-bubble .msg-retry-btn.inline:focus-visible,
+.msg-row .msg-bubble .msg-retry-btn.inline:active {
+  background: rgba(0,0,0,.16) !important;
+}
+.msg-row.client-sending .msg-retry-btn {
+  opacity: .6;
+  cursor: progress;
 }
 
 /* Prevent horizontal scroll on mobile when compact view aligns messages to one side */
@@ -846,6 +892,11 @@ a:hover { text-decoration: underline; }
   overflow: hidden;
 }
 .msg-footer > div:empty { display: none; }
+.msg-retry-slot {
+  display: flex;
+  align-items: center;
+  min-height: 20px;
+}
 
 /* ── Reactions ───────────────────────────────────────────────────────────── */
 .msg-reactions {

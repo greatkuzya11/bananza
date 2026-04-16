@@ -1088,22 +1088,13 @@
     setRecorderMessage('Отправка голосового сообщения...', 'pending');
 
     try {
-      const chatId = getBridge().getCurrentChatId();
-      const replyTo = getBridge().getReplyTo?.();
-      const formData = new FormData();
-      formData.append('file', wavBlob, `voice-note-${Date.now()}.wav`);
-      formData.append('durationMs', String(safeDurationMs));
-      formData.append('sampleRate', '16000');
-      if (replyTo?.id) formData.append('replyToId', String(replyTo.id));
-
-      await getBridge().api(`/api/chats/${chatId}/voice-message`, {
-        method: 'POST',
-        body: formData,
+      await getBridge().queueVoiceMessage?.({
+        blob: wavBlob,
+        durationMs: safeDurationMs,
+        sampleRate: 16000,
+        replyTo: getBridge().getReplyTo?.(),
       });
-      getBridge().clearReply?.();
       hideRecorderBar();
-      getBridge()?.playSound?.('send');
-      getBridge().scrollToBottom?.();
     } finally {
       state.recorder.uploading = false;
       state.recorder.chunks = [];

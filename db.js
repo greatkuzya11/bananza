@@ -55,6 +55,7 @@ db.exec(`
     edited_by INTEGER DEFAULT NULL REFERENCES users(id),
     ai_generated INTEGER DEFAULT 0,
     ai_bot_id INTEGER DEFAULT NULL,
+    client_id TEXT DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -232,6 +233,12 @@ try {
 } catch {
   db.exec("ALTER TABLE messages ADD COLUMN ai_bot_id INTEGER DEFAULT NULL");
 }
+try {
+  db.prepare("SELECT client_id FROM messages LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE messages ADD COLUMN client_id TEXT DEFAULT NULL");
+}
+db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_id ON messages(user_id, chat_id, client_id) WHERE client_id IS NOT NULL");
 // Migration: last_read_id on chat_members
 try {
   db.prepare("SELECT last_read_id FROM chat_members LIMIT 1").get();

@@ -12,6 +12,13 @@ const MAX_VOICE_FILE_SIZE = 12 * 1024 * 1024;
 const ALLOWED_VOICE_MIME = new Set(['audio/wav', 'audio/x-wav', 'audio/wave']);
 const TEST_AUDIO_PATH = path.join(__dirname, 'test-assets', 'model-test-ru.wav');
 
+function normalizeClientId(value) {
+  if (typeof value !== 'string') return null;
+  const id = value.trim();
+  if (!id || id.length > 128) return null;
+  return id;
+}
+
 function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, uploadsDir, broadcastToChatAll, clients, secret, notifyMessageCreated, onMessageTextAvailable }) {
   const previewStmt = db.prepare('SELECT * FROM link_previews WHERE message_id=?');
   const reactionStmt = db.prepare('SELECT user_id, emoji FROM reactions WHERE message_id=?');
@@ -45,9 +52,10 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
     VALUES(?,?,?,?,?,?)
   `);
   const insertMessageStmt = db.prepare(`
-    INSERT INTO messages(chat_id, user_id, text, file_id, reply_to_id)
-    VALUES(?,?,?,?,?)
+    INSERT INTO messages(chat_id, user_id, text, file_id, reply_to_id, client_id)
+    VALUES(?,?,?,?,?,?)
   `);
+  const getExistingClientMessageStmt = db.prepare('SELECT id FROM messages WHERE chat_id=? AND user_id=? AND client_id=?');
   const insertVoiceStmt = db.prepare(`
     INSERT INTO voice_messages(message_id, duration_ms, sample_rate, transcription_status, requested_by, auto_requested)
     VALUES(?,?,?,?,?,?)
@@ -331,6 +339,7 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
         const durationMs = Math.max(0, Math.round(Number(req.body.durationMs || 0)));
         const sampleRate = Math.max(8_000, Math.round(Number(req.body.sampleRate || 16_000)));
         const replyToId = req.body.replyToId ? Number(req.body.replyToId) : null;
+        const clientId = normalizeClientId(req.body.client_id);
 
         if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id)) {
           if (req.file?.path) fs.unlink(req.file.path, () => {});
@@ -341,6 +350,15 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
         if (!req.file) {
           res.status(400).json({ error: 'Voice file is required' });
           return;
+        }
+
+        if (clientId) {
+          const existing = getExistingClientMessageStmt.get(chatId, req.user.id, clientId);
+          if (existing) {
+            if (req.file?.path) fs.unlink(req.file.path, () => {});
+            res.json(getHydratedMessageById(existing.id));
+            return;
+          }
         }
 
         let validReplyId = null;
@@ -358,7 +376,7 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
           'audio',
           req.user.id
         );
-        const messageResult = insertMessageStmt.run(chatId, req.user.id, null, fileResult.lastInsertRowid, validReplyId);
+        const messageResult = insertMessageStmt.run(chatId, req.user.id, null, fileResult.lastInsertRowid, validReplyId, clientId);
         const transcriptionStatus = settings.auto_transcribe_on_send ? 'pending' : 'idle';
         insertVoiceStmt.run(
           messageResult.lastInsertRowid,

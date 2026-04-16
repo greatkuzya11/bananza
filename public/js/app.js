@@ -7,6 +7,28 @@
   const WS_URL = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
   const PAGE_SIZE = 50;
   const MAX_MSG = 5000;
+  const MAX_ATTACHMENTS = 10;
+  const MAX_FILE_SIZE = 25 * 1024 * 1024;
+  const FILE_TYPE_BY_MIME = {
+    'image/jpeg': 'image', 'image/png': 'image', 'image/webp': 'image', 'image/gif': 'image',
+    'application/pdf': 'document', 'text/plain': 'document',
+    'application/msword': 'document',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'document',
+    'application/vnd.ms-excel': 'document',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'document',
+    'application/zip': 'document',
+    'application/x-rar-compressed': 'document', 'application/vnd.rar': 'document',
+    'application/x-msdownload': 'document', 'application/octet-stream': 'document',
+    'audio/mpeg': 'audio', 'audio/wav': 'audio', 'audio/ogg': 'audio',
+    'audio/mp4': 'audio', 'audio/x-m4a': 'audio', 'audio/aac': 'audio',
+    'video/mp4': 'video', 'video/webm': 'video', 'video/quicktime': 'video',
+  };
+  const ALLOWED_FILE_EXT = new Set([
+    '.jpg','.jpeg','.png','.webp','.gif',
+    '.pdf','.txt','.doc','.docx','.xls','.xlsx','.zip','.rar','.exe',
+    '.mp3','.wav','.ogg','.m4a',
+    '.mp4','.webm','.mov',
+  ]);
   const UI_THEMES = [
     { id: 'bananza', name: 'BananZa', note: 'Classic blue', colors: ['#17212b', '#5eb5f7'], own: '#2b5278', other: '#182533' },
     { id: 'banan-hero', name: 'Banan Hero', note: 'Grass + signal', colors: ['#15171a', '#ffd33f'], own: '#496436', other: '#202228' },
@@ -33,6 +55,9 @@
   let hasMore = true;
   let pendingFile = null;
   let pendingFiles = []; // queue for multi-file upload
+  let outboxObjectUrls = new Map();
+  let outboxSending = new Set();
+  let retryLayoutTimer = null;
   let typingSendTimeout = null;
   let typingDisplayTimeouts = {};
   let displayedMsgIds = new Set();
@@ -193,6 +218,7 @@
     getPendingFiles: () => [...pendingFiles],
     getReplyTo: () => replyTo ? { ...replyTo } : null,
     getEditTo: () => editTo ? { ...editTo } : null,
+    queueVoiceMessage: (payload) => queueVoiceOutbox(payload),
     updateReplyPreview: (messageId, text) => {
       if (replyTo?.id === messageId && !editTo) {
         replyTo.text = text || '📎 Attachment';
@@ -414,6 +440,30 @@
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function fileExtension(name) {
+    const m = String(name || '').toLowerCase().match(/\.[^.]+$/);
+    return m ? m[0] : '';
+  }
+
+  function getLocalFileType(file) {
+    if (!file) return null;
+    const ext = fileExtension(file.name);
+    if (!ALLOWED_FILE_EXT.has(ext)) return null;
+    if (FILE_TYPE_BY_MIME[file.type]) return FILE_TYPE_BY_MIME[file.type];
+    if (['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(ext)) return 'image';
+    if (['.mp3', '.wav', '.ogg', '.m4a'].includes(ext)) return 'audio';
+    if (['.mp4', '.webm', '.mov'].includes(ext)) return 'video';
+    return 'document';
+  }
+
+  function makeClientId(prefix = 'c') {
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  function isClientSideMessage(msg) {
+    return Boolean(msg?.is_outbox || msg?.client_status || (typeof msg?.id === 'string' && msg.id.startsWith('c-')));
   }
 
   function initials(name) {
@@ -1977,12 +2027,16 @@
         // If this message echoes a client_id, remove optimistic placeholder first
         try {
           if (msg.message && msg.message.client_id) {
-            const optimisticEl = messagesEl.querySelector(`[data-client-id="${msg.message.client_id}"]`);
+            await window.messageCache?.deleteOutboxItem?.(msg.message.chat_id, msg.message.client_id);
+            revokeOutboxObjectUrls(msg.message.client_id);
+            outboxSending.delete(msg.message.client_id);
+            const optimisticEl = messagesEl.querySelector(`.msg-row[data-outbox="1"][data-client-id="${msg.message.client_id}"]`);
             if (optimisticEl) {
               const wasNearBottom = isNearBottom();
               const anchor = !wasNearBottom && !isNearBottom(8) ? captureScrollAnchor() : null;
               optimisticEl.remove();
               displayedMsgIds.delete(optimisticEl.dataset.msgId);
+              cleanupEmptyMessageGroups();
               if (anchor) requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
             }
           }
@@ -2759,6 +2813,7 @@
           displayedMsgIds.clear();
           setHasMoreBefore(restoreAnchor?.messageId ? cachedMsgs.length > 0 : cachedMsgs.length >= PAGE_SIZE);
           renderMessages(cachedMsgs);
+          await renderOutboxForChat(chatId);
           if (restoreAnchor?.messageId) {
             requestAnimationFrame(() => restoreScrollAnchor(restoreAnchor, 1));
           } else {
@@ -2854,6 +2909,7 @@
           await window.cacheAssets(Array.from(assetUrls).slice(0, 12));
         } catch (e) {}
       })();
+      await renderOutboxForChat(chatId);
       if (restoreAnchor?.messageId) {
         requestAnimationFrame(() => {
           if (!restoreScrollAnchor(restoreAnchor)) {
@@ -2874,7 +2930,9 @@
         }, 260);
       });
       scrollRestoreScheduled = true;
-    } catch {}
+    } catch {
+      await renderOutboxForChat(chatId);
+    }
     if (!scrollRestoreScheduled && currentChatId === chatId && suppressScrollAnchorSave) {
       suppressScrollAnchorSave = false;
       maybeLoadMoreAtTop();
@@ -3090,6 +3148,7 @@
   function createMessageEl(msg, showName = true) {
     applyOwnReadStateToMessage(msg, msg?.chat_id || msg?.chatId || currentChatId);
     const isOwn = msg.user_id === currentUser.id;
+    const isClientMessage = isClientSideMessage(msg);
     const isMediaMessage = Boolean(
       !msg.is_deleted &&
       msg.file_id &&
@@ -3109,6 +3168,7 @@
     row.className = `msg-row ${isOwn ? 'own' : 'other'}${isEmojiOnly ? ' emoji-only-message' : ''}${isMediaMessage ? ' media-message' : ''}`;
     row.dataset.msgId = msg.id;
     if (msg.client_id) row.dataset.clientId = msg.client_id;
+    if (isClientMessage) row.dataset.outbox = '1';
     row.dataset.date = formatDate(msg.created_at);
     row.dataset.userId = msg.user_id;
     row.__messageData = { ...msg };
@@ -3158,7 +3218,7 @@
       }
 
       // File attachment
-      if (msg.file_id && msg.file_stored) {
+      if (msg.file_id && (msg.file_stored || msg.client_file_url)) {
         html += renderFileAttachment(msg);
       }
 
@@ -3175,7 +3235,7 @@
       }
 
       // Delete button (inside bubble)
-        if (isOwn || currentUser.is_admin) {
+        if (!isClientMessage && (isOwn || currentUser.is_admin)) {
           html += `<button class="msg-delete-btn" data-id="${msg.id}" title="Delete">🗑</button>`;
         }
     }
@@ -3183,9 +3243,7 @@
     // Client-side status overrides server read icons when present
     let statusIcon = '';
     if (isOwn && !msg.is_deleted) {
-      if (msg.client_status === 'sending') statusIcon = `<span class="msg-status sending">⏳</span>`;
-      else if (msg.client_status === 'queued') statusIcon = `<span class="msg-status queued">🕒</span>`;
-      else if (msg.client_status === 'failed') statusIcon = `<span class="msg-status failed">❗</span>`;
+      if (msg.client_status) statusIcon = `<span class="msg-status failed">!</span>`;
       else statusIcon = `<span class="msg-status${msg.is_read ? ' read' : ''}">${msg.is_read ? '✓✓' : '✓'}</span>`;
     }
     const editedIcon = !msg.is_deleted && msg.edited_at ? '<span class="msg-edited" title="Edited">✎</span>' : '';
@@ -3196,7 +3254,7 @@
     html += '</div>'; // msg-content
 
     // Reply/edit/react buttons outside bubble
-    if (!msg.is_deleted) {
+    if (!msg.is_deleted && !isClientMessage) {
       html += '<div class="msg-actions">';
       html += '<button class="msg-copy-btn" title="Копировать">⧉</button>';
       html += '<button class="msg-reply-btn" title="Reply">↩</button>';
@@ -3209,7 +3267,7 @@
     row.innerHTML = html;
     // Persist client_status on row for CSS/logic; apply class for failed state so retry button can be overlayed
     if (msg.client_status) row.dataset.clientStatus = msg.client_status;
-    if (msg.client_status === 'failed') row.classList.add('client-failed');
+    if (msg.client_status) row.classList.add('client-failed');
     if (isMediaMessage) {
       const mediaContent = row.querySelector(':scope > .msg-content');
       const mediaActions = row.querySelector(':scope > .msg-actions');
@@ -3349,47 +3407,51 @@
       const d = row.__messageData || {};
       const statusEl = row.querySelector('.msg-status');
       if (!statusEl) return;
-      if (d.client_status === 'sending') { statusEl.className = 'msg-status sending'; statusEl.textContent = '⏳'; }
-      else if (d.client_status === 'queued') { statusEl.className = 'msg-status queued'; statusEl.textContent = '🕒'; }
-      else if (d.client_status === 'failed') { statusEl.className = 'msg-status failed'; statusEl.textContent = '❗'; }
-      else { statusEl.className = `msg-status${d.is_read ? ' read' : ''}`; statusEl.textContent = d.is_read ? '✓✓' : '✓'; }
-      // Ensure Retry button exists for failed client messages (visible without hover)
-      const deleteBtn = row.querySelector('.msg-delete-btn');
-      let retryBtn = row.querySelector('.msg-retry-btn');
-      if (d.client_status === 'failed') {
+      if (d.client_status) {
+        row.classList.add('client-failed');
+        row.dataset.clientStatus = d.client_status;
+        let retryBtn = row.querySelector('.msg-retry-btn');
         if (!retryBtn) {
           retryBtn = document.createElement('button');
           retryBtn.type = 'button';
           retryBtn.className = 'msg-retry-btn';
           retryBtn.title = 'Retry';
-          retryBtn.textContent = '↻';
+          retryBtn.setAttribute('aria-label', 'Retry sending message');
+          retryBtn.textContent = '\u21bb';
           const bubble = row.querySelector('.msg-bubble');
           if (bubble) bubble.appendChild(retryBtn);
           else row.appendChild(retryBtn);
-          retryBtn.addEventListener('click', (e) => { e.stopPropagation(); retrySend(row); });
+          retryBtn.addEventListener('mousedown', (e) => e.preventDefault());
+          retryBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            e.currentTarget.blur();
+            retrySend(row);
+          });
         }
-      } else {
-        if (retryBtn) retryBtn.remove();
+        const isSending = outboxSending.has(d.client_id || row.dataset.clientId || row.dataset.msgId);
+        statusEl.className = `msg-status ${isSending ? 'sending' : 'failed'}`;
+        statusEl.textContent = isSending ? '\u23f3' : '!';
+        retryBtn.disabled = isSending;
+        row.classList.toggle('client-sending', isSending);
+        scheduleRetryLayout();
+        return;
       }
+      statusEl.className = `msg-status${d.is_read ? ' read' : ''}`;
+      statusEl.textContent = d.is_read ? '✓✓' : '✓';
+      row.classList.remove('client-failed', 'client-sending');
+      delete row.dataset.clientStatus;
+      const retryBtn = row.querySelector('.msg-retry-btn');
+      if (retryBtn) retryBtn.remove();
     } catch (e) {}
   }
 
   async function retrySend(row) {
-    if (!row || !row.__clientPayload) return;
-    const payload = row.__clientPayload;
-    row.__messageData = row.__messageData || {};
-    row.__messageData.client_status = 'sending';
-    updateRowStatus(row);
-    try {
-      await api(`/api/chats/${currentChatId}/messages`, {
-        method: 'POST',
-        body: { text: payload.text || null, fileId: payload.fileId || null, replyToId: payload.replyToId || null, client_id: payload.client_id }
-      });
-      // on success, server will broadcast message with client_id and replace optimistic row
-    } catch (e) {
-      row.__messageData.client_status = 'failed';
-      updateRowStatus(row);
-    }
+    const clientId = row?.dataset.clientId || row?.dataset.msgId;
+    const chatId = Number(row?.__messageData?.chat_id || row?.__messageData?.chatId || currentChatId || 0);
+    if (!clientId || !chatId) return;
+    const item = row.__outboxItem || await window.messageCache?.getOutboxItem?.(chatId, clientId);
+    if (!item) return;
+    await trySendOutboxItem(item);
   }
 
   function formatDuration(seconds) {
@@ -3400,7 +3462,7 @@
   }
 
   function renderFileAttachment(msg) {
-    const url = `/uploads/${msg.file_stored}`;
+    const url = msg.client_file_url || `/uploads/${msg.file_stored}`;
     switch (msg.file_type) {
       case 'image':
         return `<img class="msg-image" src="${url}" alt="${esc(msg.file_name)}">`;
@@ -3520,6 +3582,353 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  function getReplySnapshot(source = replyTo) {
+    if (!source?.id) return null;
+    return {
+      id: source.id,
+      display_name: source.display_name || source.displayName || '',
+      text: source.text || '',
+      is_voice_note: Boolean(source.is_voice_note),
+    };
+  }
+
+  function localAttachmentFromFile(file) {
+    const type = getLocalFileType(file);
+    if (!type) return null;
+    return {
+      localId: makeClientId('f'),
+      file,
+      name: file.name,
+      size: file.size,
+      mime: file.type || 'application/octet-stream',
+      type,
+    };
+  }
+
+  function outboxUrlKey(clientId, part = 'file') {
+    return `${clientId}:${part}`;
+  }
+
+  function getOutboxObjectUrl(clientId, blob, part = 'file') {
+    if (!blob) return '';
+    const key = outboxUrlKey(clientId, part);
+    if (outboxObjectUrls.has(key)) return outboxObjectUrls.get(key);
+    const url = URL.createObjectURL(blob);
+    outboxObjectUrls.set(key, url);
+    return url;
+  }
+
+  function revokeOutboxObjectUrls(clientId) {
+    const prefix = `${clientId}:`;
+    for (const [key, url] of outboxObjectUrls.entries()) {
+      if (!key.startsWith(prefix)) continue;
+      try { URL.revokeObjectURL(url); } catch (e) {}
+      outboxObjectUrls.delete(key);
+    }
+  }
+
+  function findOutboxRow(clientId) {
+    if (!clientId) return null;
+    return messagesEl.querySelector(`.msg-row[data-outbox="1"][data-client-id="${clientId}"], .msg-row[data-outbox="1"][data-msg-id="${clientId}"]`);
+  }
+
+  function cleanupEmptyMessageGroups() {
+    messagesEl.querySelectorAll('.msg-group').forEach((group) => {
+      if (!group.querySelector('.msg-row')) group.remove();
+    });
+  }
+
+  function removeOutboxRows() {
+    messagesEl.querySelectorAll('.msg-row[data-outbox="1"]').forEach((row) => {
+      displayedMsgIds.delete(row.dataset.msgId);
+      revokeOutboxObjectUrls(row.dataset.clientId || row.dataset.msgId);
+      row.remove();
+    });
+    cleanupEmptyMessageGroups();
+  }
+
+  function buildLocalMessageFromOutbox(item) {
+    const attachment = (item.attachments && item.attachments[0]) || null;
+    const serverMeta = item.serverFileMeta || null;
+    const isVoice = item.kind === 'voice';
+    const voice = item.voice || {};
+    const fileBlob = isVoice ? voice.blob : attachment?.file;
+    const localUrl = serverMeta?.stored_name ? '' : getOutboxObjectUrl(item.clientId, fileBlob, attachment?.localId || 'file');
+    const fileName = serverMeta?.original_name || attachment?.name || voice.name || 'voice-note.wav';
+    const fileSize = serverMeta?.size || attachment?.size || fileBlob?.size || 0;
+    const fileMime = serverMeta?.mime_type || attachment?.mime || voice.mime || 'audio/wav';
+    const fileType = serverMeta?.type || attachment?.type || (isVoice ? 'audio' : null);
+    const reply = item.reply || null;
+
+    return {
+      id: item.clientId,
+      client_id: item.clientId,
+      client_status: item.status || 'failed',
+      is_outbox: true,
+      chat_id: item.chatId,
+      user_id: currentUser.id,
+      username: currentUser.username,
+      display_name: currentUser.display_name,
+      avatar_color: currentUser.avatar_color,
+      avatar_url: currentUser.avatar_url,
+      text: item.text || null,
+      file_id: (attachment || isVoice || serverMeta) ? (item.serverFileId || item.clientId) : null,
+      file_name: fileName,
+      file_stored: serverMeta?.stored_name || null,
+      client_file_url: localUrl,
+      file_mime: fileMime,
+      file_size: fileSize,
+      file_type: fileType,
+      reply_to_id: item.replyToId || null,
+      reply_display_name: reply?.display_name || null,
+      reply_text: reply?.text || null,
+      reply_is_voice_note: reply?.is_voice_note ? 1 : 0,
+      created_at: item.createdAt,
+      is_read: false,
+      reactions: [],
+      previews: [],
+      is_deleted: false,
+      is_voice_note: isVoice,
+      voice_duration_ms: isVoice ? voice.durationMs : null,
+      transcription_status: 'idle',
+      transcription_text: '',
+      transcription_provider: '',
+      transcription_model: '',
+      transcription_error: '',
+    };
+  }
+
+  function renderOutboxItem(item) {
+    if (!item || Number(item.chatId) !== Number(currentChatId)) return null;
+    if (displayedMsgIds.has(item.clientId)) return findOutboxRow(item.clientId);
+    const localMsg = buildLocalMessageFromOutbox(item);
+    appendMessage(localMsg);
+    const row = findOutboxRow(item.clientId);
+    if (row) {
+      row.__outboxItem = item;
+      row.__messageData = { ...(row.__messageData || {}), ...localMsg };
+      updateRowStatus(row);
+    }
+    scheduleRetryLayout();
+    return row;
+  }
+
+  async function renderOutboxForChat(chatId) {
+    const id = Number(chatId || 0);
+    if (!id || id !== Number(currentChatId || 0)) return;
+    removeOutboxRows();
+    const items = await window.messageCache?.readOutbox?.(id) || [];
+    if (id !== Number(currentChatId || 0)) return;
+    items
+      .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')))
+      .forEach((item) => renderOutboxItem(item));
+    updateScrollBottomButton();
+  }
+
+  function scheduleRetryLayout() {
+    clearTimeout(retryLayoutTimer);
+    retryLayoutTimer = setTimeout(() => requestAnimationFrame(layoutRetryButtons), 0);
+  }
+
+  function layoutRetryButtons() {
+    if (!messagesEl) return;
+    const containerRect = messagesEl.getBoundingClientRect();
+    messagesEl.querySelectorAll('.msg-row[data-outbox="1"] .msg-retry-btn').forEach((btn) => {
+      const row = btn.closest('.msg-row');
+      const bubble = row?.querySelector('.msg-bubble') || btn.closest('.msg-bubble');
+      if (!bubble) return;
+      const bubbleRect = bubble.getBoundingClientRect();
+      const retryWidth = btn.offsetWidth || 22;
+      const shouldInline = bubbleRect.left - retryWidth - 2 < containerRect.left + 2;
+      bubble.classList.toggle('retry-inline', shouldInline);
+      if (shouldInline) {
+        const footer = bubble.querySelector('.msg-footer');
+        let slot = footer?.querySelector('.msg-retry-slot') || footer?.firstElementChild;
+        if (footer && !slot) {
+          slot = document.createElement('div');
+          footer.insertBefore(slot, footer.firstChild);
+        }
+        if (slot) {
+          slot.classList.add('msg-retry-slot');
+          if (btn.parentElement !== slot) slot.appendChild(btn);
+        }
+        btn.classList.add('inline');
+      } else {
+        if (btn.parentElement !== bubble) bubble.appendChild(btn);
+        btn.classList.remove('inline');
+      }
+    });
+  }
+
+  async function persistOutboxItem(item) {
+    item.status = item.status || 'failed';
+    await window.messageCache?.upsertOutboxItem?.(item);
+    const row = findOutboxRow(item.clientId);
+    if (row) row.__outboxItem = item;
+    return item;
+  }
+
+  function setOutboxSending(clientId, sending) {
+    if (!clientId) return;
+    if (sending) outboxSending.add(clientId);
+    else outboxSending.delete(clientId);
+    const row = findOutboxRow(clientId);
+    if (row) updateRowStatus(row);
+  }
+
+  async function uploadOutboxAttachment(item) {
+    if (item.serverFileId) return item.serverFileId;
+    const attachment = item.attachments && item.attachments[0];
+    if (!attachment?.file) throw new Error('Attachment is not available locally');
+    const fd = new FormData();
+    fd.append('file', attachment.file, attachment.name || 'attachment');
+    const data = await api('/api/upload', { method: 'POST', body: fd });
+    item.serverFileId = data.id;
+    item.serverFileMeta = data;
+    await persistOutboxItem(item);
+    return data.id;
+  }
+
+  async function sendOutboxMessageItem(item) {
+    const attachment = item.attachments && item.attachments[0];
+    let fileId = item.serverFileId || null;
+    if (attachment && !fileId) fileId = await uploadOutboxAttachment(item);
+    return api(`/api/chats/${item.chatId}/messages`, {
+      method: 'POST',
+      body: {
+        text: item.text || null,
+        fileId: fileId || null,
+        replyToId: item.replyToId || null,
+        client_id: item.clientId,
+      },
+    });
+  }
+
+  async function sendOutboxVoiceItem(item) {
+    const voice = item.voice || {};
+    if (!voice.blob) throw new Error('Voice note is not available locally');
+    const formData = new FormData();
+    formData.append('file', voice.blob, voice.name || `voice-note-${Date.now()}.wav`);
+    formData.append('durationMs', String(voice.durationMs || 0));
+    formData.append('sampleRate', String(voice.sampleRate || 16000));
+    formData.append('client_id', item.clientId);
+    if (item.replyToId) formData.append('replyToId', String(item.replyToId));
+    return api(`/api/chats/${item.chatId}/voice-message`, {
+      method: 'POST',
+      body: formData,
+    });
+  }
+
+  async function completeOutboxSend(item, serverMsg) {
+    if (!serverMsg) return;
+    await window.messageCache?.deleteOutboxItem?.(item.chatId, item.clientId);
+    revokeOutboxObjectUrls(item.clientId);
+    outboxSending.delete(item.clientId);
+    applyOwnReadStateToMessage(serverMsg, item.chatId);
+    try { window.messageCache?.upsertMessage?.(serverMsg).catch(()=>{}); } catch (e) {}
+    updateChatListLastMessage(serverMsg);
+
+    const row = findOutboxRow(item.clientId);
+    const alreadyDisplayed = displayedMsgIds.has(serverMsg.id);
+    if (row) {
+      displayedMsgIds.delete(row.dataset.msgId);
+      if (alreadyDisplayed) {
+        row.remove();
+        cleanupEmptyMessageGroups();
+      } else {
+        const showName = Boolean(row.querySelector('.msg-sender'));
+        const replacement = createMessageEl(serverMsg, showName);
+        row.replaceWith(replacement);
+        displayedMsgIds.add(serverMsg.id);
+      }
+    } else if (Number(serverMsg.chat_id) === Number(currentChatId) && !alreadyDisplayed) {
+      appendMessage(serverMsg);
+    }
+    updateScrollBottomButton();
+  }
+
+  async function trySendOutboxItem(rawItem) {
+    const latest = await window.messageCache?.getOutboxItem?.(rawItem.chatId, rawItem.clientId);
+    const item = latest || rawItem;
+    if (!item?.clientId || outboxSending.has(item.clientId)) return;
+    setOutboxSending(item.clientId, true);
+    try {
+      const serverMsg = item.kind === 'voice'
+        ? await sendOutboxVoiceItem(item)
+        : await sendOutboxMessageItem(item);
+      await completeOutboxSend(item, serverMsg);
+    } catch (e) {
+      item.status = 'failed';
+      await persistOutboxItem(item);
+    } finally {
+      setOutboxSending(item.clientId, false);
+    }
+  }
+
+  async function queueOutboxItem(item, { attempt = true } = {}) {
+    await persistOutboxItem(item);
+    renderOutboxItem(item);
+    if (attempt) await trySendOutboxItem(item);
+    return item;
+  }
+
+  function createMessageOutboxItem({ text = null, attachment = null, reply = null, createdAt = null } = {}) {
+    const clientId = makeClientId('c');
+    return {
+      clientId,
+      chatId: currentChatId,
+      userId: currentUser.id,
+      status: 'failed',
+      kind: 'message',
+      createdAt: createdAt || new Date().toISOString(),
+      text: text || null,
+      replyToId: reply?.id || null,
+      reply,
+      attachments: attachment ? [attachment] : [],
+      serverFileId: null,
+      serverFileMeta: null,
+    };
+  }
+
+  async function queueVoiceOutbox({ blob, durationMs, sampleRate, replyTo: suppliedReply } = {}) {
+    if (!currentChatId || !blob) return null;
+    const reply = getReplySnapshot(suppliedReply || replyTo);
+    const clientId = makeClientId('c');
+    const voiceName = `voice-note-${Date.now()}.wav`;
+    const item = {
+      clientId,
+      chatId: currentChatId,
+      userId: currentUser.id,
+      status: 'failed',
+      kind: 'voice',
+      createdAt: new Date().toISOString(),
+      text: null,
+      replyToId: reply?.id || null,
+      reply,
+      attachments: [{
+        localId: 'voice',
+        file: blob,
+        name: voiceName,
+        size: blob.size || 0,
+        mime: 'audio/wav',
+        type: 'audio',
+      }],
+      voice: {
+        blob,
+        name: voiceName,
+        durationMs,
+        sampleRate,
+        mime: 'audio/wav',
+      },
+    };
+    clearReply();
+    await queueOutboxItem(item, { attempt: false });
+    playAppSound('send');
+    scrollToBottom();
+    trySendOutboxItem(item);
+    return item;
+  }
+
   // SEND MESSAGE
   // ═══════════════════════════════════════════════════════════════════════════
   async function saveEditedMessage() {
@@ -3554,65 +3963,39 @@
     }
     const text = msgInput.value.trim();
     const filesToSend = [...pendingFiles];
-    const firstFileId = filesToSend.length > 0 ? filesToSend[0].id : null;
 
-    if (!text && !firstFileId) return;
+    if (!text && filesToSend.length === 0) return;
     if (text.length > MAX_MSG) { alert('Message too long'); return; }
     animateSendButton();
 
+    const replySnapshot = getReplySnapshot();
     msgInput.value = '';
     autoResize();
     clearPendingFile();
-    const replyToId = replyTo ? replyTo.id : null;
     clearReply();
     window.BananzaVoiceHooks?.refreshComposerState?.();
 
-    // Prepare message list: first message may contain text and first file, then one message per remaining file
-    const toSend = [];
-    toSend.push({ text: text || null, fileId: firstFileId, replyToId });
-    for (let i = 1; i < filesToSend.length; i++) toSend.push({ text: null, fileId: filesToSend[i].id, replyToId: null });
-
-    // Render optimistic messages immediately and attempt send; on failure mark as failed and show retry
-    for (const item of toSend) {
-      const clientId = 'c-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
-      const optimisticMsg = {
-        id: clientId,
-        client_id: clientId,
-        client_status: 'sending',
-        chat_id: currentChatId,
-        user_id: currentUser.id,
-        display_name: currentUser.display_name,
-        avatar_color: currentUser.avatar_color,
-        text: item.text,
-        file_id: item.fileId || null,
-        file_stored: null,
-        file_type: (item.fileId && filesToSend.find(f => f.id === item.fileId)) ? (filesToSend.find(f => f.id === item.fileId).type || null) : null,
-        created_at: new Date().toISOString(),
-        is_read: false,
-        reactions: [],
-        previews: [],
-        is_deleted: false,
-      };
-      appendMessage(optimisticMsg);
-      const row = messagesEl.querySelector(`[data-msg-id="${clientId}"]`);
-      if (row) row.__clientPayload = { text: item.text, fileId: item.fileId, replyToId: item.replyToId, client_id: clientId };
-
-      try {
-        await api(`/api/chats/${currentChatId}/messages`, {
-          method: 'POST',
-          body: { text: item.text || null, fileId: item.fileId || null, replyToId: item.replyToId || null, client_id: clientId }
-        });
-      } catch (e) {
-        // mark optimistic row as failed
-        if (row) {
-          row.__messageData = row.__messageData || {};
-          row.__messageData.client_status = 'failed';
-          updateRowStatus(row);
-        }
-      }
+    const items = [];
+    const firstAttachment = filesToSend[0] || null;
+    items.push(createMessageOutboxItem({
+      text: text || null,
+      attachment: firstAttachment,
+      reply: replySnapshot,
+      createdAt: new Date().toISOString(),
+    }));
+    for (let i = 1; i < filesToSend.length; i++) {
+      items.push(createMessageOutboxItem({
+        text: null,
+        attachment: filesToSend[i],
+        reply: null,
+        createdAt: new Date(Date.now() + i).toISOString(),
+      }));
     }
+
+    for (const item of items) await queueOutboxItem(item, { attempt: false });
     playAppSound('send');
     scrollToBottom();
+    for (const item of items) await trySendOutboxItem(item);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -3683,33 +4066,18 @@
       alert('Finish editing before attaching files.');
       return;
     }
-    const files = Array.from(fileList).slice(0, 10);
+    const files = Array.from(fileList).slice(0, MAX_ATTACHMENTS);
     if (files.length === 0) return;
     for (const f of files) {
-      if (f.size > 25 * 1024 * 1024) { alert(`File too large: ${f.name} (max 25 MB)`); return; }
+      if (f.size > MAX_FILE_SIZE) { alert(`File too large: ${f.name} (max 25 MB)`); return; }
+      if (!getLocalFileType(f)) { alert(`File type not allowed: ${f.name}`); return; }
     }
 
-    pendingFileEl.classList.remove('hidden');
-    pendingFileEl.innerHTML = `<span>📎</span><span class="pending-file-name">Uploading 0/${files.length}...</span>`;
-
-    const uploaded = [];
-    try {
-      for (let i = 0; i < files.length; i++) {
-        pendingFileEl.querySelector('.pending-file-name').textContent = `Uploading ${i + 1}/${files.length}...`;
-        const fd = new FormData();
-        fd.append('file', files[i]);
-        const data = await api('/api/upload', { method: 'POST', body: fd });
-        uploaded.push(data);
-      }
-      pendingFiles = uploaded;
-      pendingFile = uploaded[0];
-      renderPendingFiles();
-      msgInput.focus();
-      window.BananzaVoiceHooks?.refreshComposerState?.();
-    } catch (e) {
-      alert(e.message);
-      clearPendingFile();
-    }
+    pendingFiles = files.map(localAttachmentFromFile).filter(Boolean);
+    pendingFile = pendingFiles[0] || null;
+    renderPendingFiles();
+    msgInput.focus();
+    window.BananzaVoiceHooks?.refreshComposerState?.();
   }
 
   function renderPendingFiles() {
@@ -3720,7 +4088,7 @@
       const d = pendingFiles[0];
       pendingFileEl.innerHTML = `
         <span>${icon(d.type)}</span>
-        <span class="pending-file-name">${esc(d.original_name)} (${formatSize(d.size)})</span>
+        <span class="pending-file-name">${esc(d.name)} (${formatSize(d.size)})</span>
         <button class="pending-file-remove" title="Remove">✕</button>
       `;
     } else {
@@ -3775,12 +4143,14 @@
 
   function canEditMessage(msg) {
     if (!currentUser || !msg || msg.is_deleted) return false;
+    if (isClientSideMessage(msg)) return false;
     if (!currentUser.is_admin && msg.user_id !== currentUser.id) return false;
     return Boolean(msg.is_voice_note || msg.file_id || msg.text);
   }
 
   function canForwardMessage(msg) {
     if (!currentUser || !msg || msg.is_deleted) return false;
+    if (isClientSideMessage(msg)) return false;
     return Boolean(msg.is_voice_note || msg.file_id || msg.text);
   }
 
@@ -3834,6 +4204,7 @@
   }
 
   function setReplyFromRow(row) {
+    if (row?.dataset.outbox === '1') return;
     const payload = row?.__replyPayload;
     if (!payload || row.querySelector('.msg-deleted')) return;
     setReply(payload.id, payload.display_name, payload.text);
@@ -5074,7 +5445,9 @@
     window.visualViewport?.addEventListener('resize', () => {
       positionMentionPicker();
       positionAvatarUserMenu(avatarUserMenuState?.anchor);
+      scheduleRetryLayout();
     });
+    window.addEventListener('resize', scheduleRetryLayout);
     document.addEventListener('pointerdown', (e) => {
       const picker = $('#mentionPicker');
       if (!picker || picker.classList.contains('hidden')) return;

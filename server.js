@@ -363,6 +363,13 @@ function hydrateMessageById(messageId) {
   return voiceFeature.attachVoiceMetadata([row])[0];
 }
 
+function normalizeClientId(value) {
+  if (typeof value !== 'string') return null;
+  const id = value.trim();
+  if (!id || id.length > 128) return null;
+  return id;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // AUTH ROUTES
 // ═══════════════════════════════════════════════════════════════════════════
@@ -740,12 +747,17 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
 app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   const chatId = +req.params.chatId;
   const { text, fileId, replyToId, client_id } = req.body;
+  const clientId = normalizeClientId(client_id);
 
+  if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
+    return res.status(403).json({ error: 'Not a member' });
+  if (clientId) {
+    const existing = db.prepare('SELECT id FROM messages WHERE chat_id=? AND user_id=? AND client_id=?').get(chatId, req.user.id, clientId);
+    if (existing) return res.json(hydrateMessageById(existing.id));
+  }
   if (!text && !fileId) return res.status(400).json({ error: 'Empty message' });
   if (text && (typeof text !== 'string' || text.length > 5000))
     return res.status(400).json({ error: 'Message too long' });
-  if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
-    return res.status(403).json({ error: 'Not a member' });
   if (fileId && !db.prepare('SELECT 1 FROM files WHERE id=?').get(fileId))
     return res.status(400).json({ error: 'File not found' });
 
@@ -757,8 +769,8 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   }
 
   const cleanText = text ? text.trim() : null;
-  const r = db.prepare('INSERT INTO messages(chat_id,user_id,text,file_id,reply_to_id) VALUES(?,?,?,?,?)')
-    .run(chatId, req.user.id, cleanText, fileId || null, validReplyId);
+  const r = db.prepare('INSERT INTO messages(chat_id,user_id,text,file_id,reply_to_id,client_id) VALUES(?,?,?,?,?,?)')
+    .run(chatId, req.user.id, cleanText, fileId || null, validReplyId, clientId);
   try { db.prepare("UPDATE users SET last_activity = datetime('now') WHERE id = ?").run(req.user.id); } catch (e) {}
   if (cleanText) saveMessageMentions(r.lastInsertRowid, chatId, cleanText);
 
@@ -783,7 +795,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   attachMessageMentions(msg);
   const hydratedMsg = voiceFeature.attachVoiceMetadata([msg])[0];
   // Echo client_id back to clients so optimistic messages can be matched
-  if (client_id) hydratedMsg.client_id = client_id;
+  if (clientId) hydratedMsg.client_id = clientId;
 
   broadcastToChatAll(chatId, { type: 'message', message: hydratedMsg });
   pushFeature.notifyMessageCreated(hydratedMsg);

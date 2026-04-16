@@ -1,9 +1,11 @@
 // User-scoped IndexedDB message cache and safe image asset cache helpers.
 (function () {
   const DB_NAME = 'bananza-cache-v2';
-  const DB_VERSION = 1;
+  const DB_VERSION = 2;
   const STORE_MESSAGES = 'messages';
+  const STORE_OUTBOX = 'outbox';
   const INDEX_USER_CHAT_ID = 'by_user_chat_id';
+  const INDEX_OUTBOX_USER_CHAT_CREATED = 'by_user_chat_created';
   const ASSET_CACHE = 'bananza-assets-v2';
   const OLD_ASSET_CACHES = ['bananza-assets-v1'];
   const OLD_DB_NAMES = ['bananza-cache-v1'];
@@ -38,6 +40,10 @@
           const store = nextDb.createObjectStore(STORE_MESSAGES, { keyPath: ['userId', 'chatId', 'id'] });
           store.createIndex(INDEX_USER_CHAT_ID, ['userId', 'chatId', 'id']);
         }
+        if (!nextDb.objectStoreNames.contains(STORE_OUTBOX)) {
+          const outbox = nextDb.createObjectStore(STORE_OUTBOX, { keyPath: ['userId', 'chatId', 'clientId'] });
+          outbox.createIndex(INDEX_OUTBOX_USER_CHAT_CREATED, ['userId', 'chatId', 'createdAt']);
+        }
       };
       req.onsuccess = () => {
         db = req.result;
@@ -58,13 +64,13 @@
     return dbPromise;
   }
 
-  async function withStore(mode, fn) {
+  async function withObjectStore(storeName, mode, fn) {
     const database = await openDB();
     if (!database || !currentUserId) return null;
     return new Promise((resolve) => {
       try {
-        const tx = database.transaction(STORE_MESSAGES, mode);
-        const store = tx.objectStore(STORE_MESSAGES);
+        const tx = database.transaction(storeName, mode);
+        const store = tx.objectStore(storeName);
         const result = fn(store, tx);
         tx.oncomplete = () => resolve(result);
         tx.onerror = () => resolve(null);
@@ -75,11 +81,34 @@
     });
   }
 
+  function withStore(mode, fn) {
+    return withObjectStore(STORE_MESSAGES, mode, fn);
+  }
+
   function normalizeMessage(chatId, msg) {
     const id = normalizeId(msg?.id);
     const cid = normalizeId(chatId || msg?.chat_id || msg?.chatId);
     if (!id || !cid || !currentUserId) return null;
     return { ...msg, userId: currentUserId, chatId: cid };
+  }
+
+  function normalizeClientId(value) {
+    const id = String(value || '').trim();
+    return id ? id : '';
+  }
+
+  function normalizeOutboxItem(item) {
+    const cid = normalizeId(item?.chatId || item?.chat_id);
+    const clientId = normalizeClientId(item?.clientId || item?.client_id);
+    if (!currentUserId || !cid || !clientId) return null;
+    return {
+      ...item,
+      userId: currentUserId,
+      chatId: cid,
+      clientId,
+      status: item.status || 'failed',
+      createdAt: item.createdAt || new Date().toISOString(),
+    };
   }
 
   function rangeForChat(chatId, minId = 0, maxId = Number.MAX_SAFE_INTEGER) {
@@ -222,10 +251,72 @@
     }));
   }
 
+  async function upsertOutboxItem(item) {
+    const row = normalizeOutboxItem(item);
+    if (!row) return false;
+    return !!(await withObjectStore(STORE_OUTBOX, 'readwrite', (store) => {
+      store.put(row);
+      return true;
+    }));
+  }
+
+  async function getOutboxItem(chatId, clientId) {
+    const cid = normalizeId(chatId);
+    const key = normalizeClientId(clientId);
+    if (!cid || !key || !currentUserId) return null;
+    const database = await openDB().catch(() => null);
+    if (!database) return null;
+    try {
+      return await new Promise((resolve) => {
+        const tx = database.transaction(STORE_OUTBOX, 'readonly');
+        const req = tx.objectStore(STORE_OUTBOX).get([currentUserId, cid, key]);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  async function readOutbox(chatId) {
+    const cid = normalizeId(chatId);
+    if (!cid || !currentUserId) return [];
+    const database = await openDB().catch(() => null);
+    if (!database) return [];
+    try {
+      return await new Promise((resolve) => {
+        const rows = [];
+        const tx = database.transaction(STORE_OUTBOX, 'readonly');
+        const index = tx.objectStore(STORE_OUTBOX).index(INDEX_OUTBOX_USER_CHAT_CREATED);
+        const range = IDBKeyRange.bound([currentUserId, cid, ''], [currentUserId, cid, '\uffff']);
+        const req = index.openCursor(range, 'next');
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (!cursor) return resolve(rows);
+          rows.push(cursor.value);
+          cursor.continue();
+        };
+        req.onerror = () => resolve(rows);
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  async function deleteOutboxItem(chatId, clientId) {
+    const cid = normalizeId(chatId);
+    const key = normalizeClientId(clientId);
+    if (!cid || !key || !currentUserId) return false;
+    return !!(await withObjectStore(STORE_OUTBOX, 'readwrite', (store) => {
+      store.delete([currentUserId, cid, key]);
+      return true;
+    }));
+  }
+
   async function clearUserCache() {
     if (!currentUserId) return false;
     const uid = currentUserId;
-    const ok = await withStore('readwrite', (store) => {
+    const clearMessages = await withStore('readwrite', (store) => {
       const index = store.index(INDEX_USER_CHAT_ID);
       const range = IDBKeyRange.bound([uid, 0, 0], [uid, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER]);
       const req = index.openCursor(range);
@@ -237,7 +328,19 @@
       };
       return true;
     });
-    return !!ok;
+    const clearOutbox = await withObjectStore(STORE_OUTBOX, 'readwrite', (store) => {
+      const index = store.index(INDEX_OUTBOX_USER_CHAT_CREATED);
+      const range = IDBKeyRange.bound([uid, 0, ''], [uid, Number.MAX_SAFE_INTEGER, '\uffff']);
+      const req = index.openCursor(range);
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (!cursor) return;
+        store.delete(cursor.primaryKey);
+        cursor.continue();
+      };
+      return true;
+    });
+    return !!(clearMessages || clearOutbox);
   }
 
   function isCacheableAsset(url) {
@@ -330,6 +433,10 @@
     writeWindow,
     upsertMessage,
     deleteMessage,
+    upsertOutboxItem,
+    getOutboxItem,
+    readOutbox,
+    deleteOutboxItem,
     clearUserCache,
     syncOwnMessageReadState,
   };
