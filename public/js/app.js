@@ -164,6 +164,15 @@
   let modalAnimationSaveInFlight = false;
   let modalAnimationSaveQueued = false;
   let modalAnimationStatusTimer = null;
+  let searchAllChats = false;
+  let searchRequestSeq = 0;
+  let searchPanelHistoryPushed = false;
+  let searchPanelSkipNextPopstate = false;
+  let searchPanelCloseTimer = null;
+  let searchPanelOpenFrame = null;
+  let searchPanelTransitionHandler = null;
+  let searchPanelPendingAction = null;
+  let searchPanelReturnFocusEl = null;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DOM
@@ -200,8 +209,10 @@
   const replyBarName = $('#replyBarName');
   const replyBarText = $('#replyBarText');
   const searchPanel = $('#searchPanel');
+  const searchPanelSheet = $('#searchPanelSheet');
   const searchInput = $('#searchInput');
   const searchResults = $('#searchResults');
+  const searchAllChatsToggle = $('#searchAllChatsToggle');
   const dragOverlay = $('#dragOverlay');
   const newChatModal = $('#newChatModal');
   const adminModal = $('#adminModal');
@@ -3874,7 +3885,12 @@
   // ═══════════════════════════════════════════════════════════════════════════
   // OPEN CHAT
   // ═══════════════════════════════════════════════════════════════════════════
-  async function openChat(chatId) {
+  async function openChat(chatId, options = {}) {
+    const targetChatId = Number(chatId);
+    const previousChatId = Number(currentChatId || 0);
+    const sameChat = previousChatId === targetChatId;
+    const explicitAnchorId = Number(options?.anchorMessageId || 0);
+    const suppressHistoryPush = Boolean(options?.suppressHistoryPush);
     // Save scroll position of previous chat
     if (currentChatId) {
       saveCurrentScrollAnchor(currentChatId, { force: true });
@@ -3882,7 +3898,7 @@
     hideMentionPicker();
     hideAvatarUserMenu();
 
-    currentChatId = chatId;
+    currentChatId = targetChatId;
     displayedMsgIds.clear();
     hasMore = false; // prevent scroll handler triggering loadMore during DOM clear
     setHasMoreAfter(false);
@@ -3893,7 +3909,7 @@
 
     // Update sidebar active state
     chatList.querySelectorAll('.chat-item').forEach(el => {
-      el.classList.toggle('active', +el.dataset.chatId === chatId);
+      el.classList.toggle('active', +el.dataset.chatId === targetChatId);
     });
 
     // Mobile: hide sidebar
@@ -3901,11 +3917,15 @@
       cancelPendingSidebarReveal();
       sidebar.classList.remove('sidebar-no-transition');
       sidebar.classList.add('sidebar-hidden');
-      history.pushState({ chat: chatId }, '');
+      if (!suppressHistoryPush) {
+        history.pushState({ chat: targetChatId }, '');
+      }
     }
 
-    const chat = chats.find(c => c.id === chatId);
-    const restoreAnchor = anchorForChatOpen(chat);
+    const chat = chats.find(c => c.id === targetChatId);
+    const restoreAnchor = explicitAnchorId
+      ? { messageId: explicitAnchorId, offsetTop: 72, atBottom: false, mode: sameChat ? 'search_same_chat' : 'search' }
+      : anchorForChatOpen(chat);
     renderCurrentChatHeader(chat);
 
     updateChatStatus();
@@ -3913,24 +3933,24 @@
     applyChatBackground(chat);
 
     // Clear and load messages (show cached messages first if available)
-    compactView = !!compactViewMap[chatId];
+    compactView = !!compactViewMap[targetChatId];
     messagesEl.classList.toggle('compact-view', compactView);
     loadMoreWrap.classList.add('hidden');
     messagesEl.querySelectorAll('.msg-row, .msg-group, .date-separator').forEach(el => el.remove());
     try {
       if (window.messageCache) {
         const cachedMsgs = restoreAnchor?.messageId
-          ? await window.messageCache.readAround(chatId, restoreAnchor.messageId, { limit: PAGE_SIZE })
-          : await window.messageCache.readLatest(chatId, { limit: PAGE_SIZE });
+          ? await window.messageCache.readAround(targetChatId, restoreAnchor.messageId, { limit: PAGE_SIZE })
+          : await window.messageCache.readLatest(targetChatId, { limit: PAGE_SIZE });
         if (Array.isArray(cachedMsgs) && cachedMsgs.length) {
-          applyOwnReadStateToMessages(chatId, cachedMsgs);
+          applyOwnReadStateToMessages(targetChatId, cachedMsgs);
           displayedMsgIds.clear();
           const cachedFirstId = minMessageId(cachedMsgs);
           const cachedLastId = maxMessageId(cachedMsgs);
           setHasMoreBefore(cachedFirstId !== Number.MAX_SAFE_INTEGER && cachedFirstId > 1 && (restoreAnchor?.messageId ? true : cachedMsgs.length >= PAGE_SIZE));
           setHasMoreAfter(Boolean(restoreAnchor?.messageId && chat?.last_message_id && cachedLastId < Number(chat.last_message_id || 0)));
           renderMessages(cachedMsgs);
-          await renderOutboxForChat(chatId);
+          await renderOutboxForChat(targetChatId);
           if (restoreAnchor?.messageId) {
             requestAnimationFrame(() => restoreScrollAnchor(restoreAnchor, 1));
           } else {
@@ -3957,18 +3977,18 @@
       const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
       params.set('meta', '1');
       if (restoreAnchor?.messageId) params.set('anchor', String(restoreAnchor.messageId));
-      const raw = await api(`/api/chats/${chatId}/messages?${params}`);
+      const raw = await api(`/api/chats/${targetChatId}/messages?${params}`);
       const page = normalizeMessagesPage(raw);
       const msgs = page.messages;
       const memberLastReads = raw && raw.member_last_reads ? raw.member_last_reads : null;
-      const readState = await reconcileChatReadState(chatId, memberLastReads, {
+      const readState = await reconcileChatReadState(targetChatId, memberLastReads, {
         replace: true,
-        updateVisible: currentChatId === chatId,
+        updateVisible: currentChatId === targetChatId,
       });
       if (readState.chatReadChanged) renderChatList(chatSearch.value);
       applyOwnReadStateToMessages(chatId, msgs);
       // Re-clear after async gap: WS may have appended messages while we waited
-      if (currentChatId !== chatId) { suppressScrollAnchorSave = false; return; } // user switched chats
+      if (currentChatId !== targetChatId) { suppressScrollAnchorSave = false; return; } // user switched chats
 
       // If DOM already contains the same messages in the same order, skip re-render to avoid blinking.
       try {
@@ -3978,7 +3998,7 @@
         const same = domIds.length > 0 && domIds.length === fetchedIds.length && domIds.every((id, idx) => id === fetchedIds[idx]);
         if (same) {
           // Persist network-fetched messages to IndexedDB for offline/low-traffic history reuse.
-          cacheMessages(chatId, msgs || []);
+          cacheMessages(targetChatId, msgs || []);
           setHasMoreBefore(page.hasMoreBefore ?? (restoreAnchor?.messageId ? msgs.length > 0 : msgs.length >= PAGE_SIZE));
           setHasMoreAfter(page.hasMoreAfter ?? Boolean(restoreAnchor?.messageId && chat?.last_message_id && maxMessageId(msgs) < Number(chat.last_message_id || 0)));
           if (restoreAnchor?.messageId) {
@@ -3994,9 +4014,9 @@
           requestAnimationFrame(() => {
             updateScrollBottomButton();
             setTimeout(() => {
-              if (currentChatId !== chatId) return;
+              if (currentChatId !== targetChatId) return;
               suppressScrollAnchorSave = false;
-              saveCurrentScrollAnchor(chatId, { force: true });
+              saveCurrentScrollAnchor(targetChatId, { force: true });
               maybeLoadMoreAtTop();
               maybeLoadMoreAtBottom();
             }, 260);
@@ -4017,7 +4037,7 @@
         renderMessages(msgs);
       }
       // Persist network-fetched messages to IndexedDB for offline/low-traffic history reuse.
-      cacheMessages(chatId, msgs || []);
+      cacheMessages(targetChatId, msgs || []);
       // Cache background, avatars, and first 5 images
       (async () => {
         try {
@@ -4030,7 +4050,7 @@
           await window.cacheAssets(Array.from(assetUrls).slice(0, 12));
         } catch (e) {}
       })();
-      await renderOutboxForChat(chatId);
+      await renderOutboxForChat(targetChatId);
       if (restoreAnchor?.messageId) {
         requestAnimationFrame(() => {
           if (!restoreScrollAnchor(restoreAnchor)) {
@@ -4044,18 +4064,18 @@
       requestAnimationFrame(() => {
         updateScrollBottomButton();
         setTimeout(() => {
-          if (currentChatId !== chatId) return;
+          if (currentChatId !== targetChatId) return;
           suppressScrollAnchorSave = false;
-          saveCurrentScrollAnchor(chatId, { force: true });
+          saveCurrentScrollAnchor(targetChatId, { force: true });
           maybeLoadMoreAtTop();
           maybeLoadMoreAtBottom();
         }, 260);
       });
       scrollRestoreScheduled = true;
     } catch {
-      await renderOutboxForChat(chatId);
+      await renderOutboxForChat(targetChatId);
     }
-    if (!scrollRestoreScheduled && currentChatId === chatId && suppressScrollAnchorSave) {
+    if (!scrollRestoreScheduled && currentChatId === targetChatId && suppressScrollAnchorSave) {
       suppressScrollAnchorSave = false;
       maybeLoadMoreAtTop();
       maybeLoadMoreAtBottom();
@@ -4066,7 +4086,7 @@
     if (window.innerWidth > 768) msgInput.focus();
     window.BananzaVoiceHooks?.refreshComposerState?.();
     updateScrollBottomButton();
-    localStorage.setItem('lastChat', chatId);
+    localStorage.setItem('lastChat', targetChatId);
   }
 
   function updateChatStatus() {
@@ -5642,67 +5662,313 @@
   // ═══════════════════════════════════════════════════════════════════════════
   let searchDebounce = null;
 
-  function openSearchPanel() {
-    searchPanel.classList.remove('hidden');
-    searchInput.value = '';
-    searchResults.innerHTML = '';
-    searchInput.focus();
+  function isSearchPanelOpen() {
+    return Boolean(searchPanel && searchPanel.getAttribute('aria-hidden') === 'false');
   }
 
-  function closeSearchPanel() {
-    searchPanel.classList.add('hidden');
-    searchInput.value = '';
-    searchResults.innerHTML = '';
+  function clearSearchResults() {
+    if (searchResults) searchResults.innerHTML = '';
   }
 
-  function performSearch() {
-    const q = searchInput.value.trim();
-    if (q.length < 2) { searchResults.innerHTML = ''; return; }
+  function updateSearchTriggerState(active) {
+    $('#searchBtn')?.classList.toggle('is-active', !!active);
+  }
+
+  function renderSearchResultsEmpty(message = 'No results') {
+    if (!searchResults) return;
+    searchResults.innerHTML = `<div class="search-results-empty">${esc(message)}</div>`;
+  }
+
+  function renderSearchScopeToggle() {
+    if (!searchAllChatsToggle) return;
+    const forcedGlobal = !currentChatId;
+    searchAllChatsToggle.checked = forcedGlobal ? true : searchAllChats;
+    searchAllChatsToggle.disabled = forcedGlobal;
+    searchAllChatsToggle.setAttribute('aria-disabled', forcedGlobal ? 'true' : 'false');
+    searchPanel?.querySelector('.search-panel-scope')?.classList.toggle('is-disabled', forcedGlobal);
+  }
+
+  function clearSearchPanelTransitionState() {
+    clearTimeout(searchPanelCloseTimer);
+    searchPanelCloseTimer = null;
+    if (searchPanelTransitionHandler) {
+      searchPanelSheet?.removeEventListener('transitionend', searchPanelTransitionHandler);
+      searchPanelTransitionHandler = null;
+    }
+    if (searchPanelOpenFrame) {
+      cancelAnimationFrame(searchPanelOpenFrame);
+      searchPanelOpenFrame = null;
+    }
+  }
+
+  function ensureSearchPanelReady() {
+    if (!searchPanel) return;
+    if (searchPanel.dataset.ready === '1') return;
+    searchPanel.dataset.ready = '1';
+    searchPanel.classList.remove('hidden', 'is-open', 'is-closing');
+    searchPanel.setAttribute('aria-hidden', 'true');
+    renderSearchScopeToggle();
+    updateSearchTriggerState(false);
+  }
+
+  function getSearchPanelTransitionFallbackMs() {
+    const maxDuration = Math.max(
+      getElementTransitionTotalMs(searchPanel),
+      getElementTransitionTotalMs(searchPanelSheet)
+    );
+    return Math.max(MODAL_TRANSITION_BUFFER_MS, Math.ceil(maxDuration + MODAL_TRANSITION_BUFFER_MS));
+  }
+
+  function focusSearchInput() {
+    if (!searchInput) return;
+    try {
+      searchInput.focus({ preventScroll: true });
+    } catch {
+      searchInput.focus();
+    }
+  }
+
+  function flushSearchPanelPendingAction() {
+    const action = searchPanelPendingAction;
+    searchPanelPendingAction = null;
+    if (typeof action !== 'function') return;
+    setTimeout(() => {
+      try {
+        action();
+      } catch (e) {}
+    }, 0);
+  }
+
+  function shouldAutoFocusSearchInput() {
+    return window.innerWidth > 768;
+  }
+
+  function waitForMs(ms = 0) {
+    return new Promise((resolve) => {
+      setTimeout(resolve, Math.max(0, Number(ms) || 0));
+    });
+  }
+
+  async function animateSearchResultChatSwitch(targetChatId) {
+    if (window.innerWidth > 768) return;
+    if (!currentChatId || Number(targetChatId) === Number(currentChatId)) return;
+    if (prefersReducedMotion()) {
+      revealSidebarFromChat({ forceAnimation: true });
+      return;
+    }
+    const transitionMs = Math.max(180, Math.ceil(getElementTransitionTotalMs(sidebar) || 250));
+    if (sidebar.classList.contains('sidebar-hidden')) {
+      if (history.state?.chat) {
+        navigateBackToChatList();
+      } else {
+        revealSidebarFromChat({ forceAnimation: true });
+      }
+      await waitForMs(transitionMs + 24);
+    }
+  }
+
+  function formatSearchResultTimestamp(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    const now = new Date();
+    const sameYear = date.getFullYear() === now.getFullYear();
+    return date.toLocaleString([], sameYear
+      ? { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }
+      : { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function finalizeSearchPanelClose() {
+    if (!searchPanel) return false;
+    clearSearchPanelTransitionState();
+    searchPanel.classList.remove('is-open', 'is-closing');
+    searchPanel.setAttribute('aria-hidden', 'true');
+    updateSearchTriggerState(false);
     clearTimeout(searchDebounce);
-    searchDebounce = setTimeout(async () => {
+    searchDebounce = null;
+    searchRequestSeq += 1;
+    searchAllChats = false;
+    if (searchInput) searchInput.value = '';
+    clearSearchResults();
+    renderSearchScopeToggle();
+    return true;
+  }
+
+  function openSearchPanel() {
+    if (!searchPanel) return;
+    ensureSearchPanelReady();
+    if (isSearchPanelOpen() && !searchPanel.classList.contains('is-closing')) {
+      if (shouldAutoFocusSearchInput()) focusSearchInput();
+      return;
+    }
+    clearSearchPanelTransitionState();
+    clearTimeout(searchDebounce);
+    searchDebounce = null;
+    searchRequestSeq += 1;
+    searchPanelPendingAction = null;
+    searchPanelReturnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : $('#searchBtn');
+    searchAllChats = false;
+    renderSearchScopeToggle();
+    if (searchInput) searchInput.value = '';
+    clearSearchResults();
+    searchPanel.setAttribute('aria-hidden', 'false');
+    searchPanel.classList.remove('is-open', 'is-closing');
+    updateSearchTriggerState(true);
+    if (!searchPanelHistoryPushed) {
+      history.pushState({ ...(history.state || {}), searchPanel: true }, '');
+      searchPanelHistoryPushed = true;
+    }
+    searchPanelOpenFrame = requestAnimationFrame(() => {
+      searchPanel.classList.add('is-open');
+      searchPanelOpenFrame = null;
+      if (shouldAutoFocusSearchInput()) {
+        requestAnimationFrame(() => {
+          if (isSearchPanelOpen()) focusSearchInput();
+        });
+      }
+    });
+  }
+
+  function closeSearchPanel({ fromHistory = false, immediate = false, afterClose = null } = {}) {
+    if (!searchPanel) return false;
+    if (!isSearchPanelOpen()) {
+      if (typeof afterClose === 'function') afterClose();
+      return false;
+    }
+    if (typeof afterClose === 'function') searchPanelPendingAction = afterClose;
+    clearTimeout(searchDebounce);
+    searchDebounce = null;
+    searchRequestSeq += 1;
+    clearSearchPanelTransitionState();
+
+    const finish = () => {
+      finalizeSearchPanelClose();
+      if (fromHistory) searchPanelHistoryPushed = false;
+      if (searchPanelHistoryPushed && !fromHistory) {
+        searchPanelSkipNextPopstate = true;
+        searchPanelHistoryPushed = false;
+        history.back();
+        return true;
+      }
+      const shouldRestoreFocus = !searchPanelPendingAction;
+      if (shouldRestoreFocus) {
+        focusElementIfPossible(searchPanelReturnFocusEl || $('#searchBtn'));
+      }
+      searchPanelReturnFocusEl = null;
+      flushSearchPanelPendingAction();
+      return true;
+    };
+
+    searchPanel.classList.remove('is-open');
+    if (immediate || prefersReducedMotion() || currentModalAnimation === 'none') {
+      return finish();
+    }
+    searchPanel.classList.add('is-closing');
+    searchPanelTransitionHandler = (event) => {
+      if (event.target !== searchPanelSheet || event.propertyName !== 'transform') return;
+      finish();
+    };
+    searchPanelSheet?.addEventListener('transitionend', searchPanelTransitionHandler);
+    searchPanelCloseTimer = setTimeout(finish, getSearchPanelTransitionFallbackMs());
+    return true;
+  }
+
+  function performSearch({ immediate = false } = {}) {
+    const q = searchInput.value.trim();
+    clearTimeout(searchDebounce);
+    searchDebounce = null;
+    const requestId = ++searchRequestSeq;
+    if (q.length < 2) {
+      clearSearchResults();
+      return;
+    }
+    const runSearch = async () => {
       try {
         const params = new URLSearchParams({ q });
-        if (currentChatId) params.set('chatId', currentChatId);
+        const isGlobalSearch = searchAllChats || !currentChatId;
+        if (!isGlobalSearch && currentChatId) params.set('chatId', currentChatId);
         const results = await api(`/api/messages/search?${params}`);
-        searchResults.innerHTML = '';
+        if (requestId !== searchRequestSeq || !isSearchPanelOpen()) return;
+        clearSearchResults();
         if (results.length === 0) {
-          searchResults.innerHTML = '<div style="padding:12px;color:var(--text-secondary)">No results</div>';
+          renderSearchResultsEmpty('No results');
           return;
         }
+        const escapedQuery = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const queryPattern = new RegExp(`(${escapedQuery})`, 'gi');
         for (const r of results) {
           const el = document.createElement('div');
           el.className = 'search-result-item';
           const highlighted = esc(r.text || '').replace(
-            new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'),
+            queryPattern,
             '<mark>$1</mark>'
           );
+          const chatContext = r.chat_name
+            ? r.chat_name
+            : (r.chat_type === 'group' ? 'Group chat' : 'Direct chat');
           el.innerHTML = `
-            <div style="font-weight:600;font-size:13px;color:var(--accent)">${esc(r.display_name)}</div>
+            <div class="search-result-meta">
+              <div class="search-result-name">${esc(r.display_name || 'Unknown')}</div>
+              <div class="search-result-chat">${esc(chatContext)}</div>
+            </div>
             <div class="search-result-text">${highlighted}</div>
-            <div style="font-size:11px;color:var(--text-secondary)">${formatTime(r.created_at)}</div>
+            <div class="search-result-time">${esc(formatSearchResultTimestamp(r.created_at))}</div>
           `;
           el.addEventListener('click', () => {
-            closeSearchPanel();
-            if (r.chat_id !== currentChatId) {
-              openChat(r.chat_id).then(() => scrollToMessage(r.id));
-            } else {
-              scrollToMessage(r.id);
-            }
+            closeSearchPanel({
+              afterClose: () => {
+                jumpToSearchResult(r).catch((e) => {
+                  showCenterToast(e?.message || 'Message not found');
+                });
+              },
+            });
           });
           searchResults.appendChild(el);
         }
-      } catch {}
-    }, 300);
+      } catch (e) {
+        if (requestId !== searchRequestSeq) return;
+        renderSearchResultsEmpty(e?.message || 'Search failed');
+      }
+    };
+    if (immediate) {
+      runSearch();
+      return;
+    }
+    searchDebounce = setTimeout(runSearch, 300);
   }
 
-  function scrollToMessage(msgId) {
-    const el = messagesEl.querySelector(`[data-msg-id="${msgId}"]`);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      el.style.transition = 'background 0.3s';
-      el.style.background = 'rgba(94,181,247,0.15)';
-      setTimeout(() => { el.style.background = ''; }, 1500);
+  function scrollToMessage(msgId, { behavior = 'smooth', highlight = true } = {}) {
+    const row = messagesEl.querySelector(`[data-msg-id="${msgId}"]`);
+    if (!row) return false;
+    row.scrollIntoView({ behavior, block: 'center' });
+    if (highlight) {
+      clearTimeout(row.__searchHitTimer);
+      row.classList.add('is-search-hit');
+      row.__searchHitTimer = setTimeout(() => {
+        row.classList.remove('is-search-hit');
+      }, 1800);
     }
+    return true;
+  }
+
+  async function jumpToSearchResult(result) {
+    const chatId = Number(result?.chat_id || 0);
+    const messageId = Number(result?.id || 0);
+    if (!chatId || !messageId) {
+      showCenterToast('Message not found');
+      return false;
+    }
+    const sameChat = chatId === Number(currentChatId || 0);
+    if (sameChat && scrollToMessage(messageId)) return true;
+    await animateSearchResultChatSwitch(chatId);
+    await openChat(chatId, {
+      anchorMessageId: messageId,
+      suppressHistoryPush: sameChat,
+      source: 'search',
+    });
+    if (scrollToMessage(messageId)) return true;
+    showCenterToast('Message not found');
+    return false;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -6524,6 +6790,18 @@
     }, 230);
   }
 
+  function animateChatHeaderActionButton(buttonOrSelector) {
+    const button = typeof buttonOrSelector === 'string' ? $(buttonOrSelector) : buttonOrSelector;
+    if (!button) return;
+    button.classList.remove('is-spinning');
+    void button.offsetWidth;
+    button.classList.add('is-spinning');
+    clearTimeout(button.__spinTimer);
+    button.__spinTimer = setTimeout(() => {
+      button.classList.remove('is-spinning');
+    }, 380);
+  }
+
   function prefersReducedMotion() {
     return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
   }
@@ -6624,6 +6902,7 @@
     setupPasswordPreviewToggles();
     setupSwipeReplyGesture();
     setupSwipeEditGesture();
+    ensureSearchPanelReady();
 
     // Send message
     sendBtn.addEventListener('click', (e) => {
@@ -6984,6 +7263,10 @@
         closeTopModal();
         return;
       }
+      if (isSearchPanelOpen()) {
+        closeSearchPanel();
+        return;
+      }
       if (backBtn.__isNavigating) return;
       const finishBackNavigation = () => {
         navigateBackToChatList();
@@ -7007,12 +7290,26 @@
         modalSkipPopstateCount -= 1;
         return;
       }
+      if (searchPanelSkipNextPopstate) {
+        searchPanelSkipNextPopstate = false;
+        const shouldRestoreFocus = !searchPanelPendingAction;
+        if (shouldRestoreFocus) {
+          focusElementIfPossible(searchPanelReturnFocusEl || $('#searchBtn'));
+        }
+        searchPanelReturnFocusEl = null;
+        flushSearchPanelPendingAction();
+        return;
+      }
       if (ivSkipNextPopstate) {
         ivSkipNextPopstate = false;
         return;
       }
       if (hasOpenModal()) {
         closeTopModal({ fromHistory: true });
+        return;
+      }
+      if (isSearchPanelOpen()) {
+        closeSearchPanel({ fromHistory: true });
         return;
       }
       if (!imageViewer.classList.contains('hidden')) {
@@ -7273,7 +7570,10 @@
     $('#menuBtn').addEventListener('click', openMenuDrawer);
 
     // Chat info button
-    $('#chatInfoBtn').addEventListener('click', openChatInfoModal);
+    $('#chatInfoBtn').addEventListener('click', () => {
+      animateChatHeaderActionButton('#chatInfoBtn');
+      openChatInfoModal();
+    });
 
     // Compact view toggle (per-chat)
     $('#compactViewToggle').addEventListener('change', (e) => {
@@ -7325,9 +7625,29 @@
     });
 
     // Search
-    $('#searchBtn').addEventListener('click', openSearchPanel);
-    $('#searchClose').addEventListener('click', closeSearchPanel);
-    searchInput.addEventListener('input', performSearch);
+    $('#searchBtn').addEventListener('click', () => {
+      animateChatHeaderActionButton('#searchBtn');
+      openSearchPanel();
+    });
+    $('#searchClose').addEventListener('click', () => closeSearchPanel());
+    searchInput.addEventListener('input', () => performSearch());
+    searchAllChatsToggle?.addEventListener('change', () => {
+      if (!currentChatId) {
+        searchAllChats = false;
+        renderSearchScopeToggle();
+        if (searchInput.value.trim().length >= 2) performSearch({ immediate: true });
+        return;
+      }
+      searchAllChats = !!searchAllChatsToggle.checked;
+      if (searchInput.value.trim().length >= 2) {
+        performSearch({ immediate: true });
+      } else {
+        clearSearchResults();
+      }
+    });
+    searchPanel?.addEventListener('click', (e) => {
+      if (e.target === searchPanel) closeSearchPanel();
+    });
 
     // Drag & drop
     chatView.addEventListener('dragenter', handleDragEnter);
@@ -7343,8 +7663,12 @@
           closeTopModal();
           return;
         }
+        if (isSearchPanelOpen()) {
+          e.preventDefault();
+          closeSearchPanel();
+          return;
+        }
         hideAvatarUserMenu();
-        closeSearchPanel();
         clearReply();
       }
     });
