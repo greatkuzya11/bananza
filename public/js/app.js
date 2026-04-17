@@ -42,12 +42,15 @@
   ];
   const UI_THEME_IDS = new Set(UI_THEMES.map(t => t.id));
   const MODAL_ANIMATION_STYLES = [
-    { id: 'soft', name: 'Soft', note: 'Best default: fade + subtle lift with transform only.' },
-    { id: 'fade', name: 'Fade', note: 'Simpler cross-fade with no movement.' },
+    { id: 'soft', name: 'Soft', note: 'Stronger lift with a smooth modal feel.' },
+    { id: 'lift', name: 'Lift', note: 'More vertical travel and a clearer close motion.' },
+    { id: 'zoom', name: 'Zoom', note: 'Content pops from scale with a dense backdrop.' },
+    { id: 'slide', name: 'Slide', note: 'More obvious upward slide, closer to a sheet feel.' },
+    { id: 'fade', name: 'Fade', note: 'Pure fade, but slower and more noticeable than before.' },
     { id: 'none', name: 'None', note: 'Instant open/close with no animation.' },
   ];
   const MODAL_ANIMATION_STYLE_IDS = new Set(MODAL_ANIMATION_STYLES.map(style => style.id));
-  const MODAL_TRANSITION_FALLBACK_MS = 220;
+  const MODAL_TRANSITION_FALLBACK_MS = 380;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STATE
@@ -140,6 +143,8 @@
   let modalStack = [];
   let modalHistoryDepth = 0;
   let modalSkipPopstateCount = 0;
+  let pendingModalHistoryRewind = 0;
+  let modalHistorySyncTimer = null;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DOM
@@ -2083,10 +2088,17 @@
   }
 
   function updateModalStackState() {
+    let activeTopIndex = -1;
+    for (let index = modalStack.length - 1; index >= 0; index -= 1) {
+      if (!modalStack[index]?.isClosing) {
+        activeTopIndex = index;
+        break;
+      }
+    }
     modalStack.forEach((entry, index) => {
-      const isTop = index === modalStack.length - 1;
+      const isTop = index === activeTopIndex;
       entry.el.style.setProperty('--modal-layer-z', String(150 + index * 4));
-      entry.el.classList.toggle('is-underlay', !isTop && !entry.isClosing);
+      entry.el.classList.toggle('is-underlay', !entry.isClosing && !isTop);
       if (isTop && !entry.isClosing) setModalInertState(entry, false);
       else setModalInertState(entry, true);
     });
@@ -2103,6 +2115,23 @@
     modalSkipPopstateCount += depth;
     modalHistoryDepth -= depth;
     history.go(-depth);
+  }
+
+  function flushPendingModalHistoryRewind() {
+    clearTimeout(modalHistorySyncTimer);
+    modalHistorySyncTimer = null;
+    if (!pendingModalHistoryRewind) return;
+    const steps = pendingModalHistoryRewind;
+    pendingModalHistoryRewind = 0;
+    rewindModalHistory(steps);
+  }
+
+  function scheduleModalHistoryRewind(steps = 1) {
+    pendingModalHistoryRewind += Math.max(0, Number(steps) || 0);
+    clearTimeout(modalHistorySyncTimer);
+    modalHistorySyncTimer = setTimeout(() => {
+      flushPendingModalHistoryRewind();
+    }, MODAL_TRANSITION_FALLBACK_MS);
   }
 
   function finalizeModalClose(entry) {
@@ -2137,6 +2166,7 @@
     entry.el.classList.remove('is-open', 'is-underlay');
     entry.el.classList.add('is-closing');
     setModalInertState(entry, true);
+    updateModalStackState();
     if (immediate || prefersReducedMotion() || currentModalAnimation === 'none') {
       return finalizeModalClose(entry);
     }
@@ -2204,6 +2234,7 @@
   function openModal(modalOrId, { replaceStack = false, opener = null } = {}) {
     const entry = registerModal(modalOrId);
     if (!entry?.el) return null;
+    flushPendingModalHistoryRewind();
     const reuseHistoryEntry = replaceStack && modalHistoryDepth === 1;
     if (replaceStack && modalStack.length) {
       closeAllModals({ immediate: true, includeMedia: false, syncHistory: !reuseHistoryEntry });
@@ -2252,8 +2283,12 @@
     }
     const toClose = modalStack.slice(index).reverse();
     toClose.forEach((item) => beginModalClose(item, { immediate }));
-    if (!fromHistory) rewindModalHistory(toClose.length);
-    else modalHistoryDepth = Math.max(0, modalHistoryDepth - toClose.length);
+    if (!fromHistory) {
+      if (immediate || prefersReducedMotion() || currentModalAnimation === 'none') rewindModalHistory(toClose.length);
+      else scheduleModalHistoryRewind(toClose.length);
+    } else {
+      modalHistoryDepth = Math.max(0, modalHistoryDepth - toClose.length);
+    }
     return true;
   }
 
@@ -2266,7 +2301,10 @@
   function closeAllModals({ immediate = false, includeMedia = true, syncHistory = true } = {}) {
     if (modalStack.length) {
       [...modalStack].reverse().forEach((entry) => beginModalClose(entry, { immediate }));
-      if (syncHistory) rewindModalHistory(modalHistoryDepth);
+      if (syncHistory) {
+        if (immediate || prefersReducedMotion() || currentModalAnimation === 'none') rewindModalHistory(modalHistoryDepth);
+        else scheduleModalHistoryRewind(modalHistoryDepth);
+      }
       modalHistoryDepth = 0;
     }
     if (includeMedia) closeMediaViewer();

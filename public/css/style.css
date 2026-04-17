@@ -259,7 +259,96 @@ html, body {
   font-size: 15px; color: var(--text-primary); background: var(--bg-app-gradient);
 }
 
-button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+  appearance: none;
+  -webkit-appearance: none;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+button:focus,
+button:focus-visible,
+button:active {
+  outline: none;
+  box-shadow: none;
+}
+input[type="checkbox"],
+input[type="radio"] {
+  -webkit-tap-highlight-color: transparent;
+}
+input[type="checkbox"]:focus,
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus,
+input[type="radio"]:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+/* Normalize tap/focus feedback for custom interactive surfaces so browsers do not draw a native blue ring. */
+:where(
+  [role="button"],
+  summary,
+  label.toggle-switch,
+  .chat-item,
+  .user-list-item,
+  .search-result-item,
+  .reaction-badge,
+  .emoji-tab,
+  .emoji-item,
+  .modal-tab,
+  .settings-item,
+  .animation-style-card,
+  .theme-card,
+  .attach-menu-item,
+  .weather-widget.interactive,
+  .msg-image,
+  .msg-expand-btn,
+  .msg-reply,
+  .avatar-upload-label,
+  .member-remove,
+  .color-swatch,
+  .mention-picker-item,
+  .forward-chat-item
+) {
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+:where(
+  [role="button"],
+  summary,
+  label.toggle-switch,
+  .emoji-tab,
+  .emoji-item,
+  .modal-tab,
+  .settings-item,
+  .animation-style-card,
+  .theme-card,
+  .attach-menu-item,
+  .weather-widget.interactive,
+  .mention-picker-item,
+  .forward-chat-item
+):focus,
+:where(
+  [role="button"],
+  summary,
+  label.toggle-switch,
+  .emoji-tab,
+  .emoji-item,
+  .modal-tab,
+  .settings-item,
+  .animation-style-card,
+  .theme-card,
+  .attach-menu-item,
+  .weather-widget.interactive,
+  .mention-picker-item,
+  .forward-chat-item
+):focus-visible {
+  outline: none;
+  box-shadow: none;
+}
 input, textarea { font-family: inherit; font-size: inherit; }
 a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -431,11 +520,12 @@ a:hover { text-decoration: underline; }
   filter: brightness(1.06);
 }
 
+.chat-back-btn:focus,
 .chat-back-btn:focus-visible {
-  background: var(--accent-softer-bg);
-  box-shadow:
-    0 0 0 1px rgba(255,255,255,.04),
-    0 0 0 4px var(--accent-softer-bg);
+  outline: none;
+  background: var(--bg-hover);
+  box-shadow: none;
+  filter: brightness(1.06);
 }
 
 .chat-back-btn:active {
@@ -876,7 +966,8 @@ a:hover { text-decoration: underline; }
 .mention-picker-item:focus,
 .mention-picker-item:focus-visible {
   outline: none;
-  box-shadow: inset 0 0 0 1px var(--accent-border-strong);
+  box-shadow: none;
+  background: var(--bg-hover);
 }
 .mention-picker-avatar {
   width: 30px;
@@ -1246,13 +1337,16 @@ a:hover { text-decoration: underline; }
 
 /* ── Modals ───────────────────────────────────────────────────────────────── */
 .modal {
-  --modal-backdrop-opacity: .6;
-  --modal-duration: .18s;
-  --modal-ease: cubic-bezier(.2, .9, .2, 1);
-  --modal-enter-transform: translate3d(0, 14px, 0) scale(.98);
+  --modal-backdrop-opacity: .74;
+  --modal-underlay-backdrop-opacity: .48;
+  --modal-duration: .26s;
+  --modal-close-duration: .22s;
+  --modal-ease: cubic-bezier(.16, 1, .3, 1);
+  --modal-enter-transform: translate3d(0, 28px, 0) scale(.94);
+  --modal-close-transform: translate3d(0, 34px, 0) scale(.92);
   position: fixed; inset: 0; z-index: var(--modal-layer-z, 150);
   display: flex; align-items: center; justify-content: center; padding: 20px;
-  background: rgba(0,0,0,var(--modal-backdrop-opacity));
+  background-color: rgba(0,0,0,var(--modal-backdrop-opacity));
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -1265,8 +1359,10 @@ a:hover { text-decoration: underline; }
   background: var(--bg-modal); border-radius: 12px; width: 100%;
   max-width: 420px; max-height: 80vh; display: flex; flex-direction: column;
   overflow: hidden;
+  box-shadow: 0 24px 80px rgba(0,0,0,.38);
   opacity: 0;
   transform: var(--modal-enter-transform);
+  transform-origin: 50% 50%;
   transition:
     opacity var(--modal-duration) var(--modal-ease),
     transform var(--modal-duration) var(--modal-ease);
@@ -1289,28 +1385,62 @@ a:hover { text-decoration: underline; }
 .modal.is-underlay {
   opacity: 1;
   visibility: visible;
-  background: transparent;
+  background-color: rgba(0,0,0,var(--modal-underlay-backdrop-opacity));
   pointer-events: none;
-}
-.modal.is-underlay .modal-content {
-  transition-duration: 0s;
 }
 .modal.is-closing {
+  opacity: 0;
+  visibility: visible;
   pointer-events: none;
+  transition-duration: var(--modal-close-duration), var(--modal-close-duration), 0s;
 }
 .modal.is-closing .modal-content {
+  opacity: 0;
+  transform: var(--modal-close-transform);
   pointer-events: none;
+  transition-duration: var(--modal-close-duration), var(--modal-close-duration);
 }
 .modal[inert] {
   pointer-events: none;
 }
+html[data-modal-animation="lift"] .modal {
+  --modal-backdrop-opacity: .78;
+  --modal-underlay-backdrop-opacity: .54;
+  --modal-duration: .3s;
+  --modal-close-duration: .26s;
+  --modal-enter-transform: translate3d(0, 46px, 0) scale(.9);
+  --modal-close-transform: translate3d(0, 56px, 0) scale(.88);
+}
+html[data-modal-animation="zoom"] .modal {
+  --modal-backdrop-opacity: .8;
+  --modal-underlay-backdrop-opacity: .58;
+  --modal-duration: .24s;
+  --modal-close-duration: .22s;
+  --modal-enter-transform: translate3d(0, 8px, 0) scale(.82);
+  --modal-close-transform: translate3d(0, 0, 0) scale(.78);
+}
+html[data-modal-animation="slide"] .modal {
+  --modal-backdrop-opacity: .76;
+  --modal-underlay-backdrop-opacity: .52;
+  --modal-duration: .28s;
+  --modal-close-duration: .24s;
+  --modal-enter-transform: translate3d(0, 64px, 0) scale(1);
+  --modal-close-transform: translate3d(0, 78px, 0) scale(1);
+}
 html[data-modal-animation="fade"] .modal {
-  --modal-duration: .16s;
+  --modal-backdrop-opacity: .78;
+  --modal-underlay-backdrop-opacity: .56;
+  --modal-duration: .24s;
+  --modal-close-duration: .24s;
   --modal-enter-transform: translate3d(0, 0, 0) scale(1);
+  --modal-close-transform: translate3d(0, 0, 0) scale(1);
+  --modal-ease: ease-out;
 }
 html[data-modal-animation="none"] .modal {
   --modal-duration: 0s;
+  --modal-close-duration: 0s;
   --modal-enter-transform: translate3d(0, 0, 0) scale(1);
+  --modal-close-transform: translate3d(0, 0, 0) scale(1);
 }
 .modal-content.wide { max-width: 600px; }
 .modal-content.narrow { max-width: 320px; }
@@ -1322,8 +1452,19 @@ html[data-modal-animation="none"] .modal {
 .modal-close {
   font-size: 20px; color: var(--text-secondary); width: 32px; height: 32px;
   display: flex; align-items: center; justify-content: center; border-radius: 50%;
+  appearance: none; -webkit-appearance: none;
+  outline: none; box-shadow: none;
+  -webkit-tap-highlight-color: transparent;
 }
 .modal-close:hover { background: var(--bg-hover); color: var(--text-primary); }
+.modal-close:focus,
+.modal-close:focus-visible,
+.modal-close:active {
+  outline: none;
+  box-shadow: none;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
 .modal-tabs {
   display: flex; border-bottom: 1px solid var(--border-light);
 }
@@ -1465,10 +1606,25 @@ html[data-modal-animation="none"] .modal {
   display: flex; align-items: center; gap: 10px; width: 100%; padding: 14px 16px;
   background: var(--bg-input); border: none; border-radius: 8px; color: var(--text-primary);
   font-size: 15px; cursor: pointer; transition: background .15s; margin-bottom: 6px;
+  appearance: none; -webkit-appearance: none;
+  outline: none; box-shadow: none;
+  -webkit-tap-highlight-color: transparent;
 }
 .settings-item:hover { background: var(--bg-hover); }
+.settings-item:focus,
+.settings-item:focus-visible,
+.settings-item:active {
+  outline: none;
+  box-shadow: none;
+  background: var(--bg-hover);
+}
 .settings-toggle-item { cursor: default; justify-content: space-between; }
 .settings-toggle-item:hover { background: var(--bg-input); }
+.settings-toggle-item:focus,
+.settings-toggle-item:focus-visible,
+.settings-toggle-item:active {
+  background: var(--bg-input);
+}
 .settings-hint { font-size: 12px; color: var(--text-secondary); padding: 0 16px 12px; }
 .settings-hint.is-success { color: var(--success); }
 .settings-hint.is-error { color: var(--danger); }
@@ -1510,6 +1666,13 @@ html[data-modal-animation="none"] .modal {
   background: var(--bg-hover);
   transform: translateY(-1px);
 }
+.animation-style-card:focus,
+.animation-style-card:focus-visible,
+.animation-style-card:active {
+  outline: none;
+  box-shadow: none;
+  background: var(--bg-hover);
+}
 .animation-style-card.active {
   border-color: var(--accent-border-strong);
   background: var(--accent-soft-bg);
@@ -1538,7 +1701,8 @@ html[data-modal-animation="none"] .modal {
 .forward-chat-item:focus,
 .forward-chat-item:focus-visible {
   outline: none;
-  box-shadow: inset 0 0 0 1px var(--accent-border-strong);
+  box-shadow: none;
+  background: var(--bg-hover);
 }
 .forward-chat-item.is-current {
   box-shadow: inset 0 0 0 1px var(--accent-border-strong);
@@ -2047,11 +2211,20 @@ html[data-modal-animation="none"] .modal {
 .chat-preferences-status.is-error { color: var(--danger); }
 
 /* Toggle switch */
-.toggle-switch { position: relative; width: 42px; height: 24px; flex-shrink: 0; }
-.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-switch {
+  position: relative; width: 42px; height: 24px; flex-shrink: 0;
+  outline: none; -webkit-tap-highlight-color: transparent;
+}
+.toggle-switch input {
+  opacity: 0; width: 0; height: 0;
+  outline: none; box-shadow: none;
+  -webkit-tap-highlight-color: transparent;
+}
 .toggle-slider {
   position: absolute; inset: 0; background: #3a4a5c; border-radius: 24px;
   cursor: pointer; transition: .2s;
+  outline: none; box-shadow: none;
+  -webkit-tap-highlight-color: transparent;
 }
 .toggle-slider::before {
   content: ''; position: absolute; width: 18px; height: 18px;
@@ -2059,6 +2232,17 @@ html[data-modal-animation="none"] .modal {
 }
 .toggle-switch input:checked + .toggle-slider { background: var(--accent); }
 .toggle-switch input:checked + .toggle-slider::before { transform: translateX(18px); }
+.toggle-switch input:focus,
+.toggle-switch input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+.toggle-switch:focus-within .toggle-slider {
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.12);
+}
+.toggle-switch:active .toggle-slider {
+  filter: brightness(1.04);
+}
 
 .cp-error { color: var(--danger); font-size: 13px; margin-top: 8px; min-height: 18px; }
 .cp-success { color: var(--success); font-size: 13px; margin-top: 4px; min-height: 18px; }
