@@ -1366,6 +1366,51 @@ a:hover { text-decoration: underline; }
   background: rgba(255,255,255,.1);
 }
 .iv-close:hover { background: rgba(255,255,255,.2); }
+.iv-loading {
+  position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%);
+  z-index: 202; color: #fff; font-size: 13px; letter-spacing: .01em;
+  background: rgba(0,0,0,.58); border: 1px solid rgba(255,255,255,.12);
+  border-radius: 999px; padding: 8px 13px; opacity: 0; pointer-events: none;
+  display: flex; align-items: center; gap: 8px;
+  transition: opacity .18s ease;
+}
+.image-viewer.iv-is-loading .iv-loading { opacity: .9; }
+.iv-loading-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: #fff;
+  box-shadow: 0 0 0 0 rgba(255,255,255,.45);
+  animation: iv-loading-pulse 1s ease-in-out infinite;
+}
+.iv-edge-hint {
+  position: absolute; top: 50%; left: 50%; z-index: 202;
+  max-width: min(280px, calc(100vw - 36px)); padding: 9px 14px;
+  border-radius: 999px; background: rgba(0,0,0,.62);
+  border: 1px solid rgba(255,255,255,.12); color: #fff;
+  font-size: 13px; line-height: 1.3; text-align: center;
+  opacity: 0; pointer-events: none;
+  transform: translate3d(-50%, -50%, 0) scale(.96);
+  transition: opacity .18s ease, transform .18s ease;
+}
+.iv-edge-hint.visible { opacity: .94; transform: translate3d(-50%, -50%, 0) scale(1); }
+.iv-edge-hint.before {
+  left: 24px; right: auto;
+  transform: translate3d(-8px, -50%, 0) scale(.96);
+}
+.iv-edge-hint.before.visible { transform: translate3d(0, -50%, 0) scale(1); }
+.iv-edge-hint.after {
+  left: auto; right: 24px;
+  transform: translate3d(8px, -50%, 0) scale(.96);
+}
+.iv-edge-hint.after.visible { transform: translate3d(0, -50%, 0) scale(1); }
+.iv-edge-hint.error {
+  top: auto; bottom: 70px; left: 50%; right: auto;
+  background: rgba(132,34,34,.78);
+  transform: translate3d(-50%, 8px, 0) scale(.96);
+}
+.iv-edge-hint.error.visible { transform: translate3d(-50%, 0, 0) scale(1); }
+@keyframes iv-loading-pulse {
+  0%, 100% { transform: scale(.84); opacity: .65; box-shadow: 0 0 0 0 rgba(255,255,255,.36); }
+  50% { transform: scale(1); opacity: 1; box-shadow: 0 0 0 6px rgba(255,255,255,0); }
+}
 #ivStrip {
   position: absolute; top: 0; left: 0; width: 100%; height: 100%;
   display: flex; align-items: center;

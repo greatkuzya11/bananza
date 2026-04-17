@@ -1,9 +1,10 @@
 // User-scoped IndexedDB message cache and safe image asset cache helpers.
 (function () {
   const DB_NAME = 'bananza-cache-v2';
-  const DB_VERSION = 3;
+  const DB_VERSION = 4;
   const STORE_MESSAGES = 'messages';
   const STORE_PAGES = 'message_pages';
+  const STORE_MEDIA_PAGES = 'media_pages';
   const STORE_OUTBOX = 'outbox';
   const INDEX_USER_CHAT_ID = 'by_user_chat_id';
   const INDEX_OUTBOX_USER_CHAT_CREATED = 'by_user_chat_created';
@@ -43,6 +44,9 @@
         }
         if (!nextDb.objectStoreNames.contains(STORE_PAGES)) {
           nextDb.createObjectStore(STORE_PAGES, { keyPath: ['userId', 'chatId', 'direction', 'cursor'] });
+        }
+        if (!nextDb.objectStoreNames.contains(STORE_MEDIA_PAGES)) {
+          nextDb.createObjectStore(STORE_MEDIA_PAGES, { keyPath: ['userId', 'chatId', 'direction', 'cursor'] });
         }
         if (!nextDb.objectStoreNames.contains(STORE_OUTBOX)) {
           const outbox = nextDb.createObjectStore(STORE_OUTBOX, { keyPath: ['userId', 'chatId', 'clientId'] });
@@ -315,6 +319,67 @@
     }
   }
 
+  async function writeMediaPage(chatId, { direction = 'after', cursor = 0, media = [], hasMoreBefore = null, hasMoreAfter = null, limit = DEFAULT_MESSAGE_LIMIT } = {}) {
+    const cid = normalizeId(chatId);
+    const pageCursor = normalizePageCursor(cursor);
+    const pageDirection = normalizePageDirection(direction);
+    if (!Array.isArray(media) || !cid || !pageCursor || !currentUserId) return false;
+    const rows = media
+      .map((msg) => normalizeMessage(cid, msg))
+      .filter((msg) => msg && (msg.file_type === 'image' || msg.file_type === 'video'))
+      .sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+    const wroteMessages = rows.length ? await writeWindow(cid, rows, { limit }) : true;
+    const wrotePage = await withObjectStore(STORE_MEDIA_PAGES, 'readwrite', (store) => {
+      store.put({
+        userId: currentUserId,
+        chatId: cid,
+        direction: pageDirection,
+        cursor: pageCursor,
+        messageIds: rows.map((msg) => normalizeId(msg.id)).filter(Boolean),
+        media: rows,
+        hasMoreBefore: typeof hasMoreBefore === 'boolean' ? hasMoreBefore : null,
+        hasMoreAfter: typeof hasMoreAfter === 'boolean' ? hasMoreAfter : null,
+        savedAt: Date.now(),
+      });
+      return true;
+    });
+    return !!(wroteMessages && wrotePage);
+  }
+
+  async function readMediaPage(chatId, direction = 'after', cursor = 0) {
+    const cid = normalizeId(chatId);
+    const pageCursor = normalizePageCursor(cursor);
+    const pageDirection = normalizePageDirection(direction);
+    if (!currentUserId || !cid || !pageCursor) return null;
+    const database = await openDB().catch(() => null);
+    if (!database) return null;
+    try {
+      const page = await new Promise((resolve) => {
+        const tx = database.transaction(STORE_MEDIA_PAGES, 'readonly');
+        const req = tx.objectStore(STORE_MEDIA_PAGES).get([currentUserId, cid, pageDirection, pageCursor]);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      });
+      if (!page) return null;
+      let media = Array.isArray(page.media) ? page.media : [];
+      if (!media.length && Array.isArray(page.messageIds) && page.messageIds.length) {
+        media = await readMessagesByIds(cid, page.messageIds);
+      }
+      media = media
+        .filter((msg) => msg && (msg.file_type === 'image' || msg.file_type === 'video'))
+        .sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+      return {
+        media,
+        complete: true,
+        hasMoreBefore: typeof page.hasMoreBefore === 'boolean' ? page.hasMoreBefore : null,
+        hasMoreAfter: typeof page.hasMoreAfter === 'boolean' ? page.hasMoreAfter : null,
+        savedAt: page.savedAt || 0,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   async function upsertMessage(msg) {
     const cid = normalizeId(msg?.chat_id || msg?.chatId);
     if (!cid || !currentUserId) return false;
@@ -438,7 +503,18 @@
       };
       return true;
     });
-    return !!(clearMessages || clearOutbox || clearPages);
+    const clearMediaPages = await withObjectStore(STORE_MEDIA_PAGES, 'readwrite', (store) => {
+      const range = IDBKeyRange.bound([uid, 0, '', 0], [uid, Number.MAX_SAFE_INTEGER, '\uffff', Number.MAX_SAFE_INTEGER]);
+      const req = store.openCursor(range);
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (!cursor) return;
+        store.delete(cursor.primaryKey);
+        cursor.continue();
+      };
+      return true;
+    });
+    return !!(clearMessages || clearOutbox || clearPages || clearMediaPages);
   }
 
   function isCacheableAsset(url) {
@@ -591,6 +667,8 @@
     writeWindow,
     writePage,
     readPage,
+    writeMediaPage,
+    readMediaPage,
     upsertMessage,
     deleteMessage,
     upsertOutboxItem,

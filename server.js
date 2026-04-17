@@ -688,6 +688,52 @@ app.post('/api/chats/:chatId/members', auth, (req, res) => {
 // MESSAGE ROUTES
 // ═══════════════════════════════════════════════════════════════════════════
 
+app.get('/api/chats/:chatId/media', auth, (req, res) => {
+  const chatId = +req.params.chatId;
+  const before = req.query.before ? +req.query.before : null;
+  const after = req.query.after ? +req.query.after : null;
+  const rawLimit = Number(req.query.limit || 3);
+  const limit = Math.min(Math.max(Number.isFinite(rawLimit) ? Math.floor(rawLimit) : 3, 1), 20);
+
+  if (!chatId) return res.status(400).json({ error: 'Invalid chat' });
+  if (before && after) return res.status(400).json({ error: 'Use either before or after' });
+  if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
+    return res.status(403).json({ error: 'Not a member' });
+
+  const mediaWhere = `
+    FROM messages m
+    JOIN files f ON f.id=m.file_id
+    WHERE m.chat_id=? AND m.is_deleted=0 AND f.type IN ('image','video')
+  `;
+  let rows;
+  if (after) {
+    rows = db.prepare(`SELECT m.id ${mediaWhere} AND m.id>? ORDER BY m.id ASC LIMIT ?`)
+      .all(chatId, after, limit);
+  } else {
+    rows = before
+      ? db.prepare(`SELECT m.id ${mediaWhere} AND m.id<? ORDER BY m.id DESC LIMIT ?`).all(chatId, before, limit)
+      : db.prepare(`SELECT m.id ${mediaWhere} ORDER BY m.id DESC LIMIT ?`).all(chatId, limit);
+    rows = rows.reverse();
+  }
+
+  const media = rows
+    .map(row => hydrateMessageById(row.id))
+    .filter(row => row && (row.file_type === 'image' || row.file_type === 'video'));
+  const firstId = media.reduce((min, msg) => {
+    const id = Number(msg.id) || 0;
+    return id > 0 ? Math.min(min, id) : min;
+  }, Number.MAX_SAFE_INTEGER);
+  const lastId = media.reduce((max, msg) => Math.max(max, Number(msg.id) || 0), 0);
+  const hasMoreBefore = firstId !== Number.MAX_SAFE_INTEGER
+    ? !!db.prepare(`SELECT 1 ${mediaWhere} AND m.id<? LIMIT 1`).get(chatId, firstId)
+    : false;
+  const hasMoreAfter = lastId
+    ? !!db.prepare(`SELECT 1 ${mediaWhere} AND m.id>? LIMIT 1`).get(chatId, lastId)
+    : false;
+
+  res.json({ media, has_more_before: hasMoreBefore, has_more_after: hasMoreAfter });
+});
+
 app.get('/api/chats/:chatId/messages', auth, (req, res) => {
   const chatId = +req.params.chatId;
   const before = req.query.before ? +req.query.before : null;
