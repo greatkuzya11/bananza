@@ -15,7 +15,9 @@
       <div class="sidebar-header">
         <button id="menuBtn" class="icon-btn" title="Menu">☰</button>
         <h2>🍌 BananZa</h2>
-        <button id="refreshChatsBtn" class="icon-btn mobile-only" title="Refresh chats">↻</button>
+        <button id="refreshChatsBtn" class="icon-btn mobile-only" title="Refresh chats" type="button">
+          <span class="refresh-chats-icon" aria-hidden="true">↻</span>
+        </button>
         <button id="newChatBtn" class="icon-btn" title="New chat">✎</button>
       </div>
       <div class="sidebar-search">
@@ -23,6 +25,7 @@
         <button id="chatSearchClear" class="search-clear hidden" title="Clear">✕</button>
       </div>
       <div id="chatList" class="chat-list"></div>
+      <div id="chatListStatus" class="chat-list-status hidden" aria-live="polite"></div>
       <div class="sidebar-footer">
         <div id="currentUserInfo" class="current-user"></div>
         <div id="weatherWidget" class="weather-widget hidden" role="status" aria-live="polite" title="Weather"></div>

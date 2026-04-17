@@ -64,6 +64,9 @@
     10: 0.5,
   });
   const MODAL_TRANSITION_BUFFER_MS = 80;
+  const CHAT_LIST_CACHE_VERSION = 1;
+  const CHAT_LIST_CACHE_SYNC_DEBOUNCE_MS = 250;
+  const CHAT_LIST_REQUEST_TIMEOUT_MS = 9000;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STATE
@@ -71,6 +74,10 @@
   let currentUser = null;
   let token = null;
   let chats = [];
+  let chatListLoadedOnce = false;
+  let chatListRequestSeq = 0;
+  let chatListAbortController = null;
+  let chatListCacheSyncTimer = null;
   let currentChatId = null;
   let ws = null;
   let wsRetry = 1000;
@@ -182,6 +189,7 @@
 
   const sidebar = $('#sidebar');
   const chatList = $('#chatList');
+  const chatListStatus = $('#chatListStatus');
   const chatSearch = $('#chatSearch');
   const chatArea = $('#chatArea');
   const emptyState = $('#emptyState');
@@ -724,7 +732,9 @@
   }
 
   function initials(name) {
-    return name.split(' ').map(w => w[0]).join('').toUpperCase().substring(0, 2) || '?';
+    const text = String(name || '').trim();
+    if (!text) return '?';
+    return text.split(/\s+/).map(w => w[0]).join('').toUpperCase().substring(0, 2) || '?';
   }
 
   function avatarHtml(name, color, avatarUrl, size) {
@@ -743,6 +753,91 @@
   function persistCurrentUser() {
     if (!currentUser) return;
     localStorage.setItem('user', JSON.stringify(currentUser));
+  }
+
+  function chatListCacheKey() {
+    const userId = Number(currentUser?.id || 0);
+    return userId > 0 ? `bananza:chat-list:${userId}` : '';
+  }
+
+  function normalizeCachedChats(rawChats) {
+    return (Array.isArray(rawChats) ? rawChats : [])
+      .filter((chat) => Number(chat?.id || 0) > 0)
+      .map((chat) => ({
+        ...chat,
+        private_user: chat?.private_user ? { ...chat.private_user } : null,
+      }));
+  }
+
+  function readChatListCache() {
+    const key = chatListCacheKey();
+    if (!key) return [];
+    try {
+      const raw = JSON.parse(localStorage.getItem(key) || 'null');
+      if (Array.isArray(raw)) return normalizeCachedChats(raw);
+      if (!raw || Number(raw.version) !== CHAT_LIST_CACHE_VERSION) return [];
+      return normalizeCachedChats(raw.chats);
+    } catch {
+      return [];
+    }
+  }
+
+  function collectChatAvatarUrls(sourceChats = chats) {
+    const urls = new Set();
+    for (const chat of Array.isArray(sourceChats) ? sourceChats : []) {
+      const chatAvatar = String(chat?.avatar_url || '').trim();
+      const privateAvatar = String(chat?.private_user?.avatar_url || '').trim();
+      if (chatAvatar) urls.add(chatAvatar);
+      if (privateAvatar) urls.add(privateAvatar);
+    }
+    return Array.from(urls);
+  }
+
+  function warmChatListAvatarAssets(sourceChats = chats) {
+    const avatarUrls = collectChatAvatarUrls(sourceChats).slice(0, 32);
+    if (!avatarUrls.length || !window.cacheAssets) return;
+    window.cacheAssets(avatarUrls).catch(() => {});
+  }
+
+  function persistChatListCache() {
+    const key = chatListCacheKey();
+    if (!key) return;
+    try {
+      localStorage.setItem(key, JSON.stringify({
+        version: CHAT_LIST_CACHE_VERSION,
+        savedAt: Date.now(),
+        chats: normalizeCachedChats(chats),
+      }));
+    } catch (e) {}
+    warmChatListAvatarAssets();
+  }
+
+  function scheduleChatListCacheSync() {
+    clearTimeout(chatListCacheSyncTimer);
+    chatListCacheSyncTimer = setTimeout(() => {
+      chatListCacheSyncTimer = null;
+      persistChatListCache();
+    }, CHAT_LIST_CACHE_SYNC_DEBOUNCE_MS);
+  }
+
+  function setChatListStatus(message = '', type = '') {
+    if (!chatListStatus) return;
+    chatListStatus.textContent = message;
+    chatListStatus.classList.toggle('hidden', !message);
+    chatListStatus.classList.toggle('is-loading', type === 'loading');
+    chatListStatus.classList.toggle('is-info', type === 'info');
+    chatListStatus.classList.toggle('is-error', type === 'error');
+  }
+
+  function hydrateChatListCache() {
+    const cachedChats = readChatListCache();
+    if (!cachedChats.length) return false;
+    chats = cachedChats;
+    chatListLoadedOnce = true;
+    renderChatList(chatSearch?.value || '');
+    setChatListStatus('Showing saved chats while refreshing...', 'info');
+    warmChatListAvatarAssets(cachedChats);
+    return true;
   }
 
   function setAvatarElementVisual(el, { name = '', color = '#65aadd', avatarUrl = '', fallbackText = '' } = {}) {
@@ -2984,6 +3079,8 @@
   }
 
   function logout() {
+    clearTimeout(chatListCacheSyncTimer);
+    if (chatListAbortController) chatListAbortController.abort();
     try { if (window.clearAssetCache) window.clearAssetCache().catch(()=>{}); } catch (e) {}
     try { if (window.messageCache && window.messageCache.clearUserCache) window.messageCache.clearUserCache().catch(()=>{}); } catch (e) {}
     localStorage.removeItem('token');
@@ -3240,15 +3337,58 @@
   // ═══════════════════════════════════════════════════════════════════════════
   // CHAT LIST
   // ═══════════════════════════════════════════════════════════════════════════
-  async function loadChats() {
+  async function loadChats({ silent = false } = {}) {
+    const requestId = ++chatListRequestSeq;
+    if (chatListAbortController) chatListAbortController.abort();
+    const controller = new AbortController();
+    chatListAbortController = controller;
+    const timeoutId = setTimeout(() => {
+      try { controller.abort(); } catch (e) {}
+    }, CHAT_LIST_REQUEST_TIMEOUT_MS);
+    if (!silent) {
+      const hasSidebarContent = chats.length > 0 || chatList.childElementCount > 0;
+      if (!chatListLoadedOnce && !hasSidebarContent) setChatListStatus('Loading chats...', 'loading');
+      else setChatListStatus('Refreshing chats...', 'loading');
+    }
     try {
-      chats = await api('/api/chats');
-      renderChatList();
-    } catch {}
+      const nextChats = await api('/api/chats', { signal: controller.signal });
+      if (requestId !== chatListRequestSeq) return chats;
+      chats = Array.isArray(nextChats) ? nextChats : [];
+      chatListLoadedOnce = true;
+      renderChatList(chatSearch.value);
+      setChatListStatus('', '');
+      return chats;
+    } catch (e) {
+      if (requestId !== chatListRequestSeq) return chats;
+      const isAbort = e?.name === 'AbortError';
+      if (chats.length > 0) {
+        setChatListStatus(
+          isAbort
+            ? 'Chat refresh took too long. Showing saved chats.'
+            : 'Could not refresh chats. Showing saved chats.',
+          'info'
+        );
+      } else {
+        setChatListStatus(
+          isAbort
+            ? 'Chat list took too long to load. Tap refresh to try again.'
+            : 'Could not load chats. Tap refresh to try again.',
+          'error'
+        );
+      }
+      console.warn('Failed to load chats', e);
+      return chats;
+    } finally {
+      clearTimeout(timeoutId);
+      if (chatListAbortController === controller) chatListAbortController = null;
+    }
   }
 
   async function loadAllUsers() {
-    try { allUsers = await api('/api/users'); } catch {}
+    try {
+      allUsers = await api('/api/users');
+      if (chatSearch.value) renderChatList(chatSearch.value);
+    } catch {}
   }
 
   function renderChatList(filter = '') {
@@ -3335,6 +3475,7 @@
         chatList.appendChild(el);
       }
     }
+    scheduleChatListCacheSync();
   }
 
   function updateChatListLastMessage(msg) {
@@ -7332,6 +7473,7 @@
     // New chat
     $('#newChatBtn').addEventListener('click', openNewChatModal);
     $('#refreshChatsBtn')?.addEventListener('click', async () => {
+      animateChatHeaderActionButton('#refreshChatsBtn');
       await loadChats();
       if (currentChatId) updateChatStatus();
     });
@@ -7679,6 +7821,7 @@
   // ═══════════════════════════════════════════════════════════════════════════
   async function init() {
     if (!checkAuth()) return;
+    hydrateChatListCache();
 
     // Mobile keyboard resize fix
     if (window.visualViewport && window.innerWidth <= 768) {
@@ -7729,8 +7872,8 @@
     setupProfileEvents();
     initEmojiPicker();
     connectWS();
-    await loadAllUsers();
     await loadChats();
+    loadAllUsers().catch(() => {});
 
     // Optional startup behavior: push deep-link, restore the last opened chat, or stay on the chat list.
     const startupChatId = Number(new URLSearchParams(location.search).get('chatId'));
