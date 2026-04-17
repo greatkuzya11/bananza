@@ -1425,8 +1425,24 @@ a:hover { text-decoration: underline; }
 
 /* ── Typing indicator ────────────────────────────────────────────────────── */
 .typing-bar {
-  padding: 4px 16px; font-size: 13px; color: var(--accent);
-  background: var(--bg-app-gradient);
+  position: absolute;
+  left: 16px;
+  right: 72px;
+  bottom: calc(100% + 4px);
+  z-index: 6;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  color: var(--accent);
+  background: transparent;
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: -1px -1px 0 rgba(0,0,0,0.95), 1px -1px 0 rgba(0,0,0,0.95),
+               -1px 1px 0 rgba(0,0,0,0.95), 1px 1px 0 rgba(0,0,0,0.95),
+               0 4px 12px rgba(0,0,0,0.9);
 }
 
 /* ── Input area ──────────────────────────────────────────────────────────── */

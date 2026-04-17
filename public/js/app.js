@@ -6852,7 +6852,7 @@
     typingBar.classList.remove('hidden');
     typingBar.textContent = names.length === 1
       ? `${names[0]} печатает...`
-      : `${names.slice(0, 2).join(', ')} печатают...`;
+      : `${names.join(', ')} печатают..`;
   }
 
   function showTyping(username) {
