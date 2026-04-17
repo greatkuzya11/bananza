@@ -227,6 +227,7 @@
   const imageViewer = $('#imageViewer');
   const ivStrip = $('#ivStrip');
   const reactionPicker = $('#reactionPicker');
+  const reactionEmojiPopover = $('#reactionEmojiPopover');
   const messageContextMenu = $('#messageContextMenu');
   const replyBar = $('#replyBar');
   const replyBarName = $('#replyBarName');
@@ -2223,7 +2224,12 @@
     messagesEl.querySelectorAll(`.msg-group-avatar[data-user-id="${Number(bot.user_id)}"]`).forEach((avatarEl) => {
       avatarEl.title = bot.name || avatarEl.title || '';
       avatarEl.dataset.displayName = bot.name || avatarEl.dataset.displayName || '';
-      avatarEl.innerHTML = avatarHtml(bot.name || 'AI', bot.avatar_color || '#65aadd', bot.avatar_url, 32);
+      if (bot.mention) avatarEl.dataset.mentionToken = bot.mention;
+      setAvatarElementVisual(avatarEl, {
+        name: bot.name || 'AI',
+        color: bot.avatar_color || '#65aadd',
+        avatarUrl: bot.avatar_url || '',
+      });
     });
   }
 
@@ -4831,7 +4837,21 @@
     const name = isOwn ? currentUser.display_name : msg.display_name;
     const isAiBot = !isOwn && (Number(msg.is_ai_bot) !== 0 || Number(msg.ai_bot_id) > 0 || Number(msg.ai_generated) > 0);
     const mentionToken = isAiBot ? (msg.ai_bot_mention || msg.username) : (isOwn ? currentUser.username : msg.username);
-    group.innerHTML = `<div class="msg-group-avatar" role="button" tabindex="0" title="${esc(name)}" data-user-id="${Number(msg.user_id) || 0}" data-display-name="${esc(name)}" data-mention-token="${esc(mentionToken || '')}" data-is-ai-bot="${isAiBot ? '1' : '0'}">${avatarHtml(name, avatarColor, avatarUrl, 32)}</div>`;
+    const avatar = document.createElement('div');
+    avatar.className = 'msg-group-avatar';
+    avatar.setAttribute('role', 'button');
+    avatar.tabIndex = 0;
+    avatar.title = name || '';
+    avatar.dataset.userId = String(Number(msg.user_id) || 0);
+    avatar.dataset.displayName = name || '';
+    avatar.dataset.mentionToken = mentionToken || '';
+    avatar.dataset.isAiBot = isAiBot ? '1' : '0';
+    setAvatarElementVisual(avatar, {
+      name: name || '',
+      color: avatarColor,
+      avatarUrl: avatarUrl || '',
+    });
+    group.appendChild(avatar);
     const body = document.createElement('div');
     body.className = 'msg-group-body';
     group.appendChild(body);
@@ -6883,9 +6903,16 @@
   // ═══════════════════════════════════════════════════════════════════════════
   // REACTIONS
   // ═══════════════════════════════════════════════════════════════════════════
+  const QUICK_REACTIONS = Object.freeze(['👍', '👎', '❤️', '🔥', '😂', '😮', '😢', '💩', '🎉', '🤡']);
+  const FLOATING_ACTION_MARGIN = 8;
+  const FLOATING_ACTION_GAP = 8;
+  const REACTION_PICKER_IDLE_MS = 5000;
   let reactionPickerMsgId = null;
   let reactionPickerKeepKeyboard = false;
   let messageContextMenuMsgId = null;
+  let floatingMessageActionsState = null;
+  let reactionPickerIdleTimer = null;
+  let reactionEmojiPopoverCategory = Object.keys(EMOJIS)[0] || '';
 
   function renderReactions(reactions) {
     if (!reactions || reactions.length === 0) return '';
@@ -6918,38 +6945,202 @@
     }
   }
 
-  function showReactionPicker(row, trigger, options = {}) {
-    hideMessageContextMenu();
-    reactionPickerKeepKeyboard = Boolean(options.keepComposerFocus);
-    reactionPickerMsgId = +row.dataset.msgId;
-    reactionPicker.classList.remove('hidden');
-    // Position near the trigger
-    const triggerEl = (trigger instanceof Element ? trigger : row);
-    const rect = triggerEl.getBoundingClientRect();
-    const pw = reactionPicker.offsetWidth || 370;
-    const ph = reactionPicker.offsetHeight || 52;
-    let left = rect.left;
-    let top = rect.top - ph - 8;
-    if (top < 8) top = rect.bottom + 8;
-    left = Math.max(8, Math.min(left, window.innerWidth - pw - 8));
-    reactionPicker.style.left = left + 'px';
-    reactionPicker.style.top = top + 'px';
-    if (reactionPickerKeepKeyboard) focusComposerKeepKeyboard(true);
+  function isFloatingSurfaceVisible(el) {
+    return Boolean(el && !el.classList.contains('hidden'));
   }
 
-  function hideReactionPicker(options = {}) {
-    reactionPicker.classList.add('hidden');
-    reactionPickerMsgId = null;
-    if (!options.keepComposerState) reactionPickerKeepKeyboard = false;
+  function getFloatingViewportRect() {
+    const vv = window.visualViewport;
+    const left = vv ? vv.offsetLeft : 0;
+    const top = vv ? vv.offsetTop : 0;
+    const width = vv ? vv.width : window.innerWidth;
+    const height = vv ? vv.height : window.innerHeight;
+    return {
+      left,
+      top,
+      width,
+      height,
+      right: left + width,
+      bottom: top + height,
+    };
   }
 
-  function getReactionEmojiButtonsHtml() {
-    return Array.from(reactionPicker?.querySelectorAll('button[data-emoji]') || [])
-      .map((btn) => {
-        const emoji = btn.dataset.emoji || '';
-        return `<button type="button" class="message-context-reaction" data-emoji="${esc(emoji)}">${esc(emoji)}</button>`;
-      })
-      .join('');
+  function clamp(value, min, max) {
+    if (!Number.isFinite(value)) return min;
+    if (max < min) return min;
+    return Math.max(min, Math.min(value, max));
+  }
+
+  function findMessageRowById(msgId) {
+    const key = String(msgId || '');
+    if (!key) return null;
+    return Array.from(messagesEl.querySelectorAll('.msg-row[data-msg-id]'))
+      .find((row) => String(row.dataset.msgId || '') === key) || null;
+  }
+
+  function getFloatingMessageActionRow() {
+    const key = reactionPickerMsgId || messageContextMenuMsgId || floatingMessageActionsState?.msgId || '';
+    if (!key) return null;
+    const row = findMessageRowById(key);
+    if (row && floatingMessageActionsState) floatingMessageActionsState.row = row;
+    return row;
+  }
+
+  function updateFloatingMessageActionsState(row, options = {}) {
+    const msgId = Number(row?.dataset.msgId || 0);
+    if (!msgId || !row) return null;
+    const next = floatingMessageActionsState?.msgId === msgId
+      ? { ...floatingMessageActionsState }
+      : { msgId, row, pointerX: null, pointerY: null, placement: 'above' };
+    next.msgId = msgId;
+    next.row = row;
+    if (Number.isFinite(options.x)) next.pointerX = Number(options.x);
+    if (Number.isFinite(options.y)) next.pointerY = Number(options.y);
+    floatingMessageActionsState = next;
+    return next;
+  }
+
+  function clearFloatingMessageActionsStateIfClosed() {
+    if (isFloatingSurfaceVisible(messageContextMenu) || isFloatingSurfaceVisible(reactionPicker) || isFloatingSurfaceVisible(reactionEmojiPopover)) return;
+    floatingMessageActionsState = null;
+  }
+
+  function measureFloatingSurface(el, fallbackWidth, fallbackHeight) {
+    if (!(el instanceof HTMLElement)) return { width: fallbackWidth, height: fallbackHeight };
+    const wasHidden = el.classList.contains('hidden');
+    const wasOpen = el.classList.contains('is-open');
+    const wasClosing = el.classList.contains('is-closing');
+    const prevVisibility = el.style.visibility;
+    const prevPointerEvents = el.style.pointerEvents;
+    const prevLeft = el.style.left;
+    const prevTop = el.style.top;
+
+    if (wasHidden) el.classList.remove('hidden');
+    el.classList.remove('is-open', 'is-closing');
+    el.style.visibility = 'hidden';
+    el.style.pointerEvents = 'none';
+    el.style.left = '-9999px';
+    el.style.top = '-9999px';
+
+    const width = el.offsetWidth || fallbackWidth;
+    const height = el.offsetHeight || fallbackHeight;
+
+    el.style.visibility = prevVisibility;
+    el.style.pointerEvents = prevPointerEvents;
+    el.style.left = prevLeft;
+    el.style.top = prevTop;
+    if (wasHidden) el.classList.add('hidden');
+    if (wasOpen) el.classList.add('is-open');
+    if (wasClosing) el.classList.add('is-closing');
+
+    return { width, height };
+  }
+
+  function openFloatingSurface(el) {
+    if (!(el instanceof HTMLElement)) return;
+    clearTimeout(el.__closeTimer);
+    el.__closeTimer = null;
+    if (el.__openFrame) cancelAnimationFrame(el.__openFrame);
+    el.classList.remove('hidden', 'is-closing');
+    if (prefersReducedMotion() || currentModalAnimation === 'none') {
+      el.classList.add('is-open');
+      return;
+    }
+    if (el.classList.contains('is-open')) return;
+    el.__openFrame = requestAnimationFrame(() => {
+      el.__openFrame = requestAnimationFrame(() => {
+        el.classList.add('is-open');
+        el.__openFrame = null;
+      });
+    });
+  }
+
+  function closeFloatingSurface(el, { immediate = false, onAfterClose = null } = {}) {
+    if (!(el instanceof HTMLElement)) {
+      onAfterClose?.();
+      return false;
+    }
+    clearTimeout(el.__closeTimer);
+    el.__closeTimer = null;
+    if (el.__openFrame) {
+      cancelAnimationFrame(el.__openFrame);
+      el.__openFrame = null;
+    }
+
+    const finalize = () => {
+      clearTimeout(el.__closeTimer);
+      el.__closeTimer = null;
+      el.classList.add('hidden');
+      el.classList.remove('is-open', 'is-closing');
+      onAfterClose?.();
+    };
+
+    if (el.classList.contains('hidden')) {
+      finalize();
+      return false;
+    }
+
+    if (immediate || prefersReducedMotion() || currentModalAnimation === 'none') {
+      finalize();
+      return true;
+    }
+
+    el.classList.remove('is-open');
+    el.classList.add('is-closing');
+    const onTransitionEnd = (event) => {
+      if (event.target !== el || event.propertyName !== 'opacity') return;
+      el.removeEventListener('transitionend', onTransitionEnd);
+      finalize();
+    };
+    el.addEventListener('transitionend', onTransitionEnd);
+    const closeFallbackMs = Math.max(MODAL_TRANSITION_BUFFER_MS, Math.ceil(getElementTransitionTotalMs(el) + MODAL_TRANSITION_BUFFER_MS));
+    el.__closeTimer = setTimeout(() => {
+      el.removeEventListener('transitionend', onTransitionEnd);
+      finalize();
+    }, closeFallbackMs);
+    return true;
+  }
+
+  function getReactionButtonAnchor(trigger, row) {
+    if (trigger instanceof Element) {
+      const rect = trigger.getBoundingClientRect();
+      return {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      };
+    }
+    const rect = row?.querySelector('.msg-bubble')?.getBoundingClientRect() || row?.getBoundingClientRect();
+    if (!rect) return {};
+    return {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    };
+  }
+
+  function renderQuickReactionButtonsHtml({ buttonClass = '', moreAction = 'open-emoji-popover' } = {}) {
+    const buttons = QUICK_REACTIONS.map((emoji) =>
+      `<button type="button" class="${buttonClass}" data-reaction-action="toggle" data-emoji="${esc(emoji)}" title="${esc(`React ${emoji}`)}">${esc(emoji)}</button>`
+    );
+    buttons.push(
+      `<button type="button" class="${buttonClass} reaction-more-button" data-reaction-action="${esc(moreAction)}" title="More reactions">⋯</button>`
+    );
+    return buttons.join('');
+  }
+
+  function renderReactionPickerContent() {
+    if (!reactionPicker) return;
+    reactionPicker.innerHTML = `
+      <div class="reaction-picker-strip">
+        ${renderQuickReactionButtonsHtml({ buttonClass: 'reaction-picker-button', moreAction: 'open-emoji-popover' })}
+      </div>
+    `;
+    reactionPicker.querySelector('.reaction-picker-strip')?.addEventListener('scroll', () => {
+      bumpReactionPickerIdleTimer();
+    }, { passive: true });
+  }
+
+  function getMessageContextReactionRowHtml() {
+    return renderQuickReactionButtonsHtml({ buttonClass: 'message-context-reaction', moreAction: 'open-picker' });
   }
 
   function contextActionHtml(action, label, { title = '', disabled = false, danger = false } = {}) {
@@ -6960,32 +7151,9 @@
     `;
   }
 
-  function getMessageContextRow() {
-    const key = String(messageContextMenuMsgId || '');
-    if (!key) return null;
-    return Array.from(messagesEl.querySelectorAll('.msg-row[data-msg-id]'))
-      .find(row => String(row.dataset.msgId || '') === key) || null;
-  }
-
-  function positionFloatingMenu(menu, x, y) {
-    if (!menu) return;
-    const margin = 8;
-    const rect = menu.getBoundingClientRect();
-    const width = rect.width || 260;
-    const height = rect.height || 220;
-    const left = Math.max(margin, Math.min(Number(x) || margin, window.innerWidth - width - margin));
-    const top = Math.max(margin, Math.min(Number(y) || margin, window.innerHeight - height - margin));
-    menu.style.left = `${left}px`;
-    menu.style.top = `${top}px`;
-  }
-
-  function showMessageContextMenu(row, anchor = {}) {
-    if (!messageContextMenu || !row || row.dataset.outbox === '1') return;
+  function renderMessageContextMenuContent(row) {
+    if (!messageContextMenu || !row) return;
     const msg = row.__messageData || {};
-    if (!msg.id || msg.is_deleted) return;
-
-    hideReactionPicker();
-    messageContextMenuMsgId = String(row.dataset.msgId || msg.id);
     const pinState = getPinActionState(msg);
     const canDelete = !isClientSideMessage(msg) && (Number(msg.user_id) === Number(currentUser?.id) || currentUser?.is_admin);
     const canCopy = Boolean(getMessageCopyText(row));
@@ -6999,18 +7167,255 @@
     ].filter(Boolean).join('');
 
     messageContextMenu.innerHTML = `
-      <div class="message-context-reactions">${getReactionEmojiButtonsHtml()}</div>
+      <div class="message-context-reactions">${getMessageContextReactionRowHtml()}</div>
       <div class="message-context-actions">${actions}</div>
     `;
-    messageContextMenu.classList.remove('hidden');
-    positionFloatingMenu(messageContextMenu, anchor.x || window.innerWidth / 2, anchor.y || window.innerHeight / 2);
+    messageContextMenu.querySelector('.message-context-reactions')?.addEventListener('scroll', () => {
+      bumpReactionPickerIdleTimer();
+    }, { passive: true });
   }
 
-  function hideMessageContextMenu() {
+  function getReactionEmojiCategoryKey(value) {
+    const categories = Object.keys(EMOJIS);
+    if (!categories.length) return '';
+    return categories.includes(value) ? value : categories[0];
+  }
+
+  function renderReactionEmojiPopoverContent() {
+    if (!reactionEmojiPopover) return;
+    const categoryKey = getReactionEmojiCategoryKey(reactionEmojiPopoverCategory);
+    reactionEmojiPopoverCategory = categoryKey;
+    const categories = Object.keys(EMOJIS);
+    const categoryEmojis = EMOJIS[categoryKey] || [];
+    reactionEmojiPopover.innerHTML = `
+      <div class="reaction-emoji-tabs">
+        ${categories.map((cat) => `
+          <button type="button" class="reaction-emoji-tab${cat === categoryKey ? ' active' : ''}" data-category="${esc(cat)}">${esc(cat)}</button>
+        `).join('')}
+      </div>
+      <div class="reaction-emoji-grid">
+        ${categoryEmojis.map((emoji) => `
+          <button type="button" class="reaction-emoji-item" data-emoji="${esc(emoji)}" title="${esc(`React ${emoji}`)}">${esc(emoji)}</button>
+        `).join('')}
+      </div>
+    `;
+    reactionEmojiPopover.querySelector('.reaction-emoji-tabs')?.addEventListener('scroll', () => {
+      bumpReactionPickerIdleTimer();
+    }, { passive: true });
+    reactionEmojiPopover.querySelector('.reaction-emoji-grid')?.addEventListener('scroll', () => {
+      bumpReactionPickerIdleTimer();
+    }, { passive: true });
+  }
+
+  function resolveMessageActionLayout(row, { includeMenu = false, includePicker = false, reserveMenuForPicker = false } = {}) {
+    const bubbleRect = row?.querySelector('.msg-bubble')?.getBoundingClientRect() || row?.getBoundingClientRect();
+    const viewport = getFloatingViewportRect();
+    const menuSize = (includeMenu || reserveMenuForPicker)
+      ? measureFloatingSurface(messageContextMenu, 320, 220)
+      : { width: 0, height: 0 };
+    const pickerSize = includePicker
+      ? measureFloatingSurface(reactionPicker, 430, 56)
+      : { width: 0, height: 0 };
+    const reservedMenuHeight = (includeMenu || reserveMenuForPicker) ? menuSize.height : 0;
+    const stackHeight = includePicker
+      ? pickerSize.height + (reservedMenuHeight ? FLOATING_ACTION_GAP + reservedMenuHeight : 0)
+      : reservedMenuHeight;
+    const stackWidth = Math.max(includePicker ? pickerSize.width : 0, (includeMenu || reserveMenuForPicker) ? menuSize.width : 0);
+    const topVisible = bubbleRect.top >= viewport.top + FLOATING_ACTION_MARGIN;
+    const bottomVisible = bubbleRect.bottom <= viewport.bottom - FLOATING_ACTION_MARGIN;
+    const spaceAbove = bubbleRect.top - viewport.top - FLOATING_ACTION_MARGIN - FLOATING_ACTION_GAP;
+    const spaceBelow = viewport.bottom - bubbleRect.bottom - FLOATING_ACTION_MARGIN - FLOATING_ACTION_GAP;
+    let placement = 'above';
+    if (!bottomVisible || spaceBelow < stackHeight) placement = 'above';
+    else if (!topVisible || spaceAbove < stackHeight) placement = 'below';
+
+    const pointerX = Number(floatingMessageActionsState?.pointerX);
+    let preferredLeft = row.classList.contains('own') ? bubbleRect.right - stackWidth : bubbleRect.left;
+    if (Number.isFinite(pointerX)) preferredLeft = pointerX - Math.min(stackWidth / 2, 96);
+    const left = clamp(preferredLeft, viewport.left + FLOATING_ACTION_MARGIN, viewport.right - stackWidth - FLOATING_ACTION_MARGIN);
+    let stackTop = placement === 'above'
+      ? bubbleRect.top - FLOATING_ACTION_GAP - stackHeight
+      : bubbleRect.bottom + FLOATING_ACTION_GAP;
+    stackTop = clamp(stackTop, viewport.top + FLOATING_ACTION_MARGIN, viewport.bottom - stackHeight - FLOATING_ACTION_MARGIN);
+
+    return {
+      placement,
+      left,
+      pickerTop: includePicker ? stackTop : null,
+      menuTop: (includeMenu || reserveMenuForPicker)
+        ? stackTop + (includePicker ? pickerSize.height + FLOATING_ACTION_GAP : 0)
+        : null,
+    };
+  }
+
+  function positionFloatingElement(el, left, top) {
+    if (!(el instanceof HTMLElement)) return;
+    el.style.left = `${Math.round(left)}px`;
+    el.style.top = `${Math.round(top)}px`;
+  }
+
+  function positionReactionEmojiPopover() {
+    if (!reactionEmojiPopover || reactionEmojiPopover.classList.contains('hidden')) return;
+    const anchorRect = reactionPicker?.querySelector('[data-reaction-action="open-emoji-popover"]')?.getBoundingClientRect()
+      || reactionPicker?.getBoundingClientRect()
+      || messageContextMenu?.getBoundingClientRect();
+    if (!anchorRect) return;
+    const viewport = getFloatingViewportRect();
+    const size = measureFloatingSurface(reactionEmojiPopover, 340, 260);
+    let left = anchorRect.left + (anchorRect.width - size.width) / 2;
+    left = clamp(left, viewport.left + FLOATING_ACTION_MARGIN, viewport.right - size.width - FLOATING_ACTION_MARGIN);
+    let top = anchorRect.top - size.height - FLOATING_ACTION_GAP;
+    if (top < viewport.top + FLOATING_ACTION_MARGIN) top = anchorRect.bottom + FLOATING_ACTION_GAP;
+    top = clamp(top, viewport.top + FLOATING_ACTION_MARGIN, viewport.bottom - size.height - FLOATING_ACTION_MARGIN);
+    positionFloatingElement(reactionEmojiPopover, left, top);
+  }
+
+  function positionMessageActionSurfaces({ includeMenu = isFloatingSurfaceVisible(messageContextMenu), includePicker = isFloatingSurfaceVisible(reactionPicker), reserveMenuForPicker = includePicker && !includeMenu } = {}) {
+    if (!includeMenu && !includePicker && !isFloatingSurfaceVisible(reactionEmojiPopover)) return null;
+    const row = getFloatingMessageActionRow();
+    if (!row) {
+      hideFloatingMessageActions({ immediate: true });
+      return null;
+    }
+    if (includeMenu || reserveMenuForPicker) renderMessageContextMenuContent(row);
+    if (includePicker) renderReactionPickerContent();
+    const layout = resolveMessageActionLayout(row, { includeMenu, includePicker, reserveMenuForPicker });
+    if (includePicker && Number.isFinite(layout.pickerTop)) positionFloatingElement(reactionPicker, layout.left, layout.pickerTop);
+    if (includeMenu && Number.isFinite(layout.menuTop)) positionFloatingElement(messageContextMenu, layout.left, layout.menuTop);
+    if (floatingMessageActionsState) floatingMessageActionsState.placement = layout.placement;
+    if (!reactionEmojiPopover.classList.contains('hidden')) positionReactionEmojiPopover();
+    return layout;
+  }
+
+  function clearReactionPickerIdleTimer() {
+    clearTimeout(reactionPickerIdleTimer);
+    reactionPickerIdleTimer = null;
+  }
+
+  function bumpReactionPickerIdleTimer() {
+    clearReactionPickerIdleTimer();
+    if (!isFloatingSurfaceVisible(reactionPicker) && !isFloatingSurfaceVisible(reactionEmojiPopover)) return;
+    reactionPickerIdleTimer = setTimeout(() => {
+      hideReactionPicker({ immediate: false, keepComposerState: reactionPickerKeepKeyboard });
+    }, REACTION_PICKER_IDLE_MS);
+  }
+
+  function hideReactionEmojiPopover(options = {}) {
+    if (!reactionEmojiPopover) return;
+    closeFloatingSurface(reactionEmojiPopover, {
+      immediate: Boolean(options.immediate),
+      onAfterClose: () => {
+        clearFloatingMessageActionsStateIfClosed();
+      },
+    });
+  }
+
+  function showReactionEmojiPopover() {
+    if (!reactionPickerMsgId) return;
+    if (isFloatingSurfaceVisible(reactionEmojiPopover)) {
+      hideReactionEmojiPopover();
+      return;
+    }
+    renderReactionEmojiPopoverContent();
+    positionReactionEmojiPopover();
+    openFloatingSurface(reactionEmojiPopover);
+    bumpReactionPickerIdleTimer();
+  }
+
+  function hideReactionPicker(options = {}) {
+    const keepComposerState = Boolean(options.keepComposerState);
+    clearReactionPickerIdleTimer();
+    hideReactionEmojiPopover({ immediate: options.immediate });
+    closeFloatingSurface(reactionPicker, {
+      immediate: Boolean(options.immediate),
+      onAfterClose: () => {
+        reactionPickerMsgId = null;
+        if (!keepComposerState) reactionPickerKeepKeyboard = false;
+        if (keepComposerState) focusComposerKeepKeyboard(true);
+        clearFloatingMessageActionsStateIfClosed();
+      },
+    });
+    if (!isFloatingSurfaceVisible(reactionPicker) && !keepComposerState) reactionPickerKeepKeyboard = false;
+  }
+
+  function hideMessageContextMenu(options = {}) {
     if (!messageContextMenu) return;
-    messageContextMenu.classList.add('hidden');
-    messageContextMenu.innerHTML = '';
-    messageContextMenuMsgId = null;
+    if (!options.preservePicker) hideReactionPicker({ keepComposerState: options.keepComposerState, immediate: options.immediate });
+    else if (!options.keepPopover) hideReactionEmojiPopover({ immediate: options.immediate });
+    closeFloatingSurface(messageContextMenu, {
+      immediate: Boolean(options.immediate),
+      onAfterClose: () => {
+        messageContextMenu.innerHTML = '';
+        messageContextMenuMsgId = null;
+        clearFloatingMessageActionsStateIfClosed();
+      },
+    });
+  }
+
+  function hideFloatingMessageActions(options = {}) {
+    hideReactionPicker({ keepComposerState: options.keepComposerState, immediate: options.immediate });
+    hideMessageContextMenu({ immediate: options.immediate, preservePicker: true });
+  }
+
+  function getMessageContextRow() {
+    return getFloatingMessageActionRow();
+  }
+
+  function showReactionPicker(row, trigger, options = {}) {
+    if (!reactionPicker || !row) return;
+    const msg = row.__messageData || {};
+    const msgId = Number(row.dataset.msgId || msg.id || 0);
+    if (!msgId || msg.is_deleted) return;
+
+    const fromContextMenu = options.source === 'context-menu';
+    const keepComposerFocus = Boolean(options.keepComposerFocus);
+    const sameStandalonePicker = !fromContextMenu
+      && reactionPickerMsgId === msgId
+      && isFloatingSurfaceVisible(reactionPicker)
+      && !isFloatingSurfaceVisible(messageContextMenu);
+    if (sameStandalonePicker) {
+      hideReactionPicker({ keepComposerState: keepComposerFocus });
+      return;
+    }
+
+    if (fromContextMenu && reactionPickerMsgId === msgId && isFloatingSurfaceVisible(reactionPicker)) {
+      hideReactionPicker({ keepComposerState: keepComposerFocus });
+      return;
+    }
+
+    const anchor = getReactionButtonAnchor(trigger, row);
+    reactionPickerKeepKeyboard = keepComposerFocus;
+    if (!fromContextMenu) hideFloatingMessageActions({ keepComposerState: keepComposerFocus, immediate: true });
+    else hideReactionEmojiPopover({ immediate: true });
+
+    reactionPickerMsgId = msgId;
+    updateFloatingMessageActionsState(row, { x: anchor.x, y: anchor.y });
+    renderReactionPickerContent();
+    const includeMenu = fromContextMenu && isFloatingSurfaceVisible(messageContextMenu);
+    positionMessageActionSurfaces({ includeMenu, includePicker: true, reserveMenuForPicker: !includeMenu });
+    openFloatingSurface(reactionPicker);
+    bumpReactionPickerIdleTimer();
+    if (keepComposerFocus) focusComposerKeepKeyboard(true);
+  }
+
+  function showMessageContextMenu(row, anchor = {}) {
+    if (!messageContextMenu || !row || row.dataset.outbox === '1') return;
+    const msg = row.__messageData || {};
+    const msgId = String(row.dataset.msgId || msg.id || '');
+    if (!msgId || msg.is_deleted) return;
+
+    const sameMenu = messageContextMenuMsgId === msgId && isFloatingSurfaceVisible(messageContextMenu);
+    if (sameMenu) {
+      hideFloatingMessageActions({ keepComposerState: reactionPickerKeepKeyboard });
+      return;
+    }
+
+    hideFloatingMessageActions({ keepComposerState: reactionPickerKeepKeyboard, immediate: true });
+    messageContextMenuMsgId = msgId;
+    updateFloatingMessageActionsState(row, { x: anchor.x, y: anchor.y });
+    renderMessageContextMenuContent(row);
+    positionMessageActionSurfaces({ includeMenu: true, includePicker: false });
+    openFloatingSurface(messageContextMenu);
   }
 
   async function handleMessageContextMenuClick(e) {
@@ -7023,9 +7428,16 @@
     const reactionBtn = e.target.closest('.message-context-reaction');
     if (reactionBtn) {
       e.stopPropagation();
+      const action = reactionBtn.dataset.reactionAction || 'toggle';
+      if (action === 'open-picker') {
+        const keepComposerFocus = reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen();
+        showReactionPicker(row, reactionBtn, { source: 'context-menu', keepComposerFocus });
+        return;
+      }
+
       const msgId = Number(row.dataset.msgId || 0);
       const emoji = reactionBtn.dataset.emoji;
-      hideMessageContextMenu();
+      hideMessageContextMenu({ immediate: true });
       if (msgId && emoji) await toggleReaction(msgId, emoji);
       return;
     }
@@ -7048,10 +7460,8 @@
     const keepComposerFocus = Boolean(options.keepComposerFocus);
     hideReactionPicker({ keepComposerState: keepComposerFocus });
     if (keepComposerFocus) focusComposerKeepKeyboard(true);
-    console.log('[reaction] sending', msgId, emoji);
     try {
       const data = await api(`/api/messages/${msgId}/reactions`, { method: 'POST', body: { emoji } });
-      console.log('[reaction] response', data);
       if (data && data.reactions) updateReactionBar(msgId, data.reactions);
     } catch (err) {
       console.warn('[reaction] failed:', err);
@@ -8100,9 +8510,13 @@
     window.visualViewport?.addEventListener('resize', () => {
       positionMentionPicker();
       positionAvatarUserMenu(avatarUserMenuState?.anchor);
+      positionMessageActionSurfaces();
       scheduleRetryLayout();
     });
-    window.addEventListener('resize', scheduleRetryLayout);
+    window.addEventListener('resize', () => {
+      positionMessageActionSurfaces();
+      scheduleRetryLayout();
+    });
     document.addEventListener('pointerdown', (e) => {
       const picker = $('#mentionPicker');
       if (!picker || picker.classList.contains('hidden')) return;
@@ -8327,25 +8741,77 @@
       });
     })();
 
-    // Reaction picker: emoji click
+    // Reaction picker + extra emoji popover
     const keepReactionInteractionFromBlurringInput = (e) => {
       if (e.type === 'touchstart' && 'PointerEvent' in window) return;
       if (preventMobileComposerBlur(e)) reactionPickerKeepKeyboard = true;
     };
-    reactionPicker.addEventListener('pointerdown', keepReactionInteractionFromBlurringInput);
-    reactionPicker.addEventListener('touchstart', keepReactionInteractionFromBlurringInput, { passive: false });
-    reactionPicker.addEventListener('mousedown', (e) => {
+    const markReactionInteraction = (e) => {
       keepReactionInteractionFromBlurringInput(e);
-      e.preventDefault(); // prevent blur/focus changes
+      bumpReactionPickerIdleTimer();
+    };
+
+    reactionPicker.addEventListener('pointerdown', (e) => {
+      markReactionInteraction(e);
       e.stopPropagation();
     });
+    reactionPicker.addEventListener('touchstart', (e) => {
+      markReactionInteraction(e);
+    }, { passive: false });
+    reactionPicker.addEventListener('mousedown', (e) => {
+      markReactionInteraction(e);
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    reactionPicker.addEventListener('wheel', () => bumpReactionPickerIdleTimer(), { passive: true });
     reactionPicker.addEventListener('click', (e) => {
       e.stopPropagation();
-      const btn = e.target.closest('button[data-emoji]');
-      if (btn && reactionPickerMsgId) {
-        const keepComposerFocus = reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen();
-        toggleReaction(reactionPickerMsgId, btn.dataset.emoji, { keepComposerFocus });
+      const btn = e.target.closest('button[data-reaction-action]');
+      if (!btn || !reactionPickerMsgId) return;
+      const action = btn.dataset.reactionAction || 'toggle';
+      const keepComposerFocus = reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen();
+      if (action === 'open-emoji-popover') {
+        showReactionEmojiPopover();
+        return;
       }
+      if (!btn.dataset.emoji) return;
+      if (isFloatingSurfaceVisible(messageContextMenu)) {
+        hideMessageContextMenu({ immediate: true, preservePicker: true, keepPopover: true });
+      }
+      toggleReaction(reactionPickerMsgId, btn.dataset.emoji, { keepComposerFocus });
+    });
+
+    reactionEmojiPopover?.addEventListener('pointerdown', (e) => {
+      markReactionInteraction(e);
+      e.stopPropagation();
+    });
+    reactionEmojiPopover?.addEventListener('touchstart', (e) => {
+      markReactionInteraction(e);
+    }, { passive: false });
+    reactionEmojiPopover?.addEventListener('mousedown', (e) => {
+      markReactionInteraction(e);
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    reactionEmojiPopover?.addEventListener('wheel', () => bumpReactionPickerIdleTimer(), { passive: true });
+    reactionEmojiPopover?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const tab = e.target.closest('.reaction-emoji-tab');
+      if (tab) {
+        reactionEmojiPopoverCategory = tab.dataset.category || reactionEmojiPopoverCategory;
+        renderReactionEmojiPopoverContent();
+        positionReactionEmojiPopover();
+        bumpReactionPickerIdleTimer();
+        return;
+      }
+
+      const item = e.target.closest('.reaction-emoji-item');
+      if (!item || !reactionPickerMsgId) return;
+      const keepComposerFocus = reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen();
+      if (isFloatingSurfaceVisible(messageContextMenu)) {
+        hideMessageContextMenu({ immediate: true, preservePicker: true, keepPopover: true });
+      }
+      toggleReaction(reactionPickerMsgId, item.dataset.emoji, { keepComposerFocus });
     });
 
     messageContextMenu?.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -8355,13 +8821,15 @@
       handleMessageContextMenuClick(e).catch(() => {});
     });
 
-    // Reaction picker: close on outside click
     document.addEventListener('click', (e) => {
-      if (!reactionPicker.classList.contains('hidden') && !reactionPicker.contains(e.target) && !e.target.closest('.msg-react-btn')) {
-        hideReactionPicker();
-      }
-      if (messageContextMenu && !messageContextMenu.classList.contains('hidden') && !messageContextMenu.contains(e.target)) {
-        hideMessageContextMenu();
+      const insideFloatingActions =
+        reactionPicker.contains(e.target)
+        || reactionEmojiPopover?.contains(e.target)
+        || messageContextMenu?.contains(e.target);
+      if (!insideFloatingActions && !e.target.closest('.msg-react-btn')) {
+        if (isFloatingSurfaceVisible(reactionPicker) || isFloatingSurfaceVisible(reactionEmojiPopover) || isFloatingSurfaceVisible(messageContextMenu)) {
+          hideFloatingMessageActions();
+        }
       }
     });
 
@@ -8381,7 +8849,7 @@
         const row = reactBtn.closest('.msg-row');
         if (row) {
           const keepComposerFocus = reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen();
-          showReactionPicker(row, reactBtn, { keepComposerFocus });
+          showReactionPicker(row, reactBtn, { source: 'direct', keepComposerFocus });
         }
         return;
       }

@@ -1584,12 +1584,49 @@ app.post('/api/chats/:chatId/read', auth, (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════
 // REACTIONS
 // ═══════════════════════════════════════════════════════════════════════════
-const ALLOWED_REACTIONS = ['👍','👎','❤️','🔥','😂','😮','😢','💩','🎉','🤡'];
+let reactionEmojiPattern = null;
+const reactionGraphemeSegmenter = (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function')
+  ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+  : null;
+
+function getReactionEmojiPattern() {
+  if (reactionEmojiPattern !== null) return reactionEmojiPattern;
+  try {
+    reactionEmojiPattern = new RegExp(
+      '^(?:' +
+        '(?:\\p{Regional_Indicator}{2})|' +
+        '(?:[0-9#*]\\uFE0F?\\u20E3)|' +
+        '(?:\\p{Extended_Pictographic}(?:\\uFE0F|\\uFE0E)?(?:\\p{Emoji_Modifier})?(?:\\u200D\\p{Extended_Pictographic}(?:\\uFE0F|\\uFE0E)?(?:\\p{Emoji_Modifier})?)*)' +
+      ')$',
+      'u'
+    );
+  } catch {
+    reactionEmojiPattern = false;
+  }
+  return reactionEmojiPattern;
+}
+
+function splitReactionGraphemes(value) {
+  if (reactionGraphemeSegmenter) {
+    return Array.from(reactionGraphemeSegmenter.segment(value), part => part.segment);
+  }
+  return Array.from(value);
+}
+
+function isValidReactionEmoji(value) {
+  const emoji = String(value || '').trim();
+  if (!emoji || emoji.length > 32) return false;
+  const graphemes = splitReactionGraphemes(emoji);
+  if (graphemes.length !== 1) return false;
+  const pattern = getReactionEmojiPattern();
+  if (pattern) return pattern.test(graphemes[0]);
+  return /^(?:[\u00A9\u00AE]|[\u203C-\u3299]\uFE0F?|[\uD800-\uDBFF][\uDC00-\uDFFF])$/.test(graphemes[0]);
+}
 
 app.post('/api/messages/:id/reactions', auth, (req, res) => {
   const mid = +req.params.id;
-  const { emoji } = req.body;
-  if (!emoji || typeof emoji !== 'string' || emoji.length > 10 || !ALLOWED_REACTIONS.includes(emoji))
+  const emoji = typeof req.body?.emoji === 'string' ? req.body.emoji.trim() : '';
+  if (!isValidReactionEmoji(emoji))
     return res.status(400).json({ error: 'Invalid emoji' });
 
   const msg = db.prepare('SELECT chat_id,user_id FROM messages WHERE id=? AND is_deleted=0').get(mid);
