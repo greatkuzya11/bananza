@@ -435,31 +435,20 @@
   width: fit-content;
 }
 
-.media-actions-shell {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  max-width: 100%;
+.msg-row.media-message .msg-content {
+  position: relative;
+  overflow: visible;
 }
 
-.msg-row.media-message.own .media-actions-shell {
-  flex-direction: row-reverse;
+.msg-row.media-message.other .msg-actions {
+  left: 12px;
+  right: auto;
 }
 
-.msg-row.media-message.other .media-actions-shell,
-.compact-view .msg-row.media-message.own .media-actions-shell {
-  flex-direction: row;
-}
-
-.media-actions-shell > .msg-content {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: calc(100% - 30px);
-}
-
-.media-actions-shell > .msg-actions {
-  flex: 0 0 auto;
+.msg-row.media-message.own .msg-actions,
+.compact-view .msg-row.media-message.own .msg-actions {
+  left: auto;
+  right: 12px;
 }
 
 .msg-row.media-message.wide-media-message {
@@ -467,12 +456,7 @@
   max-width: calc(100% - 4px);
 }
 
-.msg-row.media-message.wide-media-message .media-actions-shell {
-  width: fit-content;
-  max-width: 100%;
-}
-
-.msg-row.media-message.wide-media-message .media-actions-shell > .msg-content {
+.msg-row.media-message.wide-media-message > .msg-content {
   flex: 0 1 auto;
   width: fit-content;
   max-width: min(340px, calc(100vw - 58px));
@@ -498,7 +482,7 @@
     width: fit-content;
   }
 
-  .msg-row.media-message.wide-media-message .media-actions-shell > .msg-content {
+  .msg-row.media-message.wide-media-message > .msg-content {
     max-width: calc(100vw - 58px);
   }
 }

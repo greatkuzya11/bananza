@@ -1003,15 +1003,24 @@ a:hover { text-decoration: underline; }
   border: 0;
 }
 
-/* Position retry button to the left of the bubble using relative units */
+/* Position retry button beside the bubble using relative units */
 .msg-row .msg-bubble { position: relative; }
 .msg-row .msg-bubble .msg-retry-btn {
-  position: absolute; left: -1.6em; top: 50%; transform: translateY(-50%);
+  position: absolute; left: -1.6em; right: auto; top: 50%; transform: translateY(-50%);
   z-index: 3; display: inline-flex;
+}
+.msg-row .msg-bubble .msg-retry-btn.retry-side-left {
+  left: -1.6em;
+  right: auto;
+}
+.msg-row .msg-bubble .msg-retry-btn.retry-side-right {
+  left: auto;
+  right: -1.6em;
 }
 .msg-row .msg-bubble .msg-retry-btn.inline {
   position: static;
   left: auto;
+  right: auto;
   top: auto;
   bottom: auto;
   transform: none;
@@ -1065,8 +1074,14 @@ a:hover { text-decoration: underline; }
 }
 .msg-row.other .msg-actions {
   left: 12px;
+  right: auto;
 }
 .msg-row.own .msg-actions {
+  left: auto;
+  right: 12px;
+}
+.compact-view .msg-row.own .msg-actions {
+  left: auto;
   right: 12px;
 }
 .msg-row:hover .msg-actions,
@@ -1257,7 +1272,7 @@ a:hover { text-decoration: underline; }
   background: var(--bg-hover);
 }
 
-.swipe-reply-indicator { display: none; }
+.swipe-message-indicator { display: none; }
 
 .msg-footer {
   display: flex; align-items: flex-end; justify-content: flex-start;
@@ -1266,8 +1281,9 @@ a:hover { text-decoration: underline; }
 }
 .msg-footer > div:empty { display: none; }
 .msg-retry-slot {
-  display: flex;
+  display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
   min-height: 20px;
 }
 
@@ -3068,7 +3084,7 @@ html[data-modal-animation="none"] .search-panel {
   .msg-bubble {
     touch-action: pan-y;
   }
-  .msg-row:not(.swipe-reply-active) .msg-content {
+  .msg-row:not(.swipe-reply-active):not(.swipe-edit-active) .msg-content {
     transition: transform .18s cubic-bezier(.2, .8, .2, 1);
   }
   .msg-row.swipe-reply-active {
@@ -3082,9 +3098,8 @@ html[data-modal-animation="none"] .search-panel {
     transition: none;
     will-change: transform;
   }
-  .swipe-reply-indicator {
+  .swipe-message-indicator {
     position: absolute;
-    right: 8px;
     top: 50%;
     z-index: 0;
     display: flex;
@@ -3103,20 +3118,23 @@ html[data-modal-animation="none"] .search-panel {
     transform: translateY(-50%) scale(.92);
     transition: background .12s ease, color .12s ease, transform .12s ease;
   }
+  .swipe-reply-indicator {
+    right: 8px;
+  }
+  .swipe-edit-indicator {
+    left: 8px;
+    background: rgba(240, 179, 91, .18);
+    color: #f0b35b;
+  }
   .msg-row.swipe-reply-ready .swipe-reply-indicator {
     background: var(--accent);
     color: #fff;
     transform: translateY(-50%) scale(1);
   }
-  .msg-row.swipe-edit-active .msg-edit-btn {
-    opacity: 1;
-    color: #f0b35b;
-    transform: translateX(6px) scale(1.08);
-    transition: opacity .12s ease, color .12s ease, transform .12s ease;
-  }
-  .msg-row.swipe-edit-ready .msg-edit-btn {
-    color: #ffd28a;
-    transform: translateX(10px) scale(1.28) rotate(-8deg);
+  .msg-row.swipe-edit-ready .swipe-edit-indicator {
+    background: #f0b35b;
+    color: #1b1206;
+    transform: translateY(-50%) scale(1);
   }
   .msg-bubble:has(.msg-image) { max-width: min(260px, 100%); }
   .msg-image { max-width: min(260px, 100%); max-height: 240px; }

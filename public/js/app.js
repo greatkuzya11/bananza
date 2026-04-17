@@ -5043,10 +5043,8 @@
     const reactionsHtml = (!msg.is_deleted && msg.reactions && msg.reactions.length > 0)
       ? `<div class="msg-reactions">${renderReactions(msg.reactions)}</div>` : '<div></div>';
     html += `<div class="msg-footer">${reactionsHtml}<span class="msg-time">${statusIcon}${editedIcon}${formatTime(msg.created_at)}</span></div>`;
-    html += '</div>'; // msg-bubble
-    html += '</div>'; // msg-content
 
-    // Reply/edit/react buttons outside bubble
+    // Reply/edit/react buttons are anchored to the bubble and visually float above it.
     if (!msg.is_deleted && !isClientMessage) {
       html += '<div class="msg-actions">';
       html += '<button class="msg-copy-btn" title="Копировать">⧉</button>';
@@ -5056,23 +5054,13 @@
       html += '<button class="msg-react-btn" title="React">🙂</button>';
       html += '</div>';
     }
+    html += '</div>'; // msg-bubble
+    html += '</div>'; // msg-content
 
     row.innerHTML = html;
     // Persist client_status on row for CSS/logic; apply class for failed state so retry button can be overlayed
     if (msg.client_status) row.dataset.clientStatus = msg.client_status;
     if (msg.client_status) row.classList.add('client-failed');
-    if (isMediaMessage) {
-      const mediaContent = row.querySelector(':scope > .msg-content');
-      const mediaActions = row.querySelector(':scope > .msg-actions');
-      if (mediaContent && mediaActions) {
-        const shell = document.createElement('div');
-        shell.className = 'media-actions-shell';
-        row.insertBefore(shell, mediaContent);
-        shell.appendChild(mediaContent);
-        shell.appendChild(mediaActions);
-      }
-    }
-
     const actionsEl = row.querySelector('.msg-actions');
     if (actionsEl && !row.querySelector('.msg-pin-btn')) {
       const pinWrap = document.createElement('span');
@@ -5250,7 +5238,9 @@
       row.classList.remove('client-failed', 'client-sending');
       delete row.dataset.clientStatus;
       const retryBtn = row.querySelector('.msg-retry-btn');
+      const retrySlot = retryBtn?.closest('.msg-retry-slot');
       if (retryBtn) retryBtn.remove();
+      if (retrySlot && retrySlot.childElementCount === 0) retrySlot.remove();
     } catch (e) {}
   }
 
@@ -5681,22 +5671,30 @@
       if (!bubble) return;
       const bubbleRect = bubble.getBoundingClientRect();
       const retryWidth = btn.offsetWidth || 22;
-      const shouldInline = bubbleRect.left - retryWidth - 2 < containerRect.left + 2;
+      const useRightSide = Boolean(row?.classList.contains('own') && messagesEl.classList.contains('compact-view'));
+      const shouldInline = useRightSide
+        ? bubbleRect.right + retryWidth + 2 > containerRect.right - 2
+        : bubbleRect.left - retryWidth - 2 < containerRect.left + 2;
+      btn.classList.toggle('retry-side-right', useRightSide);
+      btn.classList.toggle('retry-side-left', !useRightSide);
       bubble.classList.toggle('retry-inline', shouldInline);
       if (shouldInline) {
         const footer = bubble.querySelector('.msg-footer');
-        let slot = footer?.querySelector('.msg-retry-slot') || footer?.firstElementChild;
+        let slot = footer?.querySelector('.msg-retry-slot');
         if (footer && !slot) {
-          slot = document.createElement('div');
-          footer.insertBefore(slot, footer.firstChild);
+          slot = document.createElement('span');
+          slot.className = 'msg-retry-slot';
+          const time = footer.querySelector('.msg-time');
+          footer.insertBefore(slot, time || null);
         }
         if (slot) {
-          slot.classList.add('msg-retry-slot');
           if (btn.parentElement !== slot) slot.appendChild(btn);
         }
         btn.classList.add('inline');
       } else {
+        const slot = bubble.querySelector('.msg-retry-slot');
         if (btn.parentElement !== bubble) bubble.appendChild(btn);
+        if (slot && slot.childElementCount === 0) slot.remove();
         btn.classList.remove('inline');
       }
     });
@@ -6243,7 +6241,7 @@
     window.BananzaVoiceHooks?.refreshComposerState?.();
   }
 
-  function setupSwipeReplyGesture() {
+  function setupMessageSwipeGestures() {
     const threshold = 42;
     const maxOffset = 68;
     const lockStartPx = 8;
@@ -6254,26 +6252,30 @@
     const isInteractiveTarget = (target) => Boolean(target.closest(
       'button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-image, .msg-video'
     ));
-    const ensureIndicator = (row) => {
-      let indicator = row.querySelector('.swipe-reply-indicator');
+    const canReplyFromRow = (row) => Boolean(
+      row?.__replyPayload && row.dataset.outbox !== '1' && !row.querySelector('.msg-deleted')
+    );
+    const ensureIndicator = (row, kind) => {
+      let indicator = row.querySelector('.swipe-message-indicator');
       if (!indicator) {
         indicator = document.createElement('div');
-        indicator.className = 'swipe-reply-indicator';
-        indicator.textContent = '\u21A9';
         row.appendChild(indicator);
       }
+      indicator.className = `swipe-message-indicator swipe-${kind}-indicator`;
+      indicator.textContent = kind === 'reply' ? '\u21A9' : '\u270E';
       return indicator;
     };
-    const finishSwipe = (shouldReply) => {
+    const finishSwipe = (shouldApply) => {
       if (!swipe) return;
-      const { row, content } = swipe;
-      row.classList.remove('swipe-reply-active', 'swipe-reply-ready');
+      const { row, content, kind } = swipe;
+      row.classList.remove('swipe-reply-active', 'swipe-reply-ready', 'swipe-edit-active', 'swipe-edit-ready');
       if (content) content.style.transform = '';
-      const indicator = row.querySelector('.swipe-reply-indicator');
+      const indicator = row.querySelector('.swipe-message-indicator');
       setTimeout(() => indicator?.remove(), 180);
-      if (shouldReply) {
+      if (shouldApply && kind) {
         navigator.vibrate?.(18);
-        setReplyFromRow(row);
+        if (kind === 'reply') setReplyFromRow(row);
+        else if (kind === 'edit') setEditFromRow(row);
       }
       swipe = null;
     };
@@ -6281,7 +6283,7 @@
     messagesEl.addEventListener('touchstart', (e) => {
       if (!isMobile() || e.touches.length !== 1 || isInteractiveTarget(e.target)) return;
       const row = e.target.closest('.msg-row');
-      if (!row || row.querySelector('.msg-deleted') || !row.__replyPayload) return;
+      if (!row || row.dataset.outbox === '1' || row.querySelector('.msg-deleted')) return;
       const touch = e.touches[0];
       swipe = {
         row,
@@ -6289,6 +6291,7 @@
         startX: touch.clientX,
         startY: touch.clientY,
         dx: 0,
+        kind: null,
         locked: false,
       };
     }, { passive: true });
@@ -6296,25 +6299,32 @@
     messagesEl.addEventListener('touchmove', (e) => {
       if (!swipe || e.touches.length !== 1) return;
       const touch = e.touches[0];
-      const dx = swipe.startX - touch.clientX;
+      const rawDx = touch.clientX - swipe.startX;
       const dy = touch.clientY - swipe.startY;
-      const absX = Math.abs(dx);
+      const absX = Math.abs(rawDx);
       const absY = Math.abs(dy);
 
       if (!swipe.locked) {
-        if ((absY > verticalCancelPx && absY > absX * 1.35) || dx < -10) {
+        if (absY > verticalCancelPx && absY > absX * 1.35) {
           finishSwipe(false);
           return;
         }
-        if (dx < lockStartPx || absX < absY * 0.75) return;
+        if (absX < lockStartPx || absX < absY * 0.75) return;
+        const kind = rawDx < 0 ? 'reply' : 'edit';
+        if ((kind === 'reply' && !canReplyFromRow(swipe.row)) || (kind === 'edit' && !canEditMessage(swipe.row.__messageData))) {
+          finishSwipe(false);
+          return;
+        }
         if (!e.cancelable) {
           finishSwipe(false);
           return;
         }
+        swipe.kind = kind;
         swipe.locked = true;
         hideReactionPicker();
-        ensureIndicator(swipe.row);
-        swipe.row.classList.add('swipe-reply-active');
+        hideMessageContextMenu();
+        ensureIndicator(swipe.row, kind);
+        swipe.row.classList.add(`swipe-${kind}-active`);
       }
 
       if (!e.cancelable) {
@@ -6322,86 +6332,10 @@
         return;
       }
       e.preventDefault();
-      swipe.dx = Math.max(0, Math.min(dx, maxOffset));
-      if (swipe.content) swipe.content.style.transform = `translateX(${-swipe.dx}px)`;
-      swipe.row.classList.toggle('swipe-reply-ready', dx >= threshold);
-    }, { passive: false });
-
-    messagesEl.addEventListener('touchend', () => {
-      finishSwipe(Boolean(swipe?.locked && swipe.dx >= threshold));
-    }, { passive: true });
-    messagesEl.addEventListener('touchcancel', () => finishSwipe(false), { passive: true });
-  }
-
-  function setupSwipeEditGesture() {
-    const threshold = 42;
-    const maxOffset = 68;
-    const lockStartPx = 8;
-    const verticalCancelPx = 22;
-    let swipe = null;
-
-    const isMobile = () => window.innerWidth <= 768;
-    const isInteractiveTarget = (target) => Boolean(target.closest(
-      'button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-image, .msg-video'
-    ));
-    const finishSwipe = (shouldEdit) => {
-      if (!swipe) return;
-      const { row, content } = swipe;
-      row.classList.remove('swipe-edit-active', 'swipe-edit-ready');
-      if (content) content.style.transform = '';
-      if (shouldEdit) {
-        navigator.vibrate?.(18);
-        setEditFromRow(row);
-      }
-      swipe = null;
-    };
-
-    messagesEl.addEventListener('touchstart', (e) => {
-      if (!isMobile() || e.touches.length !== 1 || isInteractiveTarget(e.target)) return;
-      const row = e.target.closest('.msg-row');
-      if (!row || !canEditMessage(row.__messageData)) return;
-      const touch = e.touches[0];
-      swipe = {
-        row,
-        content: row.querySelector('.msg-content'),
-        startX: touch.clientX,
-        startY: touch.clientY,
-        dx: 0,
-        locked: false,
-      };
-    }, { passive: true });
-
-    messagesEl.addEventListener('touchmove', (e) => {
-      if (!swipe || e.touches.length !== 1) return;
-      const touch = e.touches[0];
-      const dx = touch.clientX - swipe.startX;
-      const dy = touch.clientY - swipe.startY;
-      const absX = Math.abs(dx);
-      const absY = Math.abs(dy);
-
-      if (!swipe.locked) {
-        if ((absY > verticalCancelPx && absY > absX * 1.35) || dx < -10) {
-          finishSwipe(false);
-          return;
-        }
-        if (dx < lockStartPx || absX < absY * 0.75) return;
-        if (!e.cancelable) {
-          finishSwipe(false);
-          return;
-        }
-        swipe.locked = true;
-        hideReactionPicker();
-        swipe.row.classList.add('swipe-edit-active');
-      }
-
-      if (!e.cancelable) {
-        finishSwipe(false);
-        return;
-      }
-      e.preventDefault();
-      swipe.dx = Math.max(0, Math.min(dx, maxOffset));
-      if (swipe.content) swipe.content.style.transform = `translateX(${swipe.dx}px)`;
-      swipe.row.classList.toggle('swipe-edit-ready', dx >= threshold);
+      swipe.dx = Math.min(absX, maxOffset);
+      const offset = swipe.kind === 'reply' ? -swipe.dx : swipe.dx;
+      if (swipe.content) swipe.content.style.transform = `translateX(${offset}px)`;
+      swipe.row.classList.toggle(`swipe-${swipe.kind}-ready`, absX >= threshold);
     }, { passive: false });
 
     messagesEl.addEventListener('touchend', () => {
@@ -8131,8 +8065,7 @@
   // ═══════════════════════════════════════════════════════════════════════════
   function setupEvents() {
     setupPasswordPreviewToggles();
-    setupSwipeReplyGesture();
-    setupSwipeEditGesture();
+    setupMessageSwipeGestures();
     ensureSearchPanelReady();
 
     // Send message
