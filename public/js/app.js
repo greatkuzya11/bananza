@@ -67,6 +67,9 @@
   const CHAT_LIST_CACHE_VERSION = 1;
   const CHAT_LIST_CACHE_SYNC_DEBOUNCE_MS = 250;
   const CHAT_LIST_REQUEST_TIMEOUT_MS = 9000;
+  const RECOVERY_SYNC_MIN_INTERVAL_MS = 1200;
+  const RECOVERY_CATCHUP_MAX_PAGES = 5;
+  const RESUME_WS_REFRESH_AFTER_MS = 25000;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STATE
@@ -75,12 +78,20 @@
   let token = null;
   let chats = [];
   let chatListLoadedOnce = false;
+  let initialChatLoadFinished = false;
   let chatListRequestSeq = 0;
   let chatListAbortController = null;
   let chatListCacheSyncTimer = null;
   let currentChatId = null;
   let ws = null;
   let wsRetry = 1000;
+  let wsReconnectTimer = null;
+  let lastHiddenAt = document.hidden ? Date.now() : 0;
+  let recoverySyncTimer = null;
+  let recoverySyncPromise = null;
+  let recoverySyncRequested = false;
+  let recoverySyncLastStartedAt = 0;
+  let pendingRecoveryChatIds = new Set();
   let onlineUsers = new Set();
   let chatMembersCache = new Map();
   let loadingMore = false;
@@ -2206,6 +2217,93 @@
     }
   }
 
+  function getPayloadChatId(payload = {}) {
+    const id = Number(payload.chatId || payload.chat_id || 0);
+    return Number.isInteger(id) && id > 0 ? id : 0;
+  }
+
+  function scheduleRecoverySync(reason = 'event', { chatId = null, immediate = false } = {}) {
+    if (!token || !currentUser) return;
+    const id = Number(chatId || 0);
+    if (Number.isInteger(id) && id > 0) pendingRecoveryChatIds.add(id);
+    if (!initialChatLoadFinished && !currentChatId) return;
+    if (document.hidden) {
+      recoverySyncRequested = true;
+      return;
+    }
+
+    recoverySyncRequested = true;
+    const elapsed = Date.now() - recoverySyncLastStartedAt;
+    const delay = immediate ? 0 : Math.max(0, RECOVERY_SYNC_MIN_INTERVAL_MS - elapsed);
+    clearTimeout(recoverySyncTimer);
+    recoverySyncTimer = setTimeout(() => {
+      recoverySyncTimer = null;
+      runRecoverySync(reason).catch(() => {});
+    }, delay);
+  }
+
+  async function runRecoverySync(reason = 'event') {
+    if (!token || !currentUser) return;
+    if (recoverySyncPromise) {
+      recoverySyncRequested = true;
+      return recoverySyncPromise;
+    }
+
+    recoverySyncRequested = false;
+    recoverySyncLastStartedAt = Date.now();
+    const requestedChatIds = [...pendingRecoveryChatIds];
+    pendingRecoveryChatIds.clear();
+
+    recoverySyncPromise = (async () => {
+      await loadChats({ silent: true }).catch(() => chats);
+
+      const activeChatId = Number(currentChatId || 0);
+      if (activeChatId) {
+        await catchUpCurrentChat(activeChatId, {
+          fromPush: requestedChatIds.includes(activeChatId) || reason === 'push',
+        });
+      }
+    })();
+
+    try {
+      return await recoverySyncPromise;
+    } finally {
+      recoverySyncPromise = null;
+      if (recoverySyncRequested || pendingRecoveryChatIds.size > 0) {
+        scheduleRecoverySync('queued');
+      }
+    }
+  }
+
+  function refreshWebSocketAfterResume() {
+    if (!token) return;
+    const hiddenFor = lastHiddenAt ? Date.now() - lastHiddenAt : 0;
+    const shouldRefreshOpenSocket = ws
+      && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)
+      && hiddenFor >= RESUME_WS_REFRESH_AFTER_MS;
+    connectWS({ force: shouldRefreshOpenSocket });
+  }
+
+  function handleAppResume(reason) {
+    if (!token || !currentUser) return;
+    refreshWebSocketAfterResume();
+    scheduleRecoverySync(reason, { immediate: true });
+  }
+
+  function setupLifecycleRecovery() {
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        lastHiddenAt = Date.now();
+        return;
+      }
+      handleAppResume('visible');
+    });
+    window.addEventListener('focus', () => handleAppResume('focus'));
+    window.addEventListener('pageshow', () => handleAppResume('pageshow'));
+    window.addEventListener('online', () => handleAppResume('online'));
+    window.addEventListener('pagehide', () => { lastHiddenAt = Date.now(); });
+  }
+
   async function openChatFromPush(chatId) {
     const id = Number(chatId);
     if (!Number.isInteger(id) || id <= 0) return;
@@ -2217,6 +2315,12 @@
     const data = event.data || {};
     if (data.type === 'open_chat') {
       openChatFromPush(data.chatId).catch(() => {});
+    } else if (data.type === 'push_received') {
+      const chatId = getPayloadChatId(data.payload || {});
+      scheduleRecoverySync('push', {
+        chatId,
+        immediate: Boolean(chatId && Number(chatId) === Number(currentChatId || 0)),
+      });
     }
   }
 
@@ -3080,33 +3184,67 @@
 
   function logout() {
     clearTimeout(chatListCacheSyncTimer);
+    clearTimeout(wsReconnectTimer);
     if (chatListAbortController) chatListAbortController.abort();
     try { if (window.clearAssetCache) window.clearAssetCache().catch(()=>{}); } catch (e) {}
     try { if (window.messageCache && window.messageCache.clearUserCache) window.messageCache.clearUserCache().catch(()=>{}); } catch (e) {}
     localStorage.removeItem('token');
     localStorage.removeItem('user');
-    if (ws) ws.close();
+    token = null;
+    if (ws) {
+      try { ws.onclose = null; ws.close(); } catch (e) {}
+      ws = null;
+    }
     location.href = '/login.html';
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // WEBSOCKET
   // ═══════════════════════════════════════════════════════════════════════════
-  function connectWS() {
-    ws = new WebSocket(WS_URL + '?token=' + encodeURIComponent(token));
+  function connectWS({ force = false } = {}) {
+    if (!token) return;
+    if (!force && ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = null;
 
-    ws.onopen = () => { wsRetry = 1000; };
+    if (!force && ws && (ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED)) {
+      try { ws.onclose = null; } catch (e) {}
+      ws = null;
+    }
 
-    ws.onclose = (e) => {
+    if (force && ws) {
+      try {
+        ws.onclose = null;
+        ws.close(4000, 'resume refresh');
+      } catch (e) {}
+      ws = null;
+    }
+
+    const socket = new WebSocket(WS_URL + '?token=' + encodeURIComponent(token));
+    ws = socket;
+
+    socket.onopen = () => {
+      if (ws !== socket) return;
+      wsRetry = 1000;
+      if (initialChatLoadFinished) scheduleRecoverySync('ws-open');
+    };
+
+    socket.onclose = (e) => {
+      if (ws === socket) ws = null;
       if (e.code === 4003) {
         alert('Your account has been blocked by an administrator.');
         logout();
         return;
       }
-      setTimeout(() => { wsRetry = Math.min(wsRetry * 2, 30000); connectWS(); }, wsRetry);
+      if (!token) return;
+      const retryDelay = wsRetry;
+      wsReconnectTimer = setTimeout(() => {
+        wsRetry = Math.min(wsRetry * 2, 30000);
+        connectWS();
+      }, retryDelay);
     };
 
-    ws.onmessage = (e) => {
+    socket.onmessage = (e) => {
       try {
         const payload = JSON.parse(e.data);
         Promise.resolve(handleWSMessage(payload)).catch(() => {});
@@ -4795,6 +4933,95 @@
       if (seenDates.has(text)) sep.remove();
       else seenDates.add(text);
     });
+  }
+
+  async function catchUpCurrentChat(chatId, { fromPush = false } = {}) {
+    const id = Number(chatId || 0);
+    if (!id || Number(currentChatId || 0) !== id) return false;
+
+    if (loadingMore || loadingMoreAfter) {
+      recoverySyncRequested = true;
+      return false;
+    }
+
+    const initialLastId = getMaxRenderedMessageId();
+    if (!initialLastId) {
+      await openChat(id, { suppressHistoryPush: true });
+      return true;
+    }
+
+    const wasNearBottom = isNearBottom(120);
+    const anchor = wasNearBottom ? null : captureScrollAnchor();
+    let cursor = initialLastId;
+    let appendedAny = false;
+    let hasMoreAfterValue = false;
+
+    loadingMoreAfter = true;
+    try {
+      for (let pageIndex = 0; pageIndex < RECOVERY_CATCHUP_MAX_PAGES; pageIndex += 1) {
+        if (Number(currentChatId || 0) !== id) return appendedAny;
+
+        const params = new URLSearchParams({ limit: String(PAGE_SIZE), meta: '1', after: String(cursor) });
+        const raw = await api(`/api/chats/${id}/messages?${params}`);
+        const page = normalizeMessagesPage(raw);
+        const msgs = page.messages || [];
+
+        const memberLastReads = raw && raw.member_last_reads ? raw.member_last_reads : null;
+        const readState = await reconcileChatReadState(id, memberLastReads, {
+          replace: true,
+          updateVisible: Number(currentChatId || 0) === id,
+        });
+        if (readState.chatReadChanged) renderChatList(chatSearch.value);
+
+        applyOwnReadStateToMessages(id, msgs);
+        if (Number(currentChatId || 0) !== id) return appendedAny;
+
+        const newMessages = filterNewMessages(msgs);
+        if (newMessages.length) {
+          newMessages.forEach((message) => appendMessage(message));
+          updateChatListLastMessage(newMessages[newMessages.length - 1]);
+          appendedAny = true;
+        } else if (fromPush && msgs.length) {
+          updateChatListLastMessage(msgs[msgs.length - 1]);
+        }
+
+        if (msgs.length) cacheMessages(id, msgs);
+
+        const fetchedLastId = maxMessageId(msgs);
+        hasMoreAfterValue = page.hasMoreAfter ?? (msgs.length >= PAGE_SIZE);
+        if (!fetchedLastId || fetchedLastId <= cursor || !hasMoreAfterValue) break;
+        cursor = fetchedLastId;
+      }
+    } catch (e) {
+      if (Number(currentChatId || 0) === id) updateHasMoreAfterFromChat(id);
+      return appendedAny;
+    } finally {
+      loadingMoreAfter = false;
+    }
+
+    if (Number(currentChatId || 0) !== id) return appendedAny;
+
+    const chat = chats.find(c => Number(c.id) === id);
+    const renderedLastId = getMaxRenderedMessageId();
+    const hasMoreFromChat = Boolean(
+      chat?.last_message_id && renderedLastId && renderedLastId < Number(chat.last_message_id || 0)
+    );
+    setHasMoreAfter(Boolean(hasMoreAfterValue || hasMoreFromChat));
+
+    if (appendedAny) {
+      cleanupDuplicateDateSeparators();
+      if (wasNearBottom && !document.hidden) {
+        scrollToBottom(true, true);
+      } else {
+        if (anchor) requestAnimationFrame(() => restoreScrollAnchor(anchor, 2));
+        saveCurrentScrollAnchor(id, { force: true });
+        updateScrollBottomButton();
+      }
+    } else {
+      updateScrollBottomButton();
+    }
+
+    return appendedAny;
   }
 
   // Load more messages
@@ -8250,6 +8477,8 @@
     initEmojiPicker();
     connectWS();
     await loadChats();
+    initialChatLoadFinished = true;
+    setupLifecycleRecovery();
     loadAllUsers().catch(() => {});
 
     // Optional startup behavior: push deep-link, restore the last opened chat, or stay on the chat list.
