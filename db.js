@@ -21,6 +21,7 @@ db.exec(`
     avatar_url TEXT DEFAULT NULL,
     ui_theme TEXT DEFAULT 'bananza',
     ui_modal_animation TEXT DEFAULT 'soft',
+    ui_modal_animation_speed INTEGER DEFAULT 8,
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -170,6 +171,12 @@ try {
 } catch {
   db.exec("ALTER TABLE users ADD COLUMN ui_modal_animation TEXT DEFAULT 'soft'");
 }
+try {
+  db.prepare("SELECT ui_modal_animation_speed FROM users LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE users ADD COLUMN ui_modal_animation_speed INTEGER DEFAULT 8");
+}
+db.prepare("UPDATE users SET ui_modal_animation_speed=8 WHERE ui_modal_animation_speed IS NULL").run();
 try {
   db.prepare("SELECT is_ai_bot FROM users LIMIT 1").get();
 } catch {

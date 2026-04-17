@@ -242,6 +242,22 @@
       </div>
       <div class="modal-body">
         <div id="settingsAnimationOptions" class="animation-settings-list"></div>
+        <div class="animation-speed-control">
+          <label class="animation-speed-label" for="settingsAnimationSpeed">
+            <span>Speed</span>
+            <strong id="settingsAnimationSpeedValue">8/10</strong>
+          </label>
+          <input
+            type="range"
+            id="settingsAnimationSpeed"
+            class="animation-speed-range"
+            min="1"
+            max="10"
+            step="1"
+            value="8"
+          >
+          <div class="animation-speed-hint">1 = slower, 10 = faster, 8 = current</div>
+        </div>
         <div id="settingsAnimationStatus" class="theme-settings-status"></div>
       </div>
     </div>

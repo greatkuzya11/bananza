@@ -120,8 +120,17 @@ const upLimiter   = rateLimit({ windowMs: 60_000, max: 20, message: { error: 'To
 const AVATAR_COLORS = ['#e17076','#7bc862','#e5ca77','#65aadd','#a695e7','#ee7aae','#6ec9cb','#faa774'];
 const UI_THEMES = new Set(['bananza', 'banan-hero', 'midnight-ocean', 'nord-aurora', 'rose-pine', 'dracula-neon', 'tokyo-night']);
 const UI_MODAL_ANIMATIONS = new Set(['soft', 'lift', 'zoom', 'slide', 'fade', 'none']);
-const USER_PUBLIC_FIELDS = 'id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,ui_theme,ui_modal_animation';
+const UI_MODAL_ANIMATION_SPEED_DEFAULT = 8;
+const UI_MODAL_ANIMATION_SPEED_MIN = 1;
+const UI_MODAL_ANIMATION_SPEED_MAX = 10;
+const USER_PUBLIC_FIELDS = 'id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,ui_theme,ui_modal_animation,ui_modal_animation_speed';
 const USER_REALTIME_FIELDS = `${USER_PUBLIC_FIELDS},is_ai_bot`;
+
+function normalizeModalAnimationSpeed(speed) {
+  const next = Math.round(Number(speed));
+  if (!Number.isFinite(next)) return UI_MODAL_ANIMATION_SPEED_DEFAULT;
+  return Math.min(UI_MODAL_ANIMATION_SPEED_MAX, Math.max(UI_MODAL_ANIMATION_SPEED_MIN, next));
+}
 
 function publicUser(u) {
   return {
@@ -134,6 +143,7 @@ function publicUser(u) {
     avatar_url: u.avatar_url,
     ui_theme: UI_THEMES.has(u.ui_theme) ? u.ui_theme : 'bananza',
     ui_modal_animation: UI_MODAL_ANIMATIONS.has(u.ui_modal_animation) ? u.ui_modal_animation : 'soft',
+    ui_modal_animation_speed: normalizeModalAnimationSpeed(u.ui_modal_animation_speed),
   };
 }
 
@@ -435,7 +445,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     if (gen) db.prepare('INSERT OR IGNORE INTO chat_members(chat_id,user_id) VALUES(?,?)').run(gen.id, userId);
 
     const token = jwt.sign({ id: userId, username: username.toLowerCase() }, JWT_SECRET, { expiresIn: '30d' });
-    res.json({ token, user: publicUser({ id: userId, username: username.toLowerCase(), display_name: name, is_admin: isAdmin, is_blocked: 0, avatar_color: color, avatar_url: null, ui_theme: 'bananza', ui_modal_animation: 'soft' }) });
+    res.json({ token, user: publicUser({ id: userId, username: username.toLowerCase(), display_name: name, is_admin: isAdmin, is_blocked: 0, avatar_color: color, avatar_url: null, ui_theme: 'bananza', ui_modal_animation: 'soft', ui_modal_animation_speed: UI_MODAL_ANIMATION_SPEED_DEFAULT }) });
   } catch (e) { console.error(e); res.status(500).json({ error: 'Server error' }); }
 });
 
@@ -961,9 +971,31 @@ app.patch('/api/user/theme', auth, (req, res) => {
 });
 
 app.patch('/api/user/modal-animation', auth, (req, res) => {
-  const style = typeof req.body?.style === 'string' ? req.body.style : '';
-  if (!UI_MODAL_ANIMATIONS.has(style)) return res.status(400).json({ error: 'Unknown modal animation style' });
-  db.prepare('UPDATE users SET ui_modal_animation=? WHERE id=?').run(style, req.user.id);
+  const hasStyle = Object.prototype.hasOwnProperty.call(req.body || {}, 'style');
+  const hasSpeed = Object.prototype.hasOwnProperty.call(req.body || {}, 'speed');
+  if (!hasStyle && !hasSpeed) return res.status(400).json({ error: 'No modal animation changes provided' });
+
+  const updates = [];
+  const params = [];
+
+  if (hasStyle) {
+    const style = typeof req.body?.style === 'string' ? req.body.style : '';
+    if (!UI_MODAL_ANIMATIONS.has(style)) return res.status(400).json({ error: 'Unknown modal animation style' });
+    updates.push('ui_modal_animation=?');
+    params.push(style);
+  }
+
+  if (hasSpeed) {
+    const rawSpeed = req.body?.speed;
+    const speed = Math.round(Number(rawSpeed));
+    if (!Number.isFinite(speed) || speed < UI_MODAL_ANIMATION_SPEED_MIN || speed > UI_MODAL_ANIMATION_SPEED_MAX) {
+      return res.status(400).json({ error: 'Unknown modal animation speed' });
+    }
+    updates.push('ui_modal_animation_speed=?');
+    params.push(speed);
+  }
+
+  db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id=?`).run(...params, req.user.id);
   const user = db.prepare(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id=?`).get(req.user.id);
   notifyUserUpdated(req.user.id);
   res.json({ user: publicUser(user) });

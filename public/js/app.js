@@ -50,7 +50,20 @@
     { id: 'none', name: 'None', note: 'Instant open/close with no animation.' },
   ];
   const MODAL_ANIMATION_STYLE_IDS = new Set(MODAL_ANIMATION_STYLES.map(style => style.id));
-  const MODAL_TRANSITION_FALLBACK_MS = 380;
+  const MODAL_ANIMATION_SPEED_DEFAULT = 8;
+  const MODAL_ANIMATION_SPEED_FACTORS = Object.freeze({
+    1: 4.5,
+    2: 4.0,
+    3: 3.5,
+    4: 3.0,
+    5: 2.3,
+    6: 1.8,
+    7: 1.5,
+    8: 1.0,
+    9: 0.8,
+    10: 0.5,
+  });
+  const MODAL_TRANSITION_BUFFER_MS = 80;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STATE
@@ -89,6 +102,7 @@
   let scrollAnchorSaveTimer = null;
   let currentUiTheme = 'bananza';
   let currentModalAnimation = 'soft';
+  let currentModalAnimationSpeed = MODAL_ANIMATION_SPEED_DEFAULT;
   let weatherSettings = { enabled: false, refresh_minutes: 30, location: null };
   let weatherSettingsLoaded = false;
   let selectedWeatherLocation = null;
@@ -145,6 +159,11 @@
   let modalSkipPopstateCount = 0;
   let pendingModalHistoryRewind = 0;
   let modalHistorySyncTimer = null;
+  let modalHistorySyncDueAt = 0;
+  let modalAnimationSaveTimer = null;
+  let modalAnimationSaveInFlight = false;
+  let modalAnimationSaveQueued = false;
+  let modalAnimationStatusTimer = null;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DOM
@@ -243,6 +262,7 @@
     getCurrentUser: () => currentUser,
     getCurrentChatId: () => currentChatId,
     getCurrentModalAnimation: () => currentModalAnimation,
+    getCurrentModalAnimationSpeed: () => currentModalAnimationSpeed,
     getPendingFiles: () => [...pendingFiles],
     getReplyTo: () => replyTo ? { ...replyTo } : null,
     getEditTo: () => editTo ? { ...editTo } : null,
@@ -402,12 +422,53 @@
     return MODAL_ANIMATION_STYLE_IDS.has(style) ? style : 'soft';
   }
 
+  function normalizeModalAnimationSpeed(speed) {
+    const next = Math.round(Number(speed));
+    if (!Number.isFinite(next)) return MODAL_ANIMATION_SPEED_DEFAULT;
+    return Math.min(10, Math.max(1, next));
+  }
+
+  function getModalAnimationSpeedFactor(speed = currentModalAnimationSpeed) {
+    return MODAL_ANIMATION_SPEED_FACTORS[normalizeModalAnimationSpeed(speed)] || 1;
+  }
+
   function setModalAnimationStatus(message, type = '') {
     const el = $('#settingsAnimationStatus');
     if (!el) return;
     el.textContent = message || '';
     el.classList.toggle('is-error', type === 'error');
     el.classList.toggle('is-success', type === 'success');
+  }
+
+  function clearModalAnimationStatusTimer() {
+    clearTimeout(modalAnimationStatusTimer);
+    modalAnimationStatusTimer = null;
+  }
+
+  function scheduleModalAnimationStatusClear() {
+    clearModalAnimationStatusTimer();
+    modalAnimationStatusTimer = setTimeout(() => {
+      if ($('#settingsAnimationStatus')?.textContent === 'Saved') setModalAnimationStatus('');
+    }, 1200);
+  }
+
+  function getPersistedModalAnimationPreferences() {
+    return {
+      style: normalizeModalAnimationStyle(currentUser?.ui_modal_animation),
+      speed: normalizeModalAnimationSpeed(currentUser?.ui_modal_animation_speed),
+    };
+  }
+
+  function getCurrentModalAnimationPreferences() {
+    return {
+      style: normalizeModalAnimationStyle(currentModalAnimation),
+      speed: normalizeModalAnimationSpeed(currentModalAnimationSpeed),
+    };
+  }
+
+  function modalAnimationPreferencesEqual(a = {}, b = {}) {
+    return normalizeModalAnimationStyle(a.style) === normalizeModalAnimationStyle(b.style)
+      && normalizeModalAnimationSpeed(a.speed) === normalizeModalAnimationSpeed(b.speed);
   }
 
   function renderModalAnimationOptions() {
@@ -421,35 +482,138 @@
     `).join('');
   }
 
+  function renderModalAnimationSpeedControl() {
+    const input = $('#settingsAnimationSpeed');
+    const value = $('#settingsAnimationSpeedValue');
+    const control = document.querySelector('.animation-speed-control');
+    if (input) input.value = String(normalizeModalAnimationSpeed(currentModalAnimationSpeed));
+    if (value) value.textContent = `${normalizeModalAnimationSpeed(currentModalAnimationSpeed)}/10`;
+    control?.classList.toggle('is-inactive', currentModalAnimation === 'none');
+  }
+
   function applyModalAnimation(style, persist = true) {
     const nextStyle = normalizeModalAnimationStyle(style);
     currentModalAnimation = nextStyle;
     document.documentElement.dataset.modalAnimation = nextStyle;
-    if (currentUser) {
+    if (currentUser && persist) {
       currentUser.ui_modal_animation = nextStyle;
-      if (persist) persistCurrentUser();
+      persistCurrentUser();
     }
     renderModalAnimationOptions();
+    renderModalAnimationSpeedControl();
   }
 
-  async function selectModalAnimation(style) {
+  function applyModalAnimationSpeed(speed, persist = true) {
+    const nextSpeed = normalizeModalAnimationSpeed(speed);
+    currentModalAnimationSpeed = nextSpeed;
+    document.documentElement.style.setProperty('--modal-animation-speed-factor', String(getModalAnimationSpeedFactor(nextSpeed)));
+    if (currentUser && persist) {
+      currentUser.ui_modal_animation_speed = nextSpeed;
+      persistCurrentUser();
+    }
+    renderModalAnimationSpeedControl();
+  }
+
+  async function flushModalAnimationSave() {
+    clearTimeout(modalAnimationSaveTimer);
+    modalAnimationSaveTimer = null;
+    if (modalAnimationSaveInFlight || !currentUser) return;
+    const nextPrefs = getCurrentModalAnimationPreferences();
+    const prevPrefs = getPersistedModalAnimationPreferences();
+    if (modalAnimationPreferencesEqual(nextPrefs, prevPrefs)) {
+      modalAnimationSaveQueued = false;
+      setModalAnimationStatus('');
+      return;
+    }
+
+    modalAnimationSaveInFlight = true;
+    modalAnimationSaveQueued = false;
+    clearModalAnimationStatusTimer();
+    setModalAnimationStatus('Saving...');
+    let didSave = false;
+    const requestPrefs = { ...nextPrefs };
+
+    try {
+      const res = await api('/api/user/modal-animation', { method: 'PATCH', body: requestPrefs });
+      currentUser = { ...currentUser, ...res.user };
+      persistCurrentUser();
+      didSave = true;
+
+      const localChangedSinceRequest = !modalAnimationPreferencesEqual(getCurrentModalAnimationPreferences(), requestPrefs);
+      if (!localChangedSinceRequest) {
+        applyModalAnimation(currentUser.ui_modal_animation, false);
+        applyModalAnimationSpeed(currentUser.ui_modal_animation_speed, false);
+      }
+
+      const pendingLocalChanges = !modalAnimationPreferencesEqual(getCurrentModalAnimationPreferences(), getPersistedModalAnimationPreferences());
+      if (!pendingLocalChanges && !modalAnimationSaveTimer) {
+        setModalAnimationStatus('Saved', 'success');
+        scheduleModalAnimationStatusClear();
+      } else {
+        setModalAnimationStatus('Saving...');
+      }
+    } catch (e) {
+      const localChangedSinceRequest = !modalAnimationPreferencesEqual(getCurrentModalAnimationPreferences(), requestPrefs);
+      if (!localChangedSinceRequest) {
+        applyModalAnimation(prevPrefs.style, false);
+        applyModalAnimationSpeed(prevPrefs.speed, false);
+      }
+      setModalAnimationStatus(e.message || 'Animation save failed', 'error');
+    } finally {
+      modalAnimationSaveInFlight = false;
+      const pendingLocalChanges = !modalAnimationPreferencesEqual(getCurrentModalAnimationPreferences(), getPersistedModalAnimationPreferences());
+      if (didSave && !modalAnimationSaveTimer && pendingLocalChanges) {
+        modalAnimationSaveQueued = false;
+        flushModalAnimationSave().catch(() => {});
+      } else if (!pendingLocalChanges && !modalAnimationSaveTimer) {
+        modalAnimationSaveQueued = false;
+      }
+    }
+  }
+
+  function scheduleModalAnimationSave({ debounce = 0 } = {}) {
+    clearModalAnimationStatusTimer();
+    const nextPrefs = getCurrentModalAnimationPreferences();
+    const prevPrefs = getPersistedModalAnimationPreferences();
+    if (modalAnimationPreferencesEqual(nextPrefs, prevPrefs)) {
+      clearTimeout(modalAnimationSaveTimer);
+      modalAnimationSaveTimer = null;
+      modalAnimationSaveQueued = false;
+      if (!modalAnimationSaveInFlight) setModalAnimationStatus('');
+      return;
+    }
+
+    setModalAnimationStatus('Saving...');
+    clearTimeout(modalAnimationSaveTimer);
+
+    if (debounce > 0) {
+      modalAnimationSaveQueued = true;
+      modalAnimationSaveTimer = setTimeout(() => {
+        modalAnimationSaveTimer = null;
+        if (modalAnimationSaveInFlight) return;
+        flushModalAnimationSave().catch(() => {});
+      }, debounce);
+      return;
+    }
+
+    if (modalAnimationSaveInFlight) {
+      modalAnimationSaveQueued = true;
+      return;
+    }
+
+    flushModalAnimationSave().catch(() => {});
+  }
+
+  function selectModalAnimation(style) {
     const nextStyle = normalizeModalAnimationStyle(style);
     if (nextStyle === currentModalAnimation) return;
-    const prevStyle = currentModalAnimation;
-    applyModalAnimation(nextStyle);
-    setModalAnimationStatus('Saving...');
-    try {
-      const res = await api('/api/user/modal-animation', { method: 'PATCH', body: { style: nextStyle } });
-      currentUser = { ...currentUser, ...res.user };
-      applyModalAnimation(currentUser.ui_modal_animation);
-      setModalAnimationStatus('Saved', 'success');
-      setTimeout(() => {
-        if ($('#settingsAnimationStatus')?.textContent === 'Saved') setModalAnimationStatus('');
-      }, 1200);
-    } catch (e) {
-      applyModalAnimation(prevStyle);
-      setModalAnimationStatus(e.message || 'Animation save failed', 'error');
-    }
+    applyModalAnimation(nextStyle, false);
+    scheduleModalAnimationSave();
+  }
+
+  function updateModalAnimationSpeed(speed, { immediate = false } = {}) {
+    applyModalAnimationSpeed(speed, false);
+    scheduleModalAnimationSave({ debounce: immediate ? 0 : 350 });
   }
 
   let singleEmojiPattern = null;
@@ -761,6 +925,9 @@
       if (user.ui_theme) applyUiTheme(user.ui_theme, false);
       if (Object.prototype.hasOwnProperty.call(user, 'ui_modal_animation')) {
         applyModalAnimation(user.ui_modal_animation, false);
+      }
+      if (Object.prototype.hasOwnProperty.call(user, 'ui_modal_animation_speed')) {
+        applyModalAnimationSpeed(user.ui_modal_animation_speed, false);
       }
       persistCurrentUser();
       updateCurrentUserFooter();
@@ -2117,21 +2284,65 @@
     history.go(-depth);
   }
 
+  function parseTransitionTimeMs(value) {
+    const text = String(value || '').trim();
+    if (!text) return 0;
+    if (text.endsWith('ms')) return Math.max(0, Number.parseFloat(text) || 0);
+    if (text.endsWith('s')) return Math.max(0, (Number.parseFloat(text) || 0) * 1000);
+    return Math.max(0, Number.parseFloat(text) || 0);
+  }
+
+  function getElementTransitionTotalMs(el) {
+    if (!(el instanceof Element)) return 0;
+    const styles = getComputedStyle(el);
+    const durations = String(styles.transitionDuration || '').split(',').map(parseTransitionTimeMs);
+    const delays = String(styles.transitionDelay || '').split(',').map(parseTransitionTimeMs);
+    const count = Math.max(durations.length, delays.length);
+    let max = 0;
+    for (let index = 0; index < count; index += 1) {
+      const duration = durations[durations.length ? index % durations.length : 0] || 0;
+      const delay = delays[delays.length ? index % delays.length : 0] || 0;
+      max = Math.max(max, duration + delay);
+    }
+    return max;
+  }
+
+  function getModalTransitionFallbackMs(entryOrEl) {
+    const entry = entryOrEl?.el ? entryOrEl : modalEntryOf(entryOrEl);
+    const modalEl = entry?.el || entryOrEl;
+    if (!(modalEl instanceof HTMLElement)) return MODAL_TRANSITION_BUFFER_MS;
+    const contentEl = modalEl.querySelector('.modal-content');
+    const maxDuration = Math.max(
+      getElementTransitionTotalMs(modalEl),
+      getElementTransitionTotalMs(contentEl)
+    );
+    return Math.max(MODAL_TRANSITION_BUFFER_MS, Math.ceil(maxDuration + MODAL_TRANSITION_BUFFER_MS));
+  }
+
+  function getModalEntriesTransitionFallbackMs(entries = []) {
+    return entries.reduce((max, entry) => Math.max(max, getModalTransitionFallbackMs(entry)), MODAL_TRANSITION_BUFFER_MS);
+  }
+
   function flushPendingModalHistoryRewind() {
     clearTimeout(modalHistorySyncTimer);
     modalHistorySyncTimer = null;
+    modalHistorySyncDueAt = 0;
     if (!pendingModalHistoryRewind) return;
     const steps = pendingModalHistoryRewind;
     pendingModalHistoryRewind = 0;
     rewindModalHistory(steps);
   }
 
-  function scheduleModalHistoryRewind(steps = 1) {
-    pendingModalHistoryRewind += Math.max(0, Number(steps) || 0);
+  function scheduleModalHistoryRewind(steps = 1, delayMs = MODAL_TRANSITION_BUFFER_MS) {
+    const count = Math.max(0, Number(steps) || 0);
+    if (!count) return;
+    pendingModalHistoryRewind += count;
+    const nextDueAt = Date.now() + Math.max(MODAL_TRANSITION_BUFFER_MS, Number(delayMs) || 0);
+    modalHistorySyncDueAt = Math.max(modalHistorySyncDueAt, nextDueAt);
     clearTimeout(modalHistorySyncTimer);
     modalHistorySyncTimer = setTimeout(() => {
       flushPendingModalHistoryRewind();
-    }, MODAL_TRANSITION_FALLBACK_MS);
+    }, Math.max(0, modalHistorySyncDueAt - Date.now()));
   }
 
   function finalizeModalClose(entry) {
@@ -2178,10 +2389,11 @@
     };
     entry.el.addEventListener('transitionend', onTransitionEnd);
     clearTimeout(entry.closeTimer);
+    const closeFallbackMs = getModalTransitionFallbackMs(entry);
     entry.closeTimer = setTimeout(() => {
       entry.el.removeEventListener('transitionend', onTransitionEnd);
       finalizeModalClose(entry);
-    }, MODAL_TRANSITION_FALLBACK_MS);
+    }, closeFallbackMs);
     return true;
   }
 
@@ -2285,7 +2497,7 @@
     toClose.forEach((item) => beginModalClose(item, { immediate }));
     if (!fromHistory) {
       if (immediate || prefersReducedMotion() || currentModalAnimation === 'none') rewindModalHistory(toClose.length);
-      else scheduleModalHistoryRewind(toClose.length);
+      else scheduleModalHistoryRewind(toClose.length, getModalEntriesTransitionFallbackMs(toClose));
     } else {
       modalHistoryDepth = Math.max(0, modalHistoryDepth - toClose.length);
     }
@@ -2300,10 +2512,11 @@
 
   function closeAllModals({ immediate = false, includeMedia = true, syncHistory = true } = {}) {
     if (modalStack.length) {
-      [...modalStack].reverse().forEach((entry) => beginModalClose(entry, { immediate }));
+      const toClose = [...modalStack].reverse();
+      toClose.forEach((entry) => beginModalClose(entry, { immediate }));
       if (syncHistory) {
         if (immediate || prefersReducedMotion() || currentModalAnimation === 'none') rewindModalHistory(modalHistoryDepth);
-        else scheduleModalHistoryRewind(modalHistoryDepth);
+        else scheduleModalHistoryRewind(modalHistoryDepth, getModalEntriesTransitionFallbackMs(toClose));
       }
       modalHistoryDepth = 0;
     }
@@ -2754,6 +2967,7 @@
       currentUser = JSON.parse(userStr);
       applyUiTheme(currentUser.ui_theme, false);
       applyModalAnimation(currentUser.ui_modal_animation, false);
+      applyModalAnimationSpeed(currentUser.ui_modal_animation_speed, false);
     } catch { logout(); return false; }
     return true;
   }
@@ -5966,6 +6180,7 @@
   function openAnimationSettingsModal() {
     openModal('animationSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
     renderModalAnimationOptions();
+    renderModalAnimationSpeedControl();
     setModalAnimationStatus('');
   }
 
@@ -6915,6 +7130,15 @@
       if (!card) return;
       selectModalAnimation(card.dataset.modalAnimationStyle);
     });
+    $('#settingsAnimationSpeed')?.addEventListener('input', (e) => {
+      updateModalAnimationSpeed(e.target.value, { immediate: false });
+    });
+    $('#settingsAnimationSpeed')?.addEventListener('change', (e) => {
+      updateModalAnimationSpeed(e.target.value, { immediate: true });
+    });
+    $('#settingsAnimationSpeed')?.addEventListener('blur', (e) => {
+      updateModalAnimationSpeed(e.target.value, { immediate: true });
+    });
 
     // Weather settings
     $('#settingsWeatherEnabled')?.addEventListener('change', async (e) => {
@@ -7161,6 +7385,7 @@
       currentUser = data.user;
       applyUiTheme(currentUser.ui_theme);
       applyModalAnimation(currentUser.ui_modal_animation);
+      applyModalAnimationSpeed(currentUser.ui_modal_animation_speed);
       localStorage.setItem('user', JSON.stringify(currentUser));
       await window.messageCache?.init?.(currentUser.id);
     } catch { return; }
