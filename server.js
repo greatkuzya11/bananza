@@ -314,6 +314,31 @@ const insertMentionStmt = db.prepare(`
   INSERT OR IGNORE INTO message_mentions(message_id, chat_id, mentioned_user_id, token)
   VALUES(?,?,?,?)
 `);
+const chatPinSettingsStmt = db.prepare('SELECT id, created_by, allow_unpin_any_pin FROM chats WHERE id=?');
+const chatPinsStmt = db.prepare(`
+  SELECT
+    p.id,
+    p.chat_id,
+    p.message_id,
+    p.pinned_by,
+    p.created_at,
+    pu.display_name as pinned_by_name,
+    m.user_id as message_user_id,
+    m.text,
+    u.display_name as message_author_name,
+    f.original_name as file_name,
+    f.type as file_type,
+    vm.message_id as voice_message_id,
+    vm.transcription_text
+  FROM message_pins p
+  JOIN messages m ON m.id=p.message_id
+  JOIN users u ON u.id=m.user_id
+  JOIN users pu ON pu.id=p.pinned_by
+  LEFT JOIN files f ON f.id=m.file_id
+  LEFT JOIN voice_messages vm ON vm.message_id=m.id
+  WHERE p.chat_id=? AND m.is_deleted=0
+  ORDER BY p.id DESC
+`);
 
 function mentionPayload(row) {
   const isAiBot = Number(row.is_ai_bot) !== 0;
@@ -403,6 +428,57 @@ function hydrateMessageById(messageId) {
   const minRead = readInfo && readInfo.min_read != null ? readInfo.min_read : row.id;
   row.is_read = row.id <= minRead;
   return voiceFeature.attachVoiceMetadata([row])[0];
+}
+
+function isChatMember(chatId, userId) {
+  return !!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, userId);
+}
+
+function pinPreviewText(row) {
+  const text = String(row?.text || row?.transcription_text || '').trim();
+  if (text) return text.substring(0, 160);
+  if (row?.voice_message_id) return 'Voice message';
+  if (row?.file_name) return String(row.file_name).substring(0, 160);
+  return 'Attachment';
+}
+
+function getChatPins(chatId) {
+  return chatPinsStmt.all(chatId).map((row) => ({
+    id: row.id,
+    chat_id: row.chat_id,
+    message_id: row.message_id,
+    pinned_by: row.pinned_by,
+    pinned_by_name: row.pinned_by_name,
+    created_at: row.created_at,
+    message_user_id: row.message_user_id,
+    message_author_name: row.message_author_name,
+    preview_text: pinPreviewText(row),
+    file_name: row.file_name || null,
+    file_type: row.file_type || null,
+    is_voice_note: !!row.voice_message_id,
+  }));
+}
+
+function getChatPinPayload(chatId) {
+  const chat = chatPinSettingsStmt.get(chatId);
+  return {
+    pins: getChatPins(chatId),
+    allow_unpin_any_pin: chat ? chat.allow_unpin_any_pin !== 0 : false,
+  };
+}
+
+function broadcastPinsUpdated(chatId, { action = 'updated', actorId = null, messageId = null } = {}) {
+  const payload = getChatPinPayload(chatId);
+  broadcastToChatAll(chatId, {
+    type: 'pins_updated',
+    chatId,
+    pins: payload.pins,
+    allow_unpin_any_pin: payload.allow_unpin_any_pin,
+    action,
+    actorId,
+    messageId,
+  });
+  return payload;
 }
 
 function normalizeClientId(value) {
@@ -653,6 +729,39 @@ app.put('/api/chats/:chatId/preferences', auth, (req, res) => {
   db.prepare('UPDATE chat_members SET notify_enabled=?, sounds_enabled=? WHERE chat_id=? AND user_id=?')
     .run(next.notify_enabled ? 1 : 0, next.sounds_enabled ? 1 : 0, chatId, req.user.id);
   res.json({ preferences: next });
+});
+
+app.get('/api/chats/:chatId/pins', auth, (req, res) => {
+  const chatId = +req.params.chatId;
+  if (!chatId) return res.status(400).json({ error: 'Invalid chat' });
+  if (!isChatMember(chatId, req.user.id))
+    return res.status(403).json({ error: 'Not a member' });
+  res.json(getChatPinPayload(chatId));
+});
+
+app.put('/api/chats/:chatId/pin-settings', auth, (req, res) => {
+  const chatId = +req.params.chatId;
+  if (!chatId) return res.status(400).json({ error: 'Invalid chat' });
+  const chat = chatPinSettingsStmt.get(chatId);
+  if (!chat) return res.status(404).json({ error: 'Chat not found' });
+
+  if (!req.user.is_admin) {
+    if (!isChatMember(chatId, req.user.id))
+      return res.status(403).json({ error: 'Not a member' });
+    if (Number(chat.created_by || 0) !== Number(req.user.id))
+      return res.status(403).json({ error: 'Only chat creator or admin can change pin settings' });
+  }
+
+  const allowUnpinAnyPin = boolPreferenceValue(
+    req.body?.allow_unpin_any_pin,
+    chat.allow_unpin_any_pin !== 0
+  );
+  db.prepare('UPDATE chats SET allow_unpin_any_pin=? WHERE id=?')
+    .run(allowUnpinAnyPin ? 1 : 0, chatId);
+
+  const updated = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+  broadcastToChatAll(chatId, { type: 'chat_updated', chat: updated });
+  res.json(updated);
 });
 
 app.post('/api/chats/:chatId/members', auth, (req, res) => {
@@ -917,6 +1026,49 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   res.json(hydratedMsg);
 });
 
+app.post('/api/messages/:id/pin', auth, msgLimiter, (req, res) => {
+  const mid = +req.params.id;
+  if (!mid) return res.status(400).json({ error: 'Invalid message' });
+
+  const msg = db.prepare('SELECT id,chat_id FROM messages WHERE id=? AND is_deleted=0').get(mid);
+  if (!msg) return res.status(404).json({ error: 'Message not found' });
+  if (!isChatMember(msg.chat_id, req.user.id))
+    return res.status(403).json({ error: 'Not a member' });
+
+  const inserted = db.prepare('INSERT OR IGNORE INTO message_pins(chat_id,message_id,pinned_by) VALUES(?,?,?)')
+    .run(msg.chat_id, mid, req.user.id);
+  const payload = inserted.changes > 0
+    ? broadcastPinsUpdated(msg.chat_id, { action: 'pinned', actorId: req.user.id, messageId: mid })
+    : getChatPinPayload(msg.chat_id);
+  res.json({ ok: true, ...payload });
+});
+
+app.delete('/api/messages/:id/pin', auth, (req, res) => {
+  const mid = +req.params.id;
+  if (!mid) return res.status(400).json({ error: 'Invalid message' });
+
+  const pin = db.prepare(`
+    SELECT p.*, c.allow_unpin_any_pin, c.created_by
+    FROM message_pins p
+    JOIN chats c ON c.id=p.chat_id
+    WHERE p.message_id=?
+  `).get(mid);
+  if (!pin) return res.status(404).json({ error: 'Pin not found' });
+
+  const member = isChatMember(pin.chat_id, req.user.id);
+  if (!req.user.is_admin && !member)
+    return res.status(403).json({ error: 'Not a member' });
+
+  const canUnpin = req.user.is_admin ||
+    Number(pin.pinned_by) === Number(req.user.id) ||
+    (member && pin.allow_unpin_any_pin !== 0);
+  if (!canUnpin) return res.status(403).json({ error: 'Not allowed to unpin this message' });
+
+  db.prepare('DELETE FROM message_pins WHERE id=?').run(pin.id);
+  const payload = broadcastPinsUpdated(pin.chat_id, { action: 'unpinned', actorId: req.user.id, messageId: mid });
+  res.json({ ok: true, ...payload });
+});
+
 app.patch('/api/messages/:id', auth, msgLimiter, (req, res) => {
   const mid = +req.params.id;
   const { text } = req.body || {};
@@ -960,6 +1112,9 @@ app.patch('/api/messages/:id', auth, msgLimiter, (req, res) => {
 
   const updated = hydrateMessageById(mid);
   broadcastToChatAll(m.chat_id, { type: 'message_updated', message: updated });
+  if (db.prepare('SELECT 1 FROM message_pins WHERE message_id=?').get(mid)) {
+    broadcastPinsUpdated(m.chat_id, { action: 'updated', actorId: req.user.id, messageId: mid });
+  }
   aiBotFeature.handleMessageUpdated(updated).catch((error) => {
     console.warn('[ai-bot] update hook failed:', error.message);
   });
@@ -1351,11 +1506,15 @@ app.delete('/api/messages/:id', auth, (req, res) => {
   // Soft-delete message (keep record for reply_to_id foreign keys)
   db.prepare('UPDATE messages SET is_deleted=1, text=NULL, file_id=NULL WHERE id=?').run(mid);
   deleteMentionsStmt.run(mid);
+  const removedPins = db.prepare('DELETE FROM message_pins WHERE message_id=?').run(mid);
   // Clean up related file and previews
   if (m.file_id) db.prepare('DELETE FROM files WHERE id=?').run(m.file_id);
   voiceFeature.deleteVoiceMetadata(mid);
   db.prepare('DELETE FROM link_previews WHERE message_id=?').run(mid);
   broadcastToChatAll(m.chat_id, { type: 'message_deleted', messageId: mid, chatId: m.chat_id });
+  if (removedPins.changes > 0) {
+    broadcastPinsUpdated(m.chat_id, { action: 'unpinned', actorId: req.user.id, messageId: mid });
+  }
   aiBotFeature.handleMessageDeleted(mid);
   res.json({ ok: true });
 });

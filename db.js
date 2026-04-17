@@ -31,6 +31,7 @@ db.exec(`
     type TEXT NOT NULL CHECK(type IN ('general','group','private')),
     created_by INTEGER REFERENCES users(id),
     avatar_url TEXT DEFAULT NULL,
+    allow_unpin_any_pin INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -128,6 +129,15 @@ db.exec(`
     PRIMARY KEY (message_id, mentioned_user_id)
   );
 
+  CREATE TABLE IF NOT EXISTS message_pins (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    pinned_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(chat_id, message_id)
+  );
+
   CREATE TABLE IF NOT EXISTS push_subscriptions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -147,6 +157,8 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);
   CREATE INDEX IF NOT EXISTS idx_message_mentions_user ON message_mentions(mentioned_user_id, chat_id);
   CREATE INDEX IF NOT EXISTS idx_message_mentions_chat ON message_mentions(chat_id, message_id);
+  CREATE INDEX IF NOT EXISTS idx_message_pins_chat ON message_pins(chat_id, id);
+  CREATE INDEX IF NOT EXISTS idx_message_pins_message ON message_pins(message_id);
 `);
 
 // Seed general chat
@@ -191,6 +203,11 @@ try {
   db.prepare("SELECT avatar_url FROM chats LIMIT 1").get();
 } catch {
   db.exec("ALTER TABLE chats ADD COLUMN avatar_url TEXT DEFAULT NULL");
+}
+try {
+  db.prepare("SELECT allow_unpin_any_pin FROM chats LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE chats ADD COLUMN allow_unpin_any_pin INTEGER DEFAULT 0");
 }
 // Migration: chat background columns
 try {
@@ -289,6 +306,18 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_message_mentions_user ON message_mentions(mentioned_user_id, chat_id);
   CREATE INDEX IF NOT EXISTS idx_message_mentions_chat ON message_mentions(chat_id, message_id);
+`);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS message_pins (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    pinned_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(chat_id, message_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_message_pins_chat ON message_pins(chat_id, id);
+  CREATE INDEX IF NOT EXISTS idx_message_pins_message ON message_pins(message_id);
 `);
 // Migration: reactions table
 try {

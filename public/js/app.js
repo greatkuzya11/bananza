@@ -94,6 +94,8 @@
   let pendingRecoveryChatIds = new Set();
   let onlineUsers = new Set();
   let chatMembersCache = new Map();
+  let chatPinsByChat = new Map();
+  let activePinIndexByChat = new Map();
   let loadingMore = false;
   let loadingMoreAfter = false;
   let hasMore = true;
@@ -209,6 +211,7 @@
   const chatTitle = $('#chatTitle');
   const chatHeaderAvatar = $('#chatHeaderAvatar');
   const chatStatus = $('#chatStatus');
+  const pinnedBar = $('#pinnedBar');
   const messagesEl = $('#messages');
   const loadMoreWrap = $('#loadMoreWrap');
   const loadMoreBtn = $('#loadMoreBtn');
@@ -224,6 +227,7 @@
   const imageViewer = $('#imageViewer');
   const ivStrip = $('#ivStrip');
   const reactionPicker = $('#reactionPicker');
+  const messageContextMenu = $('#messageContextMenu');
   const replyBar = $('#replyBar');
   const replyBarName = $('#replyBarName');
   const replyBarText = $('#replyBarText');
@@ -1012,14 +1016,20 @@
         : (current.background_url || null),
       background_style: nextChat.background_style || current.background_style || 'cover',
     };
+    if ((current.type === 'private' || nextChat.type === 'private') && current.private_user && !nextChat.private_user) {
+      chats[idx].name = current.name;
+    }
     const updated = chats[idx];
     renderChatList(chatSearch.value);
     if (currentChatId === chatId) {
       renderCurrentChatHeader(updated);
       applyChatBackground(updated);
       updateChatStatus();
+      renderPinnedBar(chatId);
+      refreshVisiblePinButtons(chatId);
     }
     refreshChatInfoPresentation(updated);
+    renderChatPinSettingsForm(updated);
     return updated;
   }
 
@@ -1729,6 +1739,358 @@
       setChatPreferencesStatus(e.message || 'Не удалось сохранить настройки чата', 'error');
       if (chat) await loadChatPreferences(currentChatId);
     }
+  }
+
+  function chatAllowsUnpinAnyPin(chat) {
+    return chat && (chat.allow_unpin_any_pin === true || chat.allow_unpin_any_pin === 1 || chat.allow_unpin_any_pin === '1');
+  }
+
+  function canManagePinSettings(chat = getChatById(currentChatId)) {
+    if (!currentUser || !chat) return false;
+    return Boolean(currentUser.is_admin || Number(chat.created_by || 0) === Number(currentUser.id));
+  }
+
+  function setChatPinSettingsStatus(message, type = '') {
+    const el = $('#chatPinSettingsStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function renderChatPinSettingsForm(chat = getChatById(currentChatId)) {
+    const section = $('#chatPinSettingsSection');
+    const toggle = $('#chatAllowUnpinAnyPinToggle');
+    if (!section || !toggle) return;
+    const canManage = canManagePinSettings(chat);
+    section.classList.toggle('hidden', !canManage);
+    toggle.checked = chatAllowsUnpinAnyPin(chat);
+    setChatPinSettingsStatus('');
+  }
+
+  async function saveChatPinSettings() {
+    if (!currentChatId) return;
+    const chat = getChatById(currentChatId);
+    if (!canManagePinSettings(chat)) return;
+    const next = { allow_unpin_any_pin: $('#chatAllowUnpinAnyPinToggle')?.checked ?? false };
+    if (chat) chat.allow_unpin_any_pin = next.allow_unpin_any_pin;
+    renderChatPinSettingsForm(chat);
+    renderPinnedBar(currentChatId);
+    refreshVisiblePinButtons(currentChatId);
+    setChatPinSettingsStatus('Saving...');
+    try {
+      const updated = await api(`/api/chats/${currentChatId}/pin-settings`, { method: 'PUT', body: next });
+      applyChatUpdate(updated || {});
+      setChatPinSettingsStatus('Saved', 'success');
+    } catch (e) {
+      setChatPinSettingsStatus(e.message || 'Could not save pin settings', 'error');
+      await loadChats({ silent: true });
+      renderChatPinSettingsForm(getChatById(currentChatId));
+    }
+  }
+
+  function normalizePin(raw) {
+    if (!raw) return null;
+    const messageId = Number(raw.message_id || raw.messageId || 0);
+    const chatId = Number(raw.chat_id || raw.chatId || currentChatId || 0);
+    if (!messageId || !chatId) return null;
+    return {
+      id: Number(raw.id || 0),
+      chat_id: chatId,
+      message_id: messageId,
+      pinned_by: Number(raw.pinned_by || raw.pinnedBy || 0),
+      pinned_by_name: raw.pinned_by_name || raw.pinnedByName || '',
+      created_at: raw.created_at || raw.createdAt || '',
+      message_user_id: Number(raw.message_user_id || raw.messageUserId || 0),
+      message_author_name: raw.message_author_name || raw.messageAuthorName || '',
+      preview_text: raw.preview_text || raw.previewText || '',
+      file_name: raw.file_name || raw.fileName || null,
+      file_type: raw.file_type || raw.fileType || null,
+      is_voice_note: Boolean(raw.is_voice_note || raw.isVoiceNote),
+    };
+  }
+
+  function normalizePins(pins = []) {
+    const seen = new Set();
+    return (Array.isArray(pins) ? pins : [])
+      .map(normalizePin)
+      .filter((pin) => {
+        if (!pin || seen.has(pin.message_id)) return false;
+        seen.add(pin.message_id);
+        return true;
+      });
+  }
+
+  function getChatPins(chatId = currentChatId) {
+    return chatPinsByChat.get(Number(chatId || 0)) || [];
+  }
+
+  function getPinForMessage(messageId, chatId = currentChatId) {
+    const mid = Number(messageId || 0);
+    if (!mid) return null;
+    return getChatPins(chatId).find(pin => Number(pin.message_id) === mid) || null;
+  }
+
+  function canUnpinPin(pin) {
+    if (!pin || !currentUser) return false;
+    if (currentUser.is_admin) return true;
+    if (Number(pin.pinned_by) === Number(currentUser.id)) return true;
+    return chatAllowsUnpinAnyPin(getChatById(pin.chat_id));
+  }
+
+  function getPinActionState(msg) {
+    if (!msg || msg.is_deleted || isClientSideMessage(msg)) return { show: false };
+    const chatId = Number(msg.chat_id || msg.chatId || currentChatId || 0);
+    const pin = getPinForMessage(msg.id, chatId);
+    if (!pin) {
+      return {
+        show: true,
+        isPinned: false,
+        disabled: false,
+        title: 'Pin message',
+        label: 'Pin',
+        iconHtml: '&#128204;',
+      };
+    }
+    const canUnpin = canUnpinPin(pin);
+    return {
+      show: true,
+      isPinned: true,
+      disabled: !canUnpin,
+      pin,
+      title: canUnpin ? 'Unpin message' : `Pinned by ${pin.pinned_by_name || 'another user'}`,
+      label: canUnpin ? 'Unpin' : 'Pinned',
+      iconHtml: '&#128204;',
+    };
+  }
+
+  function renderPinActionButton(msg) {
+    const state = getPinActionState(msg);
+    if (!state.show) return '';
+    const classes = ['msg-pin-btn'];
+    if (state.isPinned) classes.push('active');
+    if (state.disabled) classes.push('disabled');
+    return `<button class="${classes.join(' ')}" title="${esc(state.title)}" ${state.disabled ? 'disabled' : ''}>${state.iconHtml}</button>`;
+  }
+
+  function applyPinsUpdate(data = {}) {
+    const chatId = Number(data.chatId || data.chat_id || currentChatId || 0);
+    if (!chatId) return;
+    const previousPins = getChatPins(chatId);
+    const previousIndex = Math.max(0, Number(activePinIndexByChat.get(chatId) || 0));
+    const previousPin = previousPins[previousIndex] || previousPins[0] || null;
+    const nextPins = normalizePins(data.pins);
+    chatPinsByChat.set(chatId, nextPins);
+
+    let nextIndex = 0;
+    if (previousPin) {
+      const found = nextPins.findIndex(pin => Number(pin.message_id) === Number(previousPin.message_id));
+      if (found >= 0) nextIndex = found;
+    }
+    if (nextPins.length) activePinIndexByChat.set(chatId, Math.min(nextIndex, nextPins.length - 1));
+    else activePinIndexByChat.set(chatId, 0);
+
+    if (Object.prototype.hasOwnProperty.call(data, 'allow_unpin_any_pin')) {
+      const chat = getChatById(chatId);
+      if (chat) chat.allow_unpin_any_pin = !!data.allow_unpin_any_pin;
+    }
+
+    if (Number(currentChatId || 0) === chatId) {
+      renderPinnedBar(chatId);
+      refreshVisiblePinButtons(chatId);
+      renderChatPinSettingsForm(getChatById(chatId));
+    }
+  }
+
+  async function loadChatPins(chatId = currentChatId) {
+    const id = Number(chatId || 0);
+    if (!id) return [];
+    try {
+      const data = await api(`/api/chats/${id}/pins`);
+      applyPinsUpdate({ chatId: id, pins: data.pins || [], allow_unpin_any_pin: data.allow_unpin_any_pin });
+      return getChatPins(id);
+    } catch (e) {
+      if (Number(currentChatId || 0) === id) renderPinnedBar(id);
+      return [];
+    }
+  }
+
+  function renderPinnedBar(chatId = currentChatId) {
+    if (!pinnedBar) return;
+    const id = Number(chatId || 0);
+    if (!id || Number(currentChatId || 0) !== id) {
+      pinnedBar.classList.add('hidden');
+      pinnedBar.innerHTML = '';
+      return;
+    }
+    const pins = getChatPins(id);
+    if (!pins.length) {
+      pinnedBar.classList.add('hidden');
+      pinnedBar.innerHTML = '';
+      return;
+    }
+
+    const index = Math.min(Math.max(0, Number(activePinIndexByChat.get(id) || 0)), pins.length - 1);
+    activePinIndexByChat.set(id, index);
+    const activePin = pins[index];
+    const canUnpinActive = canUnpinPin(activePin);
+    const isMultiple = pins.length > 1;
+
+    pinnedBar.innerHTML = `
+      <div class="pinned-bar-viewport" role="list" aria-label="Pinned messages">
+        ${pins.map((pin, pinIndex) => {
+          const preview = pin.preview_text || pin.file_name || (pin.is_voice_note ? 'Voice message' : 'Pinned message');
+          const author = pin.message_author_name ? `${pin.message_author_name}` : 'Message';
+          const pinnedBy = pin.pinned_by_name ? `Pinned by ${pin.pinned_by_name}` : 'Pinned message';
+          return `
+            <button type="button" class="pinned-bar-item${pinIndex === index ? ' active' : ''}" data-pin-index="${pinIndex}" title="Jump to pinned message">
+              <span class="pinned-bar-icon" aria-hidden="true">&#128204;</span>
+              <span class="pinned-bar-copy">
+                <strong>${esc(preview)}</strong>
+                <small>${esc(author)} &middot; ${esc(pinnedBy)}</small>
+              </span>
+            </button>
+          `;
+        }).join('')}
+      </div>
+      <div class="pinned-bar-side">
+        <button type="button" class="pinned-bar-close${canUnpinActive ? '' : ' hidden'}" title="Unpin message" aria-label="Unpin pinned message">&times;</button>
+        ${isMultiple ? `<span class="pinned-bar-count">${index + 1}/${pins.length}</span>` : ''}
+      </div>
+      ${isMultiple ? '<div class="pinned-bar-scrollbar" aria-hidden="true"><span class="pinned-bar-scrollbar-thumb"></span></div>' : ''}
+    `;
+    pinnedBar.classList.toggle('has-multiple', isMultiple);
+    pinnedBar.classList.remove('hidden');
+
+    const viewport = pinnedBar.querySelector('.pinned-bar-viewport');
+    const updateScrollbar = () => {
+      const track = pinnedBar.querySelector('.pinned-bar-scrollbar');
+      const thumb = pinnedBar.querySelector('.pinned-bar-scrollbar-thumb');
+      if (!viewport || !track || !thumb) return;
+      const scrollHeight = Math.max(viewport.scrollHeight, viewport.clientHeight);
+      const scrollRange = Math.max(1, scrollHeight - viewport.clientHeight);
+      const trackHeight = track.clientHeight || viewport.clientHeight || 1;
+      const thumbHeight = Math.max(14, Math.round((viewport.clientHeight / scrollHeight) * trackHeight));
+      const maxTop = Math.max(0, trackHeight - thumbHeight);
+      const top = Math.round(maxTop * ((viewport.scrollTop || 0) / scrollRange));
+      thumb.style.height = `${thumbHeight}px`;
+      thumb.style.transform = `translateY(${top}px)`;
+    };
+    const syncActivePinFromScroll = () => {
+      if (!viewport) return;
+      const firstItem = viewport.querySelector('.pinned-bar-item');
+      const itemHeight = firstItem ? firstItem.getBoundingClientRect().height : viewport.clientHeight;
+      const nextIndex = Math.min(pins.length - 1, Math.max(0, Math.round((viewport.scrollTop || 0) / Math.max(1, itemHeight || 1))));
+      activePinIndexByChat.set(id, nextIndex);
+      const countEl = pinnedBar.querySelector('.pinned-bar-count');
+      if (countEl) countEl.textContent = `${nextIndex + 1}/${pins.length}`;
+      pinnedBar.querySelectorAll('.pinned-bar-item').forEach((item) => {
+        item.classList.toggle('active', Number(item.dataset.pinIndex || 0) === nextIndex);
+      });
+      const closeBtn = pinnedBar.querySelector('.pinned-bar-close');
+      if (closeBtn) closeBtn.classList.toggle('hidden', !canUnpinPin(pins[nextIndex]));
+      updateScrollbar();
+    };
+
+    viewport?.addEventListener('scroll', () => {
+      if (pins.length <= 1) return;
+      window.requestAnimationFrame(syncActivePinFromScroll);
+    });
+    requestAnimationFrame(() => {
+      const targetItem = viewport?.querySelector(`.pinned-bar-item[data-pin-index="${index}"]`);
+      if (viewport && targetItem) viewport.scrollTop = targetItem.offsetTop;
+      if (isMultiple) syncActivePinFromScroll();
+      else updateScrollbar();
+    });
+
+    pinnedBar.querySelectorAll('.pinned-bar-item').forEach((item) => {
+      item.addEventListener('click', () => {
+        const pinIndex = Number(item.dataset.pinIndex || 0);
+        activePinIndexByChat.set(id, pinIndex);
+        jumpToPinnedMessage(pins[pinIndex]);
+      });
+    });
+    pinnedBar.querySelector('.pinned-bar-close')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const pinIndex = Math.min(pins.length - 1, Math.max(0, Number(activePinIndexByChat.get(id) || 0)));
+      unpinPin(pins[pinIndex]);
+    });
+  }
+
+  async function jumpToPinnedMessage(pin) {
+    if (!pin?.message_id || !pin?.chat_id) return false;
+    const sameChat = Number(pin.chat_id) === Number(currentChatId || 0);
+    if (sameChat && scrollToMessage(pin.message_id, { highlightClass: 'is-pin-hit' })) return true;
+    await openChat(pin.chat_id, {
+      anchorMessageId: pin.message_id,
+      suppressHistoryPush: sameChat,
+      source: 'pin',
+    });
+    if (scrollToMessage(pin.message_id, { highlightClass: 'is-pin-hit' })) return true;
+    showCenterToast('Pinned message not found');
+    return false;
+  }
+
+  async function pinMessage(msg) {
+    if (!msg?.id) return;
+    try {
+      const chatId = Number(msg.chat_id || msg.chatId || currentChatId || 0);
+      const data = await api(`/api/messages/${msg.id}/pin`, { method: 'POST' });
+      applyPinsUpdate({ chatId, pins: data.pins || [], allow_unpin_any_pin: data.allow_unpin_any_pin });
+      showCenterToast('Message pinned');
+    } catch (e) {
+      showCenterToast(e.message || 'Could not pin message');
+    }
+  }
+
+  async function unpinPin(pin) {
+    if (!pin?.message_id) return;
+    if (!canUnpinPin(pin)) {
+      showCenterToast('Only the pin owner or admin can unpin this');
+      return;
+    }
+    try {
+      const data = await api(`/api/messages/${pin.message_id}/pin`, { method: 'DELETE' });
+      applyPinsUpdate({ chatId: pin.chat_id, pins: data.pins || [], allow_unpin_any_pin: data.allow_unpin_any_pin });
+      showCenterToast('Message unpinned');
+    } catch (e) {
+      showCenterToast(e.message || 'Could not unpin message');
+    }
+  }
+
+  async function togglePinFromRow(row) {
+    const msg = row?.__messageData;
+    const state = getPinActionState(msg);
+    if (!state.show) return;
+    hideMessageContextMenu();
+    if (state.isPinned) {
+      if (state.disabled) {
+        showCenterToast('Only the pin owner or admin can unpin this');
+        return;
+      }
+      await unpinPin(state.pin);
+      return;
+    }
+    await pinMessage(msg);
+  }
+
+  function refreshVisiblePinButtons(chatId = currentChatId) {
+    const id = Number(chatId || 0);
+    if (!id || Number(currentChatId || 0) !== id) return;
+    messagesEl.querySelectorAll('.msg-row[data-msg-id]').forEach((row) => {
+      const btn = row.querySelector('.msg-pin-btn');
+      if (!btn) return;
+      const state = getPinActionState(row.__messageData);
+      if (!state.show) {
+        btn.remove();
+        return;
+      }
+      btn.classList.toggle('active', !!state.isPinned);
+      btn.classList.toggle('disabled', !!state.disabled);
+      btn.disabled = !!state.disabled;
+      btn.title = state.title;
+      btn.innerHTML = state.iconHtml;
+    });
   }
 
   function setAiBotStatus(message, type = '') {
@@ -3449,6 +3811,10 @@
         applyUserUpdate(msg.user || {});
         break;
       }
+      case 'pins_updated': {
+        applyPinsUpdate(msg);
+        break;
+      }
       case 'chat_updated': {
         applyChatUpdate(msg.chat || {});
         break;
@@ -4176,6 +4542,7 @@
     }
     hideMentionPicker();
     hideAvatarUserMenu();
+    hideMessageContextMenu();
 
     currentChatId = targetChatId;
     displayedMsgIds.clear();
@@ -4206,6 +4573,8 @@
       ? { messageId: explicitAnchorId, offsetTop: 72, atBottom: false, mode: sameChat ? 'search_same_chat' : 'search' }
       : anchorForChatOpen(chat);
     renderCurrentChatHeader(chat);
+    renderPinnedBar(targetChatId);
+    loadChatPins(targetChatId).catch(() => {});
 
     updateChatStatus();
     // Apply chat background (if present)
@@ -4704,6 +5073,14 @@
       }
     }
 
+    const actionsEl = row.querySelector('.msg-actions');
+    if (actionsEl && !row.querySelector('.msg-pin-btn')) {
+      const pinWrap = document.createElement('span');
+      pinWrap.innerHTML = renderPinActionButton(msg);
+      const pinButton = pinWrap.firstElementChild;
+      if (pinButton) actionsEl.insertBefore(pinButton, actionsEl.querySelector('.msg-react-btn'));
+    }
+
     // Event listeners
     const deleteBtn = row.querySelector('.msg-delete-btn');
     if (deleteBtn) {
@@ -4740,6 +5117,14 @@
       forwardBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         openForwardMessageModal(row.__messageData);
+      });
+    }
+
+    const pinBtn = row.querySelector('.msg-pin-btn');
+    if (pinBtn) {
+      pinBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        togglePinFromRow(row);
       });
     }
 
@@ -6305,15 +6690,15 @@
     searchDebounce = setTimeout(runSearch, 300);
   }
 
-  function scrollToMessage(msgId, { behavior = 'smooth', highlight = true } = {}) {
+  function scrollToMessage(msgId, { behavior = 'smooth', highlight = true, highlightClass = 'is-search-hit' } = {}) {
     const row = messagesEl.querySelector(`[data-msg-id="${msgId}"]`);
     if (!row) return false;
     row.scrollIntoView({ behavior, block: 'center' });
     if (highlight) {
       clearTimeout(row.__searchHitTimer);
-      row.classList.add('is-search-hit');
+      row.classList.add(highlightClass);
       row.__searchHitTimer = setTimeout(() => {
-        row.classList.remove('is-search-hit');
+        row.classList.remove(highlightClass);
       }, 1800);
     }
     return true;
@@ -6566,6 +6951,7 @@
   // ═══════════════════════════════════════════════════════════════════════════
   let reactionPickerMsgId = null;
   let reactionPickerKeepKeyboard = false;
+  let messageContextMenuMsgId = null;
 
   function renderReactions(reactions) {
     if (!reactions || reactions.length === 0) return '';
@@ -6599,6 +6985,7 @@
   }
 
   function showReactionPicker(row, trigger, options = {}) {
+    hideMessageContextMenu();
     reactionPickerKeepKeyboard = Boolean(options.keepComposerFocus);
     reactionPickerMsgId = +row.dataset.msgId;
     reactionPicker.classList.remove('hidden');
@@ -6620,6 +7007,107 @@
     reactionPicker.classList.add('hidden');
     reactionPickerMsgId = null;
     if (!options.keepComposerState) reactionPickerKeepKeyboard = false;
+  }
+
+  function getReactionEmojiButtonsHtml() {
+    return Array.from(reactionPicker?.querySelectorAll('button[data-emoji]') || [])
+      .map((btn) => {
+        const emoji = btn.dataset.emoji || '';
+        return `<button type="button" class="message-context-reaction" data-emoji="${esc(emoji)}">${esc(emoji)}</button>`;
+      })
+      .join('');
+  }
+
+  function contextActionHtml(action, label, { title = '', disabled = false, danger = false } = {}) {
+    return `
+      <button type="button" class="message-context-action${danger ? ' danger' : ''}" data-action="${esc(action)}" ${disabled ? 'disabled' : ''} title="${esc(title || label)}">
+        <span>${esc(label)}</span>
+      </button>
+    `;
+  }
+
+  function getMessageContextRow() {
+    const key = String(messageContextMenuMsgId || '');
+    if (!key) return null;
+    return Array.from(messagesEl.querySelectorAll('.msg-row[data-msg-id]'))
+      .find(row => String(row.dataset.msgId || '') === key) || null;
+  }
+
+  function positionFloatingMenu(menu, x, y) {
+    if (!menu) return;
+    const margin = 8;
+    const rect = menu.getBoundingClientRect();
+    const width = rect.width || 260;
+    const height = rect.height || 220;
+    const left = Math.max(margin, Math.min(Number(x) || margin, window.innerWidth - width - margin));
+    const top = Math.max(margin, Math.min(Number(y) || margin, window.innerHeight - height - margin));
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+  }
+
+  function showMessageContextMenu(row, anchor = {}) {
+    if (!messageContextMenu || !row || row.dataset.outbox === '1') return;
+    const msg = row.__messageData || {};
+    if (!msg.id || msg.is_deleted) return;
+
+    hideReactionPicker();
+    messageContextMenuMsgId = String(row.dataset.msgId || msg.id);
+    const pinState = getPinActionState(msg);
+    const canDelete = !isClientSideMessage(msg) && (Number(msg.user_id) === Number(currentUser?.id) || currentUser?.is_admin);
+    const canCopy = Boolean(getMessageCopyText(row));
+    const actions = [
+      contextActionHtml('copy', 'Copy', { disabled: !canCopy }),
+      contextActionHtml('reply', 'Reply'),
+      canEditMessage(msg) ? contextActionHtml('edit', 'Edit') : '',
+      canForwardMessage(msg) ? contextActionHtml('forward', 'Forward') : '',
+      pinState.show ? contextActionHtml('pin', pinState.label, { title: pinState.title, disabled: pinState.disabled }) : '',
+      canDelete ? contextActionHtml('delete', 'Delete', { danger: true }) : '',
+    ].filter(Boolean).join('');
+
+    messageContextMenu.innerHTML = `
+      <div class="message-context-reactions">${getReactionEmojiButtonsHtml()}</div>
+      <div class="message-context-actions">${actions}</div>
+    `;
+    messageContextMenu.classList.remove('hidden');
+    positionFloatingMenu(messageContextMenu, anchor.x || window.innerWidth / 2, anchor.y || window.innerHeight / 2);
+  }
+
+  function hideMessageContextMenu() {
+    if (!messageContextMenu) return;
+    messageContextMenu.classList.add('hidden');
+    messageContextMenu.innerHTML = '';
+    messageContextMenuMsgId = null;
+  }
+
+  async function handleMessageContextMenuClick(e) {
+    const row = getMessageContextRow();
+    if (!row) {
+      hideMessageContextMenu();
+      return;
+    }
+
+    const reactionBtn = e.target.closest('.message-context-reaction');
+    if (reactionBtn) {
+      e.stopPropagation();
+      const msgId = Number(row.dataset.msgId || 0);
+      const emoji = reactionBtn.dataset.emoji;
+      hideMessageContextMenu();
+      if (msgId && emoji) await toggleReaction(msgId, emoji);
+      return;
+    }
+
+    const actionBtn = e.target.closest('.message-context-action');
+    if (!actionBtn || actionBtn.disabled) return;
+    e.stopPropagation();
+    const action = actionBtn.dataset.action;
+    hideMessageContextMenu();
+
+    if (action === 'copy') await copyMessageFromRow(row);
+    else if (action === 'reply') setReplyFromRow(row);
+    else if (action === 'edit') setEditFromRow(row);
+    else if (action === 'forward') openForwardMessageModal(row.__messageData);
+    else if (action === 'pin') await togglePinFromRow(row);
+    else if (action === 'delete') await deleteMessage(row.__messageData?.id || row.dataset.msgId);
   }
 
   async function toggleReaction(msgId, emoji, options = {}) {
@@ -7245,6 +7733,7 @@
     // Sync compact view toggle
     $('#compactViewToggle').checked = compactView;
     await loadChatPreferences(currentChatId);
+    renderChatPinSettingsForm(chat);
 
     // Group edit section
     const editSection = $('#chatEditSection');
@@ -7358,11 +7847,17 @@
       // Cache members for this chat so header can count per-chat online users
       try { chatMembersCache.set(currentChatId, members); } catch (e) {}
       const memberList = $('#chatMemberList');
-      const canRemove = chat && chat.type === 'group' && (chat.created_by === currentUser.id || currentUser.is_admin);
+      const ownerId = Number(chat?.created_by || 0);
+      const canRemove = chat && chat.type === 'group' && (ownerId === Number(currentUser.id) || currentUser.is_admin);
 
-      memberList.innerHTML = members.map(u => `
-        <div class="user-list-item" data-uid="${u.id}" data-bot="${u.is_ai_bot ? 1 : 0}">
-          ${avatarHtml(u.display_name, u.avatar_color, u.avatar_url)}
+      memberList.innerHTML = members.map(u => {
+        const isOwner = ownerId && Number(u.id) === ownerId;
+        return `
+        <div class="user-list-item${isOwner ? ' chat-owner' : ''}" data-uid="${u.id}" data-bot="${u.is_ai_bot ? 1 : 0}">
+          <div class="member-avatar-wrap${isOwner ? ' is-owner' : ''}" title="${isOwner ? 'Chat creator' : ''}">
+            ${avatarHtml(u.display_name, u.avatar_color, u.avatar_url)}
+            ${isOwner ? '<span class="member-owner-crown" aria-label="Chat creator" title="Chat creator">&#128081;</span>' : ''}
+          </div>
           <div>
             <div class="name">${esc(u.display_name)}</div>
             <div class="admin-user-status ${u.is_ai_bot ? 'bot' : (onlineUsers.has(u.id) ? 'online' : 'offline')}">
@@ -7371,7 +7866,8 @@
           </div>
           ${canRemove && u.id !== currentUser.id ? `<button class="member-remove" data-uid="${u.id}" title="Remove">✕</button>` : ''}
         </div>
-      `).join('');
+      `;
+      }).join('');
 
       // Update status indicators in modal
       try { refreshChatMemberStatuses(); } catch (e) {}
@@ -7919,10 +8415,20 @@
       }
     });
 
+    messageContextMenu?.addEventListener('pointerdown', (e) => e.stopPropagation());
+    messageContextMenu?.addEventListener('mousedown', (e) => e.preventDefault());
+    messageContextMenu?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleMessageContextMenuClick(e).catch(() => {});
+    });
+
     // Reaction picker: close on outside click
     document.addEventListener('click', (e) => {
       if (!reactionPicker.classList.contains('hidden') && !reactionPicker.contains(e.target) && !e.target.closest('.msg-react-btn')) {
         hideReactionPicker();
+      }
+      if (messageContextMenu && !messageContextMenu.classList.contains('hidden') && !messageContextMenu.contains(e.target)) {
+        hideMessageContextMenu();
       }
     });
 
@@ -7956,16 +8462,20 @@
       }
     });
 
-    // Long press on message for reaction picker (mobile)
+    // Long press/right-click on message for context menu
     (() => {
       let lpTimer = null;
       messagesEl.addEventListener('touchstart', (e) => {
         const row = e.target.closest('.msg-row');
-        if (!row || e.target.closest('.msg-copy-btn, .msg-react-btn, .msg-reply-btn, .msg-edit-btn, .msg-forward-btn, .msg-group-avatar') || e.target.closest('.reaction-badge')) return;
+        if (!row || e.target.closest('.msg-copy-btn, .msg-react-btn, .msg-reply-btn, .msg-edit-btn, .msg-forward-btn, .msg-pin-btn, .msg-group-avatar') || e.target.closest('.reaction-badge')) return;
+        const touch = e.touches && e.touches[0] ? e.touches[0] : null;
         lpTimer = setTimeout(() => {
           lpTimer = null;
           navigator.vibrate && navigator.vibrate(30);
-          showReactionPicker(row, null, { keepComposerFocus: isMobileComposerKeyboardOpen() });
+          showMessageContextMenu(row, {
+            x: touch?.clientX || window.innerWidth / 2,
+            y: touch?.clientY || window.innerHeight / 2,
+          });
         }, 500);
       }, { passive: true });
       messagesEl.addEventListener('touchend', () => { clearTimeout(lpTimer); lpTimer = null; }, { passive: true });
@@ -7976,7 +8486,7 @@
         if (e.target.closest('.msg-actions')) return;
         if (!row) return;
         e.preventDefault();
-        showReactionPicker(row, null);
+        showMessageContextMenu(row, { x: e.clientX, y: e.clientY });
       });
     })();
 
@@ -8335,6 +8845,7 @@
     });
     $('#chatNotifyToggle')?.addEventListener('change', () => saveChatPreferences());
     $('#chatSoundToggle')?.addEventListener('change', () => saveChatPreferences());
+    $('#chatAllowUnpinAnyPinToggle')?.addEventListener('change', () => saveChatPinSettings());
 
     // Logout
     $('#logoutBtn').addEventListener('click', () => { if (confirm('Logout?')) logout(); });
@@ -8350,6 +8861,7 @@
     // Scroll to load more
     messagesEl.addEventListener('scroll', () => {
       hideAvatarUserMenu();
+      hideMessageContextMenu();
       if (!suppressScrollAnchorSave && !loadingMore && !loadingMoreAfter) scheduleScrollAnchorSave();
       maybeLoadMoreAtTop();
       maybeLoadMoreAtBottom();

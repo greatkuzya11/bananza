@@ -76,6 +76,8 @@
           <button id="chatInfoBtn" class="icon-btn chat-header-action-btn" title="Chat settings" aria-label="Chat settings" type="button">⚙️</button>
         </div>
 
+        <div id="pinnedBar" class="pinned-bar hidden" aria-live="polite"></div>
+
         <div id="messages" class="messages">
           <div id="loadMoreWrap" class="load-more hidden">
             <button id="loadMoreBtn">Load earlier messages</button>
@@ -130,6 +132,9 @@
     <button data-emoji="🎉">🎉</button>
     <button data-emoji="🤡">🤡</button>
   </div>
+
+  <!-- Message Context Menu -->
+  <div id="messageContextMenu" class="message-context-menu hidden"></div>
 
   <!-- Image Viewer -->
   <div id="imageViewer" class="image-viewer hidden">
@@ -638,6 +643,18 @@
           </div>
           <div id="chatSoundHint" class="settings-hint hidden">Общие звуки выключены. Сначала включите их в настройках пользователя.</div>
           <div id="chatPreferencesStatus" class="chat-preferences-status"></div>
+        </div>
+        <div id="chatPinSettingsSection" class="chat-preferences-block hidden">
+          <h4>Pins</h4>
+          <div class="settings-item settings-toggle-item">
+            <span>Anyone can unpin any pinned message</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="chatAllowUnpinAnyPinToggle">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="settings-hint">When off, only the person who pinned the message and admins can unpin it.</div>
+          <div id="chatPinSettingsStatus" class="chat-preferences-status"></div>
         </div>
         <hr class="divider">
         <div id="chatEditSection" class="hidden">
