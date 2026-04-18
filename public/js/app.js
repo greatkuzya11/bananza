@@ -178,7 +178,7 @@
   let suppressNextChatItemTapUntil = 0;
   let suppressChatContextDismissUntil = 0;
   let mentionTargetsByChat = new Map();
-  let mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [] };
+  let mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [], source: null };
   let mentionPickerPointerState = null;
   let avatarUserMenuState = null;
   let chatMemberLastReads = new Map();
@@ -226,6 +226,7 @@
   const loadMoreBtn = $('#loadMoreBtn');
   const typingBar = $('#typingBar');
   const msgInput = $('#msgInput');
+  const mentionOpenBtn = $('#mentionOpenBtn');
   const sendBtn = $('#sendBtn');
   const scrollBottomBtn = $('#scrollBottomBtn');
   const attachBtn = $('#attachBtn');
@@ -3665,10 +3666,30 @@
     return picker;
   }
 
+  function isComposerMeaningfullyEmpty() {
+    return !String(msgInput?.value || '').trim();
+  }
+
+  function getManualMentionRange() {
+    const value = String(msgInput?.value || '');
+    if (!value.trim()) return { start: 0, end: value.length };
+    const start = msgInput?.selectionStart ?? value.length;
+    const end = msgInput?.selectionEnd ?? start;
+    return { start, end };
+  }
+
+  function syncMentionOpenButton() {
+    if (!mentionOpenBtn) return;
+    const visible = Boolean(currentChatId && isComposerMeaningfullyEmpty());
+    mentionOpenBtn.classList.toggle('hidden', !visible);
+    mentionOpenBtn.disabled = !visible;
+    mentionOpenBtn.setAttribute('aria-hidden', visible ? 'false' : 'true');
+  }
+
   function hideMentionPicker() {
-    mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [] };
+    mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [], source: null };
     mentionPickerPointerState = null;
-    $('#mentionPicker')?.classList.add('hidden');
+    closeFloatingSurface($('#mentionPicker'));
   }
 
   function findMentionTrigger() {
@@ -3702,14 +3723,18 @@
     picker.style.top = `${top}px`;
   }
 
-  function renderMentionPicker(targets) {
+  function renderMentionPicker(targets, options = {}) {
     const picker = ensureMentionPicker();
+    const { source = mentionPickerState.source || 'trigger', preserveSelection = true } = options;
     if (!targets.length) {
       hideMentionPicker();
       return;
     }
     mentionPickerState.targets = targets;
-    mentionPickerState.selected = Math.min(mentionPickerState.selected, targets.length - 1);
+    mentionPickerState.source = source;
+    mentionPickerState.selected = preserveSelection
+      ? Math.min(mentionPickerState.selected, targets.length - 1)
+      : 0;
     picker.innerHTML = targets.map((target, index) => `
       <button type="button" class="mention-picker-item${index === mentionPickerState.selected ? ' active' : ''}" data-index="${index}">
         <span class="mention-picker-avatar" style="background:${esc(target.avatar_color || '#65aadd')}">${target.avatar_url ? `<img src="${esc(target.avatar_url)}" alt="">` : esc((target.display_name || target.token || '?').trim()[0] || '?')}</span>
@@ -3719,15 +3744,54 @@
         </span>
       </button>
     `).join('');
-    picker.classList.remove('hidden');
     mentionPickerState.active = true;
+    openFloatingSurface(picker);
     positionMentionPicker();
+    requestAnimationFrame(() => positionMentionPicker());
+  }
+
+  async function openMentionPickerFromButton() {
+    const chatId = Number(currentChatId || 0);
+    if (mentionPickerState.active && mentionPickerState.source === 'button') {
+      hideMentionPicker();
+      focusComposerKeepKeyboard(true);
+      return;
+    }
+    if (!chatId || !msgInput || !isComposerMeaningfullyEmpty()) {
+      syncMentionOpenButton();
+      return;
+    }
+    try {
+      const targets = await loadMentionTargets(chatId);
+      if (chatId !== Number(currentChatId || 0) || !isComposerMeaningfullyEmpty()) return;
+      const range = getManualMentionRange();
+      mentionPickerState.start = range.start;
+      mentionPickerState.end = range.end;
+      renderMentionPicker(targets, { source: 'button', preserveSelection: false });
+      focusComposerKeepKeyboard(true);
+    } catch {
+      hideMentionPicker();
+    }
   }
 
   async function updateMentionPicker() {
     const trigger = findMentionTrigger();
     if (!trigger) {
-      hideMentionPicker();
+      if (mentionPickerState.active && mentionPickerState.source === 'button' && isComposerMeaningfullyEmpty()) {
+        const chatId = Number(currentChatId || 0);
+        try {
+          const targets = await loadMentionTargets(chatId);
+          if (chatId !== Number(currentChatId || 0) || !mentionPickerState.active || mentionPickerState.source !== 'button' || !isComposerMeaningfullyEmpty()) return;
+          const range = getManualMentionRange();
+          mentionPickerState.start = range.start;
+          mentionPickerState.end = range.end;
+          renderMentionPicker(targets, { source: 'button' });
+        } catch {
+          hideMentionPicker();
+        }
+      } else {
+        hideMentionPicker();
+      }
       return;
     }
     mentionPickerState.start = trigger.start;
@@ -3747,7 +3811,7 @@
         ].join(' ').toLowerCase();
         return !query || haystack.includes(query);
       }).slice(0, 8);
-      renderMentionPicker(filtered);
+      renderMentionPicker(filtered, { source: 'trigger' });
     } catch {
       hideMentionPicker();
     }
@@ -3764,6 +3828,7 @@
     msgInput.setSelectionRange(cursor, cursor);
     hideMentionPicker();
     autoResize();
+    syncMentionOpenButton();
     window.BananzaVoiceHooks?.refreshComposerState?.();
     focusComposerKeepKeyboard(true);
     msgInput.dispatchEvent(new Event('input', { bubbles: true }));
@@ -3780,6 +3845,7 @@
     const nextCursor = cursor + insertion.length;
     msgInput.setSelectionRange(nextCursor, nextCursor);
     autoResize();
+    syncMentionOpenButton();
     window.BananzaVoiceHooks?.refreshComposerState?.();
     focusComposerKeepKeyboard(true);
     msgInput.dispatchEvent(new Event('input', { bubbles: true }));
@@ -5173,6 +5239,7 @@
 
     clearReply();
     if (editTo) clearEdit({ clearInput: true });
+    syncMentionOpenButton();
     if (window.innerWidth > 768) msgInput.focus();
     window.BananzaVoiceHooks?.refreshComposerState?.();
     updateScrollBottomButton();
@@ -6406,6 +6473,7 @@
     const replySnapshot = getReplySnapshot();
     msgInput.value = '';
     autoResize();
+    syncMentionOpenButton();
     clearPendingFile();
     clearReply();
     window.BananzaVoiceHooks?.refreshComposerState?.();
@@ -6732,6 +6800,7 @@
     replyBar.classList.remove('hidden');
     msgInput.value = text;
     autoResize();
+    syncMentionOpenButton();
     attachBtn.disabled = true;
     attachBtn.classList.add('disabled');
     window.BananzaVoiceHooks?.refreshComposerState?.();
@@ -6748,6 +6817,7 @@
       msgInput.value = '';
       autoResize();
     }
+    syncMentionOpenButton();
     window.BananzaVoiceHooks?.refreshComposerState?.();
   }
 
@@ -9105,6 +9175,14 @@
       // Keep keyboard open on mobile
       if (window.innerWidth <= 768) msgInput.focus();
     });
+    mentionOpenBtn?.addEventListener('mousedown', (e) => {
+      if (typeof e.button === 'number' && e.button !== 0) return;
+      e.preventDefault();
+    });
+    mentionOpenBtn?.addEventListener('click', (e) => {
+      e.preventDefault();
+      openMentionPickerFromButton();
+    });
     msgInput.addEventListener('keydown', (e) => {
       if (handleMentionPickerKeydown(e)) return;
       if (e.key === 'Enter') {
@@ -9114,6 +9192,7 @@
     });
     msgInput.addEventListener('input', () => {
       autoResize();
+      syncMentionOpenButton();
       window.BananzaVoiceHooks?.refreshComposerState?.();
       updateMentionPicker();
       // Typing indicator
@@ -9144,7 +9223,7 @@
     document.addEventListener('pointerdown', (e) => {
       const picker = $('#mentionPicker');
       if (!picker || picker.classList.contains('hidden')) return;
-      if (picker.contains(e.target) || e.target === msgInput) return;
+      if (picker.contains(e.target) || e.target === msgInput || e.target.closest('#mentionOpenBtn')) return;
       hideMentionPicker();
     });
     document.addEventListener('pointerdown', (e) => {
@@ -9158,6 +9237,7 @@
     const fileInputGallery = $('#fileInputGallery');
     const fileInputCamera = $('#fileInputCamera');
     const fileInputDocs = $('#fileInputDocs');
+    syncMentionOpenButton();
     const attachMenu = $('#attachMenu');
     const attachMenuOverlay = $('#attachMenuOverlay');
     const isMobileAttachMenu = () => window.innerWidth <= 768;

@@ -97,7 +97,16 @@
           <div class="input-row">
             <button id="attachBtn" class="icon-btn" title="Attach file">📎</button>
             <button id="emojiBtn" class="icon-btn" title="Emoji">😊</button>
-            <textarea id="msgInput" placeholder="Message..." rows="1"></textarea>
+            <div class="composer-input-wrap">
+              <textarea id="msgInput" placeholder="Message..." rows="1"></textarea>
+              <button
+                id="mentionOpenBtn"
+                class="mention-open-btn hidden"
+                type="button"
+                title="Open mentions"
+                aria-label="Open mentions"
+              >@</button>
+            </div>
             <button id="sendBtn" class="icon-btn send-btn" title="Send" onmousedown="event.preventDefault()">➤</button>
           </div>
           <button id="scrollBottomBtn" class="scroll-bottom-btn" type="button" title="Scroll to bottom" aria-label="Scroll to bottom">

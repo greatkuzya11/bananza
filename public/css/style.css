@@ -1429,6 +1429,7 @@ a:hover { text-decoration: underline; }
 
 .reaction-picker,
 .reaction-emoji-popover,
+.mention-picker,
 .chat-context-menu,
 .chat-context-menu-backdrop {
   --floating-duration-base: .26s;
@@ -1453,6 +1454,8 @@ a:hover { text-decoration: underline; }
 .reaction-picker.is-closing,
 .reaction-emoji-popover.is-open,
 .reaction-emoji-popover.is-closing,
+.mention-picker.is-open,
+.mention-picker.is-closing,
 .chat-context-menu.is-open,
 .chat-context-menu.is-closing,
 .chat-context-menu-backdrop.is-open,
@@ -1461,6 +1464,7 @@ a:hover { text-decoration: underline; }
 }
 .reaction-picker.is-open,
 .reaction-emoji-popover.is-open,
+.mention-picker.is-open,
 .chat-context-menu.is-open,
 .chat-context-menu-backdrop.is-open {
   opacity: 1;
@@ -1470,6 +1474,7 @@ a:hover { text-decoration: underline; }
 }
 .reaction-picker.is-closing,
 .reaction-emoji-popover.is-closing,
+.mention-picker.is-closing,
 .chat-context-menu.is-closing,
 .chat-context-menu-backdrop.is-closing {
   opacity: 0;
@@ -1480,6 +1485,7 @@ a:hover { text-decoration: underline; }
 }
 html[data-modal-animation="lift"] .reaction-picker,
 html[data-modal-animation="lift"] .reaction-emoji-popover,
+html[data-modal-animation="lift"] .mention-picker,
 html[data-modal-animation="lift"] .chat-context-menu,
 html[data-modal-animation="lift"] .chat-context-menu-backdrop {
   --floating-duration-base: .3s;
@@ -1489,6 +1495,7 @@ html[data-modal-animation="lift"] .chat-context-menu-backdrop {
 }
 html[data-modal-animation="zoom"] .reaction-picker,
 html[data-modal-animation="zoom"] .reaction-emoji-popover,
+html[data-modal-animation="zoom"] .mention-picker,
 html[data-modal-animation="zoom"] .chat-context-menu,
 html[data-modal-animation="zoom"] .chat-context-menu-backdrop {
   --floating-duration-base: .24s;
@@ -1498,6 +1505,7 @@ html[data-modal-animation="zoom"] .chat-context-menu-backdrop {
 }
 html[data-modal-animation="slide"] .reaction-picker,
 html[data-modal-animation="slide"] .reaction-emoji-popover,
+html[data-modal-animation="slide"] .mention-picker,
 html[data-modal-animation="slide"] .chat-context-menu,
 html[data-modal-animation="slide"] .chat-context-menu-backdrop {
   --floating-duration-base: .28s;
@@ -1507,6 +1515,7 @@ html[data-modal-animation="slide"] .chat-context-menu-backdrop {
 }
 html[data-modal-animation="fade"] .reaction-picker,
 html[data-modal-animation="fade"] .reaction-emoji-popover,
+html[data-modal-animation="fade"] .mention-picker,
 html[data-modal-animation="fade"] .chat-context-menu,
 html[data-modal-animation="fade"] .chat-context-menu-backdrop {
   --floating-duration-base: .24s;
@@ -1517,6 +1526,7 @@ html[data-modal-animation="fade"] .chat-context-menu-backdrop {
 }
 html[data-modal-animation="none"] .reaction-picker,
 html[data-modal-animation="none"] .reaction-emoji-popover,
+html[data-modal-animation="none"] .mention-picker,
 html[data-modal-animation="none"] .chat-context-menu,
 html[data-modal-animation="none"] .chat-context-menu-backdrop {
   --floating-duration-base: 0s;
@@ -1821,6 +1831,14 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
 
 .input-row { display: flex; align-items: flex-end; gap: 4px; }
 
+.composer-input-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+}
+
 .scroll-bottom-btn {
   position: absolute;
   right: 14px;
@@ -1863,13 +1881,49 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
 }
 
 #msgInput {
-  flex: 1; padding: 10px 14px; background: var(--bg-input); border: none;
+  flex: 1; width: 100%; padding: 10px 52px 10px 14px; background: var(--bg-input); border: none;
   border-radius: 20px; color: var(--text-primary); outline: none; resize: none;
   max-height: 150px; line-height: 1.35; font-size: 15px; overflow-y: auto;
 }
 #msgInput::-webkit-scrollbar { display: none; }
 #msgInput { scrollbar-width: none; }
 #msgInput::placeholder { color: var(--text-secondary); }
+
+.mention-open-btn {
+  position: absolute;
+  right: 10px;
+  bottom: 6px;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(127,127,127,.18);
+  border-radius: 999px;
+  background: rgba(127,127,127,.12);
+  color: var(--text-secondary);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  opacity: .92;
+  transition: background .16s ease, color .16s ease, opacity .16s ease, transform .16s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.mention-open-btn:hover {
+  background: rgba(127,127,127,.18);
+  color: var(--text-primary);
+}
+.mention-open-btn:focus,
+.mention-open-btn:focus-visible,
+.mention-open-btn:active {
+  outline: none;
+  box-shadow: none;
+  background: rgba(127,127,127,.2);
+  color: var(--accent);
+}
+.mention-open-btn.hidden {
+  display: none;
+}
 
 .send-btn {
   position: relative;
