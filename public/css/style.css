@@ -1111,21 +1111,20 @@ a:hover { text-decoration: underline; }
     transform: none;
   }
 }
-.msg-row.actions-open .msg-actions {
+.msg-row.actions-open .msg-actions,
+.msg-actions.actions-floating-open {
   position: fixed;
   z-index: 410;
   opacity: 1;
   pointer-events: auto;
   transform: none;
 }
-.msg-row.actions-placement-above .msg-actions {
-  top: auto;
-  bottom: calc(100% + 8px);
+.msg-row.actions-placement-above .msg-actions,
+.msg-actions.actions-placement-above {
   transform-origin: bottom center;
 }
-.msg-row.actions-placement-below .msg-actions {
-  top: calc(100% + 8px);
-  bottom: auto;
+.msg-row.actions-placement-below .msg-actions,
+.msg-actions.actions-placement-below {
   transform-origin: top center;
 }
 .msg-row.actions-hover-suppressed:not(.actions-open) .msg-actions {

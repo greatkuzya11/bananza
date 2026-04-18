@@ -6918,6 +6918,7 @@
   let reactionPickerMsgId = null;
   let reactionPickerKeepKeyboard = false;
   let activeMessageActionsRow = null;
+  let activeMessageActionsEl = null;
   let floatingMessageActionsState = null;
   let reactionPickerIdleTimer = null;
   let reactionEmojiPopoverCategory = Object.keys(EMOJIS)[0] || '';
@@ -7200,7 +7201,7 @@
   }
 
   function measureMessageActions(row) {
-    const actions = row?.querySelector('.msg-actions');
+    const actions = getMessageActionsElement(row);
     if (!(actions instanceof HTMLElement)) return { width: 178, height: 36 };
     return {
       width: actions.offsetWidth || 178,
@@ -7208,14 +7209,69 @@
     };
   }
 
-  function clearMessageActionsPlacement(row) {
-    const actions = row?.querySelector('.msg-actions');
-    row?.classList.remove('actions-open', 'actions-placement-above', 'actions-placement-below');
+  function getMessageActionsElement(row) {
+    if (
+      activeMessageActionsEl instanceof HTMLElement
+      && activeMessageActionsRow
+      && String(activeMessageActionsRow.dataset.msgId || '') === String(row?.dataset?.msgId || '')
+    ) {
+      return activeMessageActionsEl;
+    }
+    return row?.querySelector('.msg-actions') || null;
+  }
+
+  function portalMessageActions(row) {
+    const actions = getMessageActionsElement(row);
+    if (!(actions instanceof HTMLElement)) return null;
+    if (!actions.__floatingActionsBound) {
+      actions.addEventListener('click', (e) => {
+        if (!actions.classList.contains('actions-floating-open')) return;
+        const reactBtn = e.target.closest('.msg-react-btn');
+        if (!reactBtn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const keepComposerFocus = reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen();
+        showReactionPicker(activeMessageActionsRow, reactBtn, { source: 'actions', keepComposerFocus });
+      });
+      actions.__floatingActionsBound = true;
+    }
+    if (!actions.__messageActionsHome) {
+      actions.__messageActionsHome = {
+        parent: actions.parentNode,
+        nextSibling: actions.nextSibling,
+      };
+    }
+    actions.style.setProperty('--msg-actions-bg', row.classList.contains('own') ? 'var(--bg-own-msg)' : 'var(--bg-other-msg)');
+    if (actions.parentNode !== document.body) document.body.appendChild(actions);
+    activeMessageActionsEl = actions;
+    return actions;
+  }
+
+  function restoreMessageActions(actions) {
     if (!(actions instanceof HTMLElement)) return;
+    const home = actions.__messageActionsHome;
+    if (home?.parent?.isConnected) {
+      if (home.nextSibling?.parentNode === home.parent) home.parent.insertBefore(actions, home.nextSibling);
+      else home.parent.appendChild(actions);
+    }
+    delete actions.__messageActionsHome;
+  }
+
+  function clearMessageActionsPlacement(row) {
+    const actions = getMessageActionsElement(row);
+    row?.classList.remove('actions-open', 'actions-placement-above', 'actions-placement-below');
+    if (!(actions instanceof HTMLElement)) {
+      if (activeMessageActionsRow === row) activeMessageActionsEl = null;
+      return;
+    }
+    actions.classList.remove('actions-floating-open', 'actions-placement-above', 'actions-placement-below');
     actions.style.removeProperty('left');
     actions.style.removeProperty('right');
     actions.style.removeProperty('top');
     actions.style.removeProperty('bottom');
+    actions.style.removeProperty('--msg-actions-bg');
+    restoreMessageActions(actions);
+    if (activeMessageActionsEl === actions) activeMessageActionsEl = null;
   }
 
   function resolveMessageActionLayout(row, { includeActions = false, includePicker = false, reserveActionsForPicker = includePicker } = {}) {
@@ -7267,13 +7323,9 @@
         visibleArea.left + FLOATING_ACTION_MARGIN,
         visibleArea.right - pickerSize.width - FLOATING_ACTION_MARGIN
       );
-      pickerTop = virtualActionsTop - FLOATING_ACTION_GAP - pickerSize.height;
-      if (pickerTop < visibleArea.top + FLOATING_ACTION_MARGIN) {
-        const belowActionsTop = virtualActionsTop + actionSlotHeight + FLOATING_ACTION_GAP;
-        pickerTop = belowActionsTop + pickerSize.height <= visibleArea.bottom - FLOATING_ACTION_MARGIN
-          ? belowActionsTop
-          : pickerTop;
-      }
+      pickerTop = placement === 'above'
+        ? virtualActionsTop - FLOATING_ACTION_GAP - pickerSize.height
+        : virtualActionsTop + actionSlotHeight + FLOATING_ACTION_GAP;
       pickerTop = clamp(
         pickerTop,
         visibleArea.top + FLOATING_ACTION_MARGIN,
@@ -7297,11 +7349,14 @@
   }
 
   function applyMessageActionsLayout(row, layout) {
-    const actions = row?.querySelector('.msg-actions');
+    const actions = portalMessageActions(row);
     if (!(actions instanceof HTMLElement) || !layout) return false;
     row.classList.add('actions-open');
     row.classList.toggle('actions-placement-above', layout.placement === 'above');
     row.classList.toggle('actions-placement-below', layout.placement === 'below');
+    actions.classList.add('actions-floating-open');
+    actions.classList.toggle('actions-placement-above', layout.placement === 'above');
+    actions.classList.toggle('actions-placement-below', layout.placement === 'below');
     actions.style.left = `${Math.round(layout.actionsLeft)}px`;
     actions.style.top = `${Math.round(layout.actionsTop)}px`;
     actions.style.right = 'auto';
@@ -7430,7 +7485,7 @@
     if (!row || row.dataset.outbox === '1') return false;
     row.classList.remove('actions-hover-suppressed');
     const msg = row.__messageData || {};
-    if (msg.is_deleted || !row.querySelector('.msg-actions')) return false;
+    if (msg.is_deleted || !getMessageActionsElement(row)) return false;
     const sameRow = activeMessageActionsRow
       && String(activeMessageActionsRow.dataset.msgId || '') === String(row.dataset.msgId || '');
     if (sameRow && toggle) {
@@ -8908,7 +8963,7 @@
       const reactBtn = e.target.closest('.msg-react-btn');
       if (reactBtn) {
         e.stopPropagation();
-        const row = reactBtn.closest('.msg-row');
+        const row = reactBtn.closest('.msg-row') || (activeMessageActionsEl?.contains(reactBtn) ? activeMessageActionsRow : null);
         if (row) {
           const keepComposerFocus = reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen();
           showReactionPicker(row, reactBtn, { source: 'actions', keepComposerFocus });
