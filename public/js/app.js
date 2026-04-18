@@ -6905,6 +6905,9 @@
   let galleryEdgeToastTimer = null;
   let galleryEdgeBounceTimer = null;
   let ivScale = 1, ivPanX = 0, ivPanY = 0;
+  let mediaViewerSuppressClickUntil = 0;
+  let ivZoomAnimationTimer = null;
+  let ivZoomAnimationImg = null;
   let ivHistoryPushed = false;    // true when we pushed { view: 'mediaviewer' } to history
   let ivSkipNextPopstate = false; // skip chat-nav after closeMediaViewer calls history.back()
 
@@ -7615,14 +7618,46 @@
     if (galleryItems[galleryIndex]?.type === 'video') return null;
     return ivStrip.querySelectorAll('.iv-slide')[galleryIndex]?.querySelector('img') || null;
   }
+  function ivClearZoomTransition() {
+    clearTimeout(ivZoomAnimationTimer);
+    ivZoomAnimationTimer = null;
+    if (ivZoomAnimationImg) ivZoomAnimationImg.style.transition = '';
+    ivZoomAnimationImg = null;
+  }
+  function ivPrepareZoomTransition(img) {
+    ivClearZoomTransition();
+    if (!img || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    ivZoomAnimationImg = img;
+    img.style.transition = 'transform 220ms cubic-bezier(.2, .8, .2, 1)';
+    // Force the browser to commit the current transform before changing it.
+    void img.offsetWidth;
+    ivZoomAnimationTimer = setTimeout(ivClearZoomTransition, 280);
+  }
   function ivApplyTransform() {
     const img = ivCurrentImg();
     if (img) img.style.transform = `scale(${ivScale}) translate(${ivPanX}px, ${ivPanY}px)`;
   }
-  function ivResetZoom() {
-    ivScale = 1; ivPanX = 0; ivPanY = 0;
+  function ivResetZoom(animated = false) {
     const img = ivCurrentImg();
+    if (animated) ivPrepareZoomTransition(img);
+    else ivClearZoomTransition();
+    ivScale = 1; ivPanX = 0; ivPanY = 0;
     if (img) img.style.transform = '';
+  }
+  function ivToggleZoomAt(clientX = window.innerWidth / 2, clientY = window.innerHeight / 2) {
+    if (galleryItems[galleryIndex]?.type === 'video') return false;
+    const img = ivCurrentImg();
+    if (ivScale > 1) {
+      ivResetZoom(true);
+      return true;
+    }
+    ivPrepareZoomTransition(img);
+    const ZOOM = 2.5;
+    ivScale = ZOOM;
+    ivPanX = (clientX - window.innerWidth / 2) * (1 / ZOOM - 1);
+    ivPanY = (clientY - window.innerHeight / 2) * (1 / ZOOM - 1);
+    ivApplyTransform();
+    return true;
   }
 
   function gallerySlideHtml(item) {
@@ -7898,6 +7933,8 @@
 
   function openMediaViewer(src, type = 'image') {
     gallerySessionId += 1;
+    ivClearZoomTransition();
+    mediaViewerSuppressClickUntil = 0;
     gallerySourceChatId = currentChatId;
     galleryLoadPromises = { before: null, after: null };
     galleryLoadErrors = { before: false, after: false };
@@ -7944,6 +7981,8 @@
   function closeMediaViewer() {
     if (imageViewer.classList.contains('hidden')) return;
     gallerySessionId += 1;
+    ivClearZoomTransition();
+    mediaViewerSuppressClickUntil = 0;
     ivStrip.querySelectorAll('video').forEach(v => v.pause());
     imageViewer.classList.add('hidden');
     imageViewer.classList.remove('iv-is-loading');
@@ -8709,9 +8748,23 @@
 
     // Media viewer close
     imageViewer.addEventListener('click', (e) => {
+      if (Date.now() < mediaViewerSuppressClickUntil && e.target.closest('.iv-slide')) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if (e.target.closest('.iv-prev')) { galleryNav(-1); return; }
       if (e.target.closest('.iv-next')) { galleryNav(1); return; }
-      if (e.target.closest('.iv-close') || e.target.classList.contains('iv-slide')) closeMediaViewer();
+      if (e.target.closest('.iv-close')) closeMediaViewer();
+    });
+    imageViewer.addEventListener('dblclick', (e) => {
+      if (imageViewer.classList.contains('hidden')) return;
+      if (e.target.closest('.iv-prev, .iv-next, .iv-close, video')) return;
+      const slide = e.target.closest('.iv-slide');
+      if (!slide || slide.classList.contains('iv-slide-video')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      ivToggleZoomAt(e.clientX, e.clientY);
     });
     document.addEventListener('keydown', (e) => {
       if (imageViewer.classList.contains('hidden')) return;
@@ -8743,9 +8796,13 @@
       let lastTapTime = 0, lastTapX = 0, lastTapY = 0;
 
       imageViewer.addEventListener('touchstart', (e) => {
+        const touchedSlide = e.target.closest('.iv-slide');
+        const isImageSlideTouch = Boolean(touchedSlide && !touchedSlide.classList.contains('iv-slide-video'));
+        const canImageZoomTouch = isImageSlideTouch && galleryItems[galleryIndex]?.type !== 'video';
         if (e.touches.length === 2) {
           // Pinch zoom for images only
-          if (galleryItems[galleryIndex]?.type !== 'video') {
+          if (canImageZoomTouch) {
+            ivClearZoomTransition();
             pinching = true; dragging = false;
             const t = e.touches;
             pinchDist0 = Math.hypot(t[1].clientX - t[0].clientX, t[1].clientY - t[0].clientY);
@@ -8759,24 +8816,17 @@
           const ty = e.touches[0].clientY;
           // Double-tap to zoom (images only)
           if (
-            galleryItems[galleryIndex]?.type !== 'video' &&
+            canImageZoomTouch &&
             now - lastTapTime < 300 &&
             Math.abs(tx - lastTapX) < 40 &&
             Math.abs(ty - lastTapY) < 40
           ) {
             lastTapTime = 0;
-            if (ivScale > 1) {
-              ivResetZoom();
-            } else {
-              const ZOOM = 2.5;
-              ivScale = ZOOM;
-              ivPanX = (tx - window.innerWidth / 2) * (1 / ZOOM - 1);
-              ivPanY = (ty - window.innerHeight / 2) * (1 / ZOOM - 1);
-              ivApplyTransform();
-            }
+            mediaViewerSuppressClickUntil = Date.now() + 450;
+            ivToggleZoomAt(tx, ty);
             return;
           }
-          lastTapTime = now;
+          lastTapTime = canImageZoomTouch ? now : 0;
           lastTapX = tx;
           lastTapY = ty;
           startX = tx;
@@ -8800,6 +8850,7 @@
         const cx = e.touches[0].clientX;
         const cy = e.touches[0].clientY;
         if (ivScale > 1) {
+          ivClearZoomTransition();
           ivPanX = panBaseX + (cx - startX) / ivScale;
           ivPanY = panBaseY + (cy - startY) / ivScale;
           ivApplyTransform();
