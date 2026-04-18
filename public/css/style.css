@@ -1011,9 +1011,12 @@ a:hover { text-decoration: underline; }
 .msg-status.queued { color: var(--text-time); }
 .msg-status.failed { color: var(--danger); letter-spacing: 0; font-weight: 700; }
 .msg-edited {
+  display: inline-block;
   font-size: 11px;
   color: var(--text-time);
   line-height: 1;
+  transform: scaleX(-1);
+  transform-origin: center;
 }
 
 .msg-deleted {
