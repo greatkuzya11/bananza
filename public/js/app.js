@@ -64,13 +64,14 @@
     10: 0.5,
   });
   const MODAL_TRANSITION_BUFFER_MS = 80;
-  const CHAT_LIST_CACHE_VERSION = 2;
+  const CHAT_LIST_CACHE_VERSION = 3;
   const CHAT_LIST_CACHE_SYNC_DEBOUNCE_MS = 250;
   const CHAT_LIST_REQUEST_TIMEOUT_MS = 9000;
   const RECOVERY_SYNC_MIN_INTERVAL_MS = 1200;
   const RECOVERY_CATCHUP_MAX_PAGES = 5;
   const RESUME_WS_REFRESH_AFTER_MS = 25000;
   const NOTES_CHAT_EMOJI = '📝';
+  const CHAT_CONTEXT_LONG_PRESS_MS = 500;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STATE
@@ -170,6 +171,12 @@
   let forwardMessageBusy = false;
   let savingToNotesMessageIds = new Set();
   let centerToastTimer = null;
+  let chatContextMenuState = null;
+  let chatContextLongPressTimer = null;
+  let chatContextLongPressStart = null;
+  let chatContextLongPressRow = null;
+  let suppressNextChatItemTapUntil = 0;
+  let suppressChatContextDismissUntil = 0;
   let mentionTargetsByChat = new Map();
   let mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [] };
   let mentionPickerPointerState = null;
@@ -230,6 +237,8 @@
   const ivStrip = $('#ivStrip');
   const reactionPicker = $('#reactionPicker');
   const reactionEmojiPopover = $('#reactionEmojiPopover');
+  const chatContextMenuBackdrop = $('#chatContextMenuBackdrop');
+  const chatContextMenu = $('#chatContextMenu');
   const replyBar = $('#replyBar');
   const replyBarName = $('#replyBarName');
   const replyBarText = $('#replyBarText');
@@ -778,12 +787,9 @@
   }
 
   function normalizeCachedChats(rawChats) {
-    return (Array.isArray(rawChats) ? rawChats : [])
+    return sortChatsInPlace((Array.isArray(rawChats) ? rawChats : [])
       .filter((chat) => Number(chat?.id || 0) > 0)
-      .map((chat) => ({
-        ...chat,
-        private_user: chat?.private_user ? { ...chat.private_user } : null,
-      }));
+      .map((chat) => normalizeChatListEntry(chat)));
   }
 
   function readChatListCache() {
@@ -904,6 +910,7 @@
   function refreshChatInfoPresentation(chat = chats.find(c => c.id === currentChatId)) {
     if (!chat || chatInfoModal?.classList.contains('hidden') || Number(chat.id) !== Number(currentChatId)) return;
     $('#chatInfoTitle').textContent = chat.name || 'Chat Info';
+    syncChatInfoStatusVisibility(chat);
 
     const editSection = $('#chatEditSection');
     if (editSection) {
@@ -937,6 +944,18 @@
       }
     }
     if (bgStyleSelect) bgStyleSelect.value = chat.background_style || 'cover';
+  }
+
+  function syncChatInfoStatusVisibility(chat = getChatById(currentChatId)) {
+    const statusEl = $('#chatInfoStatus');
+    if (!statusEl) return;
+    const shouldHide = isNotesChat(chat);
+    statusEl.classList.toggle('hidden', shouldHide);
+    if (shouldHide) {
+      statusEl.classList.remove('online', 'offline', 'bot');
+      statusEl.style.color = '';
+      statusEl.innerHTML = '';
+    }
   }
 
   function updateUserListItemElement(item, user) {
@@ -1019,18 +1038,19 @@
     const idx = chats.findIndex((chat) => Number(chat.id) === chatId);
     if (idx < 0) return null;
     const current = chats[idx] || {};
-    chats[idx] = {
+    chats[idx] = normalizeChatListEntry({
       ...current,
       ...nextChat,
       background_url: Object.prototype.hasOwnProperty.call(nextChat, 'background_url')
         ? (nextChat.background_url || null)
         : (current.background_url || null),
       background_style: nextChat.background_style || current.background_style || 'cover',
-    };
+    });
     if ((current.type === 'private' || nextChat.type === 'private') && current.private_user && !nextChat.private_user) {
       chats[idx].name = current.name;
     }
-    const updated = chats[idx];
+    sortChatsInPlace(chats);
+    const updated = getChatById(chatId);
     renderChatList(chatSearch.value);
     if (currentChatId === chatId) {
       renderCurrentChatHeader(updated);
@@ -1678,6 +1698,78 @@
     return chats.find(c => c.id === id) || null;
   }
 
+  function getChatPinOrder(chat) {
+    const order = Number(chat?.chat_list_pin_order);
+    return Number.isFinite(order) && order > 0 ? Math.floor(order) : null;
+  }
+
+  function isChatPinned(chatOrId) {
+    const chat = typeof chatOrId === 'object' && chatOrId !== null ? chatOrId : getChatById(chatOrId);
+    return getChatPinOrder(chat) != null || Boolean(chat && (chat.is_pinned === true || chat.is_pinned === 1 || chat.is_pinned === '1'));
+  }
+
+  function normalizeChatListEntry(chat = {}) {
+    const next = {
+      ...chat,
+      private_user: chat?.private_user ? { ...chat.private_user } : null,
+    };
+    const pinOrder = getChatPinOrder(next);
+    next.chat_list_pin_order = pinOrder;
+    next.is_pinned = pinOrder != null;
+    if (Object.prototype.hasOwnProperty.call(next, 'notify_enabled')) {
+      next.notify_enabled = localChatPreferenceEnabled(next.notify_enabled);
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'sounds_enabled')) {
+      next.sounds_enabled = localChatPreferenceEnabled(next.sounds_enabled);
+    }
+    return next;
+  }
+
+  function compareChatActivity(a, b) {
+    if (a?.last_time && b?.last_time) {
+      const byLastTime = String(b.last_time).localeCompare(String(a.last_time));
+      if (byLastTime) return byLastTime;
+    } else if (a?.last_time) {
+      return -1;
+    } else if (b?.last_time) {
+      return 1;
+    }
+    const byCreatedAt = String(b?.created_at || '').localeCompare(String(a?.created_at || ''));
+    if (byCreatedAt) return byCreatedAt;
+    return Number(b?.id || 0) - Number(a?.id || 0);
+  }
+
+  function compareChatsForList(a, b) {
+    const pinA = getChatPinOrder(a);
+    const pinB = getChatPinOrder(b);
+    const aPinned = pinA != null;
+    const bPinned = pinB != null;
+    if (aPinned !== bPinned) return aPinned ? -1 : 1;
+    if (aPinned && bPinned && pinA !== pinB) return pinA - pinB;
+    return compareChatActivity(a, b);
+  }
+
+  function sortChatsInPlace(list = chats) {
+    if (!Array.isArray(list)) return list;
+    list.sort(compareChatsForList);
+    return list;
+  }
+
+  function getPinnedChats(list = chats) {
+    return (Array.isArray(list) ? list : []).filter((chat) => isChatPinned(chat)).sort(compareChatsForList);
+  }
+
+  function getPinnedChatMoveState(chatId, list = chats) {
+    const pinned = getPinnedChats(list);
+    const index = pinned.findIndex((chat) => Number(chat.id || 0) === Number(chatId || 0));
+    return {
+      index,
+      total: pinned.length,
+      canMoveUp: index > 0,
+      canMoveDown: index >= 0 && index < pinned.length - 1,
+    };
+  }
+
   function isNotesChat(chatOrId) {
     const chat = typeof chatOrId === 'object' && chatOrId !== null ? chatOrId : getChatById(chatOrId);
     return Boolean(chat && (chat.type === 'notes' || Number(chat.is_notes) === 1));
@@ -1783,7 +1875,7 @@
     const toggle = $('#chatAllowUnpinAnyPinToggle');
     if (!section || !toggle) return;
     const canManage = canManagePinSettings(chat);
-    section.classList.toggle('hidden', !canManage);
+    section.classList.toggle('hidden', isNotesChat(chat) || !canManage);
     toggle.checked = chatAllowsUnpinAnyPin(chat);
     setChatPinSettingsStatus('');
   }
@@ -2779,6 +2871,233 @@
     centerToastTimer = setTimeout(() => {
       toast.classList.remove('is-visible');
     }, 2000);
+  }
+
+  function suppressNextChatItemTap(ms = 650) {
+    suppressNextChatItemTapUntil = Math.max(suppressNextChatItemTapUntil, Date.now() + Math.max(0, Number(ms) || 0));
+  }
+
+  function clearChatContextLongPress() {
+    clearTimeout(chatContextLongPressTimer);
+    chatContextLongPressTimer = null;
+    chatContextLongPressStart = null;
+    chatContextLongPressRow = null;
+  }
+
+  function renderChatContextMenu(chat) {
+    if (!chatContextMenu || !chat) return;
+    const pinned = isChatPinned(chat);
+    const moveState = getPinnedChatMoveState(chat.id);
+    const notificationsEnabled = localChatPreferenceEnabled(chat.notify_enabled);
+    const soundsEnabled = localChatPreferenceEnabled(chat.sounds_enabled);
+    const actions = [
+      {
+        action: 'toggle-pin',
+        icon: '&#128204;',
+        label: pinned ? 'Unpin' : 'Pin',
+        hidden: false,
+        disabled: false,
+      },
+      {
+        action: 'move-up',
+        icon: '&#8593;',
+        label: 'Move up',
+        hidden: !pinned,
+        disabled: !moveState.canMoveUp,
+      },
+      {
+        action: 'move-down',
+        icon: '&#8595;',
+        label: 'Move down',
+        hidden: !pinned,
+        disabled: !moveState.canMoveDown,
+      },
+      {
+        action: 'toggle-notifications',
+        icon: '&#128276;',
+        label: notificationsEnabled ? 'Disable notifications' : 'Enable notifications',
+        hidden: false,
+        disabled: false,
+      },
+      {
+        action: 'toggle-sound',
+        icon: '&#128266;',
+        label: soundsEnabled ? 'Disable sound' : 'Enable sound',
+        hidden: false,
+        disabled: false,
+      },
+    ];
+    chatContextMenu.innerHTML = `
+      <div class="chat-context-menu-sheet">
+        <div class="chat-context-menu-header">${esc(chat.name || 'Chat')}</div>
+        ${actions
+          .filter((item) => !item.hidden)
+          .map((item) => `
+            <button
+              type="button"
+              class="chat-context-menu-button"
+              data-chat-action="${esc(item.action)}"
+              ${item.disabled ? 'disabled' : ''}
+            >
+              <span class="chat-context-menu-icon" aria-hidden="true">${item.icon}</span>
+              <span class="chat-context-menu-label">${esc(item.label)}</span>
+            </button>
+          `).join('')}
+      </div>
+    `;
+    chatContextMenu.setAttribute('aria-hidden', 'false');
+    chatContextMenu.setAttribute('role', 'menu');
+    chatContextMenu.dataset.chatId = String(chat.id);
+  }
+
+  function positionChatContextMenu() {
+    if (!chatContextMenuState || !chatContextMenu || chatContextMenu.classList.contains('hidden')) return;
+    const row = chatList.querySelector(`.chat-item[data-chat-id="${chatContextMenuState.chatId}"]`) || chatContextMenuState.row;
+    if (!(row instanceof HTMLElement)) {
+      hideChatContextMenu({ immediate: true });
+      return;
+    }
+    chatContextMenuState.row = row;
+    const rowRect = row.getBoundingClientRect();
+    const viewport = getFloatingViewportRect();
+    const size = measureFloatingSurface(chatContextMenu, 236, 260);
+    const gap = 6;
+    const horizontalPadding = 8;
+    const preferredLeft = Math.min(rowRect.left + 10, rowRect.right - size.width);
+    const left = clamp(preferredLeft, viewport.left + horizontalPadding, viewport.right - size.width - horizontalPadding);
+    const belowTop = rowRect.bottom + gap;
+    const aboveTop = rowRect.top - size.height - gap;
+    const fitsBelow = belowTop + size.height <= viewport.bottom - horizontalPadding;
+    const preferredTop = fitsBelow || aboveTop < viewport.top + horizontalPadding
+      ? belowTop
+      : aboveTop;
+    const top = clamp(preferredTop, viewport.top + horizontalPadding, viewport.bottom - size.height - horizontalPadding);
+    chatContextMenu.style.right = 'auto';
+    chatContextMenu.style.bottom = 'auto';
+    positionFloatingElement(chatContextMenu, left, top);
+  }
+
+  function hideChatContextMenu({ immediate = false } = {}) {
+    clearChatContextLongPress();
+    closeFloatingSurface(chatContextMenuBackdrop, { immediate });
+    closeFloatingSurface(chatContextMenu, {
+      immediate,
+      onAfterClose: () => {
+        if (chatContextMenu) {
+          chatContextMenu.innerHTML = '';
+          chatContextMenu.setAttribute('aria-hidden', 'true');
+          chatContextMenu.style.left = '';
+          chatContextMenu.style.top = '';
+          chatContextMenu.style.right = '';
+          chatContextMenu.style.bottom = '';
+        }
+        chatContextMenuState = null;
+      },
+    });
+  }
+
+  function showChatContextMenuForRow(row, { x = null, y = null, source = 'contextmenu' } = {}) {
+    const chatId = Number(row?.dataset?.chatId || 0);
+    if (!chatId) return;
+    const chat = getChatById(chatId);
+    if (!chat || !chatContextMenu || !chatContextMenuBackdrop) return;
+    const isSameChatOpen = isFloatingSurfaceVisible(chatContextMenu) && Number(chatContextMenuState?.chatId || 0) === chatId;
+    if (isSameChatOpen) {
+      hideChatContextMenu();
+      return;
+    }
+    hideChatContextMenu({ immediate: true });
+    chatContextMenuState = {
+      chatId,
+      row,
+      source,
+      pointerX: typeof x === 'number' && Number.isFinite(x) ? x : null,
+      pointerY: typeof y === 'number' && Number.isFinite(y) ? y : null,
+    };
+    renderChatContextMenu(chat);
+    positionChatContextMenu();
+    openFloatingSurface(chatContextMenuBackdrop);
+    openFloatingSurface(chatContextMenu);
+    requestAnimationFrame(() => {
+      positionChatContextMenu();
+      chatContextMenu.querySelector('.chat-context-menu-button:not(:disabled)')?.focus({ preventScroll: true });
+    });
+  }
+
+  async function setChatSidebarPin(chatId, pinned) {
+    try {
+      await api(`/api/chats/${chatId}/sidebar-pin`, { method: 'PUT', body: { pinned } });
+      await loadChats({ silent: true });
+      showCenterToast(pinned ? 'Chat pinned' : 'Chat unpinned');
+    } catch (e) {
+      showCenterToast(e.message || (pinned ? 'Could not pin chat' : 'Could not unpin chat'));
+    }
+  }
+
+  async function moveChatSidebarPin(chatId, direction) {
+    try {
+      await api(`/api/chats/${chatId}/sidebar-pin/move`, { method: 'POST', body: { direction } });
+      await loadChats({ silent: true });
+      showCenterToast(direction === 'up' ? 'Moved up' : 'Moved down');
+    } catch (e) {
+      showCenterToast(e.message || 'Could not move pinned chat');
+    }
+  }
+
+  async function updateChatContextPreference(chatId, changes) {
+    const chat = getChatById(chatId);
+    if (!chat) return;
+    const next = {
+      notify_enabled: Object.prototype.hasOwnProperty.call(changes, 'notify_enabled')
+        ? !!changes.notify_enabled
+        : localChatPreferenceEnabled(chat.notify_enabled),
+      sounds_enabled: Object.prototype.hasOwnProperty.call(changes, 'sounds_enabled')
+        ? !!changes.sounds_enabled
+        : localChatPreferenceEnabled(chat.sounds_enabled),
+    };
+    try {
+      const data = await api(`/api/chats/${chatId}/preferences`, { method: 'PUT', body: next });
+      Object.assign(chat, data.preferences || next);
+      renderChatList(chatSearch.value);
+      if (Number(currentChatId || 0) === Number(chatId)) {
+        renderChatPreferencesForm(chat);
+      }
+      if (Object.prototype.hasOwnProperty.call(changes, 'notify_enabled')) {
+        showCenterToast(next.notify_enabled ? 'Notifications enabled' : 'Notifications disabled');
+      } else if (Object.prototype.hasOwnProperty.call(changes, 'sounds_enabled')) {
+        showCenterToast(next.sounds_enabled ? 'Sound enabled' : 'Sound disabled');
+      }
+    } catch (e) {
+      showCenterToast(e.message || 'Could not update chat preferences');
+    }
+  }
+
+  async function handleChatContextMenuAction(action, chatId) {
+    const chat = getChatById(chatId);
+    if (!chat) return;
+    if (action === 'toggle-pin') {
+      await setChatSidebarPin(chatId, !isChatPinned(chat));
+      return;
+    }
+    if (action === 'move-up') {
+      await moveChatSidebarPin(chatId, 'up');
+      return;
+    }
+    if (action === 'move-down') {
+      await moveChatSidebarPin(chatId, 'down');
+      return;
+    }
+    if (action === 'toggle-notifications') {
+      await updateChatContextPreference(chatId, {
+        notify_enabled: !localChatPreferenceEnabled(chat.notify_enabled),
+      });
+      return;
+    }
+    if (action === 'toggle-sound') {
+      await updateChatContextPreference(chatId, {
+        sounds_enabled: !localChatPreferenceEnabled(chat.sounds_enabled),
+      });
+    }
   }
 
   async function copyTextToClipboard(text) {
@@ -3830,6 +4149,11 @@
         loadChats();
         break;
       }
+      case 'chat_list_updated': {
+        if (chatListAbortController) break;
+        loadChats({ silent: true }).catch(() => {});
+        break;
+      }
       case 'messages_read': {
         const readState = await reconcileChatReadState(
           msg.chatId,
@@ -3933,9 +4257,18 @@
     try {
       const nextChats = await api('/api/chats', { signal: controller.signal });
       if (requestId !== chatListRequestSeq) return chats;
-      chats = Array.isArray(nextChats) ? nextChats : [];
+      chats = normalizeCachedChats(nextChats);
       chatListLoadedOnce = true;
       renderChatList(chatSearch.value);
+      const currentChat = getChatById(currentChatId);
+      if (currentChat) {
+        renderCurrentChatHeader(currentChat);
+        applyChatBackground(currentChat);
+        updateChatStatus();
+        refreshChatInfoPresentation(currentChat);
+        renderChatPreferencesForm(currentChat);
+        renderChatPinSettingsForm(currentChat);
+      }
       setChatListStatus('', '');
       return chats;
     } catch (e) {
@@ -3971,62 +4304,97 @@
     } catch {}
   }
 
-  function renderChatList(filter = '') {
-    chatList.innerHTML = '';
-    const filtered = filter
-      ? chats.filter(c => getChatSearchHaystack(c).includes(filter.toLowerCase()))
-      : chats;
+  function appendChatListSeparator(label, parent = chatList) {
+    const sep = document.createElement('div');
+    sep.className = 'chat-list-separator';
+    sep.textContent = label;
+    parent.appendChild(sep);
+    return sep;
+  }
 
-    for (const chat of filtered) {
-      const el = document.createElement('div');
-      el.className = 'chat-item' + (chat.id === currentChatId ? ' active' : '');
-      el.dataset.chatId = chat.id;
+  function createChatListItem(chat) {
+    const el = document.createElement('div');
+    const pinned = isChatPinned(chat);
+    el.className = 'chat-item' + (chat.id === currentChatId ? ' active' : '') + (pinned ? ' is-pinned' : '');
+    el.dataset.chatId = chat.id;
+    el.dataset.pinned = pinned ? '1' : '0';
 
-      const avatarColor = chat.type === 'private' && chat.private_user
-        ? chat.private_user.avatar_color : '#5eb5f7';
-      const displayName = chat.name;
-      const isOnline = chat.type === 'private' && chat.private_user && onlineUsers.has(chat.private_user.id);
+    const displayName = chat.name;
+    const isOnline = chat.type === 'private' && chat.private_user && onlineUsers.has(chat.private_user.id);
+    const lastMsg = getChatLastPreviewText(chat);
+    const lastTime = chat.last_time ? formatTime(chat.last_time) : '';
+    const unread = chat.unread_count > 0 ? `<span class="unread-badge">${chat.unread_count > 99 ? '99+' : chat.unread_count}</span>` : '';
+    const pinIndicator = pinned ? '<span class="chat-item-state-indicator chat-item-pin-indicator" aria-hidden="true" title="Pinned">&#128204;</span>' : '';
+    const notifyDisabledIndicator = pinned && !localChatPreferenceEnabled(chat.notify_enabled)
+      ? '<span class="chat-item-state-indicator chat-item-muted-indicator" aria-hidden="true" title="Notifications off">&#128277;</span>'
+      : '';
+    const soundDisabledIndicator = pinned && !localChatPreferenceEnabled(chat.sounds_enabled)
+      ? '<span class="chat-item-state-indicator chat-item-muted-indicator" aria-hidden="true" title="Sound off">&#128263;</span>'
+      : '';
 
-      const lastMsg = getChatLastPreviewText(chat);
-
-      const lastTime = chat.last_time ? formatTime(chat.last_time) : '';
-
-      const unread = chat.unread_count > 0 ? `<span class="unread-badge">${chat.unread_count > 99 ? '99+' : chat.unread_count}</span>` : '';
-
-      el.innerHTML = `
-        ${chatItemAvatarHtml(chat)}
-          ${isOnline ? '<div class="online-dot"></div>' : ''}
-        </div>
-        <div class="chat-item-body">
-          <div class="chat-item-top">
-            <span class="chat-item-name">${esc(displayName)}</span>
+    el.innerHTML = `
+      ${chatItemAvatarHtml(chat)}
+        ${isOnline ? '<div class="online-dot"></div>' : ''}
+      </div>
+      <div class="chat-item-body">
+        <div class="chat-item-top">
+          <span class="chat-item-name">${esc(displayName)}</span>
+          <span class="chat-item-meta">
+            ${pinIndicator}
+            ${notifyDisabledIndicator}
+            ${soundDisabledIndicator}
             <span class="chat-item-time">${lastTime}</span>
-          </div>
-          <div class="chat-item-last">
-            <span>${esc(lastMsg).substring(0, 60)}</span>
-            ${unread}
-          </div>
+          </span>
         </div>
-      `;
-      el.addEventListener('click', () => openChat(chat.id));
-      chatList.appendChild(el);
+        <div class="chat-item-last">
+          <span>${esc(lastMsg).substring(0, 60)}</span>
+          ${unread}
+        </div>
+      </div>
+    `;
+    el.addEventListener('click', () => {
+      if (Date.now() < suppressNextChatItemTapUntil) return;
+      openChat(chat.id);
+    });
+    return el;
+  }
+
+  function renderChatList(filter = '') {
+    hideChatContextMenu({ immediate: true });
+    chatList.innerHTML = '';
+    const normalizedFilter = String(filter || '').trim().toLowerCase();
+    const filteredChats = normalizedFilter
+      ? chats.filter((chat) => getChatSearchHaystack(chat).includes(normalizedFilter))
+      : chats;
+    const pinnedChats = filteredChats.filter((chat) => isChatPinned(chat));
+    const regularChats = filteredChats.filter((chat) => !isChatPinned(chat));
+
+    if (pinnedChats.length) {
+      const pinnedGroup = document.createElement('div');
+      pinnedGroup.className = 'chat-list-group chat-list-group--pinned';
+      appendChatListSeparator('Pinned', pinnedGroup);
+      pinnedChats.forEach((chat) => {
+        pinnedGroup.appendChild(createChatListItem(chat));
+      });
+      chatList.appendChild(pinnedGroup);
     }
 
+    regularChats.forEach((chat) => {
+      chatList.appendChild(createChatListItem(chat));
+    });
+
     // When searching, also show users without existing private chats
-    if (filter) {
+    if (normalizedFilter) {
       const privatePeerIds = new Set(
         chats.filter(c => c.type === 'private' && c.private_user).map(c => c.private_user.id)
       );
       const matchingUsers = allUsers.filter(u =>
         !privatePeerIds.has(u.id) &&
-        (u.display_name.toLowerCase().includes(filter.toLowerCase()) ||
-         u.username.toLowerCase().includes(filter.toLowerCase()))
+        (u.display_name.toLowerCase().includes(normalizedFilter) ||
+         u.username.toLowerCase().includes(normalizedFilter))
       );
       if (matchingUsers.length > 0) {
-        const sep = document.createElement('div');
-        sep.className = 'chat-list-separator';
-        sep.textContent = 'Users';
-        chatList.appendChild(sep);
+        appendChatListSeparator('Users');
       }
       for (const u of matchingUsers) {
         const el = document.createElement('div');
@@ -4066,13 +4434,7 @@
       chat.last_user = msg.display_name;
       chat.last_file_id = msg.file_id;
       chat.last_message_id = Math.max(Number(chat.last_message_id || 0), Number(msg.id || 0));
-      // Re-sort
-      chats.sort((a, b) => {
-        if (!a.last_time && !b.last_time) return 0;
-        if (!a.last_time) return 1;
-        if (!b.last_time) return -1;
-        return b.last_time.localeCompare(a.last_time);
-      });
+      sortChatsInPlace(chats);
       renderChatList(chatSearch.value);
     }
   }
@@ -4571,6 +4933,9 @@
   function refreshChatInfoStatus() {
     const el = $('#chatInfoStatus');
     if (!el) return;
+    const chat = getChatById(currentChatId);
+    syncChatInfoStatusVisibility(chat);
+    if (isNotesChat(chat)) return;
     const memberList = $('#chatMemberList');
     if (!memberList) {
       el.classList.remove('online'); el.classList.add('offline');
@@ -4618,6 +4983,7 @@
     }
     hideMentionPicker();
     hideAvatarUserMenu();
+    hideChatContextMenu({ immediate: true });
     hideFloatingMessageActions({ immediate: true });
 
     currentChatId = targetChatId;
@@ -4630,7 +4996,7 @@
     chatView.classList.remove('hidden');
 
     // Update sidebar active state
-    chatList.querySelectorAll('.chat-item').forEach(el => {
+    chatList.querySelectorAll('.chat-item[data-chat-id]').forEach(el => {
       el.classList.toggle('active', +el.dataset.chatId === targetChatId);
     });
 
@@ -8322,6 +8688,7 @@
 
     const chat = chats.find(c => c.id === currentChatId);
     $('#chatInfoTitle').textContent = chat ? chat.name : 'Chat Info';
+    syncChatInfoStatusVisibility(chat);
 
     // Sync compact view toggle
     $('#compactViewToggle').checked = compactView;
@@ -9209,6 +9576,94 @@
       });
     })();
 
+    (() => {
+      chatContextMenu?.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+      });
+      chatContextMenu?.addEventListener('mousedown', (e) => {
+        e.stopPropagation();
+      });
+      chatContextMenu?.addEventListener('touchstart', (e) => {
+        e.stopPropagation();
+      }, { passive: true });
+      chatContextMenu?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const btn = e.target.closest('.chat-context-menu-button[data-chat-action]');
+        if (!btn || btn.disabled || !chatContextMenuState?.chatId) return;
+        const chatId = Number(chatContextMenuState.chatId || 0);
+        const action = btn.dataset.chatAction || '';
+        hideChatContextMenu();
+        await handleChatContextMenuAction(action, chatId);
+      });
+      chatContextMenuBackdrop?.addEventListener('click', () => {
+        if (Date.now() < suppressChatContextDismissUntil) return;
+        hideChatContextMenu();
+      });
+      chatContextMenuBackdrop?.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        if (Date.now() < suppressChatContextDismissUntil) return;
+        hideChatContextMenu();
+      });
+      chatList.addEventListener('scroll', () => {
+        if (isFloatingSurfaceVisible(chatContextMenu)) hideChatContextMenu({ immediate: true });
+      }, { passive: true });
+      const syncChatContextMenuLayout = () => {
+        if (!isFloatingSurfaceVisible(chatContextMenu)) return;
+        positionChatContextMenu();
+      };
+      window.addEventListener('resize', syncChatContextMenuLayout, { passive: true });
+      window.visualViewport?.addEventListener('resize', syncChatContextMenuLayout);
+      window.visualViewport?.addEventListener('scroll', syncChatContextMenuLayout);
+      let startPoint = null;
+      chatList.addEventListener('touchstart', (e) => {
+        if (e.touches.length !== 1) return;
+        const row = e.target.closest('.chat-item[data-chat-id]');
+        if (!row || !chatList.contains(row) || e.target.closest('button, a, input, textarea, select, label')) return;
+        const touch = e.touches[0];
+        startPoint = { x: touch.clientX, y: touch.clientY };
+        chatContextLongPressStart = startPoint;
+        chatContextLongPressRow = row;
+        clearTimeout(chatContextLongPressTimer);
+        chatContextLongPressTimer = setTimeout(() => {
+          chatContextLongPressTimer = null;
+          suppressNextChatItemTap();
+          suppressChatContextDismissUntil = Date.now() + 550;
+          navigator.vibrate?.(30);
+          showChatContextMenuForRow(row, {
+            x: startPoint?.x,
+            y: startPoint?.y,
+            source: 'long-press',
+          });
+        }, CHAT_CONTEXT_LONG_PRESS_MS);
+      }, { passive: true });
+      chatList.addEventListener('touchmove', (e) => {
+        if (!startPoint || e.touches.length !== 1) return;
+        const touch = e.touches[0];
+        if (Math.hypot(touch.clientX - startPoint.x, touch.clientY - startPoint.y) > 10) {
+          clearChatContextLongPress();
+          startPoint = null;
+        }
+      }, { passive: true });
+      chatList.addEventListener('touchend', () => {
+        clearChatContextLongPress();
+        startPoint = null;
+      }, { passive: true });
+      chatList.addEventListener('touchcancel', () => {
+        clearChatContextLongPress();
+        startPoint = null;
+      }, { passive: true });
+      chatList.addEventListener('contextmenu', (e) => {
+        const row = e.target.closest('.chat-item[data-chat-id]');
+        if (!row || !chatList.contains(row) || e.target.closest('button, a, input, textarea, select, label')) return;
+        e.preventDefault();
+        showChatContextMenuForRow(row, {
+          x: e.clientX,
+          y: e.clientY,
+          source: 'contextmenu',
+        });
+      });
+    })();
+
     // Sidebar search
     chatSearch.addEventListener('input', () => {
       renderChatList(chatSearch.value);
@@ -9635,6 +10090,11 @@
     // Escape key
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
+        if (isFloatingSurfaceVisible(chatContextMenu)) {
+          e.preventDefault();
+          hideChatContextMenu();
+          return;
+        }
         if (hasOpenModal()) {
           e.preventDefault();
           closeTopModal();

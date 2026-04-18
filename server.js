@@ -326,6 +326,16 @@ const insertMentionStmt = db.prepare(`
   INSERT OR IGNORE INTO message_mentions(message_id, chat_id, mentioned_user_id, token)
   VALUES(?,?,?,?)
 `);
+const chatMemberPreferencesStmt = db.prepare(`
+  SELECT
+    chat_id,
+    user_id,
+    notify_enabled,
+    sounds_enabled,
+    COALESCE(chat_list_pin_order, NULL) as chat_list_pin_order
+  FROM chat_members
+  WHERE chat_id=? AND user_id=?
+`);
 const chatPinSettingsStmt = db.prepare('SELECT id, created_by, allow_unpin_any_pin FROM chats WHERE id=?');
 const chatPinsStmt = db.prepare(`
   SELECT
@@ -626,12 +636,116 @@ function chatPreferencesPayload(row) {
   };
 }
 
+function chatSidebarPinPayload(row) {
+  const order = row?.chat_list_pin_order == null ? null : Number(row.chat_list_pin_order);
+  const normalizedOrder = Number.isFinite(order) && order > 0 ? Math.floor(order) : null;
+  return {
+    is_pinned: normalizedOrder != null,
+    chat_list_pin_order: normalizedOrder,
+  };
+}
+
+function sendChatListUpdated(userId, data = {}) {
+  const id = Number(userId || 0);
+  if (!id) return;
+  sendToUser(id, {
+    type: 'chat_list_updated',
+    ...data,
+  });
+}
+
+function getChatMemberPreferences(chatId, userId) {
+  return chatMemberPreferencesStmt.get(chatId, userId) || null;
+}
+
+const pinChatForUserTx = db.transaction((chatId, userId) => {
+  const member = getChatMemberPreferences(chatId, userId);
+  if (!member) return null;
+  const currentOrder = member.chat_list_pin_order == null ? null : Number(member.chat_list_pin_order);
+  if (Number.isFinite(currentOrder) && currentOrder > 0) {
+    return { ...member, ...chatSidebarPinPayload(member) };
+  }
+  const maxRow = db.prepare('SELECT MAX(chat_list_pin_order) as max_order FROM chat_members WHERE user_id=?').get(userId);
+  const nextOrder = Math.max(0, Number(maxRow?.max_order || 0)) + 1;
+  db.prepare('UPDATE chat_members SET chat_list_pin_order=? WHERE chat_id=? AND user_id=?')
+    .run(nextOrder, chatId, userId);
+  return {
+    ...member,
+    chat_list_pin_order: nextOrder,
+    is_pinned: true,
+  };
+});
+
+const unpinChatForUserTx = db.transaction((chatId, userId) => {
+  const member = getChatMemberPreferences(chatId, userId);
+  if (!member) return null;
+  const currentOrder = member.chat_list_pin_order == null ? null : Number(member.chat_list_pin_order);
+  if (!Number.isFinite(currentOrder) || currentOrder <= 0) {
+    return { ...member, ...chatSidebarPinPayload(member) };
+  }
+  db.prepare('UPDATE chat_members SET chat_list_pin_order=NULL WHERE chat_id=? AND user_id=?')
+    .run(chatId, userId);
+  db.prepare('UPDATE chat_members SET chat_list_pin_order=chat_list_pin_order-1 WHERE user_id=? AND chat_list_pin_order>?')
+    .run(userId, currentOrder);
+  return {
+    ...member,
+    chat_list_pin_order: null,
+    is_pinned: false,
+  };
+});
+
+const movePinnedChatForUserTx = db.transaction((chatId, userId, direction) => {
+  const member = getChatMemberPreferences(chatId, userId);
+  if (!member) return { error: 'not_member' };
+  const currentOrder = member.chat_list_pin_order == null ? null : Number(member.chat_list_pin_order);
+  if (!Number.isFinite(currentOrder) || currentOrder <= 0) return { error: 'not_pinned' };
+  const isUp = direction === 'up';
+  const adjacent = isUp
+    ? db.prepare(`
+        SELECT chat_id, chat_list_pin_order
+        FROM chat_members
+        WHERE user_id=? AND chat_list_pin_order IS NOT NULL AND chat_list_pin_order<?
+        ORDER BY chat_list_pin_order DESC
+        LIMIT 1
+      `).get(userId, currentOrder)
+    : db.prepare(`
+        SELECT chat_id, chat_list_pin_order
+        FROM chat_members
+        WHERE user_id=? AND chat_list_pin_order IS NOT NULL AND chat_list_pin_order>?
+        ORDER BY chat_list_pin_order ASC
+        LIMIT 1
+      `).get(userId, currentOrder);
+  if (!adjacent) {
+    return {
+      moved: false,
+      sidebar_pin: {
+        ...member,
+        ...chatSidebarPinPayload(member),
+      },
+    };
+  }
+  db.prepare('UPDATE chat_members SET chat_list_pin_order=? WHERE chat_id=? AND user_id=?')
+    .run(Number(adjacent.chat_list_pin_order), chatId, userId);
+  db.prepare('UPDATE chat_members SET chat_list_pin_order=? WHERE chat_id=? AND user_id=?')
+    .run(currentOrder, adjacent.chat_id, userId);
+  return {
+    moved: true,
+    sidebar_pin: {
+      ...member,
+      chat_list_pin_order: Number(adjacent.chat_list_pin_order),
+      is_pinned: true,
+    },
+  };
+});
+
 app.get('/api/chats', auth, (req, res) => {
   ensureNotesChatForUser(req.user.id);
   const rows = db.prepare(`
     SELECT c.*,
       cm.notify_enabled,
       cm.sounds_enabled,
+      cm.chat_list_pin_order,
+      CASE WHEN cm.chat_list_pin_order IS NULL THEN 0 ELSE 1 END as is_pinned,
       (SELECT COALESCE(NULLIF(m.text, ''), NULLIF(vm.transcription_text, ''))
         FROM messages m
         LEFT JOIN voice_messages vm ON vm.message_id=m.id
@@ -645,11 +759,16 @@ app.get('/api/chats', auth, (req, res) => {
       cm.last_read_id
     FROM chats c JOIN chat_members cm ON cm.chat_id=c.id
     WHERE cm.user_id=?
-    ORDER BY last_time DESC NULLS LAST, c.created_at DESC
+    ORDER BY
+      CASE WHEN cm.chat_list_pin_order IS NULL THEN 1 ELSE 0 END ASC,
+      cm.chat_list_pin_order ASC,
+      last_time DESC NULLS LAST,
+      c.created_at DESC
   `).all(req.user.id);
 
   for (const chat of rows) {
     Object.assign(chat, chatPreferencesPayload(chat));
+    Object.assign(chat, chatSidebarPinPayload(chat));
     if (isNotesChatRow(chat)) {
       Object.assign(chat, notesChatPayload(chat));
     } else if (chat.type === 'private') {
@@ -781,7 +900,49 @@ app.put('/api/chats/:chatId/preferences', auth, (req, res) => {
   };
   db.prepare('UPDATE chat_members SET notify_enabled=?, sounds_enabled=? WHERE chat_id=? AND user_id=?')
     .run(next.notify_enabled ? 1 : 0, next.sounds_enabled ? 1 : 0, chatId, req.user.id);
+  sendChatListUpdated(req.user.id, { chatId, reason: 'preferences' });
   res.json({ preferences: next });
+});
+
+app.put('/api/chats/:chatId/sidebar-pin', auth, (req, res) => {
+  const chatId = +req.params.chatId;
+  if (!chatId) return res.status(400).json({ error: 'Invalid chat' });
+  const member = getChatMemberPreferences(chatId, req.user.id);
+  if (!member) return res.status(403).json({ error: 'Not a member' });
+  const nextPinned = boolPreferenceValue(req.body?.pinned, member.chat_list_pin_order != null);
+  const sidebarPin = nextPinned
+    ? pinChatForUserTx(chatId, req.user.id)
+    : unpinChatForUserTx(chatId, req.user.id);
+  sendChatListUpdated(req.user.id, {
+    chatId,
+    reason: nextPinned ? 'sidebar_pin' : 'sidebar_unpin',
+  });
+  res.json({
+    chatId,
+    sidebar_pin: sidebarPin ? chatSidebarPinPayload(sidebarPin) : { is_pinned: nextPinned, chat_list_pin_order: null },
+  });
+});
+
+app.post('/api/chats/:chatId/sidebar-pin/move', auth, (req, res) => {
+  const chatId = +req.params.chatId;
+  if (!chatId) return res.status(400).json({ error: 'Invalid chat' });
+  const direction = String(req.body?.direction || '').trim().toLowerCase();
+  if (direction !== 'up' && direction !== 'down') {
+    return res.status(400).json({ error: 'Direction must be up or down' });
+  }
+  const result = movePinnedChatForUserTx(chatId, req.user.id, direction);
+  if (!result || result.error === 'not_member') return res.status(403).json({ error: 'Not a member' });
+  if (result.error === 'not_pinned') return res.status(400).json({ error: 'Chat is not pinned' });
+  sendChatListUpdated(req.user.id, {
+    chatId,
+    direction,
+    reason: 'sidebar_pin_move',
+  });
+  res.json({
+    chatId,
+    moved: !!result.moved,
+    sidebar_pin: result.sidebar_pin ? chatSidebarPinPayload(result.sidebar_pin) : { is_pinned: true, chat_list_pin_order: null },
+  });
 });
 
 app.get('/api/chats/:chatId/pins', auth, (req, res) => {

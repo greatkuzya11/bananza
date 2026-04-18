@@ -42,6 +42,8 @@ db.exec(`
     joined_at TEXT DEFAULT (datetime('now')),
     notify_enabled INTEGER DEFAULT 1,
     sounds_enabled INTEGER DEFAULT 1,
+    last_read_id INTEGER DEFAULT 0,
+    chat_list_pin_order INTEGER DEFAULT NULL,
     PRIMARY KEY (chat_id, user_id)
   );
 
@@ -324,6 +326,12 @@ try {
 } catch {
   db.exec("ALTER TABLE chat_members ADD COLUMN sounds_enabled INTEGER DEFAULT 1");
 }
+try {
+  db.prepare("SELECT chat_list_pin_order FROM chat_members LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE chat_members ADD COLUMN chat_list_pin_order INTEGER DEFAULT NULL");
+}
+db.exec("CREATE INDEX IF NOT EXISTS idx_chat_members_user_pin_order ON chat_members(user_id, chat_list_pin_order)");
 try {
   db.prepare("SELECT notify_mentions FROM user_notification_settings LIMIT 1").get();
 } catch {
