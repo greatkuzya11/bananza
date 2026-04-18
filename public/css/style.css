@@ -1074,7 +1074,8 @@ a:hover { text-decoration: underline; }
 
 .msg-actions {
   position: absolute;
-  top: 0;
+  top: auto;
+  bottom: calc(100% + 8px);
   z-index: 4;
   display: inline-flex;
   flex-direction: row;
@@ -1087,7 +1088,7 @@ a:hover { text-decoration: underline; }
   box-shadow: 0 8px 20px rgba(0,0,0,.22);
   opacity: 0;
   pointer-events: none;
-  transform: translateY(-68%) scale(.96);
+  transform: translateY(6px) scale(.96);
   transition: opacity .15s ease, transform .15s ease;
 }
 .msg-row.other .msg-actions {
@@ -1102,11 +1103,35 @@ a:hover { text-decoration: underline; }
   left: auto;
   right: 12px;
 }
-.msg-row:hover .msg-actions,
-.msg-row:focus-within .msg-actions {
+@media (hover: hover) and (pointer: fine) {
+  .msg-row:hover .msg-actions,
+  .msg-row:focus-within .msg-actions {
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+  }
+}
+.msg-row.actions-open .msg-actions {
+  position: fixed;
+  z-index: 410;
   opacity: 1;
   pointer-events: auto;
-  transform: translateY(-82%) scale(1);
+  transform: none;
+}
+.msg-row.actions-placement-above .msg-actions {
+  top: auto;
+  bottom: calc(100% + 8px);
+  transform-origin: bottom center;
+}
+.msg-row.actions-placement-below .msg-actions {
+  top: calc(100% + 8px);
+  bottom: auto;
+  transform-origin: top center;
+}
+.msg-row.actions-hover-suppressed:not(.actions-open) .msg-actions {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(6px) scale(.96);
 }
 .msg-copy-btn, .msg-reply-btn, .msg-edit-btn, .msg-forward-btn, .msg-pin-btn, .msg-react-btn {
   width: 28px;
@@ -1322,8 +1347,7 @@ a:hover { text-decoration: underline; }
 .reaction-badge:hover { background: rgba(255,255,255,.13); }
 
 .reaction-picker,
-.reaction-emoji-popover,
-.message-context-menu {
+.reaction-emoji-popover {
   --floating-duration-base: .26s;
   --floating-close-duration-base: .22s;
   --floating-duration: calc(var(--floating-duration-base) * var(--modal-animation-speed-factor));
@@ -1345,22 +1369,18 @@ a:hover { text-decoration: underline; }
 .reaction-picker.is-open,
 .reaction-picker.is-closing,
 .reaction-emoji-popover.is-open,
-.reaction-emoji-popover.is-closing,
-.message-context-menu.is-open,
-.message-context-menu.is-closing {
+.reaction-emoji-popover.is-closing {
   visibility: visible;
 }
 .reaction-picker.is-open,
-.reaction-emoji-popover.is-open,
-.message-context-menu.is-open {
+.reaction-emoji-popover.is-open {
   opacity: 1;
   pointer-events: auto;
   transform: none;
   transition-delay: 0s;
 }
 .reaction-picker.is-closing,
-.reaction-emoji-popover.is-closing,
-.message-context-menu.is-closing {
+.reaction-emoji-popover.is-closing {
   opacity: 0;
   visibility: visible;
   pointer-events: none;
@@ -1368,32 +1388,28 @@ a:hover { text-decoration: underline; }
   transition-duration: var(--floating-close-duration), var(--floating-close-duration), 0s;
 }
 html[data-modal-animation="lift"] .reaction-picker,
-html[data-modal-animation="lift"] .reaction-emoji-popover,
-html[data-modal-animation="lift"] .message-context-menu {
+html[data-modal-animation="lift"] .reaction-emoji-popover {
   --floating-duration-base: .3s;
   --floating-close-duration-base: .26s;
   --floating-enter-transform: translate3d(0, 30px, 0) scale(.91);
   --floating-close-transform: translate3d(0, 38px, 0) scale(.88);
 }
 html[data-modal-animation="zoom"] .reaction-picker,
-html[data-modal-animation="zoom"] .reaction-emoji-popover,
-html[data-modal-animation="zoom"] .message-context-menu {
+html[data-modal-animation="zoom"] .reaction-emoji-popover {
   --floating-duration-base: .24s;
   --floating-close-duration-base: .22s;
   --floating-enter-transform: translate3d(0, 8px, 0) scale(.84);
   --floating-close-transform: translate3d(0, 0, 0) scale(.8);
 }
 html[data-modal-animation="slide"] .reaction-picker,
-html[data-modal-animation="slide"] .reaction-emoji-popover,
-html[data-modal-animation="slide"] .message-context-menu {
+html[data-modal-animation="slide"] .reaction-emoji-popover {
   --floating-duration-base: .28s;
   --floating-close-duration-base: .24s;
   --floating-enter-transform: translate3d(0, 42px, 0) scale(1);
   --floating-close-transform: translate3d(0, 56px, 0) scale(1);
 }
 html[data-modal-animation="fade"] .reaction-picker,
-html[data-modal-animation="fade"] .reaction-emoji-popover,
-html[data-modal-animation="fade"] .message-context-menu {
+html[data-modal-animation="fade"] .reaction-emoji-popover {
   --floating-duration-base: .24s;
   --floating-close-duration-base: .24s;
   --floating-enter-transform: translate3d(0, 0, 0) scale(1);
@@ -1401,8 +1417,7 @@ html[data-modal-animation="fade"] .message-context-menu {
   --floating-ease: ease-out;
 }
 html[data-modal-animation="none"] .reaction-picker,
-html[data-modal-animation="none"] .reaction-emoji-popover,
-html[data-modal-animation="none"] .message-context-menu {
+html[data-modal-animation="none"] .reaction-emoji-popover {
   --floating-duration-base: 0s;
   --floating-close-duration-base: 0s;
   --floating-enter-transform: translate3d(0, 0, 0) scale(1);
@@ -1419,14 +1434,12 @@ html[data-modal-animation="none"] .message-context-menu {
   border: 1px solid var(--border-light);
 }
 .reaction-picker-strip,
-.message-context-reactions,
 .reaction-emoji-tabs,
 .reaction-emoji-grid {
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
 .reaction-picker-strip::-webkit-scrollbar,
-.message-context-reactions::-webkit-scrollbar,
 .reaction-emoji-tabs::-webkit-scrollbar,
 .reaction-emoji-grid::-webkit-scrollbar {
   width: 0;
@@ -1444,7 +1457,6 @@ html[data-modal-animation="none"] .message-context-menu {
   touch-action: pan-x;
 }
 .reaction-picker-button,
-.message-context-reaction,
 .reaction-more-button,
 .reaction-emoji-item,
 .reaction-emoji-tab {
@@ -1454,7 +1466,6 @@ html[data-modal-animation="none"] .message-context-menu {
   cursor: pointer;
 }
 .reaction-picker-button,
-.message-context-reaction,
 .reaction-more-button {
   flex: 0 0 auto;
   width: 34px;
@@ -1468,7 +1479,6 @@ html[data-modal-animation="none"] .message-context-menu {
   transition: transform .12s, background .12s;
 }
 .reaction-picker-button:hover,
-.message-context-reaction:hover,
 .reaction-more-button:hover {
   background: rgba(255,255,255,.1);
   transform: scale(1.18);
@@ -1476,32 +1486,18 @@ html[data-modal-animation="none"] .message-context-menu {
 .reaction-more-button {
   font-size: 20px;
   font-weight: 700;
+  -webkit-tap-highlight-color: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  user-select: none;
 }
-
-.message-context-menu {
-  z-index: 410;
-  width: min(320px, calc(100vw - 16px));
-  padding: 8px;
-  border-radius: 8px;
-  border: 1px solid var(--border-light);
-  background: var(--bg-modal);
-  box-shadow: 0 10px 34px rgba(0,0,0,.48);
-}
-.message-context-reactions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding-bottom: 7px;
-  margin-bottom: 7px;
-  border-bottom: 1px solid var(--border-light);
-  overscroll-behavior-x: contain;
-  -webkit-overflow-scrolling: touch;
-  touch-action: pan-x;
-}
-.message-context-reaction {
-  border-radius: 8px;
+.reaction-more-button:active,
+.reaction-more-button:focus,
+.reaction-more-button:focus-visible {
+  background: transparent;
+  outline: none;
+  box-shadow: none;
+  transform: none;
 }
 
 .reaction-emoji-popover {
@@ -1557,41 +1553,6 @@ html[data-modal-animation="none"] .message-context-menu {
 }
 .reaction-emoji-item:hover {
   background: var(--bg-input);
-}
-
-.message-context-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.message-context-action {
-  min-height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  border: 0;
-  border-radius: 6px;
-  padding: 0 10px;
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 14px;
-  font-weight: 600;
-  text-align: left;
-  cursor: pointer;
-}
-.message-context-action:hover {
-  background: var(--bg-hover);
-}
-.message-context-action.danger {
-  color: var(--danger);
-}
-.message-context-action:disabled {
-  color: var(--text-secondary);
-  opacity: .55;
-  cursor: default;
-}
-.message-context-action:disabled:hover {
-  background: transparent;
 }
 
 .date-separator {

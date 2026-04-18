@@ -228,7 +228,6 @@
   const ivStrip = $('#ivStrip');
   const reactionPicker = $('#reactionPicker');
   const reactionEmojiPopover = $('#reactionEmojiPopover');
-  const messageContextMenu = $('#messageContextMenu');
   const replyBar = $('#replyBar');
   const replyBarName = $('#replyBarName');
   const replyBarText = $('#replyBarText');
@@ -2063,7 +2062,7 @@
     const msg = row?.__messageData;
     const state = getPinActionState(msg);
     if (!state.show) return;
-    hideMessageContextMenu();
+    hideFloatingMessageActions();
     if (state.isPinned) {
       if (state.disabled) {
         showCenterToast('Only the pin owner or admin can unpin this');
@@ -3145,7 +3144,7 @@
 
   function openForwardMessageModal(message) {
     if (!message?.id) return;
-    hideReactionPicker();
+    hideFloatingMessageActions();
     openModal('forwardMessageModal', { replaceStack: true });
     forwardMessageState = { id: message.id };
     renderForwardChatList();
@@ -3830,6 +3829,7 @@
         chats = chats.filter(c => c.id !== msg.chatId);
         renderChatList(chatSearch.value);
         if (currentChatId === msg.chatId) {
+          hideFloatingMessageActions({ immediate: true });
           currentChatId = null;
           chatView.classList.add('hidden');
           emptyState.classList.remove('hidden');
@@ -4548,7 +4548,7 @@
     }
     hideMentionPicker();
     hideAvatarUserMenu();
-    hideMessageContextMenu();
+    hideFloatingMessageActions({ immediate: true });
 
     currentChatId = targetChatId;
     displayedMsgIds.clear();
@@ -5064,7 +5064,7 @@
       ? `<div class="msg-reactions">${renderReactions(msg.reactions)}</div>` : '<div></div>';
     html += `<div class="msg-footer">${reactionsHtml}<span class="msg-time">${statusIcon}${editedIcon}${formatTime(msg.created_at)}</span></div>`;
 
-    // Reply/edit/react buttons are anchored to the bubble and visually float above it.
+    // Message action icons are shown on hover/focus and can be pinned by tapping the message.
     if (!msg.is_deleted && !isClientMessage) {
       html += '<div class="msg-actions">';
       html += '<button class="msg-copy-btn" title="Копировать">⧉</button>';
@@ -6009,6 +6009,12 @@
         edited_at: null,
       };
     }
+    if (
+      String(activeMessageActionsRow?.dataset?.msgId || '') === String(msgId)
+      || String(reactionPickerMsgId || '') === String(msgId)
+    ) {
+      hideFloatingMessageActions({ immediate: true });
+    }
     if (el.__replyPayload) el.__replyPayload.text = 'Message deleted';
     el.querySelector('.msg-reply-btn')?.remove();
     el.querySelector('.msg-react-btn')?.remove();
@@ -6191,6 +6197,7 @@
     const selectedText = getSelectedMessageFragment(row);
     const text = selectedText || getMessageCopyText(row);
     if (!text) return;
+    hideFloatingMessageActions();
     const copied = await copyTextToClipboard(text);
     showCenterToast(copied
       ? (selectedText ? 'Фрагмент скопирован' : 'Сообщение скопировано')
@@ -6201,6 +6208,7 @@
     if (row?.dataset.outbox === '1') return;
     const payload = row?.__replyPayload;
     if (!payload || row.querySelector('.msg-deleted')) return;
+    hideFloatingMessageActions();
     setReply(payload.id, payload.display_name, payload.text);
   }
 
@@ -6228,7 +6236,7 @@
     }
 
     const text = getEditableText(row);
-    hideReactionPicker();
+    hideFloatingMessageActions();
     replyTo = null;
     editTo = {
       id: msg.id,
@@ -6341,8 +6349,8 @@
         }
         swipe.kind = kind;
         swipe.locked = true;
-        hideReactionPicker();
-        hideMessageContextMenu();
+        suppressNextMessageActionTap();
+        hideFloatingMessageActions({ immediate: true });
         ensureIndicator(swipe.row, kind);
         swipe.row.classList.add(`swipe-${kind}-active`);
       }
@@ -6909,10 +6917,12 @@
   const REACTION_PICKER_IDLE_MS = 5000;
   let reactionPickerMsgId = null;
   let reactionPickerKeepKeyboard = false;
-  let messageContextMenuMsgId = null;
+  let activeMessageActionsRow = null;
   let floatingMessageActionsState = null;
   let reactionPickerIdleTimer = null;
   let reactionEmojiPopoverCategory = Object.keys(EMOJIS)[0] || '';
+  let suppressNextMessageActionTapUntil = 0;
+  let reactionMorePointerHandledUntil = 0;
 
   function renderReactions(reactions) {
     if (!reactions || reactions.length === 0) return '';
@@ -6979,7 +6989,7 @@
   }
 
   function getFloatingMessageActionRow() {
-    const key = reactionPickerMsgId || messageContextMenuMsgId || floatingMessageActionsState?.msgId || '';
+    const key = reactionPickerMsgId || floatingMessageActionsState?.msgId || activeMessageActionsRow?.dataset?.msgId || '';
     if (!key) return null;
     const row = findMessageRowById(key);
     if (row && floatingMessageActionsState) floatingMessageActionsState.row = row;
@@ -7001,8 +7011,12 @@
   }
 
   function clearFloatingMessageActionsStateIfClosed() {
-    if (isFloatingSurfaceVisible(messageContextMenu) || isFloatingSurfaceVisible(reactionPicker) || isFloatingSurfaceVisible(reactionEmojiPopover)) return;
+    if (activeMessageActionsRow || isFloatingSurfaceVisible(reactionPicker) || isFloatingSurfaceVisible(reactionEmojiPopover)) return;
     floatingMessageActionsState = null;
+  }
+
+  function suppressNextMessageActionTap(ms = 650) {
+    suppressNextMessageActionTapUntil = Math.max(suppressNextMessageActionTapUntil, Date.now() + ms);
   }
 
   function measureFloatingSurface(el, fallbackWidth, fallbackHeight) {
@@ -7101,22 +7115,6 @@
     return true;
   }
 
-  function getReactionButtonAnchor(trigger, row) {
-    if (trigger instanceof Element) {
-      const rect = trigger.getBoundingClientRect();
-      return {
-        x: rect.left + rect.width / 2,
-        y: rect.top + rect.height / 2,
-      };
-    }
-    const rect = row?.querySelector('.msg-bubble')?.getBoundingClientRect() || row?.getBoundingClientRect();
-    if (!rect) return {};
-    return {
-      x: rect.left + rect.width / 2,
-      y: rect.top + rect.height / 2,
-    };
-  }
-
   function renderQuickReactionButtonsHtml({ buttonClass = '', moreAction = 'open-emoji-popover' } = {}) {
     const buttons = QUICK_REACTIONS.map((emoji) =>
       `<button type="button" class="${buttonClass}" data-reaction-action="toggle" data-emoji="${esc(emoji)}" title="${esc(`React ${emoji}`)}">${esc(emoji)}</button>`
@@ -7139,58 +7137,33 @@
     }, { passive: true });
   }
 
-  function getMessageContextReactionRowHtml() {
-    return renderQuickReactionButtonsHtml({ buttonClass: 'message-context-reaction', moreAction: 'open-picker' });
-  }
-
-  function contextActionHtml(action, label, { title = '', disabled = false, danger = false } = {}) {
-    return `
-      <button type="button" class="message-context-action${danger ? ' danger' : ''}" data-action="${esc(action)}" ${disabled ? 'disabled' : ''} title="${esc(title || label)}">
-        <span>${esc(label)}</span>
-      </button>
-    `;
-  }
-
-  function renderMessageContextMenuContent(row) {
-    if (!messageContextMenu || !row) return;
-    const msg = row.__messageData || {};
-    const pinState = getPinActionState(msg);
-    const canDelete = !isClientSideMessage(msg) && (Number(msg.user_id) === Number(currentUser?.id) || currentUser?.is_admin);
-    const canCopy = Boolean(getMessageCopyText(row));
-    const actions = [
-      contextActionHtml('copy', 'Copy', { disabled: !canCopy }),
-      contextActionHtml('reply', 'Reply'),
-      canEditMessage(msg) ? contextActionHtml('edit', 'Edit') : '',
-      canForwardMessage(msg) ? contextActionHtml('forward', 'Forward') : '',
-      pinState.show ? contextActionHtml('pin', pinState.label, { title: pinState.title, disabled: pinState.disabled }) : '',
-      canDelete ? contextActionHtml('delete', 'Delete', { danger: true }) : '',
-    ].filter(Boolean).join('');
-
-    messageContextMenu.innerHTML = `
-      <div class="message-context-reactions">${getMessageContextReactionRowHtml()}</div>
-      <div class="message-context-actions">${actions}</div>
-    `;
-    messageContextMenu.querySelector('.message-context-reactions')?.addEventListener('scroll', () => {
-      bumpReactionPickerIdleTimer();
-    }, { passive: true });
+  function getAdditionalReactionCategories() {
+    const quickSet = new Set(QUICK_REACTIONS);
+    return Object.entries(EMOJIS || {})
+      .map(([key, emojis]) => ({
+        key,
+        emojis: (Array.isArray(emojis) ? emojis : []).filter((emoji) => !quickSet.has(emoji)),
+      }))
+      .filter((category) => category.emojis.length > 0);
   }
 
   function getReactionEmojiCategoryKey(value) {
-    const categories = Object.keys(EMOJIS);
+    const categories = getAdditionalReactionCategories();
     if (!categories.length) return '';
-    return categories.includes(value) ? value : categories[0];
+    return categories.some((category) => category.key === value) ? value : categories[0].key;
   }
 
   function renderReactionEmojiPopoverContent() {
     if (!reactionEmojiPopover) return;
+    const categories = getAdditionalReactionCategories();
     const categoryKey = getReactionEmojiCategoryKey(reactionEmojiPopoverCategory);
     reactionEmojiPopoverCategory = categoryKey;
-    const categories = Object.keys(EMOJIS);
-    const categoryEmojis = EMOJIS[categoryKey] || [];
+    const activeCategory = categories.find((category) => category.key === categoryKey) || categories[0];
+    const categoryEmojis = activeCategory?.emojis || [];
     reactionEmojiPopover.innerHTML = `
       <div class="reaction-emoji-tabs">
-        ${categories.map((cat) => `
-          <button type="button" class="reaction-emoji-tab${cat === categoryKey ? ' active' : ''}" data-category="${esc(cat)}">${esc(cat)}</button>
+        ${categories.map((category) => `
+          <button type="button" class="reaction-emoji-tab${category.key === categoryKey ? ' active' : ''}" data-category="${esc(category.key)}">${esc(category.key)}</button>
         `).join('')}
       </div>
       <div class="reaction-emoji-grid">
@@ -7207,44 +7180,113 @@
     }, { passive: true });
   }
 
-  function resolveMessageActionLayout(row, { includeMenu = false, includePicker = false, reserveMenuForPicker = false } = {}) {
-    const bubbleRect = row?.querySelector('.msg-bubble')?.getBoundingClientRect() || row?.getBoundingClientRect();
+  function getVisibleMessageAreaRect() {
     const viewport = getFloatingViewportRect();
-    const menuSize = (includeMenu || reserveMenuForPicker)
-      ? measureFloatingSurface(messageContextMenu, 320, 220)
+    const messagesRect = messagesEl?.getBoundingClientRect?.();
+    if (!messagesRect) return viewport;
+    const left = Math.max(viewport.left, messagesRect.left);
+    const top = Math.max(viewport.top, messagesRect.top);
+    const right = Math.min(viewport.right, messagesRect.right);
+    const bottom = Math.min(viewport.bottom, messagesRect.bottom);
+    if (right <= left || bottom <= top) return viewport;
+    return {
+      left,
+      top,
+      right,
+      bottom,
+      width: right - left,
+      height: bottom - top,
+    };
+  }
+
+  function measureMessageActions(row) {
+    const actions = row?.querySelector('.msg-actions');
+    if (!(actions instanceof HTMLElement)) return { width: 178, height: 36 };
+    return {
+      width: actions.offsetWidth || 178,
+      height: actions.offsetHeight || 36,
+    };
+  }
+
+  function clearMessageActionsPlacement(row) {
+    const actions = row?.querySelector('.msg-actions');
+    row?.classList.remove('actions-open', 'actions-placement-above', 'actions-placement-below');
+    if (!(actions instanceof HTMLElement)) return;
+    actions.style.removeProperty('left');
+    actions.style.removeProperty('right');
+    actions.style.removeProperty('top');
+    actions.style.removeProperty('bottom');
+  }
+
+  function resolveMessageActionLayout(row, { includeActions = false, includePicker = false, reserveActionsForPicker = includePicker } = {}) {
+    const rowRect = row?.getBoundingClientRect?.();
+    if (!rowRect) return null;
+    const bubbleRect = row.querySelector('.msg-bubble')?.getBoundingClientRect() || rowRect;
+    const visibleArea = getVisibleMessageAreaRect();
+    const hasActionSlot = includeActions || reserveActionsForPicker;
+    const actionSize = hasActionSlot
+      ? measureMessageActions(row)
       : { width: 0, height: 0 };
     const pickerSize = includePicker
       ? measureFloatingSurface(reactionPicker, 430, 56)
       : { width: 0, height: 0 };
-    const reservedMenuHeight = (includeMenu || reserveMenuForPicker) ? menuSize.height : 0;
-    const stackHeight = includePicker
-      ? pickerSize.height + (reservedMenuHeight ? FLOATING_ACTION_GAP + reservedMenuHeight : 0)
-      : reservedMenuHeight;
-    const stackWidth = Math.max(includePicker ? pickerSize.width : 0, (includeMenu || reserveMenuForPicker) ? menuSize.width : 0);
-    const topVisible = bubbleRect.top >= viewport.top + FLOATING_ACTION_MARGIN;
-    const bottomVisible = bubbleRect.bottom <= viewport.bottom - FLOATING_ACTION_MARGIN;
-    const spaceAbove = bubbleRect.top - viewport.top - FLOATING_ACTION_MARGIN - FLOATING_ACTION_GAP;
-    const spaceBelow = viewport.bottom - bubbleRect.bottom - FLOATING_ACTION_MARGIN - FLOATING_ACTION_GAP;
+    const actionSlotHeight = hasActionSlot ? actionSize.height : pickerSize.height;
+    const actionSlotWidth = Math.max(1, hasActionSlot ? actionSize.width : pickerSize.width);
+    const topVisible = rowRect.top >= visibleArea.top + FLOATING_ACTION_MARGIN;
+    const bottomVisible = rowRect.bottom <= visibleArea.bottom - FLOATING_ACTION_MARGIN;
+    const spaceAbove = rowRect.top - visibleArea.top - FLOATING_ACTION_MARGIN - FLOATING_ACTION_GAP;
+    const spaceBelow = visibleArea.bottom - rowRect.bottom - FLOATING_ACTION_MARGIN - FLOATING_ACTION_GAP;
     let placement = 'above';
-    if (!bottomVisible || spaceBelow < stackHeight) placement = 'above';
-    else if (!topVisible || spaceAbove < stackHeight) placement = 'below';
+    if (!topVisible) placement = 'below';
+    else if (!bottomVisible || spaceBelow < actionSlotHeight) placement = 'above';
+    else if (spaceAbove < actionSlotHeight) placement = 'below';
 
-    const pointerX = Number(floatingMessageActionsState?.pointerX);
-    let preferredLeft = row.classList.contains('own') ? bubbleRect.right - stackWidth : bubbleRect.left;
-    if (Number.isFinite(pointerX)) preferredLeft = pointerX - Math.min(stackWidth / 2, 96);
-    const left = clamp(preferredLeft, viewport.left + FLOATING_ACTION_MARGIN, viewport.right - stackWidth - FLOATING_ACTION_MARGIN);
-    let stackTop = placement === 'above'
-      ? bubbleRect.top - FLOATING_ACTION_GAP - stackHeight
-      : bubbleRect.bottom + FLOATING_ACTION_GAP;
-    stackTop = clamp(stackTop, viewport.top + FLOATING_ACTION_MARGIN, viewport.bottom - stackHeight - FLOATING_ACTION_MARGIN);
+    const preferredActionsLeft = row.classList.contains('own') ? bubbleRect.right - actionSlotWidth : bubbleRect.left;
+    const virtualActionsLeft = clamp(
+      preferredActionsLeft,
+      visibleArea.left + FLOATING_ACTION_MARGIN,
+      visibleArea.right - actionSlotWidth - FLOATING_ACTION_MARGIN
+    );
+    let virtualActionsTop = placement === 'above'
+      ? rowRect.top - FLOATING_ACTION_GAP - actionSlotHeight
+      : rowRect.bottom + FLOATING_ACTION_GAP;
+    virtualActionsTop = clamp(
+      virtualActionsTop,
+      visibleArea.top + FLOATING_ACTION_MARGIN,
+      visibleArea.bottom - actionSlotHeight - FLOATING_ACTION_MARGIN
+    );
+
+    let pickerLeft = null;
+    let pickerTop = null;
+    if (includePicker) {
+      const preferredPickerLeft = row.classList.contains('own')
+        ? virtualActionsLeft + actionSlotWidth - pickerSize.width
+        : virtualActionsLeft;
+      pickerLeft = clamp(
+        preferredPickerLeft,
+        visibleArea.left + FLOATING_ACTION_MARGIN,
+        visibleArea.right - pickerSize.width - FLOATING_ACTION_MARGIN
+      );
+      pickerTop = virtualActionsTop - FLOATING_ACTION_GAP - pickerSize.height;
+      if (pickerTop < visibleArea.top + FLOATING_ACTION_MARGIN) {
+        const belowActionsTop = virtualActionsTop + actionSlotHeight + FLOATING_ACTION_GAP;
+        pickerTop = belowActionsTop + pickerSize.height <= visibleArea.bottom - FLOATING_ACTION_MARGIN
+          ? belowActionsTop
+          : pickerTop;
+      }
+      pickerTop = clamp(
+        pickerTop,
+        visibleArea.top + FLOATING_ACTION_MARGIN,
+        visibleArea.bottom - pickerSize.height - FLOATING_ACTION_MARGIN
+      );
+    }
 
     return {
       placement,
-      left,
-      pickerTop: includePicker ? stackTop : null,
-      menuTop: (includeMenu || reserveMenuForPicker)
-        ? stackTop + (includePicker ? pickerSize.height + FLOATING_ACTION_GAP : 0)
-        : null,
+      pickerLeft,
+      pickerTop,
+      actionsLeft: includeActions ? virtualActionsLeft : null,
+      actionsTop: includeActions ? virtualActionsTop : null,
     };
   }
 
@@ -7254,13 +7296,25 @@
     el.style.top = `${Math.round(top)}px`;
   }
 
+  function applyMessageActionsLayout(row, layout) {
+    const actions = row?.querySelector('.msg-actions');
+    if (!(actions instanceof HTMLElement) || !layout) return false;
+    row.classList.add('actions-open');
+    row.classList.toggle('actions-placement-above', layout.placement === 'above');
+    row.classList.toggle('actions-placement-below', layout.placement === 'below');
+    actions.style.left = `${Math.round(layout.actionsLeft)}px`;
+    actions.style.top = `${Math.round(layout.actionsTop)}px`;
+    actions.style.right = 'auto';
+    actions.style.bottom = 'auto';
+    return true;
+  }
+
   function positionReactionEmojiPopover() {
     if (!reactionEmojiPopover || reactionEmojiPopover.classList.contains('hidden')) return;
     const anchorRect = reactionPicker?.querySelector('[data-reaction-action="open-emoji-popover"]')?.getBoundingClientRect()
-      || reactionPicker?.getBoundingClientRect()
-      || messageContextMenu?.getBoundingClientRect();
+      || reactionPicker?.getBoundingClientRect();
     if (!anchorRect) return;
-    const viewport = getFloatingViewportRect();
+    const viewport = getVisibleMessageAreaRect();
     const size = measureFloatingSurface(reactionEmojiPopover, 340, 260);
     let left = anchorRect.left + (anchorRect.width - size.width) / 2;
     left = clamp(left, viewport.left + FLOATING_ACTION_MARGIN, viewport.right - size.width - FLOATING_ACTION_MARGIN);
@@ -7270,18 +7324,23 @@
     positionFloatingElement(reactionEmojiPopover, left, top);
   }
 
-  function positionMessageActionSurfaces({ includeMenu = isFloatingSurfaceVisible(messageContextMenu), includePicker = isFloatingSurfaceVisible(reactionPicker), reserveMenuForPicker = includePicker && !includeMenu } = {}) {
-    if (!includeMenu && !includePicker && !isFloatingSurfaceVisible(reactionEmojiPopover)) return null;
+  function positionMessageActionSurfaces({ includeActions = Boolean(activeMessageActionsRow), includePicker = isFloatingSurfaceVisible(reactionPicker) } = {}) {
+    if (!includeActions && !includePicker && !isFloatingSurfaceVisible(reactionEmojiPopover)) return null;
     const row = getFloatingMessageActionRow();
     if (!row) {
       hideFloatingMessageActions({ immediate: true });
       return null;
     }
-    if (includeMenu || reserveMenuForPicker) renderMessageContextMenuContent(row);
+    includeActions = Boolean(includeActions && activeMessageActionsRow && String(activeMessageActionsRow.dataset.msgId || '') === String(row.dataset.msgId || ''));
+    if (includeActions) activeMessageActionsRow = row;
     if (includePicker) renderReactionPickerContent();
-    const layout = resolveMessageActionLayout(row, { includeMenu, includePicker, reserveMenuForPicker });
-    if (includePicker && Number.isFinite(layout.pickerTop)) positionFloatingElement(reactionPicker, layout.left, layout.pickerTop);
-    if (includeMenu && Number.isFinite(layout.menuTop)) positionFloatingElement(messageContextMenu, layout.left, layout.menuTop);
+    const layout = resolveMessageActionLayout(row, { includeActions, includePicker, reserveActionsForPicker: includePicker });
+    if (!layout) {
+      hideFloatingMessageActions({ immediate: true });
+      return null;
+    }
+    if (includePicker && Number.isFinite(layout.pickerTop)) positionFloatingElement(reactionPicker, layout.pickerLeft, layout.pickerTop);
+    if (includeActions && Number.isFinite(layout.actionsTop) && !applyMessageActionsLayout(row, layout)) hideActiveMessageActions();
     if (floatingMessageActionsState) floatingMessageActionsState.placement = layout.placement;
     if (!reactionEmojiPopover.classList.contains('hidden')) positionReactionEmojiPopover();
     return layout;
@@ -7296,7 +7355,7 @@
     clearReactionPickerIdleTimer();
     if (!isFloatingSurfaceVisible(reactionPicker) && !isFloatingSurfaceVisible(reactionEmojiPopover)) return;
     reactionPickerIdleTimer = setTimeout(() => {
-      hideReactionPicker({ immediate: false, keepComposerState: reactionPickerKeepKeyboard });
+      hideReactionUi({ immediate: false, keepComposerState: reactionPickerKeepKeyboard });
     }, REACTION_PICKER_IDLE_MS);
   }
 
@@ -7311,18 +7370,29 @@
   }
 
   function showReactionEmojiPopover() {
-    if (!reactionPickerMsgId) return;
+    const msgId = reactionPickerMsgId || Number(floatingMessageActionsState?.msgId || activeMessageActionsRow?.dataset?.msgId || 0);
+    if (!msgId) return;
+    reactionPickerMsgId = msgId;
+    if (!getAdditionalReactionCategories().length) return;
     if (isFloatingSurfaceVisible(reactionEmojiPopover)) {
       hideReactionEmojiPopover();
       return;
     }
     renderReactionEmojiPopoverContent();
-    positionReactionEmojiPopover();
     openFloatingSurface(reactionEmojiPopover);
+    positionReactionEmojiPopover();
     bumpReactionPickerIdleTimer();
   }
 
-  function hideReactionPicker(options = {}) {
+  function handleReactionMoreButton(btn) {
+    if (!btn) return;
+    btn.blur?.();
+    showReactionEmojiPopover();
+    reactionMorePointerHandledUntil = Date.now() + 450;
+    bumpReactionPickerIdleTimer();
+  }
+
+  function hideReactionUi(options = {}) {
     const keepComposerState = Boolean(options.keepComposerState);
     clearReactionPickerIdleTimer();
     hideReactionEmojiPopover({ immediate: options.immediate });
@@ -7338,27 +7408,46 @@
     if (!isFloatingSurfaceVisible(reactionPicker) && !keepComposerState) reactionPickerKeepKeyboard = false;
   }
 
-  function hideMessageContextMenu(options = {}) {
-    if (!messageContextMenu) return;
-    if (!options.preservePicker) hideReactionPicker({ keepComposerState: options.keepComposerState, immediate: options.immediate });
-    else if (!options.keepPopover) hideReactionEmojiPopover({ immediate: options.immediate });
-    closeFloatingSurface(messageContextMenu, {
-      immediate: Boolean(options.immediate),
-      onAfterClose: () => {
-        messageContextMenu.innerHTML = '';
-        messageContextMenuMsgId = null;
-        clearFloatingMessageActionsStateIfClosed();
-      },
+  function hideReactionPicker(options = {}) {
+    hideReactionUi(options);
+  }
+
+  function hideActiveMessageActions() {
+    if (activeMessageActionsRow) clearMessageActionsPlacement(activeMessageActionsRow);
+    messagesEl?.querySelectorAll('.msg-row.actions-open').forEach((row) => {
+      if (row !== activeMessageActionsRow) clearMessageActionsPlacement(row);
     });
+    activeMessageActionsRow = null;
+    clearFloatingMessageActionsStateIfClosed();
   }
 
   function hideFloatingMessageActions(options = {}) {
-    hideReactionPicker({ keepComposerState: options.keepComposerState, immediate: options.immediate });
-    hideMessageContextMenu({ immediate: options.immediate, preservePicker: true });
+    hideReactionUi({ keepComposerState: options.keepComposerState, immediate: options.immediate });
+    hideActiveMessageActions();
   }
 
-  function getMessageContextRow() {
-    return getFloatingMessageActionRow();
+  function showMessageActions(row, { toggle = false, preserveReactionUi = false } = {}) {
+    if (!row || row.dataset.outbox === '1') return false;
+    row.classList.remove('actions-hover-suppressed');
+    const msg = row.__messageData || {};
+    if (msg.is_deleted || !row.querySelector('.msg-actions')) return false;
+    const sameRow = activeMessageActionsRow
+      && String(activeMessageActionsRow.dataset.msgId || '') === String(row.dataset.msgId || '');
+    if (sameRow && toggle) {
+      const closingRow = activeMessageActionsRow;
+      hideFloatingMessageActions({ keepComposerState: reactionPickerKeepKeyboard });
+      closingRow?.classList.add('actions-hover-suppressed');
+      closingRow?.addEventListener('pointerleave', () => {
+        closingRow.classList.remove('actions-hover-suppressed');
+      }, { once: true });
+      return true;
+    }
+    if (!preserveReactionUi) hideReactionUi({ immediate: true, keepComposerState: reactionPickerKeepKeyboard });
+    hideActiveMessageActions();
+    activeMessageActionsRow = row;
+    updateFloatingMessageActionsState(row);
+    positionMessageActionSurfaces({ includeActions: true, includePicker: isFloatingSurfaceVisible(reactionPicker) });
+    return true;
   }
 
   function showReactionPicker(row, trigger, options = {}) {
@@ -7367,98 +7456,41 @@
     const msgId = Number(row.dataset.msgId || msg.id || 0);
     if (!msgId || msg.is_deleted) return;
 
-    const fromContextMenu = options.source === 'context-menu';
+    const source = options.source || 'direct';
     const keepComposerFocus = Boolean(options.keepComposerFocus);
-    const sameStandalonePicker = !fromContextMenu
-      && reactionPickerMsgId === msgId
-      && isFloatingSurfaceVisible(reactionPicker)
-      && !isFloatingSurfaceVisible(messageContextMenu);
-    if (sameStandalonePicker) {
-      hideReactionPicker({ keepComposerState: keepComposerFocus });
+    const samePicker = reactionPickerMsgId === msgId && isFloatingSurfaceVisible(reactionPicker);
+    if (samePicker) {
+      updateFloatingMessageActionsState(row);
+      positionMessageActionSurfaces({
+        includeActions: Boolean(activeMessageActionsRow && String(activeMessageActionsRow.dataset.msgId || '') === String(msgId)),
+        includePicker: true,
+      });
+      bumpReactionPickerIdleTimer();
+      if (keepComposerFocus) focusComposerKeepKeyboard(true);
       return;
     }
 
-    if (fromContextMenu && reactionPickerMsgId === msgId && isFloatingSurfaceVisible(reactionPicker)) {
-      hideReactionPicker({ keepComposerState: keepComposerFocus });
-      return;
+    if (source === 'actions') {
+      showMessageActions(row, { preserveReactionUi: true });
+    } else {
+      hideActiveMessageActions();
     }
 
-    const anchor = getReactionButtonAnchor(trigger, row);
+    hideReactionUi({ keepComposerState: keepComposerFocus, immediate: true });
     reactionPickerKeepKeyboard = keepComposerFocus;
-    if (!fromContextMenu) hideFloatingMessageActions({ keepComposerState: keepComposerFocus, immediate: true });
-    else hideReactionEmojiPopover({ immediate: true });
-
     reactionPickerMsgId = msgId;
-    updateFloatingMessageActionsState(row, { x: anchor.x, y: anchor.y });
+    updateFloatingMessageActionsState(row);
     renderReactionPickerContent();
-    const includeMenu = fromContextMenu && isFloatingSurfaceVisible(messageContextMenu);
-    positionMessageActionSurfaces({ includeMenu, includePicker: true, reserveMenuForPicker: !includeMenu });
+    const includeActions = Boolean(activeMessageActionsRow && String(activeMessageActionsRow.dataset.msgId || '') === String(msgId));
+    positionMessageActionSurfaces({ includeActions, includePicker: true });
     openFloatingSurface(reactionPicker);
     bumpReactionPickerIdleTimer();
     if (keepComposerFocus) focusComposerKeepKeyboard(true);
   }
 
-  function showMessageContextMenu(row, anchor = {}) {
-    if (!messageContextMenu || !row || row.dataset.outbox === '1') return;
-    const msg = row.__messageData || {};
-    const msgId = String(row.dataset.msgId || msg.id || '');
-    if (!msgId || msg.is_deleted) return;
-
-    const sameMenu = messageContextMenuMsgId === msgId && isFloatingSurfaceVisible(messageContextMenu);
-    if (sameMenu) {
-      hideFloatingMessageActions({ keepComposerState: reactionPickerKeepKeyboard });
-      return;
-    }
-
-    hideFloatingMessageActions({ keepComposerState: reactionPickerKeepKeyboard, immediate: true });
-    messageContextMenuMsgId = msgId;
-    updateFloatingMessageActionsState(row, { x: anchor.x, y: anchor.y });
-    renderMessageContextMenuContent(row);
-    positionMessageActionSurfaces({ includeMenu: true, includePicker: false });
-    openFloatingSurface(messageContextMenu);
-  }
-
-  async function handleMessageContextMenuClick(e) {
-    const row = getMessageContextRow();
-    if (!row) {
-      hideMessageContextMenu();
-      return;
-    }
-
-    const reactionBtn = e.target.closest('.message-context-reaction');
-    if (reactionBtn) {
-      e.stopPropagation();
-      const action = reactionBtn.dataset.reactionAction || 'toggle';
-      if (action === 'open-picker') {
-        const keepComposerFocus = reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen();
-        showReactionPicker(row, reactionBtn, { source: 'context-menu', keepComposerFocus });
-        return;
-      }
-
-      const msgId = Number(row.dataset.msgId || 0);
-      const emoji = reactionBtn.dataset.emoji;
-      hideMessageContextMenu({ immediate: true });
-      if (msgId && emoji) await toggleReaction(msgId, emoji);
-      return;
-    }
-
-    const actionBtn = e.target.closest('.message-context-action');
-    if (!actionBtn || actionBtn.disabled) return;
-    e.stopPropagation();
-    const action = actionBtn.dataset.action;
-    hideMessageContextMenu();
-
-    if (action === 'copy') await copyMessageFromRow(row);
-    else if (action === 'reply') setReplyFromRow(row);
-    else if (action === 'edit') setEditFromRow(row);
-    else if (action === 'forward') openForwardMessageModal(row.__messageData);
-    else if (action === 'pin') await togglePinFromRow(row);
-    else if (action === 'delete') await deleteMessage(row.__messageData?.id || row.dataset.msgId);
-  }
-
   async function toggleReaction(msgId, emoji, options = {}) {
     const keepComposerFocus = Boolean(options.keepComposerFocus);
-    hideReactionPicker({ keepComposerState: keepComposerFocus });
+    hideFloatingMessageActions({ keepComposerState: keepComposerFocus });
     if (keepComposerFocus) focusComposerKeepKeyboard(true);
     try {
       const data = await api(`/api/messages/${msgId}/reactions`, { method: 'POST', body: { emoji } });
@@ -8267,6 +8299,7 @@
   const AVATAR_COLORS = ['#e17076','#7bc862','#e5ca77','#65aadd','#a695e7','#ee7aae','#6ec9cb','#faa774'];
 
   function openMenuDrawer() {
+    hideFloatingMessageActions({ immediate: true });
     openModal('menuDrawer', { replaceStack: true });
 
     // Avatar
@@ -8389,6 +8422,7 @@
 
   function revealSidebarFromChat({ forceAnimation = false } = {}) {
     if (!sidebar) return;
+    hideFloatingMessageActions({ immediate: true });
     cancelPendingSidebarReveal();
     sidebar.classList.remove('sidebar-no-transition');
 
@@ -8414,6 +8448,7 @@
   }
 
   function navigateBackToChatList() {
+    hideFloatingMessageActions({ immediate: true });
     if (history.state && history.state.chat) {
       history.back();
       return;
@@ -8512,6 +8547,11 @@
       positionAvatarUserMenu(avatarUserMenuState?.anchor);
       positionMessageActionSurfaces();
       scheduleRetryLayout();
+    });
+    window.visualViewport?.addEventListener('scroll', () => {
+      positionMentionPicker();
+      positionAvatarUserMenu(avatarUserMenuState?.anchor);
+      positionMessageActionSurfaces();
     });
     window.addEventListener('resize', () => {
       positionMessageActionSurfaces();
@@ -8742,8 +8782,14 @@
     })();
 
     // Reaction picker + extra emoji popover
+    const isReactionScrollSurface = (target) => Boolean(target?.closest?.(
+      '.reaction-picker-strip, .reaction-emoji-tabs, .reaction-emoji-grid'
+    ));
     const keepReactionInteractionFromBlurringInput = (e) => {
-      if (e.type === 'touchstart' && 'PointerEvent' in window) return;
+      if (e.type === 'touchstart' || e.type === 'touchmove' || isReactionScrollSurface(e.target)) {
+        if (isMobileComposerKeyboardOpen()) reactionPickerKeepKeyboard = true;
+        return;
+      }
       if (preventMobileComposerBlur(e)) reactionPickerKeepKeyboard = true;
     };
     const markReactionInteraction = (e) => {
@@ -8755,12 +8801,23 @@
       markReactionInteraction(e);
       e.stopPropagation();
     });
+    reactionPicker.addEventListener('pointerup', (e) => {
+      const moreBtn = e.target.closest('.reaction-more-button');
+      if (!moreBtn || !reactionPicker.contains(moreBtn)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      markReactionInteraction(e);
+      handleReactionMoreButton(moreBtn);
+    });
     reactionPicker.addEventListener('touchstart', (e) => {
       markReactionInteraction(e);
-    }, { passive: false });
+    }, { passive: true });
+    reactionPicker.addEventListener('touchmove', (e) => {
+      markReactionInteraction(e);
+    }, { passive: true });
     reactionPicker.addEventListener('mousedown', (e) => {
       markReactionInteraction(e);
-      e.preventDefault();
+      if (!isReactionScrollSurface(e.target)) e.preventDefault();
       e.stopPropagation();
     });
     reactionPicker.addEventListener('wheel', () => bumpReactionPickerIdleTimer(), { passive: true });
@@ -8771,13 +8828,11 @@
       const action = btn.dataset.reactionAction || 'toggle';
       const keepComposerFocus = reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen();
       if (action === 'open-emoji-popover') {
-        showReactionEmojiPopover();
+        e.preventDefault();
+        if (Date.now() >= reactionMorePointerHandledUntil) handleReactionMoreButton(btn);
         return;
       }
       if (!btn.dataset.emoji) return;
-      if (isFloatingSurfaceVisible(messageContextMenu)) {
-        hideMessageContextMenu({ immediate: true, preservePicker: true, keepPopover: true });
-      }
       toggleReaction(reactionPickerMsgId, btn.dataset.emoji, { keepComposerFocus });
     });
 
@@ -8787,10 +8842,13 @@
     });
     reactionEmojiPopover?.addEventListener('touchstart', (e) => {
       markReactionInteraction(e);
-    }, { passive: false });
+    }, { passive: true });
+    reactionEmojiPopover?.addEventListener('touchmove', (e) => {
+      markReactionInteraction(e);
+    }, { passive: true });
     reactionEmojiPopover?.addEventListener('mousedown', (e) => {
       markReactionInteraction(e);
-      e.preventDefault();
+      if (!isReactionScrollSurface(e.target)) e.preventDefault();
       e.stopPropagation();
     });
     reactionEmojiPopover?.addEventListener('wheel', () => bumpReactionPickerIdleTimer(), { passive: true });
@@ -8808,26 +8866,16 @@
       const item = e.target.closest('.reaction-emoji-item');
       if (!item || !reactionPickerMsgId) return;
       const keepComposerFocus = reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen();
-      if (isFloatingSurfaceVisible(messageContextMenu)) {
-        hideMessageContextMenu({ immediate: true, preservePicker: true, keepPopover: true });
-      }
       toggleReaction(reactionPickerMsgId, item.dataset.emoji, { keepComposerFocus });
-    });
-
-    messageContextMenu?.addEventListener('pointerdown', (e) => e.stopPropagation());
-    messageContextMenu?.addEventListener('mousedown', (e) => e.preventDefault());
-    messageContextMenu?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      handleMessageContextMenuClick(e).catch(() => {});
     });
 
     document.addEventListener('click', (e) => {
       const insideFloatingActions =
         reactionPicker.contains(e.target)
         || reactionEmojiPopover?.contains(e.target)
-        || messageContextMenu?.contains(e.target);
+        || e.target.closest('.msg-actions');
       if (!insideFloatingActions && !e.target.closest('.msg-react-btn')) {
-        if (isFloatingSurfaceVisible(reactionPicker) || isFloatingSurfaceVisible(reactionEmojiPopover) || isFloatingSurfaceVisible(messageContextMenu)) {
+        if (activeMessageActionsRow || isFloatingSurfaceVisible(reactionPicker) || isFloatingSurfaceVisible(reactionEmojiPopover)) {
           hideFloatingMessageActions();
         }
       }
@@ -8841,15 +8889,29 @@
     messagesEl.addEventListener('touchstart', (e) => {
       if (!e.target.closest('.msg-react-btn, .reaction-badge')) return;
       keepReactionInteractionFromBlurringInput(e);
-    }, { passive: false });
+    }, { passive: true });
+    const getMessageActionTapRow = (e) => {
+      if (e.defaultPrevented || Date.now() < suppressNextMessageActionTapUntil) return null;
+      if (e.target.closest(
+        '.msg-actions, button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-image, .msg-video, .msg-file, .link-preview, .msg-group-avatar'
+      )) return null;
+      const row = e.target.closest('.msg-row');
+      if (!row || row.dataset.outbox === '1' || row.querySelector('.msg-deleted')) return null;
+      return row;
+    };
     messagesEl.addEventListener('click', (e) => {
+      if (Date.now() < suppressNextMessageActionTapUntil) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       const reactBtn = e.target.closest('.msg-react-btn');
       if (reactBtn) {
         e.stopPropagation();
         const row = reactBtn.closest('.msg-row');
         if (row) {
           const keepComposerFocus = reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen();
-          showReactionPicker(row, reactBtn, { source: 'direct', keepComposerFocus });
+          showReactionPicker(row, reactBtn, { source: 'actions', keepComposerFocus });
         }
         return;
       }
@@ -8860,34 +8922,61 @@
           const keepComposerFocus = reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen();
           toggleReaction(+row.dataset.msgId, badge.dataset.emoji, { keepComposerFocus });
         }
+        return;
+      }
+      const row = getMessageActionTapRow(e);
+      if (row) {
+        e.stopPropagation();
+        showMessageActions(row, { toggle: true });
       }
     });
 
-    // Long press/right-click on message for context menu
+    // Long press/right-click on a message opens reactions directly.
     (() => {
       let lpTimer = null;
+      let lpStart = null;
+      const clearLongPress = () => {
+        clearTimeout(lpTimer);
+        lpTimer = null;
+        lpStart = null;
+      };
       messagesEl.addEventListener('touchstart', (e) => {
+        if (e.touches.length !== 1) return;
         const row = e.target.closest('.msg-row');
-        if (!row || e.target.closest('.msg-copy-btn, .msg-react-btn, .msg-reply-btn, .msg-edit-btn, .msg-forward-btn, .msg-pin-btn, .msg-group-avatar') || e.target.closest('.reaction-badge')) return;
+        if (!row || e.target.closest(
+          '.msg-actions, button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-image, .msg-video, .msg-file, .link-preview, .msg-group-avatar'
+        )) return;
         const touch = e.touches && e.touches[0] ? e.touches[0] : null;
+        lpStart = { row, x: touch?.clientX || 0, y: touch?.clientY || 0 };
         lpTimer = setTimeout(() => {
           lpTimer = null;
-          navigator.vibrate && navigator.vibrate(30);
-          showMessageContextMenu(row, {
-            x: touch?.clientX || window.innerWidth / 2,
-            y: touch?.clientY || window.innerHeight / 2,
+          suppressNextMessageActionTap();
+          navigator.vibrate?.(30);
+          showReactionPicker(row, null, {
+            source: 'long-press',
+            keepComposerFocus: reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen(),
           });
         }, 500);
       }, { passive: true });
-      messagesEl.addEventListener('touchend', () => { clearTimeout(lpTimer); lpTimer = null; }, { passive: true });
-      messagesEl.addEventListener('touchmove', () => { clearTimeout(lpTimer); lpTimer = null; }, { passive: true });
+      messagesEl.addEventListener('touchend', clearLongPress, { passive: true });
+      messagesEl.addEventListener('touchcancel', clearLongPress, { passive: true });
+      messagesEl.addEventListener('touchmove', (e) => {
+        if (!lpStart || e.touches.length !== 1) return;
+        const touch = e.touches[0];
+        if (Math.hypot(touch.clientX - lpStart.x, touch.clientY - lpStart.y) > 10) clearLongPress();
+      }, { passive: true });
       // Desktop right-click
       messagesEl.addEventListener('contextmenu', (e) => {
         const row = e.target.closest('.msg-row');
-        if (e.target.closest('.msg-actions')) return;
+        if (e.target.closest(
+          '.msg-actions, button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-image, .msg-video, .msg-file, .link-preview, .msg-group-avatar'
+        )) return;
         if (!row) return;
         e.preventDefault();
-        showMessageContextMenu(row, { x: e.clientX, y: e.clientY });
+        showReactionPicker(row, null, {
+          source: 'long-press',
+          keepComposerFocus: reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen(),
+        });
       });
     })();
 
@@ -9262,7 +9351,7 @@
     // Scroll to load more
     messagesEl.addEventListener('scroll', () => {
       hideAvatarUserMenu();
-      hideMessageContextMenu();
+      hideFloatingMessageActions({ immediate: true });
       if (!suppressScrollAnchorSave && !loadingMore && !loadingMoreAfter) scheduleScrollAnchorSave();
       maybeLoadMoreAtTop();
       maybeLoadMoreAtBottom();
