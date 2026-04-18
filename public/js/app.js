@@ -169,6 +169,32 @@
     error: '',
   };
   let selectedAiBotId = null;
+  let yandexBotState = {
+    settings: {
+      yandex_enabled: false,
+      yandex_folder_id: '',
+      yandex_base_url: 'https://llm.api.cloud.yandex.net/foundationModels/v1',
+      yandex_default_response_model: 'yandexgpt/latest',
+      yandex_default_summary_model: 'yandexgpt-lite/latest',
+      yandex_default_embedding_doc_model: 'text-search-doc/latest',
+      yandex_default_embedding_query_model: 'text-search-query/latest',
+      yandex_temperature: 0.3,
+      yandex_summary_temperature: 0.2,
+      yandex_max_tokens: 1000,
+      yandex_reasoning_mode: 'DISABLED',
+      yandex_data_logging_enabled: false,
+    },
+    bots: [],
+    chats: [],
+    chatSettings: [],
+    models: {
+      response: ['yandexgpt/latest', 'yandexgpt-lite/latest'],
+      summary: ['yandexgpt-lite/latest', 'yandexgpt/latest'],
+      docEmbedding: ['text-search-doc/latest'],
+      queryEmbedding: ['text-search-query/latest'],
+    },
+  };
+  let selectedYandexBotId = null;
   let forwardMessageState = null;
   let forwardMessageBusy = false;
   let savingToNotesMessageIds = new Set();
@@ -2770,6 +2796,511 @@
     }
   }
 
+  function setYandexAiStatus(message, type = '') {
+    const el = $('#yandexAiStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function setYandexAiModelStatus(message, type = '') {
+    const el = $('#yandexAiModelStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function currentYandexBot() {
+    return yandexBotState.bots.find(bot => Number(bot.id) === Number(selectedYandexBotId)) || null;
+  }
+
+  function getYandexChatSetting(chatId, botId) {
+    return yandexBotState.chatSettings.find(item => Number(item.chat_id) === Number(chatId) && Number(item.bot_id) === Number(botId)) || null;
+  }
+
+  function mergeYandexAiState(data = {}) {
+    const state = data.state || data;
+    if (state.settings) yandexBotState.settings = { ...yandexBotState.settings, ...state.settings };
+    if (state.bots) yandexBotState.bots = state.bots;
+    if (state.chats) yandexBotState.chats = state.chats;
+    if (state.chatSettings) yandexBotState.chatSettings = state.chatSettings;
+    if (state.models) yandexBotState.models = { ...yandexBotState.models, ...state.models };
+    if (selectedYandexBotId && !yandexBotState.bots.some(bot => Number(bot.id) === Number(selectedYandexBotId))) {
+      selectedYandexBotId = null;
+    }
+    mentionTargetsByChat.clear();
+  }
+
+  function renderYandexModelOptions(bot = currentYandexBot()) {
+    const settings = yandexBotState.settings || {};
+    const models = yandexBotState.models || {};
+    const responseModels = models.response || ['yandexgpt/latest', 'yandexgpt-lite/latest'];
+    const summaryModels = models.summary || ['yandexgpt-lite/latest', 'yandexgpt/latest'];
+    setAiModelSelectOptions('yandexAiDefaultResponseModel', responseModels, settings.yandex_default_response_model || 'yandexgpt/latest');
+    setAiModelSelectOptions('yandexAiDefaultSummaryModel', summaryModels, settings.yandex_default_summary_model || 'yandexgpt-lite/latest');
+    setAiModelSelectOptions('yandexAiBotResponseModel', responseModels, bot?.response_model || settings.yandex_default_response_model || 'yandexgpt/latest');
+    setAiModelSelectOptions('yandexAiBotSummaryModel', summaryModels, bot?.summary_model || settings.yandex_default_summary_model || 'yandexgpt-lite/latest');
+  }
+
+  function renderYandexBotAvatar(bot = currentYandexBot()) {
+    const avatarEl = $('#yandexAiBotAvatar');
+    if (!avatarEl) return;
+    const name = bot?.name || $('#yandexAiBotName')?.value.trim() || 'Yandex AI';
+    const color = bot?.avatar_color || '#65aadd';
+    avatarEl.style.background = color;
+    if (bot?.avatar_url) {
+      avatarEl.innerHTML = `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="">`;
+    } else {
+      avatarEl.textContent = initials(name);
+    }
+
+    const hasSavedBot = Boolean(bot?.id);
+    const input = $('#yandexAiBotAvatarInput');
+    const label = $('#yandexAiBotAvatarLabel');
+    if (input) {
+      input.disabled = !hasSavedBot;
+      input.value = '';
+    }
+    if (label) {
+      label.classList.toggle('ai-bot-avatar-label-disabled', !hasSavedBot);
+      label.title = hasSavedBot ? 'Change avatar' : 'Save the bot first';
+    }
+    $('#removeYandexAiBotAvatar')?.classList.toggle('hidden', !hasSavedBot || !bot?.avatar_url);
+  }
+
+  function fillYandexBotForm(bot = null) {
+    const settings = yandexBotState.settings || {};
+    selectedYandexBotId = bot ? bot.id : null;
+    $('#yandexAiBotName').value = bot?.name || 'Yandex AI';
+    $('#yandexAiBotMention').value = bot?.mention || 'yandex';
+    $('#yandexAiBotEnabled').checked = bot ? !!bot.enabled : true;
+    $('#yandexAiBotResponseModel').value = bot?.response_model || settings.yandex_default_response_model || 'yandexgpt/latest';
+    $('#yandexAiBotSummaryModel').value = bot?.summary_model || settings.yandex_default_summary_model || 'yandexgpt-lite/latest';
+    $('#yandexAiBotTemperature').value = bot?.temperature ?? settings.yandex_temperature ?? 0.3;
+    $('#yandexAiBotMaxTokens').value = bot?.max_tokens ?? settings.yandex_max_tokens ?? 1000;
+    $('#yandexAiBotStyle').value = bot?.style || 'Helpful Yandex AI assistant for chat';
+    $('#yandexAiBotTone').value = bot?.tone || 'warm, concise, attentive';
+    $('#yandexAiBotRules').value = bot?.behavior_rules || '';
+    $('#yandexAiBotSpeech').value = bot?.speech_patterns || '';
+    renderYandexBotAvatar(bot);
+    renderYandexModelOptions(bot);
+    renderYandexBotList();
+    renderYandexChatBotSettings();
+  }
+
+  function yandexBotFormPayload() {
+    return {
+      name: $('#yandexAiBotName')?.value.trim(),
+      mention: $('#yandexAiBotMention')?.value.trim(),
+      enabled: $('#yandexAiBotEnabled')?.checked,
+      response_model: $('#yandexAiBotResponseModel')?.value.trim(),
+      summary_model: $('#yandexAiBotSummaryModel')?.value.trim(),
+      temperature: Number($('#yandexAiBotTemperature')?.value || 0.3),
+      max_tokens: Number($('#yandexAiBotMaxTokens')?.value || 1000),
+      style: $('#yandexAiBotStyle')?.value.trim(),
+      tone: $('#yandexAiBotTone')?.value.trim(),
+      behavior_rules: $('#yandexAiBotRules')?.value.trim(),
+      speech_patterns: $('#yandexAiBotSpeech')?.value.trim(),
+    };
+  }
+
+  function renderYandexBotList() {
+    const list = $('#yandexAiBotList');
+    if (!list) return;
+    if (!yandexBotState.bots.length) {
+      list.innerHTML = '<div class="ai-bot-empty">No Yandex bots yet. Create the first one.</div>';
+      return;
+    }
+    list.innerHTML = yandexBotState.bots.map(bot => `
+      <button type="button" class="ai-bot-list-item${Number(bot.id) === Number(selectedYandexBotId) ? ' active' : ''}" data-bot-id="${bot.id}">
+        <span class="ai-bot-list-main">
+          <span class="ai-bot-list-avatar" style="background:${esc(bot.avatar_color || '#65aadd')}">
+            ${bot.avatar_url ? `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">` : esc(initials(bot.name || '?'))}
+          </span>
+          <span class="ai-bot-list-copy">
+            <strong>${esc(bot.name)}</strong>
+            <small>@${esc(bot.mention)} · ${bot.enabled ? 'enabled' : 'disabled'}</small>
+          </span>
+        </span>
+        <span class="ai-bot-list-model">${bot.response_model ? esc(bot.response_model) : ''}</span>
+      </button>
+    `).join('');
+  }
+
+  function renderYandexChatBotSettings() {
+    const chatSelect = $('#yandexAiBotChatSelect');
+    const botSelect = $('#yandexAiBotChatBotSelect');
+    if (!chatSelect || !botSelect) return;
+    const currentChatValue = chatSelect.value || String(currentChatId || yandexBotState.chats[0]?.id || '');
+    const currentBotValue = botSelect.value || String(selectedYandexBotId || yandexBotState.bots[0]?.id || '');
+
+    chatSelect.innerHTML = yandexBotState.chats.map(chat => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+    botSelect.innerHTML = yandexBotState.bots.map(bot => `<option value="${bot.id}">${esc(bot.name)} @${esc(bot.mention)}</option>`).join('');
+    if (yandexBotState.chats.some(chat => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
+    if (yandexBotState.bots.some(bot => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;
+    if (!botSelect.value && yandexBotState.bots[0]) botSelect.value = String(yandexBotState.bots[0].id);
+
+    const setting = getYandexChatSetting(chatSelect.value, botSelect.value);
+    $('#yandexAiBotChatEnabled').checked = !!setting?.enabled;
+    $('#yandexAiBotChatMode').value = setting?.mode || 'simple';
+    $('#yandexAiBotChatHotLimit').value = setting?.hot_context_limit || 50;
+  }
+
+  function renderYandexAiSettings() {
+    const settings = yandexBotState.settings || {};
+    $('#yandexAiGlobalEnabled').checked = !!settings.yandex_enabled;
+    $('#yandexAiFolderId').value = settings.yandex_folder_id || '';
+    $('#yandexAiBaseUrl').value = settings.yandex_base_url || 'https://llm.api.cloud.yandex.net/foundationModels/v1';
+    $('#yandexAiDocEmbeddingModel').value = settings.yandex_default_embedding_doc_model || 'text-search-doc/latest';
+    $('#yandexAiQueryEmbeddingModel').value = settings.yandex_default_embedding_query_model || 'text-search-query/latest';
+    $('#yandexAiTemperature').value = settings.yandex_temperature ?? 0.3;
+    $('#yandexAiSummaryTemperature').value = settings.yandex_summary_temperature ?? 0.2;
+    $('#yandexAiMaxTokens').value = settings.yandex_max_tokens || 1000;
+    $('#yandexAiReasoningMode').value = settings.yandex_reasoning_mode || 'DISABLED';
+    $('#yandexAiDataLoggingEnabled').checked = !!settings.yandex_data_logging_enabled;
+    $('#yandexAiApiKey').value = '';
+    $('#yandexAiKeyStatus').textContent = settings.has_yandex_key
+      ? `Key saved: ${settings.masked_yandex_key || '***'}`
+      : 'Key is not saved';
+    renderYandexModelOptions(currentYandexBot());
+    $('#yandexAiDefaultResponseModel').value = settings.yandex_default_response_model || 'yandexgpt/latest';
+    $('#yandexAiDefaultSummaryModel').value = settings.yandex_default_summary_model || 'yandexgpt-lite/latest';
+    const selected = currentYandexBot() || yandexBotState.bots[0] || null;
+    fillYandexBotForm(selected);
+    renderYandexChatBotSettings();
+    const models = yandexBotState.models || {};
+    if (models.error) {
+      setYandexAiModelStatus(`Model list fallback is used: ${models.error}`, 'error');
+    } else if (models.source === 'live') {
+      setYandexAiModelStatus(`Loaded ${models.response?.length || 0} Yandex models for selectors.`, 'success');
+    } else {
+      setYandexAiModelStatus(settings.yandex_folder_id ? 'Static model fallback is shown. Press "Обновить модели" or "Проверить ключ" to load account models.' : 'Введите идентификатор каталога в поле Folder ID выше перед проверкой.');
+    }
+  }
+
+  function yandexAiSettingsPayload() {
+    const body = {
+      yandex_enabled: $('#yandexAiGlobalEnabled')?.checked,
+      yandex_folder_id: $('#yandexAiFolderId')?.value.trim(),
+      yandex_base_url: $('#yandexAiBaseUrl')?.value.trim(),
+      yandex_default_response_model: $('#yandexAiDefaultResponseModel')?.value.trim(),
+      yandex_default_summary_model: $('#yandexAiDefaultSummaryModel')?.value.trim(),
+      yandex_default_embedding_doc_model: $('#yandexAiDocEmbeddingModel')?.value.trim(),
+      yandex_default_embedding_query_model: $('#yandexAiQueryEmbeddingModel')?.value.trim(),
+      yandex_temperature: Number($('#yandexAiTemperature')?.value || 0.3),
+      yandex_summary_temperature: Number($('#yandexAiSummaryTemperature')?.value || 0.2),
+      yandex_max_tokens: Number($('#yandexAiMaxTokens')?.value || 1000),
+      yandex_reasoning_mode: $('#yandexAiReasoningMode')?.value || 'DISABLED',
+      yandex_data_logging_enabled: $('#yandexAiDataLoggingEnabled')?.checked,
+    };
+    const key = $('#yandexAiApiKey')?.value.trim();
+    if (key) body.yandex_api_key = key;
+    return body;
+  }
+
+  async function persistYandexAiSettings() {
+    const data = await api('/api/admin/yandex-ai-bots/settings', {
+      method: 'PUT',
+      body: yandexAiSettingsPayload(),
+    });
+    mergeYandexAiState(data);
+    return data;
+  }
+
+  async function loadYandexAiState() {
+    const data = await api('/api/admin/yandex-ai-bots');
+    mergeYandexAiState(data);
+    renderYandexAiSettings();
+  }
+
+  async function saveYandexAiSettings() {
+    setYandexAiStatus('Saving...');
+    try {
+      await persistYandexAiSettings();
+      renderYandexAiSettings();
+      setYandexAiStatus('Settings saved', 'success');
+    } catch (e) {
+      setYandexAiStatus(e.message || 'Could not save settings', 'error');
+    }
+  }
+
+  async function testYandexAiConnection() {
+    const folderInput = $('#yandexAiFolderId');
+    const keyInput = $('#yandexAiApiKey');
+    const folderId = folderInput?.value.trim();
+    const hasKey = Boolean(keyInput?.value.trim() || yandexBotState.settings?.has_yandex_key);
+    if (!folderId) {
+      setYandexAiStatus('Введите идентификатор каталога Yandex Cloud в поле Folder ID.', 'error');
+      setYandexAiModelStatus('Folder ID нужен для modelUri: gpt://<folder_ID>/yandexgpt/latest.', 'error');
+      folderInput?.focus();
+      return;
+    }
+    if (!hasKey) {
+      setYandexAiStatus('Введите Yandex API key перед проверкой.', 'error');
+      keyInput?.focus();
+      return;
+    }
+
+    setYandexAiStatus('Checking Yandex connection...');
+    try {
+      const data = await api('/api/admin/yandex-ai-bots/test-connection', {
+        method: 'POST',
+        body: yandexAiSettingsPayload(),
+      });
+      await persistYandexAiSettings();
+      if (data.state?.models) mergeYandexAiState({ state: { models: data.state.models } });
+      renderYandexAiSettings();
+      const text = String(data.result?.text || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+      const latency = data.result?.latencyMs || 0;
+      const models = yandexBotState.models || {};
+      const modelNote = models.source === 'live' ? ` Моделей в селекторе: ${models.response?.length || 0}.` : '';
+      setYandexAiStatus(`Ключ проверен и сохранен (${latency} ms). ${text}${modelNote}`, 'success');
+      setYandexAiModelStatus(models.error ? `Key OK. Model list fallback is used: ${models.error}` : `OK: ${data.result?.model || 'Yandex model'}`, models.error ? 'error' : 'success');
+    } catch (e) {
+      setYandexAiStatus(e.message || 'Could not check Yandex key', 'error');
+    }
+  }
+
+  async function refreshYandexAiModels() {
+    const folderInput = $('#yandexAiFolderId');
+    const keyInput = $('#yandexAiApiKey');
+    const folderId = folderInput?.value.trim();
+    const hasKey = Boolean(keyInput?.value.trim() || yandexBotState.settings?.has_yandex_key);
+    if (!folderId) {
+      setYandexAiStatus('Введите идентификатор каталога Yandex Cloud в поле Folder ID.', 'error');
+      folderInput?.focus();
+      return;
+    }
+    if (!hasKey) {
+      setYandexAiStatus('Введите или сохраните Yandex API key перед загрузкой моделей.', 'error');
+      keyInput?.focus();
+      return;
+    }
+
+    setYandexAiStatus('Loading Yandex models...');
+    try {
+      const data = await api('/api/admin/yandex-ai-bots/models/refresh', {
+        method: 'POST',
+        body: yandexAiSettingsPayload(),
+      });
+      mergeYandexAiState(data);
+      renderYandexAiSettings();
+      setYandexAiStatus(`Модели обновлены: ${yandexBotState.models?.response?.length || 0} в селекторе.`, 'success');
+    } catch (e) {
+      setYandexAiStatus(e.message || 'Could not load Yandex models', 'error');
+    }
+  }
+
+  async function deleteYandexAiKey() {
+    if (!confirm('Delete Yandex API key for AI bots?')) return;
+    try {
+      const data = await api('/api/admin/yandex-ai-bots/key', { method: 'DELETE' });
+      mergeYandexAiState(data);
+      renderYandexAiSettings();
+      setYandexAiStatus('Key deleted', 'success');
+    } catch (e) {
+      setYandexAiStatus(e.message || 'Could not delete key', 'error');
+    }
+  }
+
+  async function saveYandexBot() {
+    const payload = yandexBotFormPayload();
+    if (!payload.name) { setYandexAiStatus('Enter bot name', 'error'); return; }
+    setYandexAiStatus('Saving bot...');
+    try {
+      await persistYandexAiSettings();
+      const shouldUpdate = Boolean(selectedYandexBotId && yandexBotState.bots.some(bot => Number(bot.id) === Number(selectedYandexBotId)));
+      const url = shouldUpdate ? `/api/admin/yandex-ai-bots/${selectedYandexBotId}` : '/api/admin/yandex-ai-bots';
+      const method = shouldUpdate ? 'PUT' : 'POST';
+      const data = await api(url, { method, body: payload });
+      mergeYandexAiState(data);
+      selectedYandexBotId = data.bot?.id || selectedYandexBotId;
+      if (data.bot?.user_id) {
+        applyUserUpdate({
+          id: data.bot.user_id,
+          user_id: data.bot.user_id,
+          display_name: data.bot.name,
+          avatar_color: data.bot.avatar_color,
+          avatar_url: data.bot.avatar_url,
+          is_ai_bot: 1,
+        });
+      }
+      renderYandexAiSettings();
+      setYandexAiStatus('Bot saved', 'success');
+    } catch (e) {
+      setYandexAiStatus(e.message || 'Could not save bot', 'error');
+    }
+  }
+
+  async function uploadYandexBotAvatar(file) {
+    if (!file) return;
+    if (!selectedYandexBotId) {
+      setYandexAiStatus('Save the bot before adding an avatar', 'error');
+      renderYandexBotAvatar(null);
+      return;
+    }
+    const fd = new FormData();
+    fd.append('avatar', file);
+    setYandexAiStatus('Uploading avatar...');
+    try {
+      const data = await api(`/api/admin/yandex-ai-bots/${selectedYandexBotId}/avatar`, { method: 'POST', body: fd });
+      mergeYandexAiState(data);
+      selectedYandexBotId = data.bot?.id || selectedYandexBotId;
+      if (data.bot?.user_id) {
+        applyUserUpdate({
+          id: data.bot.user_id,
+          user_id: data.bot.user_id,
+          display_name: data.bot.name,
+          avatar_color: data.bot.avatar_color,
+          avatar_url: data.bot.avatar_url,
+          is_ai_bot: 1,
+        });
+      }
+      renderYandexBotList();
+      renderYandexBotAvatar(currentYandexBot());
+      refreshRenderedAiBotAvatar(data.bot);
+      renderYandexChatBotSettings();
+      setYandexAiStatus('Avatar saved', 'success');
+    } catch (e) {
+      setYandexAiStatus(e.message || 'Could not upload avatar', 'error');
+      renderYandexBotAvatar(currentYandexBot());
+    }
+  }
+
+  async function removeYandexBotAvatar() {
+    if (!selectedYandexBotId) return;
+    try {
+      const data = await api(`/api/admin/yandex-ai-bots/${selectedYandexBotId}/avatar`, { method: 'DELETE' });
+      mergeYandexAiState(data);
+      selectedYandexBotId = data.bot?.id || selectedYandexBotId;
+      if (data.bot?.user_id) {
+        applyUserUpdate({
+          id: data.bot.user_id,
+          user_id: data.bot.user_id,
+          display_name: data.bot.name,
+          avatar_color: data.bot.avatar_color,
+          avatar_url: data.bot.avatar_url,
+          is_ai_bot: 1,
+        });
+      }
+      renderYandexBotList();
+      renderYandexBotAvatar(currentYandexBot());
+      refreshRenderedAiBotAvatar(data.bot);
+      renderYandexChatBotSettings();
+      setYandexAiStatus('Avatar removed', 'success');
+    } catch (e) {
+      setYandexAiStatus(e.message || 'Could not remove avatar', 'error');
+    }
+  }
+
+  async function disableYandexBot() {
+    if (!selectedYandexBotId) return;
+    if (!confirm('Disable this Yandex bot in all chats?')) return;
+    try {
+      const data = await api(`/api/admin/yandex-ai-bots/${selectedYandexBotId}`, { method: 'DELETE' });
+      mergeYandexAiState(data);
+      renderYandexAiSettings();
+      setYandexAiStatus('Bot disabled', 'success');
+    } catch (e) {
+      setYandexAiStatus(e.message || 'Could not disable bot', 'error');
+    }
+  }
+
+  async function testYandexBot() {
+    if (!selectedYandexBotId) { setYandexAiStatus('Save the bot first', 'error'); return; }
+    setYandexAiStatus('Testing model...');
+    try {
+      await persistYandexAiSettings();
+      const data = await api(`/api/admin/yandex-ai-bots/${selectedYandexBotId}/test`, { method: 'POST', body: {} });
+      const text = data.result?.text ? data.result.text.slice(0, 500) : '';
+      setYandexAiStatus(`Success (${data.result?.latencyMs || 0} ms): ${text}`, 'success');
+    } catch (e) {
+      setYandexAiStatus(e.message || 'Test failed', 'error');
+    }
+  }
+
+  async function exportYandexBotJson() {
+    if (!selectedYandexBotId) { setYandexAiStatus('Choose a saved bot first', 'error'); return; }
+    setYandexAiStatus('Preparing JSON...');
+    try {
+      const headers = {};
+      if (token) headers.Authorization = 'Bearer ' + token;
+      const res = await fetch(`/api/admin/yandex-ai-bots/${selectedYandexBotId}/export`, { headers });
+      if (!res.ok) {
+        let data = {};
+        try { data = await res.json(); } catch {}
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const bot = currentYandexBot();
+      const fallbackName = `bananza-yandex-bot-${bot?.mention || selectedYandexBotId}.json`;
+      const filename = filenameFromContentDisposition(res.headers.get('content-disposition'), fallbackName);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setYandexAiStatus('JSON exported', 'success');
+    } catch (e) {
+      setYandexAiStatus(e.message || 'Could not export JSON', 'error');
+    }
+  }
+
+  async function importYandexBotJsonFile(file) {
+    if (!file) return;
+    setYandexAiStatus('Importing JSON...');
+    try {
+      const raw = await file.text();
+      const payload = JSON.parse(raw);
+      const data = await api('/api/admin/yandex-ai-bots/import', { method: 'POST', body: payload });
+      mergeYandexAiState(data);
+      selectedYandexBotId = data.bot?.id || selectedYandexBotId;
+      renderYandexAiSettings();
+      const warnings = Array.isArray(data.warnings) && data.warnings.length ? ` ${data.warnings.join(' ')}` : '';
+      setYandexAiStatus(`Bot imported.${warnings}`, warnings ? 'error' : 'success');
+    } catch (e) {
+      setYandexAiStatus(e.message || 'Could not import JSON', 'error');
+    } finally {
+      const input = $('#yandexAiBotImportFile');
+      if (input) input.value = '';
+    }
+  }
+
+  async function saveYandexChatBotSettings() {
+    const chatId = Number($('#yandexAiBotChatSelect')?.value || 0);
+    const botId = Number($('#yandexAiBotChatBotSelect')?.value || 0);
+    const botExists = yandexBotState.bots.some(bot => Number(bot.id) === botId);
+    if (!chatId || !botId) { setYandexAiStatus('Choose chat and bot', 'error'); return; }
+    if (!botExists) {
+      setYandexAiStatus('Save the bot first', 'error');
+      await loadYandexAiState().catch(() => {});
+      return;
+    }
+    try {
+      await persistYandexAiSettings();
+      const data = await api('/api/admin/yandex-ai-bots/chat-settings', {
+        method: 'PUT',
+        body: {
+          chatId,
+          botId,
+          enabled: $('#yandexAiBotChatEnabled')?.checked,
+          mode: $('#yandexAiBotChatMode')?.value || 'simple',
+          hot_context_limit: Number($('#yandexAiBotChatHotLimit')?.value || 50),
+        },
+      });
+      mergeYandexAiState(data);
+      renderYandexChatBotSettings();
+      setYandexAiStatus('Chat settings saved', 'success');
+    } catch (e) {
+      setYandexAiStatus(e.message || 'Could not save chat settings', 'error');
+    }
+  }
+
   function getPayloadChatId(payload = {}) {
     const id = Number(payload.chatId || payload.chat_id || 0);
     return Number.isInteger(id) && id > 0 ? id : 0;
@@ -3423,6 +3954,7 @@
       notificationSettingsModal,
       soundSettingsModal,
       aiBotSettingsModal,
+      yandexAiSettingsModal,
       changePasswordModal,
     ].forEach((modal) => registerModal(modal));
     registerModal(forwardMessageModal, { onAfterClose: resetForwardMessageModal });
@@ -8798,6 +9330,9 @@
     const aiBotsItem = $('#settingsAiBotsPanel');
     if (currentUser.is_admin) aiBotsItem?.classList.remove('hidden');
     else aiBotsItem?.classList.add('hidden');
+    const yandexAiItem = $('#settingsYandexAiPanel');
+    if (currentUser.is_admin) yandexAiItem?.classList.remove('hidden');
+    else yandexAiItem?.classList.add('hidden');
     $('#settingsSendEnter').checked = sendByEnter;
     $('#settingsScrollRestore').checked = scrollRestoreMode === 'restore';
     $('#settingsOpenLastChat').checked = openLastChatOnReload;
@@ -8847,6 +9382,15 @@
     setAiBotStatus('Загружаю...');
     loadAiBotState().then(() => setAiBotStatus('')).catch((e) => {
       setAiBotStatus(e.message || 'Не удалось загрузить AI-ботов', 'error');
+    });
+  }
+
+  function openYandexAiSettingsModal() {
+    if (!currentUser?.is_admin) return;
+    openModal('yandexAiSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
+    setYandexAiStatus('Loading...');
+    loadYandexAiState().then(() => setYandexAiStatus('')).catch((e) => {
+      setYandexAiStatus(e.message || 'Could not load Yandex AI bots', 'error');
     });
   }
 
@@ -10020,6 +10564,7 @@
     $('#settingsNotificationsPanel')?.addEventListener('click', openNotificationSettingsModal);
     $('#settingsSoundsPanel')?.addEventListener('click', openSoundSettingsModal);
     $('#settingsAiBotsPanel')?.addEventListener('click', openAiBotSettingsModal);
+    $('#settingsYandexAiPanel')?.addEventListener('click', openYandexAiSettingsModal);
     $('#settingsChangePassword').addEventListener('click', openChangePasswordModal);
     $('#settingsAdminPanel').addEventListener('click', openAdminModal);
 
@@ -10172,6 +10717,36 @@
     $('#aiBotChatSelect')?.addEventListener('change', renderAiChatBotSettings);
     $('#aiBotChatBotSelect')?.addEventListener('change', renderAiChatBotSettings);
     $('#aiBotChatSave')?.addEventListener('click', saveAiChatBotSettings);
+
+    // Yandex AI bot admin settings
+    $('#yandexAiSaveSettings')?.addEventListener('click', saveYandexAiSettings);
+    $('#yandexAiTestConnection')?.addEventListener('click', testYandexAiConnection);
+    $('#yandexAiRefreshModels')?.addEventListener('click', refreshYandexAiModels);
+    $('#yandexAiDeleteKey')?.addEventListener('click', deleteYandexAiKey);
+    $('#yandexAiBotCreateNew')?.addEventListener('click', () => {
+      fillYandexBotForm(null);
+      setYandexAiStatus('New Yandex bot: fill fields and save');
+    });
+    $('#yandexAiBotSave')?.addEventListener('click', saveYandexBot);
+    $('#yandexAiBotDisable')?.addEventListener('click', disableYandexBot);
+    $('#yandexAiBotTest')?.addEventListener('click', testYandexBot);
+    $('#yandexAiBotExportJson')?.addEventListener('click', exportYandexBotJson);
+    $('#yandexAiBotImportJson')?.addEventListener('click', () => $('#yandexAiBotImportFile')?.click());
+    $('#yandexAiBotImportFile')?.addEventListener('change', (event) => importYandexBotJsonFile(event.target.files?.[0]));
+    $('#yandexAiBotAvatarInput')?.addEventListener('change', (event) => uploadYandexBotAvatar(event.target.files?.[0]));
+    $('#removeYandexAiBotAvatar')?.addEventListener('click', removeYandexBotAvatar);
+    $('#yandexAiBotName')?.addEventListener('input', () => {
+      if (!currentYandexBot()?.avatar_url) renderYandexBotAvatar(currentYandexBot());
+    });
+    $('#yandexAiBotList')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.ai-bot-list-item');
+      if (!btn) return;
+      const bot = yandexBotState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
+      if (bot) fillYandexBotForm(bot);
+    });
+    $('#yandexAiBotChatSelect')?.addEventListener('change', renderYandexChatBotSettings);
+    $('#yandexAiBotChatBotSelect')?.addEventListener('change', renderYandexChatBotSettings);
+    $('#yandexAiBotChatSave')?.addEventListener('click', saveYandexChatBotSettings);
 
     // Change password save
     $('#cpSaveBtn').addEventListener('click', async () => {

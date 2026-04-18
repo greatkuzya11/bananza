@@ -24,9 +24,12 @@ function initAiSchema(db) {
       behavior_rules TEXT DEFAULT '',
       speech_patterns TEXT DEFAULT '',
       enabled INTEGER DEFAULT 1,
+      provider TEXT DEFAULT 'openai',
       response_model TEXT DEFAULT 'gpt-4o-mini',
       summary_model TEXT DEFAULT 'gpt-4o-mini',
       embedding_model TEXT DEFAULT 'text-embedding-3-small',
+      temperature REAL DEFAULT NULL,
+      max_tokens INTEGER DEFAULT NULL,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -105,6 +108,69 @@ function initAiSchema(db) {
       updated_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS yandex_message_embeddings (
+      message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+      chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      model TEXT NOT NULL,
+      embedding_json TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      source_text TEXT NOT NULL,
+      is_stale INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS yandex_memory_chunks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      source_from_message_id INTEGER NOT NULL,
+      source_to_message_id INTEGER NOT NULL,
+      message_count INTEGER NOT NULL,
+      summary_short TEXT DEFAULT '',
+      summary_long TEXT DEFAULT '',
+      structured_json TEXT DEFAULT '{}',
+      embedding_model TEXT DEFAULT NULL,
+      embedding_json TEXT DEFAULT NULL,
+      status TEXT DEFAULT 'completed',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS yandex_room_summaries (
+      chat_id INTEGER PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
+      summary_short TEXT DEFAULT '',
+      summary_long TEXT DEFAULT '',
+      structured_json TEXT DEFAULT '{}',
+      source_to_message_id INTEGER DEFAULT 0,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS yandex_memory_facts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      fact_text TEXT NOT NULL,
+      subject TEXT DEFAULT '',
+      object TEXT DEFAULT '',
+      confidence REAL DEFAULT 0.5,
+      source_message_id INTEGER DEFAULT NULL REFERENCES messages(id) ON DELETE SET NULL,
+      content_hash TEXT NOT NULL,
+      is_active INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS yandex_memory_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      status TEXT DEFAULT 'queued',
+      payload_json TEXT DEFAULT '{}',
+      error TEXT DEFAULT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_ai_chat_bots_chat ON ai_chat_bots(chat_id, enabled);
     CREATE INDEX IF NOT EXISTS idx_ai_bots_enabled ON ai_bots(enabled);
     CREATE INDEX IF NOT EXISTS idx_message_embeddings_chat ON message_embeddings(chat_id, is_stale);
@@ -112,11 +178,21 @@ function initAiSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_memory_facts_chat ON memory_facts(chat_id, is_active, type);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_facts_dedupe ON memory_facts(chat_id, content_hash);
     CREATE INDEX IF NOT EXISTS idx_ai_memory_jobs_chat ON ai_memory_jobs(chat_id, status, type);
+    CREATE INDEX IF NOT EXISTS idx_yandex_message_embeddings_chat ON yandex_message_embeddings(chat_id, is_stale);
+    CREATE INDEX IF NOT EXISTS idx_yandex_memory_chunks_chat ON yandex_memory_chunks(chat_id, source_to_message_id);
+    CREATE INDEX IF NOT EXISTS idx_yandex_memory_facts_chat ON yandex_memory_facts(chat_id, is_active, type);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_yandex_memory_facts_dedupe ON yandex_memory_facts(chat_id, content_hash);
+    CREATE INDEX IF NOT EXISTS idx_yandex_memory_jobs_chat ON yandex_memory_jobs(chat_id, status, type);
   `);
 
+  addColumnIfMissing(db, 'ai_bots', 'provider', "provider TEXT DEFAULT 'openai'");
+  addColumnIfMissing(db, 'ai_bots', 'temperature', 'temperature REAL DEFAULT NULL');
+  addColumnIfMissing(db, 'ai_bots', 'max_tokens', 'max_tokens INTEGER DEFAULT NULL');
   addColumnIfMissing(db, 'users', 'is_ai_bot', 'is_ai_bot INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'messages', 'ai_generated', 'ai_generated INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'messages', 'ai_bot_id', 'ai_bot_id INTEGER DEFAULT NULL');
+
+  db.exec('CREATE INDEX IF NOT EXISTS idx_ai_bots_provider ON ai_bots(provider, enabled)');
 }
 
 module.exports = { initAiSchema };

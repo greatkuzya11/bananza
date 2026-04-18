@@ -218,6 +218,7 @@
         <button id="settingsChangePassword" class="settings-item">🔑 Change Password</button>
         <button id="settingsAdminPanel" class="settings-item hidden">🛡 Admin Panel</button>
         <button id="settingsAiBotsPanel" class="settings-item hidden">🤖 AI-боты</button>
+        <button id="settingsYandexAiPanel" class="settings-item hidden">YA AI-&#1071;&#1085;&#1076;&#1077;&#1082;&#1089;</button>
       </div>
     </div>
   </div>
@@ -562,6 +563,132 @@
           </div>
 
           <div id="aiBotsStatus" class="ai-bot-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Yandex AI Bot Settings Modal -->
+  <div id="yandexAiSettingsModal" class="modal hidden">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3>AI-&#1071;&#1085;&#1076;&#1077;&#1082;&#1089;</h3>
+        <button class="modal-close">×</button>
+      </div>
+      <div class="modal-body">
+        <div id="yandexAiSettingsBlock" class="ai-bot-settings-block yandex-ai-settings-block">
+          <div class="ai-bot-panel">
+            <h4>Global Yandex settings</h4>
+            <div class="settings-item settings-toggle-item">
+              <span>Enable Yandex AI bots</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="yandexAiGlobalEnabled">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="ai-bot-grid">
+              <label>&#1048;&#1076;&#1077;&#1085;&#1090;&#1080;&#1092;&#1080;&#1082;&#1072;&#1090;&#1086;&#1088; &#1082;&#1072;&#1090;&#1072;&#1083;&#1086;&#1075;&#1072; (Folder ID)<input id="yandexAiFolderId" class="modal-input" autocomplete="off" placeholder="b1g..."></label>
+              <label>Base URL<input id="yandexAiBaseUrl" class="modal-input" value="https://llm.api.cloud.yandex.net/foundationModels/v1"></label>
+              <label>Response model<select id="yandexAiDefaultResponseModel" class="modal-input"></select></label>
+              <label>Summary model<select id="yandexAiDefaultSummaryModel" class="modal-input"></select></label>
+              <label>Doc embedding model<input id="yandexAiDocEmbeddingModel" class="modal-input" value="text-search-doc/latest"></label>
+              <label>Query embedding model<input id="yandexAiQueryEmbeddingModel" class="modal-input" value="text-search-query/latest"></label>
+              <label>Temperature<input id="yandexAiTemperature" class="modal-input" type="number" min="0" max="1" step="0.05" value="0.3"></label>
+              <label>Summary temperature<input id="yandexAiSummaryTemperature" class="modal-input" type="number" min="0" max="1" step="0.05" value="0.2"></label>
+              <label>Max tokens<input id="yandexAiMaxTokens" class="modal-input" type="number" min="1" max="8000" step="50" value="1000"></label>
+              <label>Reasoning<select id="yandexAiReasoningMode" class="modal-input">
+                <option value="DISABLED">DISABLED</option>
+                <option value="ENABLED_HIDDEN">ENABLED_HIDDEN</option>
+              </select></label>
+              <label class="ai-bot-toggle-label">Data logging
+                <label class="toggle-switch">
+                  <input type="checkbox" id="yandexAiDataLoggingEnabled">
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+            </div>
+            <label class="ai-bot-field">Yandex API key
+              <input id="yandexAiApiKey" class="modal-input" type="password" autocomplete="off" placeholder="Api-Key value">
+            </label>
+            <div class="settings-hint">&#1048;&#1076;&#1077;&#1085;&#1090;&#1080;&#1092;&#1080;&#1082;&#1072;&#1090;&#1086;&#1088; &#1082;&#1072;&#1090;&#1072;&#1083;&#1086;&#1075;&#1072; &#1074;&#1074;&#1086;&#1076;&#1080;&#1090;&#1089;&#1103; &#1074; &#1087;&#1086;&#1083;&#1077; Folder ID &#1074;&#1099;&#1096;&#1077;. &#1054;&#1085; &#1085;&#1091;&#1078;&#1077;&#1085; &#1076;&#1083;&#1103; &#1089;&#1073;&#1086;&#1088;&#1082;&#1080; modelUri &#1074;&#1080;&#1076;&#1072; gpt://&lt;folder_ID&gt;/yandexgpt/latest.</div>
+            <div id="yandexAiKeyStatus" class="settings-hint"></div>
+            <div id="yandexAiModelStatus" class="settings-hint"></div>
+            <div class="ai-bot-actions">
+              <button id="yandexAiSaveSettings" type="button" class="btn-primary">Save settings</button>
+              <button id="yandexAiTestConnection" type="button" class="weather-action-btn">&#1055;&#1088;&#1086;&#1074;&#1077;&#1088;&#1080;&#1090;&#1100; &#1082;&#1083;&#1102;&#1095;</button>
+              <button id="yandexAiRefreshModels" type="button" class="weather-action-btn">&#1054;&#1073;&#1085;&#1086;&#1074;&#1080;&#1090;&#1100; &#1084;&#1086;&#1076;&#1077;&#1083;&#1080;</button>
+              <button id="yandexAiDeleteKey" type="button" class="weather-action-btn">Delete key</button>
+            </div>
+          </div>
+
+          <div class="ai-bot-panel">
+            <h4>Yandex bots and persona</h4>
+            <div id="yandexAiBotList" class="ai-bot-list"></div>
+            <div class="ai-bot-actions">
+              <button id="yandexAiBotCreateNew" type="button" class="weather-action-btn">New bot</button>
+              <button id="yandexAiBotSave" type="button" class="btn-primary">Save bot</button>
+              <button id="yandexAiBotDisable" type="button" class="weather-action-btn">Disable</button>
+              <button id="yandexAiBotTest" type="button" class="weather-action-btn">Test</button>
+              <button id="yandexAiBotExportJson" type="button" class="weather-action-btn">Export JSON</button>
+              <button id="yandexAiBotImportJson" type="button" class="weather-action-btn">Import JSON</button>
+              <input id="yandexAiBotImportFile" class="hidden" type="file" accept="application/json,.json">
+            </div>
+            <div class="ai-bot-avatar-row">
+              <div class="avatar-upload-wrap ai-bot-avatar-wrap">
+                <div id="yandexAiBotAvatar" class="avatar-large"></div>
+                <label class="avatar-upload-label" id="yandexAiBotAvatarLabel" title="Change avatar">📷
+                  <input type="file" id="yandexAiBotAvatarInput" accept=".jpg,.jpeg,.png,.webp" class="hidden">
+                </label>
+              </div>
+              <div class="ai-bot-avatar-copy">
+                <strong>Bot avatar</strong>
+                <span>The image is stored separately from JSON persona settings.</span>
+                <button id="removeYandexAiBotAvatar" class="btn-text hidden" type="button">Remove avatar</button>
+              </div>
+            </div>
+            <div class="ai-bot-grid">
+              <label>Name<input id="yandexAiBotName" class="modal-input" value="Yandex AI"></label>
+              <label>Mention<input id="yandexAiBotMention" class="modal-input" value="yandex"></label>
+              <label>Response model<select id="yandexAiBotResponseModel" class="modal-input"></select></label>
+              <label>Summary model<select id="yandexAiBotSummaryModel" class="modal-input"></select></label>
+              <label>Temperature<input id="yandexAiBotTemperature" class="modal-input" type="number" min="0" max="1" step="0.05" value="0.3"></label>
+              <label>Max tokens<input id="yandexAiBotMaxTokens" class="modal-input" type="number" min="1" max="8000" step="50" value="1000"></label>
+              <label class="ai-bot-toggle-label">Enabled
+                <label class="toggle-switch">
+                  <input type="checkbox" id="yandexAiBotEnabled" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+            </div>
+            <div class="settings-hint">Yandex hybrid memory uses separate embedding tables and does not touch OpenAI memory.</div>
+            <label class="ai-bot-field">Style<textarea id="yandexAiBotStyle" class="modal-input" rows="2"></textarea></label>
+            <label class="ai-bot-field">Tone<textarea id="yandexAiBotTone" class="modal-input" rows="2"></textarea></label>
+            <label class="ai-bot-field">Behavior rules<textarea id="yandexAiBotRules" class="modal-input" rows="4"></textarea></label>
+            <label class="ai-bot-field">Speech patterns<textarea id="yandexAiBotSpeech" class="modal-input" rows="3"></textarea></label>
+          </div>
+
+          <div class="ai-bot-panel">
+            <h4>Yandex bots in chats</h4>
+            <div class="ai-bot-grid">
+              <label>Chat<select id="yandexAiBotChatSelect" class="modal-input"></select></label>
+              <label>Bot<select id="yandexAiBotChatBotSelect" class="modal-input"></select></label>
+              <label>Mode<select id="yandexAiBotChatMode" class="modal-input">
+                <option value="simple">Simple context</option>
+                <option value="hybrid">Hybrid memory</option>
+              </select></label>
+              <label>Context<input id="yandexAiBotChatHotLimit" class="modal-input" type="number" min="20" max="100" value="50"></label>
+              <label class="ai-bot-toggle-label">Enabled in chat
+                <label class="toggle-switch">
+                  <input type="checkbox" id="yandexAiBotChatEnabled">
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+            </div>
+            <button id="yandexAiBotChatSave" type="button" class="btn-primary">Save for chat</button>
+            <div class="settings-hint">Yandex bots answer only to @mention or reply to that bot.</div>
+          </div>
+
+          <div id="yandexAiStatus" class="ai-bot-status"></div>
         </div>
       </div>
     </div>
