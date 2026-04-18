@@ -30,7 +30,8 @@ function createMessageCopyService({
       vm.transcription_error as voice_transcription_error,
       vm.transcribed_at as voice_transcribed_at,
       vm.requested_by as voice_requested_by,
-      vm.auto_requested as voice_auto_requested
+      vm.auto_requested as voice_auto_requested,
+      EXISTS(SELECT 1 FROM polls p WHERE p.message_id=m.id) as is_poll_message
     FROM messages m
     JOIN users u ON u.id = m.user_id
     LEFT JOIN files f ON f.id = m.file_id
@@ -154,6 +155,9 @@ function createMessageCopyService({
   }) {
     let duplicatedFile = null;
     try {
+      if (Number(source?.is_poll_message) !== 0) {
+        throw new Error('Poll messages cannot be copied');
+      }
       duplicatedFile = duplicateMessageFile(source, actorUserId);
 
       const messageId = db.transaction(() => {

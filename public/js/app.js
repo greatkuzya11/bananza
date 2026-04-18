@@ -11,6 +11,15 @@
   const MAX_MSG = 5000;
   const MAX_ATTACHMENTS = 10;
   const MAX_FILE_SIZE = 25 * 1024 * 1024;
+  const POLL_MIN_OPTIONS = 2;
+  const POLL_MAX_OPTIONS = 10;
+  const POLL_CLOSE_PRESET_MS = Object.freeze({
+    '1h': 60 * 60 * 1000,
+    '4h': 4 * 60 * 60 * 1000,
+    '24h': 24 * 60 * 60 * 1000,
+    '3d': 3 * 24 * 60 * 60 * 1000,
+    '7d': 7 * 24 * 60 * 60 * 1000,
+  });
   const FILE_TYPE_BY_MIME = {
     'image/jpeg': 'image', 'image/png': 'image', 'image/webp': 'image', 'image/gif': 'image',
     'application/pdf': 'document', 'text/plain': 'document',
@@ -41,6 +50,12 @@
     { id: 'tokyo-night', name: 'Tokyo Night', note: 'Ink + electric blue', colors: ['#1a1b26', '#7aa2f7'], own: '#2b4d7d', other: '#202437' },
   ];
   const UI_THEME_IDS = new Set(UI_THEMES.map(t => t.id));
+  const POLL_STYLES = [
+    { id: 'pulse', name: 'Pulse', note: 'Hero gradients and bold result cards', accent: ['var(--accent)', 'var(--link)'] },
+    { id: 'stack', name: 'Stack', note: 'Compact rows with dense readable stats', accent: ['var(--border-light)', 'var(--accent)'] },
+    { id: 'orbit', name: 'Orbit', note: 'Mini chart with colorful legend blocks', accent: ['var(--link)', 'var(--success)'] },
+  ];
+  const POLL_STYLE_IDS = new Set(POLL_STYLES.map((style) => style.id));
   const MODAL_ANIMATION_STYLES = [
     { id: 'soft', name: 'Soft', note: 'Stronger lift with a smooth modal feel.' },
     { id: 'lift', name: 'Lift', note: 'More vertical travel and a clearer close motion.' },
@@ -104,6 +119,10 @@
   let hasMoreAfter = false;
   let pendingFile = null;
   let pendingFiles = []; // queue for multi-file upload
+  let pollComposerOptions = ['', ''];
+  let pollVotePending = new Set();
+  let pollClosePending = new Set();
+  let pollVotersState = null;
   let outboxObjectUrls = new Map();
   let outboxSending = new Set();
   let retryLayoutTimer = null;
@@ -123,6 +142,7 @@
   let suppressScrollAnchorSave = false;
   let scrollAnchorSaveTimer = null;
   let currentUiTheme = 'bananza';
+  let pollComposerStyle = 'pulse';
   let currentModalAnimation = 'soft';
   let currentModalAnimationSpeed = MODAL_ANIMATION_SPEED_DEFAULT;
   let weatherSettings = { enabled: false, refresh_minutes: 30, location: null };
@@ -221,6 +241,7 @@
   let modalAnimationSaveInFlight = false;
   let modalAnimationSaveQueued = false;
   let modalAnimationStatusTimer = null;
+  let chatAreaResizeObserver = null;
   let searchAllChats = false;
   let searchRequestSeq = 0;
   let searchPanelHistoryPushed = false;
@@ -258,6 +279,7 @@
   const sendBtn = $('#sendBtn');
   const scrollBottomBtn = $('#scrollBottomBtn');
   const attachBtn = $('#attachBtn');
+  const pollBtn = $('#pollBtn');
   const emojiBtn = $('#emojiBtn');
   const fileInput = $('#fileInput');
   const pendingFileEl = $('#pendingFile');
@@ -285,6 +307,7 @@
   const weatherWidget = $('#weatherWidget');
   const settingsModal = $('#settingsModal');
   const themeSettingsModal = $('#themeSettingsModal');
+  const pollStyleSettingsModal = $('#pollStyleSettingsModal');
   const animationSettingsModal = $('#animationSettingsModal');
   const weatherSettingsModal = $('#weatherSettingsModal');
   const notificationSettingsModal = $('#notificationSettingsModal');
@@ -295,6 +318,16 @@
   const forwardChatSearch = $('#forwardChatSearch');
   const forwardChatList = $('#forwardChatList');
   const forwardMessageStatus = $('#forwardMessageStatus');
+  const pollComposerModal = $('#pollComposerModal');
+  const pollQuestionInput = $('#pollQuestionInput');
+  const pollOptionsList = $('#pollOptionsList');
+  const pollComposerPreview = $('#pollComposerPreview');
+  const pollComposerStatus = $('#pollComposerStatus');
+  const pollVotersModal = $('#pollVotersModal');
+  const pollVotersMeta = $('#pollVotersMeta');
+  const pollVotersTitle = $('#pollVotersTitle');
+  const pollVotersStatus = $('#pollVotersStatus');
+  const pollVotersList = $('#pollVotersList');
 
   function isMobileComposerKeyboardOpen() {
     if (window.innerWidth > 768) return false;
@@ -430,6 +463,95 @@
 
   function normalizeUiTheme(theme) {
     return UI_THEME_IDS.has(theme) ? theme : 'bananza';
+  }
+
+  function normalizePollStyle(style) {
+    return POLL_STYLE_IDS.has(style) ? style : 'pulse';
+  }
+
+  function pollStyleMeta(style) {
+    return POLL_STYLES.find((item) => item.id === normalizePollStyle(style)) || POLL_STYLES[0];
+  }
+
+  function setPollStyleStatus(message, type = '') {
+    const el = $('#settingsPollStyleStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function renderPollStyleCardPreview(styleId) {
+    if (styleId === 'stack') {
+      return `
+        <span class="poll-style-card-preview poll-style-card-preview--stack" aria-hidden="true">
+          <i></i>
+          <i></i>
+          <i></i>
+        </span>
+      `;
+    }
+    if (styleId === 'orbit') {
+      return `
+        <span class="poll-style-card-preview poll-style-card-preview--orbit" aria-hidden="true">
+          <span class="poll-style-card-ring"></span>
+          <span class="poll-style-card-legend">
+            <i></i>
+            <i></i>
+            <i></i>
+          </span>
+        </span>
+      `;
+    }
+    return `
+      <span class="poll-style-card-preview poll-style-card-preview--pulse" aria-hidden="true">
+        <i></i>
+        <i></i>
+        <i></i>
+      </span>
+    `;
+  }
+
+  function renderPollStylePicker() {
+    const picker = $('#settingsPollStylePicker');
+    if (!picker) return;
+    picker.innerHTML = POLL_STYLES.map((style) => `
+      <button type="button" class="poll-style-card${style.id === pollComposerStyle ? ' active' : ''}" data-poll-style-option="${style.id}">
+        ${renderPollStyleCardPreview(style.id)}
+        <span class="poll-style-card-copy">
+          <strong>${esc(style.name)}</strong>
+          <small>${esc(style.note)}</small>
+        </span>
+      </button>
+    `).join('');
+  }
+
+  function setPollStyleSurface(modalEl, style) {
+    if (!modalEl) return;
+    modalEl.dataset.pollStyle = normalizePollStyle(style);
+  }
+
+  function syncPollComposerStyleUi() {
+    const style = normalizePollStyle(pollComposerStyle);
+    const meta = pollStyleMeta(style);
+    setPollStyleSurface(pollComposerModal, style);
+    setPollStyleSurface(pollStyleSettingsModal, style);
+    const nameEl = $('#pollComposerStyleName');
+    const noteEl = $('#pollComposerStyleNote');
+    const btnEl = $('#pollComposerStyleBtn');
+    if (nameEl) nameEl.textContent = meta.name;
+    if (noteEl) noteEl.textContent = meta.note;
+    if (btnEl) btnEl.textContent = `Poll Style: ${meta.name}`;
+    renderPollStylePicker();
+  }
+
+  function selectPollStyle(style) {
+    const nextStyle = normalizePollStyle(style);
+    if (nextStyle === pollComposerStyle) return;
+    pollComposerStyle = nextStyle;
+    syncPollComposerStyleUi();
+    refreshPollComposerPreview();
+    setPollStyleStatus('Applies to this poll only', 'success');
   }
 
   function setThemeStatus(message, type = '') {
@@ -786,6 +908,705 @@
     return Boolean(msg?.is_outbox || msg?.client_status || (typeof msg?.id === 'string' && msg.id.startsWith('c-')));
   }
 
+  function normalizePoll(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const myOptionIds = [...new Set((Array.isArray(raw.my_option_ids) ? raw.my_option_ids : raw.myOptionIds || [])
+      .map((value) => Number(value || 0))
+      .filter((value) => Number.isInteger(value) && value > 0))];
+    return {
+      created_by: Number(raw.created_by || raw.createdBy || 0),
+      closed_by: raw.closed_by == null && raw.closedBy == null ? null : Number(raw.closed_by || raw.closedBy || 0),
+      style: normalizePollStyle(raw.style),
+      allows_multiple: Boolean(raw.allows_multiple ?? raw.allowsMultiple),
+      show_voters: Boolean(raw.show_voters ?? raw.showVoters),
+      closes_at: raw.closes_at || raw.closesAt || null,
+      closed_at: raw.closed_at || raw.closedAt || null,
+      created_at: raw.created_at || raw.createdAt || null,
+      is_closed: Boolean(raw.is_closed ?? raw.isClosed ?? raw.closed_at ?? raw.closedAt),
+      total_votes: Number(raw.total_votes || raw.totalVotes || 0),
+      total_voters: Number(raw.total_voters || raw.totalVoters || 0),
+      my_option_ids: myOptionIds,
+      options: (Array.isArray(raw.options) ? raw.options : []).map((option, index) => ({
+        id: Number(option.id || 0),
+        text: String(option.text || '').trim(),
+        position: Number(option.position ?? index),
+        vote_count: Number(option.vote_count || option.voteCount || 0),
+        voted_by_me: Boolean(option.voted_by_me ?? option.votedByMe ?? myOptionIds.includes(Number(option.id || 0))),
+      })).filter((option) => option.id > 0),
+    };
+  }
+
+  function isPollMessage(msg) {
+    return Boolean(normalizePoll(msg?.poll));
+  }
+
+  function formatRelativeDuration(targetIso) {
+    if (!targetIso) return '';
+    const normalized = String(targetIso).includes('T') ? String(targetIso) : String(targetIso).replace(' ', 'T');
+    const time = new Date(/[zZ]$|[+\-]\d{2}:?\d{2}$/.test(normalized) ? normalized : `${normalized}Z`).getTime();
+    if (!Number.isFinite(time)) return '';
+    const diff = time - Date.now();
+    if (diff <= 0) return 'soon';
+    const minutes = Math.round(diff / 60000);
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.round(diff / 3600000);
+    if (hours < 24) return `${hours}h`;
+    const days = Math.round(diff / 86400000);
+    return `${days}d`;
+  }
+
+  function formatPollDeadline(poll) {
+    if (!poll) return '';
+    if (poll.is_closed) {
+      return poll.closed_at ? `Closed ${formatTime(poll.closed_at)}` : 'Closed';
+    }
+    if (!poll.closes_at) return 'Open-ended';
+    const relative = formatRelativeDuration(poll.closes_at);
+    return relative ? `Ends in ${relative}` : `Ends ${formatTime(poll.closes_at)}`;
+  }
+
+  function canClosePollMessage(msg) {
+    const poll = normalizePoll(msg?.poll);
+    if (!currentUser || !poll || poll.is_closed) return false;
+    const chat = getChatById(msg?.chat_id || msg?.chatId || currentChatId);
+    return Boolean(
+      currentUser.is_admin ||
+      Number(poll.created_by || 0) === Number(currentUser.id || 0) ||
+      Number(chat?.created_by || 0) === Number(currentUser.id || 0)
+    );
+  }
+
+  function setPollComposerStatus(message, type = '') {
+    if (!pollComposerStatus) return;
+    pollComposerStatus.textContent = message || '';
+    pollComposerStatus.classList.toggle('is-error', type === 'error');
+    pollComposerStatus.classList.toggle('is-success', type === 'success');
+  }
+
+  function readPollComposerForm() {
+    const optionInputs = Array.from(pollOptionsList?.querySelectorAll('input[data-poll-option-index]') || []);
+    const options = optionInputs.map((input) => input.value.trim()).filter(Boolean);
+    return {
+      question: String(pollQuestionInput?.value || '').trim(),
+      options,
+      style: normalizePollStyle(pollComposerStyle),
+      allows_multiple: !!$('#pollAllowMultiple')?.checked,
+      show_voters: !!$('#pollShowVoters')?.checked,
+      close_preset: String($('#pollClosePreset')?.value || '').trim() || null,
+    };
+  }
+
+  function renderPollComposerOptionInputs() {
+    if (!pollOptionsList) return;
+    pollComposerOptions = pollComposerOptions.slice(0, POLL_MAX_OPTIONS);
+    while (pollComposerOptions.length < POLL_MIN_OPTIONS) pollComposerOptions.push('');
+    pollOptionsList.innerHTML = pollComposerOptions.map((value, index) => `
+      <div class="poll-option-editor" data-poll-option-row="${index}">
+        <span class="poll-option-index">${index + 1}</span>
+        <input
+          type="text"
+          class="modal-input"
+          maxlength="160"
+          data-poll-option-index="${index}"
+          placeholder="Option ${index + 1}"
+          value="${esc(value)}"
+        >
+        <button
+          type="button"
+          class="poll-option-remove"
+          data-poll-option-remove="${index}"
+          ${pollComposerOptions.length <= POLL_MIN_OPTIONS ? 'disabled' : ''}
+          title="Remove option"
+        >✕</button>
+      </div>
+    `).join('');
+  }
+
+  function refreshPollComposerActionState() {
+    const enabled = Boolean(currentChatId && !isCurrentNotesChat() && !editTo && pendingFiles.length === 0);
+    if (pollBtn) {
+      pollBtn.disabled = !enabled;
+      pollBtn.classList.toggle('disabled', !enabled);
+    }
+    const mobilePollBtn = $('#attachMenuPoll');
+    if (mobilePollBtn) {
+      mobilePollBtn.disabled = !enabled;
+      mobilePollBtn.classList.toggle('disabled', !enabled);
+    }
+  }
+
+  function buildPollComposerPreviewMessage() {
+    const form = readPollComposerForm();
+    const fallbackOptions = ['Friday night', 'Saturday brunch', 'Sunday reset', 'Next week'];
+    const optionTexts = [...form.options];
+    while (optionTexts.length < 3) optionTexts.push(fallbackOptions[optionTexts.length] || `Option ${optionTexts.length + 1}`);
+    const previewTexts = optionTexts.slice(0, Math.min(Math.max(optionTexts.length, 3), 5));
+    const previewVotes = previewTexts.map((_, index) => Math.max(2, previewTexts.length * 4 - index * 2));
+    const myOptionIds = form.allows_multiple
+      ? previewTexts.slice(0, Math.min(2, previewTexts.length)).map((_, index) => index + 1)
+      : [1];
+    const totalVotes = previewVotes.reduce((sum, count) => sum + count, 0);
+    const closesAt = form.close_preset && POLL_CLOSE_PRESET_MS[form.close_preset]
+      ? new Date(Date.now() + POLL_CLOSE_PRESET_MS[form.close_preset]).toISOString()
+      : null;
+    return {
+      id: -1,
+      chat_id: currentChatId || 0,
+      user_id: currentUser?.id || 0,
+      text: form.question || 'Where should we go this weekend?',
+      poll: {
+        created_by: currentUser?.id || 0,
+        closed_by: null,
+        style: form.style,
+        allows_multiple: form.allows_multiple,
+        show_voters: form.show_voters,
+        closes_at: closesAt,
+        closed_at: null,
+        created_at: new Date().toISOString(),
+        is_closed: false,
+        total_votes: totalVotes,
+        total_voters: form.allows_multiple ? Math.max(6, Math.round(totalVotes * 0.72)) : totalVotes,
+        my_option_ids: myOptionIds,
+        options: previewTexts.map((text, index) => ({
+          id: index + 1,
+          text,
+          position: index,
+          vote_count: previewVotes[index] || 0,
+          voted_by_me: myOptionIds.includes(index + 1),
+        })),
+      },
+    };
+  }
+
+  function refreshPollComposerPreview() {
+    if (!pollComposerPreview) return;
+    const previewMessage = buildPollComposerPreviewMessage();
+    const styleMeta = pollStyleMeta(previewMessage.poll?.style);
+    pollComposerPreview.innerHTML = `
+      <div class="poll-composer-preview-shell">
+        <div class="poll-composer-preview-meta">
+          <span class="poll-composer-preview-style">${esc(styleMeta.name)} style</span>
+          <span class="poll-composer-preview-note">${esc(styleMeta.note)}</span>
+        </div>
+        <div class="poll-composer-preview-message">
+          <div class="poll-composer-preview-question">${esc(previewMessage.text || '')}</div>
+          ${renderPollCard(previewMessage, { preview: true })}
+        </div>
+      </div>
+    `;
+  }
+
+  function resetPollComposer() {
+    pollComposerOptions = ['', ''];
+    pollComposerStyle = 'pulse';
+    if (pollQuestionInput) pollQuestionInput.value = '';
+    if ($('#pollAllowMultiple')) $('#pollAllowMultiple').checked = false;
+    if ($('#pollShowVoters')) $('#pollShowVoters').checked = false;
+    if ($('#pollClosePreset')) $('#pollClosePreset').value = '';
+    renderPollComposerOptionInputs();
+    syncPollComposerStyleUi();
+    setPollComposerStatus('');
+    refreshPollComposerPreview();
+  }
+
+  function openPollComposer() {
+    if (!currentChatId) return;
+    if (isCurrentNotesChat()) {
+      alert('Polls are not available in notes chat.');
+      return;
+    }
+    if (editTo) {
+      alert('Finish editing before creating a poll.');
+      return;
+    }
+    if (pendingFiles.length > 0) {
+      alert('Remove pending attachments before creating a poll.');
+      return;
+    }
+    resetPollComposer();
+    if (pollQuestionInput) pollQuestionInput.value = String(msgInput?.value || '').trim();
+    refreshPollComposerPreview();
+    syncChatAreaMetrics();
+    openModal('pollComposerModal', { opener: pollBtn || attachBtn });
+    requestAnimationFrame(() => pollQuestionInput?.focus());
+  }
+
+  function buildOptimisticPollState(poll, nextOptionIds) {
+    const previousSet = new Set((poll?.my_option_ids || []).map((id) => Number(id)));
+    const nextSet = new Set((Array.isArray(nextOptionIds) ? nextOptionIds : []).map((id) => Number(id)));
+    const wasVoter = previousSet.size > 0;
+    const willVoter = nextSet.size > 0;
+    return {
+      ...poll,
+      total_votes: Math.max(0, Number(poll.total_votes || 0) - previousSet.size + nextSet.size),
+      total_voters: Math.max(0, Number(poll.total_voters || 0) - (wasVoter ? 1 : 0) + (willVoter ? 1 : 0)),
+      my_option_ids: [...nextSet],
+      options: (poll.options || []).map((option) => ({
+        ...option,
+        vote_count: Math.max(
+          0,
+          Number(option.vote_count || 0) - (previousSet.has(Number(option.id)) ? 1 : 0) + (nextSet.has(Number(option.id)) ? 1 : 0)
+        ),
+        voted_by_me: nextSet.has(Number(option.id)),
+      })),
+    };
+  }
+
+  function nextPollVoteSelection(poll, optionId) {
+    const selected = new Set((poll?.my_option_ids || []).map((id) => Number(id)));
+    const id = Number(optionId || 0);
+    if (!id) return [];
+    if (poll?.allows_multiple) {
+      if (selected.has(id)) selected.delete(id);
+      else selected.add(id);
+      return [...selected];
+    }
+    if (selected.has(id)) return [];
+    return [id];
+  }
+
+  function replaceRenderedMessage(nextMsg) {
+    if (!nextMsg?.id) return false;
+    const row = messagesEl.querySelector(`[data-msg-id="${nextMsg.id}"]`);
+    if (!row) return false;
+    const prepared = { ...nextMsg };
+    if (row.querySelector('.msg-status.read')) prepared.is_read = true;
+    const showName = Boolean(row.querySelector('.msg-sender'));
+    const replacement = createMessageEl(prepared, showName);
+    row.replaceWith(replacement);
+    rememberDisplayedMessage(prepared.id);
+    updateScrollBottomButton();
+    return true;
+  }
+
+  function replaceRenderedPollCard(row, nextMsg) {
+    if (!row || !nextMsg?.poll) return false;
+    const currentCard = row.querySelector('.poll-card');
+    if (!currentCard) return false;
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = renderPollCard(nextMsg, { liveUpdate: true }).trim();
+    const nextCard = wrapper.firstElementChild;
+    if (!nextCard) return false;
+    currentCard.replaceWith(nextCard);
+    row.__messageData = { ...nextMsg };
+    row.classList.toggle('poll-message', Boolean(!nextMsg.is_deleted && nextMsg.poll));
+    bindPollControls(row);
+    return true;
+  }
+
+  function applyPollUpdate(chatId, messageId, poll) {
+    const normalizedPoll = normalizePoll(poll);
+    if (!normalizedPoll) return;
+    const id = Number(messageId || 0);
+    if (!id) return;
+    const resolvedChatId = Number(chatId || currentChatId || 0);
+    if (resolvedChatId && window.messageCache?.patchMessage) {
+      window.messageCache.patchMessage(resolvedChatId, id, { poll: normalizedPoll }).catch(() => {});
+    }
+    const row = messagesEl.querySelector(`[data-msg-id="${id}"]`);
+    if (!row || Number(currentChatId || 0) !== resolvedChatId) return;
+    const nextMsg = { ...(row.__messageData || {}), poll: normalizedPoll };
+    if (!replaceRenderedPollCard(row, nextMsg)) {
+      replaceRenderedMessage(nextMsg);
+    }
+  }
+
+  async function submitPollComposer() {
+    if (!currentChatId) return;
+    const payload = readPollComposerForm();
+    if (!payload.question) {
+      setPollComposerStatus('Question is required', 'error');
+      return;
+    }
+    if (payload.options.length < POLL_MIN_OPTIONS || payload.options.length > POLL_MAX_OPTIONS) {
+      setPollComposerStatus(`Use ${POLL_MIN_OPTIONS}-${POLL_MAX_OPTIONS} filled options`, 'error');
+      return;
+    }
+    const uniqueOptions = payload.options.map((option) => option.toLowerCase());
+    if (new Set(uniqueOptions).size !== uniqueOptions.length) {
+      setPollComposerStatus('Options must be unique', 'error');
+      return;
+    }
+
+    setPollComposerStatus('Sending...');
+    try {
+      const message = await api(`/api/chats/${currentChatId}/messages`, {
+        method: 'POST',
+        body: {
+          text: payload.question,
+          replyToId: replyTo?.id || null,
+          poll: {
+            style: payload.style,
+            options: payload.options,
+            allows_multiple: payload.allows_multiple,
+            show_voters: payload.show_voters,
+            close_preset: payload.close_preset,
+          },
+        },
+      });
+      closeModal('pollComposerModal');
+      msgInput.value = '';
+      autoResize();
+      syncMentionOpenButton();
+      clearReply();
+      window.BananzaVoiceHooks?.refreshComposerState?.();
+      if (message?.chat_id) {
+        updateChatListLastMessage(message);
+        if (Number(message.chat_id) === Number(currentChatId) && !isMessageDisplayed(message.id)) {
+          appendMessage(message);
+          scrollToBottom(false, true);
+        }
+      }
+      playAppSound('send');
+    } catch (error) {
+      setPollComposerStatus(error.message || 'Could not send poll', 'error');
+    }
+  }
+
+  async function togglePollVote(messageId, optionId) {
+    const row = messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
+    const msg = row?.__messageData || {};
+    const poll = normalizePoll(msg.poll);
+    if (!poll || poll.is_closed || pollVotePending.has(Number(messageId))) return;
+    const nextSelection = nextPollVoteSelection(poll, optionId);
+    const optimisticPoll = buildOptimisticPollState(poll, nextSelection);
+    pollVotePending.add(Number(messageId));
+    applyPollUpdate(msg.chat_id, messageId, optimisticPoll);
+    try {
+      const data = await api(`/api/messages/${messageId}/poll-vote`, {
+        method: 'POST',
+        body: { optionIds: nextSelection },
+      });
+      pollVotePending.delete(Number(messageId));
+      if (data?.poll) applyPollUpdate(msg.chat_id, messageId, data.poll);
+    } catch (error) {
+      pollVotePending.delete(Number(messageId));
+      if (error?.poll) applyPollUpdate(msg.chat_id, messageId, error.poll);
+      else applyPollUpdate(msg.chat_id, messageId, poll);
+      showCenterToast(error.message || 'Could not update vote');
+    }
+  }
+
+  async function closePollMessage(messageId) {
+    const row = messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
+    const msg = row?.__messageData || {};
+    if (!canClosePollMessage(msg) || pollClosePending.has(Number(messageId))) return;
+    pollClosePending.add(Number(messageId));
+    applyPollUpdate(msg.chat_id, messageId, { ...normalizePoll(msg.poll), is_closed: false });
+    try {
+      const data = await api(`/api/messages/${messageId}/poll-close`, { method: 'POST' });
+      pollClosePending.delete(Number(messageId));
+      if (data?.poll) applyPollUpdate(msg.chat_id, messageId, data.poll);
+    } catch (error) {
+      pollClosePending.delete(Number(messageId));
+      applyPollUpdate(msg.chat_id, messageId, msg.poll);
+      showCenterToast(error.message || 'Could not close poll');
+    }
+  }
+
+  function pollAccentVar(index = 0) {
+    return `var(--poll-accent-${(Number(index || 0) % 6) + 1})`;
+  }
+
+  function buildPollRenderState(message, { preview = false, liveUpdate = false } = {}) {
+    const poll = normalizePoll(message?.poll);
+    if (!poll) return null;
+    const messageId = preview ? 0 : Number(message?.id || 0);
+    const totalVotes = Math.max(0, Number(poll.total_votes || 0));
+    const interactionLocked = preview || pollVotePending.has(messageId) || pollClosePending.has(messageId);
+    return {
+      preview,
+      liveUpdate,
+      messageId,
+      poll,
+      totalVotes,
+      canClose: !preview && canClosePollMessage(message),
+      interactionLocked,
+      options: (poll.options || []).map((option, index) => {
+        const voteCount = Math.max(0, Number(option.vote_count || 0));
+        return {
+          ...option,
+          index,
+          accentVar: pollAccentVar(index),
+          selected: !!option.voted_by_me,
+          voteCount,
+          percentage: totalVotes > 0 ? Math.round((voteCount / totalVotes) * 100) : 0,
+          voteLabel: voteCount === 1 ? '1 vote' : `${voteCount} votes`,
+          mark: poll.allows_multiple ? '✓' : '●',
+        };
+      }),
+    };
+  }
+
+  function buildPollOrbitGradient(options = [], totalVotes = 0) {
+    if (!totalVotes) return 'conic-gradient(rgba(255,255,255,.08) 0deg 360deg)';
+    let current = 0;
+    const segments = [];
+    options.forEach((option) => {
+      const share = Number(option.voteCount || 0) / totalVotes;
+      if (share <= 0) return;
+      const next = current + share * 360;
+      segments.push(`${option.accentVar} ${current.toFixed(2)}deg ${next.toFixed(2)}deg`);
+      current = next;
+    });
+    if (current < 360) segments.push(`rgba(255,255,255,.08) ${current.toFixed(2)}deg 360deg`);
+    return `conic-gradient(${segments.join(', ')})`;
+  }
+
+  function renderPollInfoChips(state, variant = '') {
+    const suffix = variant ? ` ${variant}` : '';
+    return [
+      `${state.poll.total_voters || 0} ${Number(state.poll.total_voters || 0) === 1 ? 'voter' : 'voters'}`,
+      state.poll.show_voters ? 'Visible votes' : 'Anonymous votes',
+      formatPollDeadline(state.poll),
+    ].map((label) => `<span class="poll-info-chip${suffix}">${esc(label)}</span>`).join('');
+  }
+
+  function renderPollCloseButton(state, extraClass = '') {
+    if (!state.canClose) return '';
+    return `<button type="button" class="poll-close-btn${extraClass ? ` ${extraClass}` : ''}" data-poll-close="${state.messageId}" ${state.poll.is_closed || state.interactionLocked ? 'disabled' : ''}>Close</button>`;
+  }
+
+  function renderPollVotersButton(state, option, label = 'View voters') {
+    if (!state.poll.show_voters) return '<span></span>';
+    return `<button
+      type="button"
+      class="poll-option-voters"
+      data-poll-voters="${state.messageId}"
+      data-poll-option-id="${Number(option.id)}"
+      ${state.preview || option.voteCount === 0 ? 'disabled' : ''}
+    >${label}</button>`;
+  }
+
+  function renderPulsePollCard(state) {
+    const optionsHtml = state.options.map((option) => `
+      <div class="poll-pulse-option${option.selected ? ' selected' : ''}" style="--poll-option-accent:${option.accentVar};">
+        <span class="poll-pulse-option-glow"></span>
+        <button
+          type="button"
+          class="poll-pulse-option-main"
+          data-poll-vote="${state.messageId}"
+          data-poll-option-id="${Number(option.id)}"
+          ${state.poll.is_closed || state.interactionLocked ? 'disabled' : ''}
+        >
+          <span class="poll-pulse-option-row">
+            <span class="poll-pulse-option-kicker">Option ${option.index + 1}</span>
+            <span class="poll-pulse-option-percent">${option.percentage}%</span>
+          </span>
+          <span class="poll-pulse-option-text">${esc(option.text)}</span>
+          <span class="poll-pulse-option-bar"><i style="width:${option.percentage}%"></i></span>
+          <span class="poll-pulse-option-row poll-pulse-option-row--bottom">
+            <span class="poll-pulse-option-votes">${option.voteLabel}</span>
+            <span class="poll-pulse-option-mark${state.poll.allows_multiple ? ' multi' : ''}">${option.selected ? option.mark : ''}</span>
+          </span>
+        </button>
+        <div class="poll-pulse-option-footer">
+          ${renderPollVotersButton(state, option)}
+        </div>
+      </div>
+    `).join('');
+
+    return `
+      <div class="poll-card poll-card--pulse${state.preview ? ' is-preview' : ''}${state.liveUpdate ? ' is-live-update' : ''}">
+        <div class="poll-card-header poll-card-header--hero">
+          <div class="poll-card-heading">
+            <span class="poll-status-badge${state.poll.is_closed ? ' closed' : ''}">${state.poll.is_closed ? 'Closed' : 'Open'}</span>
+            <div class="poll-card-heading-copy">
+              <strong>${state.poll.allows_multiple ? 'Multiple choice' : 'Single choice'}</strong>
+              <small>${state.totalVotes || 0} total votes</small>
+            </div>
+          </div>
+          ${renderPollCloseButton(state)}
+        </div>
+        <div class="poll-info-chip-row">
+          ${renderPollInfoChips(state, 'hero')}
+        </div>
+        <div class="poll-pulse-options">${optionsHtml}</div>
+      </div>
+    `;
+  }
+
+  function renderStackPollCard(state) {
+    const optionsHtml = state.options.map((option) => `
+      <div class="poll-stack-option${option.selected ? ' selected' : ''}" style="--poll-option-accent:${option.accentVar};">
+        <button
+          type="button"
+          class="poll-stack-option-main"
+          data-poll-vote="${state.messageId}"
+          data-poll-option-id="${Number(option.id)}"
+          ${state.poll.is_closed || state.interactionLocked ? 'disabled' : ''}
+        >
+          <span class="poll-stack-option-top">
+            <span class="poll-stack-option-left">
+              <span class="poll-stack-option-dot"></span>
+              <span class="poll-stack-option-text">${esc(option.text)}</span>
+            </span>
+            <span class="poll-stack-option-right">
+              <span class="poll-stack-option-percent">${option.percentage}%</span>
+              <span class="poll-stack-option-check${state.poll.allows_multiple ? ' multi' : ''}">${option.selected ? option.mark : ''}</span>
+            </span>
+          </span>
+          <span class="poll-stack-option-bar"><i style="width:${option.percentage}%"></i></span>
+        </button>
+        <div class="poll-stack-option-footer">
+          <span class="poll-stat-chip">${option.voteLabel}</span>
+          ${renderPollVotersButton(state, option)}
+        </div>
+      </div>
+    `).join('');
+
+    return `
+      <div class="poll-card poll-card--stack${state.preview ? ' is-preview' : ''}${state.liveUpdate ? ' is-live-update' : ''}">
+        <div class="poll-card-header">
+          <span class="poll-status-badge${state.poll.is_closed ? ' closed' : ''}">${state.poll.is_closed ? 'Closed' : 'Open'}</span>
+          ${renderPollCloseButton(state)}
+        </div>
+        <div class="poll-stack-subhead">
+          <span>${state.poll.allows_multiple ? 'Multi-select poll' : 'Single-select poll'}</span>
+          <span>${state.totalVotes || 0} votes</span>
+        </div>
+        <div class="poll-stack-options">${optionsHtml}</div>
+        <div class="poll-card-footer poll-card-footer--stack">
+          ${renderPollInfoChips(state)}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderOrbitPollCard(state) {
+    const orbitGradient = buildPollOrbitGradient(state.options, state.totalVotes);
+    const optionsHtml = state.options.map((option) => `
+      <div class="poll-orbit-option${option.selected ? ' selected' : ''}" style="--poll-option-accent:${option.accentVar};">
+        <button
+          type="button"
+          class="poll-orbit-option-main"
+          data-poll-vote="${state.messageId}"
+          data-poll-option-id="${Number(option.id)}"
+          ${state.poll.is_closed || state.interactionLocked ? 'disabled' : ''}
+        >
+          <span class="poll-orbit-option-swatch">${option.index + 1}</span>
+          <span class="poll-orbit-option-copy">
+            <strong>${esc(option.text)}</strong>
+            <small>${option.voteLabel}</small>
+          </span>
+          <span class="poll-orbit-option-side">
+            <em>${option.percentage}%</em>
+            <span class="poll-orbit-option-check${state.poll.allows_multiple ? ' multi' : ''}" aria-hidden="true"></span>
+          </span>
+        </button>
+        <span class="poll-orbit-option-bar"><i style="width:${option.percentage}%"></i></span>
+        ${state.poll.show_voters ? `<div class="poll-orbit-option-footer">${renderPollVotersButton(state, option, 'Voters')}</div>` : ''}
+      </div>
+    `).join('');
+
+    return `
+      <div class="poll-card poll-card--orbit${state.preview ? ' is-preview' : ''}${state.liveUpdate ? ' is-live-update' : ''}">
+        <div class="poll-card-header poll-card-header--orbit">
+          <span class="poll-status-badge${state.poll.is_closed ? ' closed' : ''}">${state.poll.is_closed ? 'Closed' : 'Open'}</span>
+          ${renderPollCloseButton(state)}
+        </div>
+        <div class="poll-orbit-hero">
+          <div class="poll-orbit-chart" style="--poll-orbit-chart:${orbitGradient};">
+            <div class="poll-orbit-chart-center">
+              <strong>${state.totalVotes || 0}</strong>
+              <small>${state.totalVotes === 1 ? 'vote' : 'votes'}</small>
+            </div>
+          </div>
+          <div class="poll-orbit-summary">
+            <div class="poll-orbit-meta-row">
+              <span class="poll-orbit-stat">
+                <strong>${state.poll.total_voters || 0}</strong>
+                <small>voters</small>
+              </span>
+              <span class="poll-orbit-stat">
+                <strong>${state.poll.show_voters ? 'Public' : 'Private'}</strong>
+                <small>visibility</small>
+              </span>
+              <span class="poll-orbit-stat wide">
+                <strong>${esc(formatPollDeadline(state.poll))}</strong>
+                <small>deadline</small>
+              </span>
+            </div>
+          </div>
+        </div>
+        <div class="poll-orbit-options">${optionsHtml}</div>
+      </div>
+    `;
+  }
+
+  function resetPollVotersModal() {
+    pollVotersState = null;
+    setPollStyleSurface(pollVotersModal, 'pulse');
+    if (pollVotersTitle) pollVotersTitle.textContent = 'Voters';
+    if (pollVotersMeta) {
+      pollVotersMeta.innerHTML = '';
+      pollVotersMeta.classList.add('hidden');
+    }
+    if (pollVotersStatus) {
+      pollVotersStatus.textContent = '';
+      pollVotersStatus.classList.remove('is-error', 'is-success');
+    }
+    if (pollVotersList) pollVotersList.innerHTML = '';
+  }
+
+  async function openPollVotersModal(messageId, optionId) {
+    const row = messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
+    const msg = row?.__messageData || {};
+    const poll = normalizePoll(msg.poll);
+    const option = (poll?.options || []).find((item) => Number(item.id) === Number(optionId));
+    const optionIndex = Math.max(0, (poll?.options || []).findIndex((item) => Number(item.id) === Number(optionId)));
+    if (!poll || !poll.show_voters || !option) return;
+    setPollStyleSurface(pollVotersModal, poll.style);
+    pollVotersState = { messageId: Number(messageId), optionId: Number(optionId) };
+    if (pollVotersTitle) pollVotersTitle.textContent = `Voters: ${option.text}`;
+    if (pollVotersMeta) {
+      pollVotersMeta.innerHTML = `
+        <span class="poll-voters-chip" style="--poll-option-accent:${pollAccentVar(optionIndex)};">${Math.max(0, Number(option.vote_count || 0))} votes</span>
+        <span class="poll-voters-chip">${poll.allows_multiple ? 'Multiple choice' : 'Single choice'}</span>
+        <span class="poll-voters-chip">${esc(formatPollDeadline(poll))}</span>
+      `;
+      pollVotersMeta.classList.remove('hidden');
+    }
+    if (pollVotersStatus) {
+      pollVotersStatus.textContent = 'Loading...';
+      pollVotersStatus.classList.remove('is-error', 'is-success');
+    }
+    if (pollVotersList) pollVotersList.innerHTML = '';
+    syncChatAreaMetrics();
+    openModal('pollVotersModal');
+    try {
+      const data = await api(`/api/messages/${messageId}/poll-voters?optionId=${optionId}`);
+      if (!pollVotersState || pollVotersState.messageId !== Number(messageId) || pollVotersState.optionId !== Number(optionId)) return;
+      const voters = Array.isArray(data?.voters) ? data.voters : [];
+      if (pollVotersStatus) pollVotersStatus.textContent = voters.length ? '' : 'No voters yet';
+      if (pollVotersList) {
+        pollVotersList.innerHTML = voters.map((voter) => `
+          <div class="poll-voter-item">
+            ${avatarHtml(voter.display_name, voter.avatar_color, voter.avatar_url, 32)}
+            <div class="poll-voter-meta">
+              <span class="poll-voter-name">${esc(voter.display_name || voter.username || 'User')}</span>
+              <span class="poll-voter-time">${esc(voter.voted_at ? `${formatDate(voter.voted_at)} ${formatTime(voter.voted_at)}` : '')}</span>
+            </div>
+          </div>
+        `).join('') || '<div class="settings-hint">No voters yet</div>';
+      }
+    } catch (error) {
+      if (pollVotersStatus) {
+        pollVotersStatus.textContent = error.message || 'Could not load voters';
+        pollVotersStatus.classList.add('is-error');
+      }
+    }
+  }
+
+  function renderPollCard(message, options = {}) {
+    const state = buildPollRenderState(message, options);
+    if (!state) return '';
+    const style = normalizePollStyle(state.poll?.style);
+    if (style === 'stack') return renderStackPollCard(state);
+    if (style === 'orbit') return renderOrbitPollCard(state);
+    return renderPulsePollCard(state);
+  }
+
   function initials(name) {
     const text = String(name || '').trim();
     if (!text) return '?';
@@ -808,6 +1629,29 @@
   function persistCurrentUser() {
     if (!currentUser) return;
     localStorage.setItem('user', JSON.stringify(currentUser));
+  }
+
+  function syncChatAreaMetrics() {
+    if (!chatArea) return;
+    const rect = chatArea.getBoundingClientRect();
+    const root = document.documentElement;
+    const width = Math.max(0, rect.width || window.innerWidth || 0);
+    const height = Math.max(0, rect.height || window.innerHeight || 0);
+    root.style.setProperty('--chat-area-left', `${Math.max(0, rect.left || 0)}px`);
+    root.style.setProperty('--chat-area-top', `${Math.max(0, rect.top || 0)}px`);
+    root.style.setProperty('--chat-area-width', `${width}px`);
+    root.style.setProperty('--chat-area-height', `${height}px`);
+  }
+
+  function setupChatAreaMetricsSync() {
+    syncChatAreaMetrics();
+    window.addEventListener('resize', syncChatAreaMetrics);
+    window.visualViewport?.addEventListener('resize', syncChatAreaMetrics);
+    window.visualViewport?.addEventListener('scroll', syncChatAreaMetrics);
+    if ('ResizeObserver' in window && chatArea && !chatAreaResizeObserver) {
+      chatAreaResizeObserver = new ResizeObserver(syncChatAreaMetrics);
+      chatAreaResizeObserver.observe(chatArea);
+    }
   }
 
   function chatListCacheKey() {
@@ -3990,6 +4834,7 @@
       menuDrawer,
       settingsModal,
       themeSettingsModal,
+      pollStyleSettingsModal,
       animationSettingsModal,
       weatherSettingsModal,
       notificationSettingsModal,
@@ -3999,6 +4844,8 @@
       changePasswordModal,
     ].forEach((modal) => registerModal(modal));
     registerModal(forwardMessageModal, { onAfterClose: resetForwardMessageModal });
+    registerModal(pollComposerModal, { onAfterClose: resetPollComposer });
+    registerModal(pollVotersModal, { onAfterClose: resetPollVotersModal });
   }
 
   function getTopModal() {
@@ -4840,6 +5687,10 @@
       case 'message_updated': {
         applyMessageUpdate(msg.message);
         loadChats();
+        break;
+      }
+      case 'poll_updated': {
+        applyPollUpdate(msg.chatId || msg.chat_id, msg.messageId || msg.message_id, msg.poll);
         break;
       }
       case 'online': {
@@ -5709,6 +6560,7 @@
 
     emptyState.classList.add('hidden');
     chatView.classList.remove('hidden');
+    requestAnimationFrame(syncChatAreaMetrics);
 
     // Update sidebar active state
     chatList.querySelectorAll('.chat-item[data-chat-id]').forEach(el => {
@@ -5890,6 +6742,7 @@
     if (editTo) clearEdit({ clearInput: true });
     syncMentionOpenButton();
     if (window.innerWidth > 768) msgInput.focus();
+    refreshPollComposerActionState();
     window.BananzaVoiceHooks?.refreshComposerState?.();
     updateScrollBottomButton();
     localStorage.setItem('lastChat', targetChatId);
@@ -6116,6 +6969,32 @@
     updateScrollBottomButton();
   }
 
+  function bindPollControls(row) {
+    const messageId = Number(row?.dataset?.msgId || row?.__messageData?.id || 0);
+    if (!row || !messageId) return;
+    row.querySelectorAll('[data-poll-vote]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        togglePollVote(messageId, Number(btn.dataset.pollOptionId || 0));
+      });
+    });
+
+    row.querySelectorAll('[data-poll-voters]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openPollVotersModal(messageId, Number(btn.dataset.pollOptionId || 0));
+      });
+    });
+
+    const pollCloseBtn = row.querySelector('[data-poll-close]');
+    if (pollCloseBtn) {
+      pollCloseBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closePollMessage(messageId);
+      });
+    }
+  }
+
   function createMessageEl(msg, showName = true) {
     applyOwnReadStateToMessage(msg, msg?.chat_id || msg?.chatId || currentChatId);
     const isOwn = msg.user_id === currentUser.id;
@@ -6127,6 +7006,7 @@
     );
     const isEmojiOnly = Boolean(
       !msg.is_deleted &&
+      !msg.poll &&
       !msg.is_voice_note &&
       !msg.file_id &&
       !msg.forwarded_from_display_name &&
@@ -6135,8 +7015,9 @@
       !(msg.previews && msg.previews.length) &&
       isSingleEmojiMessage(msg.text)
     );
+    const isPollMessage = Boolean(!msg.is_deleted && msg.poll);
     const row = document.createElement('div');
-    row.className = `msg-row ${isOwn ? 'own' : 'other'}${isEmojiOnly ? ' emoji-only-message' : ''}${isMediaMessage ? ' media-message' : ''}`;
+    row.className = `msg-row ${isOwn ? 'own' : 'other'}${isEmojiOnly ? ' emoji-only-message' : ''}${isMediaMessage ? ' media-message' : ''}${isPollMessage ? ' poll-message' : ''}`;
     row.dataset.msgId = msg.id;
     if (msg.client_id) row.dataset.clientId = msg.client_id;
     if (isClientMessage) row.dataset.outbox = '1';
@@ -6204,6 +7085,10 @@
       // Text
       if (msg.text) {
         html += `<div class="msg-text">${isEmojiOnly ? esc(msg.text.trim()) : renderMessageText(msg.text, msg.mentions)}</div>`;
+      }
+
+      if (msg.poll) {
+        html += renderPollCard(msg);
       }
 
       // Link previews
@@ -6302,6 +7187,8 @@
         saveMessageToNotes(row.__messageData, saveNoteBtn);
       });
     }
+
+    bindPollControls(row);
 
     const pinBtn = row.querySelector('.msg-pin-btn');
     if (pinBtn) {
@@ -7241,16 +8128,7 @@
     applyOwnReadStateToMessage(msg, msg.chat_id || currentChatId);
     try { if (window.messageCache) window.messageCache.upsertMessage(msg).catch(()=>{}); } catch (e) {}
     if (msg.chat_id !== currentChatId) return;
-
-    const row = messagesEl.querySelector(`[data-msg-id="${msg.id}"]`);
-    if (!row) return;
-    const nextMsg = { ...msg };
-    if (row.querySelector('.msg-status.read')) nextMsg.is_read = true;
-    const showName = Boolean(row.querySelector('.msg-sender'));
-    const replacement = createMessageEl(nextMsg, showName);
-    row.replaceWith(replacement);
-    rememberDisplayedMessage(nextMsg.id);
-    updateScrollBottomButton();
+    replaceRenderedMessage(msg);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -7272,6 +8150,7 @@
     pendingFile = pendingFiles[0] || null;
     renderPendingFiles();
     msgInput.focus();
+    refreshPollComposerActionState();
     window.BananzaVoiceHooks?.refreshComposerState?.();
   }
 
@@ -7302,6 +8181,7 @@
     pendingFileEl.classList.add('hidden');
     pendingFileEl.innerHTML = '';
     fileInput.value = '';
+    refreshPollComposerActionState();
     window.BananzaVoiceHooks?.refreshComposerState?.();
   }
 
@@ -7339,6 +8219,7 @@
   function canEditMessage(msg) {
     if (!currentUser || !msg || msg.is_deleted) return false;
     if (isClientSideMessage(msg)) return false;
+    if (isPollMessage(msg)) return false;
     if (!currentUser.is_admin && msg.user_id !== currentUser.id) return false;
     return Boolean(msg.is_voice_note || msg.file_id || msg.text);
   }
@@ -7346,6 +8227,7 @@
   function canForwardMessage(msg) {
     if (!currentUser || !msg || msg.is_deleted) return false;
     if (isClientSideMessage(msg)) return false;
+    if (isPollMessage(msg)) return false;
     return Boolean(msg.is_voice_note || msg.file_id || msg.text);
   }
 
@@ -7454,6 +8336,7 @@
     syncMentionOpenButton();
     attachBtn.disabled = true;
     attachBtn.classList.add('disabled');
+    refreshPollComposerActionState();
     window.BananzaVoiceHooks?.refreshComposerState?.();
     msgInput.focus();
   }
@@ -7469,6 +8352,7 @@
       autoResize();
     }
     syncMentionOpenButton();
+    refreshPollComposerActionState();
     window.BananzaVoiceHooks?.refreshComposerState?.();
   }
 
@@ -9386,6 +10270,16 @@
     setThemeStatus('');
   }
 
+  function openPollStyleSettingsModal() {
+    syncPollComposerStyleUi();
+    openModal('pollStyleSettingsModal', {
+      replaceStack: false,
+      opener: $('#pollComposerStyleBtn'),
+    });
+    renderPollStylePicker();
+    setPollStyleStatus('Applies to this poll only');
+  }
+
   function openAnimationSettingsModal() {
     openModal('animationSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
     renderModalAnimationOptions();
@@ -10004,11 +10898,48 @@
     $('#attachMenuGallery').addEventListener('click', () => { closeAttachMenu(); fileInputGallery.click(); });
     $('#attachMenuCamera').addEventListener('click', () => { closeAttachMenu(); fileInputCamera.click(); });
     $('#attachMenuFile').addEventListener('click', () => { closeAttachMenu(); fileInputDocs.click(); });
+    $('#attachMenuPoll')?.addEventListener('click', () => { closeAttachMenu(); openPollComposer(); });
 
     fileInput.addEventListener('change', () => { if (fileInput.files.length > 0) uploadFiles(fileInput.files); });
     fileInputGallery.addEventListener('change', () => { if (fileInputGallery.files.length > 0) { uploadFiles(fileInputGallery.files); fileInputGallery.value = ''; } });
     fileInputCamera.addEventListener('change', () => { if (fileInputCamera.files.length > 0) { uploadFiles(fileInputCamera.files); fileInputCamera.value = ''; } });
     fileInputDocs.addEventListener('change', () => { if (fileInputDocs.files.length > 0) { uploadFiles(fileInputDocs.files); fileInputDocs.value = ''; } });
+    pollBtn?.addEventListener('click', openPollComposer);
+    $('#pollAddOptionBtn')?.addEventListener('click', () => {
+      if (pollComposerOptions.length >= POLL_MAX_OPTIONS) return;
+      pollComposerOptions.push('');
+      renderPollComposerOptionInputs();
+      refreshPollComposerPreview();
+      const nextInput = pollOptionsList?.querySelector(`input[data-poll-option-index="${pollComposerOptions.length - 1}"]`);
+      nextInput?.focus();
+    });
+    pollOptionsList?.addEventListener('input', (e) => {
+      const input = e.target.closest('input[data-poll-option-index]');
+      if (!input) return;
+      const index = Number(input.dataset.pollOptionIndex || -1);
+      if (index < 0) return;
+      pollComposerOptions[index] = input.value;
+      setPollComposerStatus('');
+      refreshPollComposerPreview();
+    });
+    pollOptionsList?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-poll-option-remove]');
+      if (!btn) return;
+      const index = Number(btn.dataset.pollOptionRemove || -1);
+      if (index < 0 || pollComposerOptions.length <= POLL_MIN_OPTIONS) return;
+      pollComposerOptions.splice(index, 1);
+      renderPollComposerOptionInputs();
+      refreshPollComposerPreview();
+    });
+    pollQuestionInput?.addEventListener('input', () => {
+      setPollComposerStatus('');
+      refreshPollComposerPreview();
+    });
+    $('#pollAllowMultiple')?.addEventListener('change', refreshPollComposerPreview);
+    $('#pollShowVoters')?.addEventListener('change', refreshPollComposerPreview);
+    $('#pollClosePreset')?.addEventListener('change', refreshPollComposerPreview);
+    $('#pollComposerStyleBtn')?.addEventListener('click', openPollStyleSettingsModal);
+    $('#pollSubmitBtn')?.addEventListener('click', submitPollComposer);
 
     // Emoji
     emojiBtn.addEventListener('click', (e) => {
@@ -10633,6 +11564,11 @@
       if (!card) return;
       selectUiTheme(card.dataset.theme);
     });
+    $('#settingsPollStylePicker')?.addEventListener('click', (e) => {
+      const card = e.target.closest('[data-poll-style-option]');
+      if (!card) return;
+      selectPollStyle(card.dataset.pollStyleOption);
+    });
     $('#settingsAnimationOptions')?.addEventListener('click', (e) => {
       const card = e.target.closest('[data-modal-animation-style]');
       if (!card) return;
@@ -10976,6 +11912,10 @@
 
     registerBuiltinModals();
     setupEvents();
+    setupChatAreaMetricsSync();
+    resetPollComposer();
+    resetPollVotersModal();
+    refreshPollComposerActionState();
     setupProfileEvents();
     initEmojiPicker();
     connectWS();

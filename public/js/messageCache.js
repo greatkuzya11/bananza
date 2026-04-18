@@ -393,6 +393,21 @@
     return !!ok;
   }
 
+  async function patchMessage(chatId, id, patch = {}) {
+    const cid = normalizeId(chatId);
+    const mid = normalizeId(id);
+    if (!cid || !mid || !currentUserId || !patch || typeof patch !== 'object') return false;
+    return !!(await withStore('readwrite', (store) => {
+      const req = store.get([currentUserId, cid, mid]);
+      req.onsuccess = () => {
+        const row = req.result;
+        if (!row) return;
+        store.put({ ...row, ...patch, userId: currentUserId, chatId: cid, id: mid });
+      };
+      return true;
+    }));
+  }
+
   async function deleteMessage(chatId, id) {
     const cid = normalizeId(chatId);
     const mid = normalizeId(id);
@@ -670,6 +685,7 @@
     writeMediaPage,
     readMediaPage,
     upsertMessage,
+    patchMessage,
     deleteMessage,
     upsertOutboxItem,
     getOutboxItem,

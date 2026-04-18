@@ -96,6 +96,7 @@
           <div id="pendingFile" class="pending-file hidden"></div>
           <div class="input-row">
             <button id="attachBtn" class="icon-btn" title="Attach file">📎</button>
+            <button id="pollBtn" class="icon-btn composer-desktop-only" title="Create poll" type="button">📊</button>
             <button id="emojiBtn" class="icon-btn" title="Emoji">😊</button>
             <div class="composer-input-wrap">
               <textarea id="msgInput" placeholder="Message..." rows="1"></textarea>
@@ -234,6 +235,22 @@
         <div id="settingsThemeBlock" class="theme-settings-block">
           <div id="settingsThemePicker" class="theme-picker"></div>
           <div id="settingsThemeStatus" class="theme-settings-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Poll Style Settings Modal -->
+  <div id="pollStyleSettingsModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Choose Poll Style</h3>
+        <button class="modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="settingsPollStyleBlock" class="theme-settings-block">
+          <div id="settingsPollStylePicker" class="poll-style-picker"></div>
+          <div id="settingsPollStyleStatus" class="theme-settings-status"></div>
         </div>
       </div>
     </div>
@@ -747,6 +764,86 @@
     </div>
   </div>
 
+  <div id="pollComposerModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Create Poll</h3>
+        <button class="modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <label class="poll-modal-field" for="pollQuestionInput">
+          <span>Question</span>
+          <textarea id="pollQuestionInput" class="modal-input poll-question-input" rows="3" maxlength="5000" placeholder="What should we vote on?"></textarea>
+        </label>
+        <div class="poll-modal-options-header">
+          <strong>Options</strong>
+          <small>2-10 options</small>
+        </div>
+        <div id="pollOptionsList" class="poll-options-list"></div>
+        <div class="poll-modal-actions-row">
+          <button id="pollAddOptionBtn" type="button" class="weather-action-btn">Add option</button>
+        </div>
+        <div class="settings-item settings-toggle-item">
+          <span>Allow multiple answers</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="pollAllowMultiple">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="settings-item settings-toggle-item">
+          <span>Show who voted</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="pollShowVoters">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <label class="poll-modal-field" for="pollClosePreset">
+          <span>Auto-close</span>
+          <select id="pollClosePreset" class="modal-input">
+            <option value="">No timer</option>
+            <option value="1h">1 hour</option>
+            <option value="4h">4 hours</option>
+            <option value="24h">24 hours</option>
+            <option value="3d">3 days</option>
+            <option value="7d">7 days</option>
+          </select>
+        </label>
+        <div class="poll-style-composer-row">
+          <span>
+            <strong id="pollComposerStyleName">Pulse</strong>
+            <small id="pollComposerStyleNote">Hero gradients and bold result cards</small>
+          </span>
+          <button id="pollComposerStyleBtn" type="button" class="weather-action-btn">Poll Style: Pulse</button>
+        </div>
+        <div class="poll-preview-block">
+          <div class="poll-preview-header">
+            <strong>Live preview</strong>
+            <small>Selected poll style</small>
+          </div>
+          <div id="pollComposerPreview" class="poll-composer-preview"></div>
+        </div>
+        <div id="pollComposerStatus" class="theme-settings-status"></div>
+        <div class="poll-modal-submit">
+          <button id="pollSubmitBtn" type="button" class="btn-primary">Send Poll</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="pollVotersModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="pollVotersTitle">Voters</h3>
+        <button class="modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="pollVotersMeta" class="poll-voters-meta hidden"></div>
+        <div id="pollVotersStatus" class="theme-settings-status"></div>
+        <div id="pollVotersList" class="poll-voters-list"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Chat Info Modal -->
   <div id="chatInfoModal" class="modal hidden">
     <div class="modal-content">
@@ -916,6 +1013,10 @@
     <button id="attachMenuFile" class="attach-menu-item">
       <span class="attach-menu-icon" style="background:#f0a24e">📄</span>
       <span>File</span>
+    </button>
+    <button id="attachMenuPoll" class="attach-menu-item">
+      <span class="attach-menu-icon" style="background:#8f7cf3">📊</span>
+      <span>Poll</span>
     </button>
   </div>
   <div id="attachMenuOverlay" class="attach-menu-overlay hidden"></div>

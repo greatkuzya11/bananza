@@ -39,6 +39,9 @@ function createForwardingFeature({
 
     const source = copyService.getSourceMessage(sourceMessageId);
     if (!source) return res.status(404).json({ error: 'Message not found' });
+    if (Number(source.is_poll_message) !== 0) {
+      return res.status(400).json({ error: 'Poll messages cannot be forwarded' });
+    }
 
     const isSourceMember = db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?')
       .get(source.chat_id, req.user.id);

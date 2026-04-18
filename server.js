@@ -20,6 +20,7 @@ const { createMessageCopyService } = require('./messageCopy');
 const { createPushFeature } = require('./push');
 const { createSoundSettingsFeature } = require('./soundSettings');
 const { createAiBotFeature } = require('./ai');
+const { createPollService, POLL_CLOSE_PRESETS, toDbDate } = require('./polls');
 
 // ── JWT Secret ──────────────────────────────────────────────────────────────
 const SECRET_PATH = path.join(__dirname, '.secret');
@@ -120,17 +121,73 @@ const upLimiter   = rateLimit({ windowMs: 60_000, max: 20, message: { error: 'To
 // ── Auth middleware ─────────────────────────────────────────────────────────
 const AVATAR_COLORS = ['#e17076','#7bc862','#e5ca77','#65aadd','#a695e7','#ee7aae','#6ec9cb','#faa774'];
 const UI_THEMES = new Set(['bananza', 'banan-hero', 'midnight-ocean', 'nord-aurora', 'rose-pine', 'dracula-neon', 'tokyo-night']);
+const POLL_STYLES = new Set(['pulse', 'stack', 'orbit']);
 const UI_MODAL_ANIMATIONS = new Set(['soft', 'lift', 'zoom', 'slide', 'fade', 'none']);
 const UI_MODAL_ANIMATION_SPEED_DEFAULT = 8;
 const UI_MODAL_ANIMATION_SPEED_MIN = 1;
 const UI_MODAL_ANIMATION_SPEED_MAX = 10;
 const USER_PUBLIC_FIELDS = 'id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,ui_theme,ui_modal_animation,ui_modal_animation_speed';
 const USER_REALTIME_FIELDS = `${USER_PUBLIC_FIELDS},is_ai_bot`;
+const POLL_MAX_OPTIONS = 10;
+const POLL_MIN_OPTIONS = 2;
 
 function normalizeModalAnimationSpeed(speed) {
   const next = Math.round(Number(speed));
   if (!Number.isFinite(next)) return UI_MODAL_ANIMATION_SPEED_DEFAULT;
   return Math.min(UI_MODAL_ANIMATION_SPEED_MAX, Math.max(UI_MODAL_ANIMATION_SPEED_MIN, next));
+}
+
+function boolValue(value, fallback = false) {
+  if (typeof value === 'boolean') return value;
+  if (value === 1 || value === '1') return true;
+  if (value === 0 || value === '0') return false;
+  return !!fallback;
+}
+
+function normalizePollOptionText(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
+function normalizePollPayload(input = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const style = typeof input.style === 'string' && input.style.trim()
+    ? input.style.trim()
+    : 'pulse';
+  if (!POLL_STYLES.has(style)) {
+    const error = new Error('Unknown poll style');
+    error.status = 400;
+    throw error;
+  }
+  const rawOptions = Array.isArray(input.options) ? input.options : [];
+  const options = rawOptions.map(normalizePollOptionText).filter(Boolean);
+  if (options.length < POLL_MIN_OPTIONS || options.length > POLL_MAX_OPTIONS) {
+    const error = new Error(`Poll must have ${POLL_MIN_OPTIONS}-${POLL_MAX_OPTIONS} options`);
+    error.status = 400;
+    throw error;
+  }
+  const normalizedKeys = options.map((option) => option.toLowerCase());
+  if (new Set(normalizedKeys).size !== normalizedKeys.length) {
+    const error = new Error('Poll options must be unique');
+    error.status = 400;
+    throw error;
+  }
+  const closePreset = typeof input.close_preset === 'string' && input.close_preset.trim()
+    ? input.close_preset.trim()
+    : null;
+  if (closePreset && !Object.prototype.hasOwnProperty.call(POLL_CLOSE_PRESETS, closePreset)) {
+    const error = new Error('Unknown poll close preset');
+    error.status = 400;
+    throw error;
+  }
+  const closesAt = closePreset ? toDbDate(Date.now() + POLL_CLOSE_PRESETS[closePreset]) : null;
+  return {
+    style,
+    options,
+    allows_multiple: boolValue(input.allows_multiple, false),
+    show_voters: boolValue(input.show_voters, false),
+    close_preset: closePreset,
+    closes_at: closesAt,
+  };
 }
 
 function publicUser(u) {
@@ -195,6 +252,11 @@ const pushFeature = createPushFeature({
   db,
   auth,
   rateLimit,
+});
+
+const pollFeature = createPollService({
+  db,
+  sendToUser,
 });
 
 let aiBotFeature = null;
@@ -435,7 +497,7 @@ function attachMessageMentions(row) {
   return row;
 }
 
-function hydrateMessageById(messageId) {
+function hydrateMessageById(messageId, viewerUserId = null) {
   const row = messageByIdStmt.get(messageId);
   if (!row) return null;
   row.previews = messagePreviewsStmt.all(row.id);
@@ -449,7 +511,8 @@ function hydrateMessageById(messageId) {
   ).get(row.chat_id, row.user_id);
   const minRead = readInfo && readInfo.min_read != null ? readInfo.min_read : row.id;
   row.is_read = row.id <= minRead;
-  return voiceFeature.attachVoiceMetadata([row])[0];
+  const withVoice = voiceFeature.attachVoiceMetadata([row])[0];
+  return pollFeature.attachPollMetadata([withVoice], viewerUserId, { ensureClosed: false, broadcastOnClose: false })[0];
 }
 
 function isChatMember(chatId, userId) {
@@ -1040,7 +1103,7 @@ app.get('/api/chats/:chatId/media', auth, (req, res) => {
   }
 
   const media = rows
-    .map(row => hydrateMessageById(row.id))
+    .map(row => hydrateMessageById(row.id, req.user.id))
     .filter(row => row && (row.file_type === 'image' || row.file_type === 'video'));
   const firstId = media.reduce((min, msg) => {
     const id = Number(msg.id) || 0;
@@ -1134,8 +1197,12 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
   ).get(chatId, req.user.id);
   const minRead = readInfo && readInfo.min_read != null ? readInfo.min_read : Number.MAX_SAFE_INTEGER;
 
-  const result = voiceFeature.attachVoiceMetadata(
-    msgs.map(m => attachMessageMentions({ ...m, previews: prevStmt.all(m.id), reactions: reactStmt.all(m.id), is_read: m.id <= minRead }))
+  const result = pollFeature.attachPollMetadata(
+    voiceFeature.attachVoiceMetadata(
+      msgs.map(m => attachMessageMentions({ ...m, previews: prevStmt.all(m.id), reactions: reactStmt.all(m.id), is_read: m.id <= minRead }))
+    ),
+    req.user.id,
+    { ensureClosed: true, broadcastOnClose: true }
   );
   // Build per-member last-read map so clients can atomically reconcile local cache/UI.
   const members = db.prepare(`
@@ -1167,20 +1234,34 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
 
 app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   const chatId = +req.params.chatId;
-  const { text, fileId, replyToId, client_id } = req.body;
+  const { text, fileId, replyToId, client_id, poll: rawPoll } = req.body;
   const clientId = normalizeClientId(client_id);
+  const chat = db.prepare('SELECT id,is_notes FROM chats WHERE id=?').get(chatId);
 
+  if (!chat) return res.status(404).json({ error: 'Chat not found' });
   if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
   if (clientId) {
     const existing = db.prepare('SELECT id FROM messages WHERE chat_id=? AND user_id=? AND client_id=?').get(chatId, req.user.id, clientId);
-    if (existing) return res.json(hydrateMessageById(existing.id));
+    if (existing) return res.json(hydrateMessageById(existing.id, req.user.id));
   }
-  if (!text && !fileId) return res.status(400).json({ error: 'Empty message' });
+  const cleanText = text ? text.trim() : null;
   if (text && (typeof text !== 'string' || text.length > 5000))
     return res.status(400).json({ error: 'Message too long' });
   if (fileId && !db.prepare('SELECT 1 FROM files WHERE id=?').get(fileId))
     return res.status(400).json({ error: 'File not found' });
+  let poll = null;
+  try {
+    poll = rawPoll ? normalizePollPayload(rawPoll) : null;
+  } catch (error) {
+    return res.status(error.status || 400).json({ error: error.message || 'Invalid poll payload' });
+  }
+  if (!cleanText && !fileId) return res.status(400).json({ error: 'Empty message' });
+  if (poll) {
+    if (isNotesChatRow(chat)) return res.status(400).json({ error: 'Polls are not available in notes chat' });
+    if (!cleanText) return res.status(400).json({ error: 'Poll question is required' });
+    if (fileId) return res.status(400).json({ error: 'Poll message cannot include files' });
+  }
 
   // Validate reply
   let validReplyId = null;
@@ -1189,11 +1270,26 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
     if (replyMsg) validReplyId = replyMsg.id;
   }
 
-  const cleanText = text ? text.trim() : null;
-  const r = db.prepare('INSERT INTO messages(chat_id,user_id,text,file_id,reply_to_id,client_id) VALUES(?,?,?,?,?,?)')
-    .run(chatId, req.user.id, cleanText, fileId || null, validReplyId, clientId);
+  const createMessageTx = db.transaction(() => {
+    const inserted = db.prepare('INSERT INTO messages(chat_id,user_id,text,file_id,reply_to_id,client_id) VALUES(?,?,?,?,?,?)')
+      .run(chatId, req.user.id, cleanText, poll ? null : (fileId || null), validReplyId, clientId);
+    const messageId = Number(inserted.lastInsertRowid);
+    if (poll) {
+      pollFeature.createPollData({
+        messageId,
+        createdBy: req.user.id,
+        style: poll.style,
+        allowsMultiple: poll.allows_multiple,
+        showVoters: poll.show_voters,
+        closesAt: poll.closes_at,
+        options: poll.options,
+      });
+    }
+    return messageId;
+  });
+  const messageId = createMessageTx();
   try { db.prepare("UPDATE users SET last_activity = datetime('now') WHERE id = ?").run(req.user.id); } catch (e) {}
-  if (cleanText) saveMessageMentions(r.lastInsertRowid, chatId, cleanText);
+  if (cleanText) saveMessageMentions(messageId, chatId, cleanText);
 
   const msg = db.prepare(`
     SELECT m.*, u.username, u.display_name, u.avatar_color, u.avatar_url,
@@ -1210,22 +1306,26 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
     LEFT JOIN voice_messages rvm ON rvm.message_id=rm.id
     LEFT JOIN users ru ON ru.id=rm.user_id
     WHERE m.id=?
-  `).get(r.lastInsertRowid);
+  `).get(messageId);
   msg.previews = [];
   msg.reactions = [];
   attachMessageMentions(msg);
-  const hydratedMsg = voiceFeature.attachVoiceMetadata([msg])[0];
+  const hydratedMsg = pollFeature.attachPollMetadata(
+    voiceFeature.attachVoiceMetadata([msg]),
+    req.user.id,
+    { ensureClosed: false, broadcastOnClose: false }
+  )[0];
   // Echo client_id back to clients so optimistic messages can be matched
   if (clientId) hydratedMsg.client_id = clientId;
 
   broadcastToChatAll(chatId, { type: 'message', message: hydratedMsg });
   pushFeature.notifyMessageCreated(hydratedMsg);
-  aiBotFeature.handleMessageCreated(hydratedMsg).catch((error) => {
+  aiBotFeature.handleMessageCreated(hydratedMsg, { skipBotTrigger: Boolean(hydratedMsg.poll) }).catch((error) => {
     console.warn('[ai-bot] message hook failed:', error.message);
   });
 
   // Async link previews
-  if (cleanText) {
+  if (cleanText && !poll) {
     const urls = extractUrls(cleanText);
     if (urls.length > 0) {
       fetchPreview(urls[0]).then(preview => {
@@ -1248,6 +1348,9 @@ app.post('/api/messages/:id/save-to-notes', auth, msgLimiter, (req, res) => {
 
   const source = messageCopyService.getSourceMessage(sourceMessageId);
   if (!source) return res.status(404).json({ error: 'Message not found' });
+  if (Number(source.is_poll_message) !== 0) {
+    return res.status(400).json({ error: 'Poll messages cannot be saved to notes' });
+  }
   if (!isChatMember(source.chat_id, req.user.id)) {
     return res.status(403).json({ error: 'Not a member of source chat' });
   }
@@ -1304,7 +1407,7 @@ app.post('/api/messages/:id/save-to-notes', auth, msgLimiter, (req, res) => {
     return res.status(500).json({ error: error.message || 'Save to notes failed' });
   }
 
-  const message = hydrateMessageById(savedMessageId);
+  const message = hydrateMessageById(savedMessageId, req.user.id);
   if (!message) return res.status(500).json({ error: 'Saved note could not be loaded' });
 
   broadcastToChatAll(notesChat.id, { type: 'message', message });
@@ -1339,6 +1442,83 @@ app.get('/api/messages/:id/jump-target', auth, (req, res) => {
   }
 
   return res.json({ chatId: message.chat_id, messageId: message.id });
+});
+
+app.post('/api/messages/:id/poll-vote', auth, msgLimiter, (req, res) => {
+  const messageId = Number(req.params.id);
+  if (!Number.isInteger(messageId) || messageId <= 0) {
+    return res.status(400).json({ error: 'Invalid message id' });
+  }
+
+  const state = pollFeature.pollStateForMessage(messageId);
+  if (!state) return res.status(404).json({ error: 'Poll not found' });
+  if (!isChatMember(state.chat_id, req.user.id)) {
+    return res.status(403).json({ error: 'Not a member of chat' });
+  }
+
+  try {
+    const result = pollFeature.replaceVotes(messageId, req.user.id, req.body?.optionIds || []);
+    pollFeature.broadcastPollUpdated(result.chatId, messageId);
+    return res.json({ ok: true, poll: result.poll });
+  } catch (error) {
+    if (error.code === 'not_found') return res.status(404).json({ error: error.message });
+    if (error.code === 'closed') {
+      const poll = pollFeature.getPollPayload(messageId, req.user.id, { ensureClosed: false });
+      return res.status(409).json({ error: error.message, poll });
+    }
+    return res.status(400).json({ error: error.message || 'Could not update poll vote' });
+  }
+});
+
+app.post('/api/messages/:id/poll-close', auth, msgLimiter, (req, res) => {
+  const messageId = Number(req.params.id);
+  if (!Number.isInteger(messageId) || messageId <= 0) {
+    return res.status(400).json({ error: 'Invalid message id' });
+  }
+
+  const state = pollFeature.pollStateForMessage(messageId);
+  if (!state) return res.status(404).json({ error: 'Poll not found' });
+  const canClose = req.user.is_admin ||
+    Number(state.created_by) === Number(req.user.id) ||
+    Number(state.chat_created_by) === Number(req.user.id);
+  if (!canClose) return res.status(403).json({ error: 'Not allowed to close this poll' });
+
+  try {
+    const result = pollFeature.closePoll(messageId, req.user.id);
+    pollFeature.broadcastPollUpdated(result.chatId, messageId);
+    const poll = pollFeature.getPollPayload(messageId, req.user.id, { ensureClosed: false });
+    return res.json({ ok: true, poll });
+  } catch (error) {
+    return res.status(error.code === 'not_found' ? 404 : 400).json({ error: error.message || 'Could not close poll' });
+  }
+});
+
+app.get('/api/messages/:id/poll-voters', auth, (req, res) => {
+  const messageId = Number(req.params.id);
+  const optionId = Number(req.query?.optionId);
+  if (!Number.isInteger(messageId) || messageId <= 0) {
+    return res.status(400).json({ error: 'Invalid message id' });
+  }
+  if (!Number.isInteger(optionId) || optionId <= 0) {
+    return res.status(400).json({ error: 'Invalid poll option' });
+  }
+
+  const state = pollFeature.pollStateForMessage(messageId);
+  if (!state) return res.status(404).json({ error: 'Poll not found' });
+  if (!req.user.is_admin && !isChatMember(state.chat_id, req.user.id)) {
+    return res.status(403).json({ error: 'Not a member of chat' });
+  }
+
+  const poll = pollFeature.getPollPayload(messageId, req.user.id, { ensureClosed: true, broadcastOnClose: true });
+  if (!poll) return res.status(404).json({ error: 'Poll not found' });
+  if (!poll.show_voters) return res.status(403).json({ error: 'This poll hides voters' });
+  const option = (poll.options || []).find((item) => Number(item.id) === optionId);
+  if (!option) return res.status(404).json({ error: 'Poll option not found' });
+
+  return res.json({
+    option,
+    voters: pollFeature.getVoters(messageId, optionId),
+  });
 });
 
 app.post('/api/messages/:id/pin', auth, msgLimiter, (req, res) => {
@@ -1394,9 +1574,10 @@ app.patch('/api/messages/:id', auth, msgLimiter, (req, res) => {
   if (text.length > 5000) return res.status(400).json({ error: 'Message too long' });
 
   const m = db.prepare(`
-    SELECT m.*, vm.message_id as voice_message_id
+    SELECT m.*, vm.message_id as voice_message_id, p.message_id as poll_message_id
     FROM messages m
     LEFT JOIN voice_messages vm ON vm.message_id=m.id
+    LEFT JOIN polls p ON p.message_id=m.id
     WHERE m.id=? AND m.is_deleted=0
   `).get(mid);
   if (!m) return res.status(404).json({ error: 'Not found' });
@@ -1404,6 +1585,7 @@ app.patch('/api/messages/:id', auth, msgLimiter, (req, res) => {
     return res.status(403).json({ error: 'Not allowed' });
   if (!req.user.is_admin && !db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(m.chat_id, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
+  if (m.poll_message_id) return res.status(400).json({ error: 'Poll messages cannot be edited' });
 
   const cleanText = text.trim();
   if (m.voice_message_id) {
@@ -1428,7 +1610,7 @@ app.patch('/api/messages/:id', auth, msgLimiter, (req, res) => {
     saveMessageMentions(mid, m.chat_id, cleanText);
   }
 
-  const updated = hydrateMessageById(mid);
+  const updated = hydrateMessageById(mid, req.user.id);
   broadcastToChatAll(m.chat_id, { type: 'message_updated', message: updated });
   if (db.prepare('SELECT 1 FROM message_pins WHERE message_id=?').get(mid)) {
     broadcastPinsUpdated(m.chat_id, { action: 'updated', actorId: req.user.id, messageId: mid });
@@ -1829,6 +2011,7 @@ app.delete('/api/messages/:id', auth, (req, res) => {
   if (m.file_id) db.prepare('DELETE FROM files WHERE id=?').run(m.file_id);
   voiceFeature.deleteVoiceMetadata(mid);
   db.prepare('DELETE FROM link_previews WHERE message_id=?').run(mid);
+  pollFeature.deletePollData(mid);
   broadcastToChatAll(m.chat_id, { type: 'message_deleted', messageId: mid, chatId: m.chat_id });
   if (removedPins.changes > 0) {
     broadcastPinsUpdated(m.chat_id, { action: 'unpinned', actorId: req.user.id, messageId: mid });

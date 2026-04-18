@@ -20,6 +20,7 @@ db.exec(`
     avatar_color TEXT NOT NULL,
     avatar_url TEXT DEFAULT NULL,
     ui_theme TEXT DEFAULT 'bananza',
+    ui_poll_style TEXT DEFAULT 'pulse',
     ui_modal_animation TEXT DEFAULT 'soft',
     ui_modal_animation_speed INTEGER DEFAULT 8,
     created_at TEXT DEFAULT (datetime('now'))
@@ -189,6 +190,11 @@ try {
   db.exec("ALTER TABLE users ADD COLUMN ui_theme TEXT DEFAULT 'bananza'");
 }
 try {
+  db.prepare("SELECT ui_poll_style FROM users LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE users ADD COLUMN ui_poll_style TEXT DEFAULT 'pulse'");
+}
+try {
   db.prepare("SELECT ui_modal_animation FROM users LIMIT 1").get();
 } catch {
   db.exec("ALTER TABLE users ADD COLUMN ui_modal_animation TEXT DEFAULT 'soft'");
@@ -198,6 +204,7 @@ try {
 } catch {
   db.exec("ALTER TABLE users ADD COLUMN ui_modal_animation_speed INTEGER DEFAULT 8");
 }
+db.prepare("UPDATE users SET ui_poll_style='pulse' WHERE ui_poll_style IS NULL OR TRIM(ui_poll_style)=''").run();
 db.prepare("UPDATE users SET ui_modal_animation_speed=8 WHERE ui_modal_animation_speed IS NULL").run();
 try {
   db.prepare("SELECT is_ai_bot FROM users LIMIT 1").get();
@@ -378,6 +385,48 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_message_pins_chat ON message_pins(chat_id, id);
   CREATE INDEX IF NOT EXISTS idx_message_pins_message ON message_pins(message_id);
 `);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS polls (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    style TEXT NOT NULL DEFAULT 'pulse',
+    allows_multiple INTEGER NOT NULL DEFAULT 0,
+    show_voters INTEGER NOT NULL DEFAULT 0,
+    closes_at TEXT DEFAULT NULL,
+    closed_at TEXT DEFAULT NULL,
+    closed_by INTEGER DEFAULT NULL REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS poll_options (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(message_id, position)
+  );
+
+  CREATE TABLE IF NOT EXISTS poll_votes (
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    option_id INTEGER NOT NULL REFERENCES poll_options(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (message_id, option_id, user_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_polls_closed_at ON polls(closed_at, closes_at);
+  CREATE INDEX IF NOT EXISTS idx_poll_options_message ON poll_options(message_id, position);
+  CREATE INDEX IF NOT EXISTS idx_poll_votes_message ON poll_votes(message_id);
+  CREATE INDEX IF NOT EXISTS idx_poll_votes_option ON poll_votes(option_id);
+  CREATE INDEX IF NOT EXISTS idx_poll_votes_user_message ON poll_votes(user_id, message_id);
+`);
+try {
+  db.prepare("SELECT style FROM polls LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE polls ADD COLUMN style TEXT NOT NULL DEFAULT 'pulse'");
+}
+db.prepare("UPDATE polls SET style='pulse' WHERE style IS NULL OR TRIM(style)='' OR style NOT IN ('pulse','stack','orbit')").run();
 // Migration: reactions table
 try {
   db.prepare("SELECT 1 FROM reactions LIMIT 1").get();
