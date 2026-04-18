@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const webpush = require('web-push');
+const { normalizeSoundSettings } = require('./soundSettings');
 
 const VAPID_PATH = path.join(__dirname, '.vapid.json');
 const DEFAULT_SETTINGS = {
@@ -8,13 +9,22 @@ const DEFAULT_SETTINGS = {
   notify_messages: true,
   notify_chat_invites: true,
   notify_reactions: true,
+  notify_pins: true,
   notify_mentions: true,
 };
 const TYPE_FLAGS = {
   messages: 'notify_messages',
   chat_invites: 'notify_chat_invites',
   reactions: 'notify_reactions',
+  pins: 'notify_pins',
   mentions: 'notify_mentions',
+};
+const SOUND_TYPE_FLAGS = {
+  messages: 'play_notifications',
+  chat_invites: 'play_invites',
+  reactions: 'play_reactions',
+  pins: 'play_pins',
+  mentions: 'play_mentions',
 };
 const MAX_BODY_LENGTH = 120;
 
@@ -72,6 +82,7 @@ function normalizeSettings(row) {
     notify_messages: !!row.notify_messages,
     notify_chat_invites: !!row.notify_chat_invites,
     notify_reactions: !!row.notify_reactions,
+    notify_pins: row.notify_pins == null ? true : !!row.notify_pins,
     notify_mentions: row.notify_mentions == null ? true : !!row.notify_mentions,
   };
 }
@@ -108,7 +119,7 @@ function createPushFeature({ app, db, auth, rateLimit }) {
     : (_req, _res, next) => next();
 
   const settingsStmt = db.prepare('SELECT * FROM user_notification_settings WHERE user_id=?');
-  const soundSettingsStmt = db.prepare('SELECT sounds_enabled FROM user_sound_settings WHERE user_id=?');
+  const soundSettingsStmt = db.prepare('SELECT * FROM user_sound_settings WHERE user_id=?');
   const activeSubscriptionsStmt = db.prepare(`
     SELECT * FROM push_subscriptions
     WHERE user_id=? AND disabled_at IS NULL
@@ -133,6 +144,14 @@ function createPushFeature({ app, db, auth, rateLimit }) {
     LEFT JOIN voice_messages vm ON vm.message_id=m.id
     WHERE m.id=? AND m.is_deleted=0
   `);
+  const pinMessageStmt = db.prepare(`
+    SELECT m.id, m.chat_id, m.user_id, m.text, f.type as file_type,
+      f.original_name as file_name, vm.message_id as voice_message_id, vm.transcription_text
+    FROM messages m
+    LEFT JOIN files f ON f.id=m.file_id
+    LEFT JOIN voice_messages vm ON vm.message_id=m.id
+    WHERE m.id=? AND m.is_deleted=0
+  `);
   const messageMentionsStmt = db.prepare(`
     SELECT mentioned_user_id
     FROM message_mentions
@@ -150,17 +169,19 @@ function createPushFeature({ app, db, auth, rateLimit }) {
       notify_messages: boolValue(input.notify_messages, current.notify_messages),
       notify_chat_invites: boolValue(input.notify_chat_invites, current.notify_chat_invites),
       notify_reactions: boolValue(input.notify_reactions, current.notify_reactions),
+      notify_pins: boolValue(input.notify_pins, current.notify_pins),
       notify_mentions: boolValue(input.notify_mentions, current.notify_mentions),
     };
     db.prepare(`
       INSERT INTO user_notification_settings (
-        user_id, push_enabled, notify_messages, notify_chat_invites, notify_reactions, notify_mentions, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+        user_id, push_enabled, notify_messages, notify_chat_invites, notify_reactions, notify_pins, notify_mentions, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(user_id) DO UPDATE SET
         push_enabled=excluded.push_enabled,
         notify_messages=excluded.notify_messages,
         notify_chat_invites=excluded.notify_chat_invites,
         notify_reactions=excluded.notify_reactions,
+        notify_pins=excluded.notify_pins,
         notify_mentions=excluded.notify_mentions,
         updated_at=datetime('now')
     `).run(
@@ -169,6 +190,7 @@ function createPushFeature({ app, db, auth, rateLimit }) {
       next.notify_messages ? 1 : 0,
       next.notify_chat_invites ? 1 : 0,
       next.notify_reactions ? 1 : 0,
+      next.notify_pins ? 1 : 0,
       next.notify_mentions ? 1 : 0
     );
     return getSettings(userId);
@@ -209,14 +231,16 @@ function createPushFeature({ app, db, auth, rateLimit }) {
       const settings = getSettings(userId);
       const flag = TYPE_FLAGS[type];
       if (!settings.push_enabled || (flag && !settings[flag])) return [];
-      if ((type === 'messages' || type === 'reactions') && !isChatNotificationEnabled(userId, chatId)) return [];
+      if ((type === 'messages' || type === 'reactions' || type === 'pins') && !isChatNotificationEnabled(userId, chatId)) return [];
     }
     return activeSubscriptionsStmt.all(userId);
   }
 
-  function shouldUseSilentPush(userId) {
-    const row = soundSettingsStmt.get(userId);
-    return row ? !row.sounds_enabled : false;
+  function shouldUseSilentPush(userId, type = '') {
+    const settings = normalizeSoundSettings(soundSettingsStmt.get(userId));
+    const flag = SOUND_TYPE_FLAGS[type];
+    if (!settings.sounds_enabled) return true;
+    return flag ? settings[flag] === false : false;
   }
 
   async function sendToSubscription(row, payload) {
@@ -245,7 +269,7 @@ function createPushFeature({ app, db, auth, rateLimit }) {
     if (subscriptions.length === 0) return { sent: 0, failed: 0, skipped: true };
     const userPayload = {
       ...payload,
-      silent: payload.silent ?? shouldUseSilentPush(userId),
+      silent: payload.silent ?? shouldUseSilentPush(userId, type),
     };
     const results = await Promise.all(subscriptions.map(row => sendToSubscription(row, userPayload)));
     return {
@@ -272,6 +296,15 @@ function createPushFeature({ app, db, auth, rateLimit }) {
     if (message?.file_type === 'audio') return 'Аудио';
     if (message?.file_type === 'document' || message?.file_id) return 'Файл';
     return 'Новое сообщение';
+  }
+
+  function pinPreview(message) {
+    const text = String(message?.text || message?.transcription_text || '').trim();
+    if (text) return truncate(text, 160);
+    if (message?.is_voice_note || message?.voice_message_id) return '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435';
+    if (message?.file_name) return truncate(message.file_name, 160);
+    if (message?.file_type || message?.file_id) return '\u0412\u043b\u043e\u0436\u0435\u043d\u0438\u0435';
+    return '\u0417\u0430\u043a\u0440\u0435\u043f\u043b\u0435\u043d\u043d\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435';
   }
 
   function notifyMessageCreated(message) {
@@ -342,6 +375,41 @@ function createPushFeature({ app, db, auth, rateLimit }) {
     }, { chatId: message.chat_id });
   }
 
+  function notifyPinCreated({ chatId, messageId, actor } = {}) {
+    const actorId = Number(actor?.id || 0);
+    const resolvedMessageId = Number(messageId || 0);
+    if (!actorId || !resolvedMessageId) return;
+    const message = pinMessageStmt.get(resolvedMessageId);
+    if (!message) return;
+    const resolvedChatId = Number(chatId || message.chat_id || 0);
+    if (!resolvedChatId || Number(message.chat_id) !== resolvedChatId) return;
+    const chat = chatStmt.get(message.chat_id);
+    if (!chat) return;
+    const members = chatMembersExceptStmt.all(message.chat_id, actorId);
+    if (members.length === 0) return;
+
+    const actorName = actor.display_name || actor.username || 'User';
+    const preview = pinPreview(message);
+    const isPrivate = chat.type === 'private';
+    const title = isPrivate ? actorName : (chat.name || 'BananZa');
+    const body = isPrivate
+      ? `\u0417\u0430\u043a\u0440\u0435\u043f\u0438\u043b(\u0430) \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435: ${preview}`
+      : `${actorName} \u0437\u0430\u043a\u0440\u0435\u043f\u0438\u043b(\u0430) \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435: ${preview}`;
+
+    for (const { user_id: userId } of members) {
+      queueUserNotification(userId, 'pins', {
+        type: 'pin',
+        chatId: message.chat_id,
+        messageId: resolvedMessageId,
+        title,
+        body,
+        url: currentChatUrl(message.chat_id),
+        tag: `pin:${resolvedMessageId}:${actorId}`,
+        urgency: 'high',
+      }, { chatId: message.chat_id });
+    }
+  }
+
   app.get('/api/notification-settings', auth, (req, res) => {
     const activeCount = activeSubscriptionsStmt.all(req.user.id).length;
     res.json({
@@ -408,6 +476,7 @@ function createPushFeature({ app, db, auth, rateLimit }) {
     notifyMessageCreated,
     notifyChatInvite,
     notifyReaction,
+    notifyPinCreated,
     sendUserNotification,
   };
 }

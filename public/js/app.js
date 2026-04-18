@@ -136,6 +136,7 @@
     notify_messages: true,
     notify_chat_invites: true,
     notify_reactions: true,
+    notify_pins: true,
     notify_mentions: true,
   };
   let notificationSettingsLoaded = false;
@@ -147,6 +148,7 @@
     play_incoming: true,
     play_notifications: true,
     play_reactions: true,
+    play_pins: true,
     play_invites: true,
     play_voice: true,
     play_mentions: true,
@@ -1415,6 +1417,7 @@
     const messagesInput = $('#settingsNotifyMessages');
     const invitesInput = $('#settingsNotifyChatInvites');
     const reactionsInput = $('#settingsNotifyReactions');
+    const pinsInput = $('#settingsNotifyPins');
     const mentionsInput = $('#settingsNotifyMentions');
     const enableBtn = $('#settingsPushEnable');
     const disableBtn = $('#settingsPushDisable');
@@ -1432,6 +1435,7 @@
     messagesInput.checked = !!notificationSettings.notify_messages;
     invitesInput.checked = !!notificationSettings.notify_chat_invites;
     reactionsInput.checked = !!notificationSettings.notify_reactions;
+    if (pinsInput) pinsInput.checked = notificationSettings.notify_pins !== false;
     if (mentionsInput) mentionsInput.checked = notificationSettings.notify_mentions !== false;
 
     if (enableBtn) enableBtn.disabled = !supported || Notification.permission === 'denied';
@@ -1488,6 +1492,7 @@
       notify_messages: $('#settingsNotifyMessages')?.checked ?? notificationSettings.notify_messages,
       notify_chat_invites: $('#settingsNotifyChatInvites')?.checked ?? notificationSettings.notify_chat_invites,
       notify_reactions: $('#settingsNotifyReactions')?.checked ?? notificationSettings.notify_reactions,
+      notify_pins: $('#settingsNotifyPins')?.checked ?? notificationSettings.notify_pins,
       notify_mentions: $('#settingsNotifyMentions')?.checked ?? notificationSettings.notify_mentions,
     };
     if (Object.prototype.hasOwnProperty.call(patch, 'push_enabled')) {
@@ -1606,6 +1611,7 @@
       settingsSoundIncoming: soundSettings.play_incoming,
       settingsSoundNotifications: soundSettings.play_notifications,
       settingsSoundReactions: soundSettings.play_reactions,
+      settingsSoundPins: soundSettings.play_pins,
       settingsSoundInvites: soundSettings.play_invites,
       settingsSoundVoice: soundSettings.play_voice,
       settingsSoundMentions: soundSettings.play_mentions,
@@ -1628,6 +1634,7 @@
       play_incoming: $('#settingsSoundIncoming')?.checked ?? soundSettings.play_incoming,
       play_notifications: $('#settingsSoundNotifications')?.checked ?? soundSettings.play_notifications,
       play_reactions: $('#settingsSoundReactions')?.checked ?? soundSettings.play_reactions,
+      play_pins: $('#settingsSoundPins')?.checked ?? soundSettings.play_pins,
       play_invites: $('#settingsSoundInvites')?.checked ?? soundSettings.play_invites,
       play_voice: $('#settingsSoundVoice')?.checked ?? soundSettings.play_voice,
       play_mentions: $('#settingsSoundMentions')?.checked ?? soundSettings.play_mentions,
@@ -1680,7 +1687,7 @@
   }
 
   function previewAllSounds() {
-    const sequence = ['send', 'incoming', 'notification', 'mention', 'reaction', 'invite', 'voice_start', 'voice_stop'];
+    const sequence = ['send', 'incoming', 'notification', 'pin', 'mention', 'reaction', 'invite', 'voice_start', 'voice_stop'];
     sequence.forEach((type, index) => {
       if (index === 0) {
         previewSound(type);
@@ -1788,6 +1795,14 @@
   function isChatIncomingSoundEnabled(chatId) {
     const chat = getChatById(chatId);
     return Boolean(soundSettings.sounds_enabled && (!chat || localChatPreferenceEnabled(chat.sounds_enabled)));
+  }
+
+  function isPinNotificationEnabled(chatId) {
+    return Boolean(notificationSettings.notify_pins !== false && isChatNotificationEnabled(chatId));
+  }
+
+  function isPinSoundEnabled(chatId) {
+    return Boolean(soundSettings.play_pins !== false && isChatIncomingSoundEnabled(chatId));
   }
 
   function isMentionSoundEnabled() {
@@ -1934,6 +1949,30 @@
       });
   }
 
+  function getPinPreviewText(pin) {
+    return String(pin?.preview_text || pin?.file_name || (pin?.is_voice_note ? 'Voice message' : 'Pinned message')).trim() || 'Pinned message';
+  }
+
+  function getPinActorName(pin) {
+    return String(pin?.pinned_by_name || 'Someone').trim() || 'Someone';
+  }
+
+  function getPinToastText(pin) {
+    return `${getPinActorName(pin)} pinned: ${getPinPreviewText(pin)}`;
+  }
+
+  function buildPinBrowserNotification(pin, chatId) {
+    const chat = getChatById(chatId);
+    const actorName = getPinActorName(pin);
+    const preview = getPinPreviewText(pin);
+    return {
+      title: chat?.type === 'private' ? actorName : (chat?.name || 'BananZa'),
+      body: chat?.type === 'private'
+        ? `Pinned message: ${preview}`
+        : `${actorName} pinned: ${preview}`,
+    };
+  }
+
   function getChatPins(chatId = currentChatId) {
     return chatPinsByChat.get(Number(chatId || 0)) || [];
   }
@@ -2012,6 +2051,40 @@
       renderPinnedBar(chatId);
       refreshVisiblePinButtons(chatId);
       renderChatPinSettingsForm(getChatById(chatId));
+    }
+  }
+
+  function handlePinnedMessageUpdate(data = {}) {
+    const chatId = Number(data.chatId || data.chat_id || 0);
+    if (!chatId) return;
+    if (Number(data.actorId || 0) === Number(currentUser?.id || 0)) return;
+    const messageId = Number(data.messageId || data.message_id || 0);
+    if (!messageId) return;
+    const pin = getPinForMessage(messageId, chatId);
+    if (!pin) return;
+
+    if (!document.hidden) {
+      if (isPinNotificationEnabled(chatId)) {
+        showCenterToast(getPinToastText(pin));
+      }
+      if (isPinSoundEnabled(chatId)) {
+        playAppSound('pin');
+      }
+      return;
+    }
+
+    if (
+      'Notification' in window &&
+      Notification.permission === 'granted' &&
+      notificationSettings.push_enabled &&
+      isPinNotificationEnabled(chatId) &&
+      !pushDeviceSubscribed
+    ) {
+      const content = buildPinBrowserNotification(pin, chatId);
+      new Notification(content.title, {
+        body: content.body.substring(0, 100),
+        icon: '/favicon.ico',
+      });
     }
   }
 
@@ -4278,6 +4351,9 @@
       }
       case 'pins_updated': {
         applyPinsUpdate(msg);
+        if (msg.action === 'pinned') {
+          handlePinnedMessageUpdate(msg);
+        }
         break;
       }
       case 'chat_updated': {
@@ -10036,7 +10112,7 @@
         }
       }
     });
-    ['settingsNotifyMessages', 'settingsNotifyChatInvites', 'settingsNotifyReactions', 'settingsNotifyMentions'].forEach((id) => {
+    ['settingsNotifyMessages', 'settingsNotifyChatInvites', 'settingsNotifyReactions', 'settingsNotifyPins', 'settingsNotifyMentions'].forEach((id) => {
       document.getElementById(id)?.addEventListener('change', () => saveNotificationSettings());
     });
 
@@ -10047,6 +10123,7 @@
       'settingsSoundIncoming',
       'settingsSoundNotifications',
       'settingsSoundReactions',
+      'settingsSoundPins',
       'settingsSoundInvites',
       'settingsSoundVoice',
       'settingsSoundMentions',

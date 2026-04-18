@@ -110,6 +110,7 @@ db.exec(`
     notify_messages INTEGER DEFAULT 1,
     notify_chat_invites INTEGER DEFAULT 1,
     notify_reactions INTEGER DEFAULT 1,
+    notify_pins INTEGER DEFAULT 1,
     notify_mentions INTEGER DEFAULT 1,
     updated_at TEXT DEFAULT (datetime('now'))
   );
@@ -122,6 +123,7 @@ db.exec(`
     play_incoming INTEGER DEFAULT 1,
     play_notifications INTEGER DEFAULT 1,
     play_reactions INTEGER DEFAULT 1,
+    play_pins INTEGER DEFAULT 1,
     play_invites INTEGER DEFAULT 1,
     play_voice INTEGER DEFAULT 1,
     play_mentions INTEGER DEFAULT 1,
@@ -338,9 +340,19 @@ try {
   db.exec("ALTER TABLE user_notification_settings ADD COLUMN notify_mentions INTEGER DEFAULT 1");
 }
 try {
+  db.prepare("SELECT notify_pins FROM user_notification_settings LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE user_notification_settings ADD COLUMN notify_pins INTEGER DEFAULT 1");
+}
+try {
   db.prepare("SELECT play_mentions FROM user_sound_settings LIMIT 1").get();
 } catch {
   db.exec("ALTER TABLE user_sound_settings ADD COLUMN play_mentions INTEGER DEFAULT 1");
+}
+try {
+  db.prepare("SELECT play_pins FROM user_sound_settings LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE user_sound_settings ADD COLUMN play_pins INTEGER DEFAULT 1");
 }
 db.exec(`
   CREATE TABLE IF NOT EXISTS message_mentions (

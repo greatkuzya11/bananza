@@ -5,6 +5,7 @@ const DEFAULT_SOUND_SETTINGS = {
   play_incoming: true,
   play_notifications: true,
   play_reactions: true,
+  play_pins: true,
   play_invites: true,
   play_voice: true,
   play_mentions: true,
@@ -32,6 +33,7 @@ function normalizeSoundSettings(row) {
     play_incoming: !!row.play_incoming,
     play_notifications: !!row.play_notifications,
     play_reactions: !!row.play_reactions,
+    play_pins: row.play_pins == null ? true : !!row.play_pins,
     play_invites: !!row.play_invites,
     play_voice: !!row.play_voice,
     play_mentions: row.play_mentions == null ? true : !!row.play_mentions,
@@ -43,8 +45,8 @@ function createSoundSettingsFeature({ app, db, auth }) {
   const upsertStmt = db.prepare(`
     INSERT INTO user_sound_settings (
       user_id, sounds_enabled, volume, play_send, play_incoming, play_notifications,
-      play_reactions, play_invites, play_voice, play_mentions, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      play_reactions, play_pins, play_invites, play_voice, play_mentions, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     ON CONFLICT(user_id) DO UPDATE SET
       sounds_enabled=excluded.sounds_enabled,
       volume=excluded.volume,
@@ -52,6 +54,7 @@ function createSoundSettingsFeature({ app, db, auth }) {
       play_incoming=excluded.play_incoming,
       play_notifications=excluded.play_notifications,
       play_reactions=excluded.play_reactions,
+      play_pins=excluded.play_pins,
       play_invites=excluded.play_invites,
       play_voice=excluded.play_voice,
       play_mentions=excluded.play_mentions,
@@ -71,6 +74,7 @@ function createSoundSettingsFeature({ app, db, auth }) {
       play_incoming: boolValue(input.play_incoming, current.play_incoming),
       play_notifications: boolValue(input.play_notifications, current.play_notifications),
       play_reactions: boolValue(input.play_reactions, current.play_reactions),
+      play_pins: boolValue(input.play_pins, current.play_pins),
       play_invites: boolValue(input.play_invites, current.play_invites),
       play_voice: boolValue(input.play_voice, current.play_voice),
       play_mentions: boolValue(input.play_mentions, current.play_mentions),
@@ -83,6 +87,7 @@ function createSoundSettingsFeature({ app, db, auth }) {
       next.play_incoming ? 1 : 0,
       next.play_notifications ? 1 : 0,
       next.play_reactions ? 1 : 0,
+      next.play_pins ? 1 : 0,
       next.play_invites ? 1 : 0,
       next.play_voice ? 1 : 0,
       next.play_mentions ? 1 : 0

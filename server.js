@@ -1355,6 +1355,9 @@ app.post('/api/messages/:id/pin', auth, msgLimiter, (req, res) => {
   const payload = inserted.changes > 0
     ? broadcastPinsUpdated(msg.chat_id, { action: 'pinned', actorId: req.user.id, messageId: mid })
     : getChatPinPayload(msg.chat_id);
+  if (inserted.changes > 0) {
+    pushFeature.notifyPinCreated({ chatId: msg.chat_id, messageId: mid, actor: req.user });
+  }
   res.json({ ok: true, ...payload });
 });
 
