@@ -526,6 +526,8 @@
               <label>Response model<select id="aiBotResponseModel" class="modal-input"></select></label>
               <label>Summary model<select id="aiBotSummaryModel" class="modal-input"></select></label>
               <label>Embedding model<input id="aiBotEmbeddingModel" class="modal-input" readonly></label>
+              <label>Temperature<input id="aiBotTemperature" class="modal-input" type="number" min="0" max="2" step="0.05" value="0.55"></label>
+              <label>Max tokens<input id="aiBotMaxTokens" class="modal-input" type="number" min="16" max="8000" step="50" value="1000"></label>
               <label class="ai-bot-toggle-label">Enabled
                 <label class="toggle-switch">
                   <input type="checkbox" id="aiBotEnabled" checked>

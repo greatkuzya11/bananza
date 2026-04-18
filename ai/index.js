@@ -5,7 +5,7 @@ const path = require('path');
 
 const { AsyncJobQueue } = require('../voice/queue');
 const { getAiSettings, getOpenAIKey, getYandexKey, saveAiSettings, deleteOpenAIKey, deleteYandexKey, sanitizeSettings } = require('./settings');
-const { createEmbedding, listModelIds, generateText, generateJson } = require('./openai');
+const { OPENAI_MIN_OUTPUT_TOKENS, createEmbedding, listModelIds, generateText, generateJson } = require('./openai');
 const yandexAi = require('./yandex');
 
 const BOT_COLORS = ['#65aadd', '#7bc862', '#a695e7', '#ee7aae', '#6ec9cb', '#faa774'];
@@ -56,12 +56,14 @@ function boolValue(value, fallback = false) {
 }
 
 function intValue(value, fallback, min, max) {
+  if (value == null || value === '') return fallback;
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, Math.round(parsed)));
 }
 
 function floatValue(value, fallback, min, max) {
+  if (value == null || value === '') return fallback;
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, parsed));
@@ -114,6 +116,49 @@ function safeFilenamePart(value, fallback = 'bot') {
     .replace(/^-+|-+$/g, '')
     .slice(0, 48);
   return text || fallback;
+}
+
+function errorText(error, fallback = 'Unexpected error') {
+  if (error == null) return fallback;
+  if (typeof error === 'string') return error.trim() || fallback;
+  if (error instanceof Error) return errorText(error.message, fallback);
+  if (Array.isArray(error)) {
+    const text = error.map((item) => errorText(item, '')).filter(Boolean).join('; ');
+    return text || fallback;
+  }
+  if (typeof error === 'object') {
+    const nested = errorText(
+      error.message
+      || error.error?.message
+      || error.error
+      || error.details?.[0]?.message
+      || error.type
+      || error.error?.type
+      || error.code
+      || error.description
+      || error.reason,
+      ''
+    );
+    if (nested) return nested;
+    try {
+      const text = JSON.stringify(error);
+      return text === '{}' ? fallback : text;
+    } catch {
+      return fallback;
+    }
+  }
+  return String(error).trim() || fallback;
+}
+
+function explainYandexModelListError(error) {
+  const text = errorText(error, 'Could not load Yandex model list');
+  if (/permission_error/i.test(text)) {
+    return 'The API key works, but the service account does not have permission to list Yandex AI Studio models. Grant ai.models.viewer or ai.models.user on the folder/cloud, or use ai.viewer / ai.editor / ai.admin. The static model list will stay available.';
+  }
+  if (/authentication_error/i.test(text)) {
+    return 'Could not authenticate when loading the Yandex model list. Check the API key and the folder where the service account was created.';
+  }
+  return text;
 }
 
 function isEmbeddingModel(id) {
@@ -348,6 +393,14 @@ function createAiBotFeature({
   const botAvatarLimiter = upLimiter || passThroughLimiter;
   let modelCatalogCache = null;
   let modelCatalogFetchedAt = 0;
+
+  db.prepare(`
+    UPDATE ai_bots
+    SET max_tokens=?
+    WHERE COALESCE(provider,'openai')='openai'
+      AND max_tokens IS NOT NULL
+      AND max_tokens<?
+  `).run(OPENAI_MIN_OUTPUT_TOKENS, OPENAI_MIN_OUTPUT_TOKENS);
 
   const memoryQueue = new AsyncJobQueue({
     getConcurrency: () => 1,
@@ -615,7 +668,9 @@ function createAiBotFeature({
       summary_model: row.summary_model || (provider === 'yandex' ? settings.yandex_default_summary_model : settings.default_summary_model),
       embedding_model: provider === 'yandex' ? settings.yandex_default_embedding_doc_model : settings.default_embedding_model,
       temperature: row.temperature == null ? (provider === 'yandex' ? settings.yandex_temperature : null) : Number(row.temperature),
-      max_tokens: row.max_tokens == null ? (provider === 'yandex' ? settings.yandex_max_tokens : null) : Number(row.max_tokens),
+      max_tokens: row.max_tokens == null
+        ? (provider === 'yandex' ? settings.yandex_max_tokens : null)
+        : intValue(row.max_tokens, provider === 'yandex' ? settings.yandex_max_tokens : OPENAI_MIN_OUTPUT_TOKENS, provider === 'yandex' ? 1 : OPENAI_MIN_OUTPUT_TOKENS, 8000),
       avatar_color: row.avatar_color || BOT_COLORS[0],
       avatar_url: row.avatar_url || null,
       created_at: row.created_at,
@@ -764,7 +819,12 @@ function createAiBotFeature({
         : floatValue(input.temperature ?? current.temperature, provider === 'yandex' ? settings.yandex_temperature : 0.55, 0, 1),
       max_tokens: input.max_tokens == null && current.max_tokens == null
         ? (provider === 'yandex' ? settings.yandex_max_tokens : null)
-        : intValue(input.max_tokens ?? current.max_tokens, provider === 'yandex' ? settings.yandex_max_tokens : 1000, 1, 8000),
+        : intValue(
+            input.max_tokens ?? current.max_tokens,
+            provider === 'yandex' ? settings.yandex_max_tokens : 1000,
+            provider === 'yandex' ? 1 : OPENAI_MIN_OUTPUT_TOKENS,
+            8000
+          ),
     };
   }
 
@@ -1442,7 +1502,7 @@ function createAiBotFeature({
             model: bot.response_model || settings.default_response_model,
             system: context.system,
             user: context.user,
-            maxOutputTokens: intValue(bot.max_tokens, 1000, 1, 8000),
+            maxOutputTokens: intValue(bot.max_tokens, 1000, OPENAI_MIN_OUTPUT_TOKENS, 8000),
             temperature: floatValue(bot.temperature, 0.55, 0, 1),
           });
       const responseText = cleanText(stripBotSpeakerLabel(rawText, bot), 5000);
@@ -1806,7 +1866,7 @@ function createAiBotFeature({
       } catch (modelError) {
         models = buildYandexModelCatalog({
           source: 'static',
-          error: modelError.message || 'Could not load Yandex model list',
+          error: explainYandexModelListError(modelError),
         });
       }
       res.json({
@@ -1815,7 +1875,7 @@ function createAiBotFeature({
         state: { models },
       });
     } catch (error) {
-      res.status(400).json({ ok: false, error: error.message || 'Yandex connection test failed' });
+      res.status(400).json({ ok: false, error: errorText(error, 'Yandex connection test failed') });
     }
   });
 
@@ -1830,7 +1890,7 @@ function createAiBotFeature({
       const models = await getLiveYandexModelCatalog({ apiKey, folderId });
       res.json({ ok: true, state: { models } });
     } catch (error) {
-      res.status(400).json({ ok: false, error: error.message || 'Could not load Yandex models' });
+      res.status(400).json({ ok: false, error: explainYandexModelListError(error) });
     }
   });
 

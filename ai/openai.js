@@ -1,9 +1,19 @@
 const OpenAI = require('openai');
 
+const OPENAI_MIN_OUTPUT_TOKENS = 16;
+
 function createClient(apiKey) {
   const key = String(apiKey || '').trim();
   if (!key) throw new Error('OpenAI API key is not configured for AI bots');
   return new OpenAI({ apiKey: key });
+}
+
+function normalizeMaxOutputTokens(value, fallback = 900) {
+  if (value == null || value === '') return Math.max(OPENAI_MIN_OUTPUT_TOKENS, Math.round(Number(fallback) || 900));
+  const parsed = Number(value);
+  const safeFallback = Math.max(OPENAI_MIN_OUTPUT_TOKENS, Math.round(Number(fallback) || 900));
+  if (!Number.isFinite(parsed)) return safeFallback;
+  return Math.max(OPENAI_MIN_OUTPUT_TOKENS, Math.round(parsed));
 }
 
 function extractResponseText(response) {
@@ -62,7 +72,7 @@ async function generateText({ apiKey, model, system, user, maxOutputTokens = 900
       { role: 'user', content: user },
     ],
     temperature,
-    max_output_tokens: maxOutputTokens,
+    max_output_tokens: normalizeMaxOutputTokens(maxOutputTokens),
   });
   return extractResponseText(response);
 }
@@ -80,6 +90,7 @@ async function generateJson({ apiKey, model, system, user, fallback = {}, maxOut
 }
 
 module.exports = {
+  OPENAI_MIN_OUTPUT_TOKENS,
   createEmbedding,
   listModelIds,
   generateText,

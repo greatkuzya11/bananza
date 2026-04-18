@@ -48,12 +48,14 @@ function resolveModelUri(model, folderId, scheme = 'gpt') {
 }
 
 function intValue(value, fallback, min, max) {
+  if (value == null || value === '') return fallback;
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, Math.round(parsed)));
 }
 
 function floatValue(value, fallback, min, max) {
+  if (value == null || value === '') return fallback;
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, parsed));
@@ -64,9 +66,46 @@ function normalizeReasoningMode(value) {
   return mode === 'ENABLED_HIDDEN' ? 'ENABLED_HIDDEN' : 'DISABLED';
 }
 
+function stringifyErrorValue(value, fallback = '') {
+  if (value == null) return fallback;
+  if (typeof value === 'string') return value.trim() || fallback;
+  if (value instanceof Error) {
+    const nested = stringifyErrorValue(value.message, '');
+    return nested || fallback;
+  }
+  if (Array.isArray(value)) {
+    const text = value
+      .map((item) => stringifyErrorValue(item, ''))
+      .filter(Boolean)
+      .join('; ');
+    return text || fallback;
+  }
+  if (typeof value === 'object') {
+    const nested = stringifyErrorValue(
+      value.message
+      || value.error?.message
+      || value.error
+      || value.details?.[0]?.message
+      || value.type
+      || value.error?.type
+      || value.code
+      || value.description
+      || value.reason,
+      ''
+    );
+    if (nested) return nested;
+    try {
+      const text = JSON.stringify(value);
+      return text === '{}' ? fallback : text;
+    } catch {
+      return fallback;
+    }
+  }
+  return String(value).trim() || fallback;
+}
+
 function yandexErrorMessage(payload, fallback) {
-  if (!payload || typeof payload !== 'object') return fallback;
-  return payload.message || payload.error?.message || payload.error || payload.details?.[0]?.message || fallback;
+  return stringifyErrorValue(payload, fallback);
 }
 
 async function postJson(url, body, { apiKey, dataLoggingEnabled, timeoutMs = 60000 }) {

@@ -2454,6 +2454,8 @@
     $('#aiBotResponseModel').value = bot?.response_model || settings.default_response_model || 'gpt-4o-mini';
     $('#aiBotSummaryModel').value = bot?.summary_model || settings.default_summary_model || 'gpt-4o-mini';
     $('#aiBotEmbeddingModel').value = settings.default_embedding_model || 'text-embedding-3-small';
+    $('#aiBotTemperature').value = bot?.temperature ?? 0.55;
+    $('#aiBotMaxTokens').value = bot?.max_tokens ?? 1000;
     $('#aiBotStyle').value = bot?.style || 'Полезный AI-помощник для чата';
     $('#aiBotTone').value = bot?.tone || 'тёплый, внимательный, краткий';
     $('#aiBotRules').value = bot?.behavior_rules || '';
@@ -2471,6 +2473,8 @@
       enabled: $('#aiBotEnabled')?.checked,
       response_model: $('#aiBotResponseModel')?.value.trim(),
       summary_model: $('#aiBotSummaryModel')?.value.trim(),
+      temperature: Number($('#aiBotTemperature')?.value || 0.55),
+      max_tokens: Number($('#aiBotMaxTokens')?.value || 1000),
       style: $('#aiBotStyle')?.value.trim(),
       tone: $('#aiBotTone')?.value.trim(),
       behavior_rules: $('#aiBotRules')?.value.trim(),
@@ -2812,6 +2816,38 @@
     el.classList.toggle('is-success', type === 'success');
   }
 
+  function formatUiErrorMessage(value, fallback = 'Unexpected error') {
+    if (value == null) return fallback;
+    if (typeof value === 'string') return value.trim() || fallback;
+    if (value instanceof Error) return formatUiErrorMessage(value.message, fallback);
+    if (Array.isArray(value)) {
+      const text = value.map((item) => formatUiErrorMessage(item, '')).filter(Boolean).join('; ');
+      return text || fallback;
+    }
+    if (typeof value === 'object') {
+      const nested = formatUiErrorMessage(
+        value.message
+        || value.error?.message
+        || value.error
+        || value.details?.[0]?.message
+        || value.type
+        || value.error?.type
+        || value.code
+        || value.description
+        || value.reason,
+        ''
+      );
+      if (nested) return nested;
+      try {
+        const text = JSON.stringify(value);
+        return text === '{}' ? fallback : text;
+      } catch {
+        return fallback;
+      }
+    }
+    return String(value).trim() || fallback;
+  }
+
   function currentYandexBot() {
     return yandexBotState.bots.find(bot => Number(bot.id) === Number(selectedYandexBotId)) || null;
   }
@@ -2972,7 +3008,7 @@
     renderYandexChatBotSettings();
     const models = yandexBotState.models || {};
     if (models.error) {
-      setYandexAiModelStatus(`Model list fallback is used: ${models.error}`, 'error');
+      setYandexAiModelStatus(`Model list fallback is used: ${formatUiErrorMessage(models.error, 'Could not load Yandex models')}`, 'error');
     } else if (models.source === 'live') {
       setYandexAiModelStatus(`Loaded ${models.response?.length || 0} Yandex models for selectors.`, 'success');
     } else {
@@ -3057,9 +3093,14 @@
       const models = yandexBotState.models || {};
       const modelNote = models.source === 'live' ? ` Моделей в селекторе: ${models.response?.length || 0}.` : '';
       setYandexAiStatus(`Ключ проверен и сохранен (${latency} ms). ${text}${modelNote}`, 'success');
-      setYandexAiModelStatus(models.error ? `Key OK. Model list fallback is used: ${models.error}` : `OK: ${data.result?.model || 'Yandex model'}`, models.error ? 'error' : 'success');
+      setYandexAiModelStatus(
+        models.error
+          ? `Key OK. Model list fallback is used: ${formatUiErrorMessage(models.error, 'Could not load Yandex models')}`
+          : `OK: ${data.result?.model || 'Yandex model'}`,
+        models.error ? 'error' : 'success'
+      );
     } catch (e) {
-      setYandexAiStatus(e.message || 'Could not check Yandex key', 'error');
+      setYandexAiStatus(formatUiErrorMessage(e, 'Could not check Yandex key'), 'error');
     }
   }
 
@@ -3089,7 +3130,7 @@
       renderYandexAiSettings();
       setYandexAiStatus(`Модели обновлены: ${yandexBotState.models?.response?.length || 0} в селекторе.`, 'success');
     } catch (e) {
-      setYandexAiStatus(e.message || 'Could not load Yandex models', 'error');
+      setYandexAiStatus(formatUiErrorMessage(e, 'Could not load Yandex models'), 'error');
     }
   }
 
