@@ -64,12 +64,13 @@
     10: 0.5,
   });
   const MODAL_TRANSITION_BUFFER_MS = 80;
-  const CHAT_LIST_CACHE_VERSION = 1;
+  const CHAT_LIST_CACHE_VERSION = 2;
   const CHAT_LIST_CACHE_SYNC_DEBOUNCE_MS = 250;
   const CHAT_LIST_REQUEST_TIMEOUT_MS = 9000;
   const RECOVERY_SYNC_MIN_INTERVAL_MS = 1200;
   const RECOVERY_CATCHUP_MAX_PAGES = 5;
   const RESUME_WS_REFRESH_AFTER_MS = 25000;
+  const NOTES_CHAT_EMOJI = '📝';
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STATE
@@ -167,6 +168,7 @@
   let selectedAiBotId = null;
   let forwardMessageState = null;
   let forwardMessageBusy = false;
+  let savingToNotesMessageIds = new Set();
   let centerToastTimer = null;
   let mentionTargetsByChat = new Map();
   let mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [] };
@@ -873,6 +875,15 @@
     }
     chatTitle.textContent = chat.name || 'Chat';
     chatHeaderAvatar.style.display = '';
+    if (isNotesChat(chat)) {
+      setAvatarElementVisual(chatHeaderAvatar, {
+        name: chat.name,
+        color: '#5eb5f7',
+        avatarUrl: '',
+        fallbackText: chat.avatar_emoji || NOTES_CHAT_EMOJI,
+      });
+      return;
+    }
     if (chat.type === 'private' && chat.private_user) {
       setAvatarElementVisual(chatHeaderAvatar, {
         name: chat.name,
@@ -896,7 +907,7 @@
 
     const editSection = $('#chatEditSection');
     if (editSection) {
-      if (chat.type === 'group' || chat.type === 'general') {
+      if (!isNotesChat(chat) && (chat.type === 'group' || chat.type === 'general')) {
         editSection.classList.remove('hidden');
         setAvatarElementVisual($('#chatAvatar'), {
           name: chat.name,
@@ -1665,6 +1676,15 @@
   function getChatById(chatId) {
     const id = Number(chatId);
     return chats.find(c => c.id === id) || null;
+  }
+
+  function isNotesChat(chatOrId) {
+    const chat = typeof chatOrId === 'object' && chatOrId !== null ? chatOrId : getChatById(chatOrId);
+    return Boolean(chat && (chat.type === 'notes' || Number(chat.is_notes) === 1));
+  }
+
+  function isCurrentNotesChat() {
+    return isNotesChat(currentChatId);
   }
 
   function isChatNotificationEnabled(chatId) {
@@ -2692,6 +2712,9 @@
   }
 
   function chatItemAvatarHtml(chat) {
+    if (isNotesChat(chat)) {
+      return `<div class="chat-item-avatar notes-chat-avatar" style="background:#5eb5f7">${esc(chat.avatar_emoji || NOTES_CHAT_EMOJI)}`;
+    }
     if (chat.type === 'private' && chat.private_user) {
       const u = chat.private_user;
       if (u.avatar_url) {
@@ -3112,9 +3135,10 @@
   function renderForwardChatList(filter = '') {
     if (!forwardChatList) return;
     const query = String(filter || '').trim().toLowerCase();
+    const forwardableChats = chats.filter(chat => !isNotesChat(chat));
     const filtered = query
-      ? chats.filter(chat => getChatSearchHaystack(chat).includes(query))
-      : chats;
+      ? forwardableChats.filter(chat => getChatSearchHaystack(chat).includes(query))
+      : forwardableChats;
 
     if (filtered.length === 0) {
       forwardChatList.innerHTML = '<div class="forward-empty-state">Подходящих чатов не найдено</div>';
@@ -3168,6 +3192,52 @@
       setForwardMessageStatus(e.message || 'Не удалось переслать сообщение', 'error');
     } finally {
       forwardMessageBusy = false;
+    }
+  }
+
+  async function saveMessageToNotes(message, button = null) {
+    const messageId = Number(message?.id || 0);
+    if (!messageId || savingToNotesMessageIds.has(messageId)) return;
+    savingToNotesMessageIds.add(messageId);
+    if (button) button.disabled = true;
+    try {
+      const saved = await api(`/api/messages/${messageId}/save-to-notes`, { method: 'POST' });
+      if (saved?.chat_id) updateChatListLastMessage(saved);
+      showCenterToast('Сохранено в заметки');
+      playAppSound('send');
+    } catch (e) {
+      showCenterToast(e.message || 'Не удалось сохранить в заметки');
+    } finally {
+      savingToNotesMessageIds.delete(messageId);
+      if (button) button.disabled = false;
+      hideFloatingMessageActions();
+    }
+  }
+
+  async function jumpToSavedOriginal(message) {
+    const originalId = Number(message?.saved_from_message_id || 0);
+    if (!originalId) {
+      showCenterToast('Оригинальное сообщение удалено');
+      return false;
+    }
+
+    try {
+      const target = await api(`/api/messages/${originalId}/jump-target`);
+      const chatId = Number(target?.chatId || 0);
+      const messageId = Number(target?.messageId || originalId);
+      if (!chatId || !messageId) throw new Error('Original message deleted');
+      if (!chats.find(c => Number(c.id) === chatId)) await loadChats({ silent: true });
+      await openChat(chatId, {
+        anchorMessageId: messageId,
+        suppressHistoryPush: chatId === Number(currentChatId || 0),
+        source: 'saved_original',
+      });
+      if (scrollToMessage(messageId)) return true;
+      showCenterToast('Оригинальное сообщение удалено');
+      return false;
+    } catch (e) {
+      showCenterToast('Оригинальное сообщение удалено');
+      return false;
     }
   }
 
@@ -4746,6 +4816,12 @@
   function updateChatStatus() {
     const chat = chats.find(c => c.id === currentChatId);
     if (!chat) return;
+    if (isNotesChat(chat)) {
+      chatStatus.classList.remove('online', 'offline');
+      chatStatus.textContent = 'Личный чат';
+      chatStatus.style.color = '';
+      return;
+    }
     if (chat.type === 'private' && chat.private_user) {
       const isOnline = onlineUsers.has(chat.private_user.id);
       chatStatus.textContent = isOnline ? 'online' : 'offline';
@@ -5017,6 +5093,14 @@
     if (msg.is_deleted) {
       html += `<span class="msg-deleted">Message deleted</span>`;
     } else {
+      if (msg.saved_from_message_id) {
+        const savedName = (msg.saved_from_display_name || '').trim() || 'Unknown';
+        html += `<button type="button" class="msg-saved-origin" data-origin-id="${Number(msg.saved_from_message_id) || 0}">
+          <span>Сохранено от ${esc(savedName)}</span>
+          <strong>К оригиналу</strong>
+        </button>`;
+      }
+
       if (msg.forwarded_from_display_name) {
         html += `<div class="msg-forwarded">Переслано от ${esc(msg.forwarded_from_display_name)}</div>`;
       }
@@ -5070,6 +5154,7 @@
       html += '<button class="msg-copy-btn" title="Копировать">⧉</button>';
       html += '<button class="msg-reply-btn" title="Reply">↩</button>';
       if (canEditMessage(msg)) html += '<button class="msg-edit-btn" title="Edit">✏️</button>';
+      if (canSaveMessageToNotes(msg)) html += '<button class="msg-save-note-btn" title="Сохранить в заметки">📝</button>';
       if (canForwardMessage(msg)) html += '<button class="msg-forward-btn" title="Forward">📤</button>';
       html += '<button class="msg-react-btn" title="React">🙂</button>';
       html += '</div>';
@@ -5128,6 +5213,14 @@
       });
     }
 
+    const saveNoteBtn = row.querySelector('.msg-save-note-btn');
+    if (saveNoteBtn) {
+      saveNoteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        saveMessageToNotes(row.__messageData, saveNoteBtn);
+      });
+    }
+
     const pinBtn = row.querySelector('.msg-pin-btn');
     if (pinBtn) {
       pinBtn.addEventListener('click', (e) => {
@@ -5154,13 +5247,29 @@
       replyQuote.addEventListener('click', () => scrollToMessage(+replyQuote.dataset.replyId));
     }
 
+    const savedOrigin = row.querySelector('.msg-saved-origin');
+    if (savedOrigin) {
+      savedOrigin.addEventListener('click', (e) => {
+        e.stopPropagation();
+        jumpToSavedOriginal(row.__messageData);
+      });
+    }
+
     const img = row.querySelector('.msg-image');
     if (img) {
       const markWideImage = () => {
         if (!img.naturalWidth || !img.naturalHeight) return;
         row.classList.toggle('wide-media-message', img.naturalWidth >= img.naturalHeight);
       };
-      img.addEventListener('click', () => openImageViewer(img.src));
+      img.addEventListener('click', (e) => {
+        if (Date.now() < (row.__suppressMediaClickUntil || 0)) {
+          e.preventDefault();
+          e.stopPropagation();
+          row.__suppressMediaClickUntil = 0;
+          return;
+        }
+        openImageViewer(img.src);
+      });
       const wasNearBottom = isNearBottom();
       img.addEventListener('load', () => {
         const anchor = !wasNearBottom && !isNearBottom(8) ? captureScrollAnchor() : null;
@@ -6019,6 +6128,7 @@
     el.querySelector('.msg-reply-btn')?.remove();
     el.querySelector('.msg-react-btn')?.remove();
     el.querySelector('.msg-edit-btn')?.remove();
+    el.querySelector('.msg-save-note-btn')?.remove();
     el.querySelector('.msg-forward-btn')?.remove();
     el.querySelector('.msg-actions')?.remove();
     if (editTo?.id === msgId) clearEdit({ clearInput: true });
@@ -6154,6 +6264,12 @@
     return Boolean(msg.is_voice_note || msg.file_id || msg.text);
   }
 
+  function canSaveMessageToNotes(msg) {
+    if (!canForwardMessage(msg)) return false;
+    if (isCurrentNotesChat()) return false;
+    return true;
+  }
+
   function getEditableText(row) {
     const msg = row?.__messageData || {};
     if (msg.is_voice_note || row?.__voiceMessage?.is_voice_note) {
@@ -6274,12 +6390,17 @@
     const maxOffset = 68;
     const lockStartPx = 8;
     const verticalCancelPx = 22;
+    const mediaClickSuppressMs = 700;
     let swipe = null;
 
     const isMobile = () => window.innerWidth <= 768;
     const isInteractiveTarget = (target) => Boolean(target.closest(
-      'button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-image, .msg-video'
+      'button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-file, .link-preview, .msg-group-avatar'
     ));
+    const suppressMediaClickAfterSwipe = (row) => {
+      if (!row?.querySelector?.('.msg-image')) return;
+      row.__suppressMediaClickUntil = Date.now() + mediaClickSuppressMs;
+    };
     const canReplyFromRow = (row) => Boolean(
       row?.__replyPayload && row.dataset.outbox !== '1' && !row.querySelector('.msg-deleted')
     );
@@ -6295,11 +6416,12 @@
     };
     const finishSwipe = (shouldApply) => {
       if (!swipe) return;
-      const { row, content, kind } = swipe;
+      const { row, content, kind, locked, startedOnMedia } = swipe;
       row.classList.remove('swipe-reply-active', 'swipe-reply-ready', 'swipe-edit-active', 'swipe-edit-ready');
       if (content) content.style.transform = '';
       const indicator = row.querySelector('.swipe-message-indicator');
       setTimeout(() => indicator?.remove(), 180);
+      if (locked && startedOnMedia) suppressMediaClickAfterSwipe(row);
       if (shouldApply && kind) {
         navigator.vibrate?.(18);
         if (kind === 'reply') setReplyFromRow(row);
@@ -6321,6 +6443,7 @@
         dx: 0,
         kind: null,
         locked: false,
+        startedOnMedia: Boolean(e.target.closest('.msg-image')),
       };
     }, { passive: true });
 
@@ -8207,7 +8330,7 @@
 
     // Group edit section
     const editSection = $('#chatEditSection');
-    if (chat && (chat.type === 'group' || chat.type === 'general')) {
+    if (chat && !isNotesChat(chat) && (chat.type === 'group' || chat.type === 'general')) {
       editSection.classList.remove('hidden');
       const chatAvatarEl = $('#chatAvatar');
       const removeChatAvatarBtn = $('#removeChatAvatar');

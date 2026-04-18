@@ -1132,7 +1132,7 @@ a:hover { text-decoration: underline; }
   pointer-events: none;
   transform: translateY(6px) scale(.96);
 }
-.msg-copy-btn, .msg-reply-btn, .msg-edit-btn, .msg-forward-btn, .msg-pin-btn, .msg-react-btn {
+.msg-copy-btn, .msg-reply-btn, .msg-edit-btn, .msg-save-note-btn, .msg-forward-btn, .msg-pin-btn, .msg-react-btn {
   width: 28px;
   height: 28px;
   display: inline-flex;
@@ -1154,6 +1154,8 @@ a:hover { text-decoration: underline; }
 .msg-copy-btn:focus-visible,
 .msg-edit-btn:focus,
 .msg-edit-btn:focus-visible,
+.msg-save-note-btn:focus,
+.msg-save-note-btn:focus-visible,
 .msg-forward-btn:focus,
 .msg-forward-btn:focus-visible,
 .msg-pin-btn:focus,
@@ -1165,6 +1167,11 @@ a:hover { text-decoration: underline; }
 }
 .msg-reply-btn:hover { color: var(--accent); }
 .msg-edit-btn:hover { color: var(--accent); }
+.msg-save-note-btn:hover { color: var(--accent); }
+.msg-save-note-btn:disabled {
+  opacity: .5;
+  cursor: default;
+}
 .msg-forward-btn:hover { color: var(--accent); }
 .msg-pin-btn:hover,
 .msg-pin-btn.active { color: var(--accent); }
@@ -1179,6 +1186,41 @@ a:hover { text-decoration: underline; }
   font-size: 12px;
   font-weight: 600;
   line-height: 1.35;
+}
+.msg-saved-origin {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 6px 8px;
+  border: 0;
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: rgba(255,255,255,.08);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+}
+.msg-saved-origin span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg-saved-origin strong {
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+.msg-saved-origin:hover,
+.msg-saved-origin:focus-visible {
+  background: rgba(255,255,255,.12);
 }
 
 .mention-link {

@@ -31,6 +31,7 @@ db.exec(`
     type TEXT NOT NULL CHECK(type IN ('general','group','private')),
     created_by INTEGER REFERENCES users(id),
     avatar_url TEXT DEFAULT NULL,
+    is_notes INTEGER DEFAULT 0,
     allow_unpin_any_pin INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now'))
   );
@@ -53,6 +54,11 @@ db.exec(`
     forwarded_from_message_id INTEGER DEFAULT NULL REFERENCES messages(id),
     forwarded_from_user_id INTEGER DEFAULT NULL REFERENCES users(id),
     forwarded_from_display_name TEXT DEFAULT NULL,
+    saved_from_message_id INTEGER DEFAULT NULL REFERENCES messages(id),
+    saved_from_chat_id INTEGER DEFAULT NULL REFERENCES chats(id),
+    saved_from_user_id INTEGER DEFAULT NULL REFERENCES users(id),
+    saved_from_display_name TEXT DEFAULT NULL,
+    saved_from_created_at TEXT DEFAULT NULL,
     is_deleted INTEGER DEFAULT 0,
     edited_at TEXT DEFAULT NULL,
     edited_by INTEGER DEFAULT NULL REFERENCES users(id),
@@ -209,6 +215,13 @@ try {
 } catch {
   db.exec("ALTER TABLE chats ADD COLUMN allow_unpin_any_pin INTEGER DEFAULT 0");
 }
+try {
+  db.prepare("SELECT is_notes FROM chats LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE chats ADD COLUMN is_notes INTEGER DEFAULT 0");
+}
+db.prepare("UPDATE chats SET is_notes=0 WHERE is_notes IS NULL").run();
+db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_chats_notes_owner ON chats(created_by) WHERE is_notes=1");
 // Migration: chat background columns
 try {
   db.prepare("SELECT background_url FROM chats LIMIT 1").get();
@@ -241,6 +254,32 @@ try {
   db.prepare("SELECT forwarded_from_display_name FROM messages LIMIT 1").get();
 } catch {
   db.exec("ALTER TABLE messages ADD COLUMN forwarded_from_display_name TEXT DEFAULT NULL");
+}
+// Migration: saved-to-notes metadata
+try {
+  db.prepare("SELECT saved_from_message_id FROM messages LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE messages ADD COLUMN saved_from_message_id INTEGER DEFAULT NULL REFERENCES messages(id)");
+}
+try {
+  db.prepare("SELECT saved_from_chat_id FROM messages LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE messages ADD COLUMN saved_from_chat_id INTEGER DEFAULT NULL REFERENCES chats(id)");
+}
+try {
+  db.prepare("SELECT saved_from_user_id FROM messages LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE messages ADD COLUMN saved_from_user_id INTEGER DEFAULT NULL REFERENCES users(id)");
+}
+try {
+  db.prepare("SELECT saved_from_display_name FROM messages LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE messages ADD COLUMN saved_from_display_name TEXT DEFAULT NULL");
+}
+try {
+  db.prepare("SELECT saved_from_created_at FROM messages LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE messages ADD COLUMN saved_from_created_at TEXT DEFAULT NULL");
 }
 // Migration: edited marker on messages
 try {

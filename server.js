@@ -16,6 +16,7 @@ const { extractUrls, fetchPreview } = require('./linkPreview');
 const { createVoiceFeature } = require('./voice');
 const { createWeatherFeature } = require('./weather');
 const { createForwardingFeature } = require('./forwarding');
+const { createMessageCopyService } = require('./messageCopy');
 const { createPushFeature } = require('./push');
 const { createSoundSettingsFeature } = require('./soundSettings');
 const { createAiBotFeature } = require('./ai');
@@ -213,6 +214,16 @@ const voiceFeature = createVoiceFeature({
   onMessageTextAvailable: (message) => aiBotFeature?.handleMessageCreated(message),
 });
 
+const messageCopyService = createMessageCopyService({
+  db,
+  uploadsDir: UPLOADS_DIR,
+  voiceFeature,
+  extractUrls,
+  fetchPreview,
+  broadcastToChatAll,
+  saveMessageMentions: (messageId, chatId, text) => saveMessageMentions(messageId, chatId, text),
+});
+
 createWeatherFeature({
   app,
   db,
@@ -240,6 +251,7 @@ createForwardingFeature({
   notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),
   onMessageCreated: (message) => aiBotFeature?.handleMessageCreated(message),
   saveMessageMentions: (messageId, chatId, text) => saveMessageMentions(messageId, chatId, text),
+  messageCopyService,
 });
 
 aiBotFeature = createAiBotFeature({
@@ -488,6 +500,42 @@ function normalizeClientId(value) {
   return id;
 }
 
+const NOTES_CHAT_NAME = 'Заметки';
+const NOTES_CHAT_EMOJI = '📝';
+
+function isNotesChatRow(chat) {
+  return Number(chat?.is_notes) === 1;
+}
+
+function notesChatPayload(chat) {
+  if (!chat) return null;
+  return {
+    ...chat,
+    name: NOTES_CHAT_NAME,
+    type: 'notes',
+    avatar_url: null,
+    avatar_emoji: NOTES_CHAT_EMOJI,
+    private_user: null,
+  };
+}
+
+function ensureNotesChatForUser(userId) {
+  const ownerId = Number(userId);
+  if (!Number.isInteger(ownerId) || ownerId <= 0) return null;
+
+  let chat = db.prepare('SELECT * FROM chats WHERE is_notes=1 AND created_by=? ORDER BY id ASC LIMIT 1')
+    .get(ownerId);
+  if (!chat) {
+    const inserted = db.prepare('INSERT INTO chats(name,type,created_by,is_notes) VALUES(?,?,?,1)')
+      .run(NOTES_CHAT_NAME, 'private', ownerId);
+    chat = db.prepare('SELECT * FROM chats WHERE id=?').get(inserted.lastInsertRowid);
+  }
+
+  db.prepare('INSERT OR IGNORE INTO chat_members(chat_id,user_id) VALUES(?,?)').run(chat.id, ownerId);
+  db.prepare('DELETE FROM chat_members WHERE chat_id=? AND user_id<>?').run(chat.id, ownerId);
+  return chat;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // AUTH ROUTES
 // ═══════════════════════════════════════════════════════════════════════════
@@ -519,6 +567,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 
     const gen = db.prepare("SELECT id FROM chats WHERE type='general'").get();
     if (gen) db.prepare('INSERT OR IGNORE INTO chat_members(chat_id,user_id) VALUES(?,?)').run(gen.id, userId);
+    ensureNotesChatForUser(userId);
 
     const token = jwt.sign({ id: userId, username: username.toLowerCase() }, JWT_SECRET, { expiresIn: '30d' });
     res.json({ token, user: publicUser({ id: userId, username: username.toLowerCase(), display_name: name, is_admin: isAdmin, is_blocked: 0, avatar_color: color, avatar_url: null, ui_theme: 'bananza', ui_modal_animation: 'soft', ui_modal_animation_speed: UI_MODAL_ANIMATION_SPEED_DEFAULT }) });
@@ -538,6 +587,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     if (!(await bcrypt.compare(password, u.password)))
       return res.status(401).json({ error: 'Invalid credentials' });
 
+    ensureNotesChatForUser(u.id);
     const token = jwt.sign({ id: u.id, username: u.username }, JWT_SECRET, { expiresIn: '30d' });
     try { db.prepare("UPDATE users SET last_activity = datetime('now') WHERE id = ?").run(u.id); } catch (e) {}
     res.json({ token, user: publicUser(u) });
@@ -577,6 +627,7 @@ function chatPreferencesPayload(row) {
 }
 
 app.get('/api/chats', auth, (req, res) => {
+  ensureNotesChatForUser(req.user.id);
   const rows = db.prepare(`
     SELECT c.*,
       cm.notify_enabled,
@@ -599,7 +650,9 @@ app.get('/api/chats', auth, (req, res) => {
 
   for (const chat of rows) {
     Object.assign(chat, chatPreferencesPayload(chat));
-    if (chat.type === 'private') {
+    if (isNotesChatRow(chat)) {
+      Object.assign(chat, notesChatPayload(chat));
+    } else if (chat.type === 'private') {
       const other = db.prepare(`
         SELECT u.id,u.display_name,u.avatar_color,u.avatar_url FROM users u
         JOIN chat_members cm ON cm.user_id=u.id WHERE cm.chat_id=? AND u.id!=?
@@ -665,7 +718,7 @@ app.post('/api/chats/private', auth, (req, res) => {
     SELECT c.id FROM chats c
     JOIN chat_members cm1 ON cm1.chat_id=c.id AND cm1.user_id=?
     JOIN chat_members cm2 ON cm2.chat_id=c.id AND cm2.user_id=?
-    WHERE c.type='private'
+    WHERE c.type='private' AND COALESCE(c.is_notes,0)=0
   `).get(req.user.id, targetUserId);
 
   if (existing) {
@@ -1024,6 +1077,107 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   }
 
   res.json(hydratedMsg);
+});
+
+app.post('/api/messages/:id/save-to-notes', auth, msgLimiter, (req, res) => {
+  const sourceMessageId = Number(req.params.id);
+  if (!Number.isInteger(sourceMessageId) || sourceMessageId <= 0) {
+    return res.status(400).json({ error: 'Invalid source message id' });
+  }
+
+  const source = messageCopyService.getSourceMessage(sourceMessageId);
+  if (!source) return res.status(404).json({ error: 'Message not found' });
+  if (!isChatMember(source.chat_id, req.user.id)) {
+    return res.status(403).json({ error: 'Not a member of source chat' });
+  }
+
+  const sourceChat = db.prepare('SELECT id,is_notes FROM chats WHERE id=?').get(source.chat_id);
+  if (isNotesChatRow(sourceChat)) {
+    return res.status(400).json({ error: 'Message is already in notes' });
+  }
+  if (!source.text && !source.file_id && !source.voice_message_id) {
+    return res.status(400).json({ error: 'Nothing to save' });
+  }
+  if (source.voice_message_id && !source.file_id) {
+    return res.status(409).json({ error: 'Voice source file is missing' });
+  }
+
+  const notesChat = ensureNotesChatForUser(req.user.id);
+  if (!notesChat) return res.status(500).json({ error: 'Notes chat could not be created' });
+
+  const sourcePreviews = messageCopyService.getSourcePreviews(source.id);
+  const voiceSettings = voiceFeature.getPublicSettings ? voiceFeature.getPublicSettings() : {};
+  const shouldAutoTranscribe = Boolean(
+    source.voice_message_id &&
+    voiceSettings.voice_notes_enabled &&
+    voiceSettings.auto_transcribe_on_send &&
+    source.voice_transcription_status !== 'completed'
+  );
+  const forwardedFrom = source.forwarded_from_message_id
+    ? {
+        messageId: source.forwarded_from_message_id,
+        userId: source.forwarded_from_user_id,
+        displayName: source.forwarded_from_display_name,
+      }
+    : null;
+  const savedFrom = {
+    messageId: source.id,
+    chatId: source.chat_id,
+    userId: source.user_id,
+    displayName: (source.display_name || '').trim() || 'Unknown',
+    createdAt: source.created_at,
+  };
+
+  let savedMessageId = null;
+  try {
+    savedMessageId = messageCopyService.copyMessageToChat({
+      source,
+      sourcePreviews,
+      targetChatId: notesChat.id,
+      actorUserId: req.user.id,
+      forwardedFrom,
+      savedFrom,
+      shouldAutoTranscribe,
+    }).messageId;
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Save to notes failed' });
+  }
+
+  const message = hydrateMessageById(savedMessageId);
+  if (!message) return res.status(500).json({ error: 'Saved note could not be loaded' });
+
+  broadcastToChatAll(notesChat.id, { type: 'message', message });
+
+  if (shouldAutoTranscribe && typeof voiceFeature.scheduleTranscription === 'function') {
+    voiceFeature.scheduleTranscription({
+      messageId: savedMessageId,
+      chatId: notesChat.id,
+      requestedBy: req.user.id,
+      autoRequested: true,
+    });
+  }
+
+  if (sourcePreviews.length === 0 && source.text) {
+    messageCopyService.schedulePreviewFetch(savedMessageId, notesChat.id, source.text);
+  }
+
+  return res.json(message);
+});
+
+app.get('/api/messages/:id/jump-target', auth, (req, res) => {
+  const messageId = Number(req.params.id);
+  if (!Number.isInteger(messageId) || messageId <= 0) {
+    return res.status(400).json({ error: 'Invalid message id' });
+  }
+
+  const message = db.prepare('SELECT id,chat_id,is_deleted FROM messages WHERE id=?').get(messageId);
+  if (!message) return res.status(404).json({ error: 'Message not found' });
+  if (message.is_deleted) return res.status(410).json({ error: 'Original message deleted' });
+  if (!isChatMember(message.chat_id, req.user.id)) {
+    return res.status(403).json({ error: 'Original message unavailable' });
+  }
+
+  return res.json({ chatId: message.chat_id, messageId: message.id });
 });
 
 app.post('/api/messages/:id/pin', auth, msgLimiter, (req, res) => {
