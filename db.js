@@ -2,6 +2,7 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const { initVoiceSchema } = require('./voice/schema');
 const { initAiSchema } = require('./ai/schema');
+const { initVideoNoteSchema } = require('./videoNotes/schema');
 
 const db = new Database(path.join(__dirname, 'bananza.db'));
 
@@ -530,6 +531,7 @@ try {
 }
 
 initVoiceSchema(db);
+initVideoNoteSchema(db);
 initAiSchema(db);
 
 module.exports = db;

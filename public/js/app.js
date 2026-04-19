@@ -384,6 +384,7 @@
     getReplyTo: () => replyTo ? { ...replyTo } : null,
     getEditTo: () => editTo ? { ...editTo } : null,
     queueVoiceMessage: (payload) => queueVoiceOutbox(payload),
+    queueVideoNote: (payload) => queueVideoNoteOutbox(payload),
     updateReplyPreview: (messageId, text) => {
       if (replyTo?.id === messageId && !editTo) {
         replyTo.text = text || '📎 Attachment';
@@ -2929,6 +2930,7 @@
       file_name: raw.file_name || raw.fileName || null,
       file_type: raw.file_type || raw.fileType || null,
       is_voice_note: Boolean(raw.is_voice_note || raw.isVoiceNote),
+      is_video_note: Boolean(raw.is_video_note || raw.isVideoNote),
     };
   }
 
@@ -2944,7 +2946,11 @@
   }
 
   function getPinPreviewText(pin) {
-    return String(pin?.preview_text || pin?.file_name || (pin?.is_voice_note ? 'Voice message' : 'Pinned message')).trim() || 'Pinned message';
+    return String(
+      pin?.preview_text
+      || pin?.file_name
+      || (pin?.is_voice_note ? (pin?.is_video_note ? 'Видео-заметка' : 'Голосовое сообщение') : 'Pinned message')
+    ).trim() || 'Pinned message';
   }
 
   function getPinActorName(pin) {
@@ -3119,7 +3125,7 @@
     pinnedBar.innerHTML = `
       <div class="pinned-bar-viewport" role="list" aria-label="Pinned messages">
         ${pins.map((pin, pinIndex) => {
-          const preview = pin.preview_text || pin.file_name || (pin.is_voice_note ? 'Voice message' : 'Pinned message');
+          const preview = pin.preview_text || pin.file_name || (pin.is_voice_note ? (pin.is_video_note ? 'Видео-заметка' : 'Голосовое сообщение') : 'Pinned message');
           const author = pin.message_author_name ? `${pin.message_author_name}` : 'Message';
           const pinnedBy = pin.pinned_by_name ? `Pinned by ${pin.pinned_by_name}` : 'Pinned message';
           return `
@@ -5893,6 +5899,7 @@
       case 'message_transcription':
       case 'voice_settings_updated': {
         window.BananzaVoiceHooks?.handleWSMessage?.(msg);
+        window.BananzaVideoNoteHooks?.handleWSMessage?.(msg);
         break;
       }
       case 'user_updated': {
@@ -6123,7 +6130,7 @@
   function updateChatListLastMessage(msg) {
     const chat = chats.find(c => c.id === msg.chat_id);
     if (chat) {
-      chat.last_text = msg.text || (msg.is_voice_note ? msg.transcription_text || null : null);
+      chat.last_text = msg.text || (msg.is_voice_note ? msg.transcription_text || getMediaNoteFallbackLabel(msg) || null : null);
       chat.last_time = msg.created_at;
       chat.last_user = msg.display_name;
       chat.last_file_id = msg.file_id;
@@ -7159,6 +7166,8 @@
       id: msg.id,
       display_name: isOwn ? currentUser.display_name : msg.display_name,
       text: getReplyPreviewText(msg),
+      is_voice_note: Boolean(msg.is_voice_note),
+      is_video_note: Boolean(msg.is_video_note),
     };
     row.__voiceBootstrap = {
       id: msg.id,
@@ -7238,7 +7247,10 @@
     // Client-side status overrides server read icons when present
     let statusIcon = '';
     if (isOwn && !msg.is_deleted) {
-      if (msg.client_status) statusIcon = `<span class="msg-status failed">!</span>`;
+      if (msg.client_status) {
+        const isFailedStatus = String(msg.client_status || '').toLowerCase() === 'failed';
+        statusIcon = `<span class="msg-status ${isFailedStatus ? 'failed' : 'sending'}">${isFailedStatus ? '!' : '\u23f3'}</span>`;
+      }
       else statusIcon = `<span class="msg-status${msg.is_read ? ' read' : ''}">${msg.is_read ? '✓✓' : '✓'}</span>`;
     }
     const editedIcon = !msg.is_deleted && msg.edited_at ? '<span class="msg-edited" title="Edited">✎</span>' : '';
@@ -7263,7 +7275,8 @@
     row.innerHTML = html;
     // Persist client_status on row for CSS/logic; apply class for failed state so retry button can be overlayed
     if (msg.client_status) row.dataset.clientStatus = msg.client_status;
-    if (msg.client_status) row.classList.add('client-failed');
+    if (msg.client_status && String(msg.client_status || '').toLowerCase() === 'failed') row.classList.add('client-failed');
+    if (msg.client_status && String(msg.client_status || '').toLowerCase() !== 'failed') row.classList.add('client-sending');
     const actionsEl = row.querySelector('.msg-actions');
     if (actionsEl && !row.querySelector('.msg-pin-btn')) {
       const pinWrap = document.createElement('span');
@@ -7383,7 +7396,7 @@
     }
 
     const expandBtn = row.querySelector('.msg-expand-btn');
-    if (expandBtn) {
+    if (expandBtn && !msg.is_video_note) {
       expandBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         const video = row.querySelector('.msg-video video');
@@ -7404,7 +7417,7 @@
       });
     }
     const video = row.querySelector('video');
-    if (video) {
+    if (video && !msg.is_video_note) {
       const markWideVideo = () => {
         if (!video.videoWidth || !video.videoHeight) return;
         row.classList.toggle('wide-media-message', video.videoWidth >= video.videoHeight);
@@ -7422,6 +7435,7 @@
       if (video.readyState >= 1) markWideVideo();
     }
 
+    window.BananzaVideoNoteHooks?.decorateMessageRow?.(row, msg);
     window.BananzaVoiceHooks?.decorateMessageRow?.(row, msg);
     // Ensure status UI is in sync (adds retry button when failed)
     updateRowStatus(row);
@@ -7436,7 +7450,6 @@
       const statusEl = row.querySelector('.msg-status');
       if (!statusEl) return;
       if (d.client_status) {
-        row.classList.add('client-failed');
         row.dataset.clientStatus = d.client_status;
         let retryBtn = row.querySelector('.msg-retry-btn');
         if (!retryBtn) {
@@ -7456,10 +7469,12 @@
             retrySend(row);
           });
         }
-        const isSending = outboxSending.has(d.client_id || row.dataset.clientId || row.dataset.msgId);
+        const statusValue = String(d.client_status || '').toLowerCase();
+        const isSending = statusValue !== 'failed' || outboxSending.has(d.client_id || row.dataset.clientId || row.dataset.msgId);
         statusEl.className = `msg-status ${isSending ? 'sending' : 'failed'}`;
         statusEl.textContent = isSending ? '\u23f3' : '!';
         retryBtn.disabled = isSending;
+        row.classList.toggle('client-failed', !isSending);
         row.classList.toggle('client-sending', isSending);
         scheduleRetryLayout();
         return;
@@ -7491,7 +7506,14 @@
     return m + ':' + String(s).padStart(2, '0');
   }
 
+  function getMediaNoteFallbackLabel(msg, { voiceLabel = 'Голосовое сообщение', videoLabel = 'Видео-заметка' } = {}) {
+    if (!msg?.is_voice_note) return '';
+    return msg?.is_video_note ? videoLabel : voiceLabel;
+  }
+
   function renderFileAttachment(msg) {
+    const customVideoNoteAttachment = window.BananzaVideoNoteHooks?.renderAttachment?.(msg);
+    if (customVideoNoteAttachment) return customVideoNoteAttachment;
     const url = msg.client_file_url || `/uploads/${msg.file_stored}`;
     switch (msg.file_type) {
       case 'image':
@@ -7752,6 +7774,7 @@
       display_name: source.display_name || source.displayName || '',
       text: source.text || '',
       is_voice_note: Boolean(source.is_voice_note),
+      is_video_note: Boolean(source.is_video_note),
     };
   }
 
@@ -7814,19 +7837,20 @@
     const attachment = (item.attachments && item.attachments[0]) || null;
     const serverMeta = item.serverFileMeta || null;
     const isVoice = item.kind === 'voice';
-    const voice = item.voice || {};
-    const fileBlob = isVoice ? voice.blob : attachment?.file;
-    const localUrl = serverMeta?.stored_name ? '' : getOutboxObjectUrl(item.clientId, fileBlob, attachment?.localId || 'file');
-    const fileName = serverMeta?.original_name || attachment?.name || voice.name || 'voice-note.wav';
+    const isVideoNote = item.kind === 'video_note';
+    const mediaNote = isVideoNote ? (item.videoNote || {}) : (item.voice || {});
+    const fileBlob = (isVoice || isVideoNote) ? mediaNote.blob : attachment?.file;
+    const localUrl = serverMeta?.stored_name ? '' : getOutboxObjectUrl(item.clientId, fileBlob, attachment?.localId || (isVideoNote ? 'video-note' : 'file'));
+    const fileName = serverMeta?.original_name || attachment?.name || mediaNote.name || (isVideoNote ? 'video-note.webm' : 'voice-note.wav');
     const fileSize = serverMeta?.size || attachment?.size || fileBlob?.size || 0;
-    const fileMime = serverMeta?.mime_type || attachment?.mime || voice.mime || 'audio/wav';
-    const fileType = serverMeta?.type || attachment?.type || (isVoice ? 'audio' : null);
+    const fileMime = serverMeta?.mime_type || attachment?.mime || mediaNote.mime || (isVideoNote ? 'video/webm' : 'audio/wav');
+    const fileType = serverMeta?.type || attachment?.type || (isVideoNote ? 'video' : (isVoice ? 'audio' : null));
     const reply = item.reply || null;
 
     return {
       id: item.clientId,
       client_id: item.clientId,
-      client_status: item.status || 'failed',
+      client_status: item.status || 'queued',
       is_outbox: true,
       chat_id: item.chatId,
       user_id: currentUser.id,
@@ -7835,7 +7859,7 @@
       avatar_color: currentUser.avatar_color,
       avatar_url: currentUser.avatar_url,
       text: item.text || null,
-      file_id: (attachment || isVoice || serverMeta) ? (item.serverFileId || item.clientId) : null,
+      file_id: (attachment || isVoice || isVideoNote || serverMeta) ? (item.serverFileId || item.clientId) : null,
       file_name: fileName,
       file_stored: serverMeta?.stored_name || null,
       client_file_url: localUrl,
@@ -7846,13 +7870,18 @@
       reply_display_name: reply?.display_name || null,
       reply_text: reply?.text || null,
       reply_is_voice_note: reply?.is_voice_note ? 1 : 0,
+      reply_note_kind: reply?.is_video_note ? 'video_note' : (reply?.is_voice_note ? 'voice' : null),
       created_at: item.createdAt,
       is_read: false,
       reactions: [],
       previews: [],
       is_deleted: false,
-      is_voice_note: isVoice,
-      voice_duration_ms: isVoice ? voice.durationMs : null,
+      is_voice_note: isVoice || isVideoNote,
+      is_video_note: isVideoNote,
+      media_note_kind: isVideoNote ? 'video_note' : (isVoice ? 'voice' : null),
+      voice_duration_ms: (isVoice || isVideoNote) ? mediaNote.durationMs : null,
+      video_note_shape_id: isVideoNote ? mediaNote.shapeId || 'banana-fat' : null,
+      video_note_shape_snapshot: isVideoNote ? mediaNote.shapeSnapshot || null : null,
       transcription_status: 'idle',
       transcription_text: '',
       transcription_provider: '',
@@ -7932,7 +7961,7 @@
   }
 
   async function persistOutboxItem(item) {
-    item.status = item.status || 'failed';
+    item.status = item.status || 'queued';
     await window.messageCache?.upsertOutboxItem?.(item);
     const row = findOutboxRow(item.clientId);
     if (row) row.__outboxItem = item;
@@ -7990,6 +8019,26 @@
     });
   }
 
+  async function sendOutboxVideoNoteItem(item) {
+    const videoNote = item.videoNote || {};
+    if (!videoNote.blob || !videoNote.audioBlob) throw new Error('Video note is not available locally');
+    const normalizedVideoMime = String(videoNote.mime || 'video/webm').split(';')[0].trim().toLowerCase() || 'video/webm';
+    const formData = new FormData();
+    formData.append('video', videoNote.blob, videoNote.name || `video-note-${Date.now()}.webm`);
+    formData.append('audio', videoNote.audioBlob, videoNote.audioName || `video-note-${Date.now()}.wav`);
+    formData.append('durationMs', String(videoNote.durationMs || 0));
+    formData.append('sampleRate', String(videoNote.sampleRate || 16000));
+    formData.append('videoMime', normalizedVideoMime);
+    formData.append('client_id', item.clientId);
+    formData.append('shapeId', String(videoNote.shapeId || 'banana-fat'));
+    formData.append('shapeSnapshot', JSON.stringify(videoNote.shapeSnapshot || null));
+    if (item.replyToId) formData.append('replyToId', String(item.replyToId));
+    return api(`/api/chats/${item.chatId}/video-note`, {
+      method: 'POST',
+      body: formData,
+    });
+  }
+
   async function completeOutboxSend(item, serverMsg) {
     if (!serverMsg) return;
     await window.messageCache?.deleteOutboxItem?.(item.chatId, item.clientId);
@@ -8016,17 +8065,27 @@
       appendMessage(serverMsg);
     }
     updateScrollBottomButton();
+    if (Number(serverMsg.chat_id) === Number(currentChatId)) {
+      requestAnimationFrame(() => {
+        scrollToBottom();
+        requestAnimationFrame(() => scrollToBottom());
+      });
+    }
   }
 
   async function trySendOutboxItem(rawItem) {
     const latest = await window.messageCache?.getOutboxItem?.(rawItem.chatId, rawItem.clientId);
     const item = latest || rawItem;
     if (!item?.clientId || outboxSending.has(item.clientId)) return;
+    item.status = 'sending';
+    await persistOutboxItem(item);
     setOutboxSending(item.clientId, true);
     try {
       const serverMsg = item.kind === 'voice'
         ? await sendOutboxVoiceItem(item)
-        : await sendOutboxMessageItem(item);
+        : item.kind === 'video_note'
+          ? await sendOutboxVideoNoteItem(item)
+          : await sendOutboxMessageItem(item);
       await completeOutboxSend(item, serverMsg);
     } catch (e) {
       item.status = 'failed';
@@ -8049,7 +8108,7 @@
       clientId,
       chatId: currentChatId,
       userId: currentUser.id,
-      status: 'failed',
+      status: 'queued',
       kind: 'message',
       createdAt: createdAt || new Date().toISOString(),
       text: text || null,
@@ -8070,7 +8129,7 @@
       clientId,
       chatId: currentChatId,
       userId: currentUser.id,
-      status: 'failed',
+      status: 'queued',
       kind: 'voice',
       createdAt: new Date().toISOString(),
       text: null,
@@ -8090,6 +8149,59 @@
         durationMs,
         sampleRate,
         mime: 'audio/wav',
+      },
+    };
+    clearReply();
+    await queueOutboxItem(item, { attempt: false });
+    playAppSound('send');
+    scrollToBottom();
+    trySendOutboxItem(item);
+    return item;
+  }
+
+  async function queueVideoNoteOutbox({
+    videoBlob,
+    audioBlob,
+    durationMs,
+    sampleRate,
+    videoMime,
+    shapeId,
+    shapeSnapshot,
+    replyTo: suppliedReply,
+  } = {}) {
+    if (!currentChatId || !videoBlob || !audioBlob) return null;
+    const reply = getReplySnapshot(suppliedReply || replyTo);
+    const clientId = makeClientId('c');
+    const videoName = `video-note-${Date.now()}.webm`;
+    const audioName = `video-note-${Date.now()}.wav`;
+    const item = {
+      clientId,
+      chatId: currentChatId,
+      userId: currentUser.id,
+      status: 'queued',
+      kind: 'video_note',
+      createdAt: new Date().toISOString(),
+      text: null,
+      replyToId: reply?.id || null,
+      reply,
+      attachments: [{
+        localId: 'video-note',
+        file: videoBlob,
+        name: videoName,
+        size: videoBlob.size || 0,
+        mime: videoMime || 'video/webm',
+        type: 'video',
+      }],
+      videoNote: {
+        blob: videoBlob,
+        audioBlob,
+        name: videoName,
+        audioName,
+        durationMs,
+        sampleRate,
+        mime: videoMime || 'video/webm',
+        shapeId: shapeId || 'banana-fat',
+        shapeSnapshot: shapeSnapshot || null,
       },
     };
     clearReply();
@@ -8347,6 +8459,38 @@
     return isVoiceReply ? 'Голосовое сообщение' : 'Attachment';
   }
 
+  function getReplyPreviewText(msg) {
+    if (msg?.text) return msg.text.substring(0, 100);
+    if (msg?.is_voice_note) {
+      const transcript = (msg.transcription_text || '').trim();
+      return transcript ? transcript.substring(0, 100) : getMediaNoteFallbackLabel(msg);
+    }
+    if (msg?.file_name) return msg.file_name.substring(0, 100);
+    return 'Attachment';
+  }
+
+  function getReplyQuoteText(msg) {
+    const serverText = (msg?.reply_text || '').trim();
+    if (serverText) return serverText.substring(0, 100);
+
+    const sourceRow = msg?.reply_to_id
+      ? messagesEl.querySelector(`[data-msg-id="${msg.reply_to_id}"]`)
+      : null;
+    const sourceText = (sourceRow?.__replyPayload?.text || '').trim();
+    if (sourceText && sourceText !== 'Attachment') return sourceText.substring(0, 100);
+
+    const isVoiceReply = Boolean(
+      msg?.reply_is_voice_note ||
+      sourceRow?.__voiceMessage?.is_voice_note ||
+      sourceRow?.__voiceBootstrap?.is_voice_note
+    );
+    if (!isVoiceReply) return 'Attachment';
+    return getMediaNoteFallbackLabel({
+      is_voice_note: true,
+      is_video_note: Boolean(sourceRow?.__messageData?.is_video_note || msg?.reply_note_kind === 'video_note'),
+    });
+  }
+
   function canEditMessage(msg) {
     if (!currentUser || !msg || msg.is_deleted) return false;
     if (isClientSideMessage(msg)) return false;
@@ -8423,12 +8567,18 @@
     const payload = row?.__replyPayload;
     if (!payload || row.querySelector('.msg-deleted')) return;
     hideFloatingMessageActions();
-    setReply(payload.id, payload.display_name, payload.text);
+    setReply(payload.id, payload.display_name, payload.text, payload);
   }
 
-  function setReply(id, name, text) {
+  function setReply(id, name, text, meta = null) {
     if (editTo) clearEdit({ clearInput: true });
-    replyTo = { id, display_name: name, text };
+    replyTo = {
+      id,
+      display_name: name,
+      text,
+      is_voice_note: Boolean(meta?.is_voice_note),
+      is_video_note: Boolean(meta?.is_video_note),
+    };
     replyBarName.textContent = name;
     replyBarText.textContent = text || '📎 Attachment';
     replyBar.classList.remove('edit-bar');
@@ -9836,6 +9986,7 @@
   }
 
   function galleryItemFromMessage(msg, fallbackSrc = '') {
+    if (msg?.is_video_note) return null;
     const type = msg?.file_type === 'video' ? 'video' : (msg?.file_type === 'image' ? 'image' : '');
     const src = normalizeGallerySrc(fallbackSrc || msg?.client_file_url || (msg?.file_stored ? `/uploads/${msg.file_stored}` : ''));
     if (!type || !src) return null;
@@ -11399,7 +11550,7 @@
     const getMessageActionTapRow = (e) => {
       if (e.defaultPrevented || Date.now() < suppressNextMessageActionTapUntil) return null;
       if (e.target.closest(
-        '.msg-actions, button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-image, .msg-video, .msg-file, .link-preview, .msg-group-avatar'
+        '.msg-actions, button, a, input, textarea, select, label, audio, video, .video-note-stage, .msg-reply, .reaction-badge, .msg-image, .msg-video, .msg-file, .link-preview, .msg-group-avatar'
       )) return null;
       const row = e.target.closest('.msg-row');
       if (!row || row.dataset.outbox === '1' || row.querySelector('.msg-deleted')) return null;

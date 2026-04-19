@@ -1,3 +1,5 @@
+const { applyVideoNoteFields } = require('../videoNotes/meta');
+
 function applyVoiceFields(message, voiceRow) {
   const next = { ...message };
   if (!voiceRow) {
@@ -10,7 +12,7 @@ function applyVoiceFields(message, voiceRow) {
     next.transcription_model = null;
     next.transcription_error = null;
     next.auto_requested = 0;
-    return next;
+    return applyVideoNoteFields(next, null);
   }
 
   next.is_voice_note = true;
@@ -22,7 +24,7 @@ function applyVoiceFields(message, voiceRow) {
   next.transcription_model = voiceRow.transcription_model;
   next.transcription_error = voiceRow.transcription_error;
   next.auto_requested = voiceRow.auto_requested;
-  return next;
+  return applyVideoNoteFields(next, voiceRow);
 }
 
 function attachVoiceMetadata(db, messages) {
@@ -33,7 +35,8 @@ function attachVoiceMetadata(db, messages) {
   const placeholders = ids.map(() => '?').join(',');
   const rows = db.prepare(`
     SELECT message_id, duration_ms, sample_rate, transcription_status, transcription_text,
-      transcription_provider, transcription_model, transcription_error, auto_requested
+      transcription_provider, transcription_model, transcription_error, auto_requested,
+      note_kind, transcription_file_id, shape_id, shape_snapshot
     FROM voice_messages
     WHERE message_id IN (${placeholders})
   `).all(...ids);

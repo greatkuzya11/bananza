@@ -21,6 +21,8 @@ const { createPushFeature } = require('./push');
 const { createSoundSettingsFeature } = require('./soundSettings');
 const { createAiBotFeature } = require('./ai');
 const { createPollService, POLL_CLOSE_PRESETS, toDbDate } = require('./polls');
+const { createVideoNoteFeature } = require('./videoNotes');
+const { createVideoNoteStorage } = require('./videoNotes/storage');
 
 // ── JWT Secret ──────────────────────────────────────────────────────────────
 const SECRET_PATH = path.join(__dirname, '.secret');
@@ -262,6 +264,10 @@ const pollFeature = createPollService({
 });
 
 let aiBotFeature = null;
+const videoNoteStorage = createVideoNoteStorage({
+  db,
+  uploadsDir: UPLOADS_DIR,
+});
 
 const voiceFeature = createVoiceFeature({
   app,
@@ -282,10 +288,25 @@ const messageCopyService = createMessageCopyService({
   db,
   uploadsDir: UPLOADS_DIR,
   voiceFeature,
+  videoNoteStorage,
   extractUrls,
   fetchPreview,
   broadcastToChatAll,
   saveMessageMentions: (messageId, chatId, text) => saveMessageMentions(messageId, chatId, text),
+});
+
+const videoNoteFeature = createVideoNoteFeature({
+  app,
+  db,
+  auth,
+  msgLimiter,
+  upLimiter,
+  uploadsDir: UPLOADS_DIR,
+  hydrateMessageById: (messageId, viewerUserId) => hydrateMessageById(messageId, viewerUserId),
+  broadcastToChatAll,
+  notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),
+  onMessageCreated: (message) => aiBotFeature?.handleMessageCreated(message),
+  voiceFeature,
 });
 
 createWeatherFeature({
@@ -342,6 +363,12 @@ const messageByIdStmt = db.prepare(`
     f.mime_type as file_mime, f.size as file_size, f.type as file_type,
     COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN 'Голосовое сообщение' END) as reply_text,
     CASE WHEN rvm.message_id IS NOT NULL THEN 1 ELSE 0 END as reply_is_voice_note,
+    COALESCE(rvm.note_kind, 'voice') as reply_note_kind,
+    CASE
+      WHEN NULLIF(rm.text, '') IS NULL AND NULLIF(rvm.transcription_text, '') IS NULL AND rvm.message_id IS NOT NULL
+      THEN 1
+      ELSE 0
+    END as reply_text_is_fallback,
     ru.display_name as reply_display_name, rm.id as reply_msg_id
   FROM messages m
   JOIN users u ON u.id=m.user_id
@@ -415,7 +442,8 @@ const chatPinsStmt = db.prepare(`
     f.original_name as file_name,
     f.type as file_type,
     vm.message_id as voice_message_id,
-    vm.transcription_text
+    vm.transcription_text,
+    vm.note_kind as voice_note_kind
   FROM message_pins p
   JOIN messages m ON m.id=p.message_id
   JOIN users u ON u.id=m.user_id
@@ -435,7 +463,8 @@ const pinEventMessageStmt = db.prepare(`
     f.original_name as file_name,
     f.type as file_type,
     vm.message_id as voice_message_id,
-    vm.transcription_text
+    vm.transcription_text,
+    vm.note_kind as voice_note_kind
   FROM messages m
   JOIN users u ON u.id=m.user_id
   LEFT JOIN files f ON f.id=m.file_id
@@ -455,6 +484,13 @@ const insertPinEventStmt = db.prepare(`
     created_at
   ) VALUES(?,?,?,?,?,?,?,?,COALESCE(?, datetime('now')))
 `);
+
+function applyReplyTextFallback(row) {
+  if (!row || Number(row.reply_text_is_fallback || 0) !== 1) return row;
+  const noteKind = String(row.reply_note_kind || 'voice');
+  row.reply_text = noteKind === 'video_note' ? 'Видео-заметка' : 'Голосовое сообщение';
+  return row;
+}
 
 function mentionPayload(row) {
   const isAiBot = Number(row.is_ai_bot) !== 0;
@@ -530,7 +566,7 @@ function attachMessageMentions(row) {
 }
 
 function hydrateMessageById(messageId, viewerUserId = null) {
-  const row = messageByIdStmt.get(messageId);
+  const row = applyReplyTextFallback(messageByIdStmt.get(messageId));
   if (!row) return null;
   row.previews = messagePreviewsStmt.all(row.id);
   row.reactions = messageReactionsStmt.all(row.id);
@@ -554,7 +590,7 @@ function isChatMember(chatId, userId) {
 function pinPreviewText(row) {
   const text = String(row?.text || row?.transcription_text || '').trim();
   if (text) return text.substring(0, 160);
-  if (row?.voice_message_id) return 'Voice message';
+  if (row?.voice_message_id) return row?.voice_note_kind === 'video_note' ? 'Видео-заметка' : 'Голосовое сообщение';
   if (row?.file_name) return String(row.file_name).substring(0, 160);
   return 'Attachment';
 }
@@ -592,6 +628,7 @@ function getChatPins(chatId) {
     file_name: row.file_name || null,
     file_type: row.file_type || null,
     is_voice_note: !!row.voice_message_id,
+    is_video_note: row.voice_note_kind === 'video_note',
   }));
 }
 
@@ -865,6 +902,16 @@ app.get('/api/chats', auth, (req, res) => {
         LEFT JOIN voice_messages vm ON vm.message_id=m.id
         WHERE m.chat_id=c.id AND m.is_deleted=0
         ORDER BY m.id DESC LIMIT 1) as last_text,
+      (SELECT vm.message_id
+        FROM messages m
+        LEFT JOIN voice_messages vm ON vm.message_id=m.id
+        WHERE m.chat_id=c.id AND m.is_deleted=0
+        ORDER BY m.id DESC LIMIT 1) as last_voice_message_id,
+      (SELECT COALESCE(vm.note_kind, 'voice')
+        FROM messages m
+        LEFT JOIN voice_messages vm ON vm.message_id=m.id
+        WHERE m.chat_id=c.id AND m.is_deleted=0
+        ORDER BY m.id DESC LIMIT 1) as last_note_kind,
       (SELECT m.created_at FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) as last_time,
       (SELECT u.display_name FROM messages m JOIN users u ON u.id=m.user_id WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) as last_user,
       (SELECT m.file_id FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) as last_file_id,
@@ -899,6 +946,9 @@ app.get('/api/chats', auth, (req, res) => {
     const lastRead = chat.last_read_id || 0;
     const unread = db.prepare('SELECT COUNT(*) as c FROM messages WHERE chat_id=? AND id>? AND is_deleted=0 AND user_id!=?').get(chat.id, lastRead, req.user.id);
     chat.unread_count = unread ? unread.c : 0;
+    if (!String(chat.last_text || '').trim() && Number(chat.last_voice_message_id || 0) > 0) {
+      chat.last_text = chat.last_note_kind === 'video_note' ? 'Видео-заметка' : 'Голосовое сообщение';
+    }
   }
   res.json(rows);
 });
@@ -1140,7 +1190,9 @@ app.get('/api/chats/:chatId/media', auth, (req, res) => {
   const mediaWhere = `
     FROM messages m
     JOIN files f ON f.id=m.file_id
+    LEFT JOIN voice_messages vm ON vm.message_id=m.id
     WHERE m.chat_id=? AND m.is_deleted=0 AND f.type IN ('image','video')
+      AND (vm.message_id IS NULL OR COALESCE(vm.note_kind, 'voice')!='video_note')
   `;
   let rows;
   if (after) {
@@ -1189,6 +1241,12 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
       f.mime_type as file_mime, f.size as file_size, f.type as file_type,
       COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN 'Голосовое сообщение' END) as reply_text,
       CASE WHEN rvm.message_id IS NOT NULL THEN 1 ELSE 0 END as reply_is_voice_note,
+      COALESCE(rvm.note_kind, 'voice') as reply_note_kind,
+      CASE
+        WHEN NULLIF(rm.text, '') IS NULL AND NULLIF(rvm.transcription_text, '') IS NULL AND rvm.message_id IS NOT NULL
+        THEN 1
+        ELSE 0
+      END as reply_text_is_fallback,
       ru.display_name as reply_display_name, rm.id as reply_msg_id
     FROM messages m JOIN users u ON u.id=m.user_id
     LEFT JOIN ai_bots ab ON ab.user_id=u.id
@@ -1210,14 +1268,17 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
         .get(chatId, anchor);
     }
     if (anchorMsg) {
+      anchorMsg = applyReplyTextFallback(anchorMsg);
       const anchorId = anchorMsg.id;
       const olderLimit = Math.floor((limit - 1) / 2);
       const newerLimit = Math.max(0, limit - olderLimit - 1);
       const older = db.prepare(`${selectSql} WHERE m.chat_id=? AND m.id<? AND m.is_deleted=0 ORDER BY m.id DESC LIMIT ?`)
         .all(chatId, anchorId, olderLimit)
+        .map((row) => applyReplyTextFallback(row))
         .reverse();
       const newer = db.prepare(`${selectSql} WHERE m.chat_id=? AND m.id>? AND m.is_deleted=0 ORDER BY m.id ASC LIMIT ?`)
-        .all(chatId, anchorId, newerLimit);
+        .all(chatId, anchorId, newerLimit)
+        .map((row) => applyReplyTextFallback(row));
       msgs = [...older, anchorMsg, ...newer];
     }
   }
@@ -1225,12 +1286,14 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
   if (!msgs) {
     if (after) {
       msgs = db.prepare(`${selectSql} WHERE m.chat_id=? AND m.id>? AND m.is_deleted=0 ORDER BY m.id ASC LIMIT ?`)
-        .all(chatId, after, limit);
+        .all(chatId, after, limit)
+        .map((row) => applyReplyTextFallback(row));
     } else {
       const q = `${selectSql} WHERE m.chat_id=? ${before ? 'AND m.id<?' : ''} AND m.is_deleted=0 ORDER BY m.id DESC LIMIT ?`;
       msgs = before
         ? db.prepare(q).all(chatId, before, limit)
         : db.prepare(q).all(chatId, limit);
+      msgs = msgs.map((row) => applyReplyTextFallback(row));
       msgs = msgs.reverse();
     }
   }
@@ -1349,6 +1412,12 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
       f.mime_type as file_mime, f.size as file_size, f.type as file_type,
       COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN 'Голосовое сообщение' END) as reply_text,
       CASE WHEN rvm.message_id IS NOT NULL THEN 1 ELSE 0 END as reply_is_voice_note,
+      COALESCE(rvm.note_kind, 'voice') as reply_note_kind,
+      CASE
+        WHEN NULLIF(rm.text, '') IS NULL AND NULLIF(rvm.transcription_text, '') IS NULL AND rvm.message_id IS NOT NULL
+        THEN 1
+        ELSE 0
+      END as reply_text_is_fallback,
       ru.display_name as reply_display_name, rm.id as reply_msg_id
     FROM messages m JOIN users u ON u.id=m.user_id
     LEFT JOIN ai_bots ab ON ab.user_id=u.id
@@ -1358,6 +1427,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
     LEFT JOIN users ru ON ru.id=rm.user_id
     WHERE m.id=?
   `).get(messageId);
+  applyReplyTextFallback(msg);
   msg.previews = [];
   msg.reactions = [];
   attachMessageMentions(msg);
@@ -1422,8 +1492,10 @@ app.post('/api/messages/:id/save-to-notes', auth, msgLimiter, (req, res) => {
 
   const sourcePreviews = messageCopyService.getSourcePreviews(source.id);
   const voiceSettings = voiceFeature.getPublicSettings ? voiceFeature.getPublicSettings() : {};
+  const isPlainVoiceNote = String(source.voice_note_kind || 'voice') === 'voice';
   const shouldAutoTranscribe = Boolean(
     source.voice_message_id &&
+    isPlainVoiceNote &&
     voiceSettings.voice_notes_enabled &&
     voiceSettings.auto_transcribe_on_send &&
     source.voice_transcription_status !== 'completed'
@@ -2095,6 +2167,7 @@ app.delete('/api/messages/:id', auth, (req, res) => {
   const removedPins = db.prepare('DELETE FROM message_pins WHERE message_id=?').run(mid);
   // Clean up related file and previews
   if (m.file_id) db.prepare('DELETE FROM files WHERE id=?').run(m.file_id);
+  videoNoteStorage.deleteMessageAssets(mid);
   voiceFeature.deleteVoiceMetadata(mid);
   db.prepare('DELETE FROM link_previews WHERE message_id=?').run(mid);
   pollFeature.deletePollData(mid);

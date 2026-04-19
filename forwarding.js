@@ -68,8 +68,10 @@ function createForwardingFeature({
     };
     const sourcePreviews = copyService.getSourcePreviews(source.id);
     const voiceSettings = voiceFeature.getPublicSettings ? voiceFeature.getPublicSettings() : {};
+    const isPlainVoiceNote = String(source.voice_note_kind || 'voice') === 'voice';
     const shouldAutoTranscribe = Boolean(
       source.voice_message_id &&
+      isPlainVoiceNote &&
       voiceSettings.voice_notes_enabled &&
       voiceSettings.auto_transcribe_on_send &&
       source.voice_transcription_status !== 'completed'

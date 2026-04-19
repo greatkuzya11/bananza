@@ -20,6 +20,15 @@ function normalizeClientId(value) {
 }
 
 function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, uploadsDir, broadcastToChatAll, clients, secret, notifyMessageCreated, onMessageTextAvailable }) {
+  const replyFallbackLabelSql = `
+    CASE
+      WHEN rvm.message_id IS NOT NULL THEN
+        CASE
+          WHEN COALESCE(rvm.note_kind, 'voice')='video_note' THEN 'Видео-заметка'
+          ELSE 'Голосовое сообщение'
+        END
+    END
+  `;
   const previewStmt = db.prepare('SELECT * FROM link_previews WHERE message_id=?');
   const reactionStmt = db.prepare('SELECT user_id, emoji FROM reactions WHERE message_id=?');
 
@@ -27,7 +36,7 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
     SELECT m.*, u.username, u.display_name, u.avatar_color, u.avatar_url,
       f.original_name as file_name, f.stored_name as file_stored,
       f.mime_type as file_mime, f.size as file_size, f.type as file_type,
-      COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN 'Голосовое сообщение' END) as reply_text,
+      COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), ${replyFallbackLabelSql}) as reply_text,
       CASE WHEN rvm.message_id IS NOT NULL THEN 1 ELSE 0 END as reply_is_voice_note,
       ru.display_name as reply_display_name, rm.id as reply_msg_id
     FROM messages m
@@ -40,10 +49,13 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
   `);
 
   const getVoiceJobStmt = db.prepare(`
-    SELECT vm.*, m.chat_id, m.file_id, m.is_deleted, f.stored_name
+    SELECT vm.*, m.chat_id, m.file_id, m.is_deleted,
+      f.stored_name,
+      tf.stored_name as transcription_stored_name
     FROM voice_messages vm
     JOIN messages m ON m.id=vm.message_id
     LEFT JOIN files f ON f.id=m.file_id
+    LEFT JOIN files tf ON tf.id=vm.transcription_file_id
     WHERE vm.message_id=?
   `);
 
@@ -143,16 +155,17 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
 
   async function processQueuedTranscription(messageId) {
     const voiceJob = getVoiceJobStmt.get(messageId);
-    if (!voiceJob || voiceJob.is_deleted || !voiceJob.stored_name) return;
+    const transcriptionStoredName = voiceJob?.transcription_stored_name || voiceJob?.stored_name || '';
+    if (!voiceJob || voiceJob.is_deleted || !transcriptionStoredName) return;
 
-    const filePath = path.join(uploadsDir, voiceJob.stored_name);
+    const filePath = path.join(uploadsDir, transcriptionStoredName);
     if (!fs.existsSync(filePath)) {
       updateVoiceStatusStmt.run(
         'error',
         null,
         null,
         null,
-        'Voice file not found',
+        'Transcription source file not found',
         null,
         voiceJob.requested_by || null,
         voiceJob.auto_requested || 0,

@@ -746,6 +746,7 @@ function createAiBotFeature({
       f.type as file_type,
       vm.message_id as voice_message_id,
       vm.transcription_text,
+      vm.note_kind as voice_note_kind,
       poll.message_id as poll_message_id
     FROM message_pins p
     JOIN messages m ON m.id=p.message_id
@@ -780,6 +781,7 @@ function createAiBotFeature({
       f.type as file_type,
       vm.message_id as voice_message_id,
       vm.transcription_text,
+      vm.note_kind as voice_note_kind,
       poll.message_id as poll_message_id
     FROM message_pin_events e
     LEFT JOIN users au ON au.id=e.actor_id
@@ -814,6 +816,7 @@ function createAiBotFeature({
       f.type as file_type,
       vm.message_id as voice_message_id,
       vm.transcription_text,
+      vm.note_kind as voice_note_kind,
       poll.message_id as poll_message_id
     FROM message_pin_events e
     LEFT JOIN users au ON au.id=e.actor_id
@@ -987,7 +990,7 @@ function createAiBotFeature({
     if (snapshot) return snapshot;
     const text = firstText(row?.text, row?.transcription_text);
     if (text) return text;
-    if (row?.voice_message_id) return 'Voice message';
+    if (row?.voice_message_id) return row?.voice_note_kind === 'video_note' ? 'Видео-заметка' : 'Voice message';
     if (row?.file_name) return `[file:${row.file_type || 'file'}] ${row.file_name}`;
     return messageId ? 'Message content unavailable' : 'Deleted/unavailable message';
   }

@@ -6,6 +6,7 @@ function createMessageCopyService({
   db,
   uploadsDir,
   voiceFeature,
+  videoNoteStorage,
   extractUrls,
   fetchPreview,
   broadcastToChatAll,
@@ -31,6 +32,10 @@ function createMessageCopyService({
       vm.transcribed_at as voice_transcribed_at,
       vm.requested_by as voice_requested_by,
       vm.auto_requested as voice_auto_requested,
+      vm.note_kind as voice_note_kind,
+      vm.transcription_file_id as voice_transcription_file_id,
+      vm.shape_id as voice_shape_id,
+      vm.shape_snapshot as voice_shape_snapshot,
       EXISTS(SELECT 1 FROM polls p WHERE p.message_id=m.id) as is_poll_message
     FROM messages m
     JOIN users u ON u.id = m.user_id
@@ -82,9 +87,13 @@ function createMessageCopyService({
       transcription_error,
       transcribed_at,
       requested_by,
-      auto_requested
+      auto_requested,
+      note_kind,
+      transcription_file_id,
+      shape_id,
+      shape_snapshot
     )
-    VALUES(?,?,?,?,?,?,?,?,?,?,?)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `);
 
   function getSourceMessage(messageId) {
@@ -195,6 +204,9 @@ function createMessageCopyService({
 
         if (source.voice_message_id) {
           const copyCompletedTranscript = source.voice_transcription_status === 'completed';
+          const duplicatedTranscriptionFileId = source.voice_transcription_file_id && videoNoteStorage
+            ? videoNoteStorage.duplicateFileById(source.voice_transcription_file_id, actorUserId)
+            : null;
           insertVoiceStmt.run(
             newMessageId,
             Number(source.voice_duration_ms) || 0,
@@ -206,7 +218,11 @@ function createMessageCopyService({
             null,
             copyCompletedTranscript ? (source.voice_transcribed_at ?? null) : null,
             copyCompletedTranscript ? (source.voice_requested_by ?? null) : (shouldAutoTranscribe ? actorUserId : null),
-            copyCompletedTranscript ? (Number(source.voice_auto_requested) || 0) : (shouldAutoTranscribe ? 1 : 0)
+            copyCompletedTranscript ? (Number(source.voice_auto_requested) || 0) : (shouldAutoTranscribe ? 1 : 0),
+            source.voice_note_kind || 'voice',
+            duplicatedTranscriptionFileId,
+            source.voice_shape_id ?? null,
+            source.voice_shape_snapshot ?? null
           );
         }
 

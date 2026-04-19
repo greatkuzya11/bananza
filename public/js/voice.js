@@ -44,6 +44,15 @@
     handleWSMessage: (msg) => handleWSMessage(msg),
     onSettingsOpened: () => syncAdminEntryVisibility(),
     refreshComposerState: () => syncSendButtonState(),
+    canUseGesture: () => canUseVoiceGesture(),
+    startExternalRecording: () => startRecording(),
+    stopExternalRecording: () => stopRecordingAndSend(),
+    isRecording: () => Boolean(state.recorder.recording),
+    isUploading: () => Boolean(state.recorder.uploading),
+    getFeatures: () => ({ ...state.features }),
+    setRecorderMessage: (text, kind) => setRecorderMessage(text, kind),
+    hideRecorderBar: () => hideRecorderBar(),
+    formatDurationMs: (durationMs) => formatDurationMs(durationMs),
   });
 
   function getBridge() {
@@ -304,6 +313,13 @@
           : showMicMode
             ? 'Удерживайте для записи'
             : 'Отправить';
+    window.BananzaMediaNoteHooks?.refreshComposerState?.({
+      showMicMode,
+      isEditing,
+      isRecording: Boolean(state.recorder.recording),
+      isUploading: Boolean(state.recorder.uploading),
+      features: { ...state.features },
+    });
   }
 
   async function ensureRecorderWorklet(audioContext) {
@@ -949,7 +965,25 @@
 
   function attachRecorderEvents() {
     const { sendBtn, messagesEl } = getDom();
-    if (!sendBtn || sendBtn.dataset.voiceBound === '1') return;
+    if (messagesEl && messagesEl.dataset.voiceMessageBound !== '1') {
+      messagesEl.dataset.voiceMessageBound = '1';
+      messagesEl.addEventListener('scroll', () => {
+        if (state.recorder.recording) updateRecorderBar();
+      });
+
+      messagesEl.addEventListener('click', (event) => {
+        const transcribeBtn = event.target.closest('.voice-transcribe-btn');
+        if (!transcribeBtn) return;
+        const row = transcribeBtn.closest('.msg-row');
+        const messageId = row?.__voiceMessage?.id || Number(row?.dataset.msgId || 0);
+        if (!messageId) return;
+        event.preventDefault();
+        event.stopPropagation();
+        requestManualTranscription(messageId, row);
+      });
+    }
+
+    if (!sendBtn || sendBtn.dataset.voiceBound === '1' || window.BananzaMediaNoteHooks?.ownsComposer?.()) return;
     sendBtn.dataset.voiceBound = '1';
 
     sendBtn.addEventListener('click', (event) => {
@@ -965,21 +999,6 @@
     sendBtn.addEventListener('pointercancel', cancelPendingHold, { passive: false });
     sendBtn.addEventListener('pointerleave', () => {
       if (!state.recorder.recording) cancelPendingHold();
-    });
-
-    messagesEl?.addEventListener('scroll', () => {
-      if (state.recorder.recording) updateRecorderBar();
-    });
-
-    messagesEl?.addEventListener('click', (event) => {
-      const transcribeBtn = event.target.closest('.voice-transcribe-btn');
-      if (!transcribeBtn) return;
-      const row = transcribeBtn.closest('.msg-row');
-      const messageId = row?.__voiceMessage?.id || Number(row?.dataset.msgId || 0);
-      if (!messageId) return;
-      event.preventDefault();
-      event.stopPropagation();
-      requestManualTranscription(messageId, row);
     });
   }
 
