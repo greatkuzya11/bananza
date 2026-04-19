@@ -221,6 +221,35 @@
     },
   };
   let selectedYandexBotId = null;
+  let grokBotState = {
+    settings: {
+      grok_enabled: false,
+      grok_base_url: 'https://api.x.ai/v1',
+      grok_default_response_model: 'grok-4-1-fast-reasoning',
+      grok_default_summary_model: 'grok-4-1-fast-reasoning',
+      grok_default_embedding_model: 'text-embedding',
+      grok_default_image_model: 'grok-imagine-image',
+      grok_default_image_aspect_ratio: '1:1',
+      grok_default_image_resolution: '1k',
+      grok_temperature: 0.3,
+      grok_max_tokens: 1000,
+    },
+    bots: [],
+    imageBots: [],
+    chats: [],
+    chatSettings: [],
+    imageChatSettings: [],
+    models: {
+      response: ['grok-4-1-fast-reasoning'],
+      summary: ['grok-4-1-fast-reasoning'],
+      embedding: ['text-embedding'],
+      image: ['grok-imagine-image'],
+      aspect_ratio: ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '2:1', '1:2', '19.5:9', '9:19.5', '20:9', '9:20', 'auto'],
+      resolution: ['1k', '2k'],
+    },
+  };
+  let selectedGrokBotId = null;
+  let selectedGrokImageBotId = null;
   let forwardMessageState = null;
   let forwardMessageBusy = false;
   let savingToNotesMessageIds = new Set();
@@ -4313,6 +4342,711 @@
       setYandexAiStatus('Chat settings saved', 'success');
     } catch (e) {
       setYandexAiStatus(e.message || 'Could not save chat settings', 'error');
+    }
+  }
+
+  function setGrokStatus(statusId, message, type = '') {
+    const el = $(statusId);
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function setGrokAiStatus(message, type = '') {
+    setGrokStatus('grokAiStatus', message, type);
+  }
+
+  function setGrokTextStatus(message, type = '') {
+    setGrokStatus('grokAiTextStatus', message, type);
+  }
+
+  function setGrokImageStatus(message, type = '') {
+    setGrokStatus('grokAiImageStatus', message, type);
+  }
+
+  function setGrokBotStatus(kind = 'text', message, type = '') {
+    if (kind === 'image') setGrokImageStatus(message, type);
+    else setGrokTextStatus(message, type);
+  }
+
+  function setGrokAiModelStatus(message, type = '') {
+    const el = $('#grokAiModelStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function currentGrokBot() {
+    return grokBotState.bots.find(bot => Number(bot.id) === Number(selectedGrokBotId)) || null;
+  }
+
+  function currentGrokImageBot() {
+    return grokBotState.imageBots.find(bot => Number(bot.id) === Number(selectedGrokImageBotId)) || null;
+  }
+
+  function getGrokChatSetting(chatId, botId) {
+    return grokBotState.chatSettings.find(item => Number(item.chat_id) === Number(chatId) && Number(item.bot_id) === Number(botId)) || null;
+  }
+
+  function getGrokImageChatSetting(chatId, botId) {
+    return grokBotState.imageChatSettings.find(item => Number(item.chat_id) === Number(chatId) && Number(item.bot_id) === Number(botId)) || null;
+  }
+
+  function mergeGrokAiState(data = {}) {
+    const state = data.state || data;
+    if (state.settings) grokBotState.settings = { ...grokBotState.settings, ...state.settings };
+    if (state.bots) grokBotState.bots = state.bots;
+    if (state.imageBots) grokBotState.imageBots = state.imageBots;
+    if (state.chats) grokBotState.chats = state.chats;
+    if (state.chatSettings) grokBotState.chatSettings = state.chatSettings;
+    if (state.imageChatSettings) grokBotState.imageChatSettings = state.imageChatSettings;
+    if (state.models) grokBotState.models = { ...grokBotState.models, ...state.models };
+    if (selectedGrokBotId && !grokBotState.bots.some(bot => Number(bot.id) === Number(selectedGrokBotId))) {
+      selectedGrokBotId = null;
+    }
+    if (selectedGrokImageBotId && !grokBotState.imageBots.some(bot => Number(bot.id) === Number(selectedGrokImageBotId))) {
+      selectedGrokImageBotId = null;
+    }
+    mentionTargetsByChat.clear();
+  }
+
+  function renderNamedGrokAvatar({ bot, avatarId, nameId, fallbackName, inputId, labelId, removeId }) {
+    const avatarEl = $(avatarId);
+    if (!avatarEl) return;
+    const name = bot?.name || $(nameId)?.value.trim() || fallbackName;
+    const color = bot?.avatar_color || '#65aadd';
+    avatarEl.style.background = color;
+    if (bot?.avatar_url) {
+      avatarEl.innerHTML = `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="">`;
+    } else {
+      avatarEl.textContent = initials(name);
+    }
+
+    const hasSavedBot = Boolean(bot?.id);
+    const input = $(inputId);
+    const label = $(labelId);
+    if (input) {
+      input.disabled = !hasSavedBot;
+      input.value = '';
+    }
+    if (label) {
+      label.classList.toggle('ai-bot-avatar-label-disabled', !hasSavedBot);
+      label.title = hasSavedBot ? 'Change avatar' : 'Save the bot first';
+    }
+    $(removeId)?.classList.toggle('hidden', !hasSavedBot || !bot?.avatar_url);
+  }
+
+  function renderGrokBotAvatar(bot = currentGrokBot()) {
+    renderNamedGrokAvatar({
+      bot,
+      avatarId: 'grokAiBotAvatar',
+      nameId: 'grokAiBotName',
+      fallbackName: 'Grok AI',
+      inputId: 'grokAiBotAvatarInput',
+      labelId: 'grokAiBotAvatarLabel',
+      removeId: 'removeGrokAiBotAvatar',
+    });
+  }
+
+  function renderGrokImageBotAvatar(bot = currentGrokImageBot()) {
+    renderNamedGrokAvatar({
+      bot,
+      avatarId: 'grokAiImageBotAvatar',
+      nameId: 'grokAiImageBotName',
+      fallbackName: 'Grok Images',
+      inputId: 'grokAiImageBotAvatarInput',
+      labelId: 'grokAiImageBotAvatarLabel',
+      removeId: 'removeGrokAiImageBotAvatar',
+    });
+  }
+
+  function mountGrokBotPanels() {
+    const settingsBlock = $('#grokAiSettingsBlock');
+    const textBlock = $('#grokAiTextBotsBlock');
+    const imageBlock = $('#grokAiImageBotsBlock');
+    const textPanel = $('#grokAiBotList')?.closest('.ai-bot-panel');
+    const imagePanel = $('#grokAiImageBotList')?.closest('.ai-bot-panel');
+    const globalStatus = $('#grokAiStatus');
+    const textStatus = $('#grokAiTextStatus');
+    const imageStatus = $('#grokAiImageStatus');
+    const navPanel = $('#grokAiNavPanel');
+
+    if (settingsBlock && navPanel && globalStatus && navPanel.parentElement !== settingsBlock) {
+      settingsBlock.insertBefore(navPanel, globalStatus);
+    }
+    if (textBlock && textPanel && textStatus && textPanel.parentElement !== textBlock) {
+      textBlock.insertBefore(textPanel, textStatus);
+    }
+    if (imageBlock && imagePanel && imageStatus && imagePanel.parentElement !== imageBlock) {
+      imageBlock.insertBefore(imagePanel, imageStatus);
+    }
+    textPanel?.classList.remove('hidden');
+    imagePanel?.classList.remove('hidden');
+  }
+
+  function renderGrokGlobalTextModelOptions() {
+    const settings = grokBotState.settings || {};
+    const models = grokBotState.models || {};
+    const responseModels = models.response || ['grok-4-1-fast-reasoning'];
+    const summaryModels = models.summary || responseModels;
+    const embeddingModels = models.embedding || ['text-embedding'];
+    setAiModelSelectOptions('grokAiDefaultResponseModel', responseModels, settings.grok_default_response_model || responseModels[0] || '');
+    setAiModelSelectOptions('grokAiDefaultSummaryModel', summaryModels, settings.grok_default_summary_model || summaryModels[0] || '');
+    setAiModelSelectOptions('grokAiDefaultEmbeddingModel', embeddingModels, settings.grok_default_embedding_model || embeddingModels[0] || '');
+  }
+
+  function renderGrokBotModelOptions(bot = currentGrokBot()) {
+    const settings = grokBotState.settings || {};
+    const models = grokBotState.models || {};
+    const responseModels = models.response || ['grok-4-1-fast-reasoning'];
+    const summaryModels = models.summary || responseModels;
+    setAiModelSelectOptions('grokAiBotResponseModel', responseModels, bot?.response_model || settings.grok_default_response_model || responseModels[0] || '');
+    setAiModelSelectOptions('grokAiBotSummaryModel', summaryModels, bot?.summary_model || settings.grok_default_summary_model || summaryModels[0] || '');
+  }
+
+  function renderGrokGlobalImageModelOptions() {
+    const settings = grokBotState.settings || {};
+    const models = grokBotState.models || {};
+    const imageModels = models.image || ['grok-imagine-image'];
+    const aspectRatios = models.aspect_ratio || ['1:1', '16:9', '9:16'];
+    const resolutions = models.resolution || ['1k', '2k'];
+    setAiModelSelectOptions('grokAiDefaultImageModel', imageModels, settings.grok_default_image_model || imageModels[0] || '');
+    setAiModelSelectOptions('grokAiDefaultAspectRatio', aspectRatios, settings.grok_default_image_aspect_ratio || aspectRatios[0] || '');
+    setAiModelSelectOptions('grokAiDefaultResolution', resolutions, settings.grok_default_image_resolution || resolutions[0] || '');
+  }
+
+  function renderGrokImageBotModelOptions(bot = currentGrokImageBot()) {
+    const settings = grokBotState.settings || {};
+    const models = grokBotState.models || {};
+    const imageModels = models.image || ['grok-imagine-image'];
+    const aspectRatios = models.aspect_ratio || ['1:1', '16:9', '9:16'];
+    const resolutions = models.resolution || ['1k', '2k'];
+    setAiModelSelectOptions('grokAiImageBotModel', imageModels, bot?.image_model || settings.grok_default_image_model || imageModels[0] || '');
+    setAiModelSelectOptions('grokAiImageBotAspectRatio', aspectRatios, bot?.image_aspect_ratio || settings.grok_default_image_aspect_ratio || aspectRatios[0] || '');
+    setAiModelSelectOptions('grokAiImageBotResolution', resolutions, bot?.image_resolution || settings.grok_default_image_resolution || resolutions[0] || '');
+  }
+
+  function renderGrokBotList() {
+    const list = $('#grokAiBotList');
+    if (!list) return;
+    if (!grokBotState.bots.length) {
+      list.innerHTML = '<div class="ai-bot-empty">No Grok text bots yet. Create the first one.</div>';
+      return;
+    }
+    list.innerHTML = grokBotState.bots.map(bot => `
+      <button type="button" class="ai-bot-list-item${Number(bot.id) === Number(selectedGrokBotId) ? ' active' : ''}" data-bot-id="${bot.id}">
+        <span class="ai-bot-list-main">
+          <span class="ai-bot-list-avatar" style="background:${esc(bot.avatar_color || '#65aadd')}">
+            ${bot.avatar_url ? `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">` : esc(initials(bot.name || '?'))}
+          </span>
+          <span class="ai-bot-list-copy">
+            <strong>${esc(bot.name)}</strong>
+            <small>@${esc(bot.mention)} · ${bot.enabled ? 'enabled' : 'disabled'}</small>
+          </span>
+        </span>
+        <span class="ai-bot-list-model">${bot.response_model ? esc(bot.response_model) : ''}</span>
+      </button>
+    `).join('');
+  }
+
+  function renderGrokImageBotList() {
+    const list = $('#grokAiImageBotList');
+    if (!list) return;
+    if (!grokBotState.imageBots.length) {
+      list.innerHTML = '<div class="ai-bot-empty">No Grok image bots yet. Create the first one.</div>';
+      return;
+    }
+    list.innerHTML = grokBotState.imageBots.map(bot => `
+      <button type="button" class="ai-bot-list-item${Number(bot.id) === Number(selectedGrokImageBotId) ? ' active' : ''}" data-bot-id="${bot.id}">
+        <span class="ai-bot-list-main">
+          <span class="ai-bot-list-avatar" style="background:${esc(bot.avatar_color || '#65aadd')}">
+            ${bot.avatar_url ? `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">` : esc(initials(bot.name || '?'))}
+          </span>
+          <span class="ai-bot-list-copy">
+            <strong>${esc(bot.name)}</strong>
+            <small>@${esc(bot.mention)} · ${bot.enabled ? 'enabled' : 'disabled'}</small>
+          </span>
+        </span>
+        <span class="ai-bot-list-model">${bot.image_model ? esc(bot.image_model) : ''}</span>
+      </button>
+    `).join('');
+  }
+
+  function fillGrokBotForm(bot = null) {
+    const settings = grokBotState.settings || {};
+    selectedGrokBotId = bot ? bot.id : null;
+    $('#grokAiBotName').value = bot?.name || 'Grok AI';
+    $('#grokAiBotMention').value = bot?.mention || 'grok';
+    $('#grokAiBotEnabled').checked = bot ? !!bot.enabled : true;
+    $('#grokAiBotTemperature').value = bot?.temperature ?? settings.grok_temperature ?? 0.3;
+    $('#grokAiBotMaxTokens').value = bot?.max_tokens ?? settings.grok_max_tokens ?? 1000;
+    $('#grokAiBotStyle').value = bot?.style || 'Helpful Grok assistant for chat';
+    $('#grokAiBotTone').value = bot?.tone || 'warm, concise, attentive';
+    $('#grokAiBotRules').value = bot?.behavior_rules || '';
+    $('#grokAiBotSpeech').value = bot?.speech_patterns || '';
+    renderGrokBotModelOptions(bot);
+    renderGrokBotAvatar(bot);
+    renderGrokBotList();
+    renderGrokChatBotSettings();
+  }
+
+  function fillGrokImageBotForm(bot = null) {
+    selectedGrokImageBotId = bot ? bot.id : null;
+    $('#grokAiImageBotName').value = bot?.name || 'Grok Images';
+    $('#grokAiImageBotMention').value = bot?.mention || 'grok_image';
+    $('#grokAiImageBotEnabled').checked = bot ? !!bot.enabled : true;
+    $('#grokAiImageBotStyle').value = bot?.style || 'Visual prompt specialist for chat';
+    $('#grokAiImageBotTone').value = bot?.tone || 'clear, imaginative, precise';
+    $('#grokAiImageBotRules').value = bot?.behavior_rules || '';
+    $('#grokAiImageBotSpeech').value = bot?.speech_patterns || '';
+    renderGrokImageBotModelOptions(bot);
+    renderGrokImageBotAvatar(bot);
+    renderGrokImageBotList();
+    renderGrokImageChatBotSettings();
+  }
+
+  function grokBotFormPayload() {
+    return {
+      kind: 'text',
+      name: $('#grokAiBotName')?.value.trim(),
+      mention: $('#grokAiBotMention')?.value.trim(),
+      enabled: $('#grokAiBotEnabled')?.checked,
+      response_model: $('#grokAiBotResponseModel')?.value.trim(),
+      summary_model: $('#grokAiBotSummaryModel')?.value.trim(),
+      temperature: Number($('#grokAiBotTemperature')?.value || 0.3),
+      max_tokens: Number($('#grokAiBotMaxTokens')?.value || 1000),
+      style: $('#grokAiBotStyle')?.value.trim(),
+      tone: $('#grokAiBotTone')?.value.trim(),
+      behavior_rules: $('#grokAiBotRules')?.value.trim(),
+      speech_patterns: $('#grokAiBotSpeech')?.value.trim(),
+    };
+  }
+
+  function grokImageBotFormPayload() {
+    return {
+      kind: 'image',
+      name: $('#grokAiImageBotName')?.value.trim(),
+      mention: $('#grokAiImageBotMention')?.value.trim(),
+      enabled: $('#grokAiImageBotEnabled')?.checked,
+      image_model: $('#grokAiImageBotModel')?.value.trim(),
+      image_aspect_ratio: $('#grokAiImageBotAspectRatio')?.value.trim(),
+      image_resolution: $('#grokAiImageBotResolution')?.value.trim(),
+      style: $('#grokAiImageBotStyle')?.value.trim(),
+      tone: $('#grokAiImageBotTone')?.value.trim(),
+      behavior_rules: $('#grokAiImageBotRules')?.value.trim(),
+      speech_patterns: $('#grokAiImageBotSpeech')?.value.trim(),
+    };
+  }
+
+  function renderGrokChatBotSettings() {
+    const chatSelect = $('#grokAiBotChatSelect');
+    const botSelect = $('#grokAiBotChatBotSelect');
+    if (!chatSelect || !botSelect) return;
+    const currentChatValue = chatSelect.value || String(currentChatId || grokBotState.chats[0]?.id || '');
+    const currentBotValue = botSelect.value || String(selectedGrokBotId || grokBotState.bots[0]?.id || '');
+    chatSelect.innerHTML = grokBotState.chats.map(chat => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+    botSelect.innerHTML = grokBotState.bots.map(bot => `<option value="${bot.id}">${esc(bot.name)} @${esc(bot.mention)}</option>`).join('');
+    if (grokBotState.chats.some(chat => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
+    if (grokBotState.bots.some(bot => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;
+    if (!botSelect.value && grokBotState.bots[0]) botSelect.value = String(grokBotState.bots[0].id);
+    const setting = getGrokChatSetting(chatSelect.value, botSelect.value);
+    $('#grokAiBotChatEnabled').checked = !!setting?.enabled;
+    $('#grokAiBotChatMode').value = setting?.mode || 'simple';
+    $('#grokAiBotChatHotLimit').value = setting?.hot_context_limit || 50;
+  }
+
+  function renderGrokImageChatBotSettings() {
+    const chatSelect = $('#grokAiImageBotChatSelect');
+    const botSelect = $('#grokAiImageBotChatBotSelect');
+    if (!chatSelect || !botSelect) return;
+    const currentChatValue = chatSelect.value || String(currentChatId || grokBotState.chats[0]?.id || '');
+    const currentBotValue = botSelect.value || String(selectedGrokImageBotId || grokBotState.imageBots[0]?.id || '');
+    chatSelect.innerHTML = grokBotState.chats.map(chat => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+    botSelect.innerHTML = grokBotState.imageBots.map(bot => `<option value="${bot.id}">${esc(bot.name)} @${esc(bot.mention)}</option>`).join('');
+    if (grokBotState.chats.some(chat => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
+    if (grokBotState.imageBots.some(bot => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;
+    if (!botSelect.value && grokBotState.imageBots[0]) botSelect.value = String(grokBotState.imageBots[0].id);
+    const setting = getGrokImageChatSetting(chatSelect.value, botSelect.value);
+    $('#grokAiImageBotChatEnabled').checked = !!setting?.enabled;
+  }
+
+  function renderGrokAiSettings() {
+    mountGrokBotPanels();
+    const settings = grokBotState.settings || {};
+    $('#grokAiGlobalEnabled').checked = !!settings.grok_enabled;
+    $('#grokAiBaseUrl').value = settings.grok_base_url || 'https://api.x.ai/v1';
+    $('#grokAiTemperature').value = settings.grok_temperature ?? 0.3;
+    $('#grokAiMaxTokens').value = settings.grok_max_tokens ?? 1000;
+    $('#grokAiApiKey').value = '';
+    $('#grokAiKeyStatus').textContent = settings.has_grok_key
+      ? `Key saved: ${settings.masked_grok_key || '***'}`
+      : 'Key is not saved';
+    renderGrokGlobalTextModelOptions();
+    renderGrokGlobalImageModelOptions();
+    const models = grokBotState.models || {};
+    if (models.error) {
+      setGrokAiModelStatus(`Model list fallback is used: ${formatUiErrorMessage(models.error, 'Could not load Grok models')}`, 'error');
+    } else if (models.source === 'live') {
+      setGrokAiModelStatus(`Loaded ${models.response?.length || 0} text models and ${models.image?.length || 0} image models.`, 'success');
+    } else {
+      setGrokAiModelStatus('Saved defaults are shown. Use "Refresh models" or "Test key" to load live Grok models.');
+    }
+  }
+
+  function renderGrokTextBotsSettings() {
+    mountGrokBotPanels();
+    fillGrokBotForm(currentGrokBot() || grokBotState.bots[0] || null);
+    renderGrokChatBotSettings();
+  }
+
+  function renderGrokImageBotsSettings() {
+    mountGrokBotPanels();
+    fillGrokImageBotForm(currentGrokImageBot() || grokBotState.imageBots[0] || null);
+    renderGrokImageChatBotSettings();
+  }
+
+  function grokAiSettingsPayload() {
+    const body = {
+      grok_enabled: $('#grokAiGlobalEnabled')?.checked,
+      grok_base_url: $('#grokAiBaseUrl')?.value.trim(),
+      grok_default_response_model: $('#grokAiDefaultResponseModel')?.value.trim(),
+      grok_default_summary_model: $('#grokAiDefaultSummaryModel')?.value.trim(),
+      grok_default_embedding_model: $('#grokAiDefaultEmbeddingModel')?.value.trim(),
+      grok_default_image_model: $('#grokAiDefaultImageModel')?.value.trim(),
+      grok_default_image_aspect_ratio: $('#grokAiDefaultAspectRatio')?.value.trim(),
+      grok_default_image_resolution: $('#grokAiDefaultResolution')?.value.trim(),
+      grok_temperature: Number($('#grokAiTemperature')?.value || 0.3),
+      grok_max_tokens: Number($('#grokAiMaxTokens')?.value || 1000),
+    };
+    const key = $('#grokAiApiKey')?.value.trim();
+    if (key) body.grok_api_key = key;
+    return body;
+  }
+
+  async function persistGrokAiSettings() {
+    const data = await api('/api/admin/grok-ai-bots/settings', {
+      method: 'PUT',
+      body: grokAiSettingsPayload(),
+    });
+    mergeGrokAiState(data);
+    return data;
+  }
+
+  async function loadGrokAiState() {
+    const data = await api('/api/admin/grok-ai-bots');
+    mergeGrokAiState(data);
+    return data;
+  }
+
+  function syncGrokBotUser(bot) {
+    if (!bot?.user_id) return;
+    applyUserUpdate({
+      id: bot.user_id,
+      user_id: bot.user_id,
+      display_name: bot.name,
+      avatar_color: bot.avatar_color,
+      avatar_url: bot.avatar_url,
+      is_ai_bot: 1,
+    });
+  }
+
+  async function saveGrokAiSettings() {
+    setGrokAiStatus('Saving...');
+    try {
+      await persistGrokAiSettings();
+      renderGrokAiSettings();
+      setGrokAiStatus('Settings saved', 'success');
+    } catch (e) {
+      setGrokAiStatus(e.message || 'Could not save settings', 'error');
+    }
+  }
+
+  async function testGrokAiConnection() {
+    const keyInput = $('#grokAiApiKey');
+    const hasKey = Boolean(keyInput?.value.trim() || grokBotState.settings?.has_grok_key);
+    if (!hasKey) {
+      setGrokAiStatus('Enter Grok API key before testing.', 'error');
+      keyInput?.focus();
+      return;
+    }
+    setGrokAiStatus('Checking Grok connection...');
+    try {
+      const data = await api('/api/admin/grok-ai-bots/test-connection', {
+        method: 'POST',
+        body: grokAiSettingsPayload(),
+      });
+      await persistGrokAiSettings();
+      if (data.state?.models) mergeGrokAiState({ state: { models: data.state.models } });
+      renderGrokAiSettings();
+      const text = String(data.result?.text || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+      setGrokAiStatus(`Key verified (${data.result?.latencyMs || 0} ms). ${text}`, 'success');
+    } catch (e) {
+      setGrokAiStatus(formatUiErrorMessage(e, 'Could not check Grok key'), 'error');
+    }
+  }
+
+  async function refreshGrokAiModels() {
+    const keyInput = $('#grokAiApiKey');
+    const hasKey = Boolean(keyInput?.value.trim() || grokBotState.settings?.has_grok_key);
+    if (!hasKey) {
+      setGrokAiStatus('Enter or save Grok API key before loading models.', 'error');
+      keyInput?.focus();
+      return;
+    }
+    setGrokAiStatus('Loading Grok models...');
+    try {
+      const data = await api('/api/admin/grok-ai-bots/models/refresh', {
+        method: 'POST',
+        body: grokAiSettingsPayload(),
+      });
+      mergeGrokAiState(data);
+      renderGrokAiSettings();
+      setGrokAiStatus(`Models refreshed: ${grokBotState.models?.response?.length || 0} text / ${grokBotState.models?.image?.length || 0} image.`, 'success');
+    } catch (e) {
+      setGrokAiStatus(formatUiErrorMessage(e, 'Could not load Grok models'), 'error');
+    }
+  }
+
+  async function deleteGrokAiKey() {
+    if (!confirm('Delete Grok API key for AI bots?')) return;
+    try {
+      const data = await api('/api/admin/grok-ai-bots/key', { method: 'DELETE' });
+      mergeGrokAiState(data);
+      renderGrokAiSettings();
+      setGrokAiStatus('Key deleted', 'success');
+    } catch (e) {
+      setGrokAiStatus(e.message || 'Could not delete key', 'error');
+    }
+  }
+
+  async function saveGrokBot() {
+    const payload = grokBotFormPayload();
+    if (!payload.name) { setGrokTextStatus('Enter bot name', 'error'); return; }
+    setGrokTextStatus('Saving Grok bot...');
+    try {
+      const shouldUpdate = Boolean(selectedGrokBotId && grokBotState.bots.some(bot => Number(bot.id) === Number(selectedGrokBotId)));
+      const url = shouldUpdate ? `/api/admin/grok-ai-bots/${selectedGrokBotId}` : '/api/admin/grok-ai-bots';
+      const method = shouldUpdate ? 'PUT' : 'POST';
+      const data = await api(url, { method, body: payload });
+      mergeGrokAiState(data);
+      selectedGrokBotId = data.bot?.id || selectedGrokBotId;
+      syncGrokBotUser(data.bot);
+      renderGrokTextBotsSettings();
+      setGrokTextStatus('Text bot saved', 'success');
+    } catch (e) {
+      setGrokTextStatus(e.message || 'Could not save Grok bot', 'error');
+    }
+  }
+
+  async function saveGrokImageBot() {
+    const payload = grokImageBotFormPayload();
+    if (!payload.name) { setGrokImageStatus('Enter image bot name', 'error'); return; }
+    setGrokImageStatus('Saving Grok image bot...');
+    try {
+      const shouldUpdate = Boolean(selectedGrokImageBotId && grokBotState.imageBots.some(bot => Number(bot.id) === Number(selectedGrokImageBotId)));
+      const url = shouldUpdate ? `/api/admin/grok-ai-bots/${selectedGrokImageBotId}` : '/api/admin/grok-ai-bots';
+      const method = shouldUpdate ? 'PUT' : 'POST';
+      const data = await api(url, { method, body: payload });
+      mergeGrokAiState(data);
+      selectedGrokImageBotId = data.bot?.id || selectedGrokImageBotId;
+      syncGrokBotUser(data.bot);
+      renderGrokImageBotsSettings();
+      setGrokImageStatus('Image bot saved', 'success');
+    } catch (e) {
+      setGrokImageStatus(e.message || 'Could not save image bot', 'error');
+    }
+  }
+
+  async function uploadGrokBotAvatar(file, kind = 'text') {
+    if (!file) return;
+    const botId = kind === 'text' ? selectedGrokBotId : selectedGrokImageBotId;
+    if (!botId) {
+      setGrokBotStatus(kind, 'Save the bot before adding an avatar', 'error');
+      if (kind === 'text') renderGrokBotAvatar(null);
+      else renderGrokImageBotAvatar(null);
+      return;
+    }
+    const fd = new FormData();
+    fd.append('avatar', file);
+    setGrokBotStatus(kind, 'Uploading avatar...');
+    try {
+      const data = await api(`/api/admin/grok-ai-bots/${botId}/avatar`, { method: 'POST', body: fd });
+      mergeGrokAiState(data);
+      if (kind === 'text') selectedGrokBotId = data.bot?.id || selectedGrokBotId;
+      else selectedGrokImageBotId = data.bot?.id || selectedGrokImageBotId;
+      syncGrokBotUser(data.bot);
+      if (kind === 'text') renderGrokTextBotsSettings();
+      else renderGrokImageBotsSettings();
+      refreshRenderedAiBotAvatar(data.bot);
+      setGrokBotStatus(kind, 'Avatar saved', 'success');
+    } catch (e) {
+      setGrokBotStatus(kind, e.message || 'Could not upload avatar', 'error');
+    }
+  }
+
+  async function removeGrokBotAvatar(kind = 'text') {
+    const botId = kind === 'text' ? selectedGrokBotId : selectedGrokImageBotId;
+    if (!botId) return;
+    try {
+      const data = await api(`/api/admin/grok-ai-bots/${botId}/avatar`, { method: 'DELETE' });
+      mergeGrokAiState(data);
+      if (kind === 'text') selectedGrokBotId = data.bot?.id || selectedGrokBotId;
+      else selectedGrokImageBotId = data.bot?.id || selectedGrokImageBotId;
+      syncGrokBotUser(data.bot);
+      if (kind === 'text') renderGrokTextBotsSettings();
+      else renderGrokImageBotsSettings();
+      refreshRenderedAiBotAvatar(data.bot);
+      setGrokBotStatus(kind, 'Avatar removed', 'success');
+    } catch (e) {
+      setGrokBotStatus(kind, e.message || 'Could not remove avatar', 'error');
+    }
+  }
+
+  async function disableGrokBot(kind = 'text') {
+    const botId = kind === 'text' ? selectedGrokBotId : selectedGrokImageBotId;
+    if (!botId) return;
+    if (!confirm(`Disable this Grok ${kind === 'text' ? 'text' : 'image'} bot in all chats?`)) return;
+    try {
+      const data = await api(`/api/admin/grok-ai-bots/${botId}`, { method: 'DELETE' });
+      mergeGrokAiState(data);
+      if (kind === 'text') renderGrokTextBotsSettings();
+      else renderGrokImageBotsSettings();
+      setGrokBotStatus(kind, `${kind === 'text' ? 'Text' : 'Image'} bot disabled`, 'success');
+    } catch (e) {
+      setGrokBotStatus(kind, e.message || 'Could not disable bot', 'error');
+    }
+  }
+
+  async function testGrokBot(kind = 'text') {
+    const botId = kind === 'text' ? selectedGrokBotId : selectedGrokImageBotId;
+    if (!botId) { setGrokBotStatus(kind, 'Save the bot first', 'error'); return; }
+    setGrokBotStatus(kind, 'Testing model...');
+    try {
+      const data = await api(`/api/admin/grok-ai-bots/${botId}/test`, { method: 'POST', body: {} });
+      const text = data.result?.text ? data.result.text.slice(0, 500) : '';
+      setGrokBotStatus(kind, `Success (${data.result?.latencyMs || 0} ms): ${text}`, 'success');
+    } catch (e) {
+      setGrokBotStatus(kind, e.message || 'Test failed', 'error');
+    }
+  }
+
+  async function exportGrokBotJson(kind = 'text') {
+    const botId = kind === 'text' ? selectedGrokBotId : selectedGrokImageBotId;
+    if (!botId) { setGrokBotStatus(kind, 'Choose a saved bot first', 'error'); return; }
+    setGrokBotStatus(kind, 'Preparing JSON...');
+    try {
+      const headers = {};
+      if (token) headers.Authorization = 'Bearer ' + token;
+      const res = await fetch(`/api/admin/grok-ai-bots/${botId}/export`, { headers });
+      if (!res.ok) {
+        let data = {};
+        try { data = await res.json(); } catch {}
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const bot = kind === 'text' ? currentGrokBot() : currentGrokImageBot();
+      const fallbackName = `bananza-grok-bot-${bot?.mention || botId}.json`;
+      const filename = filenameFromContentDisposition(res.headers.get('content-disposition'), fallbackName);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setGrokBotStatus(kind, 'JSON exported', 'success');
+    } catch (e) {
+      setGrokBotStatus(kind, e.message || 'Could not export JSON', 'error');
+    }
+  }
+
+  async function importGrokBotJsonFile(file, kind = 'text') {
+    if (!file) return;
+    setGrokBotStatus(kind, 'Importing JSON...');
+    try {
+      const raw = await file.text();
+      const payload = JSON.parse(raw);
+      const data = await api('/api/admin/grok-ai-bots/import', { method: 'POST', body: payload });
+      mergeGrokAiState(data);
+      const importedKind = (data.bot?.kind || kind) === 'image' ? 'image' : 'text';
+      if (importedKind === 'image') {
+        selectedGrokImageBotId = data.bot?.id || selectedGrokImageBotId;
+        if (kind === 'image') renderGrokImageBotsSettings();
+      } else {
+        selectedGrokBotId = data.bot?.id || selectedGrokBotId;
+        if (kind === 'text') renderGrokTextBotsSettings();
+      }
+      const warnings = Array.isArray(data.warnings) && data.warnings.length ? ` ${data.warnings.join(' ')}` : '';
+      const message = importedKind !== kind
+        ? `Bot imported as ${importedKind} bot.${warnings} Open the ${importedKind} bot window to edit it.`
+        : `Bot imported.${warnings}`;
+      setGrokBotStatus(kind, message, warnings ? 'error' : 'success');
+    } catch (e) {
+      setGrokBotStatus(kind, e.message || 'Could not import JSON', 'error');
+    } finally {
+      const input = kind === 'text' ? $('#grokAiBotImportFile') : $('#grokAiImageBotImportFile');
+      if (input) input.value = '';
+    }
+  }
+
+  async function saveGrokChatBotSettings() {
+    const chatId = Number($('#grokAiBotChatSelect')?.value || 0);
+    const botId = Number($('#grokAiBotChatBotSelect')?.value || 0);
+    const botExists = grokBotState.bots.some(bot => Number(bot.id) === Number(botId));
+    if (!chatId || !botId) { setGrokTextStatus('Choose chat and bot', 'error'); return; }
+    if (!botExists) {
+      setGrokTextStatus('Save the bot first', 'error');
+      await loadGrokAiState().then(renderGrokTextBotsSettings).catch(() => {});
+      return;
+    }
+    try {
+      const data = await api('/api/admin/grok-ai-bots/chat-settings', {
+        method: 'PUT',
+        body: {
+          chatId,
+          botId,
+          enabled: $('#grokAiBotChatEnabled')?.checked,
+          mode: $('#grokAiBotChatMode')?.value || 'simple',
+          hot_context_limit: Number($('#grokAiBotChatHotLimit')?.value || 50),
+        },
+      });
+      mergeGrokAiState(data);
+      renderGrokChatBotSettings();
+      setGrokTextStatus('Chat settings saved', 'success');
+    } catch (e) {
+      setGrokTextStatus(e.message || 'Could not save chat settings', 'error');
+    }
+  }
+
+  async function saveGrokImageChatBotSettings() {
+    const chatId = Number($('#grokAiImageBotChatSelect')?.value || 0);
+    const botId = Number($('#grokAiImageBotChatBotSelect')?.value || 0);
+    const botExists = grokBotState.imageBots.some(bot => Number(bot.id) === Number(botId));
+    if (!chatId || !botId) { setGrokImageStatus('Choose chat and image bot', 'error'); return; }
+    if (!botExists) {
+      setGrokImageStatus('Save the image bot first', 'error');
+      await loadGrokAiState().then(renderGrokImageBotsSettings).catch(() => {});
+      return;
+    }
+    try {
+      const data = await api('/api/admin/grok-ai-bots/chat-settings', {
+        method: 'PUT',
+        body: {
+          chatId,
+          botId,
+          enabled: $('#grokAiImageBotChatEnabled')?.checked,
+          mode: 'simple',
+          hot_context_limit: 50,
+        },
+      });
+      mergeGrokAiState(data);
+      renderGrokImageChatBotSettings();
+      setGrokImageStatus('Image bot chat settings saved', 'success');
+    } catch (e) {
+      setGrokImageStatus(e.message || 'Could not save image bot chat settings', 'error');
     }
   }
 
@@ -10540,6 +11274,9 @@
     const yandexAiItem = $('#settingsYandexAiPanel');
     if (currentUser.is_admin) yandexAiItem?.classList.remove('hidden');
     else yandexAiItem?.classList.add('hidden');
+    const grokAiItem = $('#settingsGrokAiPanel');
+    if (currentUser.is_admin) grokAiItem?.classList.remove('hidden');
+    else grokAiItem?.classList.add('hidden');
     $('#settingsSendEnter').checked = sendByEnter;
     $('#settingsScrollRestore').checked = scrollRestoreMode === 'restore';
     $('#settingsOpenLastChat').checked = openLastChatOnReload;
@@ -10614,6 +11351,73 @@
     setYandexAiStatus('Loading...');
     loadYandexAiState().then(() => setYandexAiStatus('')).catch((e) => {
       setYandexAiStatus(e.message || 'Could not load Yandex AI bots', 'error');
+    });
+  }
+
+  function resetManagedModalScroll(modalId) {
+    const modal = typeof modalId === 'string' ? document.getElementById(modalId) : modalId;
+    const body = modal?.querySelector('.modal-body');
+    if (!body) return;
+    requestAnimationFrame(() => {
+      body.scrollTop = 0;
+    });
+  }
+
+  function openGrokAiSettingsModal() {
+    if (!currentUser?.is_admin) return;
+    openModal('grokAiSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
+    resetManagedModalScroll('grokAiSettingsModal');
+    setGrokAiStatus('Loading...');
+    loadGrokAiState().then(() => {
+      renderGrokAiSettings();
+      resetManagedModalScroll('grokAiSettingsModal');
+      setGrokAiStatus('');
+    }).catch((e) => {
+      setGrokAiStatus(e.message || 'Could not load Grok AI bots', 'error');
+    });
+  }
+
+  function openGrokTextBotsModal() {
+    if (!currentUser?.is_admin) return;
+    mountGrokBotPanels();
+    openModal('grokAiTextBotsModal', { replaceStack: false, opener: $('#grokAiOpenTextBots') });
+    resetManagedModalScroll('grokAiTextBotsModal');
+    setGrokTextStatus('Loading...');
+    const hasState = grokBotState.chats.length || grokBotState.bots.length || grokBotState.imageBots.length;
+    if (hasState) {
+      renderGrokTextBotsSettings();
+      resetManagedModalScroll('grokAiTextBotsModal');
+      setGrokTextStatus('');
+      return;
+    }
+    loadGrokAiState().then(() => {
+      renderGrokTextBotsSettings();
+      resetManagedModalScroll('grokAiTextBotsModal');
+      setGrokTextStatus('');
+    }).catch((e) => {
+      setGrokTextStatus(e.message || 'Could not load Grok text bots', 'error');
+    });
+  }
+
+  function openGrokImageBotsModal() {
+    if (!currentUser?.is_admin) return;
+    mountGrokBotPanels();
+    openModal('grokAiImageBotsModal', { replaceStack: false, opener: $('#grokAiOpenImageBots') });
+    resetManagedModalScroll('grokAiImageBotsModal');
+    setGrokImageStatus('Loading...');
+    const hasState = grokBotState.chats.length || grokBotState.bots.length || grokBotState.imageBots.length;
+    if (hasState) {
+      renderGrokImageBotsSettings();
+      resetManagedModalScroll('grokAiImageBotsModal');
+      setGrokImageStatus('');
+      return;
+    }
+    loadGrokAiState().then(() => {
+      renderGrokImageBotsSettings();
+      resetManagedModalScroll('grokAiImageBotsModal');
+      setGrokImageStatus('');
+    }).catch((e) => {
+      setGrokImageStatus(e.message || 'Could not load Grok image bots', 'error');
     });
   }
 
@@ -11893,6 +12697,7 @@
     $('#settingsSoundsPanel')?.addEventListener('click', openSoundSettingsModal);
     $('#settingsAiBotsPanel')?.addEventListener('click', openAiBotSettingsModal);
     $('#settingsYandexAiPanel')?.addEventListener('click', openYandexAiSettingsModal);
+    $('#settingsGrokAiPanel')?.addEventListener('click', openGrokAiSettingsModal);
     $('#settingsChangePassword').addEventListener('click', openChangePasswordModal);
     $('#settingsAdminPanel').addEventListener('click', openAdminModal);
 
@@ -12085,6 +12890,63 @@
     $('#yandexAiBotChatSelect')?.addEventListener('change', renderYandexChatBotSettings);
     $('#yandexAiBotChatBotSelect')?.addEventListener('change', renderYandexChatBotSettings);
     $('#yandexAiBotChatSave')?.addEventListener('click', saveYandexChatBotSettings);
+
+    // Grok AI bot admin settings
+    $('#grokAiSaveSettings')?.addEventListener('click', saveGrokAiSettings);
+    $('#grokAiTestConnection')?.addEventListener('click', testGrokAiConnection);
+    $('#grokAiRefreshModels')?.addEventListener('click', refreshGrokAiModels);
+    $('#grokAiDeleteKey')?.addEventListener('click', deleteGrokAiKey);
+    $('#grokAiOpenTextBots')?.addEventListener('click', openGrokTextBotsModal);
+    $('#grokAiOpenImageBots')?.addEventListener('click', openGrokImageBotsModal);
+    $('#grokAiBotCreateNew')?.addEventListener('click', () => {
+      fillGrokBotForm(null);
+      setGrokTextStatus('New Grok text bot: fill fields and save');
+    });
+    $('#grokAiBotSave')?.addEventListener('click', saveGrokBot);
+    $('#grokAiBotDisable')?.addEventListener('click', () => disableGrokBot('text'));
+    $('#grokAiBotTest')?.addEventListener('click', () => testGrokBot('text'));
+    $('#grokAiBotExportJson')?.addEventListener('click', () => exportGrokBotJson('text'));
+    $('#grokAiBotImportJson')?.addEventListener('click', () => $('#grokAiBotImportFile')?.click());
+    $('#grokAiBotImportFile')?.addEventListener('change', (event) => importGrokBotJsonFile(event.target.files?.[0], 'text'));
+    $('#grokAiBotAvatarInput')?.addEventListener('change', (event) => uploadGrokBotAvatar(event.target.files?.[0], 'text'));
+    $('#removeGrokAiBotAvatar')?.addEventListener('click', () => removeGrokBotAvatar('text'));
+    $('#grokAiBotName')?.addEventListener('input', () => {
+      if (!currentGrokBot()?.avatar_url) renderGrokBotAvatar(currentGrokBot());
+    });
+    $('#grokAiBotList')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.ai-bot-list-item');
+      if (!btn) return;
+      const bot = grokBotState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
+      if (bot) fillGrokBotForm(bot);
+    });
+    $('#grokAiBotChatSelect')?.addEventListener('change', renderGrokChatBotSettings);
+    $('#grokAiBotChatBotSelect')?.addEventListener('change', renderGrokChatBotSettings);
+    $('#grokAiBotChatSave')?.addEventListener('click', saveGrokChatBotSettings);
+
+    $('#grokAiImageBotCreateNew')?.addEventListener('click', () => {
+      fillGrokImageBotForm(null);
+      setGrokImageStatus('New Grok image bot: fill fields and save');
+    });
+    $('#grokAiImageBotSave')?.addEventListener('click', saveGrokImageBot);
+    $('#grokAiImageBotDisable')?.addEventListener('click', () => disableGrokBot('image'));
+    $('#grokAiImageBotTest')?.addEventListener('click', () => testGrokBot('image'));
+    $('#grokAiImageBotExportJson')?.addEventListener('click', () => exportGrokBotJson('image'));
+    $('#grokAiImageBotImportJson')?.addEventListener('click', () => $('#grokAiImageBotImportFile')?.click());
+    $('#grokAiImageBotImportFile')?.addEventListener('change', (event) => importGrokBotJsonFile(event.target.files?.[0], 'image'));
+    $('#grokAiImageBotAvatarInput')?.addEventListener('change', (event) => uploadGrokBotAvatar(event.target.files?.[0], 'image'));
+    $('#removeGrokAiImageBotAvatar')?.addEventListener('click', () => removeGrokBotAvatar('image'));
+    $('#grokAiImageBotName')?.addEventListener('input', () => {
+      if (!currentGrokImageBot()?.avatar_url) renderGrokImageBotAvatar(currentGrokImageBot());
+    });
+    $('#grokAiImageBotList')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.ai-bot-list-item');
+      if (!btn) return;
+      const bot = grokBotState.imageBots.find(item => Number(item.id) === Number(btn.dataset.botId));
+      if (bot) fillGrokImageBotForm(bot);
+    });
+    $('#grokAiImageBotChatSelect')?.addEventListener('change', renderGrokImageChatBotSettings);
+    $('#grokAiImageBotChatBotSelect')?.addEventListener('change', renderGrokImageChatBotSettings);
+    $('#grokAiImageBotChatSave')?.addEventListener('click', saveGrokImageChatBotSettings);
 
     // Change password save
     $('#cpSaveBtn').addEventListener('click', async () => {

@@ -4,8 +4,19 @@ const fs = require('fs');
 const path = require('path');
 
 const { AsyncJobQueue } = require('../voice/queue');
-const { getAiSettings, getOpenAIKey, getYandexKey, saveAiSettings, deleteOpenAIKey, deleteYandexKey, sanitizeSettings } = require('./settings');
+const {
+  getAiSettings,
+  getOpenAIKey,
+  getGrokKey,
+  getYandexKey,
+  saveAiSettings,
+  deleteOpenAIKey,
+  deleteGrokKey,
+  deleteYandexKey,
+  sanitizeSettings,
+} = require('./settings');
 const { OPENAI_MIN_OUTPUT_TOKENS, createEmbedding, listModelIds, generateText, generateJson } = require('./openai');
+const grokAi = require('./grok');
 const yandexAi = require('./yandex');
 
 const BOT_COLORS = ['#65aadd', '#7bc862', '#a695e7', '#ee7aae', '#6ec9cb', '#faa774'];
@@ -35,6 +46,8 @@ const FALLBACK_YANDEX_RESPONSE_MODELS = [
 const FALLBACK_YANDEX_SUMMARY_MODELS = ['yandexgpt-lite/latest', 'yandexgpt/latest'];
 const FALLBACK_YANDEX_DOC_EMBEDDING_MODELS = ['text-search-doc/latest'];
 const FALLBACK_YANDEX_QUERY_EMBEDDING_MODELS = ['text-search-query/latest'];
+const GROK_IMAGE_ASPECT_RATIO_OPTIONS = ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '2:1', '1:2', '19.5:9', '9:19.5', '20:9', '9:20', 'auto'];
+const GROK_IMAGE_RESOLUTION_OPTIONS = ['1k', '2k'];
 const FACT_TYPES = new Set([
   'user_profile',
   'preference',
@@ -118,6 +131,16 @@ function safeFilenamePart(value, fallback = 'bot') {
   return text || fallback;
 }
 
+function cleanGrokAspectRatio(value, fallback = '1:1') {
+  const text = String(value || '').trim();
+  return GROK_IMAGE_ASPECT_RATIO_OPTIONS.includes(text) ? text : fallback;
+}
+
+function cleanGrokResolution(value, fallback = '1k') {
+  const text = String(value || '').trim().toLowerCase();
+  return GROK_IMAGE_RESOLUTION_OPTIONS.includes(text) ? text : fallback;
+}
+
 function errorText(error, fallback = 'Unexpected error') {
   if (error == null) return fallback;
   if (typeof error === 'string') return error.trim() || fallback;
@@ -170,6 +193,25 @@ function isLikelyResponseModel(id) {
   if (!value || isEmbeddingModel(value)) return false;
   if (/whisper|tts|audio|transcrib|speech|image|vision|dall|moderation|realtime|search|rerank/.test(value)) return false;
   return /^(gpt|o\d|chatgpt)/.test(value);
+}
+
+function isLikelyGrokTextModel(id) {
+  const value = String(id || '').toLowerCase();
+  if (!value || isEmbeddingModel(value)) return false;
+  if (/image|vision|speech|audio|tts|stt|video|moderation|search|rerank/.test(value)) return false;
+  return /grok|reason|chat|text/.test(value);
+}
+
+function normalizeProvider(value, fallback = 'openai') {
+  const provider = String(value || '').trim().toLowerCase();
+  if (provider === 'grok' || provider === 'yandex' || provider === 'openai') return provider;
+  return fallback;
+}
+
+function normalizeBotKind(value, provider = 'openai', fallback = 'text') {
+  const kind = String(value || fallback).trim().toLowerCase();
+  if (provider === 'grok' && kind === 'image') return 'image';
+  return 'text';
 }
 
 function escapeRegExp(value) {
@@ -264,6 +306,7 @@ function createAiBotFeature({
   avatarUpload,
   upLimiter,
   avatarsDir,
+  uploadsDir,
   notifyUserUpdated,
   broadcastToChatAll,
   hydrateMessageById,
@@ -289,6 +332,22 @@ function createAiBotFeature({
     FROM ai_bots b
     LEFT JOIN users u ON u.id=b.user_id
     WHERE COALESCE(b.provider,'openai')='yandex'
+    ORDER BY b.enabled DESC, b.id ASC
+  `);
+  const allGrokTextBotsStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE COALESCE(b.provider,'openai')='grok'
+      AND COALESCE(b.kind,'text')='text'
+    ORDER BY b.enabled DESC, b.id ASC
+  `);
+  const allGrokImageBotsStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE COALESCE(b.provider,'openai')='grok'
+      AND COALESCE(b.kind,'text')='image'
     ORDER BY b.enabled DESC, b.id ASC
   `);
   const chatSettingsStmt = db.prepare('SELECT * FROM ai_chat_bots ORDER BY chat_id ASC, bot_id ASC');
@@ -329,6 +388,23 @@ function createAiBotFeature({
     WHERE cb.enabled=1 AND cb.mode='hybrid' AND b.enabled=1
       AND COALESCE(b.provider,'openai')='yandex'
   `);
+  const grokHybridEnabledStmt = db.prepare(`
+    SELECT 1
+    FROM ai_chat_bots cb
+    JOIN ai_bots b ON b.id=cb.bot_id
+    WHERE cb.chat_id=? AND cb.enabled=1 AND cb.mode='hybrid' AND b.enabled=1
+      AND COALESCE(b.provider,'openai')='grok'
+      AND COALESCE(b.kind,'text')='text'
+    LIMIT 1
+  `);
+  const grokHybridChatIdsStmt = db.prepare(`
+    SELECT DISTINCT cb.chat_id
+    FROM ai_chat_bots cb
+    JOIN ai_bots b ON b.id=cb.bot_id
+    WHERE cb.enabled=1 AND cb.mode='hybrid' AND b.enabled=1
+      AND COALESCE(b.provider,'openai')='grok'
+      AND COALESCE(b.kind,'text')='text'
+  `);
   const hybridSummaryModelStmt = db.prepare(`
     SELECT b.summary_model
     FROM ai_chat_bots cb
@@ -344,6 +420,16 @@ function createAiBotFeature({
     JOIN ai_bots b ON b.id=cb.bot_id
     WHERE cb.chat_id=? AND cb.enabled=1 AND cb.mode='hybrid' AND b.enabled=1
       AND COALESCE(b.provider,'openai')='yandex'
+    ORDER BY b.id ASC
+    LIMIT 1
+  `);
+  const grokHybridSummaryModelStmt = db.prepare(`
+    SELECT b.summary_model
+    FROM ai_chat_bots cb
+    JOIN ai_bots b ON b.id=cb.bot_id
+    WHERE cb.chat_id=? AND cb.enabled=1 AND cb.mode='hybrid' AND b.enabled=1
+      AND COALESCE(b.provider,'openai')='grok'
+      AND COALESCE(b.kind,'text')='text'
     ORDER BY b.id ASC
     LIMIT 1
   `);
@@ -378,6 +464,10 @@ function createAiBotFeature({
     INSERT INTO link_previews(message_id, url, title, description, image, hostname)
     VALUES(?,?,?,?,?,?)
   `);
+  const insertFileStmt = db.prepare(`
+    INSERT INTO files(original_name, stored_name, mime_type, size, type, uploaded_by)
+    VALUES(?,?,?,?,?,?)
+  `);
   const upsertChatBotSettingStmt = db.prepare(`
     INSERT INTO ai_chat_bots(chat_id, bot_id, enabled, mode, hot_context_limit, trigger_mode, updated_at)
     VALUES(?,?,?,?,?,?,datetime('now'))
@@ -396,6 +486,8 @@ function createAiBotFeature({
   const botAvatarLimiter = upLimiter || passThroughLimiter;
   let modelCatalogCache = null;
   let modelCatalogFetchedAt = 0;
+  let grokModelCatalogCache = null;
+  let grokModelCatalogFetchedAt = 0;
 
   db.prepare(`
     UPDATE ai_bots
@@ -416,6 +508,10 @@ function createAiBotFeature({
       else if (job.type === 'yandex-process-chunks') await yandexProcessPendingChunks(job.chatId);
       else if (job.type === 'yandex-backfill-chat') await yandexBackfillChatMemory(job.chatId);
       else if (job.type === 'yandex-refresh-chunks') await yandexRefreshChunkEmbeddings(job.chatId);
+      else if (job.type === 'grok-embed-message') await grokEmbedMessage(job.messageId);
+      else if (job.type === 'grok-process-chunks') await grokProcessPendingChunks(job.chatId);
+      else if (job.type === 'grok-backfill-chat') await grokBackfillChatMemory(job.chatId);
+      else if (job.type === 'grok-refresh-chunks') await grokRefreshChunkEmbeddings(job.chatId);
     },
   });
   const responseLocks = new Set();
@@ -428,8 +524,17 @@ function createAiBotFeature({
     return getOpenAIKey(db, secret);
   }
 
+  function getGrokApiKey() {
+    return getGrokKey(db, secret);
+  }
+
   function getYandexApiKey() {
     return getYandexKey(db, secret);
+  }
+
+  function grokBaseUrl() {
+    const settings = getGlobalSettings();
+    return settings.grok_base_url || grokAi.DEFAULT_BASE_URL;
   }
 
   function yandexModelUri(model, scheme = 'gpt') {
@@ -516,6 +621,87 @@ function createAiBotFeature({
       modelCatalogCache = fallbackModelCatalog(error.message || 'Could not load OpenAI models');
       modelCatalogFetchedAt = now;
       return modelCatalogCache;
+    }
+  }
+
+  function grokSavedModelHints() {
+    const settings = getGlobalSettings();
+    const bots = allGrokTextBotsStmt.all();
+    const imageBots = allGrokImageBotsStmt.all();
+    return {
+      response: uniqueList([
+        settings.grok_default_response_model,
+        ...bots.map(bot => bot.response_model),
+      ]),
+      summary: uniqueList([
+        settings.grok_default_summary_model,
+        ...bots.map(bot => bot.summary_model),
+      ]),
+      embedding: uniqueList([
+        settings.grok_default_embedding_model,
+        ...bots.map(bot => bot.embedding_model),
+      ]),
+      image: uniqueList([
+        settings.grok_default_image_model,
+        ...imageBots.map(bot => bot.image_model),
+      ]),
+    };
+  }
+
+  function buildGrokModelCatalog({ source = 'fallback', modelIds = [], imageModelIds = [], error = '' } = {}) {
+    const hints = grokSavedModelHints();
+    const responseModels = uniqueList(modelIds.filter(isLikelyGrokTextModel));
+    const embeddingModels = uniqueList(modelIds.filter(isEmbeddingModel));
+    const imageModels = uniqueList(imageModelIds);
+    return {
+      source,
+      fetched_at: new Date().toISOString(),
+      response: uniqueList([...hints.response, ...responseModels]),
+      summary: uniqueList([...hints.summary, ...responseModels]),
+      embedding: uniqueList([...hints.embedding, ...embeddingModels]),
+      image: uniqueList([...hints.image, ...imageModels]),
+      aspect_ratio: [...GROK_IMAGE_ASPECT_RATIO_OPTIONS],
+      resolution: [...GROK_IMAGE_RESOLUTION_OPTIONS],
+      error,
+    };
+  }
+
+  function getGrokModelCatalog() {
+    return buildGrokModelCatalog();
+  }
+
+  async function getLiveGrokModelCatalog({ apiKey, baseUrl }) {
+    const [modelIds, imageModelIds] = await Promise.all([
+      grokAi.listModelIds({ apiKey, baseUrl }),
+      grokAi.listImageModelIds({ apiKey, baseUrl }),
+    ]);
+    return buildGrokModelCatalog({ source: 'live', modelIds, imageModelIds, error: '' });
+  }
+
+  async function getGrokModelCatalogCached({ refresh = false } = {}) {
+    const now = Date.now();
+    if (!refresh && grokModelCatalogCache && now - grokModelCatalogFetchedAt < MODEL_CACHE_MS) {
+      return grokModelCatalogCache;
+    }
+
+    const apiKey = getGrokApiKey();
+    if (!apiKey) {
+      grokModelCatalogCache = buildGrokModelCatalog({ source: 'fallback', error: 'Grok API key is not configured' });
+      grokModelCatalogFetchedAt = now;
+      return grokModelCatalogCache;
+    }
+
+    try {
+      grokModelCatalogCache = await getLiveGrokModelCatalog({ apiKey, baseUrl: grokBaseUrl() });
+      grokModelCatalogFetchedAt = now;
+      return grokModelCatalogCache;
+    } catch (error) {
+      grokModelCatalogCache = buildGrokModelCatalog({
+        source: 'fallback',
+        error: errorText(error, 'Could not load Grok models'),
+      });
+      grokModelCatalogFetchedAt = now;
+      return grokModelCatalogCache;
     }
   }
 
@@ -616,6 +802,12 @@ function createAiBotFeature({
     }
   }
 
+  function enqueueGrokHybridBackfill(reason = 'settings') {
+    for (const row of grokHybridChatIdsStmt.all()) {
+      memoryQueue.enqueue(`grok:backfill:${row.chat_id}:${reason}:${Date.now()}`, { type: 'grok-backfill-chat', chatId: row.chat_id });
+    }
+  }
+
   function markEmbeddingModelChanged(nextModel) {
     const model = String(nextModel || '').trim();
     if (!model) return;
@@ -640,6 +832,18 @@ function createAiBotFeature({
     enqueueYandexHybridBackfill('embedding');
   }
 
+  function markGrokEmbeddingModelChanged(nextModel) {
+    const model = String(nextModel || '').trim();
+    if (!model) return;
+    db.prepare('UPDATE grok_message_embeddings SET is_stale=1, updated_at=datetime(\'now\') WHERE model!=?').run(model);
+    db.prepare(`
+      UPDATE grok_memory_chunks
+      SET embedding_model=NULL, embedding_json=NULL, updated_at=datetime('now')
+      WHERE embedding_model IS NULL OR embedding_model!=?
+    `).run(model);
+    enqueueGrokHybridBackfill('embedding');
+  }
+
   function getSummaryModelForChat(chatId) {
     const settings = getGlobalSettings();
     const row = hybridSummaryModelStmt.get(chatId);
@@ -650,6 +854,12 @@ function createAiBotFeature({
     const settings = getGlobalSettings();
     const row = yandexHybridSummaryModelStmt.get(chatId);
     return cleanText(row?.summary_model || settings.yandex_default_summary_model, 160) || settings.yandex_default_summary_model;
+  }
+
+  function getGrokSummaryModelForChat(chatId) {
+    const settings = getGlobalSettings();
+    const row = grokHybridSummaryModelStmt.get(chatId);
+    return cleanText(row?.summary_model || settings.grok_default_summary_model, 160) || settings.grok_default_summary_model;
   }
 
   function positiveId(value) {
@@ -1050,7 +1260,23 @@ function createAiBotFeature({
   function sanitizeBot(row) {
     if (!row) return null;
     const settings = getGlobalSettings();
-    const provider = row.provider === 'yandex' ? 'yandex' : 'openai';
+    const provider = normalizeProvider(row.provider, 'openai');
+    const kind = normalizeBotKind(row.kind, provider, 'text');
+    const defaultResponseModel = provider === 'yandex'
+      ? settings.yandex_default_response_model
+      : (provider === 'grok' ? settings.grok_default_response_model : settings.default_response_model);
+    const defaultSummaryModel = provider === 'yandex'
+      ? settings.yandex_default_summary_model
+      : (provider === 'grok' ? settings.grok_default_summary_model : settings.default_summary_model);
+    const defaultEmbeddingModel = provider === 'yandex'
+      ? settings.yandex_default_embedding_doc_model
+      : (provider === 'grok' ? settings.grok_default_embedding_model : settings.default_embedding_model);
+    const defaultTemperature = provider === 'yandex'
+      ? settings.yandex_temperature
+      : (provider === 'grok' ? settings.grok_temperature : null);
+    const defaultMaxTokens = provider === 'yandex'
+      ? settings.yandex_max_tokens
+      : (provider === 'grok' ? settings.grok_max_tokens : null);
     return {
       id: row.id,
       user_id: row.user_id,
@@ -1062,18 +1288,46 @@ function createAiBotFeature({
       speech_patterns: row.speech_patterns || '',
       enabled: row.enabled !== 0,
       provider,
-      response_model: row.response_model || (provider === 'yandex' ? settings.yandex_default_response_model : settings.default_response_model),
-      summary_model: row.summary_model || (provider === 'yandex' ? settings.yandex_default_summary_model : settings.default_summary_model),
-      embedding_model: provider === 'yandex' ? settings.yandex_default_embedding_doc_model : settings.default_embedding_model,
-      temperature: row.temperature == null ? (provider === 'yandex' ? settings.yandex_temperature : null) : Number(row.temperature),
+      kind,
+      response_model: row.response_model || defaultResponseModel,
+      summary_model: row.summary_model || defaultSummaryModel,
+      embedding_model: row.embedding_model || defaultEmbeddingModel,
+      image_model: row.image_model || (provider === 'grok' ? settings.grok_default_image_model : ''),
+      image_aspect_ratio: cleanGrokAspectRatio(
+        row.image_aspect_ratio,
+        provider === 'grok' ? settings.grok_default_image_aspect_ratio : settings.grok_default_image_aspect_ratio
+      ),
+      image_resolution: cleanGrokResolution(
+        row.image_resolution,
+        provider === 'grok' ? settings.grok_default_image_resolution : settings.grok_default_image_resolution
+      ),
+      temperature: row.temperature == null ? defaultTemperature : Number(row.temperature),
       max_tokens: row.max_tokens == null
-        ? (provider === 'yandex' ? settings.yandex_max_tokens : null)
-        : intValue(row.max_tokens, provider === 'yandex' ? settings.yandex_max_tokens : OPENAI_MIN_OUTPUT_TOKENS, provider === 'yandex' ? 1 : OPENAI_MIN_OUTPUT_TOKENS, 8000),
+        ? defaultMaxTokens
+        : intValue(
+            row.max_tokens,
+            defaultMaxTokens == null ? OPENAI_MIN_OUTPUT_TOKENS : defaultMaxTokens,
+            provider === 'openai' ? OPENAI_MIN_OUTPUT_TOKENS : 1,
+            8000
+          ),
       avatar_color: row.avatar_color || BOT_COLORS[0],
       avatar_url: row.avatar_url || null,
       created_at: row.created_at,
       updated_at: row.updated_at,
     };
+  }
+
+  function serializeChatSettingsForBotIds(botIds, { forceSimple = false } = {}) {
+    return chatSettingsStmt.all()
+      .filter(row => botIds.has(Number(row.bot_id)))
+      .map(row => ({
+        chat_id: row.chat_id,
+        bot_id: row.bot_id,
+        enabled: row.enabled !== 0,
+        mode: forceSimple ? 'simple' : (row.mode === 'hybrid' ? 'hybrid' : 'simple'),
+        hot_context_limit: intValue(row.hot_context_limit, 50, 20, 100),
+        trigger_mode: row.trigger_mode || 'mention_reply',
+      }));
   }
 
   function serializeAdminState() {
@@ -1085,20 +1339,11 @@ function createAiBotFeature({
       WHERE cm.chat_id=? AND COALESCE(u.is_ai_bot,0)=0
       ORDER BY u.display_name COLLATE NOCASE ASC
     `);
+    const openAiBotIds = new Set(allBotsStmt.all().map((bot) => Number(bot.id)));
     return {
       settings: sanitizeSettings(getGlobalSettings()),
       bots: allBotsStmt.all().map(sanitizeBot),
-      chatSettings: chatSettingsStmt.all().filter((row) => {
-        const bot = botByIdStmt.get(row.bot_id);
-        return (bot?.provider || 'openai') !== 'yandex';
-      }).map(row => ({
-        chat_id: row.chat_id,
-        bot_id: row.bot_id,
-        enabled: row.enabled !== 0,
-        mode: row.mode === 'hybrid' ? 'hybrid' : 'simple',
-        hot_context_limit: intValue(row.hot_context_limit, 50, 20, 100),
-        trigger_mode: row.trigger_mode || 'mention_reply',
-      })),
+      chatSettings: serializeChatSettingsForBotIds(openAiBotIds),
       chats: chats.map((chat) => {
         if (chat.type !== 'private') return chat;
         const names = memberNamesStmt.all(chat.id).map(row => row.display_name).join(', ');
@@ -1113,16 +1358,26 @@ function createAiBotFeature({
     return {
       settings: sanitizeSettings(getGlobalSettings()),
       bots: allYandexBotsStmt.all().map(sanitizeBot),
-      chatSettings: chatSettingsStmt.all().filter(row => yandexBotIds.has(Number(row.bot_id))).map(row => ({
-        chat_id: row.chat_id,
-        bot_id: row.bot_id,
-        enabled: row.enabled !== 0,
-        mode: row.mode === 'hybrid' ? 'hybrid' : 'simple',
-        hot_context_limit: intValue(row.hot_context_limit, 50, 20, 100),
-        trigger_mode: row.trigger_mode || 'mention_reply',
-      })),
+      chatSettings: serializeChatSettingsForBotIds(yandexBotIds),
       chats: state.chats,
       models: getYandexModelCatalog(),
+    };
+  }
+
+  function serializeGrokAdminState() {
+    const state = serializeAdminState();
+    const textBots = allGrokTextBotsStmt.all().map(sanitizeBot);
+    const imageBots = allGrokImageBotsStmt.all().map(sanitizeBot);
+    const textBotIds = new Set(textBots.map((bot) => Number(bot.id)));
+    const imageBotIds = new Set(imageBots.map((bot) => Number(bot.id)));
+    return {
+      settings: sanitizeSettings(getGlobalSettings()),
+      bots: textBots,
+      imageBots,
+      chatSettings: serializeChatSettingsForBotIds(textBotIds),
+      imageChatSettings: serializeChatSettingsForBotIds(imageBotIds, { forceSimple: true }),
+      chats: state.chats,
+      models: grokModelCatalogCache || getGrokModelCatalog(),
     };
   }
 
@@ -1195,32 +1450,69 @@ function createAiBotFeature({
     }
   });
 
+  function defaultBotName(provider, kind = 'text') {
+    if (provider === 'yandex') return 'Yandex AI';
+    if (provider === 'grok' && kind === 'image') return 'Grok Images';
+    if (provider === 'grok') return 'Grok AI';
+    return 'Bananza AI';
+  }
+
   function normalizeBotInput(input = {}, current = {}) {
     const settings = getGlobalSettings();
-    const provider = input.provider === 'yandex' || current.provider === 'yandex' ? 'yandex' : 'openai';
-    const name = cleanText(input.name ?? current.name ?? 'Bananza AI', 50) || 'Bananza AI';
+    const provider = normalizeProvider(input.provider || current.provider, 'openai');
+    const kind = normalizeBotKind(input.kind ?? current.kind, provider, 'text');
+    const name = cleanText(input.name ?? current.name ?? defaultBotName(provider, kind), 50) || defaultBotName(provider, kind);
     const mention = buildUniqueMention(input.mention ?? current.mention ?? name, current.id || null);
+    const responseFallback = provider === 'yandex'
+      ? settings.yandex_default_response_model
+      : (provider === 'grok' ? settings.grok_default_response_model : settings.default_response_model);
+    const summaryFallback = provider === 'yandex'
+      ? settings.yandex_default_summary_model
+      : (provider === 'grok' ? settings.grok_default_summary_model : settings.default_summary_model);
+    const embeddingFallback = provider === 'yandex'
+      ? settings.yandex_default_embedding_doc_model
+      : (provider === 'grok' ? settings.grok_default_embedding_model : settings.default_embedding_model);
+    const temperatureFallback = provider === 'yandex'
+      ? settings.yandex_temperature
+      : (provider === 'grok' ? settings.grok_temperature : 0.55);
+    const maxTokensFallback = provider === 'yandex'
+      ? settings.yandex_max_tokens
+      : (provider === 'grok' ? settings.grok_max_tokens : 1000);
     return {
       name,
       mention,
       provider,
+      kind,
       style: cleanText(input.style ?? current.style ?? 'Helpful chat assistant', 1000),
       tone: cleanText(input.tone ?? current.tone ?? 'warm, concise, attentive', 1000),
       behavior_rules: cleanText(input.behavior_rules ?? current.behavior_rules ?? '', 4000),
       speech_patterns: cleanText(input.speech_patterns ?? current.speech_patterns ?? '', 4000),
       enabled: boolValue(input.enabled, current.enabled == null ? true : current.enabled !== 0),
-      response_model: cleanText(input.response_model ?? current.response_model ?? (provider === 'yandex' ? settings.yandex_default_response_model : settings.default_response_model), 160),
-      summary_model: cleanText(input.summary_model ?? current.summary_model ?? (provider === 'yandex' ? settings.yandex_default_summary_model : settings.default_summary_model), 160),
-      embedding_model: provider === 'yandex' ? settings.yandex_default_embedding_doc_model : settings.default_embedding_model,
+      response_model: kind === 'image'
+        ? ''
+        : cleanText(input.response_model ?? current.response_model ?? responseFallback, 160),
+      summary_model: kind === 'image'
+        ? ''
+        : cleanText(input.summary_model ?? current.summary_model ?? summaryFallback, 160),
+      embedding_model: embeddingFallback,
+      image_model: provider === 'grok' && kind === 'image'
+        ? cleanText(input.image_model ?? current.image_model ?? settings.grok_default_image_model, 160)
+        : '',
+      image_aspect_ratio: provider === 'grok' && kind === 'image'
+        ? cleanGrokAspectRatio(input.image_aspect_ratio ?? current.image_aspect_ratio, settings.grok_default_image_aspect_ratio)
+        : '',
+      image_resolution: provider === 'grok' && kind === 'image'
+        ? cleanGrokResolution(input.image_resolution ?? current.image_resolution, settings.grok_default_image_resolution)
+        : '',
       temperature: input.temperature == null && current.temperature == null
-        ? (provider === 'yandex' ? settings.yandex_temperature : null)
-        : floatValue(input.temperature ?? current.temperature, provider === 'yandex' ? settings.yandex_temperature : 0.55, 0, 1),
+        ? (provider === 'openai' ? null : temperatureFallback)
+        : floatValue(input.temperature ?? current.temperature, temperatureFallback, 0, 1),
       max_tokens: input.max_tokens == null && current.max_tokens == null
-        ? (provider === 'yandex' ? settings.yandex_max_tokens : null)
+        ? (provider === 'openai' ? null : maxTokensFallback)
         : intValue(
             input.max_tokens ?? current.max_tokens,
-            provider === 'yandex' ? settings.yandex_max_tokens : 1000,
-            provider === 'yandex' ? 1 : OPENAI_MIN_OUTPUT_TOKENS,
+            maxTokensFallback,
+            provider === 'openai' ? OPENAI_MIN_OUTPUT_TOKENS : 1,
             8000
           ),
     };
@@ -1229,8 +1521,12 @@ function createAiBotFeature({
   const createBotTx = db.transaction((input) => {
     const userId = createBackingUser(input);
     const result = db.prepare(`
-      INSERT INTO ai_bots(user_id, name, mention, style, tone, behavior_rules, speech_patterns, enabled, provider, response_model, summary_model, embedding_model, temperature, max_tokens)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO ai_bots(
+        user_id, name, mention, style, tone, behavior_rules, speech_patterns,
+        enabled, provider, kind, response_model, summary_model, embedding_model,
+        image_model, image_aspect_ratio, image_resolution, temperature, max_tokens
+      )
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       userId,
       input.name,
@@ -1241,9 +1537,13 @@ function createAiBotFeature({
       input.speech_patterns,
       input.enabled ? 1 : 0,
       input.provider || 'openai',
+      input.kind || 'text',
       input.response_model,
       input.summary_model,
       input.embedding_model,
+      input.image_model || '',
+      input.image_aspect_ratio || '',
+      input.image_resolution || '',
       input.temperature,
       input.max_tokens
     );
@@ -1260,6 +1560,11 @@ function createAiBotFeature({
     return settings.yandex_enabled && Boolean(yandexHybridEnabledStmt.get(chatId));
   }
 
+  function isGrokHybridEnabled(chatId) {
+    const settings = getGlobalSettings();
+    return settings.grok_enabled && Boolean(grokHybridEnabledStmt.get(chatId));
+  }
+
   function enqueueMemoryForMessage(message) {
     const text = aiMessageMemoryText(message, { includeVoters: true });
     if (!text) return;
@@ -1270,6 +1575,10 @@ function createAiBotFeature({
     if (isYandexHybridEnabled(message.chat_id)) {
       memoryQueue.enqueue(`yandex:embed:${message.id}`, { type: 'yandex-embed-message', messageId: message.id });
       memoryQueue.enqueue(`yandex:chunks:${message.chat_id}`, { type: 'yandex-process-chunks', chatId: message.chat_id });
+    }
+    if (isGrokHybridEnabled(message.chat_id)) {
+      memoryQueue.enqueue(`grok:embed:${message.id}`, { type: 'grok-embed-message', messageId: message.id });
+      memoryQueue.enqueue(`grok:chunks:${message.chat_id}`, { type: 'grok-process-chunks', chatId: message.chat_id });
     }
   }
 
@@ -1769,6 +2078,266 @@ function createAiBotFeature({
     return items.sort((a, b) => b.score - a.score).slice(0, topK || 6);
   }
 
+  async function grokEmbedMessage(messageId) {
+    const row = messageForMemoryStmt.get(messageId);
+    if (!row) return;
+    const text = aiMessageMemoryText(row, { includeVoters: true });
+    if (!text) return;
+    const settings = getGlobalSettings();
+    const apiKey = getGrokApiKey();
+    if (!apiKey) return;
+    const model = settings.grok_default_embedding_model;
+    const baseUrl = grokBaseUrl();
+    const contentHash = hashText(text);
+    const existing = db.prepare('SELECT content_hash, is_stale FROM grok_message_embeddings WHERE message_id=?').get(messageId);
+    if (existing && existing.content_hash === contentHash && existing.is_stale === 0) return;
+
+    const embedding = await grokAi.createEmbedding({ apiKey, baseUrl, model, input: text });
+    if (!embedding.length) return;
+    db.prepare(`
+      INSERT INTO grok_message_embeddings(message_id, chat_id, model, embedding_json, content_hash, source_text, is_stale, created_at, updated_at)
+      VALUES(?,?,?,?,?,?,0,datetime('now'),datetime('now'))
+      ON CONFLICT(message_id) DO UPDATE SET
+        chat_id=excluded.chat_id,
+        model=excluded.model,
+        embedding_json=excluded.embedding_json,
+        content_hash=excluded.content_hash,
+        source_text=excluded.source_text,
+        is_stale=0,
+        updated_at=datetime('now')
+    `).run(row.id, row.chat_id, model, JSON.stringify(embedding), contentHash, truncate(text, 4000));
+  }
+
+  async function grokBackfillChatMemory(chatId) {
+    if (!isGrokHybridEnabled(chatId)) return;
+    const rows = db.prepare(`
+      SELECT m.id, m.chat_id, m.text, vm.transcription_text, f.original_name as file_name, f.type as file_type,
+        p.message_id as poll_message_id
+      FROM messages m
+      LEFT JOIN voice_messages vm ON vm.message_id=m.id
+      LEFT JOIN files f ON f.id=m.file_id
+      LEFT JOIN polls p ON p.message_id=m.id
+      LEFT JOIN grok_message_embeddings me ON me.message_id=m.id AND me.is_stale=0
+      WHERE m.chat_id=? AND m.is_deleted=0 AND me.message_id IS NULL
+      ORDER BY m.id ASC
+      LIMIT 300
+    `).all(chatId);
+    for (const row of rows) {
+      if (aiMessageMemoryText(row, { includeVoters: true })) {
+        memoryQueue.enqueue(`grok:embed:${row.id}`, { type: 'grok-embed-message', messageId: row.id });
+      }
+    }
+    if (rows.length >= 300) {
+      const cursor = rows[rows.length - 1]?.id || Date.now();
+      memoryQueue.enqueue(`grok:backfill:${chatId}:${cursor}`, { type: 'grok-backfill-chat', chatId });
+    }
+    memoryQueue.enqueue(`grok:chunks:${chatId}`, { type: 'grok-process-chunks', chatId });
+    memoryQueue.enqueue(`grok:refresh-chunks:${chatId}`, { type: 'grok-refresh-chunks', chatId });
+  }
+
+  async function grokRefreshChunkEmbeddings(chatId) {
+    if (!isGrokHybridEnabled(chatId)) return;
+    const settings = getGlobalSettings();
+    const apiKey = getGrokApiKey();
+    if (!apiKey) return;
+    const model = settings.grok_default_embedding_model;
+    const baseUrl = grokBaseUrl();
+    const rows = db.prepare(`
+      SELECT id, summary_short, summary_long
+      FROM grok_memory_chunks
+      WHERE chat_id=? AND status='completed'
+        AND (embedding_json IS NULL OR embedding_model IS NULL OR embedding_model!=?)
+      ORDER BY id ASC
+      LIMIT 50
+    `).all(chatId, model);
+
+    for (const row of rows) {
+      const input = `${row.summary_short || ''}\n${row.summary_long || ''}`.trim();
+      if (!input) continue;
+      const embedding = await grokAi.createEmbedding({ apiKey, baseUrl, model, input });
+      if (!embedding.length) continue;
+      db.prepare(`
+        UPDATE grok_memory_chunks
+        SET embedding_model=?, embedding_json=?, updated_at=datetime('now')
+        WHERE id=?
+      `).run(model, JSON.stringify(embedding), row.id);
+    }
+
+    if (rows.length >= 50) {
+      const cursor = rows[rows.length - 1]?.id || Date.now();
+      memoryQueue.enqueue(`grok:refresh-chunks:${chatId}:${cursor}`, { type: 'grok-refresh-chunks', chatId });
+    }
+  }
+
+  async function grokProcessPendingChunks(chatId) {
+    if (!isGrokHybridEnabled(chatId)) return;
+    const settings = getGlobalSettings();
+    const apiKey = getGrokApiKey();
+    if (!apiKey) return;
+    const baseUrl = grokBaseUrl();
+    const chunkSize = settings.chunk_size;
+    const last = db.prepare('SELECT MAX(source_to_message_id) as last_id FROM grok_memory_chunks WHERE chat_id=? AND status=\'completed\'')
+      .get(chatId);
+    const afterId = Number(last?.last_id || 0);
+    const rows = db.prepare(`
+      SELECT m.*, u.username, u.display_name, f.original_name as file_name, f.type as file_type,
+        vm.transcription_text, p.message_id as poll_message_id
+      FROM messages m
+      JOIN users u ON u.id=m.user_id
+      LEFT JOIN files f ON f.id=m.file_id
+      LEFT JOIN voice_messages vm ON vm.message_id=m.id
+      LEFT JOIN polls p ON p.message_id=m.id
+      WHERE m.chat_id=? AND m.is_deleted=0 AND m.id>?
+      ORDER BY m.id ASC
+      LIMIT ?
+    `).all(chatId, afterId, chunkSize);
+    const usable = rows.filter(row => aiMessageMemoryText(row, { includeVoters: true }));
+    if (usable.length < chunkSize) return;
+
+    const model = getGrokSummaryModelForChat(chatId);
+    const fromId = usable[0].id;
+    const toId = usable[usable.length - 1].id;
+    const transcript = usable.map(formatAiChatLine).filter(Boolean).join('\n');
+    const payload = await grokAi.generateJson({
+      apiKey,
+      baseUrl,
+      model,
+      system: 'You summarize chat history for long-term memory. Keep facts conservative and do not invent details.',
+      user: `Summarize this Russian/English chat block as JSON with keys summary_short, summary_long, key_points, decisions, open_questions, tasks.\n\nMessages:\n${transcript}`,
+      fallback: {},
+      maxOutputTokens: 1600,
+    });
+    const summaryShort = cleanText(payload.summary_short || payload.summary || '', 1200) || truncate(transcript, 900);
+    const summaryLong = cleanText(payload.summary_long || '', 4000) || summaryShort;
+    const embedding = await grokAi.createEmbedding({
+      apiKey,
+      baseUrl,
+      model: settings.grok_default_embedding_model,
+      input: `${summaryShort}\n${summaryLong}`,
+    });
+
+    db.prepare(`
+      INSERT INTO grok_memory_chunks(
+        chat_id, source_from_message_id, source_to_message_id, message_count,
+        summary_short, summary_long, structured_json, embedding_model, embedding_json, status
+      ) VALUES(?,?,?,?,?,?,?,?,?,'completed')
+    `).run(
+      chatId,
+      fromId,
+      toId,
+      usable.length,
+      summaryShort,
+      summaryLong,
+      JSON.stringify(payload || {}),
+      settings.grok_default_embedding_model,
+      embedding.length ? JSON.stringify(embedding) : null
+    );
+
+    await grokExtractFactsForChunk({ model, chatId, toId, transcript });
+    await grokUpdateRollingSummary({ model, chatId, toId, chunkSummary: payload, summaryShort, summaryLong });
+    memoryQueue.enqueue(`grok:chunks:${chatId}`, { type: 'grok-process-chunks', chatId });
+  }
+
+  async function grokExtractFactsForChunk({ model, chatId, toId, transcript }) {
+    const settings = getGlobalSettings();
+    const payload = await grokAi.generateJson({
+      apiKey: getGrokApiKey(),
+      baseUrl: grokBaseUrl(),
+      model,
+      system: 'Extract durable memory facts from chat. Return only facts that are likely useful later.',
+      user: `Return JSON {"facts":[...]} where each fact has type, fact_text, subject, object, confidence. Allowed types: ${[...FACT_TYPES].join(', ')}.\n\nMessages:\n${transcript}`,
+      fallback: { facts: [] },
+      maxOutputTokens: 1800,
+    });
+    const facts = Array.isArray(payload.facts) ? payload.facts.slice(0, 40) : [];
+    const upsert = db.prepare(`
+      INSERT INTO grok_memory_facts(chat_id, type, fact_text, subject, object, confidence, source_message_id, content_hash, is_active, created_at, updated_at)
+      VALUES(?,?,?,?,?,?,?,?,1,datetime('now'),datetime('now'))
+      ON CONFLICT(chat_id, content_hash) DO UPDATE SET
+        confidence=MAX(grok_memory_facts.confidence, excluded.confidence),
+        source_message_id=excluded.source_message_id,
+        is_active=1,
+        updated_at=datetime('now')
+    `);
+    for (const fact of facts) {
+      const type = FACT_TYPES.has(fact.type) ? fact.type : 'project_fact';
+      const factText = cleanText(fact.fact_text || fact.text || '', 1000);
+      if (!factText) continue;
+      const subject = cleanText(fact.subject || '', 180);
+      const object = cleanText(fact.object || '', 180);
+      const confidence = Math.min(1, Math.max(0, Number(fact.confidence) || settings.grok_temperature || 0.55));
+      upsert.run(chatId, type, factText, subject, object, confidence, toId, hashText(`${type}:${subject}:${object}:${factText}`));
+    }
+  }
+
+  async function grokUpdateRollingSummary({ model, chatId, toId, chunkSummary, summaryShort, summaryLong }) {
+    const current = db.prepare('SELECT * FROM grok_room_summaries WHERE chat_id=?').get(chatId);
+    const payload = await grokAi.generateJson({
+      apiKey: getGrokApiKey(),
+      baseUrl: grokBaseUrl(),
+      model,
+      system: 'Update a rolling room summary. Prefer durable decisions, tasks, participants, preferences and project facts.',
+      user: `Previous rolling summary JSON:\n${current?.structured_json || '{}'}\n\nNew chunk summary JSON:\n${JSON.stringify(chunkSummary || { summary_short: summaryShort, summary_long: summaryLong })}\n\nReturn JSON with summary_short, summary_long, key_points, decisions, open_questions, tasks.`,
+      fallback: {},
+      maxOutputTokens: 1700,
+    });
+    const nextShort = cleanText(payload.summary_short || summaryShort, 1600);
+    const nextLong = cleanText(payload.summary_long || summaryLong, 6000);
+    db.prepare(`
+      INSERT INTO grok_room_summaries(chat_id, summary_short, summary_long, structured_json, source_to_message_id, updated_at)
+      VALUES(?,?,?,?,?,datetime('now'))
+      ON CONFLICT(chat_id) DO UPDATE SET
+        summary_short=excluded.summary_short,
+        summary_long=excluded.summary_long,
+        structured_json=excluded.structured_json,
+        source_to_message_id=excluded.source_to_message_id,
+        updated_at=datetime('now')
+    `).run(chatId, nextShort, nextLong, JSON.stringify(payload || {}), toId);
+  }
+
+  async function grokRetrieveMemory({ chatId, queryText, excludeMessageId, topK }) {
+    const settings = getGlobalSettings();
+    const apiKey = getGrokApiKey();
+    if (!apiKey || !queryText) return [];
+    const queryEmbedding = await grokAi.createEmbedding({
+      apiKey,
+      baseUrl: grokBaseUrl(),
+      model: settings.grok_default_embedding_model,
+      input: queryText,
+    });
+    if (!queryEmbedding.length) return [];
+    const items = [];
+
+    const messageRows = db.prepare(`
+      SELECT message_id, source_text, embedding_json
+      FROM grok_message_embeddings
+      WHERE chat_id=? AND is_stale=0 AND message_id!=?
+      ORDER BY message_id DESC
+      LIMIT 1200
+    `).all(chatId, excludeMessageId || 0);
+    for (const row of messageRows) {
+      const score = cosineSimilarity(queryEmbedding, parseEmbedding(row.embedding_json));
+      if (score > 0.22) {
+        const messageId = Number(row.message_id || 0);
+        items.push({ type: 'message', score, text: freshRetrievalText({ type: 'message', text: row.source_text, messageId }), messageId });
+      }
+    }
+
+    const chunkRows = db.prepare(`
+      SELECT id, summary_short, summary_long, embedding_json
+      FROM grok_memory_chunks
+      WHERE chat_id=? AND status='completed' AND embedding_json IS NOT NULL
+      ORDER BY source_to_message_id DESC
+      LIMIT 200
+    `).all(chatId);
+    for (const row of chunkRows) {
+      const score = cosineSimilarity(queryEmbedding, parseEmbedding(row.embedding_json));
+      if (score > 0.2) items.push({ type: 'summary', score, text: row.summary_short || row.summary_long, chunkId: row.id });
+    }
+
+    return items.sort((a, b) => b.score - a.score).slice(0, topK || 6);
+  }
+
   function trimRecentLines(lines, maxChars) {
     const mustKeep = lines.slice(-20);
     const optional = lines.slice(0, Math.max(0, lines.length - mustKeep.length));
@@ -1809,10 +2378,13 @@ function createAiBotFeature({
     }
 
     const isYandex = bot.provider === 'yandex';
-    const room = db.prepare(`SELECT * FROM ${isYandex ? 'yandex_room_summaries' : 'room_summaries'} WHERE chat_id=?`).get(message.chat_id);
+    const isGrok = bot.provider === 'grok';
+    const roomTable = isYandex ? 'yandex_room_summaries' : (isGrok ? 'grok_room_summaries' : 'room_summaries');
+    const factsTable = isYandex ? 'yandex_memory_facts' : (isGrok ? 'grok_memory_facts' : 'memory_facts');
+    const room = db.prepare(`SELECT * FROM ${roomTable} WHERE chat_id=?`).get(message.chat_id);
     const facts = db.prepare(`
       SELECT type, fact_text, subject, object, confidence
-      FROM ${isYandex ? 'yandex_memory_facts' : 'memory_facts'}
+      FROM ${factsTable}
       WHERE chat_id=? AND is_active=1
       ORDER BY confidence DESC, updated_at DESC
       LIMIT 24
@@ -1824,6 +2396,13 @@ function createAiBotFeature({
           excludeMessageId: message.id,
           topK: settings.retrieval_top_k,
         })
+      : isGrok
+        ? await grokRetrieveMemory({
+            chatId: message.chat_id,
+            queryText: currentText,
+            excludeMessageId: message.id,
+            topK: settings.retrieval_top_k,
+          })
       : await retrieveMemory({
           chatId: message.chat_id,
           queryText: currentText,
@@ -1890,6 +2469,117 @@ function createAiBotFeature({
     });
   }
 
+  function extractBotPromptText(bot, message) {
+    const original = String(message?.text || message?.transcription_text || '').trim();
+    if (!original) return '';
+    const patterns = [
+      bot?.mention ? new RegExp(`@${escapeRegExp(bot.mention)}\\b`, 'ig') : null,
+      bot?.name ? new RegExp(`@${escapeRegExp(bot.name)}\\b`, 'ig') : null,
+    ].filter(Boolean);
+    let text = original;
+    for (const pattern of patterns) {
+      text = text.replace(pattern, ' ');
+    }
+    text = text.replace(/\s+/g, ' ').replace(/^[\s,.:;!?-]+/, '').trim();
+    return text || original;
+  }
+
+  function imageExtensionForMime(mimeType = '') {
+    const mime = String(mimeType || '').toLowerCase();
+    if (mime === 'image/jpeg' || mime === 'image/jpg') return '.jpg';
+    if (mime === 'image/webp') return '.webp';
+    if (mime === 'image/gif') return '.gif';
+    return '.png';
+  }
+
+  async function loadGrokImageBytes(imageResult) {
+    if (imageResult?.b64Json) {
+      return {
+        buffer: Buffer.from(imageResult.b64Json, 'base64'),
+        mimeType: 'image/png',
+      };
+    }
+    if (imageResult?.url) {
+      const response = await fetch(imageResult.url);
+      if (!response.ok) {
+        throw new Error(`Could not download generated image (HTTP ${response.status})`);
+      }
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const mimeType = String(response.headers.get('content-type') || 'image/png').split(';')[0].trim() || 'image/png';
+      return { buffer, mimeType };
+    }
+    throw new Error('Grok image generation returned no downloadable image');
+  }
+
+  async function createGrokImageMessage(bot, sourceMessage) {
+    const settings = getGlobalSettings();
+    const apiKey = getGrokApiKey();
+    if (!apiKey || !settings.grok_enabled) return null;
+    if (!uploadsDir) throw new Error('Uploads directory is not configured');
+    const prompt = cleanText(extractBotPromptText(bot, sourceMessage), 4000);
+    if (!prompt) return null;
+
+    const imageResult = await grokAi.generateImage({
+      apiKey,
+      baseUrl: grokBaseUrl(),
+      model: bot.image_model || settings.grok_default_image_model,
+      prompt,
+      n: 1,
+      aspectRatio: cleanGrokAspectRatio(bot.image_aspect_ratio, settings.grok_default_image_aspect_ratio),
+      resolution: cleanGrokResolution(bot.image_resolution, settings.grok_default_image_resolution),
+      responseFormat: 'b64_json',
+    });
+    const { buffer, mimeType } = await loadGrokImageBytes(imageResult);
+    if (!buffer.length) throw new Error('Generated image is empty');
+
+    const ext = imageExtensionForMime(mimeType);
+    const storedName = `ai-${crypto.randomUUID()}${ext}`;
+    const originalName = `grok-${safeFilenamePart(bot.mention || bot.name, 'image')}-${Date.now()}${ext}`;
+    await fs.promises.writeFile(path.join(uploadsDir, storedName), buffer);
+
+    const fileRow = insertFileStmt.run(
+      originalName,
+      storedName,
+      mimeType,
+      buffer.length,
+      'image',
+      bot.user_id
+    );
+    const result = insertBotMessageStmt.run(
+      sourceMessage.chat_id,
+      bot.user_id,
+      null,
+      fileRow.lastInsertRowid,
+      sourceMessage.id,
+      1,
+      bot.id
+    );
+    return hydrateMessageById(result.lastInsertRowid);
+  }
+
+  function buildBotFailureText(error) {
+    const detail = cleanText(errorText(error, 'Unexpected error'), 2000) || 'Unexpected error';
+    return `[ai-bot] response failed: ${detail}`;
+  }
+
+  function publishBotFailureMessage(bot, sourceMessage, error) {
+    const text = buildBotFailureText(error);
+    const result = insertBotMessageStmt.run(
+      sourceMessage.chat_id,
+      bot.user_id,
+      text,
+      null,
+      sourceMessage.id,
+      1,
+      bot.id
+    );
+    const message = hydrateMessageById(result.lastInsertRowid);
+    if (!message) return null;
+    broadcastToChatAll(sourceMessage.chat_id, { type: 'message', message });
+    if (typeof notifyMessageCreated === 'function') notifyMessageCreated(message);
+    return message;
+  }
+
   async function createBotResponse(bot, chatConfig, sourceMessage) {
     const key = `reply:${bot.id}:${sourceMessage.id}`;
     if (responseLocks.has(key)) return;
@@ -1897,10 +2587,23 @@ function createAiBotFeature({
     let typingTimer = null;
     try {
       const isYandex = bot.provider === 'yandex';
+      const isGrok = bot.provider === 'grok';
       const settings = getGlobalSettings();
-      const apiKey = isYandex ? getYandexApiKey() : getApiKey();
+      const apiKey = isYandex ? getYandexApiKey() : (isGrok ? getGrokApiKey() : getApiKey());
       if (!apiKey) return;
       if (isYandex && !settings.yandex_folder_id) return;
+      if (bot.kind === 'image') {
+        if (!isGrok) return;
+        broadcastBotTyping(bot, sourceMessage.chat_id, true);
+        typingTimer = setInterval(() => {
+          broadcastBotTyping(bot, sourceMessage.chat_id, true);
+        }, 2200);
+        const message = await createGrokImageMessage(bot, sourceMessage);
+        if (!message) return;
+        broadcastToChatAll(sourceMessage.chat_id, { type: 'message', message });
+        if (typeof notifyMessageCreated === 'function') notifyMessageCreated(message);
+        return;
+      }
       broadcastBotTyping(bot, sourceMessage.chat_id, true);
       typingTimer = setInterval(() => {
         broadcastBotTyping(bot, sourceMessage.chat_id, true);
@@ -1915,6 +2618,16 @@ function createAiBotFeature({
             maxOutputTokens: intValue(bot.max_tokens, settings.yandex_max_tokens, 1, 8000),
             temperature: floatValue(bot.temperature, settings.yandex_temperature, 0, 1),
           }))
+        : isGrok
+          ? await grokAi.generateText({
+              apiKey,
+              baseUrl: grokBaseUrl(),
+              model: bot.response_model || settings.grok_default_response_model,
+              system: context.system,
+              user: context.user,
+              maxOutputTokens: intValue(bot.max_tokens, settings.grok_max_tokens, 1, 8000),
+              temperature: floatValue(bot.temperature, settings.grok_temperature, 0, 1),
+            })
         : await generateText({
             apiKey,
             model: bot.response_model || settings.default_response_model,
@@ -1942,7 +2655,12 @@ function createAiBotFeature({
       schedulePreviewFetch(message.id, sourceMessage.chat_id, responseText);
       enqueueMemoryForMessage(message);
     } catch (error) {
-      console.warn('[ai-bot] response failed:', error.message);
+      console.warn(buildBotFailureText(error));
+      try {
+        publishBotFailureMessage(bot, sourceMessage, error);
+      } catch (publishError) {
+        console.warn('[ai-bot] failed to publish error message:', errorText(publishError, 'Unexpected error'));
+      }
     } finally {
       if (typingTimer) clearInterval(typingTimer);
       broadcastBotTyping(bot, sourceMessage.chat_id, false);
@@ -1955,16 +2673,17 @@ function createAiBotFeature({
     enqueueMemoryForMessage(message);
     if (options.skipBotTrigger || message.ai_generated) return;
     const settings = getGlobalSettings();
-    if (!settings.enabled && !settings.yandex_enabled) return;
+    if (!settings.enabled && !settings.yandex_enabled && !settings.grok_enabled) return;
     const text = aiMessageMemoryText(message, { includeVoters: true });
     if (!text) return;
     const rows = activeChatBotsStmt.all(message.chat_id);
     for (const row of rows) {
       const bot = sanitizeBot(row);
       if (bot.provider === 'yandex' && !settings.yandex_enabled) continue;
-      if (bot.provider !== 'yandex' && !settings.enabled) continue;
+      if (bot.provider === 'grok' && !settings.grok_enabled) continue;
+      if (bot.provider === 'openai' && !settings.enabled) continue;
       const chatConfig = {
-        mode: row.mode === 'hybrid' ? 'hybrid' : 'simple',
+        mode: bot.kind === 'image' ? 'simple' : (row.mode === 'hybrid' ? 'hybrid' : 'simple'),
         hot_context_limit: intValue(row.hot_context_limit, 50, 20, 100),
         trigger_mode: row.trigger_mode || 'mention_reply',
       };
@@ -1980,6 +2699,8 @@ function createAiBotFeature({
     db.prepare('UPDATE memory_facts SET is_active=0, updated_at=datetime(\'now\') WHERE source_message_id=?').run(message.id);
     db.prepare('UPDATE yandex_message_embeddings SET is_stale=1, updated_at=datetime(\'now\') WHERE message_id=?').run(message.id);
     db.prepare('UPDATE yandex_memory_facts SET is_active=0, updated_at=datetime(\'now\') WHERE source_message_id=?').run(message.id);
+    db.prepare('UPDATE grok_message_embeddings SET is_stale=1, updated_at=datetime(\'now\') WHERE message_id=?').run(message.id);
+    db.prepare('UPDATE grok_memory_facts SET is_active=0, updated_at=datetime(\'now\') WHERE source_message_id=?').run(message.id);
     enqueueMemoryForMessage(message);
   }
 
@@ -1988,6 +2709,8 @@ function createAiBotFeature({
     db.prepare('UPDATE memory_facts SET is_active=0, updated_at=datetime(\'now\') WHERE source_message_id=?').run(messageId);
     db.prepare('UPDATE yandex_message_embeddings SET is_stale=1, updated_at=datetime(\'now\') WHERE message_id=?').run(messageId);
     db.prepare('UPDATE yandex_memory_facts SET is_active=0, updated_at=datetime(\'now\') WHERE source_message_id=?').run(messageId);
+    db.prepare('UPDATE grok_message_embeddings SET is_stale=1, updated_at=datetime(\'now\') WHERE message_id=?').run(messageId);
+    db.prepare('UPDATE grok_memory_facts SET is_active=0, updated_at=datetime(\'now\') WHERE source_message_id=?').run(messageId);
   }
 
   app.get('/api/admin/ai-bots', auth, adminOnly, (_req, res) => {
@@ -2495,6 +3218,355 @@ function createAiBotFeature({
     }
     const bot = sanitizeBot(createBotTx(input));
     res.json({ bot, warnings, state: serializeYandexAdminState() });
+  });
+
+  function grokBotByRequestId(req, res, { kind = null } = {}) {
+    const bot = botByIdStmt.get(Number(req.params.id));
+    if (!bot) {
+      res.status(404).json({ error: 'Bot not found' });
+      return null;
+    }
+    if (normalizeProvider(bot.provider, 'openai') !== 'grok') {
+      res.status(404).json({ error: 'Grok bot not found' });
+      return null;
+    }
+    if (kind && normalizeBotKind(bot.kind, 'grok', 'text') !== kind) {
+      res.status(404).json({ error: `Grok ${kind} bot not found` });
+      return null;
+    }
+    return bot;
+  }
+
+  app.get('/api/admin/grok-ai-bots', auth, adminOnly, (_req, res) => {
+    res.json(serializeGrokAdminState());
+  });
+
+  app.put('/api/admin/grok-ai-bots/settings', auth, adminOnly, (req, res) => {
+    const before = getGlobalSettings();
+    const settings = saveAiSettings(db, req.body || {}, secret);
+    const after = getGlobalSettings();
+    if (
+      Object.prototype.hasOwnProperty.call(req.body || {}, 'grok_api_key')
+      || before.grok_base_url !== after.grok_base_url
+    ) {
+      grokModelCatalogCache = null;
+      grokModelCatalogFetchedAt = 0;
+    }
+    if (before.grok_default_embedding_model !== after.grok_default_embedding_model) {
+      markGrokEmbeddingModelChanged(after.grok_default_embedding_model);
+    }
+    if (!before.grok_enabled && after.grok_enabled) {
+      enqueueGrokHybridBackfill('enabled');
+    }
+    res.json({ settings, state: serializeGrokAdminState() });
+  });
+
+  app.post('/api/admin/grok-ai-bots/test-connection', auth, adminOnly, async (req, res) => {
+    const settings = getGlobalSettings();
+    const body = req.body || {};
+    const apiKey = cleanText(body.grok_api_key, 500) || getGrokApiKey();
+    const baseUrl = grokAi.cleanBaseUrl(body.grok_base_url || settings.grok_base_url);
+    const model = cleanText(body.grok_default_response_model || settings.grok_default_response_model, 160) || settings.grok_default_response_model;
+    if (!apiKey) return res.status(400).json({ ok: false, error: 'Enter Grok API key.' });
+    const startedAt = Date.now();
+
+    try {
+      const result = await grokAi.testConnection({
+        apiKey,
+        baseUrl,
+        model,
+      });
+      let models = null;
+      try {
+        models = await getLiveGrokModelCatalog({ apiKey, baseUrl });
+      } catch (modelError) {
+        models = buildGrokModelCatalog({
+          source: 'fallback',
+          error: errorText(modelError, 'Could not load Grok models'),
+        });
+      }
+      grokModelCatalogCache = models;
+      grokModelCatalogFetchedAt = Date.now();
+      res.json({
+        ok: true,
+        result: { ...result, latencyMs: Date.now() - startedAt, model },
+        state: { models },
+      });
+    } catch (error) {
+      res.status(400).json({ ok: false, error: errorText(error, 'Grok connection test failed') });
+    }
+  });
+
+  app.post('/api/admin/grok-ai-bots/models/refresh', auth, adminOnly, async (req, res) => {
+    const settings = getGlobalSettings();
+    const body = req.body || {};
+    const apiKey = cleanText(body.grok_api_key, 500) || getGrokApiKey();
+    const baseUrl = grokAi.cleanBaseUrl(body.grok_base_url || settings.grok_base_url);
+    if (!apiKey) return res.status(400).json({ ok: false, error: 'Enter Grok API key.' });
+    try {
+      const models = await getLiveGrokModelCatalog({ apiKey, baseUrl });
+      grokModelCatalogCache = models;
+      grokModelCatalogFetchedAt = Date.now();
+      res.json({ ok: true, state: { models } });
+    } catch (error) {
+      res.status(400).json({ ok: false, error: errorText(error, 'Could not load Grok models') });
+    }
+  });
+
+  app.delete('/api/admin/grok-ai-bots/key', auth, adminOnly, (_req, res) => {
+    const settings = deleteGrokKey(db);
+    grokModelCatalogCache = null;
+    grokModelCatalogFetchedAt = 0;
+    res.json({ settings, state: serializeGrokAdminState() });
+  });
+
+  app.post('/api/admin/grok-ai-bots', auth, adminOnly, (req, res) => {
+    const input = normalizeBotInput({
+      ...(req.body || {}),
+      provider: 'grok',
+      kind: req.body?.kind === 'image' ? 'image' : 'text',
+    });
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, state: serializeGrokAdminState() });
+  });
+
+  app.put('/api/admin/grok-ai-bots/chat-settings', auth, adminOnly, (req, res) => {
+    const chatId = Number(req.body?.chatId);
+    const botId = Number(req.body?.botId);
+    if (!db.prepare('SELECT 1 FROM chats WHERE id=?').get(chatId)) return res.status(404).json({ error: 'Chat not found' });
+    const bot = botByIdStmt.get(botId);
+    if (!bot || normalizeProvider(bot.provider, 'openai') !== 'grok') return res.status(404).json({ error: 'Grok bot not found' });
+    const enabled = boolValue(req.body?.enabled, false);
+    const botKind = normalizeBotKind(bot.kind, 'grok', 'text');
+    const mode = botKind === 'image' ? 'simple' : (req.body?.mode === 'hybrid' ? 'hybrid' : 'simple');
+    const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
+    const triggerMode = 'mention_reply';
+    saveChatBotSettingTx({ chatId, bot, enabled, mode, hotContextLimit, triggerMode });
+    if (enabled && mode === 'hybrid' && botKind === 'text') {
+      memoryQueue.enqueue(`grok:backfill:${chatId}`, { type: 'grok-backfill-chat', chatId });
+    }
+    res.json({ ok: true, state: serializeGrokAdminState() });
+  });
+
+  app.post('/api/admin/grok-ai-bots/:id(\\d+)/avatar', auth, adminOnly, botAvatarLimiter, (req, res) => {
+    if (!avatarUpload?.single) return res.status(500).json({ error: 'Avatar upload is not configured' });
+    const bot = grokBotByRequestId(req, res);
+    if (!bot) return;
+
+    avatarUpload.single('avatar')(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
+      if (!req.file) return res.status(400).json({ error: 'No file' });
+
+      const userId = ensureBackingUser(bot);
+      const old = db.prepare('SELECT avatar_url FROM users WHERE id=?').get(userId);
+      removeAvatarFile(old?.avatar_url);
+
+      const avatarUrl = '/uploads/avatars/' + req.file.filename;
+      db.prepare('UPDATE users SET avatar_url=?, display_name=? WHERE id=?').run(avatarUrl, bot.name, userId);
+      db.prepare('UPDATE ai_bots SET updated_at=datetime(\'now\') WHERE id=?').run(bot.id);
+      const updated = sanitizeBot(botByIdStmt.get(bot.id));
+      if (typeof notifyUserUpdated === 'function') notifyUserUpdated(userId);
+      res.json({ bot: updated, state: serializeGrokAdminState() });
+    });
+  });
+
+  app.delete('/api/admin/grok-ai-bots/:id(\\d+)/avatar', auth, adminOnly, (req, res) => {
+    const bot = grokBotByRequestId(req, res);
+    if (!bot) return;
+    const userId = ensureBackingUser(bot);
+    const old = db.prepare('SELECT avatar_url FROM users WHERE id=?').get(userId);
+    removeAvatarFile(old?.avatar_url);
+    db.prepare('UPDATE users SET avatar_url=NULL WHERE id=?').run(userId);
+    db.prepare('UPDATE ai_bots SET updated_at=datetime(\'now\') WHERE id=?').run(bot.id);
+    const updated = sanitizeBot(botByIdStmt.get(bot.id));
+    if (typeof notifyUserUpdated === 'function') notifyUserUpdated(userId);
+    res.json({ bot: updated, state: serializeGrokAdminState() });
+  });
+
+  app.put('/api/admin/grok-ai-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = grokBotByRequestId(req, res);
+    if (!current) return;
+    const input = normalizeBotInput({
+      ...(req.body || {}),
+      provider: 'grok',
+      kind: normalizeBotKind(req.body?.kind ?? current.kind, 'grok', 'text'),
+    }, current);
+    db.prepare(`
+      UPDATE ai_bots
+      SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
+          enabled=?, provider='grok', kind=?, response_model=?, summary_model=?, embedding_model=?,
+          image_model=?, image_aspect_ratio=?, image_resolution=?, temperature=?, max_tokens=?,
+          updated_at=datetime('now')
+      WHERE id=?
+    `).run(
+      input.name,
+      input.mention,
+      input.style,
+      input.tone,
+      input.behavior_rules,
+      input.speech_patterns,
+      input.enabled ? 1 : 0,
+      input.kind,
+      input.response_model,
+      input.summary_model,
+      input.embedding_model,
+      input.image_model,
+      input.image_aspect_ratio,
+      input.image_resolution,
+      input.temperature,
+      input.max_tokens,
+      current.id
+    );
+    if (current.user_id) {
+      db.prepare('UPDATE users SET display_name=? WHERE id=?').run(input.name, current.user_id);
+      if (typeof notifyUserUpdated === 'function') notifyUserUpdated(current.user_id);
+    }
+    const updated = botByIdStmt.get(current.id);
+    syncBotMemberships(updated, updated.enabled !== 0);
+    res.json({ bot: sanitizeBot(updated), state: serializeGrokAdminState() });
+  });
+
+  app.delete('/api/admin/grok-ai-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = grokBotByRequestId(req, res);
+    if (!current) return;
+    db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
+    db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
+    syncBotMemberships(current, false);
+    res.json({ ok: true, state: serializeGrokAdminState() });
+  });
+
+  app.post('/api/admin/grok-ai-bots/:id(\\d+)/test', auth, adminOnly, async (req, res) => {
+    const bot = sanitizeBot(grokBotByRequestId(req, res));
+    if (!bot) return;
+    const settings = getGlobalSettings();
+    const apiKey = String(req.body?.grok_api_key || '').trim() || getGrokApiKey();
+    if (!apiKey) return res.status(400).json({ ok: false, error: 'Enter Grok API key in Grok settings.' });
+    const startedAt = Date.now();
+    try {
+      if (bot.kind === 'image') {
+        const prompt = cleanText(req.body?.prompt || `Generate a friendly test image for ${bot.name}.`, 1000);
+        const result = await grokAi.generateImage({
+          apiKey,
+          baseUrl: grokBaseUrl(),
+          model: bot.image_model || settings.grok_default_image_model,
+          prompt,
+          n: 1,
+          aspectRatio: cleanGrokAspectRatio(bot.image_aspect_ratio, settings.grok_default_image_aspect_ratio),
+          resolution: cleanGrokResolution(bot.image_resolution, settings.grok_default_image_resolution),
+          responseFormat: 'b64_json',
+        });
+        res.json({
+          ok: true,
+          result: {
+            text: result.revisedPrompt ? `Image generated. Revised prompt: ${truncate(result.revisedPrompt, 240)}` : 'Image generated successfully.',
+            latencyMs: Date.now() - startedAt,
+            model: result.model || bot.image_model || settings.grok_default_image_model,
+          },
+        });
+        return;
+      }
+
+      const prompt = cleanText(req.body?.prompt || `Hello, ${bot.name}. Briefly explain how you will help in this chat.`, 1000);
+      const text = await grokAi.generateText({
+        apiKey,
+        baseUrl: grokBaseUrl(),
+        model: bot.response_model || settings.grok_default_response_model,
+        system: botSystemPrompt(bot),
+        user: prompt,
+        maxOutputTokens: 500,
+        temperature: floatValue(bot.temperature, settings.grok_temperature, 0, 1),
+      });
+      res.json({ ok: true, result: { text, latencyMs: Date.now() - startedAt, model: bot.response_model || settings.grok_default_response_model } });
+    } catch (error) {
+      res.status(400).json({ ok: false, error: error.message || 'Grok bot test failed' });
+    }
+  });
+
+  app.get('/api/admin/grok-ai-bots/:id(\\d+)/export', auth, adminOnly, (req, res) => {
+    const bot = sanitizeBot(grokBotByRequestId(req, res));
+    if (!bot) return;
+    const payload = {
+      schema_version: AI_BOT_EXPORT_VERSION,
+      exported_at: new Date().toISOString(),
+      bot: {
+        provider: 'grok',
+        kind: bot.kind || 'text',
+        name: bot.name,
+        mention: bot.mention,
+        enabled: bot.enabled,
+        response_model: bot.response_model,
+        summary_model: bot.summary_model,
+        image_model: bot.image_model,
+        image_aspect_ratio: bot.image_aspect_ratio,
+        image_resolution: bot.image_resolution,
+        temperature: bot.temperature,
+        max_tokens: bot.max_tokens,
+        style: bot.style,
+        tone: bot.tone,
+        behavior_rules: bot.behavior_rules,
+        speech_patterns: bot.speech_patterns,
+      },
+    };
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = `bananza-grok-bot-${safeFilenamePart(bot.mention || bot.name)}-${date}.json`;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(JSON.stringify(payload, null, 2));
+  });
+
+  app.post('/api/admin/grok-ai-bots/import', auth, adminOnly, async (req, res) => {
+    const source = req.body?.bot && typeof req.body.bot === 'object' ? req.body.bot : (req.body || {});
+    const warnings = [];
+    const settings = getGlobalSettings();
+    const kind = normalizeBotKind(source.kind, 'grok', 'text');
+    const requestedMention = normalizeMention(source.mention || source.name || 'bot');
+    const catalog = await getGrokModelCatalogCached();
+
+    let responseModel = cleanText(source.response_model || settings.grok_default_response_model, 160);
+    let summaryModel = cleanText(source.summary_model || settings.grok_default_summary_model, 160);
+    let imageModel = cleanText(source.image_model || settings.grok_default_image_model, 160);
+
+    if (catalog.source === 'live') {
+      if (kind === 'text') {
+        if (responseModel && !catalog.response.includes(responseModel)) {
+          warnings.push(`Response model "${responseModel}" is not available; default model was used.`);
+          responseModel = settings.grok_default_response_model;
+        }
+        if (summaryModel && !catalog.summary.includes(summaryModel)) {
+          warnings.push(`Summary model "${summaryModel}" is not available; default model was used.`);
+          summaryModel = settings.grok_default_summary_model;
+        }
+      } else if (imageModel && !catalog.image.includes(imageModel)) {
+        warnings.push(`Image model "${imageModel}" is not available; default model was used.`);
+        imageModel = settings.grok_default_image_model;
+      }
+    } else if (catalog.error) {
+      warnings.push(`Model availability was not verified: ${catalog.error}`);
+    }
+
+    const input = normalizeBotInput({
+      name: source.name,
+      mention: requestedMention,
+      provider: 'grok',
+      kind,
+      enabled: Object.prototype.hasOwnProperty.call(source, 'enabled') ? source.enabled : true,
+      response_model: responseModel,
+      summary_model: summaryModel,
+      image_model: imageModel,
+      image_aspect_ratio: source.image_aspect_ratio || settings.grok_default_image_aspect_ratio,
+      image_resolution: source.image_resolution || settings.grok_default_image_resolution,
+      temperature: source.temperature,
+      max_tokens: source.max_tokens,
+      style: source.style,
+      tone: source.tone,
+      behavior_rules: source.behavior_rules,
+      speech_patterns: source.speech_patterns,
+    });
+    if (input.mention !== requestedMention) {
+      warnings.push(`Mention "@${requestedMention}" is already taken; imported as "@${input.mention}".`);
+    }
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, warnings, state: serializeGrokAdminState() });
   });
 
   return {

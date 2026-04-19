@@ -205,6 +205,26 @@
                 </div>
               </div>
 
+              <div id="voiceProviderGrok" class="voice-provider-panel">
+                <div class="field-group">
+                  <label>Модель Grok</label>
+                  <select id="voiceGrokModel" class="modal-input"></select>
+                </div>
+                <div class="field-group">
+                  <label>Язык</label>
+                  <input type="text" id="voiceGrokLanguage" class="modal-input" placeholder="ru">
+                </div>
+                <div class="field-group">
+                  <label>API-ключ Grok</label>
+                  <input type="password" id="voiceGrokKey" class="modal-input" placeholder="Введите новый ключ">
+                  <div id="voiceGrokKeyState" class="voice-key-state"></div>
+                </div>
+                <div class="voice-inline-actions">
+                  <button type="button" id="voiceReplaceGrokKeyBtn" class="btn-sm voice-inline-btn">Заменить ключ</button>
+                  <button type="button" id="voiceDeleteGrokKeyBtn" class="btn-text voice-inline-danger">Удалить ключ</button>
+                </div>
+              </div>
+
               <div class="voice-inline-actions voice-admin-actions">
                 <div id="voiceSelectedModelMeta" class="voice-selected-model-meta"></div>
                 <button type="button" id="voiceTestModelBtn" class="btn-sm voice-inline-btn">Проверить модель</button>
@@ -255,13 +275,21 @@
     document.getElementById('voiceActiveProvider')?.addEventListener('change', syncProviderPanels);
     document.getElementById('voiceVoskModel')?.addEventListener('change', syncProviderPanels);
     document.getElementById('voiceOpenAIModel')?.addEventListener('change', syncProviderPanels);
+    document.getElementById('voiceGrokModel')?.addEventListener('change', syncProviderPanels);
     document.getElementById('voiceReplaceKeyBtn')?.addEventListener('click', () => {
       const input = document.getElementById('voiceOpenAIKey');
       if (!input) return;
       input.value = '';
       input.focus();
     });
+    document.getElementById('voiceReplaceGrokKeyBtn')?.addEventListener('click', () => {
+      const input = document.getElementById('voiceGrokKey');
+      if (!input) return;
+      input.value = '';
+      input.focus();
+    });
     document.getElementById('voiceDeleteKeyBtn')?.addEventListener('click', deleteOpenAIKey);
+    document.getElementById('voiceDeleteGrokKeyBtn')?.addEventListener('click', deleteGrokKey);
     document.getElementById('voiceSaveSettingsBtn')?.addEventListener('click', saveVoiceSettings);
     document.getElementById('voiceTestModelBtn')?.addEventListener('click', testCurrentModel);
   }
@@ -456,6 +484,7 @@
     fillSelect('voiceActiveProvider', options.providers, settings.active_provider);
     fillSelect('voiceVoskModel', options.models?.vosk || [], settings.vosk_model);
     fillSelect('voiceOpenAIModel', options.models?.openai || [], settings.openai_model);
+    fillSelect('voiceGrokModel', options.models?.grok || [], 'speech-to-text');
 
     document.getElementById('voiceVoskHelperUrl').value = settings.vosk_helper_url || '';
     document.getElementById('voiceVoskModelPath').value = settings.vosk_model_path || '';
@@ -468,6 +497,15 @@
       ? `Ключ сохранён: ${settings.masked_openai_key}`
       : 'Ключ не сохранён';
     document.getElementById('voiceDeleteKeyBtn').classList.toggle('hidden', !settings.has_openai_key);
+    document.getElementById('voiceGrokLanguage').value = settings.grok_language || 'ru';
+    document.getElementById('voiceGrokKey').value = '';
+    document.getElementById('voiceGrokKey').placeholder = settings.masked_grok_key
+      ? `Сохранён ключ ${settings.masked_grok_key}`
+      : 'Введите новый ключ';
+    document.getElementById('voiceGrokKeyState').textContent = settings.has_grok_key
+      ? `Ключ сохранён: ${settings.masked_grok_key}`
+      : 'Ключ не сохранён';
+    document.getElementById('voiceDeleteGrokKeyBtn').classList.toggle('hidden', !settings.has_grok_key);
     syncProviderPanels();
   }
 
@@ -478,20 +516,29 @@
     const testBtn = document.getElementById('voiceTestModelBtn');
     const selectedModel = provider === 'openai'
       ? (document.getElementById('voiceOpenAIModel')?.value || 'не выбрана')
-      : (document.getElementById('voiceVoskModel')?.value || 'не выбрана');
+      : provider === 'grok'
+        ? (document.getElementById('voiceGrokModel')?.value || 'speech-to-text')
+        : (document.getElementById('voiceVoskModel')?.value || 'не выбрана');
 
     document.getElementById('voiceProviderVosk')?.classList.toggle('hidden', provider !== 'vosk');
     document.getElementById('voiceProviderOpenAI')?.classList.toggle('hidden', provider !== 'openai');
+    document.getElementById('voiceProviderGrok')?.classList.toggle('hidden', provider !== 'grok');
     if (providerHint) {
       providerHint.textContent = provider === 'openai'
         ? 'Выберите модель OpenAI ниже. Для проверки нужен сохранённый API-ключ.'
-        : 'Выберите модель Vosk ниже и затем нажмите «Проверить модель».';
+        : provider === 'grok'
+          ? 'Выберите профиль Grok STT ниже. Для проверки нужен сохранённый API-ключ Grok.'
+          : 'Выберите модель Vosk ниже и затем нажмите «Проверить модель».';
     }
     if (selectedMeta) {
-      selectedMeta.textContent = `Сейчас выбрано: ${provider === 'openai' ? 'OpenAI' : 'Vosk'} / ${selectedModel}`;
+      selectedMeta.textContent = `Сейчас выбрано: ${
+        provider === 'openai' ? 'OpenAI' : (provider === 'grok' ? 'Grok' : 'Vosk')
+      } / ${selectedModel}`;
     }
     if (testBtn) {
-      testBtn.title = `Проверить ${provider === 'openai' ? 'OpenAI' : 'Vosk'}: ${selectedModel}`;
+      testBtn.title = `Проверить ${
+        provider === 'openai' ? 'OpenAI' : (provider === 'grok' ? 'Grok' : 'Vosk')
+      }: ${selectedModel}`;
     }
   }
 
@@ -512,6 +559,8 @@
       openai_model: document.getElementById('voiceOpenAIModel')?.value || '',
       openai_language: document.getElementById('voiceOpenAILanguage')?.value || 'ru',
       openai_api_key: document.getElementById('voiceOpenAIKey')?.value || '',
+      grok_language: document.getElementById('voiceGrokLanguage')?.value || 'ru',
+      grok_api_key: document.getElementById('voiceGrokKey')?.value || '',
     };
   }
 
@@ -540,6 +589,22 @@
     setAdminStatus('Удаление ключа...', 'pending');
     try {
       const data = await getBridge().api('/api/admin/voice-settings/openai-key', {
+        method: 'DELETE',
+      });
+      state.admin.settings = data.settings;
+      state.admin.options = data.options;
+      fillAdminForm();
+      setAdminStatus('Ключ удалён', 'success');
+    } catch (error) {
+      setAdminStatus(error.message || 'Не удалось удалить ключ', 'error');
+    }
+  }
+
+  async function deleteGrokKey() {
+    if (!confirm('Удалить сохранённый Grok API-ключ?')) return;
+    setAdminStatus('Удаление ключа...', 'pending');
+    try {
+      const data = await getBridge().api('/api/admin/voice-settings/grok-key', {
         method: 'DELETE',
       });
       state.admin.settings = data.settings;

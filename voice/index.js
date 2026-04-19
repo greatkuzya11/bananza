@@ -3,7 +3,19 @@ const path = require('path');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
 
-const { getVoiceSettings, getAdminVoiceSettings, getPublicVoiceSettings, getOpenAIKey, setVoiceSettings, deleteOpenAIKey, updateLastModelTest, buildDraftSettings, VOICE_SETTINGS_OPTIONS } = require('./settings');
+const {
+  getVoiceSettings,
+  getAdminVoiceSettings,
+  getPublicVoiceSettings,
+  getOpenAIKey,
+  getGrokKey,
+  setVoiceSettings,
+  deleteOpenAIKey,
+  deleteGrokKey,
+  updateLastModelTest,
+  buildDraftSettings,
+  VOICE_SETTINGS_OPTIONS,
+} = require('./settings');
 const { attachVoiceMetadata } = require('./messageMeta');
 const { AsyncJobQueue } = require('./queue');
 const { transcribeAudio, testProviderModel } = require('./providers');
@@ -177,12 +189,14 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
 
     const settings = getVoiceSettings(db);
     const apiKey = getOpenAIKey(db, secret);
+    const grokApiKey = getGrokKey(db, secret);
 
     try {
       const result = await transcribeAudio({
         filePath,
         settings,
         apiKey,
+        grokApiKey,
       });
       updateVoiceStatusStmt.run(
         'completed',
@@ -200,7 +214,9 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
         'error',
         null,
         settings.active_provider,
-        settings.active_provider === 'openai' ? settings.openai_model : settings.vosk_model,
+        settings.active_provider === 'openai'
+          ? settings.openai_model
+          : (settings.active_provider === 'grok' ? 'speech-to-text' : settings.vosk_model),
         error.message || 'Transcription failed',
         null,
         voiceJob.requested_by || null,
@@ -265,11 +281,19 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
     res.json({ settings, options: VOICE_SETTINGS_OPTIONS });
   });
 
+  app.delete('/api/admin/voice-settings/grok-key', auth, adminOnly, (_req, res) => {
+    const settings = deleteGrokKey(db);
+    res.json({ settings, options: VOICE_SETTINGS_OPTIONS });
+  });
+
   app.post('/api/admin/voice-settings/test-model', auth, adminOnly, async (req, res) => {
     const draftSettings = buildDraftSettings(db, req.body || {}, secret);
     const apiKey = Object.prototype.hasOwnProperty.call(req.body || {}, 'openai_api_key')
       ? String(req.body.openai_api_key || '').trim() || getOpenAIKey(db, secret)
       : getOpenAIKey(db, secret);
+    const grokApiKey = Object.prototype.hasOwnProperty.call(req.body || {}, 'grok_api_key')
+      ? String(req.body.grok_api_key || '').trim() || getGrokKey(db, secret)
+      : getGrokKey(db, secret);
 
     if (!fs.existsSync(TEST_AUDIO_PATH)) {
       return res.status(500).json({ error: 'Model test audio is missing' });
@@ -281,6 +305,7 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
         filePath: TEST_AUDIO_PATH,
         settings: draftSettings,
         apiKey,
+        grokApiKey,
       });
       const latencyMs = Date.now() - startedAt;
       const updated = updateLastModelTest(db, {
@@ -310,7 +335,9 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
         last_model_test_status: 'error',
         last_model_test_at: new Date().toISOString(),
         last_model_test_provider: draftSettings.active_provider,
-        last_model_test_model: draftSettings.active_provider === 'openai' ? draftSettings.openai_model : draftSettings.vosk_model,
+        last_model_test_model: draftSettings.active_provider === 'openai'
+          ? draftSettings.openai_model
+          : (draftSettings.active_provider === 'grok' ? 'speech-to-text' : draftSettings.vosk_model),
         last_model_test_latency_ms: latencyMs,
         last_model_test_excerpt: '',
         last_model_test_error: error.message || 'Model test failed',

@@ -228,6 +228,7 @@
         <button id="settingsAdminPanel" class="settings-item hidden">🛡 Admin Panel</button>
         <button id="settingsAiBotsPanel" class="settings-item hidden">🤖 AI-боты</button>
         <button id="settingsYandexAiPanel" class="settings-item hidden">YA AI-&#1071;&#1085;&#1076;&#1077;&#1082;&#1089;</button>
+        <button id="settingsGrokAiPanel" class="settings-item hidden">&#x1D54F; Grok AI</button>
       </div>
     </div>
   </div>
@@ -733,6 +734,211 @@
           </div>
 
           <div id="yandexAiStatus" class="ai-bot-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Grok AI Settings Modal -->
+  <div id="grokAiSettingsModal" class="modal hidden">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3>&#x1D54F; Grok AI</h3>
+        <button class="modal-close">&#10005;</button>
+      </div>
+      <div class="modal-body">
+        <div id="grokAiSettingsBlock" class="ai-bot-settings-block">
+          <div class="ai-bot-panel" id="grokAiGlobalPanel">
+            <h4>Global Grok settings</h4>
+            <div class="settings-item settings-toggle-item">
+              <span>Enable Grok AI bots</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="grokAiGlobalEnabled">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="ai-bot-grid">
+              <label>Base URL<input id="grokAiBaseUrl" class="modal-input" value="https://api.x.ai/v1"></label>
+              <label>Response model<select id="grokAiDefaultResponseModel" class="modal-input"></select></label>
+              <label>Summary model<select id="grokAiDefaultSummaryModel" class="modal-input"></select></label>
+              <label>Embedding model<select id="grokAiDefaultEmbeddingModel" class="modal-input"></select></label>
+              <label>Image model<select id="grokAiDefaultImageModel" class="modal-input"></select></label>
+              <label>Image aspect ratio<select id="grokAiDefaultAspectRatio" class="modal-input"></select></label>
+              <label>Image resolution<select id="grokAiDefaultResolution" class="modal-input"></select></label>
+              <label>Temperature<input id="grokAiTemperature" class="modal-input" type="number" min="0" max="1" step="0.05" value="0.3"></label>
+              <label>Max tokens<input id="grokAiMaxTokens" class="modal-input" type="number" min="1" max="8000" step="50" value="1000"></label>
+            </div>
+            <label class="ai-bot-field">Grok API key
+              <input id="grokAiApiKey" class="modal-input" type="password" autocomplete="off" placeholder="xai-...">
+            </label>
+            <div id="grokAiKeyStatus" class="settings-hint"></div>
+            <div id="grokAiModelStatus" class="settings-hint"></div>
+            <div class="ai-bot-actions">
+              <button id="grokAiSaveSettings" type="button" class="btn-primary">Save settings</button>
+              <button id="grokAiTestConnection" type="button" class="weather-action-btn">Test key</button>
+              <button id="grokAiRefreshModels" type="button" class="weather-action-btn">Refresh models</button>
+              <button id="grokAiDeleteKey" type="button" class="weather-action-btn">Delete key</button>
+            </div>
+          </div>
+
+          <div class="ai-bot-panel grok-bot-panel grok-bot-panel--text hidden">
+            <h4>Grok text bots</h4>
+            <div id="grokAiBotList" class="ai-bot-list"></div>
+            <div class="ai-bot-actions">
+              <button id="grokAiBotCreateNew" type="button" class="weather-action-btn">New bot</button>
+              <button id="grokAiBotSave" type="button" class="btn-primary">Save bot</button>
+              <button id="grokAiBotDisable" type="button" class="weather-action-btn">Disable</button>
+              <button id="grokAiBotTest" type="button" class="weather-action-btn">Test</button>
+              <button id="grokAiBotExportJson" type="button" class="weather-action-btn">Export JSON</button>
+              <button id="grokAiBotImportJson" type="button" class="weather-action-btn">Import JSON</button>
+              <input id="grokAiBotImportFile" class="hidden" type="file" accept="application/json,.json">
+            </div>
+            <div class="ai-bot-avatar-row">
+              <div class="avatar-upload-wrap ai-bot-avatar-wrap">
+                <div id="grokAiBotAvatar" class="avatar-large"></div>
+                <label class="avatar-upload-label" id="grokAiBotAvatarLabel" title="Change avatar">📷
+                  <input type="file" id="grokAiBotAvatarInput" accept=".jpg,.jpeg,.png,.webp" class="hidden">
+                </label>
+              </div>
+              <div class="ai-bot-avatar-copy">
+                <strong>Bot avatar</strong>
+                <span>The image is stored separately from JSON persona settings.</span>
+                <button id="removeGrokAiBotAvatar" class="btn-text hidden" type="button">Remove avatar</button>
+              </div>
+            </div>
+            <div class="ai-bot-grid">
+              <label>Name<input id="grokAiBotName" class="modal-input" value="Grok AI"></label>
+              <label>Mention<input id="grokAiBotMention" class="modal-input" value="grok"></label>
+              <label>Response model<select id="grokAiBotResponseModel" class="modal-input"></select></label>
+              <label>Summary model<select id="grokAiBotSummaryModel" class="modal-input"></select></label>
+              <label>Temperature<input id="grokAiBotTemperature" class="modal-input" type="number" min="0" max="1" step="0.05" value="0.3"></label>
+              <label>Max tokens<input id="grokAiBotMaxTokens" class="modal-input" type="number" min="1" max="8000" step="50" value="1000"></label>
+              <label class="ai-bot-toggle-label">Enabled
+                <label class="toggle-switch">
+                  <input type="checkbox" id="grokAiBotEnabled" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+            </div>
+            <div class="settings-hint">Grok hybrid memory uses separate Grok vector tables and does not touch OpenAI or Yandex memory.</div>
+            <label class="ai-bot-field">Style<textarea id="grokAiBotStyle" class="modal-input" rows="2"></textarea></label>
+            <label class="ai-bot-field">Tone<textarea id="grokAiBotTone" class="modal-input" rows="2"></textarea></label>
+            <label class="ai-bot-field">Behavior rules<textarea id="grokAiBotRules" class="modal-input" rows="4"></textarea></label>
+            <label class="ai-bot-field">Speech patterns<textarea id="grokAiBotSpeech" class="modal-input" rows="3"></textarea></label>
+            <div class="ai-bot-grid">
+              <label>Chat<select id="grokAiBotChatSelect" class="modal-input"></select></label>
+              <label>Bot<select id="grokAiBotChatBotSelect" class="modal-input"></select></label>
+              <label>Mode<select id="grokAiBotChatMode" class="modal-input">
+                <option value="simple">Simple context</option>
+                <option value="hybrid">Hybrid memory</option>
+              </select></label>
+              <label>Context<input id="grokAiBotChatHotLimit" class="modal-input" type="number" min="20" max="100" value="50"></label>
+              <label class="ai-bot-toggle-label">Enabled in chat
+                <label class="toggle-switch">
+                  <input type="checkbox" id="grokAiBotChatEnabled">
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+            </div>
+            <button id="grokAiBotChatSave" type="button" class="btn-primary">Save for chat</button>
+          </div>
+
+          <div class="ai-bot-panel grok-bot-panel grok-bot-panel--image hidden">
+            <h4>Grok image bots</h4>
+            <div id="grokAiImageBotList" class="ai-bot-list"></div>
+            <div class="ai-bot-actions">
+              <button id="grokAiImageBotCreateNew" type="button" class="weather-action-btn">New image bot</button>
+              <button id="grokAiImageBotSave" type="button" class="btn-primary">Save image bot</button>
+              <button id="grokAiImageBotDisable" type="button" class="weather-action-btn">Disable</button>
+              <button id="grokAiImageBotTest" type="button" class="weather-action-btn">Test</button>
+              <button id="grokAiImageBotExportJson" type="button" class="weather-action-btn">Export JSON</button>
+              <button id="grokAiImageBotImportJson" type="button" class="weather-action-btn">Import JSON</button>
+              <input id="grokAiImageBotImportFile" class="hidden" type="file" accept="application/json,.json">
+            </div>
+            <div class="ai-bot-avatar-row">
+              <div class="avatar-upload-wrap ai-bot-avatar-wrap">
+                <div id="grokAiImageBotAvatar" class="avatar-large"></div>
+                <label class="avatar-upload-label" id="grokAiImageBotAvatarLabel" title="Change avatar">📷
+                  <input type="file" id="grokAiImageBotAvatarInput" accept=".jpg,.jpeg,.png,.webp" class="hidden">
+                </label>
+              </div>
+              <div class="ai-bot-avatar-copy">
+                <strong>Image bot avatar</strong>
+                <span>The image is stored separately from JSON persona settings.</span>
+                <button id="removeGrokAiImageBotAvatar" class="btn-text hidden" type="button">Remove avatar</button>
+              </div>
+            </div>
+            <div class="ai-bot-grid">
+              <label>Name<input id="grokAiImageBotName" class="modal-input" value="Grok Images"></label>
+              <label>Mention<input id="grokAiImageBotMention" class="modal-input" value="grok_image"></label>
+              <label>Image model<select id="grokAiImageBotModel" class="modal-input"></select></label>
+              <label>Aspect ratio<select id="grokAiImageBotAspectRatio" class="modal-input"></select></label>
+              <label>Resolution<select id="grokAiImageBotResolution" class="modal-input"></select></label>
+              <label class="ai-bot-toggle-label">Enabled
+                <label class="toggle-switch">
+                  <input type="checkbox" id="grokAiImageBotEnabled" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+            </div>
+            <label class="ai-bot-field">Style<textarea id="grokAiImageBotStyle" class="modal-input" rows="2"></textarea></label>
+            <label class="ai-bot-field">Tone<textarea id="grokAiImageBotTone" class="modal-input" rows="2"></textarea></label>
+            <label class="ai-bot-field">Behavior rules<textarea id="grokAiImageBotRules" class="modal-input" rows="4"></textarea></label>
+            <label class="ai-bot-field">Speech patterns<textarea id="grokAiImageBotSpeech" class="modal-input" rows="3"></textarea></label>
+            <div class="ai-bot-grid">
+              <label>Chat<select id="grokAiImageBotChatSelect" class="modal-input"></select></label>
+              <label>Bot<select id="grokAiImageBotChatBotSelect" class="modal-input"></select></label>
+              <label class="ai-bot-toggle-label">Enabled in chat
+                <label class="toggle-switch">
+                  <input type="checkbox" id="grokAiImageBotChatEnabled">
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+            </div>
+            <button id="grokAiImageBotChatSave" type="button" class="btn-primary">Save for chat</button>
+            <div class="settings-hint">Image bots always use simple mode and answer with one generated image saved to local uploads.</div>
+          </div>
+
+          <div id="grokAiNavPanel" class="ai-bot-panel">
+            <h4>Bot settings</h4>
+            <div class="settings-hint">Open separate windows for Grok text bots and Grok image bots.</div>
+            <div class="grok-ai-nav-grid">
+              <button id="grokAiOpenTextBots" type="button" class="weather-action-btn">Open text bots</button>
+              <button id="grokAiOpenImageBots" type="button" class="weather-action-btn">Open image bots</button>
+            </div>
+          </div>
+
+          <div id="grokAiStatus" class="ai-bot-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Grok Text Bot Settings Modal -->
+  <div id="grokAiTextBotsModal" class="modal hidden">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3>&#x1D54F; Grok Text Bots</h3>
+        <button class="modal-close">&#10005;</button>
+      </div>
+      <div class="modal-body">
+        <div id="grokAiTextBotsBlock" class="ai-bot-settings-block">
+          <div id="grokAiTextStatus" class="ai-bot-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Grok Image Bot Settings Modal -->
+  <div id="grokAiImageBotsModal" class="modal hidden">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3>&#x1D54F; Grok Image Bots</h3>
+        <button class="modal-close">&#10005;</button>
+      </div>
+      <div class="modal-body">
+        <div id="grokAiImageBotsBlock" class="ai-bot-settings-block">
+          <div id="grokAiImageStatus" class="ai-bot-status"></div>
         </div>
       </div>
     </div>

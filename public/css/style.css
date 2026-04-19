@@ -3,6 +3,7 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 
 :root {
+  color-scheme: dark;
   --modal-animation-speed-factor: 1;
   --chat-area-left: 0px;
   --chat-area-top: 0px;
@@ -60,6 +61,11 @@
   --poll-style-preview-shadow: 0 14px 34px rgba(0,0,0,.24);
   --radius: 10px;
   --radius-msg: 12px;
+}
+
+html,
+body {
+  color-scheme: dark;
 }
 
 #pollComposerModal[data-poll-style="pulse"],
@@ -2544,11 +2550,37 @@ html[data-modal-animation="none"] .search-panel {
 }
 .modal-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 .modal-body { padding: 16px 20px; overflow-y: auto; flex: 1; }
+.modal-content,
+.mention-picker,
+.avatar-user-menu,
+.reaction-picker,
+.reaction-emoji-popover,
+.chat-context-menu-sheet,
+.attach-menu,
+.search-panel-sheet {
+  color-scheme: dark;
+}
 .modal-input {
   width: 100%; padding: 10px 14px; background: var(--bg-input); border: 1px solid var(--border-light);
   border-radius: 8px; color: var(--text-primary); outline: none; margin-bottom: 12px; font-size: 14px;
 }
 .modal-input:focus { border-color: var(--accent); }
+select,
+select.modal-input,
+.modal-input[type="date"],
+.modal-input[type="time"],
+.modal-input[type="datetime-local"] {
+  color-scheme: dark;
+  background-color: var(--bg-input);
+  color: var(--text-primary);
+}
+select option,
+select optgroup,
+select.modal-input option,
+select.modal-input optgroup {
+  background: var(--bg-modal);
+  color: var(--text-primary);
+}
 .pw-wrap {
   position: relative;
   margin-bottom: 12px;
@@ -3580,6 +3612,16 @@ html[data-visual-mode="rich"] .poll-card {
   min-height: 40px;
   padding: 0 14px;
 }
+.grok-ai-nav-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.grok-ai-nav-grid .weather-action-btn {
+  width: 100%;
+  min-height: 40px;
+}
 .ai-bot-list {
   display: flex;
   flex-direction: column;
@@ -3667,6 +3709,9 @@ html[data-visual-mode="rich"] .poll-card {
 .ai-bot-status.is-error { color: var(--danger); }
 @media (max-width: 640px) {
   .ai-bot-grid {
+    grid-template-columns: 1fr;
+  }
+  .grok-ai-nav-grid {
     grid-template-columns: 1fr;
   }
   .ai-bot-avatar-row {

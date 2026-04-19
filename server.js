@@ -348,6 +348,7 @@ aiBotFeature = createAiBotFeature({
   avatarUpload,
   upLimiter,
   avatarsDir: AVATARS_DIR,
+  uploadsDir: UPLOADS_DIR,
   notifyUserUpdated,
   broadcastToChatAll,
   hydrateMessageById: (messageId) => hydrateMessageById(messageId),

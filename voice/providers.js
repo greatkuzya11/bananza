@@ -83,20 +83,55 @@ async function transcribeWithOpenAI({ filePath, settings, apiKey }) {
   };
 }
 
+async function transcribeWithGrok({ filePath, settings, grokApiKey }) {
+  if (!grokApiKey) throw new Error('Grok API key is not configured');
+  const fileBuffer = await fs.promises.readFile(filePath);
+  const formData = new FormData();
+  formData.append('file', new Blob([fileBuffer], { type: 'audio/wav' }), path.basename(filePath));
+  if (settings.grok_language) {
+    formData.append('language', settings.grok_language);
+  }
+
+  const res = await fetch('https://api.x.ai/v1/stt', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${grokApiKey}`,
+    },
+    body: formData,
+    signal: AbortSignal.timeout(settings.transcription_timeout_ms),
+  });
+
+  const data = await parseJsonResponse(res);
+  if (!res.ok) {
+    throw new Error(data.error?.message || data.error || data.raw || 'Grok transcription request failed');
+  }
+
+  if (!data.text || !String(data.text).trim()) {
+    throw new Error('Grok returned empty transcription');
+  }
+
+  return {
+    text: String(data.text).trim(),
+    provider: 'grok',
+    model: data.model || 'speech-to-text',
+  };
+}
+
 async function runProvider(provider, ctx) {
   if (provider === 'openai') return transcribeWithOpenAI(ctx);
+  if (provider === 'grok') return transcribeWithGrok(ctx);
   if (provider === 'vosk') return transcribeWithVosk(ctx);
   throw new Error(`Unsupported provider: ${provider}`);
 }
 
-async function transcribeAudio({ filePath, settings, apiKey }) {
+async function transcribeAudio({ filePath, settings, apiKey, grokApiKey }) {
   const primary = settings.active_provider;
   try {
-    return await runProvider(primary, { filePath, settings, apiKey });
+    return await runProvider(primary, { filePath, settings, apiKey, grokApiKey });
   } catch (error) {
     if (primary !== 'openai' && settings.fallback_to_openai) {
       try {
-        return await runProvider('openai', { filePath, settings, apiKey });
+        return await runProvider('openai', { filePath, settings, apiKey, grokApiKey });
       } catch (fallbackError) {
         fallbackError.message = `${error.message}; fallback failed: ${fallbackError.message}`;
         throw fallbackError;
@@ -106,8 +141,8 @@ async function transcribeAudio({ filePath, settings, apiKey }) {
   }
 }
 
-async function testProviderModel({ filePath, settings, apiKey }) {
-  return runProvider(settings.active_provider, { filePath, settings, apiKey });
+async function testProviderModel({ filePath, settings, apiKey, grokApiKey }) {
+  return runProvider(settings.active_provider, { filePath, settings, apiKey, grokApiKey });
 }
 
 module.exports = {

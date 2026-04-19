@@ -11,6 +11,18 @@ const DEFAULT_AI_SETTINGS = {
   retrieval_top_k: 6,
   openai_key_encrypted: '',
   openai_key_masked: '',
+  grok_enabled: false,
+  grok_base_url: 'https://api.x.ai/v1',
+  grok_default_response_model: 'grok-4-1-fast-reasoning',
+  grok_default_summary_model: 'grok-4-1-fast-reasoning',
+  grok_default_embedding_model: 'text-embedding',
+  grok_default_image_model: 'grok-imagine-image',
+  grok_default_image_aspect_ratio: '1:1',
+  grok_default_image_resolution: '1k',
+  grok_temperature: 0.3,
+  grok_max_tokens: 1000,
+  grok_key_encrypted: '',
+  grok_key_masked: '',
   yandex_enabled: false,
   yandex_folder_id: '',
   yandex_base_url: 'https://llm.api.cloud.yandex.net/foundationModels/v1',
@@ -75,6 +87,21 @@ function cleanReasoningMode(value) {
   return mode === 'ENABLED_HIDDEN' ? 'ENABLED_HIDDEN' : 'DISABLED';
 }
 
+function cleanAspectRatio(value, fallback) {
+  const text = String(value || '').trim();
+  if (!text) return fallback;
+  if (/^(?:auto|1:1|16:9|9:16|4:3|3:4|3:2|2:3|2:1|1:2|19\.5:9|9:19\.5|20:9|9:20)$/i.test(text)) {
+    return text;
+  }
+  return fallback;
+}
+
+function cleanImageResolution(value, fallback) {
+  const text = String(value || '').trim().toLowerCase();
+  if (text === '1k' || text === '2k') return text;
+  return fallback;
+}
+
 function normalizeSettings(raw = {}) {
   const next = { ...DEFAULT_AI_SETTINGS, ...raw };
   next.enabled = boolValue(next.enabled, DEFAULT_AI_SETTINGS.enabled);
@@ -85,6 +112,18 @@ function normalizeSettings(raw = {}) {
   next.retrieval_top_k = intValue(next.retrieval_top_k, DEFAULT_AI_SETTINGS.retrieval_top_k, 1, 12);
   next.openai_key_encrypted = String(next.openai_key_encrypted || '');
   next.openai_key_masked = String(next.openai_key_masked || '');
+  next.grok_enabled = boolValue(next.grok_enabled, DEFAULT_AI_SETTINGS.grok_enabled);
+  next.grok_base_url = cleanBaseUrl(next.grok_base_url, DEFAULT_AI_SETTINGS.grok_base_url);
+  next.grok_default_response_model = cleanModel(next.grok_default_response_model, DEFAULT_AI_SETTINGS.grok_default_response_model);
+  next.grok_default_summary_model = cleanModel(next.grok_default_summary_model, DEFAULT_AI_SETTINGS.grok_default_summary_model);
+  next.grok_default_embedding_model = cleanModel(next.grok_default_embedding_model, DEFAULT_AI_SETTINGS.grok_default_embedding_model);
+  next.grok_default_image_model = cleanModel(next.grok_default_image_model, DEFAULT_AI_SETTINGS.grok_default_image_model);
+  next.grok_default_image_aspect_ratio = cleanAspectRatio(next.grok_default_image_aspect_ratio, DEFAULT_AI_SETTINGS.grok_default_image_aspect_ratio);
+  next.grok_default_image_resolution = cleanImageResolution(next.grok_default_image_resolution, DEFAULT_AI_SETTINGS.grok_default_image_resolution);
+  next.grok_temperature = floatValue(next.grok_temperature, DEFAULT_AI_SETTINGS.grok_temperature, 0, 1);
+  next.grok_max_tokens = intValue(next.grok_max_tokens, DEFAULT_AI_SETTINGS.grok_max_tokens, 1, 8000);
+  next.grok_key_encrypted = String(next.grok_key_encrypted || '');
+  next.grok_key_masked = String(next.grok_key_masked || '');
   next.yandex_enabled = boolValue(next.yandex_enabled, DEFAULT_AI_SETTINGS.yandex_enabled);
   next.yandex_folder_id = cleanText(next.yandex_folder_id, DEFAULT_AI_SETTINGS.yandex_folder_id, 120);
   next.yandex_base_url = cleanBaseUrl(next.yandex_base_url, DEFAULT_AI_SETTINGS.yandex_base_url);
@@ -137,6 +176,16 @@ function getOpenAIKey(db, secret) {
   }
 }
 
+function getGrokKey(db, secret) {
+  const settings = getAiSettings(db);
+  if (!settings.grok_key_encrypted) return '';
+  try {
+    return decryptText(settings.grok_key_encrypted, secret);
+  } catch {
+    return '';
+  }
+}
+
 function getYandexKey(db, secret) {
   const settings = getAiSettings(db);
   if (!settings.yandex_key_encrypted) return '';
@@ -157,6 +206,16 @@ function saveAiSettings(db, incoming = {}, secret) {
     default_embedding_model: incoming.default_embedding_model ?? current.default_embedding_model,
     chunk_size: incoming.chunk_size ?? current.chunk_size,
     retrieval_top_k: incoming.retrieval_top_k ?? current.retrieval_top_k,
+    grok_enabled: Object.prototype.hasOwnProperty.call(incoming, 'grok_enabled') ? incoming.grok_enabled : current.grok_enabled,
+    grok_base_url: incoming.grok_base_url ?? current.grok_base_url,
+    grok_default_response_model: incoming.grok_default_response_model ?? current.grok_default_response_model,
+    grok_default_summary_model: incoming.grok_default_summary_model ?? current.grok_default_summary_model,
+    grok_default_embedding_model: incoming.grok_default_embedding_model ?? current.grok_default_embedding_model,
+    grok_default_image_model: incoming.grok_default_image_model ?? current.grok_default_image_model,
+    grok_default_image_aspect_ratio: incoming.grok_default_image_aspect_ratio ?? current.grok_default_image_aspect_ratio,
+    grok_default_image_resolution: incoming.grok_default_image_resolution ?? current.grok_default_image_resolution,
+    grok_temperature: incoming.grok_temperature ?? current.grok_temperature,
+    grok_max_tokens: incoming.grok_max_tokens ?? current.grok_max_tokens,
     yandex_enabled: Object.prototype.hasOwnProperty.call(incoming, 'yandex_enabled') ? incoming.yandex_enabled : current.yandex_enabled,
     yandex_folder_id: incoming.yandex_folder_id ?? current.yandex_folder_id,
     yandex_base_url: incoming.yandex_base_url ?? current.yandex_base_url,
@@ -176,6 +235,14 @@ function saveAiSettings(db, incoming = {}, secret) {
     if (key) {
       next.openai_key_encrypted = encryptText(key, secret);
       next.openai_key_masked = maskSecret(key);
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(incoming, 'grok_api_key')) {
+    const key = String(incoming.grok_api_key || '').trim();
+    if (key) {
+      next.grok_key_encrypted = encryptText(key, secret);
+      next.grok_key_masked = maskSecret(key);
     }
   }
 
@@ -199,6 +266,14 @@ function deleteOpenAIKey(db) {
   return sanitizeSettings(current);
 }
 
+function deleteGrokKey(db) {
+  const current = getAiSettings(db);
+  current.grok_key_encrypted = '';
+  current.grok_key_masked = '';
+  writeSettings(db, current);
+  return sanitizeSettings(current);
+}
+
 function deleteYandexKey(db) {
   const current = getAiSettings(db);
   current.yandex_key_encrypted = '';
@@ -209,11 +284,13 @@ function deleteYandexKey(db) {
 
 function sanitizeSettings(settings) {
   const normalized = normalizeSettings(settings);
-  const { openai_key_encrypted, yandex_key_encrypted, ...safe } = normalized;
+  const { openai_key_encrypted, grok_key_encrypted, yandex_key_encrypted, ...safe } = normalized;
   return {
     ...safe,
     has_openai_key: Boolean(openai_key_encrypted),
     masked_openai_key: normalized.openai_key_masked || '',
+    has_grok_key: Boolean(grok_key_encrypted),
+    masked_grok_key: normalized.grok_key_masked || '',
     has_yandex_key: Boolean(yandex_key_encrypted),
     masked_yandex_key: normalized.yandex_key_masked || '',
   };
@@ -223,9 +300,11 @@ module.exports = {
   DEFAULT_AI_SETTINGS,
   getAiSettings,
   getOpenAIKey,
+  getGrokKey,
   getYandexKey,
   saveAiSettings,
   deleteOpenAIKey,
+  deleteGrokKey,
   deleteYandexKey,
   sanitizeSettings,
 };

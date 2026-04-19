@@ -6,6 +6,7 @@ const VOICE_SETTINGS_OPTIONS = {
   providers: [
     { value: 'vosk', label: 'Vosk (local/free)' },
     { value: 'openai', label: 'OpenAI' },
+    { value: 'grok', label: 'Grok' },
   ],
   ui_modes: [
     { value: 'compact', label: 'Компактный' },
@@ -20,6 +21,9 @@ const VOICE_SETTINGS_OPTIONS = {
     openai: [
       { value: 'gpt-4o-mini-transcribe', label: 'gpt-4o-mini-transcribe' },
       { value: 'gpt-4o-transcribe', label: 'gpt-4o-transcribe' },
+    ],
+    grok: [
+      { value: 'speech-to-text', label: 'xAI Speech to Text' },
     ],
   },
 };
@@ -38,6 +42,9 @@ const DEFAULT_VOICE_SETTINGS = {
   openai_language: 'ru',
   openai_key_encrypted: '',
   openai_key_masked: '',
+  grok_language: 'ru',
+  grok_key_encrypted: '',
+  grok_key_masked: '',
   vosk_helper_url: 'http://127.0.0.1:2700',
   vosk_model: 'vosk-model-small-ru-0.22',
   vosk_model_path: '',
@@ -95,14 +102,17 @@ function normalizeSettings(raw = {}) {
   next.queue_concurrency = clampNumber(next.queue_concurrency, DEFAULT_VOICE_SETTINGS.queue_concurrency, 1, 4);
   next.openai_model = String(next.openai_model || DEFAULT_VOICE_SETTINGS.openai_model).trim() || DEFAULT_VOICE_SETTINGS.openai_model;
   next.openai_language = String(next.openai_language || DEFAULT_VOICE_SETTINGS.openai_language).trim() || DEFAULT_VOICE_SETTINGS.openai_language;
+  next.grok_language = String(next.grok_language || DEFAULT_VOICE_SETTINGS.grok_language).trim() || DEFAULT_VOICE_SETTINGS.grok_language;
   next.vosk_helper_url = String(next.vosk_helper_url || DEFAULT_VOICE_SETTINGS.vosk_helper_url).trim() || DEFAULT_VOICE_SETTINGS.vosk_helper_url;
   next.vosk_model = String(next.vosk_model || DEFAULT_VOICE_SETTINGS.vosk_model).trim() || DEFAULT_VOICE_SETTINGS.vosk_model;
   next.vosk_model_path = String(next.vosk_model_path || '').trim();
-  if (!['vosk', 'openai'].includes(next.active_provider)) {
+  if (!['vosk', 'openai', 'grok'].includes(next.active_provider)) {
     next.active_provider = DEFAULT_VOICE_SETTINGS.active_provider;
   }
   next.openai_key_encrypted = String(next.openai_key_encrypted || '');
   next.openai_key_masked = String(next.openai_key_masked || '');
+  next.grok_key_encrypted = String(next.grok_key_encrypted || '');
+  next.grok_key_masked = String(next.grok_key_masked || '');
   next.last_model_test_status = String(next.last_model_test_status || '');
   next.last_model_test_at = String(next.last_model_test_at || '');
   next.last_model_test_provider = String(next.last_model_test_provider || '');
@@ -150,6 +160,16 @@ function getOpenAIKey(db, secret) {
   }
 }
 
+function getGrokKey(db, secret) {
+  const settings = getVoiceSettings(db);
+  if (!settings.grok_key_encrypted) return '';
+  try {
+    return decryptText(settings.grok_key_encrypted, secret);
+  } catch {
+    return '';
+  }
+}
+
 function setVoiceSettings(db, incoming, secret) {
   const current = getVoiceSettings(db);
   const next = normalizeSettings({
@@ -165,6 +185,14 @@ function setVoiceSettings(db, incoming, secret) {
     }
   }
 
+  if (Object.prototype.hasOwnProperty.call(incoming, 'grok_api_key')) {
+    const plainKey = String(incoming.grok_api_key || '').trim();
+    if (plainKey) {
+      next.grok_key_encrypted = encryptText(plainKey, secret);
+      next.grok_key_masked = maskSecret(plainKey);
+    }
+  }
+
   writeStoredSettings(db, next);
   return sanitizeAdminSettings(next);
 }
@@ -173,6 +201,14 @@ function deleteOpenAIKey(db) {
   const current = getVoiceSettings(db);
   current.openai_key_encrypted = '';
   current.openai_key_masked = '';
+  writeStoredSettings(db, current);
+  return sanitizeAdminSettings(current);
+}
+
+function deleteGrokKey(db) {
+  const current = getVoiceSettings(db);
+  current.grok_key_encrypted = '';
+  current.grok_key_masked = '';
   writeStoredSettings(db, current);
   return sanitizeAdminSettings(current);
 }
@@ -188,12 +224,15 @@ function sanitizeAdminSettings(settings) {
   const normalized = normalizeSettings(settings);
   const {
     openai_key_encrypted,
+    grok_key_encrypted,
     ...safeSettings
   } = normalized;
   return {
     ...safeSettings,
     has_openai_key: Boolean(normalized.openai_key_encrypted),
     masked_openai_key: normalized.openai_key_masked || '',
+    has_grok_key: Boolean(grok_key_encrypted),
+    masked_grok_key: normalized.grok_key_masked || '',
   };
 }
 
@@ -225,6 +264,14 @@ function buildDraftSettings(db, incoming, secret) {
     }
   }
 
+  if (Object.prototype.hasOwnProperty.call(incoming, 'grok_api_key')) {
+    const plainKey = String(incoming.grok_api_key || '').trim();
+    if (plainKey) {
+      merged.grok_key_encrypted = encryptText(plainKey, secret);
+      merged.grok_key_masked = maskSecret(plainKey);
+    }
+  }
+
   return merged;
 }
 
@@ -235,8 +282,10 @@ module.exports = {
   getAdminVoiceSettings,
   getPublicVoiceSettings,
   getOpenAIKey,
+  getGrokKey,
   setVoiceSettings,
   deleteOpenAIKey,
+  deleteGrokKey,
   updateLastModelTest,
   buildDraftSettings,
 };
