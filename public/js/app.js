@@ -267,7 +267,10 @@
   const sidebar = $('#sidebar');
   const chatList = $('#chatList');
   const chatListStatus = $('#chatListStatus');
+  const sidebarSearch = $('#sidebarSearch');
   const chatSearch = $('#chatSearch');
+  const chatSearchToggle = $('#chatSearchToggle');
+  const chatSearchClear = $('#chatSearchClear');
   const chatArea = $('#chatArea');
   const emptyState = $('#emptyState');
   const chatView = $('#chatView');
@@ -1802,6 +1805,44 @@
     chatListStatus.classList.toggle('is-loading', type === 'loading');
     chatListStatus.classList.toggle('is-info', type === 'info');
     chatListStatus.classList.toggle('is-error', type === 'error');
+  }
+
+  function isChatSearchOpen() {
+    return Boolean(sidebarSearch && sidebarSearch.getAttribute('aria-hidden') === 'false');
+  }
+
+  function focusChatSearchInput() {
+    requestAnimationFrame(() => {
+      if (isChatSearchOpen()) focusElementIfPossible(chatSearch);
+    });
+  }
+
+  function setChatSearchOpen(open, { clear = false, focus = false, render = true } = {}) {
+    if (!sidebarSearch || !chatSearch) return false;
+    const shouldOpen = !!open;
+
+    if (clear) chatSearch.value = '';
+
+    sidebarSearch.classList.toggle('is-collapsed', !shouldOpen);
+    sidebarSearch.setAttribute('aria-hidden', shouldOpen ? 'false' : 'true');
+    sidebar?.classList.toggle('sidebar-search-open', shouldOpen);
+    chatSearchToggle?.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+    chatSearchToggle?.classList.toggle('is-active', shouldOpen);
+    chatSearch.tabIndex = shouldOpen ? 0 : -1;
+    if (chatSearchClear) chatSearchClear.tabIndex = shouldOpen ? 0 : -1;
+
+    if (clear && render) {
+      renderChatList();
+    }
+
+    if (shouldOpen && focus) {
+      focusChatSearchInput();
+    } else if (!shouldOpen) {
+      if (document.activeElement === chatSearch) chatSearch.blur();
+      if (focus) focusElementIfPossible(chatSearchToggle);
+    }
+
+    return true;
   }
 
   function hydrateChatListCache() {
@@ -6070,7 +6111,7 @@
             const chat = await api('/api/chats/private', { method: 'POST', body: { targetUserId: u.id } });
             await loadChats();
             openChat(chat.id);
-            chatSearch.value = '';
+            setChatSearchOpen(false, { clear: true, focus: false });
           } catch (e) { alert(e.message); }
         });
         chatList.appendChild(el);
@@ -11534,15 +11575,20 @@
     })();
 
     // Sidebar search
-    chatSearch.addEventListener('input', () => {
-      renderChatList(chatSearch.value);
-      $('#chatSearchClear').classList.toggle('hidden', !chatSearch.value);
+    setChatSearchOpen(false, { clear: true, focus: false, render: false });
+    chatSearchToggle?.addEventListener('click', () => {
+      if (isChatSearchOpen()) {
+        setChatSearchOpen(false, { clear: true, focus: true });
+        return;
+      }
+      setChatSearchOpen(true, { focus: true });
     });
-    $('#chatSearchClear').addEventListener('click', () => {
-      chatSearch.value = '';
-      renderChatList();
-      $('#chatSearchClear').classList.add('hidden');
-      chatSearch.focus();
+    chatSearch.addEventListener('input', () => {
+      if (!isChatSearchOpen()) setChatSearchOpen(true);
+      renderChatList(chatSearch.value);
+    });
+    chatSearchClear?.addEventListener('click', () => {
+      setChatSearchOpen(false, { clear: true, focus: true });
     });
 
     // Back button (mobile)
@@ -12017,6 +12063,11 @@
           closeSearchPanel();
           return;
         }
+        if (isChatSearchOpen()) {
+          e.preventDefault();
+          setChatSearchOpen(false, { clear: true, focus: true });
+          return;
+        }
         hideAvatarUserMenu();
         clearReply();
       }
@@ -12028,6 +12079,7 @@
   // ═══════════════════════════════════════════════════════════════════════════
   async function init() {
     if (!checkAuth()) return;
+    setChatSearchOpen(false, { clear: true, focus: false, render: false });
     hydrateChatListCache();
 
     // Mobile keyboard resize fix
