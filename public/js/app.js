@@ -5938,7 +5938,6 @@
     if (pinnedChats.length) {
       const pinnedGroup = document.createElement('div');
       pinnedGroup.className = 'chat-list-group chat-list-group--pinned';
-      appendChatListSeparator('Pinned', pinnedGroup);
       pinnedChats.forEach((chat) => {
         pinnedGroup.appendChild(createChatListItem(chat));
       });

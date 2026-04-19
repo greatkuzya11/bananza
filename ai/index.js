@@ -247,6 +247,7 @@ function botSystemPrompt(bot) {
     'Отвечай на языке пользователя, обычно по-русски. Будь полезным, кратким и живым.',
     `Do not start your answer with "${bot.name}:", "@${bot.mention}:", "Bot:", "Бот:", or any other speaker label. The chat UI already shows your name above the message.`,
   ];
+  parts.push('If poll context says voters are private/anonymous or voter names are hidden, never identify or guess individual voters; use only aggregate counts and percentages.');
   if (bot.style) parts.push(`Style: ${bot.style}`);
   if (bot.tone) parts.push(`Tone: ${bot.tone}`);
   if (bot.behavior_rules) parts.push(`Behavior rules:\n${bot.behavior_rules}`);
@@ -349,22 +350,24 @@ function createAiBotFeature({
   const replyBotStmt = db.prepare('SELECT ai_bot_id FROM messages WHERE id=? AND ai_generated=1 AND ai_bot_id IS NOT NULL');
   const recentMessagesStmt = db.prepare(`
     SELECT m.*, u.username, u.display_name, f.original_name as file_name, f.type as file_type,
-      vm.transcription_text
+      vm.transcription_text, p.message_id as poll_message_id
     FROM messages m
     JOIN users u ON u.id=m.user_id
     LEFT JOIN files f ON f.id=m.file_id
     LEFT JOIN voice_messages vm ON vm.message_id=m.id
+    LEFT JOIN polls p ON p.message_id=m.id
     WHERE m.chat_id=? AND m.is_deleted=0
     ORDER BY m.id DESC
     LIMIT ?
   `);
   const messageForMemoryStmt = db.prepare(`
     SELECT m.*, u.username, u.display_name, f.original_name as file_name, f.type as file_type,
-      vm.transcription_text
+      vm.transcription_text, p.message_id as poll_message_id
     FROM messages m
     JOIN users u ON u.id=m.user_id
     LEFT JOIN files f ON f.id=m.file_id
     LEFT JOIN voice_messages vm ON vm.message_id=m.id
+    LEFT JOIN polls p ON p.message_id=m.id
     WHERE m.id=? AND m.is_deleted=0
   `);
   const insertBotMessageStmt = db.prepare(`
@@ -649,6 +652,398 @@ function createAiBotFeature({
     return cleanText(row?.summary_model || settings.yandex_default_summary_model, 160) || settings.yandex_default_summary_model;
   }
 
+  function positiveId(value) {
+    const id = Number(value || 0);
+    return Number.isInteger(id) && id > 0 ? id : 0;
+  }
+
+  function parseDbDate(value) {
+    const source = String(value || '').trim();
+    if (!source) return null;
+    const normalized = source.includes('T') ? source : source.replace(' ', 'T');
+    const withZone = /[zZ]$|[+\-]\d{2}:?\d{2}$/.test(normalized) ? normalized : `${normalized}Z`;
+    const time = Date.parse(withZone);
+    return Number.isNaN(time) ? null : time;
+  }
+
+  function isPastDbDate(value) {
+    const time = parseDbDate(value);
+    return time != null && time <= Date.now();
+  }
+
+  // Polls are enriched live so vote/close changes do not require re-embedding.
+  const pollDetailStmt = db.prepare(`
+    SELECT
+      p.message_id,
+      p.created_by,
+      p.style,
+      p.allows_multiple,
+      p.show_voters,
+      p.closes_at,
+      p.closed_at,
+      p.closed_by,
+      p.created_at,
+      m.chat_id,
+      m.user_id,
+      m.text,
+      u.username,
+      u.display_name
+    FROM polls p
+    JOIN messages m ON m.id=p.message_id
+    JOIN users u ON u.id=m.user_id
+    WHERE p.message_id=? AND m.is_deleted=0
+  `);
+  const pollOptionsWithCountsStmt = db.prepare(`
+    SELECT
+      po.id,
+      po.position,
+      po.text,
+      COUNT(pv.user_id) as vote_count
+    FROM poll_options po
+    LEFT JOIN poll_votes pv ON pv.message_id=po.message_id AND pv.option_id=po.id
+    WHERE po.message_id=?
+    GROUP BY po.id, po.position, po.text
+    ORDER BY po.position ASC, po.id ASC
+  `);
+  const pollTotalsStmt = db.prepare(`
+    SELECT COUNT(*) as total_votes, COUNT(DISTINCT user_id) as total_voters
+    FROM poll_votes
+    WHERE message_id=?
+  `);
+  const pollVotersStmt = db.prepare(`
+    SELECT
+      pv.option_id,
+      u.username,
+      u.display_name,
+      pv.created_at
+    FROM poll_votes pv
+    JOIN users u ON u.id=pv.user_id
+    WHERE pv.message_id=?
+    ORDER BY pv.option_id ASC, pv.created_at ASC, pv.user_id ASC
+  `);
+  const latestPollIdsStmt = db.prepare(`
+    SELECT p.message_id
+    FROM polls p
+    JOIN messages m ON m.id=p.message_id
+    WHERE m.chat_id=? AND m.is_deleted=0
+    ORDER BY CASE WHEN p.closed_at IS NULL THEN 0 ELSE 1 END, m.id DESC
+    LIMIT ?
+  `);
+  const currentPinsContextStmt = db.prepare(`
+    SELECT
+      p.id,
+      p.chat_id,
+      p.message_id,
+      p.pinned_by,
+      p.created_at,
+      pu.username as pinned_by_username,
+      pu.display_name as pinned_by_name,
+      m.user_id as message_author_id,
+      m.text,
+      mu.username as message_author_username,
+      mu.display_name as message_author_name,
+      f.original_name as file_name,
+      f.type as file_type,
+      vm.message_id as voice_message_id,
+      vm.transcription_text,
+      poll.message_id as poll_message_id
+    FROM message_pins p
+    JOIN messages m ON m.id=p.message_id
+    JOIN users pu ON pu.id=p.pinned_by
+    JOIN users mu ON mu.id=m.user_id
+    LEFT JOIN files f ON f.id=m.file_id
+    LEFT JOIN voice_messages vm ON vm.message_id=m.id
+    LEFT JOIN polls poll ON poll.message_id=m.id
+    WHERE p.chat_id=? AND m.is_deleted=0
+    ORDER BY p.id DESC
+    LIMIT ?
+  `);
+  const recentPinEventsContextStmt = db.prepare(`
+    SELECT
+      e.id,
+      e.chat_id,
+      e.message_id,
+      e.action,
+      e.actor_id,
+      e.actor_name,
+      e.message_author_id,
+      e.message_author_name,
+      e.message_preview,
+      e.created_at,
+      au.username as actor_username,
+      au.display_name as actor_display_name,
+      m.text,
+      m.is_deleted,
+      mu.username as current_message_author_username,
+      mu.display_name as current_message_author_name,
+      f.original_name as file_name,
+      f.type as file_type,
+      vm.message_id as voice_message_id,
+      vm.transcription_text,
+      poll.message_id as poll_message_id
+    FROM message_pin_events e
+    LEFT JOIN users au ON au.id=e.actor_id
+    LEFT JOIN messages m ON m.id=e.message_id
+    LEFT JOIN users mu ON mu.id=m.user_id
+    LEFT JOIN files f ON f.id=m.file_id
+    LEFT JOIN voice_messages vm ON vm.message_id=m.id
+    LEFT JOIN polls poll ON poll.message_id=m.id
+    WHERE e.chat_id=?
+    ORDER BY e.id DESC
+    LIMIT ?
+  `);
+  const pinEventsForMessageContextStmt = db.prepare(`
+    SELECT
+      e.id,
+      e.chat_id,
+      e.message_id,
+      e.action,
+      e.actor_id,
+      e.actor_name,
+      e.message_author_id,
+      e.message_author_name,
+      e.message_preview,
+      e.created_at,
+      au.username as actor_username,
+      au.display_name as actor_display_name,
+      m.text,
+      m.is_deleted,
+      mu.username as current_message_author_username,
+      mu.display_name as current_message_author_name,
+      f.original_name as file_name,
+      f.type as file_type,
+      vm.message_id as voice_message_id,
+      vm.transcription_text,
+      poll.message_id as poll_message_id
+    FROM message_pin_events e
+    LEFT JOIN users au ON au.id=e.actor_id
+    LEFT JOIN messages m ON m.id=e.message_id
+    LEFT JOIN users mu ON mu.id=m.user_id
+    LEFT JOIN files f ON f.id=m.file_id
+    LEFT JOIN voice_messages vm ON vm.message_id=m.id
+    LEFT JOIN polls poll ON poll.message_id=m.id
+    WHERE e.chat_id=? AND e.message_id=?
+    ORDER BY e.id DESC
+    LIMIT ?
+  `);
+
+  function pollStatusText(poll) {
+    if (!poll) return 'unknown';
+    if (poll.closed_at) return `closed; closed_at=${poll.closed_at}`;
+    if (poll.closes_at && isPastDbDate(poll.closes_at)) return `closed; closed_at=${poll.closes_at}; reason=deadline reached`;
+    if (poll.closes_at) return `open; deadline=${poll.closes_at}`;
+    return 'open; deadline=open-ended';
+  }
+
+  function pollVisibilityText(poll) {
+    return Number(poll?.show_voters) !== 0 ? 'public voters' : 'private/anonymous voters; voter names hidden';
+  }
+
+  function getPollContext(messageOrId) {
+    const id = positiveId(typeof messageOrId === 'object' ? messageOrId?.id : messageOrId);
+    if (!id) return null;
+
+    const row = pollDetailStmt.get(id);
+    const hydratedPoll = typeof messageOrId === 'object' && messageOrId?.poll && typeof messageOrId.poll === 'object'
+      ? messageOrId.poll
+      : null;
+    if (!row && !hydratedPoll) return null;
+
+    const totalRow = pollTotalsStmt.get(id) || {};
+    const options = pollOptionsWithCountsStmt.all(id);
+    const poll = {
+      message_id: id,
+      created_by: Number(row?.created_by ?? hydratedPoll?.created_by ?? hydratedPoll?.createdBy ?? 0),
+      style: String(row?.style || hydratedPoll?.style || 'pulse'),
+      allows_multiple: Number(row?.allows_multiple ?? (hydratedPoll?.allows_multiple || hydratedPoll?.allowsMultiple ? 1 : 0)) !== 0,
+      show_voters: Number(row?.show_voters ?? (hydratedPoll?.show_voters || hydratedPoll?.showVoters ? 1 : 0)) !== 0,
+      closes_at: row?.closes_at || hydratedPoll?.closes_at || hydratedPoll?.closesAt || null,
+      closed_at: row?.closed_at || hydratedPoll?.closed_at || hydratedPoll?.closedAt || null,
+      closed_by: row?.closed_by ?? hydratedPoll?.closed_by ?? hydratedPoll?.closedBy ?? null,
+      created_at: row?.created_at || hydratedPoll?.created_at || hydratedPoll?.createdAt || null,
+      chat_id: Number(row?.chat_id || messageOrId?.chat_id || messageOrId?.chatId || 0),
+      text: String(row?.text || messageOrId?.text || '').trim(),
+      author_name: String(row?.display_name || row?.username || '').trim(),
+      total_votes: Number(totalRow.total_votes ?? hydratedPoll?.total_votes ?? hydratedPoll?.totalVotes ?? 0) || 0,
+      total_voters: Number(totalRow.total_voters ?? hydratedPoll?.total_voters ?? hydratedPoll?.totalVoters ?? 0) || 0,
+    };
+
+    const hydratedOptions = Array.isArray(hydratedPoll?.options) ? hydratedPoll.options : [];
+    const optionRows = options.length ? options : hydratedOptions.map((option, index) => ({
+      id: Number(option.id || 0),
+      position: Number(option.position ?? index),
+      text: option.text,
+      vote_count: Number(option.vote_count || option.voteCount || 0),
+    })).filter((option) => option.id > 0);
+
+    const votersByOption = new Map();
+    if (poll.show_voters) {
+      for (const voter of pollVotersStmt.all(id)) {
+        const optionId = Number(voter.option_id || 0);
+        const list = votersByOption.get(optionId) || [];
+        list.push(voter.display_name || voter.username || 'User');
+        votersByOption.set(optionId, list);
+      }
+    }
+
+    return {
+      poll,
+      options: optionRows.map((option) => ({
+        id: Number(option.id || 0),
+        position: Number(option.position || 0),
+        text: String(option.text || '').trim(),
+        vote_count: Number(option.vote_count || 0),
+        voters: votersByOption.get(Number(option.id || 0)) || [],
+      })),
+    };
+  }
+
+  function formatPollMemoryText(messageOrId, { includeVoters = true, maxVotersPerOption = 12 } = {}) {
+    const context = getPollContext(messageOrId);
+    if (!context) return '';
+    const { poll, options } = context;
+    const totalVotes = Math.max(0, Number(poll.total_votes || 0));
+    const question = poll.text || '(no question text)';
+    const author = poll.author_name || (poll.created_by ? `user:${poll.created_by}` : 'unknown');
+    const lines = [
+      `Poll #${poll.message_id}: ${question}`,
+      `Poll metadata: status=${pollStatusText(poll)}; type=${poll.allows_multiple ? 'multiple choice' : 'single choice'}; visibility=${pollVisibilityText(poll)}; style=${poll.style || 'pulse'}; created_by=${author}; created_at=${poll.created_at || 'unknown'}; total_voters=${poll.total_voters}; total_votes=${poll.total_votes}.`,
+      'Poll options/results:',
+    ];
+
+    options.forEach((option, index) => {
+      const count = Math.max(0, Number(option.vote_count || 0));
+      const percentage = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0;
+      let line = `${index + 1}. ${option.text || `Option ${index + 1}`} - ${count} ${count === 1 ? 'vote' : 'votes'} (${percentage}% of total votes)`;
+      if (includeVoters && poll.show_voters) {
+        const voters = option.voters || [];
+        const shown = voters.slice(0, maxVotersPerOption);
+        const more = Math.max(0, voters.length - shown.length);
+        line += shown.length
+          ? `; voters: ${shown.join(', ')}${more ? `, +${more} more` : ''}`
+          : '; voters: none';
+      }
+      lines.push(line);
+    });
+
+    return lines.join('\n');
+  }
+
+  function aiMessageMemoryText(row, options = {}) {
+    if (row?.poll || row?.poll_message_id) {
+      const pollText = formatPollMemoryText(row, options);
+      if (pollText) return pollText;
+    }
+    return messageMemoryText(row);
+  }
+
+  function formatAiChatLine(row) {
+    const who = row.display_name || row.username || `user:${row.user_id}`;
+    const text = aiMessageMemoryText(row, { includeVoters: true });
+    if (!text) return '';
+    return `${who}: ${truncate(text, 1600)}`;
+  }
+
+  function freshRetrievalText(item) {
+    if (!item || item.type !== 'message' || !item.messageId) return item?.text || '';
+    return formatPollMemoryText(item.messageId, { includeVoters: true }) || item.text || '';
+  }
+
+  function buildLivePollContext(chatId, currentMessage, recentRows = []) {
+    const ids = new Set();
+    const replyId = positiveId(currentMessage?.reply_to_id || currentMessage?.replyToId);
+    if (replyId && getPollContext(replyId)) ids.add(replyId);
+
+    recentRows.forEach((row) => {
+      const pollId = positiveId(row?.poll_message_id || (row?.poll ? row.id : 0));
+      if (pollId) ids.add(pollId);
+    });
+
+    latestPollIdsStmt.all(chatId, 5).forEach((row) => {
+      const id = positiveId(row.message_id);
+      if (id) ids.add(id);
+    });
+
+    const lines = [...ids].slice(0, 8).map((id) => formatPollMemoryText(id, { includeVoters: true })).filter(Boolean);
+    if (!lines.length) return '';
+    return `Live poll context (fresh from database; respects poll voter visibility):\n${lines.map((line) => truncate(line, 1800)).join('\n\n')}`;
+  }
+
+  function firstText(...values) {
+    for (const value of values) {
+      const text = String(value || '').trim();
+      if (text) return text;
+    }
+    return '';
+  }
+
+  function pinMessageSummary(row) {
+    const messageId = positiveId(row?.message_id);
+    if (messageId && row?.poll_message_id && Number(row?.is_deleted || 0) === 0) {
+      const pollText = formatPollMemoryText(messageId, { includeVoters: true });
+      if (pollText) return pollText;
+    }
+    const snapshot = firstText(row?.message_preview);
+    if (snapshot) return snapshot;
+    const text = firstText(row?.text, row?.transcription_text);
+    if (text) return text;
+    if (row?.voice_message_id) return 'Voice message';
+    if (row?.file_name) return `[file:${row.file_type || 'file'}] ${row.file_name}`;
+    return messageId ? 'Message content unavailable' : 'Deleted/unavailable message';
+  }
+
+  function pinActorName(row) {
+    return firstText(row?.actor_display_name, row?.actor_name, row?.actor_username, row?.pinned_by_name, row?.pinned_by_username)
+      || (positiveId(row?.actor_id || row?.pinned_by) ? `user:${positiveId(row?.actor_id || row?.pinned_by)}` : 'unknown');
+  }
+
+  function pinAuthorName(row) {
+    return firstText(
+      row?.current_message_author_name,
+      row?.message_author_name,
+      row?.current_message_author_username,
+      row?.message_author_username
+    ) || (positiveId(row?.message_author_id) ? `user:${positiveId(row?.message_author_id)}` : 'unknown');
+  }
+
+  function formatCurrentPinLine(row) {
+    const messageId = positiveId(row?.message_id);
+    return `Current pin #${row.id}: message #${messageId || 'unknown'}; pinned_by=${pinActorName(row)}; pinned_at=${row.created_at || 'unknown'}; message_author=${pinAuthorName(row)}; message=${truncate(pinMessageSummary(row), 1200)}`;
+  }
+
+  function formatPinEventLine(row) {
+    const action = row?.action === 'unpinned' ? 'unpinned' : 'pinned';
+    const messageId = positiveId(row?.message_id);
+    return `Pin event #${row.id}: action=${action}; message #${messageId || 'unknown'}; actor=${pinActorName(row)}; at=${row.created_at || 'unknown'}; message_author=${pinAuthorName(row)}; message=${truncate(pinMessageSummary(row), 1200)}`;
+  }
+
+  function buildLivePinContext(chatId, currentMessage = null) {
+    const id = positiveId(chatId);
+    if (!id) return '';
+    const replyId = positiveId(currentMessage?.reply_to_id || currentMessage?.replyToId);
+    const replyEvents = replyId
+      ? pinEventsForMessageContextStmt.all(id, replyId, 12)
+      : [];
+    const replyEventIds = new Set(replyEvents.map((row) => Number(row.id || 0)).filter(Boolean));
+    const currentPins = currentPinsContextStmt.all(id, 8).map(formatCurrentPinLine).filter(Boolean);
+    const recentEvents = recentPinEventsContextStmt.all(id, 20)
+      .filter((row) => !replyEventIds.has(Number(row.id || 0)))
+      .map(formatPinEventLine)
+      .filter(Boolean);
+    const sections = [];
+    if (replyEvents.length) {
+      sections.push(`Pin/unpin activity for replied message #${replyId}:\n${replyEvents.map(formatPinEventLine).filter(Boolean).join('\n')}`);
+    }
+    if (currentPins.length) {
+      sections.push(`Current pinned messages:\n${currentPins.join('\n')}`);
+    }
+    if (recentEvents.length) {
+      sections.push(`Recent pin/unpin activity:\n${recentEvents.join('\n')}`);
+    }
+    if (!sections.length) return '';
+    return `Pinned message context (fresh from database):\n${sections.join('\n\n')}`;
+  }
+
   function sanitizeBot(row) {
     if (!row) return null;
     const settings = getGlobalSettings();
@@ -863,7 +1258,7 @@ function createAiBotFeature({
   }
 
   function enqueueMemoryForMessage(message) {
-    const text = messageMemoryText(message);
+    const text = aiMessageMemoryText(message, { includeVoters: true });
     if (!text) return;
     if (isHybridEnabled(message.chat_id)) {
       memoryQueue.enqueue(`ai:embed:${message.id}`, { type: 'embed-message', messageId: message.id });
@@ -878,7 +1273,7 @@ function createAiBotFeature({
   async function embedMessage(messageId) {
     const row = messageForMemoryStmt.get(messageId);
     if (!row) return;
-    const text = messageMemoryText(row);
+    const text = aiMessageMemoryText(row, { includeVoters: true });
     if (!text) return;
     const settings = getGlobalSettings();
     const apiKey = getApiKey();
@@ -907,17 +1302,19 @@ function createAiBotFeature({
   async function backfillChatMemory(chatId) {
     if (!isHybridEnabled(chatId)) return;
     const rows = db.prepare(`
-      SELECT m.id, m.chat_id, m.text, vm.transcription_text, f.original_name as file_name, f.type as file_type
+      SELECT m.id, m.chat_id, m.text, vm.transcription_text, f.original_name as file_name, f.type as file_type,
+        p.message_id as poll_message_id
       FROM messages m
       LEFT JOIN voice_messages vm ON vm.message_id=m.id
       LEFT JOIN files f ON f.id=m.file_id
+      LEFT JOIN polls p ON p.message_id=m.id
       LEFT JOIN message_embeddings me ON me.message_id=m.id AND me.is_stale=0
       WHERE m.chat_id=? AND m.is_deleted=0 AND me.message_id IS NULL
       ORDER BY m.id ASC
       LIMIT 300
     `).all(chatId);
     for (const row of rows) {
-      if (messageMemoryText(row)) {
+      if (aiMessageMemoryText(row, { includeVoters: true })) {
         memoryQueue.enqueue(`ai:embed:${row.id}`, { type: 'embed-message', messageId: row.id });
       }
     }
@@ -972,22 +1369,24 @@ function createAiBotFeature({
       .get(chatId);
     const afterId = Number(last?.last_id || 0);
     const rows = db.prepare(`
-      SELECT m.*, u.username, u.display_name, f.original_name as file_name, f.type as file_type, vm.transcription_text
+      SELECT m.*, u.username, u.display_name, f.original_name as file_name, f.type as file_type,
+        vm.transcription_text, p.message_id as poll_message_id
       FROM messages m
       JOIN users u ON u.id=m.user_id
       LEFT JOIN files f ON f.id=m.file_id
       LEFT JOIN voice_messages vm ON vm.message_id=m.id
+      LEFT JOIN polls p ON p.message_id=m.id
       WHERE m.chat_id=? AND m.is_deleted=0 AND m.id>?
       ORDER BY m.id ASC
       LIMIT ?
     `).all(chatId, afterId, chunkSize);
-    const usable = rows.filter(row => messageMemoryText(row));
+    const usable = rows.filter(row => aiMessageMemoryText(row, { includeVoters: true }));
     if (usable.length < chunkSize) return;
 
     const model = getSummaryModelForChat(chatId);
     const fromId = usable[0].id;
     const toId = usable[usable.length - 1].id;
-    const transcript = usable.map(formatChatLine).filter(Boolean).join('\n');
+    const transcript = usable.map(formatAiChatLine).filter(Boolean).join('\n');
     const payload = await generateJson({
       apiKey,
       model,
@@ -1092,7 +1491,10 @@ function createAiBotFeature({
     `).all(chatId, excludeMessageId || 0);
     for (const row of messageRows) {
       const score = cosineSimilarity(queryEmbedding, parseEmbedding(row.embedding_json));
-      if (score > 0.22) items.push({ type: 'message', score, text: row.source_text, messageId: row.message_id });
+      if (score > 0.22) {
+        const messageId = Number(row.message_id || 0);
+        items.push({ type: 'message', score, text: freshRetrievalText({ type: 'message', text: row.source_text, messageId }), messageId });
+      }
     }
 
     const chunkRows = db.prepare(`
@@ -1113,7 +1515,7 @@ function createAiBotFeature({
   async function yandexEmbedMessage(messageId) {
     const row = messageForMemoryStmt.get(messageId);
     if (!row) return;
-    const text = messageMemoryText(row);
+    const text = aiMessageMemoryText(row, { includeVoters: true });
     if (!text) return;
     const settings = getGlobalSettings();
     const apiKey = getYandexApiKey();
@@ -1145,17 +1547,19 @@ function createAiBotFeature({
   async function yandexBackfillChatMemory(chatId) {
     if (!isYandexHybridEnabled(chatId)) return;
     const rows = db.prepare(`
-      SELECT m.id, m.chat_id, m.text, vm.transcription_text, f.original_name as file_name, f.type as file_type
+      SELECT m.id, m.chat_id, m.text, vm.transcription_text, f.original_name as file_name, f.type as file_type,
+        p.message_id as poll_message_id
       FROM messages m
       LEFT JOIN voice_messages vm ON vm.message_id=m.id
       LEFT JOIN files f ON f.id=m.file_id
+      LEFT JOIN polls p ON p.message_id=m.id
       LEFT JOIN yandex_message_embeddings me ON me.message_id=m.id AND me.is_stale=0
       WHERE m.chat_id=? AND m.is_deleted=0 AND me.message_id IS NULL
       ORDER BY m.id ASC
       LIMIT 300
     `).all(chatId);
     for (const row of rows) {
-      if (messageMemoryText(row)) {
+      if (aiMessageMemoryText(row, { includeVoters: true })) {
         memoryQueue.enqueue(`yandex:embed:${row.id}`, { type: 'yandex-embed-message', messageId: row.id });
       }
     }
@@ -1210,22 +1614,24 @@ function createAiBotFeature({
       .get(chatId);
     const afterId = Number(last?.last_id || 0);
     const rows = db.prepare(`
-      SELECT m.*, u.username, u.display_name, f.original_name as file_name, f.type as file_type, vm.transcription_text
+      SELECT m.*, u.username, u.display_name, f.original_name as file_name, f.type as file_type,
+        vm.transcription_text, p.message_id as poll_message_id
       FROM messages m
       JOIN users u ON u.id=m.user_id
       LEFT JOIN files f ON f.id=m.file_id
       LEFT JOIN voice_messages vm ON vm.message_id=m.id
+      LEFT JOIN polls p ON p.message_id=m.id
       WHERE m.chat_id=? AND m.is_deleted=0 AND m.id>?
       ORDER BY m.id ASC
       LIMIT ?
     `).all(chatId, afterId, chunkSize);
-    const usable = rows.filter(row => messageMemoryText(row));
+    const usable = rows.filter(row => aiMessageMemoryText(row, { includeVoters: true }));
     if (usable.length < chunkSize) return;
 
     const model = getYandexSummaryModelForChat(chatId);
     const fromId = usable[0].id;
     const toId = usable[usable.length - 1].id;
-    const transcript = usable.map(formatChatLine).filter(Boolean).join('\n');
+    const transcript = usable.map(formatAiChatLine).filter(Boolean).join('\n');
     const payload = await yandexAi.generateJson(yandexClientOptions({
       model,
       system: 'You summarize chat history for long-term memory. Keep facts conservative and do not invent details.',
@@ -1339,7 +1745,10 @@ function createAiBotFeature({
     `).all(chatId, excludeMessageId || 0);
     for (const row of messageRows) {
       const score = cosineSimilarity(queryEmbedding, parseEmbedding(row.embedding_json));
-      if (score > 0.22) items.push({ type: 'message', score, text: row.source_text, messageId: row.message_id });
+      if (score > 0.22) {
+        const messageId = Number(row.message_id || 0);
+        items.push({ type: 'message', score, text: freshRetrievalText({ type: 'message', text: row.source_text, messageId }), messageId });
+      }
     }
 
     const chunkRows = db.prepare(`
@@ -1374,14 +1783,18 @@ function createAiBotFeature({
   async function assembleContext({ bot, chatConfig, message }) {
     const limit = intValue(chatConfig.hot_context_limit, 50, 20, 100);
     const recentRows = recentMessagesStmt.all(message.chat_id, limit).reverse();
-    const recentLines = trimRecentLines(recentRows.map(formatChatLine).filter(Boolean), 10000);
-    const currentText = messageMemoryText(message);
+    const recentLines = trimRecentLines(recentRows.map(formatAiChatLine).filter(Boolean), 10000);
+    const currentText = aiMessageMemoryText(message, { includeVoters: true });
+    const livePollContext = buildLivePollContext(message.chat_id, message, recentRows);
+    const livePinContext = buildLivePinContext(message.chat_id, message);
     const settings = getGlobalSettings();
 
     if (chatConfig.mode !== 'hybrid') {
       return {
         system: botSystemPrompt(bot),
         user: [
+          livePollContext,
+          livePinContext,
           `Recent chat context (${recentLines.length} messages):`,
           recentLines.join('\n') || '(empty)',
           '',
@@ -1424,6 +1837,8 @@ function createAiBotFeature({
         room?.summary_short ? `Rolling room summary:\n${room.summary_short}` : '',
         factLines ? `Active long-term facts:\n${factLines}` : '',
         retrievalLines ? `Relevant archive retrieval:\n${retrievalLines}` : '',
+        livePollContext,
+        livePinContext,
         `Recent chat context (${recentLines.length} messages):\n${recentLines.join('\n') || '(empty)'}`,
         '',
         `Current user message:\n${currentText}`,
@@ -1538,7 +1953,7 @@ function createAiBotFeature({
     if (options.skipBotTrigger || message.ai_generated) return;
     const settings = getGlobalSettings();
     if (!settings.enabled && !settings.yandex_enabled) return;
-    const text = messageMemoryText(message);
+    const text = aiMessageMemoryText(message, { includeVoters: true });
     if (!text) return;
     const rows = activeChatBotsStmt.all(message.chat_id);
     for (const row of rows) {

@@ -149,6 +149,19 @@ db.exec(`
     UNIQUE(chat_id, message_id)
   );
 
+  CREATE TABLE IF NOT EXISTS message_pin_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+    action TEXT NOT NULL CHECK(action IN ('pinned','unpinned')),
+    actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    actor_name TEXT DEFAULT NULL,
+    message_author_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    message_author_name TEXT DEFAULT NULL,
+    message_preview TEXT DEFAULT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS push_subscriptions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -170,6 +183,8 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_message_mentions_chat ON message_mentions(chat_id, message_id);
   CREATE INDEX IF NOT EXISTS idx_message_pins_chat ON message_pins(chat_id, id);
   CREATE INDEX IF NOT EXISTS idx_message_pins_message ON message_pins(message_id);
+  CREATE INDEX IF NOT EXISTS idx_message_pin_events_chat ON message_pin_events(chat_id, id);
+  CREATE INDEX IF NOT EXISTS idx_message_pin_events_message ON message_pin_events(message_id, id);
 `);
 
 // Seed general chat
@@ -385,6 +400,57 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_message_pins_chat ON message_pins(chat_id, id);
   CREATE INDEX IF NOT EXISTS idx_message_pins_message ON message_pins(message_id);
 `);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS message_pin_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+    action TEXT NOT NULL CHECK(action IN ('pinned','unpinned')),
+    actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    actor_name TEXT DEFAULT NULL,
+    message_author_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    message_author_name TEXT DEFAULT NULL,
+    message_preview TEXT DEFAULT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_message_pin_events_chat ON message_pin_events(chat_id, id);
+  CREATE INDEX IF NOT EXISTS idx_message_pin_events_message ON message_pin_events(message_id, id);
+`);
+db.prepare(`
+  INSERT INTO message_pin_events(
+    chat_id,
+    message_id,
+    action,
+    actor_id,
+    actor_name,
+    message_author_id,
+    message_author_name,
+    message_preview,
+    created_at
+  )
+  SELECT
+    p.chat_id,
+    p.message_id,
+    'pinned',
+    p.pinned_by,
+    pu.display_name,
+    m.user_id,
+    mu.display_name,
+    SUBSTR(COALESCE(NULLIF(m.text, ''), f.original_name, 'Attachment'), 1, 500),
+    p.created_at
+  FROM message_pins p
+  JOIN messages m ON m.id=p.message_id
+  JOIN users pu ON pu.id=p.pinned_by
+  JOIN users mu ON mu.id=m.user_id
+  LEFT JOIN files f ON f.id=m.file_id
+  WHERE NOT EXISTS (
+    SELECT 1
+    FROM message_pin_events e
+    WHERE e.action='pinned'
+      AND e.message_id=p.message_id
+      AND e.created_at=p.created_at
+  )
+`).run();
 db.exec(`
   CREATE TABLE IF NOT EXISTS polls (
     message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,

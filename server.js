@@ -423,6 +423,36 @@ const chatPinsStmt = db.prepare(`
   WHERE p.chat_id=? AND m.is_deleted=0
   ORDER BY p.id DESC
 `);
+const pinEventMessageStmt = db.prepare(`
+  SELECT
+    m.id,
+    m.chat_id,
+    m.user_id as message_author_id,
+    m.text,
+    u.display_name as message_author_name,
+    f.original_name as file_name,
+    f.type as file_type,
+    vm.message_id as voice_message_id,
+    vm.transcription_text
+  FROM messages m
+  JOIN users u ON u.id=m.user_id
+  LEFT JOIN files f ON f.id=m.file_id
+  LEFT JOIN voice_messages vm ON vm.message_id=m.id
+  WHERE m.id=?
+`);
+const insertPinEventStmt = db.prepare(`
+  INSERT INTO message_pin_events(
+    chat_id,
+    message_id,
+    action,
+    actor_id,
+    actor_name,
+    message_author_id,
+    message_author_name,
+    message_preview,
+    created_at
+  ) VALUES(?,?,?,?,?,?,?,?,COALESCE(?, datetime('now')))
+`);
 
 function mentionPayload(row) {
   const isAiBot = Number(row.is_ai_bot) !== 0;
@@ -525,6 +555,25 @@ function pinPreviewText(row) {
   if (row?.voice_message_id) return 'Voice message';
   if (row?.file_name) return String(row.file_name).substring(0, 160);
   return 'Attachment';
+}
+
+function recordPinEvent({ chatId, messageId, action, actor, createdAt = null } = {}) {
+  const normalizedAction = action === 'unpinned' ? 'unpinned' : 'pinned';
+  const message = pinEventMessageStmt.get(messageId) || {};
+  const resolvedChatId = Number(chatId || message.chat_id || 0);
+  if (!resolvedChatId || !messageId) return false;
+  insertPinEventStmt.run(
+    resolvedChatId,
+    messageId,
+    normalizedAction,
+    actor?.id || null,
+    actor?.display_name || actor?.username || null,
+    message.message_author_id || null,
+    message.message_author_name || null,
+    pinPreviewText(message).substring(0, 500),
+    createdAt || null
+  );
+  return true;
 }
 
 function getChatPins(chatId) {
@@ -1532,6 +1581,16 @@ app.post('/api/messages/:id/pin', auth, msgLimiter, (req, res) => {
 
   const inserted = db.prepare('INSERT OR IGNORE INTO message_pins(chat_id,message_id,pinned_by) VALUES(?,?,?)')
     .run(msg.chat_id, mid, req.user.id);
+  if (inserted.changes > 0) {
+    const pin = db.prepare('SELECT created_at FROM message_pins WHERE chat_id=? AND message_id=?').get(msg.chat_id, mid);
+    recordPinEvent({
+      chatId: msg.chat_id,
+      messageId: mid,
+      action: 'pinned',
+      actor: req.user,
+      createdAt: pin?.created_at || null,
+    });
+  }
   const payload = inserted.changes > 0
     ? broadcastPinsUpdated(msg.chat_id, { action: 'pinned', actorId: req.user.id, messageId: mid })
     : getChatPinPayload(msg.chat_id);
@@ -1563,6 +1622,12 @@ app.delete('/api/messages/:id/pin', auth, (req, res) => {
   if (!canUnpin) return res.status(403).json({ error: 'Not allowed to unpin this message' });
 
   db.prepare('DELETE FROM message_pins WHERE id=?').run(pin.id);
+  recordPinEvent({
+    chatId: pin.chat_id,
+    messageId: mid,
+    action: 'unpinned',
+    actor: req.user,
+  });
   const payload = broadcastPinsUpdated(pin.chat_id, { action: 'unpinned', actorId: req.user.id, messageId: mid });
   res.json({ ok: true, ...payload });
 });
@@ -2001,6 +2066,16 @@ app.delete('/api/messages/:id', auth, (req, res) => {
       const filePath = path.join(UPLOADS_DIR, file.stored_name);
       fs.unlink(filePath, () => {});
     }
+  }
+
+  const wasPinned = db.prepare('SELECT 1 FROM message_pins WHERE message_id=?').get(mid);
+  if (wasPinned) {
+    recordPinEvent({
+      chatId: m.chat_id,
+      messageId: mid,
+      action: 'unpinned',
+      actor: req.user,
+    });
   }
 
   // Soft-delete message (keep record for reply_to_id foreign keys)
