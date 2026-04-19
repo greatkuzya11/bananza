@@ -10662,35 +10662,89 @@
   }
 
   function cancelPendingSidebarReveal() {
-    if (!sidebar?.__revealFrame) return;
-    cancelAnimationFrame(sidebar.__revealFrame);
-    sidebar.__revealFrame = 0;
+    if (!sidebar) return;
+    if (sidebar.__revealFrame) {
+      cancelAnimationFrame(sidebar.__revealFrame);
+      sidebar.__revealFrame = 0;
+    }
+    if (sidebar.__revealFallbackTimer) {
+      clearTimeout(sidebar.__revealFallbackTimer);
+      sidebar.__revealFallbackTimer = null;
+    }
+    if (sidebar.__revealAnimation) {
+      const animation = sidebar.__revealAnimation;
+      sidebar.__revealAnimation = null;
+      animation.onfinish = null;
+      animation.oncancel = null;
+      try { animation.cancel(); } catch {}
+    }
+    sidebar.style.transform = '';
+    sidebar.style.willChange = '';
   }
 
   function revealSidebarFromChat({ forceAnimation = false } = {}) {
     if (!sidebar) return;
     hideFloatingMessageActions({ immediate: true });
     cancelPendingSidebarReveal();
-    sidebar.classList.remove('sidebar-no-transition');
-
-    if (prefersReducedMotion()) {
-      sidebar.classList.remove('sidebar-hidden');
-      return;
-    }
 
     if (!sidebar.classList.contains('sidebar-hidden')) {
       if (!forceAnimation) return;
       sidebar.classList.add('sidebar-no-transition');
       sidebar.classList.add('sidebar-hidden');
       void sidebar.offsetWidth;
+    }
+
+    const finishReveal = () => {
+      if (!sidebar) return;
+      if (sidebar.__revealAnimation) {
+        sidebar.__revealAnimation.onfinish = null;
+        sidebar.__revealAnimation.oncancel = null;
+        sidebar.__revealAnimation = null;
+      }
+      if (sidebar.__revealFallbackTimer) {
+        clearTimeout(sidebar.__revealFallbackTimer);
+        sidebar.__revealFallbackTimer = null;
+      }
+      sidebar.__revealFrame = 0;
+      sidebar.classList.remove('sidebar-hidden');
       sidebar.classList.remove('sidebar-no-transition');
-    } else {
-      void sidebar.offsetWidth;
+      sidebar.style.transform = '';
+      sidebar.style.willChange = '';
+    };
+
+    // Mobile browsers can lose the previous transform frame after background resume.
+    // Start every reveal from an explicit offscreen transform so the slide always runs.
+    sidebar.classList.add('sidebar-no-transition');
+    sidebar.style.willChange = 'transform';
+    sidebar.style.transform = 'translate3d(-100%,0,0)';
+    sidebar.classList.remove('sidebar-hidden');
+    void sidebar.offsetWidth;
+    sidebar.classList.remove('sidebar-no-transition');
+
+    if (typeof sidebar.animate === 'function') {
+      const animation = sidebar.animate(
+        [
+          { transform: 'translate3d(-100%,0,0)' },
+          { transform: 'translate3d(0,0,0)' },
+        ],
+        {
+          duration: 260,
+          easing: 'cubic-bezier(.2,.85,.2,1)',
+          fill: 'forwards',
+        }
+      );
+      sidebar.__revealAnimation = animation;
+      animation.onfinish = finishReveal;
+      animation.oncancel = () => {
+        if (sidebar.__revealAnimation === animation) sidebar.__revealAnimation = null;
+      };
+      return;
     }
 
     sidebar.__revealFrame = requestAnimationFrame(() => {
-      sidebar.classList.remove('sidebar-hidden');
+      sidebar.style.transform = 'translate3d(0,0,0)';
       sidebar.__revealFrame = 0;
+      sidebar.__revealFallbackTimer = setTimeout(finishReveal, 280);
     });
   }
 
