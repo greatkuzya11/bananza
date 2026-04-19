@@ -21,6 +21,7 @@ db.exec(`
     avatar_url TEXT DEFAULT NULL,
     ui_theme TEXT DEFAULT 'bananza',
     ui_poll_style TEXT DEFAULT 'pulse',
+    ui_visual_mode TEXT DEFAULT 'classic',
     ui_modal_animation TEXT DEFAULT 'soft',
     ui_modal_animation_speed INTEGER DEFAULT 8,
     created_at TEXT DEFAULT (datetime('now'))
@@ -209,6 +210,12 @@ try {
 } catch {
   db.exec("ALTER TABLE users ADD COLUMN ui_poll_style TEXT DEFAULT 'pulse'");
 }
+try {
+  db.prepare("SELECT ui_visual_mode FROM users LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE users ADD COLUMN ui_visual_mode TEXT DEFAULT 'classic'");
+}
+db.prepare("UPDATE users SET ui_visual_mode='classic' WHERE ui_visual_mode IS NULL OR TRIM(ui_visual_mode)='' OR ui_visual_mode NOT IN ('classic','rich')").run();
 try {
   db.prepare("SELECT ui_modal_animation FROM users LIMIT 1").get();
 } catch {

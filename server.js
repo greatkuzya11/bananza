@@ -121,12 +121,13 @@ const upLimiter   = rateLimit({ windowMs: 60_000, max: 20, message: { error: 'To
 // ── Auth middleware ─────────────────────────────────────────────────────────
 const AVATAR_COLORS = ['#e17076','#7bc862','#e5ca77','#65aadd','#a695e7','#ee7aae','#6ec9cb','#faa774'];
 const UI_THEMES = new Set(['bananza', 'banan-hero', 'midnight-ocean', 'nord-aurora', 'rose-pine', 'dracula-neon', 'tokyo-night']);
+const UI_VISUAL_MODES = new Set(['classic', 'rich']);
 const POLL_STYLES = new Set(['pulse', 'stack', 'orbit']);
 const UI_MODAL_ANIMATIONS = new Set(['soft', 'lift', 'zoom', 'slide', 'fade', 'none']);
 const UI_MODAL_ANIMATION_SPEED_DEFAULT = 8;
 const UI_MODAL_ANIMATION_SPEED_MIN = 1;
 const UI_MODAL_ANIMATION_SPEED_MAX = 10;
-const USER_PUBLIC_FIELDS = 'id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,ui_theme,ui_modal_animation,ui_modal_animation_speed';
+const USER_PUBLIC_FIELDS = 'id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,ui_theme,ui_visual_mode,ui_modal_animation,ui_modal_animation_speed';
 const USER_REALTIME_FIELDS = `${USER_PUBLIC_FIELDS},is_ai_bot`;
 const POLL_MAX_OPTIONS = 10;
 const POLL_MIN_OPTIONS = 2;
@@ -200,6 +201,7 @@ function publicUser(u) {
     avatar_color: u.avatar_color,
     avatar_url: u.avatar_url,
     ui_theme: UI_THEMES.has(u.ui_theme) ? u.ui_theme : 'bananza',
+    ui_visual_mode: UI_VISUAL_MODES.has(u.ui_visual_mode) ? u.ui_visual_mode : 'classic',
     ui_modal_animation: UI_MODAL_ANIMATIONS.has(u.ui_modal_animation) ? u.ui_modal_animation : 'soft',
     ui_modal_animation_speed: normalizeModalAnimationSpeed(u.ui_modal_animation_speed),
   };
@@ -692,7 +694,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     ensureNotesChatForUser(userId);
 
     const token = jwt.sign({ id: userId, username: username.toLowerCase() }, JWT_SECRET, { expiresIn: '30d' });
-    res.json({ token, user: publicUser({ id: userId, username: username.toLowerCase(), display_name: name, is_admin: isAdmin, is_blocked: 0, avatar_color: color, avatar_url: null, ui_theme: 'bananza', ui_modal_animation: 'soft', ui_modal_animation_speed: UI_MODAL_ANIMATION_SPEED_DEFAULT }) });
+    res.json({ token, user: publicUser({ id: userId, username: username.toLowerCase(), display_name: name, is_admin: isAdmin, is_blocked: 0, avatar_color: color, avatar_url: null, ui_theme: 'bananza', ui_visual_mode: 'classic', ui_modal_animation: 'soft', ui_modal_animation_speed: UI_MODAL_ANIMATION_SPEED_DEFAULT }) });
   } catch (e) { console.error(e); res.status(500).json({ error: 'Server error' }); }
 });
 
@@ -1733,6 +1735,15 @@ app.patch('/api/user/theme', auth, (req, res) => {
   if (!UI_THEMES.has(theme)) return res.status(400).json({ error: 'Unknown theme' });
   db.prepare('UPDATE users SET ui_theme=? WHERE id=?').run(theme, req.user.id);
   const user = db.prepare(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id=?`).get(req.user.id);
+  res.json({ user: publicUser(user) });
+});
+
+app.patch('/api/user/visual-mode', auth, (req, res) => {
+  const mode = typeof req.body?.mode === 'string' ? req.body.mode : '';
+  if (!UI_VISUAL_MODES.has(mode)) return res.status(400).json({ error: 'Unknown visual mode' });
+  db.prepare('UPDATE users SET ui_visual_mode=? WHERE id=?').run(mode, req.user.id);
+  const user = db.prepare(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id=?`).get(req.user.id);
+  notifyUserUpdated(req.user.id);
   res.json({ user: publicUser(user) });
 });
 

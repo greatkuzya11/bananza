@@ -50,6 +50,11 @@
     { id: 'tokyo-night', name: 'Tokyo Night', note: 'Ink + electric blue', colors: ['#1a1b26', '#7aa2f7'], own: '#2b4d7d', other: '#202437' },
   ];
   const UI_THEME_IDS = new Set(UI_THEMES.map(t => t.id));
+  const UI_VISUAL_MODES = [
+    { id: 'classic', name: 'Off', note: 'Classic flat theme surfaces.' },
+    { id: 'rich', name: 'On', note: 'Layered gradients, glass cards and theme-colored glow.' },
+  ];
+  const UI_VISUAL_MODE_IDS = new Set(UI_VISUAL_MODES.map(mode => mode.id));
   const POLL_STYLES = [
     { id: 'pulse', name: 'Pulse', note: 'Hero gradients and bold result cards', accent: ['var(--accent)', 'var(--link)'] },
     { id: 'stack', name: 'Stack', note: 'Compact rows with dense readable stats', accent: ['var(--border-light)', 'var(--accent)'] },
@@ -142,6 +147,7 @@
   let suppressScrollAnchorSave = false;
   let scrollAnchorSaveTimer = null;
   let currentUiTheme = 'bananza';
+  let currentVisualMode = 'classic';
   let pollComposerStyle = 'pulse';
   let currentModalAnimation = 'soft';
   let currentModalAnimationSpeed = MODAL_ANIMATION_SPEED_DEFAULT;
@@ -307,6 +313,7 @@
   const weatherWidget = $('#weatherWidget');
   const settingsModal = $('#settingsModal');
   const themeSettingsModal = $('#themeSettingsModal');
+  const visualModeSettingsModal = $('#visualModeSettingsModal');
   const pollStyleSettingsModal = $('#pollStyleSettingsModal');
   const animationSettingsModal = $('#animationSettingsModal');
   const weatherSettingsModal = $('#weatherSettingsModal');
@@ -562,9 +569,47 @@
     el.classList.toggle('is-success', type === 'success');
   }
 
+  function normalizeVisualMode(mode) {
+    return UI_VISUAL_MODE_IDS.has(mode) ? mode : 'classic';
+  }
+
+  function visualModeMeta(mode) {
+    const id = normalizeVisualMode(mode);
+    return UI_VISUAL_MODES.find(item => item.id === id) || UI_VISUAL_MODES[0];
+  }
+
+  function visualModeStateLabel(mode) {
+    return normalizeVisualMode(mode) === 'rich' ? 'On' : 'Off';
+  }
+
+  function setVisualModeStatus(message, type = '') {
+    const el = $('#settingsVisualModeStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function renderVisualModePicker() {
+    const picker = $('#settingsVisualModePicker');
+    if (!picker) return;
+    picker.innerHTML = UI_VISUAL_MODES.map(mode => `
+      <button type="button" class="visual-mode-card${mode.id === currentVisualMode ? ' active' : ''}" data-visual-mode-option="${mode.id}">
+        <span class="visual-mode-card-preview visual-mode-card-preview--${mode.id}" aria-hidden="true">
+          <i></i><i></i><i></i>
+        </span>
+        <span class="visual-mode-card-copy">
+          <strong>${esc(mode.name)}</strong>
+          <small>${esc(mode.note)}</small>
+        </span>
+      </button>
+    `).join('');
+  }
+
   function renderThemePicker() {
     const picker = $('#settingsThemePicker');
     if (!picker) return;
+    const mode = visualModeMeta(currentVisualMode);
     picker.innerHTML = UI_THEMES.map(theme => `
       <button type="button" class="theme-card${theme.id === currentUiTheme ? ' active' : ''}" data-theme="${theme.id}">
         <span class="theme-card-swatches">
@@ -573,14 +618,28 @@
         </span>
         <span class="theme-card-copy">
           <strong>${esc(theme.name)}</strong>
-          <small>${esc(theme.note)}</small>
+          <small>${esc(theme.note)} · Rich Banan UX ${visualModeStateLabel(mode.id)}</small>
         </span>
-        <span class="theme-card-preview" aria-hidden="true">
+        <span class="theme-card-preview theme-card-preview--${mode.id}" aria-hidden="true">
           <i style="background:${theme.other}"></i>
           <i style="background:${theme.own}"></i>
         </span>
       </button>
     `).join('');
+  }
+
+  function applyVisualMode(mode, persist = true) {
+    const nextMode = normalizeVisualMode(mode);
+    currentVisualMode = nextMode;
+    document.documentElement.dataset.visualMode = nextMode;
+    if (currentUser) {
+      currentUser.ui_visual_mode = nextMode;
+      if (persist) localStorage.setItem('user', JSON.stringify(currentUser));
+    }
+    const panelBtn = $('#settingsVisualModePanel');
+    if (panelBtn) panelBtn.textContent = `\uD83C\uDF4C Rich Banan UX: ${visualModeStateLabel(nextMode)}`;
+    renderVisualModePicker();
+    renderThemePicker();
   }
 
   function applyUiTheme(theme, persist = true) {
@@ -592,6 +651,26 @@
       if (persist) localStorage.setItem('user', JSON.stringify(currentUser));
     }
     renderThemePicker();
+  }
+
+  async function selectVisualMode(mode) {
+    const nextMode = normalizeVisualMode(mode);
+    if (nextMode === currentVisualMode) return;
+    const prevMode = currentVisualMode;
+    applyVisualMode(nextMode);
+    setVisualModeStatus('Saving...');
+    try {
+      const res = await api('/api/user/visual-mode', { method: 'PATCH', body: { mode: nextMode } });
+      currentUser = { ...currentUser, ...res.user };
+      applyVisualMode(currentUser.ui_visual_mode);
+      setVisualModeStatus('Saved', 'success');
+      setTimeout(() => {
+        if ($('#settingsVisualModeStatus')?.textContent === 'Saved') setVisualModeStatus('');
+      }, 1200);
+    } catch (e) {
+      applyVisualMode(prevMode);
+      setVisualModeStatus(e.message || 'Visual mode save failed', 'error');
+    }
   }
 
   async function selectUiTheme(theme) {
@@ -1954,6 +2033,9 @@
         avatar_url: user.avatar_url,
       };
       if (user.ui_theme) applyUiTheme(user.ui_theme, false);
+      if (Object.prototype.hasOwnProperty.call(user, 'ui_visual_mode')) {
+        applyVisualMode(user.ui_visual_mode, false);
+      }
       if (Object.prototype.hasOwnProperty.call(user, 'ui_modal_animation')) {
         applyModalAnimation(user.ui_modal_animation, false);
       }
@@ -2573,7 +2655,7 @@
 
   function getChatById(chatId) {
     const id = Number(chatId);
-    return chats.find(c => c.id === id) || null;
+    return chats.find(c => Number(c.id) === id) || null;
   }
 
   function getChatPinOrder(chat) {
@@ -2589,6 +2671,7 @@
   function normalizeChatListEntry(chat = {}) {
     const next = {
       ...chat,
+      id: Number(chat?.id || 0),
       private_user: chat?.private_user ? { ...chat.private_user } : null,
     };
     const pinOrder = getChatPinOrder(next);
@@ -4834,6 +4917,7 @@
       menuDrawer,
       settingsModal,
       themeSettingsModal,
+      visualModeSettingsModal,
       pollStyleSettingsModal,
       animationSettingsModal,
       weatherSettingsModal,
@@ -5491,6 +5575,7 @@
     try {
       currentUser = JSON.parse(userStr);
       applyUiTheme(currentUser.ui_theme, false);
+      applyVisualMode(currentUser.ui_visual_mode, false);
       applyModalAnimation(currentUser.ui_modal_animation, false);
       applyModalAnimationSpeed(currentUser.ui_modal_animation_speed, false);
     } catch { logout(); return false; }
@@ -5881,7 +5966,7 @@
   function createChatListItem(chat) {
     const el = document.createElement('div');
     const pinned = isChatPinned(chat);
-    el.className = 'chat-item' + (chat.id === currentChatId ? ' active' : '') + (pinned ? ' is-pinned' : '');
+    el.className = 'chat-item' + (Number(chat.id) === Number(currentChatId) ? ' active' : '') + (pinned ? ' is-pinned' : '');
     el.dataset.chatId = chat.id;
     el.dataset.pinned = pinned ? '1' : '0';
 
@@ -5920,7 +6005,10 @@
     `;
     el.addEventListener('click', () => {
       if (Date.now() < suppressNextChatItemTapUntil) return;
-      openChat(chat.id);
+      openChat(chat.id).catch((error) => {
+        console.warn('Failed to open chat', error);
+        showCenterToast(error?.message || 'Could not open chat');
+      });
     });
     return el;
   }
@@ -6538,6 +6626,10 @@
   // ═══════════════════════════════════════════════════════════════════════════
   async function openChat(chatId, options = {}) {
     const targetChatId = Number(chatId);
+    const chat = getChatById(targetChatId);
+    if (!chat) {
+      throw new Error('Chat not found in local list');
+    }
     const previousChatId = Number(currentChatId || 0);
     const sameChat = previousChatId === targetChatId;
     const explicitAnchorId = Number(options?.anchorMessageId || 0);
@@ -6576,7 +6668,6 @@
       }
     }
 
-    const chat = chats.find(c => c.id === targetChatId);
     const restoreAnchor = explicitAnchorId
       ? { messageId: explicitAnchorId, offsetTop: 72, atBottom: false, mode: sameChat ? 'search_same_chat' : 'search' }
       : anchorForChatOpen(chat);
@@ -10269,6 +10360,12 @@
     setThemeStatus('');
   }
 
+  function openVisualModeSettingsModal() {
+    openModal('visualModeSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
+    renderVisualModePicker();
+    setVisualModeStatus('');
+  }
+
   function openPollStyleSettingsModal() {
     syncPollComposerStyleUi();
     openModal('pollStyleSettingsModal', {
@@ -10678,6 +10775,11 @@
       animation.oncancel = null;
       try { animation.cancel(); } catch {}
     }
+    try {
+      sidebar.getAnimations?.().forEach((animation) => {
+        if (animation?.id === 'sidebarRevealAnimation') animation.cancel();
+      });
+    } catch {}
     sidebar.style.transform = '';
     sidebar.style.willChange = '';
   }
@@ -10696,6 +10798,7 @@
 
     const finishReveal = () => {
       if (!sidebar) return;
+      const animation = sidebar.__revealAnimation;
       if (sidebar.__revealAnimation) {
         sidebar.__revealAnimation.onfinish = null;
         sidebar.__revealAnimation.oncancel = null;
@@ -10710,6 +10813,7 @@
       sidebar.classList.remove('sidebar-no-transition');
       sidebar.style.transform = '';
       sidebar.style.willChange = '';
+      try { animation?.cancel?.(); } catch {}
     };
 
     // Mobile browsers can lose the previous transform frame after background resume.
@@ -10733,6 +10837,7 @@
           fill: 'forwards',
         }
       );
+      animation.id = 'sidebarRevealAnimation';
       sidebar.__revealAnimation = animation;
       animation.onfinish = finishReveal;
       animation.oncancel = () => {
@@ -11584,6 +11689,7 @@
 
     // Settings sub-buttons
     $('#settingsThemePanel').addEventListener('click', openThemeSettingsModal);
+    $('#settingsVisualModePanel')?.addEventListener('click', openVisualModeSettingsModal);
     $('#settingsAnimationPanel')?.addEventListener('click', openAnimationSettingsModal);
     $('#settingsWeatherPanel').addEventListener('click', openWeatherSettingsModal);
     $('#settingsNotificationsPanel')?.addEventListener('click', openNotificationSettingsModal);
@@ -11616,6 +11722,11 @@
       const card = e.target.closest('.theme-card');
       if (!card) return;
       selectUiTheme(card.dataset.theme);
+    });
+    $('#settingsVisualModePicker')?.addEventListener('click', (e) => {
+      const card = e.target.closest('[data-visual-mode-option]');
+      if (!card) return;
+      selectVisualMode(card.dataset.visualModeOption);
     });
     $('#settingsPollStylePicker')?.addEventListener('click', (e) => {
       const card = e.target.closest('[data-poll-style-option]');
@@ -11947,6 +12058,7 @@
       const data = await api('/api/auth/me');
       currentUser = data.user;
       applyUiTheme(currentUser.ui_theme);
+      applyVisualMode(currentUser.ui_visual_mode);
       applyModalAnimation(currentUser.ui_modal_animation);
       applyModalAnimationSpeed(currentUser.ui_modal_animation_speed);
       localStorage.setItem('user', JSON.stringify(currentUser));
