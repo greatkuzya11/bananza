@@ -92,6 +92,7 @@
   const RESUME_WS_REFRESH_AFTER_MS = 25000;
   const NOTES_CHAT_EMOJI = '📝';
   const CHAT_CONTEXT_LONG_PRESS_MS = 500;
+  const aiImageRiskApi = window.BananzaAiImageRisk || null;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STATE
@@ -135,6 +136,7 @@
   let typingDisplayTimeouts = {};
   let displayedMsgIds = new Set();
   let replyTo = null; // { id, display_name, text }
+  let grokImageRiskConfirmResolver = null;
   let editTo = null; // { id, text, is_voice_note, allowEmpty }
   let allUsers = [];
   let compactViewMap = JSON.parse(localStorage.getItem('compactViewMap') || '{}');
@@ -357,6 +359,10 @@
   const forwardChatSearch = $('#forwardChatSearch');
   const forwardChatList = $('#forwardChatList');
   const forwardMessageStatus = $('#forwardMessageStatus');
+  const grokImageRiskConfirmModal = $('#grokImageRiskConfirmModal');
+  const grokImageRiskTerms = $('#grokImageRiskTerms');
+  const grokImageRiskCancel = $('#grokImageRiskCancel');
+  const grokImageRiskConfirm = $('#grokImageRiskConfirm');
   const pollComposerModal = $('#pollComposerModal');
   const pollQuestionInput = $('#pollQuestionInput');
   const pollOptionsList = $('#pollOptionsList');
@@ -5690,6 +5696,17 @@
     return entry;
   }
 
+  function handleGrokImageRiskModalClosed() {
+    if (grokImageRiskTerms) {
+      grokImageRiskTerms.innerHTML = '';
+      grokImageRiskTerms.classList.add('hidden');
+    }
+    if (!grokImageRiskConfirmResolver) return;
+    const resolve = grokImageRiskConfirmResolver;
+    grokImageRiskConfirmResolver = null;
+    resolve(false);
+  }
+
   function registerBuiltinModals() {
     [
       newChatModal,
@@ -5707,7 +5724,9 @@
       aiBotSettingsModal,
       yandexAiSettingsModal,
       changePasswordModal,
+      grokImageRiskConfirmModal,
     ].forEach((modal) => registerModal(modal));
+    registerModal(grokImageRiskConfirmModal, { onAfterClose: handleGrokImageRiskModalClosed });
     registerModal(forwardMessageModal, { onAfterClose: resetForwardMessageModal });
     registerModal(pollComposerModal, { onAfterClose: resetPollComposer });
     registerModal(pollVotersModal, { onAfterClose: resetPollVotersModal });
@@ -5962,13 +5981,138 @@
       mention: token,
       user_id: Number(raw.user_id) || 0,
       is_ai_bot: Boolean(raw.is_ai_bot),
+      bot_id: Number(raw.bot_id) || 0,
+      bot_provider: String(raw.bot_provider || '').trim(),
+      bot_kind: String(raw.bot_kind || '').trim(),
     };
   }
 
-  async function loadMentionTargets(chatId = currentChatId) {
+  function escapeRegExpText(value) {
+    return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function extractMentionTokensFromText(text) {
+    const source = String(text || '');
+    const tokens = [];
+    const re = /@([a-zA-Z0-9_][a-zA-Z0-9_-]{0,31})/g;
+    let match;
+    while ((match = re.exec(source))) {
+      const prev = match.index > 0 ? source[match.index - 1] : '';
+      if (prev && /[A-Za-z0-9_.-]/.test(prev)) continue;
+      tokens.push(String(match[1] || '').toLowerCase());
+    }
+    return [...new Set(tokens)];
+  }
+
+  function isGrokImageBotTarget(target) {
+    if (!target) return false;
+    return String(target.bot_provider || target.ai_bot_provider || '').toLowerCase() === 'grok'
+      && String(target.bot_kind || target.ai_bot_kind || '').toLowerCase() === 'image';
+  }
+
+  function stripTriggeredBotMention(text, target) {
+    const original = String(text || '').trim();
+    if (!original || !target) return original;
+    const patterns = [
+      target.token ? new RegExp(`@${escapeRegExpText(target.token)}\\b`, 'ig') : null,
+      target.mention ? new RegExp(`@${escapeRegExpText(target.mention)}\\b`, 'ig') : null,
+      target.display_name ? new RegExp(`@${escapeRegExpText(target.display_name)}\\b`, 'ig') : null,
+    ].filter(Boolean);
+    let next = original;
+    patterns.forEach((pattern) => {
+      next = next.replace(pattern, ' ');
+    });
+    next = next.replace(/\s+/g, ' ').replace(/^[\s,.:;!?-]+/, '').trim();
+    return next || original;
+  }
+
+  async function resolveTriggeredGrokImageBot(text, replySnapshot = null) {
+    const tokens = extractMentionTokensFromText(text);
+    const findTarget = (targets) => {
+      const byToken = new Map();
+      targets.forEach((target) => {
+        const token = String(target.token || target.mention || '').toLowerCase();
+        if (token && !byToken.has(token)) byToken.set(token, target);
+      });
+      for (const token of tokens) {
+        const target = byToken.get(token);
+        if (isGrokImageBotTarget(target)) return target;
+      }
+      return null;
+    };
+    const targets = await loadMentionTargets(currentChatId);
+    const directTarget = findTarget(targets);
+    if (directTarget) return directTarget;
+    if (tokens.length) {
+      const staleAiTarget = targets.some((target) => {
+        const token = String(target.token || target.mention || '').toLowerCase();
+        return token && tokens.includes(token)
+          && Boolean(target.is_ai_bot)
+          && (!String(target.bot_provider || '').trim() || !String(target.bot_kind || '').trim());
+      });
+      if (staleAiTarget) {
+        const refreshedTargets = await loadMentionTargets(currentChatId, { force: true });
+        const refreshedTarget = findTarget(refreshedTargets);
+        if (refreshedTarget) return refreshedTarget;
+      }
+    }
+    if (isGrokImageBotTarget(replySnapshot)) {
+      return {
+        token: String(replySnapshot.ai_bot_mention || replySnapshot.mention || '').replace(/^@+/, '').trim(),
+        mention: String(replySnapshot.ai_bot_mention || replySnapshot.mention || '').replace(/^@+/, '').trim(),
+        display_name: replySnapshot.display_name || '',
+        bot_id: Number(replySnapshot.ai_bot_id) || 0,
+        bot_provider: replySnapshot.ai_bot_provider || '',
+        bot_kind: replySnapshot.ai_bot_kind || '',
+      };
+    }
+    return null;
+  }
+
+  async function analyzeOutgoingGrokImageRisk(text, replySnapshot = null) {
+    if (!aiImageRiskApi?.analyzeAiImageRisk) return { risky: false, matches: [], prompt: '', target: null };
+    const target = await resolveTriggeredGrokImageBot(text, replySnapshot);
+    if (!target) return { risky: false, matches: [], prompt: '', target: null };
+    const prompt = stripTriggeredBotMention(text, target);
+    if (!prompt) return { risky: false, matches: [], prompt: '', target };
+    const result = aiImageRiskApi.analyzeAiImageRisk(prompt);
+    return { ...result, prompt, target };
+  }
+
+  function renderGrokImageRiskTerms(matches = []) {
+    if (!grokImageRiskTerms) return;
+    const terms = matches
+      .map((item) => String(item?.term || '').trim())
+      .filter(Boolean)
+      .slice(0, 6);
+    if (!terms.length) {
+      grokImageRiskTerms.innerHTML = '';
+      grokImageRiskTerms.classList.add('hidden');
+      return;
+    }
+    grokImageRiskTerms.innerHTML = terms.map((term) => `<span class="grok-risk-term">${esc(term)}</span>`).join('');
+    grokImageRiskTerms.classList.remove('hidden');
+  }
+
+  function openGrokImageRiskConfirm(matches = []) {
+    if (!grokImageRiskConfirmModal) return Promise.resolve(true);
+    if (grokImageRiskConfirmResolver) {
+      const resolvePending = grokImageRiskConfirmResolver;
+      grokImageRiskConfirmResolver = null;
+      resolvePending(false);
+    }
+    renderGrokImageRiskTerms(matches);
+    openModal('grokImageRiskConfirmModal', { replaceStack: false, opener: sendBtn });
+    return new Promise((resolve) => {
+      grokImageRiskConfirmResolver = resolve;
+    });
+  }
+
+  async function loadMentionTargets(chatId = currentChatId, { force = false } = {}) {
     const id = Number(chatId);
     if (!id) return [];
-    if (mentionTargetsByChat.has(id)) return mentionTargetsByChat.get(id);
+    if (!force && mentionTargetsByChat.has(id)) return mentionTargetsByChat.get(id);
+    if (force) mentionTargetsByChat.delete(id);
     const data = await api(`/api/chats/${id}/mention-targets`);
     const targets = (data.targets || []).map(normalizeMentionTarget).filter(Boolean);
     mentionTargetsByChat.set(id, targets);
@@ -7902,6 +8046,10 @@
       text: getReplyPreviewText(msg),
       is_voice_note: Boolean(msg.is_voice_note),
       is_video_note: Boolean(msg.is_video_note),
+      ai_bot_id: Number(msg.ai_bot_id) || 0,
+      ai_bot_mention: msg.ai_bot_mention || '',
+      ai_bot_provider: msg.ai_bot_provider || '',
+      ai_bot_kind: msg.ai_bot_kind || '',
     };
     row.__voiceBootstrap = {
       id: msg.id,
@@ -8509,6 +8657,10 @@
       text: source.text || '',
       is_voice_note: Boolean(source.is_voice_note),
       is_video_note: Boolean(source.is_video_note),
+      ai_bot_id: Number(source.ai_bot_id) || 0,
+      ai_bot_mention: source.ai_bot_mention || '',
+      ai_bot_provider: source.ai_bot_provider || '',
+      ai_bot_kind: source.ai_bot_kind || '',
     };
   }
 
@@ -8734,6 +8886,7 @@
         fileId: fileId || null,
         replyToId: item.replyToId || null,
         client_id: item.clientId,
+        aiImageRiskAccepted: Boolean(item.aiImageRiskAccepted),
       },
     });
   }
@@ -8836,7 +8989,7 @@
     return item;
   }
 
-  function createMessageOutboxItem({ text = null, attachment = null, reply = null, createdAt = null } = {}) {
+  function createMessageOutboxItem({ text = null, attachment = null, reply = null, createdAt = null, aiImageRiskAccepted = false } = {}) {
     const clientId = makeClientId('c');
     return {
       clientId,
@@ -8846,6 +8999,7 @@
       kind: 'message',
       createdAt: createdAt || new Date().toISOString(),
       text: text || null,
+      aiImageRiskAccepted: Boolean(aiImageRiskAccepted),
       replyToId: reply?.id || null,
       reply,
       attachments: attachment ? [attachment] : [],
@@ -8983,9 +9137,21 @@
 
     if (!text && filesToSend.length === 0) return;
     if (text.length > MAX_MSG) { alert('Message too long'); return; }
-    animateSendButton();
-
     const replySnapshot = getReplySnapshot();
+    let aiImageRiskAccepted = false;
+    if (text) {
+      try {
+        const risk = await analyzeOutgoingGrokImageRisk(text, replySnapshot);
+        if (risk.risky) {
+          const confirmed = await openGrokImageRiskConfirm(risk.matches);
+          if (!confirmed) return;
+          aiImageRiskAccepted = true;
+        }
+      } catch (e) {
+        console.warn('[grok-image-risk] precheck failed:', e?.message || e);
+      }
+    }
+    animateSendButton();
     msgInput.value = '';
     autoResize();
     syncMentionOpenButton();
@@ -9000,6 +9166,7 @@
       attachment: firstAttachment,
       reply: replySnapshot,
       createdAt: new Date().toISOString(),
+      aiImageRiskAccepted,
     }));
     for (let i = 1; i < filesToSend.length; i++) {
       items.push(createMessageOutboxItem({
@@ -9312,6 +9479,10 @@
       text,
       is_voice_note: Boolean(meta?.is_voice_note),
       is_video_note: Boolean(meta?.is_video_note),
+      ai_bot_id: Number(meta?.ai_bot_id) || 0,
+      ai_bot_mention: meta?.ai_bot_mention || '',
+      ai_bot_provider: meta?.ai_bot_provider || '',
+      ai_bot_kind: meta?.ai_bot_kind || '',
     };
     replyBarName.textContent = name;
     replyBarText.textContent = text || '📎 Attachment';
@@ -12828,6 +12999,16 @@
       previewSound(previewBtn.dataset.soundPreview);
     });
     $('#settingsSoundPreviewAll')?.addEventListener('click', previewAllSounds);
+
+    grokImageRiskCancel?.addEventListener('click', () => {
+      closeModal('grokImageRiskConfirmModal');
+    });
+    grokImageRiskConfirm?.addEventListener('click', () => {
+      const resolve = grokImageRiskConfirmResolver;
+      grokImageRiskConfirmResolver = null;
+      closeModal('grokImageRiskConfirmModal');
+      if (typeof resolve === 'function') resolve(true);
+    });
 
     // AI bot admin settings
     $('#aiBotsSaveSettings')?.addEventListener('click', saveAiBotSettings);

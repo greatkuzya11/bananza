@@ -70,6 +70,7 @@ db.exec(`
     ai_generated INTEGER DEFAULT 0,
     ai_bot_id INTEGER DEFAULT NULL,
     client_id TEXT DEFAULT NULL,
+    ai_image_risk_confirmed INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -340,6 +341,11 @@ try {
   db.prepare("SELECT client_id FROM messages LIMIT 1").get();
 } catch {
   db.exec("ALTER TABLE messages ADD COLUMN client_id TEXT DEFAULT NULL");
+}
+try {
+  db.prepare("SELECT ai_image_risk_confirmed FROM messages LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE messages ADD COLUMN ai_image_risk_confirmed INTEGER DEFAULT 0");
 }
 db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_id ON messages(user_id, chat_id, client_id) WHERE client_id IS NOT NULL");
 // Migration: last_read_id on chat_members

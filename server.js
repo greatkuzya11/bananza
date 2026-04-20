@@ -360,6 +360,7 @@ aiBotFeature = createAiBotFeature({
 const messageByIdStmt = db.prepare(`
   SELECT m.*, u.username, u.display_name, u.avatar_color, u.avatar_url,
     COALESCE(u.is_ai_bot, 0) as is_ai_bot, ab.mention as ai_bot_mention,
+    ab.provider as ai_bot_provider, ab.kind as ai_bot_kind,
     f.original_name as file_name, f.stored_name as file_stored,
     f.mime_type as file_mime, f.size as file_size, f.type as file_type,
     COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN 'Голосовое сообщение' END) as reply_text,
@@ -406,7 +407,10 @@ const mentionTargetsStmt = db.prepare(`
     u.avatar_color,
     u.avatar_url,
     COALESCE(u.is_ai_bot, 0) as is_ai_bot,
-    ab.mention as bot_mention
+    ab.id as bot_id,
+    ab.mention as bot_mention,
+    ab.provider as bot_provider,
+    ab.kind as bot_kind
   FROM chat_members cm
   JOIN users u ON u.id=cm.user_id
   LEFT JOIN ai_bots ab ON ab.user_id=u.id
@@ -503,6 +507,9 @@ function mentionPayload(row) {
     mention: token,
     token: row.token || token,
     is_ai_bot: isAiBot,
+    bot_id: Number(row.bot_id) || 0,
+    bot_provider: row.bot_provider || '',
+    bot_kind: row.bot_kind || '',
     avatar_color: row.avatar_color,
     avatar_url: row.avatar_url,
   };
@@ -1238,6 +1245,7 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
   const selectSql = `
     SELECT m.*, u.username, u.display_name, u.avatar_color, u.avatar_url,
       COALESCE(u.is_ai_bot, 0) as is_ai_bot, ab.mention as ai_bot_mention,
+      ab.provider as ai_bot_provider, ab.kind as ai_bot_kind,
       f.original_name as file_name, f.stored_name as file_stored,
       f.mime_type as file_mime, f.size as file_size, f.type as file_type,
       COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN 'Голосовое сообщение' END) as reply_text,
@@ -1349,8 +1357,9 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
 
 app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   const chatId = +req.params.chatId;
-  const { text, fileId, replyToId, client_id, poll: rawPoll } = req.body;
+  const { text, fileId, replyToId, client_id, poll: rawPoll, aiImageRiskAccepted } = req.body;
   const clientId = normalizeClientId(client_id);
+  const riskAccepted = aiImageRiskAccepted === true || aiImageRiskAccepted === 1 || aiImageRiskAccepted === '1';
   const chat = db.prepare('SELECT id,is_notes FROM chats WHERE id=?').get(chatId);
 
   if (!chat) return res.status(404).json({ error: 'Chat not found' });
@@ -1386,8 +1395,8 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   }
 
   const createMessageTx = db.transaction(() => {
-    const inserted = db.prepare('INSERT INTO messages(chat_id,user_id,text,file_id,reply_to_id,client_id) VALUES(?,?,?,?,?,?)')
-      .run(chatId, req.user.id, cleanText, poll ? null : (fileId || null), validReplyId, clientId);
+    const inserted = db.prepare('INSERT INTO messages(chat_id,user_id,text,file_id,reply_to_id,client_id,ai_image_risk_confirmed) VALUES(?,?,?,?,?,?,?)')
+      .run(chatId, req.user.id, cleanText, poll ? null : (fileId || null), validReplyId, clientId, riskAccepted ? 1 : 0);
     const messageId = Number(inserted.lastInsertRowid);
     if (poll) {
       pollFeature.createPollData({
@@ -1409,6 +1418,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   const msg = db.prepare(`
     SELECT m.*, u.username, u.display_name, u.avatar_color, u.avatar_url,
       COALESCE(u.is_ai_bot, 0) as is_ai_bot, ab.mention as ai_bot_mention,
+      ab.provider as ai_bot_provider, ab.kind as ai_bot_kind,
       f.original_name as file_name, f.stored_name as file_stored,
       f.mime_type as file_mime, f.size as file_size, f.type as file_type,
       COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN 'Голосовое сообщение' END) as reply_text,

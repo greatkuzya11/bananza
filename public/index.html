@@ -995,6 +995,26 @@
     </div>
   </div>
 
+  <div id="grokImageRiskConfirmModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Grok image warning</h3>
+        <button class="modal-close">✕</button>
+      </div>
+      <div class="modal-body grok-risk-modal-body">
+        <p class="grok-risk-copy">
+          This prompt may be rejected by Grok image moderation, and rejected requests can still be billable.
+          Send it anyway?
+        </p>
+        <div id="grokImageRiskTerms" class="grok-risk-terms hidden"></div>
+        <div class="ai-bot-actions grok-risk-actions">
+          <button id="grokImageRiskCancel" type="button" class="weather-action-btn">No, cancel</button>
+          <button id="grokImageRiskConfirm" type="button" class="btn-primary">Yes, send</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="pollComposerModal" class="modal hidden">
     <div class="modal-content">
       <div class="modal-header">
@@ -1254,6 +1274,7 @@
 
   <script src="/js/sounds.js"></script>
   <script src="/js/messageCache.js"></script>
+  <script src="/js/ai-image-risk.js"></script>
   <script src="/js/app.js"></script>
   <script src="/js/video-notes/video-note-shapes.js"></script>
   <script src="/js/video-notes/VideoShapeRegistry.js"></script>

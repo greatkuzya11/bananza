@@ -3612,6 +3612,43 @@ html[data-visual-mode="rich"] .poll-card {
   min-height: 40px;
   padding: 0 14px;
 }
+.grok-risk-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.grok-risk-copy {
+  margin: 0;
+  color: var(--text-primary);
+  line-height: 1.45;
+}
+.grok-risk-terms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+}
+.grok-risk-terms.hidden {
+  display: none;
+}
+.grok-risk-term {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(255, 196, 61, 0.14);
+  border: 1px solid rgba(255, 196, 61, 0.35);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.grok-risk-actions {
+  justify-content: flex-end;
+}
 .grok-ai-nav-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

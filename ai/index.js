@@ -18,6 +18,7 @@ const {
 const { OPENAI_MIN_OUTPUT_TOKENS, createEmbedding, listModelIds, generateText, generateJson } = require('./openai');
 const grokAi = require('./grok');
 const yandexAi = require('./yandex');
+const { analyzeAiImageRisk } = require('../public/js/ai-image-risk');
 
 const BOT_COLORS = ['#65aadd', '#7bc862', '#a695e7', '#ee7aae', '#6ec9cb', '#faa774'];
 const AI_BOT_EXPORT_VERSION = 1;
@@ -2518,6 +2519,14 @@ function createAiBotFeature({
     if (!uploadsDir) throw new Error('Uploads directory is not configured');
     const prompt = cleanText(extractBotPromptText(bot, sourceMessage), 4000);
     if (!prompt) return null;
+    const risk = analyzeAiImageRisk(prompt);
+    if (risk.risky && Number(sourceMessage?.ai_image_risk_confirmed || 0) !== 1) {
+      const matchedTerms = risk.matches.slice(0, 4).map((item) => item.term).join(', ');
+      const notice = matchedTerms
+        ? `⚠️ Risky prompt detected (${matchedTerms}). Grok image moderation may reject it and still bill the request. Send it again and confirm the warning dialog first. If the dialog did not appear, reload the page and try again.`
+        : '⚠️ Risky prompt detected. Grok image moderation may reject it and still bill the request. Send it again and confirm the warning dialog first. If the dialog did not appear, reload the page and try again.';
+      return publishBotTextMessage(bot, sourceMessage, notice);
+    }
 
     const imageResult = await grokAi.generateImage({
       apiKey,
@@ -2562,12 +2571,13 @@ function createAiBotFeature({
     return `[ai-bot] response failed: ${detail}`;
   }
 
-  function publishBotFailureMessage(bot, sourceMessage, error) {
-    const text = buildBotFailureText(error);
+  function publishBotTextMessage(bot, sourceMessage, text) {
+    const body = cleanText(text, 4000);
+    if (!body) return null;
     const result = insertBotMessageStmt.run(
       sourceMessage.chat_id,
       bot.user_id,
-      text,
+      body,
       null,
       sourceMessage.id,
       1,
@@ -2578,6 +2588,10 @@ function createAiBotFeature({
     broadcastToChatAll(sourceMessage.chat_id, { type: 'message', message });
     if (typeof notifyMessageCreated === 'function') notifyMessageCreated(message);
     return message;
+  }
+
+  function publishBotFailureMessage(bot, sourceMessage, error) {
+    return publishBotTextMessage(bot, sourceMessage, buildBotFailureText(error));
   }
 
   async function createBotResponse(bot, chatConfig, sourceMessage) {
