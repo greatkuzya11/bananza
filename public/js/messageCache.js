@@ -1,11 +1,12 @@
 // User-scoped IndexedDB message cache and safe image asset cache helpers.
 (function () {
   const DB_NAME = 'bananza-cache-v2';
-  const DB_VERSION = 4;
+  const DB_VERSION = 5;
   const STORE_MESSAGES = 'messages';
   const STORE_PAGES = 'message_pages';
   const STORE_MEDIA_PAGES = 'media_pages';
   const STORE_OUTBOX = 'outbox';
+  const STORE_CHAT_META = 'chat_meta';
   const INDEX_USER_CHAT_ID = 'by_user_chat_id';
   const INDEX_OUTBOX_USER_CHAT_CREATED = 'by_user_chat_created';
   const ASSET_CACHE = 'bananza-assets-v2';
@@ -51,6 +52,9 @@
         if (!nextDb.objectStoreNames.contains(STORE_OUTBOX)) {
           const outbox = nextDb.createObjectStore(STORE_OUTBOX, { keyPath: ['userId', 'chatId', 'clientId'] });
           outbox.createIndex(INDEX_OUTBOX_USER_CHAT_CREATED, ['userId', 'chatId', 'createdAt']);
+        }
+        if (!nextDb.objectStoreNames.contains(STORE_CHAT_META)) {
+          nextDb.createObjectStore(STORE_CHAT_META, { keyPath: ['userId', 'chatId'] });
         }
       };
       req.onsuccess = () => {
@@ -132,6 +136,24 @@
     return IDBKeyRange.bound([currentUserId, normalizeId(chatId), minId], [currentUserId, normalizeId(chatId), maxId]);
   }
 
+  function rangeFromMessages(messages = []) {
+    let minId = Number.MAX_SAFE_INTEGER;
+    let maxId = 0;
+    let count = 0;
+    for (const msg of Array.isArray(messages) ? messages : []) {
+      const id = normalizeId(msg?.id);
+      if (!id) continue;
+      minId = Math.min(minId, id);
+      maxId = Math.max(maxId, id);
+      count += 1;
+    }
+    return { minId: count ? minId : 0, maxId, count };
+  }
+
+  function booleanOrNull(value) {
+    return typeof value === 'boolean' ? value : null;
+  }
+
   function readCursor(index, range, direction, limit) {
     return new Promise((resolve) => {
       const out = [];
@@ -177,6 +199,100 @@
       return rows.reverse();
     } catch {
       return [];
+    }
+  }
+
+  async function readChatMeta(chatId) {
+    const cid = normalizeId(chatId);
+    if (!currentUserId || !cid) return null;
+    const database = await openDB().catch(() => null);
+    if (!database || !database.objectStoreNames.contains(STORE_CHAT_META)) return null;
+    try {
+      return await new Promise((resolve) => {
+        const tx = database.transaction(STORE_CHAT_META, 'readonly');
+        const req = tx.objectStore(STORE_CHAT_META).get([currentUserId, cid]);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  async function writeChatMeta(chatId, patch = {}) {
+    const cid = normalizeId(chatId);
+    if (!currentUserId || !cid || !patch || typeof patch !== 'object') return null;
+    const database = await openDB().catch(() => null);
+    if (!database || !database.objectStoreNames.contains(STORE_CHAT_META)) return null;
+    return await new Promise((resolve) => {
+      let next = null;
+      try {
+        const tx = database.transaction(STORE_CHAT_META, 'readwrite');
+        const store = tx.objectStore(STORE_CHAT_META);
+        const req = store.get([currentUserId, cid]);
+        req.onsuccess = () => {
+          const previous = patch.replaceRange ? null : req.result;
+          const patchMin = normalizeId(patch.minId);
+          const patchMax = normalizeId(patch.maxId);
+          const prevMin = normalizeId(previous?.minId);
+          const prevMax = normalizeId(previous?.maxId);
+          const prevKnown = normalizeId(previous?.lastKnownServerId);
+          const patchKnown = normalizeId(patch.lastKnownServerId);
+          next = {
+            userId: currentUserId,
+            chatId: cid,
+            minId: patch.replaceRange
+              ? patchMin
+              : (patchMin && prevMin ? Math.min(patchMin, prevMin) : (patchMin || prevMin || 0)),
+            maxId: patch.replaceRange ? patchMax : Math.max(patchMax, prevMax),
+            hasMoreBefore: booleanOrNull(patch.hasMoreBefore) ?? booleanOrNull(previous?.hasMoreBefore),
+            hasMoreAfter: booleanOrNull(patch.hasMoreAfter) ?? booleanOrNull(previous?.hasMoreAfter),
+            lastKnownServerId: Math.max(patchKnown, prevKnown, patchMax, prevMax),
+            savedAt: Date.now(),
+          };
+          store.put(next);
+        };
+        tx.oncomplete = () => resolve(next);
+        tx.onerror = () => resolve(null);
+        tx.onabort = () => resolve(null);
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
+  async function getCachedRange(chatId) {
+    const cid = normalizeId(chatId);
+    if (!currentUserId || !cid) return null;
+    const database = await openDB().catch(() => null);
+    if (!database) return null;
+    try {
+      const tx = database.transaction(STORE_MESSAGES, 'readonly');
+      const index = tx.objectStore(STORE_MESSAGES).index(INDEX_USER_CHAT_ID);
+      const range = rangeForChat(cid);
+      const readEdge = (direction) => new Promise((resolve) => {
+        const req = index.openCursor(range, direction);
+        req.onsuccess = () => resolve(req.result?.value || null);
+        req.onerror = () => resolve(null);
+      });
+      const [first, last, meta] = await Promise.all([
+        readEdge('next'),
+        readEdge('prev'),
+        readChatMeta(cid),
+      ]);
+      const minId = normalizeId(first?.id);
+      const maxId = normalizeId(last?.id);
+      return {
+        ...(meta || {}),
+        userId: currentUserId,
+        chatId: cid,
+        minId,
+        maxId,
+        hasMessages: Boolean(minId && maxId),
+        lastKnownServerId: Math.max(normalizeId(meta?.lastKnownServerId), maxId),
+      };
+    } catch {
+      return readChatMeta(cid);
     }
   }
 
@@ -251,9 +367,10 @@
     }));
   }
 
-  async function writeWindow(chatId, messages = [], { limit = DEFAULT_MESSAGE_LIMIT } = {}) {
+  async function writeWindow(chatId, messages = [], { limit = DEFAULT_MESSAGE_LIMIT, hasMoreBefore = null, hasMoreAfter = null, lastKnownServerId = 0, replaceRange = false } = {}) {
     const cid = normalizeId(chatId);
     if (!Array.isArray(messages) || !cid || !currentUserId) return false;
+    const messageRange = rangeFromMessages(messages);
     const ok = await withStore('readwrite', (store) => {
       for (const msg of messages) {
         const row = normalizeMessage(cid, msg);
@@ -262,6 +379,15 @@
       return true;
     });
     if (ok) await trimChat(cid, limit);
+    if (ok) {
+      await writeChatMeta(cid, {
+        ...messageRange,
+        hasMoreBefore,
+        hasMoreAfter,
+        lastKnownServerId,
+        replaceRange,
+      });
+    }
     return !!ok;
   }
 
@@ -272,7 +398,11 @@
     if (!Array.isArray(messages) || !messages.length || !cid || !pageCursor || !currentUserId) return false;
     const messageIds = [...new Set(messages.map((msg) => normalizeId(msg?.id)).filter(Boolean))].sort((a, b) => a - b);
     if (!messageIds.length) return false;
-    const wroteMessages = await writeWindow(cid, messages, { limit });
+    const wroteMessages = await writeWindow(cid, messages, {
+      limit,
+      hasMoreBefore,
+      hasMoreAfter,
+    });
     const wrotePage = await withObjectStore(STORE_PAGES, 'readwrite', (store) => {
       store.put({
         userId: currentUserId,
@@ -328,7 +458,11 @@
       .map((msg) => normalizeMessage(cid, msg))
       .filter((msg) => msg && (msg.file_type === 'image' || msg.file_type === 'video'))
       .sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
-    const wroteMessages = rows.length ? await writeWindow(cid, rows, { limit }) : true;
+    const wroteMessages = rows.length ? await writeWindow(cid, rows, {
+      limit,
+      hasMoreBefore,
+      hasMoreAfter,
+    }) : true;
     const wrotePage = await withObjectStore(STORE_MEDIA_PAGES, 'readwrite', (store) => {
       store.put({
         userId: currentUserId,
@@ -390,6 +524,14 @@
       return true;
     });
     if (ok) await trimChat(cid);
+    if (ok) {
+      const id = normalizeId(msg?.id);
+      await writeChatMeta(cid, {
+        minId: id,
+        maxId: id,
+        lastKnownServerId: id,
+      });
+    }
     return !!ok;
   }
 
@@ -412,10 +554,22 @@
     const cid = normalizeId(chatId);
     const mid = normalizeId(id);
     if (!cid || !mid || !currentUserId) return false;
-    return !!(await withStore('readwrite', (store) => {
+    const ok = !!(await withStore('readwrite', (store) => {
       store.delete([currentUserId, cid, mid]);
       return true;
     }));
+    if (ok) {
+      const range = await getCachedRange(cid);
+      await writeChatMeta(cid, {
+        minId: range?.minId || 0,
+        maxId: range?.maxId || 0,
+        lastKnownServerId: range?.maxId || 0,
+        hasMoreBefore: range?.hasMoreBefore,
+        hasMoreAfter: range?.hasMoreAfter,
+        replaceRange: true,
+      });
+    }
+    return ok;
   }
 
   async function upsertOutboxItem(item) {
@@ -529,7 +683,18 @@
       };
       return true;
     });
-    return !!(clearMessages || clearOutbox || clearPages || clearMediaPages);
+    const clearChatMeta = await withObjectStore(STORE_CHAT_META, 'readwrite', (store) => {
+      const range = IDBKeyRange.bound([uid, 0], [uid, Number.MAX_SAFE_INTEGER]);
+      const req = store.openCursor(range);
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (!cursor) return;
+        store.delete(cursor.primaryKey);
+        cursor.continue();
+      };
+      return true;
+    });
+    return !!(clearMessages || clearOutbox || clearPages || clearMediaPages || clearChatMeta);
   }
 
   function isCacheableAsset(url) {
@@ -679,6 +844,9 @@
     init,
     readLatest,
     readAround,
+    readChatMeta,
+    writeChatMeta,
+    getCachedRange,
     writeWindow,
     writePage,
     readPage,

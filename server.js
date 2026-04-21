@@ -1464,7 +1464,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
         if (!preview) return;
         db.prepare('INSERT INTO link_previews(message_id,url,title,description,image,hostname) VALUES(?,?,?,?,?,?)')
           .run(msg.id, preview.url, preview.title, preview.description, preview.image, preview.hostname);
-        broadcastToChatAll(chatId, { type: 'link_preview', messageId: msg.id, preview });
+        broadcastToChatAll(chatId, { type: 'link_preview', chatId, messageId: msg.id, preview });
       }).catch(() => {});
     }
   }
@@ -1776,7 +1776,7 @@ app.patch('/api/messages/:id', auth, msgLimiter, (req, res) => {
         if (!preview) return;
         db.prepare('INSERT INTO link_previews(message_id,url,title,description,image,hostname) VALUES(?,?,?,?,?,?)')
           .run(mid, preview.url, preview.title, preview.description, preview.image, preview.hostname);
-        broadcastToChatAll(m.chat_id, { type: 'link_preview', messageId: mid, preview });
+        broadcastToChatAll(m.chat_id, { type: 'link_preview', chatId: m.chat_id, messageId: mid, preview });
       }).catch(() => {});
     }
   }
@@ -2099,6 +2099,7 @@ app.get('/uploads/:filename', (req, res) => {
 
   res.setHeader('Content-Type', file.mime_type);
   res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.original_name)}"`);
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
   res.sendFile(filePath);
 });
 
