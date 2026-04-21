@@ -401,6 +401,11 @@
     return Math.max(0, viewportHeight + Math.max(0, vv.offsetTop || 0));
   }
 
+  function getMobileAppViewportTopInset() {
+    if (!isIosViewportFixTarget) return 0;
+    return Math.max(0, window.visualViewport?.offsetTop || 0);
+  }
+
   function isMobileComposerKeyboardOpen() {
     if (window.innerWidth > 768) return false;
     if (window.visualViewport) {
@@ -14024,11 +14029,13 @@
         if (!app) return;
         const newViewportHeight = Math.max(0, window.visualViewport?.height || 0);
         const newAppHeight = getMobileAppViewportHeight();
+        const newAppTopInset = getMobileAppViewportTopInset();
         if (isMobileViewportLayoutLocked()) {
           prevVVHeight = newViewportHeight;
           return;
         }
         app.style.height = `${Math.round(newAppHeight)}px`;
+        app.style.paddingTop = `${Math.round(newAppTopInset)}px`;
         // If keyboard appeared (viewport shrunk) — scroll messages to bottom
         if (newViewportHeight < prevVVHeight && messagesEl) {
           requestAnimationFrame(() => {
