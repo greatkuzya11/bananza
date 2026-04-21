@@ -7590,6 +7590,16 @@
     } catch (e) {}
   }
 
+  function revealActiveMobileChatRoute({ suppressHistoryPush = false, chatId = currentChatId } = {}) {
+    if (window.innerWidth > 768 || !sidebar) return;
+    cancelPendingSidebarReveal();
+    sidebar.classList.remove('sidebar-no-transition');
+    sidebar.classList.add('sidebar-hidden');
+    if (!suppressHistoryPush) {
+      history.pushState({ chat: Number(chatId || currentChatId || 0) }, '');
+    }
+  }
+
   function warmMessageWindowAssets(chat, messages = []) {
     if (!window.cacheAssets) return;
     (async () => {
@@ -8008,6 +8018,7 @@
 
     const revealCommittedWindow = () => {
       if (!isCurrentOpen()) return;
+      revealActiveMobileChatRoute({ suppressHistoryPush, chatId: targetChatId });
       applyOpenScroll();
       revealChatHydration(seq, targetChatId);
       finishVisibleOpen();
@@ -8195,16 +8206,6 @@
     chatList.querySelectorAll('.chat-item[data-chat-id]').forEach(el => {
       el.classList.toggle('active', +el.dataset.chatId === targetChatId);
     });
-
-    // Mobile: hide sidebar
-    if (window.innerWidth <= 768) {
-      cancelPendingSidebarReveal();
-      sidebar.classList.remove('sidebar-no-transition');
-      sidebar.classList.add('sidebar-hidden');
-      if (!suppressHistoryPush) {
-        history.pushState({ chat: targetChatId }, '');
-      }
-    }
 
     restoreAnchor = explicitAnchorId
       ? { messageId: explicitAnchorId, offsetTop: 72, atBottom: false, mode: sameChat ? 'search_same_chat' : 'search' }
