@@ -450,17 +450,6 @@ a:hover { text-decoration: underline; }
   overflow: hidden;
   isolation: isolate;
 }
-#app::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 18;
-  pointer-events: none;
-  visibility: hidden;
-  opacity: 0;
-  background-color: var(--bg-sidebar);
-  background-image: var(--bg-sidebar-gradient);
-}
 
 /* ── Sidebar ─────────────────────────────────────────────────────────────── */
 #sidebar {
@@ -858,6 +847,44 @@ a:hover { text-decoration: underline; }
   background-image: var(--bg-app-gradient);
 }
 
+#sidebar,
+#chatArea,
+.chat-view,
+.chat-header,
+.pinned-bar,
+.messages,
+.input-area,
+.modal,
+.modal::before,
+.modal-content,
+.search-panel,
+.search-panel::before,
+.search-panel-sheet,
+.chat-context-menu-backdrop,
+.chat-context-menu,
+.reaction-picker,
+.reaction-emoji-popover,
+.mention-picker {
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
+#sidebar,
+#chatArea,
+.chat-view,
+.chat-header,
+.pinned-bar,
+.messages,
+.input-area {
+  transform: translateZ(0);
+}
+
+.modal,
+.search-panel,
+.chat-context-menu-backdrop {
+  contain: paint;
+}
+
 .empty-state {
   flex: 1; display: flex; flex-direction: column;
   align-items: center; justify-content: center; color: var(--text-secondary);
@@ -875,23 +902,6 @@ a:hover { text-decoration: underline; }
   isolation: isolate;
   background-color: var(--bg-dark);
   background-image: var(--bg-app-gradient);
-}
-.chat-view::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 16;
-  pointer-events: none;
-  visibility: hidden;
-  opacity: 0;
-  background-color: var(--bg-dark);
-  background-image:
-    linear-gradient(180deg, var(--bg-sidebar) 0, var(--bg-sidebar) 132px, transparent 132px, transparent 100%),
-    var(--bg-app-gradient);
-}
-html[data-view-transition="chat-open"] #chatView::after {
-  visibility: visible;
-  opacity: 1;
 }
 
 /* ── Chat header ─────────────────────────────────────────────────────────── */
@@ -4236,10 +4246,6 @@ html[data-visual-mode="rich"] .poll-card {
   html.is-mobile-route-transitioning #app {
     background-color: var(--bg-sidebar);
     background-image: var(--bg-sidebar-gradient);
-  }
-  html.is-mobile-route-transitioning #app::after {
-    visibility: visible;
-    opacity: 1;
   }
   html.is-mobile-route-transitioning #chatArea {
     visibility: hidden;

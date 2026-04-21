@@ -8374,7 +8374,8 @@
   // MESSAGES
   // ═══════════════════════════════════════════════════════════════════════════
   function clearRenderedMessages({ resetDisplayed = true } = {}) {
-    messagesEl.querySelectorAll('.msg-row, .msg-group, .date-separator').forEach(el => el.remove());
+    if (loadMoreWrap) messagesEl.replaceChildren(loadMoreWrap);
+    else messagesEl.replaceChildren();
     if (resetDisplayed) displayedMsgIds.clear();
   }
 
@@ -8437,8 +8438,10 @@
   }
 
   function replaceRenderedMessages(msgs = []) {
-    clearRenderedMessages({ resetDisplayed: true });
-    messagesEl.appendChild(buildMessagesFragment(Array.isArray(msgs) ? msgs : []));
+    displayedMsgIds.clear();
+    const fragment = buildMessagesFragment(Array.isArray(msgs) ? msgs : []);
+    if (loadMoreWrap) messagesEl.replaceChildren(loadMoreWrap, fragment);
+    else messagesEl.replaceChildren(fragment);
     updateScrollBottomButton();
   }
 
