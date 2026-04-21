@@ -288,6 +288,14 @@
   let searchPanelTransitionHandler = null;
   let searchPanelPendingAction = null;
   let searchPanelReturnFocusEl = null;
+  let chatOpenSeq = 0;
+  let chatMessageAbortController = null;
+  let chatOpenInProgress = false;
+  let deferredRecoveryReason = '';
+  let scrollRestoreTimers = new Set();
+  let routeTransitionCover = null;
+  let routeCoverActive = false;
+  let routeCoverTimer = null;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DOM
@@ -1770,6 +1778,100 @@
       chatAreaResizeObserver = new ResizeObserver(syncChatAreaMetrics);
       chatAreaResizeObserver.observe(chatArea);
     }
+  }
+
+  function isAbortError(error) {
+    return error?.name === 'AbortError';
+  }
+
+  function isCurrentChatOpenTransition(seq, chatId = currentChatId) {
+    return Number(seq || 0) === Number(chatOpenSeq || 0)
+      && Number(chatId || 0) === Number(currentChatId || 0);
+  }
+
+  function isUiTransitionBusy() {
+    return Boolean(chatOpenInProgress || routeCoverActive);
+  }
+
+  function flushDeferredRecoverySync(reason = 'transition-complete') {
+    if (!token || !currentUser || document.hidden || isUiTransitionBusy()) return;
+    if (!recoverySyncRequested && pendingRecoveryChatIds.size === 0) return;
+    const nextReason = deferredRecoveryReason || reason;
+    deferredRecoveryReason = '';
+    scheduleRecoverySync(nextReason, { immediate: true });
+  }
+
+  function cancelPendingScrollRestores() {
+    scrollRestoreTimers.forEach((timer) => clearTimeout(timer));
+    scrollRestoreTimers.clear();
+  }
+
+  function setChatHydrating(active) {
+    messagesEl?.classList.toggle('is-hydrating', Boolean(active));
+    chatView?.classList.toggle('is-chat-hydrating', Boolean(active));
+    document.documentElement.classList.toggle('is-chat-hydrating', Boolean(active));
+  }
+
+  function revealChatHydration(seq, chatId = currentChatId) {
+    if (seq && !isCurrentChatOpenTransition(seq, chatId)) return false;
+    setChatHydrating(false);
+    return true;
+  }
+
+  function beginChatOpenTransition(chatId) {
+    chatOpenSeq += 1;
+    const seq = chatOpenSeq;
+    if (chatMessageAbortController) {
+      try { chatMessageAbortController.abort(); } catch (e) {}
+    }
+    cancelPendingScrollRestores();
+    chatMessageAbortController = new AbortController();
+    chatOpenInProgress = true;
+    document.documentElement.dataset.viewTransition = 'chat-open';
+    setChatHydrating(true);
+    return { seq, controller: chatMessageAbortController, chatId: Number(chatId || 0) };
+  }
+
+  function endChatOpenTransition(seq, chatId = currentChatId) {
+    if (!isCurrentChatOpenTransition(seq, chatId)) return false;
+    chatOpenInProgress = false;
+    chatMessageAbortController = null;
+    delete document.documentElement.dataset.viewTransition;
+    revealChatHydration(seq, chatId);
+    flushDeferredRecoverySync();
+    return true;
+  }
+
+  function ensureRouteTransitionCover() {
+    if (routeTransitionCover?.isConnected) return routeTransitionCover;
+    const appEl = document.getElementById('app');
+    if (!appEl) return null;
+    routeTransitionCover = document.createElement('div');
+    routeTransitionCover.id = 'routeTransitionCover';
+    routeTransitionCover.className = 'route-transition-cover';
+    routeTransitionCover.setAttribute('aria-hidden', 'true');
+    appEl.appendChild(routeTransitionCover);
+    return routeTransitionCover;
+  }
+
+  function showRouteTransitionCover(durationMs = 340) {
+    if (window.innerWidth > 768) return false;
+    if (!ensureRouteTransitionCover()) return false;
+    routeCoverActive = true;
+    clearTimeout(routeCoverTimer);
+    document.documentElement.classList.add('is-route-cover-active');
+    routeCoverTimer = setTimeout(() => {
+      hideRouteTransitionCover();
+    }, Math.max(120, Number(durationMs) || 340));
+    return true;
+  }
+
+  function hideRouteTransitionCover() {
+    clearTimeout(routeCoverTimer);
+    routeCoverTimer = null;
+    routeCoverActive = false;
+    document.documentElement.classList.remove('is-route-cover-active');
+    flushDeferredRecoverySync();
   }
 
   function chatListCacheKey() {
@@ -5070,6 +5172,11 @@
       recoverySyncRequested = true;
       return;
     }
+    if (isUiTransitionBusy()) {
+      recoverySyncRequested = true;
+      deferredRecoveryReason = reason || deferredRecoveryReason;
+      return;
+    }
 
     recoverySyncRequested = true;
     const elapsed = Date.now() - recoverySyncLastStartedAt;
@@ -5083,6 +5190,11 @@
 
   async function runRecoverySync(reason = 'event') {
     if (!token || !currentUser) return;
+    if (isUiTransitionBusy()) {
+      recoverySyncRequested = true;
+      deferredRecoveryReason = reason || deferredRecoveryReason;
+      return;
+    }
     if (recoverySyncPromise) {
       recoverySyncRequested = true;
       return recoverySyncPromise;
@@ -7223,6 +7335,21 @@
     } catch (e) {}
   }
 
+  function warmMessageWindowAssets(chat, messages = []) {
+    if (!window.cacheAssets) return;
+    (async () => {
+      try {
+        const assetUrls = new Set();
+        if (chat?.background_url) assetUrls.add(chat.background_url);
+        for (const message of messages || []) {
+          if (message.avatar_url) assetUrls.add(message.avatar_url);
+          if (message.file_type === 'image' && message.file_stored) assetUrls.add(`/uploads/${message.file_stored}`);
+        }
+        await window.cacheAssets(Array.from(assetUrls).slice(0, 12));
+      } catch (e) {}
+    })();
+  }
+
   function cacheCursorPage(chatId, direction, cursor, messages = [], page = {}) {
     if (!Array.isArray(messages) || !messages.length || !cursor) return;
     try {
@@ -7389,18 +7516,32 @@
     scrollAnchorSaveTimer = setTimeout(() => saveCurrentScrollAnchor(), 140);
   }
 
-  function restoreScrollAnchor(anchor, attempts = 3) {
+  function restoreScrollAnchor(anchor, attempts = 3, options = {}) {
     if (!anchor?.messageId) return false;
+    const guardSeq = Number(options.openSeq || 0);
+    const guardChatId = Number(options.chatId || currentChatId || 0);
+    const isGuardCurrent = () => (
+      (!guardSeq || Number(chatOpenSeq || 0) === guardSeq)
+      && (!guardChatId || Number(currentChatId || 0) === guardChatId)
+    );
+    if (!isGuardCurrent()) return false;
     const row = findRestorableAnchorRow(anchor);
     if (!row) return false;
     const apply = () => {
+      if (!isGuardCurrent()) return;
       const containerRect = messagesEl.getBoundingClientRect();
       const rect = row.getBoundingClientRect();
       messagesEl.scrollTop += (rect.top - containerRect.top) - (Number(anchor.offsetTop) || 0);
       updateScrollBottomButton();
     };
     apply();
-    if (attempts > 1) setTimeout(() => restoreScrollAnchor(anchor, attempts - 1), 120);
+    if (attempts > 1) {
+      const timer = setTimeout(() => {
+        scrollRestoreTimers.delete(timer);
+        restoreScrollAnchor(anchor, attempts - 1, options);
+      }, 120);
+      scrollRestoreTimers.add(timer);
+    }
     return true;
   }
 
@@ -7560,6 +7701,80 @@
     const sameChat = previousChatId === targetChatId;
     const explicitAnchorId = Number(options?.anchorMessageId || 0);
     const suppressHistoryPush = Boolean(options?.suppressHistoryPush);
+    const { seq, controller } = beginChatOpenTransition(targetChatId);
+    let restoreAnchor = null;
+    let cachedMsgs = [];
+    let committedWindow = false;
+    let postOpenScheduled = false;
+    const isCurrentOpen = () => isCurrentChatOpenTransition(seq, targetChatId);
+
+    const applyOpenScroll = () => {
+      if (!isCurrentOpen()) return;
+      if (restoreAnchor?.messageId) {
+        if (!restoreScrollAnchor(restoreAnchor, 1, { openSeq: seq, chatId: targetChatId })) {
+          messagesEl.scrollTop = 0;
+          updateScrollBottomButton();
+        }
+      } else {
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        updateScrollBottomButton();
+      }
+    };
+
+    const commitMessageWindow = async (msgs = [], page = null, { source = 'network' } = {}) => {
+      if (!isCurrentOpen()) return false;
+      const list = Array.isArray(msgs) ? msgs : [];
+      const firstId = minMessageId(list);
+      const lastId = maxMessageId(list);
+      const cacheHasMoreBefore = firstId !== Number.MAX_SAFE_INTEGER
+        && firstId > 1
+        && (restoreAnchor?.messageId ? true : list.length >= PAGE_SIZE);
+      const networkHasMoreBefore = restoreAnchor?.messageId ? list.length > 0 : list.length >= PAGE_SIZE;
+      const fallbackHasMoreAfter = Boolean(
+        restoreAnchor?.messageId
+        && chat?.last_message_id
+        && lastId
+        && lastId < Number(chat.last_message_id || 0)
+      );
+
+      setHasMoreBefore(page?.hasMoreBefore ?? (source === 'cache' ? cacheHasMoreBefore : networkHasMoreBefore));
+      setHasMoreAfter(page?.hasMoreAfter ?? fallbackHasMoreAfter);
+      replaceRenderedMessages(list);
+      await renderOutboxForChat(targetChatId);
+      if (!isCurrentOpen()) return false;
+      committedWindow = true;
+      return true;
+    };
+
+    const finishVisibleOpen = () => {
+      if (!isCurrentOpen()) return;
+      clearReply();
+      if (editTo) clearEdit({ clearInput: true });
+      syncMentionOpenButton();
+      if (window.innerWidth > 768) msgInput.focus();
+      refreshPollComposerActionState();
+      window.BananzaVoiceHooks?.refreshComposerState?.();
+      updateScrollBottomButton();
+      localStorage.setItem('lastChat', targetChatId);
+    };
+
+    const schedulePostOpenWork = () => {
+      if (postOpenScheduled) return;
+      postOpenScheduled = true;
+      requestAnimationFrame(() => {
+        if (!isCurrentOpen()) return;
+        updateScrollBottomButton();
+        setTimeout(() => {
+          if (!isCurrentOpen()) return;
+          suppressScrollAnchorSave = false;
+          saveCurrentScrollAnchor(targetChatId, { force: true });
+          maybeLoadMoreAtTop();
+          maybeLoadMoreAtBottom();
+          endChatOpenTransition(seq, targetChatId);
+        }, 260);
+      });
+    };
+
     // Save scroll position of previous chat
     if (currentChatId) {
       saveCurrentScrollAnchor(currentChatId, { force: true });
@@ -7574,6 +7789,7 @@
     hasMore = false; // prevent scroll handler triggering loadMore during DOM clear
     setHasMoreAfter(false);
     suppressScrollAnchorSave = true;
+    setChatHydrating(true);
 
     emptyState.classList.add('hidden');
     chatView.classList.remove('hidden');
@@ -7594,7 +7810,7 @@
       }
     }
 
-    const restoreAnchor = explicitAnchorId
+    restoreAnchor = explicitAnchorId
       ? { messageId: explicitAnchorId, offsetTop: 72, atBottom: false, mode: sameChat ? 'search_same_chat' : 'search' }
       : anchorForChatOpen(chat);
     renderCurrentChatHeader(chat);
@@ -7609,48 +7825,34 @@
     compactView = !!compactViewMap[targetChatId];
     messagesEl.classList.toggle('compact-view', compactView);
     loadMoreWrap.classList.add('hidden');
-    messagesEl.querySelectorAll('.msg-row, .msg-group, .date-separator').forEach(el => el.remove());
+    clearRenderedMessages({ resetDisplayed: true });
+
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
+    params.set('meta', '1');
+    if (restoreAnchor?.messageId) params.set('anchor', String(restoreAnchor.messageId));
+    const networkMessagesPromise = api(`/api/chats/${targetChatId}/messages?${params}`, { signal: controller.signal })
+      .then((data) => ({ data }))
+      .catch((error) => ({ error }));
+
     try {
       if (window.messageCache) {
-        const cachedMsgs = restoreAnchor?.messageId
+        cachedMsgs = restoreAnchor?.messageId
           ? await window.messageCache.readAround(targetChatId, restoreAnchor.messageId, { limit: PAGE_SIZE })
           : await window.messageCache.readLatest(targetChatId, { limit: PAGE_SIZE });
-        if (Array.isArray(cachedMsgs) && cachedMsgs.length) {
+        if (isCurrentOpen() && Array.isArray(cachedMsgs) && cachedMsgs.length) {
           applyOwnReadStateToMessages(targetChatId, cachedMsgs);
-          displayedMsgIds.clear();
-          const cachedFirstId = minMessageId(cachedMsgs);
-          const cachedLastId = maxMessageId(cachedMsgs);
-          setHasMoreBefore(cachedFirstId !== Number.MAX_SAFE_INTEGER && cachedFirstId > 1 && (restoreAnchor?.messageId ? true : cachedMsgs.length >= PAGE_SIZE));
-          setHasMoreAfter(Boolean(restoreAnchor?.messageId && chat?.last_message_id && cachedLastId < Number(chat.last_message_id || 0)));
-          renderMessages(cachedMsgs);
-          await renderOutboxForChat(targetChatId);
-          if (restoreAnchor?.messageId) {
-            requestAnimationFrame(() => restoreScrollAnchor(restoreAnchor, 1));
-          } else {
-            scrollToBottom(true);
-          }
-          // cache assets in background (background, avatars, first 5 images)
-          (async () => {
-            try {
-              const assetUrls = new Set();
-              if (chat?.background_url) assetUrls.add(chat.background_url);
-              for (const m of cachedMsgs) {
-                if (m.avatar_url) assetUrls.add(m.avatar_url);
-                if (m.file_type === 'image' && m.file_stored) assetUrls.add(`/uploads/${m.file_stored}`);
-              }
-              await window.cacheAssets(Array.from(assetUrls).slice(0, 12));
-            } catch (e) {}
-          })();
+          await commitMessageWindow(cachedMsgs, null, { source: 'cache' });
+          applyOpenScroll();
+          warmMessageWindowAssets(chat, cachedMsgs);
         }
       }
     } catch (e) {}
 
-    let scrollRestoreScheduled = false;
     try {
-      const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
-      params.set('meta', '1');
-      if (restoreAnchor?.messageId) params.set('anchor', String(restoreAnchor.messageId));
-      const raw = await api(`/api/chats/${targetChatId}/messages?${params}`);
+      const networkResult = await networkMessagesPromise;
+      if (networkResult.error) throw networkResult.error;
+      const raw = networkResult.data;
+      if (!isCurrentOpen()) return;
       const page = normalizeMessagesPage(raw);
       const msgs = page.messages;
       const memberLastReads = raw && raw.member_last_reads ? raw.member_last_reads : null;
@@ -7658,110 +7860,40 @@
         replace: true,
         updateVisible: currentChatId === targetChatId,
       });
+      if (!isCurrentOpen()) return;
       if (readState.chatReadChanged) renderChatList(chatSearch.value);
-      applyOwnReadStateToMessages(chatId, msgs);
-      // Re-clear after async gap: WS may have appended messages while we waited
-      if (currentChatId !== targetChatId) { suppressScrollAnchorSave = false; return; } // user switched chats
+      applyOwnReadStateToMessages(targetChatId, msgs);
 
-      // If DOM already contains the same messages in the same order, skip re-render to avoid blinking.
-      try {
-        const domRows = Array.from(messagesEl.querySelectorAll('.msg-row'));
-        const domIds = domRows.map(el => Number(el.dataset.msgId || 0));
-        const fetchedIds = (msgs || []).map(m => Number(m.id || 0));
-        const same = domIds.length > 0 && domIds.length === fetchedIds.length && domIds.every((id, idx) => id === fetchedIds[idx]);
-        if (same) {
-          // Persist network-fetched messages to IndexedDB for offline/low-traffic history reuse.
-          cacheMessages(targetChatId, msgs || []);
-          setHasMoreBefore(page.hasMoreBefore ?? (restoreAnchor?.messageId ? msgs.length > 0 : msgs.length >= PAGE_SIZE));
-          setHasMoreAfter(page.hasMoreAfter ?? Boolean(restoreAnchor?.messageId && chat?.last_message_id && maxMessageId(msgs) < Number(chat.last_message_id || 0)));
-          if (restoreAnchor?.messageId) {
-            requestAnimationFrame(() => {
-              if (!restoreScrollAnchor(restoreAnchor)) {
-                messagesEl.scrollTop = 0;
-                updateScrollBottomButton();
-              }
-            });
-          } else {
-            scrollToBottom(true);
-          }
-          requestAnimationFrame(() => {
-            updateScrollBottomButton();
-            setTimeout(() => {
-              if (currentChatId !== targetChatId) return;
-              suppressScrollAnchorSave = false;
-              saveCurrentScrollAnchor(targetChatId, { force: true });
-              maybeLoadMoreAtTop();
-              maybeLoadMoreAtBottom();
-            }, 260);
-          });
-          scrollRestoreScheduled = true;
-        } else {
-          messagesEl.querySelectorAll('.msg-row, .msg-group, .date-separator').forEach(el => el.remove());
-          displayedMsgIds.clear();
-          setHasMoreBefore(page.hasMoreBefore ?? (restoreAnchor?.messageId ? msgs.length > 0 : msgs.length >= PAGE_SIZE));
-          setHasMoreAfter(page.hasMoreAfter ?? Boolean(restoreAnchor?.messageId && chat?.last_message_id && maxMessageId(msgs) < Number(chat.last_message_id || 0)));
-          renderMessages(msgs);
-        }
-      } catch (e) {
-        messagesEl.querySelectorAll('.msg-row, .msg-group, .date-separator').forEach(el => el.remove());
-        displayedMsgIds.clear();
+      if (committedWindow && renderedMessageIdsMatch(msgs)) {
         setHasMoreBefore(page.hasMoreBefore ?? (restoreAnchor?.messageId ? msgs.length > 0 : msgs.length >= PAGE_SIZE));
         setHasMoreAfter(page.hasMoreAfter ?? Boolean(restoreAnchor?.messageId && chat?.last_message_id && maxMessageId(msgs) < Number(chat.last_message_id || 0)));
-        renderMessages(msgs);
-      }
-      // Persist network-fetched messages to IndexedDB for offline/low-traffic history reuse.
-      cacheMessages(targetChatId, msgs || []);
-      // Cache background, avatars, and first 5 images
-      (async () => {
-        try {
-          const assetUrls = new Set();
-          if (chat?.background_url) assetUrls.add(chat.background_url);
-          for (const m of msgs) {
-            if (m.avatar_url) assetUrls.add(m.avatar_url);
-            if (m.file_type === 'image' && m.file_stored) assetUrls.add(`/uploads/${m.file_stored}`);
-          }
-          await window.cacheAssets(Array.from(assetUrls).slice(0, 12));
-        } catch (e) {}
-      })();
-      await renderOutboxForChat(targetChatId);
-      if (restoreAnchor?.messageId) {
-        requestAnimationFrame(() => {
-          if (!restoreScrollAnchor(restoreAnchor)) {
-            messagesEl.scrollTop = 0;
-            updateScrollBottomButton();
-          }
-        });
+        await renderOutboxForChat(targetChatId);
+        if (!isCurrentOpen()) return;
       } else {
-        scrollToBottom(true);
+        if (!await commitMessageWindow(msgs, page, { source: 'network' })) return;
       }
-      requestAnimationFrame(() => {
-        updateScrollBottomButton();
-        setTimeout(() => {
-          if (currentChatId !== targetChatId) return;
-          suppressScrollAnchorSave = false;
-          saveCurrentScrollAnchor(targetChatId, { force: true });
-          maybeLoadMoreAtTop();
-          maybeLoadMoreAtBottom();
-        }, 260);
-      });
-      scrollRestoreScheduled = true;
-    } catch {
-      await renderOutboxForChat(targetChatId);
+      cacheMessages(targetChatId, msgs || []);
+      warmMessageWindowAssets(chat, msgs);
+      applyOpenScroll();
+      revealChatHydration(seq, targetChatId);
+      finishVisibleOpen();
+      schedulePostOpenWork();
+    } catch (error) {
+      if (isAbortError(error) || !isCurrentOpen()) return;
+      if (!committedWindow) {
+        if (Array.isArray(cachedMsgs) && cachedMsgs.length) {
+          applyOwnReadStateToMessages(targetChatId, cachedMsgs);
+          if (!await commitMessageWindow(cachedMsgs, null, { source: 'cache' })) return;
+        } else {
+          await renderOutboxForChat(targetChatId);
+          if (!isCurrentOpen()) return;
+        }
+      }
+      applyOpenScroll();
+      revealChatHydration(seq, targetChatId);
+      finishVisibleOpen();
+      schedulePostOpenWork();
     }
-    if (!scrollRestoreScheduled && currentChatId === targetChatId && suppressScrollAnchorSave) {
-      suppressScrollAnchorSave = false;
-      maybeLoadMoreAtTop();
-      maybeLoadMoreAtBottom();
-    }
-
-    clearReply();
-    if (editTo) clearEdit({ clearInput: true });
-    syncMentionOpenButton();
-    if (window.innerWidth > 768) msgInput.focus();
-    refreshPollComposerActionState();
-    window.BananzaVoiceHooks?.refreshComposerState?.();
-    updateScrollBottomButton();
-    localStorage.setItem('lastChat', targetChatId);
   }
 
   function updateChatStatus() {
@@ -7855,6 +7987,81 @@
   // ═══════════════════════════════════════════════════════════════════════════
   // MESSAGES
   // ═══════════════════════════════════════════════════════════════════════════
+  function clearRenderedMessages({ resetDisplayed = true } = {}) {
+    messagesEl.querySelectorAll('.msg-row, .msg-group, .date-separator').forEach(el => el.remove());
+    if (resetDisplayed) displayedMsgIds.clear();
+  }
+
+  function getRenderedMessageIdList() {
+    return Array.from(messagesEl.querySelectorAll('.msg-row[data-msg-id]'))
+      .filter((row) => row.dataset.outbox !== '1')
+      .map((row) => Number(row.dataset.msgId || 0));
+  }
+
+  function renderedMessageIdsMatch(msgs = []) {
+    const domIds = getRenderedMessageIdList();
+    const nextIds = (Array.isArray(msgs) ? msgs : []).map((msg) => Number(msg?.id || 0));
+    return domIds.length > 0
+      && domIds.length === nextIds.length
+      && domIds.every((id, index) => id === nextIds[index]);
+  }
+
+  function buildMessagesFragment(msgs = []) {
+    const fragment = document.createDocumentFragment();
+    let lastDate = null;
+    let currentGroupBody = null;
+
+    for (let i = 0; i < msgs.length; i++) {
+      const msg = msgs[i];
+      if (isMessageDisplayed(msg?.id)) continue;
+      const msgDate = formatDate(msg.created_at);
+      if (msgDate !== lastDate) {
+        lastDate = msgDate;
+        currentGroupBody = null;
+        const sep = document.createElement('div');
+        sep.className = 'date-separator';
+        sep.innerHTML = `<span>${msgDate}</span>`;
+        fragment.appendChild(sep);
+      }
+
+      const prevMsg = i > 0 ? msgs[i - 1] : null;
+      const sameUser = prevMsg && prevMsg.user_id === msg.user_id && formatDate(prevMsg.created_at) === msgDate;
+      const isOwn = msg.user_id === currentUser.id;
+      const useGroup = !isOwn || compactView;
+      const startsGroup = useGroup && (!sameUser || !currentGroupBody);
+
+      if (startsGroup) {
+        const { group, body } = createMessageGroup(msg, isOwn);
+        currentGroupBody = body;
+        fragment.appendChild(group);
+      }
+
+      const showName = useGroup && startsGroup;
+      const el = createMessageEl(msg, showName);
+      if (useGroup) {
+        currentGroupBody.appendChild(el);
+      } else {
+        currentGroupBody = null;
+        fragment.appendChild(el);
+      }
+      rememberDisplayedMessage(msg.id);
+    }
+
+    return fragment;
+  }
+
+  function replaceRenderedMessages(msgs = []) {
+    clearRenderedMessages({ resetDisplayed: true });
+    messagesEl.appendChild(buildMessagesFragment(Array.isArray(msgs) ? msgs : []));
+    updateScrollBottomButton();
+  }
+
+  function isCurrentMessageRow(row) {
+    if (!row?.isConnected) return false;
+    const rowChatId = Number(row.__messageData?.chat_id || row.__messageData?.chatId || currentChatId || 0);
+    return !rowChatId || rowChatId === Number(currentChatId || 0);
+  }
+
   function createMessageGroup(msg, isOwn) {
     const group = document.createElement('div');
     group.className = 'msg-group';
@@ -8269,6 +8476,7 @@
       });
       const wasNearBottom = isNearBottom();
       img.addEventListener('load', () => {
+        if (!isCurrentMessageRow(row)) return;
         const anchor = !wasNearBottom && !isNearBottom(8) ? captureScrollAnchor() : null;
         markWideImage();
         if (anchor) requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
@@ -8305,6 +8513,7 @@
         row.classList.toggle('wide-media-message', video.videoWidth >= video.videoHeight);
       };
       video.addEventListener('loadedmetadata', () => {
+        if (!isCurrentMessageRow(row)) return;
         const anchor = !isNearBottom(8) ? captureScrollAnchor() : null;
         markWideVideo();
         if (anchor) requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
@@ -8448,6 +8657,11 @@
   async function catchUpCurrentChat(chatId, { fromPush = false } = {}) {
     const id = Number(chatId || 0);
     if (!id || Number(currentChatId || 0) !== id) return false;
+    if (isUiTransitionBusy()) {
+      recoverySyncRequested = true;
+      deferredRecoveryReason = fromPush ? 'push' : 'catch-up';
+      return false;
+    }
 
     if (loadingMore || loadingMoreAfter) {
       recoverySyncRequested = true;
@@ -8637,14 +8851,29 @@
     return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < threshold;
   }
 
-  function scrollToBottom(instant = false, markRead = false) {
+  function scrollToBottom(instant = false, markRead = false, options = {}) {
+    const guardChatId = Number(options.chatId || currentChatId || 0);
+    const guardSeq = Number(options.openSeq || 0);
+    const isGuardCurrent = () => (
+      (!guardChatId || Number(currentChatId || 0) === guardChatId)
+      && (!guardSeq || Number(chatOpenSeq || 0) === guardSeq)
+    );
     requestAnimationFrame(() => {
+      if (!isGuardCurrent()) return;
       messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: instant ? 'instant' : 'smooth' });
       if (scrollBottomBtn) scrollBottomBtn.classList.remove('visible');
-      requestAnimationFrame(updateScrollBottomButton);
-      if (!instant) setTimeout(updateScrollBottomButton, 260);
-      if (hasMoreAfter) setTimeout(() => maybeLoadMoreAtBottom(), instant ? 0 : 320);
-      if (markRead) setTimeout(() => markCurrentChatReadIfAtBottom(true), instant ? 0 : 320);
+      requestAnimationFrame(() => {
+        if (isGuardCurrent()) updateScrollBottomButton();
+      });
+      if (!instant) setTimeout(() => {
+        if (isGuardCurrent()) updateScrollBottomButton();
+      }, 260);
+      if (hasMoreAfter) setTimeout(() => {
+        if (isGuardCurrent()) maybeLoadMoreAtBottom();
+      }, instant ? 0 : 320);
+      if (markRead) setTimeout(() => {
+        if (isGuardCurrent()) markCurrentChatReadIfAtBottom(true);
+      }, instant ? 0 : 320);
     });
   }
 
@@ -11949,6 +12178,7 @@
     } catch {}
     sidebar.style.transform = '';
     sidebar.style.willChange = '';
+    hideRouteTransitionCover();
   }
 
   function revealSidebarFromChat({ forceAnimation = false } = {}) {
@@ -11957,11 +12187,14 @@
     cancelPendingSidebarReveal();
 
     if (!sidebar.classList.contains('sidebar-hidden')) {
+      hideRouteTransitionCover();
       if (!forceAnimation) return;
       sidebar.classList.add('sidebar-no-transition');
       sidebar.classList.add('sidebar-hidden');
       void sidebar.offsetWidth;
     }
+
+    showRouteTransitionCover(Math.max(260, Math.ceil(getElementTransitionTotalMs(sidebar) || 250)) + 90);
 
     const finishReveal = () => {
       if (!sidebar) return;
@@ -11981,6 +12214,7 @@
       sidebar.style.transform = '';
       sidebar.style.willChange = '';
       try { animation?.cancel?.(); } catch {}
+      hideRouteTransitionCover();
     };
 
     // Mobile browsers can lose the previous transform frame after background resume.
