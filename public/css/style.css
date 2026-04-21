@@ -9,6 +9,7 @@
   --chat-area-top: 0px;
   --chat-area-width: 100vw;
   --chat-area-height: 100vh;
+  --chat-header-sticky-top: 0px;
   --bg-dark: #0e1621;
   --bg-sidebar: #17212b;
   --bg-input: #242f3d;
@@ -4230,7 +4231,7 @@ html[data-visual-mode="rich"] .poll-card {
   .chat-header {
     padding: 8px 6px;
     min-height: 52px;
-    position: sticky; top: 0; z-index: 15;
+    position: sticky; top: var(--chat-header-sticky-top); z-index: 15;
     background-color: var(--bg-sidebar);
     background-image: var(--bg-panel-gradient);
     border-bottom: 1px solid var(--border-light);

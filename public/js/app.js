@@ -14027,15 +14027,17 @@
       let prevVVHeight = Math.max(0, window.visualViewport.height || 0);
       const syncAppHeightToViewport = () => {
         if (!app) return;
+        const root = document.documentElement;
         const newViewportHeight = Math.max(0, window.visualViewport?.height || 0);
         const newAppHeight = getMobileAppViewportHeight();
-        const newAppTopInset = getMobileAppViewportTopInset();
+        const newHeaderStickyTop = isMobileComposerKeyboardOpen() ? getMobileAppViewportTopInset() : 0;
+        root.style.setProperty('--chat-header-sticky-top', `${Math.round(newHeaderStickyTop)}px`);
         if (isMobileViewportLayoutLocked()) {
           prevVVHeight = newViewportHeight;
           return;
         }
         app.style.height = `${Math.round(newAppHeight)}px`;
-        app.style.paddingTop = `${Math.round(newAppTopInset)}px`;
+        app.style.paddingTop = '0px';
         // If keyboard appeared (viewport shrunk) — scroll messages to bottom
         if (newViewportHeight < prevVVHeight && messagesEl) {
           requestAnimationFrame(() => {
