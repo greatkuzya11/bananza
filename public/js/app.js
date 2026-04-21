@@ -12618,6 +12618,26 @@
     }, 230);
   }
 
+  function resetBackButtonNavigationState() {
+    if (!backBtn) return;
+    clearTimeout(backBtn.__navTimer);
+    clearTimeout(backBtn.__unlockTimer);
+    clearTimeout(backBtn.__spinTimer);
+    backBtn.classList.remove('is-spinning');
+    backBtn.__isNavigating = false;
+  }
+
+  function deferBackButtonNavigationRelease() {
+    if (!backBtn) return;
+    clearTimeout(backBtn.__unlockTimer);
+    // iOS Safari can deliver the history transition slightly later than the tap handler.
+    backBtn.__unlockTimer = setTimeout(() => {
+      if (!backBtn) return;
+      backBtn.__isNavigating = false;
+      backBtn.classList.remove('is-spinning');
+    }, isIosViewportFixTarget ? 420 : 260);
+  }
+
   function animateChatHeaderActionButton(buttonOrSelector) {
     const button = typeof buttonOrSelector === 'string' ? $(buttonOrSelector) : buttonOrSelector;
     if (!button) return;
@@ -13442,10 +13462,15 @@
         return;
       }
       if (backBtn.__isNavigating) return;
+      const expectsHistoryPopstate = Boolean(history.state && history.state.chat);
       const finishBackNavigation = () => {
         navigateBackToChatList();
         clearTimeout(backBtn.__spinTimer);
         backBtn.classList.remove('is-spinning');
+        if (expectsHistoryPopstate) {
+          deferBackButtonNavigationRelease();
+          return;
+        }
         backBtn.__isNavigating = false;
       };
       backBtn.__isNavigating = true;
@@ -13478,6 +13503,7 @@
         ivSkipNextPopstate = false;
         return;
       }
+      resetBackButtonNavigationState();
       if (hasOpenModal()) {
         closeTopModal({ fromHistory: true });
         return;
