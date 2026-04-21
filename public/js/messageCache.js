@@ -14,6 +14,7 @@
   const OLD_DB_NAMES = ['bananza-cache-v1'];
   const DEFAULT_MESSAGE_LIMIT = 800;
   const MAX_PREFETCH_ASSETS = 24;
+  const DB_OPEN_TIMEOUT_MS = 450;
 
   let currentUserId = null;
   let db = null;
@@ -37,8 +38,19 @@
     if (db) return Promise.resolve(db);
     if (dbPromise) return dbPromise;
 
-    dbPromise = new Promise((resolve, reject) => {
+    dbPromise = new Promise((resolve) => {
       const req = indexedDB.open(DB_NAME, DB_VERSION);
+      let settled = false;
+      const settle = (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        resolve(value);
+      };
+      const timeoutId = setTimeout(() => {
+        dbPromise = null;
+        settle(null);
+      }, DB_OPEN_TIMEOUT_MS);
       req.onupgradeneeded = (event) => {
         const nextDb = event.target.result;
         if (!nextDb.objectStoreNames.contains(STORE_MESSAGES)) {
@@ -66,15 +78,15 @@
           db = null;
           dbPromise = null;
         };
-        resolve(db);
+        settle(db);
       };
       req.onerror = () => {
         dbPromise = null;
-        reject(req.error);
+        settle(null);
       };
       req.onblocked = () => {
         dbPromise = null;
-        resolve(null);
+        settle(null);
       };
     });
 
@@ -346,6 +358,7 @@
     const max = clampLimit(limit);
     if (!currentUserId || !cid) return [];
     const memoryRows = readMemoryLatest(cid, max);
+    if (memoryRows.length) return memoryRows;
     const database = await openDB().catch(() => null);
     if (!database) return memoryRows;
     try {
@@ -364,6 +377,7 @@
     const cid = normalizeId(chatId);
     if (!currentUserId || !cid) return null;
     const memoryMeta = getMemoryMeta(cid);
+    if (memoryMeta) return memoryMeta;
     const database = await openDB().catch(() => null);
     if (!database || !database.objectStoreNames.contains(STORE_CHAT_META)) return memoryMeta;
     try {
@@ -392,6 +406,7 @@
     const cid = normalizeId(chatId);
     if (!currentUserId || !cid) return null;
     const memoryRange = getMemoryRange(cid);
+    if (memoryRange.hasMessages || memoryRange.windowCached) return memoryRange;
     const database = await openDB().catch(() => null);
     if (!database) return memoryRange;
     try {
@@ -438,6 +453,7 @@
     if (!anchor) return readLatest(cid, { limit: max });
     if (!currentUserId || !cid) return [];
     const memoryRows = readMemoryAround(cid, anchor, max);
+    if (memoryRows.length) return memoryRows;
     const database = await openDB().catch(() => null);
     if (!database) return memoryRows;
     try {
@@ -522,16 +538,18 @@
       windowCached: true,
       replaceRange,
     });
-    const ok = await withStore('readwrite', (store) => {
+    withStore('readwrite', (store) => {
       for (const msg of messages) {
         const row = normalizeMessage(cid, msg);
         if (row) store.put(row);
       }
       return true;
-    });
-    if (ok) await trimChat(cid, limit);
-    if (ok && nextMeta) await persistChatMetaToDB(nextMeta);
-    return Boolean(rows.length || nextMeta || ok);
+    }).then(async (ok) => {
+      if (!ok) return;
+      await trimChat(cid, limit);
+      if (nextMeta) await persistChatMetaToDB(nextMeta);
+    }).catch(() => {});
+    return Boolean(rows.length || nextMeta);
   }
 
   async function writePage(chatId, { direction = 'before', cursor = 0, messages = [], hasMoreBefore = null, hasMoreAfter = null, limit = DEFAULT_MESSAGE_LIMIT } = {}) {

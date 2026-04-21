@@ -7583,6 +7583,13 @@
     }
   }
 
+  function debugMessageCache(event, detail = {}) {
+    try {
+      if (localStorage.getItem('bananza:debugMessageCache') !== '1') return;
+      console.info('[message-cache]', event, detail);
+    } catch (e) {}
+  }
+
   function warmMessageWindowAssets(chat, messages = []) {
     if (!window.cacheAssets) return;
     (async () => {
@@ -7955,6 +7962,7 @@
     let cachedRange = null;
     let committedWindow = false;
     let postOpenScheduled = false;
+    const openStartedAt = performance.now();
     const isCurrentOpen = () => isCurrentChatOpenTransition(seq, targetChatId);
 
     const applyOpenScroll = () => {
@@ -7992,9 +8000,9 @@
       setHasMoreBefore(page?.hasMoreBefore ?? (source === 'cache' ? cacheHasMoreBefore : networkHasMoreBefore));
       setHasMoreAfter(page?.hasMoreAfter ?? fallbackHasMoreAfter);
       replaceRenderedMessages(list);
-      await renderOutboxForChat(targetChatId);
       if (!isCurrentOpen()) return false;
       committedWindow = true;
+      renderOutboxForChat(targetChatId).catch(() => {});
       return true;
     };
 
@@ -8058,10 +8066,21 @@
     };
 
     const fetchFullWindow = async () => {
+      const networkStartedAt = performance.now();
+      debugMessageCache('network-window-start', {
+        chatId: targetChatId,
+        elapsedMs: Math.round(networkStartedAt - openStartedAt),
+        anchor: restoreAnchor?.messageId || null,
+      });
       const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
       params.set('meta', '1');
       if (restoreAnchor?.messageId && !restoreAnchor?.atBottom) params.set('anchor', String(restoreAnchor.messageId));
       const result = await fetchMessagesPage(targetChatId, params, { signal: controller.signal });
+      debugMessageCache('network-window-done', {
+        chatId: targetChatId,
+        fetchMs: Math.round(performance.now() - networkStartedAt),
+        count: result.messages?.length || 0,
+      });
       const { page, messages: msgs } = result;
       if (!isCurrentOpen()) return false;
       if (!await reconcileFetchedPage(result)) return false;
@@ -8069,7 +8088,7 @@
       if (committedWindow && renderedMessageIdsMatch(msgs)) {
         setHasMoreBefore(page.hasMoreBefore ?? (restoreAnchor?.messageId ? msgs.length > 0 : msgs.length >= PAGE_SIZE));
         setHasMoreAfter(page.hasMoreAfter ?? Boolean(restoreAnchor?.messageId && chat?.last_message_id && maxMessageId(msgs) < Number(chat.last_message_id || 0)));
-        await renderOutboxForChat(targetChatId);
+        renderOutboxForChat(targetChatId).catch(() => {});
         if (!isCurrentOpen()) return false;
       } else {
         if (!await commitMessageWindow(msgs, page, { source: 'network' })) return false;
@@ -8206,11 +8225,13 @@
 
     try {
       if (window.messageCache) {
+        const cacheStartedAt = performance.now();
         cachedRange = await readCachedChatRange(targetChatId);
         const preferLatestCachedWindow = !restoreAnchor?.messageId || restoreAnchor?.atBottom;
         cachedMsgs = preferLatestCachedWindow
           ? await window.messageCache.readLatest(targetChatId, { limit: PAGE_SIZE })
           : await window.messageCache.readAround(targetChatId, restoreAnchor.messageId, { limit: PAGE_SIZE });
+        const cacheReadMs = Math.round(performance.now() - cacheStartedAt);
         const hasAnchorInCache = !restoreAnchor?.messageId || restoreAnchor?.atBottom
           || cachedMsgs.some((msg) => Number(msg?.id || 0) === Number(restoreAnchor.messageId));
         const hasCachedWindowMeta = cachedRange?.windowCached === true
@@ -8220,6 +8241,15 @@
         const cacheLooksLikeWindow = hasCachedWindowMeta
           || cachedMsgs.length >= PAGE_SIZE
           || (cachedMinId > 0 && cachedMinId <= 1);
+        debugMessageCache(cacheLooksLikeWindow && cachedMsgs.length && hasAnchorInCache ? 'hit' : 'miss', {
+          chatId: targetChatId,
+          cacheReadMs,
+          count: cachedMsgs.length,
+          windowCached: cachedRange?.windowCached === true,
+          hasCachedWindowMeta,
+          hasAnchorInCache,
+          anchor: restoreAnchor?.messageId || null,
+        });
         if (isCurrentOpen() && Array.isArray(cachedMsgs) && cachedMsgs.length && hasAnchorInCache && cacheLooksLikeWindow) {
           applyOwnReadStateToMessages(targetChatId, cachedMsgs);
           await commitMessageWindow(cachedMsgs, {
@@ -8245,7 +8275,7 @@
           applyOwnReadStateToMessages(targetChatId, cachedMsgs);
           if (!await commitMessageWindow(cachedMsgs, null, { source: 'cache' })) return;
         } else {
-          await renderOutboxForChat(targetChatId);
+          renderOutboxForChat(targetChatId).catch(() => {});
           if (!isCurrentOpen()) return;
         }
       }
