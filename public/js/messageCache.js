@@ -19,6 +19,8 @@
   let db = null;
   let dbPromise = null;
   let oldDbCleanupStarted = false;
+  const memoryMessages = new Map();
+  const memoryChatMeta = new Map();
 
   function normalizeId(value) {
     const id = Number(value || 0);
@@ -70,14 +72,17 @@
         dbPromise = null;
         reject(req.error);
       };
-      req.onblocked = () => reject(req.error || new Error('IndexedDB open blocked'));
+      req.onblocked = () => {
+        dbPromise = null;
+        resolve(null);
+      };
     });
 
     return dbPromise;
   }
 
   async function withObjectStore(storeName, mode, fn) {
-    const database = await openDB();
+    const database = await openDB().catch(() => null);
     if (!database || !currentUserId) return null;
     return new Promise((resolve) => {
       try {
@@ -154,6 +159,156 @@
     return typeof value === 'boolean' ? value : null;
   }
 
+  function memoryChatKey(chatId) {
+    const cid = normalizeId(chatId);
+    return currentUserId && cid ? `${currentUserId}:${cid}` : '';
+  }
+
+  function memoryMessageMap(chatId, create = false) {
+    const key = memoryChatKey(chatId);
+    if (!key) return null;
+    if (!memoryMessages.has(key) && create) memoryMessages.set(key, new Map());
+    return memoryMessages.get(key) || null;
+  }
+
+  function sortMessagesAsc(rows = []) {
+    return rows
+      .filter(Boolean)
+      .sort((a, b) => normalizeId(a.id) - normalizeId(b.id));
+  }
+
+  function mergeMessageRows(...sources) {
+    const merged = new Map();
+    for (const rows of sources) {
+      for (const row of Array.isArray(rows) ? rows : []) {
+        const id = normalizeId(row?.id);
+        if (id) merged.set(id, { ...row, id });
+      }
+    }
+    return sortMessagesAsc(Array.from(merged.values()));
+  }
+
+  function selectRowsAround(rows = [], anchorId = 0, limit = DEFAULT_MESSAGE_LIMIT) {
+    const anchor = normalizeId(anchorId);
+    const sorted = sortMessagesAsc(rows);
+    const max = clampLimit(limit);
+    if (!anchor) return sorted.slice(-max);
+    const olderLimit = Math.floor((max - 1) / 2) + 1;
+    const newerLimit = Math.max(0, max - olderLimit);
+    const older = sorted.filter((row) => normalizeId(row.id) <= anchor).slice(-olderLimit);
+    const newer = sorted.filter((row) => normalizeId(row.id) > anchor).slice(0, newerLimit);
+    return mergeMessageRows(older, newer);
+  }
+
+  function readMemoryLatest(chatId, limit = DEFAULT_MESSAGE_LIMIT) {
+    const map = memoryMessageMap(chatId);
+    if (!map?.size) return [];
+    return sortMessagesAsc(Array.from(map.values())).slice(-clampLimit(limit));
+  }
+
+  function readMemoryAround(chatId, anchorId, limit = DEFAULT_MESSAGE_LIMIT) {
+    const anchor = normalizeId(anchorId);
+    if (!anchor) return readMemoryLatest(chatId, limit);
+    const rows = sortMessagesAsc(Array.from(memoryMessageMap(chatId)?.values() || []));
+    if (!rows.length) return [];
+    return selectRowsAround(rows, anchor, limit);
+  }
+
+  function getMemoryMeta(chatId) {
+    const key = memoryChatKey(chatId);
+    return key ? (memoryChatMeta.get(key) || null) : null;
+  }
+
+  function getMemoryRange(chatId) {
+    const rows = sortMessagesAsc(Array.from(memoryMessageMap(chatId)?.values() || []));
+    const range = rangeFromMessages(rows);
+    return {
+      ...(getMemoryMeta(chatId) || {}),
+      userId: currentUserId,
+      chatId: normalizeId(chatId),
+      minId: range.minId,
+      maxId: range.maxId,
+      hasMessages: range.count > 0,
+      lastKnownServerId: Math.max(normalizeId(getMemoryMeta(chatId)?.lastKnownServerId), range.maxId),
+    };
+  }
+
+  function mergeChatMeta(chatId, patch = {}) {
+    const cid = normalizeId(chatId);
+    const previous = patch.replaceRange ? null : getMemoryMeta(cid);
+    const patchMin = normalizeId(patch.minId);
+    const patchMax = normalizeId(patch.maxId);
+    const prevMin = normalizeId(previous?.minId);
+    const prevMax = normalizeId(previous?.maxId);
+    const prevKnown = normalizeId(previous?.lastKnownServerId);
+    const patchKnown = normalizeId(patch.lastKnownServerId);
+    return {
+      userId: currentUserId,
+      chatId: cid,
+      minId: patch.replaceRange
+        ? patchMin
+        : (patchMin && prevMin ? Math.min(patchMin, prevMin) : (patchMin || prevMin || 0)),
+      maxId: patch.replaceRange ? patchMax : Math.max(patchMax, prevMax),
+      hasMoreBefore: booleanOrNull(patch.hasMoreBefore) ?? booleanOrNull(previous?.hasMoreBefore),
+      hasMoreAfter: booleanOrNull(patch.hasMoreAfter) ?? booleanOrNull(previous?.hasMoreAfter),
+      windowCached: Boolean(patch.windowCached || previous?.windowCached),
+      lastKnownServerId: Math.max(patchKnown, prevKnown, patchMax, prevMax),
+      savedAt: Date.now(),
+    };
+  }
+
+  function writeMemoryChatMeta(chatId, patch = {}) {
+    const key = memoryChatKey(chatId);
+    if (!key) return null;
+    const next = mergeChatMeta(chatId, patch);
+    memoryChatMeta.set(key, next);
+    return next;
+  }
+
+  function trimMemoryChat(chatId, limit = DEFAULT_MESSAGE_LIMIT) {
+    const map = memoryMessageMap(chatId);
+    if (!map?.size) return;
+    const max = clampLimit(limit);
+    const rows = sortMessagesAsc(Array.from(map.values()));
+    const excess = rows.length - max;
+    if (excess <= 0) return;
+    for (const row of rows.slice(0, excess)) map.delete(normalizeId(row.id));
+  }
+
+  function writeMemoryMessages(chatId, messages = [], { limit = DEFAULT_MESSAGE_LIMIT } = {}) {
+    const cid = normalizeId(chatId);
+    const map = memoryMessageMap(cid, true);
+    if (!map) return [];
+    const rows = [];
+    for (const msg of Array.isArray(messages) ? messages : []) {
+      const row = normalizeMessage(cid, msg);
+      if (!row) continue;
+      const id = normalizeId(row.id);
+      const next = { ...row, id };
+      map.set(id, next);
+      rows.push(next);
+    }
+    trimMemoryChat(cid, limit);
+    return rows;
+  }
+
+  async function persistChatMetaToDB(meta) {
+    if (!meta?.userId || !meta?.chatId) return null;
+    const database = await openDB().catch(() => null);
+    if (!database || !database.objectStoreNames.contains(STORE_CHAT_META)) return null;
+    return await new Promise((resolve) => {
+      try {
+        const tx = database.transaction(STORE_CHAT_META, 'readwrite');
+        tx.objectStore(STORE_CHAT_META).put(meta);
+        tx.oncomplete = () => resolve(meta);
+        tx.onerror = () => resolve(null);
+        tx.onabort = () => resolve(null);
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
   function readCursor(index, range, direction, limit) {
     return new Promise((resolve) => {
       const out = [];
@@ -173,7 +328,7 @@
     if (!currentUserId) return false;
     try {
       const database = await openDB();
-      if (!database) return false;
+      if (!database) return true;
       if (!oldDbCleanupStarted && 'indexedDB' in window) {
         oldDbCleanupStarted = true;
         OLD_DB_NAMES.forEach((name) => {
@@ -182,7 +337,7 @@
       }
       return true;
     } catch {
-      return false;
+      return true;
     }
   }
 
@@ -190,82 +345,55 @@
     const cid = normalizeId(chatId);
     const max = clampLimit(limit);
     if (!currentUserId || !cid) return [];
+    const memoryRows = readMemoryLatest(cid, max);
     const database = await openDB().catch(() => null);
-    if (!database) return [];
+    if (!database) return memoryRows;
     try {
       const tx = database.transaction(STORE_MESSAGES, 'readonly');
       const index = tx.objectStore(STORE_MESSAGES).index(INDEX_USER_CHAT_ID);
       const rows = await readCursor(index, rangeForChat(cid), 'prev', max);
-      return rows.reverse();
+      const idbRows = rows.reverse();
+      if (idbRows.length) writeMemoryMessages(cid, idbRows, { limit: Math.max(max, DEFAULT_MESSAGE_LIMIT) });
+      return mergeMessageRows(idbRows, memoryRows).slice(-max);
     } catch {
-      return [];
+      return memoryRows;
     }
   }
 
   async function readChatMeta(chatId) {
     const cid = normalizeId(chatId);
     if (!currentUserId || !cid) return null;
+    const memoryMeta = getMemoryMeta(cid);
     const database = await openDB().catch(() => null);
-    if (!database || !database.objectStoreNames.contains(STORE_CHAT_META)) return null;
+    if (!database || !database.objectStoreNames.contains(STORE_CHAT_META)) return memoryMeta;
     try {
-      return await new Promise((resolve) => {
+      const idbMeta = await new Promise((resolve) => {
         const tx = database.transaction(STORE_CHAT_META, 'readonly');
         const req = tx.objectStore(STORE_CHAT_META).get([currentUserId, cid]);
         req.onsuccess = () => resolve(req.result || null);
         req.onerror = () => resolve(null);
       });
+      if (!memoryMeta && idbMeta) memoryChatMeta.set(memoryChatKey(cid), idbMeta);
+      return memoryMeta || idbMeta;
     } catch {
-      return null;
+      return memoryMeta;
     }
   }
 
   async function writeChatMeta(chatId, patch = {}) {
     const cid = normalizeId(chatId);
     if (!currentUserId || !cid || !patch || typeof patch !== 'object') return null;
-    const database = await openDB().catch(() => null);
-    if (!database || !database.objectStoreNames.contains(STORE_CHAT_META)) return null;
-    return await new Promise((resolve) => {
-      let next = null;
-      try {
-        const tx = database.transaction(STORE_CHAT_META, 'readwrite');
-        const store = tx.objectStore(STORE_CHAT_META);
-        const req = store.get([currentUserId, cid]);
-        req.onsuccess = () => {
-          const previous = patch.replaceRange ? null : req.result;
-          const patchMin = normalizeId(patch.minId);
-          const patchMax = normalizeId(patch.maxId);
-          const prevMin = normalizeId(previous?.minId);
-          const prevMax = normalizeId(previous?.maxId);
-          const prevKnown = normalizeId(previous?.lastKnownServerId);
-          const patchKnown = normalizeId(patch.lastKnownServerId);
-          next = {
-            userId: currentUserId,
-            chatId: cid,
-            minId: patch.replaceRange
-              ? patchMin
-              : (patchMin && prevMin ? Math.min(patchMin, prevMin) : (patchMin || prevMin || 0)),
-            maxId: patch.replaceRange ? patchMax : Math.max(patchMax, prevMax),
-            hasMoreBefore: booleanOrNull(patch.hasMoreBefore) ?? booleanOrNull(previous?.hasMoreBefore),
-            hasMoreAfter: booleanOrNull(patch.hasMoreAfter) ?? booleanOrNull(previous?.hasMoreAfter),
-            lastKnownServerId: Math.max(patchKnown, prevKnown, patchMax, prevMax),
-            savedAt: Date.now(),
-          };
-          store.put(next);
-        };
-        tx.oncomplete = () => resolve(next);
-        tx.onerror = () => resolve(null);
-        tx.onabort = () => resolve(null);
-      } catch {
-        resolve(null);
-      }
-    });
+    const memoryMeta = writeMemoryChatMeta(cid, patch);
+    persistChatMetaToDB(memoryMeta).catch(() => {});
+    return memoryMeta;
   }
 
   async function getCachedRange(chatId) {
     const cid = normalizeId(chatId);
     if (!currentUserId || !cid) return null;
+    const memoryRange = getMemoryRange(cid);
     const database = await openDB().catch(() => null);
-    if (!database) return null;
+    if (!database) return memoryRange;
     try {
       const tx = database.transaction(STORE_MESSAGES, 'readonly');
       const index = tx.objectStore(STORE_MESSAGES).index(INDEX_USER_CHAT_ID);
@@ -282,17 +410,24 @@
       ]);
       const minId = normalizeId(first?.id);
       const maxId = normalizeId(last?.id);
-      return {
-        ...(meta || {}),
+      const mergedMinId = minId && memoryRange.minId ? Math.min(minId, memoryRange.minId) : (minId || memoryRange.minId || 0);
+      const mergedMaxId = Math.max(maxId, memoryRange.maxId || 0);
+      const mergedMeta = memoryRange.savedAt && memoryRange.savedAt >= normalizeId(meta?.savedAt)
+        ? memoryRange
+        : (meta || memoryRange || {});
+      const nextRange = {
+        ...mergedMeta,
         userId: currentUserId,
         chatId: cid,
-        minId,
-        maxId,
-        hasMessages: Boolean(minId && maxId),
-        lastKnownServerId: Math.max(normalizeId(meta?.lastKnownServerId), maxId),
+        minId: mergedMinId,
+        maxId: mergedMaxId,
+        hasMessages: Boolean(mergedMinId && mergedMaxId),
+        lastKnownServerId: Math.max(normalizeId(mergedMeta?.lastKnownServerId), mergedMaxId),
       };
+      if (nextRange.minId || nextRange.maxId || nextRange.savedAt) memoryChatMeta.set(memoryChatKey(cid), nextRange);
+      return nextRange;
     } catch {
-      return readChatMeta(cid);
+      return memoryRange || readChatMeta(cid);
     }
   }
 
@@ -302,8 +437,9 @@
     const max = clampLimit(limit);
     if (!anchor) return readLatest(cid, { limit: max });
     if (!currentUserId || !cid) return [];
+    const memoryRows = readMemoryAround(cid, anchor, max);
     const database = await openDB().catch(() => null);
-    if (!database) return [];
+    if (!database) return memoryRows;
     try {
       const tx = database.transaction(STORE_MESSAGES, 'readonly');
       const index = tx.objectStore(STORE_MESSAGES).index(INDEX_USER_CHAT_ID);
@@ -317,14 +453,16 @@
       ]);
       const rows = [...older.reverse(), ...newer];
       const seen = new Set();
-      return rows.filter((row) => {
+      const idbRows = rows.filter((row) => {
         const key = row.id;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
       }).sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+      if (idbRows.length) writeMemoryMessages(cid, idbRows, { limit: Math.max(max, DEFAULT_MESSAGE_LIMIT) });
+      return selectRowsAround(mergeMessageRows(idbRows, memoryRows), anchor, max);
     } catch {
-      return [];
+      return memoryRows;
     }
   }
 
@@ -332,8 +470,10 @@
     const cid = normalizeId(chatId);
     const messageIds = [...new Set((ids || []).map(normalizeId).filter(Boolean))];
     if (!currentUserId || !cid || !messageIds.length) return [];
+    const memoryMap = memoryMessageMap(cid);
+    const memoryRows = messageIds.map((id) => memoryMap?.get(id)).filter(Boolean);
     const database = await openDB().catch(() => null);
-    if (!database) return [];
+    if (!database) return sortMessagesAsc(memoryRows);
     try {
       const tx = database.transaction(STORE_MESSAGES, 'readonly');
       const store = tx.objectStore(STORE_MESSAGES);
@@ -342,9 +482,11 @@
         req.onsuccess = () => resolve(req.result || null);
         req.onerror = () => resolve(null);
       })));
-      return rows.filter(Boolean).sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+      const idbRows = rows.filter(Boolean);
+      if (idbRows.length) writeMemoryMessages(cid, idbRows);
+      return mergeMessageRows(idbRows, memoryRows);
     } catch {
-      return [];
+      return sortMessagesAsc(memoryRows);
     }
   }
 
@@ -370,7 +512,16 @@
   async function writeWindow(chatId, messages = [], { limit = DEFAULT_MESSAGE_LIMIT, hasMoreBefore = null, hasMoreAfter = null, lastKnownServerId = 0, replaceRange = false } = {}) {
     const cid = normalizeId(chatId);
     if (!Array.isArray(messages) || !cid || !currentUserId) return false;
-    const messageRange = rangeFromMessages(messages);
+    const rows = writeMemoryMessages(cid, messages, { limit });
+    const messageRange = rangeFromMessages(rows);
+    const nextMeta = writeMemoryChatMeta(cid, {
+      ...messageRange,
+      hasMoreBefore,
+      hasMoreAfter,
+      lastKnownServerId,
+      windowCached: true,
+      replaceRange,
+    });
     const ok = await withStore('readwrite', (store) => {
       for (const msg of messages) {
         const row = normalizeMessage(cid, msg);
@@ -379,16 +530,8 @@
       return true;
     });
     if (ok) await trimChat(cid, limit);
-    if (ok) {
-      await writeChatMeta(cid, {
-        ...messageRange,
-        hasMoreBefore,
-        hasMoreAfter,
-        lastKnownServerId,
-        replaceRange,
-      });
-    }
-    return !!ok;
+    if (ok && nextMeta) await persistChatMetaToDB(nextMeta);
+    return Boolean(rows.length || nextMeta || ok);
   }
 
   async function writePage(chatId, { direction = 'before', cursor = 0, messages = [], hasMoreBefore = null, hasMoreAfter = null, limit = DEFAULT_MESSAGE_LIMIT } = {}) {
@@ -517,6 +660,15 @@
   async function upsertMessage(msg) {
     const cid = normalizeId(msg?.chat_id || msg?.chatId);
     if (!cid || !currentUserId) return false;
+    const rows = writeMemoryMessages(cid, [msg]);
+    const id = normalizeId(msg?.id);
+    if (id) {
+      writeMemoryChatMeta(cid, {
+        minId: id,
+        maxId: id,
+        lastKnownServerId: id,
+      });
+    }
     const ok = await withStore('readwrite', (store) => {
       const row = normalizeMessage(cid, msg);
       if (!row) return false;
@@ -525,21 +677,27 @@
     });
     if (ok) await trimChat(cid);
     if (ok) {
-      const id = normalizeId(msg?.id);
       await writeChatMeta(cid, {
         minId: id,
         maxId: id,
         lastKnownServerId: id,
       });
     }
-    return !!ok;
+    return Boolean(rows.length || ok);
   }
 
   async function patchMessage(chatId, id, patch = {}) {
     const cid = normalizeId(chatId);
     const mid = normalizeId(id);
     if (!cid || !mid || !currentUserId || !patch || typeof patch !== 'object') return false;
-    return !!(await withStore('readwrite', (store) => {
+    const memoryMap = memoryMessageMap(cid);
+    let patchedMemory = false;
+    if (memoryMap?.has(mid)) {
+      const row = memoryMap.get(mid);
+      memoryMap.set(mid, { ...row, ...patch, userId: currentUserId, chatId: cid, id: mid });
+      patchedMemory = true;
+    }
+    const patchedDB = !!(await withStore('readwrite', (store) => {
       const req = store.get([currentUserId, cid, mid]);
       req.onsuccess = () => {
         const row = req.result;
@@ -548,17 +706,20 @@
       };
       return true;
     }));
+    return Boolean(patchedMemory || patchedDB);
   }
 
   async function deleteMessage(chatId, id) {
     const cid = normalizeId(chatId);
     const mid = normalizeId(id);
     if (!cid || !mid || !currentUserId) return false;
+    const memoryMap = memoryMessageMap(cid);
+    const deletedMemory = Boolean(memoryMap?.delete(mid));
     const ok = !!(await withStore('readwrite', (store) => {
       store.delete([currentUserId, cid, mid]);
       return true;
     }));
-    if (ok) {
+    if (ok || deletedMemory) {
       const range = await getCachedRange(cid);
       await writeChatMeta(cid, {
         minId: range?.minId || 0,
@@ -569,7 +730,7 @@
         replaceRange: true,
       });
     }
-    return ok;
+    return Boolean(ok || deletedMemory);
   }
 
   async function upsertOutboxItem(item) {
@@ -637,6 +798,13 @@
   async function clearUserCache() {
     if (!currentUserId) return false;
     const uid = currentUserId;
+    const userPrefix = `${uid}:`;
+    for (const key of Array.from(memoryMessages.keys())) {
+      if (key.startsWith(userPrefix)) memoryMessages.delete(key);
+    }
+    for (const key of Array.from(memoryChatMeta.keys())) {
+      if (key.startsWith(userPrefix)) memoryChatMeta.delete(key);
+    }
     const clearMessages = await withStore('readwrite', (store) => {
       const index = store.index(INDEX_USER_CHAT_ID);
       const range = IDBKeyRange.bound([uid, 0, 0], [uid, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER]);
@@ -738,8 +906,23 @@
     const cid = normalizeId(chatId);
     const lid = Number.isFinite(Number(lastReadId)) ? Math.max(0, Math.floor(Number(lastReadId))) : 0;
     if (!currentUserId || !cid) return 0;
+    let memoryUpdated = 0;
+    const memoryMap = memoryMessageMap(cid);
+    if (memoryMap?.size) {
+      for (const [id, row] of memoryMap.entries()) {
+        const msgAuthor = Number(row.user_id || row.userId || 0);
+        const mid = Number(row.id || id || 0);
+        if (msgAuthor !== currentUserId || !mid) continue;
+        const nextReadValue = mid <= lid ? 1 : 0;
+        const prevReadValue = Number(row.is_read) ? 1 : 0;
+        if (prevReadValue !== nextReadValue) {
+          memoryMap.set(id, { ...row, is_read: nextReadValue });
+          memoryUpdated += 1;
+        }
+      }
+    }
     const database = await openDB().catch(() => null);
-    if (!database) return 0;
+    if (!database) return memoryUpdated;
     try {
       return await new Promise((resolve) => {
         let updated = 0;
@@ -770,21 +953,44 @@
           }
           cursor.continue();
         };
-        req.onerror = () => finish(0);
-        tx.oncomplete = () => finish(updated);
-        tx.onerror = () => finish(0);
-        tx.onabort = () => finish(0);
+        req.onerror = () => finish(memoryUpdated);
+        tx.oncomplete = () => finish(Math.max(updated, memoryUpdated));
+        tx.onerror = () => finish(memoryUpdated);
+        tx.onabort = () => finish(memoryUpdated);
       });
     } catch (e) {
-      return 0;
+      return memoryUpdated;
     }
   }
 
   async function updateMessagesByUser(user) {
     const targetId = normalizeId(user?.id || user?.user_id);
     if (!currentUserId || !targetId) return 0;
+    let memoryUpdated = 0;
+    for (const map of memoryMessages.values()) {
+      for (const [id, row] of map.entries()) {
+        if (normalizeId(row.user_id || row.userId) !== targetId) continue;
+        let next = row;
+        if (typeof user.display_name === 'string' && next.display_name !== user.display_name) {
+          next = { ...next, display_name: user.display_name };
+        }
+        if (typeof user.avatar_color === 'string' && next.avatar_color !== user.avatar_color) {
+          next = { ...next, avatar_color: user.avatar_color };
+        }
+        if ((user.avatar_url || null) !== (next.avatar_url || null)) {
+          next = { ...next, avatar_url: user.avatar_url || null };
+        }
+        if (typeof user.username === 'string' && next.username !== user.username) {
+          next = { ...next, username: user.username };
+        }
+        if (next !== row) {
+          map.set(id, next);
+          memoryUpdated += 1;
+        }
+      }
+    }
     const database = await openDB().catch(() => null);
-    if (!database) return 0;
+    if (!database) return memoryUpdated;
     try {
       return await new Promise((resolve) => {
         let updated = 0;
@@ -830,13 +1036,13 @@
           }
           cursor.continue();
         };
-        req.onerror = () => finish(0);
-        tx.oncomplete = () => finish(updated);
-        tx.onerror = () => finish(0);
-        tx.onabort = () => finish(0);
+        req.onerror = () => finish(memoryUpdated);
+        tx.oncomplete = () => finish(Math.max(updated, memoryUpdated));
+        tx.onerror = () => finish(memoryUpdated);
+        tx.onabort = () => finish(memoryUpdated);
       });
     } catch (e) {
-      return 0;
+      return memoryUpdated;
     }
   }
 

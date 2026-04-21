@@ -7959,7 +7959,10 @@
 
     const applyOpenScroll = () => {
       if (!isCurrentOpen()) return;
-      if (restoreAnchor?.messageId) {
+      if (restoreAnchor?.atBottom) {
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        updateScrollBottomButton();
+      } else if (restoreAnchor?.messageId) {
         if (!restoreScrollAnchor(restoreAnchor, 1, { openSeq: seq, chatId: targetChatId })) {
           messagesEl.scrollTop = 0;
           updateScrollBottomButton();
@@ -8057,7 +8060,7 @@
     const fetchFullWindow = async () => {
       const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
       params.set('meta', '1');
-      if (restoreAnchor?.messageId) params.set('anchor', String(restoreAnchor.messageId));
+      if (restoreAnchor?.messageId && !restoreAnchor?.atBottom) params.set('anchor', String(restoreAnchor.messageId));
       const result = await fetchMessagesPage(targetChatId, params, { signal: controller.signal });
       const { page, messages: msgs } = result;
       if (!isCurrentOpen()) return false;
@@ -8204,12 +8207,14 @@
     try {
       if (window.messageCache) {
         cachedRange = await readCachedChatRange(targetChatId);
-        cachedMsgs = restoreAnchor?.messageId
-          ? await window.messageCache.readAround(targetChatId, restoreAnchor.messageId, { limit: PAGE_SIZE })
-          : await window.messageCache.readLatest(targetChatId, { limit: PAGE_SIZE });
-        const hasAnchorInCache = !restoreAnchor?.messageId
+        const preferLatestCachedWindow = !restoreAnchor?.messageId || restoreAnchor?.atBottom;
+        cachedMsgs = preferLatestCachedWindow
+          ? await window.messageCache.readLatest(targetChatId, { limit: PAGE_SIZE })
+          : await window.messageCache.readAround(targetChatId, restoreAnchor.messageId, { limit: PAGE_SIZE });
+        const hasAnchorInCache = !restoreAnchor?.messageId || restoreAnchor?.atBottom
           || cachedMsgs.some((msg) => Number(msg?.id || 0) === Number(restoreAnchor.messageId));
-        const hasCachedWindowMeta = typeof cachedRange?.hasMoreBefore === 'boolean'
+        const hasCachedWindowMeta = cachedRange?.windowCached === true
+          || typeof cachedRange?.hasMoreBefore === 'boolean'
           || typeof cachedRange?.hasMoreAfter === 'boolean';
         const cachedMinId = Number(cachedRange?.minId || minMessageId(cachedMsgs) || 0);
         const cacheLooksLikeWindow = hasCachedWindowMeta
