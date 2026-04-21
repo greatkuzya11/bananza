@@ -387,6 +387,19 @@
   const pollVotersTitle = $('#pollVotersTitle');
   const pollVotersStatus = $('#pollVotersStatus');
   const pollVotersList = $('#pollVotersList');
+  const isIosViewportFixTarget = (() => {
+    const ua = navigator.userAgent || '';
+    const platform = navigator.platform || '';
+    const maxTouchPoints = Number(navigator.maxTouchPoints || 0);
+    return /iP(hone|ad|od)/.test(ua) || (platform === 'MacIntel' && maxTouchPoints > 1);
+  })();
+
+  function getMobileAppViewportHeight() {
+    const vv = window.visualViewport;
+    const viewportHeight = Math.max(0, vv?.height || window.innerHeight || 0);
+    if (!isIosViewportFixTarget || !vv) return viewportHeight;
+    return Math.max(0, viewportHeight + Math.max(0, vv.offsetTop || 0));
+  }
 
   function isMobileComposerKeyboardOpen() {
     if (window.innerWidth > 768) return false;
@@ -13980,25 +13993,30 @@
     // Mobile keyboard resize fix
     if (window.visualViewport && window.innerWidth <= 768) {
       const app = document.getElementById('app');
-      let prevVVHeight = window.visualViewport.height;
-      const onVVResize = () => {
+      let prevVVHeight = Math.max(0, window.visualViewport.height || 0);
+      const syncAppHeightToViewport = () => {
         if (!app) return;
-        const newHeight = window.visualViewport.height;
+        const newViewportHeight = Math.max(0, window.visualViewport?.height || 0);
+        const newAppHeight = getMobileAppViewportHeight();
         if (isMobileViewportLayoutLocked()) {
-          prevVVHeight = newHeight;
+          prevVVHeight = newViewportHeight;
           return;
         }
-        app.style.height = newHeight + 'px';
+        app.style.height = `${Math.round(newAppHeight)}px`;
         // If keyboard appeared (viewport shrunk) — scroll messages to bottom
-        if (newHeight < prevVVHeight && messagesEl) {
+        if (newViewportHeight < prevVVHeight && messagesEl) {
           requestAnimationFrame(() => {
             if (isMobileViewportLayoutLocked()) return;
             messagesEl.scrollTop = messagesEl.scrollHeight;
           });
         }
-        prevVVHeight = newHeight;
+        prevVVHeight = newViewportHeight;
       };
-      window.visualViewport.addEventListener('resize', onVVResize);
+      syncAppHeightToViewport();
+      window.visualViewport.addEventListener('resize', syncAppHeightToViewport);
+      if (isIosViewportFixTarget) {
+        window.visualViewport.addEventListener('scroll', syncAppHeightToViewport);
+      }
     }
 
     // Mobile navigation: set initial history state for chat list
