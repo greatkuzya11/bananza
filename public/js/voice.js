@@ -976,13 +976,48 @@
 
   async function requestManualTranscription(messageId, row) {
     try {
-      await getBridge().api(`/api/messages/${messageId}/transcribe`, {
+      const response = await getBridge().api(`/api/messages/${messageId}/transcribe`, {
         method: 'POST',
       });
+      if (response?.status === 'completed' && response?.text) {
+        applyTranscriptionUpdate({
+          type: 'message_transcription',
+          messageId,
+          chatId: response.chatId || row?.__messageData?.chat_id || row?.__messageData?.chatId || 0,
+          status: response.status,
+          text: response.text,
+          provider: response.provider || '',
+          model: response.model || '',
+          error: response.error || '',
+        });
+        return;
+      }
       if (row?.__voiceMessage) {
-        row.__voiceMessage.transcription_status = 'pending';
-        row.__voiceMessage.transcription_error = '';
+        row.__voiceMessage.transcription_status = response?.status || 'pending';
+        row.__voiceMessage.transcription_text = response?.text || '';
+        row.__voiceMessage.transcription_provider = response?.provider || '';
+        row.__voiceMessage.transcription_model = response?.model || '';
+        row.__voiceMessage.transcription_error = response?.error || '';
         renderVoiceRow(row, row.__voiceMessage);
+      }
+      if (row?.__messageData) {
+        row.__messageData.transcription_status = response?.status || 'pending';
+        row.__messageData.transcription_text = response?.text || '';
+        row.__messageData.transcription_provider = response?.provider || '';
+        row.__messageData.transcription_model = response?.model || '';
+        row.__messageData.transcription_error = response?.error || '';
+      }
+      const resolvedChatId = Number(
+        response?.chatId || row?.__messageData?.chat_id || row?.__messageData?.chatId || getBridge()?.getCurrentChatId?.() || 0
+      );
+      if (resolvedChatId && window.messageCache?.patchMessage) {
+        window.messageCache.patchMessage(resolvedChatId, messageId, {
+          transcription_status: response?.status || 'pending',
+          transcription_text: response?.text || '',
+          transcription_provider: response?.provider || '',
+          transcription_model: response?.model || '',
+          transcription_error: response?.error || '',
+        }).catch(() => {});
       }
     } catch (error) {
       if (row?.__voiceMessage) {
@@ -1003,6 +1038,18 @@
       });
     }
     const row = messagesEl?.querySelector(`[data-msg-id="${msg.messageId}"]`);
+    const resolvedChatId = Number(
+      msg.chatId || row?.__messageData?.chat_id || row?.__messageData?.chatId || getBridge()?.getCurrentChatId?.() || 0
+    );
+    if (resolvedChatId && window.messageCache?.patchMessage) {
+      window.messageCache.patchMessage(resolvedChatId, msg.messageId, {
+        transcription_status: msg.status || 'idle',
+        transcription_text: msg.text || '',
+        transcription_provider: msg.provider || '',
+        transcription_model: msg.model || '',
+        transcription_error: msg.error || '',
+      }).catch(() => {});
+    }
     if (!row) return;
     row.__voiceMessage = {
       ...(row.__voiceMessage || {}),

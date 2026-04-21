@@ -324,8 +324,29 @@
           const bridge = this.getBridge();
           if (!bridge?.api) throw new Error(TEXT.bridgeError);
           const response = await bridge.api(`/api/messages/${messageId}/transcribe`, { method: 'POST' });
-          if (response?.status && response.status !== 'pending') {
-            this.updateMessage(row, { transcription_status: response.status });
+          const patch = {
+            transcription_status: response?.status || 'pending',
+            transcription_text: response?.text || '',
+            transcription_provider: response?.provider || '',
+            transcription_model: response?.model || '',
+            transcription_error: response?.error || '',
+          };
+          const resolvedChatId = Number(
+            response?.chatId || row?.__messageData?.chat_id || row?.__messageData?.chatId || bridge?.getCurrentChatId?.() || 0
+          );
+          if (resolvedChatId && window.messageCache?.patchMessage) {
+            window.messageCache.patchMessage(resolvedChatId, messageId, patch).catch(() => {});
+          }
+          if (patch.transcription_status === 'completed' && patch.transcription_text) {
+            this.expandedIds.add(messageId);
+            bridge?.updateReplyPreview?.(messageId, patch.transcription_text.substring(0, 100));
+            if (row?.__replyPayload) row.__replyPayload.text = patch.transcription_text.substring(0, 100);
+            document.querySelectorAll(`.msg-reply[data-reply-id="${messageId}"] .msg-reply-text`).forEach((el) => {
+              el.textContent = patch.transcription_text.substring(0, 100);
+            });
+          }
+          if (response?.status) {
+            this.updateMessage(row, patch);
           }
         } catch (error) {
           this.updateMessage(row, {

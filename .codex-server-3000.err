@@ -1,0 +1,44 @@
+SqliteError: FOREIGN KEY constraint failed
+    at deleteFileById (C:\Users\kuzya\Documents\GitHub\bananza\videoNotes\storage.js:33:48)
+    at Object.deleteMessageAssets (C:\Users\kuzya\Documents\GitHub\bananza\videoNotes\storage.js:74:12)
+    at C:\Users\kuzya\Documents\GitHub\bananza\server.js:2182:20
+    at Layer.handle [as handle_request] (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\layer.js:95:5)
+    at next (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\route.js:149:13)
+    at auth (C:\Users\kuzya\Documents\GitHub\bananza\server.js:227:5)
+    at Layer.handle [as handle_request] (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\layer.js:95:5)
+    at next (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\route.js:149:13)
+    at Route.dispatch (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\route.js:119:3)
+    at Layer.handle [as handle_request] (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\layer.js:95:5)
+SqliteError: FOREIGN KEY constraint failed
+    at deleteFileById (C:\Users\kuzya\Documents\GitHub\bananza\videoNotes\storage.js:33:48)
+    at Object.deleteMessageAssets (C:\Users\kuzya\Documents\GitHub\bananza\videoNotes\storage.js:74:12)
+    at C:\Users\kuzya\Documents\GitHub\bananza\server.js:2182:20
+    at Layer.handle [as handle_request] (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\layer.js:95:5)
+    at next (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\route.js:149:13)
+    at auth (C:\Users\kuzya\Documents\GitHub\bananza\server.js:227:5)
+    at Layer.handle [as handle_request] (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\layer.js:95:5)
+    at next (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\route.js:149:13)
+    at Route.dispatch (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\route.js:119:3)
+    at Layer.handle [as handle_request] (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\layer.js:95:5)
+SqliteError: FOREIGN KEY constraint failed
+    at deleteFileById (C:\Users\kuzya\Documents\GitHub\bananza\videoNotes\storage.js:33:48)
+    at Object.deleteMessageAssets (C:\Users\kuzya\Documents\GitHub\bananza\videoNotes\storage.js:74:12)
+    at C:\Users\kuzya\Documents\GitHub\bananza\server.js:2182:20
+    at Layer.handle [as handle_request] (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\layer.js:95:5)
+    at next (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\route.js:149:13)
+    at auth (C:\Users\kuzya\Documents\GitHub\bananza\server.js:227:5)
+    at Layer.handle [as handle_request] (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\layer.js:95:5)
+    at next (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\route.js:149:13)
+    at Route.dispatch (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\route.js:119:3)
+    at Layer.handle [as handle_request] (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\layer.js:95:5)
+SqliteError: FOREIGN KEY constraint failed
+    at deleteFileById (C:\Users\kuzya\Documents\GitHub\bananza\videoNotes\storage.js:33:48)
+    at Object.deleteMessageAssets (C:\Users\kuzya\Documents\GitHub\bananza\videoNotes\storage.js:74:12)
+    at C:\Users\kuzya\Documents\GitHub\bananza\server.js:2182:20
+    at Layer.handle [as handle_request] (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\layer.js:95:5)
+    at next (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\route.js:149:13)
+    at auth (C:\Users\kuzya\Documents\GitHub\bananza\server.js:227:5)
+    at Layer.handle [as handle_request] (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\layer.js:95:5)
+    at next (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\route.js:149:13)
+    at Route.dispatch (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\route.js:119:3)
+    at Layer.handle [as handle_request] (C:\Users\kuzya\Documents\GitHub\bananza\node_modules\express\lib\router\layer.js:95:5)

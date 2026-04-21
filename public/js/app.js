@@ -5642,6 +5642,18 @@
     }
   }
 
+  function blurFocusedElementWithin(root) {
+    if (!(root instanceof HTMLElement)) return false;
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement) || !root.contains(active)) return false;
+    try {
+      active.blur();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function getModalFocusableTarget(entry) {
     return entry?.el?.querySelector?.(
       '[autofocus], button:not([disabled]), input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
@@ -5651,6 +5663,7 @@
   function setModalInertState(entry, disabled) {
     if (!entry?.el) return;
     if (disabled) {
+      blurFocusedElementWithin(entry.el);
       entry.el.setAttribute('inert', '');
       entry.el.setAttribute('aria-hidden', 'true');
       entry.el.removeAttribute('aria-modal');
@@ -9833,40 +9846,99 @@
       console.warn('[markDeleted] element not found for', msgId);
       return;
     }
-    const bubble = el.querySelector('.msg-bubble');
-    if (!bubble) { console.warn('[markDeleted] bubble not found'); return; }
-    const timeEl = bubble.querySelector('.msg-time');
-    const timeText = timeEl ? timeEl.textContent : '';
-    bubble.innerHTML = `<span class="msg-deleted">Message deleted</span><span class="msg-time">${esc(timeText)}</span>`;
-    if (el.__messageData) {
-      el.__messageData = {
-        ...el.__messageData,
-        is_deleted: true,
-        text: null,
-        file_id: null,
-        file_name: null,
-        file_stored: null,
-        file_type: null,
-        file_mime: null,
-        previews: [],
-        reactions: [],
-        edited_at: null,
-      };
-    }
     if (
       String(activeMessageActionsRow?.dataset?.msgId || '') === String(msgId)
       || String(reactionPickerMsgId || '') === String(msgId)
     ) {
       hideFloatingMessageActions({ immediate: true });
     }
-    if (el.__replyPayload) el.__replyPayload.text = 'Message deleted';
-    el.querySelector('.msg-reply-btn')?.remove();
-    el.querySelector('.msg-react-btn')?.remove();
-    el.querySelector('.msg-edit-btn')?.remove();
-    el.querySelector('.msg-save-note-btn')?.remove();
-    el.querySelector('.msg-forward-btn')?.remove();
-    el.querySelector('.msg-actions')?.remove();
     if (editTo?.id === msgId) clearEdit({ clearInput: true });
+    el.querySelectorAll('audio, video').forEach((media) => {
+      try {
+        media.pause?.();
+        media.currentTime = 0;
+      } catch (e) {}
+    });
+
+    const previousMessage = el.__messageData ? { ...el.__messageData } : null;
+    const deletedPreviewText = 'Message deleted';
+    const deletedMessage = {
+      ...(previousMessage || {}),
+      id: Number(previousMessage?.id || msgId || 0),
+      chat_id: Number(previousMessage?.chat_id || previousMessage?.chatId || targetChatId || activeChatId || 0),
+      user_id: Number(previousMessage?.user_id || el.dataset.userId || 0),
+      is_deleted: true,
+      text: deletedPreviewText,
+      file_id: null,
+      file_name: null,
+      file_stored: null,
+      file_type: null,
+      file_mime: null,
+      file_size: null,
+      client_file_url: '',
+      previews: [],
+      reactions: [],
+      edited_at: null,
+      poll: null,
+      is_voice_note: false,
+      is_video_note: false,
+      voice_duration_ms: null,
+      media_note_duration_ms: null,
+      transcription_status: 'idle',
+      transcription_text: '',
+      transcription_provider: '',
+      transcription_model: '',
+      transcription_error: '',
+      client_status: null,
+    };
+
+    let replaced = false;
+    try {
+      replaced = replaceRenderedMessage(deletedMessage);
+    } catch (e) {
+      console.warn('[markDeleted] rerender failed for', msgId, e);
+    }
+
+    if (!replaced) {
+      const bubble = el.querySelector('.msg-bubble');
+      if (!bubble) {
+        console.warn('[markDeleted] bubble not found');
+        return;
+      }
+      const timeEl = bubble.querySelector('.msg-time');
+      const timeText = timeEl ? timeEl.textContent : '';
+      bubble.innerHTML = `<span class="msg-deleted">Message deleted</span><span class="msg-time">${esc(timeText)}</span>`;
+      el.classList.remove('video-note-row', 'video-note-playing', 'media-message', 'poll-message', 'emoji-only-message', 'client-failed', 'client-sending');
+      delete el.dataset.clientStatus;
+      el.__messageData = deletedMessage;
+      el.__voiceMessage = null;
+      if (el.__replyPayload) {
+        el.__replyPayload = {
+          ...el.__replyPayload,
+          text: deletedPreviewText,
+          is_voice_note: false,
+          is_video_note: false,
+        };
+      }
+      el.querySelector('.msg-reply-btn')?.remove();
+      el.querySelector('.msg-react-btn')?.remove();
+      el.querySelector('.msg-edit-btn')?.remove();
+      el.querySelector('.msg-save-note-btn')?.remove();
+      el.querySelector('.msg-forward-btn')?.remove();
+      el.querySelector('.msg-actions')?.remove();
+    } else {
+      const replacement = messagesEl.querySelector(`[data-msg-id="${msgId}"]`);
+      if (replacement?.__replyPayload) {
+        replacement.__replyPayload = {
+          ...replacement.__replyPayload,
+          text: deletedPreviewText,
+          is_voice_note: false,
+          is_video_note: false,
+        };
+      }
+    }
+
+    updateVisibleReplyQuotesFromMessage(deletedMessage);
     requestAnimationFrame(() => {
       if (isActiveChat && preserveAnchor?.messageId) restoreScrollAnchor(preserveAnchor, 1);
       if (targetChatId) saveCurrentScrollAnchor(targetChatId, { force: true });
@@ -10433,6 +10505,7 @@
     if (!searchPanel) return false;
     clearSearchPanelTransitionState();
     searchPanel.classList.remove('is-open', 'is-closing');
+    blurFocusedElementWithin(searchPanel);
     searchPanel.setAttribute('aria-hidden', 'true');
     updateSearchTriggerState(false);
     clearTimeout(searchDebounce);

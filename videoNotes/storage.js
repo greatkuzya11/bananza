@@ -18,6 +18,11 @@ function createVideoNoteStorage({ db, uploadsDir }) {
     LEFT JOIN voice_messages vm ON vm.message_id=m.id
     WHERE m.id=?
   `);
+  const clearTranscriptionFileRefStmt = db.prepare(`
+    UPDATE voice_messages
+    SET transcription_file_id=NULL
+    WHERE message_id=?
+  `);
 
   function getFilePath(storedName) {
     return path.join(uploadsDir, path.basename(storedName || ''));
@@ -67,10 +72,12 @@ function createVideoNoteStorage({ db, uploadsDir }) {
   }
 
   function deleteMessageAssets(messageId) {
-    const row = noteAssetsStmt.get(messageId);
+    const mid = Number(messageId || 0);
+    if (!mid) return false;
+    const row = noteAssetsStmt.get(mid);
     const transcriptionFileId = Number(row?.transcription_file_id || 0);
-    const visibleFileId = Number(row?.file_id || 0);
-    if (!transcriptionFileId || transcriptionFileId === visibleFileId) return false;
+    if (!transcriptionFileId) return false;
+    clearTranscriptionFileRefStmt.run(mid);
     return deleteFileById(transcriptionFileId);
   }
 

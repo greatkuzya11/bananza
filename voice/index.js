@@ -161,6 +161,7 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
     if (!payload) return;
     broadcastToChatAll(chatId, {
       type: 'message_transcription',
+      chatId,
       ...payload,
     });
   }
@@ -456,7 +457,8 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
 
     const messageId = Number(req.params.id);
     const message = db.prepare(`
-      SELECT m.id, m.chat_id, vm.transcription_status
+      SELECT m.id, m.chat_id, vm.transcription_status, vm.transcription_text,
+        vm.transcription_provider, vm.transcription_model, vm.transcription_error
       FROM messages m
       JOIN voice_messages vm ON vm.message_id=m.id
       WHERE m.id=? AND m.is_deleted=0
@@ -467,8 +469,21 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
       return res.status(403).json({ error: 'Not a member' });
     }
 
+    const savedText = String(message.transcription_text || '').trim();
+    if (message.transcription_status === 'completed' && savedText) {
+      return res.json({
+        ok: true,
+        chatId: message.chat_id,
+        status: 'completed',
+        text: savedText,
+        provider: message.transcription_provider || '',
+        model: message.transcription_model || '',
+        error: message.transcription_error || '',
+      });
+    }
+
     if (message.transcription_status === 'pending' && queue.has(`voice:${messageId}`)) {
-      return res.json({ ok: true, status: 'pending' });
+      return res.json({ ok: true, chatId: message.chat_id, status: 'pending' });
     }
 
     scheduleTranscription({
@@ -477,7 +492,7 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
       requestedBy: req.user.id,
       autoRequested: false,
     });
-    return res.json({ ok: true, status: 'pending' });
+    return res.json({ ok: true, chatId: message.chat_id, status: 'pending' });
   });
 
   return {

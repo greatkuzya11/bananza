@@ -502,7 +502,22 @@ html[data-visual-mode="rich"] .msg-row.video-note-row.other .msg-bubble {
   padding: 0 10px;
   margin: 0;
   border-radius: 8px;
-  background: rgba(255,255,255,.05);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(
+        in srgb,
+        color-mix(in srgb, var(--bg-modal) 76%, #000000 24%) 50%,
+        transparent
+      ),
+      color-mix(
+        in srgb,
+        color-mix(in srgb, var(--bg-modal) 84%, #000000 16%) 50%,
+        transparent
+      )
+    );
+  border: 1px solid color-mix(in srgb, var(--border-light) 74%, rgba(255,255,255,.1));
+  box-shadow: 0 10px 24px rgba(0,0,0,.2);
   color: var(--text-primary);
   font-size: 13px;
   line-height: 1.4;
