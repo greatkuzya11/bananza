@@ -445,9 +445,21 @@ a:hover { text-decoration: underline; }
 
 /* ── App layout ──────────────────────────────────────────────────────────── */
 #app {
+  position: relative;
   display: flex; height: 100vh; height: 100dvh; width: 100vw;
   overflow: hidden;
   isolation: isolate;
+}
+#app::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 18;
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+  background-color: var(--bg-sidebar);
+  background-image: var(--bg-sidebar-gradient);
 }
 
 /* ── Sidebar ─────────────────────────────────────────────────────────────── */
@@ -854,7 +866,33 @@ a:hover { text-decoration: underline; }
 .empty-state h3 { font-size: 22px; margin-bottom: 8px; color: var(--text-primary); }
 .empty-state p { font-size: 15px; }
 
-.chat-view { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
+.chat-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+  isolation: isolate;
+  background-color: var(--bg-dark);
+  background-image: var(--bg-app-gradient);
+}
+.chat-view::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 16;
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+  background-color: var(--bg-dark);
+  background-image:
+    linear-gradient(180deg, var(--bg-sidebar) 0, var(--bg-sidebar) 132px, transparent 132px, transparent 100%),
+    var(--bg-app-gradient);
+}
+html[data-view-transition="chat-open"] #chatView::after {
+  visibility: visible;
+  opacity: 1;
+}
 
 /* ── Chat header ─────────────────────────────────────────────────────────── */
 .chat-header {
@@ -4198,6 +4236,10 @@ html[data-visual-mode="rich"] .poll-card {
   html.is-mobile-route-transitioning #app {
     background-color: var(--bg-sidebar);
     background-image: var(--bg-sidebar-gradient);
+  }
+  html.is-mobile-route-transitioning #app::after {
+    visibility: visible;
+    opacity: 1;
   }
   html.is-mobile-route-transitioning #chatArea {
     visibility: hidden;

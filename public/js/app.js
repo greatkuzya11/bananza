@@ -8221,7 +8221,6 @@
     compactView = !!compactViewMap[targetChatId];
     messagesEl.classList.toggle('compact-view', compactView);
     loadMoreWrap.classList.add('hidden');
-    clearRenderedMessages({ resetDisplayed: true });
 
     try {
       if (window.messageCache) {
