@@ -322,6 +322,9 @@
   const messageBackgroundSyncInFlight = new Set();
   let iosViewportLayoutSyncFrame = 0;
   let iosViewportElementResizeObserver = null;
+  let iosVisualViewportBaselineHeight = 0;
+  let iosComposerFocused = false;
+  let iosComposerBlurTimer = null;
   let iosBackNavigationToken = 0;
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -468,15 +471,41 @@
     };
   }
 
+  function getIosViewportBaselineHeight() {
+    const vv = window.visualViewport;
+    const currentHeight = Math.max(
+      0,
+      (vv?.height || 0) + Math.max(0, vv?.offsetTop || 0),
+      window.innerHeight || 0,
+      document.documentElement?.clientHeight || 0
+    );
+    if (currentHeight > iosVisualViewportBaselineHeight) {
+      iosVisualViewportBaselineHeight = currentHeight;
+    }
+    return Math.max(iosVisualViewportBaselineHeight, currentHeight);
+  }
+
   function isIosKeyboardOpen() {
     if (!isIosMobileViewportTarget() || !window.visualViewport) return false;
-    return window.innerHeight - window.visualViewport.height > 80;
+    const vv = window.visualViewport;
+    const viewportTop = Math.max(0, vv.offsetTop || 0);
+    const viewportHeight = Math.max(0, vv.height || 0);
+    const visibleBottom = viewportTop + viewportHeight;
+    const baselineHeight = getIosViewportBaselineHeight();
+    const layoutHeight = Math.max(window.innerHeight || 0, document.documentElement?.clientHeight || 0, baselineHeight);
+    const keyboardOverlap = Math.max(
+      0,
+      layoutHeight - visibleBottom,
+      baselineHeight - visibleBottom,
+      baselineHeight - viewportHeight
+    );
+    return keyboardOverlap > 80;
   }
 
   function isIosChatKeyboardLayoutActive() {
     if (!isIosMobileViewportTarget() || !window.visualViewport) return false;
     if (chatView?.classList.contains('hidden')) return false;
-    if (document.activeElement !== msgInput) return false;
+    if (document.activeElement !== msgInput && !iosComposerFocused) return false;
     return isIosKeyboardOpen();
   }
 
@@ -509,6 +538,7 @@
 
   function isMobileComposerKeyboardOpen() {
     if (window.innerWidth > 768) return false;
+    if (isIosViewportFixTarget) return isIosKeyboardOpen();
     if (window.visualViewport) {
       return window.innerHeight - window.visualViewport.height > 80;
     }
@@ -13470,9 +13500,18 @@
       }
     });
     msgInput.addEventListener('focus', () => {
+      clearTimeout(iosComposerBlurTimer);
+      iosComposerBlurTimer = null;
+      iosComposerFocused = true;
+      getIosViewportBaselineHeight();
       queueIosViewportLayoutSync();
     });
     msgInput.addEventListener('blur', () => {
+      clearTimeout(iosComposerBlurTimer);
+      iosComposerBlurTimer = setTimeout(() => {
+        iosComposerFocused = false;
+        queueIosViewportLayoutSync();
+      }, 180);
       requestAnimationFrame(() => queueIosViewportLayoutSync());
     });
     msgInput.addEventListener('click', updateMentionPicker);
@@ -14683,6 +14722,7 @@
       const syncAppHeightToViewport = () => {
         if (!app) return;
         const newViewportHeight = Math.max(0, window.visualViewport?.height || 0);
+        getIosViewportBaselineHeight();
         const newAppHeight = getMobileAppViewportHeight();
         if (isMobileViewportLayoutLocked() && !isIosViewportFixTarget) {
           prevVVHeight = newViewportHeight;

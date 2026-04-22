@@ -4288,6 +4288,11 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
   html.is-ios-webkit.is-ios-chat-keyboard-layout #chatView {
     padding-top: var(--ios-chat-header-height);
     padding-bottom: var(--ios-chat-input-area-height);
+    overflow: visible;
+  }
+  html.is-ios-webkit.is-ios-chat-keyboard-layout #chatArea {
+    contain: none;
+    overflow: visible;
   }
   html.is-ios-webkit.is-ios-chat-keyboard-layout #chatView .chat-header {
     position: fixed;
@@ -4296,7 +4301,10 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
     width: var(--chat-area-width);
     max-width: var(--chat-area-width);
     box-sizing: border-box;
-    z-index: 25;
+    z-index: 120;
+    transform: translateZ(0);
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
   }
   html.is-ios-webkit.is-ios-chat-keyboard-layout #chatView .input-area {
     position: fixed;
@@ -4305,7 +4313,10 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
     width: var(--chat-area-width);
     max-width: var(--chat-area-width);
     box-sizing: border-box;
-    z-index: 26;
+    z-index: 121;
+    transform: translateZ(0);
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
   }
   html.is-ios-webkit.is-ios-chat-keyboard-layout #chatView .pinned-bar {
     position: relative;
