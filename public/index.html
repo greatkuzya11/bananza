@@ -228,6 +228,7 @@
         <button id="settingsAdminPanel" class="settings-item hidden">🛡 Admin Panel</button>
         <button id="settingsAiBotsPanel" class="settings-item hidden">🤖 AI-боты</button>
         <button id="settingsYandexAiPanel" class="settings-item hidden">YA AI-&#1071;&#1085;&#1076;&#1077;&#1082;&#1089;</button>
+        <button id="settingsDeepSeekAiPanel" class="settings-item hidden">DS DeepSeek AI</button>
         <button id="settingsGrokAiPanel" class="settings-item hidden">&#x1D54F; Grok AI</button>
       </div>
     </div>
@@ -608,6 +609,117 @@
           </div>
 
           <div id="aiBotsStatus" class="ai-bot-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DeepSeek AI Settings Modal -->
+  <div id="deepseekAiSettingsModal" class="modal hidden">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3>DeepSeek AI</h3>
+        <button class="modal-close">&#10005;</button>
+      </div>
+      <div class="modal-body">
+        <div id="deepseekAiSettingsBlock" class="ai-bot-settings-block">
+          <div class="ai-bot-panel">
+            <h4>Global DeepSeek settings</h4>
+            <div class="settings-item settings-toggle-item">
+              <span>Enable DeepSeek AI bots</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="deepseekAiGlobalEnabled">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="ai-bot-grid">
+              <label>Base URL<input id="deepseekAiBaseUrl" class="modal-input" value="https://api.deepseek.com"></label>
+              <label>Response model<select id="deepseekAiDefaultResponseModel" class="modal-input"></select></label>
+              <label>Summary model<select id="deepseekAiDefaultSummaryModel" class="modal-input"></select></label>
+              <label>Temperature<input id="deepseekAiTemperature" class="modal-input" type="number" min="0" max="1" step="0.05" value="0.3"></label>
+              <label>Max tokens<input id="deepseekAiMaxTokens" class="modal-input" type="number" min="1" max="8000" step="50" value="1000"></label>
+            </div>
+            <label class="ai-bot-field">DeepSeek API key
+              <input id="deepseekAiApiKey" class="modal-input" type="password" autocomplete="off" placeholder="sk-...">
+            </label>
+            <div id="deepseekAiKeyStatus" class="settings-hint"></div>
+            <div id="deepseekAiModelStatus" class="settings-hint"></div>
+            <div class="settings-hint">DeepSeek в этой версии работает только как text-only провайдер. OCR, vision, audio/STT и native hybrid memory не включены, потому что в официальном API для них нет подтверждённой документации.</div>
+            <div class="ai-bot-actions">
+              <button id="deepseekAiSaveSettings" type="button" class="btn-primary">Save settings</button>
+              <button id="deepseekAiTestConnection" type="button" class="weather-action-btn">Test key</button>
+              <button id="deepseekAiRefreshModels" type="button" class="weather-action-btn">Refresh models</button>
+              <button id="deepseekAiDeleteKey" type="button" class="weather-action-btn">Delete key</button>
+            </div>
+          </div>
+
+          <div class="ai-bot-panel">
+            <h4>DeepSeek bots and persona</h4>
+            <div id="deepseekAiBotList" class="ai-bot-list"></div>
+            <div class="ai-bot-actions">
+              <button id="deepseekAiBotCreateNew" type="button" class="weather-action-btn">New bot</button>
+              <button id="deepseekAiBotSave" type="button" class="btn-primary">Save bot</button>
+              <button id="deepseekAiBotDisable" type="button" class="weather-action-btn">Disable</button>
+              <button id="deepseekAiBotTest" type="button" class="weather-action-btn">Test</button>
+              <button id="deepseekAiBotExportJson" type="button" class="weather-action-btn">Export JSON</button>
+              <button id="deepseekAiBotImportJson" type="button" class="weather-action-btn">Import JSON</button>
+              <input id="deepseekAiBotImportFile" class="hidden" type="file" accept="application/json,.json">
+            </div>
+            <div class="ai-bot-avatar-row">
+              <div class="avatar-upload-wrap ai-bot-avatar-wrap">
+                <div id="deepseekAiBotAvatar" class="avatar-large"></div>
+                <label class="avatar-upload-label" id="deepseekAiBotAvatarLabel" title="Change avatar">&#128247;
+                  <input type="file" id="deepseekAiBotAvatarInput" accept=".jpg,.jpeg,.png,.webp" class="hidden">
+                </label>
+              </div>
+              <div class="ai-bot-avatar-copy">
+                <strong>Bot avatar</strong>
+                <span>The image is stored separately from JSON persona settings.</span>
+                <button id="removeDeepseekAiBotAvatar" class="btn-text hidden" type="button">Remove avatar</button>
+              </div>
+            </div>
+            <div class="ai-bot-grid">
+              <label>Name<input id="deepseekAiBotName" class="modal-input" value="DeepSeek AI"></label>
+              <label>Mention<input id="deepseekAiBotMention" class="modal-input" value="deepseek"></label>
+              <label>Response model<select id="deepseekAiBotResponseModel" class="modal-input"></select></label>
+              <label>Summary model<select id="deepseekAiBotSummaryModel" class="modal-input"></select></label>
+              <label>Temperature<input id="deepseekAiBotTemperature" class="modal-input" type="number" min="0" max="1" step="0.05" value="0.3"></label>
+              <label>Max tokens<input id="deepseekAiBotMaxTokens" class="modal-input" type="number" min="1" max="8000" step="50" value="1000"></label>
+              <label class="ai-bot-toggle-label">Enabled
+                <label class="toggle-switch">
+                  <input type="checkbox" id="deepseekAiBotEnabled" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+            </div>
+            <div class="settings-hint">Выбирайте `deepseek-chat` для обычного текстового режима и `deepseek-reasoner` для reasoning-сценариев. Hybrid memory для DeepSeek отключён.</div>
+            <label class="ai-bot-field">Style<textarea id="deepseekAiBotStyle" class="modal-input" rows="2"></textarea></label>
+            <label class="ai-bot-field">Tone<textarea id="deepseekAiBotTone" class="modal-input" rows="2"></textarea></label>
+            <label class="ai-bot-field">Behavior rules<textarea id="deepseekAiBotRules" class="modal-input" rows="4"></textarea></label>
+            <label class="ai-bot-field">Speech patterns<textarea id="deepseekAiBotSpeech" class="modal-input" rows="3"></textarea></label>
+          </div>
+
+          <div class="ai-bot-panel">
+            <h4>DeepSeek bots in chats</h4>
+            <div class="ai-bot-grid">
+              <label>Chat<select id="deepseekAiBotChatSelect" class="modal-input"></select></label>
+              <label>Bot<select id="deepseekAiBotChatBotSelect" class="modal-input"></select></label>
+              <label>Mode<select id="deepseekAiBotChatMode" class="modal-input">
+                <option value="simple">Simple context</option>
+              </select></label>
+              <label>Context<input id="deepseekAiBotChatHotLimit" class="modal-input" type="number" min="20" max="100" value="50"></label>
+              <label class="ai-bot-toggle-label">Enabled in chat
+                <label class="toggle-switch">
+                  <input type="checkbox" id="deepseekAiBotChatEnabled">
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+            </div>
+            <button id="deepseekAiBotChatSave" type="button" class="btn-primary">Save for chat</button>
+            <div class="settings-hint">DeepSeek-боты отвечают только на @mention или reply. Hybrid memory для них недоступен, поэтому здесь всегда используется только simple context.</div>
+          </div>
+
+          <div id="deepseekAiStatus" class="ai-bot-status"></div>
         </div>
       </div>
     </div>

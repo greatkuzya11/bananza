@@ -226,6 +226,24 @@
     },
   };
   let selectedYandexBotId = null;
+  let deepseekBotState = {
+    settings: {
+      deepseek_enabled: false,
+      deepseek_base_url: 'https://api.deepseek.com',
+      deepseek_default_response_model: 'deepseek-chat',
+      deepseek_default_summary_model: 'deepseek-chat',
+      deepseek_temperature: 0.3,
+      deepseek_max_tokens: 1000,
+    },
+    bots: [],
+    chats: [],
+    chatSettings: [],
+    models: {
+      response: ['deepseek-chat', 'deepseek-reasoner'],
+      summary: ['deepseek-chat', 'deepseek-reasoner'],
+    },
+  };
+  let selectedDeepseekBotId = null;
   let grokBotState = {
     settings: {
       grok_enabled: false,
@@ -368,6 +386,11 @@
   const notificationSettingsModal = $('#notificationSettingsModal');
   const soundSettingsModal = $('#soundSettingsModal');
   const aiBotSettingsModal = $('#aiBotSettingsModal');
+  const yandexAiSettingsModal = $('#yandexAiSettingsModal');
+  const deepseekAiSettingsModal = $('#deepseekAiSettingsModal');
+  const grokAiSettingsModal = $('#grokAiSettingsModal');
+  const grokAiTextBotsModal = $('#grokAiTextBotsModal');
+  const grokAiImageBotsModal = $('#grokAiImageBotsModal');
   const changePasswordModal = $('#changePasswordModal');
   const forwardMessageModal = $('#forwardMessageModal');
   const forwardChatSearch = $('#forwardChatSearch');
@@ -3945,6 +3968,478 @@
     }
   }
 
+  function setDeepseekAiStatus(message, type = '') {
+    const el = $('#deepseekAiStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function setDeepseekAiModelStatus(message, type = '') {
+    const el = $('#deepseekAiModelStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function currentDeepseekBot() {
+    return deepseekBotState.bots.find(bot => Number(bot.id) === Number(selectedDeepseekBotId)) || null;
+  }
+
+  function getDeepseekChatSetting(chatId, botId) {
+    return deepseekBotState.chatSettings.find(item => Number(item.chat_id) === Number(chatId) && Number(item.bot_id) === Number(botId)) || null;
+  }
+
+  function mergeDeepseekAiState(data = {}) {
+    const state = data.state || data;
+    if (state.settings) deepseekBotState.settings = { ...deepseekBotState.settings, ...state.settings };
+    if (state.bots) deepseekBotState.bots = state.bots;
+    if (state.chats) deepseekBotState.chats = state.chats;
+    if (state.chatSettings) deepseekBotState.chatSettings = state.chatSettings;
+    if (state.models) deepseekBotState.models = { ...deepseekBotState.models, ...state.models };
+    if (selectedDeepseekBotId && !deepseekBotState.bots.some(bot => Number(bot.id) === Number(selectedDeepseekBotId))) {
+      selectedDeepseekBotId = null;
+    }
+    mentionTargetsByChat.clear();
+  }
+
+  function renderDeepseekModelOptions(bot = currentDeepseekBot()) {
+    const settings = deepseekBotState.settings || {};
+    const models = deepseekBotState.models || {};
+    const responseModels = models.response || ['deepseek-chat', 'deepseek-reasoner'];
+    const summaryModels = models.summary || responseModels;
+    setAiModelSelectOptions('deepseekAiDefaultResponseModel', responseModels, settings.deepseek_default_response_model || 'deepseek-chat');
+    setAiModelSelectOptions('deepseekAiDefaultSummaryModel', summaryModels, settings.deepseek_default_summary_model || 'deepseek-chat');
+    setAiModelSelectOptions('deepseekAiBotResponseModel', responseModels, bot?.response_model || settings.deepseek_default_response_model || 'deepseek-chat');
+    setAiModelSelectOptions('deepseekAiBotSummaryModel', summaryModels, bot?.summary_model || settings.deepseek_default_summary_model || 'deepseek-chat');
+  }
+
+  function renderDeepseekBotAvatar(bot = currentDeepseekBot()) {
+    const avatarEl = $('#deepseekAiBotAvatar');
+    if (!avatarEl) return;
+    const name = bot?.name || $('#deepseekAiBotName')?.value.trim() || 'DeepSeek AI';
+    const color = bot?.avatar_color || '#65aadd';
+    avatarEl.style.background = color;
+    if (bot?.avatar_url) {
+      avatarEl.innerHTML = `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="">`;
+    } else {
+      avatarEl.textContent = initials(name);
+    }
+
+    const hasSavedBot = Boolean(bot?.id);
+    const input = $('#deepseekAiBotAvatarInput');
+    const label = $('#deepseekAiBotAvatarLabel');
+    if (input) {
+      input.disabled = !hasSavedBot;
+      input.value = '';
+    }
+    if (label) {
+      label.classList.toggle('ai-bot-avatar-label-disabled', !hasSavedBot);
+      label.title = hasSavedBot ? 'Change avatar' : 'Save the bot first';
+    }
+    $('#removeDeepseekAiBotAvatar')?.classList.toggle('hidden', !hasSavedBot || !bot?.avatar_url);
+  }
+
+  function fillDeepseekBotForm(bot = null) {
+    const settings = deepseekBotState.settings || {};
+    selectedDeepseekBotId = bot ? bot.id : null;
+    $('#deepseekAiBotName').value = bot?.name || 'DeepSeek AI';
+    $('#deepseekAiBotMention').value = bot?.mention || 'deepseek';
+    $('#deepseekAiBotEnabled').checked = bot ? !!bot.enabled : true;
+    $('#deepseekAiBotResponseModel').value = bot?.response_model || settings.deepseek_default_response_model || 'deepseek-chat';
+    $('#deepseekAiBotSummaryModel').value = bot?.summary_model || settings.deepseek_default_summary_model || 'deepseek-chat';
+    $('#deepseekAiBotTemperature').value = bot?.temperature ?? settings.deepseek_temperature ?? 0.3;
+    $('#deepseekAiBotMaxTokens').value = bot?.max_tokens ?? settings.deepseek_max_tokens ?? 1000;
+    $('#deepseekAiBotStyle').value = bot?.style || 'Helpful DeepSeek assistant for chat';
+    $('#deepseekAiBotTone').value = bot?.tone || 'warm, concise, attentive';
+    $('#deepseekAiBotRules').value = bot?.behavior_rules || '';
+    $('#deepseekAiBotSpeech').value = bot?.speech_patterns || '';
+    renderDeepseekBotAvatar(bot);
+    renderDeepseekModelOptions(bot);
+    renderDeepseekBotList();
+    renderDeepseekChatBotSettings();
+  }
+
+  function deepseekBotFormPayload() {
+    return {
+      name: $('#deepseekAiBotName')?.value.trim(),
+      mention: $('#deepseekAiBotMention')?.value.trim(),
+      enabled: $('#deepseekAiBotEnabled')?.checked,
+      response_model: $('#deepseekAiBotResponseModel')?.value.trim(),
+      summary_model: $('#deepseekAiBotSummaryModel')?.value.trim(),
+      temperature: Number($('#deepseekAiBotTemperature')?.value || 0.3),
+      max_tokens: Number($('#deepseekAiBotMaxTokens')?.value || 1000),
+      style: $('#deepseekAiBotStyle')?.value.trim(),
+      tone: $('#deepseekAiBotTone')?.value.trim(),
+      behavior_rules: $('#deepseekAiBotRules')?.value.trim(),
+      speech_patterns: $('#deepseekAiBotSpeech')?.value.trim(),
+    };
+  }
+
+  function renderDeepseekBotList() {
+    const list = $('#deepseekAiBotList');
+    if (!list) return;
+    if (!deepseekBotState.bots.length) {
+      list.innerHTML = '<div class="ai-bot-empty">No DeepSeek bots yet. Create the first one.</div>';
+      return;
+    }
+    list.innerHTML = deepseekBotState.bots.map(bot => `
+      <button type="button" class="ai-bot-list-item${Number(bot.id) === Number(selectedDeepseekBotId) ? ' active' : ''}" data-bot-id="${bot.id}">
+        <span class="ai-bot-list-main">
+          <span class="ai-bot-list-avatar" style="background:${esc(bot.avatar_color || '#65aadd')}">
+            ${bot.avatar_url ? `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">` : esc(initials(bot.name || '?'))}
+          </span>
+          <span class="ai-bot-list-copy">
+            <strong>${esc(bot.name)}</strong>
+            <small>@${esc(bot.mention)} · ${bot.enabled ? 'enabled' : 'disabled'}</small>
+          </span>
+        </span>
+        <span class="ai-bot-list-model">${bot.response_model ? esc(bot.response_model) : ''}</span>
+      </button>
+    `).join('');
+  }
+
+  function renderDeepseekChatBotSettings() {
+    const chatSelect = $('#deepseekAiBotChatSelect');
+    const botSelect = $('#deepseekAiBotChatBotSelect');
+    if (!chatSelect || !botSelect) return;
+    const currentChatValue = chatSelect.value || String(currentChatId || deepseekBotState.chats[0]?.id || '');
+    const currentBotValue = botSelect.value || String(selectedDeepseekBotId || deepseekBotState.bots[0]?.id || '');
+
+    chatSelect.innerHTML = deepseekBotState.chats.map(chat => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+    botSelect.innerHTML = deepseekBotState.bots.map(bot => `<option value="${bot.id}">${esc(bot.name)} @${esc(bot.mention)}</option>`).join('');
+    if (deepseekBotState.chats.some(chat => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
+    if (deepseekBotState.bots.some(bot => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;
+    if (!botSelect.value && deepseekBotState.bots[0]) botSelect.value = String(deepseekBotState.bots[0].id);
+
+    const setting = getDeepseekChatSetting(chatSelect.value, botSelect.value);
+    $('#deepseekAiBotChatEnabled').checked = !!setting?.enabled;
+    $('#deepseekAiBotChatMode').value = 'simple';
+    $('#deepseekAiBotChatHotLimit').value = setting?.hot_context_limit || 50;
+  }
+
+  function renderDeepseekAiSettings() {
+    const settings = deepseekBotState.settings || {};
+    $('#deepseekAiGlobalEnabled').checked = !!settings.deepseek_enabled;
+    $('#deepseekAiBaseUrl').value = settings.deepseek_base_url || 'https://api.deepseek.com';
+    $('#deepseekAiTemperature').value = settings.deepseek_temperature ?? 0.3;
+    $('#deepseekAiMaxTokens').value = settings.deepseek_max_tokens ?? 1000;
+    $('#deepseekAiApiKey').value = '';
+    $('#deepseekAiKeyStatus').textContent = settings.has_deepseek_key
+      ? `Key saved: ${settings.masked_deepseek_key || '***'}`
+      : 'Key is not saved';
+    renderDeepseekModelOptions(currentDeepseekBot());
+    $('#deepseekAiDefaultResponseModel').value = settings.deepseek_default_response_model || 'deepseek-chat';
+    $('#deepseekAiDefaultSummaryModel').value = settings.deepseek_default_summary_model || 'deepseek-chat';
+    const selected = currentDeepseekBot() || deepseekBotState.bots[0] || null;
+    fillDeepseekBotForm(selected);
+    renderDeepseekChatBotSettings();
+    const models = deepseekBotState.models || {};
+    if (models.error) {
+      setDeepseekAiModelStatus(`Model list fallback is used: ${formatUiErrorMessage(models.error, 'Could not load DeepSeek models')}`, 'error');
+    } else if (models.source === 'live') {
+      setDeepseekAiModelStatus(`Loaded ${models.response?.length || 0} DeepSeek models for selectors.`, 'success');
+    } else {
+      setDeepseekAiModelStatus('Saved defaults are shown. Use "Refresh models" or "Test key" to load live DeepSeek models.');
+    }
+  }
+
+  function deepseekAiSettingsPayload() {
+    const body = {
+      deepseek_enabled: $('#deepseekAiGlobalEnabled')?.checked,
+      deepseek_base_url: $('#deepseekAiBaseUrl')?.value.trim(),
+      deepseek_default_response_model: $('#deepseekAiDefaultResponseModel')?.value.trim(),
+      deepseek_default_summary_model: $('#deepseekAiDefaultSummaryModel')?.value.trim(),
+      deepseek_temperature: Number($('#deepseekAiTemperature')?.value || 0.3),
+      deepseek_max_tokens: Number($('#deepseekAiMaxTokens')?.value || 1000),
+    };
+    const key = $('#deepseekAiApiKey')?.value.trim();
+    if (key) body.deepseek_api_key = key;
+    return body;
+  }
+
+  async function persistDeepseekAiSettings() {
+    const data = await api('/api/admin/deepseek-ai-bots/settings', {
+      method: 'PUT',
+      body: deepseekAiSettingsPayload(),
+    });
+    mergeDeepseekAiState(data);
+    return data;
+  }
+
+  async function loadDeepseekAiState() {
+    const data = await api('/api/admin/deepseek-ai-bots');
+    mergeDeepseekAiState(data);
+    renderDeepseekAiSettings();
+  }
+
+  async function saveDeepseekAiSettings() {
+    setDeepseekAiStatus('Saving...');
+    try {
+      await persistDeepseekAiSettings();
+      renderDeepseekAiSettings();
+      setDeepseekAiStatus('Settings saved', 'success');
+    } catch (e) {
+      setDeepseekAiStatus(e.message || 'Could not save settings', 'error');
+    }
+  }
+
+  async function testDeepseekAiConnection() {
+    const keyInput = $('#deepseekAiApiKey');
+    const hasKey = Boolean(keyInput?.value.trim() || deepseekBotState.settings?.has_deepseek_key);
+    if (!hasKey) {
+      setDeepseekAiStatus('Enter DeepSeek API key before testing.', 'error');
+      keyInput?.focus();
+      return;
+    }
+    setDeepseekAiStatus('Checking DeepSeek connection...');
+    try {
+      const data = await api('/api/admin/deepseek-ai-bots/test-connection', {
+        method: 'POST',
+        body: deepseekAiSettingsPayload(),
+      });
+      await persistDeepseekAiSettings();
+      if (data.state?.models) mergeDeepseekAiState({ state: { models: data.state.models } });
+      renderDeepseekAiSettings();
+      const text = String(data.result?.text || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+      setDeepseekAiStatus(`Key verified (${data.result?.latencyMs || 0} ms). ${text}`, 'success');
+    } catch (e) {
+      setDeepseekAiStatus(formatUiErrorMessage(e, 'Could not check DeepSeek key'), 'error');
+    }
+  }
+
+  async function refreshDeepseekAiModels() {
+    const keyInput = $('#deepseekAiApiKey');
+    const hasKey = Boolean(keyInput?.value.trim() || deepseekBotState.settings?.has_deepseek_key);
+    if (!hasKey) {
+      setDeepseekAiStatus('Enter or save DeepSeek API key before loading models.', 'error');
+      keyInput?.focus();
+      return;
+    }
+    setDeepseekAiStatus('Loading DeepSeek models...');
+    try {
+      const data = await api('/api/admin/deepseek-ai-bots/models/refresh', {
+        method: 'POST',
+        body: deepseekAiSettingsPayload(),
+      });
+      mergeDeepseekAiState(data);
+      renderDeepseekAiSettings();
+      setDeepseekAiStatus(`Models refreshed: ${deepseekBotState.models?.response?.length || 0}.`, 'success');
+    } catch (e) {
+      setDeepseekAiStatus(formatUiErrorMessage(e, 'Could not load DeepSeek models'), 'error');
+    }
+  }
+
+  async function deleteDeepseekAiKey() {
+    if (!confirm('Delete DeepSeek API key for AI bots?')) return;
+    try {
+      const data = await api('/api/admin/deepseek-ai-bots/key', { method: 'DELETE' });
+      mergeDeepseekAiState(data);
+      renderDeepseekAiSettings();
+      setDeepseekAiStatus('Key deleted', 'success');
+    } catch (e) {
+      setDeepseekAiStatus(e.message || 'Could not delete key', 'error');
+    }
+  }
+
+  async function saveDeepseekBot() {
+    const payload = deepseekBotFormPayload();
+    if (!payload.name) { setDeepseekAiStatus('Enter bot name', 'error'); return; }
+    setDeepseekAiStatus('Saving bot...');
+    try {
+      await persistDeepseekAiSettings();
+      const shouldUpdate = Boolean(selectedDeepseekBotId && deepseekBotState.bots.some(bot => Number(bot.id) === Number(selectedDeepseekBotId)));
+      const url = shouldUpdate ? `/api/admin/deepseek-ai-bots/${selectedDeepseekBotId}` : '/api/admin/deepseek-ai-bots';
+      const method = shouldUpdate ? 'PUT' : 'POST';
+      const data = await api(url, { method, body: payload });
+      mergeDeepseekAiState(data);
+      selectedDeepseekBotId = data.bot?.id || selectedDeepseekBotId;
+      if (data.bot?.user_id) {
+        applyUserUpdate({
+          id: data.bot.user_id,
+          user_id: data.bot.user_id,
+          display_name: data.bot.name,
+          avatar_color: data.bot.avatar_color,
+          avatar_url: data.bot.avatar_url,
+          is_ai_bot: 1,
+        });
+      }
+      renderDeepseekAiSettings();
+      setDeepseekAiStatus('Bot saved', 'success');
+    } catch (e) {
+      setDeepseekAiStatus(e.message || 'Could not save bot', 'error');
+    }
+  }
+
+  async function uploadDeepseekBotAvatar(file) {
+    if (!file) return;
+    if (!selectedDeepseekBotId) {
+      setDeepseekAiStatus('Save the bot before adding an avatar', 'error');
+      renderDeepseekBotAvatar(null);
+      return;
+    }
+    const fd = new FormData();
+    fd.append('avatar', file);
+    setDeepseekAiStatus('Uploading avatar...');
+    try {
+      const data = await api(`/api/admin/deepseek-ai-bots/${selectedDeepseekBotId}/avatar`, { method: 'POST', body: fd });
+      mergeDeepseekAiState(data);
+      selectedDeepseekBotId = data.bot?.id || selectedDeepseekBotId;
+      if (data.bot?.user_id) {
+        applyUserUpdate({
+          id: data.bot.user_id,
+          user_id: data.bot.user_id,
+          display_name: data.bot.name,
+          avatar_color: data.bot.avatar_color,
+          avatar_url: data.bot.avatar_url,
+          is_ai_bot: 1,
+        });
+      }
+      renderDeepseekBotList();
+      renderDeepseekBotAvatar(currentDeepseekBot());
+      refreshRenderedAiBotAvatar(data.bot);
+      renderDeepseekChatBotSettings();
+      setDeepseekAiStatus('Avatar saved', 'success');
+    } catch (e) {
+      setDeepseekAiStatus(e.message || 'Could not upload avatar', 'error');
+      renderDeepseekBotAvatar(currentDeepseekBot());
+    }
+  }
+
+  async function removeDeepseekBotAvatar() {
+    if (!selectedDeepseekBotId) return;
+    try {
+      const data = await api(`/api/admin/deepseek-ai-bots/${selectedDeepseekBotId}/avatar`, { method: 'DELETE' });
+      mergeDeepseekAiState(data);
+      selectedDeepseekBotId = data.bot?.id || selectedDeepseekBotId;
+      if (data.bot?.user_id) {
+        applyUserUpdate({
+          id: data.bot.user_id,
+          user_id: data.bot.user_id,
+          display_name: data.bot.name,
+          avatar_color: data.bot.avatar_color,
+          avatar_url: data.bot.avatar_url,
+          is_ai_bot: 1,
+        });
+      }
+      renderDeepseekBotList();
+      renderDeepseekBotAvatar(currentDeepseekBot());
+      refreshRenderedAiBotAvatar(data.bot);
+      renderDeepseekChatBotSettings();
+      setDeepseekAiStatus('Avatar removed', 'success');
+    } catch (e) {
+      setDeepseekAiStatus(e.message || 'Could not remove avatar', 'error');
+    }
+  }
+
+  async function disableDeepseekBot() {
+    if (!selectedDeepseekBotId) return;
+    if (!confirm('Disable this DeepSeek bot in all chats?')) return;
+    try {
+      const data = await api(`/api/admin/deepseek-ai-bots/${selectedDeepseekBotId}`, { method: 'DELETE' });
+      mergeDeepseekAiState(data);
+      renderDeepseekAiSettings();
+      setDeepseekAiStatus('Bot disabled', 'success');
+    } catch (e) {
+      setDeepseekAiStatus(e.message || 'Could not disable bot', 'error');
+    }
+  }
+
+  async function testDeepseekBot() {
+    if (!selectedDeepseekBotId) { setDeepseekAiStatus('Save the bot first', 'error'); return; }
+    setDeepseekAiStatus('Testing model...');
+    try {
+      await persistDeepseekAiSettings();
+      const data = await api(`/api/admin/deepseek-ai-bots/${selectedDeepseekBotId}/test`, { method: 'POST', body: {} });
+      const text = data.result?.text ? data.result.text.slice(0, 500) : '';
+      setDeepseekAiStatus(`Success (${data.result?.latencyMs || 0} ms): ${text}`, 'success');
+    } catch (e) {
+      setDeepseekAiStatus(e.message || 'Test failed', 'error');
+    }
+  }
+
+  async function exportDeepseekBotJson() {
+    if (!selectedDeepseekBotId) { setDeepseekAiStatus('Choose a saved bot first', 'error'); return; }
+    setDeepseekAiStatus('Preparing JSON...');
+    try {
+      const headers = {};
+      if (token) headers.Authorization = 'Bearer ' + token;
+      const res = await fetch(`/api/admin/deepseek-ai-bots/${selectedDeepseekBotId}/export`, { headers });
+      if (!res.ok) {
+        let data = {};
+        try { data = await res.json(); } catch {}
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const bot = currentDeepseekBot();
+      const fallbackName = `bananza-deepseek-bot-${bot?.mention || selectedDeepseekBotId}.json`;
+      const filename = filenameFromContentDisposition(res.headers.get('content-disposition'), fallbackName);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setDeepseekAiStatus('JSON exported', 'success');
+    } catch (e) {
+      setDeepseekAiStatus(e.message || 'Could not export JSON', 'error');
+    }
+  }
+
+  async function importDeepseekBotJsonFile(file) {
+    if (!file) return;
+    setDeepseekAiStatus('Importing JSON...');
+    try {
+      const raw = await file.text();
+      const payload = JSON.parse(raw);
+      const data = await api('/api/admin/deepseek-ai-bots/import', { method: 'POST', body: payload });
+      mergeDeepseekAiState(data);
+      selectedDeepseekBotId = data.bot?.id || selectedDeepseekBotId;
+      renderDeepseekAiSettings();
+      const warnings = Array.isArray(data.warnings) && data.warnings.length ? ` ${data.warnings.join(' ')}` : '';
+      setDeepseekAiStatus(`Bot imported.${warnings}`, warnings ? 'error' : 'success');
+    } catch (e) {
+      setDeepseekAiStatus(e.message || 'Could not import JSON', 'error');
+    } finally {
+      const input = $('#deepseekAiBotImportFile');
+      if (input) input.value = '';
+    }
+  }
+
+  async function saveDeepseekChatBotSettings() {
+    const chatId = Number($('#deepseekAiBotChatSelect')?.value || 0);
+    const botId = Number($('#deepseekAiBotChatBotSelect')?.value || 0);
+    const botExists = deepseekBotState.bots.some(bot => Number(bot.id) === botId);
+    if (!chatId || !botId) { setDeepseekAiStatus('Choose chat and bot', 'error'); return; }
+    if (!botExists) {
+      setDeepseekAiStatus('Save the bot first', 'error');
+      await loadDeepseekAiState().catch(() => {});
+      return;
+    }
+    try {
+      await persistDeepseekAiSettings();
+      const data = await api('/api/admin/deepseek-ai-bots/chat-settings', {
+        method: 'PUT',
+        body: {
+          chatId,
+          botId,
+          enabled: $('#deepseekAiBotChatEnabled')?.checked,
+          mode: 'simple',
+          hot_context_limit: Number($('#deepseekAiBotChatHotLimit')?.value || 50),
+        },
+      });
+      mergeDeepseekAiState(data);
+      renderDeepseekChatBotSettings();
+      setDeepseekAiStatus('Chat settings saved', 'success');
+    } catch (e) {
+      setDeepseekAiStatus(e.message || 'Could not save chat settings', 'error');
+    }
+  }
+
   function setYandexAiStatus(message, type = '') {
     const el = $('#yandexAiStatus');
     if (!el) return;
@@ -5883,6 +6378,10 @@
       soundSettingsModal,
       aiBotSettingsModal,
       yandexAiSettingsModal,
+      deepseekAiSettingsModal,
+      grokAiSettingsModal,
+      grokAiTextBotsModal,
+      grokAiImageBotsModal,
       changePasswordModal,
       grokImageRiskConfirmModal,
     ].forEach((modal) => registerModal(modal));
@@ -12159,6 +12658,9 @@
     const yandexAiItem = $('#settingsYandexAiPanel');
     if (currentUser.is_admin) yandexAiItem?.classList.remove('hidden');
     else yandexAiItem?.classList.add('hidden');
+    const deepseekAiItem = $('#settingsDeepSeekAiPanel');
+    if (currentUser.is_admin) deepseekAiItem?.classList.remove('hidden');
+    else deepseekAiItem?.classList.add('hidden');
     const grokAiItem = $('#settingsGrokAiPanel');
     if (currentUser.is_admin) grokAiItem?.classList.remove('hidden');
     else grokAiItem?.classList.add('hidden');
@@ -12236,6 +12738,15 @@
     setYandexAiStatus('Loading...');
     loadYandexAiState().then(() => setYandexAiStatus('')).catch((e) => {
       setYandexAiStatus(e.message || 'Could not load Yandex AI bots', 'error');
+    });
+  }
+
+  function openDeepseekAiSettingsModal() {
+    if (!currentUser?.is_admin) return;
+    openModal('deepseekAiSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
+    setDeepseekAiStatus('Loading...');
+    loadDeepseekAiState().then(() => setDeepseekAiStatus('')).catch((e) => {
+      setDeepseekAiStatus(e.message || 'Could not load DeepSeek AI bots', 'error');
     });
   }
 
@@ -13613,6 +14124,7 @@
     $('#settingsSoundsPanel')?.addEventListener('click', openSoundSettingsModal);
     $('#settingsAiBotsPanel')?.addEventListener('click', openAiBotSettingsModal);
     $('#settingsYandexAiPanel')?.addEventListener('click', openYandexAiSettingsModal);
+    $('#settingsDeepSeekAiPanel')?.addEventListener('click', openDeepseekAiSettingsModal);
     $('#settingsGrokAiPanel')?.addEventListener('click', openGrokAiSettingsModal);
     $('#settingsChangePassword').addEventListener('click', openChangePasswordModal);
     $('#settingsAdminPanel').addEventListener('click', openAdminModal);
@@ -13816,6 +14328,36 @@
     $('#yandexAiBotChatSelect')?.addEventListener('change', renderYandexChatBotSettings);
     $('#yandexAiBotChatBotSelect')?.addEventListener('change', renderYandexChatBotSettings);
     $('#yandexAiBotChatSave')?.addEventListener('click', saveYandexChatBotSettings);
+
+    // DeepSeek AI bot admin settings
+    $('#deepseekAiSaveSettings')?.addEventListener('click', saveDeepseekAiSettings);
+    $('#deepseekAiTestConnection')?.addEventListener('click', testDeepseekAiConnection);
+    $('#deepseekAiRefreshModels')?.addEventListener('click', refreshDeepseekAiModels);
+    $('#deepseekAiDeleteKey')?.addEventListener('click', deleteDeepseekAiKey);
+    $('#deepseekAiBotCreateNew')?.addEventListener('click', () => {
+      fillDeepseekBotForm(null);
+      setDeepseekAiStatus('New DeepSeek bot: fill fields and save');
+    });
+    $('#deepseekAiBotSave')?.addEventListener('click', saveDeepseekBot);
+    $('#deepseekAiBotDisable')?.addEventListener('click', disableDeepseekBot);
+    $('#deepseekAiBotTest')?.addEventListener('click', testDeepseekBot);
+    $('#deepseekAiBotExportJson')?.addEventListener('click', exportDeepseekBotJson);
+    $('#deepseekAiBotImportJson')?.addEventListener('click', () => $('#deepseekAiBotImportFile')?.click());
+    $('#deepseekAiBotImportFile')?.addEventListener('change', (event) => importDeepseekBotJsonFile(event.target.files?.[0]));
+    $('#deepseekAiBotAvatarInput')?.addEventListener('change', (event) => uploadDeepseekBotAvatar(event.target.files?.[0]));
+    $('#removeDeepseekAiBotAvatar')?.addEventListener('click', removeDeepseekBotAvatar);
+    $('#deepseekAiBotName')?.addEventListener('input', () => {
+      if (!currentDeepseekBot()?.avatar_url) renderDeepseekBotAvatar(currentDeepseekBot());
+    });
+    $('#deepseekAiBotList')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.ai-bot-list-item');
+      if (!btn) return;
+      const bot = deepseekBotState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
+      if (bot) fillDeepseekBotForm(bot);
+    });
+    $('#deepseekAiBotChatSelect')?.addEventListener('change', renderDeepseekChatBotSettings);
+    $('#deepseekAiBotChatBotSelect')?.addEventListener('change', renderDeepseekChatBotSettings);
+    $('#deepseekAiBotChatSave')?.addEventListener('click', saveDeepseekChatBotSettings);
 
     // Grok AI bot admin settings
     $('#grokAiSaveSettings')?.addEventListener('click', saveGrokAiSettings);

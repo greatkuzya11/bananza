@@ -23,6 +23,14 @@ const DEFAULT_AI_SETTINGS = {
   grok_max_tokens: 1000,
   grok_key_encrypted: '',
   grok_key_masked: '',
+  deepseek_enabled: false,
+  deepseek_base_url: 'https://api.deepseek.com',
+  deepseek_default_response_model: 'deepseek-chat',
+  deepseek_default_summary_model: 'deepseek-chat',
+  deepseek_temperature: 0.3,
+  deepseek_max_tokens: 1000,
+  deepseek_key_encrypted: '',
+  deepseek_key_masked: '',
   yandex_enabled: false,
   yandex_folder_id: '',
   yandex_base_url: 'https://llm.api.cloud.yandex.net/foundationModels/v1',
@@ -124,6 +132,14 @@ function normalizeSettings(raw = {}) {
   next.grok_max_tokens = intValue(next.grok_max_tokens, DEFAULT_AI_SETTINGS.grok_max_tokens, 1, 8000);
   next.grok_key_encrypted = String(next.grok_key_encrypted || '');
   next.grok_key_masked = String(next.grok_key_masked || '');
+  next.deepseek_enabled = boolValue(next.deepseek_enabled, DEFAULT_AI_SETTINGS.deepseek_enabled);
+  next.deepseek_base_url = cleanBaseUrl(next.deepseek_base_url, DEFAULT_AI_SETTINGS.deepseek_base_url);
+  next.deepseek_default_response_model = cleanModel(next.deepseek_default_response_model, DEFAULT_AI_SETTINGS.deepseek_default_response_model);
+  next.deepseek_default_summary_model = cleanModel(next.deepseek_default_summary_model, DEFAULT_AI_SETTINGS.deepseek_default_summary_model);
+  next.deepseek_temperature = floatValue(next.deepseek_temperature, DEFAULT_AI_SETTINGS.deepseek_temperature, 0, 1);
+  next.deepseek_max_tokens = intValue(next.deepseek_max_tokens, DEFAULT_AI_SETTINGS.deepseek_max_tokens, 1, 8000);
+  next.deepseek_key_encrypted = String(next.deepseek_key_encrypted || '');
+  next.deepseek_key_masked = String(next.deepseek_key_masked || '');
   next.yandex_enabled = boolValue(next.yandex_enabled, DEFAULT_AI_SETTINGS.yandex_enabled);
   next.yandex_folder_id = cleanText(next.yandex_folder_id, DEFAULT_AI_SETTINGS.yandex_folder_id, 120);
   next.yandex_base_url = cleanBaseUrl(next.yandex_base_url, DEFAULT_AI_SETTINGS.yandex_base_url);
@@ -196,6 +212,16 @@ function getYandexKey(db, secret) {
   }
 }
 
+function getDeepSeekKey(db, secret) {
+  const settings = getAiSettings(db);
+  if (!settings.deepseek_key_encrypted) return '';
+  try {
+    return decryptText(settings.deepseek_key_encrypted, secret);
+  } catch {
+    return '';
+  }
+}
+
 function saveAiSettings(db, incoming = {}, secret) {
   const current = getAiSettings(db);
   const next = normalizeSettings({
@@ -216,6 +242,12 @@ function saveAiSettings(db, incoming = {}, secret) {
     grok_default_image_resolution: incoming.grok_default_image_resolution ?? current.grok_default_image_resolution,
     grok_temperature: incoming.grok_temperature ?? current.grok_temperature,
     grok_max_tokens: incoming.grok_max_tokens ?? current.grok_max_tokens,
+    deepseek_enabled: Object.prototype.hasOwnProperty.call(incoming, 'deepseek_enabled') ? incoming.deepseek_enabled : current.deepseek_enabled,
+    deepseek_base_url: incoming.deepseek_base_url ?? current.deepseek_base_url,
+    deepseek_default_response_model: incoming.deepseek_default_response_model ?? current.deepseek_default_response_model,
+    deepseek_default_summary_model: incoming.deepseek_default_summary_model ?? current.deepseek_default_summary_model,
+    deepseek_temperature: incoming.deepseek_temperature ?? current.deepseek_temperature,
+    deepseek_max_tokens: incoming.deepseek_max_tokens ?? current.deepseek_max_tokens,
     yandex_enabled: Object.prototype.hasOwnProperty.call(incoming, 'yandex_enabled') ? incoming.yandex_enabled : current.yandex_enabled,
     yandex_folder_id: incoming.yandex_folder_id ?? current.yandex_folder_id,
     yandex_base_url: incoming.yandex_base_url ?? current.yandex_base_url,
@@ -243,6 +275,14 @@ function saveAiSettings(db, incoming = {}, secret) {
     if (key) {
       next.grok_key_encrypted = encryptText(key, secret);
       next.grok_key_masked = maskSecret(key);
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(incoming, 'deepseek_api_key')) {
+    const key = String(incoming.deepseek_api_key || '').trim();
+    if (key) {
+      next.deepseek_key_encrypted = encryptText(key, secret);
+      next.deepseek_key_masked = maskSecret(key);
     }
   }
 
@@ -282,15 +322,31 @@ function deleteYandexKey(db) {
   return sanitizeSettings(current);
 }
 
+function deleteDeepSeekKey(db) {
+  const current = getAiSettings(db);
+  current.deepseek_key_encrypted = '';
+  current.deepseek_key_masked = '';
+  writeSettings(db, current);
+  return sanitizeSettings(current);
+}
+
 function sanitizeSettings(settings) {
   const normalized = normalizeSettings(settings);
-  const { openai_key_encrypted, grok_key_encrypted, yandex_key_encrypted, ...safe } = normalized;
+  const {
+    openai_key_encrypted,
+    grok_key_encrypted,
+    deepseek_key_encrypted,
+    yandex_key_encrypted,
+    ...safe
+  } = normalized;
   return {
     ...safe,
     has_openai_key: Boolean(openai_key_encrypted),
     masked_openai_key: normalized.openai_key_masked || '',
     has_grok_key: Boolean(grok_key_encrypted),
     masked_grok_key: normalized.grok_key_masked || '',
+    has_deepseek_key: Boolean(deepseek_key_encrypted),
+    masked_deepseek_key: normalized.deepseek_key_masked || '',
     has_yandex_key: Boolean(yandex_key_encrypted),
     masked_yandex_key: normalized.yandex_key_masked || '',
   };
@@ -301,10 +357,12 @@ module.exports = {
   getAiSettings,
   getOpenAIKey,
   getGrokKey,
+  getDeepSeekKey,
   getYandexKey,
   saveAiSettings,
   deleteOpenAIKey,
   deleteGrokKey,
+  deleteDeepSeekKey,
   deleteYandexKey,
   sanitizeSettings,
 };

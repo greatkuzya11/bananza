@@ -8,15 +8,18 @@ const {
   getAiSettings,
   getOpenAIKey,
   getGrokKey,
+  getDeepSeekKey,
   getYandexKey,
   saveAiSettings,
   deleteOpenAIKey,
   deleteGrokKey,
+  deleteDeepSeekKey,
   deleteYandexKey,
   sanitizeSettings,
 } = require('./settings');
 const { OPENAI_MIN_OUTPUT_TOKENS, createEmbedding, listModelIds, generateText, generateJson } = require('./openai');
 const grokAi = require('./grok');
+const deepseekAi = require('./deepseek');
 const yandexAi = require('./yandex');
 const { analyzeAiImageRisk } = require('../public/js/ai-image-risk');
 
@@ -26,6 +29,8 @@ const MODEL_CACHE_MS = 10 * 60 * 1000;
 const FALLBACK_RESPONSE_MODELS = ['gpt-4o-mini'];
 const FALLBACK_SUMMARY_MODELS = ['gpt-4o-mini'];
 const FALLBACK_EMBEDDING_MODELS = ['text-embedding-3-small'];
+const FALLBACK_DEEPSEEK_RESPONSE_MODELS = ['deepseek-chat', 'deepseek-reasoner'];
+const FALLBACK_DEEPSEEK_SUMMARY_MODELS = ['deepseek-chat', 'deepseek-reasoner'];
 const FALLBACK_YANDEX_RESPONSE_MODELS = [
   'yandexgpt/latest',
   'yandexgpt/rc',
@@ -203,9 +208,16 @@ function isLikelyGrokTextModel(id) {
   return /grok|reason|chat|text/.test(value);
 }
 
+function isLikelyDeepSeekTextModel(id) {
+  const value = String(id || '').toLowerCase();
+  if (!value || isEmbeddingModel(value)) return false;
+  if (/image|vision|speech|audio|tts|stt|video|moderation|search|rerank|embedding/.test(value)) return false;
+  return /deepseek|reason|chat/.test(value);
+}
+
 function normalizeProvider(value, fallback = 'openai') {
   const provider = String(value || '').trim().toLowerCase();
-  if (provider === 'grok' || provider === 'yandex' || provider === 'openai') return provider;
+  if (provider === 'grok' || provider === 'deepseek' || provider === 'yandex' || provider === 'openai') return provider;
   return fallback;
 }
 
@@ -333,6 +345,13 @@ function createAiBotFeature({
     FROM ai_bots b
     LEFT JOIN users u ON u.id=b.user_id
     WHERE COALESCE(b.provider,'openai')='yandex'
+    ORDER BY b.enabled DESC, b.id ASC
+  `);
+  const allDeepSeekBotsStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE COALESCE(b.provider,'openai')='deepseek'
     ORDER BY b.enabled DESC, b.id ASC
   `);
   const allGrokTextBotsStmt = db.prepare(`
@@ -487,6 +506,8 @@ function createAiBotFeature({
   const botAvatarLimiter = upLimiter || passThroughLimiter;
   let modelCatalogCache = null;
   let modelCatalogFetchedAt = 0;
+  let deepseekModelCatalogCache = null;
+  let deepseekModelCatalogFetchedAt = 0;
   let grokModelCatalogCache = null;
   let grokModelCatalogFetchedAt = 0;
 
@@ -529,8 +550,17 @@ function createAiBotFeature({
     return getGrokKey(db, secret);
   }
 
+  function getDeepSeekApiKey() {
+    return getDeepSeekKey(db, secret);
+  }
+
   function getYandexApiKey() {
     return getYandexKey(db, secret);
+  }
+
+  function deepseekBaseUrl() {
+    const settings = getGlobalSettings();
+    return settings.deepseek_base_url || deepseekAi.DEFAULT_BASE_URL;
   }
 
   function grokBaseUrl() {
@@ -703,6 +733,69 @@ function createAiBotFeature({
       });
       grokModelCatalogFetchedAt = now;
       return grokModelCatalogCache;
+    }
+  }
+
+  function deepseekSavedModelHints() {
+    const settings = getGlobalSettings();
+    const bots = allDeepSeekBotsStmt.all();
+    return {
+      response: uniqueList([
+        settings.deepseek_default_response_model,
+        ...bots.map(bot => bot.response_model),
+      ]),
+      summary: uniqueList([
+        settings.deepseek_default_summary_model,
+        ...bots.map(bot => bot.summary_model),
+      ]),
+    };
+  }
+
+  function buildDeepSeekModelCatalog({ source = 'fallback', modelIds = [], error = '' } = {}) {
+    const hints = deepseekSavedModelHints();
+    const responseModels = uniqueList(modelIds.filter(isLikelyDeepSeekTextModel));
+    return {
+      source,
+      fetched_at: new Date().toISOString(),
+      response: uniqueList([...hints.response, ...responseModels, ...FALLBACK_DEEPSEEK_RESPONSE_MODELS]),
+      summary: uniqueList([...hints.summary, ...responseModels, ...FALLBACK_DEEPSEEK_SUMMARY_MODELS]),
+      error,
+    };
+  }
+
+  function getDeepSeekModelCatalog() {
+    return buildDeepSeekModelCatalog();
+  }
+
+  async function getLiveDeepSeekModelCatalog({ apiKey, baseUrl }) {
+    const modelIds = await deepseekAi.listModelIds({ apiKey, baseUrl });
+    return buildDeepSeekModelCatalog({ source: 'live', modelIds, error: '' });
+  }
+
+  async function getDeepSeekModelCatalogCached({ refresh = false } = {}) {
+    const now = Date.now();
+    if (!refresh && deepseekModelCatalogCache && now - deepseekModelCatalogFetchedAt < MODEL_CACHE_MS) {
+      return deepseekModelCatalogCache;
+    }
+
+    const apiKey = getDeepSeekApiKey();
+    if (!apiKey) {
+      deepseekModelCatalogCache = buildDeepSeekModelCatalog({ source: 'fallback', error: 'DeepSeek API key is not configured' });
+      deepseekModelCatalogFetchedAt = now;
+      return deepseekModelCatalogCache;
+    }
+
+    try {
+      deepseekModelCatalogCache = await getLiveDeepSeekModelCatalog({ apiKey, baseUrl: deepseekBaseUrl() });
+      deepseekModelCatalogFetchedAt = now;
+      return deepseekModelCatalogCache;
+    } catch (error) {
+      deepseekModelCatalogCache = buildDeepSeekModelCatalog({
+        source: 'fallback',
+        error: errorText(error, 'Could not load DeepSeek models'),
+      });
+      deepseekModelCatalogFetchedAt = now;
+      return deepseekModelCatalogCache;
     }
   }
 
@@ -1265,19 +1358,29 @@ function createAiBotFeature({
     const kind = normalizeBotKind(row.kind, provider, 'text');
     const defaultResponseModel = provider === 'yandex'
       ? settings.yandex_default_response_model
-      : (provider === 'grok' ? settings.grok_default_response_model : settings.default_response_model);
+      : (provider === 'grok'
+        ? settings.grok_default_response_model
+        : (provider === 'deepseek' ? settings.deepseek_default_response_model : settings.default_response_model));
     const defaultSummaryModel = provider === 'yandex'
       ? settings.yandex_default_summary_model
-      : (provider === 'grok' ? settings.grok_default_summary_model : settings.default_summary_model);
+      : (provider === 'grok'
+        ? settings.grok_default_summary_model
+        : (provider === 'deepseek' ? settings.deepseek_default_summary_model : settings.default_summary_model));
     const defaultEmbeddingModel = provider === 'yandex'
       ? settings.yandex_default_embedding_doc_model
-      : (provider === 'grok' ? settings.grok_default_embedding_model : settings.default_embedding_model);
+      : (provider === 'grok'
+        ? settings.grok_default_embedding_model
+        : (provider === 'deepseek' ? '' : settings.default_embedding_model));
     const defaultTemperature = provider === 'yandex'
       ? settings.yandex_temperature
-      : (provider === 'grok' ? settings.grok_temperature : null);
+      : (provider === 'grok'
+        ? settings.grok_temperature
+        : (provider === 'deepseek' ? settings.deepseek_temperature : null));
     const defaultMaxTokens = provider === 'yandex'
       ? settings.yandex_max_tokens
-      : (provider === 'grok' ? settings.grok_max_tokens : null);
+      : (provider === 'grok'
+        ? settings.grok_max_tokens
+        : (provider === 'deepseek' ? settings.deepseek_max_tokens : null));
     return {
       id: row.id,
       user_id: row.user_id,
@@ -1362,6 +1465,19 @@ function createAiBotFeature({
       chatSettings: serializeChatSettingsForBotIds(yandexBotIds),
       chats: state.chats,
       models: getYandexModelCatalog(),
+    };
+  }
+
+  function serializeDeepSeekAdminState() {
+    const state = serializeAdminState();
+    const deepseekBots = allDeepSeekBotsStmt.all().map(sanitizeBot);
+    const deepseekBotIds = new Set(deepseekBots.map((bot) => Number(bot.id)));
+    return {
+      settings: sanitizeSettings(getGlobalSettings()),
+      bots: deepseekBots,
+      chatSettings: serializeChatSettingsForBotIds(deepseekBotIds, { forceSimple: true }),
+      chats: state.chats,
+      models: deepseekModelCatalogCache || getDeepSeekModelCatalog(),
     };
   }
 
@@ -1453,6 +1569,7 @@ function createAiBotFeature({
 
   function defaultBotName(provider, kind = 'text') {
     if (provider === 'yandex') return 'Yandex AI';
+    if (provider === 'deepseek') return 'DeepSeek AI';
     if (provider === 'grok' && kind === 'image') return 'Grok Images';
     if (provider === 'grok') return 'Grok AI';
     return 'Bananza AI';
@@ -1466,19 +1583,29 @@ function createAiBotFeature({
     const mention = buildUniqueMention(input.mention ?? current.mention ?? name, current.id || null);
     const responseFallback = provider === 'yandex'
       ? settings.yandex_default_response_model
-      : (provider === 'grok' ? settings.grok_default_response_model : settings.default_response_model);
+      : (provider === 'grok'
+        ? settings.grok_default_response_model
+        : (provider === 'deepseek' ? settings.deepseek_default_response_model : settings.default_response_model));
     const summaryFallback = provider === 'yandex'
       ? settings.yandex_default_summary_model
-      : (provider === 'grok' ? settings.grok_default_summary_model : settings.default_summary_model);
+      : (provider === 'grok'
+        ? settings.grok_default_summary_model
+        : (provider === 'deepseek' ? settings.deepseek_default_summary_model : settings.default_summary_model));
     const embeddingFallback = provider === 'yandex'
       ? settings.yandex_default_embedding_doc_model
-      : (provider === 'grok' ? settings.grok_default_embedding_model : settings.default_embedding_model);
+      : (provider === 'grok'
+        ? settings.grok_default_embedding_model
+        : (provider === 'deepseek' ? '' : settings.default_embedding_model));
     const temperatureFallback = provider === 'yandex'
       ? settings.yandex_temperature
-      : (provider === 'grok' ? settings.grok_temperature : 0.55);
+      : (provider === 'grok'
+        ? settings.grok_temperature
+        : (provider === 'deepseek' ? settings.deepseek_temperature : 0.55));
     const maxTokensFallback = provider === 'yandex'
       ? settings.yandex_max_tokens
-      : (provider === 'grok' ? settings.grok_max_tokens : 1000);
+      : (provider === 'grok'
+        ? settings.grok_max_tokens
+        : (provider === 'deepseek' ? settings.deepseek_max_tokens : 1000));
     return {
       name,
       mention,
@@ -2601,11 +2728,15 @@ function createAiBotFeature({
     let typingTimer = null;
     try {
       const isYandex = bot.provider === 'yandex';
+      const isDeepSeek = bot.provider === 'deepseek';
       const isGrok = bot.provider === 'grok';
       const settings = getGlobalSettings();
-      const apiKey = isYandex ? getYandexApiKey() : (isGrok ? getGrokApiKey() : getApiKey());
+      const apiKey = isYandex
+        ? getYandexApiKey()
+        : (isDeepSeek ? getDeepSeekApiKey() : (isGrok ? getGrokApiKey() : getApiKey()));
       if (!apiKey) return;
       if (isYandex && !settings.yandex_folder_id) return;
+      if (isDeepSeek && !settings.deepseek_enabled) return;
       if (bot.kind === 'image') {
         if (!isGrok) return;
         broadcastBotTyping(bot, sourceMessage.chat_id, true);
@@ -2632,6 +2763,16 @@ function createAiBotFeature({
             maxOutputTokens: intValue(bot.max_tokens, settings.yandex_max_tokens, 1, 8000),
             temperature: floatValue(bot.temperature, settings.yandex_temperature, 0, 1),
           }))
+        : isDeepSeek
+          ? await deepseekAi.generateText({
+              apiKey,
+              baseUrl: deepseekBaseUrl(),
+              model: bot.response_model || settings.deepseek_default_response_model,
+              system: context.system,
+              user: context.user,
+              maxOutputTokens: intValue(bot.max_tokens, settings.deepseek_max_tokens, 1, 8000),
+              temperature: floatValue(bot.temperature, settings.deepseek_temperature, 0, 1),
+            })
         : isGrok
           ? await grokAi.generateText({
               apiKey,
@@ -2687,17 +2828,20 @@ function createAiBotFeature({
     enqueueMemoryForMessage(message);
     if (options.skipBotTrigger || message.ai_generated) return;
     const settings = getGlobalSettings();
-    if (!settings.enabled && !settings.yandex_enabled && !settings.grok_enabled) return;
+    if (!settings.enabled && !settings.yandex_enabled && !settings.deepseek_enabled && !settings.grok_enabled) return;
     const text = aiMessageMemoryText(message, { includeVoters: true });
     if (!text) return;
     const rows = activeChatBotsStmt.all(message.chat_id);
     for (const row of rows) {
       const bot = sanitizeBot(row);
       if (bot.provider === 'yandex' && !settings.yandex_enabled) continue;
+      if (bot.provider === 'deepseek' && !settings.deepseek_enabled) continue;
       if (bot.provider === 'grok' && !settings.grok_enabled) continue;
       if (bot.provider === 'openai' && !settings.enabled) continue;
       const chatConfig = {
-        mode: bot.kind === 'image' ? 'simple' : (row.mode === 'hybrid' ? 'hybrid' : 'simple'),
+        mode: bot.kind === 'image' || bot.provider === 'deepseek'
+          ? 'simple'
+          : (row.mode === 'hybrid' ? 'hybrid' : 'simple'),
         hot_context_limit: intValue(row.hot_context_limit, 50, 20, 100),
         trigger_mode: row.trigger_mode || 'mention_reply',
       };
@@ -2957,6 +3101,292 @@ function createAiBotFeature({
     } catch (error) {
       res.status(400).json({ ok: false, error: error.message || 'Bot test failed' });
     }
+  });
+
+  function deepseekBotByRequestId(req, res) {
+    const bot = botByIdStmt.get(Number(req.params.id));
+    if (!bot) {
+      res.status(404).json({ error: 'Bot not found' });
+      return null;
+    }
+    if (normalizeProvider(bot.provider, 'openai') !== 'deepseek') {
+      res.status(404).json({ error: 'DeepSeek bot not found' });
+      return null;
+    }
+    return bot;
+  }
+
+  app.get('/api/admin/deepseek-ai-bots', auth, adminOnly, (_req, res) => {
+    res.json(serializeDeepSeekAdminState());
+  });
+
+  app.put('/api/admin/deepseek-ai-bots/settings', auth, adminOnly, (req, res) => {
+    const before = getGlobalSettings();
+    const settings = saveAiSettings(db, req.body || {}, secret);
+    const after = getGlobalSettings();
+    if (
+      Object.prototype.hasOwnProperty.call(req.body || {}, 'deepseek_api_key')
+      || before.deepseek_base_url !== after.deepseek_base_url
+    ) {
+      deepseekModelCatalogCache = null;
+      deepseekModelCatalogFetchedAt = 0;
+    }
+    res.json({ settings, state: serializeDeepSeekAdminState() });
+  });
+
+  app.post('/api/admin/deepseek-ai-bots/test-connection', auth, adminOnly, async (req, res) => {
+    const settings = getGlobalSettings();
+    const body = req.body || {};
+    const apiKey = cleanText(body.deepseek_api_key, 500) || getDeepSeekApiKey();
+    const baseUrl = deepseekAi.cleanBaseUrl(body.deepseek_base_url || settings.deepseek_base_url);
+    const model = cleanText(body.deepseek_default_response_model || settings.deepseek_default_response_model, 160) || settings.deepseek_default_response_model;
+    if (!apiKey) return res.status(400).json({ ok: false, error: 'Enter DeepSeek API key.' });
+    const startedAt = Date.now();
+
+    try {
+      const result = await deepseekAi.testConnection({
+        apiKey,
+        baseUrl,
+        model,
+        temperature: floatValue(body.deepseek_temperature, settings.deepseek_temperature, 0, 1),
+      });
+      let models = null;
+      try {
+        models = await getLiveDeepSeekModelCatalog({ apiKey, baseUrl });
+      } catch (modelError) {
+        models = buildDeepSeekModelCatalog({
+          source: 'fallback',
+          error: errorText(modelError, 'Could not load DeepSeek models'),
+        });
+      }
+      deepseekModelCatalogCache = models;
+      deepseekModelCatalogFetchedAt = Date.now();
+      res.json({
+        ok: true,
+        result: { ...result, latencyMs: Date.now() - startedAt, model },
+        state: { models },
+      });
+    } catch (error) {
+      res.status(400).json({ ok: false, error: errorText(error, 'DeepSeek connection test failed') });
+    }
+  });
+
+  app.post('/api/admin/deepseek-ai-bots/models/refresh', auth, adminOnly, async (req, res) => {
+    const settings = getGlobalSettings();
+    const body = req.body || {};
+    const apiKey = cleanText(body.deepseek_api_key, 500) || getDeepSeekApiKey();
+    const baseUrl = deepseekAi.cleanBaseUrl(body.deepseek_base_url || settings.deepseek_base_url);
+    if (!apiKey) return res.status(400).json({ ok: false, error: 'Enter DeepSeek API key.' });
+    try {
+      const models = await getLiveDeepSeekModelCatalog({ apiKey, baseUrl });
+      deepseekModelCatalogCache = models;
+      deepseekModelCatalogFetchedAt = Date.now();
+      res.json({ ok: true, state: { models } });
+    } catch (error) {
+      res.status(400).json({ ok: false, error: errorText(error, 'Could not load DeepSeek models') });
+    }
+  });
+
+  app.delete('/api/admin/deepseek-ai-bots/key', auth, adminOnly, (_req, res) => {
+    const settings = deleteDeepSeekKey(db);
+    deepseekModelCatalogCache = null;
+    deepseekModelCatalogFetchedAt = 0;
+    res.json({ settings, state: serializeDeepSeekAdminState() });
+  });
+
+  app.post('/api/admin/deepseek-ai-bots', auth, adminOnly, (req, res) => {
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'deepseek', kind: 'text' });
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, state: serializeDeepSeekAdminState() });
+  });
+
+  app.put('/api/admin/deepseek-ai-bots/chat-settings', auth, adminOnly, (req, res) => {
+    const chatId = Number(req.body?.chatId);
+    const botId = Number(req.body?.botId);
+    if (!db.prepare('SELECT 1 FROM chats WHERE id=?').get(chatId)) return res.status(404).json({ error: 'Chat not found' });
+    const bot = botByIdStmt.get(botId);
+    if (!bot || normalizeProvider(bot.provider, 'openai') !== 'deepseek') return res.status(404).json({ error: 'DeepSeek bot not found' });
+    const enabled = boolValue(req.body?.enabled, false);
+    const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
+    const triggerMode = 'mention_reply';
+    saveChatBotSettingTx({ chatId, bot, enabled, mode: 'simple', hotContextLimit, triggerMode });
+    res.json({ ok: true, state: serializeDeepSeekAdminState() });
+  });
+
+  app.post('/api/admin/deepseek-ai-bots/:id(\\d+)/avatar', auth, adminOnly, botAvatarLimiter, (req, res) => {
+    if (!avatarUpload?.single) return res.status(500).json({ error: 'Avatar upload is not configured' });
+    const bot = deepseekBotByRequestId(req, res);
+    if (!bot) return;
+
+    avatarUpload.single('avatar')(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
+      if (!req.file) return res.status(400).json({ error: 'No file' });
+
+      const userId = ensureBackingUser(bot);
+      const old = db.prepare('SELECT avatar_url FROM users WHERE id=?').get(userId);
+      removeAvatarFile(old?.avatar_url);
+
+      const avatarUrl = '/uploads/avatars/' + req.file.filename;
+      db.prepare('UPDATE users SET avatar_url=?, display_name=? WHERE id=?').run(avatarUrl, bot.name, userId);
+      db.prepare('UPDATE ai_bots SET updated_at=datetime(\'now\') WHERE id=?').run(bot.id);
+      const updated = sanitizeBot(botByIdStmt.get(bot.id));
+      if (typeof notifyUserUpdated === 'function') notifyUserUpdated(userId);
+      res.json({ bot: updated, state: serializeDeepSeekAdminState() });
+    });
+  });
+
+  app.delete('/api/admin/deepseek-ai-bots/:id(\\d+)/avatar', auth, adminOnly, (req, res) => {
+    const bot = deepseekBotByRequestId(req, res);
+    if (!bot) return;
+    const userId = ensureBackingUser(bot);
+    const old = db.prepare('SELECT avatar_url FROM users WHERE id=?').get(userId);
+    removeAvatarFile(old?.avatar_url);
+    db.prepare('UPDATE users SET avatar_url=NULL WHERE id=?').run(userId);
+    db.prepare('UPDATE ai_bots SET updated_at=datetime(\'now\') WHERE id=?').run(bot.id);
+    const updated = sanitizeBot(botByIdStmt.get(bot.id));
+    if (typeof notifyUserUpdated === 'function') notifyUserUpdated(userId);
+    res.json({ bot: updated, state: serializeDeepSeekAdminState() });
+  });
+
+  app.put('/api/admin/deepseek-ai-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = deepseekBotByRequestId(req, res);
+    if (!current) return;
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'deepseek', kind: 'text' }, current);
+    db.prepare(`
+      UPDATE ai_bots
+      SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
+          enabled=?, provider='deepseek', kind='text', response_model=?, summary_model=?, embedding_model=?,
+          temperature=?, max_tokens=?, updated_at=datetime('now')
+      WHERE id=?
+    `).run(
+      input.name,
+      input.mention,
+      input.style,
+      input.tone,
+      input.behavior_rules,
+      input.speech_patterns,
+      input.enabled ? 1 : 0,
+      input.response_model,
+      input.summary_model,
+      input.embedding_model,
+      input.temperature,
+      input.max_tokens,
+      current.id
+    );
+    if (current.user_id) {
+      db.prepare('UPDATE users SET display_name=? WHERE id=?').run(input.name, current.user_id);
+      if (typeof notifyUserUpdated === 'function') notifyUserUpdated(current.user_id);
+    }
+    const updated = botByIdStmt.get(current.id);
+    syncBotMemberships(updated, updated.enabled !== 0);
+    res.json({ bot: sanitizeBot(updated), state: serializeDeepSeekAdminState() });
+  });
+
+  app.delete('/api/admin/deepseek-ai-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = deepseekBotByRequestId(req, res);
+    if (!current) return;
+    db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
+    db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
+    syncBotMemberships(current, false);
+    res.json({ ok: true, state: serializeDeepSeekAdminState() });
+  });
+
+  app.post('/api/admin/deepseek-ai-bots/:id(\\d+)/test', auth, adminOnly, async (req, res) => {
+    const bot = sanitizeBot(deepseekBotByRequestId(req, res));
+    if (!bot) return;
+    const settings = getGlobalSettings();
+    const apiKey = String(req.body?.deepseek_api_key || '').trim() || getDeepSeekApiKey();
+    if (!apiKey) return res.status(400).json({ ok: false, error: 'Enter DeepSeek API key in DeepSeek settings.' });
+    const prompt = cleanText(req.body?.prompt || `Hello, ${bot.name}. Briefly explain how you will help in this chat.`, 1000);
+    const startedAt = Date.now();
+    try {
+      const text = await deepseekAi.generateText({
+        apiKey,
+        baseUrl: deepseekBaseUrl(),
+        model: bot.response_model || settings.deepseek_default_response_model,
+        system: botSystemPrompt(bot),
+        user: prompt,
+        maxOutputTokens: Math.min(intValue(bot.max_tokens, settings.deepseek_max_tokens, 1, 8000), 1000),
+        temperature: floatValue(bot.temperature, settings.deepseek_temperature, 0, 1),
+      });
+      res.json({ ok: true, result: { text, latencyMs: Date.now() - startedAt, model: bot.response_model || settings.deepseek_default_response_model } });
+    } catch (error) {
+      res.status(400).json({ ok: false, error: error.message || 'DeepSeek bot test failed' });
+    }
+  });
+
+  app.get('/api/admin/deepseek-ai-bots/:id(\\d+)/export', auth, adminOnly, (req, res) => {
+    const bot = sanitizeBot(deepseekBotByRequestId(req, res));
+    if (!bot) return;
+    const payload = {
+      schema_version: AI_BOT_EXPORT_VERSION,
+      exported_at: new Date().toISOString(),
+      bot: {
+        provider: 'deepseek',
+        kind: 'text',
+        name: bot.name,
+        mention: bot.mention,
+        enabled: bot.enabled,
+        response_model: bot.response_model,
+        summary_model: bot.summary_model,
+        temperature: bot.temperature,
+        max_tokens: bot.max_tokens,
+        style: bot.style,
+        tone: bot.tone,
+        behavior_rules: bot.behavior_rules,
+        speech_patterns: bot.speech_patterns,
+      },
+    };
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = `bananza-deepseek-bot-${safeFilenamePart(bot.mention || bot.name)}-${date}.json`;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(JSON.stringify(payload, null, 2));
+  });
+
+  app.post('/api/admin/deepseek-ai-bots/import', auth, adminOnly, async (req, res) => {
+    const source = req.body?.bot && typeof req.body.bot === 'object' ? req.body.bot : (req.body || {});
+    const warnings = [];
+    const settings = getGlobalSettings();
+    const requestedMention = normalizeMention(source.mention || source.name || 'bot');
+    const catalog = await getDeepSeekModelCatalogCached();
+
+    let responseModel = cleanText(source.response_model || settings.deepseek_default_response_model, 160);
+    let summaryModel = cleanText(source.summary_model || settings.deepseek_default_summary_model, 160);
+
+    if (catalog.source === 'live') {
+      if (responseModel && !catalog.response.includes(responseModel)) {
+        warnings.push(`Response model "${responseModel}" is not available; default model was used.`);
+        responseModel = settings.deepseek_default_response_model;
+      }
+      if (summaryModel && !catalog.summary.includes(summaryModel)) {
+        warnings.push(`Summary model "${summaryModel}" is not available; default model was used.`);
+        summaryModel = settings.deepseek_default_summary_model;
+      }
+    } else if (catalog.error) {
+      warnings.push(`Model availability was not verified: ${catalog.error}`);
+    }
+
+    const input = normalizeBotInput({
+      name: source.name,
+      mention: requestedMention,
+      provider: 'deepseek',
+      kind: 'text',
+      enabled: Object.prototype.hasOwnProperty.call(source, 'enabled') ? source.enabled : true,
+      response_model: responseModel,
+      summary_model: summaryModel,
+      temperature: source.temperature,
+      max_tokens: source.max_tokens,
+      style: source.style,
+      tone: source.tone,
+      behavior_rules: source.behavior_rules,
+      speech_patterns: source.speech_patterns,
+    });
+    if (input.mention !== requestedMention) {
+      warnings.push(`Mention "@${requestedMention}" is already taken; imported as "@${input.mention}".`);
+    }
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, warnings, state: serializeDeepSeekAdminState() });
   });
 
   function yandexBotByRequestId(req, res) {
