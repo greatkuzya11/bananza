@@ -28,7 +28,22 @@
         <button id="newChatBtn" class="icon-btn" title="New chat">✎</button>
       </div>
       <div id="sidebarSearch" class="sidebar-search is-collapsed" aria-hidden="true">
-        <input type="text" id="chatSearch" placeholder="Search chats...">
+        <input
+          type="search"
+          id="chatSearch"
+          name="bananza-chat-search"
+          placeholder="Search chats..."
+          aria-label="Search chats"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck="false"
+          inputmode="search"
+          data-lpignore="true"
+          data-1p-ignore="true"
+          data-bwignore="true"
+          data-form-type="other"
+        >
         <button id="chatSearchClear" class="search-clear" title="Close search" aria-label="Close search" type="button">✕</button>
       </div>
       <div id="chatList" class="chat-list"></div>

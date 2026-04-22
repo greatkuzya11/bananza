@@ -493,6 +493,55 @@ const insertPinEventStmt = db.prepare(`
     created_at
   ) VALUES(?,?,?,?,?,?,?,?,COALESCE(?, datetime('now')))
 `);
+const pinEventByIdStmt = db.prepare(`
+  SELECT
+    id,
+    chat_id,
+    message_id,
+    action,
+    actor_id,
+    actor_name,
+    message_author_id,
+    message_author_name,
+    message_preview,
+    created_at
+  FROM message_pin_events
+  WHERE id=?
+`);
+const pinEventsFromStmt = db.prepare(`
+  SELECT
+    id,
+    chat_id,
+    message_id,
+    action,
+    actor_id,
+    actor_name,
+    message_author_id,
+    message_author_name,
+    message_preview,
+    created_at
+  FROM message_pin_events
+  WHERE chat_id=? AND action='pinned' AND created_at>=?
+  ORDER BY created_at ASC, id ASC
+  LIMIT 200
+`);
+const pinEventsBetweenStmt = db.prepare(`
+  SELECT
+    id,
+    chat_id,
+    message_id,
+    action,
+    actor_id,
+    actor_name,
+    message_author_id,
+    message_author_name,
+    message_preview,
+    created_at
+  FROM message_pin_events
+  WHERE chat_id=? AND action='pinned' AND created_at>=? AND created_at<=?
+  ORDER BY created_at ASC, id ASC
+  LIMIT 200
+`);
 
 function applyReplyTextFallback(row) {
   if (!row || Number(row.reply_text_is_fallback || 0) !== 1) return row;
@@ -607,12 +656,28 @@ function pinPreviewText(row) {
   return 'Attachment';
 }
 
+function pinEventPayload(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id) || 0,
+    chat_id: Number(row.chat_id) || 0,
+    message_id: Number(row.message_id) || 0,
+    action: row.action || 'pinned',
+    actor_id: row.actor_id == null ? null : Number(row.actor_id),
+    actor_name: row.actor_name || '',
+    message_author_id: row.message_author_id == null ? null : Number(row.message_author_id),
+    message_author_name: row.message_author_name || '',
+    message_preview: row.message_preview || '',
+    created_at: row.created_at,
+  };
+}
+
 function recordPinEvent({ chatId, messageId, action, actor, createdAt = null } = {}) {
   const normalizedAction = action === 'unpinned' ? 'unpinned' : 'pinned';
   const message = pinEventMessageStmt.get(messageId) || {};
   const resolvedChatId = Number(chatId || message.chat_id || 0);
-  if (!resolvedChatId || !messageId) return false;
-  insertPinEventStmt.run(
+  if (!resolvedChatId || !messageId) return null;
+  const info = insertPinEventStmt.run(
     resolvedChatId,
     messageId,
     normalizedAction,
@@ -623,7 +688,21 @@ function recordPinEvent({ chatId, messageId, action, actor, createdAt = null } =
     pinPreviewText(message).substring(0, 500),
     createdAt || null
   );
-  return true;
+  return pinEventPayload(pinEventByIdStmt.get(info.lastInsertRowid));
+}
+
+function getPinEventsForWindow(chatId, messages = [], { openEnded = false } = {}) {
+  const times = (Array.isArray(messages) ? messages : [])
+    .map((msg) => msg?.created_at)
+    .filter(Boolean)
+    .sort();
+  if (!times.length) return [];
+  const from = times[0];
+  const to = times[times.length - 1];
+  const rows = openEnded
+    ? pinEventsFromStmt.all(chatId, from)
+    : pinEventsBetweenStmt.all(chatId, from, to);
+  return rows.map(pinEventPayload).filter(Boolean);
 }
 
 function getChatPins(chatId) {
@@ -652,7 +731,7 @@ function getChatPinPayload(chatId) {
   };
 }
 
-function broadcastPinsUpdated(chatId, { action = 'updated', actorId = null, messageId = null } = {}) {
+function broadcastPinsUpdated(chatId, { action = 'updated', actorId = null, messageId = null, pinEvent = null } = {}) {
   const payload = getChatPinPayload(chatId);
   broadcastToChatAll(chatId, {
     type: 'pins_updated',
@@ -662,8 +741,9 @@ function broadcastPinsUpdated(chatId, { action = 'updated', actorId = null, mess
     action,
     actorId,
     messageId,
+    pin_event: pinEvent || null,
   });
-  return payload;
+  return { ...payload, pin_event: pinEvent || null };
 }
 
 function normalizeClientId(value) {
@@ -1685,6 +1765,9 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
     req.user.id,
     { ensureClosed: true, broadcastOnClose: true }
   );
+  const pinEvents = getPinEventsForWindow(chatId, result, {
+    openEnded: !before && !after && !anchor,
+  });
   // Build per-member last-read map so clients can atomically reconcile local cache/UI.
   const members = db.prepare(`
     SELECT cm.user_id, COALESCE(cm.last_read_id,0) as last_read_id
@@ -1707,10 +1790,10 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
     const hasMoreAfter = lastId
       ? !!db.prepare('SELECT 1 FROM messages WHERE chat_id=? AND id>? AND is_deleted=0 LIMIT 1').get(chatId, lastId)
       : false;
-    return res.json({ messages: result, has_more_before: hasMoreBefore, has_more_after: hasMoreAfter, member_last_reads });
+    return res.json({ messages: result, pin_events: pinEvents, has_more_before: hasMoreBefore, has_more_after: hasMoreAfter, member_last_reads });
   }
 
-  return res.json({ messages: result, member_last_reads });
+  return res.json({ messages: result, pin_events: pinEvents, member_last_reads });
 });
 
 app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
@@ -2025,9 +2108,10 @@ app.post('/api/messages/:id/pin', auth, msgLimiter, (req, res) => {
 
   const inserted = db.prepare('INSERT OR IGNORE INTO message_pins(chat_id,message_id,pinned_by) VALUES(?,?,?)')
     .run(msg.chat_id, mid, req.user.id);
+  let pinEvent = null;
   if (inserted.changes > 0) {
     const pin = db.prepare('SELECT created_at FROM message_pins WHERE chat_id=? AND message_id=?').get(msg.chat_id, mid);
-    recordPinEvent({
+    pinEvent = recordPinEvent({
       chatId: msg.chat_id,
       messageId: mid,
       action: 'pinned',
@@ -2036,7 +2120,7 @@ app.post('/api/messages/:id/pin', auth, msgLimiter, (req, res) => {
     });
   }
   const payload = inserted.changes > 0
-    ? broadcastPinsUpdated(msg.chat_id, { action: 'pinned', actorId: req.user.id, messageId: mid })
+    ? broadcastPinsUpdated(msg.chat_id, { action: 'pinned', actorId: req.user.id, messageId: mid, pinEvent })
     : getChatPinPayload(msg.chat_id);
   if (inserted.changes > 0) {
     pushFeature.notifyPinCreated({ chatId: msg.chat_id, messageId: mid, actor: req.user });
@@ -2066,13 +2150,13 @@ app.delete('/api/messages/:id/pin', auth, (req, res) => {
   if (!canUnpin) return res.status(403).json({ error: 'Not allowed to unpin this message' });
 
   db.prepare('DELETE FROM message_pins WHERE id=?').run(pin.id);
-  recordPinEvent({
+  const pinEvent = recordPinEvent({
     chatId: pin.chat_id,
     messageId: mid,
     action: 'unpinned',
     actor: req.user,
   });
-  const payload = broadcastPinsUpdated(pin.chat_id, { action: 'unpinned', actorId: req.user.id, messageId: mid });
+  const payload = broadcastPinsUpdated(pin.chat_id, { action: 'unpinned', actorId: req.user.id, messageId: mid, pinEvent });
   res.json({ ok: true, ...payload });
 });
 
@@ -2526,8 +2610,9 @@ app.delete('/api/messages/:id', auth, (req, res) => {
   }
 
   const wasPinned = db.prepare('SELECT 1 FROM message_pins WHERE message_id=?').get(mid);
+  let pinEvent = null;
   if (wasPinned) {
-    recordPinEvent({
+    pinEvent = recordPinEvent({
       chatId: m.chat_id,
       messageId: mid,
       action: 'unpinned',
@@ -2547,7 +2632,7 @@ app.delete('/api/messages/:id', auth, (req, res) => {
   pollFeature.deletePollData(mid);
   broadcastToChatAll(m.chat_id, { type: 'message_deleted', messageId: mid, chatId: m.chat_id });
   if (removedPins.changes > 0) {
-    broadcastPinsUpdated(m.chat_id, { action: 'unpinned', actorId: req.user.id, messageId: mid });
+    broadcastPinsUpdated(m.chat_id, { action: 'unpinned', actorId: req.user.id, messageId: mid, pinEvent });
   }
   aiBotFeature.handleMessageDeleted(mid);
   res.json({ ok: true });

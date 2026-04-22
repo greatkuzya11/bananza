@@ -142,6 +142,7 @@
   let typingSendTimeout = null;
   let typingDisplayTimeouts = {};
   let displayedMsgIds = new Set();
+  let displayedPinEventIds = new Set();
   let replyTo = null; // { id, display_name, text }
   let grokImageRiskConfirmResolver = null;
   let editTo = null; // { id, text, is_voice_note, allowEmpty }
@@ -290,6 +291,7 @@
   let mentionTargetsByChat = new Map();
   let mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [], source: null };
   let mentionPickerPointerState = null;
+  let mentionPickerClickSuppressUntil = 0;
   let avatarUserMenuState = null;
   let chatMemberLastReads = new Map();
   const modalRegistry = new Map();
@@ -915,6 +917,18 @@
     return MODAL_ANIMATION_STYLE_IDS.has(style) ? style : 'soft';
   }
 
+  function modalAnimationMeta(style = currentModalAnimation) {
+    const id = normalizeModalAnimationStyle(style);
+    return MODAL_ANIMATION_STYLES.find((item) => item.id === id) || MODAL_ANIMATION_STYLES[0];
+  }
+
+  function syncModalAnimationSettingsButton() {
+    const panelBtn = $('#settingsAnimationPanel');
+    if (!panelBtn) return;
+    const meta = modalAnimationMeta(currentModalAnimation);
+    panelBtn.textContent = `✨ Animation: ${meta.name}, ${normalizeModalAnimationSpeed(currentModalAnimationSpeed)}/10`;
+  }
+
   function normalizeModalAnimationSpeed(speed) {
     const next = Math.round(Number(speed));
     if (!Number.isFinite(next)) return MODAL_ANIMATION_SPEED_DEFAULT;
@@ -968,9 +982,16 @@
     const wrap = $('#settingsAnimationOptions');
     if (!wrap) return;
     wrap.innerHTML = MODAL_ANIMATION_STYLES.map((style) => `
-      <button type="button" class="animation-style-card${style.id === currentModalAnimation ? ' active' : ''}" data-modal-animation-style="${style.id}">
+      <button
+        type="button"
+        class="animation-style-card${style.id === currentModalAnimation ? ' active' : ''}"
+        data-modal-animation-style="${style.id}"
+        aria-pressed="${style.id === currentModalAnimation ? 'true' : 'false'}"
+        ${style.id === currentModalAnimation ? 'aria-current="true"' : ''}
+      >
         <strong>${esc(style.name)}</strong>
         <small>${esc(style.note)}</small>
+        ${style.id === currentModalAnimation ? '<span class="animation-selected-mark">Selected</span>' : ''}
       </button>
     `).join('');
   }
@@ -992,6 +1013,7 @@
       currentUser.ui_modal_animation = nextStyle;
       persistCurrentUser();
     }
+    syncModalAnimationSettingsButton();
     renderModalAnimationOptions();
     renderModalAnimationSpeedControl();
   }
@@ -1004,6 +1026,7 @@
       currentUser.ui_modal_animation_speed = nextSpeed;
       persistCurrentUser();
     }
+    syncModalAnimationSettingsButton();
     renderModalAnimationSpeedControl();
   }
 
@@ -3612,6 +3635,7 @@
       const chatId = Number(msg.chat_id || msg.chatId || currentChatId || 0);
       const data = await api(`/api/messages/${msg.id}/pin`, { method: 'POST' });
       applyPinsUpdate({ chatId, pins: data.pins || [], allow_unpin_any_pin: data.allow_unpin_any_pin });
+      appendPinEventIfVisible(data.pin_event || data.pinEvent);
       showCenterToast('Message pinned');
     } catch (e) {
       showCenterToast(e.message || 'Could not pin message');
@@ -7230,8 +7254,32 @@
     return targets;
   }
 
+  function suppressMentionPickerFollowupClick(ms = 550) {
+    mentionPickerClickSuppressUntil = Math.max(mentionPickerClickSuppressUntil, Date.now() + ms);
+  }
+
+  function ensureMentionPickerBackdrop() {
+    let backdrop = $('#mentionPickerBackdrop');
+    if (backdrop) return backdrop;
+    backdrop = document.createElement('div');
+    backdrop.id = 'mentionPickerBackdrop';
+    backdrop.className = 'mention-picker-backdrop hidden';
+    document.body.appendChild(backdrop);
+    const blockAndClose = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      suppressMentionPickerFollowupClick();
+      hideMentionPicker();
+    };
+    backdrop.addEventListener('pointerdown', blockAndClose, { passive: false });
+    backdrop.addEventListener('click', blockAndClose, { passive: false });
+    backdrop.addEventListener('contextmenu', blockAndClose, { passive: false });
+    return backdrop;
+  }
+
   function ensureMentionPicker() {
     let picker = $('#mentionPicker');
+    ensureMentionPickerBackdrop();
     if (picker) return picker;
     picker = document.createElement('div');
     picker.id = 'mentionPicker';
@@ -7239,6 +7287,8 @@
     document.body.appendChild(picker);
     picker.addEventListener('pointerdown', (e) => {
       if (typeof e.button === 'number' && e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
       const item = e.target.closest('.mention-picker-item');
       if (!item) return;
       mentionPickerPointerState = {
@@ -7248,15 +7298,16 @@
         startIndex: Number(item.dataset.index),
         moved: false,
       };
-    }, { passive: true });
+    }, { passive: false });
     picker.addEventListener('pointermove', (e) => {
+      e.stopPropagation();
       if (!mentionPickerPointerState || e.pointerId !== mentionPickerPointerState.pointerId || mentionPickerPointerState.moved) return;
       const dx = e.clientX - mentionPickerPointerState.startX;
       const dy = e.clientY - mentionPickerPointerState.startY;
       if ((dx * dx) + (dy * dy) > (MENTION_PICKER_TAP_DEAD_ZONE * MENTION_PICKER_TAP_DEAD_ZONE)) {
         mentionPickerPointerState.moved = true;
       }
-    }, { passive: true });
+    }, { passive: false });
     picker.addEventListener('scroll', () => {
       if (mentionPickerPointerState) mentionPickerPointerState.moved = true;
     }, { passive: true });
@@ -7264,6 +7315,9 @@
       mentionPickerPointerState = null;
     }, { passive: true });
     picker.addEventListener('pointerup', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      suppressMentionPickerFollowupClick();
       const pointerState = mentionPickerPointerState;
       mentionPickerPointerState = null;
       if (!pointerState || e.pointerId !== pointerState.pointerId || pointerState.moved) return;
@@ -7276,6 +7330,10 @@
       const target = mentionPickerState.targets[index];
       if (target) insertMentionTarget(target);
     }, { passive: false });
+    picker.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
     return picker;
   }
 
@@ -7302,6 +7360,7 @@
   function hideMentionPicker() {
     mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [], source: null };
     mentionPickerPointerState = null;
+    closeFloatingSurface($('#mentionPickerBackdrop'));
     closeFloatingSurface($('#mentionPicker'));
   }
 
@@ -7358,6 +7417,7 @@
       </button>
     `).join('');
     mentionPickerState.active = true;
+    openFloatingSurface(ensureMentionPickerBackdrop());
     openFloatingSurface(picker);
     positionMentionPicker();
     requestAnimationFrame(() => positionMentionPicker());
@@ -7908,6 +7968,7 @@
       case 'pins_updated': {
         applyPinsUpdate(msg);
         if (msg.action === 'pinned') {
+          appendPinEventIfVisible(msg.pin_event || msg.pinEvent);
           handlePinnedMessageUpdate(msg);
         }
         break;
@@ -8416,16 +8477,47 @@
     return { reads, chatReadChanged, threshold, applied: safeToApply };
   }
 
+  function normalizePinEvent(raw = {}) {
+    const id = Number(raw.id || raw.event_id || 0);
+    const chatId = Number(raw.chat_id || raw.chatId || currentChatId || 0);
+    const messageId = Number(raw.message_id || raw.messageId || 0);
+    if (!id || !chatId || !messageId) return null;
+    return {
+      id,
+      chat_id: chatId,
+      message_id: messageId,
+      action: raw.action === 'unpinned' ? 'unpinned' : 'pinned',
+      actor_id: raw.actor_id == null && raw.actorId == null ? null : Number(raw.actor_id || raw.actorId || 0),
+      actor_name: raw.actor_name || raw.actorName || '',
+      message_author_id: raw.message_author_id == null && raw.messageAuthorId == null ? null : Number(raw.message_author_id || raw.messageAuthorId || 0),
+      message_author_name: raw.message_author_name || raw.messageAuthorName || '',
+      message_preview: raw.message_preview || raw.messagePreview || raw.preview_text || '',
+      created_at: raw.created_at || raw.createdAt || new Date().toISOString(),
+    };
+  }
+
+  function normalizePinEvents(events = []) {
+    const seen = new Set();
+    return (Array.isArray(events) ? events : [])
+      .map(normalizePinEvent)
+      .filter((event) => {
+        if (!event || event.action !== 'pinned' || seen.has(event.id)) return false;
+        seen.add(event.id);
+        return true;
+      });
+  }
+
   function normalizeMessagesPage(data) {
-    if (Array.isArray(data)) return { messages: data, hasMoreBefore: null, hasMoreAfter: null };
+    if (Array.isArray(data)) return { messages: data, pinEvents: [], hasMoreBefore: null, hasMoreAfter: null };
     if (data && Array.isArray(data.messages)) {
       return {
         messages: data.messages,
+        pinEvents: normalizePinEvents(data.pin_events || data.pinEvents || []),
         hasMoreBefore: typeof data.has_more_before === 'boolean' ? data.has_more_before : null,
         hasMoreAfter: typeof data.has_more_after === 'boolean' ? data.has_more_after : null,
       };
     }
-    return { messages: [], hasMoreBefore: false, hasMoreAfter: false };
+    return { messages: [], pinEvents: [], hasMoreBefore: false, hasMoreAfter: false };
   }
 
   async function fetchMessagesPage(chatId, params, { signal = null } = {}) {
@@ -8436,6 +8528,7 @@
       raw,
       page,
       messages: page.messages || [],
+      pinEvents: page.pinEvents || [],
       memberLastReads: raw && raw.member_last_reads ? raw.member_last_reads : null,
     };
   }
@@ -8952,7 +9045,7 @@
       }
     };
 
-    const commitMessageWindow = async (msgs = [], page = null, { source = 'network' } = {}) => {
+    const commitMessageWindow = async (msgs = [], page = null, { source = 'network', pinEvents = [] } = {}) => {
       if (!isCurrentOpen()) return false;
       const list = Array.isArray(msgs) ? msgs : [];
       const firstId = minMessageId(list);
@@ -8970,7 +9063,7 @@
 
       setHasMoreBefore(page?.hasMoreBefore ?? (source === 'cache' ? cacheHasMoreBefore : networkHasMoreBefore));
       setHasMoreAfter(page?.hasMoreAfter ?? fallbackHasMoreAfter);
-      replaceRenderedMessages(list);
+      replaceRenderedMessages(list, pinEvents);
       if (!isCurrentOpen()) return false;
       committedWindow = true;
       renderOutboxForChat(targetChatId).catch(() => {});
@@ -9053,17 +9146,17 @@
         fetchMs: Math.round(performance.now() - networkStartedAt),
         count: result.messages?.length || 0,
       });
-      const { page, messages: msgs } = result;
+      const { page, messages: msgs, pinEvents } = result;
       if (!isCurrentOpen()) return false;
       if (!await reconcileFetchedPage(result)) return false;
       if (!isCurrentOpen()) return false;
-      if (committedWindow && renderedMessageIdsMatch(msgs)) {
+      if (committedWindow && renderedMessageIdsMatch(msgs) && !pinEvents.length) {
         setHasMoreBefore(page.hasMoreBefore ?? (restoreAnchor?.messageId ? msgs.length > 0 : msgs.length >= PAGE_SIZE));
         setHasMoreAfter(page.hasMoreAfter ?? Boolean(restoreAnchor?.messageId && chat?.last_message_id && maxMessageId(msgs) < Number(chat.last_message_id || 0)));
         renderOutboxForChat(targetChatId).catch(() => {});
         if (!isCurrentOpen()) return false;
       } else {
-        if (!await commitMessageWindow(msgs, page, { source: 'network' })) return false;
+        if (!await commitMessageWindow(msgs, page, { source: 'network', pinEvents })) return false;
       }
       warmMessageWindowAssets(chat, msgs);
       revealCommittedWindow();
@@ -9082,7 +9175,7 @@
           after: String(cursor),
         });
         const result = await fetchMessagesPage(targetChatId, params, { signal: controller.signal });
-        const { page, messages: msgs } = result;
+        const { page, messages: msgs, pinEvents } = result;
         if (!await reconcileFetchedPage(result)) return appendedAny;
         if (!isCurrentOpen()) return appendedAny;
 
@@ -9097,11 +9190,12 @@
         }
 
         const newMessages = filterNewMessages(msgs);
-        if (newMessages.length) {
+        const newPinEvents = filterNewPinEvents(pinEvents);
+        if (newMessages.length || newPinEvents.length) {
           const wasNearBottom = isNearBottom(120);
           const anchor = wasNearBottom ? null : captureScrollAnchor();
-          newMessages.forEach((message) => appendMessage(message));
-          updateChatListLastMessage(newMessages[newMessages.length - 1]);
+          appendTimelineItems(newMessages, newPinEvents);
+          if (newMessages.length) updateChatListLastMessage(newMessages[newMessages.length - 1]);
           if (wasNearBottom) {
             scrollToBottom(false, true);
           } else if (anchor?.messageId) {
@@ -9122,22 +9216,13 @@
 
     const syncCachedOpenInBackground = async () => {
       try {
-        const latestRange = await readCachedChatRange(targetChatId);
-        if (!isCurrentOpen()) return;
-        const cachedMax = Math.max(
-          Number(latestRange?.maxId || 0),
-          Number(cachedRange?.maxId || 0),
-          maxMessageId(cachedMsgs)
-        );
-        if (!cachedMax) {
-          await fetchFullWindow();
-          return;
+        const refreshed = await fetchFullWindow();
+        if (!refreshed || !isCurrentOpen()) return;
+        const renderedMax = getMaxRenderedMessageId();
+        const serverLastId = getChatLastMessageId(targetChatId, renderedMax);
+        if (serverLastId > renderedMax) {
+          await syncNewMessagesAfter(renderedMax, { maxPages: RECOVERY_CATCHUP_MAX_PAGES });
         }
-        const serverLastId = getChatLastMessageId(targetChatId, cachedMax);
-        await syncNewMessagesAfter(cachedMax, {
-          maxPages: serverLastId > cachedMax ? RECOVERY_CATCHUP_MAX_PAGES : 1,
-          lightOnly: serverLastId <= cachedMax,
-        });
       } catch (error) {
         if (!isAbortError(error)) updateHasMoreAfterFromChat(targetChatId);
       }
@@ -9154,6 +9239,7 @@
 
     currentChatId = targetChatId;
     displayedMsgIds.clear();
+    displayedPinEventIds.clear();
     hasMore = false; // prevent scroll handler triggering loadMore during DOM clear
     setHasMoreAfter(false);
     suppressScrollAnchorSave = true;
@@ -9338,7 +9424,10 @@
   function clearRenderedMessages({ resetDisplayed = true } = {}) {
     if (loadMoreWrap) messagesEl.replaceChildren(loadMoreWrap);
     else messagesEl.replaceChildren();
-    if (resetDisplayed) displayedMsgIds.clear();
+    if (resetDisplayed) {
+      displayedMsgIds.clear();
+      displayedPinEventIds.clear();
+    }
   }
 
   function getRenderedMessageIdList() {
@@ -9355,15 +9444,91 @@
       && domIds.every((id, index) => id === nextIds[index]);
   }
 
-  function buildMessagesFragment(msgs = []) {
+  function pinEventIdKey(id) {
+    const key = String(id ?? '').trim();
+    return key || '';
+  }
+
+  function rememberPinEvent(id) {
+    const key = pinEventIdKey(id);
+    if (key) displayedPinEventIds.add(key);
+  }
+
+  function isPinEventDisplayed(id) {
+    const key = pinEventIdKey(id);
+    return key ? displayedPinEventIds.has(key) : false;
+  }
+
+  function filterNewPinEvents(events = []) {
+    const seen = new Set();
+    return normalizePinEvents(events).filter((event) => {
+      const key = pinEventIdKey(event.id);
+      if (!key || seen.has(key) || isPinEventDisplayed(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function timelineTimestamp(item) {
+    const value = item?.created_at || item?.createdAt || '';
+    const time = value ? Date.parse(/[zZ]$|[+\-]\d{2}:?\d{2}$/.test(value) ? value : `${value}Z`) : NaN;
+    return Number.isFinite(time) ? time : 0;
+  }
+
+  function buildTimelineItems(msgs = [], pinEvents = []) {
+    return [
+      ...(Array.isArray(msgs) ? msgs : []).map((message) => ({ kind: 'message', message, created_at: message?.created_at })),
+      ...normalizePinEvents(pinEvents).map((event) => ({ kind: 'pin-event', event, created_at: event.created_at })),
+    ].sort((a, b) => {
+      const byTime = timelineTimestamp(a) - timelineTimestamp(b);
+      if (byTime) return byTime;
+      if (a.kind !== b.kind) return a.kind === 'message' ? -1 : 1;
+      const aId = Number(a.message?.id || a.event?.id || 0);
+      const bId = Number(b.message?.id || b.event?.id || 0);
+      return aId - bId;
+    });
+  }
+
+  function renderPinSystemEvent(event) {
+    const item = normalizePinEvent(event);
+    if (!item || item.action !== 'pinned') return null;
+    const row = document.createElement('div');
+    row.className = 'pin-system-row';
+    row.dataset.pinEventId = String(item.id);
+    row.dataset.pinMessageId = String(item.message_id);
+    row.dataset.chatId = String(item.chat_id);
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+    row.title = 'Jump to pinned message';
+    const actor = String(item.actor_name || 'Someone').trim() || 'Someone';
+    const preview = String(item.message_preview || 'Pinned message').trim() || 'Pinned message';
+    row.innerHTML = `
+      <span class="pin-system-icon" aria-hidden="true">&#128204;</span>
+      <span class="pin-system-copy"><strong>${esc(actor)}</strong> запинил(а): ${esc(preview)}</span>
+    `;
+    const jump = () => jumpToPinnedMessage({ chat_id: item.chat_id, message_id: item.message_id });
+    row.addEventListener('click', (e) => {
+      e.stopPropagation();
+      jump();
+    });
+    row.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      jump();
+    });
+    return row;
+  }
+
+  function buildMessagesFragment(msgs = [], pinEvents = []) {
     const fragment = document.createDocumentFragment();
     let lastDate = null;
     let currentGroupBody = null;
+    const items = buildTimelineItems(msgs, pinEvents);
 
-    for (let i = 0; i < msgs.length; i++) {
-      const msg = msgs[i];
-      if (isMessageDisplayed(msg?.id)) continue;
-      const msgDate = formatDate(msg.created_at);
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const createdAt = item.created_at;
+      const msgDate = formatDate(createdAt);
       if (msgDate !== lastDate) {
         lastDate = msgDate;
         currentGroupBody = null;
@@ -9373,7 +9538,20 @@
         fragment.appendChild(sep);
       }
 
-      const prevMsg = i > 0 ? msgs[i - 1] : null;
+      if (item.kind === 'pin-event') {
+        if (isPinEventDisplayed(item.event?.id)) continue;
+        const systemRow = renderPinSystemEvent(item.event);
+        if (!systemRow) continue;
+        currentGroupBody = null;
+        fragment.appendChild(systemRow);
+        rememberPinEvent(item.event.id);
+        continue;
+      }
+
+      const msg = item.message;
+      if (isMessageDisplayed(msg?.id)) continue;
+      const prevMessageItem = [...items.slice(0, i)].reverse().find((entry) => entry.kind === 'message');
+      const prevMsg = prevMessageItem?.message || null;
       const sameUser = prevMsg && prevMsg.user_id === msg.user_id && formatDate(prevMsg.created_at) === msgDate;
       const isOwn = msg.user_id === currentUser.id;
       const useGroup = !isOwn || compactView;
@@ -9399,12 +9577,59 @@
     return fragment;
   }
 
-  function replaceRenderedMessages(msgs = []) {
+  function replaceRenderedMessages(msgs = [], pinEvents = []) {
     displayedMsgIds.clear();
-    const fragment = buildMessagesFragment(Array.isArray(msgs) ? msgs : []);
+    displayedPinEventIds.clear();
+    const fragment = buildMessagesFragment(Array.isArray(msgs) ? msgs : [], pinEvents);
     if (loadMoreWrap) messagesEl.replaceChildren(loadMoreWrap, fragment);
     else messagesEl.replaceChildren(fragment);
     updateScrollBottomButton();
+  }
+
+  function primeAppendedMessageSideEffects(messages = []) {
+    const list = Array.isArray(messages) ? messages : [];
+    list.forEach((msg) => {
+      try {
+        if (window.messageCache) window.messageCache.upsertMessage(msg).catch(()=>{});
+      } catch (e) {}
+      try {
+        if (msg?.file_type === 'image' && msg.file_stored && window.cacheAssets) {
+          window.cacheAssets([`/uploads/${msg.file_stored}`]).catch(()=>{});
+        }
+      } catch (e) {}
+    });
+    if (!loadingMoreAfter && list.length) updateHasMoreAfterFromChat(currentChatId);
+  }
+
+  function appendTimelineItems(msgs = [], pinEvents = []) {
+    const messages = filterNewMessages(msgs);
+    const events = filterNewPinEvents(pinEvents);
+    if (!events.length) {
+      messages.forEach((message) => appendMessage(message));
+      return;
+    }
+    const fragment = buildMessagesFragment(messages, events);
+    if (fragment.childNodes.length) {
+      messagesEl.appendChild(fragment);
+      primeAppendedMessageSideEffects(messages);
+      cleanupDuplicateDateSeparators();
+      updateScrollBottomButton();
+    }
+  }
+
+  function appendPinEventIfVisible(event) {
+    const item = normalizePinEvent(event);
+    if (!item || item.action !== 'pinned' || Number(item.chat_id || 0) !== Number(currentChatId || 0)) return false;
+    const wasNearBottom = isNearBottom(120);
+    const anchor = wasNearBottom ? null : captureScrollAnchor();
+    appendTimelineItems([], [item]);
+    if (wasNearBottom) {
+      scrollToBottom(false, true);
+    } else if (anchor?.messageId) {
+      requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
+      saveCurrentScrollAnchor(currentChatId, { force: true });
+    }
+    return true;
   }
 
   function isCurrentMessageRow(row) {
@@ -9443,50 +9668,11 @@
     return { group, body };
   }
 
-  function renderMessages(msgs) {
-    let lastDate = null;
-    const existingFirst = messagesEl.querySelector('.date-separator, .msg-row, .msg-group');
-    let currentGroupBody = null;
-
-    for (let i = 0; i < msgs.length; i++) {
-      const msg = msgs[i];
-      if (isMessageDisplayed(msg?.id)) continue;
-      const msgDate = formatDate(msg.created_at);
-      if (msgDate !== lastDate) {
-        lastDate = msgDate;
-        currentGroupBody = null;
-        const sep = document.createElement('div');
-        sep.className = 'date-separator';
-        sep.innerHTML = `<span>${msgDate}</span>`;
-        if (existingFirst) messagesEl.insertBefore(sep, existingFirst);
-        else messagesEl.appendChild(sep);
-      }
-
-      const prevMsg = i > 0 ? msgs[i - 1] : null;
-      const sameUser = prevMsg && prevMsg.user_id === msg.user_id && formatDate(prevMsg.created_at) === msgDate;
-      const isOwn = msg.user_id === currentUser.id;
-      const useGroup = !isOwn || compactView;
-
-      const startsGroup = useGroup && (!sameUser || !currentGroupBody);
-      if (startsGroup) {
-        const { group, body } = createMessageGroup(msg, isOwn);
-        currentGroupBody = body;
-        if (existingFirst) messagesEl.insertBefore(group, existingFirst);
-        else messagesEl.appendChild(group);
-      }
-
-      const showName = useGroup && startsGroup;
-      const el = createMessageEl(msg, showName);
-
-      if (useGroup) {
-        currentGroupBody.appendChild(el);
-      } else {
-        currentGroupBody = null;
-        if (existingFirst) messagesEl.insertBefore(el, existingFirst);
-        else messagesEl.appendChild(el);
-      }
-      rememberDisplayedMessage(msg.id);
-    }
+  function renderMessages(msgs, pinEvents = []) {
+    const existingFirst = messagesEl.querySelector('.date-separator, .pin-system-row, .msg-row, .msg-group');
+    const fragment = buildMessagesFragment(msgs, pinEvents);
+    if (existingFirst) messagesEl.insertBefore(fragment, existingFirst);
+    else messagesEl.appendChild(fragment);
     updateScrollBottomButton();
   }
 
@@ -10040,6 +10226,7 @@
         const raw = await api(`/api/chats/${id}/messages?${params}`);
         const page = normalizeMessagesPage(raw);
         const msgs = page.messages || [];
+        const pinEvents = page.pinEvents || [];
 
         const memberLastReads = raw && raw.member_last_reads ? raw.member_last_reads : null;
         const readState = await reconcileChatReadState(id, memberLastReads, {
@@ -10052,9 +10239,10 @@
         if (Number(currentChatId || 0) !== id) return appendedAny;
 
         const newMessages = filterNewMessages(msgs);
-        if (newMessages.length) {
-          newMessages.forEach((message) => appendMessage(message));
-          updateChatListLastMessage(newMessages[newMessages.length - 1]);
+        const newPinEvents = filterNewPinEvents(pinEvents);
+        if (newMessages.length || newPinEvents.length) {
+          appendTimelineItems(newMessages, newPinEvents);
+          if (newMessages.length) updateChatListLastMessage(newMessages[newMessages.length - 1]);
           appendedAny = true;
         } else if (fromPush && msgs.length) {
           updateChatListLastMessage(msgs[msgs.length - 1]);
@@ -10137,11 +10325,12 @@
       const scrollTopBefore = messagesEl.scrollTop;
       const scrollHeightBefore = messagesEl.scrollHeight;
       const newMessages = filterNewMessages(msgs);
+      const newPinEvents = filterNewPinEvents(page.pinEvents || []);
 
-      if (newMessages.length) {
-        renderMessages(newMessages);
+      if (newMessages.length || newPinEvents.length) {
+        renderMessages(newMessages, newPinEvents);
         cleanupDuplicateDateSeparators();
-        await cacheMessages(chatId, msgs, page);
+        if (newMessages.length) await cacheMessages(chatId, msgs, page);
       }
 
       // Restore scroll position: keep user at the same visual spot
@@ -10186,9 +10375,10 @@
       setHasMoreAfter(page.hasMoreAfter ?? msgs.length >= PAGE_SIZE);
 
       const newMessages = filterNewMessages(msgs);
-      if (newMessages.length) {
-        for (const msg of newMessages) appendMessage(msg);
-        await cacheMessages(chatId, msgs, page);
+      const newPinEvents = filterNewPinEvents(page.pinEvents || []);
+      if (newMessages.length || newPinEvents.length) {
+        appendTimelineItems(newMessages, newPinEvents);
+        if (newMessages.length) await cacheMessages(chatId, msgs, page);
         saveCurrentScrollAnchor(currentChatId, { force: true });
       }
     } catch {}
@@ -11070,6 +11260,12 @@
     const focusNode = selection.focusNode;
     if (!anchorNode || !focusNode) return '';
     return bubble.contains(anchorNode) && bubble.contains(focusNode) ? text.trim() : '';
+  }
+
+  function isSelectableMessageTextTarget(target) {
+    return Boolean(target?.closest?.(
+      '.msg-text, .msg-forwarded, .msg-reply-text, .msg-file-name, .msg-file-size, .link-preview'
+    ));
   }
 
   function getMessageCopyText(row) {
@@ -13799,6 +13995,11 @@
     setupPasswordPreviewToggles();
     setupMessageSwipeGestures();
     ensureSearchPanelReady();
+    document.addEventListener('click', (e) => {
+      if (Date.now() >= mentionPickerClickSuppressUntil) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }, true);
 
     // Send message
     sendBtn.addEventListener('click', (e) => {
@@ -14310,6 +14511,7 @@
         if (!row || e.target.closest(
           '.msg-actions, button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-image, .msg-video, .msg-file, .link-preview, .msg-group-avatar'
         )) return;
+        if (getSelectedMessageFragment(row) || isSelectableMessageTextTarget(e.target)) return;
         const touch = e.touches && e.touches[0] ? e.touches[0] : null;
         lpStart = { row, x: touch?.clientX || 0, y: touch?.clientY || 0 };
         lpTimer = setTimeout(() => {
@@ -14332,6 +14534,7 @@
       // Desktop right-click
       messagesEl.addEventListener('contextmenu', (e) => {
         const row = e.target.closest('.msg-row');
+        if (row && getSelectedMessageFragment(row)) return;
         if (e.target.closest(
           '.msg-actions, button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-image, .msg-video, .msg-file, .link-preview, .msg-group-avatar'
         )) return;
