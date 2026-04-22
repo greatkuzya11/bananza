@@ -9,7 +9,10 @@
   --chat-area-top: 0px;
   --chat-area-width: 100vw;
   --chat-area-height: 100vh;
-  --chat-header-sticky-top: 0px;
+  --ios-visual-viewport-top: 0px;
+  --ios-visual-viewport-height: 100vh;
+  --ios-chat-header-height: 0px;
+  --ios-chat-input-area-height: 0px;
   --bg-dark: #0e1621;
   --bg-sidebar: #17212b;
   --bg-input: #242f3d;
@@ -1827,6 +1830,27 @@ a:hover { text-decoration: underline; }
 .chat-context-menu.is-closing {
   will-change: opacity, transform;
 }
+html.is-ios-webkit .reaction-picker,
+html.is-ios-webkit .reaction-emoji-popover,
+html.is-ios-webkit .mention-picker,
+html.is-ios-webkit .chat-context-menu {
+  transform: var(--floating-enter-transform) translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform-style: preserve-3d;
+}
+html.is-ios-webkit .reaction-picker.is-open,
+html.is-ios-webkit .reaction-emoji-popover.is-open,
+html.is-ios-webkit .mention-picker.is-open,
+html.is-ios-webkit .chat-context-menu.is-open {
+  transform: translateZ(0);
+}
+html.is-ios-webkit .reaction-picker.is-closing,
+html.is-ios-webkit .reaction-emoji-popover.is-closing,
+html.is-ios-webkit .mention-picker.is-closing,
+html.is-ios-webkit .chat-context-menu.is-closing {
+  transform: var(--floating-close-transform) translateZ(0);
+}
 html[data-modal-animation="lift"] .reaction-picker,
 html[data-modal-animation="lift"] .reaction-emoji-popover,
 html[data-modal-animation="lift"] .mention-picker,
@@ -2551,6 +2575,19 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
   transform: var(--modal-close-transform);
   pointer-events: none;
   transition-duration: var(--modal-close-duration), var(--modal-close-duration);
+}
+html.is-ios-webkit .modal-content {
+  transform: var(--modal-enter-transform) translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform-style: preserve-3d;
+}
+html.is-ios-webkit .modal.is-open .modal-content,
+html.is-ios-webkit .modal.is-underlay .modal-content {
+  transform: translateZ(0);
+}
+html.is-ios-webkit .modal.is-closing .modal-content {
+  transform: var(--modal-close-transform) translateZ(0);
 }
 .modal[inert] {
   pointer-events: none;
@@ -4097,6 +4134,18 @@ html[data-visual-mode="rich"] .poll-card {
   transform: translate3d(100%, 0, 0);
   transition-duration: var(--search-panel-close-duration);
 }
+html.is-ios-webkit .search-panel-sheet {
+  transform: translate3d(100%, 0, 0) translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform-style: preserve-3d;
+}
+html.is-ios-webkit .search-panel.is-open .search-panel-sheet {
+  transform: translate3d(0, 0, 0) translateZ(0);
+}
+html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
+  transform: translate3d(100%, 0, 0) translateZ(0);
+}
 .search-panel-header {
   display: flex; gap: 8px; padding: 12px 14px 10px; border-bottom: 1px solid var(--border-light);
 }
@@ -4231,10 +4280,36 @@ html[data-visual-mode="rich"] .poll-card {
   .chat-header {
     padding: 8px 6px;
     min-height: 52px;
-    position: sticky; top: var(--chat-header-sticky-top); z-index: 15;
+    position: sticky; top: 0; z-index: 15;
     background-color: var(--bg-sidebar);
     background-image: var(--bg-panel-gradient);
     border-bottom: 1px solid var(--border-light);
+  }
+  html.is-ios-webkit.is-ios-chat-keyboard-layout #chatView {
+    padding-top: var(--ios-chat-header-height);
+    padding-bottom: var(--ios-chat-input-area-height);
+  }
+  html.is-ios-webkit.is-ios-chat-keyboard-layout #chatView .chat-header {
+    position: fixed;
+    top: var(--ios-visual-viewport-top);
+    left: var(--chat-area-left);
+    width: var(--chat-area-width);
+    max-width: var(--chat-area-width);
+    box-sizing: border-box;
+    z-index: 25;
+  }
+  html.is-ios-webkit.is-ios-chat-keyboard-layout #chatView .input-area {
+    position: fixed;
+    top: calc(var(--ios-visual-viewport-top) + var(--ios-visual-viewport-height) - var(--ios-chat-input-area-height));
+    left: var(--chat-area-left);
+    width: var(--chat-area-width);
+    max-width: var(--chat-area-width);
+    box-sizing: border-box;
+    z-index: 26;
+  }
+  html.is-ios-webkit.is-ios-chat-keyboard-layout #chatView .pinned-bar {
+    position: relative;
+    z-index: 16;
   }
   .chat-header .icon-btn { width: 40px; height: 40px; font-size: 20px; }
   .chat-header-avatar { width: 40px; height: 40px; font-size: 16px; }

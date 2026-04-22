@@ -135,6 +135,9 @@
       this.timerId = null;
       this.autoStopTimer = null;
       this.stoppingPromise = null;
+      this.prepared = false;
+      this.preparePromise = null;
+      this.preparedMimeType = '';
       this.previewEl = null;
       this.previewVideo = null;
       this.previewTimer = null;
@@ -147,6 +150,120 @@
 
     isRecording() {
       return Boolean(this.recording);
+    }
+
+    isIosGesturePreparationTarget() {
+      return Boolean(this.bridge?.isIosWebkit?.() && window.innerWidth <= 768);
+    }
+
+    async ensurePreparedResources() {
+      if (this.preparePromise) {
+        await this.preparePromise;
+      }
+      if (
+        this.stream
+        && this.audioContext
+        && this.audioSource
+        && this.audioProcessor
+        && this.preparedMimeType
+      ) {
+        return;
+      }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('РљР°РјРµСЂР° РЅРµРґРѕСЃС‚СѓРїРЅР° РІ СЌС‚РѕРј Р±СЂР°СѓР·РµСЂРµ');
+      }
+
+      const preparePromise = (async () => {
+        const mimeType = this.pickVideoMime();
+        if (!mimeType) {
+          throw new Error('MediaRecorder РЅРµ РїРѕРґРґРµСЂР¶РёРІР°РµС‚ Р·Р°РїРёСЃСЊ РІРёРґРµРѕ');
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: {
+            facingMode: 'user',
+            width: { ideal: 360, max: 480 },
+            height: { ideal: 360, max: 480 },
+            aspectRatio: { ideal: 1 },
+            frameRate: { ideal: 24, max: 24 },
+          },
+        });
+
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) {
+          stream.getTracks().forEach((track) => track.stop());
+          throw new Error('AudioContext РЅРµРґРѕСЃС‚СѓРїРµРЅ');
+        }
+
+        let audioContext = null;
+        try {
+          audioContext = new AudioContextClass();
+          await audioContext.resume();
+          const source = audioContext.createMediaStreamSource(stream);
+          const processor = audioContext.createScriptProcessor(4096, 1, 1);
+          const sink = audioContext.createGain();
+          sink.gain.value = 0;
+          const audioChunks = [];
+          processor.onaudioprocess = (event) => {
+            if (!this.recording) return;
+            audioChunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+          };
+          source.connect(processor);
+          processor.connect(sink);
+          sink.connect(audioContext.destination);
+
+          this.stream = stream;
+          this.audioContext = audioContext;
+          this.audioSource = source;
+          this.audioProcessor = processor;
+          this.audioSink = sink;
+          this.audioChunks = audioChunks;
+          this.videoChunks = [];
+          this.sampleRate = audioContext.sampleRate || TARGET_SAMPLE_RATE;
+          this.preparedMimeType = mimeType;
+        } catch (error) {
+          try { stream.getTracks().forEach((track) => track.stop()); } catch {}
+          try { audioContext?.close?.().catch(() => {}); } catch {}
+          this.stream = null;
+          this.audioContext = null;
+          this.audioSource = null;
+          this.audioProcessor = null;
+          this.audioSink = null;
+          this.audioChunks = [];
+          this.videoChunks = [];
+          this.preparedMimeType = '';
+          throw error;
+        }
+      })();
+
+      this.preparePromise = preparePromise;
+      try {
+        await preparePromise;
+      } finally {
+        if (this.preparePromise === preparePromise) {
+          this.preparePromise = null;
+        }
+      }
+    }
+
+    async prepare() {
+      if (!this.isIosGesturePreparationTarget() || this.recording) return;
+      await this.ensurePreparedResources();
+      this.prepared = true;
+    }
+
+    async cancelPrepared() {
+      if (this.recording) return;
+      if (this.preparePromise) {
+        try {
+          await this.preparePromise;
+        } catch {
+          return;
+        }
+      }
+      if (!this.prepared && !this.stream && !this.audioContext) return;
+      this.cleanup();
     }
 
     ensurePreview() {
@@ -202,6 +319,45 @@
 
     async start() {
       if (this.recording) return;
+      await this.ensurePreparedResources();
+      const preparedMimeType = this.preparedMimeType || this.pickVideoMime();
+      if (!preparedMimeType) {
+        throw new Error('MediaRecorder РЅРµ РїРѕРґРґРµСЂР¶РёРІР°РµС‚ Р·Р°РїРёСЃСЊ РІРёРґРµРѕ');
+      }
+      const preparedRecorder = new MediaRecorder(this.stream, { mimeType: preparedMimeType });
+      this.prepared = false;
+      this.videoChunks.length = 0;
+      this.audioChunks.length = 0;
+      preparedRecorder.ondataavailable = (event) => {
+        if (event.data?.size) this.videoChunks.push(event.data);
+      };
+
+      this.recording = true;
+      this.startAt = Date.now();
+      this.mediaRecorder = preparedRecorder;
+      this.stoppingPromise = null;
+
+      const previewNode = this.ensurePreview();
+      if (previewNode && this.previewVideo) {
+        this.applyPreviewShapeMask();
+        this.previewVideo.srcObject = this.stream;
+        previewNode.classList.remove('hidden');
+      }
+
+      this.updatePreview();
+      this.timerId = window.setInterval(() => this.updatePreview(), 200);
+      this.autoStopTimer = window.setTimeout(() => {
+        if (!this.recording) return;
+        if (this.onAutoStopRequest) {
+          this.onAutoStopRequest();
+          return;
+        }
+        this.stopAndSend().catch(() => {});
+      }, MAX_DURATION_MS);
+
+      preparedRecorder.start();
+      this.onStateChange({ recording: true });
+      return;
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error('Камера недоступна в этом браузере');
       }
@@ -343,6 +499,7 @@
 
     cleanup() {
       this.recording = false;
+      this.prepared = false;
       if (this.timerId) window.clearInterval(this.timerId);
       if (this.autoStopTimer) window.clearTimeout(this.autoStopTimer);
       this.timerId = null;
@@ -369,6 +526,7 @@
       this.audioContext = null;
       this.videoChunks = [];
       this.audioChunks = [];
+      this.preparedMimeType = '';
       this.onStateChange({ recording: false });
     }
   }

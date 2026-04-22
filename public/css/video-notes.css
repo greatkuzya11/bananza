@@ -68,6 +68,18 @@
   transform: translate3d(0, var(--media-note-menu-close-y, var(--media-note-menu-close-offset)), 0) scale(var(--media-note-menu-close-scale));
   transition-duration: var(--media-note-menu-close-duration), var(--media-note-menu-close-duration), 0s;
 }
+html.is-ios-webkit .media-note-mode-menu {
+  transform: translate3d(0, var(--media-note-menu-enter-y, var(--media-note-menu-offset)), 0) scale(var(--media-note-menu-scale)) translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform-style: preserve-3d;
+}
+html.is-ios-webkit .media-note-mode-menu.is-open {
+  transform: translateZ(0);
+}
+html.is-ios-webkit .media-note-mode-menu.is-closing {
+  transform: translate3d(0, var(--media-note-menu-close-y, var(--media-note-menu-close-offset)), 0) scale(var(--media-note-menu-close-scale)) translateZ(0);
+}
 
 .media-note-mode-menu.hidden {
   display: none;

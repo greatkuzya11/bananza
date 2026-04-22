@@ -29,6 +29,8 @@
       timerId: null,
       sampleRate: 16000,
       uploading: false,
+      prepared: false,
+      preparePromise: null,
     },
     playback: {
       activeAudio: null,
@@ -45,6 +47,8 @@
     onSettingsOpened: () => syncAdminEntryVisibility(),
     refreshComposerState: () => syncSendButtonState(),
     canUseGesture: () => canUseVoiceGesture(),
+    prepareExternalRecording: () => prepareRecording(),
+    cancelPreparedRecording: () => cancelPreparedRecording(),
     startExternalRecording: () => startRecording(),
     stopExternalRecording: () => stopRecordingAndSend(),
     isRecording: () => Boolean(state.recorder.recording),
@@ -1130,6 +1134,88 @@
     );
   }
 
+  function isIosGesturePreparationTarget() {
+    return Boolean(getBridge()?.isIosWebkit?.() && window.innerWidth <= 768);
+  }
+
+  async function ensureRecorderResources() {
+    if (state.recorder.preparePromise) {
+      await state.recorder.preparePromise;
+    }
+    if (
+      state.recorder.stream
+      && state.recorder.audioContext
+      && state.recorder.source
+      && state.recorder.processor
+    ) {
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('РњРёРєСЂРѕС„РѕРЅ РЅРµ РїРѕРґРґРµСЂР¶РёРІР°РµС‚СЃСЏ Р±СЂР°СѓР·РµСЂРѕРј');
+    }
+    const preparePromise = (async () => {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) {
+        stream.getTracks().forEach((track) => track.stop());
+        throw new Error('AudioContext РЅРµРґРѕСЃС‚СѓРїРµРЅ');
+      }
+
+      let audioContext = null;
+      try {
+        audioContext = new AudioContextClass();
+        await audioContext.resume();
+        const chunks = [];
+        const { source, processor, sink } = await createRecorderGraph(audioContext, stream, chunks);
+        state.recorder.stream = stream;
+        state.recorder.audioContext = audioContext;
+        state.recorder.source = source;
+        state.recorder.processor = processor;
+        state.recorder.sink = sink;
+        state.recorder.chunks = chunks;
+        state.recorder.sampleRate = audioContext.sampleRate || 16000;
+      } catch (error) {
+        try { stream.getTracks().forEach((track) => track.stop()); } catch {}
+        try { audioContext?.close?.().catch(() => {}); } catch {}
+        state.recorder.processor = null;
+        state.recorder.sink = null;
+        state.recorder.source = null;
+        state.recorder.stream = null;
+        state.recorder.audioContext = null;
+        state.recorder.chunks = [];
+        throw error;
+      }
+    })();
+
+    state.recorder.preparePromise = preparePromise;
+    try {
+      await preparePromise;
+    } finally {
+      if (state.recorder.preparePromise === preparePromise) {
+        state.recorder.preparePromise = null;
+      }
+    }
+  }
+
+  async function prepareRecording() {
+    if (!isIosGesturePreparationTarget() || state.recorder.recording) return;
+    await ensureRecorderResources();
+    state.recorder.prepared = true;
+  }
+
+  async function cancelPreparedRecording() {
+    if (state.recorder.recording) return;
+    if (state.recorder.preparePromise) {
+      try {
+        await state.recorder.preparePromise;
+      } catch {
+        return;
+      }
+    }
+    if (!state.recorder.prepared && !state.recorder.stream && !state.recorder.audioContext) return;
+    cleanupRecorderGraph({ clearChunks: true });
+  }
+
   function handleSendPointerDown(event) {
     if (typeof event.button === 'number' && event.button !== 0) return;
     event.currentTarget?.blur?.();
@@ -1170,6 +1256,19 @@
 
   async function startRecording() {
     if (state.recorder.recording) return;
+    await ensureRecorderResources();
+    state.recorder.prepared = false;
+    state.recorder.recording = true;
+    state.recorder.startAt = Date.now();
+    state.recorder.chunks.length = 0;
+    state.recorder.timerId = window.setInterval(updateRecorderBar, 200);
+
+    syncSendButtonState();
+    setRecorderMessage('Р—Р°РїРёСЃСЊ...', 'recording');
+    updateRecorderBar();
+    if (navigator.vibrate) navigator.vibrate(30);
+    getBridge()?.playSound?.('voice_start');
+    return;
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error('Микрофон не поддерживается браузером');
     }
@@ -1239,8 +1338,10 @@
     }
   }
 
-  function cleanupRecorderGraph() {
+  function cleanupRecorderGraph({ clearChunks = false } = {}) {
     state.recorder.recording = false;
+    state.recorder.prepared = false;
+    state.recorder.startAt = 0;
     if (state.recorder.timerId) {
       clearInterval(state.recorder.timerId);
       state.recorder.timerId = null;
@@ -1258,6 +1359,7 @@
     state.recorder.source = null;
     state.recorder.stream = null;
     state.recorder.audioContext = null;
+    if (clearChunks) state.recorder.chunks = [];
     syncSendButtonState();
   }
 

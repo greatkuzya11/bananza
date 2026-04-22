@@ -36,29 +36,53 @@
   }
 
   class MediaNoteComposerController {
-    constructor({ bridge, audioAdapter, videoRecorder } = {}) {
-      this.bridge = bridge || window.BananzaAppBridge || null;
-      this.audioAdapter = audioAdapter;
-      this.videoRecorder = videoRecorder;
-      this.mode = localStorage.getItem(STORAGE_KEY) === 'video' ? 'video' : 'audio';
-      this.holdTimer = null;
-      this.menuCloseTimer = null;
-      this.menuOpenFrame = null;
-      this.suppressNextClick = false;
-      this.pointerId = null;
-      this.activeMode = '';
-      this.menuEl = null;
-      this.initialized = false;
-      this.lastState = {};
-    }
+      constructor({ bridge, audioAdapter, videoRecorder } = {}) {
+        this.bridge = bridge || window.BananzaAppBridge || null;
+        this.audioAdapter = audioAdapter;
+        this.videoRecorder = videoRecorder;
+        this.mode = localStorage.getItem(STORAGE_KEY) === 'video' ? 'video' : 'audio';
+        this.holdTimer = null;
+        this.menuCloseTimer = null;
+        this.menuOpenFrame = null;
+        this.suppressNextClick = false;
+        this.pointerId = null;
+        this.touchIdentifier = null;
+        this.activeGestureSource = '';
+        this.gestureMode = '';
+        this.preparedMode = '';
+        this.ignoreSyntheticPointerUntil = 0;
+        this.activeRecorderStartPromise = null;
+        this.activeMode = '';
+        this.menuEl = null;
+        this.initialized = false;
+        this.lastState = {};
+      }
 
     getBridge() {
       return this.bridge || window.BananzaAppBridge || null;
     }
 
-    ownsComposer() {
-      return true;
-    }
+      ownsComposer() {
+        return true;
+      }
+
+      isIosGestureTarget() {
+        return Boolean(this.getBridge()?.isIosWebkit?.() && window.innerWidth <= 768);
+      }
+
+      shouldIgnorePointerEvent(event) {
+        if (!this.isIosGestureTarget()) return false;
+        if (event?.pointerType === 'touch') return true;
+        return Date.now() < this.ignoreSyntheticPointerUntil;
+      }
+
+      resetGestureSession({ keepPreparedMode = false } = {}) {
+        this.pointerId = null;
+        this.touchIdentifier = null;
+        this.activeGestureSource = '';
+        this.gestureMode = '';
+        if (!keepPreparedMode) this.preparedMode = '';
+      }
 
     init() {
       if (this.initialized) return;
@@ -75,19 +99,22 @@
         sendBtn.blur();
       }, true);
 
-      sendBtn.addEventListener('pointerdown', (event) => this.handlePointerDown(event), { passive: false });
-      sendBtn.addEventListener('pointerup', (event) => this.handlePointerUp(event), { passive: false });
-      sendBtn.addEventListener('pointercancel', () => this.cancelHold(), { passive: false });
-      sendBtn.addEventListener('pointerleave', () => {
-        if (!this.activeMode) this.cancelHold();
-      });
+        sendBtn.addEventListener('pointerdown', (event) => this.handlePointerDown(event), { passive: false });
+        sendBtn.addEventListener('pointerup', (event) => this.handlePointerUp(event), { passive: false });
+        sendBtn.addEventListener('pointercancel', (event) => this.handlePointerCancel(event), { passive: false });
+        sendBtn.addEventListener('pointerleave', () => {
+          if (!this.activeMode && this.activeGestureSource !== 'touch') this.cancelHold();
+        });
+        sendBtn.addEventListener('touchstart', (event) => this.handleTouchStart(event), { passive: false });
+        document.addEventListener('touchend', (event) => this.handleTouchEnd(event), { passive: false });
+        document.addEventListener('touchcancel', (event) => this.handleTouchCancel(event), { passive: false });
 
-      document.addEventListener('pointerdown', (event) => {
-        if (!this.menuEl || this.menuEl.classList.contains('hidden')) return;
-        const sendButton = this.getBridge()?.getDom?.()?.sendBtn;
-        if (this.menuEl.contains(event.target) || sendButton?.contains(event.target)) return;
-        this.closeMenu();
-      });
+        document.addEventListener('pointerdown', (event) => {
+          if (!this.menuEl || this.menuEl.classList.contains('hidden')) return;
+          const sendButton = this.getBridge()?.getDom?.()?.sendBtn;
+          if (this.menuEl.contains(event.target) || sendButton?.contains(event.target)) return;
+          this.closeMenu();
+        });
 
       this.refreshComposerState();
     }
@@ -161,76 +188,185 @@
       });
     }
 
-    canUseGesture() {
-      return Boolean(this.audioAdapter?.canUseGesture?.());
-    }
-
-    handlePointerDown(event) {
-      if (typeof event.button === 'number' && event.button !== 0) return;
-      if (!this.canUseGesture()) return;
-      const sendBtn = this.getBridge()?.getDom?.()?.sendBtn;
-      sendBtn?.blur?.();
-      this.pointerId = event.pointerId;
-      sendBtn?.setPointerCapture?.(event.pointerId);
-      this.holdTimer = window.setTimeout(() => {
-        this.holdTimer = null;
-        this.suppressNextClick = true;
-        this.startSelectedRecorder().catch((error) => {
-          window.BananzaVoiceHooks?.setRecorderMessage?.(error.message || TEXT.startError, 'error');
-          this.activeMode = '';
-          this.refreshComposerState();
-        });
-      }, HOLD_DELAY_MS);
-      event.preventDefault();
-    }
-
-    async startSelectedRecorder() {
-      this.closeMenu({ immediate: true });
-      this.activeMode = this.mode;
-      this.refreshComposerState();
-      if (this.mode === 'video') {
-        await this.videoRecorder?.start?.();
-        return;
+      canUseGesture() {
+        return Boolean(this.audioAdapter?.canUseGesture?.());
       }
-      await this.audioAdapter?.start?.();
-    }
 
-    handlePointerUp(event) {
-      const sendBtn = this.getBridge()?.getDom?.()?.sendBtn;
-      sendBtn?.releasePointerCapture?.(event.pointerId);
-      sendBtn?.blur?.();
-      if (this.holdTimer) {
+      async prepareSelectedRecorder(mode = this.gestureMode || this.mode) {
+        if (!this.isIosGestureTarget()) return;
+        const targetMode = mode === 'video' ? 'video' : 'audio';
+        this.preparedMode = targetMode;
+        if (targetMode === 'video') {
+          await this.videoRecorder?.prepare?.();
+          return;
+        }
+        await this.audioAdapter?.prepare?.();
+      }
+
+      async cancelPreparedRecorder(mode = this.preparedMode || this.gestureMode) {
+        const targetMode = mode === 'video' ? 'video' : mode === 'audio' ? 'audio' : '';
+        this.preparedMode = '';
+        if (!targetMode) return;
+        if (targetMode === 'video') {
+          await this.videoRecorder?.cancelPrepared?.();
+          return;
+        }
+        await this.audioAdapter?.cancelPrepared?.();
+      }
+
+      beginHoldGesture({ event, source, pointerId = null, touchIdentifier = null } = {}) {
+        if (this.holdTimer || this.activeMode || this.activeGestureSource) return false;
+        if (!this.canUseGesture()) return false;
+        const sendBtn = this.getBridge()?.getDom?.()?.sendBtn;
+        sendBtn?.blur?.();
+        this.pointerId = pointerId;
+        this.touchIdentifier = touchIdentifier;
+        this.activeGestureSource = source;
+        this.gestureMode = this.mode;
+        this.preparedMode = '';
+        if (source === 'pointer' && pointerId != null) {
+          sendBtn?.setPointerCapture?.(pointerId);
+        }
+        if (this.isIosGestureTarget()) {
+          this.prepareSelectedRecorder(this.gestureMode).catch(() => {});
+        }
+        this.holdTimer = window.setTimeout(() => {
+          this.holdTimer = null;
+          this.suppressNextClick = true;
+          this.startSelectedRecorder(this.gestureMode).catch((error) => {
+            this.activeMode = '';
+            this.refreshComposerState();
+            this.cancelPreparedRecorder(this.preparedMode || this.gestureMode).catch(() => {});
+            this.resetGestureSession();
+            window.BananzaVoiceHooks?.setRecorderMessage?.(error.message || TEXT.startError, 'error');
+          });
+        }, HOLD_DELAY_MS);
+        event?.preventDefault?.();
+        return true;
+      }
+
+      handlePointerDown(event) {
+        if (typeof event.button === 'number' && event.button !== 0) return;
+        if (this.shouldIgnorePointerEvent(event)) return;
+        this.beginHoldGesture({
+          event,
+          source: 'pointer',
+          pointerId: event.pointerId,
+        });
+      }
+
+      handleTouchStart(event) {
+        if (!this.isIosGestureTarget()) return;
+        if ((event.touches?.length || 0) > 1) return;
+        const touch = event.changedTouches?.[0];
+        if (!touch) return;
+        this.ignoreSyntheticPointerUntil = Date.now() + 900;
+        this.beginHoldGesture({
+          event,
+          source: 'touch',
+          touchIdentifier: touch.identifier,
+        });
+      }
+
+      async startSelectedRecorder(mode = this.gestureMode || this.mode) {
+        const targetMode = mode === 'video' ? 'video' : 'audio';
+        this.closeMenu({ immediate: true });
+        this.activeMode = targetMode;
+        this.preparedMode = '';
+        this.refreshComposerState();
+        const startPromise = targetMode === 'video'
+          ? Promise.resolve(this.videoRecorder?.start?.())
+          : Promise.resolve(this.audioAdapter?.start?.());
+        this.activeRecorderStartPromise = startPromise;
+        try {
+          await startPromise;
+        } finally {
+          if (this.activeRecorderStartPromise === startPromise) {
+            this.activeRecorderStartPromise = null;
+          }
+        }
+      }
+
+      handlePointerUp(event) {
+        if (this.shouldIgnorePointerEvent(event)) return;
+        if (this.activeGestureSource && this.activeGestureSource !== 'pointer') return;
+        this.finishGesture({ event, pointerId: event.pointerId, cancelOnly: false });
+      }
+
+      handlePointerCancel(event) {
+        if (this.shouldIgnorePointerEvent(event)) return;
+        if (this.activeGestureSource && this.activeGestureSource !== 'pointer') return;
+        this.finishGesture({ event, pointerId: event.pointerId, cancelOnly: true });
+      }
+
+      handleTouchEnd(event) {
+        if (this.activeGestureSource !== 'touch') return;
+        const matchedTouch = Array.from(event.changedTouches || []).find((touch) => touch.identifier === this.touchIdentifier);
+        if (!matchedTouch) return;
+        this.finishGesture({ event, cancelOnly: false });
+      }
+
+      handleTouchCancel(event) {
+        if (this.activeGestureSource !== 'touch') return;
+        const matchedTouch = Array.from(event.changedTouches || []).find((touch) => touch.identifier === this.touchIdentifier);
+        if (!matchedTouch) return;
+        this.finishGesture({ event, cancelOnly: true });
+      }
+
+      finishGesture({ event, pointerId = null, cancelOnly = false } = {}) {
+        const sendBtn = this.getBridge()?.getDom?.()?.sendBtn;
+        if (pointerId != null) sendBtn?.releasePointerCapture?.(pointerId);
+        sendBtn?.blur?.();
+        if (this.holdTimer) {
+          window.clearTimeout(this.holdTimer);
+          this.holdTimer = null;
+          const preparedMode = this.preparedMode || this.gestureMode;
+          this.resetGestureSession({ keepPreparedMode: true });
+          this.suppressNextClick = !cancelOnly;
+          Promise.resolve(this.cancelPreparedRecorder(preparedMode))
+            .catch(() => {})
+            .finally(() => {
+              this.preparedMode = '';
+              if (cancelOnly) return;
+              this.suppressNextClick = true;
+              this.toggleMenu();
+            });
+          event?.preventDefault?.();
+          return;
+        }
+        this.resetGestureSession();
+        if (!this.activeMode) return;
+        this.suppressNextClick = true;
+        event?.preventDefault?.();
+        this.stopActiveRecorder().catch((error) => {
+          window.BananzaVoiceHooks?.setRecorderMessage?.(error.message || TEXT.sendError, 'error');
+        });
+      }
+
+      async stopActiveRecorder() {
+        if (this.activeRecorderStartPromise) {
+          try {
+            await this.activeRecorderStartPromise;
+          } catch {}
+        }
+        const mode = this.activeMode;
+        this.activeMode = '';
+        this.refreshComposerState();
+        if (mode === 'video') {
+          await this.videoRecorder?.stopAndSend?.();
+          return;
+        }
+        await this.audioAdapter?.stopAndSend?.();
+      }
+
+      cancelHold() {
+        if (!this.holdTimer) return;
         window.clearTimeout(this.holdTimer);
         this.holdTimer = null;
-        this.suppressNextClick = true;
-        this.toggleMenu();
-        event.preventDefault();
-        return;
+        const preparedMode = this.preparedMode || this.gestureMode;
+        this.resetGestureSession({ keepPreparedMode: true });
+        this.cancelPreparedRecorder(preparedMode).catch(() => {});
       }
-      if (!this.activeMode) return;
-      this.suppressNextClick = true;
-      event.preventDefault();
-      this.stopActiveRecorder().catch((error) => {
-        window.BananzaVoiceHooks?.setRecorderMessage?.(error.message || TEXT.sendError, 'error');
-      });
-    }
-
-    async stopActiveRecorder() {
-      const mode = this.activeMode;
-      this.activeMode = '';
-      this.refreshComposerState();
-      if (mode === 'video') {
-        await this.videoRecorder?.stopAndSend?.();
-        return;
-      }
-      await this.audioAdapter?.stopAndSend?.();
-    }
-
-    cancelHold() {
-      if (!this.holdTimer) return;
-      window.clearTimeout(this.holdTimer);
-      this.holdTimer = null;
-    }
 
     handleAutoStopRequest() {
       if (!this.activeMode) return;
@@ -302,14 +438,17 @@
         direction = 'down';
       }
 
-      menu.dataset.direction = direction;
-      menu.style.left = `${Math.round(left)}px`;
-      menu.style.top = `${Math.round(top)}px`;
-      menu.classList.remove('hidden', 'is-closing', 'is-open');
-      menu.setAttribute('aria-hidden', 'false');
-      this.menuOpenFrame = requestAnimationFrame(() => {
+        menu.dataset.direction = direction;
+        menu.style.left = `${Math.round(left)}px`;
+        menu.style.top = `${Math.round(top)}px`;
+        menu.classList.remove('hidden', 'is-closing', 'is-open');
+        menu.setAttribute('aria-hidden', 'false');
+        if (this.isIosGestureTarget() && !this.shouldSkipMotion()) {
+          void menu.offsetWidth;
+        }
         this.menuOpenFrame = requestAnimationFrame(() => {
-          menu.classList.add('is-open');
+          this.menuOpenFrame = requestAnimationFrame(() => {
+            menu.classList.add('is-open');
           this.menuOpenFrame = null;
         });
       });

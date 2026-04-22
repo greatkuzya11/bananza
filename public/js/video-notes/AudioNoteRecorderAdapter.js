@@ -16,6 +16,14 @@
       await window.BananzaVoiceHooks?.startExternalRecording?.();
     }
 
+    async prepare() {
+      await window.BananzaVoiceHooks?.prepareExternalRecording?.();
+    }
+
+    async cancelPrepared() {
+      await window.BananzaVoiceHooks?.cancelPreparedRecording?.();
+    }
+
     async stopAndSend() {
       await window.BananzaVoiceHooks?.stopExternalRecording?.();
     }
