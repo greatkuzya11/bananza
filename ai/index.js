@@ -326,6 +326,7 @@ function createAiBotFeature({
   extractUrls,
   fetchPreview,
   notifyMessageCreated,
+  onMessagePublished,
 }) {
   const botByIdStmt = db.prepare(`
     SELECT b.*, u.avatar_color, u.avatar_url
@@ -2698,6 +2699,13 @@ function createAiBotFeature({
     return `[ai-bot] response failed: ${detail}`;
   }
 
+  function notifyPublishedMessage(message) {
+    if (!message || typeof onMessagePublished !== 'function') return;
+    Promise.resolve(onMessagePublished(message)).catch((error) => {
+      console.warn('[ai-bot] publish hook failed:', error.message);
+    });
+  }
+
   function publishBotTextMessage(bot, sourceMessage, text) {
     const body = cleanText(text, 4000);
     if (!body) return null;
@@ -2712,6 +2720,7 @@ function createAiBotFeature({
     );
     const message = hydrateMessageById(result.lastInsertRowid);
     if (!message) return null;
+    notifyPublishedMessage(message);
     broadcastToChatAll(sourceMessage.chat_id, { type: 'message', message });
     if (typeof notifyMessageCreated === 'function') notifyMessageCreated(message);
     return message;
@@ -2745,6 +2754,7 @@ function createAiBotFeature({
         }, 2200);
         const message = await createGrokImageMessage(bot, sourceMessage);
         if (!message) return;
+        notifyPublishedMessage(message);
         broadcastToChatAll(sourceMessage.chat_id, { type: 'message', message });
         if (typeof notifyMessageCreated === 'function') notifyMessageCreated(message);
         return;
@@ -2805,6 +2815,7 @@ function createAiBotFeature({
       );
       const message = hydrateMessageById(result.lastInsertRowid);
       if (!message) return;
+      notifyPublishedMessage(message);
       broadcastToChatAll(sourceMessage.chat_id, { type: 'message', message });
       if (typeof notifyMessageCreated === 'function') notifyMessageCreated(message);
       schedulePreviewFetch(message.id, sourceMessage.chat_id, responseText);

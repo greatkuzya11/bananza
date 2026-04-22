@@ -281,6 +281,7 @@ const voiceFeature = createVoiceFeature({
   clients,
   secret: JWT_SECRET,
   notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),
+  onMessageCreated: (message) => handleChatListMessageCreated(message),
   onMessageTextAvailable: (message) => aiBotFeature?.handleMessageCreated(message),
 });
 
@@ -305,7 +306,7 @@ const videoNoteFeature = createVideoNoteFeature({
   hydrateMessageById: (messageId, viewerUserId) => hydrateMessageById(messageId, viewerUserId),
   broadcastToChatAll,
   notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),
-  onMessageCreated: (message) => aiBotFeature?.handleMessageCreated(message),
+  onMessageCreated: (message) => handleUserMessageCreated(message),
   voiceFeature,
 });
 
@@ -334,7 +335,7 @@ createForwardingFeature({
   extractUrls,
   fetchPreview,
   notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),
-  onMessageCreated: (message) => aiBotFeature?.handleMessageCreated(message),
+  onMessageCreated: (message, options) => handleUserMessageCreated(message, options),
   saveMessageMentions: (messageId, chatId, text) => saveMessageMentions(messageId, chatId, text),
   messageCopyService,
 });
@@ -355,6 +356,7 @@ aiBotFeature = createAiBotFeature({
   extractUrls,
   fetchPreview,
   notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),
+  onMessagePublished: (message) => handleChatListMessageCreated(message),
 });
 
 const messageByIdStmt = db.prepare(`
@@ -428,7 +430,9 @@ const chatMemberPreferencesStmt = db.prepare(`
     user_id,
     notify_enabled,
     sounds_enabled,
-    COALESCE(chat_list_pin_order, NULL) as chat_list_pin_order
+    COALESCE(chat_list_pin_order, NULL) as chat_list_pin_order,
+    hidden_at,
+    hidden_after_message_id
   FROM chat_members
   WHERE chat_id=? AND user_id=?
 `);
@@ -813,6 +817,82 @@ function sendChatListUpdated(userId, data = {}) {
   });
 }
 
+function isGeneralChatRow(chat) {
+  return String(chat?.type || '') === 'general';
+}
+
+function isGroupOrPrivateChatRow(chat) {
+  const type = String(chat?.type || '');
+  return type === 'group' || type === 'private';
+}
+
+function canManageDestructiveChat(chat, user) {
+  if (!chat || !user) return false;
+  if (isNotesChatRow(chat) || isGeneralChatRow(chat) || !isGroupOrPrivateChatRow(chat)) return false;
+  return Boolean(user.is_admin || Number(chat.created_by || 0) === Number(user.id || 0));
+}
+
+function getChatLastAnyMessageId(chatId) {
+  const row = db.prepare('SELECT COALESCE(MAX(id),0) as last_id FROM messages WHERE chat_id=?').get(chatId);
+  return Number(row?.last_id || 0);
+}
+
+function revealHiddenChatForUser(chatId, userId, data = {}) {
+  const cid = Number(chatId || 0);
+  const uid = Number(userId || 0);
+  if (!cid || !uid) return false;
+  const result = db.prepare(`
+    UPDATE chat_members
+    SET hidden_at=NULL, hidden_after_message_id=NULL
+    WHERE chat_id=? AND user_id=? AND hidden_after_message_id IS NOT NULL
+  `).run(cid, uid);
+  if (result.changes > 0) {
+    sendChatListUpdated(uid, {
+      chatId: cid,
+      reason: data.reason || 'chat_revealed',
+      messageId: data.messageId || null,
+    });
+    return true;
+  }
+  return false;
+}
+
+function revealHiddenChatForMembers(chatId, data = {}) {
+  const cid = Number(chatId || 0);
+  if (!cid) return 0;
+  const hidden = db.prepare(`
+    SELECT user_id
+    FROM chat_members
+    WHERE chat_id=? AND hidden_after_message_id IS NOT NULL
+  `).all(cid);
+  if (!hidden.length) return 0;
+  db.prepare(`
+    UPDATE chat_members
+    SET hidden_at=NULL, hidden_after_message_id=NULL
+    WHERE chat_id=? AND hidden_after_message_id IS NOT NULL
+  `).run(cid);
+  hidden.forEach(({ user_id }) => {
+    sendChatListUpdated(user_id, {
+      chatId: cid,
+      reason: data.reason || 'new_message',
+      messageId: data.messageId || null,
+    });
+  });
+  return hidden.length;
+}
+
+function handleChatListMessageCreated(message) {
+  const chatId = Number(message?.chat_id || message?.chatId || 0);
+  const messageId = Number(message?.id || 0);
+  if (!chatId || !messageId) return;
+  revealHiddenChatForMembers(chatId, { reason: 'new_message', messageId });
+}
+
+function handleUserMessageCreated(message, options = {}) {
+  handleChatListMessageCreated(message);
+  return aiBotFeature?.handleMessageCreated(message, options);
+}
+
 function getChatMemberPreferences(chatId, userId) {
   return chatMemberPreferencesStmt.get(chatId, userId) || null;
 }
@@ -897,6 +977,128 @@ const movePinnedChatForUserTx = db.transaction((chatId, userId, direction) => {
   };
 });
 
+function safeUploadPath(storedName, baseDir = UPLOADS_DIR) {
+  const name = path.basename(String(storedName || ''));
+  return name ? path.join(baseDir, name) : '';
+}
+
+function unlinkIfPresent(filePath) {
+  if (!filePath) return;
+  fs.unlink(filePath, () => {});
+}
+
+function chatAssetPathFromUrl(url, baseDir) {
+  if (!url) return '';
+  return safeUploadPath(path.basename(String(url)), baseDir);
+}
+
+function collectChatFileRows(chatId) {
+  return db.prepare(`
+    SELECT id, stored_name
+    FROM files
+    WHERE id IN (
+      SELECT m.file_id
+      FROM messages m
+      WHERE m.chat_id=? AND m.file_id IS NOT NULL
+      UNION
+      SELECT vm.transcription_file_id
+      FROM voice_messages vm
+      JOIN messages m ON m.id=vm.message_id
+      WHERE m.chat_id=? AND vm.transcription_file_id IS NOT NULL
+    )
+  `).all(chatId, chatId);
+}
+
+function deleteAiMemoryForChat(chatId) {
+  [
+    'message_embeddings',
+    'memory_chunks',
+    'room_summaries',
+    'memory_facts',
+    'ai_memory_jobs',
+    'yandex_message_embeddings',
+    'yandex_memory_chunks',
+    'yandex_room_summaries',
+    'yandex_memory_facts',
+    'yandex_memory_jobs',
+    'grok_message_embeddings',
+    'grok_memory_chunks',
+    'grok_room_summaries',
+    'grok_memory_facts',
+    'grok_memory_jobs',
+  ].forEach((table) => {
+    db.prepare(`DELETE FROM ${table} WHERE chat_id=?`).run(chatId);
+  });
+}
+
+const deleteChatMessageDataTx = db.transaction((chatId, { deleteChat = false } = {}) => {
+  if (deleteChat) {
+    db.prepare('UPDATE messages SET saved_from_chat_id=NULL WHERE saved_from_chat_id=?').run(chatId);
+  }
+  db.prepare(`
+    UPDATE messages
+    SET reply_to_id=NULL
+    WHERE reply_to_id IN (SELECT id FROM messages WHERE chat_id=?)
+  `).run(chatId);
+  db.prepare(`
+    UPDATE messages
+    SET forwarded_from_message_id=NULL
+    WHERE forwarded_from_message_id IN (SELECT id FROM messages WHERE chat_id=?)
+  `).run(chatId);
+  db.prepare(`
+    UPDATE messages
+    SET saved_from_message_id=NULL
+    WHERE saved_from_message_id IN (SELECT id FROM messages WHERE chat_id=?)
+  `).run(chatId);
+
+  db.prepare('DELETE FROM message_pin_events WHERE chat_id=?').run(chatId);
+  db.prepare('DELETE FROM message_pins WHERE chat_id=?').run(chatId);
+  db.prepare('DELETE FROM message_mentions WHERE chat_id=?').run(chatId);
+  deleteAiMemoryForChat(chatId);
+  db.prepare('DELETE FROM messages WHERE chat_id=?').run(chatId);
+  db.prepare('UPDATE chat_members SET last_read_id=0 WHERE chat_id=?').run(chatId);
+  if (deleteChat) db.prepare('DELETE FROM chats WHERE id=?').run(chatId);
+});
+
+function deleteChatMessageData(chatId, options = {}) {
+  const cid = Number(chatId || 0);
+  if (!cid) return { fileRows: [] };
+  const fileRows = collectChatFileRows(cid);
+  deleteChatMessageDataTx(cid, options);
+  for (const file of fileRows) {
+    db.prepare('DELETE FROM files WHERE id=?').run(file.id);
+  }
+  fileRows.forEach((file) => unlinkIfPresent(safeUploadPath(file.stored_name)));
+  return { fileRows };
+}
+
+function decorateChatListRows(rows, viewerUserId) {
+  const uid = Number(viewerUserId || 0);
+  for (const chat of rows) {
+    Object.assign(chat, chatPreferencesPayload(chat));
+    Object.assign(chat, chatSidebarPinPayload(chat));
+    if (isNotesChatRow(chat)) {
+      Object.assign(chat, notesChatPayload(chat));
+    } else if (chat.type === 'private') {
+      const other = db.prepare(`
+        SELECT u.id,u.username,u.display_name,u.avatar_color,u.avatar_url FROM users u
+        JOIN chat_members cm ON cm.user_id=u.id WHERE cm.chat_id=? AND u.id!=?
+      `).get(chat.id, uid);
+      if (other) { chat.name = other.display_name; chat.private_user = other; }
+    }
+    if (chat.type === 'group') {
+      chat.avatar_url = chat.avatar_url || null;
+    }
+    const lastRead = chat.last_read_id || 0;
+    const unread = db.prepare('SELECT COUNT(*) as c FROM messages WHERE chat_id=? AND id>? AND is_deleted=0 AND user_id!=?').get(chat.id, lastRead, uid);
+    chat.unread_count = unread ? unread.c : 0;
+    if (!String(chat.last_text || '').trim() && Number(chat.last_voice_message_id || 0) > 0) {
+      chat.last_text = chat.last_note_kind === 'video_note' ? 'Р’РёРґРµРѕ-Р·Р°РјРµС‚РєР°' : 'Р“РѕР»РѕСЃРѕРІРѕРµ СЃРѕРѕР±С‰РµРЅРёРµ';
+    }
+  }
+  return rows;
+}
+
 app.get('/api/chats', auth, (req, res) => {
   ensureNotesChatForUser(req.user.id);
   const rows = db.prepare(`
@@ -904,6 +1106,8 @@ app.get('/api/chats', auth, (req, res) => {
       cm.notify_enabled,
       cm.sounds_enabled,
       cm.chat_list_pin_order,
+      cm.hidden_at,
+      cm.hidden_after_message_id,
       CASE WHEN cm.chat_list_pin_order IS NULL THEN 0 ELSE 1 END as is_pinned,
       (SELECT COALESCE(NULLIF(m.text, ''), NULLIF(vm.transcription_text, ''))
         FROM messages m
@@ -928,6 +1132,14 @@ app.get('/api/chats', auth, (req, res) => {
       cm.last_read_id
     FROM chats c JOIN chat_members cm ON cm.chat_id=c.id
     WHERE cm.user_id=?
+      AND (
+        cm.hidden_after_message_id IS NULL
+        OR (
+          SELECT COALESCE(MAX(mh.id),0)
+          FROM messages mh
+          WHERE mh.chat_id=c.id
+        ) > COALESCE(cm.hidden_after_message_id,0)
+      )
     ORDER BY
       CASE WHEN cm.chat_list_pin_order IS NULL THEN 1 ELSE 0 END ASC,
       cm.chat_list_pin_order ASC,
@@ -959,6 +1171,60 @@ app.get('/api/chats', auth, (req, res) => {
     }
   }
   res.json(rows);
+});
+
+app.get('/api/chats/hidden', auth, (req, res) => {
+  const query = String(req.query.q || '').trim().toLowerCase();
+  if (query.length > 80) return res.status(400).json({ error: 'Search query is too long' });
+  const rows = db.prepare(`
+    SELECT c.*,
+      cm.notify_enabled,
+      cm.sounds_enabled,
+      cm.chat_list_pin_order,
+      cm.hidden_at,
+      cm.hidden_after_message_id,
+      CASE WHEN cm.chat_list_pin_order IS NULL THEN 0 ELSE 1 END as is_pinned,
+      (SELECT COALESCE(NULLIF(m.text, ''), NULLIF(vm.transcription_text, ''))
+        FROM messages m
+        LEFT JOIN voice_messages vm ON vm.message_id=m.id
+        WHERE m.chat_id=c.id AND m.is_deleted=0
+        ORDER BY m.id DESC LIMIT 1) as last_text,
+      (SELECT vm.message_id
+        FROM messages m
+        LEFT JOIN voice_messages vm ON vm.message_id=m.id
+        WHERE m.chat_id=c.id AND m.is_deleted=0
+        ORDER BY m.id DESC LIMIT 1) as last_voice_message_id,
+      (SELECT COALESCE(vm.note_kind, 'voice')
+        FROM messages m
+        LEFT JOIN voice_messages vm ON vm.message_id=m.id
+        WHERE m.chat_id=c.id AND m.is_deleted=0
+        ORDER BY m.id DESC LIMIT 1) as last_note_kind,
+      (SELECT m.created_at FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) as last_time,
+      (SELECT u.display_name FROM messages m JOIN users u ON u.id=m.user_id WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) as last_user,
+      (SELECT m.file_id FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) as last_file_id,
+      (SELECT MAX(m.id) FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0) as last_message_id,
+      (SELECT MIN(m.id) FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 AND m.id>COALESCE(cm.last_read_id,0) AND m.user_id!=cm.user_id) as first_unread_id,
+      cm.last_read_id
+    FROM chats c JOIN chat_members cm ON cm.chat_id=c.id
+    WHERE cm.user_id=?
+      AND cm.hidden_after_message_id IS NOT NULL
+    ORDER BY
+      last_time DESC NULLS LAST,
+      c.created_at DESC
+    LIMIT 50
+  `).all(req.user.id);
+  const decorated = decorateChatListRows(rows, req.user.id)
+    .map((chat) => ({ ...chat, is_hidden: true }))
+    .filter((chat) => {
+      if (!query) return true;
+      return [
+        chat.name || '',
+        chat.private_user?.display_name || '',
+        chat.private_user?.username || '',
+      ].join(' ').toLowerCase().includes(query);
+    })
+    .slice(0, 20);
+  res.json({ chats: decorated });
 });
 
 app.post('/api/chats', auth, (req, res) => {
@@ -1013,6 +1279,7 @@ app.post('/api/chats/private', auth, (req, res) => {
   `).get(req.user.id, targetUserId);
 
   if (existing) {
+    revealHiddenChatForUser(existing.id, req.user.id, { reason: 'private_search' });
     const chat = db.prepare('SELECT * FROM chats WHERE id=?').get(existing.id);
     return res.json(chat);
   }
@@ -1074,6 +1341,73 @@ app.put('/api/chats/:chatId/preferences', auth, (req, res) => {
     .run(next.notify_enabled ? 1 : 0, next.sounds_enabled ? 1 : 0, chatId, req.user.id);
   sendChatListUpdated(req.user.id, { chatId, reason: 'preferences' });
   res.json({ preferences: next });
+});
+
+app.post('/api/chats/:chatId/hide', auth, (req, res) => {
+  const chatId = +req.params.chatId;
+  const chat = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+  if (!chat) return res.status(404).json({ error: 'Chat not found' });
+  if (isNotesChatRow(chat) || isGeneralChatRow(chat) || !isGroupOrPrivateChatRow(chat)) {
+    return res.status(400).json({ error: 'This chat cannot be hidden' });
+  }
+  const member = getChatMemberPreferences(chatId, req.user.id);
+  if (!member) return res.status(403).json({ error: 'Not a member' });
+  const hiddenAfterMessageId = getChatLastAnyMessageId(chatId);
+  db.prepare(`
+    UPDATE chat_members
+    SET hidden_at=datetime('now'), hidden_after_message_id=?
+    WHERE chat_id=? AND user_id=?
+  `).run(hiddenAfterMessageId, chatId, req.user.id);
+  sendChatListUpdated(req.user.id, { chatId, reason: 'chat_hidden' });
+  res.json({ ok: true, chatId, hidden_after_message_id: hiddenAfterMessageId });
+});
+
+app.post('/api/chats/:chatId/unhide', auth, (req, res) => {
+  const chatId = +req.params.chatId;
+  const chat = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+  if (!chat) return res.status(404).json({ error: 'Chat not found' });
+  if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id)) {
+    return res.status(403).json({ error: 'Not a member' });
+  }
+  revealHiddenChatForUser(chatId, req.user.id, { reason: 'chat_unhidden' });
+  res.json({ ok: true, chatId });
+});
+
+app.delete('/api/chats/:chatId/history', auth, (req, res) => {
+  const chatId = +req.params.chatId;
+  const chat = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+  if (!chat) return res.status(404).json({ error: 'Chat not found' });
+  if (!canManageDestructiveChat(chat, req.user)) {
+    return res.status(403).json({ error: 'Only chat creator or admin can clear history' });
+  }
+  deleteChatMessageData(chatId, { deleteChat: false });
+  broadcastToChatAll(chatId, {
+    type: 'chat_history_cleared',
+    chatId,
+    actorId: req.user.id,
+  });
+  const members = db.prepare('SELECT user_id FROM chat_members WHERE chat_id=?').all(chatId);
+  members.forEach(({ user_id }) => sendChatListUpdated(user_id, { chatId, reason: 'history_cleared' }));
+  res.json({ ok: true });
+});
+
+app.delete('/api/chats/:chatId', auth, (req, res) => {
+  const chatId = +req.params.chatId;
+  const chat = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+  if (!chat) return res.status(404).json({ error: 'Chat not found' });
+  if (!canManageDestructiveChat(chat, req.user)) {
+    return res.status(403).json({ error: 'Only chat creator or admin can delete chat' });
+  }
+  const members = db.prepare('SELECT user_id FROM chat_members WHERE chat_id=?').all(chatId);
+  const avatarPath = chatAssetPathFromUrl(chat.avatar_url, AVATARS_DIR);
+  const backgroundPath = chatAssetPathFromUrl(chat.background_url, BACKGROUNDS_DIR);
+  deleteChatMessageData(chatId, { deleteChat: true });
+  unlinkIfPresent(avatarPath);
+  unlinkIfPresent(backgroundPath);
+  members.forEach(({ user_id }) => {
+    sendToUser(user_id, { type: 'chat_removed', chatId, reason: 'deleted' });
+  });
+  res.json({ ok: true });
 });
 
 app.put('/api/chats/:chatId/sidebar-pin', auth, (req, res) => {
@@ -1182,6 +1516,30 @@ app.post('/api/chats/:chatId/members', auth, (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════
 // MESSAGE ROUTES
 // ═══════════════════════════════════════════════════════════════════════════
+
+app.delete('/api/chats/:chatId/members/me', auth, (req, res) => {
+  const chatId = +req.params.chatId;
+  const chat = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+  if (!chat) return res.status(404).json({ error: 'Chat not found' });
+  if (chat.type !== 'group' || isNotesChatRow(chat) || isGeneralChatRow(chat)) {
+    return res.status(400).json({ error: 'Cannot leave this chat' });
+  }
+  if (Number(chat.created_by || 0) === Number(req.user.id)) {
+    return res.status(403).json({ error: 'Chat creator cannot leave this chat' });
+  }
+  if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id)) {
+    return res.status(403).json({ error: 'Not a member' });
+  }
+
+  db.prepare('DELETE FROM chat_members WHERE chat_id=? AND user_id=?').run(chatId, req.user.id);
+  db.prepare(`
+    UPDATE ai_chat_bots
+    SET enabled=0, updated_at=datetime('now')
+    WHERE chat_id=? AND bot_id IN (SELECT id FROM ai_bots WHERE user_id=?)
+  `).run(chatId, req.user.id);
+  sendToUser(req.user.id, { type: 'chat_removed', chatId, reason: 'left' });
+  res.json({ ok: true });
+});
 
 app.get('/api/chats/:chatId/media', auth, (req, res) => {
   const chatId = +req.params.chatId;
@@ -1450,6 +1808,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   // Echo client_id back to clients so optimistic messages can be matched
   if (clientId) hydratedMsg.client_id = clientId;
 
+  handleChatListMessageCreated(hydratedMsg);
   broadcastToChatAll(chatId, { type: 'message', message: hydratedMsg });
   pushFeature.notifyMessageCreated(hydratedMsg);
   aiBotFeature.handleMessageCreated(hydratedMsg, { skipBotTrigger: Boolean(hydratedMsg.poll) }).catch((error) => {
@@ -1966,6 +2325,9 @@ app.delete('/api/chats/:chatId/members/:userId', auth, (req, res) => {
   if (chat.type !== 'group') return res.status(400).json({ error: 'Cannot remove from this chat' });
   if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
+  if (userId === req.user.id && Number(chat.created_by || 0) === Number(req.user.id)) {
+    return res.status(403).json({ error: 'Chat creator cannot leave this chat' });
+  }
   // Only creator or admin can remove others; anyone can leave
   if (userId !== req.user.id && chat.created_by !== req.user.id && !req.user.is_admin)
     return res.status(403).json({ error: 'Only creator or admin can remove members' });

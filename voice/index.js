@@ -31,7 +31,7 @@ function normalizeClientId(value) {
   return id;
 }
 
-function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, uploadsDir, broadcastToChatAll, clients, secret, notifyMessageCreated, onMessageTextAvailable }) {
+function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, uploadsDir, broadcastToChatAll, clients, secret, notifyMessageCreated, onMessageCreated, onMessageTextAvailable }) {
   const replyFallbackLabelSql = `
     CASE
       WHEN rvm.message_id IS NOT NULL THEN
@@ -431,6 +431,11 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
         const message = getHydratedMessageById(messageResult.lastInsertRowid);
         broadcastToChatAll(chatId, { type: 'message', message });
         if (typeof notifyMessageCreated === 'function') notifyMessageCreated(message);
+        if (typeof onMessageCreated === 'function') {
+          Promise.resolve(onMessageCreated(message)).catch((featureError) => {
+            console.warn('[voice] message hook failed:', featureError.message);
+          });
+        }
 
         if (settings.auto_transcribe_on_send) {
           scheduleTranscription({

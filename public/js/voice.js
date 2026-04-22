@@ -40,6 +40,17 @@
 
   const hooks = window.BananzaVoiceHooks = window.BananzaVoiceHooks || {};
 
+  function safeVibrate(pattern) {
+    if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return false;
+    const activation = navigator.userActivation;
+    if (activation && !activation.hasBeenActive) return false;
+    try {
+      return navigator.vibrate(pattern);
+    } catch (e) {
+      return false;
+    }
+  }
+
   Object.assign(hooks, {
     closeAll: () => hideVoiceAdminModal({ immediate: true }),
     decorateMessageRow: (row, msg) => decorateMessageRow(row, msg),
@@ -1266,7 +1277,7 @@
     syncSendButtonState();
     setRecorderMessage('Р—Р°РїРёСЃСЊ...', 'recording');
     updateRecorderBar();
-    if (navigator.vibrate) navigator.vibrate(30);
+    safeVibrate(30);
     getBridge()?.playSound?.('voice_start');
     return;
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -1299,7 +1310,7 @@
     syncSendButtonState();
     setRecorderMessage('Запись...', 'recording');
     updateRecorderBar();
-    if (navigator.vibrate) navigator.vibrate(30);
+    safeVibrate(30);
     getBridge()?.playSound?.('voice_start');
   }
 

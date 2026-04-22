@@ -47,6 +47,8 @@ db.exec(`
     sounds_enabled INTEGER DEFAULT 1,
     last_read_id INTEGER DEFAULT 0,
     chat_list_pin_order INTEGER DEFAULT NULL,
+    hidden_at TEXT DEFAULT NULL,
+    hidden_after_message_id INTEGER DEFAULT NULL,
     PRIMARY KEY (chat_id, user_id)
   );
 
@@ -370,6 +372,17 @@ try {
   db.exec("ALTER TABLE chat_members ADD COLUMN chat_list_pin_order INTEGER DEFAULT NULL");
 }
 db.exec("CREATE INDEX IF NOT EXISTS idx_chat_members_user_pin_order ON chat_members(user_id, chat_list_pin_order)");
+try {
+  db.prepare("SELECT hidden_at FROM chat_members LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE chat_members ADD COLUMN hidden_at TEXT DEFAULT NULL");
+}
+try {
+  db.prepare("SELECT hidden_after_message_id FROM chat_members LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE chat_members ADD COLUMN hidden_after_message_id INTEGER DEFAULT NULL");
+}
+db.exec("CREATE INDEX IF NOT EXISTS idx_chat_members_user_hidden ON chat_members(user_id, hidden_after_message_id)");
 try {
   db.prepare("SELECT notify_mentions FROM user_notification_settings LIMIT 1").get();
 } catch {

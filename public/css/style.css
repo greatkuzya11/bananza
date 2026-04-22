@@ -639,6 +639,18 @@ a:hover { text-decoration: underline; }
 .chat-item.active { background: var(--accent); }
 .chat-item.active .chat-item-time,
 .chat-item.active .chat-item-last { color: rgba(255,255,255,.8); }
+.chat-item.is-hidden-search-result .chat-item-name::after {
+  content: 'hidden';
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
 
 .chat-item-avatar {
   width: 48px; height: 48px; border-radius: 50%; display: flex;
@@ -1992,6 +2004,12 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
 }
 .chat-context-menu-button:hover {
   background: var(--bg-hover);
+}
+.chat-context-menu-button.is-danger {
+  color: var(--danger);
+}
+.chat-context-menu-button.is-danger .chat-context-menu-icon {
+  color: var(--danger);
 }
 .chat-context-menu-button:disabled {
   opacity: .45;
@@ -3894,6 +3912,18 @@ html[data-visual-mode="rich"] .poll-card {
 }
 .chat-preferences-status.is-success { color: var(--success); }
 .chat-preferences-status.is-error { color: var(--danger); }
+.chat-danger-section {
+  border-top: 1px solid var(--border-light);
+  padding-top: 12px;
+}
+.chat-danger-action {
+  color: var(--danger);
+  justify-content: center;
+  font-weight: 700;
+}
+.chat-danger-action:hover {
+  background: color-mix(in srgb, var(--danger) 14%, var(--bg-hover));
+}
 
 /* Toggle switch */
 .toggle-switch {

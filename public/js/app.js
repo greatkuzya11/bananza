@@ -108,6 +108,10 @@
   let chatListRequestSeq = 0;
   let chatListAbortController = null;
   let chatListCacheSyncTimer = null;
+  let hiddenChatSearchTimer = null;
+  let hiddenChatSearchSeq = 0;
+  let hiddenChatSearchQuery = '';
+  let hiddenChatSearchResults = [];
   let currentChatId = null;
   let ws = null;
   let wsRetry = 1000;
@@ -625,6 +629,17 @@
     const d = document.createElement('div');
     d.textContent = s;
     return d.innerHTML;
+  }
+
+  function safeVibrate(pattern) {
+    if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return false;
+    const activation = navigator.userActivation;
+    if (activation && !activation.hasBeenActive) return false;
+    try {
+      return navigator.vibrate(pattern);
+    } catch (e) {
+      return false;
+    }
   }
 
   function linkify(text) {
@@ -2126,7 +2141,14 @@
     if (!sidebarSearch || !chatSearch) return false;
     const shouldOpen = !!open;
 
-    if (clear) chatSearch.value = '';
+    if (clear) {
+      chatSearch.value = '';
+      clearTimeout(hiddenChatSearchTimer);
+      hiddenChatSearchTimer = null;
+      hiddenChatSearchSeq += 1;
+      hiddenChatSearchQuery = '';
+      hiddenChatSearchResults = [];
+    }
 
     sidebarSearch.classList.toggle('is-collapsed', !shouldOpen);
     sidebarSearch.setAttribute('aria-hidden', shouldOpen ? 'false' : 'true');
@@ -2242,6 +2264,7 @@
       }
     }
     if (bgStyleSelect) bgStyleSelect.value = chat.background_style || 'cover';
+    renderChatDangerControls(chat);
   }
 
   function syncChatInfoStatusVisibility(chat = getChatById(currentChatId)) {
@@ -2356,6 +2379,7 @@
       updateChatStatus();
       renderPinnedBar(chatId);
       refreshVisiblePinButtons(chatId);
+      renderChatDangerControls(updated);
     }
     refreshChatInfoPresentation(updated);
     renderChatPinSettingsForm(updated);
@@ -3177,6 +3201,40 @@
     return Boolean(currentUser.is_admin || Number(chat.created_by || 0) === Number(currentUser.id));
   }
 
+  function isGeneralChat(chat) {
+    return String(chat?.type || '') === 'general';
+  }
+
+  function isGroupOrPrivateChat(chat) {
+    const type = String(chat?.type || '');
+    return type === 'group' || type === 'private';
+  }
+
+  function canHideChat(chat) {
+    return Boolean(chat && isGroupOrPrivateChat(chat) && !isNotesChat(chat) && !isGeneralChat(chat));
+  }
+
+  function canLeaveChat(chat) {
+    return Boolean(
+      chat
+      && chat.type === 'group'
+      && !isNotesChat(chat)
+      && !isGeneralChat(chat)
+      && Number(chat.created_by || 0) !== Number(currentUser?.id || 0)
+    );
+  }
+
+  function canManageDestructiveChat(chat) {
+    return Boolean(
+      currentUser
+      && chat
+      && isGroupOrPrivateChat(chat)
+      && !isNotesChat(chat)
+      && !isGeneralChat(chat)
+      && (currentUser.is_admin || Number(chat.created_by || 0) === Number(currentUser.id))
+    );
+  }
+
   function setChatPinSettingsStatus(message, type = '') {
     const el = $('#chatPinSettingsStatus');
     if (!el) return;
@@ -3193,6 +3251,30 @@
     section.classList.toggle('hidden', isNotesChat(chat) || !canManage);
     toggle.checked = chatAllowsUnpinAnyPin(chat);
     setChatPinSettingsStatus('');
+  }
+
+  function setChatDangerStatus(message, type = '') {
+    const el = $('#chatDangerStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function renderChatDangerControls(chat = getChatById(currentChatId)) {
+    const section = $('#chatDangerSection');
+    if (!section) return;
+    const clearBtn = $('#clearChatHistoryBtn');
+    const leaveBtn = $('#leaveChatBtn');
+    const deleteBtn = $('#deleteChatBtn');
+    const showClear = canManageDestructiveChat(chat);
+    const showLeave = canLeaveChat(chat);
+    const showDelete = canManageDestructiveChat(chat);
+    section.classList.toggle('hidden', !(showClear || showLeave || showDelete));
+    clearBtn?.classList.toggle('hidden', !showClear);
+    leaveBtn?.classList.toggle('hidden', !showLeave);
+    deleteBtn?.classList.toggle('hidden', !showDelete);
+    setChatDangerStatus('');
   }
 
   async function saveChatPinSettings() {
@@ -5953,6 +6035,57 @@
     ].join(' ').toLowerCase();
   }
 
+  async function loadHiddenChatSearch(query) {
+    const normalized = String(query || '').trim().toLowerCase();
+    const requestId = ++hiddenChatSearchSeq;
+    if (normalized.length < 2) {
+      hiddenChatSearchQuery = '';
+      hiddenChatSearchResults = [];
+      renderChatList(chatSearch.value);
+      return;
+    }
+    try {
+      const data = await api(`/api/chats/hidden?q=${encodeURIComponent(normalized)}`);
+      if (requestId !== hiddenChatSearchSeq) return;
+      hiddenChatSearchQuery = normalized;
+      hiddenChatSearchResults = normalizeCachedChats(data.chats || data || []);
+      renderChatList(chatSearch.value);
+    } catch (e) {
+      if (requestId !== hiddenChatSearchSeq) return;
+      hiddenChatSearchQuery = normalized;
+      hiddenChatSearchResults = [];
+    }
+  }
+
+  function scheduleHiddenChatSearch(query) {
+    const normalized = String(query || '').trim().toLowerCase();
+    clearTimeout(hiddenChatSearchTimer);
+    if (normalized.length < 2) {
+      hiddenChatSearchSeq += 1;
+      hiddenChatSearchQuery = '';
+      hiddenChatSearchResults = [];
+      return;
+    }
+    if (hiddenChatSearchQuery === normalized) return;
+    hiddenChatSearchTimer = setTimeout(() => {
+      hiddenChatSearchTimer = null;
+      loadHiddenChatSearch(normalized);
+    }, 180);
+  }
+
+  async function openHiddenChatFromSearch(chatId) {
+    const id = Number(chatId || 0);
+    if (!id) return;
+    try {
+      await api(`/api/chats/${id}/unhide`, { method: 'POST' });
+      await loadChats({ silent: true });
+      await openChat(id);
+      setChatSearchOpen(false, { clear: true, focus: false });
+    } catch (e) {
+      showCenterToast(e.message || 'Не удалось открыть скрытый чат');
+    }
+  }
+
   function setForwardMessageStatus(message = '', type = '') {
     if (!forwardMessageStatus) return;
     forwardMessageStatus.textContent = message;
@@ -6040,6 +6173,29 @@
         hidden: false,
         disabled: false,
       },
+      {
+        action: 'hide-chat',
+        icon: '&#128065;',
+        label: 'Скрыть',
+        hidden: !canHideChat(chat),
+        disabled: false,
+      },
+      {
+        action: 'leave-chat',
+        icon: '&#8617;',
+        label: 'Выйти из чата',
+        hidden: !canLeaveChat(chat),
+        disabled: false,
+        danger: true,
+      },
+      {
+        action: 'delete-chat',
+        icon: '&#128465;',
+        label: 'Удалить чат',
+        hidden: !canManageDestructiveChat(chat),
+        disabled: false,
+        danger: true,
+      },
     ];
     chatContextMenu.innerHTML = `
       <div class="chat-context-menu-sheet">
@@ -6049,7 +6205,7 @@
           .map((item) => `
             <button
               type="button"
-              class="chat-context-menu-button"
+              class="chat-context-menu-button${item.danger ? ' is-danger' : ''}"
               data-chat-action="${esc(item.action)}"
               ${item.disabled ? 'disabled' : ''}
             >
@@ -6186,6 +6342,140 @@
     }
   }
 
+  async function clearCachedChat(chatId, { includeOutbox = true } = {}) {
+    try {
+      await window.messageCache?.clearChat?.(chatId, { includeOutbox });
+    } catch (e) {}
+  }
+
+  function resetChatPreviewAfterHistoryClear(chatId) {
+    const chat = getChatById(chatId);
+    if (!chat) return;
+    chat.last_text = null;
+    chat.last_time = null;
+    chat.last_user = null;
+    chat.last_file_id = null;
+    chat.last_message_id = 0;
+    chat.first_unread_id = null;
+    chat.unread_count = 0;
+  }
+
+  function revealChatListAfterActiveChatClose() {
+    if (window.innerWidth > 768 || !sidebar) return;
+    resetBackButtonNavigationState();
+    revealSidebarFromChat();
+  }
+
+  function closeChatViewForChat(chatId) {
+    const id = Number(chatId || 0);
+    if (!id || Number(currentChatId || 0) !== id) return;
+    hideFloatingMessageActions({ immediate: true });
+    hideMentionPicker();
+    hideAvatarUserMenu();
+    clearReply();
+    if (editTo) clearEdit({ clearInput: true });
+    currentChatId = null;
+    displayedMsgIds.clear();
+    chatPinsByChat.delete(id);
+    chatMemberLastReads.delete(id);
+    replaceRenderedMessages([]);
+    setHasMoreBefore(false);
+    setHasMoreAfter(false);
+    chatView.classList.add('hidden');
+    emptyState.classList.remove('hidden');
+    renderCurrentChatHeader(null);
+    applyChatBackground(null);
+    if (String(localStorage.getItem('lastChat') || '') === String(id)) {
+      localStorage.removeItem('lastChat');
+    }
+    revealChatListAfterActiveChatClose();
+  }
+
+  async function removeChatLocally(chatId, { clearCache = false } = {}) {
+    const id = Number(chatId || 0);
+    if (!id) return;
+    chats = chats.filter((chat) => Number(chat.id || 0) !== id);
+    chatPinsByChat.delete(id);
+    chatMemberLastReads.delete(id);
+    closeChatViewForChat(id);
+    renderChatList(chatSearch.value);
+    if (clearCache) await clearCachedChat(id, { includeOutbox: true });
+  }
+
+  async function clearLocalChatHistory(chatId, { clearCache = true } = {}) {
+    const id = Number(chatId || 0);
+    if (!id) return;
+    resetChatPreviewAfterHistoryClear(id);
+    chatPinsByChat.set(id, []);
+    chatMemberLastReads.delete(id);
+    if (Number(currentChatId || 0) === id) {
+      hideFloatingMessageActions({ immediate: true });
+      clearReply();
+      if (editTo) clearEdit({ clearInput: true });
+      replaceRenderedMessages([]);
+      setHasMoreBefore(false);
+      setHasMoreAfter(false);
+      renderPinnedBar(id);
+      updateScrollBottomButton();
+    }
+    renderChatList(chatSearch.value);
+    if (clearCache) await clearCachedChat(id, { includeOutbox: true });
+  }
+
+  async function hideChatFromList(chatId) {
+    const chat = getChatById(chatId);
+    if (!canHideChat(chat)) return;
+    try {
+      await api(`/api/chats/${chatId}/hide`, { method: 'POST' });
+      await removeChatLocally(chatId, { clearCache: false });
+      showCenterToast('Чат скрыт');
+    } catch (e) {
+      showCenterToast(e.message || 'Не удалось скрыть чат');
+    }
+  }
+
+  async function leaveChat(chatId) {
+    const chat = getChatById(chatId);
+    if (!canLeaveChat(chat)) return;
+    if (!confirm('Выйти из этого чата?')) return;
+    try {
+      await api(`/api/chats/${chatId}/members/me`, { method: 'DELETE' });
+      await removeChatLocally(chatId, { clearCache: true });
+      closeAllModals({ immediate: true });
+      showCenterToast('Вы вышли из чата');
+    } catch (e) {
+      showCenterToast(e.message || 'Не удалось выйти из чата');
+    }
+  }
+
+  async function deleteChatCompletely(chatId) {
+    const chat = getChatById(chatId);
+    if (!canManageDestructiveChat(chat)) return;
+    if (!confirm('Удалить чат, все сообщения и медиа без восстановления?')) return;
+    try {
+      await api(`/api/chats/${chatId}`, { method: 'DELETE' });
+      await removeChatLocally(chatId, { clearCache: true });
+      closeAllModals({ immediate: true });
+      showCenterToast('Чат удалён');
+    } catch (e) {
+      showCenterToast(e.message || 'Не удалось удалить чат');
+    }
+  }
+
+  async function clearChatHistoryForEveryone(chatId) {
+    const chat = getChatById(chatId);
+    if (!canManageDestructiveChat(chat)) return;
+    if (!confirm('Очистить историю чата для всех участников?')) return;
+    try {
+      await api(`/api/chats/${chatId}/history`, { method: 'DELETE' });
+      await clearLocalChatHistory(chatId, { clearCache: true });
+      await loadChats({ silent: true });
+      showCenterToast('История очищена');
+    } catch (e) {
+      showCenterToast(e.message || 'Не удалось очистить историю');
+    }
+  }
+
   async function handleChatContextMenuAction(action, chatId) {
     const chat = getChatById(chatId);
     if (!chat) return;
@@ -6211,6 +6501,18 @@
       await updateChatContextPreference(chatId, {
         sounds_enabled: !localChatPreferenceEnabled(chat.sounds_enabled),
       });
+      return;
+    }
+    if (action === 'hide-chat') {
+      await hideChatFromList(chatId);
+      return;
+    }
+    if (action === 'leave-chat') {
+      await leaveChat(chatId);
+      return;
+    }
+    if (action === 'delete-chat') {
+      await deleteChatCompletely(chatId);
     }
   }
 
@@ -7614,16 +7916,14 @@
         applyChatUpdate(msg.chat || {});
         break;
       }
+      case 'chat_history_cleared': {
+        const chatId = Number(msg.chatId || msg.chat_id || 0);
+        await clearLocalChatHistory(chatId, { clearCache: true });
+        loadChats({ silent: true }).catch(() => {});
+        break;
+      }
       case 'chat_removed': {
-        chatMemberLastReads.delete(Number(msg.chatId) || 0);
-        chats = chats.filter(c => c.id !== msg.chatId);
-        renderChatList(chatSearch.value);
-        if (currentChatId === msg.chatId) {
-          hideFloatingMessageActions({ immediate: true });
-          currentChatId = null;
-          chatView.classList.add('hidden');
-          emptyState.classList.remove('hidden');
-        }
+        await removeChatLocally(msg.chatId, { clearCache: true });
         break;
       }
     }
@@ -7664,6 +7964,7 @@
         refreshChatInfoPresentation(currentChat);
         renderChatPreferencesForm(currentChat);
         renderChatPinSettingsForm(currentChat);
+        renderChatDangerControls(currentChat);
       }
       setChatListStatus('', '');
       scheduleMessageBackgroundSync();
@@ -7840,10 +8141,13 @@
     return sep;
   }
 
-  function createChatListItem(chat) {
+  function createChatListItem(chat, { hiddenSearchResult = false } = {}) {
     const el = document.createElement('div');
     const pinned = isChatPinned(chat);
-    el.className = 'chat-item' + (Number(chat.id) === Number(currentChatId) ? ' active' : '') + (pinned ? ' is-pinned' : '');
+    el.className = 'chat-item'
+      + (Number(chat.id) === Number(currentChatId) ? ' active' : '')
+      + (pinned ? ' is-pinned' : '')
+      + (hiddenSearchResult ? ' is-hidden-search-result' : '');
     el.dataset.chatId = chat.id;
     el.dataset.pinned = pinned ? '1' : '0';
 
@@ -7882,7 +8186,8 @@
     `;
     el.addEventListener('click', () => {
       if (Date.now() < suppressNextChatItemTapUntil) return;
-      openChat(chat.id).catch((error) => {
+      const openAction = hiddenSearchResult ? openHiddenChatFromSearch(chat.id) : openChat(chat.id);
+      Promise.resolve(openAction).catch((error) => {
         console.warn('Failed to open chat', error);
         showCenterToast(error?.message || 'Could not open chat');
       });
@@ -7915,8 +8220,20 @@
 
     // When searching, also show users without existing private chats
     if (normalizedFilter) {
+      scheduleHiddenChatSearch(normalizedFilter);
+      const hiddenMatches = hiddenChatSearchQuery === normalizedFilter
+        ? hiddenChatSearchResults.filter((chat) => !chats.some((visible) => Number(visible.id) === Number(chat.id)))
+        : [];
+      if (hiddenMatches.length > 0) {
+        appendChatListSeparator('Скрытые чаты');
+        hiddenMatches.forEach((chat) => {
+          chatList.appendChild(createChatListItem(chat, { hiddenSearchResult: true }));
+        });
+      }
       const privatePeerIds = new Set(
-        chats.filter(c => c.type === 'private' && c.private_user).map(c => c.private_user.id)
+        [...chats, ...hiddenMatches]
+          .filter(c => c.type === 'private' && c.private_user)
+          .map(c => c.private_user.id)
       );
       const matchingUsers = allUsers.filter(u =>
         !privatePeerIds.has(u.id) &&
@@ -10949,7 +11266,7 @@
       setTimeout(() => indicator?.remove(), 180);
       if (locked && startedOnMedia) suppressMediaClickAfterSwipe(row);
       if (shouldApply && kind) {
-        navigator.vibrate?.(18);
+        safeVibrate(18);
         if (kind === 'reply') setReplyFromRow(row);
         else if (kind === 'edit') setEditFromRow(row);
       }
@@ -12963,6 +13280,7 @@
     $('#compactViewToggle').checked = compactView;
     await loadChatPreferences(currentChatId);
     renderChatPinSettingsForm(chat);
+    renderChatDangerControls(chat);
 
     // Group edit section
     const editSection = $('#chatEditSection');
@@ -13069,6 +13387,23 @@
           } catch (err) { alert(err.message); }
         };
       }
+    } catch (e) {}
+
+    try {
+      const targetChatId = currentChatId;
+      const clearBtn = $('#clearChatHistoryBtn');
+      const leaveBtn = $('#leaveChatBtn');
+      const deleteBtn = $('#deleteChatBtn');
+      if (clearBtn) clearBtn.onclick = async () => {
+        await clearChatHistoryForEveryone(targetChatId);
+        renderChatDangerControls(getChatById(targetChatId));
+      };
+      if (leaveBtn) leaveBtn.onclick = async () => {
+        await leaveChat(targetChatId);
+      };
+      if (deleteBtn) deleteBtn.onclick = async () => {
+        await deleteChatCompletely(targetChatId);
+      };
     } catch (e) {}
 
     try {
@@ -13980,7 +14315,7 @@
         lpTimer = setTimeout(() => {
           lpTimer = null;
           suppressNextMessageActionTap();
-          navigator.vibrate?.(30);
+          safeVibrate(30);
           showReactionPicker(row, null, {
             source: 'long-press',
             keepComposerFocus: reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen(),
@@ -14048,12 +14383,19 @@
       window.visualViewport?.addEventListener('resize', syncChatContextMenuLayout);
       window.visualViewport?.addEventListener('scroll', syncChatContextMenuLayout);
       let startPoint = null;
-      chatList.addEventListener('touchstart', (e) => {
-        if (e.touches.length !== 1) return;
+      let startPointerId = null;
+      const clearChatContextPointerPress = () => {
+        clearChatContextLongPress();
+        startPoint = null;
+        startPointerId = null;
+      };
+      chatList.addEventListener('pointerdown', (e) => {
+        if (e.button && e.button !== 0) return;
+        if (startPointerId != null) return;
         const row = e.target.closest('.chat-item[data-chat-id]');
         if (!row || !chatList.contains(row) || e.target.closest('button, a, input, textarea, select, label')) return;
-        const touch = e.touches[0];
-        startPoint = { x: touch.clientX, y: touch.clientY };
+        startPointerId = e.pointerId;
+        startPoint = { x: e.clientX, y: e.clientY };
         chatContextLongPressStart = startPoint;
         chatContextLongPressRow = row;
         clearTimeout(chatContextLongPressTimer);
@@ -14061,7 +14403,7 @@
           chatContextLongPressTimer = null;
           suppressNextChatItemTap();
           suppressChatContextDismissUntil = Date.now() + 550;
-          navigator.vibrate?.(30);
+          safeVibrate(30);
           showChatContextMenuForRow(row, {
             x: startPoint?.x,
             y: startPoint?.y,
@@ -14069,22 +14411,18 @@
           });
         }, CHAT_CONTEXT_LONG_PRESS_MS);
       }, { passive: true });
-      chatList.addEventListener('touchmove', (e) => {
-        if (!startPoint || e.touches.length !== 1) return;
-        const touch = e.touches[0];
-        if (Math.hypot(touch.clientX - startPoint.x, touch.clientY - startPoint.y) > 10) {
-          clearChatContextLongPress();
-          startPoint = null;
+      chatList.addEventListener('pointermove', (e) => {
+        if (!startPoint || e.pointerId !== startPointerId) return;
+        if (Math.hypot(e.clientX - startPoint.x, e.clientY - startPoint.y) > 10) {
+          clearChatContextPointerPress();
         }
       }, { passive: true });
-      chatList.addEventListener('touchend', () => {
-        clearChatContextLongPress();
-        startPoint = null;
-      }, { passive: true });
-      chatList.addEventListener('touchcancel', () => {
-        clearChatContextLongPress();
-        startPoint = null;
-      }, { passive: true });
+      ['pointerup', 'pointercancel', 'pointerleave'].forEach((type) => {
+        chatList.addEventListener(type, (e) => {
+          if (startPointerId != null && e.pointerId !== startPointerId) return;
+          clearChatContextPointerPress();
+        }, { passive: true });
+      });
       chatList.addEventListener('contextmenu', (e) => {
         const row = e.target.closest('.chat-item[data-chat-id]');
         if (!row || !chatList.contains(row) || e.target.closest('button, a, input, textarea, select, label')) return;

@@ -813,6 +813,70 @@
     }));
   }
 
+  async function clearChat(chatId, { includeOutbox = true } = {}) {
+    const cid = normalizeId(chatId);
+    if (!currentUserId || !cid) return false;
+    const uid = currentUserId;
+    const key = memoryChatKey(cid);
+    if (key) {
+      memoryMessages.delete(key);
+      memoryChatMeta.delete(key);
+    }
+    const clearMessages = await withStore('readwrite', (store) => {
+      const index = store.index(INDEX_USER_CHAT_ID);
+      const range = IDBKeyRange.bound([uid, cid, 0], [uid, cid, Number.MAX_SAFE_INTEGER]);
+      const req = index.openCursor(range);
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (!cursor) return;
+        store.delete(cursor.primaryKey);
+        cursor.continue();
+      };
+      return true;
+    });
+    const clearPages = await withObjectStore(STORE_PAGES, 'readwrite', (store) => {
+      const range = IDBKeyRange.bound([uid, cid, '', 0], [uid, cid, '\uffff', Number.MAX_SAFE_INTEGER]);
+      const req = store.openCursor(range);
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (!cursor) return;
+        store.delete(cursor.primaryKey);
+        cursor.continue();
+      };
+      return true;
+    });
+    const clearMediaPages = await withObjectStore(STORE_MEDIA_PAGES, 'readwrite', (store) => {
+      const range = IDBKeyRange.bound([uid, cid, '', 0], [uid, cid, '\uffff', Number.MAX_SAFE_INTEGER]);
+      const req = store.openCursor(range);
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (!cursor) return;
+        store.delete(cursor.primaryKey);
+        cursor.continue();
+      };
+      return true;
+    });
+    const clearChatMeta = await withObjectStore(STORE_CHAT_META, 'readwrite', (store) => {
+      store.delete([uid, cid]);
+      return true;
+    });
+    const clearOutbox = includeOutbox
+      ? await withObjectStore(STORE_OUTBOX, 'readwrite', (store) => {
+          const index = store.index(INDEX_OUTBOX_USER_CHAT_CREATED);
+          const range = IDBKeyRange.bound([uid, cid, ''], [uid, cid, '\uffff']);
+          const req = index.openCursor(range);
+          req.onsuccess = () => {
+            const cursor = req.result;
+            if (!cursor) return;
+            store.delete(cursor.primaryKey);
+            cursor.continue();
+          };
+          return true;
+        })
+      : false;
+    return !!(clearMessages || clearPages || clearMediaPages || clearChatMeta || clearOutbox);
+  }
+
   async function clearUserCache() {
     if (!currentUserId) return false;
     const uid = currentUserId;
@@ -1083,6 +1147,7 @@
     getOutboxItem,
     readOutbox,
     deleteOutboxItem,
+    clearChat,
     clearUserCache,
     syncOwnMessageReadState,
     updateMessagesByUser,
