@@ -13,5 +13,14 @@
       clipPadding: 6,
       previewTransform: 'translate(0 0)',
     }),
+    Object.freeze({
+      id: 'circle',
+      version: 1,
+      label: 'Circle',
+      viewBox: '0 0 360 360',
+      path: 'M180 56.088A175 123.912 0 1 1 180 303.912A175 123.912 0 1 1 180 56.088Z',
+      clipPadding: 4,
+      previewTransform: 'translate(0 0)',
+    }),
   ]);
 })();

@@ -12,6 +12,7 @@
     clipPadding: 12,
     previewTransform: '',
   });
+  const SHAPE_OVERRIDE_STORAGE_KEY = 'bananza:videoNoteShapeOverrides';
 
   function clonePreset(preset) {
     return preset ? JSON.parse(JSON.stringify(preset)) : null;
@@ -249,6 +250,7 @@
     constructor(presets = []) {
       this.presets = new Map();
       this.maskCache = new Map();
+      this.shapeOverrideCache = null;
       presets.forEach((preset) => {
         if (!preset?.id || !preset?.path) return;
         this.presets.set(String(preset.id), this.normalizeSnapshot(preset));
@@ -261,6 +263,76 @@
 
     getPreset(id) {
       return clonePreset(this.presets.get(String(id || '')) || this.getDefault());
+    }
+
+    getBaseShapeId(message) {
+      return String(message?.video_note_shape_id || message?.shape_id || 'banana-fat');
+    }
+
+    getMessageStorageKeys(message) {
+      const keys = [];
+      const pushKey = (prefix, value) => {
+        const normalized = String(value || '').trim();
+        if (!normalized) return;
+        const key = `${prefix}:${normalized}`;
+        if (!keys.includes(key)) keys.push(key);
+      };
+      pushKey('client', message?.client_id || message?.clientId);
+      pushKey('id', message?.id);
+      pushKey('file', message?.file_stored);
+      return keys;
+    }
+
+    readShapeOverrideCache() {
+      if (this.shapeOverrideCache) return this.shapeOverrideCache;
+      try {
+        const parsed = JSON.parse(localStorage.getItem(SHAPE_OVERRIDE_STORAGE_KEY) || '{}');
+        this.shapeOverrideCache = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? { ...parsed } : {};
+      } catch (error) {
+        this.shapeOverrideCache = {};
+      }
+      return this.shapeOverrideCache;
+    }
+
+    persistShapeOverrideCache() {
+      try {
+        const cache = this.shapeOverrideCache && typeof this.shapeOverrideCache === 'object'
+          ? this.shapeOverrideCache
+          : {};
+        localStorage.setItem(SHAPE_OVERRIDE_STORAGE_KEY, JSON.stringify(cache));
+      } catch (error) {}
+    }
+
+    getMessageShapeOverride(message) {
+      const keys = this.getMessageStorageKeys(message);
+      if (!keys.length) return '';
+      const cache = this.readShapeOverrideCache();
+      for (const key of keys) {
+        const shapeId = String(cache[key] || '').trim();
+        if (shapeId && this.presets.has(shapeId)) return shapeId;
+      }
+      return '';
+    }
+
+    setMessageShapeOverride(message, shapeId) {
+      const keys = this.getMessageStorageKeys(message);
+      if (!keys.length) return;
+      const normalizedShapeId = String(shapeId || '').trim();
+      const baseShapeId = this.getBaseShapeId(message);
+      const cache = this.readShapeOverrideCache();
+      if (!normalizedShapeId || !this.presets.has(normalizedShapeId) || normalizedShapeId === baseShapeId) {
+        keys.forEach((key) => delete cache[key]);
+        this.persistShapeOverrideCache();
+        return;
+      }
+      keys.forEach((key) => {
+        cache[key] = normalizedShapeId;
+      });
+      this.persistShapeOverrideCache();
+    }
+
+    getEffectiveShapeId(message) {
+      return this.getMessageShapeOverride(message) || this.getBaseShapeId(message);
     }
 
     normalizeSnapshot(snapshot, fallbackId = 'banana-fat') {
@@ -296,8 +368,13 @@
     }
 
     snapshotFromMessage(message) {
+      const effectiveShapeId = this.getEffectiveShapeId(message);
+      const baseShapeId = this.getBaseShapeId(message);
+      if (effectiveShapeId !== baseShapeId) {
+        return this.snapshotFor(effectiveShapeId);
+      }
       const source = message?.video_note_shape_snapshot || message?.video_note_shape_snapshot_raw || null;
-      return this.normalizeSnapshot(source, message?.video_note_shape_id || message?.shape_id || 'banana-fat');
+      return this.normalizeSnapshot(source, effectiveShapeId);
     }
 
     getMaskUrl(snapshot) {

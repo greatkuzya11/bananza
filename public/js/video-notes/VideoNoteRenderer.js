@@ -7,6 +7,8 @@
     playLabel: 'Play video note',
     pauseLabel: 'Pause video note',
     transcriptLabel: '\u0420\u0430\u0441\u0448\u0438\u0444\u0440\u043e\u0432\u043a\u0430',
+    shapeCircleLabel: 'Switch video note to circle',
+    shapeBananaLabel: 'Switch video note to banana',
     pending: '\u0420\u0430\u0441\u0448\u0438\u0444\u0440\u043e\u0432\u043a\u0430...',
     hidden: '\u0420\u0430\u0441\u0448\u0438\u0444\u0440\u043e\u0432\u043a\u0430 \u0441\u043a\u0440\u044b\u0442\u0430',
     defaultError: '\u041e\u0448\u0438\u0431\u043a\u0430 \u0440\u0430\u0441\u0448\u0438\u0444\u0440\u043e\u0432\u043a\u0438',
@@ -86,11 +88,18 @@
     renderAttachment(message) {
       if (!message?.is_video_note) return '';
       const snapshot = this.shapeRegistry?.snapshotFromMessage?.(message);
+      const effectiveShapeId = this.getEffectiveShapeId(message);
       const maskUrl = this.shapeRegistry?.getMaskUrl?.(snapshot) || '';
       const src = message.client_file_url || `/uploads/${message.file_stored}`;
       const gradientId = `video-note-progress-${sanitizeIdPart(message.id || message.client_id || 'local')}`;
       return `
         <div class="video-note" data-video-note="1">
+          <button
+            type="button"
+            class="video-note-shape-toggle-btn"
+            aria-label="${escapeHtml(this.getShapeToggleLabel(effectiveShapeId))}"
+            data-shape-id="${escapeHtml(effectiveShapeId)}"
+          >${escapeHtml(this.getShapeToggleGlyph(effectiveShapeId))}</button>
           <div class="video-note-stage" role="button" tabindex="0" aria-label="${TEXT.playLabel}">
             <div class="video-note-shape" style="--video-note-mask:url('${maskUrl}')">
               <video class="video-note-video" playsinline preload="metadata">
@@ -112,6 +121,16 @@
       this.boundContainers.add(container);
 
       container.addEventListener('click', (event) => {
+        const shapeToggleBtn = event.target.closest('.video-note-shape-toggle-btn');
+        if (shapeToggleBtn) {
+          const row = shapeToggleBtn.closest('.msg-row');
+          if (!row?.querySelector('.video-note')) return;
+          event.preventDefault();
+          event.stopPropagation();
+          this.toggleShape(row);
+          return;
+        }
+
         const transcriptBtn = event.target.closest('.video-note-transcript-btn');
         if (transcriptBtn) {
           const row = transcriptBtn.closest('.msg-row');
@@ -168,7 +187,6 @@
         video?.addEventListener('ended', () => {
           row.classList.remove('video-note-playing');
           this.stopProgressLoop(row);
-          if (video) video.currentTime = 0;
           syncUi();
         });
         this.getBridge()?.bindMediaPlayback?.(video, message, 'video-note-video');
@@ -261,6 +279,45 @@
       transcript.setAttribute('aria-hidden', expanded ? 'false' : 'true');
     }
 
+    getEffectiveShapeId(message) {
+      return this.shapeRegistry?.getEffectiveShapeId?.(message) || 'banana-fat';
+    }
+
+    getShapeToggleGlyph(shapeId) {
+      return shapeId === 'circle' ? '\ud83c\udf4c' : '\u25ef';
+    }
+
+    getShapeToggleLabel(shapeId) {
+      return shapeId === 'circle' ? TEXT.shapeBananaLabel : TEXT.shapeCircleLabel;
+    }
+
+    syncShapeState(row, message) {
+      const note = row?.querySelector('.video-note');
+      const shape = row?.querySelector('.video-note-shape');
+      const video = row?.querySelector('.video-note-video');
+      const progress = row?.querySelector('.video-note-progress');
+      const track = row?.querySelector('.video-note-progress-track');
+      const fill = row?.querySelector('.video-note-progress-fill');
+      const toggleBtn = row?.querySelector('.video-note-shape-toggle-btn');
+      if (!note || !shape || !video || !progress || !track || !fill || !toggleBtn) return;
+
+      const effectiveShapeId = this.getEffectiveShapeId(message);
+      const snapshot = this.shapeRegistry?.snapshotFromMessage?.(message);
+      const maskUrl = this.shapeRegistry?.getMaskUrl?.(snapshot) || '';
+      applyMaskStyle(video, maskUrl);
+
+      note.dataset.shapeId = effectiveShapeId;
+      shape.dataset.shapeId = effectiveShapeId;
+      progress.setAttribute('viewBox', snapshot?.viewBox || '0 0 320 220');
+      track.setAttribute('d', snapshot?.path || '');
+      fill.setAttribute('d', snapshot?.path || '');
+      delete fill.dataset.pathLength;
+
+      toggleBtn.dataset.shapeId = effectiveShapeId;
+      toggleBtn.textContent = this.getShapeToggleGlyph(effectiveShapeId);
+      toggleBtn.setAttribute('aria-label', this.getShapeToggleLabel(effectiveShapeId));
+    }
+
     refreshRow(row) {
       const message = row?.__messageData || {};
       if (!message?.is_video_note) return;
@@ -269,10 +326,7 @@
       const transcriptBtn = row.querySelector('.video-note-transcript-btn');
       const video = row.querySelector('.video-note-video');
       if (!note || !transcript || !transcriptBtn || !video) return;
-
-      const snapshot = this.shapeRegistry?.snapshotFromMessage?.(message);
-      const maskUrl = this.shapeRegistry?.getMaskUrl?.(snapshot) || '';
-      applyMaskStyle(video, maskUrl);
+      this.syncShapeState(row, message);
 
       const expanded = this.expandedIds.has(Number(message.id || 0));
 
@@ -299,10 +353,23 @@
       if (!video.paused && !video.ended) this.startProgressLoop(row);
     }
 
+    toggleShape(row) {
+      const message = row?.__messageData || {};
+      if (!message?.is_video_note || !this.shapeRegistry?.setMessageShapeOverride) return;
+      const nextShapeId = this.getEffectiveShapeId(message) === 'circle' ? 'banana-fat' : 'circle';
+      this.shapeRegistry.setMessageShapeOverride(message, nextShapeId);
+      this.refreshRow(row);
+    }
+
     togglePlayback(row) {
       const video = row?.querySelector('.video-note-video');
       if (!video) return;
       if (video.paused) {
+        if (video.ended) {
+          try {
+            video.currentTime = 0;
+          } catch (error) {}
+        }
         video.play().catch(() => {});
         return;
       }
