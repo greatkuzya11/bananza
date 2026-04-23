@@ -17,7 +17,6 @@
       shapeRegistry,
       getSelectedShapeId: () => 'banana-fat',
       onStateChange: () => controller.refreshComposerState(),
-      onAutoStopRequest: () => controller.handleAutoStopRequest(),
     });
     controller.videoRecorder = videoRecorder;
     feature = { bridge, shapeRegistry, renderer, audioAdapter, controller, videoRecorder };

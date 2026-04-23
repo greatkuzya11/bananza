@@ -1,18 +1,36 @@
 .send-btn.voice-enabled {
   position: relative;
   color: var(--voice-send-color);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.send-btn.voice-enabled.is-mic-mode {
+  border-radius: 12px;
+  background: transparent !important;
+  touch-action: none;
+}
+
+.send-btn.voice-enabled.is-mic-mode:hover,
+.send-btn.voice-enabled.is-mic-mode:focus,
+.send-btn.voice-enabled.is-mic-mode:focus-visible,
+.send-btn.voice-enabled.is-mic-mode:active {
+  background: transparent !important;
 }
 
 .send-btn.voice-enabled.is-mic-mode::before {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   border: none;
   border-top: 0;
   border-bottom: 0;
   border-left: 0;
   border-radius: 0;
   background: currentColor;
-  transform: none;
+  transform: scale(1);
+  opacity: 0.98;
+  transition: transform .15s ease, opacity .15s ease, filter .15s ease;
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M12 16a4 4 0 0 0 4-4V7a4 4 0 1 0-8 0v5a4 4 0 0 0 4 4Zm6-4a1 1 0 1 0-2 0 4 4 0 1 1-8 0 1 1 0 1 0-2 0 6 6 0 0 0 5 5.91V21H9a1 1 0 1 0 0 2h6a1 1 0 1 0 0-2h-2v-3.09A6 6 0 0 0 18 12Z'/%3E%3C/svg%3E") center / contain no-repeat;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M12 16a4 4 0 0 0 4-4V7a4 4 0 1 0-8 0v5a4 4 0 0 0 4 4Zm6-4a1 1 0 1 0-2 0 4 4 0 1 1-8 0 1 1 0 1 0-2 0 6 6 0 0 0 5 5.91V21H9a1 1 0 1 0 0 2h6a1 1 0 1 0 0-2h-2v-3.09A6 6 0 0 0 18 12Z'/%3E%3C/svg%3E") center / contain no-repeat;
 }
@@ -21,36 +39,117 @@
   display: none;
 }
 
-.send-btn.voice-enabled.is-recording::before {
-  width: 12px;
-  height: 12px;
-  border: none;
-  border-top: 0;
-  border-bottom: 0;
-  border-left: 0;
-  border-radius: 999px;
-  background: #ff5f6d;
-  transform: none;
-  box-shadow: 0 0 0 3px rgba(255,95,109,0.14);
-  animation: voiceRecordDotPulse 1s ease-in-out infinite;
+.send-btn.voice-enabled.is-mic-mode.is-hold-armed {
+  color: color-mix(in srgb, var(--voice-send-color) 72%, #ffffff 28%);
 }
 
-.send-btn.voice-enabled.is-recording::after {
-  display: none;
+.send-btn.voice-enabled.is-mic-mode.is-hold-armed::before {
+  transform: scale(1.08);
+  opacity: 1;
+  filter: drop-shadow(0 0 8px rgba(143,216,255,0.2));
 }
 
-@keyframes voiceRecordDotPulse {
+.send-btn.voice-enabled.is-mic-mode.is-mode-switching::before {
+  animation-fill-mode: both;
+  will-change: transform, opacity, filter;
+}
+
+.send-btn.voice-enabled.is-mic-mode.is-mode-switching::before,
+html[data-modal-animation="soft"] .send-btn.voice-enabled.is-mic-mode.is-mode-switching::before,
+html[data-modal-animation="lift"] .send-btn.voice-enabled.is-mic-mode.is-mode-switching::before {
+  animation-name: mediaNoteModeSwitchSoft;
+  animation-duration: calc(.22s * var(--modal-animation-speed-factor));
+  animation-timing-function: cubic-bezier(.2, .9, .24, 1);
+}
+
+html[data-modal-animation="zoom"] .send-btn.voice-enabled.is-mic-mode.is-mode-switching::before {
+  animation-name: mediaNoteModeSwitchZoom;
+  animation-duration: calc(.18s * var(--modal-animation-speed-factor));
+  animation-timing-function: cubic-bezier(.22, .84, .24, 1);
+}
+
+html[data-modal-animation="slide"] .send-btn.voice-enabled.is-mic-mode.is-mode-switching::before {
+  animation-name: mediaNoteModeSwitchSlide;
+  animation-duration: calc(.24s * var(--modal-animation-speed-factor));
+  animation-timing-function: cubic-bezier(.18, .9, .22, 1);
+}
+
+html[data-modal-animation="fade"] .send-btn.voice-enabled.is-mic-mode.is-mode-switching::before {
+  animation-name: mediaNoteModeSwitchFade;
+  animation-duration: calc(.16s * var(--modal-animation-speed-factor));
+  animation-timing-function: ease-out;
+}
+
+html[data-modal-animation="none"] .send-btn.voice-enabled.is-mic-mode.is-mode-switching::before {
+  animation: none;
+}
+
+.send-btn.voice-enabled.is-mic-mode.is-recording {
+  color: #ff6b78;
+}
+
+.send-btn.voice-enabled.is-mic-mode.is-recording::before {
+  transform: scale(1.12);
+  opacity: 1;
+  filter: drop-shadow(0 0 10px rgba(255,107,120,0.28));
+}
+
+@keyframes mediaNoteModeSwitchSoft {
   0% {
-    transform: scale(0.92);
-    box-shadow: 0 0 0 0 rgba(255,95,109,0.24);
+    transform: translateY(9px) scale(.8);
+    opacity: 0;
+    filter: drop-shadow(0 0 0 rgba(143,216,255,0));
   }
-  60% {
-    transform: scale(1);
-    box-shadow: 0 0 0 6px rgba(255,95,109,0);
+  55% {
+    transform: translateY(-1px) scale(1.08);
+    opacity: 1;
+    filter: drop-shadow(0 0 10px rgba(143,216,255,0.22));
   }
   100% {
-    transform: scale(0.92);
-    box-shadow: 0 0 0 0 rgba(255,95,109,0);
+    transform: translateY(0) scale(1);
+    opacity: .98;
+    filter: drop-shadow(0 0 0 rgba(143,216,255,0));
+  }
+}
+
+@keyframes mediaNoteModeSwitchZoom {
+  0% {
+    transform: scale(.62);
+    opacity: 0;
+  }
+  68% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: .98;
+  }
+}
+
+@keyframes mediaNoteModeSwitchSlide {
+  0% {
+    transform: translateX(12px) scale(.84);
+    opacity: 0;
+  }
+  60% {
+    transform: translateX(-2px) scale(1.04);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(0) scale(1);
+    opacity: .98;
+  }
+}
+
+@keyframes mediaNoteModeSwitchFade {
+  0% {
+    transform: scale(.92);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: .98;
   }
 }
 

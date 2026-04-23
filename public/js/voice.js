@@ -62,6 +62,7 @@
     cancelPreparedRecording: () => cancelPreparedRecording(),
     startExternalRecording: () => startRecording(),
     stopExternalRecording: () => stopRecordingAndSend(),
+    cancelExternalRecording: () => cancelActiveRecording(),
     isRecording: () => Boolean(state.recorder.recording),
     isUploading: () => Boolean(state.recorder.uploading),
     getFeatures: () => ({ ...state.features }),
@@ -338,13 +339,13 @@
       !hasText &&
       !hasPendingFiles &&
       !isEditing &&
-      !state.recorder.recording &&
       !state.recorder.uploading &&
       !keepSendIcon
     );
+    const keepMicMode = showMicMode || Boolean(state.recorder.recording);
     sendBtn.classList.toggle('voice-enabled', Boolean(state.features.voice_notes_enabled));
-    sendBtn.classList.toggle('is-mic-mode', showMicMode);
-    sendBtn.classList.toggle('is-send-mode', !showMicMode && !state.recorder.recording);
+    sendBtn.classList.toggle('is-mic-mode', keepMicMode);
+    sendBtn.classList.toggle('is-send-mode', !keepMicMode && !state.recorder.recording);
     sendBtn.classList.toggle('is-recording', Boolean(state.recorder.recording));
     sendBtn.classList.toggle('is-uploading', Boolean(state.recorder.uploading));
     sendBtn.title = state.recorder.recording
@@ -357,7 +358,7 @@
             ? 'Удерживайте для записи'
             : 'Отправить';
     window.BananzaMediaNoteHooks?.refreshComposerState?.({
-      showMicMode,
+      showMicMode: keepMicMode,
       isEditing,
       isRecording: Boolean(state.recorder.recording),
       isUploading: Boolean(state.recorder.uploading),
@@ -1162,14 +1163,14 @@
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error('РњРёРєСЂРѕС„РѕРЅ РЅРµ РїРѕРґРґРµСЂР¶РёРІР°РµС‚СЃСЏ Р±СЂР°СѓР·РµСЂРѕРј');
+      throw new Error('Микрофон не поддерживается браузером');
     }
     const preparePromise = (async () => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (!AudioContextClass) {
         stream.getTracks().forEach((track) => track.stop());
-        throw new Error('AudioContext РЅРµРґРѕСЃС‚СѓРїРµРЅ');
+        throw new Error('AudioContext недоступен');
       }
 
       let audioContext = null;
@@ -1275,7 +1276,7 @@
     state.recorder.timerId = window.setInterval(updateRecorderBar, 200);
 
     syncSendButtonState();
-    setRecorderMessage('Р—Р°РїРёСЃСЊ...', 'recording');
+    setRecorderMessage('Запись...', 'recording');
     updateRecorderBar();
     safeVibrate(30);
     getBridge()?.playSound?.('voice_start');
@@ -1321,14 +1322,14 @@
     cleanupRecorderGraph();
     getBridge()?.playSound?.('voice_stop');
 
-    const minRecordMs = Number(state.admin.settings?.min_record_ms || 500);
-    const maxRecordMs = Number(state.admin.settings?.max_record_ms || 120000);
-    if (durationMs < minRecordMs) {
+    const minRecordMs = 0;
+    const maxRecordMs = durationMs;
+    if (false) {
       setRecorderMessage('Слишком короткая запись', 'error');
       return;
     }
 
-    const safeDurationMs = Math.min(durationMs, maxRecordMs);
+    const safeDurationMs = durationMs;
     const wavBlob = encodeVoiceBlob(state.recorder.chunks, state.recorder.sampleRate, 16000);
     state.recorder.uploading = true;
     syncSendButtonState();
@@ -1337,7 +1338,7 @@
     try {
       await getBridge().queueVoiceMessage?.({
         blob: wavBlob,
-        durationMs: safeDurationMs,
+        durationMs,
         sampleRate: 16000,
         replyTo: getBridge().getReplyTo?.(),
       });
@@ -1347,6 +1348,13 @@
       state.recorder.chunks = [];
       syncSendButtonState();
     }
+  }
+
+  async function cancelActiveRecording() {
+    if (!state.recorder.recording) return;
+    cleanupRecorderGraph({ clearChunks: true });
+    getBridge()?.playSound?.('voice_stop');
+    hideRecorderBar();
   }
 
   function cleanupRecorderGraph({ clearChunks = false } = {}) {

@@ -3,7 +3,6 @@
 
   const ns = window.BananzaVideoNotes = window.BananzaVideoNotes || {};
 
-  const MAX_DURATION_MS = 30000;
   const TARGET_SAMPLE_RATE = 16000;
 
   function normalizeMimeType(value, fallback = '') {
@@ -110,13 +109,11 @@
       shapeRegistry,
       getSelectedShapeId,
       onStateChange,
-      onAutoStopRequest,
     } = {}) {
       this.bridge = bridge || window.BananzaAppBridge || null;
       this.shapeRegistry = shapeRegistry;
       this.getSelectedShapeId = typeof getSelectedShapeId === 'function' ? getSelectedShapeId : (() => 'banana-fat');
       this.onStateChange = typeof onStateChange === 'function' ? onStateChange : (() => {});
-      this.onAutoStopRequest = typeof onAutoStopRequest === 'function' ? onAutoStopRequest : null;
       this.reset();
     }
 
@@ -133,7 +130,6 @@
       this.audioSink = null;
       this.sampleRate = TARGET_SAMPLE_RATE;
       this.timerId = null;
-      this.autoStopTimer = null;
       this.stoppingPromise = null;
       this.prepared = false;
       this.preparePromise = null;
@@ -346,14 +342,6 @@
 
       this.updatePreview();
       this.timerId = window.setInterval(() => this.updatePreview(), 200);
-      this.autoStopTimer = window.setTimeout(() => {
-        if (!this.recording) return;
-        if (this.onAutoStopRequest) {
-          this.onAutoStopRequest();
-          return;
-        }
-        this.stopAndSend().catch(() => {});
-      }, MAX_DURATION_MS);
 
       preparedRecorder.start();
       this.onStateChange({ recording: true });
@@ -425,14 +413,6 @@
 
       this.updatePreview();
       this.timerId = window.setInterval(() => this.updatePreview(), 200);
-      this.autoStopTimer = window.setTimeout(() => {
-        if (!this.recording) return;
-        if (this.onAutoStopRequest) {
-          this.onAutoStopRequest();
-          return;
-        }
-        this.stopAndSend().catch(() => {});
-      }, MAX_DURATION_MS);
 
       recorder.start();
       this.onStateChange({ recording: true });
@@ -456,7 +436,7 @@
 
     async finishAndQueue() {
       if (!this.recording || !this.mediaRecorder) return;
-      const elapsed = Math.min(Date.now() - this.startAt, MAX_DURATION_MS);
+      const elapsed = Math.max(0, Date.now() - this.startAt);
       const mediaRecorder = this.mediaRecorder;
       const videoChunks = this.videoChunks;
 
@@ -501,9 +481,7 @@
       this.recording = false;
       this.prepared = false;
       if (this.timerId) window.clearInterval(this.timerId);
-      if (this.autoStopTimer) window.clearTimeout(this.autoStopTimer);
       this.timerId = null;
-      this.autoStopTimer = null;
 
       if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
         try { this.mediaRecorder.stop(); } catch {}

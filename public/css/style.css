@@ -2434,6 +2434,9 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
 
 .send-btn {
   position: relative;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
   color: var(--accent);
   font-size: 0;
   line-height: 0;

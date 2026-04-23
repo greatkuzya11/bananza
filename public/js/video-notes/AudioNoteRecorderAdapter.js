@@ -27,6 +27,10 @@
     async stopAndSend() {
       await window.BananzaVoiceHooks?.stopExternalRecording?.();
     }
+
+    async cancel() {
+      await window.BananzaVoiceHooks?.cancelExternalRecording?.();
+    }
   }
 
   ns.AudioNoteRecorderAdapter = AudioNoteRecorderAdapter;
