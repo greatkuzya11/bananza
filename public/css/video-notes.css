@@ -362,6 +362,134 @@ html[data-visual-mode="rich"] .msg-row.video-note-row.other .msg-bubble {
   color: var(--danger);
 }
 
+.video-note.is-shape-switching .video-note-shape,
+.video-note.is-shape-switching .video-note-progress,
+.video-note.is-shape-switching .video-note-shape-toggle-btn {
+  animation-fill-mode: both;
+  will-change: transform, opacity, filter;
+}
+
+.video-note.is-shape-switching .video-note-shape,
+.video-note.is-shape-switching .video-note-progress,
+.video-note.is-shape-switching .video-note-shape-toggle-btn,
+html[data-modal-animation="soft"] .video-note.is-shape-switching .video-note-shape,
+html[data-modal-animation="soft"] .video-note.is-shape-switching .video-note-progress,
+html[data-modal-animation="soft"] .video-note.is-shape-switching .video-note-shape-toggle-btn,
+html[data-modal-animation="lift"] .video-note.is-shape-switching .video-note-shape,
+html[data-modal-animation="lift"] .video-note.is-shape-switching .video-note-progress,
+html[data-modal-animation="lift"] .video-note.is-shape-switching .video-note-shape-toggle-btn {
+  animation-name: videoNoteShapeSwitchSoft;
+  animation-duration: calc(.22s * var(--modal-animation-speed-factor));
+  animation-timing-function: cubic-bezier(.2, .9, .24, 1);
+}
+
+html[data-modal-animation="zoom"] .video-note.is-shape-switching .video-note-shape,
+html[data-modal-animation="zoom"] .video-note.is-shape-switching .video-note-progress,
+html[data-modal-animation="zoom"] .video-note.is-shape-switching .video-note-shape-toggle-btn {
+  animation-name: videoNoteShapeSwitchZoom;
+  animation-duration: calc(.18s * var(--modal-animation-speed-factor));
+  animation-timing-function: cubic-bezier(.22, .84, .24, 1);
+}
+
+html[data-modal-animation="slide"] .video-note.is-shape-switching[data-shape-switch-to="circle"] .video-note-shape,
+html[data-modal-animation="slide"] .video-note.is-shape-switching[data-shape-switch-to="circle"] .video-note-progress,
+html[data-modal-animation="slide"] .video-note.is-shape-switching[data-shape-switch-to="circle"] .video-note-shape-toggle-btn {
+  animation-name: videoNoteShapeSwitchSlideToCircle;
+  animation-duration: calc(.24s * var(--modal-animation-speed-factor));
+  animation-timing-function: cubic-bezier(.18, .9, .22, 1);
+}
+
+html[data-modal-animation="slide"] .video-note.is-shape-switching[data-shape-switch-to="banana-fat"] .video-note-shape,
+html[data-modal-animation="slide"] .video-note.is-shape-switching[data-shape-switch-to="banana-fat"] .video-note-progress,
+html[data-modal-animation="slide"] .video-note.is-shape-switching[data-shape-switch-to="banana-fat"] .video-note-shape-toggle-btn {
+  animation-name: videoNoteShapeSwitchSlideToBanana;
+  animation-duration: calc(.24s * var(--modal-animation-speed-factor));
+  animation-timing-function: cubic-bezier(.18, .9, .22, 1);
+}
+
+html[data-modal-animation="fade"] .video-note.is-shape-switching .video-note-shape,
+html[data-modal-animation="fade"] .video-note.is-shape-switching .video-note-progress,
+html[data-modal-animation="fade"] .video-note.is-shape-switching .video-note-shape-toggle-btn {
+  animation-name: videoNoteShapeSwitchFade;
+  animation-duration: calc(.16s * var(--modal-animation-speed-factor));
+  animation-timing-function: ease-out;
+}
+
+html[data-modal-animation="none"] .video-note.is-shape-switching .video-note-shape,
+html[data-modal-animation="none"] .video-note.is-shape-switching .video-note-progress,
+html[data-modal-animation="none"] .video-note.is-shape-switching .video-note-shape-toggle-btn {
+  animation: none;
+}
+
+@keyframes videoNoteShapeSwitchSoft {
+  0% {
+    transform: scale(.965);
+    opacity: .84;
+    filter: saturate(.94);
+  }
+  55% {
+    transform: scale(1.025);
+    opacity: 1;
+    filter: saturate(1.03);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+    filter: none;
+  }
+}
+
+@keyframes videoNoteShapeSwitchZoom {
+  0% {
+    transform: scale(.88);
+    opacity: .78;
+    filter: saturate(.9);
+  }
+  70% {
+    transform: scale(1.035);
+    opacity: 1;
+    filter: saturate(1.04);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+    filter: none;
+  }
+}
+
+@keyframes videoNoteShapeSwitchSlideToCircle {
+  0% {
+    transform: translateX(-14px);
+    opacity: .72;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes videoNoteShapeSwitchSlideToBanana {
+  0% {
+    transform: translateX(14px);
+    opacity: .72;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes videoNoteShapeSwitchFade {
+  0% {
+    opacity: .56;
+    filter: saturate(.92);
+  }
+  100% {
+    opacity: 1;
+    filter: none;
+  }
+}
+
 .video-note-transcript {
   position: absolute;
   left: clamp(10px, 4vw, 18px);

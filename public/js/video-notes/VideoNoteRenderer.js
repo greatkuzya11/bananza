@@ -18,6 +18,18 @@
 
   const PLAYING_PROGRESS_MAX = 0.9;
   const MIN_PLAYING_PROGRESS_GAP_PX = 72;
+  const MODAL_ANIMATION_SPEED_FACTORS = Object.freeze({
+    1: 4.5,
+    2: 4.0,
+    3: 3.5,
+    4: 3.0,
+    5: 2.3,
+    6: 1.8,
+    7: 1.5,
+    8: 1.0,
+    9: 0.8,
+    10: 0.5,
+  });
 
   function escapeHtml(value) {
     const div = document.createElement('div');
@@ -58,6 +70,54 @@
 
     getBridge() {
       return this.bridge || window.BananzaAppBridge || null;
+    }
+
+    getShapeSwitchAnimationDurationMs() {
+      const animationStyle = String(
+        this.getBridge()?.getCurrentModalAnimation?.()
+        || document.documentElement?.dataset?.modalAnimation
+        || 'soft'
+      ).toLowerCase();
+      const rawSpeed = Number(this.getBridge()?.getCurrentModalAnimationSpeed?.() || 8);
+      const safeSpeed = Math.min(10, Math.max(1, Math.round(rawSpeed) || 8));
+      const factor = MODAL_ANIMATION_SPEED_FACTORS[safeSpeed] || 1;
+      const baseDuration = animationStyle === 'none'
+        ? 0
+        : animationStyle === 'zoom'
+          ? 180
+          : animationStyle === 'slide'
+            ? 240
+            : animationStyle === 'fade'
+              ? 160
+              : 220;
+      return Math.max(0, Math.round(baseDuration * factor));
+    }
+
+    playShapeSwitchAnimation(row, nextShapeId) {
+      const note = row?.querySelector('.video-note');
+      if (!note) return;
+      if (row.__shapeSwitchAnimationTimer) {
+        clearTimeout(row.__shapeSwitchAnimationTimer);
+        row.__shapeSwitchAnimationTimer = null;
+      }
+      note.classList.remove('is-shape-switching');
+      delete note.dataset.shapeSwitchTo;
+      void note.offsetWidth;
+      note.dataset.shapeSwitchTo = String(nextShapeId || '');
+      note.classList.add('is-shape-switching');
+      const durationMs = this.getShapeSwitchAnimationDurationMs();
+      if (durationMs <= 0) {
+        requestAnimationFrame(() => {
+          note.classList.remove('is-shape-switching');
+          delete note.dataset.shapeSwitchTo;
+        });
+        return;
+      }
+      row.__shapeSwitchAnimationTimer = window.setTimeout(() => {
+        note.classList.remove('is-shape-switching');
+        delete note.dataset.shapeSwitchTo;
+        row.__shapeSwitchAnimationTimer = null;
+      }, durationMs + 40);
     }
 
     scrollToBottomSoon() {
@@ -359,6 +419,7 @@
       const nextShapeId = this.getEffectiveShapeId(message) === 'circle' ? 'banana-fat' : 'circle';
       this.shapeRegistry.setMessageShapeOverride(message, nextShapeId);
       this.refreshRow(row);
+      this.playShapeSwitchAnimation(row, nextShapeId);
     }
 
     togglePlayback(row) {
