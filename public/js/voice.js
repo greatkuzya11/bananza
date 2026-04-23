@@ -955,6 +955,7 @@
     if (!state.features.voice_notes_enabled) {
       row.classList.remove('voice-note-row', 'voice-note-compact', 'voice-note-full');
       restoreVoiceAudioMarkup(audioWrap);
+      getBridge()?.bindMediaPlayback?.(audioWrap.querySelector('audio'), row.__messageData || message, 'voice-note-audio');
       removeCompactFooterButton(bubble);
       const titleEl = audioWrap.querySelector('div');
       if (titleEl && audioWrap.dataset.originalTitle) {
@@ -974,6 +975,7 @@
 
     if (isCompactMode) {
       renderCompactVoiceAudio(audioWrap);
+      getBridge()?.bindMediaPlayback?.(audioWrap.querySelector('.voice-compact-audio'), row.__messageData || message, 'voice-note-audio');
       const button = ensureCompactFooterButton(bubble);
       bindCompactVoicePlayer(audioWrap, button);
       renderCompactVoicePanel(panel, message, row);
@@ -981,6 +983,7 @@
     }
 
     restoreVoiceAudioMarkup(audioWrap);
+    getBridge()?.bindMediaPlayback?.(audioWrap.querySelector('audio'), row.__messageData || message, 'voice-note-audio');
     removeCompactFooterButton(bubble);
     const titleEl = audioWrap.querySelector('div');
     if (titleEl) {

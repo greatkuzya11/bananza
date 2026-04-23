@@ -171,6 +171,7 @@
           if (video) video.currentTime = 0;
           syncUi();
         });
+        this.getBridge()?.bindMediaPlayback?.(video, message, 'video-note-video');
       }
       row.classList.add('video-note-row', 'media-message');
       row.__messageData = { ...(row.__messageData || {}), ...message };

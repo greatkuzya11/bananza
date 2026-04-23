@@ -322,6 +322,7 @@
   let scrollRestoreTimers = new Set();
   let mobileRouteTransitionActive = false;
   let mobileRouteTransitionTimer = null;
+  const mediaPlaybackStateByChat = new Map();
   let messageBackgroundSyncTimer = null;
   let messageBackgroundSyncRunning = false;
   let messageBackgroundSyncRequested = false;
@@ -616,6 +617,7 @@
     },
     scrollToBottom: (instant = false) => scrollToBottom(instant),
     playSound: (type, options) => playAppSound(type, options),
+    bindMediaPlayback: (mediaEl, message, role) => bindMediaPlaybackState(mediaEl, message, role),
     getDom: () => ({
       sendBtn,
       msgInput,
@@ -6459,6 +6461,7 @@
   function closeChatViewForChat(chatId) {
     const id = Number(chatId || 0);
     if (!id || Number(currentChatId || 0) !== id) return;
+    pauseCurrentChatMediaPlayback();
     hideFloatingMessageActions({ immediate: true });
     hideMentionPicker();
     hideAvatarUserMenu();
@@ -9306,6 +9309,9 @@
     if (currentChatId) {
       saveCurrentScrollAnchor(currentChatId, { force: true });
     }
+    if (previousChatId && !sameChat) {
+      pauseCurrentChatMediaPlayback();
+    }
     hideMentionPicker();
     hideAvatarUserMenu();
     hideChatContextMenu({ immediate: true });
@@ -9490,6 +9496,202 @@
     messagesEl.classList.add('has-bg');
     messagesEl.style.backgroundImage = `url(${chat.background_url})`;
     applyBackgroundStyleToElement(messagesEl, chat.background_style || 'cover');
+  }
+
+  function resolveMediaPlaybackChatId(message = {}) {
+    return Number(message?.chat_id || message?.chatId || currentChatId || 0);
+  }
+
+  function resolveMediaPlaybackKey(message = {}, role = '') {
+    const normalizedRole = String(role || '').trim();
+    const rawId = String(
+      message?.id
+      || message?.client_id
+      || message?.clientId
+      || message?.file_stored
+      || message?.client_file_url
+      || ''
+    ).trim();
+    if (!normalizedRole || !rawId) return '';
+    return `${normalizedRole}:${rawId}`;
+  }
+
+  function getMediaPlaybackBucket(chatId, { create = false } = {}) {
+    const id = Number(chatId || 0);
+    if (!id) return null;
+    let bucket = mediaPlaybackStateByChat.get(id);
+    if (!bucket && create) {
+      bucket = new Map();
+      mediaPlaybackStateByChat.set(id, bucket);
+    }
+    return bucket || null;
+  }
+
+  function readMediaPlaybackState(message = {}, role = '') {
+    const chatId = resolveMediaPlaybackChatId(message);
+    const key = resolveMediaPlaybackKey(message, role);
+    if (!chatId || !key) return null;
+    const bucket = getMediaPlaybackBucket(chatId);
+    if (!bucket?.has(key)) return null;
+    return { ...(bucket.get(key) || {}) };
+  }
+
+  function writeMediaPlaybackState(message = {}, role = '', snapshot = null) {
+    const chatId = resolveMediaPlaybackChatId(message);
+    const key = resolveMediaPlaybackKey(message, role);
+    if (!chatId || !key) return;
+    const bucket = getMediaPlaybackBucket(chatId, { create: true });
+    const currentTime = Math.max(0, Number(snapshot?.currentTime || 0));
+    const shouldResume = Boolean(snapshot?.shouldResume);
+    if (!shouldResume && currentTime <= 0.05) {
+      bucket.delete(key);
+      if (!bucket.size) mediaPlaybackStateByChat.delete(chatId);
+      return;
+    }
+    bucket.set(key, {
+      currentTime,
+      shouldResume,
+      updatedAt: Date.now(),
+    });
+  }
+
+  function clearMediaPlaybackState(message = {}, role = '') {
+    const chatId = resolveMediaPlaybackChatId(message);
+    const key = resolveMediaPlaybackKey(message, role);
+    if (!chatId || !key) return;
+    const bucket = getMediaPlaybackBucket(chatId);
+    if (!bucket) return;
+    bucket.delete(key);
+    if (!bucket.size) mediaPlaybackStateByChat.delete(chatId);
+  }
+
+  function captureBoundMediaPlaybackState(mediaEl) {
+    if (!mediaEl) return;
+    const role = String(mediaEl.dataset.playbackRole || '').trim();
+    const row = mediaEl.closest('.msg-row');
+    const message = row?.__messageData || null;
+    if (!message || !role) return;
+    writeMediaPlaybackState(message, role, {
+      currentTime: Number(mediaEl.currentTime || 0),
+      shouldResume: !mediaEl.paused && !mediaEl.ended,
+    });
+  }
+
+  function bindMediaPlaybackState(mediaEl, message = {}, role = '') {
+    if (!mediaEl || !message) return;
+    const resolvedRole = String(role || '').trim();
+    const key = resolveMediaPlaybackKey(message, resolvedRole);
+    if (!resolvedRole || !key) return;
+    if (mediaEl.__bananzaPlaybackBoundKey === key) return;
+    mediaEl.__bananzaPlaybackBoundKey = key;
+    mediaEl.dataset.playbackRole = resolvedRole;
+
+    let lastPersistAt = 0;
+    let restored = false;
+    let restoreStarted = false;
+    const persistSnapshot = ({ force = false } = {}) => {
+      const now = Date.now();
+      if (!force && now - lastPersistAt < 500) return;
+      lastPersistAt = now;
+      captureBoundMediaPlaybackState(mediaEl);
+    };
+
+    const applySavedState = () => {
+      if (restored || restoreStarted) return;
+      const saved = readMediaPlaybackState(message, resolvedRole);
+      if (!saved) return;
+      restoreStarted = true;
+      const targetTime = Math.max(0, Number(saved.currentTime || 0));
+      const resumePlayback = () => {
+        restored = true;
+        restoreStarted = false;
+        if (saved.shouldResume) {
+          Promise.resolve(mediaEl.play?.()).catch(() => {});
+        }
+      };
+      if (targetTime > 0.05) {
+        const maxTime = Number.isFinite(mediaEl.duration) && mediaEl.duration > 0
+          ? Math.max(0, mediaEl.duration - 0.05)
+          : targetTime;
+        const nextTime = Math.min(targetTime, maxTime);
+        let resumeScheduled = false;
+        const finalizeRestore = () => {
+          if (resumeScheduled) return;
+          resumeScheduled = true;
+          try {
+            if (Math.abs(Number(mediaEl.currentTime || 0) - nextTime) > 0.1) {
+              mediaEl.currentTime = nextTime;
+            }
+          } catch (e) {}
+          resumePlayback();
+        };
+        try {
+          mediaEl.addEventListener('seeked', finalizeRestore, { once: true });
+          mediaEl.currentTime = nextTime;
+        } catch (e) {}
+        setTimeout(finalizeRestore, 180);
+        return;
+      }
+      resumePlayback();
+    };
+
+    mediaEl.addEventListener('play', () => persistSnapshot({ force: true }));
+    mediaEl.addEventListener('pause', () => {
+      if (mediaEl.__bananzaAutoPaused) {
+        mediaEl.__bananzaAutoPaused = false;
+        writeMediaPlaybackState(message, resolvedRole, {
+          currentTime: Number(mediaEl.currentTime || 0),
+          shouldResume: true,
+        });
+        return;
+      }
+      persistSnapshot({ force: true });
+    });
+    mediaEl.addEventListener('timeupdate', () => persistSnapshot());
+    mediaEl.addEventListener('ended', () => {
+      clearMediaPlaybackState(message, resolvedRole);
+    });
+    mediaEl.addEventListener('loadedmetadata', applySavedState, { once: true });
+    mediaEl.addEventListener('canplay', applySavedState, { once: true });
+
+    const saved = readMediaPlaybackState(message, resolvedRole);
+    if (saved) {
+      try {
+        if ((mediaEl.getAttribute('preload') || '').toLowerCase() === 'none') {
+          mediaEl.setAttribute('preload', saved.shouldResume ? 'auto' : 'metadata');
+        }
+        mediaEl.load?.();
+      } catch (e) {}
+      if (mediaEl.readyState >= 1) {
+        requestAnimationFrame(applySavedState);
+      }
+    }
+  }
+
+  function pauseCurrentChatMediaPlayback() {
+    if (!messagesEl) return;
+    messagesEl.querySelectorAll('audio, video').forEach((mediaEl) => {
+      const shouldResume = !mediaEl.paused && !mediaEl.ended;
+      if (shouldResume) {
+        mediaEl.__bananzaAutoPaused = true;
+        const role = String(mediaEl.dataset.playbackRole || '').trim();
+        const row = mediaEl.closest('.msg-row');
+        const message = row?.__messageData || null;
+        if (message && role) {
+          writeMediaPlaybackState(message, role, {
+            currentTime: Number(mediaEl.currentTime || 0),
+            shouldResume: true,
+          });
+        }
+      } else {
+        captureBoundMediaPlaybackState(mediaEl);
+      }
+      try {
+        mediaEl.pause?.();
+      } catch (e) {
+        mediaEl.__bananzaAutoPaused = false;
+      }
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -10109,6 +10311,9 @@
     // Audio/video duration
     const audio = row.querySelector('audio');
     if (audio) {
+      if (!msg.is_voice_note) {
+        bindMediaPlaybackState(audio, msg, 'attachment-audio');
+      }
       audio.addEventListener('loadedmetadata', () => {
         const dur = formatDuration(audio.duration);
         const durEl = document.createElement('span');
@@ -10119,6 +10324,7 @@
     }
     const video = row.querySelector('video');
     if (video && !msg.is_video_note) {
+      bindMediaPlaybackState(video, msg, 'attachment-video');
       const markWideVideo = () => {
         if (!video.videoWidth || !video.videoHeight) return;
         row.classList.toggle('wide-media-message', video.videoWidth >= video.videoHeight);
@@ -13923,6 +14129,7 @@
 
   function revealSidebarFromChat({ forceAnimation = false } = {}) {
     if (!sidebar) return;
+    pauseCurrentChatMediaPlayback();
     if (isIosViewportFixTarget && document.activeElement === msgInput) {
       try { msgInput.blur(); } catch {}
       queueIosViewportLayoutSync();
