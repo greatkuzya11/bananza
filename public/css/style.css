@@ -4167,6 +4167,15 @@ html[data-visual-mode="rich"] .poll-card {
   border-top: 1px solid var(--border-light);
 }
 .meta-username { font-size: 14px; color: var(--text-secondary); }
+.profile-danger-section {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-light);
+}
+.profile-logout-btn {
+  width: 100%;
+  margin: 0;
+}
 
 .member-remove {
   margin-left: auto; color: var(--text-secondary); font-size: 14px;

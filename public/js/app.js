@@ -15232,7 +15232,7 @@
     $('#chatAllowUnpinAnyPinToggle')?.addEventListener('change', () => saveChatPinSettings());
 
     // Logout
-    $('#logoutBtn').addEventListener('click', () => { if (confirm('Logout?')) logout(); });
+    $('#profileLogoutBtn')?.addEventListener('click', () => { if (confirm('Logout?')) logout(); });
 
     // Load more
     loadMoreBtn.addEventListener('click', loadMore);
