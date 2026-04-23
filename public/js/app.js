@@ -92,6 +92,9 @@
   const CHAT_LIST_REQUEST_TIMEOUT_MS = 9000;
   const RECOVERY_SYNC_MIN_INTERVAL_MS = 1200;
   const RECOVERY_CATCHUP_MAX_PAGES = 5;
+  const PAGINATION_FETCH_MAX_PAGES = 6;
+  const PAGINATION_TOP_THRESHOLD = 120;
+  const PAGINATION_BOTTOM_THRESHOLD = 120;
   const RESUME_WS_REFRESH_AFTER_MS = 25000;
   const NOTES_CHAT_EMOJI = '📝';
   const CHAT_CONTEXT_LONG_PRESS_MS = 500;
@@ -361,6 +364,7 @@
   const messagesEl = $('#messages');
   const loadMoreWrap = $('#loadMoreWrap');
   const loadMoreBtn = $('#loadMoreBtn');
+  const loadMoreAfterWrap = $('#loadMoreAfterWrap');
   const typingBar = $('#typingBar');
   const msgInput = $('#msgInput');
   const inputArea = chatView?.querySelector('.input-area');
@@ -1505,16 +1509,21 @@
     return [id];
   }
 
-  function replaceRenderedMessage(nextMsg) {
+  function replaceRenderedMessage(nextMsg, options = {}) {
     if (!nextMsg?.id) return false;
     const row = messagesEl.querySelector(`[data-msg-id="${nextMsg.id}"]`);
     if (!row) return false;
+    const preserveAnchor = options.preserveAnchor?.messageId ? { ...options.preserveAnchor } : null;
+    const restoreAttempts = Number(options.restoreAttempts || 2);
     const prepared = { ...nextMsg };
     if (row.querySelector('.msg-status.read')) prepared.is_read = true;
     const showName = Boolean(row.querySelector('.msg-sender'));
     const replacement = createMessageEl(prepared, showName);
     row.replaceWith(replacement);
     rememberDisplayedMessage(prepared.id);
+    if (preserveAnchor) {
+      requestAnimationFrame(() => restoreScrollAnchor(preserveAnchor, restoreAttempts));
+    }
     updateScrollBottomButton();
     return true;
   }
@@ -7420,10 +7429,12 @@
 
   function syncMentionOpenButton() {
     if (!mentionOpenBtn) return;
-    const visible = Boolean(currentChatId && isComposerMeaningfullyEmpty());
+    const visible = Boolean(currentChatId);
     mentionOpenBtn.classList.toggle('hidden', !visible);
+    mentionOpenBtn.classList.toggle('is-open', mentionPickerState.active);
     mentionOpenBtn.disabled = !visible;
     mentionOpenBtn.setAttribute('aria-hidden', visible ? 'false' : 'true');
+    mentionOpenBtn.setAttribute('aria-expanded', mentionPickerState.active ? 'true' : 'false');
   }
 
   function hideMentionPicker() {
@@ -7431,6 +7442,7 @@
     mentionPickerPointerState = null;
     closeFloatingSurface($('#mentionPickerBackdrop'));
     closeFloatingSurface($('#mentionPicker'));
+    syncMentionOpenButton();
   }
 
   function findMentionTrigger() {
@@ -7493,6 +7505,7 @@
     mentionPickerState.active = true;
     openFloatingSurface(ensureMentionPickerBackdrop());
     openFloatingSurface(picker);
+    syncMentionOpenButton();
     positionMentionPicker();
     requestAnimationFrame(() => positionMentionPicker());
   }
@@ -7505,8 +7518,12 @@
       restoreComposerFocusAfterMentionPicker(keyboardAttached);
       return;
     }
-    if (!chatId || !msgInput || !isComposerMeaningfullyEmpty()) {
+    if (!chatId || !msgInput) {
       syncMentionOpenButton();
+      return;
+    }
+    if (!isComposerMeaningfullyEmpty()) {
+      insertRawMentionTriggerAtCursor();
       return;
     }
     try {
@@ -7598,6 +7615,25 @@
     syncMentionOpenButton();
     window.BananzaVoiceHooks?.refreshComposerState?.();
     focusComposerKeepKeyboard(true);
+    msgInput.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  function insertRawMentionTriggerAtCursor() {
+    if (!msgInput) return;
+    const value = msgInput.value || '';
+    const start = Math.max(0, msgInput.selectionStart ?? value.length);
+    const end = Math.max(start, msgInput.selectionEnd ?? start);
+    msgInput.value = value.slice(0, start) + '@' + value.slice(end);
+    const nextCursor = start + 1;
+    msgInput.setSelectionRange(nextCursor, nextCursor);
+    autoResize();
+    syncMentionOpenButton();
+    window.BananzaVoiceHooks?.refreshComposerState?.();
+    try {
+      msgInput.focus({ preventScroll: true });
+    } catch {
+      msgInput.focus();
+    }
     msgInput.dispatchEvent(new Event('input', { bubbles: true }));
   }
 
@@ -8615,9 +8651,38 @@
     loadMoreWrap.classList.toggle('hidden', !hasMore);
   }
 
+  function setLoadMoreAfterLoading(value) {
+    if (!loadMoreAfterWrap) return;
+    const loading = Boolean(value);
+    loadMoreAfterWrap.classList.toggle('hidden', !loading);
+    loadMoreAfterWrap.setAttribute('aria-hidden', loading ? 'false' : 'true');
+  }
+
   function setHasMoreAfter(value) {
     hasMoreAfter = Boolean(value);
+    if (!hasMoreAfter) setLoadMoreAfterLoading(false);
     updateScrollBottomButton();
+  }
+
+  function getMessagesAfterLoader() {
+    return loadMoreAfterWrap && loadMoreAfterWrap.parentElement === messagesEl ? loadMoreAfterWrap : null;
+  }
+
+  function getMessagesLastContentChild() {
+    const afterLoader = getMessagesAfterLoader();
+    return afterLoader ? afterLoader.previousElementSibling : messagesEl.lastElementChild;
+  }
+
+  function insertAtMessagesEnd(node) {
+    messagesEl.insertBefore(node, getMessagesAfterLoader());
+  }
+
+  function buildMessagesRootChildren(fragment = null) {
+    const children = [];
+    if (loadMoreWrap) children.push(loadMoreWrap);
+    if (fragment) children.push(fragment);
+    if (loadMoreAfterWrap) children.push(loadMoreAfterWrap);
+    return children;
   }
 
   function messageIdKey(id) {
@@ -8776,7 +8841,7 @@
   }
 
   function maybeLoadMoreAtTop() {
-    if (!suppressScrollAnchorSave && messagesEl.scrollTop < 60 && hasMore && !loadingMore && !loadingMoreAfter) {
+    if (!suppressScrollAnchorSave && messagesEl.scrollTop < PAGINATION_TOP_THRESHOLD && hasMore && !loadingMore && !loadingMoreAfter) {
       loadMore();
       return true;
     }
@@ -8784,7 +8849,7 @@
   }
 
   function maybeLoadMoreAtBottom() {
-    if (!suppressScrollAnchorSave && hasMoreAfter && !loadingMoreAfter && !loadingMore && isNearBottom(80)) {
+    if (!suppressScrollAnchorSave && hasMoreAfter && !loadingMoreAfter && !loadingMore && isNearBottom(PAGINATION_BOTTOM_THRESHOLD)) {
       loadMoreAfter();
       return true;
     }
@@ -9349,6 +9414,7 @@
     compactView = !!compactViewMap[targetChatId];
     messagesEl.classList.toggle('compact-view', compactView);
     loadMoreWrap.classList.add('hidden');
+    setLoadMoreAfterLoading(false);
 
     try {
       if (window.messageCache) {
@@ -9698,8 +9764,8 @@
   // MESSAGES
   // ═══════════════════════════════════════════════════════════════════════════
   function clearRenderedMessages({ resetDisplayed = true } = {}) {
-    if (loadMoreWrap) messagesEl.replaceChildren(loadMoreWrap);
-    else messagesEl.replaceChildren();
+    setLoadMoreAfterLoading(false);
+    messagesEl.replaceChildren(...buildMessagesRootChildren());
     if (resetDisplayed) {
       displayedMsgIds.clear();
       displayedPinEventIds.clear();
@@ -9857,8 +9923,7 @@
     displayedMsgIds.clear();
     displayedPinEventIds.clear();
     const fragment = buildMessagesFragment(Array.isArray(msgs) ? msgs : [], pinEvents);
-    if (loadMoreWrap) messagesEl.replaceChildren(loadMoreWrap, fragment);
-    else messagesEl.replaceChildren(fragment);
+    messagesEl.replaceChildren(...buildMessagesRootChildren(fragment));
     updateScrollBottomButton();
   }
 
@@ -9886,7 +9951,7 @@
     }
     const fragment = buildMessagesFragment(messages, events);
     if (fragment.childNodes.length) {
-      messagesEl.appendChild(fragment);
+      insertAtMessagesEnd(fragment);
       primeAppendedMessageSideEffects(messages);
       cleanupDuplicateDateSeparators();
       updateScrollBottomButton();
@@ -9948,7 +10013,7 @@
     const existingFirst = messagesEl.querySelector('.date-separator, .pin-system-row, .msg-row, .msg-group');
     const fragment = buildMessagesFragment(msgs, pinEvents);
     if (existingFirst) messagesEl.insertBefore(fragment, existingFirst);
-    else messagesEl.appendChild(fragment);
+    else insertAtMessagesEnd(fragment);
     updateScrollBottomButton();
   }
 
@@ -9956,7 +10021,7 @@
     const msgDate = formatDate(msg.created_at);
     const isOwn = msg.user_id === currentUser.id;
     const useGroup = !isOwn || compactView;
-    let lastChild = messagesEl.lastElementChild;
+    let lastChild = getMessagesLastContentChild();
 
     // Date separator: compare against last separator in DOM
     const seps = messagesEl.querySelectorAll('.date-separator');
@@ -9965,7 +10030,7 @@
       const sep = document.createElement('div');
       sep.className = 'date-separator';
       sep.innerHTML = `<span>${msgDate}</span>`;
-      messagesEl.appendChild(sep);
+      insertAtMessagesEnd(sep);
       lastChild = null;
     }
 
@@ -9981,7 +10046,7 @@
       const { group, body } = createMessageGroup(msg, isOwn);
       groupBody = body;
       sameGroup = false;
-      messagesEl.appendChild(group);
+      insertAtMessagesEnd(group);
     }
 
     const showName = useGroup && !sameGroup;
@@ -9990,7 +10055,7 @@
     if (useGroup) {
       groupBody.appendChild(el);
     } else {
-      messagesEl.appendChild(el);
+      insertAtMessagesEnd(el);
     }
     rememberDisplayedMessage(msg.id);
     try {
@@ -10582,41 +10647,62 @@
     loadMoreBtn.textContent = 'Loading...';
 
     try {
-      let page = await readCachedCursorPage(chatId, 'before', firstId);
-      let msgs = page?.messages || [];
-      if (!page) {
-        const params = new URLSearchParams({ limit: String(PAGE_SIZE), meta: '1', before: String(firstId) });
-        const raw = await api(`/api/chats/${chatId}/messages?${params}`);
-        page = normalizeMessagesPage(raw);
-        msgs = page.messages;
-        const memberLastReads = raw && raw.member_last_reads ? raw.member_last_reads : null;
-        const readState = await reconcileChatReadState(chatId, memberLastReads, {
-          replace: true,
-          updateVisible: currentChatId === chatId,
-        });
-        if (readState.chatReadChanged) renderChatList(chatSearch.value);
-        cacheCursorPage(chatId, 'before', firstId, msgs, page);
+      let cursor = firstId;
+      let prependedAny = false;
+      let scrollTopBefore = 0;
+      let scrollHeightBefore = 0;
+
+      for (let pageIndex = 0; pageIndex < PAGINATION_FETCH_MAX_PAGES; pageIndex += 1) {
+        let page = await readCachedCursorPage(chatId, 'before', cursor);
+        let msgs = page?.messages || [];
+        if (!page) {
+          const params = new URLSearchParams({ limit: String(PAGE_SIZE), meta: '1', before: String(cursor) });
+          const raw = await api(`/api/chats/${chatId}/messages?${params}`);
+          page = normalizeMessagesPage(raw);
+          msgs = page.messages;
+          const memberLastReads = raw && raw.member_last_reads ? raw.member_last_reads : null;
+          const readState = await reconcileChatReadState(chatId, memberLastReads, {
+            replace: true,
+            updateVisible: currentChatId === chatId,
+          });
+          if (readState.chatReadChanged) renderChatList(chatSearch.value);
+          cacheCursorPage(chatId, 'before', cursor, msgs, page);
+        }
+        applyOwnReadStateToMessages(chatId, msgs);
+        if (currentChatId !== chatId) return;
+
+        const hasMoreBeforeValue = page.hasMoreBefore ?? msgs.length >= PAGE_SIZE;
+        setHasMoreBefore(hasMoreBeforeValue);
+
+        const newMessages = filterNewMessages(msgs);
+        const newPinEvents = filterNewPinEvents(page.pinEvents || []);
+        if (newMessages.length || newPinEvents.length) {
+          scrollTopBefore = messagesEl.scrollTop;
+          scrollHeightBefore = messagesEl.scrollHeight;
+          renderMessages(newMessages, newPinEvents);
+          cleanupDuplicateDateSeparators();
+          if (newMessages.length) await cacheMessages(chatId, msgs, page);
+          prependedAny = true;
+          break;
+        }
+
+        const fetchedFirstId = minMessageId(msgs);
+        if (!fetchedFirstId || fetchedFirstId >= cursor || !hasMoreBeforeValue) break;
+        cursor = fetchedFirstId;
       }
-      applyOwnReadStateToMessages(chatId, msgs);
-      if (currentChatId !== chatId) return;
-      setHasMoreBefore(page.hasMoreBefore ?? msgs.length >= PAGE_SIZE);
 
-      // Capture scroll state RIGHT before DOM mutation (not before async fetch)
-      const scrollTopBefore = messagesEl.scrollTop;
-      const scrollHeightBefore = messagesEl.scrollHeight;
-      const newMessages = filterNewMessages(msgs);
-      const newPinEvents = filterNewPinEvents(page.pinEvents || []);
-
-      if (newMessages.length || newPinEvents.length) {
-        renderMessages(newMessages, newPinEvents);
-        cleanupDuplicateDateSeparators();
-        if (newMessages.length) await cacheMessages(chatId, msgs, page);
+      if (prependedAny) {
+        messagesEl.scrollTop = scrollTopBefore + (messagesEl.scrollHeight - scrollHeightBefore);
+        saveCurrentScrollAnchor(currentChatId, { force: true });
+        if (hasMore && messagesEl.scrollTop < PAGINATION_TOP_THRESHOLD) {
+          requestAnimationFrame(() => maybeLoadMoreAtTop());
+        }
+      } else {
+        updateScrollBottomButton();
       }
-
-      // Restore scroll position: keep user at the same visual spot
-      messagesEl.scrollTop = scrollTopBefore + (messagesEl.scrollHeight - scrollHeightBefore);
-      saveCurrentScrollAnchor(currentChatId, { force: true });
-    } catch {}
+    } catch (e) {
+      console.warn('[pagination] loadMore failed:', e?.message || e);
+    }
     finally {
       loadingMore = false;
       loadMoreBtn.textContent = 'Load earlier messages';
@@ -10633,37 +10719,63 @@
     }
 
     loadingMoreAfter = true;
+    setLoadMoreAfterLoading(true);
     try {
-      let page = await readCachedCursorPage(chatId, 'after', lastId);
-      let msgs = page?.messages || [];
-      if (!page) {
-        const params = new URLSearchParams({ limit: String(PAGE_SIZE), meta: '1', after: String(lastId) });
-        const raw = await api(`/api/chats/${chatId}/messages?${params}`);
-        page = normalizeMessagesPage(raw);
-        msgs = page.messages;
-        const memberLastReads = raw && raw.member_last_reads ? raw.member_last_reads : null;
-        const readState = await reconcileChatReadState(chatId, memberLastReads, {
-          replace: true,
-          updateVisible: currentChatId === chatId,
-        });
-        if (readState.chatReadChanged) renderChatList(chatSearch.value);
-        cacheCursorPage(chatId, 'after', lastId, msgs, page);
+      let cursor = lastId;
+      let appendedAny = false;
+      let bottomOffsetBefore = 0;
+
+      for (let pageIndex = 0; pageIndex < PAGINATION_FETCH_MAX_PAGES; pageIndex += 1) {
+        let page = await readCachedCursorPage(chatId, 'after', cursor);
+        let msgs = page?.messages || [];
+        if (!page) {
+          const params = new URLSearchParams({ limit: String(PAGE_SIZE), meta: '1', after: String(cursor) });
+          const raw = await api(`/api/chats/${chatId}/messages?${params}`);
+          page = normalizeMessagesPage(raw);
+          msgs = page.messages;
+          const memberLastReads = raw && raw.member_last_reads ? raw.member_last_reads : null;
+          const readState = await reconcileChatReadState(chatId, memberLastReads, {
+            replace: true,
+            updateVisible: currentChatId === chatId,
+          });
+          if (readState.chatReadChanged) renderChatList(chatSearch.value);
+          cacheCursorPage(chatId, 'after', cursor, msgs, page);
+        }
+
+        applyOwnReadStateToMessages(chatId, msgs);
+        if (currentChatId !== chatId) return;
+
+        const hasMoreAfterValue = page.hasMoreAfter ?? msgs.length >= PAGE_SIZE;
+        setHasMoreAfter(hasMoreAfterValue);
+
+        const newMessages = filterNewMessages(msgs);
+        const newPinEvents = filterNewPinEvents(page.pinEvents || []);
+        if (newMessages.length || newPinEvents.length) {
+          bottomOffsetBefore = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
+          appendTimelineItems(newMessages, newPinEvents);
+          if (newMessages.length) await cacheMessages(chatId, msgs, page);
+          appendedAny = true;
+          break;
+        }
+
+        const fetchedLastId = maxMessageId(msgs);
+        if (!fetchedLastId || fetchedLastId <= cursor || !hasMoreAfterValue) break;
+        cursor = fetchedLastId;
       }
 
-      applyOwnReadStateToMessages(chatId, msgs);
-      if (currentChatId !== chatId) return;
-      setHasMoreAfter(page.hasMoreAfter ?? msgs.length >= PAGE_SIZE);
-
-      const newMessages = filterNewMessages(msgs);
-      const newPinEvents = filterNewPinEvents(page.pinEvents || []);
-      if (newMessages.length || newPinEvents.length) {
-        appendTimelineItems(newMessages, newPinEvents);
-        if (newMessages.length) await cacheMessages(chatId, msgs, page);
+      if (appendedAny) {
+        messagesEl.scrollTop = Math.max(0, messagesEl.scrollHeight - messagesEl.clientHeight - bottomOffsetBefore);
         saveCurrentScrollAnchor(currentChatId, { force: true });
+        if (hasMoreAfter && isNearBottom(PAGINATION_BOTTOM_THRESHOLD)) {
+          requestAnimationFrame(() => maybeLoadMoreAtBottom());
+        }
       }
-    } catch {}
+    } catch (e) {
+      console.warn('[pagination] loadMoreAfter failed:', e?.message || e);
+    }
     finally {
       loadingMoreAfter = false;
+      setLoadMoreAfterLoading(false);
       updateScrollBottomButton();
     }
   }
@@ -11168,9 +11280,18 @@
         method: 'PATCH',
         body: { text: nextText }
       });
-      applyMessageUpdate(updated);
+      const preserveAnchor = captureScrollAnchor();
+      applyMessageUpdate(updated, { preserveAnchor });
       clearEdit({ clearInput: true });
-      loadChats();
+      if (preserveAnchor?.messageId) {
+        requestAnimationFrame(() => {
+          restoreScrollAnchor(preserveAnchor, 2);
+          saveCurrentScrollAnchor(currentChatId, { force: true });
+        });
+      } else {
+        saveCurrentScrollAnchor(currentChatId, { force: true });
+      }
+      loadChats().catch(() => {});
     } catch (e) {
       alert(e.message);
     }
@@ -11375,13 +11496,13 @@
     });
   }
 
-  function applyMessageUpdate(msg) {
+  function applyMessageUpdate(msg, options = {}) {
     if (!msg?.id) return;
     updateVisibleReplyQuotesFromMessage(msg);
     applyOwnReadStateToMessage(msg, msg.chat_id || currentChatId);
     try { if (window.messageCache) window.messageCache.upsertMessage(msg).catch(()=>{}); } catch (e) {}
     if (msg.chat_id !== currentChatId) return;
-    replaceRenderedMessage(msg);
+    replaceRenderedMessage(msg, options);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
