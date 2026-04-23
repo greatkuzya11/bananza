@@ -95,6 +95,10 @@
   const PAGINATION_FETCH_MAX_PAGES = 6;
   const PAGINATION_TOP_THRESHOLD = 120;
   const PAGINATION_BOTTOM_THRESHOLD = 120;
+  const CHAT_LIST_PULL_TRIGGER_PX = 10;
+  const CHAT_LIST_PULL_THRESHOLD = 64;
+  const CHAT_LIST_PULL_MAX_OFFSET = 96;
+  const CHAT_LIST_PULL_REFRESH_OFFSET = 56;
   const RESUME_WS_REFRESH_AFTER_MS = 25000;
   const NOTES_CHAT_EMOJI = '📝';
   const CHAT_CONTEXT_LONG_PRESS_MS = 500;
@@ -348,6 +352,9 @@
   const sidebar = $('#sidebar');
   const chatList = $('#chatList');
   const chatListStatus = $('#chatListStatus');
+  const chatListPullIndicator = $('#chatListPullIndicator');
+  const chatListPullIcon = $('#chatListPullIcon');
+  const chatListPullLabel = $('#chatListPullLabel');
   const sidebarSearch = $('#sidebarSearch');
   const chatSearch = $('#chatSearch');
   const chatSearchToggle = $('#chatSearchToggle');
@@ -15042,6 +15049,165 @@
           source: 'contextmenu',
         });
       });
+    })();
+
+    (() => {
+      if (!chatList || !sidebar || !chatListPullIndicator || !chatListPullLabel) return;
+      chatListPullIndicator.classList.remove('hidden');
+      chatListPullIndicator.setAttribute('aria-hidden', 'true');
+
+      const state = {
+        tracking: false,
+        engaged: false,
+        refreshing: false,
+        startY: 0,
+        offset: 0,
+      };
+      let resetPullUiTimer = null;
+
+      const clearResetPullUiTimer = () => {
+        if (!resetPullUiTimer) return;
+        clearTimeout(resetPullUiTimer);
+        resetPullUiTimer = null;
+      };
+
+      const isSidebarListPullAvailable = () => (
+        window.innerWidth <= 768
+        && !sidebar.classList.contains('sidebar-hidden')
+        && !state.refreshing
+        && !chatListAbortController
+      );
+
+      const positionChatListPullIndicator = () => {
+        const sidebarRect = sidebar.getBoundingClientRect();
+        const listRect = chatList.getBoundingClientRect();
+        const top = Math.max(0, Math.round(listRect.top - sidebarRect.top + 8));
+        chatListPullIndicator.style.top = `${top}px`;
+      };
+
+      const setChatListPullUi = (offset, { dragging = false, refreshing = false } = {}) => {
+        const ready = !refreshing && offset >= CHAT_LIST_PULL_THRESHOLD;
+        state.offset = Math.max(0, Math.round(offset));
+        clearResetPullUiTimer();
+        positionChatListPullIndicator();
+        chatList.style.transition = dragging ? 'none' : 'padding-top .18s cubic-bezier(.22, .84, .24, 1)';
+        chatList.style.paddingTop = `${state.offset}px`;
+        chatListPullIndicator.setAttribute('aria-hidden', 'false');
+        chatListPullIndicator.style.transform = `translateY(${Math.max(0, Math.min(18, Math.round(state.offset * 0.26)))}px)`;
+        sidebar.classList.toggle('is-chat-list-pull-visible', state.offset > 0 || refreshing);
+        sidebar.classList.toggle('is-chat-list-pull-ready', ready);
+        sidebar.classList.toggle('is-chat-list-refreshing', refreshing);
+        chatListPullLabel.textContent = refreshing
+          ? 'Refreshing chats...'
+          : ready
+            ? 'Release to refresh'
+            : 'Pull to refresh';
+      };
+
+      const resetChatListPullUi = ({ immediate = false } = {}) => {
+        clearResetPullUiTimer();
+        state.engaged = false;
+        state.offset = 0;
+        sidebar.classList.remove('is-chat-list-pull-ready');
+        if (immediate) {
+          sidebar.classList.remove('is-chat-list-pull-visible', 'is-chat-list-refreshing');
+          chatList.style.transition = '';
+          chatList.style.paddingTop = '';
+          chatListPullIndicator.style.transform = '';
+          chatListPullIndicator.setAttribute('aria-hidden', 'true');
+          chatListPullLabel.textContent = 'Pull to refresh';
+          return;
+        }
+        chatList.style.transition = 'padding-top .18s cubic-bezier(.22, .84, .24, 1)';
+        chatList.style.paddingTop = '0px';
+        chatListPullIndicator.style.transform = '';
+        chatListPullIndicator.setAttribute('aria-hidden', 'true');
+        chatListPullLabel.textContent = 'Pull to refresh';
+        resetPullUiTimer = setTimeout(() => {
+          if (state.tracking || state.refreshing) return;
+          sidebar.classList.remove('is-chat-list-pull-visible', 'is-chat-list-refreshing');
+          chatList.style.transition = '';
+          chatList.style.paddingTop = '';
+          resetPullUiTimer = null;
+        }, 190);
+      };
+
+      const clearPullTracking = () => {
+        state.tracking = false;
+        state.startY = 0;
+      };
+
+      const startChatListPullRefresh = async () => {
+        if (state.refreshing) return;
+        state.refreshing = true;
+        setChatListPullUi(CHAT_LIST_PULL_REFRESH_OFFSET, { refreshing: true });
+        chatListPullLabel.textContent = 'Reloading app...';
+        animateChatHeaderActionButton('#refreshChatsBtn');
+        requestAnimationFrame(() => {
+          setTimeout(() => {
+            window.location.reload();
+          }, 80);
+        });
+      };
+
+      const dampPullDistance = (distance) => Math.min(CHAT_LIST_PULL_MAX_OFFSET, Math.round(distance * 0.62));
+
+      chatList.addEventListener('touchstart', (e) => {
+        if (!isSidebarListPullAvailable() || e.touches.length !== 1) return;
+        if (chatList.scrollTop > 0) return;
+        state.tracking = true;
+        state.engaged = false;
+        state.startY = e.touches[0].clientY;
+        state.offset = 0;
+        positionChatListPullIndicator();
+      }, { passive: true });
+
+      chatList.addEventListener('touchmove', (e) => {
+        if (!state.tracking || state.refreshing || e.touches.length !== 1) return;
+        const delta = e.touches[0].clientY - state.startY;
+        if (!state.engaged && delta <= CHAT_LIST_PULL_TRIGGER_PX) {
+          if (delta < 0) clearPullTracking();
+          return;
+        }
+        if (chatList.scrollTop > 0 || delta <= 0 || !isSidebarListPullAvailable()) {
+          clearPullTracking();
+          resetChatListPullUi({ immediate: true });
+          return;
+        }
+        state.engaged = true;
+        e.preventDefault();
+        setChatListPullUi(dampPullDistance(delta), { dragging: true });
+      }, { passive: false });
+
+      const handleChatListPullEnd = async () => {
+        if (!state.tracking) return;
+        const shouldRefresh = state.engaged && state.offset >= CHAT_LIST_PULL_THRESHOLD && !state.refreshing;
+        clearPullTracking();
+        if (shouldRefresh) {
+          await startChatListPullRefresh();
+          return;
+        }
+        resetChatListPullUi();
+      };
+
+      chatList.addEventListener('touchend', () => {
+        handleChatListPullEnd().catch(() => {
+          state.refreshing = false;
+          resetChatListPullUi();
+        });
+      }, { passive: true });
+      chatList.addEventListener('touchcancel', () => {
+        clearPullTracking();
+        if (!state.refreshing) resetChatListPullUi();
+      }, { passive: true });
+
+      const syncChatListPullLayout = () => {
+        if (!sidebar.classList.contains('is-chat-list-pull-visible') && !state.refreshing) return;
+        positionChatListPullIndicator();
+      };
+      window.addEventListener('resize', syncChatListPullLayout, { passive: true });
+      window.visualViewport?.addEventListener('resize', syncChatListPullLayout);
+      window.visualViewport?.addEventListener('scroll', syncChatListPullLayout);
     })();
 
     // Sidebar search

@@ -46,6 +46,12 @@
         >
         <button id="chatSearchClear" class="search-clear" title="Close search" aria-label="Close search" type="button">✕</button>
       </div>
+      <div id="chatListPullIndicator" class="chat-list-pull-indicator hidden" aria-live="polite" aria-hidden="true">
+        <div class="chat-list-pull-chip">
+          <span id="chatListPullIcon" class="chat-list-pull-icon" aria-hidden="true">↻</span>
+          <span id="chatListPullLabel" class="chat-list-pull-label">Pull to refresh</span>
+        </div>
+      </div>
       <div id="chatList" class="chat-list"></div>
       <div id="chatListStatus" class="chat-list-status hidden" aria-live="polite"></div>
       <div class="sidebar-footer">

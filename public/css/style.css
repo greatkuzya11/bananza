@@ -457,6 +457,7 @@ a:hover { text-decoration: underline; }
 
 /* ── Sidebar ─────────────────────────────────────────────────────────────── */
 #sidebar {
+  position: relative;
   width: 320px; min-width: 200px;
   background-color: var(--bg-sidebar);
   background-image: var(--bg-sidebar-gradient);
@@ -578,6 +579,59 @@ a:hover { text-decoration: underline; }
 }
 .search-clear:hover,
 .search-clear:focus-visible { color: var(--text-primary); }
+
+.chat-list-pull-indicator {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  z-index: 14;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: opacity .18s ease, transform .18s ease;
+}
+.chat-list-pull-indicator.hidden {
+  display: none;
+}
+.chat-list-pull-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(0,0,0,.22);
+  border: 1px solid rgba(255,255,255,.08);
+  box-shadow: 0 10px 22px rgba(0,0,0,.18);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1;
+  backdrop-filter: blur(12px);
+}
+.chat-list-pull-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+  transform-origin: 50% 50%;
+  transition: transform .18s ease, color .18s ease, opacity .18s ease;
+}
+.chat-list-pull-label {
+  white-space: nowrap;
+}
+#sidebar.is-chat-list-pull-visible .chat-list-pull-indicator {
+  opacity: 1;
+  transform: translateY(0);
+}
+#sidebar.is-chat-list-pull-ready .chat-list-pull-icon {
+  transform: rotate(180deg);
+}
+#sidebar.is-chat-list-refreshing .chat-list-pull-icon {
+  animation: refreshChatsSpin .68s linear infinite;
+}
 
 .chat-list {
   --chat-list-item-inset: 12px;
@@ -3023,6 +3077,11 @@ html[data-visual-mode="rich"] .weather-widget {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   border-color: var(--accent-border);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.07);
+}
+html[data-visual-mode="rich"] .chat-list-pull-chip {
+  background: color-mix(in srgb, var(--bg-modal) 84%, var(--accent) 16%);
+  border-color: var(--accent-border);
+  box-shadow: 0 12px 26px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.07);
 }
 
 html[data-visual-mode="rich"] .poll-card {
