@@ -4405,6 +4405,9 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
     z-index: 20; transition: transform .25s ease;
     contain: paint;
   }
+  html[data-visual-mode="rich"] #sidebar {
+    border-right: none;
+  }
   #sidebar.sidebar-no-transition { transition: none !important; }
   #sidebar.sidebar-hidden { transform: translate3d(-100%,0,0); }
   #sidebar:not(.sidebar-hidden) ~ #chatArea {

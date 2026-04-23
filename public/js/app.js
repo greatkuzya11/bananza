@@ -289,7 +289,7 @@
   let suppressNextChatItemTapUntil = 0;
   let suppressChatContextDismissUntil = 0;
   let mentionTargetsByChat = new Map();
-  let mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [], source: null };
+  let mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [], source: null, keyboardAttached: false };
   let mentionPickerPointerState = null;
   let mentionPickerClickSuppressUntil = 0;
   let avatarUserMenuState = null;
@@ -332,6 +332,8 @@
   let iosComposerFocused = false;
   let iosComposerBlurTimer = null;
   let iosBackNavigationToken = 0;
+  let mobileViewportPrevHeight = 0;
+  let mobileViewportHeightSyncBound = false;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DOM
@@ -560,6 +562,22 @@
         msgInput.focus();
       }
     });
+  }
+
+  function restoreComposerFocusAfterMentionPicker(keyboardAttached = mentionPickerState.keyboardAttached) {
+    if (window.innerWidth > 768 || keyboardAttached) {
+      focusComposerKeepKeyboard(true);
+      return true;
+    }
+    return false;
+  }
+
+  function dismissMentionPickerAfterKeyboardClose() {
+    if (window.innerWidth > 768) return false;
+    if (!mentionPickerState.active || !mentionPickerState.keyboardAttached) return false;
+    if (isMobileComposerKeyboardOpen()) return false;
+    hideMentionPicker();
+    return true;
   }
 
   function preventMobileComposerBlur(e) {
@@ -1963,6 +1981,54 @@
     root.style.setProperty('--chat-area-width', `${width}px`);
     root.style.setProperty('--chat-area-height', `${height}px`);
     queueIosViewportLayoutSync();
+  }
+
+  function syncMobileAppHeightToViewport(options = {}) {
+    const force = Boolean(options && typeof options === 'object' && options.force);
+    const app = document.getElementById('app');
+    if (!app || !window.visualViewport || window.innerWidth > 768) return;
+    const newViewportHeight = Math.max(0, window.visualViewport?.height || 0);
+    const mentionPickerDismissed = dismissMentionPickerAfterKeyboardClose();
+    getIosViewportBaselineHeight();
+    const newAppHeight = getMobileAppViewportHeight();
+    if (!force && !mentionPickerDismissed && isMobileViewportLayoutLocked() && !isIosViewportFixTarget) {
+      mobileViewportPrevHeight = newViewportHeight;
+      return;
+    }
+    app.style.height = `${Math.round(newAppHeight)}px`;
+    app.style.paddingTop = '0px';
+    syncChatAreaMetrics();
+    if (newViewportHeight < mobileViewportPrevHeight && messagesEl) {
+      requestAnimationFrame(() => {
+        if (!force && !mentionPickerDismissed && isMobileViewportLayoutLocked() && !isIosViewportFixTarget) return;
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      });
+    }
+    mobileViewportPrevHeight = newViewportHeight;
+  }
+
+  function forceMobileViewportLayoutSync() {
+    syncMobileAppHeightToViewport({ force: true });
+    syncChatAreaMetrics();
+  }
+
+  function setupMobileViewportHeightSync() {
+    if (!window.visualViewport || window.innerWidth > 768 || mobileViewportHeightSyncBound) return;
+    mobileViewportHeightSyncBound = true;
+    mobileViewportPrevHeight = Math.max(0, window.visualViewport.height || 0);
+    syncMobileAppHeightToViewport({ force: true });
+    window.visualViewport.addEventListener('resize', syncMobileAppHeightToViewport);
+    if (isIosViewportFixTarget) {
+      window.visualViewport.addEventListener('scroll', syncMobileAppHeightToViewport);
+      window.addEventListener('orientationchange', syncMobileAppHeightToViewport);
+      if ('ResizeObserver' in window && !iosViewportElementResizeObserver) {
+        iosViewportElementResizeObserver = new ResizeObserver(() => {
+          queueIosViewportLayoutSync();
+        });
+        if (chatHeader) iosViewportElementResizeObserver.observe(chatHeader);
+        if (inputArea) iosViewportElementResizeObserver.observe(inputArea);
+      }
+    }
   }
 
   function setupChatAreaMetricsSync() {
@@ -7358,7 +7424,7 @@
   }
 
   function hideMentionPicker() {
-    mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [], source: null };
+    mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [], source: null, keyboardAttached: false };
     mentionPickerPointerState = null;
     closeFloatingSurface($('#mentionPickerBackdrop'));
     closeFloatingSurface($('#mentionPicker'));
@@ -7397,13 +7463,18 @@
 
   function renderMentionPicker(targets, options = {}) {
     const picker = ensureMentionPicker();
-    const { source = mentionPickerState.source || 'trigger', preserveSelection = true } = options;
+    const {
+      source = mentionPickerState.source || 'trigger',
+      preserveSelection = true,
+      keyboardAttached = mentionPickerState.keyboardAttached,
+    } = options;
     if (!targets.length) {
       hideMentionPicker();
       return;
     }
     mentionPickerState.targets = targets;
     mentionPickerState.source = source;
+    mentionPickerState.keyboardAttached = Boolean(keyboardAttached);
     mentionPickerState.selected = preserveSelection
       ? Math.min(mentionPickerState.selected, targets.length - 1)
       : 0;
@@ -7426,8 +7497,9 @@
   async function openMentionPickerFromButton() {
     const chatId = Number(currentChatId || 0);
     if (mentionPickerState.active && mentionPickerState.source === 'button') {
+      const keyboardAttached = Boolean(mentionPickerState.keyboardAttached);
       hideMentionPicker();
-      focusComposerKeepKeyboard(true);
+      restoreComposerFocusAfterMentionPicker(keyboardAttached);
       return;
     }
     if (!chatId || !msgInput || !isComposerMeaningfullyEmpty()) {
@@ -7438,10 +7510,11 @@
       const targets = await loadMentionTargets(chatId);
       if (chatId !== Number(currentChatId || 0) || !isComposerMeaningfullyEmpty()) return;
       const range = getManualMentionRange();
+      const keyboardAttached = window.innerWidth > 768 || isMobileComposerKeyboardOpen();
       mentionPickerState.start = range.start;
       mentionPickerState.end = range.end;
-      renderMentionPicker(targets, { source: 'button', preserveSelection: false });
-      focusComposerKeepKeyboard(true);
+      renderMentionPicker(targets, { source: 'button', preserveSelection: false, keyboardAttached });
+      restoreComposerFocusAfterMentionPicker(keyboardAttached);
     } catch {
       hideMentionPicker();
     }
@@ -7458,7 +7531,7 @@
           const range = getManualMentionRange();
           mentionPickerState.start = range.start;
           mentionPickerState.end = range.end;
-          renderMentionPicker(targets, { source: 'button' });
+          renderMentionPicker(targets, { source: 'button', keyboardAttached: mentionPickerState.keyboardAttached });
         } catch {
           hideMentionPicker();
         }
@@ -7484,7 +7557,7 @@
         ].join(' ').toLowerCase();
         return !query || haystack.includes(query);
       }).slice(0, 8);
-      renderMentionPicker(filtered, { source: 'trigger' });
+      renderMentionPicker(filtered, { source: 'trigger', keyboardAttached: window.innerWidth > 768 || isMobileComposerKeyboardOpen() });
     } catch {
       hideMentionPicker();
     }
@@ -7492,6 +7565,7 @@
 
   function insertMentionTarget(target) {
     if (!target || !msgInput) return;
+    const keyboardAttached = Boolean(mentionPickerState.keyboardAttached);
     const tokenValue = `@${String(target.token || target.mention || '').replace(/^@+/, '')} `;
     const value = msgInput.value || '';
     const start = mentionPickerState.start ?? (msgInput.selectionStart || 0);
@@ -7503,7 +7577,7 @@
     autoResize();
     syncMentionOpenButton();
     window.BananzaVoiceHooks?.refreshComposerState?.();
-    focusComposerKeepKeyboard(true);
+    restoreComposerFocusAfterMentionPicker(keyboardAttached);
     msgInput.dispatchEvent(new Event('input', { bubbles: true }));
   }
 
@@ -14055,6 +14129,8 @@
       if (!['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(e.key)) updateMentionPicker();
     });
     window.visualViewport?.addEventListener('resize', () => {
+      const mentionPickerDismissed = dismissMentionPickerAfterKeyboardClose();
+      if (mentionPickerDismissed) forceMobileViewportLayoutSync();
       positionMentionPicker();
       positionAvatarUserMenu(avatarUserMenuState?.anchor);
       positionMessageActionSurfaces();
@@ -14062,6 +14138,8 @@
       queueIosViewportLayoutSync();
     });
     window.visualViewport?.addEventListener('scroll', () => {
+      const mentionPickerDismissed = dismissMentionPickerAfterKeyboardClose();
+      if (mentionPickerDismissed) forceMobileViewportLayoutSync();
       positionMentionPicker();
       positionAvatarUserMenu(avatarUserMenuState?.anchor);
       positionMessageActionSurfaces();
@@ -15256,45 +15334,7 @@
     setChatSearchOpen(false, { clear: true, focus: false, render: false });
     hydrateChatListCache();
 
-    // Mobile keyboard resize fix
-    if (window.visualViewport && window.innerWidth <= 768) {
-      const app = document.getElementById('app');
-      let prevVVHeight = Math.max(0, window.visualViewport.height || 0);
-      const syncAppHeightToViewport = () => {
-        if (!app) return;
-        const newViewportHeight = Math.max(0, window.visualViewport?.height || 0);
-        getIosViewportBaselineHeight();
-        const newAppHeight = getMobileAppViewportHeight();
-        if (isMobileViewportLayoutLocked() && !isIosViewportFixTarget) {
-          prevVVHeight = newViewportHeight;
-          return;
-        }
-        app.style.height = `${Math.round(newAppHeight)}px`;
-        app.style.paddingTop = '0px';
-        queueIosViewportLayoutSync();
-        // If keyboard appeared (viewport shrunk) — scroll messages to bottom
-        if (newViewportHeight < prevVVHeight && messagesEl) {
-          requestAnimationFrame(() => {
-            if (isMobileViewportLayoutLocked() && !isIosViewportFixTarget) return;
-            messagesEl.scrollTop = messagesEl.scrollHeight;
-          });
-        }
-        prevVVHeight = newViewportHeight;
-      };
-      syncAppHeightToViewport();
-      window.visualViewport.addEventListener('resize', syncAppHeightToViewport);
-      if (isIosViewportFixTarget) {
-        window.visualViewport.addEventListener('scroll', syncAppHeightToViewport);
-        window.addEventListener('orientationchange', syncAppHeightToViewport);
-        if ('ResizeObserver' in window && !iosViewportElementResizeObserver) {
-          iosViewportElementResizeObserver = new ResizeObserver(() => {
-            queueIosViewportLayoutSync();
-          });
-          if (chatHeader) iosViewportElementResizeObserver.observe(chatHeader);
-          if (inputArea) iosViewportElementResizeObserver.observe(inputArea);
-        }
-      }
-    }
+    setupMobileViewportHeightSync();
 
     // Mobile navigation: set initial history state for chat list
     if (window.innerWidth <= 768) {
