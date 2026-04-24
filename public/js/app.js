@@ -8882,8 +8882,10 @@
             && !isOwnIncomingMessage
             && !isAiBotResponse
             && (!wasNearBottom || document.hidden);
+          const shouldAutoScrollIncomingMedia = isOwnIncomingMessage
+            || (!document.hidden && wasNearBottom && !shouldPreserveIncomingScroll);
           const scrollTopBefore = messagesEl.scrollTop;
-          appendMessage(msg.message);
+          appendMessage(msg.message, { mediaAutoScrollToBottom: shouldAutoScrollIncomingMedia });
           if (isOwnIncomingMessage || (!document.hidden && wasNearBottom && !shouldPreserveIncomingScroll)) {
             scrollToBottom(false, !isOwnIncomingMessage);
           } else if (shouldPreserveIncomingScroll) {
@@ -9927,13 +9929,22 @@
     };
   }
 
-  function saveCurrentScrollAnchor(chatId = currentChatId, { force = false } = {}) {
-    if (!chatId || (!force && suppressScrollAnchorSave)) return;
+  function saveCurrentScrollAnchor(chatId = currentChatId, { force = false, allowPendingMedia = false } = {}) {
+    const targetChatId = Number(chatId || currentChatId || 0);
+    if (!targetChatId || (!force && suppressScrollAnchorSave)) return false;
+    if (
+      !allowPendingMedia
+      && targetChatId === Number(currentChatId || 0)
+      && pendingMediaBottomScrollRows.size
+    ) {
+      return false;
+    }
     ensureScrollAnchorsLoaded();
     const anchor = captureScrollAnchor();
-    if (!anchor?.messageId) return;
-    scrollPositions[chatId] = anchor;
+    if (!anchor?.messageId) return false;
+    scrollPositions[targetChatId] = anchor;
     persistScrollAnchors();
+    return true;
   }
 
   function scheduleScrollAnchorSave() {
@@ -10155,6 +10166,7 @@
     const commitMessageWindow = async (msgs = [], page = null, { source = 'network', pinEvents = [] } = {}) => {
       if (!isCurrentOpen()) return false;
       const list = Array.isArray(msgs) ? msgs : [];
+      const shouldAutoScrollRenderedMedia = Boolean(restoreAnchor?.atBottom || !restoreAnchor?.messageId);
       const firstId = minMessageId(list);
       const lastId = maxMessageId(list);
       const cacheHasMoreBefore = firstId !== Number.MAX_SAFE_INTEGER
@@ -10170,7 +10182,9 @@
 
       setHasMoreBefore(page?.hasMoreBefore ?? (source === 'cache' ? cacheHasMoreBefore : networkHasMoreBefore));
       setHasMoreAfter(page?.hasMoreAfter ?? fallbackHasMoreAfter);
-      replaceRenderedMessages(list, pinEvents);
+      replaceRenderedMessages(list, pinEvents, {
+        mediaAutoScrollToBottom: shouldAutoScrollRenderedMedia,
+      });
       if (!isCurrentOpen()) return false;
       committedWindow = true;
       renderOutboxForChat(targetChatId).catch(() => {});
@@ -10301,7 +10315,9 @@
         if (newMessages.length || newPinEvents.length) {
           const wasNearBottom = isNearBottom(120);
           const anchor = wasNearBottom ? null : captureScrollAnchor();
-          appendTimelineItems(newMessages, newPinEvents);
+          appendTimelineItems(newMessages, newPinEvents, {
+            mediaAutoScrollToBottom: Boolean(wasNearBottom),
+          });
           if (newMessages.length) updateChatListLastMessage(newMessages[newMessages.length - 1]);
           if (wasNearBottom) {
             scrollToBottom(false, true);
@@ -10826,7 +10842,7 @@
     return row;
   }
 
-  function buildMessagesFragment(msgs = [], pinEvents = []) {
+  function buildMessagesFragment(msgs = [], pinEvents = [], options = {}) {
     const fragment = document.createDocumentFragment();
     let lastDate = null;
     let currentGroupBody = null;
@@ -10871,7 +10887,7 @@
       }
 
       const showName = useGroup && startsGroup;
-      const el = createMessageEl(msg, showName);
+      const el = createMessageEl(msg, showName, options);
       if (useGroup) {
         currentGroupBody.appendChild(el);
       } else {
@@ -10884,10 +10900,11 @@
     return fragment;
   }
 
-  function replaceRenderedMessages(msgs = [], pinEvents = []) {
+  function replaceRenderedMessages(msgs = [], pinEvents = [], options = {}) {
     displayedMsgIds.clear();
     displayedPinEventIds.clear();
-    const fragment = buildMessagesFragment(Array.isArray(msgs) ? msgs : [], pinEvents);
+    pendingMediaBottomScrollRows.clear();
+    const fragment = buildMessagesFragment(Array.isArray(msgs) ? msgs : [], pinEvents, options);
     messagesEl.replaceChildren(...buildMessagesRootChildren(fragment));
     updateScrollBottomButton();
   }
@@ -10907,16 +10924,17 @@
     if (!loadingMoreAfter && list.length) updateHasMoreAfterFromChat(currentChatId);
   }
 
-  function appendTimelineItems(msgs = [], pinEvents = []) {
+  function appendTimelineItems(msgs = [], pinEvents = [], options = {}) {
     const messages = filterNewMessages(msgs);
     const events = filterNewPinEvents(pinEvents);
     if (!events.length) {
-      messages.forEach((message) => appendMessage(message));
+      messages.forEach((message) => appendMessage(message, options));
       return;
     }
-    const fragment = buildMessagesFragment(messages, events);
+    const fragment = buildMessagesFragment(messages, events, options);
     if (fragment.childNodes.length) {
       insertAtMessagesEnd(fragment);
+      markPendingMediaBottomScrollForMessages(messages, Boolean(options.mediaAutoScrollToBottom));
       primeAppendedMessageSideEffects(messages);
       cleanupDuplicateDateSeparators();
       updateScrollBottomButton();
@@ -10942,6 +10960,73 @@
     if (!row?.isConnected) return false;
     const rowChatId = Number(row.__messageData?.chat_id || row.__messageData?.chatId || currentChatId || 0);
     return !rowChatId || rowChatId === Number(currentChatId || 0);
+  }
+
+  function messageHasDeferredMediaLayout(msg) {
+    if (!msg || Boolean(msg.is_video_note)) return false;
+    return msg.file_type === 'image' || msg.file_type === 'video';
+  }
+
+  function clearPendingMediaBottomScroll(row) {
+    if (!row) return;
+    row.__autoScrollMediaToBottomOnLoad = false;
+    pendingMediaBottomScrollRows.delete(row);
+  }
+
+  function noteMessageScrollUserIntent() {
+    mediaBottomAutoScrollUserIntentAt = Date.now();
+  }
+
+  function scheduleMediaBottomScrollAnchorSave(chatId = currentChatId) {
+    const targetChatId = Number(chatId || currentChatId || 0);
+    if (!targetChatId) return;
+    requestAnimationFrame(() => {
+      if (pendingMediaBottomScrollRows.size) return;
+      saveCurrentScrollAnchor(targetChatId, { force: true, allowPendingMedia: true });
+    });
+  }
+
+  function settleDeferredMediaBottomScroll(chatId = currentChatId) {
+    const targetChatId = Number(chatId || currentChatId || 0);
+    if (!targetChatId) return;
+    const guardOptions = { chatId: targetChatId };
+    scrollToBottom(true, true, guardOptions);
+    requestAnimationFrame(() => {
+      scrollToBottom(true, true, guardOptions);
+      setTimeout(() => {
+        if (Number(currentChatId || 0) !== targetChatId) return;
+        scrollToBottom(true, true, guardOptions);
+        if (!pendingMediaBottomScrollRows.size) {
+          saveCurrentScrollAnchor(targetChatId, { force: true, allowPendingMedia: true });
+        }
+      }, 80);
+    });
+  }
+
+  function markPendingMediaBottomScroll(row, msg, enabled = false) {
+    clearPendingMediaBottomScroll(row);
+    if (!enabled || !messageHasDeferredMediaLayout(msg)) return;
+    row.__autoScrollMediaToBottomOnLoad = true;
+    pendingMediaBottomScrollRows.add(row);
+  }
+
+  function markPendingMediaBottomScrollForMessages(messages = [], enabled = false) {
+    if (!enabled) return;
+    const list = Array.isArray(messages) ? messages : [];
+    list.forEach((msg) => {
+      if (!messageHasDeferredMediaLayout(msg)) return;
+      const row = messagesEl.querySelector(`.msg-row[data-msg-id="${Number(msg.id || 0)}"]`);
+      if (row) markPendingMediaBottomScroll(row, msg, true);
+    });
+  }
+
+  function cancelPendingMediaBottomScrollIfNeeded() {
+    if (!pendingMediaBottomScrollRows.size || isNearBottom(8)) return;
+    if (Date.now() - mediaBottomAutoScrollUserIntentAt > 450) return;
+    for (const row of [...pendingMediaBottomScrollRows]) {
+      clearPendingMediaBottomScroll(row);
+    }
+    scheduleMediaBottomScrollAnchorSave();
   }
 
   function createMessageGroup(msg, isOwn) {
@@ -10982,7 +11067,7 @@
     updateScrollBottomButton();
   }
 
-  function appendMessage(msg) {
+  function appendMessage(msg, options = {}) {
     const msgDate = formatDate(msg.created_at);
     const isOwn = msg.user_id === currentUser.id;
     const useGroup = !isOwn || compactView;
@@ -11015,7 +11100,7 @@
     }
 
     const showName = useGroup && !sameGroup;
-    const el = createMessageEl(msg, showName);
+    const el = createMessageEl(msg, showName, options);
 
     if (useGroup) {
       groupBody.appendChild(el);
@@ -11061,7 +11146,7 @@
     }
   }
 
-  function createMessageEl(msg, showName = true) {
+  function createMessageEl(msg, showName = true, options = {}) {
     applyOwnReadStateToMessage(msg, msg?.chat_id || msg?.chatId || currentChatId);
     const isOwn = msg.user_id === currentUser.id;
     const isClientMessage = isClientSideMessage(msg);
@@ -11090,6 +11175,7 @@
     row.dataset.date = formatDate(msg.created_at);
     row.dataset.userId = msg.user_id;
     row.__messageData = { ...msg };
+    markPendingMediaBottomScroll(row, msg, Boolean(options.mediaAutoScrollToBottom));
     row.__replyPayload = {
       id: msg.id,
       display_name: isOwn ? currentUser.display_name : msg.display_name,
@@ -11303,9 +11389,35 @@
     const img = row.querySelector('.msg-image');
     if (img) {
       img.draggable = false;
+      let imageLayoutHandled = false;
+      let imageLayoutRetryFrame = 0;
       const markWideImage = () => {
         if (!img.naturalWidth || !img.naturalHeight) return;
         row.classList.toggle('wide-media-message', img.naturalWidth >= img.naturalHeight);
+      };
+      const finalizeImageLayout = () => {
+        if (!row.isConnected) {
+          if (imageLayoutRetryFrame) return;
+          imageLayoutRetryFrame = requestAnimationFrame(() => {
+            imageLayoutRetryFrame = 0;
+            finalizeImageLayout();
+          });
+          return;
+        }
+        if (imageLayoutHandled) return;
+        imageLayoutHandled = true;
+        if (!isCurrentMessageRow(row)) {
+          clearPendingMediaBottomScroll(row);
+          return;
+        }
+        const rowChatId = Number(row.__messageData?.chat_id || row.__messageData?.chatId || currentChatId || 0);
+        const shouldAutoScroll = Boolean(row.__autoScrollMediaToBottomOnLoad);
+        const anchor = !shouldAutoScroll && !isNearBottom(8) ? captureScrollAnchor() : null;
+        markWideImage();
+        if (anchor) requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
+        clearPendingMediaBottomScroll(row);
+        if (shouldAutoScroll) settleDeferredMediaBottomScroll(rowChatId);
+        else scheduleMediaBottomScrollAnchorSave(rowChatId);
       };
       img.addEventListener('dragstart', (e) => e.preventDefault());
       img.addEventListener('click', (e) => {
@@ -11317,15 +11429,8 @@
         }
         openImageViewer(img.src);
       });
-      const wasNearBottom = isNearBottom();
-      img.addEventListener('load', () => {
-        if (!isCurrentMessageRow(row)) return;
-        const anchor = !wasNearBottom && !isNearBottom(8) ? captureScrollAnchor() : null;
-        markWideImage();
-        if (anchor) requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
-        if (wasNearBottom && (scrollRestoreMode !== 'restore' || isOwn)) scrollToBottom();
-      });
-      if (img.complete) markWideImage();
+      img.addEventListener('load', finalizeImageLayout);
+      if (img.complete) finalizeImageLayout();
     }
 
     const expandBtn = row.querySelector('.msg-expand-btn');
@@ -11355,13 +11460,30 @@
     const video = row.querySelector('video');
     if (video && !msg.is_video_note) {
       bindMediaPlaybackState(video, msg, 'attachment-video');
+      let videoLayoutHandled = false;
+      let videoLayoutRetryFrame = 0;
       const markWideVideo = () => {
         if (!video.videoWidth || !video.videoHeight) return;
         row.classList.toggle('wide-media-message', video.videoWidth >= video.videoHeight);
       };
-      video.addEventListener('loadedmetadata', () => {
-        if (!isCurrentMessageRow(row)) return;
-        const anchor = !isNearBottom(8) ? captureScrollAnchor() : null;
+      const finalizeVideoLayout = () => {
+        if (!row.isConnected) {
+          if (videoLayoutRetryFrame) return;
+          videoLayoutRetryFrame = requestAnimationFrame(() => {
+            videoLayoutRetryFrame = 0;
+            finalizeVideoLayout();
+          });
+          return;
+        }
+        if (videoLayoutHandled) return;
+        videoLayoutHandled = true;
+        if (!isCurrentMessageRow(row)) {
+          clearPendingMediaBottomScroll(row);
+          return;
+        }
+        const rowChatId = Number(row.__messageData?.chat_id || row.__messageData?.chatId || currentChatId || 0);
+        const shouldAutoScroll = Boolean(row.__autoScrollMediaToBottomOnLoad);
+        const anchor = !shouldAutoScroll && !isNearBottom(8) ? captureScrollAnchor() : null;
         markWideVideo();
         if (anchor) requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
         const dur = formatDuration(video.duration);
@@ -11369,8 +11491,12 @@
         durEl.className = 'media-duration';
         durEl.textContent = dur;
         video.parentElement.querySelector('div:last-child')?.prepend(durEl);
-      });
-      if (video.readyState >= 1) markWideVideo();
+        clearPendingMediaBottomScroll(row);
+        if (shouldAutoScroll) settleDeferredMediaBottomScroll(rowChatId);
+        else scheduleMediaBottomScrollAnchorSave(rowChatId);
+      };
+      video.addEventListener('loadedmetadata', finalizeVideoLayout);
+      if (video.readyState >= 1) finalizeVideoLayout();
     }
 
     window.BananzaVideoNoteHooks?.decorateMessageRow?.(row, msg);
@@ -11551,7 +11677,9 @@
         const newMessages = filterNewMessages(msgs);
         const newPinEvents = filterNewPinEvents(pinEvents);
         if (newMessages.length || newPinEvents.length) {
-          appendTimelineItems(newMessages, newPinEvents);
+          appendTimelineItems(newMessages, newPinEvents, {
+            mediaAutoScrollToBottom: Boolean(wasNearBottom && !document.hidden),
+          });
           if (newMessages.length) updateChatListLastMessage(newMessages[newMessages.length - 1]);
           appendedAny = true;
         } else if (fromPush && msgs.length) {
@@ -11717,7 +11845,9 @@
         const newPinEvents = filterNewPinEvents(page.pinEvents || []);
         if (newMessages.length || newPinEvents.length) {
           bottomOffsetBefore = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
-          appendTimelineItems(newMessages, newPinEvents);
+          appendTimelineItems(newMessages, newPinEvents, {
+            mediaAutoScrollToBottom: bottomOffsetBefore <= 8,
+          });
           if (newMessages.length) await cacheMessages(chatId, msgs, page);
           appendedAny = true;
           break;
@@ -12080,7 +12210,7 @@
         rememberDisplayedMessage(serverMsg.id);
       }
     } else if (Number(serverMsg.chat_id) === Number(currentChatId) && !alreadyDisplayed) {
-      appendMessage(serverMsg);
+      appendMessage(serverMsg, { mediaAutoScrollToBottom: true });
     }
     updateScrollBottomButton();
     if (Number(serverMsg.chat_id) === Number(currentChatId)) {
@@ -13469,6 +13599,8 @@
   let gallerySessionId = 0;
   let galleryImagePreloads = new Map();
   let galleryVideoPreloads = new Map();
+  const pendingMediaBottomScrollRows = new Set();
+  let mediaBottomAutoScrollUserIntentAt = 0;
   let galleryEdgeToastTimer = null;
   let galleryEdgeBounceTimer = null;
   let ivScale = 1, ivPanX = 0, ivPanY = 0;
@@ -16980,11 +17112,14 @@
       scrollBottomBtn.blur();
       scrollToBottom(false, true);
     });
+    messagesEl.addEventListener('wheel', noteMessageScrollUserIntent, { passive: true });
+    messagesEl.addEventListener('touchmove', noteMessageScrollUserIntent, { passive: true });
 
     // Scroll to load more
     messagesEl.addEventListener('scroll', () => {
       hideAvatarUserMenu();
       hideFloatingMessageActions({ immediate: true });
+      cancelPendingMediaBottomScrollIfNeeded();
       if (!suppressScrollAnchorSave && !loadingMore && !loadingMoreAfter) scheduleScrollAnchorSave();
       maybeLoadMoreAtTop();
       maybeLoadMoreAtBottom();
