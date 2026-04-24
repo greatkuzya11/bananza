@@ -8343,7 +8343,7 @@
     }, { passive: false });
     picker.addEventListener('scroll', () => {
       if (mentionPickerPointerState) mentionPickerPointerState.moved = true;
-    }, { passive: true });
+    }, { passive: true, capture: true });
     picker.addEventListener('pointercancel', () => {
       mentionPickerPointerState = null;
     }, { passive: true });
@@ -8433,6 +8433,7 @@
 
   function renderMentionPicker(targets, options = {}) {
     const picker = ensureMentionPicker();
+    const previousScrollTop = picker.querySelector('.mention-picker-list')?.scrollTop || 0;
     const {
       source = mentionPickerState.source || 'trigger',
       preserveSelection = true,
@@ -8448,20 +8449,29 @@
     mentionPickerState.selected = preserveSelection
       ? Math.min(mentionPickerState.selected, targets.length - 1)
       : 0;
-    picker.innerHTML = targets.map((target, index) => `
-      <button type="button" class="mention-picker-item${index === mentionPickerState.selected ? ' active' : ''}" data-index="${index}">
-        <span class="mention-picker-avatar" style="background:${esc(target.avatar_color || '#65aadd')}">${target.avatar_url ? `<img src="${esc(target.avatar_url)}" alt="">` : esc((target.display_name || target.token || '?').trim()[0] || '?')}</span>
-        <span class="mention-picker-copy">
-          <strong>${esc(target.display_name || target.token)}</strong>
-          <small>@${esc(target.token)}${target.is_ai_bot ? ' &middot; AI' : ''}</small>
-        </span>
-      </button>
-    `).join('');
+    picker.innerHTML = `
+      <div class="mention-picker-list">
+        ${targets.map((target, index) => `
+          <button type="button" class="mention-picker-item${index === mentionPickerState.selected ? ' active' : ''}" data-index="${index}">
+            <span class="mention-picker-avatar" style="background:${esc(target.avatar_color || '#65aadd')}">${target.avatar_url ? `<img src="${esc(target.avatar_url)}" alt="">` : esc((target.display_name || target.token || '?').trim()[0] || '?')}</span>
+            <span class="mention-picker-copy">
+              <strong>${esc(target.display_name || target.token)}</strong>
+              <small>@${esc(target.token)}${target.is_ai_bot ? ' &middot; AI' : ''}</small>
+            </span>
+          </button>
+        `).join('')}
+      </div>
+    `;
     mentionPickerState.active = true;
     openFloatingSurface(ensureMentionPickerBackdrop());
     openFloatingSurface(picker);
     syncMentionOpenButton();
     positionMentionPicker();
+    const list = picker.querySelector('.mention-picker-list');
+    if (list) {
+      list.scrollTop = previousScrollTop;
+      list.querySelector('.mention-picker-item.active')?.scrollIntoView({ block: 'nearest' });
+    }
     requestAnimationFrame(() => positionMentionPicker());
   }
 
@@ -13463,6 +13473,31 @@
   let galleryEdgeBounceTimer = null;
   let ivScale = 1, ivPanX = 0, ivPanY = 0;
   let mediaViewerSuppressClickUntil = 0;
+  const IMAGE_VIEWER_DOUBLE_TAP_DELAY_MS = 300;
+  const IMAGE_VIEWER_TAP_MAX_DRIFT_PX = 14;
+  const IMAGE_VIEWER_DOUBLE_TAP_DISTANCE_PX = 40;
+  const IMAGE_VIEWER_SWIPE_START_PX = 6;
+  const IMAGE_VIEWER_SWIPE_COMMIT_PX = 50;
+  const IMAGE_VIEWER_MAX_SCALE = 5;
+  const ivTouchState = {
+    activeTouchId: null,
+    startX: 0,
+    startY: 0,
+    currentX: 0,
+    currentY: 0,
+    dx: 0,
+    dragging: false,
+    tapCandidate: false,
+    canTapZoom: false,
+    panBaseX: 0,
+    panBaseY: 0,
+    pinching: false,
+    pinchDist0: 0,
+    scaleBase: 1,
+    lastTapTime: 0,
+    lastTapX: 0,
+    lastTapY: 0,
+  };
   let ivZoomAnimationTimer = null;
   let ivZoomAnimationImg = null;
   let ivHistoryPushed = false;    // true when we pushed { view: 'mediaviewer' } to history
@@ -14187,6 +14222,46 @@
     if (ivZoomAnimationImg) ivZoomAnimationImg.style.transition = '';
     ivZoomAnimationImg = null;
   }
+  function clearImageViewerLastTap() {
+    ivTouchState.lastTapTime = 0;
+    ivTouchState.lastTapX = 0;
+    ivTouchState.lastTapY = 0;
+  }
+  function rememberImageViewerTap(x, y, time = Date.now()) {
+    ivTouchState.lastTapTime = time;
+    ivTouchState.lastTapX = x;
+    ivTouchState.lastTapY = y;
+  }
+  function clearImageViewerActiveTouch() {
+    ivTouchState.activeTouchId = null;
+    ivTouchState.startX = 0;
+    ivTouchState.startY = 0;
+    ivTouchState.currentX = 0;
+    ivTouchState.currentY = 0;
+    ivTouchState.dx = 0;
+    ivTouchState.dragging = false;
+    ivTouchState.tapCandidate = false;
+    ivTouchState.canTapZoom = false;
+    ivTouchState.panBaseX = 0;
+    ivTouchState.panBaseY = 0;
+  }
+  function resetImageViewerTouchState({ preserveLastTap = false } = {}) {
+    clearImageViewerActiveTouch();
+    ivTouchState.pinching = false;
+    ivTouchState.pinchDist0 = 0;
+    ivTouchState.scaleBase = ivScale;
+    if (!preserveLastTap) clearImageViewerLastTap();
+  }
+  function getTrackedImageViewerTouch(touchList) {
+    if (!touchList?.length) return null;
+    if (ivTouchState.activeTouchId == null) return touchList[0] || null;
+    return Array.from(touchList).find((touch) => touch.identifier === ivTouchState.activeTouchId) || null;
+  }
+  function isImageViewerDoubleTap(x, y, time = Date.now()) {
+    if (!ivTouchState.lastTapTime) return false;
+    if (time - ivTouchState.lastTapTime > IMAGE_VIEWER_DOUBLE_TAP_DELAY_MS) return false;
+    return Math.hypot(x - ivTouchState.lastTapX, y - ivTouchState.lastTapY) <= IMAGE_VIEWER_DOUBLE_TAP_DISTANCE_PX;
+  }
   function ivPrepareZoomTransition(img) {
     ivClearZoomTransition();
     if (!img || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
@@ -14483,6 +14558,7 @@
 
   function moveGalleryToIndex(newIdx) {
     if (newIdx < 0 || newIdx >= galleryItems.length) return false;
+    resetImageViewerTouchState();
     ivStrip.querySelectorAll('.iv-slide')[galleryIndex]?.querySelector('video')?.pause();
     ivResetZoom();
     galleryIndex = newIdx;
@@ -14498,6 +14574,7 @@
     gallerySessionId += 1;
     ivClearZoomTransition();
     mediaViewerSuppressClickUntil = 0;
+    resetImageViewerTouchState();
     gallerySourceChatId = currentChatId;
     galleryLoadPromises = { before: null, after: null };
     galleryLoadErrors = { before: false, after: false };
@@ -14546,6 +14623,7 @@
     gallerySessionId += 1;
     ivClearZoomTransition();
     mediaViewerSuppressClickUntil = 0;
+    resetImageViewerTouchState();
     ivStrip.querySelectorAll('video').forEach(v => v.pause());
     imageViewer.classList.add('hidden');
     imageViewer.classList.remove('iv-is-loading');
@@ -14572,6 +14650,7 @@
   }
 
   async function galleryNav(dir) {
+    resetImageViewerTouchState();
     const newIdx = galleryIndex + dir;
     if (newIdx < 0 || newIdx >= galleryItems.length) {
       const direction = dir < 0 ? 'before' : 'after';
@@ -15713,97 +15792,160 @@
 
     // Strip swipe + pinch-zoom + double-tap for media viewer
     (() => {
-      let startX = 0, startY = 0, dragging = false, dx = 0;
-      let panBaseX = 0, panBaseY = 0;
-      let pinching = false, pinchDist0 = 0, scaleBase = 1;
-      const MAX_SCALE = 5;
-      let lastTapTime = 0, lastTapX = 0, lastTapY = 0;
-
       imageViewer.addEventListener('touchstart', (e) => {
+        if (e.target.closest('.iv-prev, .iv-next, .iv-close')) return;
         const touchedSlide = e.target.closest('.iv-slide');
+        if (!touchedSlide) return;
         const isImageSlideTouch = Boolean(touchedSlide && !touchedSlide.classList.contains('iv-slide-video'));
         const canImageZoomTouch = isImageSlideTouch && galleryItems[galleryIndex]?.type !== 'video';
         if (e.touches.length === 2) {
-          // Pinch zoom for images only
+          clearImageViewerActiveTouch();
+          clearImageViewerLastTap();
           if (canImageZoomTouch) {
             ivClearZoomTransition();
-            pinching = true; dragging = false;
+            ivTouchState.pinching = true;
             const t = e.touches;
-            pinchDist0 = Math.hypot(t[1].clientX - t[0].clientX, t[1].clientY - t[0].clientY);
-            scaleBase = ivScale;
+            ivTouchState.pinchDist0 = Math.hypot(t[1].clientX - t[0].clientX, t[1].clientY - t[0].clientY);
+            ivTouchState.scaleBase = ivScale;
+            e.preventDefault();
           }
           return;
         }
-        if (e.touches.length === 1) {
-          const now = Date.now();
-          const tx = e.touches[0].clientX;
-          const ty = e.touches[0].clientY;
-          // Double-tap to zoom (images only)
-          if (
-            canImageZoomTouch &&
-            now - lastTapTime < 300 &&
-            Math.abs(tx - lastTapX) < 40 &&
-            Math.abs(ty - lastTapY) < 40
-          ) {
-            lastTapTime = 0;
-            mediaViewerSuppressClickUntil = Date.now() + 450;
-            ivToggleZoomAt(tx, ty);
-            return;
-          }
-          lastTapTime = canImageZoomTouch ? now : 0;
-          lastTapX = tx;
-          lastTapY = ty;
-          startX = tx;
-          startY = ty;
-          panBaseX = ivPanX; panBaseY = ivPanY;
-          dragging = false; dx = 0;
-          if (ivScale === 1) ivStrip.style.transition = 'none';
+        if (e.touches.length !== 1) {
+          resetImageViewerTouchState();
+          return;
         }
-      }, { passive: true });
+        const touch = e.touches[0];
+        const tx = touch.clientX;
+        const ty = touch.clientY;
+        ivTouchState.activeTouchId = touch.identifier;
+        ivTouchState.startX = tx;
+        ivTouchState.startY = ty;
+        ivTouchState.currentX = tx;
+        ivTouchState.currentY = ty;
+        ivTouchState.dx = 0;
+        ivTouchState.dragging = false;
+        ivTouchState.tapCandidate = true;
+        ivTouchState.canTapZoom = canImageZoomTouch;
+        ivTouchState.panBaseX = ivPanX;
+        ivTouchState.panBaseY = ivPanY;
+        ivTouchState.pinching = false;
+        ivTouchState.pinchDist0 = 0;
+        ivTouchState.scaleBase = ivScale;
+        if (!canImageZoomTouch) clearImageViewerLastTap();
+        if (ivScale === 1) ivStrip.style.transition = 'none';
+      }, { passive: false });
 
       imageViewer.addEventListener('touchmove', (e) => {
         if (e.touches.length === 2) {
-          if (galleryItems[galleryIndex]?.type === 'video') return;
+          if (!ivTouchState.pinching || galleryItems[galleryIndex]?.type === 'video') return;
           const t = e.touches;
+          const baseDist = Math.max(ivTouchState.pinchDist0 || 0, 1);
           const dist = Math.hypot(t[1].clientX - t[0].clientX, t[1].clientY - t[0].clientY);
-          ivScale = Math.min(MAX_SCALE, Math.max(1, scaleBase * dist / pinchDist0));
+          ivScale = Math.min(IMAGE_VIEWER_MAX_SCALE, Math.max(1, ivTouchState.scaleBase * dist / baseDist));
           ivApplyTransform();
+          e.preventDefault();
           return;
         }
-        if (pinching || e.touches.length !== 1) return;
-        const cx = e.touches[0].clientX;
-        const cy = e.touches[0].clientY;
+        if (ivTouchState.pinching || e.touches.length !== 1) return;
+        const touch = getTrackedImageViewerTouch(e.touches);
+        if (!touch) return;
+        const cx = touch.clientX;
+        const cy = touch.clientY;
+        ivTouchState.currentX = cx;
+        ivTouchState.currentY = cy;
+        const moveX = cx - ivTouchState.startX;
+        const moveY = cy - ivTouchState.startY;
+        if (ivTouchState.tapCandidate && Math.hypot(moveX, moveY) > IMAGE_VIEWER_TAP_MAX_DRIFT_PX) {
+          ivTouchState.tapCandidate = false;
+        }
         if (ivScale > 1) {
           ivClearZoomTransition();
-          ivPanX = panBaseX + (cx - startX) / ivScale;
-          ivPanY = panBaseY + (cy - startY) / ivScale;
+          ivPanX = ivTouchState.panBaseX + moveX / ivScale;
+          ivPanY = ivTouchState.panBaseY + moveY / ivScale;
           ivApplyTransform();
+          e.preventDefault();
           return;
         }
-        dx = cx - startX;
-        const dy = cy - startY;
-        if (!dragging && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 6) dragging = true;
-        if (!dragging) return;
-        ivStrip.style.transform = `translateX(${-galleryIndex * window.innerWidth + dx}px)`;
-      }, { passive: true });
+        ivTouchState.dx = moveX;
+        if (!ivTouchState.dragging && Math.abs(moveX) > Math.abs(moveY) && Math.abs(moveX) > IMAGE_VIEWER_SWIPE_START_PX) {
+          ivTouchState.dragging = true;
+        }
+        if (!ivTouchState.dragging) return;
+        ivTouchState.tapCandidate = false;
+        ivStrip.style.transform = `translateX(${-galleryIndex * window.innerWidth + ivTouchState.dx}px)`;
+        e.preventDefault();
+      }, { passive: false });
 
       imageViewer.addEventListener('touchend', (e) => {
-        if (pinching) {
-          if (e.touches.length < 2) pinching = false;
+        if (ivTouchState.pinching) {
+          if (e.touches.length < 2) {
+            ivTouchState.pinching = false;
+            ivTouchState.pinchDist0 = 0;
+            ivTouchState.scaleBase = ivScale;
+          }
+          clearImageViewerActiveTouch();
+          clearImageViewerLastTap();
           return;
         }
-        if (ivScale > 1) return;
-        if (dragging && Math.abs(dx) > 50) {
-          galleryNav(dx < 0 ? 1 : -1);
+        const touch = getTrackedImageViewerTouch(e.changedTouches);
+        if (!touch) {
+          if (!e.touches.length) clearImageViewerActiveTouch();
+          return;
+        }
+        const endX = touch.clientX;
+        const endY = touch.clientY;
+        const wasDragging = ivTouchState.dragging;
+        const wasTapCandidate = ivTouchState.tapCandidate;
+        const canTapZoom = ivTouchState.canTapZoom;
+        const travelX = endX - ivTouchState.startX;
+        const travelY = endY - ivTouchState.startY;
+        const dragDistance = Math.hypot(travelX, travelY);
+        const dragDx = ivTouchState.dx;
+        clearImageViewerActiveTouch();
+
+        if (wasTapCandidate && dragDistance <= IMAGE_VIEWER_TAP_MAX_DRIFT_PX) {
+          if (canTapZoom) {
+            const now = Date.now();
+            if (isImageViewerDoubleTap(endX, endY, now)) {
+              e.preventDefault();
+              clearImageViewerLastTap();
+              mediaViewerSuppressClickUntil = Math.max(mediaViewerSuppressClickUntil, Date.now() + 450);
+              ivToggleZoomAt(endX, endY);
+              return;
+            }
+            rememberImageViewerTap(endX, endY, now);
+          } else {
+            clearImageViewerLastTap();
+          }
+        } else {
+          clearImageViewerLastTap();
+        }
+
+        if (ivScale > 1) {
+          if (!wasTapCandidate) e.preventDefault();
+          return;
+        }
+        if (wasDragging && Math.abs(dragDx) > IMAGE_VIEWER_SWIPE_COMMIT_PX) {
+          e.preventDefault();
+          galleryNav(dragDx < 0 ? 1 : -1);
         } else {
           ivStrip.style.transition = 'transform 0.3s ease';
           ivStrip.style.transform = `translateX(${-galleryIndex * window.innerWidth}px)`;
           updateGalleryArrows();
         }
-        dragging = false;
-      }, { passive: true });
+      }, { passive: false });
+
+      imageViewer.addEventListener('touchcancel', () => {
+        resetImageViewerTouchState();
+        if (imageViewer.classList.contains('hidden') || ivScale > 1) return;
+        ivStrip.style.transition = 'transform 0.3s ease';
+        ivStrip.style.transform = `translateX(${-galleryIndex * window.innerWidth}px)`;
+        updateGalleryArrows();
+      }, { passive: false });
 
       window.addEventListener('resize', () => {
+        resetImageViewerTouchState();
         if (!imageViewer.classList.contains('hidden')) {
           ivStrip.style.transition = 'none';
           ivStrip.style.transform = `translateX(${-galleryIndex * window.innerWidth}px)`;
