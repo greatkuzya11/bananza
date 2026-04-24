@@ -2364,6 +2364,8 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
   left: 16px;
   right: 72px;
   bottom: calc(100% + 4px);
+  display: flex;
+  align-items: baseline;
   z-index: 6;
   padding: 0;
   font-size: 13px;
@@ -2378,6 +2380,51 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
   text-shadow: -1px -1px 0 rgba(0,0,0,0.95), 1px -1px 0 rgba(0,0,0,0.95),
                -1px 1px 0 rgba(0,0,0,0.95), 1px 1px 0 rgba(0,0,0,0.95),
                0 4px 12px rgba(0,0,0,0.9);
+}
+
+.typing-bar-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.typing-bar-dots {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 0;
+  justify-content: flex-start;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.typing-bar-dot {
+  flex: 0 0 auto;
+  opacity: 0;
+  animation: typingBarDotOne 1.4s steps(1, end) infinite;
+}
+
+.typing-bar-dot:nth-child(2) {
+  animation-name: typingBarDotTwo;
+}
+
+.typing-bar-dot:nth-child(3) {
+  animation-name: typingBarDotThree;
+}
+
+@keyframes typingBarDotOne {
+  0%, 14.28%, 85.71%, 100% { opacity: 0; }
+  14.29%, 85.70% { opacity: 1; }
+}
+
+@keyframes typingBarDotTwo {
+  0%, 28.57%, 71.42%, 100% { opacity: 0; }
+  28.58%, 71.41% { opacity: 1; }
+}
+
+@keyframes typingBarDotThree {
+  0%, 42.85%, 57.14%, 100% { opacity: 0; }
+  42.86%, 57.13% { opacity: 1; }
 }
 
 /* ── Input area ──────────────────────────────────────────────────────────── */

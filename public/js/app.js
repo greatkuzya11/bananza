@@ -13349,13 +13349,29 @@
     const names = Object.keys(typingDisplayTimeouts);
     if (names.length === 0) {
       typingBar.classList.add('hidden');
-      typingBar.textContent = '';
+      typingBar.replaceChildren();
       return;
     }
+
+    const label = document.createElement('span');
+    label.className = 'typing-bar-label';
+    label.textContent = names.length === 1
+      ? `${names[0]} печатает`
+      : `${names.join(', ')} печатают`;
+
+    const dots = document.createElement('span');
+    dots.className = 'typing-bar-dots';
+    dots.setAttribute('aria-hidden', 'true');
+
+    for (let i = 0; i < 3; i += 1) {
+      const dot = document.createElement('span');
+      dot.className = 'typing-bar-dot';
+      dot.textContent = '.';
+      dots.appendChild(dot);
+    }
+
     typingBar.classList.remove('hidden');
-    typingBar.textContent = names.length === 1
-      ? `${names[0]} печатает...`
-      : `${names.join(', ')} печатают..`;
+    typingBar.replaceChildren(label, dots);
   }
 
   function showTyping(username) {
