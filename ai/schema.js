@@ -32,6 +32,14 @@ function initAiSchema(db) {
       image_model TEXT DEFAULT '',
       image_aspect_ratio TEXT DEFAULT '',
       image_resolution TEXT DEFAULT '',
+      allow_text INTEGER DEFAULT 1,
+      allow_image_generate INTEGER DEFAULT 0,
+      allow_image_edit INTEGER DEFAULT 0,
+      allow_document INTEGER DEFAULT 0,
+      image_quality TEXT DEFAULT '',
+      image_background TEXT DEFAULT '',
+      image_output_format TEXT DEFAULT '',
+      document_default_format TEXT DEFAULT 'md',
       temperature REAL DEFAULT NULL,
       max_tokens INTEGER DEFAULT NULL,
       created_at TEXT DEFAULT (datetime('now')),
@@ -264,9 +272,19 @@ function initAiSchema(db) {
   addColumnIfMissing(db, 'ai_bots', 'image_model', "image_model TEXT DEFAULT ''");
   addColumnIfMissing(db, 'ai_bots', 'image_aspect_ratio', "image_aspect_ratio TEXT DEFAULT ''");
   addColumnIfMissing(db, 'ai_bots', 'image_resolution', "image_resolution TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'ai_bots', 'allow_text', 'allow_text INTEGER DEFAULT 1');
+  addColumnIfMissing(db, 'ai_bots', 'allow_image_generate', 'allow_image_generate INTEGER DEFAULT 0');
+  addColumnIfMissing(db, 'ai_bots', 'allow_image_edit', 'allow_image_edit INTEGER DEFAULT 0');
+  addColumnIfMissing(db, 'ai_bots', 'allow_document', 'allow_document INTEGER DEFAULT 0');
+  addColumnIfMissing(db, 'ai_bots', 'image_quality', "image_quality TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'ai_bots', 'image_background', "image_background TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'ai_bots', 'image_output_format', "image_output_format TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'ai_bots', 'document_default_format', "document_default_format TEXT DEFAULT 'md'");
   addColumnIfMissing(db, 'users', 'is_ai_bot', 'is_ai_bot INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'messages', 'ai_generated', 'ai_generated INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'messages', 'ai_bot_id', 'ai_bot_id INTEGER DEFAULT NULL');
+  addColumnIfMissing(db, 'messages', 'ai_response_mode_hint', "ai_response_mode_hint TEXT DEFAULT NULL");
+  addColumnIfMissing(db, 'messages', 'ai_document_format_hint', "ai_document_format_hint TEXT DEFAULT NULL");
 
   db.exec('CREATE INDEX IF NOT EXISTS idx_ai_bots_provider ON ai_bots(provider, enabled)');
 }

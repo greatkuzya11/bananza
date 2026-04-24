@@ -2399,6 +2399,47 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
 }
 .pending-file-remove:hover { color: var(--danger); }
 
+.composer-ai-override {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+}
+.composer-ai-override-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.composer-ai-override-head strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.composer-ai-override-hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.composer-ai-override-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.composer-ai-override-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+.composer-ai-override .modal-input {
+  margin-bottom: 0;
+}
+
 .input-row { display: flex; align-items: flex-end; gap: 4px; }
 
 .composer-input-wrap {
@@ -3986,13 +4027,16 @@ html[data-visual-mode="rich"] .poll-card {
 .grok-risk-actions {
   justify-content: flex-end;
 }
-.grok-ai-nav-grid {
+.provider-ai-nav-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   margin-top: 10px;
 }
-.grok-ai-nav-grid .weather-action-btn {
+.provider-ai-nav-grid--two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.provider-ai-nav-grid .weather-action-btn {
   width: 100%;
   min-height: 40px;
 }
@@ -4082,10 +4126,13 @@ html[data-visual-mode="rich"] .poll-card {
 .ai-bot-status.is-success { color: var(--success); }
 .ai-bot-status.is-error { color: var(--danger); }
 @media (max-width: 640px) {
+  .composer-ai-override-controls {
+    grid-template-columns: 1fr;
+  }
   .ai-bot-grid {
     grid-template-columns: 1fr;
   }
-  .grok-ai-nav-grid {
+  .provider-ai-nav-grid {
     grid-template-columns: 1fr;
   }
   .ai-bot-avatar-row {

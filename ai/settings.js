@@ -4,17 +4,23 @@ const GLOBAL_SETTINGS_KEY = 'global';
 
 const DEFAULT_AI_SETTINGS = {
   enabled: false,
-  default_response_model: 'gpt-4o-mini',
-  default_summary_model: 'gpt-4o-mini',
+  default_response_model: 'gpt-5.4',
+  default_summary_model: 'gpt-5.4',
   default_embedding_model: 'text-embedding-3-small',
+  openai_default_image_model: 'gpt-image-2',
+  openai_default_image_size: '1024x1024',
+  openai_default_image_quality: 'auto',
+  openai_default_image_background: 'auto',
+  openai_default_image_output_format: 'png',
+  openai_default_document_format: 'md',
   chunk_size: 50,
   retrieval_top_k: 6,
   openai_key_encrypted: '',
   openai_key_masked: '',
   grok_enabled: false,
   grok_base_url: 'https://api.x.ai/v1',
-  grok_default_response_model: 'grok-4-1-fast-reasoning',
-  grok_default_summary_model: 'grok-4-1-fast-reasoning',
+  grok_default_response_model: 'grok-4.20-reasoning',
+  grok_default_summary_model: 'grok-4.20-reasoning',
   grok_default_embedding_model: 'text-embedding',
   grok_default_image_model: 'grok-imagine-image',
   grok_default_image_aspect_ratio: '1:1',
@@ -95,6 +101,37 @@ function cleanReasoningMode(value) {
   return mode === 'ENABLED_HIDDEN' ? 'ENABLED_HIDDEN' : 'DISABLED';
 }
 
+function cleanOpenAiImageSize(value, fallback) {
+  const text = String(value || '').trim().toLowerCase();
+  if (text === 'auto' || text === '1024x1024' || text === '1024x1536' || text === '1536x1024') {
+    return text;
+  }
+  return fallback;
+}
+
+function cleanOpenAiImageQuality(value, fallback) {
+  const text = String(value || '').trim().toLowerCase();
+  if (text === 'auto' || text === 'low' || text === 'medium' || text === 'high') return text;
+  return fallback;
+}
+
+function cleanOpenAiImageBackground(value, fallback) {
+  const text = String(value || '').trim().toLowerCase();
+  if (text === 'auto' || text === 'transparent' || text === 'opaque') return text;
+  return fallback;
+}
+
+function cleanOpenAiImageOutputFormat(value, fallback) {
+  const text = String(value || '').trim().toLowerCase();
+  if (text === 'png' || text === 'webp' || text === 'jpeg') return text;
+  return fallback;
+}
+
+function cleanDocumentFormat(value, fallback = 'md') {
+  const text = String(value || '').trim().toLowerCase();
+  return text === 'txt' ? 'txt' : fallback;
+}
+
 function cleanAspectRatio(value, fallback) {
   const text = String(value || '').trim();
   if (!text) return fallback;
@@ -116,6 +153,12 @@ function normalizeSettings(raw = {}) {
   next.default_response_model = cleanModel(next.default_response_model, DEFAULT_AI_SETTINGS.default_response_model);
   next.default_summary_model = cleanModel(next.default_summary_model, DEFAULT_AI_SETTINGS.default_summary_model);
   next.default_embedding_model = cleanModel(next.default_embedding_model, DEFAULT_AI_SETTINGS.default_embedding_model);
+  next.openai_default_image_model = cleanModel(next.openai_default_image_model, DEFAULT_AI_SETTINGS.openai_default_image_model);
+  next.openai_default_image_size = cleanOpenAiImageSize(next.openai_default_image_size, DEFAULT_AI_SETTINGS.openai_default_image_size);
+  next.openai_default_image_quality = cleanOpenAiImageQuality(next.openai_default_image_quality, DEFAULT_AI_SETTINGS.openai_default_image_quality);
+  next.openai_default_image_background = cleanOpenAiImageBackground(next.openai_default_image_background, DEFAULT_AI_SETTINGS.openai_default_image_background);
+  next.openai_default_image_output_format = cleanOpenAiImageOutputFormat(next.openai_default_image_output_format, DEFAULT_AI_SETTINGS.openai_default_image_output_format);
+  next.openai_default_document_format = cleanDocumentFormat(next.openai_default_document_format, DEFAULT_AI_SETTINGS.openai_default_document_format);
   next.chunk_size = intValue(next.chunk_size, DEFAULT_AI_SETTINGS.chunk_size, 20, 100);
   next.retrieval_top_k = intValue(next.retrieval_top_k, DEFAULT_AI_SETTINGS.retrieval_top_k, 1, 12);
   next.openai_key_encrypted = String(next.openai_key_encrypted || '');
@@ -230,6 +273,12 @@ function saveAiSettings(db, incoming = {}, secret) {
     default_response_model: incoming.default_response_model ?? current.default_response_model,
     default_summary_model: incoming.default_summary_model ?? current.default_summary_model,
     default_embedding_model: incoming.default_embedding_model ?? current.default_embedding_model,
+    openai_default_image_model: incoming.openai_default_image_model ?? current.openai_default_image_model,
+    openai_default_image_size: incoming.openai_default_image_size ?? current.openai_default_image_size,
+    openai_default_image_quality: incoming.openai_default_image_quality ?? current.openai_default_image_quality,
+    openai_default_image_background: incoming.openai_default_image_background ?? current.openai_default_image_background,
+    openai_default_image_output_format: incoming.openai_default_image_output_format ?? current.openai_default_image_output_format,
+    openai_default_document_format: incoming.openai_default_document_format ?? current.openai_default_document_format,
     chunk_size: incoming.chunk_size ?? current.chunk_size,
     retrieval_top_k: incoming.retrieval_top_k ?? current.retrieval_top_k,
     grok_enabled: Object.prototype.hasOwnProperty.call(incoming, 'grok_enabled') ? incoming.grok_enabled : current.grok_enabled,

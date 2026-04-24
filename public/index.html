@@ -118,6 +118,19 @@
             <button id="replyBarClose" class="reply-bar-close">✕</button>
           </div>
           <div id="pendingFile" class="pending-file hidden"></div>
+          <div id="composerAiOverride" class="composer-ai-override hidden">
+            <div class="composer-ai-override-head">
+              <strong id="composerAiOverrideLabel">AI mode</strong>
+              <span id="composerAiOverrideHint" class="composer-ai-override-hint"></span>
+            </div>
+            <div class="composer-ai-override-controls">
+              <label>Mode<select id="composerAiOverrideMode" class="modal-input"></select></label>
+              <label id="composerAiOverrideDocumentWrap" class="hidden">Document format<select id="composerAiOverrideDocumentFormat" class="modal-input">
+                <option value="md">Markdown (.md)</option>
+                <option value="txt">Plain text (.txt)</option>
+              </select></label>
+            </div>
+          </div>
           <div class="input-row">
             <button id="attachBtn" class="icon-btn" title="Attach file">📎</button>
             <button id="pollBtn" class="icon-btn composer-desktop-only" title="Create poll" type="button">📊</button>
@@ -243,7 +256,7 @@
         <button id="settingsSoundsPanel" class="settings-item">🔊 Звуки</button>
         <button id="settingsChangePassword" class="settings-item">🔑 Change Password</button>
         <button id="settingsAdminPanel" class="settings-item hidden">🛡 Admin Panel</button>
-        <button id="settingsAiBotsPanel" class="settings-item hidden">🤖 AI-боты</button>
+        <button id="settingsAiBotsPanel" class="settings-item hidden">🤖 OpenAI AI</button>
         <button id="settingsYandexAiPanel" class="settings-item hidden">YA AI-&#1071;&#1085;&#1076;&#1077;&#1082;&#1089;</button>
         <button id="settingsDeepSeekAiPanel" class="settings-item hidden">DS DeepSeek AI</button>
         <button id="settingsGrokAiPanel" class="settings-item hidden">&#x1D54F; Grok AI</button>
@@ -523,7 +536,7 @@
   <div id="aiBotSettingsModal" class="modal hidden">
     <div class="modal-content wide">
       <div class="modal-header">
-        <h3>AI-боты</h3>
+        <h3>OpenAI AI</h3>
         <button class="modal-close">✕</button>
       </div>
       <div class="modal-body">
@@ -541,6 +554,15 @@
               <label>Response model<select id="aiBotsDefaultResponseModel" class="modal-input"></select></label>
               <label>Summary model<select id="aiBotsDefaultSummaryModel" class="modal-input"></select></label>
               <label>Embedding model<select id="aiBotsDefaultEmbeddingModel" class="modal-input"></select></label>
+              <label>Image model<select id="aiBotsDefaultImageModel" class="modal-input"></select></label>
+              <label>Image size<select id="aiBotsDefaultImageSize" class="modal-input"></select></label>
+              <label>Image quality<select id="aiBotsDefaultImageQuality" class="modal-input"></select></label>
+              <label>Image background<select id="aiBotsDefaultImageBackground" class="modal-input"></select></label>
+              <label>Image output<select id="aiBotsDefaultImageOutputFormat" class="modal-input"></select></label>
+              <label>Document format<select id="aiBotsDefaultDocumentFormat" class="modal-input">
+                <option value="md">Markdown (.md)</option>
+                <option value="txt">Plain text (.txt)</option>
+              </select></label>
               <label>Chunk size<input id="aiBotsChunkSize" class="modal-input" type="number" min="20" max="100" value="50"></label>
               <label>Retrieval top-K<input id="aiBotsRetrievalTopK" class="modal-input" type="number" min="1" max="12" value="6"></label>
             </div>
@@ -556,6 +578,30 @@
             </div>
           </div>
 
+          <div class="ai-bot-panel">
+            <h4>Bot settings</h4>
+            <div class="settings-hint">Open separate windows for OpenAI text bots and universal bots.</div>
+            <div class="provider-ai-nav-grid provider-ai-nav-grid--two">
+              <button id="openAiOpenTextBots" type="button" class="weather-action-btn">Open text bots</button>
+              <button id="openAiOpenUniversalBots" type="button" class="weather-action-btn">Open universal bots</button>
+            </div>
+          </div>
+
+          <div id="aiBotsStatus" class="ai-bot-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- OpenAI Text Bot Settings Modal -->
+  <div id="openAiTextBotsModal" class="modal hidden">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3>OpenAI Text Bots</h3>
+        <button class="modal-close">&#10005;</button>
+      </div>
+      <div class="modal-body">
+        <div id="openAiTextBotsBlock" class="ai-bot-settings-block">
           <div class="ai-bot-panel">
             <h4>Боты и характер</h4>
             <div id="aiBotList" class="ai-bot-list"></div>
@@ -625,7 +671,129 @@
             <div class="settings-hint">Hybrid memory достраивает долговременную память в фоне. Simple context не удаляет уже созданную память.</div>
           </div>
 
-          <div id="aiBotsStatus" class="ai-bot-status"></div>
+          <div id="openAiTextStatus" class="ai-bot-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- OpenAI Universal Bot Settings Modal -->
+  <div id="openAiUniversalBotsModal" class="modal hidden">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3>OpenAI Universal Bots</h3>
+        <button class="modal-close">&#10005;</button>
+      </div>
+      <div class="modal-body">
+        <div id="openAiUniversalBotsBlock" class="ai-bot-settings-block">
+          <div class="ai-bot-panel">
+            <h4>Universal bots</h4>
+            <div id="openAiUniversalBotList" class="ai-bot-list"></div>
+            <div class="ai-bot-actions">
+              <button id="openAiUniversalBotCreateNew" type="button" class="weather-action-btn">New universal bot</button>
+              <button id="openAiUniversalBotSave" type="button" class="btn-primary">Save bot</button>
+              <button id="openAiUniversalBotDisable" type="button" class="weather-action-btn">Disable</button>
+              <button id="openAiUniversalBotTest" type="button" class="weather-action-btn">Test</button>
+              <button id="openAiUniversalBotExportJson" type="button" class="weather-action-btn">Export JSON</button>
+              <button id="openAiUniversalBotImportJson" type="button" class="weather-action-btn">Import JSON</button>
+              <input id="openAiUniversalBotImportFile" class="hidden" type="file" accept="application/json,.json">
+            </div>
+            <div class="ai-bot-avatar-row">
+              <div class="avatar-upload-wrap ai-bot-avatar-wrap">
+                <div id="openAiUniversalBotAvatar" class="avatar-large"></div>
+                <label class="avatar-upload-label" id="openAiUniversalBotAvatarLabel" title="Change avatar">📷
+                  <input type="file" id="openAiUniversalBotAvatarInput" accept=".jpg,.jpeg,.png,.webp" class="hidden">
+                </label>
+              </div>
+              <div class="ai-bot-avatar-copy">
+                <strong>Bot avatar</strong>
+                <span>The image is stored separately from JSON persona settings.</span>
+                <button id="removeOpenAiUniversalBotAvatar" class="btn-text hidden" type="button">Remove avatar</button>
+              </div>
+            </div>
+            <div class="ai-bot-grid">
+              <label>Name<input id="openAiUniversalBotName" class="modal-input" value="OpenAI Universal"></label>
+              <label>Mention<input id="openAiUniversalBotMention" class="modal-input" value="openai_universal"></label>
+              <label>Response model<select id="openAiUniversalBotResponseModel" class="modal-input"></select></label>
+              <label>Summary model<select id="openAiUniversalBotSummaryModel" class="modal-input"></select></label>
+              <label>Image model<select id="openAiUniversalBotImageModel" class="modal-input"></select></label>
+              <label>Image size<select id="openAiUniversalBotImageSize" class="modal-input"></select></label>
+              <label>Image quality<select id="openAiUniversalBotImageQuality" class="modal-input"></select></label>
+              <label>Image background<select id="openAiUniversalBotImageBackground" class="modal-input"></select></label>
+              <label>Image output<select id="openAiUniversalBotImageOutputFormat" class="modal-input"></select></label>
+              <label>Document format<select id="openAiUniversalBotDocumentFormat" class="modal-input">
+                <option value="md">Markdown (.md)</option>
+                <option value="txt">Plain text (.txt)</option>
+              </select></label>
+              <label>Temperature<input id="openAiUniversalBotTemperature" class="modal-input" type="number" min="0" max="2" step="0.05" value="0.55"></label>
+              <label>Max tokens<input id="openAiUniversalBotMaxTokens" class="modal-input" type="number" min="16" max="8000" step="50" value="1000"></label>
+              <label class="ai-bot-toggle-label">Enabled
+                <label class="toggle-switch">
+                  <input type="checkbox" id="openAiUniversalBotEnabled" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+              <label class="ai-bot-toggle-label">Allow text
+                <label class="toggle-switch">
+                  <input type="checkbox" id="openAiUniversalBotAllowText" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+              <label class="ai-bot-toggle-label">Allow image generate
+                <label class="toggle-switch">
+                  <input type="checkbox" id="openAiUniversalBotAllowImageGenerate" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+              <label class="ai-bot-toggle-label">Allow image edit
+                <label class="toggle-switch">
+                  <input type="checkbox" id="openAiUniversalBotAllowImageEdit" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+              <label class="ai-bot-toggle-label">Allow document
+                <label class="toggle-switch">
+                  <input type="checkbox" id="openAiUniversalBotAllowDocument" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+            </div>
+            <div class="settings-hint">Universal OpenAI bots can answer with text, generate or edit images, and optionally return a document attachment.</div>
+            <label class="ai-bot-field">Style<textarea id="openAiUniversalBotStyle" class="modal-input" rows="2"></textarea></label>
+            <label class="ai-bot-field">Tone<textarea id="openAiUniversalBotTone" class="modal-input" rows="2"></textarea></label>
+            <label class="ai-bot-field">Behavior rules<textarea id="openAiUniversalBotRules" class="modal-input" rows="4"></textarea></label>
+            <label class="ai-bot-field">Speech patterns<textarea id="openAiUniversalBotSpeech" class="modal-input" rows="3"></textarea></label>
+            <div class="ai-bot-grid">
+              <label>Test mode<select id="openAiUniversalBotTestMode" class="modal-input">
+                <option value="auto">Auto</option>
+                <option value="text">Text</option>
+                <option value="image">Image</option>
+                <option value="document">Document</option>
+              </select></label>
+              <label>Test document<select id="openAiUniversalBotTestDocumentFormat" class="modal-input">
+                <option value="md">Markdown (.md)</option>
+                <option value="txt">Plain text (.txt)</option>
+              </select></label>
+            </div>
+            <div class="ai-bot-grid">
+              <label>Chat<select id="openAiUniversalBotChatSelect" class="modal-input"></select></label>
+              <label>Bot<select id="openAiUniversalBotChatBotSelect" class="modal-input"></select></label>
+              <label>Mode<select id="openAiUniversalBotChatMode" class="modal-input">
+                <option value="simple">Simple context</option>
+                <option value="hybrid">Hybrid memory</option>
+              </select></label>
+              <label>Context<input id="openAiUniversalBotChatHotLimit" class="modal-input" type="number" min="20" max="100" value="50"></label>
+              <label class="ai-bot-toggle-label">Enabled in chat
+                <label class="toggle-switch">
+                  <input type="checkbox" id="openAiUniversalBotChatEnabled">
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+            </div>
+            <button id="openAiUniversalBotChatSave" type="button" class="btn-primary">Save for chat</button>
+          </div>
+
+          <div id="openAiUniversalStatus" class="ai-bot-status"></div>
         </div>
       </div>
     </div>
@@ -1028,12 +1196,103 @@
             <div class="settings-hint">Image bots always use simple mode and answer with one generated image saved to local uploads.</div>
           </div>
 
+          <div class="ai-bot-panel grok-bot-panel grok-bot-panel--universal hidden">
+            <h4>Grok universal bots</h4>
+            <div id="grokAiUniversalBotList" class="ai-bot-list"></div>
+            <div class="ai-bot-actions">
+              <button id="grokAiUniversalBotCreateNew" type="button" class="weather-action-btn">New universal bot</button>
+              <button id="grokAiUniversalBotSave" type="button" class="btn-primary">Save bot</button>
+              <button id="grokAiUniversalBotDisable" type="button" class="weather-action-btn">Disable</button>
+              <button id="grokAiUniversalBotTest" type="button" class="weather-action-btn">Test</button>
+              <button id="grokAiUniversalBotExportJson" type="button" class="weather-action-btn">Export JSON</button>
+              <button id="grokAiUniversalBotImportJson" type="button" class="weather-action-btn">Import JSON</button>
+              <input id="grokAiUniversalBotImportFile" class="hidden" type="file" accept="application/json,.json">
+            </div>
+            <div class="ai-bot-avatar-row">
+              <div class="avatar-upload-wrap ai-bot-avatar-wrap">
+                <div id="grokAiUniversalBotAvatar" class="avatar-large"></div>
+                <label class="avatar-upload-label" id="grokAiUniversalBotAvatarLabel" title="Change avatar">📷
+                  <input type="file" id="grokAiUniversalBotAvatarInput" accept=".jpg,.jpeg,.png,.webp" class="hidden">
+                </label>
+              </div>
+              <div class="ai-bot-avatar-copy">
+                <strong>Universal bot avatar</strong>
+                <span>The image is stored separately from JSON persona settings.</span>
+                <button id="removeGrokAiUniversalBotAvatar" class="btn-text hidden" type="button">Remove avatar</button>
+              </div>
+            </div>
+            <div class="ai-bot-grid">
+              <label>Name<input id="grokAiUniversalBotName" class="modal-input" value="Grok Universal"></label>
+              <label>Mention<input id="grokAiUniversalBotMention" class="modal-input" value="grok_universal"></label>
+              <label>Response model<select id="grokAiUniversalBotResponseModel" class="modal-input"></select></label>
+              <label>Summary model<select id="grokAiUniversalBotSummaryModel" class="modal-input"></select></label>
+              <label>Image model<select id="grokAiUniversalBotImageModel" class="modal-input"></select></label>
+              <label>Aspect ratio<select id="grokAiUniversalBotAspectRatio" class="modal-input"></select></label>
+              <label>Resolution<select id="grokAiUniversalBotResolution" class="modal-input"></select></label>
+              <label>Temperature<input id="grokAiUniversalBotTemperature" class="modal-input" type="number" min="0" max="1" step="0.05" value="0.3"></label>
+              <label>Max tokens<input id="grokAiUniversalBotMaxTokens" class="modal-input" type="number" min="1" max="8000" step="50" value="1000"></label>
+              <label class="ai-bot-toggle-label">Enabled
+                <label class="toggle-switch">
+                  <input type="checkbox" id="grokAiUniversalBotEnabled" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+              <label class="ai-bot-toggle-label">Allow text
+                <label class="toggle-switch">
+                  <input type="checkbox" id="grokAiUniversalBotAllowText" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+              <label class="ai-bot-toggle-label">Allow image generate
+                <label class="toggle-switch">
+                  <input type="checkbox" id="grokAiUniversalBotAllowImageGenerate" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+              <label class="ai-bot-toggle-label">Allow image edit
+                <label class="toggle-switch">
+                  <input type="checkbox" id="grokAiUniversalBotAllowImageEdit" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+            </div>
+            <div class="settings-hint">Universal Grok bots can answer with text, analyze images, generate new images, and edit a supported source image.</div>
+            <label class="ai-bot-field">Style<textarea id="grokAiUniversalBotStyle" class="modal-input" rows="2"></textarea></label>
+            <label class="ai-bot-field">Tone<textarea id="grokAiUniversalBotTone" class="modal-input" rows="2"></textarea></label>
+            <label class="ai-bot-field">Behavior rules<textarea id="grokAiUniversalBotRules" class="modal-input" rows="4"></textarea></label>
+            <label class="ai-bot-field">Speech patterns<textarea id="grokAiUniversalBotSpeech" class="modal-input" rows="3"></textarea></label>
+            <div class="ai-bot-grid">
+              <label>Test mode<select id="grokAiUniversalBotTestMode" class="modal-input">
+                <option value="auto">Auto</option>
+                <option value="text">Text</option>
+                <option value="image">Image</option>
+              </select></label>
+            </div>
+            <div class="ai-bot-grid">
+              <label>Chat<select id="grokAiUniversalBotChatSelect" class="modal-input"></select></label>
+              <label>Bot<select id="grokAiUniversalBotChatBotSelect" class="modal-input"></select></label>
+              <label>Mode<select id="grokAiUniversalBotChatMode" class="modal-input">
+                <option value="simple">Simple context</option>
+                <option value="hybrid">Hybrid memory</option>
+              </select></label>
+              <label>Context<input id="grokAiUniversalBotChatHotLimit" class="modal-input" type="number" min="20" max="100" value="50"></label>
+              <label class="ai-bot-toggle-label">Enabled in chat
+                <label class="toggle-switch">
+                  <input type="checkbox" id="grokAiUniversalBotChatEnabled">
+                  <span class="toggle-slider"></span>
+                </label>
+              </label>
+            </div>
+            <button id="grokAiUniversalBotChatSave" type="button" class="btn-primary">Save for chat</button>
+          </div>
+
           <div id="grokAiNavPanel" class="ai-bot-panel">
             <h4>Bot settings</h4>
-            <div class="settings-hint">Open separate windows for Grok text bots and Grok image bots.</div>
-            <div class="grok-ai-nav-grid">
+            <div class="settings-hint">Open separate windows for Grok text bots, image bots, and universal bots.</div>
+            <div class="provider-ai-nav-grid">
               <button id="grokAiOpenTextBots" type="button" class="weather-action-btn">Open text bots</button>
               <button id="grokAiOpenImageBots" type="button" class="weather-action-btn">Open image bots</button>
+              <button id="grokAiOpenUniversalBots" type="button" class="weather-action-btn">Open universal bots</button>
             </div>
           </div>
 
@@ -1068,6 +1327,21 @@
       <div class="modal-body">
         <div id="grokAiImageBotsBlock" class="ai-bot-settings-block">
           <div id="grokAiImageStatus" class="ai-bot-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Grok Universal Bot Settings Modal -->
+  <div id="grokAiUniversalBotsModal" class="modal hidden">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3>&#x1D54F; Grok Universal Bots</h3>
+        <button class="modal-close">&#10005;</button>
+      </div>
+      <div class="modal-body">
+        <div id="grokAiUniversalBotsBlock" class="ai-bot-settings-block">
+          <div id="grokAiUniversalStatus" class="ai-bot-status"></div>
         </div>
       </div>
     </div>

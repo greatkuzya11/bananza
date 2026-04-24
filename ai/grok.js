@@ -106,16 +106,37 @@ async function listImageModelIds({ apiKey, baseUrl = DEFAULT_BASE_URL }) {
   return [...new Set(ids.filter(Boolean))].sort((a, b) => a.localeCompare(b));
 }
 
-async function generateText({ apiKey, baseUrl = DEFAULT_BASE_URL, model, system, user, maxOutputTokens = 900, temperature = 0.45 }) {
+async function createResponse({
+  apiKey,
+  baseUrl = DEFAULT_BASE_URL,
+  model,
+  input,
+  instructions = '',
+  maxOutputTokens = 900,
+  temperature = 0.45,
+}) {
   const client = createClient(apiKey, baseUrl);
-  const response = await client.responses.create({
+  const payload = {
     model,
+    input,
+    max_output_tokens: normalizeMaxOutputTokens(maxOutputTokens),
+  };
+  if (instructions) payload.instructions = String(instructions);
+  if (typeof temperature === 'number' && Number.isFinite(temperature)) payload.temperature = temperature;
+  return client.responses.create(payload);
+}
+
+async function generateText({ apiKey, baseUrl = DEFAULT_BASE_URL, model, system, user, maxOutputTokens = 900, temperature = 0.45 }) {
+  const response = await createResponse({
+    model,
+    apiKey,
+    baseUrl,
     input: [
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
     temperature,
-    max_output_tokens: normalizeMaxOutputTokens(maxOutputTokens),
+    maxOutputTokens,
   });
   return extractResponseText(response);
 }
@@ -170,6 +191,44 @@ async function generateImage({
   };
 }
 
+async function generateImageEdit({
+  apiKey,
+  baseUrl = DEFAULT_BASE_URL,
+  model,
+  prompt,
+  imageUrl,
+  resolution = '',
+  responseFormat = 'b64_json',
+}) {
+  const body = {
+    model,
+    prompt: String(prompt || '').trim(),
+    image: {
+      type: 'image_url',
+      url: String(imageUrl || '').trim(),
+    },
+    response_format: responseFormat,
+  };
+  if (resolution) body.resolution = String(resolution).trim();
+
+  const res = await fetch(`${cleanBaseUrl(baseUrl)}/images/edits`, {
+    method: 'POST',
+    headers: headers(apiKey, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify(body),
+  });
+  const data = await parseJsonResponse(res);
+  if (!res.ok) throw new Error(data.error?.message || data.error || data.raw || 'Grok image edit failed');
+
+  const image = Array.isArray(data.data) ? data.data[0] : null;
+  if (!image) throw new Error('Grok image edit returned no image');
+  return {
+    model: data.model || model,
+    revisedPrompt: image.revised_prompt || data.revised_prompt || '',
+    b64Json: image.b64_json || '',
+    url: image.url || '',
+  };
+}
+
 async function testConnection({ apiKey, baseUrl = DEFAULT_BASE_URL, model }) {
   const text = await generateText({
     apiKey,
@@ -190,8 +249,11 @@ module.exports = {
   createEmbedding,
   listModelIds,
   listImageModelIds,
+  createResponse,
+  extractResponseText,
   generateText,
   generateJson,
   generateImage,
+  generateImageEdit,
   testConnection,
 };

@@ -193,6 +193,18 @@ function normalizePollPayload(input = {}) {
   };
 }
 
+function normalizeAiResponseModeHint(value) {
+  const mode = String(value || '').trim().toLowerCase();
+  if (mode === 'auto' || mode === 'text' || mode === 'image' || mode === 'document') return mode;
+  return null;
+}
+
+function normalizeAiDocumentFormatHint(value) {
+  const format = String(value || '').trim().toLowerCase();
+  if (format === 'md' || format === 'txt') return format;
+  return null;
+}
+
 function publicUser(u) {
   return {
     id: u.id,
@@ -412,7 +424,12 @@ const mentionTargetsStmt = db.prepare(`
     ab.id as bot_id,
     ab.mention as bot_mention,
     ab.provider as bot_provider,
-    ab.kind as bot_kind
+    ab.kind as bot_kind,
+    ab.allow_text as bot_allow_text,
+    ab.allow_image_generate as bot_allow_image_generate,
+    ab.allow_image_edit as bot_allow_image_edit,
+    ab.allow_document as bot_allow_document,
+    ab.document_default_format as bot_document_default_format
   FROM chat_members cm
   JOIN users u ON u.id=cm.user_id
   LEFT JOIN ai_bots ab ON ab.user_id=u.id
@@ -563,6 +580,11 @@ function mentionPayload(row) {
     bot_id: Number(row.bot_id) || 0,
     bot_provider: row.bot_provider || '',
     bot_kind: row.bot_kind || '',
+    allow_text: isAiBot ? Number(row.bot_allow_text) !== 0 : false,
+    allow_image_generate: isAiBot ? Number(row.bot_allow_image_generate) !== 0 : false,
+    allow_image_edit: isAiBot ? Number(row.bot_allow_image_edit) !== 0 : false,
+    allow_document: isAiBot ? Number(row.bot_allow_document) !== 0 : false,
+    document_default_format: row.bot_document_default_format || '',
     avatar_color: row.avatar_color,
     avatar_url: row.avatar_url,
   };
@@ -1798,9 +1820,20 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
 
 app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   const chatId = +req.params.chatId;
-  const { text, fileId, replyToId, client_id, poll: rawPoll, aiImageRiskAccepted } = req.body;
+  const {
+    text,
+    fileId,
+    replyToId,
+    client_id,
+    poll: rawPoll,
+    aiImageRiskAccepted,
+    ai_response_mode_hint,
+    ai_document_format_hint,
+  } = req.body;
   const clientId = normalizeClientId(client_id);
   const riskAccepted = aiImageRiskAccepted === true || aiImageRiskAccepted === 1 || aiImageRiskAccepted === '1';
+  const aiResponseModeHint = normalizeAiResponseModeHint(ai_response_mode_hint);
+  const aiDocumentFormatHint = normalizeAiDocumentFormatHint(ai_document_format_hint);
   const chat = db.prepare('SELECT id,is_notes FROM chats WHERE id=?').get(chatId);
 
   if (!chat) return res.status(404).json({ error: 'Chat not found' });
@@ -1836,8 +1869,29 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   }
 
   const createMessageTx = db.transaction(() => {
-    const inserted = db.prepare('INSERT INTO messages(chat_id,user_id,text,file_id,reply_to_id,client_id,ai_image_risk_confirmed) VALUES(?,?,?,?,?,?,?)')
-      .run(chatId, req.user.id, cleanText, poll ? null : (fileId || null), validReplyId, clientId, riskAccepted ? 1 : 0);
+    const inserted = db.prepare(`
+      INSERT INTO messages(
+        chat_id,
+        user_id,
+        text,
+        file_id,
+        reply_to_id,
+        client_id,
+        ai_image_risk_confirmed,
+        ai_response_mode_hint,
+        ai_document_format_hint
+      ) VALUES(?,?,?,?,?,?,?,?,?)
+    `).run(
+      chatId,
+      req.user.id,
+      cleanText,
+      poll ? null : (fileId || null),
+      validReplyId,
+      clientId,
+      riskAccepted ? 1 : 0,
+      aiResponseModeHint,
+      aiDocumentFormatHint
+    );
     const messageId = Number(inserted.lastInsertRowid);
     if (poll) {
       pollFeature.createPollData({

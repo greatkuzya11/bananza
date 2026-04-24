@@ -199,19 +199,40 @@
   let soundSettingsLoaded = false;
   let soundSettingsSaveTimer = null;
   let aiBotState = {
-    settings: { enabled: false, default_response_model: 'gpt-4o-mini', default_summary_model: 'gpt-4o-mini', default_embedding_model: 'text-embedding-3-small', chunk_size: 50, retrieval_top_k: 6 },
+    settings: {
+      enabled: false,
+      default_response_model: 'gpt-5.4',
+      default_summary_model: 'gpt-5.4',
+      default_embedding_model: 'text-embedding-3-small',
+      openai_default_image_model: 'gpt-image-2',
+      openai_default_image_size: '1024x1024',
+      openai_default_image_quality: 'auto',
+      openai_default_image_background: 'auto',
+      openai_default_image_output_format: 'png',
+      openai_default_document_format: 'md',
+      chunk_size: 50,
+      retrieval_top_k: 6,
+    },
     bots: [],
     chats: [],
     chatSettings: [],
   };
   let aiModelCatalog = {
     source: 'fallback',
-    response: ['gpt-4o-mini'],
-    summary: ['gpt-4o-mini'],
+    response: ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'],
+    summary: ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'],
     embedding: ['text-embedding-3-small'],
+    image: ['gpt-image-2', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini'],
     error: '',
   };
   let selectedAiBotId = null;
+  let openAiUniversalState = {
+    settings: { ...aiBotState.settings },
+    bots: [],
+    chats: [],
+    chatSettings: [],
+  };
+  let selectedOpenAiUniversalBotId = null;
   let yandexBotState = {
     settings: {
       yandex_enabled: false,
@@ -260,8 +281,8 @@
     settings: {
       grok_enabled: false,
       grok_base_url: 'https://api.x.ai/v1',
-      grok_default_response_model: 'grok-4-1-fast-reasoning',
-      grok_default_summary_model: 'grok-4-1-fast-reasoning',
+      grok_default_response_model: 'grok-4.20-reasoning',
+      grok_default_summary_model: 'grok-4.20-reasoning',
       grok_default_embedding_model: 'text-embedding',
       grok_default_image_model: 'grok-imagine-image',
       grok_default_image_aspect_ratio: '1:1',
@@ -275,8 +296,8 @@
     chatSettings: [],
     imageChatSettings: [],
     models: {
-      response: ['grok-4-1-fast-reasoning'],
-      summary: ['grok-4-1-fast-reasoning'],
+      response: ['grok-4.20-reasoning'],
+      summary: ['grok-4.20-reasoning'],
       embedding: ['text-embedding'],
       image: ['grok-imagine-image'],
       aspect_ratio: ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '2:1', '1:2', '19.5:9', '9:19.5', '20:9', '9:20', 'auto'],
@@ -285,6 +306,20 @@
   };
   let selectedGrokBotId = null;
   let selectedGrokImageBotId = null;
+  let grokUniversalState = {
+    settings: { ...grokBotState.settings },
+    bots: [],
+    chats: [],
+    chatSettings: [],
+    models: { ...grokBotState.models },
+  };
+  let selectedGrokUniversalBotId = null;
+  let composerAiOverrideState = {
+    target: null,
+    mode: 'auto',
+    documentFormat: 'md',
+  };
+  let composerAiOverrideSeq = 0;
   let forwardMessageState = null;
   let forwardMessageBusy = false;
   let savingToNotesMessageIds = new Set();
@@ -383,6 +418,12 @@
   const emojiBtn = $('#emojiBtn');
   const fileInput = $('#fileInput');
   const pendingFileEl = $('#pendingFile');
+  const composerAiOverrideEl = $('#composerAiOverride');
+  const composerAiOverrideLabel = $('#composerAiOverrideLabel');
+  const composerAiOverrideHint = $('#composerAiOverrideHint');
+  const composerAiOverrideModeEl = $('#composerAiOverrideMode');
+  const composerAiOverrideDocumentWrap = $('#composerAiOverrideDocumentWrap');
+  const composerAiOverrideDocumentFormatEl = $('#composerAiOverrideDocumentFormat');
   const emojiPicker = $('#emojiPicker');
   const imageViewer = $('#imageViewer');
   const ivStrip = $('#ivStrip');
@@ -390,6 +431,11 @@
   const reactionEmojiPopover = $('#reactionEmojiPopover');
   const chatContextMenuBackdrop = $('#chatContextMenuBackdrop');
   const chatContextMenu = $('#chatContextMenu');
+  const OPENAI_IMAGE_SIZE_OPTIONS = ['auto', '1024x1024', '1024x1536', '1536x1024'];
+  const OPENAI_IMAGE_QUALITY_OPTIONS = ['auto', 'low', 'medium', 'high'];
+  const OPENAI_IMAGE_BACKGROUND_OPTIONS = ['auto', 'transparent', 'opaque'];
+  const OPENAI_IMAGE_OUTPUT_OPTIONS = ['png', 'webp', 'jpeg'];
+  const DOCUMENT_FORMAT_OPTIONS = ['md', 'txt'];
   const replyBar = $('#replyBar');
   const replyBarName = $('#replyBarName');
   const replyBarText = $('#replyBarText');
@@ -414,11 +460,14 @@
   const notificationSettingsModal = $('#notificationSettingsModal');
   const soundSettingsModal = $('#soundSettingsModal');
   const aiBotSettingsModal = $('#aiBotSettingsModal');
+  const openAiTextBotsModal = $('#openAiTextBotsModal');
+  const openAiUniversalBotsModal = $('#openAiUniversalBotsModal');
   const yandexAiSettingsModal = $('#yandexAiSettingsModal');
   const deepseekAiSettingsModal = $('#deepseekAiSettingsModal');
   const grokAiSettingsModal = $('#grokAiSettingsModal');
   const grokAiTextBotsModal = $('#grokAiTextBotsModal');
   const grokAiImageBotsModal = $('#grokAiImageBotsModal');
+  const grokAiUniversalBotsModal = $('#grokAiUniversalBotsModal');
   const changePasswordModal = $('#changePasswordModal');
   const forwardMessageModal = $('#forwardMessageModal');
   const forwardChatSearch = $('#forwardChatSearch');
@@ -3776,12 +3825,20 @@
     });
   }
 
-  function setAiBotStatus(message, type = '') {
-    const el = $('#aiBotsStatus');
+  function setOpenAiStatus(statusId, message, type = '') {
+    const el = $(statusId);
     if (!el) return;
     el.textContent = message || '';
     el.classList.toggle('is-error', type === 'error');
     el.classList.toggle('is-success', type === 'success');
+  }
+
+  function setAiBotSettingsStatus(message, type = '') {
+    setOpenAiStatus('aiBotsStatus', message, type);
+  }
+
+  function setAiBotStatus(message, type = '') {
+    setOpenAiStatus('openAiTextStatus', message, type);
   }
 
   function setAiModelStatus(message, type = '') {
@@ -3815,18 +3872,45 @@
     if (current) select.value = current;
   }
 
+  function setStaticSelectOptions(id, values, currentValue) {
+    const select = document.getElementById(id);
+    if (!select) return;
+    const current = String(currentValue || '').trim();
+    const options = [...new Set([current, ...values].filter(Boolean))];
+    select.innerHTML = options.map(value => `<option value="${esc(value)}">${esc(value)}</option>`).join('');
+    if (current) select.value = current;
+  }
+
+  function syncSharedOpenAiSettings(settings = {}) {
+    aiBotState.settings = { ...aiBotState.settings, ...settings };
+    openAiUniversalState.settings = { ...openAiUniversalState.settings, ...settings };
+  }
+
+  function syncSharedGrokSettings(settings = {}) {
+    grokBotState.settings = { ...grokBotState.settings, ...settings };
+    grokUniversalState.settings = { ...grokUniversalState.settings, ...settings };
+  }
+
   function renderAiModelOptions(bot = currentAiBot()) {
     const settings = aiBotState.settings || {};
     const responseModels = aiModelCatalog.response || [];
     const summaryModels = aiModelCatalog.summary || responseModels;
     const embeddingModels = aiModelCatalog.embedding || ['text-embedding-3-small'];
-    setAiModelSelectOptions('aiBotsDefaultResponseModel', responseModels, settings.default_response_model || 'gpt-4o-mini');
-    setAiModelSelectOptions('aiBotsDefaultSummaryModel', summaryModels, settings.default_summary_model || 'gpt-4o-mini');
+    const imageModels = aiModelCatalog.image || ['gpt-image-2'];
+    setAiModelSelectOptions('aiBotsDefaultResponseModel', responseModels, settings.default_response_model || 'gpt-5.4');
+    setAiModelSelectOptions('aiBotsDefaultSummaryModel', summaryModels, settings.default_summary_model || 'gpt-5.4');
     setAiModelSelectOptions('aiBotsDefaultEmbeddingModel', embeddingModels, settings.default_embedding_model || 'text-embedding-3-small');
-    setAiModelSelectOptions('aiBotResponseModel', responseModels, bot?.response_model || settings.default_response_model || 'gpt-4o-mini');
-    setAiModelSelectOptions('aiBotSummaryModel', summaryModels, bot?.summary_model || settings.default_summary_model || 'gpt-4o-mini');
+    setAiModelSelectOptions('aiBotsDefaultImageModel', imageModels, settings.openai_default_image_model || 'gpt-image-2');
+    setStaticSelectOptions('aiBotsDefaultImageSize', OPENAI_IMAGE_SIZE_OPTIONS, settings.openai_default_image_size || '1024x1024');
+    setStaticSelectOptions('aiBotsDefaultImageQuality', OPENAI_IMAGE_QUALITY_OPTIONS, settings.openai_default_image_quality || 'auto');
+    setStaticSelectOptions('aiBotsDefaultImageBackground', OPENAI_IMAGE_BACKGROUND_OPTIONS, settings.openai_default_image_background || 'auto');
+    setStaticSelectOptions('aiBotsDefaultImageOutputFormat', OPENAI_IMAGE_OUTPUT_OPTIONS, settings.openai_default_image_output_format || 'png');
+    setStaticSelectOptions('aiBotsDefaultDocumentFormat', DOCUMENT_FORMAT_OPTIONS, settings.openai_default_document_format || 'md');
+    setAiModelSelectOptions('aiBotResponseModel', responseModels, bot?.response_model || settings.default_response_model || 'gpt-5.4');
+    setAiModelSelectOptions('aiBotSummaryModel', summaryModels, bot?.summary_model || settings.default_summary_model || 'gpt-5.4');
     const botEmbedding = $('#aiBotEmbeddingModel');
     if (botEmbedding) botEmbedding.value = settings.default_embedding_model || 'text-embedding-3-small';
+    renderOpenAiUniversalModelOptions(currentOpenAiUniversalBot());
   }
 
   async function loadAiModelOptions(refresh = false) {
@@ -3836,6 +3920,7 @@
       response: data.response || aiModelCatalog.response,
       summary: data.summary || data.response || aiModelCatalog.summary,
       embedding: data.embedding || aiModelCatalog.embedding,
+      image: data.image || aiModelCatalog.image,
       error: data.error || '',
       fetched_at: data.fetched_at || '',
     };
@@ -3852,23 +3937,192 @@
 
   function mergeAiBotState(data = {}) {
     if (data.state) {
+      syncSharedOpenAiSettings(data.state.settings || {});
       aiBotState = {
-        settings: data.state.settings || aiBotState.settings,
+        settings: aiBotState.settings,
         bots: data.state.bots || aiBotState.bots,
         chats: data.state.chats || aiBotState.chats,
         chatSettings: data.state.chatSettings || aiBotState.chatSettings,
       };
+      if (data.state.chats) openAiUniversalState.chats = data.state.chats;
     } else if (data.settings) {
-      aiBotState = { ...aiBotState, settings: { ...aiBotState.settings, ...data.settings } };
+      syncSharedOpenAiSettings(data.settings);
+      aiBotState = { ...aiBotState, settings: aiBotState.settings };
     }
     if (selectedAiBotId && !aiBotState.bots.some(bot => Number(bot.id) === Number(selectedAiBotId))) {
       selectedAiBotId = null;
     }
     mentionTargetsByChat.clear();
+    updateComposerAiOverrideState().catch(() => {});
   }
 
   function currentAiBot() {
     return aiBotState.bots.find(bot => bot.id === selectedAiBotId) || null;
+  }
+
+  function setOpenAiUniversalStatus(message, type = '') {
+    setOpenAiStatus('openAiUniversalStatus', message, type);
+  }
+
+  function mergeOpenAiUniversalState(data = {}) {
+    const state = data.state || data;
+    if (state.settings) syncSharedOpenAiSettings(state.settings);
+    if (state.bots) openAiUniversalState.bots = state.bots;
+    if (state.chats) openAiUniversalState.chats = state.chats;
+    if (state.chatSettings) openAiUniversalState.chatSettings = state.chatSettings;
+    openAiUniversalState.settings = aiBotState.settings;
+    if (selectedOpenAiUniversalBotId && !openAiUniversalState.bots.some(bot => Number(bot.id) === Number(selectedOpenAiUniversalBotId))) {
+      selectedOpenAiUniversalBotId = null;
+    }
+    mentionTargetsByChat.clear();
+    updateComposerAiOverrideState().catch(() => {});
+  }
+
+  function currentOpenAiUniversalBot() {
+    return openAiUniversalState.bots.find(bot => Number(bot.id) === Number(selectedOpenAiUniversalBotId)) || null;
+  }
+
+  function getOpenAiUniversalChatSetting(chatId, botId) {
+    return openAiUniversalState.chatSettings.find(item => Number(item.chat_id) === Number(chatId) && Number(item.bot_id) === Number(botId)) || null;
+  }
+
+  function renderOpenAiUniversalModelOptions(bot = currentOpenAiUniversalBot()) {
+    const settings = openAiUniversalState.settings || aiBotState.settings || {};
+    const responseModels = aiModelCatalog.response || ['gpt-5.4'];
+    const summaryModels = aiModelCatalog.summary || responseModels;
+    const imageModels = aiModelCatalog.image || ['gpt-image-2'];
+    setAiModelSelectOptions('openAiUniversalBotResponseModel', responseModels, bot?.response_model || settings.default_response_model || 'gpt-5.4');
+    setAiModelSelectOptions('openAiUniversalBotSummaryModel', summaryModels, bot?.summary_model || settings.default_summary_model || 'gpt-5.4');
+    setAiModelSelectOptions('openAiUniversalBotImageModel', imageModels, bot?.image_model || settings.openai_default_image_model || 'gpt-image-2');
+    setStaticSelectOptions('openAiUniversalBotImageSize', OPENAI_IMAGE_SIZE_OPTIONS, bot?.image_resolution || settings.openai_default_image_size || '1024x1024');
+    setStaticSelectOptions('openAiUniversalBotImageQuality', OPENAI_IMAGE_QUALITY_OPTIONS, bot?.image_quality || settings.openai_default_image_quality || 'auto');
+    setStaticSelectOptions('openAiUniversalBotImageBackground', OPENAI_IMAGE_BACKGROUND_OPTIONS, bot?.image_background || settings.openai_default_image_background || 'auto');
+    setStaticSelectOptions('openAiUniversalBotImageOutputFormat', OPENAI_IMAGE_OUTPUT_OPTIONS, bot?.image_output_format || settings.openai_default_image_output_format || 'png');
+    setStaticSelectOptions('openAiUniversalBotDocumentFormat', DOCUMENT_FORMAT_OPTIONS, bot?.document_default_format || settings.openai_default_document_format || 'md');
+    setStaticSelectOptions('openAiUniversalBotTestDocumentFormat', DOCUMENT_FORMAT_OPTIONS, bot?.document_default_format || settings.openai_default_document_format || 'md');
+  }
+
+  function renderOpenAiUniversalBotAvatar(bot = currentOpenAiUniversalBot()) {
+    const avatarEl = $('#openAiUniversalBotAvatar');
+    if (!avatarEl) return;
+    const name = bot?.name || $('#openAiUniversalBotName')?.value.trim() || 'OpenAI Universal';
+    const color = bot?.avatar_color || '#65aadd';
+    avatarEl.style.background = color;
+    if (bot?.avatar_url) {
+      avatarEl.innerHTML = `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="">`;
+    } else {
+      avatarEl.textContent = initials(name);
+    }
+
+    const hasSavedBot = Boolean(bot?.id);
+    const input = $('#openAiUniversalBotAvatarInput');
+    const label = $('#openAiUniversalBotAvatarLabel');
+    if (input) {
+      input.disabled = !hasSavedBot;
+      input.value = '';
+    }
+    if (label) {
+      label.classList.toggle('ai-bot-avatar-label-disabled', !hasSavedBot);
+      label.title = hasSavedBot ? 'Change avatar' : 'Save the bot first';
+    }
+    $('#removeOpenAiUniversalBotAvatar')?.classList.toggle('hidden', !hasSavedBot || !bot?.avatar_url);
+  }
+
+  function renderOpenAiUniversalBotList() {
+    const list = $('#openAiUniversalBotList');
+    if (!list) return;
+    if (!openAiUniversalState.bots.length) {
+      list.innerHTML = '<div class="ai-bot-empty">No OpenAI universal bots yet. Create the first one.</div>';
+      return;
+    }
+    list.innerHTML = openAiUniversalState.bots.map(bot => `
+      <button type="button" class="ai-bot-list-item${Number(bot.id) === Number(selectedOpenAiUniversalBotId) ? ' active' : ''}" data-bot-id="${bot.id}">
+        <span class="ai-bot-list-main">
+          <span class="ai-bot-list-avatar" style="background:${esc(bot.avatar_color || '#65aadd')}">
+            ${bot.avatar_url ? `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">` : esc(initials(bot.name || '?'))}
+          </span>
+          <span class="ai-bot-list-copy">
+            <strong>${esc(bot.name)}</strong>
+            <small>@${esc(bot.mention)} · ${bot.enabled ? 'enabled' : 'disabled'}</small>
+          </span>
+        </span>
+        <span class="ai-bot-list-model">${bot.response_model ? esc(bot.response_model) : ''}</span>
+      </button>
+    `).join('');
+  }
+
+  function fillOpenAiUniversalBotForm(bot = null) {
+    const settings = openAiUniversalState.settings || aiBotState.settings || {};
+    selectedOpenAiUniversalBotId = bot ? bot.id : null;
+    $('#openAiUniversalBotName').value = bot?.name || 'OpenAI Universal';
+    $('#openAiUniversalBotMention').value = bot?.mention || 'openai_universal';
+    $('#openAiUniversalBotEnabled').checked = bot ? !!bot.enabled : true;
+    $('#openAiUniversalBotAllowText').checked = bot?.allow_text ?? true;
+    $('#openAiUniversalBotAllowImageGenerate').checked = bot?.allow_image_generate ?? true;
+    $('#openAiUniversalBotAllowImageEdit').checked = bot?.allow_image_edit ?? true;
+    $('#openAiUniversalBotAllowDocument').checked = bot?.allow_document ?? true;
+    $('#openAiUniversalBotTemperature').value = bot?.temperature ?? 0.55;
+    $('#openAiUniversalBotMaxTokens').value = bot?.max_tokens ?? 1000;
+    $('#openAiUniversalBotStyle').value = bot?.style || 'Helpful OpenAI universal assistant for chat';
+    $('#openAiUniversalBotTone').value = bot?.tone || 'warm, concise, attentive';
+    $('#openAiUniversalBotRules').value = bot?.behavior_rules || '';
+    $('#openAiUniversalBotSpeech').value = bot?.speech_patterns || '';
+    $('#openAiUniversalBotTestMode').value = 'auto';
+    renderOpenAiUniversalModelOptions(bot);
+    $('#openAiUniversalBotDocumentFormat').value = bot?.document_default_format || settings.openai_default_document_format || 'md';
+    $('#openAiUniversalBotTestDocumentFormat').value = bot?.document_default_format || settings.openai_default_document_format || 'md';
+    renderOpenAiUniversalBotAvatar(bot);
+    renderOpenAiUniversalBotList();
+    renderOpenAiUniversalChatBotSettings();
+  }
+
+  function openAiUniversalBotFormPayload() {
+    return {
+      kind: 'universal',
+      name: $('#openAiUniversalBotName')?.value.trim(),
+      mention: $('#openAiUniversalBotMention')?.value.trim(),
+      enabled: $('#openAiUniversalBotEnabled')?.checked,
+      response_model: $('#openAiUniversalBotResponseModel')?.value.trim(),
+      summary_model: $('#openAiUniversalBotSummaryModel')?.value.trim(),
+      image_model: $('#openAiUniversalBotImageModel')?.value.trim(),
+      image_resolution: $('#openAiUniversalBotImageSize')?.value.trim(),
+      image_quality: $('#openAiUniversalBotImageQuality')?.value.trim(),
+      image_background: $('#openAiUniversalBotImageBackground')?.value.trim(),
+      image_output_format: $('#openAiUniversalBotImageOutputFormat')?.value.trim(),
+      document_default_format: $('#openAiUniversalBotDocumentFormat')?.value.trim(),
+      allow_text: $('#openAiUniversalBotAllowText')?.checked,
+      allow_image_generate: $('#openAiUniversalBotAllowImageGenerate')?.checked,
+      allow_image_edit: $('#openAiUniversalBotAllowImageEdit')?.checked,
+      allow_document: $('#openAiUniversalBotAllowDocument')?.checked,
+      temperature: Number($('#openAiUniversalBotTemperature')?.value || 0.55),
+      max_tokens: Number($('#openAiUniversalBotMaxTokens')?.value || 1000),
+      style: $('#openAiUniversalBotStyle')?.value.trim(),
+      tone: $('#openAiUniversalBotTone')?.value.trim(),
+      behavior_rules: $('#openAiUniversalBotRules')?.value.trim(),
+      speech_patterns: $('#openAiUniversalBotSpeech')?.value.trim(),
+    };
+  }
+
+  function renderOpenAiUniversalChatBotSettings() {
+    const chatSelect = $('#openAiUniversalBotChatSelect');
+    const botSelect = $('#openAiUniversalBotChatBotSelect');
+    if (!chatSelect || !botSelect) return;
+    const currentChatValue = chatSelect.value || String(currentChatId || openAiUniversalState.chats[0]?.id || '');
+    const currentBotValue = botSelect.value || String(selectedOpenAiUniversalBotId || openAiUniversalState.bots[0]?.id || '');
+    chatSelect.innerHTML = openAiUniversalState.chats.map(chat => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+    botSelect.innerHTML = openAiUniversalState.bots.map(bot => `<option value="${bot.id}">${esc(bot.name)} @${esc(bot.mention)}</option>`).join('');
+    if (openAiUniversalState.chats.some(chat => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
+    if (openAiUniversalState.bots.some(bot => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;
+    if (!botSelect.value && openAiUniversalState.bots[0]) botSelect.value = String(openAiUniversalState.bots[0].id);
+    const setting = getOpenAiUniversalChatSetting(chatSelect.value, botSelect.value);
+    $('#openAiUniversalBotChatEnabled').checked = !!setting?.enabled;
+    $('#openAiUniversalBotChatMode').value = setting?.mode || 'simple';
+    $('#openAiUniversalBotChatHotLimit').value = setting?.hot_context_limit || 50;
+  }
+
+  function renderOpenAiUniversalSettings() {
+    const selected = currentOpenAiUniversalBot() || openAiUniversalState.bots[0] || null;
+    fillOpenAiUniversalBotForm(selected);
   }
 
   function getAiChatSetting(chatId, botId) {
@@ -3922,8 +4176,8 @@
     $('#aiBotName').value = bot?.name || 'Bananza AI';
     $('#aiBotMention').value = bot?.mention || 'bananza';
     $('#aiBotEnabled').checked = bot ? !!bot.enabled : true;
-    $('#aiBotResponseModel').value = bot?.response_model || settings.default_response_model || 'gpt-4o-mini';
-    $('#aiBotSummaryModel').value = bot?.summary_model || settings.default_summary_model || 'gpt-4o-mini';
+    $('#aiBotResponseModel').value = bot?.response_model || settings.default_response_model || 'gpt-5.4';
+    $('#aiBotSummaryModel').value = bot?.summary_model || settings.default_summary_model || 'gpt-5.4';
     $('#aiBotEmbeddingModel').value = settings.default_embedding_model || 'text-embedding-3-small';
     $('#aiBotTemperature').value = bot?.temperature ?? 0.55;
     $('#aiBotMaxTokens').value = bot?.max_tokens ?? 1000;
@@ -3995,12 +4249,18 @@
     $('#aiBotChatHotLimit').value = setting?.hot_context_limit || 50;
   }
 
-  function renderAiBotSettings() {
+  function renderOpenAiProviderSettings() {
     const settings = aiBotState.settings || {};
     $('#aiBotsGlobalEnabled').checked = !!settings.enabled;
-    $('#aiBotsDefaultResponseModel').value = settings.default_response_model || 'gpt-4o-mini';
-    $('#aiBotsDefaultSummaryModel').value = settings.default_summary_model || 'gpt-4o-mini';
+    $('#aiBotsDefaultResponseModel').value = settings.default_response_model || 'gpt-5.4';
+    $('#aiBotsDefaultSummaryModel').value = settings.default_summary_model || 'gpt-5.4';
     $('#aiBotsDefaultEmbeddingModel').value = settings.default_embedding_model || 'text-embedding-3-small';
+    $('#aiBotsDefaultImageModel').value = settings.openai_default_image_model || 'gpt-image-2';
+    $('#aiBotsDefaultImageSize').value = settings.openai_default_image_size || '1024x1024';
+    $('#aiBotsDefaultImageQuality').value = settings.openai_default_image_quality || 'auto';
+    $('#aiBotsDefaultImageBackground').value = settings.openai_default_image_background || 'auto';
+    $('#aiBotsDefaultImageOutputFormat').value = settings.openai_default_image_output_format || 'png';
+    $('#aiBotsDefaultDocumentFormat').value = settings.openai_default_document_format || 'md';
     $('#aiBotsChunkSize').value = settings.chunk_size || 50;
     $('#aiBotsRetrievalTopK').value = settings.retrieval_top_k || 6;
     $('#aiBotsApiKey').value = '';
@@ -4008,10 +4268,16 @@
       ? `Ключ сохранён: ${settings.masked_openai_key || '***'}`
       : 'Ключ не сохранён';
 
-    const selected = currentAiBot() || aiBotState.bots[0] || null;
-    renderAiModelOptions(selected);
-    fillAiBotForm(selected);
-    renderAiChatBotSettings();
+    renderAiModelOptions(currentAiBot() || aiBotState.bots[0] || null);
+  }
+
+  function renderOpenAiTextBotsSettings() {
+    fillAiBotForm(currentAiBot() || aiBotState.bots[0] || null);
+  }
+
+  function renderAiBotSettings() {
+    renderOpenAiProviderSettings();
+    renderOpenAiTextBotsSettings();
   }
 
   function aiBotSettingsPayload() {
@@ -4020,6 +4286,12 @@
       default_response_model: $('#aiBotsDefaultResponseModel')?.value.trim(),
       default_summary_model: $('#aiBotsDefaultSummaryModel')?.value.trim(),
       default_embedding_model: $('#aiBotsDefaultEmbeddingModel')?.value.trim(),
+      openai_default_image_model: $('#aiBotsDefaultImageModel')?.value.trim(),
+      openai_default_image_size: $('#aiBotsDefaultImageSize')?.value.trim(),
+      openai_default_image_quality: $('#aiBotsDefaultImageQuality')?.value.trim(),
+      openai_default_image_background: $('#aiBotsDefaultImageBackground')?.value.trim(),
+      openai_default_image_output_format: $('#aiBotsDefaultImageOutputFormat')?.value.trim(),
+      openai_default_document_format: $('#aiBotsDefaultDocumentFormat')?.value.trim(),
       chunk_size: Number($('#aiBotsChunkSize')?.value || 50),
       retrieval_top_k: Number($('#aiBotsRetrievalTopK')?.value || 6),
     };
@@ -4041,20 +4313,22 @@
     const data = await api('/api/admin/ai-bots');
     mergeAiBotState({ state: data });
     renderAiBotSettings();
+    renderOpenAiUniversalSettings();
     loadAiModelOptions(false).catch((e) => {
       setAiModelStatus(e.message || 'Не удалось загрузить список моделей', 'error');
     });
   }
 
   async function saveAiBotSettings() {
-    setAiBotStatus('Сохраняю...');
+    setAiBotSettingsStatus('Сохраняю...');
     try {
       await persistAiBotSettings();
       await loadAiModelOptions(true).catch(() => {});
       renderAiBotSettings();
-      setAiBotStatus('Настройки сохранены', 'success');
+      renderOpenAiUniversalSettings();
+      setAiBotSettingsStatus('Настройки сохранены', 'success');
     } catch (e) {
-      setAiBotStatus(e.message || 'Не удалось сохранить настройки', 'error');
+      setAiBotSettingsStatus(e.message || 'Не удалось сохранить настройки', 'error');
     }
   }
 
@@ -4065,9 +4339,10 @@
       mergeAiBotState(data);
       await loadAiModelOptions(true).catch(() => {});
       renderAiBotSettings();
-      setAiBotStatus('Ключ удалён', 'success');
+      renderOpenAiUniversalSettings();
+      setAiBotSettingsStatus('Ключ удалён', 'success');
     } catch (e) {
-      setAiBotStatus(e.message || 'Не удалось удалить ключ', 'error');
+      setAiBotSettingsStatus(e.message || 'Не удалось удалить ключ', 'error');
     }
   }
 
@@ -4268,6 +4543,192 @@
       setAiBotStatus('Настройки чата сохранены', 'success');
     } catch (e) {
       setAiBotStatus(e.message || 'Не удалось сохранить настройки чата', 'error');
+    }
+  }
+
+  async function loadOpenAiUniversalState() {
+    const data = await api('/api/admin/openai-universal-bots');
+    mergeOpenAiUniversalState({ state: data });
+    renderOpenAiUniversalSettings();
+    return data;
+  }
+
+  function syncOpenAiUniversalBotUser(bot) {
+    if (!bot?.user_id) return;
+    applyUserUpdate({
+      id: bot.user_id,
+      user_id: bot.user_id,
+      display_name: bot.name,
+      avatar_color: bot.avatar_color,
+      avatar_url: bot.avatar_url,
+      is_ai_bot: 1,
+    });
+  }
+
+  async function saveOpenAiUniversalBot() {
+    const payload = openAiUniversalBotFormPayload();
+    if (!payload.name) { setOpenAiUniversalStatus('Enter bot name', 'error'); return; }
+    setOpenAiUniversalStatus('Saving universal bot...');
+    try {
+      const shouldUpdate = Boolean(selectedOpenAiUniversalBotId && openAiUniversalState.bots.some(bot => Number(bot.id) === Number(selectedOpenAiUniversalBotId)));
+      const url = shouldUpdate ? `/api/admin/openai-universal-bots/${selectedOpenAiUniversalBotId}` : '/api/admin/openai-universal-bots';
+      const method = shouldUpdate ? 'PUT' : 'POST';
+      const data = await api(url, { method, body: payload });
+      mergeOpenAiUniversalState(data);
+      selectedOpenAiUniversalBotId = data.bot?.id || selectedOpenAiUniversalBotId;
+      syncOpenAiUniversalBotUser(data.bot);
+      renderOpenAiUniversalSettings();
+      setOpenAiUniversalStatus('Universal bot saved', 'success');
+    } catch (e) {
+      setOpenAiUniversalStatus(e.message || 'Could not save universal bot', 'error');
+    }
+  }
+
+  async function uploadOpenAiUniversalBotAvatar(file) {
+    if (!file) return;
+    if (!selectedOpenAiUniversalBotId) {
+      setOpenAiUniversalStatus('Save the bot before adding an avatar', 'error');
+      renderOpenAiUniversalBotAvatar(null);
+      return;
+    }
+    const fd = new FormData();
+    fd.append('avatar', file);
+    setOpenAiUniversalStatus('Uploading avatar...');
+    try {
+      const data = await api(`/api/admin/openai-universal-bots/${selectedOpenAiUniversalBotId}/avatar`, { method: 'POST', body: fd });
+      mergeOpenAiUniversalState(data);
+      selectedOpenAiUniversalBotId = data.bot?.id || selectedOpenAiUniversalBotId;
+      syncOpenAiUniversalBotUser(data.bot);
+      renderOpenAiUniversalSettings();
+      refreshRenderedAiBotAvatar(data.bot);
+      setOpenAiUniversalStatus('Avatar saved', 'success');
+    } catch (e) {
+      setOpenAiUniversalStatus(e.message || 'Could not upload avatar', 'error');
+    }
+  }
+
+  async function removeOpenAiUniversalBotAvatar() {
+    if (!selectedOpenAiUniversalBotId) return;
+    try {
+      const data = await api(`/api/admin/openai-universal-bots/${selectedOpenAiUniversalBotId}/avatar`, { method: 'DELETE' });
+      mergeOpenAiUniversalState(data);
+      selectedOpenAiUniversalBotId = data.bot?.id || selectedOpenAiUniversalBotId;
+      syncOpenAiUniversalBotUser(data.bot);
+      renderOpenAiUniversalSettings();
+      refreshRenderedAiBotAvatar(data.bot);
+      setOpenAiUniversalStatus('Avatar removed', 'success');
+    } catch (e) {
+      setOpenAiUniversalStatus(e.message || 'Could not remove avatar', 'error');
+    }
+  }
+
+  async function disableOpenAiUniversalBot() {
+    if (!selectedOpenAiUniversalBotId) return;
+    if (!confirm('Disable this OpenAI universal bot in all chats?')) return;
+    try {
+      const data = await api(`/api/admin/openai-universal-bots/${selectedOpenAiUniversalBotId}`, { method: 'DELETE' });
+      mergeOpenAiUniversalState(data);
+      renderOpenAiUniversalSettings();
+      setOpenAiUniversalStatus('Universal bot disabled', 'success');
+    } catch (e) {
+      setOpenAiUniversalStatus(e.message || 'Could not disable universal bot', 'error');
+    }
+  }
+
+  async function testOpenAiUniversalBot() {
+    if (!selectedOpenAiUniversalBotId) { setOpenAiUniversalStatus('Save the bot first', 'error'); return; }
+    setOpenAiUniversalStatus('Testing universal bot...');
+    try {
+      const data = await api(`/api/admin/openai-universal-bots/${selectedOpenAiUniversalBotId}/test`, {
+        method: 'POST',
+        body: {
+          mode: $('#openAiUniversalBotTestMode')?.value || 'auto',
+          document_format: $('#openAiUniversalBotTestDocumentFormat')?.value || 'md',
+        },
+      });
+      const text = data.result?.text ? data.result.text.slice(0, 500) : '';
+      setOpenAiUniversalStatus(`Success (${data.result?.latencyMs || 0} ms): ${text}`, 'success');
+    } catch (e) {
+      setOpenAiUniversalStatus(e.message || 'Universal bot test failed', 'error');
+    }
+  }
+
+  async function exportOpenAiUniversalBotJson() {
+    if (!selectedOpenAiUniversalBotId) { setOpenAiUniversalStatus('Choose a saved bot first', 'error'); return; }
+    setOpenAiUniversalStatus('Preparing JSON...');
+    try {
+      const headers = {};
+      if (token) headers.Authorization = 'Bearer ' + token;
+      const res = await fetch(`/api/admin/openai-universal-bots/${selectedOpenAiUniversalBotId}/export`, { headers });
+      if (!res.ok) {
+        let data = {};
+        try { data = await res.json(); } catch {}
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const bot = currentOpenAiUniversalBot();
+      const fallbackName = `bananza-openai-universal-${bot?.mention || selectedOpenAiUniversalBotId}.json`;
+      const filename = filenameFromContentDisposition(res.headers.get('content-disposition'), fallbackName);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setOpenAiUniversalStatus('JSON exported', 'success');
+    } catch (e) {
+      setOpenAiUniversalStatus(e.message || 'Could not export JSON', 'error');
+    }
+  }
+
+  async function importOpenAiUniversalBotJsonFile(file) {
+    if (!file) return;
+    setOpenAiUniversalStatus('Importing JSON...');
+    try {
+      const raw = await file.text();
+      const payload = JSON.parse(raw);
+      const data = await api('/api/admin/openai-universal-bots/import', { method: 'POST', body: payload });
+      mergeOpenAiUniversalState(data);
+      selectedOpenAiUniversalBotId = data.bot?.id || selectedOpenAiUniversalBotId;
+      renderOpenAiUniversalSettings();
+      const warnings = Array.isArray(data.warnings) && data.warnings.length ? ` ${data.warnings.join(' ')}` : '';
+      setOpenAiUniversalStatus(`Universal bot imported.${warnings}`, warnings ? 'error' : 'success');
+    } catch (e) {
+      setOpenAiUniversalStatus(e.message || 'Could not import JSON', 'error');
+    } finally {
+      const input = $('#openAiUniversalBotImportFile');
+      if (input) input.value = '';
+    }
+  }
+
+  async function saveOpenAiUniversalChatBotSettings() {
+    const chatId = Number($('#openAiUniversalBotChatSelect')?.value || 0);
+    const botId = Number($('#openAiUniversalBotChatBotSelect')?.value || 0);
+    const botExists = openAiUniversalState.bots.some(bot => Number(bot.id) === Number(botId));
+    if (!chatId || !botId) { setOpenAiUniversalStatus('Choose chat and bot', 'error'); return; }
+    if (!botExists) {
+      setOpenAiUniversalStatus('Save the bot first', 'error');
+      await loadOpenAiUniversalState().catch(() => {});
+      return;
+    }
+    try {
+      const data = await api('/api/admin/openai-universal-bots/chat-settings', {
+        method: 'PUT',
+        body: {
+          chatId,
+          botId,
+          enabled: $('#openAiUniversalBotChatEnabled')?.checked,
+          mode: $('#openAiUniversalBotChatMode')?.value || 'simple',
+          hot_context_limit: Number($('#openAiUniversalBotChatHotLimit')?.value || 50),
+        },
+      });
+      mergeOpenAiUniversalState(data);
+      renderOpenAiUniversalChatBotSettings();
+      setOpenAiUniversalStatus('Chat settings saved', 'success');
+    } catch (e) {
+      setOpenAiUniversalStatus(e.message || 'Could not save chat settings', 'error');
     }
   }
 
@@ -5305,8 +5766,13 @@
     setGrokStatus('grokAiImageStatus', message, type);
   }
 
+  function setGrokUniversalStatus(message, type = '') {
+    setGrokStatus('grokAiUniversalStatus', message, type);
+  }
+
   function setGrokBotStatus(kind = 'text', message, type = '') {
     if (kind === 'image') setGrokImageStatus(message, type);
+    else if (kind === 'universal') setGrokUniversalStatus(message, type);
     else setGrokTextStatus(message, type);
   }
 
@@ -5326,6 +5792,10 @@
     return grokBotState.imageBots.find(bot => Number(bot.id) === Number(selectedGrokImageBotId)) || null;
   }
 
+  function currentGrokUniversalBot() {
+    return grokUniversalState.bots.find(bot => Number(bot.id) === Number(selectedGrokUniversalBotId)) || null;
+  }
+
   function getGrokChatSetting(chatId, botId) {
     return grokBotState.chatSettings.find(item => Number(item.chat_id) === Number(chatId) && Number(item.bot_id) === Number(botId)) || null;
   }
@@ -5334,15 +5804,24 @@
     return grokBotState.imageChatSettings.find(item => Number(item.chat_id) === Number(chatId) && Number(item.bot_id) === Number(botId)) || null;
   }
 
+  function getGrokUniversalChatSetting(chatId, botId) {
+    return grokUniversalState.chatSettings.find(item => Number(item.chat_id) === Number(chatId) && Number(item.bot_id) === Number(botId)) || null;
+  }
+
   function mergeGrokAiState(data = {}) {
     const state = data.state || data;
-    if (state.settings) grokBotState.settings = { ...grokBotState.settings, ...state.settings };
+    if (state.settings) syncSharedGrokSettings(state.settings);
     if (state.bots) grokBotState.bots = state.bots;
     if (state.imageBots) grokBotState.imageBots = state.imageBots;
     if (state.chats) grokBotState.chats = state.chats;
     if (state.chatSettings) grokBotState.chatSettings = state.chatSettings;
     if (state.imageChatSettings) grokBotState.imageChatSettings = state.imageChatSettings;
-    if (state.models) grokBotState.models = { ...grokBotState.models, ...state.models };
+    if (state.chats) grokUniversalState.chats = state.chats;
+    if (state.models) {
+      grokBotState.models = { ...grokBotState.models, ...state.models };
+      grokUniversalState.models = { ...grokUniversalState.models, ...state.models };
+    }
+    grokUniversalState.settings = grokBotState.settings;
     if (selectedGrokBotId && !grokBotState.bots.some(bot => Number(bot.id) === Number(selectedGrokBotId))) {
       selectedGrokBotId = null;
     }
@@ -5350,6 +5829,25 @@
       selectedGrokImageBotId = null;
     }
     mentionTargetsByChat.clear();
+    updateComposerAiOverrideState().catch(() => {});
+  }
+
+  function mergeGrokUniversalState(data = {}) {
+    const state = data.state || data;
+    if (state.settings) syncSharedGrokSettings(state.settings);
+    if (state.bots) grokUniversalState.bots = state.bots;
+    if (state.chats) grokUniversalState.chats = state.chats;
+    if (state.chatSettings) grokUniversalState.chatSettings = state.chatSettings;
+    if (state.models) {
+      grokUniversalState.models = { ...grokUniversalState.models, ...state.models };
+      grokBotState.models = { ...grokBotState.models, ...state.models };
+    }
+    grokUniversalState.settings = grokBotState.settings;
+    if (selectedGrokUniversalBotId && !grokUniversalState.bots.some(bot => Number(bot.id) === Number(selectedGrokUniversalBotId))) {
+      selectedGrokUniversalBotId = null;
+    }
+    mentionTargetsByChat.clear();
+    updateComposerAiOverrideState().catch(() => {});
   }
 
   function renderNamedGrokAvatar({ bot, avatarId, nameId, fallbackName, inputId, labelId, removeId }) {
@@ -5402,15 +5900,30 @@
     });
   }
 
+  function renderGrokUniversalBotAvatar(bot = currentGrokUniversalBot()) {
+    renderNamedGrokAvatar({
+      bot,
+      avatarId: 'grokAiUniversalBotAvatar',
+      nameId: 'grokAiUniversalBotName',
+      fallbackName: 'Grok Universal',
+      inputId: 'grokAiUniversalBotAvatarInput',
+      labelId: 'grokAiUniversalBotAvatarLabel',
+      removeId: 'removeGrokAiUniversalBotAvatar',
+    });
+  }
+
   function mountGrokBotPanels() {
     const settingsBlock = $('#grokAiSettingsBlock');
     const textBlock = $('#grokAiTextBotsBlock');
     const imageBlock = $('#grokAiImageBotsBlock');
+    const universalBlock = $('#grokAiUniversalBotsBlock');
     const textPanel = $('#grokAiBotList')?.closest('.ai-bot-panel');
     const imagePanel = $('#grokAiImageBotList')?.closest('.ai-bot-panel');
+    const universalPanel = $('#grokAiUniversalBotList')?.closest('.ai-bot-panel');
     const globalStatus = $('#grokAiStatus');
     const textStatus = $('#grokAiTextStatus');
     const imageStatus = $('#grokAiImageStatus');
+    const universalStatus = $('#grokAiUniversalStatus');
     const navPanel = $('#grokAiNavPanel');
 
     if (settingsBlock && navPanel && globalStatus && navPanel.parentElement !== settingsBlock) {
@@ -5422,14 +5935,18 @@
     if (imageBlock && imagePanel && imageStatus && imagePanel.parentElement !== imageBlock) {
       imageBlock.insertBefore(imagePanel, imageStatus);
     }
+    if (universalBlock && universalPanel && universalStatus && universalPanel.parentElement !== universalBlock) {
+      universalBlock.insertBefore(universalPanel, universalStatus);
+    }
     textPanel?.classList.remove('hidden');
     imagePanel?.classList.remove('hidden');
+    universalPanel?.classList.remove('hidden');
   }
 
   function renderGrokGlobalTextModelOptions() {
     const settings = grokBotState.settings || {};
     const models = grokBotState.models || {};
-    const responseModels = models.response || ['grok-4-1-fast-reasoning'];
+    const responseModels = models.response || ['grok-4.20-reasoning'];
     const summaryModels = models.summary || responseModels;
     const embeddingModels = models.embedding || ['text-embedding'];
     setAiModelSelectOptions('grokAiDefaultResponseModel', responseModels, settings.grok_default_response_model || responseModels[0] || '');
@@ -5440,10 +5957,25 @@
   function renderGrokBotModelOptions(bot = currentGrokBot()) {
     const settings = grokBotState.settings || {};
     const models = grokBotState.models || {};
-    const responseModels = models.response || ['grok-4-1-fast-reasoning'];
+    const responseModels = models.response || ['grok-4.20-reasoning'];
     const summaryModels = models.summary || responseModels;
     setAiModelSelectOptions('grokAiBotResponseModel', responseModels, bot?.response_model || settings.grok_default_response_model || responseModels[0] || '');
     setAiModelSelectOptions('grokAiBotSummaryModel', summaryModels, bot?.summary_model || settings.grok_default_summary_model || summaryModels[0] || '');
+  }
+
+  function renderGrokUniversalBotModelOptions(bot = currentGrokUniversalBot()) {
+    const settings = grokUniversalState.settings || grokBotState.settings || {};
+    const models = grokUniversalState.models || grokBotState.models || {};
+    const responseModels = models.response || ['grok-4.20-reasoning'];
+    const summaryModels = models.summary || responseModels;
+    const imageModels = models.image || ['grok-imagine-image'];
+    const aspectRatios = models.aspect_ratio || ['1:1', '16:9', '9:16'];
+    const resolutions = models.resolution || ['1k', '2k'];
+    setAiModelSelectOptions('grokAiUniversalBotResponseModel', responseModels, bot?.response_model || settings.grok_default_response_model || responseModels[0] || '');
+    setAiModelSelectOptions('grokAiUniversalBotSummaryModel', summaryModels, bot?.summary_model || settings.grok_default_summary_model || summaryModels[0] || '');
+    setAiModelSelectOptions('grokAiUniversalBotImageModel', imageModels, bot?.image_model || settings.grok_default_image_model || imageModels[0] || '');
+    setAiModelSelectOptions('grokAiUniversalBotAspectRatio', aspectRatios, bot?.image_aspect_ratio || settings.grok_default_image_aspect_ratio || aspectRatios[0] || '');
+    setAiModelSelectOptions('grokAiUniversalBotResolution', resolutions, bot?.image_resolution || settings.grok_default_image_resolution || resolutions[0] || '');
   }
 
   function renderGrokGlobalImageModelOptions() {
@@ -5514,6 +6046,29 @@
     `).join('');
   }
 
+  function renderGrokUniversalBotList() {
+    const list = $('#grokAiUniversalBotList');
+    if (!list) return;
+    if (!grokUniversalState.bots.length) {
+      list.innerHTML = '<div class="ai-bot-empty">No Grok universal bots yet. Create the first one.</div>';
+      return;
+    }
+    list.innerHTML = grokUniversalState.bots.map(bot => `
+      <button type="button" class="ai-bot-list-item${Number(bot.id) === Number(selectedGrokUniversalBotId) ? ' active' : ''}" data-bot-id="${bot.id}">
+        <span class="ai-bot-list-main">
+          <span class="ai-bot-list-avatar" style="background:${esc(bot.avatar_color || '#65aadd')}">
+            ${bot.avatar_url ? `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">` : esc(initials(bot.name || '?'))}
+          </span>
+          <span class="ai-bot-list-copy">
+            <strong>${esc(bot.name)}</strong>
+            <small>@${esc(bot.mention)} · ${bot.enabled ? 'enabled' : 'disabled'}</small>
+          </span>
+        </span>
+        <span class="ai-bot-list-model">${bot.response_model ? esc(bot.response_model) : ''}</span>
+      </button>
+    `).join('');
+  }
+
   function fillGrokBotForm(bot = null) {
     const settings = grokBotState.settings || {};
     selectedGrokBotId = bot ? bot.id : null;
@@ -5545,6 +6100,28 @@
     renderGrokImageBotAvatar(bot);
     renderGrokImageBotList();
     renderGrokImageChatBotSettings();
+  }
+
+  function fillGrokUniversalBotForm(bot = null) {
+    const settings = grokUniversalState.settings || grokBotState.settings || {};
+    selectedGrokUniversalBotId = bot ? bot.id : null;
+    $('#grokAiUniversalBotName').value = bot?.name || 'Grok Universal';
+    $('#grokAiUniversalBotMention').value = bot?.mention || 'grok_universal';
+    $('#grokAiUniversalBotEnabled').checked = bot ? !!bot.enabled : true;
+    $('#grokAiUniversalBotAllowText').checked = bot?.allow_text ?? true;
+    $('#grokAiUniversalBotAllowImageGenerate').checked = bot?.allow_image_generate ?? true;
+    $('#grokAiUniversalBotAllowImageEdit').checked = bot?.allow_image_edit ?? true;
+    $('#grokAiUniversalBotTemperature').value = bot?.temperature ?? settings.grok_temperature ?? 0.3;
+    $('#grokAiUniversalBotMaxTokens').value = bot?.max_tokens ?? settings.grok_max_tokens ?? 1000;
+    $('#grokAiUniversalBotStyle').value = bot?.style || 'Helpful Grok universal assistant for chat';
+    $('#grokAiUniversalBotTone').value = bot?.tone || 'warm, concise, attentive';
+    $('#grokAiUniversalBotRules').value = bot?.behavior_rules || '';
+    $('#grokAiUniversalBotSpeech').value = bot?.speech_patterns || '';
+    $('#grokAiUniversalBotTestMode').value = 'auto';
+    renderGrokUniversalBotModelOptions(bot);
+    renderGrokUniversalBotAvatar(bot);
+    renderGrokUniversalBotList();
+    renderGrokUniversalChatBotSettings();
   }
 
   function grokBotFormPayload() {
@@ -5580,6 +6157,29 @@
     };
   }
 
+  function grokUniversalBotFormPayload() {
+    return {
+      kind: 'universal',
+      name: $('#grokAiUniversalBotName')?.value.trim(),
+      mention: $('#grokAiUniversalBotMention')?.value.trim(),
+      enabled: $('#grokAiUniversalBotEnabled')?.checked,
+      response_model: $('#grokAiUniversalBotResponseModel')?.value.trim(),
+      summary_model: $('#grokAiUniversalBotSummaryModel')?.value.trim(),
+      image_model: $('#grokAiUniversalBotImageModel')?.value.trim(),
+      image_aspect_ratio: $('#grokAiUniversalBotAspectRatio')?.value.trim(),
+      image_resolution: $('#grokAiUniversalBotResolution')?.value.trim(),
+      allow_text: $('#grokAiUniversalBotAllowText')?.checked,
+      allow_image_generate: $('#grokAiUniversalBotAllowImageGenerate')?.checked,
+      allow_image_edit: $('#grokAiUniversalBotAllowImageEdit')?.checked,
+      temperature: Number($('#grokAiUniversalBotTemperature')?.value || 0.3),
+      max_tokens: Number($('#grokAiUniversalBotMaxTokens')?.value || 1000),
+      style: $('#grokAiUniversalBotStyle')?.value.trim(),
+      tone: $('#grokAiUniversalBotTone')?.value.trim(),
+      behavior_rules: $('#grokAiUniversalBotRules')?.value.trim(),
+      speech_patterns: $('#grokAiUniversalBotSpeech')?.value.trim(),
+    };
+  }
+
   function renderGrokChatBotSettings() {
     const chatSelect = $('#grokAiBotChatSelect');
     const botSelect = $('#grokAiBotChatBotSelect');
@@ -5610,6 +6210,23 @@
     if (!botSelect.value && grokBotState.imageBots[0]) botSelect.value = String(grokBotState.imageBots[0].id);
     const setting = getGrokImageChatSetting(chatSelect.value, botSelect.value);
     $('#grokAiImageBotChatEnabled').checked = !!setting?.enabled;
+  }
+
+  function renderGrokUniversalChatBotSettings() {
+    const chatSelect = $('#grokAiUniversalBotChatSelect');
+    const botSelect = $('#grokAiUniversalBotChatBotSelect');
+    if (!chatSelect || !botSelect) return;
+    const currentChatValue = chatSelect.value || String(currentChatId || grokUniversalState.chats[0]?.id || '');
+    const currentBotValue = botSelect.value || String(selectedGrokUniversalBotId || grokUniversalState.bots[0]?.id || '');
+    chatSelect.innerHTML = grokUniversalState.chats.map(chat => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+    botSelect.innerHTML = grokUniversalState.bots.map(bot => `<option value="${bot.id}">${esc(bot.name)} @${esc(bot.mention)}</option>`).join('');
+    if (grokUniversalState.chats.some(chat => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
+    if (grokUniversalState.bots.some(bot => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;
+    if (!botSelect.value && grokUniversalState.bots[0]) botSelect.value = String(grokUniversalState.bots[0].id);
+    const setting = getGrokUniversalChatSetting(chatSelect.value, botSelect.value);
+    $('#grokAiUniversalBotChatEnabled').checked = !!setting?.enabled;
+    $('#grokAiUniversalBotChatMode').value = setting?.mode || 'simple';
+    $('#grokAiUniversalBotChatHotLimit').value = setting?.hot_context_limit || 50;
   }
 
   function renderGrokAiSettings() {
@@ -5645,6 +6262,12 @@
     mountGrokBotPanels();
     fillGrokImageBotForm(currentGrokImageBot() || grokBotState.imageBots[0] || null);
     renderGrokImageChatBotSettings();
+  }
+
+  function renderGrokUniversalBotsSettings() {
+    mountGrokBotPanels();
+    fillGrokUniversalBotForm(currentGrokUniversalBot() || grokUniversalState.bots[0] || null);
+    renderGrokUniversalChatBotSettings();
   }
 
   function grokAiSettingsPayload() {
@@ -5987,6 +6610,179 @@
       setGrokImageStatus('Image bot chat settings saved', 'success');
     } catch (e) {
       setGrokImageStatus(e.message || 'Could not save image bot chat settings', 'error');
+    }
+  }
+
+  async function loadGrokUniversalState() {
+    const data = await api('/api/admin/grok-universal-bots');
+    mergeGrokUniversalState(data);
+    renderGrokUniversalBotsSettings();
+    return data;
+  }
+
+  async function saveGrokUniversalBot() {
+    const payload = grokUniversalBotFormPayload();
+    if (!payload.name) { setGrokUniversalStatus('Enter bot name', 'error'); return; }
+    setGrokUniversalStatus('Saving universal bot...');
+    try {
+      const shouldUpdate = Boolean(selectedGrokUniversalBotId && grokUniversalState.bots.some(bot => Number(bot.id) === Number(selectedGrokUniversalBotId)));
+      const url = shouldUpdate ? `/api/admin/grok-universal-bots/${selectedGrokUniversalBotId}` : '/api/admin/grok-universal-bots';
+      const method = shouldUpdate ? 'PUT' : 'POST';
+      const data = await api(url, { method, body: payload });
+      mergeGrokUniversalState(data);
+      selectedGrokUniversalBotId = data.bot?.id || selectedGrokUniversalBotId;
+      syncGrokBotUser(data.bot);
+      renderGrokUniversalBotsSettings();
+      setGrokUniversalStatus('Universal bot saved', 'success');
+    } catch (e) {
+      setGrokUniversalStatus(e.message || 'Could not save universal bot', 'error');
+    }
+  }
+
+  async function uploadGrokUniversalBotAvatar(file) {
+    if (!file) return;
+    if (!selectedGrokUniversalBotId) {
+      setGrokUniversalStatus('Save the bot before adding an avatar', 'error');
+      renderGrokUniversalBotAvatar(null);
+      return;
+    }
+    const fd = new FormData();
+    fd.append('avatar', file);
+    setGrokUniversalStatus('Uploading avatar...');
+    try {
+      const data = await api(`/api/admin/grok-universal-bots/${selectedGrokUniversalBotId}/avatar`, { method: 'POST', body: fd });
+      mergeGrokUniversalState(data);
+      selectedGrokUniversalBotId = data.bot?.id || selectedGrokUniversalBotId;
+      syncGrokBotUser(data.bot);
+      renderGrokUniversalBotsSettings();
+      refreshRenderedAiBotAvatar(data.bot);
+      setGrokUniversalStatus('Avatar saved', 'success');
+    } catch (e) {
+      setGrokUniversalStatus(e.message || 'Could not upload avatar', 'error');
+    }
+  }
+
+  async function removeGrokUniversalBotAvatar() {
+    if (!selectedGrokUniversalBotId) return;
+    try {
+      const data = await api(`/api/admin/grok-universal-bots/${selectedGrokUniversalBotId}/avatar`, { method: 'DELETE' });
+      mergeGrokUniversalState(data);
+      selectedGrokUniversalBotId = data.bot?.id || selectedGrokUniversalBotId;
+      syncGrokBotUser(data.bot);
+      renderGrokUniversalBotsSettings();
+      refreshRenderedAiBotAvatar(data.bot);
+      setGrokUniversalStatus('Avatar removed', 'success');
+    } catch (e) {
+      setGrokUniversalStatus(e.message || 'Could not remove avatar', 'error');
+    }
+  }
+
+  async function disableGrokUniversalBot() {
+    if (!selectedGrokUniversalBotId) return;
+    if (!confirm('Disable this Grok universal bot in all chats?')) return;
+    try {
+      const data = await api(`/api/admin/grok-universal-bots/${selectedGrokUniversalBotId}`, { method: 'DELETE' });
+      mergeGrokUniversalState(data);
+      renderGrokUniversalBotsSettings();
+      setGrokUniversalStatus('Universal bot disabled', 'success');
+    } catch (e) {
+      setGrokUniversalStatus(e.message || 'Could not disable universal bot', 'error');
+    }
+  }
+
+  async function testGrokUniversalBot() {
+    if (!selectedGrokUniversalBotId) { setGrokUniversalStatus('Save the bot first', 'error'); return; }
+    setGrokUniversalStatus('Testing universal bot...');
+    try {
+      const data = await api(`/api/admin/grok-universal-bots/${selectedGrokUniversalBotId}/test`, {
+        method: 'POST',
+        body: {
+          mode: $('#grokAiUniversalBotTestMode')?.value || 'auto',
+        },
+      });
+      const text = data.result?.text ? data.result.text.slice(0, 500) : '';
+      setGrokUniversalStatus(`Success (${data.result?.latencyMs || 0} ms): ${text}`, 'success');
+    } catch (e) {
+      setGrokUniversalStatus(e.message || 'Universal bot test failed', 'error');
+    }
+  }
+
+  async function exportGrokUniversalBotJson() {
+    if (!selectedGrokUniversalBotId) { setGrokUniversalStatus('Choose a saved bot first', 'error'); return; }
+    setGrokUniversalStatus('Preparing JSON...');
+    try {
+      const headers = {};
+      if (token) headers.Authorization = 'Bearer ' + token;
+      const res = await fetch(`/api/admin/grok-universal-bots/${selectedGrokUniversalBotId}/export`, { headers });
+      if (!res.ok) {
+        let data = {};
+        try { data = await res.json(); } catch {}
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const bot = currentGrokUniversalBot();
+      const fallbackName = `bananza-grok-universal-${bot?.mention || selectedGrokUniversalBotId}.json`;
+      const filename = filenameFromContentDisposition(res.headers.get('content-disposition'), fallbackName);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setGrokUniversalStatus('JSON exported', 'success');
+    } catch (e) {
+      setGrokUniversalStatus(e.message || 'Could not export JSON', 'error');
+    }
+  }
+
+  async function importGrokUniversalBotJsonFile(file) {
+    if (!file) return;
+    setGrokUniversalStatus('Importing JSON...');
+    try {
+      const raw = await file.text();
+      const payload = JSON.parse(raw);
+      const data = await api('/api/admin/grok-universal-bots/import', { method: 'POST', body: payload });
+      mergeGrokUniversalState(data);
+      selectedGrokUniversalBotId = data.bot?.id || selectedGrokUniversalBotId;
+      renderGrokUniversalBotsSettings();
+      const warnings = Array.isArray(data.warnings) && data.warnings.length ? ` ${data.warnings.join(' ')}` : '';
+      setGrokUniversalStatus(`Universal bot imported.${warnings}`, warnings ? 'error' : 'success');
+    } catch (e) {
+      setGrokUniversalStatus(e.message || 'Could not import JSON', 'error');
+    } finally {
+      const input = $('#grokAiUniversalBotImportFile');
+      if (input) input.value = '';
+    }
+  }
+
+  async function saveGrokUniversalChatBotSettings() {
+    const chatId = Number($('#grokAiUniversalBotChatSelect')?.value || 0);
+    const botId = Number($('#grokAiUniversalBotChatBotSelect')?.value || 0);
+    const botExists = grokUniversalState.bots.some(bot => Number(bot.id) === Number(botId));
+    if (!chatId || !botId) { setGrokUniversalStatus('Choose chat and bot', 'error'); return; }
+    if (!botExists) {
+      setGrokUniversalStatus('Save the bot first', 'error');
+      await loadGrokUniversalState().catch(() => {});
+      return;
+    }
+    try {
+      const data = await api('/api/admin/grok-universal-bots/chat-settings', {
+        method: 'PUT',
+        body: {
+          chatId,
+          botId,
+          enabled: $('#grokAiUniversalBotChatEnabled')?.checked,
+          mode: $('#grokAiUniversalBotChatMode')?.value || 'simple',
+          hot_context_limit: Number($('#grokAiUniversalBotChatHotLimit')?.value || 50),
+        },
+      });
+      mergeGrokUniversalState(data);
+      renderGrokUniversalChatBotSettings();
+      setGrokUniversalStatus('Chat settings saved', 'success');
+    } catch (e) {
+      setGrokUniversalStatus(e.message || 'Could not save chat settings', 'error');
     }
   }
 
@@ -6484,6 +7280,7 @@
     clearReply();
     if (editTo) clearEdit({ clearInput: true });
     currentChatId = null;
+    updateComposerAiOverrideState().catch(() => {});
     displayedMsgIds.clear();
     chatPinsByChat.delete(id);
     chatMemberLastReads.delete(id);
@@ -6901,11 +7698,14 @@
       notificationSettingsModal,
       soundSettingsModal,
       aiBotSettingsModal,
+      openAiTextBotsModal,
+      openAiUniversalBotsModal,
       yandexAiSettingsModal,
       deepseekAiSettingsModal,
       grokAiSettingsModal,
       grokAiTextBotsModal,
       grokAiImageBotsModal,
+      grokAiUniversalBotsModal,
       changePasswordModal,
       grokImageRiskConfirmModal,
     ].forEach((modal) => registerModal(modal));
@@ -7204,6 +8004,11 @@
       bot_id: Number(raw.bot_id) || 0,
       bot_provider: String(raw.bot_provider || '').trim(),
       bot_kind: String(raw.bot_kind || '').trim(),
+      allow_text: Boolean(raw.allow_text),
+      allow_image_generate: Boolean(raw.allow_image_generate),
+      allow_image_edit: Boolean(raw.allow_image_edit),
+      allow_document: Boolean(raw.allow_document),
+      document_default_format: String(raw.document_default_format || '').trim().toLowerCase() === 'txt' ? 'txt' : 'md',
     };
   }
 
@@ -7228,6 +8033,148 @@
     if (!target) return false;
     return String(target.bot_provider || target.ai_bot_provider || '').toLowerCase() === 'grok'
       && String(target.bot_kind || target.ai_bot_kind || '').toLowerCase() === 'image';
+  }
+
+  function isUniversalBotTarget(target) {
+    if (!target) return false;
+    const provider = String(target.bot_provider || target.ai_bot_provider || '').toLowerCase();
+    const kind = String(target.bot_kind || target.ai_bot_kind || '').toLowerCase();
+    return (provider === 'openai' || provider === 'grok') && kind === 'universal';
+  }
+
+  function buildReplyBotTarget(replySnapshot, loadedTarget = null) {
+    const source = loadedTarget || replySnapshot || {};
+    const token = String(source.token || source.mention || source.ai_bot_mention || '').replace(/^@+/, '').trim();
+    return {
+      ...source,
+      token,
+      mention: token,
+      display_name: source.display_name || '',
+      bot_id: Number(source.bot_id || source.ai_bot_id) || 0,
+      bot_provider: source.bot_provider || source.ai_bot_provider || '',
+      bot_kind: source.bot_kind || source.ai_bot_kind || '',
+      allow_text: source.allow_text ?? true,
+      allow_image_generate: source.allow_image_generate ?? true,
+      allow_image_edit: source.allow_image_edit ?? true,
+      allow_document: source.allow_document ?? false,
+      document_default_format: String(source.document_default_format || 'md').toLowerCase() === 'txt' ? 'txt' : 'md',
+    };
+  }
+
+  function getUniversalBotModes(target) {
+    if (!isUniversalBotTarget(target)) return [];
+    const provider = String(target.bot_provider || target.ai_bot_provider || '').toLowerCase();
+    const allowText = target.allow_text !== false;
+    const allowImage = target.allow_image_generate !== false || target.allow_image_edit !== false;
+    const allowDocument = provider === 'openai' && target.allow_document !== false;
+    const modes = ['auto'];
+    if (allowText) modes.push('text');
+    if (allowImage) modes.push('image');
+    if (allowDocument) modes.push('document');
+    return [...new Set(modes)];
+  }
+
+  async function resolveComposerUniversalBotTarget(text = '', replySnapshot = null) {
+    const chatId = Number(currentChatId || 0);
+    if (!chatId) return null;
+    const tokens = extractMentionTokensFromText(text);
+    const targets = await loadMentionTargets(chatId);
+    const byToken = new Map();
+    const byId = new Map();
+    targets.forEach((target) => {
+      const token = String(target.token || target.mention || '').toLowerCase();
+      if (token && !byToken.has(token)) byToken.set(token, target);
+      const botId = Number(target.bot_id || 0);
+      if (botId && !byId.has(botId)) byId.set(botId, target);
+    });
+    for (const token of tokens) {
+      const target = byToken.get(token);
+      if (isUniversalBotTarget(target)) return target;
+    }
+    if (replySnapshot && isUniversalBotTarget(replySnapshot)) {
+      const loadedTarget = byId.get(Number(replySnapshot.ai_bot_id || replySnapshot.bot_id || 0)) || null;
+      return buildReplyBotTarget(replySnapshot, loadedTarget);
+    }
+    return null;
+  }
+
+  function renderComposerAiOverride() {
+    if (!composerAiOverrideEl || !composerAiOverrideModeEl) return;
+    const target = composerAiOverrideState.target;
+    if (!isUniversalBotTarget(target)) {
+      composerAiOverrideEl.classList.add('hidden');
+      composerAiOverrideState.mode = 'auto';
+      composerAiOverrideState.documentFormat = 'md';
+      return;
+    }
+    const modes = getUniversalBotModes(target);
+    composerAiOverrideEl.classList.remove('hidden');
+    if (composerAiOverrideLabel) {
+      const name = target.display_name || target.token || target.mention || 'AI bot';
+      composerAiOverrideLabel.textContent = `${name} response`;
+    }
+    if (composerAiOverrideHint) {
+      const provider = String(target.bot_provider || '').toLowerCase();
+      composerAiOverrideHint.textContent = provider === 'openai' ? 'Text, image, document' : 'Text or image';
+    }
+    composerAiOverrideModeEl.innerHTML = modes.map((mode) => {
+      const label = mode === 'auto'
+        ? 'Auto'
+        : mode === 'text'
+          ? 'Text'
+          : mode === 'image'
+            ? 'Image'
+            : 'Document';
+      return `<option value="${mode}">${label}</option>`;
+    }).join('');
+    if (!modes.includes(composerAiOverrideState.mode)) composerAiOverrideState.mode = 'auto';
+    composerAiOverrideModeEl.value = composerAiOverrideState.mode;
+    const showDocument = composerAiOverrideState.mode === 'document' && modes.includes('document');
+    composerAiOverrideDocumentWrap?.classList.toggle('hidden', !showDocument);
+    if (composerAiOverrideDocumentFormatEl) {
+      const nextFormat = String(composerAiOverrideState.documentFormat || target.document_default_format || 'md').toLowerCase() === 'txt' ? 'txt' : 'md';
+      composerAiOverrideState.documentFormat = nextFormat;
+      composerAiOverrideDocumentFormatEl.value = nextFormat;
+    }
+  }
+
+  async function updateComposerAiOverrideState() {
+    if (!composerAiOverrideEl) return;
+    const seq = ++composerAiOverrideSeq;
+    const text = msgInput?.value || '';
+    const replySnapshot = getReplySnapshot();
+    try {
+      const target = await resolveComposerUniversalBotTarget(text, replySnapshot);
+      if (seq !== composerAiOverrideSeq) return;
+      const previousTargetId = Number(composerAiOverrideState.target?.bot_id || 0);
+      const nextTargetId = Number(target?.bot_id || 0);
+      if (previousTargetId !== nextTargetId) {
+        composerAiOverrideState.mode = 'auto';
+        composerAiOverrideState.documentFormat = target?.document_default_format || 'md';
+      }
+      composerAiOverrideState.target = target;
+    } catch (e) {
+      if (seq !== composerAiOverrideSeq) return;
+      composerAiOverrideState.target = null;
+      composerAiOverrideState.mode = 'auto';
+      composerAiOverrideState.documentFormat = 'md';
+    }
+    renderComposerAiOverride();
+  }
+
+  function getComposerAiOverridePayload() {
+    const target = composerAiOverrideState.target;
+    if (!isUniversalBotTarget(target)) return {};
+    const modes = getUniversalBotModes(target);
+    const mode = modes.includes(composerAiOverrideState.mode) ? composerAiOverrideState.mode : 'auto';
+    const payload = {
+      ai_response_mode_hint: mode,
+      ai_override_target: target,
+    };
+    if (mode === 'document') {
+      payload.ai_document_format_hint = String(composerAiOverrideState.documentFormat || target.document_default_format || 'md').toLowerCase() === 'txt' ? 'txt' : 'md';
+    }
+    return payload;
   }
 
   function stripTriggeredBotMention(text, target) {
@@ -7336,6 +8283,7 @@
     const data = await api(`/api/chats/${id}/mention-targets`);
     const targets = (data.targets || []).map(normalizeMentionTarget).filter(Boolean);
     mentionTargetsByChat.set(id, targets);
+    if (id === Number(currentChatId || 0)) updateComposerAiOverrideState().catch(() => {});
     return targets;
   }
 
@@ -10942,6 +11890,8 @@
       transcription_provider: '',
       transcription_model: '',
       transcription_error: '',
+      ai_response_mode_hint: item.aiResponseModeHint || null,
+      ai_document_format_hint: item.aiDocumentFormatHint || null,
     };
   }
 
@@ -11056,6 +12006,8 @@
         replyToId: item.replyToId || null,
         client_id: item.clientId,
         aiImageRiskAccepted: Boolean(item.aiImageRiskAccepted),
+        ai_response_mode_hint: item.aiResponseModeHint || null,
+        ai_document_format_hint: item.aiDocumentFormatHint || null,
       },
     });
   }
@@ -11158,7 +12110,15 @@
     return item;
   }
 
-  function createMessageOutboxItem({ text = null, attachment = null, reply = null, createdAt = null, aiImageRiskAccepted = false } = {}) {
+  function createMessageOutboxItem({
+    text = null,
+    attachment = null,
+    reply = null,
+    createdAt = null,
+    aiImageRiskAccepted = false,
+    aiResponseModeHint = null,
+    aiDocumentFormatHint = null,
+  } = {}) {
     const clientId = makeClientId('c');
     return {
       clientId,
@@ -11169,6 +12129,8 @@
       createdAt: createdAt || new Date().toISOString(),
       text: text || null,
       aiImageRiskAccepted: Boolean(aiImageRiskAccepted),
+      aiResponseModeHint: aiResponseModeHint || null,
+      aiDocumentFormatHint: aiDocumentFormatHint || null,
       replyToId: reply?.id || null,
       reply,
       attachments: attachment ? [attachment] : [],
@@ -11316,10 +12278,22 @@
     if (!text && filesToSend.length === 0) return;
     if (text.length > MAX_MSG) { alert('Message too long'); return; }
     const replySnapshot = getReplySnapshot();
+    const composerAiOverride = getComposerAiOverridePayload();
     let aiImageRiskAccepted = false;
     if (text) {
       try {
-        const risk = await analyzeOutgoingGrokImageRisk(text, replySnapshot);
+        let risk;
+        const forcedUniversalGrokImage = composerAiOverride.ai_response_mode_hint === 'image'
+          && String(composerAiOverride.ai_override_target?.bot_provider || '').toLowerCase() === 'grok'
+          && isUniversalBotTarget(composerAiOverride.ai_override_target);
+        if (forcedUniversalGrokImage && aiImageRiskApi?.analyzeAiImageRisk) {
+          const prompt = stripTriggeredBotMention(text, composerAiOverride.ai_override_target);
+          risk = prompt
+            ? { ...aiImageRiskApi.analyzeAiImageRisk(prompt), prompt, target: composerAiOverride.ai_override_target }
+            : { risky: false, matches: [], prompt: '', target: composerAiOverride.ai_override_target };
+        } else {
+          risk = await analyzeOutgoingGrokImageRisk(text, replySnapshot);
+        }
         if (risk.risky) {
           const confirmed = await openGrokImageRiskConfirm(risk.matches);
           if (!confirmed) return;
@@ -11345,6 +12319,8 @@
       reply: replySnapshot,
       createdAt: new Date().toISOString(),
       aiImageRiskAccepted,
+      aiResponseModeHint: composerAiOverride.ai_response_mode_hint || null,
+      aiDocumentFormatHint: composerAiOverride.ai_document_format_hint || null,
     }));
     for (let i = 1; i < filesToSend.length; i++) {
       items.push(createMessageOutboxItem({
@@ -11531,6 +12507,7 @@
     pendingFile = pendingFiles[0] || null;
     renderPendingFiles();
     msgInput.focus();
+    updateComposerAiOverrideState().catch(() => {});
     refreshPollComposerActionState();
     window.BananzaVoiceHooks?.refreshComposerState?.();
   }
@@ -11738,6 +12715,7 @@
     replyTo = null;
     if (!editTo) replyBar.classList.add('hidden');
     queueIosViewportLayoutSync();
+    updateComposerAiOverrideState().catch(() => {});
   }
 
   function setEditFromRow(row) {
@@ -13764,9 +14742,42 @@
   function openAiBotSettingsModal() {
     if (!currentUser?.is_admin) return;
     openModal('aiBotSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
+    resetManagedModalScroll('aiBotSettingsModal');
+    setAiBotSettingsStatus('Загружаю...');
+    Promise.all([loadAiBotState(), loadOpenAiUniversalState()]).then(() => {
+      resetManagedModalScroll('aiBotSettingsModal');
+      setAiBotSettingsStatus('');
+    }).catch((e) => {
+      const message = e.message || 'Could not load OpenAI AI bots';
+      setAiBotSettingsStatus(message, 'error');
+    });
+  }
+
+  function openOpenAiTextBotsModal() {
+    if (!currentUser?.is_admin) return;
+    openModal('openAiTextBotsModal', { replaceStack: false, opener: $('#openAiOpenTextBots') });
+    resetManagedModalScroll('openAiTextBotsModal');
     setAiBotStatus('Загружаю...');
-    loadAiBotState().then(() => setAiBotStatus('')).catch((e) => {
-      setAiBotStatus(e.message || 'Не удалось загрузить AI-ботов', 'error');
+    loadAiBotState().then(() => {
+      renderOpenAiTextBotsSettings();
+      resetManagedModalScroll('openAiTextBotsModal');
+      setAiBotStatus('');
+    }).catch((e) => {
+      setAiBotStatus(e.message || 'Не удалось загрузить OpenAI text bots', 'error');
+    });
+  }
+
+  function openOpenAiUniversalBotsModal() {
+    if (!currentUser?.is_admin) return;
+    openModal('openAiUniversalBotsModal', { replaceStack: false, opener: $('#openAiOpenUniversalBots') });
+    resetManagedModalScroll('openAiUniversalBotsModal');
+    setOpenAiUniversalStatus('Loading...');
+    loadOpenAiUniversalState().then(() => {
+      renderOpenAiUniversalSettings();
+      resetManagedModalScroll('openAiUniversalBotsModal');
+      setOpenAiUniversalStatus('');
+    }).catch((e) => {
+      setOpenAiUniversalStatus(e.message || 'Could not load OpenAI universal bots', 'error');
     });
   }
 
@@ -13852,6 +14863,21 @@
       setGrokImageStatus('');
     }).catch((e) => {
       setGrokImageStatus(e.message || 'Could not load Grok image bots', 'error');
+    });
+  }
+
+  function openGrokUniversalBotsModal() {
+    if (!currentUser?.is_admin) return;
+    mountGrokBotPanels();
+    openModal('grokAiUniversalBotsModal', { replaceStack: false, opener: $('#grokAiOpenUniversalBots') });
+    resetManagedModalScroll('grokAiUniversalBotsModal');
+    setGrokUniversalStatus('Loading...');
+    loadGrokUniversalState().then(() => {
+      renderGrokUniversalBotsSettings();
+      resetManagedModalScroll('grokAiUniversalBotsModal');
+      setGrokUniversalStatus('');
+    }).catch((e) => {
+      setGrokUniversalStatus(e.message || 'Could not load Grok universal bots', 'error');
     });
   }
 
@@ -14437,6 +15463,7 @@
       autoResize();
       syncMentionOpenButton();
       window.BananzaVoiceHooks?.refreshComposerState?.();
+      updateComposerAiOverrideState().catch(() => {});
       updateMentionPicker();
       // Typing indicator
       if (!typingSendTimeout) {
@@ -14458,6 +15485,14 @@
         queueIosViewportLayoutSync();
       }, 180);
       requestAnimationFrame(() => queueIosViewportLayoutSync());
+    });
+    composerAiOverrideModeEl?.addEventListener('change', () => {
+      composerAiOverrideState.mode = composerAiOverrideModeEl.value || 'auto';
+      renderComposerAiOverride();
+    });
+    composerAiOverrideDocumentFormatEl?.addEventListener('change', () => {
+      composerAiOverrideState.documentFormat = composerAiOverrideDocumentFormatEl.value || 'md';
+      renderComposerAiOverride();
     });
     msgInput.addEventListener('click', updateMentionPicker);
     msgInput.addEventListener('keyup', (e) => {
@@ -14503,6 +15538,7 @@
     const fileInputCamera = $('#fileInputCamera');
     const fileInputDocs = $('#fileInputDocs');
     syncMentionOpenButton();
+    renderComposerAiOverride();
     const attachMenu = $('#attachMenu');
     const attachMenuOverlay = $('#attachMenuOverlay');
     const isMobileAttachMenu = () => window.innerWidth <= 768;
@@ -15539,6 +16575,8 @@
       loadAiModelOptions(true).catch((e) => setAiModelStatus(e.message || 'Не удалось загрузить модели', 'error'));
     });
     $('#aiBotsDeleteKey')?.addEventListener('click', deleteAiBotKey);
+    $('#openAiOpenTextBots')?.addEventListener('click', openOpenAiTextBotsModal);
+    $('#openAiOpenUniversalBots')?.addEventListener('click', openOpenAiUniversalBotsModal);
     $('#aiBotCreateNew')?.addEventListener('click', () => {
       fillAiBotForm(null);
       setAiBotStatus('Новый бот: заполните поля и сохраните');
@@ -15563,6 +16601,30 @@
     $('#aiBotChatSelect')?.addEventListener('change', renderAiChatBotSettings);
     $('#aiBotChatBotSelect')?.addEventListener('change', renderAiChatBotSettings);
     $('#aiBotChatSave')?.addEventListener('click', saveAiChatBotSettings);
+    $('#openAiUniversalBotCreateNew')?.addEventListener('click', () => {
+      fillOpenAiUniversalBotForm(null);
+      setOpenAiUniversalStatus('New OpenAI universal bot: fill fields and save');
+    });
+    $('#openAiUniversalBotSave')?.addEventListener('click', saveOpenAiUniversalBot);
+    $('#openAiUniversalBotDisable')?.addEventListener('click', disableOpenAiUniversalBot);
+    $('#openAiUniversalBotTest')?.addEventListener('click', testOpenAiUniversalBot);
+    $('#openAiUniversalBotExportJson')?.addEventListener('click', exportOpenAiUniversalBotJson);
+    $('#openAiUniversalBotImportJson')?.addEventListener('click', () => $('#openAiUniversalBotImportFile')?.click());
+    $('#openAiUniversalBotImportFile')?.addEventListener('change', (event) => importOpenAiUniversalBotJsonFile(event.target.files?.[0]));
+    $('#openAiUniversalBotAvatarInput')?.addEventListener('change', (event) => uploadOpenAiUniversalBotAvatar(event.target.files?.[0]));
+    $('#removeOpenAiUniversalBotAvatar')?.addEventListener('click', removeOpenAiUniversalBotAvatar);
+    $('#openAiUniversalBotName')?.addEventListener('input', () => {
+      if (!currentOpenAiUniversalBot()?.avatar_url) renderOpenAiUniversalBotAvatar(currentOpenAiUniversalBot());
+    });
+    $('#openAiUniversalBotList')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.ai-bot-list-item');
+      if (!btn) return;
+      const bot = openAiUniversalState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
+      if (bot) fillOpenAiUniversalBotForm(bot);
+    });
+    $('#openAiUniversalBotChatSelect')?.addEventListener('change', renderOpenAiUniversalChatBotSettings);
+    $('#openAiUniversalBotChatBotSelect')?.addEventListener('change', renderOpenAiUniversalChatBotSettings);
+    $('#openAiUniversalBotChatSave')?.addEventListener('click', saveOpenAiUniversalChatBotSettings);
 
     // Yandex AI bot admin settings
     $('#yandexAiSaveSettings')?.addEventListener('click', saveYandexAiSettings);
@@ -15631,6 +16693,7 @@
     $('#grokAiDeleteKey')?.addEventListener('click', deleteGrokAiKey);
     $('#grokAiOpenTextBots')?.addEventListener('click', openGrokTextBotsModal);
     $('#grokAiOpenImageBots')?.addEventListener('click', openGrokImageBotsModal);
+    $('#grokAiOpenUniversalBots')?.addEventListener('click', openGrokUniversalBotsModal);
     $('#grokAiBotCreateNew')?.addEventListener('click', () => {
       fillGrokBotForm(null);
       setGrokTextStatus('New Grok text bot: fill fields and save');
@@ -15680,6 +16743,30 @@
     $('#grokAiImageBotChatSelect')?.addEventListener('change', renderGrokImageChatBotSettings);
     $('#grokAiImageBotChatBotSelect')?.addEventListener('change', renderGrokImageChatBotSettings);
     $('#grokAiImageBotChatSave')?.addEventListener('click', saveGrokImageChatBotSettings);
+    $('#grokAiUniversalBotCreateNew')?.addEventListener('click', () => {
+      fillGrokUniversalBotForm(null);
+      setGrokUniversalStatus('New Grok universal bot: fill fields and save');
+    });
+    $('#grokAiUniversalBotSave')?.addEventListener('click', saveGrokUniversalBot);
+    $('#grokAiUniversalBotDisable')?.addEventListener('click', disableGrokUniversalBot);
+    $('#grokAiUniversalBotTest')?.addEventListener('click', testGrokUniversalBot);
+    $('#grokAiUniversalBotExportJson')?.addEventListener('click', exportGrokUniversalBotJson);
+    $('#grokAiUniversalBotImportJson')?.addEventListener('click', () => $('#grokAiUniversalBotImportFile')?.click());
+    $('#grokAiUniversalBotImportFile')?.addEventListener('change', (event) => importGrokUniversalBotJsonFile(event.target.files?.[0]));
+    $('#grokAiUniversalBotAvatarInput')?.addEventListener('change', (event) => uploadGrokUniversalBotAvatar(event.target.files?.[0]));
+    $('#removeGrokAiUniversalBotAvatar')?.addEventListener('click', removeGrokUniversalBotAvatar);
+    $('#grokAiUniversalBotName')?.addEventListener('input', () => {
+      if (!currentGrokUniversalBot()?.avatar_url) renderGrokUniversalBotAvatar(currentGrokUniversalBot());
+    });
+    $('#grokAiUniversalBotList')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.ai-bot-list-item');
+      if (!btn) return;
+      const bot = grokUniversalState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
+      if (bot) fillGrokUniversalBotForm(bot);
+    });
+    $('#grokAiUniversalBotChatSelect')?.addEventListener('change', renderGrokUniversalChatBotSettings);
+    $('#grokAiUniversalBotChatBotSelect')?.addEventListener('change', renderGrokUniversalChatBotSettings);
+    $('#grokAiUniversalBotChatSave')?.addEventListener('click', saveGrokUniversalChatBotSettings);
 
     // Change password save
     $('#cpSaveBtn').addEventListener('click', async () => {

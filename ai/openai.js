@@ -30,6 +30,37 @@ function extractResponseText(response) {
   return parts.join('\n').trim();
 }
 
+function collectOutputTextEntries(response) {
+  const entries = [];
+  for (const item of response?.output || []) {
+    for (const content of item?.content || []) {
+      if (content?.type === 'output_text' || content?.type === 'text') entries.push(content);
+    }
+  }
+  return entries;
+}
+
+function collectContainerFileCitations(response) {
+  const citations = [];
+  for (const entry of collectOutputTextEntries(response)) {
+    for (const annotation of entry?.annotations || []) {
+      if (annotation?.type === 'container_file_citation') citations.push(annotation);
+    }
+  }
+  return citations;
+}
+
+function collectImageGenerationCalls(response) {
+  const calls = [];
+  for (const item of response?.output || []) {
+    if (item?.type === 'image_generation_call') calls.push(item);
+    for (const content of item?.content || []) {
+      if (content?.type === 'image_generation_call') calls.push(content);
+    }
+  }
+  return calls;
+}
+
 function safeJsonParse(text, fallback) {
   if (!text) return fallback;
   try {
@@ -63,16 +94,41 @@ async function listModelIds({ apiKey }) {
   return [...new Set(ids)].sort((a, b) => a.localeCompare(b));
 }
 
-async function generateText({ apiKey, model, system, user, maxOutputTokens = 900, temperature = 0.45 }) {
+async function createResponse({
+  apiKey,
+  model,
+  input,
+  instructions = '',
+  tools = [],
+  toolChoice = 'auto',
+  include = [],
+  maxOutputTokens = 900,
+  temperature = null,
+}) {
   const client = createClient(apiKey);
-  const response = await client.responses.create({
+  const payload = {
     model,
+    input,
+    max_output_tokens: normalizeMaxOutputTokens(maxOutputTokens),
+  };
+  if (instructions) payload.instructions = String(instructions);
+  if (Array.isArray(tools) && tools.length) payload.tools = tools;
+  if (toolChoice) payload.tool_choice = toolChoice;
+  if (Array.isArray(include) && include.length) payload.include = include;
+  if (typeof temperature === 'number' && Number.isFinite(temperature)) payload.temperature = temperature;
+  return client.responses.create(payload);
+}
+
+async function generateText({ apiKey, model, system, user, maxOutputTokens = 900, temperature = 0.45 }) {
+  const response = await createResponse({
+    model,
+    apiKey,
     input: [
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
     temperature,
-    max_output_tokens: normalizeMaxOutputTokens(maxOutputTokens),
+    maxOutputTokens,
   });
   return extractResponseText(response);
 }
@@ -89,10 +145,24 @@ async function generateJson({ apiKey, model, system, user, fallback = {}, maxOut
   return safeJsonParse(text, fallback);
 }
 
+async function downloadContainerFile({ apiKey, containerId, fileId }) {
+  const client = createClient(apiKey);
+  const response = await client.containers.files.content.retrieve(fileId, { container_id: containerId });
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const mimeType = String(response.headers.get('content-type') || 'application/octet-stream').split(';')[0].trim() || 'application/octet-stream';
+  return { buffer, mimeType };
+}
+
 module.exports = {
   OPENAI_MIN_OUTPUT_TOKENS,
   createEmbedding,
   listModelIds,
+  createResponse,
+  extractResponseText,
+  collectOutputTextEntries,
+  collectContainerFileCitations,
+  collectImageGenerationCalls,
   generateText,
   generateJson,
+  downloadContainerFile,
 };

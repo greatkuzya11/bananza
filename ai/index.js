@@ -17,18 +17,30 @@ const {
   deleteYandexKey,
   sanitizeSettings,
 } = require('./settings');
-const { OPENAI_MIN_OUTPUT_TOKENS, createEmbedding, listModelIds, generateText, generateJson } = require('./openai');
+const {
+  OPENAI_MIN_OUTPUT_TOKENS,
+  createEmbedding,
+  listModelIds,
+  createResponse: createOpenAIResponse,
+  extractResponseText,
+  generateText,
+  generateJson,
+  downloadContainerFile,
+  collectContainerFileCitations,
+  collectImageGenerationCalls,
+} = require('./openai');
 const grokAi = require('./grok');
 const deepseekAi = require('./deepseek');
 const yandexAi = require('./yandex');
 const { analyzeAiImageRisk } = require('../public/js/ai-image-risk');
 
 const BOT_COLORS = ['#65aadd', '#7bc862', '#a695e7', '#ee7aae', '#6ec9cb', '#faa774'];
-const AI_BOT_EXPORT_VERSION = 1;
+const AI_BOT_EXPORT_VERSION = 2;
 const MODEL_CACHE_MS = 10 * 60 * 1000;
-const FALLBACK_RESPONSE_MODELS = ['gpt-4o-mini'];
-const FALLBACK_SUMMARY_MODELS = ['gpt-4o-mini'];
+const FALLBACK_RESPONSE_MODELS = ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'];
+const FALLBACK_SUMMARY_MODELS = ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'];
 const FALLBACK_EMBEDDING_MODELS = ['text-embedding-3-small'];
+const FALLBACK_OPENAI_IMAGE_MODELS = ['gpt-image-2', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini'];
 const FALLBACK_DEEPSEEK_RESPONSE_MODELS = ['deepseek-chat', 'deepseek-reasoner'];
 const FALLBACK_DEEPSEEK_SUMMARY_MODELS = ['deepseek-chat', 'deepseek-reasoner'];
 const FALLBACK_YANDEX_RESPONSE_MODELS = [
@@ -147,6 +159,31 @@ function cleanGrokResolution(value, fallback = '1k') {
   return GROK_IMAGE_RESOLUTION_OPTIONS.includes(text) ? text : fallback;
 }
 
+function cleanOpenAiImageSize(value, fallback = '1024x1024') {
+  const text = String(value || '').trim().toLowerCase();
+  return ['auto', '1024x1024', '1024x1536', '1536x1024'].includes(text) ? text : fallback;
+}
+
+function cleanOpenAiImageQuality(value, fallback = 'auto') {
+  const text = String(value || '').trim().toLowerCase();
+  return ['auto', 'low', 'medium', 'high'].includes(text) ? text : fallback;
+}
+
+function cleanOpenAiImageBackground(value, fallback = 'auto') {
+  const text = String(value || '').trim().toLowerCase();
+  return ['auto', 'transparent', 'opaque'].includes(text) ? text : fallback;
+}
+
+function cleanOpenAiImageOutputFormat(value, fallback = 'png') {
+  const text = String(value || '').trim().toLowerCase();
+  return ['png', 'webp', 'jpeg'].includes(text) ? text : fallback;
+}
+
+function cleanDocumentFormat(value, fallback = 'md') {
+  const text = String(value || '').trim().toLowerCase();
+  return text === 'txt' ? 'txt' : fallback;
+}
+
 function errorText(error, fallback = 'Unexpected error') {
   if (error == null) return fallback;
   if (typeof error === 'string') return error.trim() || fallback;
@@ -201,6 +238,12 @@ function isLikelyResponseModel(id) {
   return /^(gpt|o\d|chatgpt)/.test(value);
 }
 
+function isLikelyOpenAiImageModel(id) {
+  const value = String(id || '').toLowerCase();
+  if (!value) return false;
+  return /^(gpt-image|dall-e)/.test(value);
+}
+
 function isLikelyGrokTextModel(id) {
   const value = String(id || '').toLowerCase();
   if (!value || isEmbeddingModel(value)) return false;
@@ -223,8 +266,16 @@ function normalizeProvider(value, fallback = 'openai') {
 
 function normalizeBotKind(value, provider = 'openai', fallback = 'text') {
   const kind = String(value || fallback).trim().toLowerCase();
+  if ((provider === 'openai' || provider === 'grok') && kind === 'universal') return 'universal';
   if (provider === 'grok' && kind === 'image') return 'image';
   return 'text';
+}
+
+function normalizeAiResponseMode(value, provider = 'openai', fallback = 'auto') {
+  const mode = String(value || fallback).trim().toLowerCase();
+  if (mode === 'text' || mode === 'image' || mode === 'auto') return mode;
+  if (provider === 'openai' && mode === 'document') return 'document';
+  return fallback;
 }
 
 function escapeRegExp(value) {
@@ -341,6 +392,22 @@ function createAiBotFeature({
     WHERE COALESCE(b.provider,'openai')='openai'
     ORDER BY b.enabled DESC, b.id ASC
   `);
+  const allOpenAiTextBotsStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE COALESCE(b.provider,'openai')='openai'
+      AND COALESCE(b.kind,'text')='text'
+    ORDER BY b.enabled DESC, b.id ASC
+  `);
+  const allOpenAiUniversalBotsStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE COALESCE(b.provider,'openai')='openai'
+      AND COALESCE(b.kind,'text')='universal'
+    ORDER BY b.enabled DESC, b.id ASC
+  `);
   const allYandexBotsStmt = db.prepare(`
     SELECT b.*, u.avatar_color, u.avatar_url
     FROM ai_bots b
@@ -369,6 +436,14 @@ function createAiBotFeature({
     LEFT JOIN users u ON u.id=b.user_id
     WHERE COALESCE(b.provider,'openai')='grok'
       AND COALESCE(b.kind,'text')='image'
+    ORDER BY b.enabled DESC, b.id ASC
+  `);
+  const allGrokUniversalBotsStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE COALESCE(b.provider,'openai')='grok'
+      AND COALESCE(b.kind,'text')='universal'
     ORDER BY b.enabled DESC, b.id ASC
   `);
   const chatSettingsStmt = db.prepare('SELECT * FROM ai_chat_bots ORDER BY chat_id ASC, bot_id ASC');
@@ -415,7 +490,7 @@ function createAiBotFeature({
     JOIN ai_bots b ON b.id=cb.bot_id
     WHERE cb.chat_id=? AND cb.enabled=1 AND cb.mode='hybrid' AND b.enabled=1
       AND COALESCE(b.provider,'openai')='grok'
-      AND COALESCE(b.kind,'text')='text'
+      AND COALESCE(b.kind,'text')!='image'
     LIMIT 1
   `);
   const grokHybridChatIdsStmt = db.prepare(`
@@ -424,7 +499,7 @@ function createAiBotFeature({
     JOIN ai_bots b ON b.id=cb.bot_id
     WHERE cb.enabled=1 AND cb.mode='hybrid' AND b.enabled=1
       AND COALESCE(b.provider,'openai')='grok'
-      AND COALESCE(b.kind,'text')='text'
+      AND COALESCE(b.kind,'text')!='image'
   `);
   const hybridSummaryModelStmt = db.prepare(`
     SELECT b.summary_model
@@ -450,11 +525,24 @@ function createAiBotFeature({
     JOIN ai_bots b ON b.id=cb.bot_id
     WHERE cb.chat_id=? AND cb.enabled=1 AND cb.mode='hybrid' AND b.enabled=1
       AND COALESCE(b.provider,'openai')='grok'
-      AND COALESCE(b.kind,'text')='text'
+      AND COALESCE(b.kind,'text')!='image'
     ORDER BY b.id ASC
     LIMIT 1
   `);
   const replyBotStmt = db.prepare('SELECT ai_bot_id FROM messages WHERE id=? AND ai_generated=1 AND ai_bot_id IS NOT NULL');
+  const messageFileRefStmt = db.prepare(`
+    SELECT
+      m.id,
+      m.chat_id,
+      m.file_id,
+      f.original_name as file_name,
+      f.stored_name as file_stored,
+      f.mime_type as file_mime,
+      f.type as file_type
+    FROM messages m
+    LEFT JOIN files f ON f.id=m.file_id
+    WHERE m.id=? AND m.is_deleted=0
+  `);
   const recentMessagesStmt = db.prepare(`
     SELECT m.*, u.username, u.display_name, f.original_name as file_name, f.type as file_type,
       vm.transcription_text, p.message_id as poll_message_id
@@ -602,6 +690,10 @@ function createAiBotFeature({
         settings.default_embedding_model,
         ...bots.map(bot => bot.embedding_model),
       ]),
+      image: uniqueList([
+        settings.openai_default_image_model,
+        ...bots.map(bot => bot.image_model),
+      ]),
     };
   }
 
@@ -613,6 +705,7 @@ function createAiBotFeature({
       response: uniqueList([...hints.response, ...FALLBACK_RESPONSE_MODELS]),
       summary: uniqueList([...hints.summary, ...FALLBACK_SUMMARY_MODELS, ...FALLBACK_RESPONSE_MODELS]),
       embedding: uniqueList([...hints.embedding, ...FALLBACK_EMBEDDING_MODELS]),
+      image: uniqueList([...hints.image, ...FALLBACK_OPENAI_IMAGE_MODELS]),
       error,
     };
   }
@@ -621,12 +714,14 @@ function createAiBotFeature({
     const hints = savedModelHints();
     const embeddings = ids.filter(isEmbeddingModel);
     const response = ids.filter(isLikelyResponseModel);
+    const image = ids.filter(isLikelyOpenAiImageModel);
     return {
       source: 'openai',
       fetched_at: new Date().toISOString(),
       response: uniqueList([...hints.response, ...response, ...FALLBACK_RESPONSE_MODELS]),
       summary: uniqueList([...hints.summary, ...response, ...FALLBACK_SUMMARY_MODELS]),
       embedding: uniqueList([...hints.embedding, ...embeddings, ...FALLBACK_EMBEDDING_MODELS]),
+      image: uniqueList([...hints.image, ...image, ...FALLBACK_OPENAI_IMAGE_MODELS]),
       error: '',
     };
   }
@@ -658,7 +753,10 @@ function createAiBotFeature({
 
   function grokSavedModelHints() {
     const settings = getGlobalSettings();
-    const bots = allGrokTextBotsStmt.all();
+    const bots = [
+      ...allGrokTextBotsStmt.all(),
+      ...allGrokUniversalBotsStmt.all(),
+    ];
     const imageBots = allGrokImageBotsStmt.all();
     return {
       response: uniqueList([
@@ -676,6 +774,7 @@ function createAiBotFeature({
       image: uniqueList([
         settings.grok_default_image_model,
         ...imageBots.map(bot => bot.image_model),
+        ...bots.map(bot => bot.image_model),
       ]),
     };
   }
@@ -1382,6 +1481,12 @@ function createAiBotFeature({
       : (provider === 'grok'
         ? settings.grok_max_tokens
         : (provider === 'deepseek' ? settings.deepseek_max_tokens : null));
+    const openAiUniversal = provider === 'openai' && kind === 'universal';
+    const grokImageCapable = provider === 'grok' && (kind === 'image' || kind === 'universal');
+    const defaultAllowText = kind !== 'image';
+    const defaultAllowImageGenerate = kind === 'image' || kind === 'universal';
+    const defaultAllowImageEdit = kind === 'universal';
+    const defaultAllowDocument = openAiUniversal;
     return {
       id: row.id,
       user_id: row.user_id,
@@ -1397,15 +1502,23 @@ function createAiBotFeature({
       response_model: row.response_model || defaultResponseModel,
       summary_model: row.summary_model || defaultSummaryModel,
       embedding_model: row.embedding_model || defaultEmbeddingModel,
-      image_model: row.image_model || (provider === 'grok' ? settings.grok_default_image_model : ''),
-      image_aspect_ratio: cleanGrokAspectRatio(
-        row.image_aspect_ratio,
-        provider === 'grok' ? settings.grok_default_image_aspect_ratio : settings.grok_default_image_aspect_ratio
-      ),
-      image_resolution: cleanGrokResolution(
-        row.image_resolution,
-        provider === 'grok' ? settings.grok_default_image_resolution : settings.grok_default_image_resolution
-      ),
+      image_model: openAiUniversal
+        ? (row.image_model || settings.openai_default_image_model)
+        : (grokImageCapable ? (row.image_model || settings.grok_default_image_model) : ''),
+      image_aspect_ratio: grokImageCapable
+        ? cleanGrokAspectRatio(row.image_aspect_ratio, settings.grok_default_image_aspect_ratio)
+        : '',
+      image_resolution: openAiUniversal
+        ? cleanOpenAiImageSize(row.image_resolution, settings.openai_default_image_size)
+        : (grokImageCapable ? cleanGrokResolution(row.image_resolution, settings.grok_default_image_resolution) : ''),
+      allow_text: boolValue(row.allow_text, defaultAllowText),
+      allow_image_generate: boolValue(row.allow_image_generate, defaultAllowImageGenerate),
+      allow_image_edit: boolValue(row.allow_image_edit, defaultAllowImageEdit),
+      allow_document: openAiUniversal ? boolValue(row.allow_document, defaultAllowDocument) : false,
+      image_quality: openAiUniversal ? cleanOpenAiImageQuality(row.image_quality, settings.openai_default_image_quality) : '',
+      image_background: openAiUniversal ? cleanOpenAiImageBackground(row.image_background, settings.openai_default_image_background) : '',
+      image_output_format: openAiUniversal ? cleanOpenAiImageOutputFormat(row.image_output_format, settings.openai_default_image_output_format) : '',
+      document_default_format: openAiUniversal ? cleanDocumentFormat(row.document_default_format, settings.openai_default_document_format) : '',
       temperature: row.temperature == null ? defaultTemperature : Number(row.temperature),
       max_tokens: row.max_tokens == null
         ? defaultMaxTokens
@@ -1444,10 +1557,11 @@ function createAiBotFeature({
       WHERE cm.chat_id=? AND COALESCE(u.is_ai_bot,0)=0
       ORDER BY u.display_name COLLATE NOCASE ASC
     `);
-    const openAiBotIds = new Set(allBotsStmt.all().map((bot) => Number(bot.id)));
+    const openAiBots = allOpenAiTextBotsStmt.all().map(sanitizeBot);
+    const openAiBotIds = new Set(openAiBots.map((bot) => Number(bot.id)));
     return {
       settings: sanitizeSettings(getGlobalSettings()),
-      bots: allBotsStmt.all().map(sanitizeBot),
+      bots: openAiBots,
       chatSettings: serializeChatSettingsForBotIds(openAiBotIds),
       chats: chats.map((chat) => {
         if (chat.type !== 'private') return chat;
@@ -1466,6 +1580,18 @@ function createAiBotFeature({
       chatSettings: serializeChatSettingsForBotIds(yandexBotIds),
       chats: state.chats,
       models: getYandexModelCatalog(),
+    };
+  }
+
+  function serializeOpenAiUniversalAdminState() {
+    const state = serializeAdminState();
+    const bots = allOpenAiUniversalBotsStmt.all().map(sanitizeBot);
+    const botIds = new Set(bots.map((bot) => Number(bot.id)));
+    return {
+      settings: sanitizeSettings(getGlobalSettings()),
+      bots,
+      chatSettings: serializeChatSettingsForBotIds(botIds),
+      chats: state.chats,
     };
   }
 
@@ -1494,6 +1620,19 @@ function createAiBotFeature({
       imageBots,
       chatSettings: serializeChatSettingsForBotIds(textBotIds),
       imageChatSettings: serializeChatSettingsForBotIds(imageBotIds, { forceSimple: true }),
+      chats: state.chats,
+      models: grokModelCatalogCache || getGrokModelCatalog(),
+    };
+  }
+
+  function serializeGrokUniversalAdminState() {
+    const state = serializeAdminState();
+    const bots = allGrokUniversalBotsStmt.all().map(sanitizeBot);
+    const botIds = new Set(bots.map((bot) => Number(bot.id)));
+    return {
+      settings: sanitizeSettings(getGlobalSettings()),
+      bots,
+      chatSettings: serializeChatSettingsForBotIds(botIds),
       chats: state.chats,
       models: grokModelCatalogCache || getGrokModelCatalog(),
     };
@@ -1571,6 +1710,8 @@ function createAiBotFeature({
   function defaultBotName(provider, kind = 'text') {
     if (provider === 'yandex') return 'Yandex AI';
     if (provider === 'deepseek') return 'DeepSeek AI';
+    if (provider === 'openai' && kind === 'universal') return 'OpenAI Universal';
+    if (provider === 'grok' && kind === 'universal') return 'Grok Universal';
     if (provider === 'grok' && kind === 'image') return 'Grok Images';
     if (provider === 'grok') return 'Grok AI';
     return 'Bananza AI';
@@ -1607,6 +1748,10 @@ function createAiBotFeature({
       : (provider === 'grok'
         ? settings.grok_max_tokens
         : (provider === 'deepseek' ? settings.deepseek_max_tokens : 1000));
+    const isOpenAiUniversal = provider === 'openai' && kind === 'universal';
+    const isGrokUniversal = provider === 'grok' && kind === 'universal';
+    const isGrokImageBot = provider === 'grok' && kind === 'image';
+    const isImageCapable = isOpenAiUniversal || isGrokUniversal || isGrokImageBot;
     return {
       name,
       mention,
@@ -1624,14 +1769,36 @@ function createAiBotFeature({
         ? ''
         : cleanText(input.summary_model ?? current.summary_model ?? summaryFallback, 160),
       embedding_model: embeddingFallback,
-      image_model: provider === 'grok' && kind === 'image'
-        ? cleanText(input.image_model ?? current.image_model ?? settings.grok_default_image_model, 160)
-        : '',
-      image_aspect_ratio: provider === 'grok' && kind === 'image'
+      image_model: isOpenAiUniversal
+        ? cleanText(input.image_model ?? current.image_model ?? settings.openai_default_image_model, 160)
+        : (provider === 'grok' && isImageCapable
+          ? cleanText(input.image_model ?? current.image_model ?? settings.grok_default_image_model, 160)
+          : ''),
+      image_aspect_ratio: provider === 'grok' && isImageCapable
         ? cleanGrokAspectRatio(input.image_aspect_ratio ?? current.image_aspect_ratio, settings.grok_default_image_aspect_ratio)
         : '',
-      image_resolution: provider === 'grok' && kind === 'image'
-        ? cleanGrokResolution(input.image_resolution ?? current.image_resolution, settings.grok_default_image_resolution)
+      image_resolution: isOpenAiUniversal
+        ? cleanOpenAiImageSize(input.image_resolution ?? current.image_resolution, settings.openai_default_image_size)
+        : (provider === 'grok' && isImageCapable
+          ? cleanGrokResolution(input.image_resolution ?? current.image_resolution, settings.grok_default_image_resolution)
+          : ''),
+      allow_text: boolValue(input.allow_text, current.allow_text == null ? kind !== 'image' : current.allow_text !== 0),
+      allow_image_generate: boolValue(input.allow_image_generate, current.allow_image_generate == null ? isImageCapable : current.allow_image_generate !== 0),
+      allow_image_edit: boolValue(input.allow_image_edit, current.allow_image_edit == null ? (isOpenAiUniversal || isGrokUniversal) : current.allow_image_edit !== 0),
+      allow_document: isOpenAiUniversal
+        ? boolValue(input.allow_document, current.allow_document == null ? true : current.allow_document !== 0)
+        : false,
+      image_quality: isOpenAiUniversal
+        ? cleanOpenAiImageQuality(input.image_quality ?? current.image_quality, settings.openai_default_image_quality)
+        : '',
+      image_background: isOpenAiUniversal
+        ? cleanOpenAiImageBackground(input.image_background ?? current.image_background, settings.openai_default_image_background)
+        : '',
+      image_output_format: isOpenAiUniversal
+        ? cleanOpenAiImageOutputFormat(input.image_output_format ?? current.image_output_format, settings.openai_default_image_output_format)
+        : '',
+      document_default_format: isOpenAiUniversal
+        ? cleanDocumentFormat(input.document_default_format ?? current.document_default_format, settings.openai_default_document_format)
         : '',
       temperature: input.temperature == null && current.temperature == null
         ? (provider === 'openai' ? null : temperatureFallback)
@@ -1653,9 +1820,12 @@ function createAiBotFeature({
       INSERT INTO ai_bots(
         user_id, name, mention, style, tone, behavior_rules, speech_patterns,
         enabled, provider, kind, response_model, summary_model, embedding_model,
-        image_model, image_aspect_ratio, image_resolution, temperature, max_tokens
+        image_model, image_aspect_ratio, image_resolution,
+        allow_text, allow_image_generate, allow_image_edit, allow_document,
+        image_quality, image_background, image_output_format, document_default_format,
+        temperature, max_tokens
       )
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       userId,
       input.name,
@@ -1673,6 +1843,14 @@ function createAiBotFeature({
       input.image_model || '',
       input.image_aspect_ratio || '',
       input.image_resolution || '',
+      input.allow_text ? 1 : 0,
+      input.allow_image_generate ? 1 : 0,
+      input.allow_image_edit ? 1 : 0,
+      input.allow_document ? 1 : 0,
+      input.image_quality || '',
+      input.image_background || '',
+      input.image_output_format || '',
+      input.document_default_format || '',
       input.temperature,
       input.max_tokens
     );
@@ -2621,6 +2799,56 @@ function createAiBotFeature({
     return '.png';
   }
 
+  function documentExtensionForFormat(format = 'md') {
+    return cleanDocumentFormat(format, 'md') === 'txt' ? '.txt' : '.md';
+  }
+
+  function documentMimeTypeForFormat(format = 'md') {
+    return cleanDocumentFormat(format, 'md') === 'txt' ? 'text/plain' : 'text/markdown';
+  }
+
+  function buildDataUri(buffer, mimeType = 'application/octet-stream') {
+    return `data:${mimeType};base64,${buffer.toString('base64')}`;
+  }
+
+  function fileExtensionFromOriginalName(originalName = '') {
+    const ext = path.extname(String(originalName || '')).toLowerCase();
+    return ext && ext.length <= 10 ? ext : '';
+  }
+
+  async function loadStoredUpload(storedName) {
+    if (!uploadsDir) throw new Error('Uploads directory is not configured');
+    return fs.promises.readFile(path.join(uploadsDir, storedName));
+  }
+
+  function isImageFileCandidate(fileType, mimeType) {
+    return String(fileType || '').toLowerCase() === 'image'
+      && /^image\//i.test(String(mimeType || '').trim());
+  }
+
+  async function resolveSourceImageInput(sourceMessage) {
+    const candidates = [sourceMessage];
+    const replyId = Number(sourceMessage?.reply_to_id || 0);
+    if (replyId) {
+      const replyMessage = messageFileRefStmt.get(replyId);
+      if (replyMessage) candidates.push(replyMessage);
+    }
+
+    for (const candidate of candidates) {
+      if (!candidate?.file_stored || !isImageFileCandidate(candidate.file_type, candidate.file_mime)) continue;
+      const buffer = await loadStoredUpload(candidate.file_stored);
+      const mimeType = String(candidate.file_mime || 'image/png').split(';')[0].trim() || 'image/png';
+      return {
+        buffer,
+        mimeType,
+        dataUri: buildDataUri(buffer, mimeType),
+        originalName: candidate.file_name || `image${imageExtensionForMime(mimeType)}`,
+        sourceMessageId: Number(candidate.id) || 0,
+      };
+    }
+    return null;
+  }
+
   async function loadGrokImageBytes(imageResult) {
     if (imageResult?.b64Json) {
       return {
@@ -2638,6 +2866,34 @@ function createAiBotFeature({
       return { buffer, mimeType };
     }
     throw new Error('Grok image generation returned no downloadable image');
+  }
+
+  async function createBotFileMessage(bot, sourceMessage, { buffer, mimeType, fileType, originalName, text = null }) {
+    if (!buffer?.length) throw new Error('Generated file is empty');
+    if (!uploadsDir) throw new Error('Uploads directory is not configured');
+    const ext = fileExtensionFromOriginalName(originalName)
+      || (fileType === 'image' ? imageExtensionForMime(mimeType) : '');
+    const storedName = `ai-${crypto.randomUUID()}${ext}`;
+    await fs.promises.writeFile(path.join(uploadsDir, storedName), buffer);
+
+    const fileRow = insertFileStmt.run(
+      originalName || `bot-output${ext || ''}`,
+      storedName,
+      mimeType || 'application/octet-stream',
+      buffer.length,
+      fileType || 'document',
+      bot.user_id
+    );
+    const result = insertBotMessageStmt.run(
+      sourceMessage.chat_id,
+      bot.user_id,
+      cleanText(text, 4000) || null,
+      fileRow.lastInsertRowid,
+      sourceMessage.id,
+      1,
+      bot.id
+    );
+    return hydrateMessageById(result.lastInsertRowid);
   }
 
   async function createGrokImageMessage(bot, sourceMessage) {
@@ -2667,31 +2923,14 @@ function createAiBotFeature({
       responseFormat: 'b64_json',
     });
     const { buffer, mimeType } = await loadGrokImageBytes(imageResult);
-    if (!buffer.length) throw new Error('Generated image is empty');
-
     const ext = imageExtensionForMime(mimeType);
-    const storedName = `ai-${crypto.randomUUID()}${ext}`;
     const originalName = `grok-${safeFilenamePart(bot.mention || bot.name, 'image')}-${Date.now()}${ext}`;
-    await fs.promises.writeFile(path.join(uploadsDir, storedName), buffer);
-
-    const fileRow = insertFileStmt.run(
-      originalName,
-      storedName,
+    return createBotFileMessage(bot, sourceMessage, {
+      buffer,
       mimeType,
-      buffer.length,
-      'image',
-      bot.user_id
-    );
-    const result = insertBotMessageStmt.run(
-      sourceMessage.chat_id,
-      bot.user_id,
-      null,
-      fileRow.lastInsertRowid,
-      sourceMessage.id,
-      1,
-      bot.id
-    );
-    return hydrateMessageById(result.lastInsertRowid);
+      fileType: 'image',
+      originalName,
+    });
   }
 
   function buildBotFailureText(error) {
@@ -2730,6 +2969,390 @@ function createAiBotFeature({
     return publishBotTextMessage(bot, sourceMessage, buildBotFailureText(error));
   }
 
+  function finalizePublishedBotMessage(message, { schedulePreview = false, enqueueMemoryMessage = false } = {}) {
+    if (!message) return null;
+    notifyPublishedMessage(message);
+    broadcastToChatAll(message.chat_id, { type: 'message', message });
+    if (typeof notifyMessageCreated === 'function') notifyMessageCreated(message);
+    if (schedulePreview && message.text) schedulePreviewFetch(message.id, message.chat_id, message.text);
+    if (enqueueMemoryMessage) enqueueMemoryForMessage(message);
+    return message;
+  }
+
+  function resolveRequestedResponseMode(bot, sourceMessage) {
+    if (bot.kind === 'image') return 'image';
+    if (bot.kind !== 'universal') return 'text';
+    const requested = normalizeAiResponseMode(sourceMessage?.ai_response_mode_hint, bot.provider, 'auto');
+    if (requested === 'document' && (!bot.allow_document || bot.provider !== 'openai')) return 'auto';
+    if (requested === 'text' && !bot.allow_text) return 'auto';
+    if (requested === 'image' && !bot.allow_image_generate && !bot.allow_image_edit) return 'auto';
+    return requested;
+  }
+
+  function chatConfigForBotMode(bot, chatConfig, mode = 'text') {
+    if (bot.provider === 'deepseek') return { ...chatConfig, mode: 'simple' };
+    if (mode !== 'text') return { ...chatConfig, mode: 'simple' };
+    if (bot.kind === 'image') return { ...chatConfig, mode: 'simple' };
+    return chatConfig;
+  }
+
+  function buildMessageContentParts(text, imageInput = null) {
+    const parts = [];
+    if (imageInput?.dataUri) {
+      parts.push({ type: 'input_image', image_url: imageInput.dataUri, detail: 'high' });
+    }
+    if (text) {
+      parts.push({ type: 'input_text', text });
+    }
+    return parts;
+  }
+
+  function buildOpenAiUniversalImageTool(bot, imageInput, settings) {
+    let action = 'auto';
+    if (imageInput && bot.allow_image_edit && !bot.allow_image_generate) action = 'edit';
+    else if (!imageInput && bot.allow_image_generate && !bot.allow_image_edit) action = 'generate';
+    return {
+      type: 'image_generation',
+      action,
+      model: bot.image_model || settings.openai_default_image_model,
+      size: cleanOpenAiImageSize(bot.image_resolution, settings.openai_default_image_size),
+      quality: cleanOpenAiImageQuality(bot.image_quality, settings.openai_default_image_quality),
+      background: cleanOpenAiImageBackground(bot.image_background, settings.openai_default_image_background),
+      output_format: cleanOpenAiImageOutputFormat(bot.image_output_format, settings.openai_default_image_output_format),
+    };
+  }
+
+  function buildOpenAiUniversalPrompt(bot, requestedMode, documentFormat) {
+    const format = cleanDocumentFormat(documentFormat, 'md');
+    const lines = [
+      'You are a universal assistant inside a chat app.',
+      'Return only the assistant message content for the chat UI.',
+      'If you choose image generation, produce exactly one final image.',
+    ];
+    if (requestedMode === 'text') {
+      lines.push('Answer in plain text only. Do not use any tools.');
+    } else if (requestedMode === 'image') {
+      lines.push('Use the image_generation tool. If an input image is available and edits are allowed, prefer editing it when the request implies modifications.');
+      lines.push('Keep any text response short because the chat UI will show the image as the main answer.');
+    } else if (requestedMode === 'document') {
+      lines.push(`Use code_interpreter to create a downloadable .${format} document file and cite or mention that file in the response.`);
+      lines.push(`The document must be UTF-8 text and use the .${format} extension.`);
+    } else {
+      lines.push('Choose the best response mode yourself: plain text, one generated/edited image, or a downloadable text document file when that format is clearly the best fit.');
+      lines.push('Use document output sparingly, mainly for structured drafts, plans, checklists, or long-form deliverables.');
+    }
+    return lines.join('\n');
+  }
+
+  function mimeTypeForOpenAiImageOutput(format = 'png') {
+    const outputFormat = cleanOpenAiImageOutputFormat(format, 'png');
+    if (outputFormat === 'jpeg') return 'image/jpeg';
+    if (outputFormat === 'webp') return 'image/webp';
+    return 'image/png';
+  }
+
+  function stripCitationFilename(text, filename) {
+    const source = String(text || '').trim();
+    const safe = String(filename || '').trim();
+    if (!source || !safe) return source;
+    return source.replace(new RegExp(escapeRegExp(safe), 'ig'), '').replace(/\s{2,}/g, ' ').trim();
+  }
+
+  function findOpenAiDocumentCitation(response) {
+    return collectContainerFileCitations(response)[0] || null;
+  }
+
+  function findOpenAiGeneratedImage(response) {
+    const call = collectImageGenerationCalls(response).find((item) => item?.status === 'completed' && item?.result);
+    if (!call?.result) return null;
+    return call;
+  }
+
+  async function createOpenAiUniversalMessage(bot, chatConfig, sourceMessage) {
+    const settings = getGlobalSettings();
+    const apiKey = getApiKey();
+    if (!apiKey || !settings.enabled) return null;
+
+    const requestedMode = resolveRequestedResponseMode(bot, sourceMessage);
+    const imageInput = await resolveSourceImageInput(sourceMessage);
+    const effectiveMode = requestedMode === 'auto' ? 'auto' : requestedMode;
+    const prompt = cleanText(extractBotPromptText(bot, sourceMessage) || aiMessageMemoryText(sourceMessage, { includeVoters: true }), 5000);
+    const activeChatConfig = chatConfigForBotMode(bot, chatConfig, effectiveMode === 'text' ? 'text' : 'simple');
+    const context = await assembleContext({ bot, chatConfig: activeChatConfig, message: sourceMessage });
+    const documentFormat = cleanDocumentFormat(sourceMessage?.ai_document_format_hint || bot.document_default_format || settings.openai_default_document_format, settings.openai_default_document_format);
+
+    if (requestedMode === 'image') {
+      if (imageInput && !bot.allow_image_edit) {
+        return { message: publishBotTextMessage(bot, sourceMessage, 'This bot can generate new images, but image editing is disabled in its settings.'), memory: false, alreadyPublished: true };
+      }
+      if (!imageInput && !bot.allow_image_generate) {
+        return { message: publishBotTextMessage(bot, sourceMessage, 'Attach or reply to an image first: this bot is configured only for image edits.'), memory: false, alreadyPublished: true };
+      }
+    }
+    if (requestedMode === 'document' && !bot.allow_document) {
+      return { message: publishBotTextMessage(bot, sourceMessage, 'Document output is disabled for this bot.'), memory: false, alreadyPublished: true };
+    }
+
+    const tools = [];
+    if (bot.allow_image_generate || (bot.allow_image_edit && imageInput)) {
+      tools.push(buildOpenAiUniversalImageTool(bot, imageInput, settings));
+    }
+    if (bot.allow_document) {
+      tools.push({
+        type: 'code_interpreter',
+        container: { type: 'auto' },
+      });
+    }
+
+    let toolChoice = 'none';
+    if (requestedMode === 'image') {
+      toolChoice = tools.some((tool) => tool.type === 'image_generation') ? { type: 'image_generation' } : 'none';
+    } else if (requestedMode === 'document') {
+      toolChoice = tools.some((tool) => tool.type === 'code_interpreter') ? { type: 'code_interpreter' } : 'none';
+    } else if (requestedMode === 'auto' && tools.length) {
+      toolChoice = bot.allow_text ? 'auto' : {
+        type: 'allowed_tools',
+        mode: 'required',
+        tools: tools.map((tool) => ({ type: tool.type })),
+      };
+    }
+
+    const response = await createOpenAIResponse({
+      apiKey,
+      model: bot.response_model || settings.default_response_model,
+      input: [
+        { role: 'system', content: `${context.system}\n\n${buildOpenAiUniversalPrompt(bot, requestedMode, documentFormat)}` },
+        {
+          role: 'user',
+          content: buildMessageContentParts(context.user || prompt, imageInput),
+        },
+      ],
+      tools,
+      toolChoice,
+      include: ['code_interpreter_call.outputs'],
+      maxOutputTokens: intValue(bot.max_tokens, 1000, OPENAI_MIN_OUTPUT_TOKENS, 8000),
+      temperature: floatValue(bot.temperature, 0.55, 0, 1),
+    });
+
+    const responseText = cleanText(stripBotSpeakerLabel(extractResponseText(response), bot), 5000);
+    const citation = findOpenAiDocumentCitation(response);
+    if (citation) {
+      const downloaded = await downloadContainerFile({
+        apiKey,
+        containerId: citation.container_id,
+        fileId: citation.file_id,
+      });
+      const originalName = citation.filename || `openai-${safeFilenamePart(bot.mention || bot.name, 'document')}-${Date.now()}${documentExtensionForFormat(documentFormat)}`;
+      const caption = cleanText(stripCitationFilename(responseText, citation.filename), 4000);
+      const message = await createBotFileMessage(bot, sourceMessage, {
+        buffer: downloaded.buffer,
+        mimeType: downloaded.mimeType || documentMimeTypeForFormat(documentFormat),
+        fileType: 'document',
+        originalName,
+        text: caption || null,
+      });
+      return { message, memory: false };
+    }
+
+    const generatedImage = findOpenAiGeneratedImage(response);
+    if (generatedImage) {
+      const imageFormat = cleanOpenAiImageOutputFormat(bot.image_output_format, settings.openai_default_image_output_format);
+      const ext = imageFormat === 'jpeg' ? '.jpg' : (imageFormat === 'webp' ? '.webp' : '.png');
+      const caption = requestedMode === 'text' ? '' : cleanText(responseText, 4000);
+      const message = await createBotFileMessage(bot, sourceMessage, {
+        buffer: Buffer.from(generatedImage.result, 'base64'),
+        mimeType: mimeTypeForOpenAiImageOutput(imageFormat),
+        fileType: 'image',
+        originalName: `openai-${safeFilenamePart(bot.mention || bot.name, 'image')}-${Date.now()}${ext}`,
+        text: caption || null,
+      });
+      return { message, memory: false };
+    }
+
+    if (requestedMode === 'document' && responseText) {
+      const format = cleanDocumentFormat(documentFormat, settings.openai_default_document_format);
+      const message = await createBotFileMessage(bot, sourceMessage, {
+        buffer: Buffer.from(responseText, 'utf8'),
+        mimeType: documentMimeTypeForFormat(format),
+        fileType: 'document',
+        originalName: `openai-${safeFilenamePart(bot.mention || bot.name, 'document')}-${Date.now()}${documentExtensionForFormat(format)}`,
+        text: '',
+      });
+      return { message, memory: false };
+    }
+
+    if (!responseText) return null;
+    const result = insertBotMessageStmt.run(
+      sourceMessage.chat_id,
+      bot.user_id,
+      responseText,
+      null,
+      sourceMessage.id,
+      1,
+      bot.id
+    );
+    const message = hydrateMessageById(result.lastInsertRowid);
+    return { message, memory: requestedMode === 'text' };
+  }
+
+  function buildGrokUniversalRouterSystem(bot, hasImage) {
+    const modes = ['text'];
+    if (bot.allow_image_generate) modes.push('image_generate');
+    if (bot.allow_image_edit && hasImage) modes.push('image_edit');
+    return [
+      'You route a universal chatbot request.',
+      `Allowed modes: ${modes.join(', ')}.`,
+      'Return JSON only with keys: mode, prompt.',
+      'Choose "text" when the user primarily wants explanation, analysis, OCR-style reading, or image understanding.',
+      'Choose "image_edit" only when the user wants to modify the provided image.',
+      'Choose "image_generate" when the user wants a brand-new image.',
+      'Set prompt to a cleaned-up, direct instruction for the chosen mode.',
+    ].join('\n');
+  }
+
+  function validateGrokEditImageInput(imageInput) {
+    if (!imageInput) return 'Attach or reply to a JPG or PNG image first so I can edit it.';
+    const mime = String(imageInput.mimeType || '').toLowerCase();
+    if (mime !== 'image/jpeg' && mime !== 'image/jpg' && mime !== 'image/png') {
+      return 'Grok image edit currently supports only JPG and PNG source images.';
+    }
+    if (Number(imageInput.buffer?.length || 0) > 20 * 1024 * 1024) {
+      return 'The source image is too large for Grok image edit. Please use a file under 20 MiB.';
+    }
+    return '';
+  }
+
+  function buildGrokImageRiskNotice(risk) {
+    const matchedTerms = risk.matches.slice(0, 4).map((item) => item.term).join(', ');
+    return matchedTerms
+      ? `Risky prompt detected (${matchedTerms}). Grok image moderation may reject it and still bill the request. Send it again and confirm the warning dialog first.`
+      : 'Risky prompt detected. Grok image moderation may reject it and still bill the request. Send it again and confirm the warning dialog first.';
+  }
+
+  async function createGrokUniversalMessage(bot, chatConfig, sourceMessage) {
+    const settings = getGlobalSettings();
+    const apiKey = getGrokApiKey();
+    if (!apiKey || !settings.grok_enabled) return null;
+
+    const requestedMode = resolveRequestedResponseMode(bot, sourceMessage);
+    const imageInput = await resolveSourceImageInput(sourceMessage);
+    const originalPrompt = cleanText(extractBotPromptText(bot, sourceMessage) || aiMessageMemoryText(sourceMessage, { includeVoters: true }), 4000);
+    if (!originalPrompt && requestedMode !== 'text') {
+      return { message: publishBotTextMessage(bot, sourceMessage, 'Describe what to create or change first.'), memory: false, alreadyPublished: true };
+    }
+
+    let mode = requestedMode;
+    let prompt = originalPrompt;
+    if (requestedMode === 'image') {
+      mode = imageInput && bot.allow_image_edit ? 'image_edit' : 'image_generate';
+    } else if (requestedMode === 'auto') {
+      const router = await grokAi.generateJson({
+        apiKey,
+        baseUrl: grokBaseUrl(),
+        model: bot.response_model || settings.grok_default_response_model,
+        system: buildGrokUniversalRouterSystem(bot, Boolean(imageInput)),
+        user: [
+          `Has source image: ${imageInput ? 'yes' : 'no'}`,
+          `User request: ${originalPrompt || '(empty)'}`,
+        ].join('\n'),
+        fallback: { mode: 'text', prompt: originalPrompt },
+        maxOutputTokens: 180,
+      });
+      mode = ['image_generate', 'image_edit', 'text'].includes(String(router.mode || '').trim())
+        ? String(router.mode).trim()
+        : 'text';
+      prompt = cleanText(router.prompt || originalPrompt, 4000) || originalPrompt;
+      if (mode === 'image_edit' && !imageInput) mode = bot.allow_text ? 'text' : 'image_generate';
+      if (mode === 'image_generate' && !bot.allow_image_generate) mode = 'text';
+      if (mode === 'image_edit' && !bot.allow_image_edit) mode = 'text';
+      if (mode === 'text' && !bot.allow_text) mode = imageInput && bot.allow_image_edit ? 'image_edit' : 'image_generate';
+    }
+
+    if (mode === 'image_generate' || mode === 'image_edit') {
+      const risk = analyzeAiImageRisk(prompt);
+      if (risk.risky && Number(sourceMessage?.ai_image_risk_confirmed || 0) !== 1) {
+        return { message: publishBotTextMessage(bot, sourceMessage, buildGrokImageRiskNotice(risk)), memory: false, alreadyPublished: true };
+      }
+    }
+
+    if (mode === 'image_edit') {
+      const validationError = validateGrokEditImageInput(imageInput);
+      if (validationError) {
+        return { message: publishBotTextMessage(bot, sourceMessage, validationError), memory: false, alreadyPublished: true };
+      }
+      const imageResult = await grokAi.generateImageEdit({
+        apiKey,
+        baseUrl: grokBaseUrl(),
+        model: bot.image_model || settings.grok_default_image_model,
+        prompt,
+        imageUrl: imageInput.dataUri,
+        resolution: cleanGrokResolution(bot.image_resolution, settings.grok_default_image_resolution),
+        responseFormat: 'b64_json',
+      });
+      const { buffer, mimeType } = await loadGrokImageBytes(imageResult);
+      const ext = imageExtensionForMime(mimeType);
+      const message = await createBotFileMessage(bot, sourceMessage, {
+        buffer,
+        mimeType,
+        fileType: 'image',
+        originalName: `grok-${safeFilenamePart(bot.mention || bot.name, 'image')}-${Date.now()}${ext}`,
+      });
+      return { message, memory: false };
+    }
+
+    if (mode === 'image_generate') {
+      const imageResult = await grokAi.generateImage({
+        apiKey,
+        baseUrl: grokBaseUrl(),
+        model: bot.image_model || settings.grok_default_image_model,
+        prompt,
+        n: 1,
+        aspectRatio: cleanGrokAspectRatio(bot.image_aspect_ratio, settings.grok_default_image_aspect_ratio),
+        resolution: cleanGrokResolution(bot.image_resolution, settings.grok_default_image_resolution),
+        responseFormat: 'b64_json',
+      });
+      const { buffer, mimeType } = await loadGrokImageBytes(imageResult);
+      const ext = imageExtensionForMime(mimeType);
+      const message = await createBotFileMessage(bot, sourceMessage, {
+        buffer,
+        mimeType,
+        fileType: 'image',
+        originalName: `grok-${safeFilenamePart(bot.mention || bot.name, 'image')}-${Date.now()}${ext}`,
+      });
+      return { message, memory: false };
+    }
+
+    const textChatConfig = chatConfigForBotMode(bot, chatConfig, 'text');
+    const context = await assembleContext({ bot, chatConfig: textChatConfig, message: sourceMessage });
+    const response = await grokAi.createResponse({
+      apiKey,
+      baseUrl: grokBaseUrl(),
+      model: bot.response_model || settings.grok_default_response_model,
+      input: [
+        { role: 'system', content: context.system },
+        {
+          role: 'user',
+          content: buildMessageContentParts(context.user || prompt, imageInput),
+        },
+      ],
+      maxOutputTokens: intValue(bot.max_tokens, settings.grok_max_tokens, 1, 8000),
+      temperature: floatValue(bot.temperature, settings.grok_temperature, 0, 1),
+    });
+    const responseText = cleanText(stripBotSpeakerLabel(grokAi.extractResponseText(response), bot), 5000);
+    if (!responseText) return null;
+    const result = insertBotMessageStmt.run(
+      sourceMessage.chat_id,
+      bot.user_id,
+      responseText,
+      null,
+      sourceMessage.id,
+      1,
+      bot.id
+    );
+    const message = hydrateMessageById(result.lastInsertRowid);
+    return { message, memory: true };
+  }
+
   async function createBotResponse(bot, chatConfig, sourceMessage) {
     const key = `reply:${bot.id}:${sourceMessage.id}`;
     if (responseLocks.has(key)) return;
@@ -2746,23 +3369,34 @@ function createAiBotFeature({
       if (!apiKey) return;
       if (isYandex && !settings.yandex_folder_id) return;
       if (isDeepSeek && !settings.deepseek_enabled) return;
-      if (bot.kind === 'image') {
-        if (!isGrok) return;
-        broadcastBotTyping(bot, sourceMessage.chat_id, true);
-        typingTimer = setInterval(() => {
-          broadcastBotTyping(bot, sourceMessage.chat_id, true);
-        }, 2200);
-        const message = await createGrokImageMessage(bot, sourceMessage);
-        if (!message) return;
-        notifyPublishedMessage(message);
-        broadcastToChatAll(sourceMessage.chat_id, { type: 'message', message });
-        if (typeof notifyMessageCreated === 'function') notifyMessageCreated(message);
-        return;
-      }
+
       broadcastBotTyping(bot, sourceMessage.chat_id, true);
       typingTimer = setInterval(() => {
         broadcastBotTyping(bot, sourceMessage.chat_id, true);
       }, 2200);
+
+      if (bot.kind === 'image') {
+        if (!isGrok) return;
+        const message = await createGrokImageMessage(bot, sourceMessage);
+        if (!message) return;
+        finalizePublishedBotMessage(message);
+        return;
+      }
+
+      if (bot.kind === 'universal') {
+        const universalResult = (bot.provider === 'openai')
+          ? await createOpenAiUniversalMessage(bot, chatConfig, sourceMessage)
+          : (bot.provider === 'grok' ? await createGrokUniversalMessage(bot, chatConfig, sourceMessage) : null);
+        if (!universalResult?.message) return;
+        if (!universalResult.alreadyPublished) {
+          finalizePublishedBotMessage(universalResult.message, {
+            schedulePreview: Boolean(universalResult.message.text),
+            enqueueMemoryMessage: Boolean(universalResult.memory),
+          });
+        }
+        return;
+      }
+
       const context = await assembleContext({ bot, chatConfig, message: sourceMessage });
       const rawText = isYandex
         ? await yandexAi.generateText(yandexClientOptions({
@@ -2815,11 +3449,10 @@ function createAiBotFeature({
       );
       const message = hydrateMessageById(result.lastInsertRowid);
       if (!message) return;
-      notifyPublishedMessage(message);
-      broadcastToChatAll(sourceMessage.chat_id, { type: 'message', message });
-      if (typeof notifyMessageCreated === 'function') notifyMessageCreated(message);
-      schedulePreviewFetch(message.id, sourceMessage.chat_id, responseText);
-      enqueueMemoryForMessage(message);
+      finalizePublishedBotMessage(message, {
+        schedulePreview: true,
+        enqueueMemoryMessage: true,
+      });
     } catch (error) {
       console.warn(buildBotFailureText(error));
       try {
@@ -2882,6 +3515,23 @@ function createAiBotFeature({
     db.prepare('UPDATE grok_memory_facts SET is_active=0, updated_at=datetime(\'now\') WHERE source_message_id=?').run(messageId);
   }
 
+  function providerBotByRequestId(req, res, { provider = 'openai', kind = null } = {}) {
+    const bot = botByIdStmt.get(Number(req.params.id));
+    if (!bot) {
+      res.status(404).json({ error: 'Bot not found' });
+      return null;
+    }
+    if (normalizeProvider(bot.provider, 'openai') !== provider) {
+      res.status(404).json({ error: `${provider} bot not found` });
+      return null;
+    }
+    if (kind && normalizeBotKind(bot.kind, provider, 'text') !== kind) {
+      res.status(404).json({ error: `${provider} ${kind} bot not found` });
+      return null;
+    }
+    return bot;
+  }
+
   app.get('/api/admin/ai-bots', auth, adminOnly, (_req, res) => {
     res.json(serializeAdminState());
   });
@@ -2916,16 +3566,16 @@ function createAiBotFeature({
   });
 
   app.post('/api/admin/ai-bots', auth, adminOnly, (req, res) => {
-    const input = normalizeBotInput(req.body || {});
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'openai', kind: 'text' });
     const bot = sanitizeBot(createBotTx(input));
     res.json({ bot, state: serializeAdminState() });
   });
 
   app.post('/api/admin/ai-bots/:id(\\d+)/avatar', auth, adminOnly, botAvatarLimiter, (req, res) => {
     if (!avatarUpload?.single) return res.status(500).json({ error: 'Avatar upload is not configured' });
+    const bot = providerBotByRequestId(req, res, { provider: 'openai', kind: 'text' });
+    if (!bot) return;
     const botId = Number(req.params.id);
-    const bot = botByIdStmt.get(botId);
-    if (!bot) return res.status(404).json({ error: 'Bot not found' });
 
     avatarUpload.single('avatar')(req, res, (err) => {
       if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
@@ -2945,9 +3595,9 @@ function createAiBotFeature({
   });
 
   app.delete('/api/admin/ai-bots/:id(\\d+)/avatar', auth, adminOnly, (req, res) => {
+    const bot = providerBotByRequestId(req, res, { provider: 'openai', kind: 'text' });
+    if (!bot) return;
     const botId = Number(req.params.id);
-    const bot = botByIdStmt.get(botId);
-    if (!bot) return res.status(404).json({ error: 'Bot not found' });
 
     const userId = ensureBackingUser(bot);
     const old = db.prepare('SELECT avatar_url FROM users WHERE id=?').get(userId);
@@ -2987,6 +3637,7 @@ function createAiBotFeature({
       mention: requestedMention,
       enabled: Object.prototype.hasOwnProperty.call(source, 'enabled') ? source.enabled : true,
       provider: 'openai',
+      kind: 'text',
       response_model: responseModel,
       summary_model: summaryModel,
       temperature: source.temperature,
@@ -3022,8 +3673,9 @@ function createAiBotFeature({
   });
 
   app.get('/api/admin/ai-bots/:id(\\d+)/export', auth, adminOnly, (req, res) => {
-    const bot = sanitizeBot(botByIdStmt.get(Number(req.params.id)));
-    if (!bot) return res.status(404).json({ error: 'Bot not found' });
+    const rawBot = providerBotByRequestId(req, res, { provider: 'openai', kind: 'text' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
     const payload = {
       schema_version: AI_BOT_EXPORT_VERSION,
       exported_at: new Date().toISOString(),
@@ -3031,6 +3683,7 @@ function createAiBotFeature({
         name: bot.name,
         mention: bot.mention,
         provider: bot.provider || 'openai',
+        kind: bot.kind || 'text',
         enabled: bot.enabled,
         response_model: bot.response_model,
         summary_model: bot.summary_model,
@@ -3050,14 +3703,14 @@ function createAiBotFeature({
   });
 
   app.put('/api/admin/ai-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = providerBotByRequestId(req, res, { provider: 'openai', kind: 'text' });
+    if (!current) return;
     const botId = Number(req.params.id);
-    const current = botByIdStmt.get(botId);
-    if (!current) return res.status(404).json({ error: 'Bot not found' });
-    const input = normalizeBotInput(req.body || {}, current);
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'openai', kind: 'text' }, current);
     db.prepare(`
       UPDATE ai_bots
       SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
-          enabled=?, response_model=?, summary_model=?, embedding_model=?, temperature=?, max_tokens=?, updated_at=datetime('now')
+          enabled=?, provider='openai', kind='text', response_model=?, summary_model=?, embedding_model=?, temperature=?, max_tokens=?, updated_at=datetime('now')
       WHERE id=?
     `).run(
       input.name,
@@ -3085,8 +3738,8 @@ function createAiBotFeature({
 
   app.delete('/api/admin/ai-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
     const botId = Number(req.params.id);
-    const current = botByIdStmt.get(botId);
-    if (!current) return res.status(404).json({ error: 'Bot not found' });
+    const current = providerBotByRequestId(req, res, { provider: 'openai', kind: 'text' });
+    if (!current) return;
     db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(botId);
     db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(botId);
     syncBotMemberships(current, false);
@@ -3094,7 +3747,9 @@ function createAiBotFeature({
   });
 
   app.post('/api/admin/ai-bots/:id(\\d+)/test', auth, adminOnly, async (req, res) => {
-    const bot = sanitizeBot(botByIdStmt.get(Number(req.params.id)));
+    const rawBot = providerBotByRequestId(req, res, { provider: 'openai', kind: 'text' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
     if (!bot) return res.status(404).json({ error: 'Bot not found' });
     const apiKey = String(req.body?.openai_api_key || '').trim() || getApiKey();
     const prompt = cleanText(req.body?.prompt || `Привет, ${bot.name}. Коротко расскажи, как ты будешь помогать в этом чате.`, 1000);
@@ -3112,6 +3767,294 @@ function createAiBotFeature({
     } catch (error) {
       res.status(400).json({ ok: false, error: error.message || 'Bot test failed' });
     }
+  });
+
+  app.get('/api/admin/openai-universal-bots', auth, adminOnly, (_req, res) => {
+    res.json(serializeOpenAiUniversalAdminState());
+  });
+
+  app.get('/api/admin/openai-universal-bots/models', auth, adminOnly, async (req, res) => {
+    const catalog = await getModelCatalog({ refresh: req.query?.refresh === '1' });
+    res.json(catalog);
+  });
+
+  app.put('/api/admin/openai-universal-bots/settings', auth, adminOnly, (req, res) => {
+    const before = getGlobalSettings();
+    const settings = saveAiSettings(db, req.body || {}, secret);
+    const after = getGlobalSettings();
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'openai_api_key')) {
+      modelCatalogCache = null;
+      modelCatalogFetchedAt = 0;
+    }
+    if (before.default_embedding_model !== after.default_embedding_model) {
+      markEmbeddingModelChanged(after.default_embedding_model);
+    }
+    if (!before.enabled && after.enabled) {
+      enqueueHybridBackfill('enabled');
+    }
+    res.json({ settings, state: serializeOpenAiUniversalAdminState() });
+  });
+
+  app.delete('/api/admin/openai-universal-bots/key', auth, adminOnly, (_req, res) => {
+    const settings = deleteOpenAIKey(db);
+    modelCatalogCache = null;
+    modelCatalogFetchedAt = 0;
+    res.json({ settings, state: serializeOpenAiUniversalAdminState() });
+  });
+
+  app.post('/api/admin/openai-universal-bots', auth, adminOnly, (req, res) => {
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'openai', kind: 'universal' });
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, state: serializeOpenAiUniversalAdminState() });
+  });
+
+  app.put('/api/admin/openai-universal-bots/chat-settings', auth, adminOnly, (req, res) => {
+    const chatId = Number(req.body?.chatId);
+    const botId = Number(req.body?.botId);
+    if (!db.prepare('SELECT 1 FROM chats WHERE id=?').get(chatId)) return res.status(404).json({ error: 'Chat not found' });
+    const bot = providerBotByRequestId({ params: { id: botId } }, res, { provider: 'openai', kind: 'universal' });
+    if (!bot) return;
+    const enabled = boolValue(req.body?.enabled, false);
+    const mode = req.body?.mode === 'hybrid' ? 'hybrid' : 'simple';
+    const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
+    const triggerMode = 'mention_reply';
+    saveChatBotSettingTx({ chatId, bot, enabled, mode, hotContextLimit, triggerMode });
+    if (enabled && mode === 'hybrid') {
+      memoryQueue.enqueue(`ai:backfill:${chatId}`, { type: 'backfill-chat', chatId });
+    }
+    res.json({ ok: true, state: serializeOpenAiUniversalAdminState() });
+  });
+
+  app.post('/api/admin/openai-universal-bots/:id(\\d+)/avatar', auth, adminOnly, botAvatarLimiter, (req, res) => {
+    if (!avatarUpload?.single) return res.status(500).json({ error: 'Avatar upload is not configured' });
+    const bot = providerBotByRequestId(req, res, { provider: 'openai', kind: 'universal' });
+    if (!bot) return;
+
+    avatarUpload.single('avatar')(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
+      if (!req.file) return res.status(400).json({ error: 'No file' });
+
+      const userId = ensureBackingUser(bot);
+      const old = db.prepare('SELECT avatar_url FROM users WHERE id=?').get(userId);
+      removeAvatarFile(old?.avatar_url);
+
+      const avatarUrl = '/uploads/avatars/' + req.file.filename;
+      db.prepare('UPDATE users SET avatar_url=?, display_name=? WHERE id=?').run(avatarUrl, bot.name, userId);
+      db.prepare('UPDATE ai_bots SET updated_at=datetime(\'now\') WHERE id=?').run(bot.id);
+      const updated = sanitizeBot(botByIdStmt.get(bot.id));
+      if (typeof notifyUserUpdated === 'function') notifyUserUpdated(userId);
+      res.json({ bot: updated, state: serializeOpenAiUniversalAdminState() });
+    });
+  });
+
+  app.delete('/api/admin/openai-universal-bots/:id(\\d+)/avatar', auth, adminOnly, (req, res) => {
+    const bot = providerBotByRequestId(req, res, { provider: 'openai', kind: 'universal' });
+    if (!bot) return;
+    const userId = ensureBackingUser(bot);
+    const old = db.prepare('SELECT avatar_url FROM users WHERE id=?').get(userId);
+    removeAvatarFile(old?.avatar_url);
+    db.prepare('UPDATE users SET avatar_url=NULL WHERE id=?').run(userId);
+    db.prepare('UPDATE ai_bots SET updated_at=datetime(\'now\') WHERE id=?').run(bot.id);
+    const updated = sanitizeBot(botByIdStmt.get(bot.id));
+    if (typeof notifyUserUpdated === 'function') notifyUserUpdated(userId);
+    res.json({ bot: updated, state: serializeOpenAiUniversalAdminState() });
+  });
+
+  app.put('/api/admin/openai-universal-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = providerBotByRequestId(req, res, { provider: 'openai', kind: 'universal' });
+    if (!current) return;
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'openai', kind: 'universal' }, current);
+    db.prepare(`
+      UPDATE ai_bots
+      SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
+          enabled=?, provider='openai', kind='universal', response_model=?, summary_model=?, embedding_model=?,
+          image_model=?, image_resolution=?, allow_text=?, allow_image_generate=?, allow_image_edit=?, allow_document=?,
+          image_quality=?, image_background=?, image_output_format=?, document_default_format=?,
+          temperature=?, max_tokens=?, updated_at=datetime('now')
+      WHERE id=?
+    `).run(
+      input.name,
+      input.mention,
+      input.style,
+      input.tone,
+      input.behavior_rules,
+      input.speech_patterns,
+      input.enabled ? 1 : 0,
+      input.response_model,
+      input.summary_model,
+      input.embedding_model,
+      input.image_model,
+      input.image_resolution,
+      input.allow_text ? 1 : 0,
+      input.allow_image_generate ? 1 : 0,
+      input.allow_image_edit ? 1 : 0,
+      input.allow_document ? 1 : 0,
+      input.image_quality,
+      input.image_background,
+      input.image_output_format,
+      input.document_default_format,
+      input.temperature,
+      input.max_tokens,
+      current.id
+    );
+    if (current.user_id) {
+      db.prepare('UPDATE users SET display_name=? WHERE id=?').run(input.name, current.user_id);
+      if (typeof notifyUserUpdated === 'function') notifyUserUpdated(current.user_id);
+    }
+    const updated = botByIdStmt.get(current.id);
+    syncBotMemberships(updated, updated.enabled !== 0);
+    res.json({ bot: sanitizeBot(updated), state: serializeOpenAiUniversalAdminState() });
+  });
+
+  app.delete('/api/admin/openai-universal-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = providerBotByRequestId(req, res, { provider: 'openai', kind: 'universal' });
+    if (!current) return;
+    db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
+    db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
+    syncBotMemberships(current, false);
+    res.json({ ok: true, state: serializeOpenAiUniversalAdminState() });
+  });
+
+  app.post('/api/admin/openai-universal-bots/:id(\\d+)/test', auth, adminOnly, async (req, res) => {
+    const rawBot = providerBotByRequestId(req, res, { provider: 'openai', kind: 'universal' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
+    const settings = getGlobalSettings();
+    const apiKey = String(req.body?.openai_api_key || '').trim() || getApiKey();
+    const prompt = cleanText(req.body?.prompt || `Hello, ${bot.name}. Briefly show how you handle universal requests.`, 1200);
+    const mode = normalizeAiResponseMode(req.body?.mode, 'openai', 'auto');
+    const documentFormat = cleanDocumentFormat(req.body?.document_format || bot.document_default_format || settings.openai_default_document_format, settings.openai_default_document_format);
+    if (!apiKey) return res.status(400).json({ ok: false, error: 'Enter OpenAI API key in settings.' });
+    const startedAt = Date.now();
+
+    try {
+      const tools = [];
+      if (bot.allow_image_generate) {
+        tools.push(buildOpenAiUniversalImageTool(bot, null, settings));
+      }
+      if (bot.allow_document) {
+        tools.push({ type: 'code_interpreter', container: { type: 'auto' } });
+      }
+      let toolChoice = 'none';
+      if (mode === 'image') toolChoice = tools.some((tool) => tool.type === 'image_generation') ? { type: 'image_generation' } : 'none';
+      else if (mode === 'document') toolChoice = tools.some((tool) => tool.type === 'code_interpreter') ? { type: 'code_interpreter' } : 'none';
+      else if (mode === 'auto' && tools.length) toolChoice = bot.allow_text ? 'auto' : { type: 'allowed_tools', mode: 'required', tools: tools.map((tool) => ({ type: tool.type })) };
+
+      const response = await createOpenAIResponse({
+        apiKey,
+        model: bot.response_model || settings.default_response_model,
+        input: [
+          { role: 'system', content: `${botSystemPrompt(bot)}\n\n${buildOpenAiUniversalPrompt(bot, mode, documentFormat)}` },
+          { role: 'user', content: [{ type: 'input_text', text: prompt }] },
+        ],
+        tools,
+        toolChoice,
+        include: ['code_interpreter_call.outputs'],
+        maxOutputTokens: Math.min(intValue(bot.max_tokens, 1000, OPENAI_MIN_OUTPUT_TOKENS, 8000), 1200),
+        temperature: floatValue(bot.temperature, 0.55, 0, 1),
+      });
+      const citation = findOpenAiDocumentCitation(response);
+      const generatedImage = findOpenAiGeneratedImage(response);
+      const text = citation
+        ? `Document generated: ${citation.filename || citation.file_id}`
+        : (generatedImage
+          ? 'Image generated successfully.'
+          : cleanText(stripBotSpeakerLabel(extractResponseText(response), bot), 500));
+      res.json({
+        ok: true,
+        result: {
+          text,
+          latencyMs: Date.now() - startedAt,
+          model: bot.response_model || settings.default_response_model,
+          mode,
+        },
+      });
+    } catch (error) {
+      res.status(400).json({ ok: false, error: error.message || 'OpenAI universal bot test failed' });
+    }
+  });
+
+  app.get('/api/admin/openai-universal-bots/:id(\\d+)/export', auth, adminOnly, (req, res) => {
+    const rawBot = providerBotByRequestId(req, res, { provider: 'openai', kind: 'universal' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
+    const payload = {
+      schema_version: AI_BOT_EXPORT_VERSION,
+      exported_at: new Date().toISOString(),
+      bot: {
+        provider: 'openai',
+        kind: 'universal',
+        name: bot.name,
+        mention: bot.mention,
+        enabled: bot.enabled,
+        response_model: bot.response_model,
+        summary_model: bot.summary_model,
+        image_model: bot.image_model,
+        image_resolution: bot.image_resolution,
+        allow_text: bot.allow_text,
+        allow_image_generate: bot.allow_image_generate,
+        allow_image_edit: bot.allow_image_edit,
+        allow_document: bot.allow_document,
+        image_quality: bot.image_quality,
+        image_background: bot.image_background,
+        image_output_format: bot.image_output_format,
+        document_default_format: bot.document_default_format,
+        temperature: bot.temperature,
+        max_tokens: bot.max_tokens,
+        style: bot.style,
+        tone: bot.tone,
+        behavior_rules: bot.behavior_rules,
+        speech_patterns: bot.speech_patterns,
+      },
+    };
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = `bananza-openai-universal-${safeFilenamePart(bot.mention || bot.name)}-${date}.json`;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(JSON.stringify(payload, null, 2));
+  });
+
+  app.post('/api/admin/openai-universal-bots/import', auth, adminOnly, async (req, res) => {
+    const source = req.body?.bot && typeof req.body.bot === 'object' ? req.body.bot : (req.body || {});
+    const warnings = [];
+    const settings = getGlobalSettings();
+    const catalog = await getModelCatalog();
+    const requestedMention = normalizeMention(source.mention || source.name || 'bot');
+    let responseModel = cleanText(source.response_model || settings.default_response_model, 160);
+    let summaryModel = cleanText(source.summary_model || settings.default_summary_model, 160);
+    let imageModel = cleanText(source.image_model || settings.openai_default_image_model, 160);
+
+    if (catalog.source === 'openai') {
+      if (responseModel && !catalog.response.includes(responseModel)) {
+        warnings.push(`Response model "${responseModel}" is not available; default model was used.`);
+        responseModel = settings.default_response_model;
+      }
+      if (summaryModel && !catalog.summary.includes(summaryModel)) {
+        warnings.push(`Summary model "${summaryModel}" is not available; default model was used.`);
+        summaryModel = settings.default_summary_model;
+      }
+      if (imageModel && !catalog.image.includes(imageModel)) {
+        warnings.push(`Image model "${imageModel}" is not available; default model was used.`);
+        imageModel = settings.openai_default_image_model;
+      }
+    } else if (catalog.error) {
+      warnings.push(`Model availability was not verified: ${catalog.error}`);
+    }
+
+    const input = normalizeBotInput({
+      ...(source || {}),
+      provider: 'openai',
+      kind: 'universal',
+      mention: requestedMention,
+      response_model: responseModel,
+      summary_model: summaryModel,
+      image_model: imageModel,
+    });
+    if (input.mention !== requestedMention) {
+      warnings.push(`Mention "@${requestedMention}" is already taken; imported as "@${input.mention}".`);
+    }
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, warnings, state: serializeOpenAiUniversalAdminState() });
   });
 
   function deepseekBotByRequestId(req, res) {
@@ -3676,20 +4619,7 @@ function createAiBotFeature({
   });
 
   function grokBotByRequestId(req, res, { kind = null } = {}) {
-    const bot = botByIdStmt.get(Number(req.params.id));
-    if (!bot) {
-      res.status(404).json({ error: 'Bot not found' });
-      return null;
-    }
-    if (normalizeProvider(bot.provider, 'openai') !== 'grok') {
-      res.status(404).json({ error: 'Grok bot not found' });
-      return null;
-    }
-    if (kind && normalizeBotKind(bot.kind, 'grok', 'text') !== kind) {
-      res.status(404).json({ error: `Grok ${kind} bot not found` });
-      return null;
-    }
-    return bot;
+    return providerBotByRequestId(req, res, { provider: 'grok', kind });
   }
 
   app.get('/api/admin/grok-ai-bots', auth, adminOnly, (_req, res) => {
@@ -3791,6 +4721,7 @@ function createAiBotFeature({
     if (!db.prepare('SELECT 1 FROM chats WHERE id=?').get(chatId)) return res.status(404).json({ error: 'Chat not found' });
     const bot = botByIdStmt.get(botId);
     if (!bot || normalizeProvider(bot.provider, 'openai') !== 'grok') return res.status(404).json({ error: 'Grok bot not found' });
+    if (normalizeBotKind(bot.kind, 'grok', 'text') === 'universal') return res.status(404).json({ error: 'Grok bot not found' });
     const enabled = boolValue(req.body?.enabled, false);
     const botKind = normalizeBotKind(bot.kind, 'grok', 'text');
     const mode = botKind === 'image' ? 'simple' : (req.body?.mode === 'hybrid' ? 'hybrid' : 'simple');
@@ -3807,6 +4738,9 @@ function createAiBotFeature({
     if (!avatarUpload?.single) return res.status(500).json({ error: 'Avatar upload is not configured' });
     const bot = grokBotByRequestId(req, res);
     if (!bot) return;
+    if (normalizeBotKind(bot.kind, 'grok', 'text') === 'universal') {
+      return res.status(404).json({ error: 'Grok bot not found' });
+    }
 
     avatarUpload.single('avatar')(req, res, (err) => {
       if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
@@ -3828,6 +4762,9 @@ function createAiBotFeature({
   app.delete('/api/admin/grok-ai-bots/:id(\\d+)/avatar', auth, adminOnly, (req, res) => {
     const bot = grokBotByRequestId(req, res);
     if (!bot) return;
+    if (normalizeBotKind(bot.kind, 'grok', 'text') === 'universal') {
+      return res.status(404).json({ error: 'Grok bot not found' });
+    }
     const userId = ensureBackingUser(bot);
     const old = db.prepare('SELECT avatar_url FROM users WHERE id=?').get(userId);
     removeAvatarFile(old?.avatar_url);
@@ -3841,6 +4778,9 @@ function createAiBotFeature({
   app.put('/api/admin/grok-ai-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
     const current = grokBotByRequestId(req, res);
     if (!current) return;
+    if (normalizeBotKind(current.kind, 'grok', 'text') === 'universal') {
+      return res.status(404).json({ error: 'Grok bot not found' });
+    }
     const input = normalizeBotInput({
       ...(req.body || {}),
       provider: 'grok',
@@ -3884,6 +4824,9 @@ function createAiBotFeature({
   app.delete('/api/admin/grok-ai-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
     const current = grokBotByRequestId(req, res);
     if (!current) return;
+    if (normalizeBotKind(current.kind, 'grok', 'text') === 'universal') {
+      return res.status(404).json({ error: 'Grok bot not found' });
+    }
     db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
     db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
     syncBotMemberships(current, false);
@@ -3891,8 +4834,12 @@ function createAiBotFeature({
   });
 
   app.post('/api/admin/grok-ai-bots/:id(\\d+)/test', auth, adminOnly, async (req, res) => {
-    const bot = sanitizeBot(grokBotByRequestId(req, res));
-    if (!bot) return;
+    const rawBot = grokBotByRequestId(req, res);
+    if (!rawBot) return;
+    if (normalizeBotKind(rawBot.kind, 'grok', 'text') === 'universal') {
+      return res.status(404).json({ error: 'Grok bot not found' });
+    }
+    const bot = sanitizeBot(rawBot);
     const settings = getGlobalSettings();
     const apiKey = String(req.body?.grok_api_key || '').trim() || getGrokApiKey();
     if (!apiKey) return res.status(400).json({ ok: false, error: 'Enter Grok API key in Grok settings.' });
@@ -3938,8 +4885,12 @@ function createAiBotFeature({
   });
 
   app.get('/api/admin/grok-ai-bots/:id(\\d+)/export', auth, adminOnly, (req, res) => {
-    const bot = sanitizeBot(grokBotByRequestId(req, res));
-    if (!bot) return;
+    const rawBot = grokBotByRequestId(req, res);
+    if (!rawBot) return;
+    if (normalizeBotKind(rawBot.kind, 'grok', 'text') === 'universal') {
+      return res.status(404).json({ error: 'Grok bot not found' });
+    }
+    const bot = sanitizeBot(rawBot);
     const payload = {
       schema_version: AI_BOT_EXPORT_VERSION,
       exported_at: new Date().toISOString(),
@@ -3973,7 +4924,7 @@ function createAiBotFeature({
     const source = req.body?.bot && typeof req.body.bot === 'object' ? req.body.bot : (req.body || {});
     const warnings = [];
     const settings = getGlobalSettings();
-    const kind = normalizeBotKind(source.kind, 'grok', 'text');
+    const kind = String(source.kind || '').trim().toLowerCase() === 'image' ? 'image' : 'text';
     const requestedMention = normalizeMention(source.mention || source.name || 'bot');
     const catalog = await getGrokModelCatalogCached();
 
@@ -4022,6 +4973,286 @@ function createAiBotFeature({
     }
     const bot = sanitizeBot(createBotTx(input));
     res.json({ bot, warnings, state: serializeGrokAdminState() });
+  });
+
+  app.get('/api/admin/grok-universal-bots', auth, adminOnly, (_req, res) => {
+    res.json(serializeGrokUniversalAdminState());
+  });
+
+  app.put('/api/admin/grok-universal-bots/settings', auth, adminOnly, (req, res) => {
+    const before = getGlobalSettings();
+    const settings = saveAiSettings(db, req.body || {}, secret);
+    const after = getGlobalSettings();
+    if (
+      Object.prototype.hasOwnProperty.call(req.body || {}, 'grok_api_key')
+      || before.grok_base_url !== after.grok_base_url
+    ) {
+      grokModelCatalogCache = null;
+      grokModelCatalogFetchedAt = 0;
+    }
+    if (before.grok_default_embedding_model !== after.grok_default_embedding_model) {
+      markGrokEmbeddingModelChanged(after.grok_default_embedding_model);
+    }
+    if (!before.grok_enabled && after.grok_enabled) {
+      enqueueGrokHybridBackfill('enabled');
+    }
+    res.json({ settings, state: serializeGrokUniversalAdminState() });
+  });
+
+  app.delete('/api/admin/grok-universal-bots/key', auth, adminOnly, (_req, res) => {
+    const settings = deleteGrokKey(db);
+    grokModelCatalogCache = null;
+    grokModelCatalogFetchedAt = 0;
+    res.json({ settings, state: serializeGrokUniversalAdminState() });
+  });
+
+  app.post('/api/admin/grok-universal-bots', auth, adminOnly, (req, res) => {
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'grok', kind: 'universal' });
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, state: serializeGrokUniversalAdminState() });
+  });
+
+  app.put('/api/admin/grok-universal-bots/chat-settings', auth, adminOnly, (req, res) => {
+    const chatId = Number(req.body?.chatId);
+    const botId = Number(req.body?.botId);
+    if (!db.prepare('SELECT 1 FROM chats WHERE id=?').get(chatId)) return res.status(404).json({ error: 'Chat not found' });
+    const bot = providerBotByRequestId({ params: { id: botId } }, res, { provider: 'grok', kind: 'universal' });
+    if (!bot) return;
+    const enabled = boolValue(req.body?.enabled, false);
+    const mode = req.body?.mode === 'hybrid' ? 'hybrid' : 'simple';
+    const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
+    const triggerMode = 'mention_reply';
+    saveChatBotSettingTx({ chatId, bot, enabled, mode, hotContextLimit, triggerMode });
+    if (enabled && mode === 'hybrid') {
+      memoryQueue.enqueue(`grok:backfill:${chatId}`, { type: 'grok-backfill-chat', chatId });
+    }
+    res.json({ ok: true, state: serializeGrokUniversalAdminState() });
+  });
+
+  app.post('/api/admin/grok-universal-bots/:id(\\d+)/avatar', auth, adminOnly, botAvatarLimiter, (req, res) => {
+    if (!avatarUpload?.single) return res.status(500).json({ error: 'Avatar upload is not configured' });
+    const bot = grokBotByRequestId(req, res, { kind: 'universal' });
+    if (!bot) return;
+
+    avatarUpload.single('avatar')(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
+      if (!req.file) return res.status(400).json({ error: 'No file' });
+
+      const userId = ensureBackingUser(bot);
+      const old = db.prepare('SELECT avatar_url FROM users WHERE id=?').get(userId);
+      removeAvatarFile(old?.avatar_url);
+
+      const avatarUrl = '/uploads/avatars/' + req.file.filename;
+      db.prepare('UPDATE users SET avatar_url=?, display_name=? WHERE id=?').run(avatarUrl, bot.name, userId);
+      db.prepare('UPDATE ai_bots SET updated_at=datetime(\'now\') WHERE id=?').run(bot.id);
+      const updated = sanitizeBot(botByIdStmt.get(bot.id));
+      if (typeof notifyUserUpdated === 'function') notifyUserUpdated(userId);
+      res.json({ bot: updated, state: serializeGrokUniversalAdminState() });
+    });
+  });
+
+  app.delete('/api/admin/grok-universal-bots/:id(\\d+)/avatar', auth, adminOnly, (req, res) => {
+    const bot = grokBotByRequestId(req, res, { kind: 'universal' });
+    if (!bot) return;
+    const userId = ensureBackingUser(bot);
+    const old = db.prepare('SELECT avatar_url FROM users WHERE id=?').get(userId);
+    removeAvatarFile(old?.avatar_url);
+    db.prepare('UPDATE users SET avatar_url=NULL WHERE id=?').run(userId);
+    db.prepare('UPDATE ai_bots SET updated_at=datetime(\'now\') WHERE id=?').run(bot.id);
+    const updated = sanitizeBot(botByIdStmt.get(bot.id));
+    if (typeof notifyUserUpdated === 'function') notifyUserUpdated(userId);
+    res.json({ bot: updated, state: serializeGrokUniversalAdminState() });
+  });
+
+  app.put('/api/admin/grok-universal-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = grokBotByRequestId(req, res, { kind: 'universal' });
+    if (!current) return;
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'grok', kind: 'universal' }, current);
+    db.prepare(`
+      UPDATE ai_bots
+      SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
+          enabled=?, provider='grok', kind='universal', response_model=?, summary_model=?, embedding_model=?,
+          image_model=?, image_aspect_ratio=?, image_resolution=?, allow_text=?, allow_image_generate=?, allow_image_edit=?, allow_document=?,
+          temperature=?, max_tokens=?, updated_at=datetime('now')
+      WHERE id=?
+    `).run(
+      input.name,
+      input.mention,
+      input.style,
+      input.tone,
+      input.behavior_rules,
+      input.speech_patterns,
+      input.enabled ? 1 : 0,
+      input.response_model,
+      input.summary_model,
+      input.embedding_model,
+      input.image_model,
+      input.image_aspect_ratio,
+      input.image_resolution,
+      input.allow_text ? 1 : 0,
+      input.allow_image_generate ? 1 : 0,
+      input.allow_image_edit ? 1 : 0,
+      0,
+      input.temperature,
+      input.max_tokens,
+      current.id
+    );
+    if (current.user_id) {
+      db.prepare('UPDATE users SET display_name=? WHERE id=?').run(input.name, current.user_id);
+      if (typeof notifyUserUpdated === 'function') notifyUserUpdated(current.user_id);
+    }
+    const updated = botByIdStmt.get(current.id);
+    syncBotMemberships(updated, updated.enabled !== 0);
+    res.json({ bot: sanitizeBot(updated), state: serializeGrokUniversalAdminState() });
+  });
+
+  app.delete('/api/admin/grok-universal-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = grokBotByRequestId(req, res, { kind: 'universal' });
+    if (!current) return;
+    db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
+    db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
+    syncBotMemberships(current, false);
+    res.json({ ok: true, state: serializeGrokUniversalAdminState() });
+  });
+
+  app.post('/api/admin/grok-universal-bots/:id(\\d+)/test', auth, adminOnly, async (req, res) => {
+    const rawBot = grokBotByRequestId(req, res, { kind: 'universal' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
+    const settings = getGlobalSettings();
+    const apiKey = String(req.body?.grok_api_key || '').trim() || getGrokApiKey();
+    const mode = normalizeAiResponseMode(req.body?.mode, 'grok', 'auto');
+    const prompt = cleanText(req.body?.prompt || `Hello, ${bot.name}. Show how you handle universal requests.`, 1200);
+    if (!apiKey) return res.status(400).json({ ok: false, error: 'Enter Grok API key in settings.' });
+    const startedAt = Date.now();
+
+    try {
+      if (mode === 'image') {
+        const result = await grokAi.generateImage({
+          apiKey,
+          baseUrl: grokBaseUrl(),
+          model: bot.image_model || settings.grok_default_image_model,
+          prompt,
+          n: 1,
+          aspectRatio: cleanGrokAspectRatio(bot.image_aspect_ratio, settings.grok_default_image_aspect_ratio),
+          resolution: cleanGrokResolution(bot.image_resolution, settings.grok_default_image_resolution),
+          responseFormat: 'b64_json',
+        });
+        return res.json({
+          ok: true,
+          result: {
+            text: result.revisedPrompt ? `Image generated. Revised prompt: ${truncate(result.revisedPrompt, 240)}` : 'Image generated successfully.',
+            latencyMs: Date.now() - startedAt,
+            model: result.model || bot.image_model || settings.grok_default_image_model,
+            mode,
+          },
+        });
+      }
+
+      const response = await grokAi.createResponse({
+        apiKey,
+        baseUrl: grokBaseUrl(),
+        model: bot.response_model || settings.grok_default_response_model,
+        input: [
+          { role: 'system', content: botSystemPrompt(bot) },
+          { role: 'user', content: [{ type: 'input_text', text: prompt }] },
+        ],
+        maxOutputTokens: Math.min(intValue(bot.max_tokens, settings.grok_max_tokens, 1, 8000), 1200),
+        temperature: floatValue(bot.temperature, settings.grok_temperature, 0, 1),
+      });
+      const text = cleanText(stripBotSpeakerLabel(grokAi.extractResponseText(response), bot), 500);
+      res.json({
+        ok: true,
+        result: {
+          text,
+          latencyMs: Date.now() - startedAt,
+          model: bot.response_model || settings.grok_default_response_model,
+          mode,
+        },
+      });
+    } catch (error) {
+      res.status(400).json({ ok: false, error: error.message || 'Grok universal bot test failed' });
+    }
+  });
+
+  app.get('/api/admin/grok-universal-bots/:id(\\d+)/export', auth, adminOnly, (req, res) => {
+    const rawBot = grokBotByRequestId(req, res, { kind: 'universal' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
+    const payload = {
+      schema_version: AI_BOT_EXPORT_VERSION,
+      exported_at: new Date().toISOString(),
+      bot: {
+        provider: 'grok',
+        kind: 'universal',
+        name: bot.name,
+        mention: bot.mention,
+        enabled: bot.enabled,
+        response_model: bot.response_model,
+        summary_model: bot.summary_model,
+        image_model: bot.image_model,
+        image_aspect_ratio: bot.image_aspect_ratio,
+        image_resolution: bot.image_resolution,
+        allow_text: bot.allow_text,
+        allow_image_generate: bot.allow_image_generate,
+        allow_image_edit: bot.allow_image_edit,
+        temperature: bot.temperature,
+        max_tokens: bot.max_tokens,
+        style: bot.style,
+        tone: bot.tone,
+        behavior_rules: bot.behavior_rules,
+        speech_patterns: bot.speech_patterns,
+      },
+    };
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = `bananza-grok-universal-${safeFilenamePart(bot.mention || bot.name)}-${date}.json`;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(JSON.stringify(payload, null, 2));
+  });
+
+  app.post('/api/admin/grok-universal-bots/import', auth, adminOnly, async (req, res) => {
+    const source = req.body?.bot && typeof req.body.bot === 'object' ? req.body.bot : (req.body || {});
+    const warnings = [];
+    const settings = getGlobalSettings();
+    const requestedMention = normalizeMention(source.mention || source.name || 'bot');
+    const catalog = await getGrokModelCatalogCached();
+
+    let responseModel = cleanText(source.response_model || settings.grok_default_response_model, 160);
+    let summaryModel = cleanText(source.summary_model || settings.grok_default_summary_model, 160);
+    let imageModel = cleanText(source.image_model || settings.grok_default_image_model, 160);
+
+    if (catalog.source === 'live') {
+      if (responseModel && !catalog.response.includes(responseModel)) {
+        warnings.push(`Response model "${responseModel}" is not available; default model was used.`);
+        responseModel = settings.grok_default_response_model;
+      }
+      if (summaryModel && !catalog.summary.includes(summaryModel)) {
+        warnings.push(`Summary model "${summaryModel}" is not available; default model was used.`);
+        summaryModel = settings.grok_default_summary_model;
+      }
+      if (imageModel && !catalog.image.includes(imageModel)) {
+        warnings.push(`Image model "${imageModel}" is not available; default model was used.`);
+        imageModel = settings.grok_default_image_model;
+      }
+    } else if (catalog.error) {
+      warnings.push(`Model availability was not verified: ${catalog.error}`);
+    }
+
+    const input = normalizeBotInput({
+      ...(source || {}),
+      provider: 'grok',
+      kind: 'universal',
+      mention: requestedMention,
+      response_model: responseModel,
+      summary_model: summaryModel,
+      image_model: imageModel,
+    });
+    if (input.mention !== requestedMention) {
+      warnings.push(`Mention "@${requestedMention}" is already taken; imported as "@${input.mention}".`);
+    }
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, warnings, state: serializeGrokUniversalAdminState() });
   });
 
   return {
