@@ -143,6 +143,14 @@
   let pollVotePending = new Set();
   let pollClosePending = new Set();
   let pollVotersState = null;
+  const PULSE_INLINE_VOTER_LIMIT = 5;
+  const PULSE_VOTER_POPOVER_AUTOHIDE_MS = 5000;
+  const PULSE_PREVIEW_AVATAR_COLORS = Object.freeze(['#6f7f95', '#758cab', '#6a879b', '#8276a8', '#748b85']);
+  let pulseInlineVotersCache = new Map();
+  let pulseInlineVotersPending = new Map();
+  let pulseInlineVotersRevision = new Map();
+  let expandedPulseVoterOptions = new Set();
+  let activePulseVoterPopover = null;
   let outboxObjectUrls = new Map();
   let outboxSending = new Set();
   let retryLayoutTimer = null;
@@ -1342,6 +1350,155 @@
     return Boolean(normalizePoll(msg?.poll));
   }
 
+  function isPulsePoll(pollOrMessage) {
+    const poll = pollOrMessage?.poll ? normalizePoll(pollOrMessage.poll) : normalizePoll(pollOrMessage);
+    return normalizePollStyle(poll?.style) === 'pulse';
+  }
+
+  function pulseInlineVotersCacheKey(messageId, optionId) {
+    return `${Number(messageId || 0)}:${Number(optionId || 0)}`;
+  }
+
+  function getPulseInlineVotersRevision(messageId) {
+    return Number(pulseInlineVotersRevision.get(Number(messageId || 0)) || 0);
+  }
+
+  function invalidatePulseInlineVotersForMessage(messageId) {
+    const resolvedMessageId = Number(messageId || 0);
+    if (!resolvedMessageId) return;
+    const prefix = `${resolvedMessageId}:`;
+    pulseInlineVotersRevision.set(resolvedMessageId, getPulseInlineVotersRevision(resolvedMessageId) + 1);
+    [...pulseInlineVotersCache.keys()].forEach((key) => {
+      if (key.startsWith(prefix)) pulseInlineVotersCache.delete(key);
+    });
+  }
+
+  function getPulseVoterDisplayName(voter) {
+    const displayName = String(voter?.display_name || '').trim();
+    if (displayName) return displayName;
+    const username = String(voter?.username || '').trim();
+    if (username) return `@${username}`;
+    return 'User';
+  }
+
+  function isPulseVoterOptionExpanded(messageId, optionId) {
+    return expandedPulseVoterOptions.has(pulseInlineVotersCacheKey(messageId, optionId));
+  }
+
+  function getPulseVoterPopoverElement(popover = activePulseVoterPopover) {
+    if (!messagesEl || !popover) return null;
+    const key = pulseInlineVotersCacheKey(popover.messageId, popover.optionId);
+    const slot = messagesEl.querySelector(`[data-poll-inline-voters="${key}"]`);
+    if (!(slot instanceof Element)) return null;
+    return slot.querySelector(`[data-poll-voter-popover][data-poll-voter-id="${Number(popover.voterId || 0)}"]`);
+  }
+
+  function schedulePulseVoterPopoverAutoHide(popover = activePulseVoterPopover) {
+    if (!popover) return;
+    clearTimeout(popover.autoHideTimer);
+    popover.autoHideTimer = setTimeout(() => {
+      if (activePulseVoterPopover !== popover) return;
+      clearActivePulseVoterPopover();
+    }, PULSE_VOTER_POPOVER_AUTOHIDE_MS);
+  }
+
+  function mountPulseVoterPopover(popover = activePulseVoterPopover) {
+    if (!popover || activePulseVoterPopover !== popover) return;
+    const el = getPulseVoterPopoverElement(popover);
+    if (!(el instanceof HTMLElement)) return;
+    schedulePulseVoterPopoverAutoHide(popover);
+    openFloatingSurface(el);
+  }
+
+  function clearActivePulseVoterPopover({ skipRefresh = false, immediate = false } = {}) {
+    const current = activePulseVoterPopover;
+    if (!current) return;
+    clearTimeout(current.autoHideTimer);
+    current.autoHideTimer = null;
+    const finalize = () => {
+      clearTimeout(current.autoHideTimer);
+      current.autoHideTimer = null;
+      if (activePulseVoterPopover === current) activePulseVoterPopover = null;
+      if (!skipRefresh) refreshPulseInlineVoterSlots(current.messageId, current.optionId);
+    };
+    const el = getPulseVoterPopoverElement(current);
+    if (!(el instanceof HTMLElement) || skipRefresh) {
+      finalize();
+      return;
+    }
+    closeFloatingSurface(el, { immediate, onAfterClose: finalize });
+  }
+
+  function clearActivePulseVoterPopoverForMessage(messageId, { skipRefresh = false } = {}) {
+    if (!activePulseVoterPopover || Number(activePulseVoterPopover.messageId) !== Number(messageId || 0)) return;
+    clearActivePulseVoterPopover({ skipRefresh });
+  }
+
+  function bindPulseInlineVoterControls(scope, messageId) {
+    const resolvedMessageId = Number(messageId || 0);
+    if (!(scope instanceof Element) || !resolvedMessageId) return;
+    scope.querySelectorAll('[data-poll-voter-avatar]').forEach((btn) => {
+      if (btn.dataset.boundPulseVoterAvatar === '1') return;
+      btn.dataset.boundPulseVoterAvatar = '1';
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        togglePulseVoterPopover(
+          resolvedMessageId,
+          Number(btn.dataset.pollOptionId || 0),
+          Number(btn.dataset.pollVoterId || btn.dataset.pollVoterAvatar || 0)
+        );
+      });
+    });
+    scope.querySelectorAll('[data-poll-voter-more]').forEach((btn) => {
+      if (btn.dataset.boundPulseVoterMore === '1') return;
+      btn.dataset.boundPulseVoterMore = '1';
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        togglePulseVoterOptionExpanded(resolvedMessageId, Number(btn.dataset.pollOptionId || 0));
+      });
+    });
+  }
+
+  function togglePulseVoterOptionExpanded(messageId, optionId) {
+    const resolvedMessageId = Number(messageId || 0);
+    const resolvedOptionId = Number(optionId || 0);
+    if (!resolvedMessageId || !resolvedOptionId) return;
+    const key = pulseInlineVotersCacheKey(resolvedMessageId, resolvedOptionId);
+    const next = new Set(expandedPulseVoterOptions);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    expandedPulseVoterOptions = next;
+    clearActivePulseVoterPopover({ skipRefresh: true });
+    refreshPulseInlineVoterSlots(resolvedMessageId, resolvedOptionId);
+  }
+
+  function togglePulseVoterPopover(messageId, optionId, voterId) {
+    const resolvedMessageId = Number(messageId || 0);
+    const resolvedOptionId = Number(optionId || 0);
+    const resolvedVoterId = Number(voterId || 0);
+    if (!resolvedMessageId || !resolvedOptionId || !resolvedVoterId) return;
+    const previous = activePulseVoterPopover;
+    const isSame =
+      previous &&
+      Number(previous.messageId) === resolvedMessageId &&
+      Number(previous.optionId) === resolvedOptionId &&
+      Number(previous.voterId) === resolvedVoterId;
+    if (isSame) {
+      clearActivePulseVoterPopover();
+      return;
+    }
+    if (previous) {
+      const sameSlot =
+        Number(previous.messageId) === resolvedMessageId &&
+        Number(previous.optionId) === resolvedOptionId;
+      clearActivePulseVoterPopover({ skipRefresh: sameSlot, immediate: true });
+    }
+    const next = { messageId: resolvedMessageId, optionId: resolvedOptionId, voterId: resolvedVoterId, autoHideTimer: null };
+    activePulseVoterPopover = next;
+    refreshPulseInlineVoterSlots(resolvedMessageId, resolvedOptionId);
+    mountPulseVoterPopover(next);
+  }
+
   function formatRelativeDuration(targetIso) {
     if (!targetIso) return '';
     const normalized = String(targetIso).includes('T') ? String(targetIso) : String(targetIso).replace(' ', 'T');
@@ -1484,6 +1641,9 @@
     if (!pollComposerPreview) return;
     const previewMessage = buildPollComposerPreviewMessage();
     const styleMeta = pollStyleMeta(previewMessage.poll?.style);
+    const questionClass = isPulsePoll(previewMessage.poll)
+      ? 'poll-composer-preview-question poll-question-block'
+      : 'poll-composer-preview-question';
     pollComposerPreview.innerHTML = `
       <div class="poll-composer-preview-shell">
         <div class="poll-composer-preview-meta">
@@ -1491,7 +1651,7 @@
           <span class="poll-composer-preview-note">${esc(styleMeta.note)}</span>
         </div>
         <div class="poll-composer-preview-message">
-          <div class="poll-composer-preview-question">${esc(previewMessage.text || '')}</div>
+          <div class="${questionClass}">${esc(previewMessage.text || '')}</div>
           ${renderPollCard(previewMessage, { preview: true })}
         </div>
       </div>
@@ -1598,6 +1758,7 @@
     row.__messageData = { ...nextMsg };
     row.classList.toggle('poll-message', Boolean(!nextMsg.is_deleted && nextMsg.poll));
     bindPollControls(row);
+    hydratePulseInlineVoters(row);
     return true;
   }
 
@@ -1606,6 +1767,10 @@
     if (!normalizedPoll) return;
     const id = Number(messageId || 0);
     if (!id) return;
+    clearActivePulseVoterPopoverForMessage(id, { skipRefresh: true });
+    if (isPulsePoll(normalizedPoll) && normalizedPoll.show_voters) {
+      invalidatePulseInlineVotersForMessage(id);
+    }
     const resolvedChatId = Number(chatId || currentChatId || 0);
     if (resolvedChatId && window.messageCache?.patchMessage) {
       window.messageCache.patchMessage(resolvedChatId, id, { poll: normalizedPoll }).catch(() => {});
@@ -1740,6 +1905,7 @@
           voteCount,
           percentage: totalVotes > 0 ? Math.round((voteCount / totalVotes) * 100) : 0,
           voteLabel: voteCount === 1 ? '1 vote' : `${voteCount} votes`,
+          voterLabel: voteCount === 1 ? '1 voter' : `${voteCount} voters`,
           mark: poll.allows_multiple ? '✓' : '●',
         };
       }),
@@ -1786,30 +1952,211 @@
     >${label}</button>`;
   }
 
+  function renderPulseInlineVoterAvatar(voter, { placeholder = false, messageId = 0, optionId = 0 } = {}) {
+    const background = esc(voter?.avatar_color || '#6f7f95');
+    const name = getPulseVoterDisplayName(voter);
+    const title = placeholder ? '' : esc(name);
+    const avatarHtml = !placeholder && voter?.avatar_url
+      ? `<span class="poll-pulse-voter-avatar" style="--poll-inline-avatar-bg:${background};" title="${title}">
+          <img class="avatar-img" src="${esc(voter.avatar_url)}" alt="${title}" loading="lazy" onerror="this.remove()">
+        </span>`
+      : `<span class="poll-pulse-voter-avatar${placeholder ? ' poll-pulse-voter-avatar--placeholder' : ''}" style="--poll-inline-avatar-bg:${background};"${title ? ` title="${title}"` : ''}>${placeholder ? '' : esc(initials(voter?.display_name || voter?.username || 'V'))}</span>`;
+    if (placeholder) {
+      return `<span class="poll-pulse-voter-entry">${avatarHtml}</span>`;
+    }
+    const voterId = Number(voter?.id || 0);
+    const popoverOpen = Boolean(
+      activePulseVoterPopover &&
+      Number(activePulseVoterPopover.messageId) === Number(messageId) &&
+      Number(activePulseVoterPopover.optionId) === Number(optionId) &&
+      Number(activePulseVoterPopover.voterId) === voterId
+    );
+    return `
+      <span class="poll-pulse-voter-entry">
+        <button
+          type="button"
+          class="poll-pulse-voter-avatar-btn"
+          data-poll-voter-avatar="${voterId}"
+          data-poll-option-id="${Number(optionId)}"
+          data-poll-voter-id="${voterId}"
+          aria-label="${title}"
+          title="${title}"
+        >
+          ${avatarHtml}
+        </button>
+        ${popoverOpen ? `<span class="poll-pulse-voter-popover hidden" data-poll-voter-popover data-poll-option-id="${Number(optionId)}" data-poll-voter-id="${voterId}">${esc(name)}</span>` : ''}
+      </span>
+    `;
+  }
+
+  function renderPulseInlineVoterStack(voters = [], totalCount = 0, { preview = false, messageId = 0, optionId = 0 } = {}) {
+    const resolvedTotal = Math.max(0, Number(totalCount || voters.length || 0));
+    if (resolvedTotal <= 0) return '';
+    const overflow = Math.max(0, resolvedTotal - PULSE_INLINE_VOTER_LIMIT);
+    const canExpand = overflow > 0;
+    const expanded = !preview && canExpand && isPulseVoterOptionExpanded(messageId, optionId);
+    const visible = preview || !expanded
+      ? (Array.isArray(voters) ? voters : []).slice(0, PULSE_INLINE_VOTER_LIMIT)
+      : (Array.isArray(voters) ? voters : []);
+    const label = resolvedTotal === 1 ? '1 voter' : `${resolvedTotal} voters`;
+    const toggleHtml = canExpand
+      ? (
+        preview
+          ? `<span class="poll-pulse-voter-more is-static" aria-hidden="true">+${overflow}</span>`
+          : `<button
+              type="button"
+              class="poll-pulse-voter-more${expanded ? ' is-expanded' : ''}"
+              data-poll-voter-more="${pulseInlineVotersCacheKey(messageId, optionId)}"
+              data-poll-option-id="${Number(optionId)}"
+              aria-expanded="${expanded ? 'true' : 'false'}"
+              aria-label="${expanded ? `Collapse ${overflow} extra voters` : `Show ${overflow} more voters`}"
+            >${expanded ? `&minus;${overflow}` : `+${overflow}`}</button>`
+      )
+      : '';
+    return `
+      <span class="poll-pulse-voter-stack${expanded ? ' is-expanded' : ''}" aria-label="${esc(label)}">
+        ${visible.map((voter) => renderPulseInlineVoterAvatar(voter, { placeholder: preview || !!voter?.placeholder, messageId, optionId })).join('')}
+        ${toggleHtml}
+      </span>
+    `;
+  }
+
+  function buildPulsePreviewVoters(totalCount = 0) {
+    const resolvedTotal = Math.max(0, Number(totalCount || 0));
+    return Array.from({ length: Math.min(resolvedTotal, PULSE_INLINE_VOTER_LIMIT) }, (_, index) => ({
+      placeholder: true,
+      avatar_color: PULSE_PREVIEW_AVATAR_COLORS[index % PULSE_PREVIEW_AVATAR_COLORS.length],
+    }));
+  }
+
+  function renderPulseInlineVoterSummaryContent({ messageId = 0, poll = null, option = null, preview = false } = {}) {
+    const voteCount = Math.max(0, Number((option?.voteCount ?? option?.vote_count) || 0));
+    const fallbackLabel = esc(option?.voterLabel || (voteCount === 1 ? '1 voter' : `${voteCount} voters`));
+    if (!poll || !option) return `<span class="poll-pulse-voter-count">${fallbackLabel}</span>`;
+    if (!poll.show_voters) {
+      return `<span class="poll-pulse-voter-count">${fallbackLabel}</span>`;
+    }
+    if (preview) {
+      const previewVoters = buildPulsePreviewVoters(voteCount);
+      return previewVoters.length
+        ? renderPulseInlineVoterStack(previewVoters, voteCount, { preview: true, messageId, optionId: option.id })
+        : `<span class="poll-pulse-voter-count">${fallbackLabel}</span>`;
+    }
+    const cachedVoters = pulseInlineVotersCache.get(pulseInlineVotersCacheKey(messageId, option.id));
+    if (Array.isArray(cachedVoters) && cachedVoters.length) {
+      return renderPulseInlineVoterStack(cachedVoters, voteCount, { messageId, optionId: option.id });
+    }
+    return `<span class="poll-pulse-voter-count">${fallbackLabel}</span>`;
+  }
+
+  function renderPulseInlineVoterSummary(state, option) {
+    const messageId = state.preview ? 0 : state.messageId;
+    const key = state.preview ? '' : pulseInlineVotersCacheKey(messageId, option.id);
+    return `<span class="poll-pulse-voter-summary"${key ? ` data-poll-inline-voters="${key}" data-poll-option-id="${Number(option.id)}"` : ''}>
+      ${renderPulseInlineVoterSummaryContent({ messageId, poll: state.poll, option, preview: state.preview })}
+    </span>`;
+  }
+
+  function refreshPulseInlineVoterSlots(messageId, optionId = null) {
+    if (!messagesEl) return;
+    const resolvedMessageId = Number(messageId || 0);
+    if (!resolvedMessageId) return;
+    const selector = optionId
+      ? `[data-poll-inline-voters="${pulseInlineVotersCacheKey(resolvedMessageId, optionId)}"]`
+      : `[data-poll-inline-voters^="${resolvedMessageId}:"]`;
+    messagesEl.querySelectorAll(selector).forEach((slot) => {
+      const row = slot.closest('.msg-row');
+      const poll = normalizePoll(row?.__messageData?.poll);
+      const resolvedOptionId = Number(optionId || slot.dataset.pollOptionId || 0);
+      const option = (poll?.options || []).find((item) => Number(item.id) === resolvedOptionId);
+      if (!poll || !isPulsePoll(poll) || !option) return;
+      slot.innerHTML = renderPulseInlineVoterSummaryContent({
+        messageId: resolvedMessageId,
+        poll,
+        option,
+        preview: false,
+      });
+      bindPulseInlineVoterControls(slot, resolvedMessageId);
+      if (
+        activePulseVoterPopover &&
+        Number(activePulseVoterPopover.messageId) === resolvedMessageId &&
+        Number(activePulseVoterPopover.optionId) === resolvedOptionId
+      ) {
+        mountPulseVoterPopover(activePulseVoterPopover);
+      }
+    });
+  }
+
+  function ensurePulseInlineVoters(messageId, optionId) {
+    const resolvedMessageId = Number(messageId || 0);
+    const resolvedOptionId = Number(optionId || 0);
+    if (!resolvedMessageId || !resolvedOptionId) return Promise.resolve([]);
+    const cacheKey = pulseInlineVotersCacheKey(resolvedMessageId, resolvedOptionId);
+    if (pulseInlineVotersCache.has(cacheKey)) {
+      refreshPulseInlineVoterSlots(resolvedMessageId, resolvedOptionId);
+      return Promise.resolve(pulseInlineVotersCache.get(cacheKey) || []);
+    }
+    const revision = getPulseInlineVotersRevision(resolvedMessageId);
+    const pendingKey = `${cacheKey}:${revision}`;
+    if (pulseInlineVotersPending.has(pendingKey)) {
+      return pulseInlineVotersPending.get(pendingKey);
+    }
+    const request = api(`/api/messages/${resolvedMessageId}/poll-voters?optionId=${resolvedOptionId}`)
+      .then((data) => {
+        const voters = Array.isArray(data?.voters) ? data.voters : [];
+        if (getPulseInlineVotersRevision(resolvedMessageId) !== revision) return voters;
+        pulseInlineVotersCache.set(cacheKey, voters);
+        refreshPulseInlineVoterSlots(resolvedMessageId, resolvedOptionId);
+        return voters;
+      })
+      .catch(() => [])
+      .finally(() => {
+        pulseInlineVotersPending.delete(pendingKey);
+      });
+    pulseInlineVotersPending.set(pendingKey, request);
+    return request;
+  }
+
+  function hydratePulseInlineVoters(row) {
+    const messageId = Number(row?.dataset?.msgId || row?.__messageData?.id || 0);
+    const poll = normalizePoll(row?.__messageData?.poll);
+    if (!row || !messageId || !poll || !isPulsePoll(poll) || !poll.show_voters) return;
+    if (!row.isConnected) {
+      if (!row.__pulseInlineHydrateScheduled) {
+        row.__pulseInlineHydrateScheduled = true;
+        requestAnimationFrame(() => {
+          row.__pulseInlineHydrateScheduled = false;
+          hydratePulseInlineVoters(row);
+        });
+      }
+      return;
+    }
+    (poll.options || []).forEach((option) => {
+      if (Math.max(0, Number(option.vote_count || 0)) <= 0) return;
+      ensurePulseInlineVoters(messageId, Number(option.id)).catch(() => {});
+    });
+  }
+
   function renderPulsePollCard(state) {
     const optionsHtml = state.options.map((option) => `
       <div class="poll-pulse-option${option.selected ? ' selected' : ''}" style="--poll-option-accent:${option.accentVar};">
         <span class="poll-pulse-option-glow"></span>
-        <button
-          type="button"
+        <div
           class="poll-pulse-option-main"
           data-poll-vote="${state.messageId}"
           data-poll-option-id="${Number(option.id)}"
-          ${state.poll.is_closed || state.interactionLocked ? 'disabled' : ''}
+          role="button"
+          tabindex="${state.poll.is_closed || state.interactionLocked ? '-1' : '0'}"
+          aria-disabled="${state.poll.is_closed || state.interactionLocked ? 'true' : 'false'}"
         >
-          <span class="poll-pulse-option-row">
-            <span class="poll-pulse-option-kicker">Option ${option.index + 1}</span>
-            <span class="poll-pulse-option-percent">${option.percentage}%</span>
-          </span>
           <span class="poll-pulse-option-text">${esc(option.text)}</span>
-          <span class="poll-pulse-option-bar"><i style="width:${option.percentage}%"></i></span>
-          <span class="poll-pulse-option-row poll-pulse-option-row--bottom">
-            <span class="poll-pulse-option-votes">${option.voteLabel}</span>
-            <span class="poll-pulse-option-mark${state.poll.allows_multiple ? ' multi' : ''}">${option.selected ? option.mark : ''}</span>
+          <span class="poll-pulse-progress" aria-hidden="true">
+            <span class="poll-pulse-progress-track">
+              <span class="poll-pulse-progress-fill" style="width:${option.percentage}%"></span>
+              <span class="poll-pulse-progress-percent">${option.percentage}%</span>
+            </span>
           </span>
-        </button>
-        <div class="poll-pulse-option-footer">
-          ${renderPollVotersButton(state, option)}
+          ${renderPulseInlineVoterSummary(state, option)}
         </div>
       </div>
     `).join('');
@@ -7511,6 +7858,7 @@
     pauseCurrentChatMediaPlayback();
     hideFloatingMessageActions({ immediate: true });
     hideMentionPicker();
+    clearActivePulseVoterPopover({ skipRefresh: true });
     hideAvatarUserMenu();
     clearReply();
     if (editTo) clearEdit({ clearInput: true });
@@ -10602,6 +10950,7 @@
       pauseCurrentChatMediaPlayback();
     }
     hideMentionPicker();
+    clearActivePulseVoterPopover({ skipRefresh: true });
     hideAvatarUserMenu();
     hideChatContextMenu({ immediate: true });
     hideFloatingMessageActions({ immediate: true });
@@ -11366,11 +11715,20 @@
   function bindPollControls(row) {
     const messageId = Number(row?.dataset?.msgId || row?.__messageData?.id || 0);
     if (!row || !messageId) return;
-    row.querySelectorAll('[data-poll-vote]').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
+    row.querySelectorAll('[data-poll-vote]').forEach((control) => {
+      const activateVote = (e) => {
+        if (control.matches(':disabled') || control.getAttribute('aria-disabled') === 'true') return;
         e.stopPropagation();
-        togglePollVote(messageId, Number(btn.dataset.pollOptionId || 0));
-      });
+        togglePollVote(messageId, Number(control.dataset.pollOptionId || 0));
+      };
+      control.addEventListener('click', activateVote);
+      if (!(control instanceof HTMLButtonElement)) {
+        control.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return;
+          e.preventDefault();
+          activateVote(e);
+        });
+      }
     });
 
     row.querySelectorAll('[data-poll-voters]').forEach((btn) => {
@@ -11379,6 +11737,8 @@
         openPollVotersModal(messageId, Number(btn.dataset.pollOptionId || 0));
       });
     });
+
+    bindPulseInlineVoterControls(row, messageId);
 
     const pollCloseBtn = row.querySelector('[data-poll-close]');
     if (pollCloseBtn) {
@@ -11393,6 +11753,8 @@
     applyOwnReadStateToMessage(msg, msg?.chat_id || msg?.chatId || currentChatId);
     const isOwn = msg.user_id === currentUser.id;
     const isClientMessage = isClientSideMessage(msg);
+    const normalizedPoll = normalizePoll(msg?.poll);
+    const isPulsePollMessage = Boolean(!msg.is_deleted && normalizedPoll && isPulsePoll(normalizedPoll));
     const isMediaMessage = Boolean(
       !msg.is_deleted &&
       msg.file_id &&
@@ -11485,7 +11847,8 @@
 
       // Text
       if (msg.text) {
-        html += `<div class="msg-text">${isEmojiOnly ? esc(msg.text.trim()) : renderMessageText(msg.text, msg.mentions)}</div>`;
+        const textClasses = isPulsePollMessage ? 'msg-text poll-question-block' : 'msg-text';
+        html += `<div class="${textClasses}">${isEmojiOnly ? esc(msg.text.trim()) : renderMessageText(msg.text, msg.mentions)}</div>`;
       }
 
       if (msg.poll) {
@@ -11594,6 +11957,7 @@
     }
 
     bindPollControls(row);
+    hydratePulseInlineVoters(row);
 
     const pinBtn = row.querySelector('.msg-pin-btn');
     if (pinBtn) {
@@ -16000,6 +16364,11 @@
       if (!menu || menu.classList.contains('hidden')) return;
       if (menu.contains(e.target) || e.target.closest('.msg-group-avatar')) return;
       hideAvatarUserMenu();
+    });
+    document.addEventListener('pointerdown', (e) => {
+      if (!activePulseVoterPopover) return;
+      if (e.target.closest('[data-poll-voter-avatar], [data-poll-voter-more], [data-poll-voter-popover]')) return;
+      clearActivePulseVoterPopover();
     });
 
     // File attach
