@@ -1524,6 +1524,19 @@
     return relative ? `Ends in ${relative}` : `Ends ${formatTime(poll.closes_at)}`;
   }
 
+  function getPollCompactFooterMeta(poll) {
+    if (!poll) return null;
+    if (poll.is_closed) {
+      return { label: 'Closed', tone: 'closed' };
+    }
+    if (!poll.closes_at) return null;
+    const relative = formatRelativeDuration(poll.closes_at);
+    return {
+      label: relative ? `Ends in ${relative}` : `Ends ${formatTime(poll.closes_at)}`,
+      tone: 'deadline',
+    };
+  }
+
   function canClosePollMessage(msg) {
     const poll = normalizePoll(msg?.poll);
     if (!currentUser || !poll || poll.is_closed) return false;
@@ -1927,18 +1940,21 @@
     return `conic-gradient(${segments.join(', ')})`;
   }
 
-  function renderPollInfoChips(state, variant = '') {
-    const suffix = variant ? ` ${variant}` : '';
-    return [
-      `${state.poll.total_voters || 0} ${Number(state.poll.total_voters || 0) === 1 ? 'voter' : 'voters'}`,
-      state.poll.show_voters ? 'Visible votes' : 'Anonymous votes',
-      formatPollDeadline(state.poll),
-    ].map((label) => `<span class="poll-info-chip${suffix}">${esc(label)}</span>`).join('');
-  }
-
   function renderPollCloseButton(state, extraClass = '') {
     if (!state.canClose) return '';
     return `<button type="button" class="poll-close-btn${extraClass ? ` ${extraClass}` : ''}" data-poll-close="${state.messageId}" ${state.poll.is_closed || state.interactionLocked ? 'disabled' : ''}>Close</button>`;
+  }
+
+  function renderPollCompactFooter(state, extraClass = '') {
+    const meta = getPollCompactFooterMeta(state?.poll);
+    const closeButton = renderPollCloseButton(state);
+    if (!meta && !closeButton) return '';
+    return `
+      <div class="poll-card-footer poll-card-footer--minimal${extraClass ? ` ${extraClass}` : ''}">
+        ${meta ? `<span class="poll-card-footer-meta is-${meta.tone}">${esc(meta.label)}</span>` : ''}
+        ${closeButton}
+      </div>
+    `;
   }
 
   function renderPollVotersButton(state, option, label = 'View voters') {
@@ -2163,20 +2179,8 @@
 
     return `
       <div class="poll-card poll-card--pulse${state.preview ? ' is-preview' : ''}${state.liveUpdate ? ' is-live-update' : ''}">
-        <div class="poll-card-header poll-card-header--hero">
-          <div class="poll-card-heading">
-            <span class="poll-status-badge${state.poll.is_closed ? ' closed' : ''}">${state.poll.is_closed ? 'Closed' : 'Open'}</span>
-            <div class="poll-card-heading-copy">
-              <strong>${state.poll.allows_multiple ? 'Multiple choice' : 'Single choice'}</strong>
-              <small>${state.totalVotes || 0} total votes</small>
-            </div>
-          </div>
-          ${renderPollCloseButton(state)}
-        </div>
-        <div class="poll-info-chip-row">
-          ${renderPollInfoChips(state, 'hero')}
-        </div>
         <div class="poll-pulse-options">${optionsHtml}</div>
+        ${renderPollCompactFooter(state)}
       </div>
     `;
   }
@@ -2212,18 +2216,8 @@
 
     return `
       <div class="poll-card poll-card--stack${state.preview ? ' is-preview' : ''}${state.liveUpdate ? ' is-live-update' : ''}">
-        <div class="poll-card-header">
-          <span class="poll-status-badge${state.poll.is_closed ? ' closed' : ''}">${state.poll.is_closed ? 'Closed' : 'Open'}</span>
-          ${renderPollCloseButton(state)}
-        </div>
-        <div class="poll-stack-subhead">
-          <span>${state.poll.allows_multiple ? 'Multi-select poll' : 'Single-select poll'}</span>
-          <span>${state.totalVotes || 0} votes</span>
-        </div>
         <div class="poll-stack-options">${optionsHtml}</div>
-        <div class="poll-card-footer poll-card-footer--stack">
-          ${renderPollInfoChips(state)}
-        </div>
+        ${renderPollCompactFooter(state)}
       </div>
     `;
   }
@@ -2256,35 +2250,16 @@
 
     return `
       <div class="poll-card poll-card--orbit${state.preview ? ' is-preview' : ''}${state.liveUpdate ? ' is-live-update' : ''}">
-        <div class="poll-card-header poll-card-header--orbit">
-          <span class="poll-status-badge${state.poll.is_closed ? ' closed' : ''}">${state.poll.is_closed ? 'Closed' : 'Open'}</span>
-          ${renderPollCloseButton(state)}
-        </div>
-        <div class="poll-orbit-hero">
+        <div class="poll-orbit-hero poll-orbit-hero--solo">
           <div class="poll-orbit-chart" style="--poll-orbit-chart:${orbitGradient};">
             <div class="poll-orbit-chart-center">
               <strong>${state.totalVotes || 0}</strong>
               <small>${state.totalVotes === 1 ? 'vote' : 'votes'}</small>
             </div>
           </div>
-          <div class="poll-orbit-summary">
-            <div class="poll-orbit-meta-row">
-              <span class="poll-orbit-stat">
-                <strong>${state.poll.total_voters || 0}</strong>
-                <small>voters</small>
-              </span>
-              <span class="poll-orbit-stat">
-                <strong>${state.poll.show_voters ? 'Public' : 'Private'}</strong>
-                <small>visibility</small>
-              </span>
-              <span class="poll-orbit-stat wide">
-                <strong>${esc(formatPollDeadline(state.poll))}</strong>
-                <small>deadline</small>
-              </span>
-            </div>
-          </div>
         </div>
         <div class="poll-orbit-options">${optionsHtml}</div>
+        ${renderPollCompactFooter(state)}
       </div>
     `;
   }
