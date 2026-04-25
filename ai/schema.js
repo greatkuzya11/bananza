@@ -36,6 +36,10 @@ function initAiSchema(db) {
       allow_image_generate INTEGER DEFAULT 0,
       allow_image_edit INTEGER DEFAULT 0,
       allow_document INTEGER DEFAULT 0,
+      allow_poll_create INTEGER DEFAULT 0,
+      allow_poll_vote INTEGER DEFAULT 0,
+      allow_react INTEGER DEFAULT 0,
+      allow_pin INTEGER DEFAULT 0,
       image_quality TEXT DEFAULT '',
       image_background TEXT DEFAULT '',
       image_output_format TEXT DEFAULT '',
@@ -53,6 +57,7 @@ function initAiSchema(db) {
       mode TEXT DEFAULT 'simple' CHECK(mode IN ('simple','hybrid')),
       hot_context_limit INTEGER DEFAULT 50,
       trigger_mode TEXT DEFAULT 'mention_reply',
+      auto_react_on_mention INTEGER DEFAULT 0,
       updated_at TEXT DEFAULT (datetime('now')),
       PRIMARY KEY (chat_id, bot_id)
     );
@@ -276,10 +281,15 @@ function initAiSchema(db) {
   addColumnIfMissing(db, 'ai_bots', 'allow_image_generate', 'allow_image_generate INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'ai_bots', 'allow_image_edit', 'allow_image_edit INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'ai_bots', 'allow_document', 'allow_document INTEGER DEFAULT 0');
+  addColumnIfMissing(db, 'ai_bots', 'allow_poll_create', 'allow_poll_create INTEGER DEFAULT 0');
+  addColumnIfMissing(db, 'ai_bots', 'allow_poll_vote', 'allow_poll_vote INTEGER DEFAULT 0');
+  addColumnIfMissing(db, 'ai_bots', 'allow_react', 'allow_react INTEGER DEFAULT 0');
+  addColumnIfMissing(db, 'ai_bots', 'allow_pin', 'allow_pin INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'ai_bots', 'image_quality', "image_quality TEXT DEFAULT ''");
   addColumnIfMissing(db, 'ai_bots', 'image_background', "image_background TEXT DEFAULT ''");
   addColumnIfMissing(db, 'ai_bots', 'image_output_format', "image_output_format TEXT DEFAULT ''");
   addColumnIfMissing(db, 'ai_bots', 'document_default_format', "document_default_format TEXT DEFAULT 'md'");
+  addColumnIfMissing(db, 'ai_chat_bots', 'auto_react_on_mention', 'auto_react_on_mention INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'users', 'is_ai_bot', 'is_ai_bot INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'messages', 'ai_generated', 'ai_generated INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'messages', 'ai_bot_id', 'ai_bot_id INTEGER DEFAULT NULL');

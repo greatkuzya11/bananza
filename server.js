@@ -21,6 +21,7 @@ const { createPushFeature } = require('./push');
 const { createSoundSettingsFeature } = require('./soundSettings');
 const { createAiBotFeature } = require('./ai');
 const { createPollService, POLL_CLOSE_PRESETS, toDbDate } = require('./polls');
+const { createMessageActionsService } = require('./messageActions');
 const { createVideoNoteFeature } = require('./videoNotes');
 const { createVideoNoteStorage } = require('./videoNotes/storage');
 
@@ -274,6 +275,24 @@ const pollFeature = createPollService({
   db,
   sendToUser,
 });
+const messageActions = createMessageActionsService({
+  db,
+  pollFeature,
+  hydrateMessageById: (messageId, viewerUserId) => hydrateMessageById(messageId, viewerUserId),
+  saveMessageMentions: (messageId, chatId, text) => saveMessageMentions(messageId, chatId, text),
+  broadcastToChatAll,
+  notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),
+  notifyReaction: (payload) => pushFeature.notifyReaction(payload),
+  notifyPinCreated: (payload) => pushFeature.notifyPinCreated(payload),
+  onMessagePublished: (message) => handleChatListMessageCreated(message),
+  recordPinEvent,
+  broadcastPinsUpdated,
+  getChatPinPayload,
+  isChatMember,
+  isNotesChatRow,
+  normalizePollPayload,
+  isValidReactionEmoji,
+});
 
 let aiBotFeature = null;
 const videoNoteStorage = createVideoNoteStorage({
@@ -369,6 +388,7 @@ aiBotFeature = createAiBotFeature({
   fetchPreview,
   notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),
   onMessagePublished: (message) => handleChatListMessageCreated(message),
+  messageActions,
 });
 
 const messageByIdStmt = db.prepare(`
@@ -429,6 +449,10 @@ const mentionTargetsStmt = db.prepare(`
     ab.allow_image_generate as bot_allow_image_generate,
     ab.allow_image_edit as bot_allow_image_edit,
     ab.allow_document as bot_allow_document,
+    ab.allow_poll_create as bot_allow_poll_create,
+    ab.allow_poll_vote as bot_allow_poll_vote,
+    ab.allow_react as bot_allow_react,
+    ab.allow_pin as bot_allow_pin,
     ab.document_default_format as bot_document_default_format
   FROM chat_members cm
   JOIN users u ON u.id=cm.user_id
@@ -584,6 +608,10 @@ function mentionPayload(row) {
     allow_image_generate: isAiBot ? Number(row.bot_allow_image_generate) !== 0 : false,
     allow_image_edit: isAiBot ? Number(row.bot_allow_image_edit) !== 0 : false,
     allow_document: isAiBot ? Number(row.bot_allow_document) !== 0 : false,
+    allow_poll_create: isAiBot ? Number(row.bot_allow_poll_create) !== 0 : false,
+    allow_poll_vote: isAiBot ? Number(row.bot_allow_poll_vote) !== 0 : false,
+    allow_react: isAiBot ? Number(row.bot_allow_react) !== 0 : false,
+    allow_pin: isAiBot ? Number(row.bot_allow_pin) !== 0 : false,
     document_default_format: row.bot_document_default_format || '',
     avatar_color: row.avatar_color,
     avatar_url: row.avatar_url,
@@ -1848,17 +1876,28 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
     return res.status(400).json({ error: 'Message too long' });
   if (fileId && !db.prepare('SELECT 1 FROM files WHERE id=?').get(fileId))
     return res.status(400).json({ error: 'File not found' });
-  let poll = null;
-  try {
-    poll = rawPoll ? normalizePollPayload(rawPoll) : null;
-  } catch (error) {
-    return res.status(error.status || 400).json({ error: error.message || 'Invalid poll payload' });
-  }
-  if (!cleanText && !fileId) return res.status(400).json({ error: 'Empty message' });
-  if (poll) {
-    if (isNotesChatRow(chat)) return res.status(400).json({ error: 'Polls are not available in notes chat' });
-    if (!cleanText) return res.status(400).json({ error: 'Poll question is required' });
-    if (fileId) return res.status(400).json({ error: 'Poll message cannot include files' });
+  const hasPoll = rawPoll != null;
+  if (!cleanText && !fileId && !hasPoll) return res.status(400).json({ error: 'Empty message' });
+  if (hasPoll && fileId) return res.status(400).json({ error: 'Poll message cannot include files' });
+
+  if (hasPoll) {
+    try {
+      const result = messageActions.createPollMessage({
+        actor: req.user,
+        chatId,
+        text: cleanText,
+        replyToId,
+        clientId,
+        poll: rawPoll,
+      });
+      try { db.prepare("UPDATE users SET last_activity = datetime('now') WHERE id = ?").run(req.user.id); } catch (e) {}
+      aiBotFeature.handleMessageCreated(result.message, { skipBotTrigger: true }).catch((error) => {
+        console.warn('[ai-bot] message hook failed:', error.message);
+      });
+      return res.json(result.message);
+    } catch (error) {
+      return res.status(error.status || 400).json({ error: error.message || 'Invalid poll payload' });
+    }
   }
 
   // Validate reply
@@ -1885,7 +1924,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
       chatId,
       req.user.id,
       cleanText,
-      poll ? null : (fileId || null),
+      fileId || null,
       validReplyId,
       clientId,
       riskAccepted ? 1 : 0,
@@ -1893,17 +1932,6 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
       aiDocumentFormatHint
     );
     const messageId = Number(inserted.lastInsertRowid);
-    if (poll) {
-      pollFeature.createPollData({
-        messageId,
-        createdBy: req.user.id,
-        style: poll.style,
-        allowsMultiple: poll.allows_multiple,
-        showVoters: poll.show_voters,
-        closesAt: poll.closes_at,
-        options: poll.options,
-      });
-    }
     return messageId;
   });
   const messageId = createMessageTx();
@@ -1953,7 +1981,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   });
 
   // Async link previews
-  if (cleanText && !poll) {
+  if (cleanText) {
     const urls = extractUrls(cleanText);
     if (urls.length > 0) {
       fetchPreview(urls[0]).then(preview => {
@@ -2080,15 +2108,12 @@ app.post('/api/messages/:id/poll-vote', auth, msgLimiter, (req, res) => {
     return res.status(400).json({ error: 'Invalid message id' });
   }
 
-  const state = pollFeature.pollStateForMessage(messageId);
-  if (!state) return res.status(404).json({ error: 'Poll not found' });
-  if (!isChatMember(state.chat_id, req.user.id)) {
-    return res.status(403).json({ error: 'Not a member of chat' });
-  }
-
   try {
-    const result = pollFeature.replaceVotes(messageId, req.user.id, req.body?.optionIds || []);
-    pollFeature.broadcastPollUpdated(result.chatId, messageId);
+    const result = messageActions.votePoll({
+      actor: req.user,
+      messageId,
+      optionIds: req.body?.optionIds || [],
+    });
     return res.json({ ok: true, poll: result.poll });
   } catch (error) {
     if (error.code === 'not_found') return res.status(404).json({ error: error.message });
@@ -2096,6 +2121,7 @@ app.post('/api/messages/:id/poll-vote', auth, msgLimiter, (req, res) => {
       const poll = pollFeature.getPollPayload(messageId, req.user.id, { ensureClosed: false });
       return res.status(409).json({ error: error.message, poll });
     }
+    if (error.status === 403) return res.status(403).json({ error: error.message });
     return res.status(400).json({ error: error.message || 'Could not update poll vote' });
   }
 });
@@ -2153,33 +2179,14 @@ app.get('/api/messages/:id/poll-voters', auth, (req, res) => {
 
 app.post('/api/messages/:id/pin', auth, msgLimiter, (req, res) => {
   const mid = +req.params.id;
-  if (!mid) return res.status(400).json({ error: 'Invalid message' });
-
-  const msg = db.prepare('SELECT id,chat_id FROM messages WHERE id=? AND is_deleted=0').get(mid);
-  if (!msg) return res.status(404).json({ error: 'Message not found' });
-  if (!isChatMember(msg.chat_id, req.user.id))
-    return res.status(403).json({ error: 'Not a member' });
-
-  const inserted = db.prepare('INSERT OR IGNORE INTO message_pins(chat_id,message_id,pinned_by) VALUES(?,?,?)')
-    .run(msg.chat_id, mid, req.user.id);
-  let pinEvent = null;
-  if (inserted.changes > 0) {
-    const pin = db.prepare('SELECT created_at FROM message_pins WHERE chat_id=? AND message_id=?').get(msg.chat_id, mid);
-    pinEvent = recordPinEvent({
-      chatId: msg.chat_id,
-      messageId: mid,
-      action: 'pinned',
-      actor: req.user,
-      createdAt: pin?.created_at || null,
-    });
+  try {
+    const payload = messageActions.pinMessage({ actor: req.user, messageId: mid });
+    res.json(payload);
+  } catch (error) {
+    if (error.status === 403) return res.status(403).json({ error: error.message });
+    if (error.status === 404) return res.status(404).json({ error: error.message });
+    res.status(error.status || 400).json({ error: error.message || 'Could not pin message' });
   }
-  const payload = inserted.changes > 0
-    ? broadcastPinsUpdated(msg.chat_id, { action: 'pinned', actorId: req.user.id, messageId: mid, pinEvent })
-    : getChatPinPayload(msg.chat_id);
-  if (inserted.changes > 0) {
-    pushFeature.notifyPinCreated({ chatId: msg.chat_id, messageId: mid, actor: req.user });
-  }
-  res.json({ ok: true, ...payload });
 });
 
 app.delete('/api/messages/:id/pin', auth, (req, res) => {
@@ -2799,39 +2806,14 @@ function isValidReactionEmoji(value) {
 app.post('/api/messages/:id/reactions', auth, (req, res) => {
   const mid = +req.params.id;
   const emoji = typeof req.body?.emoji === 'string' ? req.body.emoji.trim() : '';
-  if (!isValidReactionEmoji(emoji))
-    return res.status(400).json({ error: 'Invalid emoji' });
-
-  const msg = db.prepare('SELECT chat_id,user_id FROM messages WHERE id=? AND is_deleted=0').get(mid);
-  if (!msg) return res.status(404).json({ error: 'Not found' });
-  if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(msg.chat_id, req.user.id))
-    return res.status(403).json({ error: 'Not a member' });
-
-  const existing = db.prepare('SELECT emoji FROM reactions WHERE message_id=? AND user_id=? AND emoji=?').get(mid, req.user.id, emoji);
-  let reactionAdded = false;
-  if (existing) {
-    db.prepare('DELETE FROM reactions WHERE message_id=? AND user_id=? AND emoji=?').run(mid, req.user.id, emoji);
-  } else {
-    db.prepare('INSERT INTO reactions(message_id, user_id, emoji) VALUES(?,?,?)').run(mid, req.user.id, emoji);
-    reactionAdded = true;
+  try {
+    const result = messageActions.toggleReaction({ actor: req.user, messageId: mid, emoji });
+    res.json({ ok: true, reactions: result.reactions });
+  } catch (error) {
+    if (error.status === 403) return res.status(403).json({ error: error.message });
+    if (error.status === 404) return res.status(404).json({ error: error.message });
+    res.status(error.status || 400).json({ error: error.message || 'Could not update reaction' });
   }
-
-  const reactions = db.prepare('SELECT user_id, emoji FROM reactions WHERE message_id=?').all(mid);
-  broadcastToChatAll(msg.chat_id, {
-    type: 'reaction',
-    messageId: mid,
-    reactions,
-    actorId: req.user.id,
-    actorName: req.user.display_name,
-    emoji,
-    action: reactionAdded ? 'added' : 'removed',
-    chatId: msg.chat_id,
-    targetUserId: msg.user_id,
-  });
-  if (reactionAdded) {
-    pushFeature.notifyReaction({ messageId: mid, emoji, actor: req.user });
-  }
-  res.json({ ok: true, reactions });
 });
 
 // ── SPA fallback ────────────────────────────────────────────────────────────

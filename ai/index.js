@@ -32,10 +32,19 @@ const {
 const grokAi = require('./grok');
 const deepseekAi = require('./deepseek');
 const yandexAi = require('./yandex');
+const {
+  shouldAttemptBotActionPlan,
+  textLooksLikeChatActionRequest,
+  textLooksLikeCreatePollRequest: textLooksLikeDirectCreatePollRequest,
+  textLooksLikeVoteRequest: textLooksLikeDirectVoteRequest,
+  textLooksLikeReactRequest: textLooksLikeDirectReactRequest,
+  textLooksLikePinRequest: textLooksLikeDirectPinRequest,
+} = require('./actionPlannerGate');
+const { tryParseJsonObject, parseLooseActionPlanText, parseDirectCreatePollRequest, parseDirectVoteRequest } = require('./actionPlanTextParser');
 const { analyzeAiImageRisk } = require('../public/js/ai-image-risk');
 
 const BOT_COLORS = ['#65aadd', '#7bc862', '#a695e7', '#ee7aae', '#6ec9cb', '#faa774'];
-const AI_BOT_EXPORT_VERSION = 2;
+const AI_BOT_EXPORT_VERSION = 3;
 const MODEL_CACHE_MS = 10 * 60 * 1000;
 const FALLBACK_RESPONSE_MODELS = ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'];
 const FALLBACK_SUMMARY_MODELS = ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'];
@@ -76,6 +85,12 @@ const FACT_TYPES = new Set([
   'project_fact',
   'open_question',
 ]);
+const BOT_ACTION_CLOSE_PRESETS = new Set(['1h', '4h', '24h', '3d', '7d']);
+const BOT_ACTION_REPLY_MODES = new Set(['none', 'status', 'clarify']);
+const BOT_ACTION_TYPES = new Set(['create_poll', 'vote_poll', 'react_message', 'pin_message']);
+const BOT_ACTION_REACTION_TARGETS = new Set(['reply_to', 'source_message']);
+const BOT_ACTION_PIN_TARGETS = new Set(['reply_to', 'created_poll']);
+const BOT_ACTION_VOTE_TARGETS = new Set(['reply_to', 'latest_open_poll']);
 
 function boolValue(value, fallback = false) {
   if (typeof value === 'boolean') return value;
@@ -378,6 +393,7 @@ function createAiBotFeature({
   fetchPreview,
   notifyMessageCreated,
   onMessagePublished,
+  messageActions,
 }) {
   const botByIdStmt = db.prepare(`
     SELECT b.*, u.avatar_color, u.avatar_url
@@ -448,7 +464,14 @@ function createAiBotFeature({
   `);
   const chatSettingsStmt = db.prepare('SELECT * FROM ai_chat_bots ORDER BY chat_id ASC, bot_id ASC');
   const activeChatBotsStmt = db.prepare(`
-    SELECT b.*, cb.chat_id, cb.mode, cb.hot_context_limit, cb.trigger_mode, cb.enabled as chat_enabled
+    SELECT
+      b.*,
+      cb.chat_id,
+      cb.mode,
+      cb.hot_context_limit,
+      cb.trigger_mode,
+      cb.auto_react_on_mention,
+      cb.enabled as chat_enabled
     FROM ai_chat_bots cb
     JOIN ai_bots b ON b.id=cb.bot_id
     WHERE cb.chat_id=? AND cb.enabled=1 AND b.enabled=1
@@ -530,6 +553,8 @@ function createAiBotFeature({
     LIMIT 1
   `);
   const replyBotStmt = db.prepare('SELECT ai_bot_id FROM messages WHERE id=? AND ai_generated=1 AND ai_bot_id IS NOT NULL');
+  const replyPollStmt = db.prepare('SELECT 1 FROM polls WHERE message_id=? LIMIT 1');
+  const reactionByMessageAndUserStmt = db.prepare('SELECT 1 FROM reactions WHERE message_id=? AND user_id=? LIMIT 1');
   const messageFileRefStmt = db.prepare(`
     SELECT
       m.id,
@@ -578,13 +603,14 @@ function createAiBotFeature({
     VALUES(?,?,?,?,?,?)
   `);
   const upsertChatBotSettingStmt = db.prepare(`
-    INSERT INTO ai_chat_bots(chat_id, bot_id, enabled, mode, hot_context_limit, trigger_mode, updated_at)
-    VALUES(?,?,?,?,?,?,datetime('now'))
+    INSERT INTO ai_chat_bots(chat_id, bot_id, enabled, mode, hot_context_limit, trigger_mode, auto_react_on_mention, updated_at)
+    VALUES(?,?,?,?,?,?,?,datetime('now'))
     ON CONFLICT(chat_id, bot_id) DO UPDATE SET
       enabled=excluded.enabled,
       mode=excluded.mode,
       hot_context_limit=excluded.hot_context_limit,
       trigger_mode=excluded.trigger_mode,
+      auto_react_on_mention=excluded.auto_react_on_mention,
       updated_at=datetime('now')
   `);
   const addBotMemberStmt = db.prepare('INSERT OR IGNORE INTO chat_members(chat_id,user_id) VALUES(?,?)');
@@ -1456,6 +1482,7 @@ function createAiBotFeature({
     const settings = getGlobalSettings();
     const provider = normalizeProvider(row.provider, 'openai');
     const kind = normalizeBotKind(row.kind, provider, 'text');
+    const interactiveActionsEnabled = kind !== 'image' && providerInteractiveEnabled(provider, settings);
     const defaultResponseModel = provider === 'yandex'
       ? settings.yandex_default_response_model
       : (provider === 'grok'
@@ -1515,6 +1542,10 @@ function createAiBotFeature({
       allow_image_generate: boolValue(row.allow_image_generate, defaultAllowImageGenerate),
       allow_image_edit: boolValue(row.allow_image_edit, defaultAllowImageEdit),
       allow_document: openAiUniversal ? boolValue(row.allow_document, defaultAllowDocument) : false,
+      allow_poll_create: interactiveActionsEnabled,
+      allow_poll_vote: interactiveActionsEnabled,
+      allow_react: interactiveActionsEnabled,
+      allow_pin: interactiveActionsEnabled,
       image_quality: openAiUniversal ? cleanOpenAiImageQuality(row.image_quality, settings.openai_default_image_quality) : '',
       image_background: openAiUniversal ? cleanOpenAiImageBackground(row.image_background, settings.openai_default_image_background) : '',
       image_output_format: openAiUniversal ? cleanOpenAiImageOutputFormat(row.image_output_format, settings.openai_default_image_output_format) : '',
@@ -1545,6 +1576,7 @@ function createAiBotFeature({
         mode: forceSimple ? 'simple' : (row.mode === 'hybrid' ? 'hybrid' : 'simple'),
         hot_context_limit: intValue(row.hot_context_limit, 50, 20, 100),
         trigger_mode: row.trigger_mode || 'mention_reply',
+        auto_react_on_mention: boolValue(row.auto_react_on_mention, false),
       }));
   }
 
@@ -1697,8 +1729,16 @@ function createAiBotFeature({
     });
   }
 
-  const saveChatBotSettingTx = db.transaction(({ chatId, bot, enabled, mode, hotContextLimit, triggerMode }) => {
-    upsertChatBotSettingStmt.run(chatId, bot.id, enabled ? 1 : 0, mode, hotContextLimit, triggerMode);
+  const saveChatBotSettingTx = db.transaction(({ chatId, bot, enabled, mode, hotContextLimit, triggerMode, autoReactOnMention }) => {
+    upsertChatBotSettingStmt.run(
+      chatId,
+      bot.id,
+      enabled ? 1 : 0,
+      mode,
+      hotContextLimit,
+      triggerMode,
+      autoReactOnMention ? 1 : 0
+    );
     if (!bot.user_id) return;
     if (enabled && bot.enabled !== 0) {
       addBotMemberStmt.run(chatId, bot.user_id);
@@ -1717,10 +1757,18 @@ function createAiBotFeature({
     return 'Bananza AI';
   }
 
+  function providerInteractiveEnabled(provider, settings = getGlobalSettings()) {
+    if (provider === 'yandex') return boolValue(settings?.yandex_interactive_enabled, false);
+    if (provider === 'deepseek') return boolValue(settings?.deepseek_interactive_enabled, false);
+    if (provider === 'grok') return boolValue(settings?.grok_interactive_enabled, false);
+    return boolValue(settings?.openai_interactive_enabled, false);
+  }
+
   function normalizeBotInput(input = {}, current = {}) {
     const settings = getGlobalSettings();
     const provider = normalizeProvider(input.provider || current.provider, 'openai');
     const kind = normalizeBotKind(input.kind ?? current.kind, provider, 'text');
+    const interactiveActionsEnabled = kind !== 'image' && providerInteractiveEnabled(provider, settings);
     const name = cleanText(input.name ?? current.name ?? defaultBotName(provider, kind), 50) || defaultBotName(provider, kind);
     const mention = buildUniqueMention(input.mention ?? current.mention ?? name, current.id || null);
     const responseFallback = provider === 'yandex'
@@ -1788,6 +1836,10 @@ function createAiBotFeature({
       allow_document: isOpenAiUniversal
         ? boolValue(input.allow_document, current.allow_document == null ? true : current.allow_document !== 0)
         : false,
+      allow_poll_create: interactiveActionsEnabled,
+      allow_poll_vote: interactiveActionsEnabled,
+      allow_react: interactiveActionsEnabled,
+      allow_pin: interactiveActionsEnabled,
       image_quality: isOpenAiUniversal
         ? cleanOpenAiImageQuality(input.image_quality ?? current.image_quality, settings.openai_default_image_quality)
         : '',
@@ -1822,10 +1874,11 @@ function createAiBotFeature({
         enabled, provider, kind, response_model, summary_model, embedding_model,
         image_model, image_aspect_ratio, image_resolution,
         allow_text, allow_image_generate, allow_image_edit, allow_document,
+        allow_poll_create, allow_poll_vote, allow_react, allow_pin,
         image_quality, image_background, image_output_format, document_default_format,
         temperature, max_tokens
       )
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       userId,
       input.name,
@@ -1847,6 +1900,10 @@ function createAiBotFeature({
       input.allow_image_generate ? 1 : 0,
       input.allow_image_edit ? 1 : 0,
       input.allow_document ? 1 : 0,
+      input.allow_poll_create ? 1 : 0,
+      input.allow_poll_vote ? 1 : 0,
+      input.allow_react ? 1 : 0,
+      input.allow_pin ? 1 : 0,
       input.image_quality || '',
       input.image_background || '',
       input.image_output_format || '',
@@ -2737,8 +2794,8 @@ function createAiBotFeature({
     };
   }
 
-  function shouldBotRespond(bot, message) {
-    if (!message || message.ai_generated || message.is_deleted) return false;
+  function messageMentionsBot(bot, message) {
+    if (!message || !bot) return false;
     if (Array.isArray(message.mentions) && message.mentions.some((mention) => (
       Number(mention.user_id) === Number(bot.user_id) ||
       (mention.is_ai_bot && String(mention.token || mention.mention || '').toLowerCase() === String(bot.mention || '').toLowerCase())
@@ -2747,10 +2804,101 @@ function createAiBotFeature({
     const mention = `@${String(bot.mention || '').toLowerCase()}`;
     const nameMention = `@${String(bot.name || '').toLowerCase()}`;
     if (text && (text.includes(mention) || text.includes(nameMention))) return true;
+    return false;
+  }
+
+  function messageRepliesToBot(bot, message) {
     if (message.reply_to_id) {
       const replied = replyBotStmt.get(message.reply_to_id);
       if (replied && Number(replied.ai_bot_id) === Number(bot.id)) return true;
     }
+    return false;
+  }
+
+  function messageRepliesToPoll(message) {
+    const replyId = positiveId(message?.reply_to_id || message?.replyToId);
+    if (!replyId) return false;
+    return !!replyPollStmt.get(replyId);
+  }
+
+  function botSupportsChatActions(bot) {
+    if (!bot || bot.kind === 'image') return false;
+    return !!(bot.allow_poll_create || bot.allow_poll_vote || bot.allow_react || bot.allow_pin);
+  }
+
+  function textLooksLikeActionRetryComplaint(value = '') {
+    const text = String(value || '').trim();
+    if (!text) return false;
+    return [
+      /\bwhere\b/i,
+      /\bdid(?:n't| not)\s+(?:create|make|post)\b/i,
+      /\bcan(?:not|'t)\s+see\b/i,
+      /\bdon(?:'|’)t\s+see\b/i,
+      /(?:где|не\s+вижу|ничего\s+ты\s+не\s+создал|ничего\s+не\s+создал|не\s+создал|не\s+сделал|не\s+появил[ао]сь|не\s+появил[аи]ся)/i,
+    ].some((pattern) => pattern.test(text));
+  }
+
+  function textLooksLikeActionSuccessClaim(value = '') {
+    const text = String(value || '').trim();
+    if (!text) return false;
+    return [
+      /\b(?:done|created|posted|pinned|reacted|voted|finished)\b/i,
+      /(?:готово|создал|создан|сделал|закрепил|отреагировал|проголосовал|опубликовал)/i,
+    ].some((pattern) => pattern.test(text));
+  }
+
+  function textLooksLikeActionCapabilityExcuse(value = '') {
+    const text = String(value || '').trim();
+    if (!text) return false;
+    return [
+      /\b(?:can(?:not|'t)|unable)\b.{0,40}(?:click|press|tap|button|vote)/i,
+      /\b(?:no\s+hands|no\s+fingers|don't\s+have\s+hands|do\s+not\s+have\s+hands)\b/i,
+      /(?:РЅРµ\s+РјРѕРіСѓ).{0,40}(?:РЅР°Р¶Р°С‚СЊ|РєРЅРѕРїРє|РєР»РёРє|С‚С‹Рє|РіРѕР»РѕСЃРѕРІР°С‚СЊ)/i,
+      /(?:РЅРµС‚\s+(?:РїР°Р»СЊС†РµРІ|СЂСѓРє)|Р±РµР·\s+РїР°Р»СЊС†РµРІ|Р±РµР·\s+СЂСѓРє)/i,
+    ].some((pattern) => pattern.test(text));
+  }
+
+  function alignActionPlanWithSourceIntent(plan, sourceMessage) {
+    if (!plan || !Array.isArray(plan.actions) || !plan.actions.length) return plan;
+    const requestText = cleanText(sourceMessage?.text || sourceMessage?.transcription_text || '', 3000);
+    const wantsCreate = textLooksLikeDirectCreatePollRequest(requestText);
+    const wantsVote = textLooksLikeDirectVoteRequest(requestText);
+    const wantsReact = textLooksLikeDirectReactRequest(requestText);
+    const wantsPin = textLooksLikeDirectPinRequest(requestText);
+    const filteredActions = plan.actions.filter((action) => {
+      if (action?.type === 'create_poll') return wantsCreate;
+      if (action?.type === 'vote_poll') return wantsVote;
+      if (action?.type === 'react_message') return wantsReact;
+      if (action?.type === 'pin_message') return wantsPin;
+      return false;
+    });
+    if (filteredActions.length === plan.actions.length) return plan;
+    if (filteredActions.length) return { ...plan, actions: filteredActions };
+    if (messageRepliesToPoll(sourceMessage) && wantsVote && !wantsCreate) {
+      return {
+        reply_mode: 'clarify',
+        reply_text: 'Укажи вариант ответа в этом опросе, за который голосовать.',
+        actions: [],
+      };
+    }
+    return {
+      reply_mode: 'clarify',
+      reply_text: 'Уточни, пожалуйста, какое действие в чате нужно выполнить.',
+      actions: [],
+    };
+  }
+
+  function shouldRecoverActionsFromGeneratedText(bot, sourceMessage) {
+    if (!botSupportsChatActions(bot)) return false;
+    const text = cleanText(sourceMessage?.text || sourceMessage?.transcription_text || '', 3000);
+    if (textLooksLikeChatActionRequest(text)) return true;
+    return messageRepliesToBot(bot, sourceMessage) && textLooksLikeActionRetryComplaint(text);
+  }
+
+  function shouldBotRespond(bot, message) {
+    if (!message || message.ai_generated || message.is_deleted) return false;
+    if (messageMentionsBot(bot, message)) return true;
+    if (messageRepliesToBot(bot, message)) return true;
     return false;
   }
 
@@ -2994,6 +3142,474 @@ function createAiBotFeature({
     if (mode !== 'text') return { ...chatConfig, mode: 'simple' };
     if (bot.kind === 'image') return { ...chatConfig, mode: 'simple' };
     return chatConfig;
+  }
+
+  function buildBotActionActor(bot) {
+    return {
+      id: Number(bot?.user_id) || 0,
+      display_name: bot?.name || bot?.mention || 'AI bot',
+      username: bot?.mention || '',
+      is_admin: false,
+    };
+  }
+
+  function canUseBotActionPlanner(bot, sourceMessage) {
+    const requestedMode = bot.kind === 'universal'
+      ? resolveRequestedResponseMode(bot, sourceMessage)
+      : 'text';
+    const promptText = extractBotPromptText(bot, sourceMessage)
+      || String(sourceMessage?.text || sourceMessage?.transcription_text || '');
+    return shouldAttemptBotActionPlan({
+      hasMessageActions: Boolean(messageActions),
+      botSupportsChatActions: botSupportsChatActions(bot),
+      botKind: bot?.kind || 'text',
+      requestedMode,
+      text: promptText,
+      replyingToPoll: messageRepliesToPoll(sourceMessage),
+    });
+  }
+
+  async function generateBotJsonPayload(bot, { system, user, fallback = {}, maxOutputTokens = 900 } = {}) {
+    const settings = getGlobalSettings();
+    const jsonSystem = `${system}\n\nReturn only valid JSON. Do not wrap it in Markdown.`;
+    let rawText = '';
+    if (bot.provider === 'yandex') {
+      rawText = await yandexAi.generateText(yandexClientOptions({
+        model: bot.response_model || settings.yandex_default_response_model,
+        system: jsonSystem,
+        user,
+        maxOutputTokens,
+        temperature: 0.2,
+        jsonObject: true,
+      }));
+    } else if (bot.provider === 'deepseek') {
+      rawText = await deepseekAi.generateText({
+        apiKey: getDeepSeekApiKey(),
+        baseUrl: deepseekBaseUrl(),
+        model: bot.response_model || settings.deepseek_default_response_model,
+        system: jsonSystem,
+        user,
+        maxOutputTokens,
+        temperature: 0.2,
+      });
+    } else if (bot.provider === 'grok') {
+      rawText = await grokAi.generateText({
+        apiKey: getGrokApiKey(),
+        baseUrl: grokBaseUrl(),
+        model: bot.response_model || settings.grok_default_response_model,
+        system: jsonSystem,
+        user,
+        maxOutputTokens,
+        temperature: 0.2,
+      });
+    } else {
+      rawText = await generateText({
+        apiKey: getApiKey(),
+        model: bot.response_model || settings.default_response_model,
+        system: jsonSystem,
+        user,
+        maxOutputTokens,
+        temperature: 0.2,
+      });
+    }
+    const parsed = tryParseJsonObject(rawText, null);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return {
+        ...parsed,
+        __raw_text: rawText,
+      };
+    }
+    if (fallback && typeof fallback === 'object' && !Array.isArray(fallback)) {
+      return {
+        ...fallback,
+        __raw_text: rawText,
+      };
+    }
+    return fallback;
+  }
+
+  function formatActionMessageSummary(message) {
+    if (!message) return '(none)';
+    const id = positiveId(message.id);
+    const author = cleanText(message.display_name || message.username || `user:${message.user_id || 'unknown'}`, 80);
+    const body = cleanText(aiMessageMemoryText(message, { includeVoters: true }), 1800) || '(empty)';
+    return `message #${id || 'unknown'} by ${author}: ${body}`;
+  }
+
+  function normalizeBotActionOptionText(value) {
+    return String(value || '').trim().replace(/\s+/g, ' ');
+  }
+
+  function summarizeBotCapabilities(bot) {
+    return [
+      `allow_poll_create=${bot.allow_poll_create ? 'yes' : 'no'}`,
+      `allow_poll_vote=${bot.allow_poll_vote ? 'yes' : 'no'}`,
+      `allow_react=${bot.allow_react ? 'yes' : 'no'}`,
+      `allow_pin=${bot.allow_pin ? 'yes' : 'no'}`,
+    ].join(', ');
+  }
+
+  function sanitizeDetectedBotAction(rawAction) {
+    if (!rawAction || typeof rawAction !== 'object' || Array.isArray(rawAction)) return null;
+    const type = String(rawAction.type || rawAction.action || '').trim().toLowerCase();
+    if (!BOT_ACTION_TYPES.has(type)) return null;
+
+    if (type === 'create_poll') {
+      const question = cleanText(rawAction.question || rawAction.text || '', 5000);
+      const options = [...new Set(
+        (Array.isArray(rawAction.options) ? rawAction.options : [])
+          .map(normalizeBotActionOptionText)
+          .filter(Boolean)
+          .map((text) => text.toLowerCase())
+      )];
+      const originalOptions = [];
+      const seen = new Set();
+      (Array.isArray(rawAction.options) ? rawAction.options : []).forEach((option) => {
+        const normalized = normalizeBotActionOptionText(option);
+        const key = normalized.toLowerCase();
+        if (!normalized || seen.has(key)) return;
+        seen.add(key);
+        originalOptions.push(normalized);
+      });
+      if (!question || originalOptions.length < 2 || originalOptions.length > 10) return null;
+      return {
+        type,
+        question,
+        options: originalOptions,
+        allows_multiple: boolValue(rawAction.allows_multiple, false),
+        show_voters: boolValue(rawAction.show_voters, false),
+        close_preset: BOT_ACTION_CLOSE_PRESETS.has(String(rawAction.close_preset || '').trim()) ? String(rawAction.close_preset).trim() : null,
+        pin_after_create: boolValue(rawAction.pin_after_create, false),
+      };
+    }
+
+    if (type === 'vote_poll') {
+      const target = BOT_ACTION_VOTE_TARGETS.has(String(rawAction.target || '').trim())
+        ? String(rawAction.target).trim()
+        : 'reply_to';
+      const option_texts = [...new Set(
+        (Array.isArray(rawAction.option_texts) ? rawAction.option_texts : [])
+          .map(normalizeBotActionOptionText)
+          .filter(Boolean)
+      )];
+      if (!option_texts.length) return null;
+      return { type, target, option_texts };
+    }
+
+    if (type === 'react_message') {
+      const emoji = cleanText(rawAction.emoji || '', 32);
+      if (!emoji) return null;
+      const target = BOT_ACTION_REACTION_TARGETS.has(String(rawAction.target || '').trim())
+        ? String(rawAction.target).trim()
+        : 'reply_to';
+      return { type, target, emoji };
+    }
+
+    if (type === 'pin_message') {
+      const target = BOT_ACTION_PIN_TARGETS.has(String(rawAction.target || '').trim())
+        ? String(rawAction.target).trim()
+        : 'reply_to';
+      return { type, target };
+    }
+
+    return null;
+  }
+
+  function sanitizeDetectedBotActionPlan(rawPlan) {
+    const replyMode = BOT_ACTION_REPLY_MODES.has(String(rawPlan?.reply_mode || '').trim())
+      ? String(rawPlan.reply_mode).trim()
+      : 'none';
+    const replyText = cleanText(rawPlan?.reply_text || '', 500);
+    const rawActions = Array.isArray(rawPlan?.actions) ? rawPlan.actions : [];
+    const actions = rawActions.map(sanitizeDetectedBotAction).filter(Boolean);
+    if (!actions.length && rawActions.length > 0 && replyMode === 'none') {
+      return {
+        reply_mode: 'clarify',
+        reply_text: replyText || 'Уточни, пожалуйста, действие или цель.',
+        actions: [],
+      };
+    }
+    return {
+      reply_mode: replyText && replyMode === 'none' ? 'status' : replyMode,
+      reply_text: replyText,
+      actions,
+    };
+  }
+
+  async function detectBotActions(bot, chatConfig, sourceMessage) {
+    const context = await assembleContext({
+      bot,
+      chatConfig: chatConfigForBotMode(bot, chatConfig, 'text'),
+      message: sourceMessage,
+    });
+    const replyTarget = positiveId(sourceMessage?.reply_to_id || sourceMessage?.replyToId)
+      ? hydrateMessageById(positiveId(sourceMessage.reply_to_id || sourceMessage.replyToId))
+      : null;
+    const raw = await generateBotJsonPayload(bot, {
+      system: [
+        botSystemPrompt(bot),
+        'You plan chat actions for a bot inside a chat app.',
+        'Decide only whether to create a poll, vote in a poll, react to a message, or pin a message.',
+        'Use actions only when the user explicitly asks the bot to perform one of those chat actions.',
+        'If the message is ordinary conversation, return {"reply_mode":"none","reply_text":"","actions":[]}.',
+        'If the request is ambiguous, missing a target, or you are not confident, return reply_mode "clarify" with a short reply_text and no actions.',
+        'If the request asks for an action that this bot is not allowed to do, return reply_mode "status" with a short refusal and no actions.',
+        'Never choose poll votes randomly. Use only the user request, bot persona, and shown context. If uncertain, clarify instead of guessing.',
+        'Return strict JSON only.',
+        'Never answer with pseudo-code or function-like calls such as create_poll(...).',
+        'Supported actions:',
+        '- create_poll(question, options, allows_multiple, show_voters, close_preset, pin_after_create)',
+        '- vote_poll(target, option_texts) where target is "reply_to" or "latest_open_poll"',
+        '- react_message(target, emoji) where target is "reply_to" or "source_message"',
+        '- pin_message(target) where target is "reply_to" or "created_poll"',
+      ].join('\n\n'),
+      user: [
+        `Bot capabilities: ${summarizeBotCapabilities(bot)}.`,
+        `Current raw message: ${cleanText(sourceMessage?.text || sourceMessage?.transcription_text || '', 3000) || '(empty)'}`,
+        `Current cleaned request: ${cleanText(extractBotPromptText(bot, sourceMessage), 3000) || '(empty)'}`,
+        `Reply target: ${formatActionMessageSummary(replyTarget)}`,
+        'Relevant context:',
+        context.user,
+      ].join('\n\n'),
+      fallback: { reply_mode: 'none', reply_text: '', actions: [] },
+      maxOutputTokens: 900,
+    });
+    const plan = alignActionPlanWithSourceIntent(sanitizeDetectedBotActionPlan(raw), sourceMessage);
+    if (plan.actions.length) return plan;
+    const loosePlan = parseLooseActionPlanText(raw?.reply_text || raw?.__raw_text || '');
+    if (loosePlan) return alignActionPlanWithSourceIntent(sanitizeDetectedBotActionPlan(loosePlan), sourceMessage);
+    const requestText = cleanText(extractBotPromptText(bot, sourceMessage), 3000)
+      || cleanText(sourceMessage?.text || sourceMessage?.transcription_text || '', 3000);
+    const directCreatePlan = parseDirectCreatePollRequest(requestText);
+    if (directCreatePlan) {
+      return alignActionPlanWithSourceIntent(sanitizeDetectedBotActionPlan(directCreatePlan), sourceMessage);
+    }
+    const directVotePlan = parseDirectVoteRequest(requestText);
+    if (directVotePlan) {
+      return alignActionPlanWithSourceIntent(sanitizeDetectedBotActionPlan(directVotePlan), sourceMessage);
+    }
+    if (textLooksLikeChatActionRequest(requestText) && textLooksLikeActionSuccessClaim(plan.reply_text || '')) {
+      return {
+        reply_mode: 'clarify',
+        reply_text: 'Не смог создать системное действие в чате. Попробуй ещё раз: вопрос и варианты ответа.',
+        actions: [],
+      };
+    }
+    return plan;
+  }
+
+  function buildActionFailureText(action, error) {
+    const code = String(error?.code || '');
+    if (code === 'not_found') return action?.type === 'vote_poll' ? 'Не вижу нужный опрос.' : 'Не нашёл целевое сообщение.';
+    if (code === 'closed') return 'Этот опрос уже закрыт.';
+    if (code === 'bad_option_text') return 'Не смог сопоставить вариант ответа в опросе.';
+    if (code === 'invalid_emoji') return 'Нужен один валидный emoji для реакции.';
+    if (code === 'not_member') return 'У этого бота нет доступа к этому чату.';
+    return cleanText(error?.message || '', 220) || 'Не получилось выполнить действие.';
+  }
+
+  function latestOpenPollCandidates(chatId) {
+    return latestPollIdsStmt.all(chatId, 8)
+      .map((row) => getPollContext(Number(row.message_id) || 0))
+      .filter((context) => context?.poll && !context.poll.closed_at && !isPastDbDate(context.poll.closes_at))
+      .map((context) => context.poll);
+  }
+
+  function resolveVoteTargetMessageId(action, sourceMessage) {
+    const replyId = positiveId(sourceMessage?.reply_to_id || sourceMessage?.replyToId);
+    if (replyId && getPollContext(replyId)?.poll) {
+      return { messageId: replyId, clarifyText: '' };
+    }
+    if (action?.target !== 'latest_open_poll') {
+      return {
+        messageId: 0,
+        clarifyText: 'Ответь реплаем на нужный опрос, чтобы я не ошибся.',
+      };
+    }
+    const candidates = latestOpenPollCandidates(sourceMessage.chat_id);
+    if (candidates.length === 1) {
+      return { messageId: positiveId(candidates[0].message_id), clarifyText: '' };
+    }
+    return {
+      messageId: 0,
+      clarifyText: candidates.length > 1
+        ? 'Ответь реплаем на нужный опрос, чтобы я не ошибся.'
+        : 'Сначала ответь реплаем на нужный опрос.',
+    };
+  }
+
+  function resolveReactionTargetMessageId(action, sourceMessage) {
+    const replyId = positiveId(sourceMessage?.reply_to_id || sourceMessage?.replyToId);
+    if (action?.target === 'reply_to') return replyId;
+    return positiveId(sourceMessage?.id);
+  }
+
+  function resolvePinTargetMessageId(action, sourceMessage, createdPollMessageId = 0) {
+    if (action?.target === 'created_poll' && positiveId(createdPollMessageId)) return positiveId(createdPollMessageId);
+    return positiveId(sourceMessage?.reply_to_id || sourceMessage?.replyToId);
+  }
+
+  async function executeBotActions(bot, sourceMessage, plan) {
+    if (!plan || (!plan.actions.length && plan.reply_mode === 'none')) {
+      return { handled: false, publishedMessage: null };
+    }
+
+    const actor = buildBotActionActor(bot);
+    let createdPollMessageId = 0;
+    const failures = [];
+    const results = [];
+
+    for (const action of plan.actions) {
+      try {
+        if (action.type === 'create_poll') {
+          if (!bot.allow_poll_create) throw Object.assign(new Error('Poll creation is disabled for this bot.'), { code: 'capability' });
+          const created = messageActions.createPollMessage({
+            actor,
+            chatId: sourceMessage.chat_id,
+            text: action.question,
+            replyToId: sourceMessage.id,
+            poll: {
+              options: action.options,
+              allows_multiple: action.allows_multiple,
+              show_voters: action.show_voters,
+              close_preset: action.close_preset,
+            },
+            aiGenerated: true,
+            aiBotId: bot.id,
+          });
+          createdPollMessageId = positiveId(created.message?.id);
+          if (created.message) enqueueMemoryForMessage(created.message);
+          results.push({ type: action.type, message_id: createdPollMessageId });
+          if (action.pin_after_create) {
+            if (!bot.allow_pin) throw Object.assign(new Error('Pinning is disabled for this bot.'), { code: 'capability' });
+            const pinResult = messageActions.pinMessage({ actor, messageId: createdPollMessageId });
+            results.push({ type: 'pin_message', message_id: createdPollMessageId, changed: pinResult.changed });
+          }
+          continue;
+        }
+
+        if (action.type === 'vote_poll') {
+          if (!bot.allow_poll_vote) throw Object.assign(new Error('Poll voting is disabled for this bot.'), { code: 'capability' });
+          const target = resolveVoteTargetMessageId(action, sourceMessage);
+          if (!target.messageId) throw Object.assign(new Error(target.clarifyText), { code: 'clarify' });
+          const voteResult = messageActions.votePoll({
+            actor,
+            messageId: target.messageId,
+            optionTexts: action.option_texts,
+          });
+          results.push({ type: action.type, message_id: target.messageId, option_ids: voteResult.optionIds });
+          continue;
+        }
+
+        if (action.type === 'react_message') {
+          if (!bot.allow_react) throw Object.assign(new Error('Reactions are disabled for this bot.'), { code: 'capability' });
+          const targetMessageId = resolveReactionTargetMessageId(action, sourceMessage);
+          if (!targetMessageId) throw Object.assign(new Error('Ответь на сообщение, к которому нужна реакция.'), { code: 'clarify' });
+          const reactResult = messageActions.toggleReaction({
+            actor,
+            messageId: targetMessageId,
+            emoji: action.emoji,
+            behavior: 'ensure_present',
+            replaceExistingFromActor: true,
+          });
+          results.push({ type: action.type, message_id: targetMessageId, changed: reactResult.changed });
+          continue;
+        }
+
+        if (action.type === 'pin_message') {
+          if (!bot.allow_pin) throw Object.assign(new Error('Pinning is disabled for this bot.'), { code: 'capability' });
+          const targetMessageId = resolvePinTargetMessageId(action, sourceMessage, createdPollMessageId);
+          if (!targetMessageId) throw Object.assign(new Error('Ответь на сообщение, которое нужно запинить.'), { code: 'clarify' });
+          const pinResult = messageActions.pinMessage({ actor, messageId: targetMessageId });
+          results.push({ type: action.type, message_id: targetMessageId, changed: pinResult.changed });
+        }
+      } catch (error) {
+        failures.push({
+          action,
+          code: String(error?.code || ''),
+          text: buildActionFailureText(action, error),
+        });
+      }
+    }
+
+    let replyMode = plan.reply_mode;
+    let replyText = cleanText(plan.reply_text || '', 500);
+    if (failures.length) {
+      if (!replyText) {
+        const joined = failures.map((item) => item.text).filter(Boolean).join(' ');
+        replyText = cleanText(joined, 500);
+      }
+      if (replyMode === 'none') {
+        replyMode = failures.some((item) => item.code === 'clarify') ? 'clarify' : 'status';
+      }
+    } else if (replyText && replyMode === 'none') {
+      replyMode = 'status';
+    }
+    if (replyMode !== 'none' && !replyText) {
+      replyText = replyMode === 'clarify'
+        ? 'Уточни, пожалуйста, что именно нужно сделать.'
+        : 'Не могу выполнить это действие.';
+    }
+
+    let publishedMessage = null;
+    if (replyMode !== 'none' && replyText) {
+      publishedMessage = publishBotTextMessage(bot, sourceMessage, replyText);
+      if (publishedMessage) enqueueMemoryForMessage(publishedMessage);
+    }
+
+    return {
+      handled: Boolean(plan.actions.length || replyMode !== 'none'),
+      publishedMessage,
+      results,
+      failures,
+    };
+  }
+
+  async function detectBotAutoReaction(bot, chatConfig, sourceMessage) {
+    if (!messageActions || !chatConfig?.auto_react_on_mention || !bot.allow_react) return null;
+    if (!messageMentionsBot(bot, sourceMessage)) return null;
+    if (reactionByMessageAndUserStmt.get(sourceMessage.id, bot.user_id)) return null;
+
+    const context = await assembleContext({
+      bot,
+      chatConfig: chatConfigForBotMode(bot, chatConfig, 'text'),
+      message: sourceMessage,
+    });
+    const payload = await generateBotJsonPayload(bot, {
+      system: [
+        botSystemPrompt(bot),
+        'Choose whether this bot should add one emoji reaction to a message that explicitly mentions it.',
+        'Return strict JSON only with keys should_react and emoji.',
+        'Choose at most one emoji. If no natural reaction fits, return should_react=false and empty emoji.',
+      ].join('\n\n'),
+      user: [
+        `Current message: ${cleanText(sourceMessage?.text || sourceMessage?.transcription_text || '', 2500) || '(empty)'}`,
+        'Context:',
+        context.user,
+      ].join('\n\n'),
+      fallback: { should_react: false, emoji: '' },
+      maxOutputTokens: 120,
+    });
+    if (!boolValue(payload?.should_react, false)) return null;
+    const emoji = cleanText(payload?.emoji || '', 32);
+    return emoji || null;
+  }
+
+  async function maybeAutoReactToMention(bot, chatConfig, sourceMessage) {
+    try {
+      const emoji = await detectBotAutoReaction(bot, chatConfig, sourceMessage);
+      if (!emoji) return null;
+      return messageActions.toggleReaction({
+        actor: buildBotActionActor(bot),
+        messageId: sourceMessage.id,
+        emoji,
+        behavior: 'ensure_present',
+        replaceExistingFromActor: false,
+      });
+    } catch (error) {
+      console.warn('[ai-bot] auto reaction failed:', errorText(error, 'Unexpected error'));
+      return null;
+    }
   }
 
   function buildMessageContentParts(text, imageInput = null) {
@@ -3353,7 +3969,7 @@ function createAiBotFeature({
     return { message, memory: true };
   }
 
-  async function createBotResponse(bot, chatConfig, sourceMessage) {
+  async function createBotResponse(bot, chatConfig, sourceMessage, options = {}) {
     const key = `reply:${bot.id}:${sourceMessage.id}`;
     if (responseLocks.has(key)) return;
     responseLocks.add(key);
@@ -3383,6 +3999,24 @@ function createAiBotFeature({
         return;
       }
 
+      const preferActionOnly = options?.preferActionOnly === true;
+      let actionHandled = false;
+      if (canUseBotActionPlanner(bot, sourceMessage)) {
+        try {
+          const actionPlan = await detectBotActions(bot, chatConfig, sourceMessage);
+          const actionResult = await executeBotActions(bot, sourceMessage, actionPlan);
+          actionHandled = actionResult.handled;
+          if (actionHandled) return;
+        } catch (error) {
+          console.warn('[ai-bot] action planner failed:', errorText(error, 'Unexpected error'));
+        }
+      }
+
+      if (!actionHandled && messageMentionsBot(bot, sourceMessage)) {
+        await maybeAutoReactToMention(bot, chatConfig, sourceMessage);
+      }
+      if (preferActionOnly) return;
+
       if (bot.kind === 'universal') {
         const universalResult = (bot.provider === 'openai')
           ? await createOpenAiUniversalMessage(bot, chatConfig, sourceMessage)
@@ -3398,11 +4032,14 @@ function createAiBotFeature({
       }
 
       const context = await assembleContext({ bot, chatConfig, message: sourceMessage });
+      const textSystem = botSupportsChatActions(bot)
+        ? `${context.system}\n\nDo not pretend that a poll, vote, reaction, or pin already exists in plain text. Never output fake "Poll #..." summaries or function-like calls such as create_poll(...).`
+        : context.system;
       const rawText = isYandex
         ? await yandexAi.generateText(yandexClientOptions({
             apiKey,
             model: bot.response_model || settings.yandex_default_response_model,
-            system: context.system,
+            system: textSystem,
             user: context.user,
             maxOutputTokens: intValue(bot.max_tokens, settings.yandex_max_tokens, 1, 8000),
             temperature: floatValue(bot.temperature, settings.yandex_temperature, 0, 1),
@@ -3412,7 +4049,7 @@ function createAiBotFeature({
               apiKey,
               baseUrl: deepseekBaseUrl(),
               model: bot.response_model || settings.deepseek_default_response_model,
-              system: context.system,
+              system: textSystem,
               user: context.user,
               maxOutputTokens: intValue(bot.max_tokens, settings.deepseek_max_tokens, 1, 8000),
               temperature: floatValue(bot.temperature, settings.deepseek_temperature, 0, 1),
@@ -3422,7 +4059,7 @@ function createAiBotFeature({
               apiKey,
               baseUrl: grokBaseUrl(),
               model: bot.response_model || settings.grok_default_response_model,
-              system: context.system,
+              system: textSystem,
               user: context.user,
               maxOutputTokens: intValue(bot.max_tokens, settings.grok_max_tokens, 1, 8000),
               temperature: floatValue(bot.temperature, settings.grok_temperature, 0, 1),
@@ -3430,11 +4067,44 @@ function createAiBotFeature({
         : await generateText({
             apiKey,
             model: bot.response_model || settings.default_response_model,
-            system: context.system,
+            system: textSystem,
             user: context.user,
             maxOutputTokens: intValue(bot.max_tokens, 1000, OPENAI_MIN_OUTPUT_TOKENS, 8000),
             temperature: floatValue(bot.temperature, 0.55, 0, 1),
           });
+      if (shouldRecoverActionsFromGeneratedText(bot, sourceMessage)) {
+        const requestText = cleanText(extractBotPromptText(bot, sourceMessage), 3000)
+          || cleanText(sourceMessage?.text || sourceMessage?.transcription_text || '', 3000);
+        const recoveredPlan = parseLooseActionPlanText(rawText || '');
+        if (recoveredPlan?.actions?.length) {
+          const recoveredResult = await executeBotActions(
+            bot,
+            sourceMessage,
+            alignActionPlanWithSourceIntent(sanitizeDetectedBotActionPlan(recoveredPlan), sourceMessage)
+          );
+          if (recoveredResult.handled) return;
+        }
+        if (textLooksLikeDirectVoteRequest(requestText) && textLooksLikeActionCapabilityExcuse(rawText || '')) {
+          const safeReply = publishBotTextMessage(
+            bot,
+            sourceMessage,
+            messageRepliesToPoll(sourceMessage)
+              ? 'Укажи вариант ответа в этом опросе, за который голосовать.'
+              : 'Ответь реплаем на нужный опрос и укажи вариант, за который голосовать.'
+          );
+          if (safeReply) enqueueMemoryForMessage(safeReply);
+          return;
+        }
+        if (textLooksLikeActionSuccessClaim(rawText || '')) {
+          const safeReply = publishBotTextMessage(
+            bot,
+            sourceMessage,
+            'Не смог создать системное действие в чате. Попробуй ещё раз: вопрос и варианты ответа.'
+          );
+          if (safeReply) enqueueMemoryForMessage(safeReply);
+          return;
+        }
+      }
       const responseText = cleanText(stripBotSpeakerLabel(rawText, bot), 5000);
       if (!responseText) return;
 
@@ -3475,25 +4145,30 @@ function createAiBotFeature({
     if (!settings.enabled && !settings.yandex_enabled && !settings.deepseek_enabled && !settings.grok_enabled) return;
     const text = aiMessageMemoryText(message, { includeVoters: true });
     if (!text) return;
-    const rows = activeChatBotsStmt.all(message.chat_id);
-    for (const row of rows) {
-      const bot = sanitizeBot(row);
+      const rows = activeChatBotsStmt.all(message.chat_id);
+      for (const row of rows) {
+        const bot = sanitizeBot(row);
       if (bot.provider === 'yandex' && !settings.yandex_enabled) continue;
       if (bot.provider === 'deepseek' && !settings.deepseek_enabled) continue;
       if (bot.provider === 'grok' && !settings.grok_enabled) continue;
       if (bot.provider === 'openai' && !settings.enabled) continue;
-      const chatConfig = {
-        mode: bot.kind === 'image' || bot.provider === 'deepseek'
-          ? 'simple'
-          : (row.mode === 'hybrid' ? 'hybrid' : 'simple'),
-        hot_context_limit: intValue(row.hot_context_limit, 50, 20, 100),
-        trigger_mode: row.trigger_mode || 'mention_reply',
-      };
-      if (shouldBotRespond(bot, message)) {
-        setImmediate(() => createBotResponse(bot, chatConfig, message));
+        const chatConfig = {
+          mode: bot.kind === 'image' || bot.provider === 'deepseek'
+            ? 'simple'
+            : (row.mode === 'hybrid' ? 'hybrid' : 'simple'),
+          hot_context_limit: intValue(row.hot_context_limit, 50, 20, 100),
+          trigger_mode: row.trigger_mode || 'mention_reply',
+          auto_react_on_mention: boolValue(row.auto_react_on_mention, false),
+        };
+        if (shouldBotRespond(bot, message)) {
+          setImmediate(() => createBotResponse(bot, chatConfig, message));
+          continue;
+        }
+        if (messageRepliesToPoll(message) && canUseBotActionPlanner(bot, message)) {
+          setImmediate(() => createBotResponse(bot, chatConfig, message, { preferActionOnly: true }));
+        }
       }
     }
-  }
 
   async function handleMessageUpdated(message) {
     if (!message) return;
@@ -3640,6 +4315,10 @@ function createAiBotFeature({
       kind: 'text',
       response_model: responseModel,
       summary_model: summaryModel,
+      allow_poll_create: source.allow_poll_create,
+      allow_poll_vote: source.allow_poll_vote,
+      allow_react: source.allow_react,
+      allow_pin: source.allow_pin,
       temperature: source.temperature,
       max_tokens: source.max_tokens,
       style: source.style,
@@ -3665,7 +4344,8 @@ function createAiBotFeature({
     const mode = req.body?.mode === 'hybrid' ? 'hybrid' : 'simple';
     const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
     const triggerMode = 'mention_reply';
-    saveChatBotSettingTx({ chatId, bot, enabled, mode, hotContextLimit, triggerMode });
+    const autoReactOnMention = boolValue(req.body?.auto_react_on_mention, false);
+    saveChatBotSettingTx({ chatId, bot, enabled, mode, hotContextLimit, triggerMode, autoReactOnMention });
     if (enabled && mode === 'hybrid') {
       memoryQueue.enqueue(`ai:backfill:${chatId}`, { type: 'backfill-chat', chatId });
     }
@@ -3685,6 +4365,10 @@ function createAiBotFeature({
         provider: bot.provider || 'openai',
         kind: bot.kind || 'text',
         enabled: bot.enabled,
+        allow_poll_create: bot.allow_poll_create,
+        allow_poll_vote: bot.allow_poll_vote,
+        allow_react: bot.allow_react,
+        allow_pin: bot.allow_pin,
         response_model: bot.response_model,
         summary_model: bot.summary_model,
         temperature: bot.temperature,
@@ -3710,7 +4394,9 @@ function createAiBotFeature({
     db.prepare(`
       UPDATE ai_bots
       SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
-          enabled=?, provider='openai', kind='text', response_model=?, summary_model=?, embedding_model=?, temperature=?, max_tokens=?, updated_at=datetime('now')
+          enabled=?, provider='openai', kind='text', response_model=?, summary_model=?, embedding_model=?,
+          allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?,
+          temperature=?, max_tokens=?, updated_at=datetime('now')
       WHERE id=?
     `).run(
       input.name,
@@ -3723,6 +4409,10 @@ function createAiBotFeature({
       input.response_model,
       input.summary_model,
       input.embedding_model,
+      input.allow_poll_create ? 1 : 0,
+      input.allow_poll_vote ? 1 : 0,
+      input.allow_react ? 1 : 0,
+      input.allow_pin ? 1 : 0,
       input.temperature,
       input.max_tokens,
       botId
@@ -3818,7 +4508,8 @@ function createAiBotFeature({
     const mode = req.body?.mode === 'hybrid' ? 'hybrid' : 'simple';
     const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
     const triggerMode = 'mention_reply';
-    saveChatBotSettingTx({ chatId, bot, enabled, mode, hotContextLimit, triggerMode });
+    const autoReactOnMention = boolValue(req.body?.auto_react_on_mention, false);
+    saveChatBotSettingTx({ chatId, bot, enabled, mode, hotContextLimit, triggerMode, autoReactOnMention });
     if (enabled && mode === 'hybrid') {
       memoryQueue.enqueue(`ai:backfill:${chatId}`, { type: 'backfill-chat', chatId });
     }
@@ -3869,6 +4560,7 @@ function createAiBotFeature({
       SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
           enabled=?, provider='openai', kind='universal', response_model=?, summary_model=?, embedding_model=?,
           image_model=?, image_resolution=?, allow_text=?, allow_image_generate=?, allow_image_edit=?, allow_document=?,
+          allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?,
           image_quality=?, image_background=?, image_output_format=?, document_default_format=?,
           temperature=?, max_tokens=?, updated_at=datetime('now')
       WHERE id=?
@@ -3889,6 +4581,10 @@ function createAiBotFeature({
       input.allow_image_generate ? 1 : 0,
       input.allow_image_edit ? 1 : 0,
       input.allow_document ? 1 : 0,
+      input.allow_poll_create ? 1 : 0,
+      input.allow_poll_vote ? 1 : 0,
+      input.allow_react ? 1 : 0,
+      input.allow_pin ? 1 : 0,
       input.image_quality,
       input.image_background,
       input.image_output_format,
@@ -3995,6 +4691,10 @@ function createAiBotFeature({
         allow_image_generate: bot.allow_image_generate,
         allow_image_edit: bot.allow_image_edit,
         allow_document: bot.allow_document,
+        allow_poll_create: bot.allow_poll_create,
+        allow_poll_vote: bot.allow_poll_vote,
+        allow_react: bot.allow_react,
+        allow_pin: bot.allow_pin,
         image_quality: bot.image_quality,
         image_background: bot.image_background,
         image_output_format: bot.image_output_format,
@@ -4163,7 +4863,8 @@ function createAiBotFeature({
     const enabled = boolValue(req.body?.enabled, false);
     const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
     const triggerMode = 'mention_reply';
-    saveChatBotSettingTx({ chatId, bot, enabled, mode: 'simple', hotContextLimit, triggerMode });
+    const autoReactOnMention = boolValue(req.body?.auto_react_on_mention, false);
+    saveChatBotSettingTx({ chatId, bot, enabled, mode: 'simple', hotContextLimit, triggerMode, autoReactOnMention });
     res.json({ ok: true, state: serializeDeepSeekAdminState() });
   });
 
@@ -4210,6 +4911,7 @@ function createAiBotFeature({
       UPDATE ai_bots
       SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
           enabled=?, provider='deepseek', kind='text', response_model=?, summary_model=?, embedding_model=?,
+          allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?,
           temperature=?, max_tokens=?, updated_at=datetime('now')
       WHERE id=?
     `).run(
@@ -4223,6 +4925,10 @@ function createAiBotFeature({
       input.response_model,
       input.summary_model,
       input.embedding_model,
+      input.allow_poll_create ? 1 : 0,
+      input.allow_poll_vote ? 1 : 0,
+      input.allow_react ? 1 : 0,
+      input.allow_pin ? 1 : 0,
       input.temperature,
       input.max_tokens,
       current.id
@@ -4281,6 +4987,10 @@ function createAiBotFeature({
         name: bot.name,
         mention: bot.mention,
         enabled: bot.enabled,
+        allow_poll_create: bot.allow_poll_create,
+        allow_poll_vote: bot.allow_poll_vote,
+        allow_react: bot.allow_react,
+        allow_pin: bot.allow_pin,
         response_model: bot.response_model,
         summary_model: bot.summary_model,
         temperature: bot.temperature,
@@ -4329,6 +5039,10 @@ function createAiBotFeature({
       enabled: Object.prototype.hasOwnProperty.call(source, 'enabled') ? source.enabled : true,
       response_model: responseModel,
       summary_model: summaryModel,
+      allow_poll_create: source.allow_poll_create,
+      allow_poll_vote: source.allow_poll_vote,
+      allow_react: source.allow_react,
+      allow_pin: source.allow_pin,
       temperature: source.temperature,
       max_tokens: source.max_tokens,
       style: source.style,
@@ -4454,7 +5168,8 @@ function createAiBotFeature({
     const mode = req.body?.mode === 'hybrid' ? 'hybrid' : 'simple';
     const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
     const triggerMode = 'mention_reply';
-    saveChatBotSettingTx({ chatId, bot, enabled, mode, hotContextLimit, triggerMode });
+    const autoReactOnMention = boolValue(req.body?.auto_react_on_mention, false);
+    saveChatBotSettingTx({ chatId, bot, enabled, mode, hotContextLimit, triggerMode, autoReactOnMention });
     if (enabled && mode === 'hybrid') {
       memoryQueue.enqueue(`yandex:backfill:${chatId}`, { type: 'yandex-backfill-chat', chatId });
     }
@@ -4504,6 +5219,7 @@ function createAiBotFeature({
       UPDATE ai_bots
       SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
           enabled=?, provider='yandex', response_model=?, summary_model=?, embedding_model=?,
+          allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?,
           temperature=?, max_tokens=?, updated_at=datetime('now')
       WHERE id=?
     `).run(
@@ -4517,6 +5233,10 @@ function createAiBotFeature({
       input.response_model,
       input.summary_model,
       input.embedding_model,
+      input.allow_poll_create ? 1 : 0,
+      input.allow_poll_vote ? 1 : 0,
+      input.allow_react ? 1 : 0,
+      input.allow_pin ? 1 : 0,
       input.temperature,
       input.max_tokens,
       current.id
@@ -4575,6 +5295,10 @@ function createAiBotFeature({
         name: bot.name,
         mention: bot.mention,
         enabled: bot.enabled,
+        allow_poll_create: bot.allow_poll_create,
+        allow_poll_vote: bot.allow_poll_vote,
+        allow_react: bot.allow_react,
+        allow_pin: bot.allow_pin,
         response_model: bot.response_model,
         summary_model: bot.summary_model,
         temperature: bot.temperature,
@@ -4604,6 +5328,10 @@ function createAiBotFeature({
       enabled: Object.prototype.hasOwnProperty.call(source, 'enabled') ? source.enabled : true,
       response_model: source.response_model || settings.yandex_default_response_model,
       summary_model: source.summary_model || settings.yandex_default_summary_model,
+      allow_poll_create: source.allow_poll_create,
+      allow_poll_vote: source.allow_poll_vote,
+      allow_react: source.allow_react,
+      allow_pin: source.allow_pin,
       temperature: source.temperature,
       max_tokens: source.max_tokens,
       style: source.style,
@@ -4727,7 +5455,8 @@ function createAiBotFeature({
     const mode = botKind === 'image' ? 'simple' : (req.body?.mode === 'hybrid' ? 'hybrid' : 'simple');
     const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
     const triggerMode = 'mention_reply';
-    saveChatBotSettingTx({ chatId, bot, enabled, mode, hotContextLimit, triggerMode });
+    const autoReactOnMention = botKind === 'image' ? false : boolValue(req.body?.auto_react_on_mention, false);
+    saveChatBotSettingTx({ chatId, bot, enabled, mode, hotContextLimit, triggerMode, autoReactOnMention });
     if (enabled && mode === 'hybrid' && botKind === 'text') {
       memoryQueue.enqueue(`grok:backfill:${chatId}`, { type: 'grok-backfill-chat', chatId });
     }
@@ -4790,7 +5519,9 @@ function createAiBotFeature({
       UPDATE ai_bots
       SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
           enabled=?, provider='grok', kind=?, response_model=?, summary_model=?, embedding_model=?,
-          image_model=?, image_aspect_ratio=?, image_resolution=?, temperature=?, max_tokens=?,
+          image_model=?, image_aspect_ratio=?, image_resolution=?,
+          allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?,
+          temperature=?, max_tokens=?,
           updated_at=datetime('now')
       WHERE id=?
     `).run(
@@ -4808,6 +5539,10 @@ function createAiBotFeature({
       input.image_model,
       input.image_aspect_ratio,
       input.image_resolution,
+      input.allow_poll_create ? 1 : 0,
+      input.allow_poll_vote ? 1 : 0,
+      input.allow_react ? 1 : 0,
+      input.allow_pin ? 1 : 0,
       input.temperature,
       input.max_tokens,
       current.id
@@ -4905,6 +5640,10 @@ function createAiBotFeature({
         image_model: bot.image_model,
         image_aspect_ratio: bot.image_aspect_ratio,
         image_resolution: bot.image_resolution,
+        allow_poll_create: bot.allow_poll_create,
+        allow_poll_vote: bot.allow_poll_vote,
+        allow_react: bot.allow_react,
+        allow_pin: bot.allow_pin,
         temperature: bot.temperature,
         max_tokens: bot.max_tokens,
         style: bot.style,
@@ -4961,6 +5700,10 @@ function createAiBotFeature({
       image_model: imageModel,
       image_aspect_ratio: source.image_aspect_ratio || settings.grok_default_image_aspect_ratio,
       image_resolution: source.image_resolution || settings.grok_default_image_resolution,
+      allow_poll_create: source.allow_poll_create,
+      allow_poll_vote: source.allow_poll_vote,
+      allow_react: source.allow_react,
+      allow_pin: source.allow_pin,
       temperature: source.temperature,
       max_tokens: source.max_tokens,
       style: source.style,
@@ -5022,7 +5765,8 @@ function createAiBotFeature({
     const mode = req.body?.mode === 'hybrid' ? 'hybrid' : 'simple';
     const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
     const triggerMode = 'mention_reply';
-    saveChatBotSettingTx({ chatId, bot, enabled, mode, hotContextLimit, triggerMode });
+    const autoReactOnMention = boolValue(req.body?.auto_react_on_mention, false);
+    saveChatBotSettingTx({ chatId, bot, enabled, mode, hotContextLimit, triggerMode, autoReactOnMention });
     if (enabled && mode === 'hybrid') {
       memoryQueue.enqueue(`grok:backfill:${chatId}`, { type: 'grok-backfill-chat', chatId });
     }
@@ -5073,6 +5817,7 @@ function createAiBotFeature({
       SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
           enabled=?, provider='grok', kind='universal', response_model=?, summary_model=?, embedding_model=?,
           image_model=?, image_aspect_ratio=?, image_resolution=?, allow_text=?, allow_image_generate=?, allow_image_edit=?, allow_document=?,
+          allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?,
           temperature=?, max_tokens=?, updated_at=datetime('now')
       WHERE id=?
     `).run(
@@ -5093,6 +5838,10 @@ function createAiBotFeature({
       input.allow_image_generate ? 1 : 0,
       input.allow_image_edit ? 1 : 0,
       0,
+      input.allow_poll_create ? 1 : 0,
+      input.allow_poll_vote ? 1 : 0,
+      input.allow_react ? 1 : 0,
+      input.allow_pin ? 1 : 0,
       input.temperature,
       input.max_tokens,
       current.id
@@ -5196,6 +5945,10 @@ function createAiBotFeature({
         allow_text: bot.allow_text,
         allow_image_generate: bot.allow_image_generate,
         allow_image_edit: bot.allow_image_edit,
+        allow_poll_create: bot.allow_poll_create,
+        allow_poll_vote: bot.allow_poll_vote,
+        allow_react: bot.allow_react,
+        allow_pin: bot.allow_pin,
         temperature: bot.temperature,
         max_tokens: bot.max_tokens,
         style: bot.style,

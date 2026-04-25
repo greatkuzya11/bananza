@@ -550,6 +550,14 @@
                 <span class="toggle-slider"></span>
               </label>
             </div>
+            <div class="settings-item settings-toggle-item">
+              <span>Interactive actions</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="aiBotsInteractiveEnabled">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="settings-hint">Enables polls, poll votes, reactions, and pinning for all OpenAI text and universal bots.</div>
             <div class="ai-bot-grid">
               <label>Response model<select id="aiBotsDefaultResponseModel" class="modal-input"></select></label>
               <label>Summary model<select id="aiBotsDefaultSummaryModel" class="modal-input"></select></label>
@@ -635,18 +643,46 @@
               <label>Embedding model<input id="aiBotEmbeddingModel" class="modal-input" readonly></label>
               <label>Temperature<input id="aiBotTemperature" class="modal-input" type="number" min="0" max="2" step="0.05" value="0.55"></label>
               <label>Max tokens<input id="aiBotMaxTokens" class="modal-input" type="number" min="16" max="8000" step="50" value="1000"></label>
-              <label class="ai-bot-toggle-label">Enabled
+              <div class="ai-bot-toggle-label"><span>Enabled</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="aiBotEnabled" checked>
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow poll create</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="aiBotAllowPollCreate" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow poll vote</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="aiBotAllowPollVote" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow reactions</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="aiBotAllowReact" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow pin</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="aiBotAllowPin" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
             </div>
+            <div class="settings-hint">Interactive actions are managed in OpenAI AI global settings and are read-only here.</div>
             <div class="settings-hint">Embedding model глобальная для долговременной памяти: все боты используют один vector index.</div>
             <label class="ai-bot-field">Style<textarea id="aiBotStyle" class="modal-input" rows="2"></textarea></label>
             <label class="ai-bot-field">Tone<textarea id="aiBotTone" class="modal-input" rows="2"></textarea></label>
             <label class="ai-bot-field">Behavior rules<textarea id="aiBotRules" class="modal-input" rows="4"></textarea></label>
             <label class="ai-bot-field">Speech patterns<textarea id="aiBotSpeech" class="modal-input" rows="3"></textarea></label>
+            <div class="ai-bot-actions">
+              <button id="aiBotSaveBottom" type="button" class="btn-primary">Сохранить бота</button>
+            </div>
           </div>
 
           <div class="ai-bot-panel">
@@ -659,12 +695,18 @@
                 <option value="hybrid">Hybrid memory</option>
               </select></label>
               <label>Контекст<input id="aiBotChatHotLimit" class="modal-input" type="number" min="20" max="100" value="50"></label>
-              <label class="ai-bot-toggle-label">Включён в чате
+              <div class="ai-bot-toggle-label"><span>Включён в чате</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="aiBotChatEnabled">
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Auto react on mention</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="aiBotChatAutoReact">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
             </div>
             <button id="aiBotChatSave" type="button" class="btn-primary">Сохранить для чата</button>
             <div class="settings-hint">Боты отвечают только на @mention или reply на сообщение конкретного бота.</div>
@@ -727,42 +769,70 @@
               </select></label>
               <label>Temperature<input id="openAiUniversalBotTemperature" class="modal-input" type="number" min="0" max="2" step="0.05" value="0.55"></label>
               <label>Max tokens<input id="openAiUniversalBotMaxTokens" class="modal-input" type="number" min="16" max="8000" step="50" value="1000"></label>
-              <label class="ai-bot-toggle-label">Enabled
+              <div class="ai-bot-toggle-label"><span>Enabled</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="openAiUniversalBotEnabled" checked>
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
-              <label class="ai-bot-toggle-label">Allow text
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow text</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="openAiUniversalBotAllowText" checked>
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
-              <label class="ai-bot-toggle-label">Allow image generate
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow image generate</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="openAiUniversalBotAllowImageGenerate" checked>
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
-              <label class="ai-bot-toggle-label">Allow image edit
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow image edit</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="openAiUniversalBotAllowImageEdit" checked>
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
-              <label class="ai-bot-toggle-label">Allow document
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow document</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="openAiUniversalBotAllowDocument" checked>
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow poll create</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="openAiUniversalBotAllowPollCreate" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow poll vote</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="openAiUniversalBotAllowPollVote" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow reactions</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="openAiUniversalBotAllowReact" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow pin</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="openAiUniversalBotAllowPin" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
             </div>
+            <div class="settings-hint">Interactive actions are managed in OpenAI AI global settings and are read-only here.</div>
             <div class="settings-hint">Universal OpenAI bots can answer with text, generate or edit images, and optionally return a document attachment.</div>
             <label class="ai-bot-field">Style<textarea id="openAiUniversalBotStyle" class="modal-input" rows="2"></textarea></label>
             <label class="ai-bot-field">Tone<textarea id="openAiUniversalBotTone" class="modal-input" rows="2"></textarea></label>
             <label class="ai-bot-field">Behavior rules<textarea id="openAiUniversalBotRules" class="modal-input" rows="4"></textarea></label>
             <label class="ai-bot-field">Speech patterns<textarea id="openAiUniversalBotSpeech" class="modal-input" rows="3"></textarea></label>
+            <div class="ai-bot-actions">
+              <button id="openAiUniversalBotSaveBottom" type="button" class="btn-primary">Save bot</button>
+            </div>
             <div class="ai-bot-grid">
               <label>Test mode<select id="openAiUniversalBotTestMode" class="modal-input">
                 <option value="auto">Auto</option>
@@ -783,12 +853,18 @@
                 <option value="hybrid">Hybrid memory</option>
               </select></label>
               <label>Context<input id="openAiUniversalBotChatHotLimit" class="modal-input" type="number" min="20" max="100" value="50"></label>
-              <label class="ai-bot-toggle-label">Enabled in chat
+              <div class="ai-bot-toggle-label"><span>Enabled in chat</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="openAiUniversalBotChatEnabled">
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Auto react on mention</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="openAiUniversalBotChatAutoReact">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
             </div>
             <button id="openAiUniversalBotChatSave" type="button" class="btn-primary">Save for chat</button>
           </div>
@@ -817,6 +893,14 @@
                 <span class="toggle-slider"></span>
               </label>
             </div>
+            <div class="settings-item settings-toggle-item">
+              <span>Interactive actions</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="deepseekAiInteractiveEnabled">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="settings-hint">Enables polls, poll votes, reactions, and pinning for all DeepSeek bots.</div>
             <div class="ai-bot-grid">
               <label>Base URL<input id="deepseekAiBaseUrl" class="modal-input" value="https://api.deepseek.com"></label>
               <label>Response model<select id="deepseekAiDefaultResponseModel" class="modal-input"></select></label>
@@ -870,13 +954,38 @@
               <label>Summary model<select id="deepseekAiBotSummaryModel" class="modal-input"></select></label>
               <label>Temperature<input id="deepseekAiBotTemperature" class="modal-input" type="number" min="0" max="1" step="0.05" value="0.3"></label>
               <label>Max tokens<input id="deepseekAiBotMaxTokens" class="modal-input" type="number" min="1" max="8000" step="50" value="1000"></label>
-              <label class="ai-bot-toggle-label">Enabled
+              <div class="ai-bot-toggle-label"><span>Enabled</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="deepseekAiBotEnabled" checked>
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow poll create</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="deepseekAiBotAllowPollCreate" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow poll vote</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="deepseekAiBotAllowPollVote" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow reactions</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="deepseekAiBotAllowReact" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow pin</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="deepseekAiBotAllowPin" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
             </div>
+            <div class="settings-hint">Interactive actions are managed by the DeepSeek provider switch above and are read-only here.</div>
             <div class="settings-hint">Выбирайте `deepseek-chat` для обычного текстового режима и `deepseek-reasoner` для reasoning-сценариев. Hybrid memory для DeepSeek отключён.</div>
             <label class="ai-bot-field">Style<textarea id="deepseekAiBotStyle" class="modal-input" rows="2"></textarea></label>
             <label class="ai-bot-field">Tone<textarea id="deepseekAiBotTone" class="modal-input" rows="2"></textarea></label>
@@ -893,12 +1002,18 @@
                 <option value="simple">Simple context</option>
               </select></label>
               <label>Context<input id="deepseekAiBotChatHotLimit" class="modal-input" type="number" min="20" max="100" value="50"></label>
-              <label class="ai-bot-toggle-label">Enabled in chat
+              <div class="ai-bot-toggle-label"><span>Enabled in chat</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="deepseekAiBotChatEnabled">
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Auto react on mention</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="deepseekAiBotChatAutoReact">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
             </div>
             <button id="deepseekAiBotChatSave" type="button" class="btn-primary">Save for chat</button>
             <div class="settings-hint">DeepSeek-боты отвечают только на @mention или reply. Hybrid memory для них недоступен, поэтому здесь всегда используется только simple context.</div>
@@ -928,6 +1043,14 @@
                 <span class="toggle-slider"></span>
               </label>
             </div>
+            <div class="settings-item settings-toggle-item">
+              <span>Interactive actions</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="yandexAiInteractiveEnabled">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="settings-hint">Enables polls, poll votes, reactions, and pinning for all Yandex bots.</div>
             <div class="ai-bot-grid">
               <label>&#1048;&#1076;&#1077;&#1085;&#1090;&#1080;&#1092;&#1080;&#1082;&#1072;&#1090;&#1086;&#1088; &#1082;&#1072;&#1090;&#1072;&#1083;&#1086;&#1075;&#1072; (Folder ID)<input id="yandexAiFolderId" class="modal-input" autocomplete="off" placeholder="b1g..."></label>
               <label>Base URL<input id="yandexAiBaseUrl" class="modal-input" value="https://llm.api.cloud.yandex.net/foundationModels/v1"></label>
@@ -942,12 +1065,12 @@
                 <option value="DISABLED">DISABLED</option>
                 <option value="ENABLED_HIDDEN">ENABLED_HIDDEN</option>
               </select></label>
-              <label class="ai-bot-toggle-label">Data logging
+              <div class="ai-bot-toggle-label"><span>Data logging</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="yandexAiDataLoggingEnabled">
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
+              </div>
             </div>
             <label class="ai-bot-field">Yandex API key
               <input id="yandexAiApiKey" class="modal-input" type="password" autocomplete="off" placeholder="Api-Key value">
@@ -995,13 +1118,38 @@
               <label>Summary model<select id="yandexAiBotSummaryModel" class="modal-input"></select></label>
               <label>Temperature<input id="yandexAiBotTemperature" class="modal-input" type="number" min="0" max="1" step="0.05" value="0.3"></label>
               <label>Max tokens<input id="yandexAiBotMaxTokens" class="modal-input" type="number" min="1" max="8000" step="50" value="1000"></label>
-              <label class="ai-bot-toggle-label">Enabled
+              <div class="ai-bot-toggle-label"><span>Enabled</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="yandexAiBotEnabled" checked>
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow poll create</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="yandexAiBotAllowPollCreate" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow poll vote</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="yandexAiBotAllowPollVote" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow reactions</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="yandexAiBotAllowReact" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow pin</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="yandexAiBotAllowPin" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
             </div>
+            <div class="settings-hint">Interactive actions are managed by the Yandex provider switch above and are read-only here.</div>
             <div class="settings-hint">Yandex hybrid memory uses separate embedding tables and does not touch OpenAI memory.</div>
             <label class="ai-bot-field">Style<textarea id="yandexAiBotStyle" class="modal-input" rows="2"></textarea></label>
             <label class="ai-bot-field">Tone<textarea id="yandexAiBotTone" class="modal-input" rows="2"></textarea></label>
@@ -1019,12 +1167,18 @@
                 <option value="hybrid">Hybrid memory</option>
               </select></label>
               <label>Context<input id="yandexAiBotChatHotLimit" class="modal-input" type="number" min="20" max="100" value="50"></label>
-              <label class="ai-bot-toggle-label">Enabled in chat
+              <div class="ai-bot-toggle-label"><span>Enabled in chat</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="yandexAiBotChatEnabled">
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Auto react on mention</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="yandexAiBotChatAutoReact">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
             </div>
             <button id="yandexAiBotChatSave" type="button" class="btn-primary">Save for chat</button>
             <div class="settings-hint">Yandex bots answer only to @mention or reply to that bot.</div>
@@ -1054,6 +1208,14 @@
                 <span class="toggle-slider"></span>
               </label>
             </div>
+            <div class="settings-item settings-toggle-item">
+              <span>Interactive actions</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="grokAiInteractiveEnabled">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="settings-hint">Enables polls, poll votes, reactions, and pinning for all Grok text and universal bots.</div>
             <div class="ai-bot-grid">
               <label>Base URL<input id="grokAiBaseUrl" class="modal-input" value="https://api.x.ai/v1"></label>
               <label>Response model<select id="grokAiDefaultResponseModel" class="modal-input"></select></label>
@@ -1110,18 +1272,46 @@
               <label>Summary model<select id="grokAiBotSummaryModel" class="modal-input"></select></label>
               <label>Temperature<input id="grokAiBotTemperature" class="modal-input" type="number" min="0" max="1" step="0.05" value="0.3"></label>
               <label>Max tokens<input id="grokAiBotMaxTokens" class="modal-input" type="number" min="1" max="8000" step="50" value="1000"></label>
-              <label class="ai-bot-toggle-label">Enabled
+              <div class="ai-bot-toggle-label"><span>Enabled</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="grokAiBotEnabled" checked>
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow poll create</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="grokAiBotAllowPollCreate" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow poll vote</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="grokAiBotAllowPollVote" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow reactions</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="grokAiBotAllowReact" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow pin</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="grokAiBotAllowPin" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
             </div>
+            <div class="settings-hint">Interactive actions are managed by the Grok provider switch above and are read-only here.</div>
             <div class="settings-hint">Grok hybrid memory uses separate Grok vector tables and does not touch OpenAI or Yandex memory.</div>
             <label class="ai-bot-field">Style<textarea id="grokAiBotStyle" class="modal-input" rows="2"></textarea></label>
             <label class="ai-bot-field">Tone<textarea id="grokAiBotTone" class="modal-input" rows="2"></textarea></label>
             <label class="ai-bot-field">Behavior rules<textarea id="grokAiBotRules" class="modal-input" rows="4"></textarea></label>
             <label class="ai-bot-field">Speech patterns<textarea id="grokAiBotSpeech" class="modal-input" rows="3"></textarea></label>
+            <div class="ai-bot-actions">
+              <button id="grokAiBotSaveBottom" type="button" class="btn-primary">Save bot</button>
+            </div>
             <div class="ai-bot-grid">
               <label>Chat<select id="grokAiBotChatSelect" class="modal-input"></select></label>
               <label>Bot<select id="grokAiBotChatBotSelect" class="modal-input"></select></label>
@@ -1130,12 +1320,18 @@
                 <option value="hybrid">Hybrid memory</option>
               </select></label>
               <label>Context<input id="grokAiBotChatHotLimit" class="modal-input" type="number" min="20" max="100" value="50"></label>
-              <label class="ai-bot-toggle-label">Enabled in chat
+              <div class="ai-bot-toggle-label"><span>Enabled in chat</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="grokAiBotChatEnabled">
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Auto react on mention</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="grokAiBotChatAutoReact">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
             </div>
             <button id="grokAiBotChatSave" type="button" class="btn-primary">Save for chat</button>
           </div>
@@ -1171,12 +1367,12 @@
               <label>Image model<select id="grokAiImageBotModel" class="modal-input"></select></label>
               <label>Aspect ratio<select id="grokAiImageBotAspectRatio" class="modal-input"></select></label>
               <label>Resolution<select id="grokAiImageBotResolution" class="modal-input"></select></label>
-              <label class="ai-bot-toggle-label">Enabled
+              <div class="ai-bot-toggle-label"><span>Enabled</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="grokAiImageBotEnabled" checked>
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
+              </div>
             </div>
             <label class="ai-bot-field">Style<textarea id="grokAiImageBotStyle" class="modal-input" rows="2"></textarea></label>
             <label class="ai-bot-field">Tone<textarea id="grokAiImageBotTone" class="modal-input" rows="2"></textarea></label>
@@ -1185,12 +1381,12 @@
             <div class="ai-bot-grid">
               <label>Chat<select id="grokAiImageBotChatSelect" class="modal-input"></select></label>
               <label>Bot<select id="grokAiImageBotChatBotSelect" class="modal-input"></select></label>
-              <label class="ai-bot-toggle-label">Enabled in chat
+              <div class="ai-bot-toggle-label"><span>Enabled in chat</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="grokAiImageBotChatEnabled">
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
+              </div>
             </div>
             <button id="grokAiImageBotChatSave" type="button" class="btn-primary">Save for chat</button>
             <div class="settings-hint">Image bots always use simple mode and answer with one generated image saved to local uploads.</div>
@@ -1231,31 +1427,56 @@
               <label>Resolution<select id="grokAiUniversalBotResolution" class="modal-input"></select></label>
               <label>Temperature<input id="grokAiUniversalBotTemperature" class="modal-input" type="number" min="0" max="1" step="0.05" value="0.3"></label>
               <label>Max tokens<input id="grokAiUniversalBotMaxTokens" class="modal-input" type="number" min="1" max="8000" step="50" value="1000"></label>
-              <label class="ai-bot-toggle-label">Enabled
+              <div class="ai-bot-toggle-label"><span>Enabled</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="grokAiUniversalBotEnabled" checked>
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
-              <label class="ai-bot-toggle-label">Allow text
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow text</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="grokAiUniversalBotAllowText" checked>
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
-              <label class="ai-bot-toggle-label">Allow image generate
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow image generate</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="grokAiUniversalBotAllowImageGenerate" checked>
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
-              <label class="ai-bot-toggle-label">Allow image edit
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow image edit</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="grokAiUniversalBotAllowImageEdit" checked>
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow poll create</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="grokAiUniversalBotAllowPollCreate" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow poll vote</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="grokAiUniversalBotAllowPollVote" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow reactions</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="grokAiUniversalBotAllowReact" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Allow pin</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="grokAiUniversalBotAllowPin" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
             </div>
+            <div class="settings-hint">Interactive actions are managed by the Grok provider switch above and are read-only here.</div>
             <div class="settings-hint">Universal Grok bots can answer with text, analyze images, generate new images, and edit a supported source image.</div>
             <label class="ai-bot-field">Style<textarea id="grokAiUniversalBotStyle" class="modal-input" rows="2"></textarea></label>
             <label class="ai-bot-field">Tone<textarea id="grokAiUniversalBotTone" class="modal-input" rows="2"></textarea></label>
@@ -1276,12 +1497,18 @@
                 <option value="hybrid">Hybrid memory</option>
               </select></label>
               <label>Context<input id="grokAiUniversalBotChatHotLimit" class="modal-input" type="number" min="20" max="100" value="50"></label>
-              <label class="ai-bot-toggle-label">Enabled in chat
+              <div class="ai-bot-toggle-label"><span>Enabled in chat</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="grokAiUniversalBotChatEnabled">
                   <span class="toggle-slider"></span>
                 </label>
-              </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Auto react on mention</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="grokAiUniversalBotChatAutoReact">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
             </div>
             <button id="grokAiUniversalBotChatSave" type="button" class="btn-primary">Save for chat</button>
           </div>
@@ -1688,7 +1915,7 @@
   <script src="/js/sounds.js"></script>
   <script src="/js/messageCache.js"></script>
   <script src="/js/ai-image-risk.js"></script>
-  <script src="/js/app.js"></script>
+  <script src="/js/app.js?v=20260425-provider-interactive"></script>
   <script src="/js/video-notes/video-note-shapes.js"></script>
   <script src="/js/video-notes/VideoShapeRegistry.js"></script>
   <script src="/js/video-notes/AudioNoteRecorderAdapter.js"></script>

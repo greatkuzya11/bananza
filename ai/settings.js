@@ -4,6 +4,7 @@ const GLOBAL_SETTINGS_KEY = 'global';
 
 const DEFAULT_AI_SETTINGS = {
   enabled: false,
+  openai_interactive_enabled: false,
   default_response_model: 'gpt-5.4',
   default_summary_model: 'gpt-5.4',
   default_embedding_model: 'text-embedding-3-small',
@@ -18,6 +19,7 @@ const DEFAULT_AI_SETTINGS = {
   openai_key_encrypted: '',
   openai_key_masked: '',
   grok_enabled: false,
+  grok_interactive_enabled: false,
   grok_base_url: 'https://api.x.ai/v1',
   grok_default_response_model: 'grok-4.20-reasoning',
   grok_default_summary_model: 'grok-4.20-reasoning',
@@ -30,6 +32,7 @@ const DEFAULT_AI_SETTINGS = {
   grok_key_encrypted: '',
   grok_key_masked: '',
   deepseek_enabled: false,
+  deepseek_interactive_enabled: false,
   deepseek_base_url: 'https://api.deepseek.com',
   deepseek_default_response_model: 'deepseek-chat',
   deepseek_default_summary_model: 'deepseek-chat',
@@ -38,6 +41,7 @@ const DEFAULT_AI_SETTINGS = {
   deepseek_key_encrypted: '',
   deepseek_key_masked: '',
   yandex_enabled: false,
+  yandex_interactive_enabled: false,
   yandex_folder_id: '',
   yandex_base_url: 'https://llm.api.cloud.yandex.net/foundationModels/v1',
   yandex_default_response_model: 'yandexgpt/latest',
@@ -150,6 +154,12 @@ function cleanImageResolution(value, fallback) {
 function normalizeSettings(raw = {}) {
   const next = { ...DEFAULT_AI_SETTINGS, ...raw };
   next.enabled = boolValue(next.enabled, DEFAULT_AI_SETTINGS.enabled);
+  next.openai_interactive_enabled = boolValue(
+    Object.prototype.hasOwnProperty.call(raw, 'openai_interactive_enabled')
+      ? raw.openai_interactive_enabled
+      : next.enabled,
+    next.enabled
+  );
   next.default_response_model = cleanModel(next.default_response_model, DEFAULT_AI_SETTINGS.default_response_model);
   next.default_summary_model = cleanModel(next.default_summary_model, DEFAULT_AI_SETTINGS.default_summary_model);
   next.default_embedding_model = cleanModel(next.default_embedding_model, DEFAULT_AI_SETTINGS.default_embedding_model);
@@ -164,6 +174,12 @@ function normalizeSettings(raw = {}) {
   next.openai_key_encrypted = String(next.openai_key_encrypted || '');
   next.openai_key_masked = String(next.openai_key_masked || '');
   next.grok_enabled = boolValue(next.grok_enabled, DEFAULT_AI_SETTINGS.grok_enabled);
+  next.grok_interactive_enabled = boolValue(
+    Object.prototype.hasOwnProperty.call(raw, 'grok_interactive_enabled')
+      ? raw.grok_interactive_enabled
+      : next.grok_enabled,
+    next.grok_enabled
+  );
   next.grok_base_url = cleanBaseUrl(next.grok_base_url, DEFAULT_AI_SETTINGS.grok_base_url);
   next.grok_default_response_model = cleanModel(next.grok_default_response_model, DEFAULT_AI_SETTINGS.grok_default_response_model);
   next.grok_default_summary_model = cleanModel(next.grok_default_summary_model, DEFAULT_AI_SETTINGS.grok_default_summary_model);
@@ -176,6 +192,12 @@ function normalizeSettings(raw = {}) {
   next.grok_key_encrypted = String(next.grok_key_encrypted || '');
   next.grok_key_masked = String(next.grok_key_masked || '');
   next.deepseek_enabled = boolValue(next.deepseek_enabled, DEFAULT_AI_SETTINGS.deepseek_enabled);
+  next.deepseek_interactive_enabled = boolValue(
+    Object.prototype.hasOwnProperty.call(raw, 'deepseek_interactive_enabled')
+      ? raw.deepseek_interactive_enabled
+      : next.deepseek_enabled,
+    next.deepseek_enabled
+  );
   next.deepseek_base_url = cleanBaseUrl(next.deepseek_base_url, DEFAULT_AI_SETTINGS.deepseek_base_url);
   next.deepseek_default_response_model = cleanModel(next.deepseek_default_response_model, DEFAULT_AI_SETTINGS.deepseek_default_response_model);
   next.deepseek_default_summary_model = cleanModel(next.deepseek_default_summary_model, DEFAULT_AI_SETTINGS.deepseek_default_summary_model);
@@ -184,6 +206,12 @@ function normalizeSettings(raw = {}) {
   next.deepseek_key_encrypted = String(next.deepseek_key_encrypted || '');
   next.deepseek_key_masked = String(next.deepseek_key_masked || '');
   next.yandex_enabled = boolValue(next.yandex_enabled, DEFAULT_AI_SETTINGS.yandex_enabled);
+  next.yandex_interactive_enabled = boolValue(
+    Object.prototype.hasOwnProperty.call(raw, 'yandex_interactive_enabled')
+      ? raw.yandex_interactive_enabled
+      : next.yandex_enabled,
+    next.yandex_enabled
+  );
   next.yandex_folder_id = cleanText(next.yandex_folder_id, DEFAULT_AI_SETTINGS.yandex_folder_id, 120);
   next.yandex_base_url = cleanBaseUrl(next.yandex_base_url, DEFAULT_AI_SETTINGS.yandex_base_url);
   next.yandex_default_response_model = cleanModel(next.yandex_default_response_model, DEFAULT_AI_SETTINGS.yandex_default_response_model);
@@ -270,6 +298,9 @@ function saveAiSettings(db, incoming = {}, secret) {
   const next = normalizeSettings({
     ...current,
     enabled: Object.prototype.hasOwnProperty.call(incoming, 'enabled') ? incoming.enabled : current.enabled,
+    openai_interactive_enabled: Object.prototype.hasOwnProperty.call(incoming, 'openai_interactive_enabled')
+      ? incoming.openai_interactive_enabled
+      : current.openai_interactive_enabled,
     default_response_model: incoming.default_response_model ?? current.default_response_model,
     default_summary_model: incoming.default_summary_model ?? current.default_summary_model,
     default_embedding_model: incoming.default_embedding_model ?? current.default_embedding_model,
@@ -282,6 +313,9 @@ function saveAiSettings(db, incoming = {}, secret) {
     chunk_size: incoming.chunk_size ?? current.chunk_size,
     retrieval_top_k: incoming.retrieval_top_k ?? current.retrieval_top_k,
     grok_enabled: Object.prototype.hasOwnProperty.call(incoming, 'grok_enabled') ? incoming.grok_enabled : current.grok_enabled,
+    grok_interactive_enabled: Object.prototype.hasOwnProperty.call(incoming, 'grok_interactive_enabled')
+      ? incoming.grok_interactive_enabled
+      : current.grok_interactive_enabled,
     grok_base_url: incoming.grok_base_url ?? current.grok_base_url,
     grok_default_response_model: incoming.grok_default_response_model ?? current.grok_default_response_model,
     grok_default_summary_model: incoming.grok_default_summary_model ?? current.grok_default_summary_model,
@@ -292,12 +326,18 @@ function saveAiSettings(db, incoming = {}, secret) {
     grok_temperature: incoming.grok_temperature ?? current.grok_temperature,
     grok_max_tokens: incoming.grok_max_tokens ?? current.grok_max_tokens,
     deepseek_enabled: Object.prototype.hasOwnProperty.call(incoming, 'deepseek_enabled') ? incoming.deepseek_enabled : current.deepseek_enabled,
+    deepseek_interactive_enabled: Object.prototype.hasOwnProperty.call(incoming, 'deepseek_interactive_enabled')
+      ? incoming.deepseek_interactive_enabled
+      : current.deepseek_interactive_enabled,
     deepseek_base_url: incoming.deepseek_base_url ?? current.deepseek_base_url,
     deepseek_default_response_model: incoming.deepseek_default_response_model ?? current.deepseek_default_response_model,
     deepseek_default_summary_model: incoming.deepseek_default_summary_model ?? current.deepseek_default_summary_model,
     deepseek_temperature: incoming.deepseek_temperature ?? current.deepseek_temperature,
     deepseek_max_tokens: incoming.deepseek_max_tokens ?? current.deepseek_max_tokens,
     yandex_enabled: Object.prototype.hasOwnProperty.call(incoming, 'yandex_enabled') ? incoming.yandex_enabled : current.yandex_enabled,
+    yandex_interactive_enabled: Object.prototype.hasOwnProperty.call(incoming, 'yandex_interactive_enabled')
+      ? incoming.yandex_interactive_enabled
+      : current.yandex_interactive_enabled,
     yandex_folder_id: incoming.yandex_folder_id ?? current.yandex_folder_id,
     yandex_base_url: incoming.yandex_base_url ?? current.yandex_base_url,
     yandex_default_response_model: incoming.yandex_default_response_model ?? current.yandex_default_response_model,

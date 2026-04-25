@@ -306,6 +306,8 @@
   };
   let selectedGrokBotId = null;
   let selectedGrokImageBotId = null;
+  let grokTextBotFormFingerprint = '';
+  let grokTextBotFormHydrating = false;
   let grokUniversalState = {
     settings: { ...grokBotState.settings },
     bots: [],
@@ -4061,6 +4063,12 @@
     $('#openAiUniversalBotAllowImageGenerate').checked = bot?.allow_image_generate ?? true;
     $('#openAiUniversalBotAllowImageEdit').checked = bot?.allow_image_edit ?? true;
     $('#openAiUniversalBotAllowDocument').checked = bot?.allow_document ?? true;
+    fillBotActionCapabilityInputs({
+      pollCreate: 'openAiUniversalBotAllowPollCreate',
+      pollVote: 'openAiUniversalBotAllowPollVote',
+      react: 'openAiUniversalBotAllowReact',
+      pin: 'openAiUniversalBotAllowPin',
+    }, bot || buildInteractiveCapabilityState(providerInteractiveEnabled('openai', settings)));
     $('#openAiUniversalBotTemperature').value = bot?.temperature ?? 0.55;
     $('#openAiUniversalBotMaxTokens').value = bot?.max_tokens ?? 1000;
     $('#openAiUniversalBotStyle').value = bot?.style || 'Helpful OpenAI universal assistant for chat';
@@ -4118,6 +4126,7 @@
     $('#openAiUniversalBotChatEnabled').checked = !!setting?.enabled;
     $('#openAiUniversalBotChatMode').value = setting?.mode || 'simple';
     $('#openAiUniversalBotChatHotLimit').value = setting?.hot_context_limit || 50;
+    $('#openAiUniversalBotChatAutoReact').checked = !!setting?.auto_react_on_mention;
   }
 
   function renderOpenAiUniversalSettings() {
@@ -4169,6 +4178,109 @@
     });
   }
 
+  function fillBotActionCapabilityInputs(ids = {}, bot = null) {
+    const fields = [
+      ['pollCreate', 'allow_poll_create'],
+      ['pollVote', 'allow_poll_vote'],
+      ['react', 'allow_react'],
+      ['pin', 'allow_pin'],
+    ];
+    fields.forEach(([key, field]) => {
+      const input = ids[key] ? $(ids[key]) : null;
+      if (!input) return;
+      input.checked = !!bot?.[field];
+      input.disabled = true;
+      input.title = 'Managed by provider interactive actions';
+    });
+  }
+
+  function readBotActionCapabilityInputs(ids = {}) {
+    return {
+      allow_poll_create: ids.pollCreate ? !!$(ids.pollCreate)?.checked : false,
+      allow_poll_vote: ids.pollVote ? !!$(ids.pollVote)?.checked : false,
+      allow_react: ids.react ? !!$(ids.react)?.checked : false,
+      allow_pin: ids.pin ? !!$(ids.pin)?.checked : false,
+    };
+  }
+
+  function buildInteractiveCapabilityState(enabled = false) {
+    return {
+      allow_poll_create: !!enabled,
+      allow_poll_vote: !!enabled,
+      allow_react: !!enabled,
+      allow_pin: !!enabled,
+    };
+  }
+
+  function providerInteractiveEnabled(provider, settings = {}) {
+    if (provider === 'yandex') return !!settings.yandex_interactive_enabled;
+    if (provider === 'deepseek') return !!settings.deepseek_interactive_enabled;
+    if (provider === 'grok') return !!settings.grok_interactive_enabled;
+    return !!settings.openai_interactive_enabled;
+  }
+
+  function providerInteractiveSummary(provider, settings = {}) {
+    return `Interactive actions: ${providerInteractiveEnabled(provider, settings) ? 'on' : 'off'}`;
+  }
+
+  const BOT_SAVE_BOOLEAN_FIELDS = new Set([
+    'enabled',
+    'allow_text',
+    'allow_image_generate',
+    'allow_image_edit',
+    'allow_document',
+    'allow_poll_create',
+    'allow_poll_vote',
+    'allow_react',
+    'allow_pin',
+  ]);
+  const BOT_SAVE_NUMERIC_FIELDS = new Set([
+    'temperature',
+    'max_tokens',
+  ]);
+
+  function normalizeBotSaveComparisonValue(key, value) {
+    if (BOT_SAVE_BOOLEAN_FIELDS.has(key) || typeof value === 'boolean') return value ? 1 : 0;
+    if (BOT_SAVE_NUMERIC_FIELDS.has(key) || typeof value === 'number') {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric : null;
+    }
+    return String(value ?? '').trim();
+  }
+
+  function verifyBotSaveResponse(bot, payload = {}) {
+    if (!bot || !payload || typeof payload !== 'object') {
+      return { ok: false, mismatches: ['server_response'] };
+    }
+    const mismatches = Object.keys(payload).filter((key) => (
+      normalizeBotSaveComparisonValue(key, bot[key]) !== normalizeBotSaveComparisonValue(key, payload[key])
+    ));
+    return { ok: mismatches.length === 0, mismatches };
+  }
+
+  function buildVerifiedBotSaveStatus(savedLabel, bot, payload = {}, detailLine = '') {
+    const verification = verifyBotSaveResponse(bot, payload);
+    if (verification.ok) {
+      return {
+        type: 'success',
+        message: [
+          savedLabel,
+          'Значения сохранены на сервере.',
+          detailLine,
+        ].filter(Boolean).join('\n'),
+      };
+    }
+    return {
+      type: 'error',
+      message: [
+        savedLabel,
+        'Сервер вернул отличающиеся значения. Форма обновлена по сохранённому состоянию.',
+        verification.mismatches.length ? `Поля: ${verification.mismatches.join(', ')}` : '',
+        detailLine,
+      ].filter(Boolean).join('\n'),
+    };
+  }
+
 
   function fillAiBotForm(bot = null) {
     const settings = aiBotState.settings || {};
@@ -4185,6 +4297,12 @@
     $('#aiBotTone').value = bot?.tone || 'тёплый, внимательный, краткий';
     $('#aiBotRules').value = bot?.behavior_rules || '';
     $('#aiBotSpeech').value = bot?.speech_patterns || '';
+    fillBotActionCapabilityInputs({
+      pollCreate: 'aiBotAllowPollCreate',
+      pollVote: 'aiBotAllowPollVote',
+      react: 'aiBotAllowReact',
+      pin: 'aiBotAllowPin',
+    }, bot || buildInteractiveCapabilityState(providerInteractiveEnabled('openai', settings)));
     renderAiBotAvatar(bot);
     renderAiModelOptions(bot);
     renderAiBotList();
@@ -4247,11 +4365,13 @@
     $('#aiBotChatEnabled').checked = !!setting?.enabled;
     $('#aiBotChatMode').value = setting?.mode || 'simple';
     $('#aiBotChatHotLimit').value = setting?.hot_context_limit || 50;
+    $('#aiBotChatAutoReact').checked = !!setting?.auto_react_on_mention;
   }
 
   function renderOpenAiProviderSettings() {
     const settings = aiBotState.settings || {};
     $('#aiBotsGlobalEnabled').checked = !!settings.enabled;
+    $('#aiBotsInteractiveEnabled').checked = !!settings.openai_interactive_enabled;
     $('#aiBotsDefaultResponseModel').value = settings.default_response_model || 'gpt-5.4';
     $('#aiBotsDefaultSummaryModel').value = settings.default_summary_model || 'gpt-5.4';
     $('#aiBotsDefaultEmbeddingModel').value = settings.default_embedding_model || 'text-embedding-3-small';
@@ -4283,6 +4403,7 @@
   function aiBotSettingsPayload() {
     const body = {
       enabled: $('#aiBotsGlobalEnabled')?.checked,
+      openai_interactive_enabled: $('#aiBotsInteractiveEnabled')?.checked,
       default_response_model: $('#aiBotsDefaultResponseModel')?.value.trim(),
       default_summary_model: $('#aiBotsDefaultSummaryModel')?.value.trim(),
       default_embedding_model: $('#aiBotsDefaultEmbeddingModel')?.value.trim(),
@@ -4326,7 +4447,7 @@
       await loadAiModelOptions(true).catch(() => {});
       renderAiBotSettings();
       renderOpenAiUniversalSettings();
-      setAiBotSettingsStatus('Настройки сохранены', 'success');
+      setAiBotSettingsStatus(`Настройки сохранены\n${providerInteractiveSummary('openai', aiBotState.settings)}`, 'success');
     } catch (e) {
       setAiBotSettingsStatus(e.message || 'Не удалось сохранить настройки', 'error');
     }
@@ -4369,7 +4490,8 @@
         });
       }
       renderAiBotSettings();
-      setAiBotStatus('Бот сохранён', 'success');
+      const status = buildVerifiedBotSaveStatus('Бот сохранён.', data.bot, payload, formatCapabilityState(data.bot || payload));
+      setAiBotStatus(status.message, status.type);
     } catch (e) {
       setAiBotStatus(e.message || 'Не удалось сохранить бота', 'error');
     }
@@ -4536,6 +4658,7 @@
           enabled: $('#aiBotChatEnabled')?.checked,
           mode: $('#aiBotChatMode')?.value || 'simple',
           hot_context_limit: Number($('#aiBotChatHotLimit')?.value || 50),
+          auto_react_on_mention: $('#aiBotChatAutoReact')?.checked,
         },
       });
       mergeAiBotState(data);
@@ -4578,7 +4701,8 @@
       selectedOpenAiUniversalBotId = data.bot?.id || selectedOpenAiUniversalBotId;
       syncOpenAiUniversalBotUser(data.bot);
       renderOpenAiUniversalSettings();
-      setOpenAiUniversalStatus('Universal bot saved', 'success');
+      const status = buildVerifiedBotSaveStatus('Universal bot saved.', data.bot, payload, formatCapabilityState(data.bot || payload));
+      setOpenAiUniversalStatus(status.message, status.type);
     } catch (e) {
       setOpenAiUniversalStatus(e.message || 'Could not save universal bot', 'error');
     }
@@ -4722,6 +4846,7 @@
           enabled: $('#openAiUniversalBotChatEnabled')?.checked,
           mode: $('#openAiUniversalBotChatMode')?.value || 'simple',
           hot_context_limit: Number($('#openAiUniversalBotChatHotLimit')?.value || 50),
+          auto_react_on_mention: $('#openAiUniversalBotChatAutoReact')?.checked,
         },
       });
       mergeOpenAiUniversalState(data);
@@ -4820,6 +4945,12 @@
     $('#deepseekAiBotTone').value = bot?.tone || 'warm, concise, attentive';
     $('#deepseekAiBotRules').value = bot?.behavior_rules || '';
     $('#deepseekAiBotSpeech').value = bot?.speech_patterns || '';
+    fillBotActionCapabilityInputs({
+      pollCreate: 'deepseekAiBotAllowPollCreate',
+      pollVote: 'deepseekAiBotAllowPollVote',
+      react: 'deepseekAiBotAllowReact',
+      pin: 'deepseekAiBotAllowPin',
+    }, bot || buildInteractiveCapabilityState(providerInteractiveEnabled('deepseek', settings)));
     renderDeepseekBotAvatar(bot);
     renderDeepseekModelOptions(bot);
     renderDeepseekBotList();
@@ -4882,11 +5013,13 @@
     $('#deepseekAiBotChatEnabled').checked = !!setting?.enabled;
     $('#deepseekAiBotChatMode').value = 'simple';
     $('#deepseekAiBotChatHotLimit').value = setting?.hot_context_limit || 50;
+    $('#deepseekAiBotChatAutoReact').checked = !!setting?.auto_react_on_mention;
   }
 
   function renderDeepseekAiSettings() {
     const settings = deepseekBotState.settings || {};
     $('#deepseekAiGlobalEnabled').checked = !!settings.deepseek_enabled;
+    $('#deepseekAiInteractiveEnabled').checked = !!settings.deepseek_interactive_enabled;
     $('#deepseekAiBaseUrl').value = settings.deepseek_base_url || 'https://api.deepseek.com';
     $('#deepseekAiTemperature').value = settings.deepseek_temperature ?? 0.3;
     $('#deepseekAiMaxTokens').value = settings.deepseek_max_tokens ?? 1000;
@@ -4913,6 +5046,7 @@
   function deepseekAiSettingsPayload() {
     const body = {
       deepseek_enabled: $('#deepseekAiGlobalEnabled')?.checked,
+      deepseek_interactive_enabled: $('#deepseekAiInteractiveEnabled')?.checked,
       deepseek_base_url: $('#deepseekAiBaseUrl')?.value.trim(),
       deepseek_default_response_model: $('#deepseekAiDefaultResponseModel')?.value.trim(),
       deepseek_default_summary_model: $('#deepseekAiDefaultSummaryModel')?.value.trim(),
@@ -4944,7 +5078,7 @@
     try {
       await persistDeepseekAiSettings();
       renderDeepseekAiSettings();
-      setDeepseekAiStatus('Settings saved', 'success');
+      setDeepseekAiStatus(`Settings saved\n${providerInteractiveSummary('deepseek', deepseekBotState.settings)}`, 'success');
     } catch (e) {
       setDeepseekAiStatus(e.message || 'Could not save settings', 'error');
     }
@@ -5031,7 +5165,8 @@
         });
       }
       renderDeepseekAiSettings();
-      setDeepseekAiStatus('Bot saved', 'success');
+      const status = buildVerifiedBotSaveStatus('Bot saved.', data.bot, payload, formatCapabilityState(data.bot || payload));
+      setDeepseekAiStatus(status.message, status.type);
     } catch (e) {
       setDeepseekAiStatus(e.message || 'Could not save bot', 'error');
     }
@@ -5194,6 +5329,7 @@
           enabled: $('#deepseekAiBotChatEnabled')?.checked,
           mode: 'simple',
           hot_context_limit: Number($('#deepseekAiBotChatHotLimit')?.value || 50),
+          auto_react_on_mention: $('#deepseekAiBotChatAutoReact')?.checked,
         },
       });
       mergeDeepseekAiState(data);
@@ -5324,6 +5460,12 @@
     $('#yandexAiBotTone').value = bot?.tone || 'warm, concise, attentive';
     $('#yandexAiBotRules').value = bot?.behavior_rules || '';
     $('#yandexAiBotSpeech').value = bot?.speech_patterns || '';
+    fillBotActionCapabilityInputs({
+      pollCreate: 'yandexAiBotAllowPollCreate',
+      pollVote: 'yandexAiBotAllowPollVote',
+      react: 'yandexAiBotAllowReact',
+      pin: 'yandexAiBotAllowPin',
+    }, bot || buildInteractiveCapabilityState(providerInteractiveEnabled('yandex', settings)));
     renderYandexBotAvatar(bot);
     renderYandexModelOptions(bot);
     renderYandexBotList();
@@ -5386,11 +5528,13 @@
     $('#yandexAiBotChatEnabled').checked = !!setting?.enabled;
     $('#yandexAiBotChatMode').value = setting?.mode || 'simple';
     $('#yandexAiBotChatHotLimit').value = setting?.hot_context_limit || 50;
+    $('#yandexAiBotChatAutoReact').checked = !!setting?.auto_react_on_mention;
   }
 
   function renderYandexAiSettings() {
     const settings = yandexBotState.settings || {};
     $('#yandexAiGlobalEnabled').checked = !!settings.yandex_enabled;
+    $('#yandexAiInteractiveEnabled').checked = !!settings.yandex_interactive_enabled;
     $('#yandexAiFolderId').value = settings.yandex_folder_id || '';
     $('#yandexAiBaseUrl').value = settings.yandex_base_url || 'https://llm.api.cloud.yandex.net/foundationModels/v1';
     $('#yandexAiDocEmbeddingModel').value = settings.yandex_default_embedding_doc_model || 'text-search-doc/latest';
@@ -5423,6 +5567,7 @@
   function yandexAiSettingsPayload() {
     const body = {
       yandex_enabled: $('#yandexAiGlobalEnabled')?.checked,
+      yandex_interactive_enabled: $('#yandexAiInteractiveEnabled')?.checked,
       yandex_folder_id: $('#yandexAiFolderId')?.value.trim(),
       yandex_base_url: $('#yandexAiBaseUrl')?.value.trim(),
       yandex_default_response_model: $('#yandexAiDefaultResponseModel')?.value.trim(),
@@ -5460,7 +5605,7 @@
     try {
       await persistYandexAiSettings();
       renderYandexAiSettings();
-      setYandexAiStatus('Settings saved', 'success');
+      setYandexAiStatus(`Settings saved\n${providerInteractiveSummary('yandex', yandexBotState.settings)}`, 'success');
     } catch (e) {
       setYandexAiStatus(e.message || 'Could not save settings', 'error');
     }
@@ -5573,7 +5718,8 @@
         });
       }
       renderYandexAiSettings();
-      setYandexAiStatus('Bot saved', 'success');
+      const status = buildVerifiedBotSaveStatus('Bot saved.', data.bot, payload, formatCapabilityState(data.bot || payload));
+      setYandexAiStatus(status.message, status.type);
     } catch (e) {
       setYandexAiStatus(e.message || 'Could not save bot', 'error');
     }
@@ -5736,6 +5882,7 @@
           enabled: $('#yandexAiBotChatEnabled')?.checked,
           mode: $('#yandexAiBotChatMode')?.value || 'simple',
           hot_context_limit: Number($('#yandexAiBotChatHotLimit')?.value || 50),
+          auto_react_on_mention: $('#yandexAiBotChatAutoReact')?.checked,
         },
       });
       mergeYandexAiState(data);
@@ -5782,6 +5929,23 @@
     el.textContent = message || '';
     el.classList.toggle('is-error', type === 'error');
     el.classList.toggle('is-success', type === 'success');
+  }
+
+  function wireAiBotToggleLabels() {
+    document.querySelectorAll('.ai-bot-toggle-label').forEach((label) => {
+      if (label.dataset.toggleLabelBound === '1') return;
+      label.dataset.toggleLabelBound = '1';
+      label.addEventListener('click', (e) => {
+        const checkbox = label.querySelector('input[type="checkbox"]');
+        if (!checkbox || checkbox.disabled) return;
+        if (e.target === checkbox) return;
+        // Nested <label> elements are invalid HTML and can double-toggle on some browsers.
+        e.preventDefault();
+        checkbox.checked = !checkbox.checked;
+        checkbox.dispatchEvent(new Event('input', { bubbles: true }));
+        checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    });
   }
 
   function currentGrokBot() {
@@ -6071,6 +6235,7 @@
 
   function fillGrokBotForm(bot = null) {
     const settings = grokBotState.settings || {};
+    grokTextBotFormHydrating = true;
     selectedGrokBotId = bot ? bot.id : null;
     $('#grokAiBotName').value = bot?.name || 'Grok AI';
     $('#grokAiBotMention').value = bot?.mention || 'grok';
@@ -6081,10 +6246,18 @@
     $('#grokAiBotTone').value = bot?.tone || 'warm, concise, attentive';
     $('#grokAiBotRules').value = bot?.behavior_rules || '';
     $('#grokAiBotSpeech').value = bot?.speech_patterns || '';
+    fillBotActionCapabilityInputs({
+      pollCreate: 'grokAiBotAllowPollCreate',
+      pollVote: 'grokAiBotAllowPollVote',
+      react: 'grokAiBotAllowReact',
+      pin: 'grokAiBotAllowPin',
+    }, bot || buildInteractiveCapabilityState(providerInteractiveEnabled('grok', settings)));
     renderGrokBotModelOptions(bot);
     renderGrokBotAvatar(bot);
     renderGrokBotList();
     renderGrokChatBotSettings();
+    grokTextBotFormHydrating = false;
+    syncGrokTextBotFormFingerprint();
   }
 
   function fillGrokImageBotForm(bot = null) {
@@ -6118,6 +6291,12 @@
     $('#grokAiUniversalBotRules').value = bot?.behavior_rules || '';
     $('#grokAiUniversalBotSpeech').value = bot?.speech_patterns || '';
     $('#grokAiUniversalBotTestMode').value = 'auto';
+    fillBotActionCapabilityInputs({
+      pollCreate: 'grokAiUniversalBotAllowPollCreate',
+      pollVote: 'grokAiUniversalBotAllowPollVote',
+      react: 'grokAiUniversalBotAllowReact',
+      pin: 'grokAiUniversalBotAllowPin',
+    }, bot || buildInteractiveCapabilityState(providerInteractiveEnabled('grok', settings)));
     renderGrokUniversalBotModelOptions(bot);
     renderGrokUniversalBotAvatar(bot);
     renderGrokUniversalBotList();
@@ -6139,6 +6318,53 @@
       behavior_rules: $('#grokAiBotRules')?.value.trim(),
       speech_patterns: $('#grokAiBotSpeech')?.value.trim(),
     };
+  }
+
+  const GROK_TEXT_BOT_DIRTY_STATUS = 'Bot settings changed. Click "Save bot" to apply them.';
+
+  function formatCapabilityState(bot = {}) {
+    const values = [
+      !!bot.allow_poll_create,
+      !!bot.allow_poll_vote,
+      !!bot.allow_react,
+      !!bot.allow_pin,
+    ];
+    if (values.every(Boolean)) return 'interactive actions: on';
+    if (values.every((value) => !value)) return 'interactive actions: off';
+    return [
+      `poll create: ${bot.allow_poll_create ? 'on' : 'off'}`,
+      `poll vote: ${bot.allow_poll_vote ? 'on' : 'off'}`,
+      `reactions: ${bot.allow_react ? 'on' : 'off'}`,
+      `pin: ${bot.allow_pin ? 'on' : 'off'}`,
+    ].join(', ');
+  }
+
+  function currentGrokTextBotFormFingerprint() {
+    return JSON.stringify(grokBotFormPayload());
+  }
+
+  function refreshGrokTextBotDirtyState() {
+    const saveBtns = ['grokAiBotSave', 'grokAiBotSaveBottom'].map((id) => $(id)).filter(Boolean);
+    const statusEl = $('#grokAiTextStatus');
+    if (!saveBtns.length || grokTextBotFormHydrating) return;
+    const isDirty = currentGrokTextBotFormFingerprint() !== grokTextBotFormFingerprint;
+    saveBtns.forEach((saveBtn) => {
+      saveBtn.textContent = isDirty ? 'Save bot changes' : 'Save bot';
+    });
+    if (isDirty) {
+      if (!statusEl?.textContent || statusEl.textContent === GROK_TEXT_BOT_DIRTY_STATUS) {
+        setGrokTextStatus(GROK_TEXT_BOT_DIRTY_STATUS);
+      }
+      return;
+    }
+    if (statusEl?.textContent === GROK_TEXT_BOT_DIRTY_STATUS) {
+      setGrokTextStatus('');
+    }
+  }
+
+  function syncGrokTextBotFormFingerprint() {
+    grokTextBotFormFingerprint = currentGrokTextBotFormFingerprint();
+    refreshGrokTextBotDirtyState();
   }
 
   function grokImageBotFormPayload() {
@@ -6195,6 +6421,7 @@
     $('#grokAiBotChatEnabled').checked = !!setting?.enabled;
     $('#grokAiBotChatMode').value = setting?.mode || 'simple';
     $('#grokAiBotChatHotLimit').value = setting?.hot_context_limit || 50;
+    $('#grokAiBotChatAutoReact').checked = !!setting?.auto_react_on_mention;
   }
 
   function renderGrokImageChatBotSettings() {
@@ -6227,12 +6454,14 @@
     $('#grokAiUniversalBotChatEnabled').checked = !!setting?.enabled;
     $('#grokAiUniversalBotChatMode').value = setting?.mode || 'simple';
     $('#grokAiUniversalBotChatHotLimit').value = setting?.hot_context_limit || 50;
+    $('#grokAiUniversalBotChatAutoReact').checked = !!setting?.auto_react_on_mention;
   }
 
   function renderGrokAiSettings() {
     mountGrokBotPanels();
     const settings = grokBotState.settings || {};
     $('#grokAiGlobalEnabled').checked = !!settings.grok_enabled;
+    $('#grokAiInteractiveEnabled').checked = !!settings.grok_interactive_enabled;
     $('#grokAiBaseUrl').value = settings.grok_base_url || 'https://api.x.ai/v1';
     $('#grokAiTemperature').value = settings.grok_temperature ?? 0.3;
     $('#grokAiMaxTokens').value = settings.grok_max_tokens ?? 1000;
@@ -6273,6 +6502,7 @@
   function grokAiSettingsPayload() {
     const body = {
       grok_enabled: $('#grokAiGlobalEnabled')?.checked,
+      grok_interactive_enabled: $('#grokAiInteractiveEnabled')?.checked,
       grok_base_url: $('#grokAiBaseUrl')?.value.trim(),
       grok_default_response_model: $('#grokAiDefaultResponseModel')?.value.trim(),
       grok_default_summary_model: $('#grokAiDefaultSummaryModel')?.value.trim(),
@@ -6320,7 +6550,7 @@
     try {
       await persistGrokAiSettings();
       renderGrokAiSettings();
-      setGrokAiStatus('Settings saved', 'success');
+      setGrokAiStatus(`Settings saved\n${providerInteractiveSummary('grok', grokBotState.settings)}`, 'success');
     } catch (e) {
       setGrokAiStatus(e.message || 'Could not save settings', 'error');
     }
@@ -6397,7 +6627,8 @@
       selectedGrokBotId = data.bot?.id || selectedGrokBotId;
       syncGrokBotUser(data.bot);
       renderGrokTextBotsSettings();
-      setGrokTextStatus('Text bot saved', 'success');
+      const status = buildVerifiedBotSaveStatus('Text bot saved.', data.bot, payload, formatCapabilityState(data.bot || payload));
+      setGrokTextStatus(status.message, status.type);
     } catch (e) {
       setGrokTextStatus(e.message || 'Could not save Grok bot', 'error');
     }
@@ -6416,7 +6647,8 @@
       selectedGrokImageBotId = data.bot?.id || selectedGrokImageBotId;
       syncGrokBotUser(data.bot);
       renderGrokImageBotsSettings();
-      setGrokImageStatus('Image bot saved', 'success');
+      const status = buildVerifiedBotSaveStatus('Image bot saved.', data.bot, payload);
+      setGrokImageStatus(status.message, status.type);
     } catch (e) {
       setGrokImageStatus(e.message || 'Could not save image bot', 'error');
     }
@@ -6574,6 +6806,7 @@
           enabled: $('#grokAiBotChatEnabled')?.checked,
           mode: $('#grokAiBotChatMode')?.value || 'simple',
           hot_context_limit: Number($('#grokAiBotChatHotLimit')?.value || 50),
+          auto_react_on_mention: $('#grokAiBotChatAutoReact')?.checked,
         },
       });
       mergeGrokAiState(data);
@@ -6633,7 +6866,8 @@
       selectedGrokUniversalBotId = data.bot?.id || selectedGrokUniversalBotId;
       syncGrokBotUser(data.bot);
       renderGrokUniversalBotsSettings();
-      setGrokUniversalStatus('Universal bot saved', 'success');
+      const status = buildVerifiedBotSaveStatus('Universal bot saved.', data.bot, payload, formatCapabilityState(data.bot || payload));
+      setGrokUniversalStatus(status.message, status.type);
     } catch (e) {
       setGrokUniversalStatus(e.message || 'Could not save universal bot', 'error');
     }
@@ -6776,6 +7010,7 @@
           enabled: $('#grokAiUniversalBotChatEnabled')?.checked,
           mode: $('#grokAiUniversalBotChatMode')?.value || 'simple',
           hot_context_limit: Number($('#grokAiUniversalBotChatHotLimit')?.value || 50),
+          auto_react_on_mention: $('#grokAiUniversalBotChatAutoReact')?.checked,
         },
       });
       mergeGrokUniversalState(data);
@@ -8008,6 +8243,10 @@
       allow_image_generate: Boolean(raw.allow_image_generate),
       allow_image_edit: Boolean(raw.allow_image_edit),
       allow_document: Boolean(raw.allow_document),
+      allow_poll_create: Boolean(raw.allow_poll_create),
+      allow_poll_vote: Boolean(raw.allow_poll_vote),
+      allow_react: Boolean(raw.allow_react),
+      allow_pin: Boolean(raw.allow_pin),
       document_default_format: String(raw.document_default_format || '').trim().toLowerCase() === 'txt' ? 'txt' : 'md',
     };
   }
@@ -8057,6 +8296,10 @@
       allow_image_generate: source.allow_image_generate ?? true,
       allow_image_edit: source.allow_image_edit ?? true,
       allow_document: source.allow_document ?? false,
+      allow_poll_create: source.allow_poll_create ?? false,
+      allow_poll_vote: source.allow_poll_vote ?? false,
+      allow_react: source.allow_react ?? false,
+      allow_pin: source.allow_pin ?? false,
       document_default_format: String(source.document_default_format || 'md').toLowerCase() === 'txt' ? 'txt' : 'md',
     };
   }
@@ -15059,8 +15302,7 @@
     if (hasState) {
       renderGrokTextBotsSettings();
       resetManagedModalScroll('grokAiTextBotsModal');
-      setGrokTextStatus('');
-      return;
+      setGrokTextStatus('Refreshing...');
     }
     loadGrokAiState().then(() => {
       renderGrokTextBotsSettings();
@@ -15081,8 +15323,7 @@
     if (hasState) {
       renderGrokImageBotsSettings();
       resetManagedModalScroll('grokAiImageBotsModal');
-      setGrokImageStatus('');
-      return;
+      setGrokImageStatus('Refreshing...');
     }
     loadGrokAiState().then(() => {
       renderGrokImageBotsSettings();
@@ -15656,6 +15897,7 @@
   function setupEvents() {
     setupPasswordPreviewToggles();
     setupMessageSwipeGestures();
+    wireAiBotToggleLabels();
     ensureSearchPanelReady();
     document.addEventListener('click', (e) => {
       if (Date.now() >= mentionPickerClickSuppressUntil) return;
@@ -16872,6 +17114,7 @@
       setAiBotStatus('Новый бот: заполните поля и сохраните');
     });
     $('#aiBotSave')?.addEventListener('click', saveAiBot);
+    $('#aiBotSaveBottom')?.addEventListener('click', saveAiBot);
     $('#aiBotDisable')?.addEventListener('click', disableAiBot);
     $('#aiBotTest')?.addEventListener('click', testAiBot);
     $('#aiBotExportJson')?.addEventListener('click', exportAiBotJson);
@@ -16896,6 +17139,7 @@
       setOpenAiUniversalStatus('New OpenAI universal bot: fill fields and save');
     });
     $('#openAiUniversalBotSave')?.addEventListener('click', saveOpenAiUniversalBot);
+    $('#openAiUniversalBotSaveBottom')?.addEventListener('click', saveOpenAiUniversalBot);
     $('#openAiUniversalBotDisable')?.addEventListener('click', disableOpenAiUniversalBot);
     $('#openAiUniversalBotTest')?.addEventListener('click', testOpenAiUniversalBot);
     $('#openAiUniversalBotExportJson')?.addEventListener('click', exportOpenAiUniversalBotJson);
@@ -16989,6 +17233,7 @@
       setGrokTextStatus('New Grok text bot: fill fields and save');
     });
     $('#grokAiBotSave')?.addEventListener('click', saveGrokBot);
+    $('#grokAiBotSaveBottom')?.addEventListener('click', saveGrokBot);
     $('#grokAiBotDisable')?.addEventListener('click', () => disableGrokBot('text'));
     $('#grokAiBotTest')?.addEventListener('click', () => testGrokBot('text'));
     $('#grokAiBotExportJson')?.addEventListener('click', () => exportGrokBotJson('text'));
@@ -16998,6 +17243,26 @@
     $('#removeGrokAiBotAvatar')?.addEventListener('click', () => removeGrokBotAvatar('text'));
     $('#grokAiBotName')?.addEventListener('input', () => {
       if (!currentGrokBot()?.avatar_url) renderGrokBotAvatar(currentGrokBot());
+    });
+    [
+      'grokAiBotName',
+      'grokAiBotMention',
+      'grokAiBotEnabled',
+      'grokAiBotResponseModel',
+      'grokAiBotSummaryModel',
+      'grokAiBotTemperature',
+      'grokAiBotMaxTokens',
+      'grokAiBotStyle',
+      'grokAiBotTone',
+      'grokAiBotRules',
+      'grokAiBotSpeech',
+      'grokAiBotAllowPollCreate',
+      'grokAiBotAllowPollVote',
+      'grokAiBotAllowReact',
+      'grokAiBotAllowPin',
+    ].forEach((id) => {
+      $(id)?.addEventListener('input', refreshGrokTextBotDirtyState);
+      $(id)?.addEventListener('change', refreshGrokTextBotDirtyState);
     });
     $('#grokAiBotList')?.addEventListener('click', (e) => {
       const btn = e.target.closest('.ai-bot-list-item');

@@ -3984,6 +3984,7 @@ html[data-visual-mode="rich"] .poll-card {
   gap: 8px;
 }
 .ai-bot-grid label,
+.ai-bot-grid .ai-bot-toggle-label,
 .ai-bot-field {
   display: flex;
   flex-direction: column;
@@ -4181,6 +4182,8 @@ html[data-visual-mode="rich"] .poll-card {
   min-height: 20px;
   color: var(--text-secondary);
   font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-line;
 }
 .ai-bot-status.is-success { color: var(--success); }
 .ai-bot-status.is-error { color: var(--danger); }
