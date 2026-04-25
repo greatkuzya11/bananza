@@ -1,4 +1,8 @@
 const ACTION_NAMES = new Set(['create_poll', 'vote_poll', 'react_message', 'pin_message']);
+const {
+  REACTION_MODES,
+  normalizeReactionKey,
+} = require('./reactionKeys');
 
 function tryParseJsonObject(text, fallback = null) {
   if (!text) return fallback;
@@ -169,10 +173,16 @@ function parseActionCall(name, args = {}) {
     };
   }
   if (type === 'react_message') {
+    const reactionKey = normalizeReactionKey(args.reaction_key || args.key || args.reaction || args.intent || args.emoji || '');
+    const mode = REACTION_MODES.has(String(args.mode || '').trim())
+      ? String(args.mode).trim()
+      : 'replace';
     return {
       type,
       target: String(args.target || 'reply_to').trim(),
+      reaction_key: reactionKey || (mode === 'remove' ? null : 'custom'),
       emoji: String(args.emoji || '').trim(),
+      mode,
     };
   }
   if (type === 'pin_message') {
@@ -464,6 +474,77 @@ function parseDirectVoteRequest(text = '') {
   };
 }
 
+function containsDirectReactionIntent(text = '') {
+  const source = String(text || '');
+  return [
+    /(?:^|[\s,.:;!?()\-])(?:please\s+)?(?:react|add\s+(?:an?\s+)?reaction|drop\s+reaction|remove\s+reaction|unreact)\b/i,
+    /(?:^|[\s,.:;!?()\-])(?:please\s+)?(?:like|dislike)\s+(?:this|that|it|message|post)\b/i,
+    /(?:^|[\s,.:;!?()\-])(?:\u043b\u0430\u0439\u043a\u043d\u0438|\u0434\u0438\u0437\u043b\u0430\u0439\u043a\u043d\u0438)(?=$|[\s,.:;!?()\-])/i,
+    /(?:^|[\s,.:;!?()\-])(?:\u043b\u0430\u0439\u043a|\u0441\u0435\u0440\u0434\u0435\u0447|\u0441\u0435\u0440\u0434\u0446|\u043e\u0433\u043e\u043d|\u0441\u043c\u0435\u0448|\u0432\u0430\u0443|\u0433\u0440\u0443\u0441\u0442|\u043f\u0435\u0447\u0430\u043b|\u043f\u043e\u0437\u0434\u0440\u0430\u0432|\u0434\u0438\u0437\u043b\u0430\u0439\u043a|\u043a\u043b\u043e\u0443\u043d|\u0433\u043e\u0432\u043d).{0,24}(?:\u043f\u043e\u0441\u0442\u0430\u0432\u044c|\u043a\u0438\u043d\u044c|\u0434\u043e\u0431\u0430\u0432\u044c|\u0432\u043b\u0435\u043f\u0438|\u0437\u0430\u043a\u0438\u043d\u044c)/i,
+    /(?:^|[\s,.:;!?()\-])(?:\u043f\u043e\u0441\u0442\u0430\u0432\u044c|\u043a\u0438\u043d\u044c|\u0434\u043e\u0431\u0430\u0432\u044c|\u0432\u043b\u0435\u043f\u0438|\u0437\u0430\u043a\u0438\u043d\u044c)(?=$|[\s,.:;!?()\-]).{0,32}(?:\u0440\u0435\u0430\u043a\u0446|\u043b\u0430\u0439\u043a|\u0441\u0435\u0440\u0434\u0435\u0447|\u0441\u0435\u0440\u0434\u0446|\u043e\u0433\u043e\u043d|\u0441\u043c\u0435\u0448|\u0432\u0430\u0443|\u0433\u0440\u0443\u0441\u0442|\u043f\u0435\u0447\u0430\u043b|\u043f\u043e\u0437\u0434\u0440\u0430\u0432|\u0434\u0438\u0437\u043b\u0430\u0439\u043a|\u043a\u043b\u043e\u0443\u043d|\u0433\u043e\u0432\u043d|\u044d\u043c\u043e\u0434\u0437\u0438|\u044d\u043c\u043e\u0434\u0436\u0438|emoji)/i,
+    /(?:^|[\s,.:;!?()\-])(?:\u0441\u043d\u0438\u043c\u0438|\u0443\u0431\u0435\u0440\u0438|\u0443\u0434\u0430\u043b\u0438|\u0443\u0431\u0440\u0430\u0442\u044c|\u0441\u043d\u044f\u0442\u044c)(?=$|[\s,.:;!?()\-]).{0,24}(?:\u0440\u0435\u0430\u043a\u0446|\u043b\u0430\u0439\u043a|\u044d\u043c\u043e\u0434\u0437\u0438|\u044d\u043c\u043e\u0434\u0436\u0438|emoji)/i,
+    /(?:^|[\s,.:;!?()\-])(?:\u043e\u0442\u0440\u0435\u0430\u0433\u0438\u0440\u0443\u0439|\u0440\u0435\u0430\u043a\u0442\u043d\u0438)(?=$|[\s,.:;!?()\-]).{0,20}(?:\u0440\u0435\u0430\u043a\u0446|\u043b\u0430\u0439\u043a|\u0441\u0435\u0440\u0434\u0435\u0447|\u0441\u0435\u0440\u0434\u0446|\u043e\u0433\u043e\u043d|\u0441\u043c\u0435\u0448|\u0432\u0430\u0443|\u0433\u0440\u0443\u0441\u0442|\u043f\u0435\u0447\u0430\u043b|\u043f\u043e\u0437\u0434\u0440\u0430\u0432|\u0434\u0438\u0437\u043b\u0430\u0439\u043a|\u043a\u043b\u043e\u0443\u043d|\u0433\u043e\u0432\u043d|\u044d\u043c\u043e\u0434\u0437\u0438|\u044d\u043c\u043e\u0434\u0436\u0438|emoji)/i,
+    /(?:^|[\s,.:;!?()\-])(?:\u043e\u0442\u0440\u0435\u0430\u0433\u0438\u0440\u0443\u0439|\u0440\u0435\u0430\u043a\u0442\u043d\u0438)(?=$|[\s,.:;!?()\-]).{0,20}(?:\u0441\u0430\u043c|\u0441\u0430\u043c\u0430|\u0441\u0430\u043c\u043e\u0441\u0442\u043e\u044f\u0442\u0435\u043b\u044c\u043d\u043e|as\s+you\s+like|yourself|however\s+you\s+want)/i,
+  ].some((pattern) => pattern.test(source));
+}
+
+function detectReactionMode(text = '') {
+  const source = String(text || '');
+  return [
+    /(?:^|[\s,.:;!?()\-])(?:remove\s+reaction|unreact|clear\s+reaction|take\s+off\s+reaction)\b/i,
+    /(?:^|[\s,.:;!?()\-])(?:\u0441\u043d\u0438\u043c\u0438|\u0443\u0431\u0435\u0440\u0438|\u0443\u0434\u0430\u043b\u0438|\u0443\u0431\u0440\u0430\u0442\u044c|\u0441\u043d\u044f\u0442\u044c)(?=$|[\s,.:;!?()\-]).{0,24}(?:\u0440\u0435\u0430\u043a\u0446|\u043b\u0430\u0439\u043a|\u044d\u043c\u043e\u0434\u0437\u0438|\u044d\u043c\u043e\u0434\u0436\u0438|emoji)/i,
+  ].some((pattern) => pattern.test(source))
+    ? 'remove'
+    : 'replace';
+}
+
+function detectReactionTarget(text = '') {
+  const source = String(text || '');
+  return /(?:^|[\s,.:;!?()\-])(?:\u0441\u044e\u0434\u0430|\u043f\u0440\u044f\u043c\u043e\s+\u0441\u044e\u0434\u0430|right\s+here|here\s+itself)(?=$|[\s,.:;!?()\-])/i.test(source)
+    ? 'source_message'
+    : 'reply_to';
+}
+
+function detectReactionKeyFromText(text = '') {
+  const source = String(text || '');
+  const matchers = [
+    ['like', /(?:^|[\s,.:;!?()\-])(?:\u043b\u0430\u0439\u043a|\u043b\u0430\u0439\u043a\u043d\u0438|thumbs?\s*up|like)/i],
+    ['heart', /(?:\u0441\u0435\u0440\u0434\u0435\u0447|\u0441\u0435\u0440\u0434\u0446|love|heart)/i],
+    ['fire', /(?:\u043e\u0433\u043e\u043d|fire|hot)/i],
+    ['laugh', /(?:\u0441\u043c\u0435\u0448|laugh|funny|lol|haha)/i],
+    ['wow', /(?:\u0432\u0430\u0443|wow|surpris|\u0443\u0434\u0438\u0432)/i],
+    ['sad', /(?:\u0433\u0440\u0443\u0441\u0442|\u043f\u0435\u0447\u0430\u043b|sad|support|\u0441\u043e\u0447\u0443\u0432)/i],
+    ['celebrate', /(?:\u043f\u043e\u0437\u0434\u0440\u0430\u0432|celebrat|congrats|party)/i],
+    ['dislike', /(?:\u0434\u0438\u0437\u043b\u0430\u0439\u043a|thumbs?\s*down|dislike|\u043d\u0435\s+\u043d\u0440\u0430\u0432)/i],
+    ['clown', /(?:\u043a\u043b\u043e\u0443\u043d|clown|mock|tease|\u043f\u043e\u0434\u043a\u043e\u043b)/i],
+    ['poop', /(?:\u0433\u043e\u0432\u043d|poop|shit|trash|\u0442\u0440\u044d\u0448)/i],
+  ];
+  for (const [reactionKey, pattern] of matchers) {
+    if (pattern.test(source)) return reactionKey;
+  }
+  return '';
+}
+
+function parseDirectReactionRequest(text = '') {
+  const source = String(text || '').trim();
+  if (!source || !containsDirectReactionIntent(source) || containsCreatePollIntent(source)) return null;
+  const mode = detectReactionMode(source);
+  const target = detectReactionTarget(source);
+  const reactionKey = detectReactionKeyFromText(source);
+  if (!reactionKey && mode !== 'remove') return null;
+  return {
+    reply_mode: 'none',
+    reply_text: '',
+    actions: [{
+      type: 'react_message',
+      target,
+      reaction_key: reactionKey || null,
+      emoji: '',
+      mode,
+    }],
+  };
+}
+
 function parseQuotedQuestionWithTrailingOptions(text = '') {
   const source = String(text || '');
   if (!containsCreatePollIntent(source)) return null;
@@ -541,6 +622,10 @@ function parseLooseActionPlanText(text = '') {
     const directVotePlan = parseDirectVoteRequest(text);
     if (directVotePlan?.actions?.length) actions.push(...directVotePlan.actions);
   }
+  if (!actions.length && containsDirectReactionIntent(text) && !containsCreatePollIntent(text)) {
+    const directReactionPlan = parseDirectReactionRequest(text);
+    if (directReactionPlan?.actions?.length) actions.push(...directReactionPlan.actions);
+  }
   if (!actions.length) return null;
   return {
     reply_mode: 'none',
@@ -554,4 +639,5 @@ module.exports = {
   parseLooseActionPlanText,
   parseDirectCreatePollRequest,
   parseDirectVoteRequest,
+  parseDirectReactionRequest,
 };

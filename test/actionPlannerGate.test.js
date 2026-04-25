@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   textLooksLikeCreatePollRequest,
   textLooksLikeVoteRequest,
+  textLooksLikeReactRequest,
   textLooksLikeChatActionRequest,
   shouldAttemptBotActionPlan,
 } = require('../ai/actionPlannerGate');
@@ -57,6 +58,25 @@ test('textLooksLikeVoteRequest requires a direct voting command', () => {
   );
   assert.equal(
     textLooksLikeVoteRequest('\u043d\u0443 \u0438 \u0436\u043c\u0438 \u0437\u0430 \u0433\u0440\u043e\u043a\u0430'),
+    true
+  );
+});
+
+test('textLooksLikeReactRequest detects direct reaction commands', () => {
+  assert.equal(
+    textLooksLikeReactRequest('\u043b\u0430\u0439\u043a\u043d\u0438 \u044d\u0442\u043e \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435'),
+    true
+  );
+  assert.equal(
+    textLooksLikeReactRequest('\u043f\u043e\u0441\u0442\u0430\u0432\u044c \u043a\u043b\u043e\u0443\u043d\u0430'),
+    true
+  );
+  assert.equal(
+    textLooksLikeReactRequest('\u0443\u0431\u0435\u0440\u0438 \u0440\u0435\u0430\u043a\u0446\u0438\u044e'),
+    true
+  );
+  assert.equal(
+    textLooksLikeReactRequest('\u0433\u043e\u0432\u043d\u043e \u043f\u043e\u0441\u0442\u0430\u0432\u044c \u043d\u0430 \u044d\u0442\u043e \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435'),
     true
   );
 });

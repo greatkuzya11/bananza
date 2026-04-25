@@ -508,3 +508,67 @@ test('toggleReaction validates emoji and ensure_present avoids duplicate bot aut
     (error) => error?.code === 'invalid_emoji'
   );
 });
+
+test('toggleReaction replace semantics keep bot reactions idempotent and swap emoji', (t) => {
+  const harness = createHarness();
+  t.after(() => harness.close());
+
+  const message = harness.insertMessage({ userId: 1, text: 'rate this' });
+  const first = harness.service.toggleReaction({
+    actor: harness.botActor,
+    messageId: message.id,
+    emoji: '👍',
+    behavior: 'ensure_present',
+    replaceExistingFromActor: true,
+  });
+  const second = harness.service.toggleReaction({
+    actor: harness.botActor,
+    messageId: message.id,
+    emoji: '👍',
+    behavior: 'ensure_present',
+    replaceExistingFromActor: true,
+  });
+  const third = harness.service.toggleReaction({
+    actor: harness.botActor,
+    messageId: message.id,
+    emoji: '🤖',
+    behavior: 'ensure_present',
+    replaceExistingFromActor: true,
+  });
+
+  assert.equal(first.changed, true);
+  assert.equal(second.changed, false);
+  assert.equal(third.changed, true);
+  assert.deepEqual(
+    harness.db.prepare('SELECT emoji FROM reactions WHERE message_id=? AND user_id=? ORDER BY emoji ASC').all(message.id, 2),
+    [{ emoji: '🤖' }]
+  );
+});
+
+test('toggleReaction remove semantics clear current bot reaction without toggle behavior', (t) => {
+  const harness = createHarness();
+  t.after(() => harness.close());
+
+  const message = harness.insertMessage({ userId: 1, text: 'remove it' });
+  harness.service.toggleReaction({
+    actor: harness.botActor,
+    messageId: message.id,
+    emoji: '🔥',
+    behavior: 'ensure_present',
+    replaceExistingFromActor: true,
+  });
+
+  const removed = harness.service.toggleReaction({
+    actor: harness.botActor,
+    messageId: message.id,
+    emoji: '',
+    behavior: 'remove',
+    removeAllFromActor: true,
+  });
+
+  assert.equal(removed.changed, true);
+  assert.equal(
+    harness.db.prepare('SELECT COUNT(*) as total FROM reactions WHERE message_id=? AND user_id=?').get(message.id, 2).total,
+    0
+  );
+});

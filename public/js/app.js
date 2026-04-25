@@ -4385,12 +4385,6 @@
     $('#openAiUniversalBotAllowImageGenerate').checked = bot?.allow_image_generate ?? true;
     $('#openAiUniversalBotAllowImageEdit').checked = bot?.allow_image_edit ?? true;
     $('#openAiUniversalBotAllowDocument').checked = bot?.allow_document ?? true;
-    fillBotActionCapabilityInputs({
-      pollCreate: 'openAiUniversalBotAllowPollCreate',
-      pollVote: 'openAiUniversalBotAllowPollVote',
-      react: 'openAiUniversalBotAllowReact',
-      pin: 'openAiUniversalBotAllowPin',
-    }, bot || buildInteractiveCapabilityState(providerInteractiveEnabled('openai', settings)));
     $('#openAiUniversalBotTemperature').value = bot?.temperature ?? 0.55;
     $('#openAiUniversalBotMaxTokens').value = bot?.max_tokens ?? 1000;
     $('#openAiUniversalBotStyle').value = bot?.style || 'Helpful OpenAI universal assistant for chat';
@@ -4500,40 +4494,6 @@
     });
   }
 
-  function fillBotActionCapabilityInputs(ids = {}, bot = null) {
-    const fields = [
-      ['pollCreate', 'allow_poll_create'],
-      ['pollVote', 'allow_poll_vote'],
-      ['react', 'allow_react'],
-      ['pin', 'allow_pin'],
-    ];
-    fields.forEach(([key, field]) => {
-      const input = ids[key] ? $(ids[key]) : null;
-      if (!input) return;
-      input.checked = !!bot?.[field];
-      input.disabled = true;
-      input.title = 'Managed by provider interactive actions';
-    });
-  }
-
-  function readBotActionCapabilityInputs(ids = {}) {
-    return {
-      allow_poll_create: ids.pollCreate ? !!$(ids.pollCreate)?.checked : false,
-      allow_poll_vote: ids.pollVote ? !!$(ids.pollVote)?.checked : false,
-      allow_react: ids.react ? !!$(ids.react)?.checked : false,
-      allow_pin: ids.pin ? !!$(ids.pin)?.checked : false,
-    };
-  }
-
-  function buildInteractiveCapabilityState(enabled = false) {
-    return {
-      allow_poll_create: !!enabled,
-      allow_poll_vote: !!enabled,
-      allow_react: !!enabled,
-      allow_pin: !!enabled,
-    };
-  }
-
   function providerInteractiveEnabled(provider, settings = {}) {
     if (provider === 'yandex') return !!settings.yandex_interactive_enabled;
     if (provider === 'deepseek') return !!settings.deepseek_interactive_enabled;
@@ -4619,12 +4579,6 @@
     $('#aiBotTone').value = bot?.tone || 'тёплый, внимательный, краткий';
     $('#aiBotRules').value = bot?.behavior_rules || '';
     $('#aiBotSpeech').value = bot?.speech_patterns || '';
-    fillBotActionCapabilityInputs({
-      pollCreate: 'aiBotAllowPollCreate',
-      pollVote: 'aiBotAllowPollVote',
-      react: 'aiBotAllowReact',
-      pin: 'aiBotAllowPin',
-    }, bot || buildInteractiveCapabilityState(providerInteractiveEnabled('openai', settings)));
     renderAiBotAvatar(bot);
     renderAiModelOptions(bot);
     renderAiBotList();
@@ -5267,12 +5221,6 @@
     $('#deepseekAiBotTone').value = bot?.tone || 'warm, concise, attentive';
     $('#deepseekAiBotRules').value = bot?.behavior_rules || '';
     $('#deepseekAiBotSpeech').value = bot?.speech_patterns || '';
-    fillBotActionCapabilityInputs({
-      pollCreate: 'deepseekAiBotAllowPollCreate',
-      pollVote: 'deepseekAiBotAllowPollVote',
-      react: 'deepseekAiBotAllowReact',
-      pin: 'deepseekAiBotAllowPin',
-    }, bot || buildInteractiveCapabilityState(providerInteractiveEnabled('deepseek', settings)));
     renderDeepseekBotAvatar(bot);
     renderDeepseekModelOptions(bot);
     renderDeepseekBotList();
@@ -5782,12 +5730,6 @@
     $('#yandexAiBotTone').value = bot?.tone || 'warm, concise, attentive';
     $('#yandexAiBotRules').value = bot?.behavior_rules || '';
     $('#yandexAiBotSpeech').value = bot?.speech_patterns || '';
-    fillBotActionCapabilityInputs({
-      pollCreate: 'yandexAiBotAllowPollCreate',
-      pollVote: 'yandexAiBotAllowPollVote',
-      react: 'yandexAiBotAllowReact',
-      pin: 'yandexAiBotAllowPin',
-    }, bot || buildInteractiveCapabilityState(providerInteractiveEnabled('yandex', settings)));
     renderYandexBotAvatar(bot);
     renderYandexModelOptions(bot);
     renderYandexBotList();
@@ -6568,12 +6510,6 @@
     $('#grokAiBotTone').value = bot?.tone || 'warm, concise, attentive';
     $('#grokAiBotRules').value = bot?.behavior_rules || '';
     $('#grokAiBotSpeech').value = bot?.speech_patterns || '';
-    fillBotActionCapabilityInputs({
-      pollCreate: 'grokAiBotAllowPollCreate',
-      pollVote: 'grokAiBotAllowPollVote',
-      react: 'grokAiBotAllowReact',
-      pin: 'grokAiBotAllowPin',
-    }, bot || buildInteractiveCapabilityState(providerInteractiveEnabled('grok', settings)));
     renderGrokBotModelOptions(bot);
     renderGrokBotAvatar(bot);
     renderGrokBotList();
@@ -6613,12 +6549,6 @@
     $('#grokAiUniversalBotRules').value = bot?.behavior_rules || '';
     $('#grokAiUniversalBotSpeech').value = bot?.speech_patterns || '';
     $('#grokAiUniversalBotTestMode').value = 'auto';
-    fillBotActionCapabilityInputs({
-      pollCreate: 'grokAiUniversalBotAllowPollCreate',
-      pollVote: 'grokAiUniversalBotAllowPollVote',
-      react: 'grokAiUniversalBotAllowReact',
-      pin: 'grokAiUniversalBotAllowPin',
-    }, bot || buildInteractiveCapabilityState(providerInteractiveEnabled('grok', settings)));
     renderGrokUniversalBotModelOptions(bot);
     renderGrokUniversalBotAvatar(bot);
     renderGrokUniversalBotList();
@@ -17600,10 +17530,6 @@
       'grokAiBotTone',
       'grokAiBotRules',
       'grokAiBotSpeech',
-      'grokAiBotAllowPollCreate',
-      'grokAiBotAllowPollVote',
-      'grokAiBotAllowReact',
-      'grokAiBotAllowPin',
     ].forEach((id) => {
       $(id)?.addEventListener('input', refreshGrokTextBotDirtyState);
       $(id)?.addEventListener('change', refreshGrokTextBotDirtyState);

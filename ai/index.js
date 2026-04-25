@@ -40,7 +40,21 @@ const {
   textLooksLikeReactRequest: textLooksLikeDirectReactRequest,
   textLooksLikePinRequest: textLooksLikeDirectPinRequest,
 } = require('./actionPlannerGate');
-const { tryParseJsonObject, parseLooseActionPlanText, parseDirectCreatePollRequest, parseDirectVoteRequest } = require('./actionPlanTextParser');
+const {
+  tryParseJsonObject,
+  parseLooseActionPlanText,
+  parseDirectCreatePollRequest,
+  parseDirectVoteRequest,
+  parseDirectReactionRequest,
+} = require('./actionPlanTextParser');
+const {
+  REACTION_KEY_TO_EMOJI,
+  REACTION_KEYS,
+  REACTION_MODES,
+  REACTION_MEME_KEYS,
+  normalizeReactionKey,
+  resolveReactionEmoji,
+} = require('./reactionKeys');
 const { analyzeAiImageRisk } = require('../public/js/ai-image-risk');
 
 const BOT_COLORS = ['#65aadd', '#7bc862', '#a695e7', '#ee7aae', '#6ec9cb', '#faa774'];
@@ -91,6 +105,9 @@ const BOT_ACTION_TYPES = new Set(['create_poll', 'vote_poll', 'react_message', '
 const BOT_ACTION_REACTION_TARGETS = new Set(['reply_to', 'source_message']);
 const BOT_ACTION_PIN_TARGETS = new Set(['reply_to', 'created_poll']);
 const BOT_ACTION_VOTE_TARGETS = new Set(['reply_to', 'latest_open_poll']);
+const BOT_ACTION_REACTION_KEYS = new Set(REACTION_KEYS);
+const BOT_ACTION_REACTION_MODES = new Set(REACTION_MODES);
+const BOT_REACTION_ALLOWED_KEYS = Object.freeze(Object.keys(REACTION_KEY_TO_EMOJI));
 
 function boolValue(value, fallback = false) {
   if (typeof value === 'boolean') return value;
@@ -3240,6 +3257,18 @@ function createAiBotFeature({
     return String(value || '').trim().replace(/\s+/g, ' ');
   }
 
+  function summarizeBotReactionPalette() {
+    return BOT_REACTION_ALLOWED_KEYS
+      .map((key) => `${key}=${REACTION_KEY_TO_EMOJI[key]}`)
+      .join(', ');
+  }
+
+  function summarizeBotMemeReactionPolicy() {
+    return [...REACTION_MEME_KEYS]
+      .map((key) => `${key}=${REACTION_KEY_TO_EMOJI[key]}`)
+      .join(', ');
+  }
+
   function summarizeBotCapabilities(bot) {
     return [
       `allow_poll_create=${bot.allow_poll_create ? 'yes' : 'no'}`,
@@ -3297,12 +3326,41 @@ function createAiBotFeature({
     }
 
     if (type === 'react_message') {
-      const emoji = cleanText(rawAction.emoji || '', 32);
-      if (!emoji) return null;
       const target = BOT_ACTION_REACTION_TARGETS.has(String(rawAction.target || '').trim())
         ? String(rawAction.target).trim()
         : 'reply_to';
-      return { type, target, emoji };
+      const mode = BOT_ACTION_REACTION_MODES.has(String(rawAction.mode || '').trim())
+        ? String(rawAction.mode).trim()
+        : 'replace';
+      const rawReactionKey = rawAction.reaction_key
+        || rawAction.key
+        || rawAction.reaction
+        || rawAction.intent
+        || rawAction.emoji
+        || '';
+      const reactionKey = normalizeReactionKey(rawReactionKey);
+      const emoji = cleanText(rawAction.emoji || '', 32);
+      if (mode === 'remove' && !reactionKey && !emoji) {
+        return { type, target, reaction_key: null, emoji: '', mode };
+      }
+      if (!reactionKey && !emoji) return null;
+      if (reactionKey === 'custom') {
+        if (!emoji) return null;
+        return { type, target, reaction_key: 'custom', emoji, mode };
+      }
+      if (reactionKey && BOT_ACTION_REACTION_KEYS.has(reactionKey)) {
+        return {
+          type,
+          target,
+          reaction_key: reactionKey,
+          emoji: resolveReactionEmoji({ reactionKey, emoji }),
+          mode,
+        };
+      }
+      if (emoji) {
+        return { type, target, reaction_key: 'custom', emoji, mode };
+      }
+      return null;
     }
 
     if (type === 'pin_message') {
@@ -3357,14 +3415,17 @@ function createAiBotFeature({
         'Never choose poll votes randomly. Use only the user request, bot persona, and shown context. If uncertain, clarify instead of guessing.',
         'Return strict JSON only.',
         'Never answer with pseudo-code or function-like calls such as create_poll(...).',
+        `Allowed reaction keys: ${summarizeBotReactionPalette()}.`,
+        `Meme reactions ${summarizeBotMemeReactionPolicy()} are allowed only when the user explicitly asks for them or the context is clearly playful/teasing.`,
         'Supported actions:',
         '- create_poll(question, options, allows_multiple, show_voters, close_preset, pin_after_create)',
         '- vote_poll(target, option_texts) where target is "reply_to" or "latest_open_poll"',
-        '- react_message(target, emoji) where target is "reply_to" or "source_message"',
+        '- react_message(target, reaction_key, emoji?, mode) where target is "reply_to" or "source_message", reaction_key is one of the allowed keys or "custom", and mode is "add", "replace", or "remove"',
         '- pin_message(target) where target is "reply_to" or "created_poll"',
       ].join('\n\n'),
       user: [
         `Bot capabilities: ${summarizeBotCapabilities(bot)}.`,
+        `Reaction palette: ${summarizeBotReactionPalette()}.`,
         `Current raw message: ${cleanText(sourceMessage?.text || sourceMessage?.transcription_text || '', 3000) || '(empty)'}`,
         `Current cleaned request: ${cleanText(extractBotPromptText(bot, sourceMessage), 3000) || '(empty)'}`,
         `Reply target: ${formatActionMessageSummary(replyTarget)}`,
@@ -3387,6 +3448,10 @@ function createAiBotFeature({
     const directVotePlan = parseDirectVoteRequest(requestText);
     if (directVotePlan) {
       return alignActionPlanWithSourceIntent(sanitizeDetectedBotActionPlan(directVotePlan), sourceMessage);
+    }
+    const directReactionPlan = parseDirectReactionRequest(requestText);
+    if (directReactionPlan) {
+      return alignActionPlanWithSourceIntent(sanitizeDetectedBotActionPlan(directReactionPlan), sourceMessage);
     }
     if (textLooksLikeChatActionRequest(requestText) && textLooksLikeActionSuccessClaim(plan.reply_text || '')) {
       return {
@@ -3440,7 +3505,7 @@ function createAiBotFeature({
 
   function resolveReactionTargetMessageId(action, sourceMessage) {
     const replyId = positiveId(sourceMessage?.reply_to_id || sourceMessage?.replyToId);
-    if (action?.target === 'reply_to') return replyId;
+    if (action?.target === 'reply_to') return replyId || positiveId(sourceMessage?.id);
     return positiveId(sourceMessage?.id);
   }
 
@@ -3505,14 +3570,28 @@ function createAiBotFeature({
           if (!bot.allow_react) throw Object.assign(new Error('Reactions are disabled for this bot.'), { code: 'capability' });
           const targetMessageId = resolveReactionTargetMessageId(action, sourceMessage);
           if (!targetMessageId) throw Object.assign(new Error('Ответь на сообщение, к которому нужна реакция.'), { code: 'clarify' });
+          const emoji = resolveReactionEmoji({
+            reactionKey: action.reaction_key || '',
+            emoji: action.emoji || '',
+          });
+          const mode = BOT_ACTION_REACTION_MODES.has(String(action.mode || '').trim())
+            ? String(action.mode).trim()
+            : 'replace';
           const reactResult = messageActions.toggleReaction({
             actor,
             messageId: targetMessageId,
-            emoji: action.emoji,
-            behavior: 'ensure_present',
-            replaceExistingFromActor: true,
+            emoji,
+            behavior: mode === 'remove' ? 'remove' : 'ensure_present',
+            replaceExistingFromActor: mode === 'replace',
+            removeAllFromActor: mode === 'remove' && !emoji,
           });
-          results.push({ type: action.type, message_id: targetMessageId, changed: reactResult.changed });
+          results.push({
+            type: action.type,
+            message_id: targetMessageId,
+            changed: reactResult.changed,
+            reaction_key: action.reaction_key || null,
+            mode,
+          });
           continue;
         }
 
@@ -3578,31 +3657,37 @@ function createAiBotFeature({
     const payload = await generateBotJsonPayload(bot, {
       system: [
         botSystemPrompt(bot),
-        'Choose whether this bot should add one emoji reaction to a message that explicitly mentions it.',
-        'Return strict JSON only with keys should_react and emoji.',
-        'Choose at most one emoji. If no natural reaction fits, return should_react=false and empty emoji.',
+        'Choose whether this bot should add one reaction to a message that explicitly mentions it.',
+        'Return strict JSON only with keys should_react and reaction_key.',
+        `Allowed reaction keys: ${summarizeBotReactionPalette()}.`,
+        `Use meme reactions ${summarizeBotMemeReactionPolicy()} only when the message is clearly joking, teasing, or provocatively playful.`,
+        'Choose at most one reaction key. If no natural reaction fits, return should_react=false and empty reaction_key.',
       ].join('\n\n'),
       user: [
         `Current message: ${cleanText(sourceMessage?.text || sourceMessage?.transcription_text || '', 2500) || '(empty)'}`,
         'Context:',
         context.user,
       ].join('\n\n'),
-      fallback: { should_react: false, emoji: '' },
+      fallback: { should_react: false, reaction_key: '' },
       maxOutputTokens: 120,
     });
     if (!boolValue(payload?.should_react, false)) return null;
-    const emoji = cleanText(payload?.emoji || '', 32);
-    return emoji || null;
+    const reactionKey = normalizeReactionKey(payload?.reaction_key || '');
+    if (!reactionKey) return null;
+    return {
+      reactionKey,
+      emoji: resolveReactionEmoji({ reactionKey }),
+    };
   }
 
   async function maybeAutoReactToMention(bot, chatConfig, sourceMessage) {
     try {
-      const emoji = await detectBotAutoReaction(bot, chatConfig, sourceMessage);
-      if (!emoji) return null;
+      const reaction = await detectBotAutoReaction(bot, chatConfig, sourceMessage);
+      if (!reaction?.emoji) return null;
       return messageActions.toggleReaction({
         actor: buildBotActionActor(bot),
         messageId: sourceMessage.id,
-        emoji,
+        emoji: reaction.emoji,
         behavior: 'ensure_present',
         replaceExistingFromActor: false,
       });

@@ -84,6 +84,7 @@ function createMessageActionsService({
   const sameReactionStmt = db.prepare('SELECT 1 FROM reactions WHERE message_id=? AND user_id=? AND emoji=?');
   const deleteSameReactionStmt = db.prepare('DELETE FROM reactions WHERE message_id=? AND user_id=? AND emoji=?');
   const deleteOtherActorReactionsStmt = db.prepare('DELETE FROM reactions WHERE message_id=? AND user_id=? AND emoji<>?');
+  const deleteActorReactionsStmt = db.prepare('DELETE FROM reactions WHERE message_id=? AND user_id=?');
   const insertReactionStmt = db.prepare('INSERT INTO reactions(message_id, user_id, emoji) VALUES(?,?,?)');
   const listReactionsStmt = db.prepare('SELECT user_id, emoji FROM reactions WHERE message_id=?');
   const insertPinStmt = db.prepare('INSERT OR IGNORE INTO message_pins(chat_id, message_id, pinned_by) VALUES(?,?,?)');
@@ -242,12 +243,15 @@ function createMessageActionsService({
     emoji,
     behavior = 'toggle',
     replaceExistingFromActor = false,
+    removeAllFromActor = false,
   }) {
     const reactor = actorPayload(actor);
     const mid = intId(messageId);
     const normalizedEmoji = String(emoji || '').trim();
     if (!mid) throw createActionError('Invalid message', 400, 'invalid_message');
-    if (!isValidReactionEmoji(normalizedEmoji)) throw createActionError('Invalid emoji', 400, 'invalid_emoji');
+    if ((behavior !== 'remove' || !removeAllFromActor) && !isValidReactionEmoji(normalizedEmoji)) {
+      throw createActionError('Invalid emoji', 400, 'invalid_emoji');
+    }
 
     const message = messageByIdStmt.get(mid);
     if (!message) throw createActionError('Not found', 404, 'not_found');
@@ -257,7 +261,15 @@ function createMessageActionsService({
     let changed = false;
     const existingSame = !!sameReactionStmt.get(mid, reactor.id, normalizedEmoji);
 
-    if (behavior === 'toggle' && existingSame) {
+    if (behavior === 'remove') {
+      if (removeAllFromActor) {
+        const removed = deleteActorReactionsStmt.run(mid, reactor.id);
+        changed = removed.changes > 0;
+      } else if (existingSame) {
+        deleteSameReactionStmt.run(mid, reactor.id, normalizedEmoji);
+        changed = true;
+      }
+    } else if (behavior === 'toggle' && existingSame) {
       deleteSameReactionStmt.run(mid, reactor.id, normalizedEmoji);
       changed = true;
     } else {

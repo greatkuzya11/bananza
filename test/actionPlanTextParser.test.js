@@ -6,6 +6,7 @@ const {
   parseLooseActionPlanText,
   parseDirectCreatePollRequest,
   parseDirectVoteRequest,
+  parseDirectReactionRequest,
 } = require('../ai/actionPlanTextParser');
 
 test('tryParseJsonObject extracts object from surrounding text', () => {
@@ -41,13 +42,13 @@ test('parseLooseActionPlanText recovers create_poll function-style output', () =
 
 test('parseLooseActionPlanText recovers react and pin function-style output', () => {
   const plan = parseLooseActionPlanText(`
-    react_message(target="source_message", emoji="🔥")
+    react_message(target="source_message", reaction_key="fire", mode="replace")
     pin_message(target="reply_to")
   `);
 
   assert.ok(plan);
   assert.deepEqual(plan.actions, [
-    { type: 'react_message', target: 'source_message', emoji: '🔥' },
+    { type: 'react_message', target: 'source_message', reaction_key: 'fire', emoji: '', mode: 'replace' },
     { type: 'pin_message', target: 'reply_to' },
   ]);
 });
@@ -145,6 +146,81 @@ test('parseDirectVoteRequest extracts explicit vote choice from user request', (
       type: 'vote_poll',
       target: 'latest_open_poll',
       option_texts: ['\u0433\u0440\u043e\u043a'],
+    },
+  ]);
+});
+
+test('parseDirectReactionRequest extracts deterministic like intent from direct user request', () => {
+  const plan = parseDirectReactionRequest('\u043b\u0430\u0439\u043a\u043d\u0438 \u044d\u0442\u043e \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435');
+
+  assert.ok(plan);
+  assert.deepEqual(plan.actions, [
+    {
+      type: 'react_message',
+      target: 'reply_to',
+      reaction_key: 'like',
+      emoji: '',
+      mode: 'replace',
+    },
+  ]);
+});
+
+test('parseDirectReactionRequest extracts meme reaction intent from direct user request', () => {
+  const plan = parseDirectReactionRequest('\u043f\u043e\u0441\u0442\u0430\u0432\u044c \u043a\u043b\u043e\u0443\u043d\u0430');
+
+  assert.ok(plan);
+  assert.deepEqual(plan.actions, [
+    {
+      type: 'react_message',
+      target: 'reply_to',
+      reaction_key: 'clown',
+      emoji: '',
+      mode: 'replace',
+    },
+  ]);
+});
+
+test('parseDirectReactionRequest extracts reaction-first wording from direct user request', () => {
+  const plan = parseDirectReactionRequest('\u0433\u043e\u0432\u043d\u043e \u043f\u043e\u0441\u0442\u0430\u0432\u044c \u043d\u0430 \u044d\u0442\u043e \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435');
+
+  assert.ok(plan);
+  assert.deepEqual(plan.actions, [
+    {
+      type: 'react_message',
+      target: 'reply_to',
+      reaction_key: 'poop',
+      emoji: '',
+      mode: 'replace',
+    },
+  ]);
+});
+
+test('parseDirectReactionRequest keeps explicit here-target on source message', () => {
+  const plan = parseDirectReactionRequest('\u043b\u0430\u0439\u043a \u0441\u044e\u0434\u0430 \u043f\u043e\u0441\u0442\u0430\u0432\u044c');
+
+  assert.ok(plan);
+  assert.deepEqual(plan.actions, [
+    {
+      type: 'react_message',
+      target: 'source_message',
+      reaction_key: 'like',
+      emoji: '',
+      mode: 'replace',
+    },
+  ]);
+});
+
+test('parseDirectReactionRequest extracts remove intent from direct user request', () => {
+  const plan = parseDirectReactionRequest('\u0443\u0431\u0435\u0440\u0438 \u0440\u0435\u0430\u043a\u0446\u0438\u044e');
+
+  assert.ok(plan);
+  assert.deepEqual(plan.actions, [
+    {
+      type: 'react_message',
+      target: 'reply_to',
+      reaction_key: null,
+      emoji: '',
+      mode: 'remove',
     },
   ]);
 });
