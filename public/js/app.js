@@ -325,6 +325,59 @@
     models: { ...grokBotState.models },
   };
   let selectedGrokUniversalBotId = null;
+  let contextConvertAdminStates = {
+    openai: {
+      settings: { ...aiBotState.settings },
+      bots: [],
+      chats: [],
+      chatSettings: [],
+      models: { response: ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'] },
+    },
+    yandex: {
+      settings: { ...yandexBotState.settings },
+      bots: [],
+      chats: [],
+      chatSettings: [],
+      models: { response: ['yandexgpt/latest', 'yandexgpt-lite/latest'] },
+    },
+    deepseek: {
+      settings: { ...deepseekBotState.settings },
+      bots: [],
+      chats: [],
+      chatSettings: [],
+      models: { response: ['deepseek-chat', 'deepseek-reasoner'] },
+    },
+    grok: {
+      settings: { ...grokBotState.settings },
+      bots: [],
+      chats: [],
+      chatSettings: [],
+      models: { response: ['grok-4.20-reasoning'] },
+    },
+  };
+  let selectedContextConvertBotIds = {
+    openai: null,
+    yandex: null,
+    deepseek: null,
+    grok: null,
+  };
+  let activeContextConvertProvider = 'openai';
+  let contextConvertAvailabilityByChat = new Map();
+  let contextConvertAvailabilityRequests = new Map();
+  let contextConvertComposerPending = false;
+  let contextConvertPendingMessageIds = new Set();
+  let contextConvertPickerState = {
+    active: false,
+    selected: 0,
+    bots: [],
+    mode: 'composer',
+    chatId: 0,
+    messageId: 0,
+    anchorEl: null,
+    keyboardAttached: false,
+  };
+  let contextConvertPickerPointerState = null;
+  let contextConvertPickerClickSuppressUntil = 0;
   let composerAiOverrideState = {
     target: null,
     mode: 'auto',
@@ -424,6 +477,7 @@
   const mentionOpenBtn = $('#mentionOpenBtn');
   const sendBtn = $('#sendBtn');
   const scrollBottomBtn = $('#scrollBottomBtn');
+  const composerContextConvertBtn = $('#composerContextConvertBtn');
   const attachBtn = $('#attachBtn');
   const pollBtn = $('#pollBtn');
   const emojiBtn = $('#emojiBtn');
@@ -473,8 +527,10 @@
   const aiBotSettingsModal = $('#aiBotSettingsModal');
   const openAiTextBotsModal = $('#openAiTextBotsModal');
   const openAiUniversalBotsModal = $('#openAiUniversalBotsModal');
+  const contextConvertBotsModal = $('#contextConvertBotsModal');
   const yandexAiSettingsModal = $('#yandexAiSettingsModal');
   const deepseekAiSettingsModal = $('#deepseekAiSettingsModal');
+  const deepseekAiTextBotsModal = $('#deepseekAiTextBotsModal');
   const grokAiSettingsModal = $('#grokAiSettingsModal');
   const grokAiTextBotsModal = $('#grokAiTextBotsModal');
   const grokAiImageBotsModal = $('#grokAiImageBotsModal');
@@ -2840,6 +2896,7 @@
     const idx = chats.findIndex((chat) => Number(chat.id) === chatId);
     if (idx < 0) return null;
     const current = chats[idx] || {};
+    const previousContextTransform = !!current.context_transform_enabled;
     chats[idx] = normalizeChatListEntry({
       ...current,
       ...nextChat,
@@ -2853,6 +2910,9 @@
     }
     sortChatsInPlace(chats);
     const updated = getChatById(chatId);
+    if (previousContextTransform !== !!updated?.context_transform_enabled) {
+      invalidateContextConvertAvailability(chatId);
+    }
     renderChatList(chatSearch.value);
     if (currentChatId === chatId) {
       renderCurrentChatHeader(updated);
@@ -2864,6 +2924,7 @@
     }
     refreshChatInfoPresentation(updated);
     renderChatPinSettingsForm(updated);
+    renderChatContextTransformForm(updated);
     return updated;
   }
 
@@ -3720,6 +3781,50 @@
     section.classList.toggle('hidden', isNotesChat(chat) || !canManage);
     toggle.checked = chatAllowsUnpinAnyPin(chat);
     setChatPinSettingsStatus('');
+  }
+
+  function canManageContextTransformSettings(chat = getChatById(currentChatId)) {
+    if (!currentUser || !chat) return false;
+    return Boolean(currentUser.is_admin || Number(chat.created_by || 0) === Number(currentUser.id));
+  }
+
+  function setChatContextTransformStatus(message, type = '') {
+    const el = $('#chatContextTransformStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function renderChatContextTransformForm(chat = getChatById(currentChatId)) {
+    const section = $('#chatContextTransformSection');
+    const toggle = $('#chatContextTransformToggle');
+    if (!section || !toggle) return;
+    const canManage = canManageContextTransformSettings(chat);
+    section.classList.toggle('hidden', !canManage);
+    toggle.checked = !!chat?.context_transform_enabled;
+    setChatContextTransformStatus('');
+  }
+
+  async function saveChatContextTransformSetting() {
+    if (!currentChatId) return;
+    const chat = getChatById(currentChatId);
+    const enabled = !!$('#chatContextTransformToggle')?.checked;
+    if (chat) chat.context_transform_enabled = enabled ? 1 : 0;
+    renderChatContextTransformForm(chat);
+    setChatContextTransformStatus('Saving...');
+    try {
+      const updated = await api(`/api/chats/${currentChatId}/context-transform-settings`, {
+        method: 'PUT',
+        body: { context_transform_enabled: enabled },
+      });
+      applyChatUpdate(updated || {});
+      setChatContextTransformStatus('Saved', 'success');
+      invalidateContextConvertAvailability(currentChatId);
+      if (enabled) loadContextConvertAvailability(currentChatId, { force: true }).catch(() => {});
+    } catch (error) {
+      setChatContextTransformStatus(error.message || 'Could not save context transform setting', 'error');
+    }
   }
 
   function setChatDangerStatus(message, type = '') {
@@ -8310,7 +8415,20 @@
     resolve(false);
   }
 
+  function ensureDeepseekTextBotsModalContent() {
+    const modalBlock = $('#deepseekAiTextBotsBlock');
+    if (!modalBlock) return;
+    const botPanel = $('#deepseekAiBotList')?.closest('.ai-bot-panel');
+    const chatPanel = $('#deepseekAiBotChatSelect')?.closest('.ai-bot-panel');
+    [botPanel, chatPanel].forEach((panel) => {
+      if (panel && panel.parentElement !== modalBlock) {
+        modalBlock.appendChild(panel);
+      }
+    });
+  }
+
   function registerBuiltinModals() {
+    ensureDeepseekTextBotsModalContent();
     [
       newChatModal,
       adminModal,
@@ -8329,6 +8447,7 @@
       openAiUniversalBotsModal,
       yandexAiSettingsModal,
       deepseekAiSettingsModal,
+      deepseekAiTextBotsModal,
       grokAiSettingsModal,
       grokAiTextBotsModal,
       grokAiImageBotsModal,
@@ -8926,6 +9045,10 @@
     mentionPickerClickSuppressUntil = Math.max(mentionPickerClickSuppressUntil, Date.now() + ms);
   }
 
+  function suppressContextConvertPickerFollowupClick(ms = 550) {
+    contextConvertPickerClickSuppressUntil = Math.max(contextConvertPickerClickSuppressUntil, Date.now() + ms);
+  }
+
   function ensureMentionPickerBackdrop() {
     let backdrop = $('#mentionPickerBackdrop');
     if (backdrop) return backdrop;
@@ -9025,6 +9148,7 @@
     mentionOpenBtn.disabled = !visible;
     mentionOpenBtn.setAttribute('aria-hidden', visible ? 'false' : 'true');
     mentionOpenBtn.setAttribute('aria-expanded', mentionPickerState.active ? 'true' : 'false');
+    syncContextConvertComposerButton();
   }
 
   function hideMentionPicker() {
@@ -9375,6 +9499,669 @@
     positionAvatarUserMenu(avatarEl);
   }
 
+  function contextConvertProviderLabel(provider = 'openai') {
+    if (provider === 'yandex') return 'Yandex';
+    if (provider === 'deepseek') return 'DeepSeek';
+    if (provider === 'grok') return 'Grok';
+    return 'OpenAI';
+  }
+
+  function providerAccent(provider = 'openai') {
+    if (provider === 'yandex') return '#fc9b28';
+    if (provider === 'deepseek') return '#2a9d8f';
+    if (provider === 'grok') return '#5f8cff';
+    return '#10a37f';
+  }
+
+  function contextConvertRouteBase(provider = 'openai') {
+    if (provider === 'yandex') return '/api/admin/yandex-convert-bots';
+    if (provider === 'deepseek') return '/api/admin/deepseek-convert-bots';
+    if (provider === 'grok') return '/api/admin/grok-convert-bots';
+    return '/api/admin/openai-convert-bots';
+  }
+
+  function currentContextConvertAdminState() {
+    return contextConvertAdminStates[activeContextConvertProvider] || contextConvertAdminStates.openai;
+  }
+
+  function currentContextConvertAdminBot() {
+    const state = currentContextConvertAdminState();
+    const selectedId = Number(selectedContextConvertBotIds[activeContextConvertProvider] || 0);
+    return state.bots.find((bot) => Number(bot.id) === selectedId) || null;
+  }
+
+  function getContextConvertChatSetting(chatId, botId) {
+    const state = currentContextConvertAdminState();
+    return state.chatSettings.find((item) => Number(item.chat_id) === Number(chatId) && Number(item.bot_id) === Number(botId)) || null;
+  }
+
+  function setContextConvertInlineStatus(targetIds, message, type = '') {
+    setInlineStatus(targetIds, message, type);
+  }
+
+  function setContextConvertModalStatus(message, type = '') {
+    setContextConvertInlineStatus('contextConvertStatus', message, type);
+  }
+
+  function setContextConvertBotStatus(message, type = '') {
+    setContextConvertInlineStatus(['contextConvertBotEditorStatus', 'contextConvertBotEditorStatusBottom'], message, type);
+  }
+
+  function setContextConvertChatStatus(message, type = '') {
+    setContextConvertInlineStatus('contextConvertBotChatStatus', message, type);
+  }
+
+  function mergeContextConvertAdminState(provider = 'openai', data = {}) {
+    const state = data.state || data;
+    if (!contextConvertAdminStates[provider]) return;
+    contextConvertAdminStates[provider] = {
+      settings: state.settings || contextConvertAdminStates[provider].settings,
+      bots: state.bots || contextConvertAdminStates[provider].bots,
+      chats: state.chats || contextConvertAdminStates[provider].chats,
+      chatSettings: state.chatSettings || contextConvertAdminStates[provider].chatSettings,
+      models: state.models || contextConvertAdminStates[provider].models,
+    };
+    if (provider === 'openai' && state.settings) syncSharedOpenAiSettings(state.settings);
+    if (provider === 'yandex' && state.settings) yandexBotState.settings = { ...yandexBotState.settings, ...state.settings };
+    if (provider === 'deepseek' && state.settings) deepseekBotState.settings = { ...deepseekBotState.settings, ...state.settings };
+    if (provider === 'grok' && state.settings) grokBotState.settings = { ...grokBotState.settings, ...state.settings };
+    const bots = contextConvertAdminStates[provider].bots || [];
+    if (selectedContextConvertBotIds[provider] && !bots.some((bot) => Number(bot.id) === Number(selectedContextConvertBotIds[provider]))) {
+      selectedContextConvertBotIds[provider] = null;
+    }
+    if (!selectedContextConvertBotIds[provider] && bots[0]) {
+      selectedContextConvertBotIds[provider] = Number(bots[0].id);
+    }
+    contextConvertAvailabilityByChat.clear();
+  }
+
+  function renderContextConvertBotList() {
+    const list = $('#contextConvertBotList');
+    if (!list) return;
+    const state = currentContextConvertAdminState();
+    const selectedId = Number(selectedContextConvertBotIds[activeContextConvertProvider] || 0);
+    if (!state.bots.length) {
+      list.innerHTML = '<div class="ai-bot-empty">No convert bots yet. Create the first one.</div>';
+      return;
+    }
+    list.innerHTML = state.bots.map((bot) => `
+      <button type="button" class="ai-bot-list-item${Number(bot.id) === selectedId ? ' active' : ''}" data-context-convert-bot-id="${bot.id}">
+        <span class="ai-bot-list-main">
+          <span class="ai-bot-list-copy">
+            <strong>${esc(bot.name || 'Convert bot')}</strong>
+            <small>${bot.enabled ? 'enabled' : 'disabled'}${bot.response_model ? ` · ${esc(bot.response_model)}` : ''}</small>
+          </span>
+        </span>
+      </button>
+    `).join('');
+  }
+
+  function renderContextConvertForm() {
+    const state = currentContextConvertAdminState();
+    const bot = currentContextConvertAdminBot() || null;
+    const responseModels = state.models?.response || [];
+    setAiModelSelectOptions(
+      'contextConvertBotResponseModel',
+      responseModels,
+      bot?.response_model || responseModels[0] || ''
+    );
+    $('#contextConvertBotName').value = bot?.name || `${contextConvertProviderLabel(activeContextConvertProvider)} Convert`;
+    $('#contextConvertBotTemperature').value = bot?.temperature ?? 0.3;
+    $('#contextConvertBotMaxTokens').value = bot?.max_tokens ?? 1000;
+    $('#contextConvertBotEnabled').checked = bot?.enabled !== false;
+    $('#contextConvertBotPrompt').value = bot?.transform_prompt || '';
+  }
+
+  function renderContextConvertChatSettings() {
+    const state = currentContextConvertAdminState();
+    const chatSelect = $('#contextConvertBotChatSelect');
+    const botSelect = $('#contextConvertBotChatBotSelect');
+    if (!chatSelect || !botSelect) return;
+    const currentChatValue = chatSelect.value || String(currentChatId || state.chats[0]?.id || '');
+    const currentBotValue = botSelect.value || String(selectedContextConvertBotIds[activeContextConvertProvider] || state.bots[0]?.id || '');
+    chatSelect.innerHTML = state.chats.map((chat) => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+    botSelect.innerHTML = state.bots.map((bot) => `<option value="${bot.id}">${esc(bot.name)}</option>`).join('');
+    if (state.chats.some((chat) => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
+    if (state.bots.some((bot) => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;
+    if (!botSelect.value && state.bots[0]) botSelect.value = String(state.bots[0].id);
+    const setting = getContextConvertChatSetting(chatSelect.value, botSelect.value);
+    $('#contextConvertBotChatEnabled').checked = !!setting?.enabled;
+  }
+
+  function renderContextConvertAdminSettings() {
+    $('#contextConvertModalTitle').textContent = `${contextConvertProviderLabel(activeContextConvertProvider)} Context Convert Bots`;
+    renderContextConvertBotList();
+    renderContextConvertForm();
+    renderContextConvertChatSettings();
+  }
+
+  function contextConvertAdminFormPayload() {
+    return {
+      name: $('#contextConvertBotName')?.value.trim(),
+      enabled: $('#contextConvertBotEnabled')?.checked,
+      response_model: $('#contextConvertBotResponseModel')?.value.trim(),
+      temperature: Number($('#contextConvertBotTemperature')?.value || 0.3),
+      max_tokens: Number($('#contextConvertBotMaxTokens')?.value || 1000),
+      transform_prompt: $('#contextConvertBotPrompt')?.value.trim(),
+    };
+  }
+
+  async function loadContextConvertAdminState(provider = activeContextConvertProvider) {
+    const data = await api(contextConvertRouteBase(provider));
+    mergeContextConvertAdminState(provider, data);
+    if (provider === activeContextConvertProvider) renderContextConvertAdminSettings();
+    return data;
+  }
+
+  function openContextConvertBotsModal(provider = 'openai') {
+    if (!currentUser?.is_admin) return;
+    activeContextConvertProvider = provider;
+    openModal('contextConvertBotsModal', { replaceStack: false, opener: $(`#${provider === 'openai' ? 'openAiOpenConvertBots' : (provider === 'grok' ? 'grokAiOpenConvertBots' : `${provider}AiOpenConvertBots`)}`) });
+    resetManagedModalScroll('contextConvertBotsModal');
+    setContextConvertModalStatus('Loading...');
+    const state = contextConvertAdminStates[provider];
+    if (state?.bots?.length || state?.chats?.length) {
+      renderContextConvertAdminSettings();
+      setContextConvertModalStatus('Refreshing...');
+    }
+    loadContextConvertAdminState(provider).then(() => {
+      renderContextConvertAdminSettings();
+      resetManagedModalScroll('contextConvertBotsModal');
+      setContextConvertModalStatus('');
+    }).catch((error) => {
+      setContextConvertModalStatus(error.message || 'Could not load convert bots', 'error');
+    });
+  }
+
+  async function saveContextConvertAdminBot() {
+    const payload = contextConvertAdminFormPayload();
+    if (!payload.name) {
+      setContextConvertBotStatus('Enter bot name', 'error');
+      return;
+    }
+    if (!payload.transform_prompt) {
+      setContextConvertBotStatus('Enter transform prompt', 'error');
+      return;
+    }
+    const selectedId = Number(selectedContextConvertBotIds[activeContextConvertProvider] || 0);
+    const state = currentContextConvertAdminState();
+    const shouldUpdate = Boolean(selectedId && state.bots.some((bot) => Number(bot.id) === selectedId));
+    const url = shouldUpdate
+      ? `${contextConvertRouteBase(activeContextConvertProvider)}/${selectedId}`
+      : contextConvertRouteBase(activeContextConvertProvider);
+    const method = shouldUpdate ? 'PUT' : 'POST';
+    setContextConvertBotStatus('Saving...');
+    try {
+      const data = await api(url, { method, body: payload });
+      mergeContextConvertAdminState(activeContextConvertProvider, data);
+      selectedContextConvertBotIds[activeContextConvertProvider] = Number(data.bot?.id || selectedId || 0) || null;
+      renderContextConvertAdminSettings();
+      setContextConvertBotStatus('Convert bot saved', 'success');
+    } catch (error) {
+      setContextConvertBotStatus(error.message || 'Could not save convert bot', 'error');
+    }
+  }
+
+  async function disableContextConvertAdminBot() {
+    const bot = currentContextConvertAdminBot();
+    if (!bot) return;
+    if (!confirm('Disable this convert bot in all chats?')) return;
+    try {
+      const data = await api(`${contextConvertRouteBase(activeContextConvertProvider)}/${bot.id}`, { method: 'DELETE' });
+      mergeContextConvertAdminState(activeContextConvertProvider, data);
+      renderContextConvertAdminSettings();
+      setContextConvertBotStatus('Convert bot disabled', 'success');
+    } catch (error) {
+      setContextConvertBotStatus(error.message || 'Could not disable convert bot', 'error');
+    }
+  }
+
+  async function testContextConvertAdminBot() {
+    const bot = currentContextConvertAdminBot();
+    if (!bot) {
+      setContextConvertBotStatus('Save a convert bot first', 'error');
+      return;
+    }
+    const sample = window.prompt('Source text for test transform:', 'Can you rewrite this text to sound clearer and more concise?');
+    if (sample == null) return;
+    setContextConvertBotStatus('Testing...');
+    try {
+      const data = await api(`${contextConvertRouteBase(activeContextConvertProvider)}/${bot.id}/test`, {
+        method: 'POST',
+        body: { text: sample },
+      });
+      const text = String(data.result?.text || '').trim().slice(0, 500);
+      setContextConvertBotStatus(`Success (${data.result?.latencyMs || 0} ms): ${text}`, 'success');
+    } catch (error) {
+      setContextConvertBotStatus(error.message || 'Convert bot test failed', 'error');
+    }
+  }
+
+  async function exportContextConvertAdminBot() {
+    const bot = currentContextConvertAdminBot();
+    if (!bot) {
+      setContextConvertBotStatus('Select a saved convert bot first', 'error');
+      return;
+    }
+    setContextConvertBotStatus('Preparing JSON...');
+    try {
+      const res = await fetch(`${contextConvertRouteBase(activeContextConvertProvider)}/${bot.id}/export`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Export failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filenameFromContentDisposition(
+        res.headers.get('content-disposition'),
+        `bananza-${activeContextConvertProvider}-convert-${bot.id}.json`
+      );
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setContextConvertBotStatus('JSON exported', 'success');
+    } catch (error) {
+      setContextConvertBotStatus(error.message || 'Could not export JSON', 'error');
+    }
+  }
+
+  async function importContextConvertAdminBot(file) {
+    if (!file) return;
+    setContextConvertBotStatus('Importing JSON...');
+    try {
+      const raw = await file.text();
+      const payload = JSON.parse(raw);
+      const data = await api(`${contextConvertRouteBase(activeContextConvertProvider)}/import`, {
+        method: 'POST',
+        body: payload,
+      });
+      mergeContextConvertAdminState(activeContextConvertProvider, data);
+      selectedContextConvertBotIds[activeContextConvertProvider] = Number(data.bot?.id || 0) || selectedContextConvertBotIds[activeContextConvertProvider];
+      renderContextConvertAdminSettings();
+      const warnings = Array.isArray(data.warnings) && data.warnings.length ? ` ${data.warnings.join(' ')}` : '';
+      setContextConvertBotStatus(`JSON imported.${warnings}`.trim(), warnings ? 'warning' : 'success');
+    } catch (error) {
+      setContextConvertBotStatus(error.message || 'Could not import JSON', 'error');
+    }
+  }
+
+  async function saveContextConvertAdminChatSetting() {
+    const chatId = Number($('#contextConvertBotChatSelect')?.value || 0);
+    const botId = Number($('#contextConvertBotChatBotSelect')?.value || 0);
+    if (!chatId || !botId) {
+      setContextConvertChatStatus('Select chat and bot', 'error');
+      return;
+    }
+    setContextConvertChatStatus('Saving...');
+    try {
+      const data = await api(`${contextConvertRouteBase(activeContextConvertProvider)}/chat-settings`, {
+        method: 'PUT',
+        body: {
+          chatId,
+          botId,
+          enabled: $('#contextConvertBotChatEnabled')?.checked,
+        },
+      });
+      mergeContextConvertAdminState(activeContextConvertProvider, data);
+      renderContextConvertChatSettings();
+      setContextConvertChatStatus('Chat setting saved', 'success');
+    } catch (error) {
+      setContextConvertChatStatus(error.message || 'Could not save chat setting', 'error');
+    }
+  }
+
+  function normalizeContextConvertAvailability(data = {}) {
+    return {
+      enabled: !!data.enabled,
+      bots: Array.isArray(data.bots) ? data.bots.map((bot) => ({
+        id: Number(bot.id || 0),
+        name: bot.name || '',
+        provider: bot.provider || 'openai',
+        transform_prompt_preview: bot.transform_prompt_preview || '',
+      })).filter((bot) => bot.id > 0) : [],
+    };
+  }
+
+  async function loadContextConvertAvailability(chatId = currentChatId, { force = false } = {}) {
+    const id = Number(chatId || 0);
+    if (!id) return { enabled: false, bots: [] };
+    if (!force && contextConvertAvailabilityByChat.has(id)) return contextConvertAvailabilityByChat.get(id);
+    if (!force && contextConvertAvailabilityRequests.has(id)) return contextConvertAvailabilityRequests.get(id);
+    const request = api(`/api/chats/${id}/context-convert-bots`)
+      .then((data) => {
+        const normalized = normalizeContextConvertAvailability(data);
+        contextConvertAvailabilityByChat.set(id, normalized);
+        contextConvertAvailabilityRequests.delete(id);
+        if (id === Number(currentChatId || 0)) syncContextConvertComposerButton();
+        return normalized;
+      })
+      .catch((error) => {
+        contextConvertAvailabilityRequests.delete(id);
+        throw error;
+      });
+    contextConvertAvailabilityRequests.set(id, request);
+    return request;
+  }
+
+  function invalidateContextConvertAvailability(chatId) {
+    const id = Number(chatId || 0);
+    if (!id) return;
+    contextConvertAvailabilityByChat.delete(id);
+    contextConvertAvailabilityRequests.delete(id);
+    if (id === Number(currentChatId || 0)) {
+      if (contextConvertPickerState.active && contextConvertPickerState.chatId === id) hideContextConvertPicker();
+      syncContextConvertComposerButton();
+    }
+  }
+
+  function ensureContextConvertPickerBackdrop() {
+    let backdrop = $('#contextConvertPickerBackdrop');
+    if (backdrop) return backdrop;
+    backdrop = document.createElement('div');
+    backdrop.id = 'contextConvertPickerBackdrop';
+    backdrop.className = 'mention-picker-backdrop hidden';
+    document.body.appendChild(backdrop);
+    const dismiss = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      suppressContextConvertPickerFollowupClick();
+      hideContextConvertPicker();
+    };
+    backdrop.addEventListener('pointerdown', dismiss, { passive: false });
+    backdrop.addEventListener('click', dismiss, { passive: false });
+    backdrop.addEventListener('contextmenu', dismiss, { passive: false });
+    return backdrop;
+  }
+
+  function ensureContextConvertPicker() {
+    let picker = $('#contextConvertPicker');
+    ensureContextConvertPickerBackdrop();
+    if (picker) return picker;
+    picker = document.createElement('div');
+    picker.id = 'contextConvertPicker';
+    picker.className = 'mention-picker context-convert-picker hidden';
+    document.body.appendChild(picker);
+    picker.addEventListener('pointerdown', (e) => {
+      if (typeof e.button === 'number' && e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const item = e.target.closest('.mention-picker-item');
+      if (!item) return;
+      contextConvertPickerPointerState = {
+        pointerId: e.pointerId,
+        startIndex: Number(item.dataset.index),
+        moved: false,
+      };
+    }, { passive: false });
+    picker.addEventListener('scroll', () => {
+      if (contextConvertPickerPointerState) contextConvertPickerPointerState.moved = true;
+    }, { passive: true, capture: true });
+    picker.addEventListener('pointerup', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      suppressContextConvertPickerFollowupClick();
+      const pointerState = contextConvertPickerPointerState;
+      contextConvertPickerPointerState = null;
+      if (!pointerState || pointerState.pointerId !== e.pointerId || pointerState.moved) return;
+      const item = e.target.closest('.mention-picker-item');
+      if (!item) return;
+      const index = Number(item.dataset.index);
+      if (!Number.isInteger(index) || index !== pointerState.startIndex) return;
+      const bot = contextConvertPickerState.bots[index];
+      if (!bot) return;
+      if (contextConvertPickerState.mode === 'message') transformMessageWithContextConvertBot(contextConvertPickerState.messageId, bot);
+      else transformComposerTextWithContextConvertBot(bot);
+    }, { passive: false });
+    picker.addEventListener('pointercancel', () => {
+      contextConvertPickerPointerState = null;
+    }, { passive: true });
+    picker.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    return picker;
+  }
+
+  function positionContextConvertPicker() {
+    const picker = $('#contextConvertPicker');
+    if (!picker || picker.classList.contains('hidden')) return;
+    const anchor = contextConvertPickerState.anchorEl || composerContextConvertBtn || msgInput;
+    const rect = anchor?.getBoundingClientRect?.();
+    if (!rect) return;
+    const vv = window.visualViewport;
+    const viewportLeft = vv ? vv.offsetLeft : 0;
+    const viewportTop = vv ? vv.offsetTop : 0;
+    const viewportWidth = vv ? vv.width : window.innerWidth;
+    const viewportHeight = vv ? vv.height : window.innerHeight;
+    const isContextConvertPicker = picker.classList.contains('context-convert-picker');
+    const maxContextConvertWidth = Math.max(96, Math.min(viewportWidth - 16, Math.floor(viewportWidth * (2 / 3))));
+    const widestContextConvertLabel = isContextConvertPicker
+      ? Array.from(picker.querySelectorAll('.context-convert-picker-label'))
+          .reduce((maxWidth, label) => Math.max(maxWidth, Math.ceil(label.scrollWidth || label.getBoundingClientRect().width || 0)), 0)
+      : 0;
+    const width = isContextConvertPicker
+      ? clamp(widestContextConvertLabel + 40, 96, maxContextConvertWidth)
+      : Math.min(Math.max(Math.max(rect.width, 260), 260), viewportWidth - 16);
+    picker.style.width = `${width}px`;
+    const height = picker.offsetHeight || 220;
+    const left = Math.max(viewportLeft + 8, Math.min(rect.left + viewportLeft, viewportLeft + viewportWidth - width - 8));
+    let top = rect.top + viewportTop - height - 8;
+    if (top < viewportTop + 8) top = rect.bottom + viewportTop + 8;
+    top = Math.max(viewportTop + 8, Math.min(top, viewportTop + viewportHeight - height - 8));
+    picker.style.left = `${left}px`;
+    picker.style.top = `${top}px`;
+  }
+
+  function renderContextConvertPicker(bots, options = {}) {
+    const picker = ensureContextConvertPicker();
+    if (!bots.length) {
+      hideContextConvertPicker();
+      return;
+    }
+    contextConvertPickerState = {
+      ...contextConvertPickerState,
+      active: true,
+      selected: Math.min(contextConvertPickerState.selected || 0, bots.length - 1),
+      bots,
+      mode: options.mode || contextConvertPickerState.mode || 'composer',
+      chatId: Number(options.chatId || contextConvertPickerState.chatId || currentChatId || 0),
+      messageId: Number(options.messageId || 0),
+      anchorEl: options.anchorEl || contextConvertPickerState.anchorEl || composerContextConvertBtn,
+      keyboardAttached: Boolean(options.keyboardAttached),
+    };
+    picker.innerHTML = `
+      <div class="mention-picker-list">
+        ${bots.map((bot, index) => `
+          <button type="button" class="mention-picker-item${index === contextConvertPickerState.selected ? ' active' : ''}" data-index="${index}">
+            <span class="mention-picker-avatar" style="background:${esc(providerAccent(bot.provider))}">🍌</span>
+            <span class="mention-picker-copy">
+              <strong>${esc(bot.name)}</strong>
+              <small>${esc(contextConvertProviderLabel(bot.provider))}${bot.transform_prompt_preview ? ` · ${esc(bot.transform_prompt_preview)}` : ''}</small>
+            </span>
+          </button>
+        `).join('')}
+      </div>
+    `;
+    picker.querySelectorAll('.mention-picker-item').forEach((item, index) => {
+      const bot = bots[index];
+      item.classList.add('context-convert-picker-item');
+      item.innerHTML = `<span class="context-convert-picker-label">${esc(bot?.name || 'Convert bot')}</span>`;
+    });
+    openFloatingSurface(ensureContextConvertPickerBackdrop());
+    openFloatingSurface(picker);
+    positionContextConvertPicker();
+    requestAnimationFrame(() => positionContextConvertPicker());
+  }
+
+  function hideContextConvertPicker() {
+    contextConvertPickerState = {
+      active: false,
+      selected: 0,
+      bots: [],
+      mode: 'composer',
+      chatId: 0,
+      messageId: 0,
+      anchorEl: null,
+      keyboardAttached: false,
+    };
+    contextConvertPickerPointerState = null;
+    closeFloatingSurface($('#contextConvertPickerBackdrop'));
+    closeFloatingSurface($('#contextConvertPicker'));
+  }
+
+  function getCurrentChatContextConvertState() {
+    return contextConvertAvailabilityByChat.get(Number(currentChatId || 0)) || { enabled: false, bots: [] };
+  }
+
+  function setComposerContextConvertButtonVisible(visible) {
+    if (!composerContextConvertBtn) return;
+    if (visible) {
+      if (composerContextConvertBtn.classList.contains('hidden') || composerContextConvertBtn.classList.contains('is-closing')) {
+        openFloatingSurface(composerContextConvertBtn);
+      }
+      return;
+    }
+    if (!composerContextConvertBtn.classList.contains('hidden')) {
+      closeFloatingSurface(composerContextConvertBtn);
+    }
+  }
+
+  function canContextConvertMessage(msg, row = null) {
+    if (!canEditMessage(msg)) return false;
+    if (msg?.ai_generated || msg?.ai_bot_id || msg?.is_ai_bot) return false;
+    const text = row ? getEditableText(row) : ((msg?.is_voice_note ? msg?.transcription_text : msg?.text) || '');
+    return Boolean(String(text || '').trim());
+  }
+
+  function syncContextConvertComposerButton() {
+    if (!composerContextConvertBtn) return;
+    const hasText = Boolean(currentChatId && !editTo && String(msgInput?.value || '').trim());
+    const currentChat = getChatById(currentChatId);
+    const availability = getCurrentChatContextConvertState();
+    const shouldShow = Boolean((hasText || contextConvertComposerPending) && currentChat?.context_transform_enabled && availability.bots.length);
+    if (!shouldShow && contextConvertPickerState.active && contextConvertPickerState.mode === 'composer') {
+      hideContextConvertPicker();
+    }
+    setComposerContextConvertButtonVisible(shouldShow);
+    const shouldOffsetForScrollFab = Boolean(
+      scrollBottomBtn?.classList.contains('visible')
+      && (shouldShow || !composerContextConvertBtn.classList.contains('hidden'))
+    );
+    composerContextConvertBtn.classList.toggle('with-scroll-bottom', shouldOffsetForScrollFab);
+    composerContextConvertBtn.classList.toggle('is-pending', contextConvertComposerPending);
+    composerContextConvertBtn.disabled = contextConvertComposerPending;
+    if (currentChat?.context_transform_enabled && !availability.bots.length && currentChatId) {
+      loadContextConvertAvailability(currentChatId).catch(() => {});
+    }
+  }
+
+  async function openComposerContextConvertPicker() {
+    if (contextConvertComposerPending || !currentChatId || editTo) return;
+    const text = String(msgInput?.value || '').trim();
+    if (!text) return;
+    hideMentionPicker();
+    const availability = await loadContextConvertAvailability(currentChatId).catch(() => ({ enabled: false, bots: [] }));
+    if (!availability.enabled || !availability.bots.length) {
+      syncContextConvertComposerButton();
+      return;
+    }
+    if (contextConvertPickerState.active && contextConvertPickerState.mode === 'composer') {
+      hideContextConvertPicker();
+      focusComposerKeepKeyboard(true);
+      return;
+    }
+    renderContextConvertPicker(availability.bots, {
+      mode: 'composer',
+      chatId: currentChatId,
+      anchorEl: composerContextConvertBtn,
+      keyboardAttached: true,
+    });
+    focusComposerKeepKeyboard(true);
+  }
+
+  async function transformComposerTextWithContextConvertBot(bot) {
+    const text = String(msgInput?.value || '').trim();
+    if (!bot?.id || !text || !currentChatId) return;
+    hideContextConvertPicker();
+    contextConvertComposerPending = true;
+    syncContextConvertComposerButton();
+    try {
+      const data = await api(`/api/chats/${currentChatId}/context-convert`, {
+        method: 'POST',
+        body: {
+          botId: bot.id,
+          text,
+        },
+      });
+      msgInput.value = data.text || '';
+      autoResize();
+      focusComposerKeepKeyboard(true);
+      msgInput.dispatchEvent(new Event('input', { bubbles: true }));
+    } catch (error) {
+      alert(error.message || 'Could not transform text');
+    } finally {
+      contextConvertComposerPending = false;
+      syncContextConvertComposerButton();
+    }
+  }
+
+  function syncContextConvertPendingMessageState(messageId) {
+    const id = Number(messageId || 0);
+    if (!id) return;
+    const pending = contextConvertPendingMessageIds.has(id);
+    const row = messagesEl.querySelector(`[data-msg-id="${id}"]`);
+    row?.classList.toggle('context-convert-pending', pending);
+    row?.querySelectorAll('.msg-context-convert-btn').forEach((btn) => btn.classList.toggle('is-pending', pending));
+    if (Number(reactionPickerMsgId || 0) === id && isFloatingSurfaceVisible(reactionPicker)) {
+      renderReactionPickerContent();
+    }
+  }
+
+  async function transformMessageWithContextConvertBot(messageId, bot) {
+    const id = Number(messageId || 0);
+    if (!id || !bot?.id || contextConvertPendingMessageIds.has(id)) return;
+    hideContextConvertPicker();
+    contextConvertPendingMessageIds.add(id);
+    syncContextConvertPendingMessageState(id);
+    try {
+      const preserveAnchor = captureScrollAnchor();
+      const data = await api(`/api/messages/${id}/context-convert`, {
+        method: 'POST',
+        body: { botId: bot.id },
+      });
+      applyMessageUpdate(data.message, { preserveAnchor });
+      if (preserveAnchor?.messageId) {
+        requestAnimationFrame(() => restoreScrollAnchor(preserveAnchor, 2));
+      }
+      loadChats().catch(() => {});
+    } catch (error) {
+      showCenterToast(error.message || 'Could not transform message');
+    } finally {
+      contextConvertPendingMessageIds.delete(id);
+      syncContextConvertPendingMessageState(id);
+    }
+  }
+
+  async function openMessageContextConvertPicker(row, anchorEl = null, { keepComposerFocus = false } = {}) {
+    const msg = row?.__messageData || null;
+    if (!canContextConvertMessage(msg, row) || !currentChatId) return;
+    const stableAnchor = anchorEl && row?.contains?.(anchorEl) ? anchorEl : row;
+    hideMentionPicker();
+    hideFloatingMessageActions({ keepComposerState: keepComposerFocus, immediate: true });
+    const availability = await loadContextConvertAvailability(currentChatId).catch(() => ({ enabled: false, bots: [] }));
+    if (!availability.enabled || !availability.bots.length) return;
+    renderContextConvertPicker(availability.bots, {
+      mode: 'message',
+      chatId: currentChatId,
+      messageId: Number(msg.id || 0),
+      anchorEl: stableAnchor,
+      keyboardAttached: keepComposerFocus,
+    });
+    if (keepComposerFocus) focusComposerKeepKeyboard(true);
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // AUTH
   // ═══════════════════════════════════════════════════════════════════════════
@@ -9691,6 +10478,13 @@
       }
       case 'chat_updated': {
         applyChatUpdate(msg.chat || {});
+        break;
+      }
+      case 'context_convert_bots_updated': {
+        invalidateContextConvertAvailability(msg.chatId || msg.chat_id);
+        if (Number(msg.chatId || msg.chat_id || 0) === Number(currentChatId || 0)) {
+          loadContextConvertAvailability(currentChatId, { force: true }).catch(() => {});
+        }
         break;
       }
       case 'chat_history_cleared': {
@@ -10076,6 +10870,7 @@
     const hasMessages = Boolean(messagesEl.querySelector('.msg-row'));
     const shouldShow = Boolean(currentChatId && hasMessages && (!isNearBottom(8) || hasMoreAfter));
     scrollBottomBtn.classList.toggle('visible', shouldShow);
+    syncContextConvertComposerButton();
   }
 
   function normalizeMemberLastReads(value) {
@@ -10841,6 +11636,7 @@
       clearReply();
       if (editTo) clearEdit({ clearInput: true });
       syncMentionOpenButton();
+      loadContextConvertAvailability(targetChatId).catch(() => {});
       if (window.innerWidth > 768) msgInput.focus();
       refreshPollComposerActionState();
       window.BananzaVoiceHooks?.refreshComposerState?.();
@@ -10995,6 +11791,7 @@
       pauseCurrentChatMediaPlayback();
     }
     hideMentionPicker();
+    hideContextConvertPicker();
     clearActivePulseVoterPopover({ skipRefresh: true });
     hideAvatarUserMenu();
     hideChatContextMenu({ immediate: true });
@@ -11819,6 +12616,7 @@
     const isPollMessage = Boolean(!msg.is_deleted && msg.poll);
     const row = document.createElement('div');
     row.className = `msg-row ${isOwn ? 'own' : 'other'}${isEmojiOnly ? ' emoji-only-message' : ''}${isMediaMessage ? ' media-message' : ''}${isPollMessage ? ' poll-message' : ''}`;
+    if (contextConvertPendingMessageIds.has(Number(msg.id || 0))) row.classList.add('context-convert-pending');
     row.dataset.msgId = msg.id;
     if (msg.client_id) row.dataset.clientId = msg.client_id;
     if (isClientMessage) row.dataset.outbox = '1';
@@ -11933,6 +12731,7 @@
       html += '<button class="msg-copy-btn" title="Копировать">⧉</button>';
       html += '<button class="msg-reply-btn" title="Reply">↩</button>';
       if (canEditMessage(msg)) html += '<button class="msg-edit-btn" title="Edit">✏️</button>';
+      if (canContextConvertMessage(msg)) html += `<button class="msg-context-convert-btn${contextConvertPendingMessageIds.has(Number(msg.id || 0)) ? ' is-pending' : ''}" title="Transform with AI">🍌</button>`;
       if (canSaveMessageToNotes(msg)) html += '<button class="msg-save-note-btn" title="Сохранить в заметки">📝</button>';
       if (canForwardMessage(msg)) html += '<button class="msg-forward-btn" title="Forward">📤</button>';
       html += '<button class="msg-react-btn" title="React">🙂</button>';
@@ -11982,6 +12781,18 @@
       editBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         setEditFromRow(row);
+      });
+    }
+
+    const contextConvertBtn = row.querySelector('.msg-context-convert-btn');
+    if (contextConvertBtn) {
+      contextConvertBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openMessageContextConvertPicker(row, contextConvertBtn, {
+          keepComposerFocus: reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen(),
+        }).catch((error) => {
+          console.warn('[context-convert] picker open failed:', error.message);
+        });
       });
     }
 
@@ -13237,6 +14048,7 @@
       el.querySelector('.msg-reply-btn')?.remove();
       el.querySelector('.msg-react-btn')?.remove();
       el.querySelector('.msg-edit-btn')?.remove();
+      el.querySelector('.msg-context-convert-btn')?.remove();
       el.querySelector('.msg-save-note-btn')?.remove();
       el.querySelector('.msg-forward-btn')?.remove();
       el.querySelector('.msg-actions')?.remove();
@@ -14512,9 +15324,12 @@
 
   function renderReactionPickerContent() {
     if (!reactionPicker) return;
+    const row = reactionPickerMsgId ? messagesEl.querySelector(`[data-msg-id="${reactionPickerMsgId}"]`) : null;
+    const canConvert = canContextConvertMessage(row?.__messageData, row);
     reactionPicker.innerHTML = `
       <div class="reaction-picker-strip">
         ${renderQuickReactionButtonsHtml({ buttonClass: 'reaction-picker-button', moreAction: 'open-emoji-popover' })}
+        ${canConvert ? `<button type="button" class="reaction-picker-button msg-context-convert-btn${contextConvertPendingMessageIds.has(Number(reactionPickerMsgId || 0)) ? ' is-pending' : ''}" data-reaction-action="context-convert" title="Transform with AI">🍌</button>` : ''}
       </div>
     `;
     reactionPicker.querySelector('.reaction-picker-strip')?.addEventListener('scroll', () => {
@@ -15689,6 +16504,21 @@
     });
   }
 
+  function openDeepseekTextBotsModal() {
+    if (!currentUser?.is_admin) return;
+    ensureDeepseekTextBotsModalContent();
+    openModal('deepseekAiTextBotsModal', { replaceStack: false, opener: $('#deepseekAiOpenTextBots') });
+    resetManagedModalScroll('deepseekAiTextBotsModal');
+    setDeepseekBotStatus('Loading...', 'pending');
+    setDeepseekChatStatus('');
+    loadDeepseekAiState().then(() => {
+      resetManagedModalScroll('deepseekAiTextBotsModal');
+      setDeepseekBotStatus('');
+    }).catch((e) => {
+      setDeepseekBotStatus(e.message || 'Could not load DeepSeek text bots', 'error');
+    });
+  }
+
   function resetManagedModalScroll(modalId) {
     const modal = typeof modalId === 'string' ? document.getElementById(modalId) : modalId;
     const body = modal?.querySelector('.modal-body');
@@ -15798,7 +16628,16 @@
     $('#compactViewToggle').checked = compactView;
     await loadChatPreferences(currentChatId);
     renderChatPinSettingsForm(chat);
+    renderChatContextTransformForm(chat);
     renderChatDangerControls(chat);
+    const contextTransformToggle = $('#chatContextTransformToggle');
+    if (contextTransformToggle) {
+      contextTransformToggle.onchange = () => {
+        saveChatContextTransformSetting().catch((error) => {
+          setChatContextTransformStatus(error.message || 'Could not save context transform setting', 'error');
+        });
+      };
+    }
 
     // Group edit section
     const editSection = $('#chatEditSection');
@@ -16321,7 +17160,10 @@
     wireAiBotToggleLabels();
     ensureSearchPanelReady();
     document.addEventListener('click', (e) => {
-      if (Date.now() >= mentionPickerClickSuppressUntil) return;
+      if (
+        Date.now() >= mentionPickerClickSuppressUntil
+        && Date.now() >= contextConvertPickerClickSuppressUntil
+      ) return;
       e.preventDefault();
       e.stopImmediatePropagation();
     }, true);
@@ -16341,6 +17183,20 @@
     mentionOpenBtn?.addEventListener('click', (e) => {
       e.preventDefault();
       openMentionPickerFromButton();
+    });
+    composerContextConvertBtn?.addEventListener('pointerdown', (e) => {
+      if (typeof e.button === 'number' && e.button !== 0) return;
+      e.preventDefault();
+    }, { passive: false });
+    composerContextConvertBtn?.addEventListener('mousedown', (e) => {
+      if (typeof e.button === 'number' && e.button !== 0) return;
+      e.preventDefault();
+    });
+    composerContextConvertBtn?.addEventListener('click', (e) => {
+      e.preventDefault();
+      openComposerContextConvertPicker().catch((error) => {
+        console.warn('[context-convert] composer picker open failed:', error.message);
+      });
     });
     msgInput.addEventListener('keydown', (e) => {
       if (handleMentionPickerKeydown(e)) return;
@@ -16392,6 +17248,7 @@
       const mentionPickerDismissed = dismissMentionPickerAfterKeyboardClose();
       if (mentionPickerDismissed) forceMobileViewportLayoutSync();
       positionMentionPicker();
+      positionContextConvertPicker();
       positionAvatarUserMenu(avatarUserMenuState?.anchor);
       positionMessageActionSurfaces();
       scheduleRetryLayout();
@@ -16401,11 +17258,13 @@
       const mentionPickerDismissed = dismissMentionPickerAfterKeyboardClose();
       if (mentionPickerDismissed) forceMobileViewportLayoutSync();
       positionMentionPicker();
+      positionContextConvertPicker();
       positionAvatarUserMenu(avatarUserMenuState?.anchor);
       positionMessageActionSurfaces();
       queueIosViewportLayoutSync();
     });
     window.addEventListener('resize', () => {
+      positionContextConvertPicker();
       positionMessageActionSurfaces();
       scheduleRetryLayout();
       queueIosViewportLayoutSync();
@@ -16809,6 +17668,16 @@
       if (action === 'open-emoji-popover') {
         e.preventDefault();
         if (Date.now() >= reactionMorePointerHandledUntil) handleReactionMoreButton(btn);
+        return;
+      }
+      if (action === 'context-convert') {
+        e.preventDefault();
+        const row = messagesEl.querySelector(`[data-msg-id="${reactionPickerMsgId}"]`);
+        if (row) {
+          openMessageContextConvertPicker(row, btn, { keepComposerFocus }).catch((error) => {
+            console.warn('[context-convert] picker open failed:', error.message);
+          });
+        }
         return;
       }
       if (!btn.dataset.emoji) return;
@@ -17544,6 +18413,7 @@
     bindAsyncActionButtons('aiBotsDeleteKey', null, 'Deleting...', deleteAiBotKey);
     $('#openAiOpenTextBots')?.addEventListener('click', openOpenAiTextBotsModal);
     $('#openAiOpenUniversalBots')?.addEventListener('click', openOpenAiUniversalBotsModal);
+    $('#openAiOpenConvertBots')?.addEventListener('click', () => openContextConvertBotsModal('openai'));
     $('#aiBotCreateNew')?.addEventListener('click', () => {
       fillAiBotForm(null);
       setAiBotStatus('Новый бот: заполните поля и сохраните');
@@ -17598,6 +18468,7 @@
     bindAsyncActionButtons('yandexAiTestConnection', null, 'Testing...', testYandexAiConnection);
     bindAsyncActionButtons('yandexAiRefreshModels', null, 'Refreshing...', refreshYandexAiModels);
     bindAsyncActionButtons('yandexAiDeleteKey', null, 'Deleting...', deleteYandexAiKey);
+    $('#yandexAiOpenConvertBots')?.addEventListener('click', () => openContextConvertBotsModal('yandex'));
     $('#yandexAiBotCreateNew')?.addEventListener('click', () => {
       fillYandexBotForm(null);
       setYandexBotStatus('New Yandex bot: fill fields and save');
@@ -17628,6 +18499,8 @@
     bindAsyncActionButtons('deepseekAiTestConnection', null, 'Testing...', testDeepseekAiConnection);
     bindAsyncActionButtons('deepseekAiRefreshModels', null, 'Refreshing...', refreshDeepseekAiModels);
     bindAsyncActionButtons('deepseekAiDeleteKey', null, 'Deleting...', deleteDeepseekAiKey);
+    $('#deepseekAiOpenTextBots')?.addEventListener('click', openDeepseekTextBotsModal);
+    $('#deepseekAiOpenConvertBots')?.addEventListener('click', () => openContextConvertBotsModal('deepseek'));
     $('#deepseekAiBotCreateNew')?.addEventListener('click', () => {
       fillDeepseekBotForm(null);
       setDeepseekBotStatus('New DeepSeek bot: fill fields and save');
@@ -17661,6 +18534,7 @@
     $('#grokAiOpenTextBots')?.addEventListener('click', openGrokTextBotsModal);
     $('#grokAiOpenImageBots')?.addEventListener('click', openGrokImageBotsModal);
     $('#grokAiOpenUniversalBots')?.addEventListener('click', openGrokUniversalBotsModal);
+    $('#grokAiOpenConvertBots')?.addEventListener('click', () => openContextConvertBotsModal('grok'));
     $('#grokAiBotCreateNew')?.addEventListener('click', () => {
       fillGrokBotForm(null);
       setGrokTextEditorStatus('New Grok text bot: fill fields and save');
@@ -17750,6 +18624,32 @@
     $('#grokAiUniversalBotChatSelect')?.addEventListener('change', renderGrokUniversalChatBotSettings);
     $('#grokAiUniversalBotChatBotSelect')?.addEventListener('change', renderGrokUniversalChatBotSettings);
     bindAsyncActionButtons('grokAiUniversalBotChatSave', null, 'Saving...', saveGrokUniversalChatBotSettings);
+    $('#contextConvertBotCreateNew')?.addEventListener('click', () => {
+      selectedContextConvertBotIds[activeContextConvertProvider] = null;
+      renderContextConvertAdminSettings();
+      setContextConvertBotStatus('New convert bot: fill fields and save');
+      setContextConvertChatStatus('');
+    });
+    bindAsyncActionButtons(['contextConvertBotSave', 'contextConvertBotSaveBottom'], null, 'Saving...', saveContextConvertAdminBot);
+    bindAsyncActionButtons('contextConvertBotDisable', null, 'Disabling...', disableContextConvertAdminBot);
+    bindAsyncActionButtons('contextConvertBotTest', null, 'Testing...', testContextConvertAdminBot);
+    bindAsyncActionButtons('contextConvertBotExportJson', null, 'Preparing...', exportContextConvertAdminBot);
+    $('#contextConvertBotImportJson')?.addEventListener('click', () => $('#contextConvertBotImportFile')?.click());
+    $('#contextConvertBotImportFile')?.addEventListener('change', (event) => {
+      importContextConvertAdminBot(event.target.files?.[0]);
+      event.target.value = '';
+    });
+    $('#contextConvertBotList')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-context-convert-bot-id]');
+      if (!btn) return;
+      selectedContextConvertBotIds[activeContextConvertProvider] = Number(btn.dataset.contextConvertBotId || 0) || null;
+      renderContextConvertAdminSettings();
+      setContextConvertBotStatus('');
+      setContextConvertChatStatus('');
+    });
+    $('#contextConvertBotChatSelect')?.addEventListener('change', renderContextConvertChatSettings);
+    $('#contextConvertBotChatBotSelect')?.addEventListener('change', renderContextConvertChatSettings);
+    bindAsyncActionButtons('contextConvertBotChatSave', null, 'Saving...', saveContextConvertAdminChatSetting);
 
     // Change password save
     $('#cpSaveBtn').addEventListener('click', async () => {
@@ -17814,6 +18714,8 @@
     messagesEl.addEventListener('scroll', () => {
       hideAvatarUserMenu();
       hideFloatingMessageActions({ immediate: true });
+      if (contextConvertPickerState.active && contextConvertPickerState.mode === 'message') hideContextConvertPicker();
+      else positionContextConvertPicker();
       cancelPendingMediaBottomScrollIfNeeded();
       if (!suppressScrollAnchorSave && !loadingMore && !loadingMoreAfter) scheduleScrollAnchorSave();
       maybeLoadMoreAtTop();
@@ -17869,6 +18771,11 @@
     // Escape key
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
+        if (contextConvertPickerState.active) {
+          e.preventDefault();
+          hideContextConvertPicker();
+          return;
+        }
         if (isFloatingSurfaceVisible(chatContextMenu)) {
           e.preventDefault();
           hideChatContextMenu();

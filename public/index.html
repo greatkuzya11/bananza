@@ -153,6 +153,7 @@
               <path d="m7 13 5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </button>
+          <button id="composerContextConvertBtn" class="composer-context-convert-btn hidden" type="button" title="Transform text" aria-label="Transform text">🍌</button>
         </div>
 
         <div id="dragOverlay" class="drag-overlay hidden">
@@ -589,10 +590,11 @@
 
           <div class="ai-bot-panel">
             <h4>Bot settings</h4>
-            <div class="settings-hint">Open separate windows for OpenAI text bots and universal bots.</div>
-            <div class="provider-ai-nav-grid provider-ai-nav-grid--two">
+            <div class="settings-hint">Open separate windows for OpenAI text bots, universal bots, and context convert bots.</div>
+            <div class="provider-ai-nav-grid">
               <button id="openAiOpenTextBots" type="button" class="weather-action-btn">Open text bots</button>
               <button id="openAiOpenUniversalBots" type="button" class="weather-action-btn">Open universal bots</button>
+              <button id="openAiOpenConvertBots" type="button" class="weather-action-btn">Open convert bots</button>
             </div>
           </div>
 
@@ -834,6 +836,71 @@
     </div>
   </div>
 
+  <!-- Context Convert Bot Settings Modal -->
+  <div id="contextConvertBotsModal" class="modal hidden">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3 id="contextConvertModalTitle">Context Convert Bots</h3>
+        <button class="modal-close">&#10005;</button>
+      </div>
+      <div class="modal-body">
+        <div class="ai-bot-settings-block">
+          <div class="ai-bot-panel">
+            <h4>Convert bots</h4>
+            <div id="contextConvertBotList" class="ai-bot-list"></div>
+            <div class="ai-bot-actions">
+              <button id="contextConvertBotCreateNew" type="button" class="weather-action-btn">New convert bot</button>
+              <button id="contextConvertBotSave" type="button" class="btn-primary">Save bot</button>
+              <button id="contextConvertBotDisable" type="button" class="weather-action-btn">Disable</button>
+              <button id="contextConvertBotTest" type="button" class="weather-action-btn">Test</button>
+              <button id="contextConvertBotExportJson" type="button" class="weather-action-btn">Export JSON</button>
+              <button id="contextConvertBotImportJson" type="button" class="weather-action-btn">Import JSON</button>
+              <input id="contextConvertBotImportFile" class="hidden" type="file" accept="application/json,.json">
+            </div>
+            <div id="contextConvertBotEditorStatus" class="ai-bot-status admin-action-status"></div>
+            <div class="ai-bot-grid">
+              <label>Name<input id="contextConvertBotName" class="modal-input" value="Context Convert"></label>
+              <label>Response model<select id="contextConvertBotResponseModel" class="modal-input"></select></label>
+              <label>Temperature<input id="contextConvertBotTemperature" class="modal-input" type="number" min="0" max="1" step="0.05" value="0.3"></label>
+              <label>Max tokens<input id="contextConvertBotMaxTokens" class="modal-input" type="number" min="1" max="8000" step="50" value="1000"></label>
+              <div class="ai-bot-toggle-label"><span>Enabled</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="contextConvertBotEnabled" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            <label class="ai-bot-field">Transform prompt<textarea id="contextConvertBotPrompt" class="modal-input" rows="12" placeholder="Rewrite the input, shorten it, make it more formal, fix mistakes, etc."></textarea></label>
+            <div class="settings-hint">Convert bots receive only the source text and return only the transformed text without dialogue, persona, mentions, or memory.</div>
+            <div class="ai-bot-actions">
+              <button id="contextConvertBotSaveBottom" type="button" class="btn-primary">Save bot</button>
+            </div>
+            <div id="contextConvertBotEditorStatusBottom" class="ai-bot-status admin-action-status"></div>
+          </div>
+
+          <div class="ai-bot-panel">
+            <h4>Convert bots in chats</h4>
+            <div class="ai-bot-grid">
+              <label>Chat<select id="contextConvertBotChatSelect" class="modal-input"></select></label>
+              <label>Bot<select id="contextConvertBotChatBotSelect" class="modal-input"></select></label>
+              <div class="ai-bot-toggle-label"><span>Enabled in chat</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="contextConvertBotChatEnabled">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            <button id="contextConvertBotChatSave" type="button" class="btn-primary">Save for chat</button>
+            <div id="contextConvertBotChatStatus" class="ai-bot-status admin-action-status"></div>
+            <div class="settings-hint">Chat members can use these bots only when the chat-level context transform feature is enabled.</div>
+          </div>
+
+          <div id="contextConvertStatus" class="ai-bot-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- DeepSeek AI Settings Modal -->
   <div id="deepseekAiSettingsModal" class="modal hidden">
     <div class="modal-content wide">
@@ -957,8 +1024,30 @@
             <div class="settings-hint">DeepSeek-боты отвечают только на @mention или reply. Hybrid memory для них недоступен, поэтому здесь всегда используется только simple context.</div>
           </div>
 
+          <div class="ai-bot-panel">
+            <h4>Bot settings</h4>
+            <div class="settings-hint">Open separate windows for DeepSeek text bots and context convert bots.</div>
+            <div class="provider-ai-nav-grid">
+              <button id="deepseekAiOpenTextBots" type="button" class="weather-action-btn">Open text bots</button>
+              <button id="deepseekAiOpenConvertBots" type="button" class="weather-action-btn">Open convert bots</button>
+            </div>
+          </div>
+
           <div id="deepseekAiStatus" class="ai-bot-status"></div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DeepSeek Text Bot Settings Modal -->
+  <div id="deepseekAiTextBotsModal" class="modal hidden">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3>DeepSeek Text Bots</h3>
+        <button class="modal-close">&#10005;</button>
+      </div>
+      <div class="modal-body">
+        <div id="deepseekAiTextBotsBlock" class="ai-bot-settings-block"></div>
       </div>
     </div>
   </div>
@@ -1099,6 +1188,14 @@
             <button id="yandexAiBotChatSave" type="button" class="btn-primary">Save for chat</button>
             <div id="yandexAiBotChatStatus" class="ai-bot-status admin-action-status"></div>
             <div class="settings-hint">Yandex bots answer only to @mention or reply to that bot.</div>
+          </div>
+
+          <div class="ai-bot-panel">
+            <h4>Bot settings</h4>
+            <div class="settings-hint">Open separate windows for Yandex text bots and context convert bots.</div>
+            <div class="provider-ai-nav-grid">
+              <button id="yandexAiOpenConvertBots" type="button" class="weather-action-btn">Open convert bots</button>
+            </div>
           </div>
 
           <div id="yandexAiStatus" class="ai-bot-status"></div>
@@ -1392,11 +1489,12 @@
 
           <div id="grokAiNavPanel" class="ai-bot-panel">
             <h4>Bot settings</h4>
-            <div class="settings-hint">Open separate windows for Grok text bots, image bots, and universal bots.</div>
+            <div class="settings-hint">Open separate windows for Grok text bots, image bots, universal bots, and context convert bots.</div>
             <div class="provider-ai-nav-grid">
               <button id="grokAiOpenTextBots" type="button" class="weather-action-btn">Open text bots</button>
               <button id="grokAiOpenImageBots" type="button" class="weather-action-btn">Open image bots</button>
               <button id="grokAiOpenUniversalBots" type="button" class="weather-action-btn">Open universal bots</button>
+              <button id="grokAiOpenConvertBots" type="button" class="weather-action-btn">Open convert bots</button>
             </div>
           </div>
 
@@ -1650,6 +1748,18 @@
           </div>
           <div class="settings-hint">When off, only the person who pinned the message and admins can unpin it.</div>
           <div id="chatPinSettingsStatus" class="chat-preferences-status"></div>
+        </div>
+        <div id="chatContextTransformSection" class="chat-preferences-block hidden">
+          <h4>Context transform</h4>
+          <div class="settings-item settings-toggle-item">
+            <span>Enable AI context transform in this chat</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="chatContextTransformToggle">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="settings-hint">When enabled, members can run assigned convert bots on draft text and editable human messages. Bot assignment itself is still managed by admins in AI settings.</div>
+          <div id="chatContextTransformStatus" class="chat-preferences-status"></div>
         </div>
         <div id="chatDangerSection" class="chat-preferences-block chat-danger-section hidden">
           <h4>Управление чатом</h4>

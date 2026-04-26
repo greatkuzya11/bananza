@@ -36,6 +36,7 @@ db.exec(`
     avatar_url TEXT DEFAULT NULL,
     is_notes INTEGER DEFAULT 0,
     allow_unpin_any_pin INTEGER DEFAULT 0,
+    context_transform_enabled INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -259,7 +260,13 @@ try {
 } catch {
   db.exec("ALTER TABLE chats ADD COLUMN is_notes INTEGER DEFAULT 0");
 }
+try {
+  db.prepare("SELECT context_transform_enabled FROM chats LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE chats ADD COLUMN context_transform_enabled INTEGER DEFAULT 0");
+}
 db.prepare("UPDATE chats SET is_notes=0 WHERE is_notes IS NULL").run();
+db.prepare("UPDATE chats SET context_transform_enabled=0 WHERE context_transform_enabled IS NULL").run();
 db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_chats_notes_owner ON chats(created_by) WHERE is_notes=1");
 // Migration: chat background columns
 try {

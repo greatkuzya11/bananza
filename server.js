@@ -478,6 +478,24 @@ const chatMemberPreferencesStmt = db.prepare(`
   WHERE chat_id=? AND user_id=?
 `);
 const chatPinSettingsStmt = db.prepare('SELECT id, created_by, allow_unpin_any_pin FROM chats WHERE id=?');
+const chatContextTransformSettingsStmt = db.prepare('SELECT id, created_by, context_transform_enabled FROM chats WHERE id=?');
+const editableMessageForUpdateStmt = db.prepare(`
+  SELECT
+    m.*,
+    vm.message_id as voice_message_id,
+    vm.note_kind as voice_note_kind,
+    vm.transcription_text,
+    p.message_id as poll_message_id,
+    COALESCE(u.is_ai_bot, 0) as is_ai_author
+  FROM messages m
+  JOIN users u ON u.id=m.user_id
+  LEFT JOIN voice_messages vm ON vm.message_id=m.id
+  LEFT JOIN polls p ON p.message_id=m.id
+  WHERE m.id=? AND m.is_deleted=0
+`);
+const messagePinExistsStmt = db.prepare('SELECT 1 FROM message_pins WHERE message_id=?');
+const deleteLinkPreviewsByMessageStmt = db.prepare('DELETE FROM link_previews WHERE message_id=?');
+const insertLinkPreviewStmt = db.prepare('INSERT INTO link_previews(message_id,url,title,description,image,hostname) VALUES(?,?,?,?,?,?)');
 const chatPinsStmt = db.prepare(`
   SELECT
     p.id,
@@ -696,6 +714,94 @@ function hydrateMessageById(messageId, viewerUserId = null) {
 
 function isChatMember(chatId, userId) {
   return !!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, userId);
+}
+
+function canManageContextTransform(chat, user) {
+  if (!chat || !user) return false;
+  if (user.is_admin) return true;
+  if (!isChatMember(chat.id, user.id)) return false;
+  return Number(chat.created_by || 0) === Number(user.id);
+}
+
+function scheduleEditedMessagePreview(messageRow, text) {
+  const clean = String(text || '').trim();
+  if (!clean) return;
+  const urls = extractUrls(clean);
+  if (!urls.length) return;
+  fetchPreview(urls[0]).then((preview) => {
+    if (!preview) return;
+    insertLinkPreviewStmt.run(
+      messageRow.id,
+      preview.url,
+      preview.title,
+      preview.description,
+      preview.image,
+      preview.hostname
+    );
+    broadcastToChatAll(messageRow.chat_id, {
+      type: 'link_preview',
+      chatId: messageRow.chat_id,
+      messageId: messageRow.id,
+      preview,
+    });
+  }).catch(() => {});
+}
+
+function applyEditableMessageText(messageRow, { actorUserId, viewerUserId = null, text } = {}) {
+  const messageId = Number(messageRow?.id || 0);
+  if (!messageId) {
+    const error = new Error('Message not found');
+    error.status = 404;
+    throw error;
+  }
+  const clean = typeof text === 'string' ? text.trim() : '';
+  if (messageRow.voice_message_id) {
+    if (!clean) {
+      const error = new Error('Voice text cannot be empty');
+      error.status = 400;
+      throw error;
+    }
+    db.prepare(`
+      UPDATE voice_messages
+      SET transcription_status='completed',
+          transcription_text=?,
+          transcription_provider='manual',
+          transcription_model=NULL,
+          transcription_error=NULL,
+          transcribed_at=datetime('now'),
+          requested_by=?
+      WHERE message_id=?
+    `).run(clean, actorUserId, messageId);
+    db.prepare('UPDATE messages SET edited_at=datetime(\'now\'), edited_by=? WHERE id=?').run(actorUserId, messageId);
+  } else {
+    if (!clean && !messageRow.file_id) {
+      const error = new Error('Message text cannot be empty');
+      error.status = 400;
+      throw error;
+    }
+    db.prepare('UPDATE messages SET text=?, edited_at=datetime(\'now\'), edited_by=? WHERE id=?')
+      .run(clean || null, actorUserId, messageId);
+  }
+
+  deleteLinkPreviewsByMessageStmt.run(messageId);
+  saveMessageMentions(messageId, messageRow.chat_id, clean);
+
+  const updated = hydrateMessageById(messageId, viewerUserId);
+  if (!updated) {
+    const error = new Error('Message could not be loaded');
+    error.status = 500;
+    throw error;
+  }
+
+  broadcastToChatAll(messageRow.chat_id, { type: 'message_updated', message: updated });
+  if (messagePinExistsStmt.get(messageId)) {
+    broadcastPinsUpdated(messageRow.chat_id, { action: 'updated', actorId: actorUserId, messageId });
+  }
+  aiBotFeature.handleMessageUpdated(updated).catch((error) => {
+    console.warn('[ai-bot] update hook failed:', error.message);
+  });
+  scheduleEditedMessagePreview(messageRow, clean);
+  return updated;
 }
 
 function pinPreviewText(row) {
@@ -1614,6 +1720,27 @@ app.put('/api/chats/:chatId/pin-settings', auth, (req, res) => {
   res.json(updated);
 });
 
+app.put('/api/chats/:chatId/context-transform-settings', auth, (req, res) => {
+  const chatId = +req.params.chatId;
+  if (!chatId) return res.status(400).json({ error: 'Invalid chat' });
+  const chat = chatContextTransformSettingsStmt.get(chatId);
+  if (!chat) return res.status(404).json({ error: 'Chat not found' });
+  if (!canManageContextTransform(chat, req.user)) {
+    return res.status(403).json({ error: 'Only chat creator or admin can change context transform settings' });
+  }
+
+  const enabled = boolPreferenceValue(
+    req.body?.context_transform_enabled,
+    chat.context_transform_enabled !== 0
+  );
+  db.prepare('UPDATE chats SET context_transform_enabled=? WHERE id=?')
+    .run(enabled ? 1 : 0, chatId);
+
+  const updated = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+  broadcastToChatAll(chatId, { type: 'chat_updated', chat: updated });
+  res.json(updated);
+});
+
 app.post('/api/chats/:chatId/members', auth, (req, res) => {
   const chatId = +req.params.chatId;
   const { userId } = req.body;
@@ -2227,13 +2354,7 @@ app.patch('/api/messages/:id', auth, msgLimiter, (req, res) => {
   if (typeof text !== 'string') return res.status(400).json({ error: 'Text is required' });
   if (text.length > 5000) return res.status(400).json({ error: 'Message too long' });
 
-  const m = db.prepare(`
-    SELECT m.*, vm.message_id as voice_message_id, p.message_id as poll_message_id
-    FROM messages m
-    LEFT JOIN voice_messages vm ON vm.message_id=m.id
-    LEFT JOIN polls p ON p.message_id=m.id
-    WHERE m.id=? AND m.is_deleted=0
-  `).get(mid);
+  const m = editableMessageForUpdateStmt.get(mid);
   if (!m) return res.status(404).json({ error: 'Not found' });
   if (!req.user.is_admin && m.user_id !== req.user.id)
     return res.status(403).json({ error: 'Not allowed' });
@@ -2241,51 +2362,63 @@ app.patch('/api/messages/:id', auth, msgLimiter, (req, res) => {
     return res.status(403).json({ error: 'Not a member' });
   if (m.poll_message_id) return res.status(400).json({ error: 'Poll messages cannot be edited' });
 
-  const cleanText = text.trim();
-  if (m.voice_message_id) {
-    if (!cleanText) return res.status(400).json({ error: 'Voice text cannot be empty' });
-    db.prepare(`
-      UPDATE voice_messages
-      SET transcription_status='completed',
-          transcription_text=?,
-          transcription_provider='manual',
-          transcription_model=NULL,
-          transcription_error=NULL,
-          transcribed_at=datetime('now'),
-          requested_by=?
-      WHERE message_id=?
-    `).run(cleanText, req.user.id, mid);
-    db.prepare('UPDATE messages SET edited_at=datetime(\'now\'), edited_by=? WHERE id=?').run(req.user.id, mid);
-  } else {
-    if (!cleanText && !m.file_id) return res.status(400).json({ error: 'Message text cannot be empty' });
-    db.prepare('UPDATE messages SET text=?, edited_at=datetime(\'now\'), edited_by=? WHERE id=?')
-      .run(cleanText || null, req.user.id, mid);
-    db.prepare('DELETE FROM link_previews WHERE message_id=?').run(mid);
-    saveMessageMentions(mid, m.chat_id, cleanText);
+  try {
+    const updated = applyEditableMessageText(m, {
+      actorUserId: req.user.id,
+      viewerUserId: req.user.id,
+      text,
+    });
+    res.json(updated);
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message || 'Could not edit message' });
+  }
+});
+
+app.post('/api/messages/:id/context-convert', auth, msgLimiter, async (req, res) => {
+  const mid = +req.params.id;
+  const m = editableMessageForUpdateStmt.get(mid);
+  if (!m) return res.status(404).json({ error: 'Not found' });
+  if (!req.user.is_admin && m.user_id !== req.user.id)
+    return res.status(403).json({ error: 'Not allowed' });
+  if (!req.user.is_admin && !db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(m.chat_id, req.user.id))
+    return res.status(403).json({ error: 'Not a member' });
+  if (m.poll_message_id) return res.status(400).json({ error: 'Poll messages cannot be transformed' });
+  if (m.ai_generated || Number(m.is_ai_author || 0) === 1) {
+    return res.status(400).json({ error: 'AI messages cannot be transformed' });
   }
 
-  const updated = hydrateMessageById(mid, req.user.id);
-  broadcastToChatAll(m.chat_id, { type: 'message_updated', message: updated });
-  if (db.prepare('SELECT 1 FROM message_pins WHERE message_id=?').get(mid)) {
-    broadcastPinsUpdated(m.chat_id, { action: 'updated', actorId: req.user.id, messageId: mid });
-  }
-  aiBotFeature.handleMessageUpdated(updated).catch((error) => {
-    console.warn('[ai-bot] update hook failed:', error.message);
-  });
-
-  if (!m.voice_message_id && cleanText) {
-    const urls = extractUrls(cleanText);
-    if (urls.length > 0) {
-      fetchPreview(urls[0]).then(preview => {
-        if (!preview) return;
-        db.prepare('INSERT INTO link_previews(message_id,url,title,description,image,hostname) VALUES(?,?,?,?,?,?)')
-          .run(mid, preview.url, preview.title, preview.description, preview.image, preview.hostname);
-        broadcastToChatAll(m.chat_id, { type: 'link_preview', chatId: m.chat_id, messageId: mid, preview });
-      }).catch(() => {});
-    }
+  const sourceText = m.voice_message_id
+    ? String(m.transcription_text || '').trim()
+    : String(m.text || '').trim();
+  if (!sourceText) {
+    return res.status(400).json({ error: 'Message has no editable text to transform' });
   }
 
-  res.json(updated);
+  try {
+    const result = await aiBotFeature.transformText({
+      chatId: m.chat_id,
+      botId: req.body?.botId,
+      text: sourceText,
+    });
+    const updated = applyEditableMessageText(m, {
+      actorUserId: req.user.id,
+      viewerUserId: req.user.id,
+      text: result.text,
+    });
+    res.json({
+      ok: true,
+      message: updated,
+      bot: result?.bot
+        ? {
+            id: Number(result.bot.id || 0),
+            name: result.bot.name || '',
+            provider: result.bot.provider || 'openai',
+          }
+        : null,
+    });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message || 'Context transform failed' });
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

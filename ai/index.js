@@ -58,7 +58,7 @@ const {
 const { analyzeAiImageRisk } = require('../public/js/ai-image-risk');
 
 const BOT_COLORS = ['#65aadd', '#7bc862', '#a695e7', '#ee7aae', '#6ec9cb', '#faa774'];
-const AI_BOT_EXPORT_VERSION = 3;
+const AI_BOT_EXPORT_VERSION = 4;
 const MODEL_CACHE_MS = 10 * 60 * 1000;
 const FALLBACK_RESPONSE_MODELS = ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'];
 const FALLBACK_SUMMARY_MODELS = ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'];
@@ -108,6 +108,7 @@ const BOT_ACTION_VOTE_TARGETS = new Set(['reply_to', 'latest_open_poll']);
 const BOT_ACTION_REACTION_KEYS = new Set(REACTION_KEYS);
 const BOT_ACTION_REACTION_MODES = new Set(REACTION_MODES);
 const BOT_REACTION_ALLOWED_KEYS = Object.freeze(Object.keys(REACTION_KEY_TO_EMOJI));
+const CONTEXT_TRANSFORM_PROMPT_MAX_LENGTH = 20000;
 
 function boolValue(value, fallback = false) {
   if (typeof value === 'boolean') return value;
@@ -298,9 +299,26 @@ function normalizeProvider(value, fallback = 'openai') {
 
 function normalizeBotKind(value, provider = 'openai', fallback = 'text') {
   const kind = String(value || fallback).trim().toLowerCase();
+  if (kind === 'convert') return 'convert';
   if ((provider === 'openai' || provider === 'grok') && kind === 'universal') return 'universal';
   if (provider === 'grok' && kind === 'image') return 'image';
   return 'text';
+}
+
+function isContextTransformBot(bot) {
+  return String(bot?.kind || '').toLowerCase() === 'convert';
+}
+
+function serializeContextConvertBot(bot) {
+  return {
+    id: Number(bot?.id || 0),
+    name: bot?.name || '',
+    provider: bot?.provider || 'openai',
+    kind: bot?.kind || 'convert',
+    response_model: bot?.response_model || '',
+    transform_prompt: bot?.transform_prompt || '',
+    transform_prompt_preview: truncate(bot?.transform_prompt || '', 160),
+  };
 }
 
 function normalizeAiResponseMode(value, provider = 'openai', fallback = 'auto') {
@@ -441,6 +459,14 @@ function createAiBotFeature({
       AND COALESCE(b.kind,'text')='universal'
     ORDER BY b.enabled DESC, b.id ASC
   `);
+  const allOpenAiConvertBotsStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE COALESCE(b.provider,'openai')='openai'
+      AND COALESCE(b.kind,'text')='convert'
+    ORDER BY b.enabled DESC, b.id ASC
+  `);
   const allYandexBotsStmt = db.prepare(`
     SELECT b.*, u.avatar_color, u.avatar_url
     FROM ai_bots b
@@ -448,11 +474,43 @@ function createAiBotFeature({
     WHERE COALESCE(b.provider,'openai')='yandex'
     ORDER BY b.enabled DESC, b.id ASC
   `);
+  const allYandexTextBotsStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE COALESCE(b.provider,'openai')='yandex'
+      AND COALESCE(b.kind,'text')='text'
+    ORDER BY b.enabled DESC, b.id ASC
+  `);
+  const allYandexConvertBotsStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE COALESCE(b.provider,'openai')='yandex'
+      AND COALESCE(b.kind,'text')='convert'
+    ORDER BY b.enabled DESC, b.id ASC
+  `);
   const allDeepSeekBotsStmt = db.prepare(`
     SELECT b.*, u.avatar_color, u.avatar_url
     FROM ai_bots b
     LEFT JOIN users u ON u.id=b.user_id
     WHERE COALESCE(b.provider,'openai')='deepseek'
+    ORDER BY b.enabled DESC, b.id ASC
+  `);
+  const allDeepSeekTextBotsStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE COALESCE(b.provider,'openai')='deepseek'
+      AND COALESCE(b.kind,'text')='text'
+    ORDER BY b.enabled DESC, b.id ASC
+  `);
+  const allDeepSeekConvertBotsStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE COALESCE(b.provider,'openai')='deepseek'
+      AND COALESCE(b.kind,'text')='convert'
     ORDER BY b.enabled DESC, b.id ASC
   `);
   const allGrokTextBotsStmt = db.prepare(`
@@ -479,7 +537,18 @@ function createAiBotFeature({
       AND COALESCE(b.kind,'text')='universal'
     ORDER BY b.enabled DESC, b.id ASC
   `);
+  const allGrokConvertBotsStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE COALESCE(b.provider,'openai')='grok'
+      AND COALESCE(b.kind,'text')='convert'
+    ORDER BY b.enabled DESC, b.id ASC
+  `);
   const chatSettingsStmt = db.prepare('SELECT * FROM ai_chat_bots ORDER BY chat_id ASC, bot_id ASC');
+  const botChatsStmt = db.prepare('SELECT chat_id FROM ai_chat_bots WHERE bot_id=?');
+  const chatContextTransformStmt = db.prepare('SELECT context_transform_enabled FROM chats WHERE id=?');
+  const chatMemberStmt = db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?');
   const activeChatBotsStmt = db.prepare(`
     SELECT
       b.*,
@@ -1499,7 +1568,8 @@ function createAiBotFeature({
     const settings = getGlobalSettings();
     const provider = normalizeProvider(row.provider, 'openai');
     const kind = normalizeBotKind(row.kind, provider, 'text');
-    const interactiveActionsEnabled = kind !== 'image' && providerInteractiveEnabled(provider, settings);
+    const isConvertBot = kind === 'convert';
+    const interactiveActionsEnabled = kind !== 'image' && !isConvertBot && providerInteractiveEnabled(provider, settings);
     const defaultResponseModel = provider === 'yandex'
       ? settings.yandex_default_response_model
       : (provider === 'grok'
@@ -1527,7 +1597,7 @@ function createAiBotFeature({
         : (provider === 'deepseek' ? settings.deepseek_max_tokens : null));
     const openAiUniversal = provider === 'openai' && kind === 'universal';
     const grokImageCapable = provider === 'grok' && (kind === 'image' || kind === 'universal');
-    const defaultAllowText = kind !== 'image';
+    const defaultAllowText = kind !== 'image' && !isConvertBot;
     const defaultAllowImageGenerate = kind === 'image' || kind === 'universal';
     const defaultAllowImageEdit = kind === 'universal';
     const defaultAllowDocument = openAiUniversal;
@@ -1536,16 +1606,17 @@ function createAiBotFeature({
       user_id: row.user_id,
       name: row.name,
       mention: row.mention,
-      style: row.style || '',
-      tone: row.tone || '',
-      behavior_rules: row.behavior_rules || '',
-      speech_patterns: row.speech_patterns || '',
+      style: isConvertBot ? '' : (row.style || ''),
+      tone: isConvertBot ? '' : (row.tone || ''),
+      behavior_rules: isConvertBot ? '' : (row.behavior_rules || ''),
+      speech_patterns: isConvertBot ? '' : (row.speech_patterns || ''),
+      transform_prompt: isConvertBot ? (row.transform_prompt || '') : '',
       enabled: row.enabled !== 0,
       provider,
       kind,
       response_model: row.response_model || defaultResponseModel,
-      summary_model: row.summary_model || defaultSummaryModel,
-      embedding_model: row.embedding_model || defaultEmbeddingModel,
+      summary_model: isConvertBot || kind === 'image' ? '' : (row.summary_model || defaultSummaryModel),
+      embedding_model: isConvertBot || kind === 'image' ? '' : (row.embedding_model || defaultEmbeddingModel),
       image_model: openAiUniversal
         ? (row.image_model || settings.openai_default_image_model)
         : (grokImageCapable ? (row.image_model || settings.grok_default_image_model) : ''),
@@ -1559,10 +1630,10 @@ function createAiBotFeature({
       allow_image_generate: boolValue(row.allow_image_generate, defaultAllowImageGenerate),
       allow_image_edit: boolValue(row.allow_image_edit, defaultAllowImageEdit),
       allow_document: openAiUniversal ? boolValue(row.allow_document, defaultAllowDocument) : false,
-      allow_poll_create: interactiveActionsEnabled,
-      allow_poll_vote: interactiveActionsEnabled,
-      allow_react: interactiveActionsEnabled,
-      allow_pin: interactiveActionsEnabled,
+      allow_poll_create: isConvertBot ? false : interactiveActionsEnabled,
+      allow_poll_vote: isConvertBot ? false : interactiveActionsEnabled,
+      allow_react: isConvertBot ? false : interactiveActionsEnabled,
+      allow_pin: isConvertBot ? false : interactiveActionsEnabled,
       image_quality: openAiUniversal ? cleanOpenAiImageQuality(row.image_quality, settings.openai_default_image_quality) : '',
       image_background: openAiUniversal ? cleanOpenAiImageBackground(row.image_background, settings.openai_default_image_background) : '',
       image_output_format: openAiUniversal ? cleanOpenAiImageOutputFormat(row.image_output_format, settings.openai_default_image_output_format) : '',
@@ -1622,10 +1693,11 @@ function createAiBotFeature({
 
   function serializeYandexAdminState() {
     const state = serializeAdminState();
-    const yandexBotIds = new Set(allYandexBotsStmt.all().map((bot) => Number(bot.id)));
+    const yandexBots = allYandexTextBotsStmt.all().map(sanitizeBot);
+    const yandexBotIds = new Set(yandexBots.map((bot) => Number(bot.id)));
     return {
       settings: sanitizeSettings(getGlobalSettings()),
-      bots: allYandexBotsStmt.all().map(sanitizeBot),
+      bots: yandexBots,
       chatSettings: serializeChatSettingsForBotIds(yandexBotIds),
       chats: state.chats,
       models: getYandexModelCatalog(),
@@ -1646,7 +1718,7 @@ function createAiBotFeature({
 
   function serializeDeepSeekAdminState() {
     const state = serializeAdminState();
-    const deepseekBots = allDeepSeekBotsStmt.all().map(sanitizeBot);
+    const deepseekBots = allDeepSeekTextBotsStmt.all().map(sanitizeBot);
     const deepseekBotIds = new Set(deepseekBots.map((bot) => Number(bot.id)));
     return {
       settings: sanitizeSettings(getGlobalSettings()),
@@ -1685,6 +1757,83 @@ function createAiBotFeature({
       chats: state.chats,
       models: grokModelCatalogCache || getGrokModelCatalog(),
     };
+  }
+
+  function openAiConvertModelOptions() {
+    return (modelCatalogCache?.response && modelCatalogCache.response.length)
+      ? modelCatalogCache.response
+      : FALLBACK_RESPONSE_MODELS;
+  }
+
+  function serializeOpenAiConvertAdminState() {
+    const state = serializeAdminState();
+    const bots = allOpenAiConvertBotsStmt.all().map(sanitizeBot);
+    const botIds = new Set(bots.map((bot) => Number(bot.id)));
+    return {
+      settings: sanitizeSettings(getGlobalSettings()),
+      bots,
+      chatSettings: serializeChatSettingsForBotIds(botIds, { forceSimple: true }),
+      chats: state.chats,
+      models: {
+        response: openAiConvertModelOptions(),
+      },
+    };
+  }
+
+  function serializeDeepSeekConvertAdminState() {
+    const state = serializeAdminState();
+    const bots = allDeepSeekConvertBotsStmt.all().map(sanitizeBot);
+    const botIds = new Set(bots.map((bot) => Number(bot.id)));
+    return {
+      settings: sanitizeSettings(getGlobalSettings()),
+      bots,
+      chatSettings: serializeChatSettingsForBotIds(botIds, { forceSimple: true }),
+      chats: state.chats,
+      models: {
+        response: (deepseekModelCatalogCache || getDeepSeekModelCatalog()).response || FALLBACK_DEEPSEEK_RESPONSE_MODELS,
+      },
+    };
+  }
+
+  function serializeYandexConvertAdminState() {
+    const state = serializeAdminState();
+    const bots = allYandexConvertBotsStmt.all().map(sanitizeBot);
+    const botIds = new Set(bots.map((bot) => Number(bot.id)));
+    return {
+      settings: sanitizeSettings(getGlobalSettings()),
+      bots,
+      chatSettings: serializeChatSettingsForBotIds(botIds, { forceSimple: true }),
+      chats: state.chats,
+      models: {
+        response: getYandexModelCatalog().response || FALLBACK_YANDEX_RESPONSE_MODELS,
+      },
+    };
+  }
+
+  function serializeGrokConvertAdminState() {
+    const state = serializeAdminState();
+    const bots = allGrokConvertBotsStmt.all().map(sanitizeBot);
+    const botIds = new Set(bots.map((bot) => Number(bot.id)));
+    return {
+      settings: sanitizeSettings(getGlobalSettings()),
+      bots,
+      chatSettings: serializeChatSettingsForBotIds(botIds, { forceSimple: true }),
+      chats: state.chats,
+      models: {
+        response: (grokModelCatalogCache || getGrokModelCatalog()).response || ['grok-4.20-reasoning'],
+      },
+    };
+  }
+
+  function broadcastContextConvertBotsUpdated(chatIds = []) {
+    [...new Set((Array.isArray(chatIds) ? chatIds : []).map((value) => Number(value || 0)).filter((value) => value > 0))]
+      .forEach((chatId) => {
+        broadcastToChatAll(chatId, { type: 'context_convert_bots_updated', chatId });
+      });
+  }
+
+  function broadcastContextConvertBotUpdatedForBot(botId) {
+    broadcastContextConvertBotsUpdated(botChatsStmt.all(botId).map((row) => Number(row.chat_id || 0)));
   }
 
   function buildUniqueMention(input, botId = null) {
@@ -1765,13 +1914,24 @@ function createAiBotFeature({
   });
 
   function defaultBotName(provider, kind = 'text') {
-    if (provider === 'yandex') return 'Yandex AI';
-    if (provider === 'deepseek') return 'DeepSeek AI';
+    if (provider === 'openai' && kind === 'convert') return 'OpenAI Convert';
+    if (provider === 'yandex' && kind === 'convert') return 'Yandex Convert';
+    if (provider === 'deepseek' && kind === 'convert') return 'DeepSeek Convert';
     if (provider === 'openai' && kind === 'universal') return 'OpenAI Universal';
     if (provider === 'grok' && kind === 'universal') return 'Grok Universal';
     if (provider === 'grok' && kind === 'image') return 'Grok Images';
+    if (provider === 'grok' && kind === 'convert') return 'Grok Convert';
+    if (provider === 'yandex') return 'Yandex AI';
+    if (provider === 'deepseek') return 'DeepSeek AI';
     if (provider === 'grok') return 'Grok AI';
     return 'Bananza AI';
+  }
+
+  function providerEnabled(provider, settings = getGlobalSettings()) {
+    if (provider === 'yandex') return boolValue(settings?.yandex_enabled, false);
+    if (provider === 'deepseek') return boolValue(settings?.deepseek_enabled, false);
+    if (provider === 'grok') return boolValue(settings?.grok_enabled, false);
+    return boolValue(settings?.enabled, false);
   }
 
   function providerInteractiveEnabled(provider, settings = getGlobalSettings()) {
@@ -1785,7 +1945,8 @@ function createAiBotFeature({
     const settings = getGlobalSettings();
     const provider = normalizeProvider(input.provider || current.provider, 'openai');
     const kind = normalizeBotKind(input.kind ?? current.kind, provider, 'text');
-    const interactiveActionsEnabled = kind !== 'image' && providerInteractiveEnabled(provider, settings);
+    const isConvertBot = kind === 'convert';
+    const interactiveActionsEnabled = kind !== 'image' && !isConvertBot && providerInteractiveEnabled(provider, settings);
     const name = cleanText(input.name ?? current.name ?? defaultBotName(provider, kind), 50) || defaultBotName(provider, kind);
     const mention = buildUniqueMention(input.mention ?? current.mention ?? name, current.id || null);
     const responseFallback = provider === 'yandex'
@@ -1822,18 +1983,19 @@ function createAiBotFeature({
       mention,
       provider,
       kind,
-      style: cleanText(input.style ?? current.style ?? 'Helpful chat assistant', 1000),
-      tone: cleanText(input.tone ?? current.tone ?? 'warm, concise, attentive', 1000),
-      behavior_rules: cleanText(input.behavior_rules ?? current.behavior_rules ?? '', 4000),
-      speech_patterns: cleanText(input.speech_patterns ?? current.speech_patterns ?? '', 4000),
+      style: isConvertBot ? '' : cleanText(input.style ?? current.style ?? 'Helpful chat assistant', 1000),
+      tone: isConvertBot ? '' : cleanText(input.tone ?? current.tone ?? 'warm, concise, attentive', 1000),
+      behavior_rules: isConvertBot ? '' : cleanText(input.behavior_rules ?? current.behavior_rules ?? '', 4000),
+      speech_patterns: isConvertBot ? '' : cleanText(input.speech_patterns ?? current.speech_patterns ?? '', 4000),
+      transform_prompt: isConvertBot ? cleanText(input.transform_prompt ?? current.transform_prompt ?? '', CONTEXT_TRANSFORM_PROMPT_MAX_LENGTH) : '',
       enabled: boolValue(input.enabled, current.enabled == null ? true : current.enabled !== 0),
       response_model: kind === 'image'
         ? ''
         : cleanText(input.response_model ?? current.response_model ?? responseFallback, 160),
-      summary_model: kind === 'image'
+      summary_model: kind === 'image' || isConvertBot
         ? ''
         : cleanText(input.summary_model ?? current.summary_model ?? summaryFallback, 160),
-      embedding_model: embeddingFallback,
+      embedding_model: isConvertBot ? '' : embeddingFallback,
       image_model: isOpenAiUniversal
         ? cleanText(input.image_model ?? current.image_model ?? settings.openai_default_image_model, 160)
         : (provider === 'grok' && isImageCapable
@@ -1847,16 +2009,16 @@ function createAiBotFeature({
         : (provider === 'grok' && isImageCapable
           ? cleanGrokResolution(input.image_resolution ?? current.image_resolution, settings.grok_default_image_resolution)
           : ''),
-      allow_text: boolValue(input.allow_text, current.allow_text == null ? kind !== 'image' : current.allow_text !== 0),
+      allow_text: boolValue(input.allow_text, current.allow_text == null ? (kind !== 'image' && !isConvertBot) : current.allow_text !== 0),
       allow_image_generate: boolValue(input.allow_image_generate, current.allow_image_generate == null ? isImageCapable : current.allow_image_generate !== 0),
       allow_image_edit: boolValue(input.allow_image_edit, current.allow_image_edit == null ? (isOpenAiUniversal || isGrokUniversal) : current.allow_image_edit !== 0),
       allow_document: isOpenAiUniversal
         ? boolValue(input.allow_document, current.allow_document == null ? true : current.allow_document !== 0)
         : false,
-      allow_poll_create: interactiveActionsEnabled,
-      allow_poll_vote: interactiveActionsEnabled,
-      allow_react: interactiveActionsEnabled,
-      allow_pin: interactiveActionsEnabled,
+      allow_poll_create: isConvertBot ? false : interactiveActionsEnabled,
+      allow_poll_vote: isConvertBot ? false : interactiveActionsEnabled,
+      allow_react: isConvertBot ? false : interactiveActionsEnabled,
+      allow_pin: isConvertBot ? false : interactiveActionsEnabled,
       image_quality: isOpenAiUniversal
         ? cleanOpenAiImageQuality(input.image_quality ?? current.image_quality, settings.openai_default_image_quality)
         : '',
@@ -1884,7 +2046,7 @@ function createAiBotFeature({
   }
 
   const createBotTx = db.transaction((input) => {
-    const userId = createBackingUser(input);
+    const userId = input.kind === 'convert' ? null : createBackingUser(input);
     const result = db.prepare(`
       INSERT INTO ai_bots(
         user_id, name, mention, style, tone, behavior_rules, speech_patterns,
@@ -1892,10 +2054,10 @@ function createAiBotFeature({
         image_model, image_aspect_ratio, image_resolution,
         allow_text, allow_image_generate, allow_image_edit, allow_document,
         allow_poll_create, allow_poll_vote, allow_react, allow_pin,
-        image_quality, image_background, image_output_format, document_default_format,
+        image_quality, image_background, image_output_format, document_default_format, transform_prompt,
         temperature, max_tokens
       )
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       userId,
       input.name,
@@ -1925,6 +2087,7 @@ function createAiBotFeature({
       input.image_background || '',
       input.image_output_format || '',
       input.document_default_format || '',
+      input.transform_prompt || '',
       input.temperature,
       input.max_tokens
     );
@@ -2939,6 +3102,266 @@ function createAiBotFeature({
       isTyping,
       isBot: true,
     });
+  }
+
+  function buildContextTransformPrompt(bot) {
+    const instruction = cleanText(bot?.transform_prompt || '', CONTEXT_TRANSFORM_PROMPT_MAX_LENGTH);
+    if (!instruction) {
+      const error = new Error('Transform prompt is empty');
+      error.status = 400;
+      throw error;
+    }
+    return [
+      'You transform user text in place.',
+      'Return only the transformed text body.',
+      'Do not add speaker labels, quotes, explanations, comments, markdown fences, or surrounding commentary.',
+      'Preserve the original language unless the transform instruction explicitly asks to change it.',
+      '',
+      `Transform instruction:\n${instruction}`,
+    ].join('\n');
+  }
+
+  async function runContextTransform(bot, sourceText) {
+    if (!isContextTransformBot(bot)) {
+      const error = new Error('Bot is not a context convert bot');
+      error.status = 400;
+      throw error;
+    }
+    const text = cleanText(sourceText || '', 5000);
+    if (!text) {
+      const error = new Error('Text is empty');
+      error.status = 400;
+      throw error;
+    }
+    const settings = getGlobalSettings();
+    if (!providerEnabled(bot.provider, settings)) {
+      const error = new Error('Provider is disabled');
+      error.status = 400;
+      throw error;
+    }
+
+    const system = buildContextTransformPrompt(bot);
+    const user = `Source text:\n${text}`;
+    let rawText = '';
+
+    if (bot.provider === 'yandex') {
+      const apiKey = getYandexApiKey();
+      if (!apiKey || !settings.yandex_folder_id) throw new Error('Yandex AI is not configured');
+      rawText = await yandexAi.generateText(yandexClientOptions({
+        apiKey,
+        model: bot.response_model || settings.yandex_default_response_model,
+        system,
+        user,
+        maxOutputTokens: intValue(bot.max_tokens, settings.yandex_max_tokens, 1, 8000),
+        temperature: floatValue(bot.temperature, settings.yandex_temperature, 0, 1),
+      }));
+    } else if (bot.provider === 'deepseek') {
+      const apiKey = getDeepSeekApiKey();
+      if (!apiKey) throw new Error('DeepSeek AI is not configured');
+      rawText = await deepseekAi.generateText({
+        apiKey,
+        baseUrl: deepseekBaseUrl(),
+        model: bot.response_model || settings.deepseek_default_response_model,
+        system,
+        user,
+        maxOutputTokens: intValue(bot.max_tokens, settings.deepseek_max_tokens, 1, 8000),
+        temperature: floatValue(bot.temperature, settings.deepseek_temperature, 0, 1),
+      });
+    } else if (bot.provider === 'grok') {
+      const apiKey = getGrokApiKey();
+      if (!apiKey) throw new Error('Grok AI is not configured');
+      rawText = await grokAi.generateText({
+        apiKey,
+        baseUrl: grokBaseUrl(),
+        model: bot.response_model || settings.grok_default_response_model,
+        system,
+        user,
+        maxOutputTokens: intValue(bot.max_tokens, settings.grok_max_tokens, 1, 8000),
+        temperature: floatValue(bot.temperature, settings.grok_temperature, 0, 1),
+      });
+    } else {
+      const apiKey = getApiKey();
+      if (!apiKey) throw new Error('OpenAI AI is not configured');
+      rawText = await generateText({
+        apiKey,
+        model: bot.response_model || settings.default_response_model,
+        system,
+        user,
+        maxOutputTokens: intValue(bot.max_tokens, 1000, OPENAI_MIN_OUTPUT_TOKENS, 8000),
+        temperature: floatValue(bot.temperature, 0.55, 0, 1),
+      });
+    }
+
+    const responseText = cleanText(stripBotSpeakerLabel(rawText, bot), 5000);
+    if (!responseText) {
+      const error = new Error('Transform result is empty');
+      error.status = 400;
+      throw error;
+    }
+    return responseText;
+  }
+
+  function isContextTransformEnabledForChat(chatId) {
+    const row = chatContextTransformStmt.get(chatId);
+    return boolValue(row?.context_transform_enabled, false);
+  }
+
+  function getContextConvertBotsForChat(chatId) {
+    if (!isContextTransformEnabledForChat(chatId)) return [];
+    const settings = getGlobalSettings();
+    return activeChatBotsStmt.all(chatId)
+      .map((row) => sanitizeBot(row))
+      .filter((bot) => isContextTransformBot(bot) && providerEnabled(bot.provider, settings))
+      .map(serializeContextConvertBot);
+  }
+
+  async function transformText({ chatId, botId, text }) {
+    if (!isContextTransformEnabledForChat(chatId)) {
+      const error = new Error('Context transform is disabled in this chat');
+      error.status = 403;
+      throw error;
+    }
+    const bot = activeChatBotsStmt.all(chatId)
+      .map((row) => sanitizeBot(row))
+      .find((item) => Number(item?.id || 0) === Number(botId || 0) && isContextTransformBot(item));
+    if (!bot) {
+      const error = new Error('Context convert bot is not available in this chat');
+      error.status = 404;
+      throw error;
+    }
+    return {
+      bot,
+      text: await runContextTransform(bot, text),
+    };
+  }
+
+  function serializeConvertAdminStateByProvider(provider = 'openai') {
+    if (provider === 'yandex') return serializeYandexConvertAdminState();
+    if (provider === 'deepseek') return serializeDeepSeekConvertAdminState();
+    if (provider === 'grok') return serializeGrokConvertAdminState();
+    return serializeOpenAiConvertAdminState();
+  }
+
+  function buildContextConvertExportPayload(bot) {
+    return {
+      schema_version: AI_BOT_EXPORT_VERSION,
+      exported_at: new Date().toISOString(),
+      bot: {
+        provider: bot.provider || 'openai',
+        kind: 'convert',
+        name: bot.name,
+        mention: bot.mention,
+        enabled: bot.enabled,
+        response_model: bot.response_model,
+        transform_prompt: bot.transform_prompt || '',
+        temperature: bot.temperature,
+        max_tokens: bot.max_tokens,
+      },
+    };
+  }
+
+  async function buildContextConvertImportInput(provider = 'openai', source = {}, warnings = []) {
+    const settings = getGlobalSettings();
+    const requestedMention = normalizeMention(source.mention || source.name || `${provider}_convert`);
+    let responseModel = '';
+
+    if (provider === 'yandex') {
+      const catalog = getYandexModelCatalog();
+      responseModel = cleanText(source.response_model || settings.yandex_default_response_model, 160);
+      if (responseModel && Array.isArray(catalog?.response) && catalog.response.length && !catalog.response.includes(responseModel)) {
+        warnings.push(`Response model "${responseModel}" is not available; default model was used.`);
+        responseModel = settings.yandex_default_response_model;
+      }
+    } else if (provider === 'deepseek') {
+      const catalog = await getDeepSeekModelCatalogCached();
+      responseModel = cleanText(source.response_model || settings.deepseek_default_response_model, 160);
+      if (catalog?.source === 'live') {
+        if (responseModel && !catalog.response.includes(responseModel)) {
+          warnings.push(`Response model "${responseModel}" is not available; default model was used.`);
+          responseModel = settings.deepseek_default_response_model;
+        }
+      } else if (catalog?.error) {
+        warnings.push(`Model availability was not verified: ${catalog.error}`);
+      }
+    } else if (provider === 'grok') {
+      const catalog = await getGrokModelCatalogCached();
+      responseModel = cleanText(source.response_model || settings.grok_default_response_model, 160);
+      if (catalog?.source === 'live') {
+        if (responseModel && !catalog.response.includes(responseModel)) {
+          warnings.push(`Response model "${responseModel}" is not available; default model was used.`);
+          responseModel = settings.grok_default_response_model;
+        }
+      } else if (catalog?.error) {
+        warnings.push(`Model availability was not verified: ${catalog.error}`);
+      }
+    } else {
+      const catalog = await getModelCatalog();
+      responseModel = cleanText(source.response_model || settings.default_response_model, 160);
+      if (catalog?.source === 'openai') {
+        if (responseModel && !catalog.response.includes(responseModel)) {
+          warnings.push(`Response model "${responseModel}" is not available; default model was used.`);
+          responseModel = settings.default_response_model;
+        }
+      } else if (catalog?.error) {
+        warnings.push(`Model availability was not verified: ${catalog.error}`);
+      }
+    }
+
+    return normalizeBotInput({
+      ...(source || {}),
+      provider,
+      kind: 'convert',
+      mention: requestedMention,
+      response_model: responseModel,
+      transform_prompt: source.transform_prompt,
+      enabled: Object.prototype.hasOwnProperty.call(source, 'enabled') ? source.enabled : true,
+    });
+  }
+
+  function updateContextConvertBot(provider, current, input) {
+    db.prepare(`
+      UPDATE ai_bots
+      SET name=?, mention=?, style='', tone='', behavior_rules='', speech_patterns='',
+          enabled=?, provider=?, kind='convert', response_model=?, summary_model='', embedding_model='',
+          image_model='', image_aspect_ratio='', image_resolution='',
+          allow_text=0, allow_image_generate=0, allow_image_edit=0, allow_document=0,
+          allow_poll_create=0, allow_poll_vote=0, allow_react=0, allow_pin=0,
+          image_quality='', image_background='', image_output_format='', document_default_format='',
+          transform_prompt=?, temperature=?, max_tokens=?, updated_at=datetime('now')
+      WHERE id=?
+    `).run(
+      input.name,
+      input.mention,
+      input.enabled ? 1 : 0,
+      provider,
+      input.response_model,
+      input.transform_prompt || '',
+      input.temperature,
+      input.max_tokens,
+      current.id
+    );
+  }
+
+  function saveContextConvertChatSetting(req, res, { provider = 'openai' } = {}) {
+    const chatId = Number(req.body?.chatId);
+    const botId = Number(req.body?.botId);
+    if (!db.prepare('SELECT 1 FROM chats WHERE id=?').get(chatId)) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+    const bot = providerBotByRequestId({ params: { id: botId } }, res, { provider, kind: 'convert' });
+    if (!bot) return;
+    const enabled = boolValue(req.body?.enabled, false);
+    saveChatBotSettingTx({
+      chatId,
+      bot,
+      enabled,
+      mode: 'simple',
+      hotContextLimit: 50,
+      triggerMode: 'mention_reply',
+      autoReactOnMention: false,
+    });
+    broadcastContextConvertBotsUpdated([chatId]);
+    return res.json({ ok: true, state: serializeConvertAdminStateByProvider(provider) });
   }
 
   function extractBotPromptText(bot, message) {
@@ -4230,31 +4653,31 @@ function createAiBotFeature({
     if (!settings.enabled && !settings.yandex_enabled && !settings.deepseek_enabled && !settings.grok_enabled) return;
     const text = aiMessageMemoryText(message, { includeVoters: true });
     if (!text) return;
-      const rows = activeChatBotsStmt.all(message.chat_id);
-      for (const row of rows) {
-        const bot = sanitizeBot(row);
+    const rows = activeChatBotsStmt.all(message.chat_id);
+    for (const row of rows) {
+      const bot = sanitizeBot(row);
+      if (isContextTransformBot(bot)) continue;
       if (bot.provider === 'yandex' && !settings.yandex_enabled) continue;
       if (bot.provider === 'deepseek' && !settings.deepseek_enabled) continue;
       if (bot.provider === 'grok' && !settings.grok_enabled) continue;
       if (bot.provider === 'openai' && !settings.enabled) continue;
-        const chatConfig = {
-          mode: bot.kind === 'image' || bot.provider === 'deepseek'
-            ? 'simple'
-            : (row.mode === 'hybrid' ? 'hybrid' : 'simple'),
-          hot_context_limit: intValue(row.hot_context_limit, 50, 20, 100),
-          trigger_mode: row.trigger_mode || 'mention_reply',
-          auto_react_on_mention: boolValue(row.auto_react_on_mention, false),
-        };
-        if (shouldBotRespond(bot, message)) {
-          setImmediate(() => createBotResponse(bot, chatConfig, message));
-          continue;
-        }
-        if (messageRepliesToPoll(message) && canUseBotActionPlanner(bot, message)) {
-          setImmediate(() => createBotResponse(bot, chatConfig, message, { preferActionOnly: true }));
-        }
+      const chatConfig = {
+        mode: bot.kind === 'image' || bot.provider === 'deepseek'
+          ? 'simple'
+          : (row.mode === 'hybrid' ? 'hybrid' : 'simple'),
+        hot_context_limit: intValue(row.hot_context_limit, 50, 20, 100),
+        trigger_mode: row.trigger_mode || 'mention_reply',
+        auto_react_on_mention: boolValue(row.auto_react_on_mention, false),
+      };
+      if (shouldBotRespond(bot, message)) {
+        setImmediate(() => createBotResponse(bot, chatConfig, message));
+        continue;
+      }
+      if (messageRepliesToPoll(message) && canUseBotActionPlanner(bot, message)) {
+        setImmediate(() => createBotResponse(bot, chatConfig, message, { preferActionOnly: true }));
       }
     }
-
+  }
   async function handleMessageUpdated(message) {
     if (!message) return;
     db.prepare('UPDATE message_embeddings SET is_stale=1, updated_at=datetime(\'now\') WHERE message_id=?').run(message.id);
@@ -4291,6 +4714,42 @@ function createAiBotFeature({
     }
     return bot;
   }
+
+  app.get('/api/chats/:chatId/context-convert-bots', auth, (req, res) => {
+    const chatId = Number(req.params.chatId);
+    if (!chatId) return res.status(400).json({ error: 'Invalid chat id' });
+    if (!chatMemberStmt.get(chatId, req.user.id)) {
+      return res.status(403).json({ error: 'Not a member' });
+    }
+    return res.json({
+      chatId,
+      enabled: isContextTransformEnabledForChat(chatId),
+      bots: getContextConvertBotsForChat(chatId),
+    });
+  });
+
+  app.post('/api/chats/:chatId/context-convert', auth, async (req, res) => {
+    const chatId = Number(req.params.chatId);
+    if (!chatId) return res.status(400).json({ error: 'Invalid chat id' });
+    if (!chatMemberStmt.get(chatId, req.user.id)) {
+      return res.status(403).json({ error: 'Not a member' });
+    }
+    try {
+      const result = await transformText({
+        chatId,
+        botId: req.body?.botId,
+        text: req.body?.text,
+      });
+      return res.json({
+        ok: true,
+        chatId,
+        bot: serializeContextConvertBot(result.bot),
+        text: result.text,
+      });
+    } catch (error) {
+      return res.status(error.status || 400).json({ error: errorText(error, 'Context transform failed') });
+    }
+  });
 
   app.get('/api/admin/ai-bots', auth, adminOnly, (_req, res) => {
     res.json(serializeAdminState());
@@ -4542,6 +5001,84 @@ function createAiBotFeature({
     } catch (error) {
       res.status(400).json({ ok: false, error: error.message || 'Bot test failed' });
     }
+  });
+
+  app.get('/api/admin/openai-convert-bots', auth, adminOnly, (_req, res) => {
+    res.json(serializeOpenAiConvertAdminState());
+  });
+
+  app.post('/api/admin/openai-convert-bots', auth, adminOnly, (req, res) => {
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'openai', kind: 'convert' });
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, state: serializeOpenAiConvertAdminState() });
+  });
+
+  app.put('/api/admin/openai-convert-bots/chat-settings', auth, adminOnly, (req, res) => {
+    return saveContextConvertChatSetting(req, res, { provider: 'openai' });
+  });
+
+  app.put('/api/admin/openai-convert-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = providerBotByRequestId(req, res, { provider: 'openai', kind: 'convert' });
+    if (!current) return;
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'openai', kind: 'convert' }, current);
+    updateContextConvertBot('openai', current, input);
+    const updated = botByIdStmt.get(current.id);
+    broadcastContextConvertBotUpdatedForBot(current.id);
+    res.json({ bot: sanitizeBot(updated), state: serializeOpenAiConvertAdminState() });
+  });
+
+  app.delete('/api/admin/openai-convert-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = providerBotByRequestId(req, res, { provider: 'openai', kind: 'convert' });
+    if (!current) return;
+    db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
+    db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
+    broadcastContextConvertBotUpdatedForBot(current.id);
+    res.json({ ok: true, state: serializeOpenAiConvertAdminState() });
+  });
+
+  app.post('/api/admin/openai-convert-bots/:id(\\d+)/test', auth, adminOnly, async (req, res) => {
+    const rawBot = providerBotByRequestId(req, res, { provider: 'openai', kind: 'convert' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
+    const sourceText = cleanText(req.body?.text || req.body?.source_text || req.body?.prompt || 'Please rewrite this text in a clearer way.', 4000);
+    const startedAt = Date.now();
+    try {
+      const text = await runContextTransform(bot, sourceText);
+      res.json({
+        ok: true,
+        result: {
+          text,
+          latencyMs: Date.now() - startedAt,
+          model: bot.response_model || getGlobalSettings().default_response_model,
+        },
+      });
+    } catch (error) {
+      res.status(error.status || 400).json({ ok: false, error: errorText(error, 'OpenAI convert bot test failed') });
+    }
+  });
+
+  app.get('/api/admin/openai-convert-bots/:id(\\d+)/export', auth, adminOnly, (req, res) => {
+    const rawBot = providerBotByRequestId(req, res, { provider: 'openai', kind: 'convert' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
+    const payload = buildContextConvertExportPayload(bot);
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = `bananza-openai-convert-${safeFilenamePart(bot.mention || bot.name)}-${date}.json`;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(JSON.stringify(payload, null, 2));
+  });
+
+  app.post('/api/admin/openai-convert-bots/import', auth, adminOnly, async (req, res) => {
+    const source = req.body?.bot && typeof req.body.bot === 'object' ? req.body.bot : (req.body || {});
+    const warnings = [];
+    const input = await buildContextConvertImportInput('openai', source, warnings);
+    const requestedMention = normalizeMention(source.mention || source.name || 'openai_convert');
+    if (input.mention !== requestedMention) {
+      warnings.push(`Mention "@${requestedMention}" is already taken; imported as "@${input.mention}".`);
+    }
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, warnings, state: serializeOpenAiConvertAdminState() });
   });
 
   app.get('/api/admin/openai-universal-bots', auth, adminOnly, (_req, res) => {
@@ -4843,16 +5380,7 @@ function createAiBotFeature({
   });
 
   function deepseekBotByRequestId(req, res) {
-    const bot = botByIdStmt.get(Number(req.params.id));
-    if (!bot) {
-      res.status(404).json({ error: 'Bot not found' });
-      return null;
-    }
-    if (normalizeProvider(bot.provider, 'openai') !== 'deepseek') {
-      res.status(404).json({ error: 'DeepSeek bot not found' });
-      return null;
-    }
-    return bot;
+    return providerBotByRequestId(req, res, { provider: 'deepseek', kind: 'text' });
   }
 
   app.get('/api/admin/deepseek-ai-bots', auth, adminOnly, (_req, res) => {
@@ -4944,7 +5472,9 @@ function createAiBotFeature({
     const botId = Number(req.body?.botId);
     if (!db.prepare('SELECT 1 FROM chats WHERE id=?').get(chatId)) return res.status(404).json({ error: 'Chat not found' });
     const bot = botByIdStmt.get(botId);
-    if (!bot || normalizeProvider(bot.provider, 'openai') !== 'deepseek') return res.status(404).json({ error: 'DeepSeek bot not found' });
+    if (!bot || normalizeProvider(bot.provider, 'openai') !== 'deepseek' || normalizeBotKind(bot.kind, 'deepseek', 'text') !== 'text') {
+      return res.status(404).json({ error: 'DeepSeek bot not found' });
+    }
     const enabled = boolValue(req.body?.enabled, false);
     const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
     const triggerMode = 'mention_reply';
@@ -5142,17 +5672,86 @@ function createAiBotFeature({
     res.json({ bot, warnings, state: serializeDeepSeekAdminState() });
   });
 
+  app.get('/api/admin/deepseek-convert-bots', auth, adminOnly, (_req, res) => {
+    res.json(serializeDeepSeekConvertAdminState());
+  });
+
+  app.post('/api/admin/deepseek-convert-bots', auth, adminOnly, (req, res) => {
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'deepseek', kind: 'convert' });
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, state: serializeDeepSeekConvertAdminState() });
+  });
+
+  app.put('/api/admin/deepseek-convert-bots/chat-settings', auth, adminOnly, (req, res) => {
+    return saveContextConvertChatSetting(req, res, { provider: 'deepseek' });
+  });
+
+  app.put('/api/admin/deepseek-convert-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = providerBotByRequestId(req, res, { provider: 'deepseek', kind: 'convert' });
+    if (!current) return;
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'deepseek', kind: 'convert' }, current);
+    updateContextConvertBot('deepseek', current, input);
+    const updated = botByIdStmt.get(current.id);
+    broadcastContextConvertBotUpdatedForBot(current.id);
+    res.json({ bot: sanitizeBot(updated), state: serializeDeepSeekConvertAdminState() });
+  });
+
+  app.delete('/api/admin/deepseek-convert-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = providerBotByRequestId(req, res, { provider: 'deepseek', kind: 'convert' });
+    if (!current) return;
+    db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
+    db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
+    broadcastContextConvertBotUpdatedForBot(current.id);
+    res.json({ ok: true, state: serializeDeepSeekConvertAdminState() });
+  });
+
+  app.post('/api/admin/deepseek-convert-bots/:id(\\d+)/test', auth, adminOnly, async (req, res) => {
+    const rawBot = providerBotByRequestId(req, res, { provider: 'deepseek', kind: 'convert' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
+    const sourceText = cleanText(req.body?.text || req.body?.source_text || req.body?.prompt || 'Please rewrite this text in a clearer way.', 4000);
+    const startedAt = Date.now();
+    try {
+      const text = await runContextTransform(bot, sourceText);
+      res.json({
+        ok: true,
+        result: {
+          text,
+          latencyMs: Date.now() - startedAt,
+          model: bot.response_model || getGlobalSettings().deepseek_default_response_model,
+        },
+      });
+    } catch (error) {
+      res.status(error.status || 400).json({ ok: false, error: errorText(error, 'DeepSeek convert bot test failed') });
+    }
+  });
+
+  app.get('/api/admin/deepseek-convert-bots/:id(\\d+)/export', auth, adminOnly, (req, res) => {
+    const rawBot = providerBotByRequestId(req, res, { provider: 'deepseek', kind: 'convert' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
+    const payload = buildContextConvertExportPayload(bot);
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = `bananza-deepseek-convert-${safeFilenamePart(bot.mention || bot.name)}-${date}.json`;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(JSON.stringify(payload, null, 2));
+  });
+
+  app.post('/api/admin/deepseek-convert-bots/import', auth, adminOnly, async (req, res) => {
+    const source = req.body?.bot && typeof req.body.bot === 'object' ? req.body.bot : (req.body || {});
+    const warnings = [];
+    const input = await buildContextConvertImportInput('deepseek', source, warnings);
+    const requestedMention = normalizeMention(source.mention || source.name || 'deepseek_convert');
+    if (input.mention !== requestedMention) {
+      warnings.push(`Mention "@${requestedMention}" is already taken; imported as "@${input.mention}".`);
+    }
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, warnings, state: serializeDeepSeekConvertAdminState() });
+  });
+
   function yandexBotByRequestId(req, res) {
-    const bot = botByIdStmt.get(Number(req.params.id));
-    if (!bot) {
-      res.status(404).json({ error: 'Bot not found' });
-      return null;
-    }
-    if ((bot.provider || 'openai') !== 'yandex') {
-      res.status(404).json({ error: 'Yandex bot not found' });
-      return null;
-    }
-    return bot;
+    return providerBotByRequestId(req, res, { provider: 'yandex', kind: 'text' });
   }
 
   app.get('/api/admin/yandex-ai-bots', auth, adminOnly, (_req, res) => {
@@ -5238,7 +5837,7 @@ function createAiBotFeature({
   });
 
   app.post('/api/admin/yandex-ai-bots', auth, adminOnly, (req, res) => {
-    const input = normalizeBotInput({ ...(req.body || {}), provider: 'yandex' });
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'yandex', kind: 'text' });
     const bot = sanitizeBot(createBotTx(input));
     res.json({ bot, state: serializeYandexAdminState() });
   });
@@ -5248,7 +5847,9 @@ function createAiBotFeature({
     const botId = Number(req.body?.botId);
     if (!db.prepare('SELECT 1 FROM chats WHERE id=?').get(chatId)) return res.status(404).json({ error: 'Chat not found' });
     const bot = botByIdStmt.get(botId);
-    if (!bot || (bot.provider || 'openai') !== 'yandex') return res.status(404).json({ error: 'Yandex bot not found' });
+    if (!bot || normalizeProvider(bot.provider, 'openai') !== 'yandex' || normalizeBotKind(bot.kind, 'yandex', 'text') !== 'text') {
+      return res.status(404).json({ error: 'Yandex bot not found' });
+    }
     const enabled = boolValue(req.body?.enabled, false);
     const mode = req.body?.mode === 'hybrid' ? 'hybrid' : 'simple';
     const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
@@ -5299,7 +5900,7 @@ function createAiBotFeature({
   app.put('/api/admin/yandex-ai-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
     const current = yandexBotByRequestId(req, res);
     if (!current) return;
-    const input = normalizeBotInput({ ...(req.body || {}), provider: 'yandex' }, current);
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'yandex', kind: 'text' }, current);
     db.prepare(`
       UPDATE ai_bots
       SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
@@ -5429,6 +6030,84 @@ function createAiBotFeature({
     }
     const bot = sanitizeBot(createBotTx(input));
     res.json({ bot, warnings, state: serializeYandexAdminState() });
+  });
+
+  app.get('/api/admin/yandex-convert-bots', auth, adminOnly, (_req, res) => {
+    res.json(serializeYandexConvertAdminState());
+  });
+
+  app.post('/api/admin/yandex-convert-bots', auth, adminOnly, (req, res) => {
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'yandex', kind: 'convert' });
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, state: serializeYandexConvertAdminState() });
+  });
+
+  app.put('/api/admin/yandex-convert-bots/chat-settings', auth, adminOnly, (req, res) => {
+    return saveContextConvertChatSetting(req, res, { provider: 'yandex' });
+  });
+
+  app.put('/api/admin/yandex-convert-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = providerBotByRequestId(req, res, { provider: 'yandex', kind: 'convert' });
+    if (!current) return;
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'yandex', kind: 'convert' }, current);
+    updateContextConvertBot('yandex', current, input);
+    const updated = botByIdStmt.get(current.id);
+    broadcastContextConvertBotUpdatedForBot(current.id);
+    res.json({ bot: sanitizeBot(updated), state: serializeYandexConvertAdminState() });
+  });
+
+  app.delete('/api/admin/yandex-convert-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = providerBotByRequestId(req, res, { provider: 'yandex', kind: 'convert' });
+    if (!current) return;
+    db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
+    db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
+    broadcastContextConvertBotUpdatedForBot(current.id);
+    res.json({ ok: true, state: serializeYandexConvertAdminState() });
+  });
+
+  app.post('/api/admin/yandex-convert-bots/:id(\\d+)/test', auth, adminOnly, async (req, res) => {
+    const rawBot = providerBotByRequestId(req, res, { provider: 'yandex', kind: 'convert' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
+    const sourceText = cleanText(req.body?.text || req.body?.source_text || req.body?.prompt || 'Please rewrite this text in a clearer way.', 4000);
+    const startedAt = Date.now();
+    try {
+      const text = await runContextTransform(bot, sourceText);
+      res.json({
+        ok: true,
+        result: {
+          text,
+          latencyMs: Date.now() - startedAt,
+          model: bot.response_model || getGlobalSettings().yandex_default_response_model,
+        },
+      });
+    } catch (error) {
+      res.status(error.status || 400).json({ ok: false, error: errorText(error, 'Yandex convert bot test failed') });
+    }
+  });
+
+  app.get('/api/admin/yandex-convert-bots/:id(\\d+)/export', auth, adminOnly, (req, res) => {
+    const rawBot = providerBotByRequestId(req, res, { provider: 'yandex', kind: 'convert' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
+    const payload = buildContextConvertExportPayload(bot);
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = `bananza-yandex-convert-${safeFilenamePart(bot.mention || bot.name)}-${date}.json`;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(JSON.stringify(payload, null, 2));
+  });
+
+  app.post('/api/admin/yandex-convert-bots/import', auth, adminOnly, async (req, res) => {
+    const source = req.body?.bot && typeof req.body.bot === 'object' ? req.body.bot : (req.body || {});
+    const warnings = [];
+    const input = await buildContextConvertImportInput('yandex', source, warnings);
+    const requestedMention = normalizeMention(source.mention || source.name || 'yandex_convert');
+    if (input.mention !== requestedMention) {
+      warnings.push(`Mention "@${requestedMention}" is already taken; imported as "@${input.mention}".`);
+    }
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, warnings, state: serializeYandexConvertAdminState() });
   });
 
   function grokBotByRequestId(req, res, { kind = null } = {}) {
@@ -5803,6 +6482,84 @@ function createAiBotFeature({
     res.json({ bot, warnings, state: serializeGrokAdminState() });
   });
 
+  app.get('/api/admin/grok-convert-bots', auth, adminOnly, (_req, res) => {
+    res.json(serializeGrokConvertAdminState());
+  });
+
+  app.post('/api/admin/grok-convert-bots', auth, adminOnly, (req, res) => {
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'grok', kind: 'convert' });
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, state: serializeGrokConvertAdminState() });
+  });
+
+  app.put('/api/admin/grok-convert-bots/chat-settings', auth, adminOnly, (req, res) => {
+    return saveContextConvertChatSetting(req, res, { provider: 'grok' });
+  });
+
+  app.put('/api/admin/grok-convert-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = providerBotByRequestId(req, res, { provider: 'grok', kind: 'convert' });
+    if (!current) return;
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'grok', kind: 'convert' }, current);
+    updateContextConvertBot('grok', current, input);
+    const updated = botByIdStmt.get(current.id);
+    broadcastContextConvertBotUpdatedForBot(current.id);
+    res.json({ bot: sanitizeBot(updated), state: serializeGrokConvertAdminState() });
+  });
+
+  app.delete('/api/admin/grok-convert-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = providerBotByRequestId(req, res, { provider: 'grok', kind: 'convert' });
+    if (!current) return;
+    db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
+    db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
+    broadcastContextConvertBotUpdatedForBot(current.id);
+    res.json({ ok: true, state: serializeGrokConvertAdminState() });
+  });
+
+  app.post('/api/admin/grok-convert-bots/:id(\\d+)/test', auth, adminOnly, async (req, res) => {
+    const rawBot = providerBotByRequestId(req, res, { provider: 'grok', kind: 'convert' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
+    const sourceText = cleanText(req.body?.text || req.body?.source_text || req.body?.prompt || 'Please rewrite this text in a clearer way.', 4000);
+    const startedAt = Date.now();
+    try {
+      const text = await runContextTransform(bot, sourceText);
+      res.json({
+        ok: true,
+        result: {
+          text,
+          latencyMs: Date.now() - startedAt,
+          model: bot.response_model || getGlobalSettings().grok_default_response_model,
+        },
+      });
+    } catch (error) {
+      res.status(error.status || 400).json({ ok: false, error: errorText(error, 'Grok convert bot test failed') });
+    }
+  });
+
+  app.get('/api/admin/grok-convert-bots/:id(\\d+)/export', auth, adminOnly, (req, res) => {
+    const rawBot = providerBotByRequestId(req, res, { provider: 'grok', kind: 'convert' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
+    const payload = buildContextConvertExportPayload(bot);
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = `bananza-grok-convert-${safeFilenamePart(bot.mention || bot.name)}-${date}.json`;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(JSON.stringify(payload, null, 2));
+  });
+
+  app.post('/api/admin/grok-convert-bots/import', auth, adminOnly, async (req, res) => {
+    const source = req.body?.bot && typeof req.body.bot === 'object' ? req.body.bot : (req.body || {});
+    const warnings = [];
+    const input = await buildContextConvertImportInput('grok', source, warnings);
+    const requestedMention = normalizeMention(source.mention || source.name || 'grok_convert');
+    if (input.mention !== requestedMention) {
+      warnings.push(`Mention "@${requestedMention}" is already taken; imported as "@${input.mention}".`);
+    }
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, warnings, state: serializeGrokConvertAdminState() });
+  });
+
   app.get('/api/admin/grok-universal-bots', auth, adminOnly, (_req, res) => {
     res.json(serializeGrokUniversalAdminState());
   });
@@ -6098,10 +6855,18 @@ function createAiBotFeature({
     handleMessageUpdated,
     handleMessageDeleted,
     enqueueMemoryForMessage,
+    transformText,
     backfillChat(chatId) {
       memoryQueue.enqueue(`ai:backfill:${chatId}`, { type: 'backfill-chat', chatId });
     },
   };
 }
 
-module.exports = { createAiBotFeature };
+module.exports = {
+  createAiBotFeature,
+  __private: {
+    normalizeBotKind,
+    isContextTransformBot,
+    serializeContextConvertBot,
+  },
+};
