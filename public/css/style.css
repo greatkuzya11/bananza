@@ -2710,6 +2710,7 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
   font-size: 28px; width: 44px; height: 44px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   background: rgba(255,255,255,.1); z-index: 203;
+  touch-action: manipulation;
 }
 .iv-close:hover { background: rgba(255,255,255,.2); }
 .iv-loading {

@@ -3887,10 +3887,15 @@
     const previousIndex = Math.max(0, Number(activePinIndexByChat.get(chatId) || 0));
     const previousPin = previousPins[previousIndex] || previousPins[0] || null;
     const nextPins = normalizePins(data.pins);
+    const action = String(data.action || '').toLowerCase();
+    const pinnedMessageId = Number(data.messageId || data.message_id || 0);
     chatPinsByChat.set(chatId, nextPins);
 
     let nextIndex = 0;
-    if (previousPin) {
+    if (action === 'pinned' && pinnedMessageId) {
+      const pinnedIndex = nextPins.findIndex(pin => Number(pin.message_id) === pinnedMessageId);
+      if (pinnedIndex >= 0) nextIndex = pinnedIndex;
+    } else if (action && previousPin) {
       const found = nextPins.findIndex(pin => Number(pin.message_id) === Number(previousPin.message_id));
       if (found >= 0) nextIndex = found;
     }
@@ -9171,8 +9176,9 @@
           target.is_ai_bot ? 'ai bot' : '',
         ].join(' ').toLowerCase();
         return !query || haystack.includes(query);
-      }).slice(0, 8);
-      renderMentionPicker(filtered, { source: 'trigger', keyboardAttached: window.innerWidth > 768 || isMobileComposerKeyboardOpen() });
+      });
+      const visibleTargets = query ? filtered.slice(0, 8) : filtered;
+      renderMentionPicker(visibleTargets, { source: 'trigger', keyboardAttached: window.innerWidth > 768 || isMobileComposerKeyboardOpen() });
     } catch {
       hideMentionPicker();
     }
@@ -15420,6 +15426,17 @@
     }
   }
 
+  function handleMediaViewerControlActivation(e) {
+    if (imageViewer.classList.contains('hidden')) return false;
+    if (e.type === 'pointerup' && e.pointerType === 'mouse' && e.button !== 0) return false;
+    const closeBtn = e.target.closest('.iv-close');
+    if (!closeBtn || !imageViewer.contains(closeBtn)) return false;
+    e.preventDefault();
+    e.stopPropagation();
+    closeMediaViewer();
+    return true;
+  }
+
   function updateGalleryArrows() {
     const prev = imageViewer.querySelector('.iv-prev');
     const next = imageViewer.querySelector('.iv-next');
@@ -16160,6 +16177,7 @@
       queueIosViewportLayoutSync();
     }
     hideFloatingMessageActions({ immediate: true });
+    hideMentionPicker();
     cancelPendingSidebarReveal();
 
     if (!sidebar.classList.contains('sidebar-hidden')) {
@@ -16532,7 +16550,14 @@
     });
 
     // Media viewer close
+    imageViewer.addEventListener('pointerup', (e) => {
+      handleMediaViewerControlActivation(e);
+    }, { passive: false });
+    imageViewer.addEventListener('touchend', (e) => {
+      handleMediaViewerControlActivation(e);
+    }, { passive: false });
     imageViewer.addEventListener('click', (e) => {
+      if (handleMediaViewerControlActivation(e)) return;
       if (Date.now() < mediaViewerSuppressClickUntil && e.target.closest('.iv-slide')) {
         e.preventDefault();
         e.stopPropagation();
