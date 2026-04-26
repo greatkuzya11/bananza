@@ -7,6 +7,7 @@ const {
   parseDirectCreatePollRequest,
   parseDirectVoteRequest,
   parseDirectReactionRequest,
+  parseDirectPinRequest,
 } = require('../ai/actionPlanTextParser');
 
 test('tryParseJsonObject extracts object from surrounding text', () => {
@@ -210,6 +211,21 @@ test('parseDirectReactionRequest keeps explicit here-target on source message', 
   ]);
 });
 
+test('parseDirectReactionRequest resolves explicit self-like to latest bot message', () => {
+  const plan = parseDirectReactionRequest('\u043b\u0430\u0439\u043a\u043d\u0438 \u0441\u0435\u0431\u044f');
+
+  assert.ok(plan);
+  assert.deepEqual(plan.actions, [
+    {
+      type: 'react_message',
+      target: 'self_latest_message',
+      reaction_key: 'like',
+      emoji: '',
+      mode: 'replace',
+    },
+  ]);
+});
+
 test('parseDirectReactionRequest extracts remove intent from direct user request', () => {
   const plan = parseDirectReactionRequest('\u0443\u0431\u0435\u0440\u0438 \u0440\u0435\u0430\u043a\u0446\u0438\u044e');
 
@@ -221,6 +237,18 @@ test('parseDirectReactionRequest extracts remove intent from direct user request
       reaction_key: null,
       emoji: '',
       mode: 'remove',
+    },
+  ]);
+});
+
+test('parseDirectPinRequest resolves explicit self-pin to latest bot message', () => {
+  const plan = parseDirectPinRequest('\u0437\u0430\u043f\u0438\u043d\u044c \u0441\u0435\u0431\u044f');
+
+  assert.ok(plan);
+  assert.deepEqual(plan.actions, [
+    {
+      type: 'pin_message',
+      target: 'self_latest_message',
     },
   ]);
 });

@@ -46,6 +46,7 @@ const {
   parseDirectCreatePollRequest,
   parseDirectVoteRequest,
   parseDirectReactionRequest,
+  parseDirectPinRequest,
 } = require('./actionPlanTextParser');
 const {
   REACTION_KEY_TO_EMOJI,
@@ -102,8 +103,8 @@ const FACT_TYPES = new Set([
 const BOT_ACTION_CLOSE_PRESETS = new Set(['1h', '4h', '24h', '3d', '7d']);
 const BOT_ACTION_REPLY_MODES = new Set(['none', 'status', 'clarify']);
 const BOT_ACTION_TYPES = new Set(['create_poll', 'vote_poll', 'react_message', 'pin_message']);
-const BOT_ACTION_REACTION_TARGETS = new Set(['reply_to', 'source_message']);
-const BOT_ACTION_PIN_TARGETS = new Set(['reply_to', 'created_poll']);
+const BOT_ACTION_REACTION_TARGETS = new Set(['reply_to', 'source_message', 'self_latest_message']);
+const BOT_ACTION_PIN_TARGETS = new Set(['reply_to', 'created_poll', 'self_latest_message']);
 const BOT_ACTION_VOTE_TARGETS = new Set(['reply_to', 'latest_open_poll']);
 const BOT_ACTION_REACTION_KEYS = new Set(REACTION_KEYS);
 const BOT_ACTION_REACTION_MODES = new Set(REACTION_MODES);
@@ -641,6 +642,13 @@ function createAiBotFeature({
   const replyBotStmt = db.prepare('SELECT ai_bot_id FROM messages WHERE id=? AND ai_generated=1 AND ai_bot_id IS NOT NULL');
   const replyPollStmt = db.prepare('SELECT 1 FROM polls WHERE message_id=? LIMIT 1');
   const reactionByMessageAndUserStmt = db.prepare('SELECT 1 FROM reactions WHERE message_id=? AND user_id=? LIMIT 1');
+  const latestBotMessageInChatStmt = db.prepare(`
+    SELECT id
+    FROM messages
+    WHERE chat_id=? AND is_deleted=0 AND (ai_bot_id=? OR user_id=?)
+    ORDER BY id DESC
+    LIMIT 1
+  `);
   const messageFileRefStmt = db.prepare(`
     SELECT
       m.id,
@@ -3701,6 +3709,130 @@ function createAiBotFeature({
     ].join(', ');
   }
 
+  function getBotLatestMessageInChat(bot, chatId) {
+    const resolvedChatId = positiveId(chatId);
+    if (!resolvedChatId || !positiveId(bot?.id) || !positiveId(bot?.user_id)) return 0;
+    const row = latestBotMessageInChatStmt.get(resolvedChatId, positiveId(bot.id), positiveId(bot.user_id));
+    return positiveId(row?.id);
+  }
+
+  function describeBotAction(action) {
+    if (!action || typeof action !== 'object') return 'unknown_action';
+    if (action.type === 'create_poll') {
+      return `create_poll(question=${JSON.stringify(cleanText(action.question || '', 120))}, options=${Array.isArray(action.options) ? action.options.length : 0}, pin_after_create=${action.pin_after_create ? 'yes' : 'no'})`;
+    }
+    if (action.type === 'vote_poll') {
+      return `vote_poll(target=${action.target || 'reply_to'}, option_texts=${JSON.stringify(Array.isArray(action.option_texts) ? action.option_texts.slice(0, 3) : [])})`;
+    }
+    if (action.type === 'react_message') {
+      return `react_message(target=${action.target || 'reply_to'}, reaction_key=${action.reaction_key || 'custom'}, mode=${action.mode || 'replace'})`;
+    }
+    if (action.type === 'pin_message') {
+      return `pin_message(target=${action.target || 'reply_to'})`;
+    }
+    return String(action.type || 'unknown_action');
+  }
+
+  function summarizeActionOutcome(result) {
+    if (!result || typeof result !== 'object') return 'unknown';
+    const base = describeBotAction(result.action || { type: result.type });
+    if (result.outcome === 'success') return `${base} -> success`;
+    if (result.outcome === 'no_op') return `${base} -> no_change`;
+    return `${base} -> ${result.outcome || 'unknown'}`;
+  }
+
+  function shouldUsePersonaFallbackAfterActions(plan, results = [], failures = []) {
+    if (!plan) return false;
+    if (!Array.isArray(results) || !Array.isArray(failures)) return false;
+    if (!plan.actions.length && plan.reply_mode !== 'none') return true;
+    if (failures.length) return true;
+    if (results.some((item) => item?.outcome && item.outcome !== 'success')) return true;
+    if (plan.actions.length && !results.some((item) => item?.outcome === 'success')) return true;
+    return false;
+  }
+
+  async function generateBotPersonaActionFallback(bot, chatConfig, sourceMessage, plan, { results = [], failures = [] } = {}) {
+    const context = await assembleContext({
+      bot,
+      chatConfig: chatConfigForBotMode(bot, chatConfig, 'text'),
+      message: sourceMessage,
+    });
+    const originalRequest = cleanText(extractBotPromptText(bot, sourceMessage), 3000)
+      || cleanText(sourceMessage?.text || sourceMessage?.transcription_text || '', 3000)
+      || '(empty)';
+    const actionLines = Array.isArray(plan?.actions) && plan.actions.length
+      ? plan.actions.map((action, index) => `${index + 1}. ${describeBotAction(action)}`)
+      : ['1. no executable chat action was resolved'];
+    const resultLines = Array.isArray(results) && results.length
+      ? results.map((result, index) => `${index + 1}. ${summarizeActionOutcome(result)}`)
+      : ['none'];
+    const failureLines = Array.isArray(failures) && failures.length
+      ? failures.map((failure, index) => `${index + 1}. ${describeBotAction(failure.action)} -> ${failure.code || 'error'}: ${cleanText(failure.detail || failure.text || '', 220) || 'unknown failure'}`)
+      : ['none'];
+    const plannerNote = cleanText(plan?.reply_text || '', 300);
+    let textSystem = botSupportsChatActions(bot)
+      ? `${context.system}\n\nDo not pretend that a poll, vote, reaction, or pin already exists in plain text. Never output fake "Poll #..." summaries or function-like calls such as create_poll(...).`
+      : context.system;
+    textSystem = `${textSystem}\n\nThe user asked you to do chat actions. Some or all of them were impossible, unavailable, ambiguous, or already done. Reply in your normal persona and style. Be honest. Never claim an action happened unless it actually changed chat state. If some actions succeeded, mention them briefly and truthfully. If a target does not exist in the current chat context, say so plainly. Do not output JSON, function calls, or system diagnostics.`;
+
+    const user = [
+      context.user,
+      'Action execution context:',
+      `Original request: ${originalRequest}`,
+      `Planner reply mode: ${plan?.reply_mode || 'none'}`,
+      plannerNote ? `Planner note: ${plannerNote}` : '',
+      'Planned actions:',
+      actionLines.join('\n'),
+      'Execution results:',
+      resultLines.join('\n'),
+      'Execution failures:',
+      failureLines.join('\n'),
+    ].filter(Boolean).join('\n\n');
+
+    let rawText = '';
+    const settings = getGlobalSettings();
+    if (bot.provider === 'yandex') {
+      rawText = await yandexAi.generateText(yandexClientOptions({
+        apiKey: getYandexApiKey(),
+        model: bot.response_model || settings.yandex_default_response_model,
+        system: textSystem,
+        user,
+        maxOutputTokens: intValue(bot.max_tokens, settings.yandex_max_tokens, 1, 8000),
+        temperature: floatValue(bot.temperature, settings.yandex_temperature, 0, 1),
+      }));
+    } else if (bot.provider === 'deepseek') {
+      rawText = await deepseekAi.generateText({
+        apiKey: getDeepSeekApiKey(),
+        baseUrl: deepseekBaseUrl(),
+        model: bot.response_model || settings.deepseek_default_response_model,
+        system: textSystem,
+        user,
+        maxOutputTokens: intValue(bot.max_tokens, settings.deepseek_max_tokens, 1, 8000),
+        temperature: floatValue(bot.temperature, settings.deepseek_temperature, 0, 1),
+      });
+    } else if (bot.provider === 'grok') {
+      rawText = await grokAi.generateText({
+        apiKey: getGrokApiKey(),
+        baseUrl: grokBaseUrl(),
+        model: bot.response_model || settings.grok_default_response_model,
+        system: textSystem,
+        user,
+        maxOutputTokens: intValue(bot.max_tokens, settings.grok_max_tokens, 1, 8000),
+        temperature: floatValue(bot.temperature, settings.grok_temperature, 0, 1),
+      });
+    } else {
+      rawText = await generateText({
+        apiKey: getApiKey(),
+        model: bot.response_model || settings.default_response_model,
+        system: textSystem,
+        user,
+        maxOutputTokens: intValue(bot.max_tokens, 1000, OPENAI_MIN_OUTPUT_TOKENS, 8000),
+        temperature: floatValue(bot.temperature, 0.55, 0, 1),
+      });
+    }
+    return cleanText(stripBotSpeakerLabel(rawText, bot), 5000);
+  }
+
   function sanitizeDetectedBotAction(rawAction) {
     if (!rawAction || typeof rawAction !== 'object' || Array.isArray(rawAction)) return null;
     const type = String(rawAction.type || rawAction.action || '').trim().toLowerCase();
@@ -3826,6 +3958,8 @@ function createAiBotFeature({
     const replyTarget = positiveId(sourceMessage?.reply_to_id || sourceMessage?.replyToId)
       ? hydrateMessageById(positiveId(sourceMessage.reply_to_id || sourceMessage.replyToId))
       : null;
+    const selfTargetMessageId = getBotLatestMessageInChat(bot, sourceMessage.chat_id);
+    const selfTarget = selfTargetMessageId ? hydrateMessageById(selfTargetMessageId) : null;
     const raw = await generateBotJsonPayload(bot, {
       system: [
         botSystemPrompt(bot),
@@ -3843,8 +3977,8 @@ function createAiBotFeature({
         'Supported actions:',
         '- create_poll(question, options, allows_multiple, show_voters, close_preset, pin_after_create)',
         '- vote_poll(target, option_texts) where target is "reply_to" or "latest_open_poll"',
-        '- react_message(target, reaction_key, emoji?, mode) where target is "reply_to" or "source_message", reaction_key is one of the allowed keys or "custom", and mode is "add", "replace", or "remove"',
-        '- pin_message(target) where target is "reply_to" or "created_poll"',
+        '- react_message(target, reaction_key, emoji?, mode) where target is "reply_to", "source_message", or "self_latest_message", reaction_key is one of the allowed keys or "custom", and mode is "add", "replace", or "remove"',
+        '- pin_message(target) where target is "reply_to", "created_poll", or "self_latest_message"',
       ].join('\n\n'),
       user: [
         `Bot capabilities: ${summarizeBotCapabilities(bot)}.`,
@@ -3852,6 +3986,7 @@ function createAiBotFeature({
         `Current raw message: ${cleanText(sourceMessage?.text || sourceMessage?.transcription_text || '', 3000) || '(empty)'}`,
         `Current cleaned request: ${cleanText(extractBotPromptText(bot, sourceMessage), 3000) || '(empty)'}`,
         `Reply target: ${formatActionMessageSummary(replyTarget)}`,
+        `Latest message from this bot in the current chat: ${formatActionMessageSummary(selfTarget)}`,
         'Relevant context:',
         context.user,
       ].join('\n\n'),
@@ -3875,6 +4010,10 @@ function createAiBotFeature({
     const directReactionPlan = parseDirectReactionRequest(requestText);
     if (directReactionPlan) {
       return alignActionPlanWithSourceIntent(sanitizeDetectedBotActionPlan(directReactionPlan), sourceMessage);
+    }
+    const directPinPlan = parseDirectPinRequest(requestText);
+    if (directPinPlan) {
+      return alignActionPlanWithSourceIntent(sanitizeDetectedBotActionPlan(directPinPlan), sourceMessage);
     }
     if (textLooksLikeChatActionRequest(requestText) && textLooksLikeActionSuccessClaim(plan.reply_text || '')) {
       return {
@@ -3926,15 +4065,49 @@ function createAiBotFeature({
     };
   }
 
-  function resolveReactionTargetMessageId(action, sourceMessage) {
+  function resolveReactionTargetMessageId(bot, action, sourceMessage) {
     const replyId = positiveId(sourceMessage?.reply_to_id || sourceMessage?.replyToId);
-    if (action?.target === 'reply_to') return replyId || positiveId(sourceMessage?.id);
-    return positiveId(sourceMessage?.id);
+    if (action?.target === 'self_latest_message') {
+      return {
+        messageId: getBotLatestMessageInChat(bot, sourceMessage?.chat_id),
+        failureCode: 'not_found',
+        failureText: 'Не вижу своего предыдущего сообщения в этом чате, чтобы отреагировать на него.',
+      };
+    }
+    if (action?.target === 'reply_to') {
+      return {
+        messageId: replyId,
+        failureCode: 'clarify',
+        failureText: 'Ответь реплаем на сообщение, к которому нужна реакция.',
+      };
+    }
+    return {
+      messageId: positiveId(sourceMessage?.id),
+      failureCode: 'clarify',
+      failureText: 'Не вижу сообщение, на которое нужно поставить реакцию.',
+    };
   }
 
-  function resolvePinTargetMessageId(action, sourceMessage, createdPollMessageId = 0) {
-    if (action?.target === 'created_poll' && positiveId(createdPollMessageId)) return positiveId(createdPollMessageId);
-    return positiveId(sourceMessage?.reply_to_id || sourceMessage?.replyToId);
+  function resolvePinTargetMessageId(bot, action, sourceMessage, createdPollMessageId = 0) {
+    if (action?.target === 'created_poll') {
+      return {
+        messageId: positiveId(createdPollMessageId),
+        failureCode: 'not_found',
+        failureText: 'Не вижу только что созданный опрос, который нужно закрепить.',
+      };
+    }
+    if (action?.target === 'self_latest_message') {
+      return {
+        messageId: getBotLatestMessageInChat(bot, sourceMessage?.chat_id),
+        failureCode: 'not_found',
+        failureText: 'Не вижу своего предыдущего сообщения в этом чате, чтобы закрепить его.',
+      };
+    }
+    return {
+      messageId: positiveId(sourceMessage?.reply_to_id || sourceMessage?.replyToId),
+      failureCode: 'clarify',
+      failureText: 'Ответь реплаем на сообщение, которое нужно закрепить.',
+    };
   }
 
   async function executeBotActions(bot, sourceMessage, plan) {
@@ -3967,11 +4140,17 @@ function createAiBotFeature({
           });
           createdPollMessageId = positiveId(created.message?.id);
           if (created.message) enqueueMemoryForMessage(created.message);
-          results.push({ type: action.type, message_id: createdPollMessageId });
+          results.push({ type: action.type, action, message_id: createdPollMessageId, outcome: 'success' });
           if (action.pin_after_create) {
             if (!bot.allow_pin) throw Object.assign(new Error('Pinning is disabled for this bot.'), { code: 'capability' });
             const pinResult = messageActions.pinMessage({ actor, messageId: createdPollMessageId });
-            results.push({ type: 'pin_message', message_id: createdPollMessageId, changed: pinResult.changed });
+            results.push({
+              type: 'pin_message',
+              action: { type: 'pin_message', target: 'created_poll' },
+              message_id: createdPollMessageId,
+              changed: pinResult.changed,
+              outcome: pinResult.changed ? 'success' : 'no_op',
+            });
           }
           continue;
         }
@@ -3985,14 +4164,14 @@ function createAiBotFeature({
             messageId: target.messageId,
             optionTexts: action.option_texts,
           });
-          results.push({ type: action.type, message_id: target.messageId, option_ids: voteResult.optionIds });
+          results.push({ type: action.type, action, message_id: target.messageId, option_ids: voteResult.optionIds, outcome: 'success' });
           continue;
         }
 
         if (action.type === 'react_message') {
           if (!bot.allow_react) throw Object.assign(new Error('Reactions are disabled for this bot.'), { code: 'capability' });
-          const targetMessageId = resolveReactionTargetMessageId(action, sourceMessage);
-          if (!targetMessageId) throw Object.assign(new Error('Ответь на сообщение, к которому нужна реакция.'), { code: 'clarify' });
+          const target = resolveReactionTargetMessageId(bot, action, sourceMessage);
+          if (!target.messageId) throw Object.assign(new Error(target.failureText), { code: target.failureCode || 'clarify' });
           const emoji = resolveReactionEmoji({
             reactionKey: action.reaction_key || '',
             emoji: action.emoji || '',
@@ -4002,7 +4181,7 @@ function createAiBotFeature({
             : 'replace';
           const reactResult = messageActions.toggleReaction({
             actor,
-            messageId: targetMessageId,
+            messageId: target.messageId,
             emoji,
             behavior: mode === 'remove' ? 'remove' : 'ensure_present',
             replaceExistingFromActor: mode === 'replace',
@@ -4010,33 +4189,37 @@ function createAiBotFeature({
           });
           results.push({
             type: action.type,
-            message_id: targetMessageId,
+            action,
+            message_id: target.messageId,
             changed: reactResult.changed,
             reaction_key: action.reaction_key || null,
             mode,
+            outcome: reactResult.changed ? 'success' : 'no_op',
           });
           continue;
         }
 
         if (action.type === 'pin_message') {
           if (!bot.allow_pin) throw Object.assign(new Error('Pinning is disabled for this bot.'), { code: 'capability' });
-          const targetMessageId = resolvePinTargetMessageId(action, sourceMessage, createdPollMessageId);
-          if (!targetMessageId) throw Object.assign(new Error('Ответь на сообщение, которое нужно запинить.'), { code: 'clarify' });
-          const pinResult = messageActions.pinMessage({ actor, messageId: targetMessageId });
-          results.push({ type: action.type, message_id: targetMessageId, changed: pinResult.changed });
+          const target = resolvePinTargetMessageId(bot, action, sourceMessage, createdPollMessageId);
+          if (!target.messageId) throw Object.assign(new Error(target.failureText), { code: target.failureCode || 'clarify' });
+          const pinResult = messageActions.pinMessage({ actor, messageId: target.messageId });
+          results.push({ type: action.type, action, message_id: target.messageId, changed: pinResult.changed, outcome: pinResult.changed ? 'success' : 'no_op' });
         }
       } catch (error) {
         failures.push({
           action,
           code: String(error?.code || ''),
           text: buildActionFailureText(action, error),
+          detail: cleanText(error?.message || '', 220),
         });
       }
     }
 
     let replyMode = plan.reply_mode;
     let replyText = cleanText(plan.reply_text || '', 500);
-    if (failures.length) {
+    const shouldUsePersonaFallback = shouldUsePersonaFallbackAfterActions(plan, results, failures);
+    if (failures.length && !shouldUsePersonaFallback) {
       if (!replyText) {
         const joined = failures.map((item) => item.text).filter(Boolean).join(' ');
         replyText = cleanText(joined, 500);
@@ -4044,17 +4227,17 @@ function createAiBotFeature({
       if (replyMode === 'none') {
         replyMode = failures.some((item) => item.code === 'clarify') ? 'clarify' : 'status';
       }
-    } else if (replyText && replyMode === 'none') {
+    } else if (replyText && replyMode === 'none' && !shouldUsePersonaFallback) {
       replyMode = 'status';
     }
-    if (replyMode !== 'none' && !replyText) {
+    if (replyMode !== 'none' && !replyText && !shouldUsePersonaFallback) {
       replyText = replyMode === 'clarify'
-        ? 'Уточни, пожалуйста, что именно нужно сделать.'
-        : 'Не могу выполнить это действие.';
+        ? 'Please clarify what exactly you want me to do.'
+        : 'I cannot complete that action.';
     }
 
     let publishedMessage = null;
-    if (replyMode !== 'none' && replyText) {
+    if (!shouldUsePersonaFallback && replyMode !== 'none' && replyText) {
       publishedMessage = publishBotTextMessage(bot, sourceMessage, replyText);
       if (publishedMessage) enqueueMemoryForMessage(publishedMessage);
     }
@@ -4064,6 +4247,7 @@ function createAiBotFeature({
       publishedMessage,
       results,
       failures,
+      shouldUsePersonaFallback,
     };
   }
 
@@ -4508,11 +4692,30 @@ function createAiBotFeature({
       }
 
       const preferActionOnly = options?.preferActionOnly === true;
+      const skipActionPlanner = options?.skipActionPlanner === true;
       let actionHandled = false;
-      if (canUseBotActionPlanner(bot, sourceMessage)) {
+      if (!skipActionPlanner && canUseBotActionPlanner(bot, sourceMessage)) {
         try {
           const actionPlan = await detectBotActions(bot, chatConfig, sourceMessage);
           const actionResult = await executeBotActions(bot, sourceMessage, actionPlan);
+          if (actionResult.shouldUsePersonaFallback) {
+            const fallbackText = await generateBotPersonaActionFallback(
+              bot,
+              chatConfig,
+              sourceMessage,
+              actionPlan,
+              actionResult
+            );
+            const fallbackBody = cleanText(
+              fallbackText || 'I cannot honestly do that in this chat context.',
+              4000
+            );
+            if (fallbackBody) {
+              const fallbackMessage = publishBotTextMessage(bot, sourceMessage, fallbackBody);
+              if (fallbackMessage) enqueueMemoryForMessage(fallbackMessage);
+            }
+            return;
+          }
           actionHandled = actionResult.handled;
           if (actionHandled) return;
         } catch (error) {
@@ -4585,11 +4788,33 @@ function createAiBotFeature({
           || cleanText(sourceMessage?.text || sourceMessage?.transcription_text || '', 3000);
         const recoveredPlan = parseLooseActionPlanText(rawText || '');
         if (recoveredPlan?.actions?.length) {
+          const alignedRecoveredPlan = alignActionPlanWithSourceIntent(
+            sanitizeDetectedBotActionPlan(recoveredPlan),
+            sourceMessage
+          );
           const recoveredResult = await executeBotActions(
             bot,
             sourceMessage,
-            alignActionPlanWithSourceIntent(sanitizeDetectedBotActionPlan(recoveredPlan), sourceMessage)
+            alignedRecoveredPlan
           );
+          if (recoveredResult.shouldUsePersonaFallback) {
+            const fallbackText = await generateBotPersonaActionFallback(
+              bot,
+              chatConfig,
+              sourceMessage,
+              alignedRecoveredPlan,
+              recoveredResult
+            );
+            const fallbackBody = cleanText(
+              fallbackText || 'I cannot honestly do that in this chat context.',
+              4000
+            );
+            if (fallbackBody) {
+              const fallbackMessage = publishBotTextMessage(bot, sourceMessage, fallbackBody);
+              if (fallbackMessage) enqueueMemoryForMessage(fallbackMessage);
+            }
+            return;
+          }
           if (recoveredResult.handled) return;
         }
         if (textLooksLikeDirectVoteRequest(requestText) && textLooksLikeActionCapabilityExcuse(rawText || '')) {

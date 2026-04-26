@@ -498,8 +498,14 @@ function detectReactionMode(text = '') {
     : 'replace';
 }
 
+function textMentionsSelfTarget(text = '') {
+  const source = String(text || '');
+  return /(?:^|[\s,.:;!?()\-])(?:себя|себе|сво[её]\s+сообщени[ея]|свой\s+пост|yourself|your\s+own\s+(?:message|post)|your\s+post)(?=$|[\s,.:;!?()\-])/i.test(source);
+}
+
 function detectReactionTarget(text = '') {
   const source = String(text || '');
+  if (textMentionsSelfTarget(source)) return 'self_latest_message';
   return /(?:^|[\s,.:;!?()\-])(?:\u0441\u044e\u0434\u0430|\u043f\u0440\u044f\u043c\u043e\s+\u0441\u044e\u0434\u0430|right\s+here|here\s+itself)(?=$|[\s,.:;!?()\-])/i.test(source)
     ? 'source_message'
     : 'reply_to';
@@ -541,6 +547,33 @@ function parseDirectReactionRequest(text = '') {
       reaction_key: reactionKey || null,
       emoji: '',
       mode,
+    }],
+  };
+}
+
+function containsDirectPinIntent(text = '') {
+  const source = String(text || '');
+  return [
+    /(?:^|[\s,.:;!?()\-])(?:please\s+)?(?:pin|unpin)\b/i,
+    /(?:^|[\s,.:;!?()\-])(?:\u0437\u0430\u043a\u0440\u0435\u043f\u0438|\u0437\u0430\u043f\u0438\u043d\u044c|\u043f\u0440\u0438\u043a\u0440\u0435\u043f\u0438)(?=$|[\s,.:;!?()\-])/i,
+  ].some((pattern) => pattern.test(source));
+}
+
+function detectPinTarget(text = '') {
+  const source = String(text || '');
+  if (textMentionsSelfTarget(source)) return 'self_latest_message';
+  return 'reply_to';
+}
+
+function parseDirectPinRequest(text = '') {
+  const source = String(text || '').trim();
+  if (!source || !containsDirectPinIntent(source) || containsCreatePollIntent(source)) return null;
+  return {
+    reply_mode: 'none',
+    reply_text: '',
+    actions: [{
+      type: 'pin_message',
+      target: detectPinTarget(source),
     }],
   };
 }
@@ -626,6 +659,10 @@ function parseLooseActionPlanText(text = '') {
     const directReactionPlan = parseDirectReactionRequest(text);
     if (directReactionPlan?.actions?.length) actions.push(...directReactionPlan.actions);
   }
+  if (!actions.length && containsDirectPinIntent(text) && !containsCreatePollIntent(text)) {
+    const directPinPlan = parseDirectPinRequest(text);
+    if (directPinPlan?.actions?.length) actions.push(...directPinPlan.actions);
+  }
   if (!actions.length) return null;
   return {
     reply_mode: 'none',
@@ -640,4 +677,5 @@ module.exports = {
   parseDirectCreatePollRequest,
   parseDirectVoteRequest,
   parseDirectReactionRequest,
+  parseDirectPinRequest,
 };

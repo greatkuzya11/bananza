@@ -5,6 +5,7 @@ const {
   textLooksLikeCreatePollRequest,
   textLooksLikeVoteRequest,
   textLooksLikeReactRequest,
+  textLooksLikePinRequest,
   textLooksLikeChatActionRequest,
   shouldAttemptBotActionPlan,
 } = require('../ai/actionPlannerGate');
@@ -79,6 +80,11 @@ test('textLooksLikeReactRequest detects direct reaction commands', () => {
     textLooksLikeReactRequest('\u0433\u043e\u0432\u043d\u043e \u043f\u043e\u0441\u0442\u0430\u0432\u044c \u043d\u0430 \u044d\u0442\u043e \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435'),
     true
   );
+});
+
+test('textLooksLikePinRequest detects direct pin commands including self-pin', () => {
+  assert.equal(textLooksLikePinRequest('\u0437\u0430\u043f\u0438\u043d\u044c \u0441\u0435\u0431\u044f'), true);
+  assert.equal(textLooksLikeChatActionRequest('\u0437\u0430\u043f\u0438\u043d\u044c \u0441\u0435\u0431\u044f'), true);
 });
 
 test('textLooksLikeChatActionRequest ignores ordinary chat messages', () => {
