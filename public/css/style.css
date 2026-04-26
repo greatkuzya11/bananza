@@ -2946,6 +2946,7 @@ html[data-modal-animation="none"] .search-panel {
   appearance: none; -webkit-appearance: none;
   outline: none; box-shadow: none;
   -webkit-tap-highlight-color: transparent;
+  transition: background .16s ease, color .16s ease, transform .08s ease, box-shadow .16s ease, opacity .16s ease;
 }
 .modal-close:hover { background: var(--bg-hover); color: var(--text-primary); }
 .modal-close:focus,
@@ -2955,6 +2956,9 @@ html[data-modal-animation="none"] .search-panel {
   box-shadow: none;
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+.modal-close:active {
+  transform: translateY(1px) scale(.96);
 }
 .modal-tabs {
   display: flex; border-bottom: 1px solid var(--border-light);
@@ -3020,7 +3024,10 @@ select.modal-input optgroup {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.pw-toggle:active { color: var(--accent); }
+.pw-toggle:active {
+  color: var(--accent);
+  transform: translateY(calc(-50% + 1px)) scale(.96);
+}
 .pw-toggle:focus,
 .pw-toggle:focus-visible {
   outline: none;
@@ -3096,9 +3103,15 @@ select.modal-input optgroup {
 .btn-primary {
   width: 100%; padding: 10px; background: var(--accent); color: #fff;
   border: none; border-radius: 8px; font-size: 15px; font-weight: 600;
-  cursor: pointer; margin-top: 12px; transition: .2s;
+  cursor: pointer; margin-top: 12px;
+  transition: background .16s ease, color .16s ease, transform .08s ease, box-shadow .16s ease, opacity .16s ease;
+  box-shadow: 0 8px 18px rgba(0,0,0,.16);
 }
 .btn-primary:hover { background: var(--accent-hover); }
+.btn-primary:active {
+  transform: translateY(1px) scale(.986);
+  box-shadow: 0 4px 10px rgba(0,0,0,.14);
+}
 
 html[data-visual-mode="rich"] #sidebar {
   border-right: 1px solid var(--surface-outline);
@@ -3261,7 +3274,9 @@ html[data-visual-mode="rich"] .poll-card {
 .settings-item {
   display: flex; align-items: center; gap: 10px; width: 100%; padding: 14px 16px;
   background: var(--bg-input); border: none; border-radius: 8px; color: var(--text-primary);
-  font-size: 15px; cursor: pointer; transition: background .15s; margin-bottom: 6px;
+  font-size: 15px; cursor: pointer;
+  transition: background .15s ease, transform .08s ease, box-shadow .15s ease, opacity .15s ease;
+  margin-bottom: 6px;
   appearance: none; -webkit-appearance: none;
   outline: none; box-shadow: none;
   -webkit-tap-highlight-color: transparent;
@@ -3273,6 +3288,7 @@ html[data-visual-mode="rich"] .poll-card {
   outline: none;
   box-shadow: none;
   background: var(--bg-hover);
+  transform: translateY(1px) scale(.992);
 }
 .settings-toggle-item { cursor: default; justify-content: space-between; }
 .settings-toggle-item:hover { background: var(--bg-input); }
@@ -3819,6 +3835,8 @@ html[data-visual-mode="rich"] .poll-card {
 .weather-action-btn {
   padding: 0 12px; min-height: 40px; border: none; border-radius: 8px; background: var(--bg-input);
   color: var(--text-primary); font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: background .16s ease, color .16s ease, transform .08s ease, box-shadow .16s ease, opacity .16s ease;
+  box-shadow: 0 6px 14px rgba(0,0,0,.12);
 }
 .weather-action-btn:hover { background: var(--bg-hover); }
 .weather-action-btn:focus,
@@ -3826,6 +3844,9 @@ html[data-visual-mode="rich"] .poll-card {
 .weather-action-btn:active {
   outline: none;
   box-shadow: none;
+}
+.weather-action-btn:active {
+  transform: translateY(1px) scale(.986);
 }
 .weather-search-results {
   display: flex; flex-direction: column; gap: 4px; max-height: 170px; overflow-y: auto; margin: 8px 0;
@@ -3944,6 +3965,7 @@ html[data-visual-mode="rich"] .poll-card {
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
+  transition: background .16s ease, color .16s ease, transform .08s ease, box-shadow .16s ease, opacity .16s ease;
 }
 .sound-preview-btn:hover,
 .sound-preview-all:hover { background: var(--accent-soft-bg); color: var(--accent); }
@@ -3955,6 +3977,10 @@ html[data-visual-mode="rich"] .poll-card {
 .sound-preview-all:active {
   outline: none;
   box-shadow: none;
+}
+.sound-preview-btn:active,
+.sound-preview-all:active {
+  transform: translateY(1px) scale(.986);
 }
 .sound-preview-all {
   width: auto;
@@ -4065,6 +4091,9 @@ html[data-visual-mode="rich"] .poll-card {
   margin: 0;
   min-height: 40px;
   padding: 0 14px;
+}
+.admin-action-status {
+  margin-top: 8px;
 }
 .grok-risk-modal-body {
   display: flex;
@@ -4235,6 +4264,10 @@ html[data-visual-mode="rich"] .poll-card {
 }
 .chat-preferences-status.is-success { color: var(--success); }
 .chat-preferences-status.is-error { color: var(--danger); }
+
+:is(.theme-settings-status, .weather-settings-status, .notification-settings-status, .sound-settings-status, .ai-bot-status, .chat-preferences-status, .admin-action-status).is-pending {
+  color: var(--accent);
+}
 .chat-danger-section {
   border-top: 1px solid var(--border-light);
   padding-top: 12px;
@@ -4331,15 +4364,32 @@ html[data-visual-mode="rich"] .poll-card {
 .btn-text {
   background: none; border: none; color: var(--danger); font-size: 13px;
   cursor: pointer; padding: 4px 8px; margin-bottom: 8px;
+  transition: color .16s ease, opacity .16s ease, transform .08s ease;
 }
 .btn-text:hover { text-decoration: underline; }
+.btn-text:active {
+  transform: translateY(1px);
+}
 
 .btn-sm {
   padding: 8px 16px; background: var(--accent); color: #fff; border: none;
   border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
   white-space: nowrap; flex-shrink: 0;
+  transition: background .16s ease, color .16s ease, transform .08s ease, box-shadow .16s ease, opacity .16s ease;
+  box-shadow: 0 8px 18px rgba(0,0,0,.16);
 }
 .btn-sm:hover { background: var(--accent-hover); }
+.btn-sm:active {
+  transform: translateY(1px) scale(.986);
+  box-shadow: 0 4px 10px rgba(0,0,0,.14);
+}
+
+:is(.btn-primary, .weather-action-btn, .btn-sm, .btn-text, .voice-inline-btn, .sound-preview-btn, .sound-preview-all, .settings-item, .modal-close).is-pending {
+  cursor: wait;
+  opacity: .9;
+  transform: translateY(1px);
+  box-shadow: 0 3px 8px rgba(0,0,0,.12);
+}
 
 .profile-form { width: 100%; }
 .profile-form .field-group { margin-bottom: 16px; }

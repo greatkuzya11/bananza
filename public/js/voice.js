@@ -304,10 +304,10 @@
       input.value = '';
       input.focus();
     });
-    document.getElementById('voiceDeleteKeyBtn')?.addEventListener('click', deleteOpenAIKey);
-    document.getElementById('voiceDeleteGrokKeyBtn')?.addEventListener('click', deleteGrokKey);
-    document.getElementById('voiceSaveSettingsBtn')?.addEventListener('click', saveVoiceSettings);
-    document.getElementById('voiceTestModelBtn')?.addEventListener('click', testCurrentModel);
+    bindAsyncActionButtons('voiceDeleteKeyBtn', null, 'Deleting...', deleteOpenAIKey);
+    bindAsyncActionButtons('voiceDeleteGrokKeyBtn', null, 'Deleting...', deleteGrokKey);
+    bindAsyncActionButtons('voiceSaveSettingsBtn', null, 'Saving...', saveVoiceSettings);
+    bindAsyncActionButtons('voiceTestModelBtn', null, 'Testing...', testCurrentModel);
   }
 
   async function refreshPublicFeatures() {
@@ -443,6 +443,65 @@
     }
     el.className = `voice-admin-status ${kind || ''}`;
     el.textContent = message;
+  }
+
+  function resolveActionButtons(targetIds) {
+    const ids = Array.isArray(targetIds) ? targetIds : [targetIds];
+    return ids
+      .map((targetId) => (typeof targetId === 'string' ? document.getElementById(targetId) : targetId))
+      .filter(Boolean);
+  }
+
+  function setActionButtonsPending(targetIds, pending = false, pendingLabel = '') {
+    const buttons = resolveActionButtons(targetIds);
+    buttons.forEach((btn) => {
+      if (pending) {
+        btn.dataset.pendingRestoreLabel = btn.textContent || '';
+        btn.dataset.pendingRestoreDisabled = btn.disabled ? '1' : '0';
+        btn.dataset.adminBusy = '1';
+        btn.disabled = true;
+        btn.classList.add('is-pending');
+        btn.setAttribute('aria-busy', 'true');
+        if (pendingLabel) btn.textContent = pendingLabel;
+        return;
+      }
+      const restoreDisabled = btn.dataset.pendingRestoreDisabled === '1';
+      if (Object.prototype.hasOwnProperty.call(btn.dataset, 'pendingRestoreLabel')) {
+        btn.textContent = btn.dataset.pendingRestoreLabel;
+      }
+      btn.disabled = restoreDisabled;
+      btn.classList.remove('is-pending');
+      btn.removeAttribute('aria-busy');
+      delete btn.dataset.adminBusy;
+      delete btn.dataset.pendingRestoreLabel;
+      delete btn.dataset.pendingRestoreDisabled;
+    });
+    return buttons;
+  }
+
+  async function withActionButtons(targetIds, pendingLabel, task) {
+    const buttons = resolveActionButtons(targetIds);
+    if (buttons.some((btn) => btn.dataset.adminBusy === '1')) return;
+    setActionButtonsPending(buttons, true, pendingLabel);
+    try {
+      return await task();
+    } finally {
+      setActionButtonsPending(buttons, false);
+    }
+  }
+
+  function bindAsyncActionButtons(triggerIds, targetIds, pendingLabel, task) {
+    const triggers = resolveActionButtons(triggerIds);
+    const busyTargets = targetIds == null ? triggerIds : targetIds;
+    triggers.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        withActionButtons(busyTargets, pendingLabel, async () => {
+          await task();
+        }).catch((error) => {
+          console.error('Voice admin action failed', error);
+        });
+      });
+    });
   }
 
   async function loadAdminSettings() {

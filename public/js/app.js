@@ -233,6 +233,7 @@
     image: ['gpt-image-2', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini'],
     error: '',
   };
+  let aiModelRefreshTriggeredByButton = false;
   let selectedAiBotId = null;
   let openAiUniversalState = {
     settings: { ...aiBotState.settings },
@@ -3041,11 +3042,7 @@
   }
 
   function setWeatherStatus(message, type = '') {
-    const el = $('#settingsWeatherStatus');
-    if (!el) return;
-    el.textContent = message || '';
-    el.classList.toggle('is-error', type === 'error');
-    el.classList.toggle('is-success', type === 'success');
+    setInlineStatus('settingsWeatherStatus', message, type);
   }
 
   function renderWeatherSettingsForm(draft = {}) {
@@ -3199,11 +3196,7 @@
   }
 
   function setNotificationStatus(message, type = '') {
-    const el = $('#settingsNotificationsStatus');
-    if (!el) return;
-    el.textContent = message || '';
-    el.classList.toggle('is-error', type === 'error');
-    el.classList.toggle('is-success', type === 'success');
+    setInlineStatus('settingsNotificationsStatus', message, type);
   }
 
   function notificationPermissionLabel() {
@@ -3399,11 +3392,7 @@
   }
 
   function setSoundStatus(message, type = '') {
-    const el = $('#settingsSoundsStatus');
-    if (!el) return;
-    el.textContent = message || '';
-    el.classList.toggle('is-error', type === 'error');
-    el.classList.toggle('is-success', type === 'success');
+    setInlineStatus('settingsSoundsStatus', message, type);
   }
 
   function renderSoundSettingsForm() {
@@ -4149,28 +4138,108 @@
     });
   }
 
-  function setOpenAiStatus(statusId, message, type = '') {
-    const el = $(statusId);
-    if (!el) return;
-    el.textContent = message || '';
-    el.classList.toggle('is-error', type === 'error');
-    el.classList.toggle('is-success', type === 'success');
+  function resolveUiTarget(target) {
+    if (!target) return null;
+    if (typeof target !== 'string') return target;
+    if (target.startsWith('#')) return document.querySelector(target);
+    return document.getElementById(target) || document.querySelector(target);
   }
 
-  function setAiBotSettingsStatus(message, type = '') {
+  function setInlineStatus(targetIds, message, type = '') {
+    const ids = Array.isArray(targetIds) ? targetIds : [targetIds];
+    ids.forEach((targetId) => {
+      const el = resolveUiTarget(targetId);
+      if (!el) return;
+      el.textContent = message || '';
+      el.classList.toggle('is-error', type === 'error');
+      el.classList.toggle('is-success', type === 'success');
+      el.classList.toggle('is-pending', type === 'pending');
+    });
+  }
+
+  function resolveActionButtons(targetIds) {
+    const ids = Array.isArray(targetIds) ? targetIds : [targetIds];
+    return ids.map((targetId) => resolveUiTarget(targetId)).filter(Boolean);
+  }
+
+  function setActionButtonsPending(targetIds, pending = false, pendingLabel = '') {
+    const buttons = resolveActionButtons(targetIds);
+    buttons.forEach((btn) => {
+      if (pending) {
+        btn.dataset.pendingRestoreLabel = btn.textContent || '';
+        btn.dataset.pendingRestoreDisabled = btn.disabled ? '1' : '0';
+        btn.dataset.adminBusy = '1';
+        btn.disabled = true;
+        btn.classList.add('is-pending');
+        btn.setAttribute('aria-busy', 'true');
+        if (pendingLabel) btn.textContent = pendingLabel;
+        return;
+      }
+      const restoreDisabled = btn.dataset.pendingRestoreDisabled === '1';
+      if (Object.prototype.hasOwnProperty.call(btn.dataset, 'pendingRestoreLabel')) {
+        btn.textContent = btn.dataset.pendingRestoreLabel;
+      }
+      btn.disabled = restoreDisabled;
+      btn.classList.remove('is-pending');
+      btn.removeAttribute('aria-busy');
+      delete btn.dataset.adminBusy;
+      delete btn.dataset.pendingRestoreLabel;
+      delete btn.dataset.pendingRestoreDisabled;
+    });
+    return buttons;
+  }
+
+  async function withActionButtons(targetIds, pendingLabel, task) {
+    const buttons = resolveActionButtons(targetIds);
+    if (buttons.some((btn) => btn.dataset.adminBusy === '1')) return;
+    setActionButtonsPending(buttons, true, pendingLabel);
+    try {
+      return await task();
+    } finally {
+      setActionButtonsPending(buttons, false);
+    }
+  }
+
+  function bindAsyncActionButtons(triggerIds, targetIds, pendingLabel, task) {
+    const triggers = resolveActionButtons(triggerIds);
+    const busyTargets = targetIds == null ? triggerIds : targetIds;
+    triggers.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        withActionButtons(busyTargets, pendingLabel, async () => {
+          await task();
+        }).catch((error) => {
+          console.error('Admin action failed', error);
+        });
+      });
+    });
+  }
+
+  function setOpenAiStatus(statusId, message, type = '') {
+    setInlineStatus(statusId, message, type);
+  }
+
+  function setAiBotModalStatus(message, type = '') {
     setOpenAiStatus('aiBotsStatus', message, type);
   }
 
+  function setAiBotSettingsStatus(message, type = '') {
+    setOpenAiStatus('aiBotsProviderStatus', message, type);
+  }
+
   function setAiBotStatus(message, type = '') {
+    setOpenAiStatus(['aiBotEditorStatus', 'aiBotEditorStatusBottom'], message, type);
+  }
+
+  function setAiBotTextModalStatus(message, type = '') {
     setOpenAiStatus('openAiTextStatus', message, type);
   }
 
+  function setAiBotChatStatus(message, type = '') {
+    setOpenAiStatus('aiBotChatStatus', message, type);
+  }
+
   function setAiModelStatus(message, type = '') {
-    const el = $('#aiBotsModelStatus');
-    if (!el) return;
-    el.textContent = message || '';
-    el.classList.toggle('is-error', type === 'error');
-    el.classList.toggle('is-success', type === 'success');
+    setOpenAiStatus('aiBotsModelStatus', message, type);
   }
 
   function uniqueAiModelValues(values = []) {
@@ -4238,25 +4307,54 @@
   }
 
   async function loadAiModelOptions(refresh = false) {
-    const data = await api(`/api/admin/ai-bots/models${refresh ? '?refresh=1' : ''}`);
-    aiModelCatalog = {
-      source: data.source || 'fallback',
-      response: data.response || aiModelCatalog.response,
-      summary: data.summary || data.response || aiModelCatalog.summary,
-      embedding: data.embedding || aiModelCatalog.embedding,
-      image: data.image || aiModelCatalog.image,
-      error: data.error || '',
-      fetched_at: data.fetched_at || '',
-    };
-    renderAiModelOptions(currentAiBot());
-    if (aiModelCatalog.source === 'openai') {
-      setAiModelStatus(aiModelCatalog.fetched_at ? `Модели загружены: ${aiModelCatalog.fetched_at}` : 'Модели загружены', 'success');
-    } else if (aiModelCatalog.error) {
-      setAiModelStatus(`Fallback models: ${aiModelCatalog.error}`, 'error');
-    } else {
-      setAiModelStatus('Fallback models');
+    const showActionStatus = refresh && aiModelRefreshTriggeredByButton;
+    if (showActionStatus) {
+      setActionButtonsPending('aiBotsRefreshModels', true, 'Refreshing...');
+      setAiBotSettingsStatus('Refreshing models...', 'pending');
     }
-    return aiModelCatalog;
+    try {
+      const data = await api(`/api/admin/ai-bots/models${refresh ? '?refresh=1' : ''}`);
+      aiModelCatalog = {
+        source: data.source || 'fallback',
+        response: data.response || aiModelCatalog.response,
+        summary: data.summary || data.response || aiModelCatalog.summary,
+        embedding: data.embedding || aiModelCatalog.embedding,
+        image: data.image || aiModelCatalog.image,
+        error: data.error || '',
+        fetched_at: data.fetched_at || '',
+      };
+      renderAiModelOptions(currentAiBot());
+      if (aiModelCatalog.source === 'openai') {
+        setAiModelStatus(aiModelCatalog.fetched_at ? `Модели загружены: ${aiModelCatalog.fetched_at}` : 'Модели загружены', 'success');
+      } else if (aiModelCatalog.error) {
+        setAiModelStatus(`Fallback models: ${aiModelCatalog.error}`, 'error');
+      } else {
+        setAiModelStatus('Fallback models');
+      }
+      if (showActionStatus) {
+        if (aiModelCatalog.source === 'openai') {
+          setAiBotSettingsStatus(
+            aiModelCatalog.fetched_at ? `Models refreshed: ${aiModelCatalog.fetched_at}` : 'Models refreshed',
+            'success'
+          );
+        } else if (aiModelCatalog.error) {
+          setAiBotSettingsStatus(`Fallback models: ${aiModelCatalog.error}`, 'error');
+        } else {
+          setAiBotSettingsStatus('Fallback model list is shown');
+        }
+      }
+      return aiModelCatalog;
+    } catch (error) {
+      if (showActionStatus) {
+        setAiBotSettingsStatus(error.message || 'Could not refresh models', 'error');
+      }
+      throw error;
+    } finally {
+      if (showActionStatus) {
+        aiModelRefreshTriggeredByButton = false;
+        setActionButtonsPending('aiBotsRefreshModels', false);
+      }
+    }
   }
 
   function mergeAiBotState(data = {}) {
@@ -4284,8 +4382,16 @@
     return aiBotState.bots.find(bot => bot.id === selectedAiBotId) || null;
   }
 
-  function setOpenAiUniversalStatus(message, type = '') {
+  function setOpenAiUniversalModalStatus(message, type = '') {
     setOpenAiStatus('openAiUniversalStatus', message, type);
+  }
+
+  function setOpenAiUniversalStatus(message, type = '') {
+    setOpenAiStatus(['openAiUniversalBotEditorStatus', 'openAiUniversalBotEditorStatusBottom'], message, type);
+  }
+
+  function setOpenAiUniversalChatStatus(message, type = '') {
+    setOpenAiStatus('openAiUniversalBotChatStatus', message, type);
   }
 
   function mergeOpenAiUniversalState(data = {}) {
@@ -4918,9 +5024,9 @@
     const chatId = Number($('#aiBotChatSelect')?.value || 0);
     const botId = Number($('#aiBotChatBotSelect')?.value || 0);
     const botExists = aiBotState.bots.some(bot => Number(bot.id) === botId);
-    if (!chatId || !botId) { setAiBotStatus('Выберите чат и бота', 'error'); return; }
+    if (!chatId || !botId) { setAiBotChatStatus('Выберите чат и бота', 'error'); return; }
     if (!botExists) {
-      setAiBotStatus('Сначала сохраните бота', 'error');
+      setAiBotChatStatus('Сначала сохраните бота', 'error');
       await loadAiBotState().catch(() => {});
       return;
     }
@@ -4939,9 +5045,9 @@
       });
       mergeAiBotState(data);
       renderAiChatBotSettings();
-      setAiBotStatus('Настройки чата сохранены', 'success');
+      setAiBotChatStatus('Настройки чата сохранены', 'success');
     } catch (e) {
-      setAiBotStatus(e.message || 'Не удалось сохранить настройки чата', 'error');
+      setAiBotChatStatus(e.message || 'Не удалось сохранить настройки чата', 'error');
     }
   }
 
@@ -5107,9 +5213,9 @@
     const chatId = Number($('#openAiUniversalBotChatSelect')?.value || 0);
     const botId = Number($('#openAiUniversalBotChatBotSelect')?.value || 0);
     const botExists = openAiUniversalState.bots.some(bot => Number(bot.id) === Number(botId));
-    if (!chatId || !botId) { setOpenAiUniversalStatus('Choose chat and bot', 'error'); return; }
+    if (!chatId || !botId) { setOpenAiUniversalChatStatus('Choose chat and bot', 'error'); return; }
     if (!botExists) {
-      setOpenAiUniversalStatus('Save the bot first', 'error');
+      setOpenAiUniversalChatStatus('Save the bot first', 'error');
       await loadOpenAiUniversalState().catch(() => {});
       return;
     }
@@ -5127,26 +5233,30 @@
       });
       mergeOpenAiUniversalState(data);
       renderOpenAiUniversalChatBotSettings();
-      setOpenAiUniversalStatus('Chat settings saved', 'success');
+      setOpenAiUniversalChatStatus('Chat settings saved', 'success');
     } catch (e) {
-      setOpenAiUniversalStatus(e.message || 'Could not save chat settings', 'error');
+      setOpenAiUniversalChatStatus(e.message || 'Could not save chat settings', 'error');
     }
   }
 
   function setDeepseekAiStatus(message, type = '') {
-    const el = $('#deepseekAiStatus');
-    if (!el) return;
-    el.textContent = message || '';
-    el.classList.toggle('is-error', type === 'error');
-    el.classList.toggle('is-success', type === 'success');
+    setInlineStatus('deepseekAiStatus', message, type);
+  }
+
+  function setDeepseekAiProviderStatus(message, type = '') {
+    setInlineStatus('deepseekAiProviderStatus', message, type);
+  }
+
+  function setDeepseekBotStatus(message, type = '') {
+    setInlineStatus('deepseekAiBotEditorStatus', message, type);
+  }
+
+  function setDeepseekChatStatus(message, type = '') {
+    setInlineStatus('deepseekAiBotChatStatus', message, type);
   }
 
   function setDeepseekAiModelStatus(message, type = '') {
-    const el = $('#deepseekAiModelStatus');
-    if (!el) return;
-    el.textContent = message || '';
-    el.classList.toggle('is-error', type === 'error');
-    el.classList.toggle('is-success', type === 'success');
+    setInlineStatus('deepseekAiModelStatus', message, type);
   }
 
   function currentDeepseekBot() {
@@ -5344,13 +5454,13 @@
   }
 
   async function saveDeepseekAiSettings() {
-    setDeepseekAiStatus('Saving...');
+    setDeepseekAiProviderStatus('Saving...', 'pending');
     try {
       await persistDeepseekAiSettings();
       renderDeepseekAiSettings();
-      setDeepseekAiStatus(`Settings saved\n${providerInteractiveSummary('deepseek', deepseekBotState.settings)}`, 'success');
+      setDeepseekAiProviderStatus(`Settings saved\n${providerInteractiveSummary('deepseek', deepseekBotState.settings)}`, 'success');
     } catch (e) {
-      setDeepseekAiStatus(e.message || 'Could not save settings', 'error');
+      setDeepseekAiProviderStatus(e.message || 'Could not save settings', 'error');
     }
   }
 
@@ -5358,11 +5468,11 @@
     const keyInput = $('#deepseekAiApiKey');
     const hasKey = Boolean(keyInput?.value.trim() || deepseekBotState.settings?.has_deepseek_key);
     if (!hasKey) {
-      setDeepseekAiStatus('Enter DeepSeek API key before testing.', 'error');
+      setDeepseekAiProviderStatus('Enter DeepSeek API key before testing.', 'error');
       keyInput?.focus();
       return;
     }
-    setDeepseekAiStatus('Checking DeepSeek connection...');
+    setDeepseekAiProviderStatus('Checking DeepSeek connection...', 'pending');
     try {
       const data = await api('/api/admin/deepseek-ai-bots/test-connection', {
         method: 'POST',
@@ -5372,9 +5482,9 @@
       if (data.state?.models) mergeDeepseekAiState({ state: { models: data.state.models } });
       renderDeepseekAiSettings();
       const text = String(data.result?.text || '').replace(/\s+/g, ' ').trim().slice(0, 180);
-      setDeepseekAiStatus(`Key verified (${data.result?.latencyMs || 0} ms). ${text}`, 'success');
+      setDeepseekAiProviderStatus(`Key verified (${data.result?.latencyMs || 0} ms). ${text}`, 'success');
     } catch (e) {
-      setDeepseekAiStatus(formatUiErrorMessage(e, 'Could not check DeepSeek key'), 'error');
+      setDeepseekAiProviderStatus(formatUiErrorMessage(e, 'Could not check DeepSeek key'), 'error');
     }
   }
 
@@ -5382,11 +5492,11 @@
     const keyInput = $('#deepseekAiApiKey');
     const hasKey = Boolean(keyInput?.value.trim() || deepseekBotState.settings?.has_deepseek_key);
     if (!hasKey) {
-      setDeepseekAiStatus('Enter or save DeepSeek API key before loading models.', 'error');
+      setDeepseekAiProviderStatus('Enter or save DeepSeek API key before loading models.', 'error');
       keyInput?.focus();
       return;
     }
-    setDeepseekAiStatus('Loading DeepSeek models...');
+    setDeepseekAiProviderStatus('Loading DeepSeek models...', 'pending');
     try {
       const data = await api('/api/admin/deepseek-ai-bots/models/refresh', {
         method: 'POST',
@@ -5394,9 +5504,9 @@
       });
       mergeDeepseekAiState(data);
       renderDeepseekAiSettings();
-      setDeepseekAiStatus(`Models refreshed: ${deepseekBotState.models?.response?.length || 0}.`, 'success');
+      setDeepseekAiProviderStatus(`Models refreshed: ${deepseekBotState.models?.response?.length || 0}.`, 'success');
     } catch (e) {
-      setDeepseekAiStatus(formatUiErrorMessage(e, 'Could not load DeepSeek models'), 'error');
+      setDeepseekAiProviderStatus(formatUiErrorMessage(e, 'Could not load DeepSeek models'), 'error');
     }
   }
 
@@ -5406,16 +5516,16 @@
       const data = await api('/api/admin/deepseek-ai-bots/key', { method: 'DELETE' });
       mergeDeepseekAiState(data);
       renderDeepseekAiSettings();
-      setDeepseekAiStatus('Key deleted', 'success');
+      setDeepseekAiProviderStatus('Key deleted', 'success');
     } catch (e) {
-      setDeepseekAiStatus(e.message || 'Could not delete key', 'error');
+      setDeepseekAiProviderStatus(e.message || 'Could not delete key', 'error');
     }
   }
 
   async function saveDeepseekBot() {
     const payload = deepseekBotFormPayload();
-    if (!payload.name) { setDeepseekAiStatus('Enter bot name', 'error'); return; }
-    setDeepseekAiStatus('Saving bot...');
+    if (!payload.name) { setDeepseekBotStatus('Enter bot name', 'error'); return; }
+    setDeepseekBotStatus('Saving bot...', 'pending');
     try {
       await persistDeepseekAiSettings();
       const shouldUpdate = Boolean(selectedDeepseekBotId && deepseekBotState.bots.some(bot => Number(bot.id) === Number(selectedDeepseekBotId)));
@@ -5436,22 +5546,22 @@
       }
       renderDeepseekAiSettings();
       const status = buildVerifiedBotSaveStatus('Bot saved.', data.bot, payload, formatCapabilityState(data.bot || payload));
-      setDeepseekAiStatus(status.message, status.type);
+      setDeepseekBotStatus(status.message, status.type);
     } catch (e) {
-      setDeepseekAiStatus(e.message || 'Could not save bot', 'error');
+      setDeepseekBotStatus(e.message || 'Could not save bot', 'error');
     }
   }
 
   async function uploadDeepseekBotAvatar(file) {
     if (!file) return;
     if (!selectedDeepseekBotId) {
-      setDeepseekAiStatus('Save the bot before adding an avatar', 'error');
+      setDeepseekBotStatus('Save the bot before adding an avatar', 'error');
       renderDeepseekBotAvatar(null);
       return;
     }
     const fd = new FormData();
     fd.append('avatar', file);
-    setDeepseekAiStatus('Uploading avatar...');
+    setDeepseekBotStatus('Uploading avatar...', 'pending');
     try {
       const data = await api(`/api/admin/deepseek-ai-bots/${selectedDeepseekBotId}/avatar`, { method: 'POST', body: fd });
       mergeDeepseekAiState(data);
@@ -5470,9 +5580,9 @@
       renderDeepseekBotAvatar(currentDeepseekBot());
       refreshRenderedAiBotAvatar(data.bot);
       renderDeepseekChatBotSettings();
-      setDeepseekAiStatus('Avatar saved', 'success');
+      setDeepseekBotStatus('Avatar saved', 'success');
     } catch (e) {
-      setDeepseekAiStatus(e.message || 'Could not upload avatar', 'error');
+      setDeepseekBotStatus(e.message || 'Could not upload avatar', 'error');
       renderDeepseekBotAvatar(currentDeepseekBot());
     }
   }
@@ -5497,9 +5607,9 @@
       renderDeepseekBotAvatar(currentDeepseekBot());
       refreshRenderedAiBotAvatar(data.bot);
       renderDeepseekChatBotSettings();
-      setDeepseekAiStatus('Avatar removed', 'success');
+      setDeepseekBotStatus('Avatar removed', 'success');
     } catch (e) {
-      setDeepseekAiStatus(e.message || 'Could not remove avatar', 'error');
+      setDeepseekBotStatus(e.message || 'Could not remove avatar', 'error');
     }
   }
 
@@ -5510,28 +5620,28 @@
       const data = await api(`/api/admin/deepseek-ai-bots/${selectedDeepseekBotId}`, { method: 'DELETE' });
       mergeDeepseekAiState(data);
       renderDeepseekAiSettings();
-      setDeepseekAiStatus('Bot disabled', 'success');
+      setDeepseekBotStatus('Bot disabled', 'success');
     } catch (e) {
-      setDeepseekAiStatus(e.message || 'Could not disable bot', 'error');
+      setDeepseekBotStatus(e.message || 'Could not disable bot', 'error');
     }
   }
 
   async function testDeepseekBot() {
-    if (!selectedDeepseekBotId) { setDeepseekAiStatus('Save the bot first', 'error'); return; }
-    setDeepseekAiStatus('Testing model...');
+    if (!selectedDeepseekBotId) { setDeepseekBotStatus('Save the bot first', 'error'); return; }
+    setDeepseekBotStatus('Testing model...', 'pending');
     try {
       await persistDeepseekAiSettings();
       const data = await api(`/api/admin/deepseek-ai-bots/${selectedDeepseekBotId}/test`, { method: 'POST', body: {} });
       const text = data.result?.text ? data.result.text.slice(0, 500) : '';
-      setDeepseekAiStatus(`Success (${data.result?.latencyMs || 0} ms): ${text}`, 'success');
+      setDeepseekBotStatus(`Success (${data.result?.latencyMs || 0} ms): ${text}`, 'success');
     } catch (e) {
-      setDeepseekAiStatus(e.message || 'Test failed', 'error');
+      setDeepseekBotStatus(e.message || 'Test failed', 'error');
     }
   }
 
   async function exportDeepseekBotJson() {
-    if (!selectedDeepseekBotId) { setDeepseekAiStatus('Choose a saved bot first', 'error'); return; }
-    setDeepseekAiStatus('Preparing JSON...');
+    if (!selectedDeepseekBotId) { setDeepseekBotStatus('Choose a saved bot first', 'error'); return; }
+    setDeepseekBotStatus('Preparing JSON...', 'pending');
     try {
       const headers = {};
       if (token) headers.Authorization = 'Bearer ' + token;
@@ -5553,15 +5663,15 @@
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-      setDeepseekAiStatus('JSON exported', 'success');
+      setDeepseekBotStatus('JSON exported', 'success');
     } catch (e) {
-      setDeepseekAiStatus(e.message || 'Could not export JSON', 'error');
+      setDeepseekBotStatus(e.message || 'Could not export JSON', 'error');
     }
   }
 
   async function importDeepseekBotJsonFile(file) {
     if (!file) return;
-    setDeepseekAiStatus('Importing JSON...');
+    setDeepseekBotStatus('Importing JSON...', 'pending');
     try {
       const raw = await file.text();
       const payload = JSON.parse(raw);
@@ -5570,9 +5680,9 @@
       selectedDeepseekBotId = data.bot?.id || selectedDeepseekBotId;
       renderDeepseekAiSettings();
       const warnings = Array.isArray(data.warnings) && data.warnings.length ? ` ${data.warnings.join(' ')}` : '';
-      setDeepseekAiStatus(`Bot imported.${warnings}`, warnings ? 'error' : 'success');
+      setDeepseekBotStatus(`Bot imported.${warnings}`, warnings ? 'error' : 'success');
     } catch (e) {
-      setDeepseekAiStatus(e.message || 'Could not import JSON', 'error');
+      setDeepseekBotStatus(e.message || 'Could not import JSON', 'error');
     } finally {
       const input = $('#deepseekAiBotImportFile');
       if (input) input.value = '';
@@ -5583,9 +5693,9 @@
     const chatId = Number($('#deepseekAiBotChatSelect')?.value || 0);
     const botId = Number($('#deepseekAiBotChatBotSelect')?.value || 0);
     const botExists = deepseekBotState.bots.some(bot => Number(bot.id) === botId);
-    if (!chatId || !botId) { setDeepseekAiStatus('Choose chat and bot', 'error'); return; }
+    if (!chatId || !botId) { setDeepseekChatStatus('Choose chat and bot', 'error'); return; }
     if (!botExists) {
-      setDeepseekAiStatus('Save the bot first', 'error');
+      setDeepseekChatStatus('Save the bot first', 'error');
       await loadDeepseekAiState().catch(() => {});
       return;
     }
@@ -5604,26 +5714,30 @@
       });
       mergeDeepseekAiState(data);
       renderDeepseekChatBotSettings();
-      setDeepseekAiStatus('Chat settings saved', 'success');
+      setDeepseekChatStatus('Chat settings saved', 'success');
     } catch (e) {
-      setDeepseekAiStatus(e.message || 'Could not save chat settings', 'error');
+      setDeepseekChatStatus(e.message || 'Could not save chat settings', 'error');
     }
   }
 
   function setYandexAiStatus(message, type = '') {
-    const el = $('#yandexAiStatus');
-    if (!el) return;
-    el.textContent = message || '';
-    el.classList.toggle('is-error', type === 'error');
-    el.classList.toggle('is-success', type === 'success');
+    setInlineStatus('yandexAiStatus', message, type);
+  }
+
+  function setYandexAiProviderStatus(message, type = '') {
+    setInlineStatus('yandexAiProviderStatus', message, type);
+  }
+
+  function setYandexBotStatus(message, type = '') {
+    setInlineStatus('yandexAiBotEditorStatus', message, type);
+  }
+
+  function setYandexChatStatus(message, type = '') {
+    setInlineStatus('yandexAiBotChatStatus', message, type);
   }
 
   function setYandexAiModelStatus(message, type = '') {
-    const el = $('#yandexAiModelStatus');
-    if (!el) return;
-    el.textContent = message || '';
-    el.classList.toggle('is-error', type === 'error');
-    el.classList.toggle('is-success', type === 'success');
+    setInlineStatus('yandexAiModelStatus', message, type);
   }
 
   function formatUiErrorMessage(value, fallback = 'Unexpected error') {
@@ -5865,13 +5979,13 @@
   }
 
   async function saveYandexAiSettings() {
-    setYandexAiStatus('Saving...');
+    setYandexAiProviderStatus('Saving...', 'pending');
     try {
       await persistYandexAiSettings();
       renderYandexAiSettings();
-      setYandexAiStatus(`Settings saved\n${providerInteractiveSummary('yandex', yandexBotState.settings)}`, 'success');
+      setYandexAiProviderStatus(`Settings saved\n${providerInteractiveSummary('yandex', yandexBotState.settings)}`, 'success');
     } catch (e) {
-      setYandexAiStatus(e.message || 'Could not save settings', 'error');
+      setYandexAiProviderStatus(e.message || 'Could not save settings', 'error');
     }
   }
 
@@ -5881,18 +5995,18 @@
     const folderId = folderInput?.value.trim();
     const hasKey = Boolean(keyInput?.value.trim() || yandexBotState.settings?.has_yandex_key);
     if (!folderId) {
-      setYandexAiStatus('Введите идентификатор каталога Yandex Cloud в поле Folder ID.', 'error');
+      setYandexAiProviderStatus('Введите идентификатор каталога Yandex Cloud в поле Folder ID.', 'error');
       setYandexAiModelStatus('Folder ID нужен для modelUri: gpt://<folder_ID>/yandexgpt/latest.', 'error');
       folderInput?.focus();
       return;
     }
     if (!hasKey) {
-      setYandexAiStatus('Введите Yandex API key перед проверкой.', 'error');
+      setYandexAiProviderStatus('Введите Yandex API key перед проверкой.', 'error');
       keyInput?.focus();
       return;
     }
 
-    setYandexAiStatus('Checking Yandex connection...');
+    setYandexAiProviderStatus('Checking Yandex connection...', 'pending');
     try {
       const data = await api('/api/admin/yandex-ai-bots/test-connection', {
         method: 'POST',
@@ -5905,7 +6019,7 @@
       const latency = data.result?.latencyMs || 0;
       const models = yandexBotState.models || {};
       const modelNote = models.source === 'live' ? ` Моделей в селекторе: ${models.response?.length || 0}.` : '';
-      setYandexAiStatus(`Ключ проверен и сохранен (${latency} ms). ${text}${modelNote}`, 'success');
+      setYandexAiProviderStatus(`Ключ проверен и сохранен (${latency} ms). ${text}${modelNote}`, 'success');
       setYandexAiModelStatus(
         models.error
           ? `Key OK. Model list fallback is used: ${formatUiErrorMessage(models.error, 'Could not load Yandex models')}`
@@ -5913,7 +6027,7 @@
         models.error ? 'error' : 'success'
       );
     } catch (e) {
-      setYandexAiStatus(formatUiErrorMessage(e, 'Could not check Yandex key'), 'error');
+      setYandexAiProviderStatus(formatUiErrorMessage(e, 'Could not check Yandex key'), 'error');
     }
   }
 
@@ -5923,17 +6037,17 @@
     const folderId = folderInput?.value.trim();
     const hasKey = Boolean(keyInput?.value.trim() || yandexBotState.settings?.has_yandex_key);
     if (!folderId) {
-      setYandexAiStatus('Введите идентификатор каталога Yandex Cloud в поле Folder ID.', 'error');
+      setYandexAiProviderStatus('Введите идентификатор каталога Yandex Cloud в поле Folder ID.', 'error');
       folderInput?.focus();
       return;
     }
     if (!hasKey) {
-      setYandexAiStatus('Введите или сохраните Yandex API key перед загрузкой моделей.', 'error');
+      setYandexAiProviderStatus('Введите или сохраните Yandex API key перед загрузкой моделей.', 'error');
       keyInput?.focus();
       return;
     }
 
-    setYandexAiStatus('Loading Yandex models...');
+    setYandexAiProviderStatus('Loading Yandex models...', 'pending');
     try {
       const data = await api('/api/admin/yandex-ai-bots/models/refresh', {
         method: 'POST',
@@ -5941,9 +6055,9 @@
       });
       mergeYandexAiState(data);
       renderYandexAiSettings();
-      setYandexAiStatus(`Модели обновлены: ${yandexBotState.models?.response?.length || 0} в селекторе.`, 'success');
+      setYandexAiProviderStatus(`Модели обновлены: ${yandexBotState.models?.response?.length || 0} в селекторе.`, 'success');
     } catch (e) {
-      setYandexAiStatus(formatUiErrorMessage(e, 'Could not load Yandex models'), 'error');
+      setYandexAiProviderStatus(formatUiErrorMessage(e, 'Could not load Yandex models'), 'error');
     }
   }
 
@@ -5953,16 +6067,16 @@
       const data = await api('/api/admin/yandex-ai-bots/key', { method: 'DELETE' });
       mergeYandexAiState(data);
       renderYandexAiSettings();
-      setYandexAiStatus('Key deleted', 'success');
+      setYandexAiProviderStatus('Key deleted', 'success');
     } catch (e) {
-      setYandexAiStatus(e.message || 'Could not delete key', 'error');
+      setYandexAiProviderStatus(e.message || 'Could not delete key', 'error');
     }
   }
 
   async function saveYandexBot() {
     const payload = yandexBotFormPayload();
-    if (!payload.name) { setYandexAiStatus('Enter bot name', 'error'); return; }
-    setYandexAiStatus('Saving bot...');
+    if (!payload.name) { setYandexBotStatus('Enter bot name', 'error'); return; }
+    setYandexBotStatus('Saving bot...', 'pending');
     try {
       await persistYandexAiSettings();
       const shouldUpdate = Boolean(selectedYandexBotId && yandexBotState.bots.some(bot => Number(bot.id) === Number(selectedYandexBotId)));
@@ -5983,22 +6097,22 @@
       }
       renderYandexAiSettings();
       const status = buildVerifiedBotSaveStatus('Bot saved.', data.bot, payload, formatCapabilityState(data.bot || payload));
-      setYandexAiStatus(status.message, status.type);
+      setYandexBotStatus(status.message, status.type);
     } catch (e) {
-      setYandexAiStatus(e.message || 'Could not save bot', 'error');
+      setYandexBotStatus(e.message || 'Could not save bot', 'error');
     }
   }
 
   async function uploadYandexBotAvatar(file) {
     if (!file) return;
     if (!selectedYandexBotId) {
-      setYandexAiStatus('Save the bot before adding an avatar', 'error');
+      setYandexBotStatus('Save the bot before adding an avatar', 'error');
       renderYandexBotAvatar(null);
       return;
     }
     const fd = new FormData();
     fd.append('avatar', file);
-    setYandexAiStatus('Uploading avatar...');
+    setYandexBotStatus('Uploading avatar...', 'pending');
     try {
       const data = await api(`/api/admin/yandex-ai-bots/${selectedYandexBotId}/avatar`, { method: 'POST', body: fd });
       mergeYandexAiState(data);
@@ -6017,9 +6131,9 @@
       renderYandexBotAvatar(currentYandexBot());
       refreshRenderedAiBotAvatar(data.bot);
       renderYandexChatBotSettings();
-      setYandexAiStatus('Avatar saved', 'success');
+      setYandexBotStatus('Avatar saved', 'success');
     } catch (e) {
-      setYandexAiStatus(e.message || 'Could not upload avatar', 'error');
+      setYandexBotStatus(e.message || 'Could not upload avatar', 'error');
       renderYandexBotAvatar(currentYandexBot());
     }
   }
@@ -6044,9 +6158,9 @@
       renderYandexBotAvatar(currentYandexBot());
       refreshRenderedAiBotAvatar(data.bot);
       renderYandexChatBotSettings();
-      setYandexAiStatus('Avatar removed', 'success');
+      setYandexBotStatus('Avatar removed', 'success');
     } catch (e) {
-      setYandexAiStatus(e.message || 'Could not remove avatar', 'error');
+      setYandexBotStatus(e.message || 'Could not remove avatar', 'error');
     }
   }
 
@@ -6057,28 +6171,28 @@
       const data = await api(`/api/admin/yandex-ai-bots/${selectedYandexBotId}`, { method: 'DELETE' });
       mergeYandexAiState(data);
       renderYandexAiSettings();
-      setYandexAiStatus('Bot disabled', 'success');
+      setYandexBotStatus('Bot disabled', 'success');
     } catch (e) {
-      setYandexAiStatus(e.message || 'Could not disable bot', 'error');
+      setYandexBotStatus(e.message || 'Could not disable bot', 'error');
     }
   }
 
   async function testYandexBot() {
-    if (!selectedYandexBotId) { setYandexAiStatus('Save the bot first', 'error'); return; }
-    setYandexAiStatus('Testing model...');
+    if (!selectedYandexBotId) { setYandexBotStatus('Save the bot first', 'error'); return; }
+    setYandexBotStatus('Testing model...', 'pending');
     try {
       await persistYandexAiSettings();
       const data = await api(`/api/admin/yandex-ai-bots/${selectedYandexBotId}/test`, { method: 'POST', body: {} });
       const text = data.result?.text ? data.result.text.slice(0, 500) : '';
-      setYandexAiStatus(`Success (${data.result?.latencyMs || 0} ms): ${text}`, 'success');
+      setYandexBotStatus(`Success (${data.result?.latencyMs || 0} ms): ${text}`, 'success');
     } catch (e) {
-      setYandexAiStatus(e.message || 'Test failed', 'error');
+      setYandexBotStatus(e.message || 'Test failed', 'error');
     }
   }
 
   async function exportYandexBotJson() {
-    if (!selectedYandexBotId) { setYandexAiStatus('Choose a saved bot first', 'error'); return; }
-    setYandexAiStatus('Preparing JSON...');
+    if (!selectedYandexBotId) { setYandexBotStatus('Choose a saved bot first', 'error'); return; }
+    setYandexBotStatus('Preparing JSON...', 'pending');
     try {
       const headers = {};
       if (token) headers.Authorization = 'Bearer ' + token;
@@ -6100,15 +6214,15 @@
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-      setYandexAiStatus('JSON exported', 'success');
+      setYandexBotStatus('JSON exported', 'success');
     } catch (e) {
-      setYandexAiStatus(e.message || 'Could not export JSON', 'error');
+      setYandexBotStatus(e.message || 'Could not export JSON', 'error');
     }
   }
 
   async function importYandexBotJsonFile(file) {
     if (!file) return;
-    setYandexAiStatus('Importing JSON...');
+    setYandexBotStatus('Importing JSON...', 'pending');
     try {
       const raw = await file.text();
       const payload = JSON.parse(raw);
@@ -6117,9 +6231,9 @@
       selectedYandexBotId = data.bot?.id || selectedYandexBotId;
       renderYandexAiSettings();
       const warnings = Array.isArray(data.warnings) && data.warnings.length ? ` ${data.warnings.join(' ')}` : '';
-      setYandexAiStatus(`Bot imported.${warnings}`, warnings ? 'error' : 'success');
+      setYandexBotStatus(`Bot imported.${warnings}`, warnings ? 'error' : 'success');
     } catch (e) {
-      setYandexAiStatus(e.message || 'Could not import JSON', 'error');
+      setYandexBotStatus(e.message || 'Could not import JSON', 'error');
     } finally {
       const input = $('#yandexAiBotImportFile');
       if (input) input.value = '';
@@ -6130,9 +6244,9 @@
     const chatId = Number($('#yandexAiBotChatSelect')?.value || 0);
     const botId = Number($('#yandexAiBotChatBotSelect')?.value || 0);
     const botExists = yandexBotState.bots.some(bot => Number(bot.id) === botId);
-    if (!chatId || !botId) { setYandexAiStatus('Choose chat and bot', 'error'); return; }
+    if (!chatId || !botId) { setYandexChatStatus('Choose chat and bot', 'error'); return; }
     if (!botExists) {
-      setYandexAiStatus('Save the bot first', 'error');
+      setYandexChatStatus('Save the bot first', 'error');
       await loadYandexAiState().catch(() => {});
       return;
     }
@@ -6151,18 +6265,14 @@
       });
       mergeYandexAiState(data);
       renderYandexChatBotSettings();
-      setYandexAiStatus('Chat settings saved', 'success');
+      setYandexChatStatus('Chat settings saved', 'success');
     } catch (e) {
-      setYandexAiStatus(e.message || 'Could not save chat settings', 'error');
+      setYandexChatStatus(e.message || 'Could not save chat settings', 'error');
     }
   }
 
   function setGrokStatus(statusId, message, type = '') {
-    const el = $(statusId);
-    if (!el) return;
-    el.textContent = message || '';
-    el.classList.toggle('is-error', type === 'error');
-    el.classList.toggle('is-success', type === 'success');
+    setInlineStatus(statusId, message, type);
   }
 
   function setGrokAiStatus(message, type = '') {
@@ -6181,18 +6291,42 @@
     setGrokStatus('grokAiUniversalStatus', message, type);
   }
 
+  function setGrokAiProviderStatus(message, type = '') {
+    setGrokStatus('grokAiProviderStatus', message, type);
+  }
+
+  function setGrokTextEditorStatus(message, type = '') {
+    setGrokStatus(['grokAiBotEditorStatus', 'grokAiBotEditorStatusBottom'], message, type);
+  }
+
+  function setGrokImageEditorStatus(message, type = '') {
+    setGrokStatus('grokAiImageBotEditorStatus', message, type);
+  }
+
+  function setGrokUniversalEditorStatus(message, type = '') {
+    setGrokStatus('grokAiUniversalBotEditorStatus', message, type);
+  }
+
+  function setGrokTextChatStatus(message, type = '') {
+    setGrokStatus('grokAiBotChatStatus', message, type);
+  }
+
+  function setGrokImageChatStatus(message, type = '') {
+    setGrokStatus('grokAiImageBotChatStatus', message, type);
+  }
+
+  function setGrokUniversalChatStatus(message, type = '') {
+    setGrokStatus('grokAiUniversalBotChatStatus', message, type);
+  }
+
   function setGrokBotStatus(kind = 'text', message, type = '') {
-    if (kind === 'image') setGrokImageStatus(message, type);
-    else if (kind === 'universal') setGrokUniversalStatus(message, type);
-    else setGrokTextStatus(message, type);
+    if (kind === 'image') setGrokImageEditorStatus(message, type);
+    else if (kind === 'universal') setGrokUniversalEditorStatus(message, type);
+    else setGrokTextEditorStatus(message, type);
   }
 
   function setGrokAiModelStatus(message, type = '') {
-    const el = $('#grokAiModelStatus');
-    if (!el) return;
-    el.textContent = message || '';
-    el.classList.toggle('is-error', type === 'error');
-    el.classList.toggle('is-success', type === 'success');
+    setInlineStatus('grokAiModelStatus', message, type);
   }
 
   function wireAiBotToggleLabels() {
@@ -6597,7 +6731,7 @@
 
   function refreshGrokTextBotDirtyState() {
     const saveBtns = ['grokAiBotSave', 'grokAiBotSaveBottom'].map((id) => $(id)).filter(Boolean);
-    const statusEl = $('#grokAiTextStatus');
+    const statusEl = $('#grokAiBotEditorStatus') || $('#grokAiBotEditorStatusBottom');
     if (!saveBtns.length || grokTextBotFormHydrating) return;
     const isDirty = currentGrokTextBotFormFingerprint() !== grokTextBotFormFingerprint;
     saveBtns.forEach((saveBtn) => {
@@ -6605,12 +6739,12 @@
     });
     if (isDirty) {
       if (!statusEl?.textContent || statusEl.textContent === GROK_TEXT_BOT_DIRTY_STATUS) {
-        setGrokTextStatus(GROK_TEXT_BOT_DIRTY_STATUS);
+        setGrokTextEditorStatus(GROK_TEXT_BOT_DIRTY_STATUS);
       }
       return;
     }
     if (statusEl?.textContent === GROK_TEXT_BOT_DIRTY_STATUS) {
-      setGrokTextStatus('');
+      setGrokTextEditorStatus('');
     }
   }
 
@@ -6798,13 +6932,13 @@
   }
 
   async function saveGrokAiSettings() {
-    setGrokAiStatus('Saving...');
+    setGrokAiProviderStatus('Saving...', 'pending');
     try {
       await persistGrokAiSettings();
       renderGrokAiSettings();
-      setGrokAiStatus(`Settings saved\n${providerInteractiveSummary('grok', grokBotState.settings)}`, 'success');
+      setGrokAiProviderStatus(`Settings saved\n${providerInteractiveSummary('grok', grokBotState.settings)}`, 'success');
     } catch (e) {
-      setGrokAiStatus(e.message || 'Could not save settings', 'error');
+      setGrokAiProviderStatus(e.message || 'Could not save settings', 'error');
     }
   }
 
@@ -6812,11 +6946,11 @@
     const keyInput = $('#grokAiApiKey');
     const hasKey = Boolean(keyInput?.value.trim() || grokBotState.settings?.has_grok_key);
     if (!hasKey) {
-      setGrokAiStatus('Enter Grok API key before testing.', 'error');
+      setGrokAiProviderStatus('Enter Grok API key before testing.', 'error');
       keyInput?.focus();
       return;
     }
-    setGrokAiStatus('Checking Grok connection...');
+    setGrokAiProviderStatus('Checking Grok connection...', 'pending');
     try {
       const data = await api('/api/admin/grok-ai-bots/test-connection', {
         method: 'POST',
@@ -6826,9 +6960,9 @@
       if (data.state?.models) mergeGrokAiState({ state: { models: data.state.models } });
       renderGrokAiSettings();
       const text = String(data.result?.text || '').replace(/\s+/g, ' ').trim().slice(0, 180);
-      setGrokAiStatus(`Key verified (${data.result?.latencyMs || 0} ms). ${text}`, 'success');
+      setGrokAiProviderStatus(`Key verified (${data.result?.latencyMs || 0} ms). ${text}`, 'success');
     } catch (e) {
-      setGrokAiStatus(formatUiErrorMessage(e, 'Could not check Grok key'), 'error');
+      setGrokAiProviderStatus(formatUiErrorMessage(e, 'Could not check Grok key'), 'error');
     }
   }
 
@@ -6836,11 +6970,11 @@
     const keyInput = $('#grokAiApiKey');
     const hasKey = Boolean(keyInput?.value.trim() || grokBotState.settings?.has_grok_key);
     if (!hasKey) {
-      setGrokAiStatus('Enter or save Grok API key before loading models.', 'error');
+      setGrokAiProviderStatus('Enter or save Grok API key before loading models.', 'error');
       keyInput?.focus();
       return;
     }
-    setGrokAiStatus('Loading Grok models...');
+    setGrokAiProviderStatus('Loading Grok models...', 'pending');
     try {
       const data = await api('/api/admin/grok-ai-bots/models/refresh', {
         method: 'POST',
@@ -6848,9 +6982,9 @@
       });
       mergeGrokAiState(data);
       renderGrokAiSettings();
-      setGrokAiStatus(`Models refreshed: ${grokBotState.models?.response?.length || 0} text / ${grokBotState.models?.image?.length || 0} image.`, 'success');
+      setGrokAiProviderStatus(`Models refreshed: ${grokBotState.models?.response?.length || 0} text / ${grokBotState.models?.image?.length || 0} image.`, 'success');
     } catch (e) {
-      setGrokAiStatus(formatUiErrorMessage(e, 'Could not load Grok models'), 'error');
+      setGrokAiProviderStatus(formatUiErrorMessage(e, 'Could not load Grok models'), 'error');
     }
   }
 
@@ -6860,16 +6994,16 @@
       const data = await api('/api/admin/grok-ai-bots/key', { method: 'DELETE' });
       mergeGrokAiState(data);
       renderGrokAiSettings();
-      setGrokAiStatus('Key deleted', 'success');
+      setGrokAiProviderStatus('Key deleted', 'success');
     } catch (e) {
-      setGrokAiStatus(e.message || 'Could not delete key', 'error');
+      setGrokAiProviderStatus(e.message || 'Could not delete key', 'error');
     }
   }
 
   async function saveGrokBot() {
     const payload = grokBotFormPayload();
-    if (!payload.name) { setGrokTextStatus('Enter bot name', 'error'); return; }
-    setGrokTextStatus('Saving Grok bot...');
+    if (!payload.name) { setGrokTextEditorStatus('Enter bot name', 'error'); return; }
+    setGrokTextEditorStatus('Saving Grok bot...', 'pending');
     try {
       const shouldUpdate = Boolean(selectedGrokBotId && grokBotState.bots.some(bot => Number(bot.id) === Number(selectedGrokBotId)));
       const url = shouldUpdate ? `/api/admin/grok-ai-bots/${selectedGrokBotId}` : '/api/admin/grok-ai-bots';
@@ -6880,16 +7014,16 @@
       syncGrokBotUser(data.bot);
       renderGrokTextBotsSettings();
       const status = buildVerifiedBotSaveStatus('Text bot saved.', data.bot, payload, formatCapabilityState(data.bot || payload));
-      setGrokTextStatus(status.message, status.type);
+      setGrokTextEditorStatus(status.message, status.type);
     } catch (e) {
-      setGrokTextStatus(e.message || 'Could not save Grok bot', 'error');
+      setGrokTextEditorStatus(e.message || 'Could not save Grok bot', 'error');
     }
   }
 
   async function saveGrokImageBot() {
     const payload = grokImageBotFormPayload();
-    if (!payload.name) { setGrokImageStatus('Enter image bot name', 'error'); return; }
-    setGrokImageStatus('Saving Grok image bot...');
+    if (!payload.name) { setGrokImageEditorStatus('Enter image bot name', 'error'); return; }
+    setGrokImageEditorStatus('Saving Grok image bot...', 'pending');
     try {
       const shouldUpdate = Boolean(selectedGrokImageBotId && grokBotState.imageBots.some(bot => Number(bot.id) === Number(selectedGrokImageBotId)));
       const url = shouldUpdate ? `/api/admin/grok-ai-bots/${selectedGrokImageBotId}` : '/api/admin/grok-ai-bots';
@@ -6900,9 +7034,9 @@
       syncGrokBotUser(data.bot);
       renderGrokImageBotsSettings();
       const status = buildVerifiedBotSaveStatus('Image bot saved.', data.bot, payload);
-      setGrokImageStatus(status.message, status.type);
+      setGrokImageEditorStatus(status.message, status.type);
     } catch (e) {
-      setGrokImageStatus(e.message || 'Could not save image bot', 'error');
+      setGrokImageEditorStatus(e.message || 'Could not save image bot', 'error');
     }
   }
 
@@ -7043,9 +7177,9 @@
     const chatId = Number($('#grokAiBotChatSelect')?.value || 0);
     const botId = Number($('#grokAiBotChatBotSelect')?.value || 0);
     const botExists = grokBotState.bots.some(bot => Number(bot.id) === Number(botId));
-    if (!chatId || !botId) { setGrokTextStatus('Choose chat and bot', 'error'); return; }
+    if (!chatId || !botId) { setGrokTextChatStatus('Choose chat and bot', 'error'); return; }
     if (!botExists) {
-      setGrokTextStatus('Save the bot first', 'error');
+      setGrokTextChatStatus('Save the bot first', 'error');
       await loadGrokAiState().then(renderGrokTextBotsSettings).catch(() => {});
       return;
     }
@@ -7063,9 +7197,9 @@
       });
       mergeGrokAiState(data);
       renderGrokChatBotSettings();
-      setGrokTextStatus('Chat settings saved', 'success');
+      setGrokTextChatStatus('Chat settings saved', 'success');
     } catch (e) {
-      setGrokTextStatus(e.message || 'Could not save chat settings', 'error');
+      setGrokTextChatStatus(e.message || 'Could not save chat settings', 'error');
     }
   }
 
@@ -7073,9 +7207,9 @@
     const chatId = Number($('#grokAiImageBotChatSelect')?.value || 0);
     const botId = Number($('#grokAiImageBotChatBotSelect')?.value || 0);
     const botExists = grokBotState.imageBots.some(bot => Number(bot.id) === Number(botId));
-    if (!chatId || !botId) { setGrokImageStatus('Choose chat and image bot', 'error'); return; }
+    if (!chatId || !botId) { setGrokImageChatStatus('Choose chat and image bot', 'error'); return; }
     if (!botExists) {
-      setGrokImageStatus('Save the image bot first', 'error');
+      setGrokImageChatStatus('Save the image bot first', 'error');
       await loadGrokAiState().then(renderGrokImageBotsSettings).catch(() => {});
       return;
     }
@@ -7092,9 +7226,9 @@
       });
       mergeGrokAiState(data);
       renderGrokImageChatBotSettings();
-      setGrokImageStatus('Image bot chat settings saved', 'success');
+      setGrokImageChatStatus('Image bot chat settings saved', 'success');
     } catch (e) {
-      setGrokImageStatus(e.message || 'Could not save image bot chat settings', 'error');
+      setGrokImageChatStatus(e.message || 'Could not save image bot chat settings', 'error');
     }
   }
 
@@ -7107,8 +7241,8 @@
 
   async function saveGrokUniversalBot() {
     const payload = grokUniversalBotFormPayload();
-    if (!payload.name) { setGrokUniversalStatus('Enter bot name', 'error'); return; }
-    setGrokUniversalStatus('Saving universal bot...');
+    if (!payload.name) { setGrokUniversalEditorStatus('Enter bot name', 'error'); return; }
+    setGrokUniversalEditorStatus('Saving universal bot...', 'pending');
     try {
       const shouldUpdate = Boolean(selectedGrokUniversalBotId && grokUniversalState.bots.some(bot => Number(bot.id) === Number(selectedGrokUniversalBotId)));
       const url = shouldUpdate ? `/api/admin/grok-universal-bots/${selectedGrokUniversalBotId}` : '/api/admin/grok-universal-bots';
@@ -7119,22 +7253,22 @@
       syncGrokBotUser(data.bot);
       renderGrokUniversalBotsSettings();
       const status = buildVerifiedBotSaveStatus('Universal bot saved.', data.bot, payload, formatCapabilityState(data.bot || payload));
-      setGrokUniversalStatus(status.message, status.type);
+      setGrokUniversalEditorStatus(status.message, status.type);
     } catch (e) {
-      setGrokUniversalStatus(e.message || 'Could not save universal bot', 'error');
+      setGrokUniversalEditorStatus(e.message || 'Could not save universal bot', 'error');
     }
   }
 
   async function uploadGrokUniversalBotAvatar(file) {
     if (!file) return;
     if (!selectedGrokUniversalBotId) {
-      setGrokUniversalStatus('Save the bot before adding an avatar', 'error');
+      setGrokUniversalEditorStatus('Save the bot before adding an avatar', 'error');
       renderGrokUniversalBotAvatar(null);
       return;
     }
     const fd = new FormData();
     fd.append('avatar', file);
-    setGrokUniversalStatus('Uploading avatar...');
+    setGrokUniversalEditorStatus('Uploading avatar...', 'pending');
     try {
       const data = await api(`/api/admin/grok-universal-bots/${selectedGrokUniversalBotId}/avatar`, { method: 'POST', body: fd });
       mergeGrokUniversalState(data);
@@ -7142,9 +7276,9 @@
       syncGrokBotUser(data.bot);
       renderGrokUniversalBotsSettings();
       refreshRenderedAiBotAvatar(data.bot);
-      setGrokUniversalStatus('Avatar saved', 'success');
+      setGrokUniversalEditorStatus('Avatar saved', 'success');
     } catch (e) {
-      setGrokUniversalStatus(e.message || 'Could not upload avatar', 'error');
+      setGrokUniversalEditorStatus(e.message || 'Could not upload avatar', 'error');
     }
   }
 
@@ -7157,9 +7291,9 @@
       syncGrokBotUser(data.bot);
       renderGrokUniversalBotsSettings();
       refreshRenderedAiBotAvatar(data.bot);
-      setGrokUniversalStatus('Avatar removed', 'success');
+      setGrokUniversalEditorStatus('Avatar removed', 'success');
     } catch (e) {
-      setGrokUniversalStatus(e.message || 'Could not remove avatar', 'error');
+      setGrokUniversalEditorStatus(e.message || 'Could not remove avatar', 'error');
     }
   }
 
@@ -7170,15 +7304,15 @@
       const data = await api(`/api/admin/grok-universal-bots/${selectedGrokUniversalBotId}`, { method: 'DELETE' });
       mergeGrokUniversalState(data);
       renderGrokUniversalBotsSettings();
-      setGrokUniversalStatus('Universal bot disabled', 'success');
+      setGrokUniversalEditorStatus('Universal bot disabled', 'success');
     } catch (e) {
-      setGrokUniversalStatus(e.message || 'Could not disable universal bot', 'error');
+      setGrokUniversalEditorStatus(e.message || 'Could not disable universal bot', 'error');
     }
   }
 
   async function testGrokUniversalBot() {
-    if (!selectedGrokUniversalBotId) { setGrokUniversalStatus('Save the bot first', 'error'); return; }
-    setGrokUniversalStatus('Testing universal bot...');
+    if (!selectedGrokUniversalBotId) { setGrokUniversalEditorStatus('Save the bot first', 'error'); return; }
+    setGrokUniversalEditorStatus('Testing universal bot...', 'pending');
     try {
       const data = await api(`/api/admin/grok-universal-bots/${selectedGrokUniversalBotId}/test`, {
         method: 'POST',
@@ -7187,15 +7321,15 @@
         },
       });
       const text = data.result?.text ? data.result.text.slice(0, 500) : '';
-      setGrokUniversalStatus(`Success (${data.result?.latencyMs || 0} ms): ${text}`, 'success');
+      setGrokUniversalEditorStatus(`Success (${data.result?.latencyMs || 0} ms): ${text}`, 'success');
     } catch (e) {
-      setGrokUniversalStatus(e.message || 'Universal bot test failed', 'error');
+      setGrokUniversalEditorStatus(e.message || 'Universal bot test failed', 'error');
     }
   }
 
   async function exportGrokUniversalBotJson() {
-    if (!selectedGrokUniversalBotId) { setGrokUniversalStatus('Choose a saved bot first', 'error'); return; }
-    setGrokUniversalStatus('Preparing JSON...');
+    if (!selectedGrokUniversalBotId) { setGrokUniversalEditorStatus('Choose a saved bot first', 'error'); return; }
+    setGrokUniversalEditorStatus('Preparing JSON...', 'pending');
     try {
       const headers = {};
       if (token) headers.Authorization = 'Bearer ' + token;
@@ -7217,15 +7351,15 @@
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-      setGrokUniversalStatus('JSON exported', 'success');
+      setGrokUniversalEditorStatus('JSON exported', 'success');
     } catch (e) {
-      setGrokUniversalStatus(e.message || 'Could not export JSON', 'error');
+      setGrokUniversalEditorStatus(e.message || 'Could not export JSON', 'error');
     }
   }
 
   async function importGrokUniversalBotJsonFile(file) {
     if (!file) return;
-    setGrokUniversalStatus('Importing JSON...');
+    setGrokUniversalEditorStatus('Importing JSON...', 'pending');
     try {
       const raw = await file.text();
       const payload = JSON.parse(raw);
@@ -7234,9 +7368,9 @@
       selectedGrokUniversalBotId = data.bot?.id || selectedGrokUniversalBotId;
       renderGrokUniversalBotsSettings();
       const warnings = Array.isArray(data.warnings) && data.warnings.length ? ` ${data.warnings.join(' ')}` : '';
-      setGrokUniversalStatus(`Universal bot imported.${warnings}`, warnings ? 'error' : 'success');
+      setGrokUniversalEditorStatus(`Universal bot imported.${warnings}`, warnings ? 'error' : 'success');
     } catch (e) {
-      setGrokUniversalStatus(e.message || 'Could not import JSON', 'error');
+      setGrokUniversalEditorStatus(e.message || 'Could not import JSON', 'error');
     } finally {
       const input = $('#grokAiUniversalBotImportFile');
       if (input) input.value = '';
@@ -7247,9 +7381,9 @@
     const chatId = Number($('#grokAiUniversalBotChatSelect')?.value || 0);
     const botId = Number($('#grokAiUniversalBotChatBotSelect')?.value || 0);
     const botExists = grokUniversalState.bots.some(bot => Number(bot.id) === Number(botId));
-    if (!chatId || !botId) { setGrokUniversalStatus('Choose chat and bot', 'error'); return; }
+    if (!chatId || !botId) { setGrokUniversalChatStatus('Choose chat and bot', 'error'); return; }
     if (!botExists) {
-      setGrokUniversalStatus('Save the bot first', 'error');
+      setGrokUniversalChatStatus('Save the bot first', 'error');
       await loadGrokUniversalState().catch(() => {});
       return;
     }
@@ -7267,9 +7401,9 @@
       });
       mergeGrokUniversalState(data);
       renderGrokUniversalChatBotSettings();
-      setGrokUniversalStatus('Chat settings saved', 'success');
+      setGrokUniversalChatStatus('Chat settings saved', 'success');
     } catch (e) {
-      setGrokUniversalStatus(e.message || 'Could not save chat settings', 'error');
+      setGrokUniversalChatStatus(e.message || 'Could not save chat settings', 'error');
     }
   }
 
@@ -15482,13 +15616,13 @@
     if (!currentUser?.is_admin) return;
     openModal('aiBotSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
     resetManagedModalScroll('aiBotSettingsModal');
-    setAiBotSettingsStatus('Загружаю...');
+    setAiBotModalStatus('Загружаю...', 'pending');
     Promise.all([loadAiBotState(), loadOpenAiUniversalState()]).then(() => {
       resetManagedModalScroll('aiBotSettingsModal');
-      setAiBotSettingsStatus('');
+      setAiBotModalStatus('');
     }).catch((e) => {
       const message = e.message || 'Could not load OpenAI AI bots';
-      setAiBotSettingsStatus(message, 'error');
+      setAiBotModalStatus(message, 'error');
     });
   }
 
@@ -15496,13 +15630,13 @@
     if (!currentUser?.is_admin) return;
     openModal('openAiTextBotsModal', { replaceStack: false, opener: $('#openAiOpenTextBots') });
     resetManagedModalScroll('openAiTextBotsModal');
-    setAiBotStatus('Загружаю...');
+    setAiBotTextModalStatus('Загружаю...', 'pending');
     loadAiBotState().then(() => {
       renderOpenAiTextBotsSettings();
       resetManagedModalScroll('openAiTextBotsModal');
-      setAiBotStatus('');
+      setAiBotTextModalStatus('');
     }).catch((e) => {
-      setAiBotStatus(e.message || 'Не удалось загрузить OpenAI text bots', 'error');
+      setAiBotTextModalStatus(e.message || 'Не удалось загрузить OpenAI text bots', 'error');
     });
   }
 
@@ -15510,13 +15644,13 @@
     if (!currentUser?.is_admin) return;
     openModal('openAiUniversalBotsModal', { replaceStack: false, opener: $('#openAiOpenUniversalBots') });
     resetManagedModalScroll('openAiUniversalBotsModal');
-    setOpenAiUniversalStatus('Loading...');
+    setOpenAiUniversalModalStatus('Loading...', 'pending');
     loadOpenAiUniversalState().then(() => {
       renderOpenAiUniversalSettings();
       resetManagedModalScroll('openAiUniversalBotsModal');
-      setOpenAiUniversalStatus('');
+      setOpenAiUniversalModalStatus('');
     }).catch((e) => {
-      setOpenAiUniversalStatus(e.message || 'Could not load OpenAI universal bots', 'error');
+      setOpenAiUniversalModalStatus(e.message || 'Could not load OpenAI universal bots', 'error');
     });
   }
 
@@ -17290,7 +17424,7 @@
       $('#settingsWeatherControls')?.classList.toggle('hidden', !e.target.checked);
       if (!e.target.checked) await saveWeatherSettings();
     });
-    $('#settingsWeatherSearchBtn')?.addEventListener('click', searchWeatherLocations);
+    bindAsyncActionButtons('settingsWeatherSearchBtn', null, 'Searching...', searchWeatherLocations);
     $('#settingsWeatherSearch')?.addEventListener('input', () => {
       clearTimeout(weatherSearchTimer);
       if ($('#settingsWeatherSearch').value.trim().length < 2) {
@@ -17302,7 +17436,7 @@
     $('#settingsWeatherSearch')?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
-        searchWeatherLocations();
+        withActionButtons('settingsWeatherSearchBtn', 'Searching...', searchWeatherLocations).catch(() => {});
       }
     });
     $('#settingsWeatherResults')?.addEventListener('click', (e) => {
@@ -17316,13 +17450,13 @@
       renderWeatherSearchResults([]);
       setWeatherStatus(selectedWeatherLocation ? 'City selected, save settings' : '', selectedWeatherLocation ? 'success' : '');
     });
-    $('#settingsWeatherSave')?.addEventListener('click', saveWeatherSettings);
-    $('#settingsWeatherRefreshNow')?.addEventListener('click', saveWeatherSettings);
+    bindAsyncActionButtons('settingsWeatherSave', null, 'Saving...', saveWeatherSettings);
+    bindAsyncActionButtons('settingsWeatherRefreshNow', null, 'Refreshing...', saveWeatherSettings);
 
     // Notification settings
-    $('#settingsPushEnable')?.addEventListener('click', enablePushNotifications);
-    $('#settingsPushDisable')?.addEventListener('click', disablePushOnThisDevice);
-    $('#settingsPushTest')?.addEventListener('click', testPushNotification);
+    bindAsyncActionButtons('settingsPushEnable', null, 'Enabling...', enablePushNotifications);
+    bindAsyncActionButtons('settingsPushDisable', null, 'Disabling...', disablePushOnThisDevice);
+    bindAsyncActionButtons('settingsPushTest', null, 'Testing...', testPushNotification);
     $('#settingsNotificationsEnabled')?.addEventListener('change', async (e) => {
       await saveNotificationSettings({ push_enabled: e.target.checked });
       if (e.target.checked && !pushDeviceSubscribed) {
@@ -17375,27 +17509,28 @@
     });
 
     // AI bot admin settings
-    $('#aiBotsSaveSettings')?.addEventListener('click', saveAiBotSettings);
+    bindAsyncActionButtons('aiBotsSaveSettings', null, 'Saving...', saveAiBotSettings);
     $('#aiBotsRefreshModels')?.addEventListener('click', () => {
+      if ($('#aiBotsRefreshModels')?.dataset.adminBusy === '1') return;
+      aiModelRefreshTriggeredByButton = true;
       setAiModelStatus('Загружаю модели...');
       loadAiModelOptions(true).catch((e) => setAiModelStatus(e.message || 'Не удалось загрузить модели', 'error'));
     });
-    $('#aiBotsDeleteKey')?.addEventListener('click', deleteAiBotKey);
+    bindAsyncActionButtons('aiBotsDeleteKey', null, 'Deleting...', deleteAiBotKey);
     $('#openAiOpenTextBots')?.addEventListener('click', openOpenAiTextBotsModal);
     $('#openAiOpenUniversalBots')?.addEventListener('click', openOpenAiUniversalBotsModal);
     $('#aiBotCreateNew')?.addEventListener('click', () => {
       fillAiBotForm(null);
       setAiBotStatus('Новый бот: заполните поля и сохраните');
     });
-    $('#aiBotSave')?.addEventListener('click', saveAiBot);
-    $('#aiBotSaveBottom')?.addEventListener('click', saveAiBot);
-    $('#aiBotDisable')?.addEventListener('click', disableAiBot);
-    $('#aiBotTest')?.addEventListener('click', testAiBot);
-    $('#aiBotExportJson')?.addEventListener('click', exportAiBotJson);
+    bindAsyncActionButtons(['aiBotSave', 'aiBotSaveBottom'], null, 'Saving...', saveAiBot);
+    bindAsyncActionButtons('aiBotDisable', null, 'Disabling...', disableAiBot);
+    bindAsyncActionButtons('aiBotTest', null, 'Testing...', testAiBot);
+    bindAsyncActionButtons('aiBotExportJson', null, 'Preparing...', exportAiBotJson);
     $('#aiBotImportJson')?.addEventListener('click', () => $('#aiBotImportFile')?.click());
     $('#aiBotImportFile')?.addEventListener('change', (event) => importAiBotJsonFile(event.target.files?.[0]));
     $('#aiBotAvatarInput')?.addEventListener('change', (event) => uploadAiBotAvatar(event.target.files?.[0]));
-    $('#removeAiBotAvatar')?.addEventListener('click', removeAiBotAvatar);
+    bindAsyncActionButtons('removeAiBotAvatar', null, 'Removing...', removeAiBotAvatar);
     $('#aiBotName')?.addEventListener('input', () => {
       if (!currentAiBot()?.avatar_url) renderAiBotAvatar(currentAiBot());
     });
@@ -17407,20 +17542,19 @@
     });
     $('#aiBotChatSelect')?.addEventListener('change', renderAiChatBotSettings);
     $('#aiBotChatBotSelect')?.addEventListener('change', renderAiChatBotSettings);
-    $('#aiBotChatSave')?.addEventListener('click', saveAiChatBotSettings);
+    bindAsyncActionButtons('aiBotChatSave', null, 'Saving...', saveAiChatBotSettings);
     $('#openAiUniversalBotCreateNew')?.addEventListener('click', () => {
       fillOpenAiUniversalBotForm(null);
       setOpenAiUniversalStatus('New OpenAI universal bot: fill fields and save');
     });
-    $('#openAiUniversalBotSave')?.addEventListener('click', saveOpenAiUniversalBot);
-    $('#openAiUniversalBotSaveBottom')?.addEventListener('click', saveOpenAiUniversalBot);
-    $('#openAiUniversalBotDisable')?.addEventListener('click', disableOpenAiUniversalBot);
-    $('#openAiUniversalBotTest')?.addEventListener('click', testOpenAiUniversalBot);
-    $('#openAiUniversalBotExportJson')?.addEventListener('click', exportOpenAiUniversalBotJson);
+    bindAsyncActionButtons(['openAiUniversalBotSave', 'openAiUniversalBotSaveBottom'], null, 'Saving...', saveOpenAiUniversalBot);
+    bindAsyncActionButtons('openAiUniversalBotDisable', null, 'Disabling...', disableOpenAiUniversalBot);
+    bindAsyncActionButtons('openAiUniversalBotTest', null, 'Testing...', testOpenAiUniversalBot);
+    bindAsyncActionButtons('openAiUniversalBotExportJson', null, 'Preparing...', exportOpenAiUniversalBotJson);
     $('#openAiUniversalBotImportJson')?.addEventListener('click', () => $('#openAiUniversalBotImportFile')?.click());
     $('#openAiUniversalBotImportFile')?.addEventListener('change', (event) => importOpenAiUniversalBotJsonFile(event.target.files?.[0]));
     $('#openAiUniversalBotAvatarInput')?.addEventListener('change', (event) => uploadOpenAiUniversalBotAvatar(event.target.files?.[0]));
-    $('#removeOpenAiUniversalBotAvatar')?.addEventListener('click', removeOpenAiUniversalBotAvatar);
+    bindAsyncActionButtons('removeOpenAiUniversalBotAvatar', null, 'Removing...', removeOpenAiUniversalBotAvatar);
     $('#openAiUniversalBotName')?.addEventListener('input', () => {
       if (!currentOpenAiUniversalBot()?.avatar_url) renderOpenAiUniversalBotAvatar(currentOpenAiUniversalBot());
     });
@@ -17432,25 +17566,25 @@
     });
     $('#openAiUniversalBotChatSelect')?.addEventListener('change', renderOpenAiUniversalChatBotSettings);
     $('#openAiUniversalBotChatBotSelect')?.addEventListener('change', renderOpenAiUniversalChatBotSettings);
-    $('#openAiUniversalBotChatSave')?.addEventListener('click', saveOpenAiUniversalChatBotSettings);
+    bindAsyncActionButtons('openAiUniversalBotChatSave', null, 'Saving...', saveOpenAiUniversalChatBotSettings);
 
     // Yandex AI bot admin settings
-    $('#yandexAiSaveSettings')?.addEventListener('click', saveYandexAiSettings);
-    $('#yandexAiTestConnection')?.addEventListener('click', testYandexAiConnection);
-    $('#yandexAiRefreshModels')?.addEventListener('click', refreshYandexAiModels);
-    $('#yandexAiDeleteKey')?.addEventListener('click', deleteYandexAiKey);
+    bindAsyncActionButtons('yandexAiSaveSettings', null, 'Saving...', saveYandexAiSettings);
+    bindAsyncActionButtons('yandexAiTestConnection', null, 'Testing...', testYandexAiConnection);
+    bindAsyncActionButtons('yandexAiRefreshModels', null, 'Refreshing...', refreshYandexAiModels);
+    bindAsyncActionButtons('yandexAiDeleteKey', null, 'Deleting...', deleteYandexAiKey);
     $('#yandexAiBotCreateNew')?.addEventListener('click', () => {
       fillYandexBotForm(null);
-      setYandexAiStatus('New Yandex bot: fill fields and save');
+      setYandexBotStatus('New Yandex bot: fill fields and save');
     });
-    $('#yandexAiBotSave')?.addEventListener('click', saveYandexBot);
-    $('#yandexAiBotDisable')?.addEventListener('click', disableYandexBot);
-    $('#yandexAiBotTest')?.addEventListener('click', testYandexBot);
-    $('#yandexAiBotExportJson')?.addEventListener('click', exportYandexBotJson);
+    bindAsyncActionButtons('yandexAiBotSave', null, 'Saving...', saveYandexBot);
+    bindAsyncActionButtons('yandexAiBotDisable', null, 'Disabling...', disableYandexBot);
+    bindAsyncActionButtons('yandexAiBotTest', null, 'Testing...', testYandexBot);
+    bindAsyncActionButtons('yandexAiBotExportJson', null, 'Preparing...', exportYandexBotJson);
     $('#yandexAiBotImportJson')?.addEventListener('click', () => $('#yandexAiBotImportFile')?.click());
     $('#yandexAiBotImportFile')?.addEventListener('change', (event) => importYandexBotJsonFile(event.target.files?.[0]));
     $('#yandexAiBotAvatarInput')?.addEventListener('change', (event) => uploadYandexBotAvatar(event.target.files?.[0]));
-    $('#removeYandexAiBotAvatar')?.addEventListener('click', removeYandexBotAvatar);
+    bindAsyncActionButtons('removeYandexAiBotAvatar', null, 'Removing...', removeYandexBotAvatar);
     $('#yandexAiBotName')?.addEventListener('input', () => {
       if (!currentYandexBot()?.avatar_url) renderYandexBotAvatar(currentYandexBot());
     });
@@ -17462,25 +17596,25 @@
     });
     $('#yandexAiBotChatSelect')?.addEventListener('change', renderYandexChatBotSettings);
     $('#yandexAiBotChatBotSelect')?.addEventListener('change', renderYandexChatBotSettings);
-    $('#yandexAiBotChatSave')?.addEventListener('click', saveYandexChatBotSettings);
+    bindAsyncActionButtons('yandexAiBotChatSave', null, 'Saving...', saveYandexChatBotSettings);
 
     // DeepSeek AI bot admin settings
-    $('#deepseekAiSaveSettings')?.addEventListener('click', saveDeepseekAiSettings);
-    $('#deepseekAiTestConnection')?.addEventListener('click', testDeepseekAiConnection);
-    $('#deepseekAiRefreshModels')?.addEventListener('click', refreshDeepseekAiModels);
-    $('#deepseekAiDeleteKey')?.addEventListener('click', deleteDeepseekAiKey);
+    bindAsyncActionButtons('deepseekAiSaveSettings', null, 'Saving...', saveDeepseekAiSettings);
+    bindAsyncActionButtons('deepseekAiTestConnection', null, 'Testing...', testDeepseekAiConnection);
+    bindAsyncActionButtons('deepseekAiRefreshModels', null, 'Refreshing...', refreshDeepseekAiModels);
+    bindAsyncActionButtons('deepseekAiDeleteKey', null, 'Deleting...', deleteDeepseekAiKey);
     $('#deepseekAiBotCreateNew')?.addEventListener('click', () => {
       fillDeepseekBotForm(null);
-      setDeepseekAiStatus('New DeepSeek bot: fill fields and save');
+      setDeepseekBotStatus('New DeepSeek bot: fill fields and save');
     });
-    $('#deepseekAiBotSave')?.addEventListener('click', saveDeepseekBot);
-    $('#deepseekAiBotDisable')?.addEventListener('click', disableDeepseekBot);
-    $('#deepseekAiBotTest')?.addEventListener('click', testDeepseekBot);
-    $('#deepseekAiBotExportJson')?.addEventListener('click', exportDeepseekBotJson);
+    bindAsyncActionButtons('deepseekAiBotSave', null, 'Saving...', saveDeepseekBot);
+    bindAsyncActionButtons('deepseekAiBotDisable', null, 'Disabling...', disableDeepseekBot);
+    bindAsyncActionButtons('deepseekAiBotTest', null, 'Testing...', testDeepseekBot);
+    bindAsyncActionButtons('deepseekAiBotExportJson', null, 'Preparing...', exportDeepseekBotJson);
     $('#deepseekAiBotImportJson')?.addEventListener('click', () => $('#deepseekAiBotImportFile')?.click());
     $('#deepseekAiBotImportFile')?.addEventListener('change', (event) => importDeepseekBotJsonFile(event.target.files?.[0]));
     $('#deepseekAiBotAvatarInput')?.addEventListener('change', (event) => uploadDeepseekBotAvatar(event.target.files?.[0]));
-    $('#removeDeepseekAiBotAvatar')?.addEventListener('click', removeDeepseekBotAvatar);
+    bindAsyncActionButtons('removeDeepseekAiBotAvatar', null, 'Removing...', removeDeepseekBotAvatar);
     $('#deepseekAiBotName')?.addEventListener('input', () => {
       if (!currentDeepseekBot()?.avatar_url) renderDeepseekBotAvatar(currentDeepseekBot());
     });
@@ -17492,29 +17626,28 @@
     });
     $('#deepseekAiBotChatSelect')?.addEventListener('change', renderDeepseekChatBotSettings);
     $('#deepseekAiBotChatBotSelect')?.addEventListener('change', renderDeepseekChatBotSettings);
-    $('#deepseekAiBotChatSave')?.addEventListener('click', saveDeepseekChatBotSettings);
+    bindAsyncActionButtons('deepseekAiBotChatSave', null, 'Saving...', saveDeepseekChatBotSettings);
 
     // Grok AI bot admin settings
-    $('#grokAiSaveSettings')?.addEventListener('click', saveGrokAiSettings);
-    $('#grokAiTestConnection')?.addEventListener('click', testGrokAiConnection);
-    $('#grokAiRefreshModels')?.addEventListener('click', refreshGrokAiModels);
-    $('#grokAiDeleteKey')?.addEventListener('click', deleteGrokAiKey);
+    bindAsyncActionButtons('grokAiSaveSettings', null, 'Saving...', saveGrokAiSettings);
+    bindAsyncActionButtons('grokAiTestConnection', null, 'Testing...', testGrokAiConnection);
+    bindAsyncActionButtons('grokAiRefreshModels', null, 'Refreshing...', refreshGrokAiModels);
+    bindAsyncActionButtons('grokAiDeleteKey', null, 'Deleting...', deleteGrokAiKey);
     $('#grokAiOpenTextBots')?.addEventListener('click', openGrokTextBotsModal);
     $('#grokAiOpenImageBots')?.addEventListener('click', openGrokImageBotsModal);
     $('#grokAiOpenUniversalBots')?.addEventListener('click', openGrokUniversalBotsModal);
     $('#grokAiBotCreateNew')?.addEventListener('click', () => {
       fillGrokBotForm(null);
-      setGrokTextStatus('New Grok text bot: fill fields and save');
+      setGrokTextEditorStatus('New Grok text bot: fill fields and save');
     });
-    $('#grokAiBotSave')?.addEventListener('click', saveGrokBot);
-    $('#grokAiBotSaveBottom')?.addEventListener('click', saveGrokBot);
-    $('#grokAiBotDisable')?.addEventListener('click', () => disableGrokBot('text'));
-    $('#grokAiBotTest')?.addEventListener('click', () => testGrokBot('text'));
-    $('#grokAiBotExportJson')?.addEventListener('click', () => exportGrokBotJson('text'));
+    bindAsyncActionButtons(['grokAiBotSave', 'grokAiBotSaveBottom'], null, 'Saving...', saveGrokBot);
+    bindAsyncActionButtons('grokAiBotDisable', null, 'Disabling...', () => disableGrokBot('text'));
+    bindAsyncActionButtons('grokAiBotTest', null, 'Testing...', () => testGrokBot('text'));
+    bindAsyncActionButtons('grokAiBotExportJson', null, 'Preparing...', () => exportGrokBotJson('text'));
     $('#grokAiBotImportJson')?.addEventListener('click', () => $('#grokAiBotImportFile')?.click());
     $('#grokAiBotImportFile')?.addEventListener('change', (event) => importGrokBotJsonFile(event.target.files?.[0], 'text'));
     $('#grokAiBotAvatarInput')?.addEventListener('change', (event) => uploadGrokBotAvatar(event.target.files?.[0], 'text'));
-    $('#removeGrokAiBotAvatar')?.addEventListener('click', () => removeGrokBotAvatar('text'));
+    bindAsyncActionButtons('removeGrokAiBotAvatar', null, 'Removing...', () => removeGrokBotAvatar('text'));
     $('#grokAiBotName')?.addEventListener('input', () => {
       if (!currentGrokBot()?.avatar_url) renderGrokBotAvatar(currentGrokBot());
     });
@@ -17542,20 +17675,20 @@
     });
     $('#grokAiBotChatSelect')?.addEventListener('change', renderGrokChatBotSettings);
     $('#grokAiBotChatBotSelect')?.addEventListener('change', renderGrokChatBotSettings);
-    $('#grokAiBotChatSave')?.addEventListener('click', saveGrokChatBotSettings);
+    bindAsyncActionButtons('grokAiBotChatSave', null, 'Saving...', saveGrokChatBotSettings);
 
     $('#grokAiImageBotCreateNew')?.addEventListener('click', () => {
       fillGrokImageBotForm(null);
-      setGrokImageStatus('New Grok image bot: fill fields and save');
+      setGrokImageEditorStatus('New Grok image bot: fill fields and save');
     });
-    $('#grokAiImageBotSave')?.addEventListener('click', saveGrokImageBot);
-    $('#grokAiImageBotDisable')?.addEventListener('click', () => disableGrokBot('image'));
-    $('#grokAiImageBotTest')?.addEventListener('click', () => testGrokBot('image'));
-    $('#grokAiImageBotExportJson')?.addEventListener('click', () => exportGrokBotJson('image'));
+    bindAsyncActionButtons('grokAiImageBotSave', null, 'Saving...', saveGrokImageBot);
+    bindAsyncActionButtons('grokAiImageBotDisable', null, 'Disabling...', () => disableGrokBot('image'));
+    bindAsyncActionButtons('grokAiImageBotTest', null, 'Testing...', () => testGrokBot('image'));
+    bindAsyncActionButtons('grokAiImageBotExportJson', null, 'Preparing...', () => exportGrokBotJson('image'));
     $('#grokAiImageBotImportJson')?.addEventListener('click', () => $('#grokAiImageBotImportFile')?.click());
     $('#grokAiImageBotImportFile')?.addEventListener('change', (event) => importGrokBotJsonFile(event.target.files?.[0], 'image'));
     $('#grokAiImageBotAvatarInput')?.addEventListener('change', (event) => uploadGrokBotAvatar(event.target.files?.[0], 'image'));
-    $('#removeGrokAiImageBotAvatar')?.addEventListener('click', () => removeGrokBotAvatar('image'));
+    bindAsyncActionButtons('removeGrokAiImageBotAvatar', null, 'Removing...', () => removeGrokBotAvatar('image'));
     $('#grokAiImageBotName')?.addEventListener('input', () => {
       if (!currentGrokImageBot()?.avatar_url) renderGrokImageBotAvatar(currentGrokImageBot());
     });
@@ -17567,19 +17700,19 @@
     });
     $('#grokAiImageBotChatSelect')?.addEventListener('change', renderGrokImageChatBotSettings);
     $('#grokAiImageBotChatBotSelect')?.addEventListener('change', renderGrokImageChatBotSettings);
-    $('#grokAiImageBotChatSave')?.addEventListener('click', saveGrokImageChatBotSettings);
+    bindAsyncActionButtons('grokAiImageBotChatSave', null, 'Saving...', saveGrokImageChatBotSettings);
     $('#grokAiUniversalBotCreateNew')?.addEventListener('click', () => {
       fillGrokUniversalBotForm(null);
-      setGrokUniversalStatus('New Grok universal bot: fill fields and save');
+      setGrokUniversalEditorStatus('New Grok universal bot: fill fields and save');
     });
-    $('#grokAiUniversalBotSave')?.addEventListener('click', saveGrokUniversalBot);
-    $('#grokAiUniversalBotDisable')?.addEventListener('click', disableGrokUniversalBot);
-    $('#grokAiUniversalBotTest')?.addEventListener('click', testGrokUniversalBot);
-    $('#grokAiUniversalBotExportJson')?.addEventListener('click', exportGrokUniversalBotJson);
+    bindAsyncActionButtons('grokAiUniversalBotSave', null, 'Saving...', saveGrokUniversalBot);
+    bindAsyncActionButtons('grokAiUniversalBotDisable', null, 'Disabling...', disableGrokUniversalBot);
+    bindAsyncActionButtons('grokAiUniversalBotTest', null, 'Testing...', testGrokUniversalBot);
+    bindAsyncActionButtons('grokAiUniversalBotExportJson', null, 'Preparing...', exportGrokUniversalBotJson);
     $('#grokAiUniversalBotImportJson')?.addEventListener('click', () => $('#grokAiUniversalBotImportFile')?.click());
     $('#grokAiUniversalBotImportFile')?.addEventListener('change', (event) => importGrokUniversalBotJsonFile(event.target.files?.[0]));
     $('#grokAiUniversalBotAvatarInput')?.addEventListener('change', (event) => uploadGrokUniversalBotAvatar(event.target.files?.[0]));
-    $('#removeGrokAiUniversalBotAvatar')?.addEventListener('click', removeGrokUniversalBotAvatar);
+    bindAsyncActionButtons('removeGrokAiUniversalBotAvatar', null, 'Removing...', removeGrokUniversalBotAvatar);
     $('#grokAiUniversalBotName')?.addEventListener('input', () => {
       if (!currentGrokUniversalBot()?.avatar_url) renderGrokUniversalBotAvatar(currentGrokUniversalBot());
     });
@@ -17591,25 +17724,27 @@
     });
     $('#grokAiUniversalBotChatSelect')?.addEventListener('change', renderGrokUniversalChatBotSettings);
     $('#grokAiUniversalBotChatBotSelect')?.addEventListener('change', renderGrokUniversalChatBotSettings);
-    $('#grokAiUniversalBotChatSave')?.addEventListener('click', saveGrokUniversalChatBotSettings);
+    bindAsyncActionButtons('grokAiUniversalBotChatSave', null, 'Saving...', saveGrokUniversalChatBotSettings);
 
     // Change password save
     $('#cpSaveBtn').addEventListener('click', async () => {
-      const cpErr = $('#cpError');
-      const cpOk = $('#cpSuccess');
-      cpErr.textContent = '';
-      cpOk.textContent = '';
-      const oldPass = $('#cpOldPass').value;
-      const newPass = $('#cpNewPass').value;
-      const confirmPass = $('#cpNewPassConfirm').value;
-      if (!oldPass || !newPass) { cpErr.textContent = 'Fill in all fields'; return; }
-      if (newPass !== confirmPass) { cpErr.textContent = 'New passwords do not match'; return; }
-      if (newPass.length < 6) { cpErr.textContent = 'Password must be at least 6 characters'; return; }
-      try {
-        await api('/api/profile/change-password', { method: 'POST', body: { oldPassword: oldPass, newPassword: newPass } });
-        cpOk.textContent = 'Password changed successfully!';
-        resetChangePasswordFields();
-      } catch (e) { cpErr.textContent = e.message; }
+      await withActionButtons('cpSaveBtn', 'Saving...', async () => {
+        const cpErr = $('#cpError');
+        const cpOk = $('#cpSuccess');
+        cpErr.textContent = '';
+        cpOk.textContent = '';
+        const oldPass = $('#cpOldPass').value;
+        const newPass = $('#cpNewPass').value;
+        const confirmPass = $('#cpNewPassConfirm').value;
+        if (!oldPass || !newPass) { cpErr.textContent = 'Fill in all fields'; return; }
+        if (newPass !== confirmPass) { cpErr.textContent = 'New passwords do not match'; return; }
+        if (newPass.length < 6) { cpErr.textContent = 'Password must be at least 6 characters'; return; }
+        try {
+          await api('/api/profile/change-password', { method: 'POST', body: { oldPassword: oldPass, newPassword: newPass } });
+          cpOk.textContent = 'Password changed successfully!';
+          resetChangePasswordFields();
+        } catch (e) { cpErr.textContent = e.message; }
+      });
     });
 
     // Menu button

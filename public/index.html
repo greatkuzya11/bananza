@@ -257,9 +257,9 @@
         <button id="settingsChangePassword" class="settings-item">🔑 Change Password</button>
         <button id="settingsAdminPanel" class="settings-item hidden">🛡 Admin Panel</button>
         <button id="settingsAiBotsPanel" class="settings-item hidden">🤖 OpenAI AI</button>
-        <button id="settingsYandexAiPanel" class="settings-item hidden">YA AI-&#1071;&#1085;&#1076;&#1077;&#1082;&#1089;</button>
-        <button id="settingsDeepSeekAiPanel" class="settings-item hidden">DS DeepSeek AI</button>
-        <button id="settingsGrokAiPanel" class="settings-item hidden">&#x1D54F; Grok AI</button>
+        <button id="settingsYandexAiPanel" class="settings-item hidden">🐓 AI-&#1071;&#1085;&#1076;&#1077;&#1082;&#1089;</button>
+        <button id="settingsDeepSeekAiPanel" class="settings-item hidden">🐋 DeepSeek AI</button>
+        <button id="settingsGrokAiPanel" class="settings-item hidden"> &#x1D54F;  Grok AI</button>
       </div>
     </div>
   </div>
@@ -584,6 +584,7 @@
               <button id="aiBotsRefreshModels" type="button" class="weather-action-btn">Обновить модели</button>
               <button id="aiBotsDeleteKey" type="button" class="weather-action-btn">Удалить ключ</button>
             </div>
+            <div id="aiBotsProviderStatus" class="ai-bot-status admin-action-status"></div>
           </div>
 
           <div class="ai-bot-panel">
@@ -622,6 +623,7 @@
               <button id="aiBotImportJson" type="button" class="weather-action-btn">Загрузить JSON</button>
               <input id="aiBotImportFile" class="hidden" type="file" accept="application/json,.json">
             </div>
+            <div id="aiBotEditorStatus" class="ai-bot-status admin-action-status"></div>
             <div class="ai-bot-avatar-row">
               <div class="avatar-upload-wrap ai-bot-avatar-wrap">
                 <div id="aiBotAvatar" class="avatar-large"></div>
@@ -659,6 +661,7 @@
             <div class="ai-bot-actions">
               <button id="aiBotSaveBottom" type="button" class="btn-primary">Сохранить бота</button>
             </div>
+            <div id="aiBotEditorStatusBottom" class="ai-bot-status admin-action-status"></div>
           </div>
 
           <div class="ai-bot-panel">
@@ -685,6 +688,7 @@
               </div>
             </div>
             <button id="aiBotChatSave" type="button" class="btn-primary">Сохранить для чата</button>
+            <div id="aiBotChatStatus" class="ai-bot-status admin-action-status"></div>
             <div class="settings-hint">Боты отвечают только на @mention или reply на сообщение конкретного бота.</div>
             <div class="settings-hint">Hybrid memory достраивает долговременную память в фоне. Simple context не удаляет уже созданную память.</div>
           </div>
@@ -716,6 +720,7 @@
               <button id="openAiUniversalBotImportJson" type="button" class="weather-action-btn">Import JSON</button>
               <input id="openAiUniversalBotImportFile" class="hidden" type="file" accept="application/json,.json">
             </div>
+            <div id="openAiUniversalBotEditorStatus" class="ai-bot-status admin-action-status"></div>
             <div class="ai-bot-avatar-row">
               <div class="avatar-upload-wrap ai-bot-avatar-wrap">
                 <div id="openAiUniversalBotAvatar" class="avatar-large"></div>
@@ -785,6 +790,7 @@
             <div class="ai-bot-actions">
               <button id="openAiUniversalBotSaveBottom" type="button" class="btn-primary">Save bot</button>
             </div>
+            <div id="openAiUniversalBotEditorStatusBottom" class="ai-bot-status admin-action-status"></div>
             <div class="ai-bot-grid">
               <label>Test mode<select id="openAiUniversalBotTestMode" class="modal-input">
                 <option value="auto">Auto</option>
@@ -819,6 +825,7 @@
               </div>
             </div>
             <button id="openAiUniversalBotChatSave" type="button" class="btn-primary">Save for chat</button>
+            <div id="openAiUniversalBotChatStatus" class="ai-bot-status admin-action-status"></div>
           </div>
 
           <div id="openAiUniversalStatus" class="ai-bot-status"></div>
@@ -872,6 +879,7 @@
               <button id="deepseekAiRefreshModels" type="button" class="weather-action-btn">Refresh models</button>
               <button id="deepseekAiDeleteKey" type="button" class="weather-action-btn">Delete key</button>
             </div>
+            <div id="deepseekAiProviderStatus" class="ai-bot-status admin-action-status"></div>
           </div>
 
           <div class="ai-bot-panel">
@@ -886,6 +894,7 @@
               <button id="deepseekAiBotImportJson" type="button" class="weather-action-btn">Import JSON</button>
               <input id="deepseekAiBotImportFile" class="hidden" type="file" accept="application/json,.json">
             </div>
+            <div id="deepseekAiBotEditorStatus" class="ai-bot-status admin-action-status"></div>
             <div class="ai-bot-avatar-row">
               <div class="avatar-upload-wrap ai-bot-avatar-wrap">
                 <div id="deepseekAiBotAvatar" class="avatar-large"></div>
@@ -944,6 +953,7 @@
               </div>
             </div>
             <button id="deepseekAiBotChatSave" type="button" class="btn-primary">Save for chat</button>
+            <div id="deepseekAiBotChatStatus" class="ai-bot-status admin-action-status"></div>
             <div class="settings-hint">DeepSeek-боты отвечают только на @mention или reply. Hybrid memory для них недоступен, поэтому здесь всегда используется только simple context.</div>
           </div>
 
@@ -1012,6 +1022,7 @@
               <button id="yandexAiRefreshModels" type="button" class="weather-action-btn">&#1054;&#1073;&#1085;&#1086;&#1074;&#1080;&#1090;&#1100; &#1084;&#1086;&#1076;&#1077;&#1083;&#1080;</button>
               <button id="yandexAiDeleteKey" type="button" class="weather-action-btn">Delete key</button>
             </div>
+            <div id="yandexAiProviderStatus" class="ai-bot-status admin-action-status"></div>
           </div>
 
           <div class="ai-bot-panel">
@@ -1026,6 +1037,7 @@
               <button id="yandexAiBotImportJson" type="button" class="weather-action-btn">Import JSON</button>
               <input id="yandexAiBotImportFile" class="hidden" type="file" accept="application/json,.json">
             </div>
+            <div id="yandexAiBotEditorStatus" class="ai-bot-status admin-action-status"></div>
             <div class="ai-bot-avatar-row">
               <div class="avatar-upload-wrap ai-bot-avatar-wrap">
                 <div id="yandexAiBotAvatar" class="avatar-large"></div>
@@ -1085,6 +1097,7 @@
               </div>
             </div>
             <button id="yandexAiBotChatSave" type="button" class="btn-primary">Save for chat</button>
+            <div id="yandexAiBotChatStatus" class="ai-bot-status admin-action-status"></div>
             <div class="settings-hint">Yandex bots answer only to @mention or reply to that bot.</div>
           </div>
 
@@ -1142,6 +1155,7 @@
               <button id="grokAiRefreshModels" type="button" class="weather-action-btn">Refresh models</button>
               <button id="grokAiDeleteKey" type="button" class="weather-action-btn">Delete key</button>
             </div>
+            <div id="grokAiProviderStatus" class="ai-bot-status admin-action-status"></div>
           </div>
 
           <div class="ai-bot-panel grok-bot-panel grok-bot-panel--text hidden">
@@ -1156,6 +1170,7 @@
               <button id="grokAiBotImportJson" type="button" class="weather-action-btn">Import JSON</button>
               <input id="grokAiBotImportFile" class="hidden" type="file" accept="application/json,.json">
             </div>
+            <div id="grokAiBotEditorStatus" class="ai-bot-status admin-action-status"></div>
             <div class="ai-bot-avatar-row">
               <div class="avatar-upload-wrap ai-bot-avatar-wrap">
                 <div id="grokAiBotAvatar" class="avatar-large"></div>
@@ -1192,6 +1207,7 @@
             <div class="ai-bot-actions">
               <button id="grokAiBotSaveBottom" type="button" class="btn-primary">Save bot</button>
             </div>
+            <div id="grokAiBotEditorStatusBottom" class="ai-bot-status admin-action-status"></div>
             <div class="ai-bot-grid">
               <label>Chat<select id="grokAiBotChatSelect" class="modal-input"></select></label>
               <label>Bot<select id="grokAiBotChatBotSelect" class="modal-input"></select></label>
@@ -1214,6 +1230,7 @@
               </div>
             </div>
             <button id="grokAiBotChatSave" type="button" class="btn-primary">Save for chat</button>
+            <div id="grokAiBotChatStatus" class="ai-bot-status admin-action-status"></div>
           </div>
 
           <div class="ai-bot-panel grok-bot-panel grok-bot-panel--image hidden">
@@ -1228,6 +1245,7 @@
               <button id="grokAiImageBotImportJson" type="button" class="weather-action-btn">Import JSON</button>
               <input id="grokAiImageBotImportFile" class="hidden" type="file" accept="application/json,.json">
             </div>
+            <div id="grokAiImageBotEditorStatus" class="ai-bot-status admin-action-status"></div>
             <div class="ai-bot-avatar-row">
               <div class="avatar-upload-wrap ai-bot-avatar-wrap">
                 <div id="grokAiImageBotAvatar" class="avatar-large"></div>
@@ -1269,6 +1287,7 @@
               </div>
             </div>
             <button id="grokAiImageBotChatSave" type="button" class="btn-primary">Save for chat</button>
+            <div id="grokAiImageBotChatStatus" class="ai-bot-status admin-action-status"></div>
             <div class="settings-hint">Image bots always use simple mode and answer with one generated image saved to local uploads.</div>
           </div>
 
@@ -1284,6 +1303,7 @@
               <button id="grokAiUniversalBotImportJson" type="button" class="weather-action-btn">Import JSON</button>
               <input id="grokAiUniversalBotImportFile" class="hidden" type="file" accept="application/json,.json">
             </div>
+            <div id="grokAiUniversalBotEditorStatus" class="ai-bot-status admin-action-status"></div>
             <div class="ai-bot-avatar-row">
               <div class="avatar-upload-wrap ai-bot-avatar-wrap">
                 <div id="grokAiUniversalBotAvatar" class="avatar-large"></div>
@@ -1367,6 +1387,7 @@
               </div>
             </div>
             <button id="grokAiUniversalBotChatSave" type="button" class="btn-primary">Save for chat</button>
+            <div id="grokAiUniversalBotChatStatus" class="ai-bot-status admin-action-status"></div>
           </div>
 
           <div id="grokAiNavPanel" class="ai-bot-panel">
