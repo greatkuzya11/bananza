@@ -6,3 +6,7 @@ uploads/*
 !uploads/.gitkeep
 bananza.db-shm
 bananza.db-wal
+coverage/
+playwright-report/
+test-results/
+test/.runtime/

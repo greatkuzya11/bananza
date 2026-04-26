@@ -1,0 +1,11 @@
+{
+  "exclude": [
+    "test/**",
+    "playwright.config.js"
+  ],
+  "report-dir": "coverage",
+  "reporter": [
+    "text",
+    "html"
+  ]
+}

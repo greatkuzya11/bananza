@@ -8,14 +8,55 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy via SSH
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build production bundle
+        run: |
+          tar \
+            --exclude=.git \
+            --exclude=node_modules \
+            --exclude=test \
+            --exclude=coverage \
+            --exclude=playwright-report \
+            --exclude=test-results \
+            --exclude=playwright.config.js \
+            --exclude=.c8rc.json \
+            --exclude=scripts/run-node-tests.js \
+            -czf bananza-prod.tgz .
+
+      - name: Upload production bundle
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          source: bananza-prod.tgz
+          target: /tmp/
+
+      - name: Deploy production bundle via SSH
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           script: |
+            set -e
+            rm -rf /tmp/bananza-prod
+            mkdir -p /tmp/bananza-prod
+            tar -xzf /tmp/bananza-prod.tgz -C /tmp/bananza-prod
+            mkdir -p /var/www/bananza
+            rsync -a --delete \
+              --exclude uploads \
+              --exclude voice/models \
+              --exclude bananza.db \
+              --exclude bananza.db-shm \
+              --exclude bananza.db-wal \
+              --exclude .secret \
+              --exclude .vapid.json \
+              /tmp/bananza-prod/ /var/www/bananza/
             cd /var/www/bananza
-            git pull origin main
             npm install --omit=dev
             systemctl restart bananza
+            rm -rf /tmp/bananza-prod
+            rm -f /tmp/bananza-prod.tgz
