@@ -13,7 +13,8 @@
   const MENTION_PICKER_TAP_DEAD_ZONE = 10;
   const MAX_MSG = 5000;
   const MAX_ATTACHMENTS = 10;
-  const MAX_FILE_SIZE = 25 * 1024 * 1024;
+  const MAX_FILE_SIZE = 1024 * 1024 * 1024;
+  const MAX_FILE_SIZE_LABEL = '1 GB';
   const POLL_MIN_OPTIONS = 2;
   const POLL_MAX_OPTIONS = 10;
   const POLL_CLOSE_PRESET_MS = Object.freeze({
@@ -23,25 +24,24 @@
     '3d': 3 * 24 * 60 * 60 * 1000,
     '7d': 7 * 24 * 60 * 60 * 1000,
   });
-  const FILE_TYPE_BY_MIME = {
-    'image/jpeg': 'image', 'image/png': 'image', 'image/webp': 'image', 'image/gif': 'image',
-    'application/pdf': 'document', 'text/plain': 'document',
-    'application/msword': 'document',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'document',
-    'application/vnd.ms-excel': 'document',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'document',
-    'application/zip': 'document',
-    'application/x-rar-compressed': 'document', 'application/vnd.rar': 'document',
-    'application/x-msdownload': 'document', 'application/octet-stream': 'document',
-    'audio/mpeg': 'audio', 'audio/wav': 'audio', 'audio/ogg': 'audio',
-    'audio/mp4': 'audio', 'audio/x-m4a': 'audio', 'audio/aac': 'audio',
-    'video/mp4': 'video', 'video/webm': 'video', 'video/quicktime': 'video',
-  };
-  const ALLOWED_FILE_EXT = new Set([
-    '.jpg','.jpeg','.png','.webp','.gif',
-    '.pdf','.txt','.doc','.docx','.xls','.xlsx','.zip','.rar','.exe',
-    '.mp3','.wav','.ogg','.m4a',
-    '.mp4','.webm','.mov',
+  const IMAGE_MIME_TYPES = new Set([
+    'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/svg+xml', 'image/avif', 'image/bmp',
+  ]);
+  const AUDIO_MIME_TYPES = new Set([
+    'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/wave', 'audio/ogg',
+    'audio/webm', 'audio/mp4', 'audio/x-m4a', 'audio/aac', 'audio/flac', 'audio/x-flac',
+  ]);
+  const VIDEO_MIME_TYPES = new Set([
+    'video/mp4', 'video/webm', 'video/quicktime', 'video/ogg', 'video/x-m4v',
+  ]);
+  const IMAGE_EXTENSIONS = new Set([
+    '.jpg', '.jpeg', '.png', '.webp', '.gif', '.svg', '.avif', '.bmp',
+  ]);
+  const AUDIO_EXTENSIONS = new Set([
+    '.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac', '.weba',
+  ]);
+  const VIDEO_EXTENSIONS = new Set([
+    '.mp4', '.webm', '.mov', '.ogv', '.m4v',
   ]);
   const UI_THEMES = [
     { id: 'bananza', name: 'BananZa', note: 'Classic blue', colors: ['#17212b', '#5eb5f7'], own: '#2b5278', other: '#182533' },
@@ -745,6 +745,8 @@
     scrollToBottom: (instant = false) => scrollToBottom(instant),
     playSound: (type, options) => playAppSound(type, options),
     bindMediaPlayback: (mediaEl, message, role) => bindMediaPlaybackState(mediaEl, message, role),
+    getAttachmentPreviewUrl: (source) => getAttachmentPreviewUrl(source),
+    getAttachmentDownloadUrl: (source) => getAttachmentDownloadUrl(source),
     getDom: () => ({
       sendBtn,
       msgInput,
@@ -1348,7 +1350,8 @@
   function formatSize(bytes) {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
   }
 
   function fileExtension(name) {
@@ -1356,14 +1359,42 @@
     return m ? m[0] : '';
   }
 
+  function normalizeMimeType(value) {
+    return String(value || '').split(';')[0].trim().toLowerCase();
+  }
+
+  function getStoredAttachmentUrl(storedName, { preview = false } = {}) {
+    const name = String(storedName || '').trim();
+    if (!name) return '';
+    const encoded = encodeURIComponent(name);
+    return preview ? `/uploads/${encoded}/preview` : `/uploads/${encoded}`;
+  }
+
+  function resolveAttachmentUrl(source, { preview = false } = {}) {
+    if (!source) return '';
+    if (typeof source === 'string') {
+      return getStoredAttachmentUrl(source, { preview });
+    }
+    const localUrl = String(source.client_file_url || source.clientFileUrl || '').trim();
+    if (localUrl) return localUrl;
+    return getStoredAttachmentUrl(source.file_stored || source.stored_name || source.storedName || '', { preview });
+  }
+
+  function getAttachmentPreviewUrl(source) {
+    return resolveAttachmentUrl(source, { preview: true });
+  }
+
+  function getAttachmentDownloadUrl(source) {
+    return resolveAttachmentUrl(source, { preview: false });
+  }
+
   function getLocalFileType(file) {
     if (!file) return null;
+    const mime = normalizeMimeType(file.type);
     const ext = fileExtension(file.name);
-    if (!ALLOWED_FILE_EXT.has(ext)) return null;
-    if (FILE_TYPE_BY_MIME[file.type]) return FILE_TYPE_BY_MIME[file.type];
-    if (['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(ext)) return 'image';
-    if (['.mp3', '.wav', '.ogg', '.m4a'].includes(ext)) return 'audio';
-    if (['.mp4', '.webm', '.mov'].includes(ext)) return 'video';
+    if (IMAGE_MIME_TYPES.has(mime) || IMAGE_EXTENSIONS.has(ext)) return 'image';
+    if (AUDIO_MIME_TYPES.has(mime) || AUDIO_EXTENSIONS.has(ext)) return 'audio';
+    if (VIDEO_MIME_TYPES.has(mime) || VIDEO_EXTENSIONS.has(ext)) return 'video';
     return 'document';
   }
 
@@ -10285,7 +10316,7 @@
         try { if (window.messageCache) window.messageCache.upsertMessage(msg.message).catch(()=>{}); } catch (e) {}
         try {
           if (msg.message.file_type === 'image' && msg.message.file_stored && window.cacheAssets) {
-            window.cacheAssets([`/uploads/${msg.message.file_stored}`]).catch(()=>{});
+            window.cacheAssets([getAttachmentPreviewUrl(msg.message)]).catch(()=>{});
           }
         } catch (e) {}
         // Track unread for non-current chats
@@ -11202,7 +11233,7 @@
         if (chat?.background_url) assetUrls.add(chat.background_url);
         for (const message of messages || []) {
           if (message.avatar_url) assetUrls.add(message.avatar_url);
-          if (message.file_type === 'image' && message.file_stored) assetUrls.add(`/uploads/${message.file_stored}`);
+          if (message.file_type === 'image' && message.file_stored) assetUrls.add(getAttachmentPreviewUrl(message));
         }
         await window.cacheAssets(Array.from(assetUrls).slice(0, 12));
       } catch (e) {}
@@ -12351,7 +12382,7 @@
       } catch (e) {}
       try {
         if (msg?.file_type === 'image' && msg.file_stored && window.cacheAssets) {
-          window.cacheAssets([`/uploads/${msg.file_stored}`]).catch(()=>{});
+          window.cacheAssets([getAttachmentPreviewUrl(msg)]).catch(()=>{});
         }
       } catch (e) {}
     });
@@ -12547,7 +12578,7 @@
     } catch (e) {}
     try {
       if (msg.file_type === 'image' && msg.file_stored && window.cacheAssets) {
-        window.cacheAssets([`/uploads/${msg.file_stored}`]).catch(()=>{});
+        window.cacheAssets([getAttachmentPreviewUrl(msg)]).catch(()=>{});
       }
     } catch (e) {}
     if (!loadingMoreAfter) updateHasMoreAfterFromChat(currentChatId);
@@ -13038,17 +13069,50 @@
     return msg?.is_video_note ? videoLabel : voiceLabel;
   }
 
+  function renderResolvedFileAttachment(msg) {
+    const previewUrl = getAttachmentPreviewUrl(msg);
+    const downloadUrl = getAttachmentDownloadUrl(msg) || previewUrl;
+    switch (msg.file_type) {
+      case 'image':
+        return `<img class="msg-image" src="${previewUrl}" alt="${esc(msg.file_name)}">`;
+      case 'audio':
+        return `<div class="msg-audio">
+          <div style="font-size:13px;margin-bottom:4px">рџЋµ ${esc(msg.file_name)}</div>
+          <audio controls preload="none"><source src="${previewUrl}" type="${msg.file_mime}"></audio>
+          <div style="font-size:11px;color:var(--text-secondary)">${formatSize(msg.file_size)} · <a href="${downloadUrl}" download="${esc(msg.file_name)}">Download</a></div>
+        </div>`;
+      case 'video':
+        return `<div class="msg-video">
+          <div class="msg-video-wrap">
+            <video controls preload="metadata" playsinline><source src="${previewUrl}" type="${msg.file_mime}"></video>
+            <button class="msg-expand-btn" type="button" title="Fullscreen">&#x26F6;</button>
+          </div>
+          <div style="font-size:11px;color:var(--text-secondary);margin-top:4px">${esc(msg.file_name)} · ${formatSize(msg.file_size)} · <a href="${downloadUrl}" download="${esc(msg.file_name)}">Download</a></div>
+        </div>`;
+      default:
+        return `<a class="msg-file" href="${downloadUrl}" download="${esc(msg.file_name)}">
+          <div class="msg-file-icon">рџ“„</div>
+          <div class="msg-file-info">
+            <div class="msg-file-name">${esc(msg.file_name)}</div>
+            <div class="msg-file-size">${formatSize(msg.file_size)}</div>
+          </div>
+        </a>`;
+    }
+  }
+
   function renderFileAttachment(msg) {
     const customVideoNoteAttachment = window.BananzaVideoNoteHooks?.renderAttachment?.(msg);
     if (customVideoNoteAttachment) return customVideoNoteAttachment;
-    const url = msg.client_file_url || `/uploads/${msg.file_stored}`;
+    return renderResolvedFileAttachment(msg);
+    const previewUrl = getAttachmentPreviewUrl(msg);
+    const downloadUrl = getAttachmentDownloadUrl(msg) || previewUrl;
     switch (msg.file_type) {
       case 'image':
-        return `<img class="msg-image" src="${url}" alt="${esc(msg.file_name)}">`;
+        return `<img class="msg-image" src="${previewUrl}" alt="${esc(msg.file_name)}">`;
       case 'audio':
         return `<div class="msg-audio">
           <div style="font-size:13px;margin-bottom:4px">🎵 ${esc(msg.file_name)}</div>
-          <audio controls preload="none"><source src="${url}" type="${msg.file_mime}"></audio>
+          <audio controls preload="none"><source src="${previewUrl}" type="${msg.file_mime}"></audio>
           <div style="font-size:11px;color:var(--text-secondary)">${formatSize(msg.file_size)} · <a href="${url}" download="${esc(msg.file_name)}">Download</a></div>
         </div>`;
       case 'video':
@@ -14103,8 +14167,7 @@
     const files = Array.from(fileList).slice(0, MAX_ATTACHMENTS);
     if (files.length === 0) return;
     for (const f of files) {
-      if (f.size > MAX_FILE_SIZE) { alert(`File too large: ${f.name} (max 25 MB)`); return; }
-      if (!getLocalFileType(f)) { alert(`File type not allowed: ${f.name}`); return; }
+      if (f.size > MAX_FILE_SIZE) { alert(`File too large: ${f.name} (max ${MAX_FILE_SIZE_LABEL})`); return; }
     }
 
     pendingFiles = files.map(localAttachmentFromFile).filter(Boolean);
@@ -15772,7 +15835,7 @@
   function galleryItemFromMessage(msg, fallbackSrc = '') {
     if (msg?.is_video_note) return null;
     const type = msg?.file_type === 'video' ? 'video' : (msg?.file_type === 'image' ? 'image' : '');
-    const src = normalizeGallerySrc(fallbackSrc || msg?.client_file_url || (msg?.file_stored ? `/uploads/${msg.file_stored}` : ''));
+    const src = normalizeGallerySrc(fallbackSrc || getAttachmentPreviewUrl(msg));
     if (!type || !src) return null;
     return {
       id: Number(msg.id || 0),

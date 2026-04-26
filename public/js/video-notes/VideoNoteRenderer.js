@@ -150,7 +150,9 @@
       const snapshot = this.shapeRegistry?.snapshotFromMessage?.(message);
       const effectiveShapeId = this.getEffectiveShapeId(message);
       const maskUrl = this.shapeRegistry?.getMaskUrl?.(snapshot) || '';
-      const src = message.client_file_url || `/uploads/${message.file_stored}`;
+      const src = this.getBridge()?.getAttachmentPreviewUrl?.(message)
+        || message.client_file_url
+        || `/uploads/${message.file_stored}`;
       const gradientId = `video-note-progress-${sanitizeIdPart(message.id || message.client_id || 'local')}`;
       return `
         <div class="video-note" data-video-note="1">

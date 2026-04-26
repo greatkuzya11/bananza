@@ -24,6 +24,13 @@ const { createPollService, POLL_CLOSE_PRESETS, toDbDate } = require('./polls');
 const { createMessageActionsService } = require('./messageActions');
 const { createVideoNoteFeature } = require('./videoNotes');
 const { createVideoNoteStorage } = require('./videoNotes/storage');
+const {
+  GENERAL_UPLOAD_LIMIT_BYTES,
+  GENERAL_UPLOAD_LIMIT_LABEL,
+  classifyUpload,
+  isPreviewableFileType,
+  normalizeMimeType,
+} = require('./uploadUtils');
 
 // ── JWT Secret ──────────────────────────────────────────────────────────────
 const SECRET_PATH = path.join(__dirname, '.secret');
@@ -55,39 +62,13 @@ if (!fs.existsSync(AVATARS_DIR)) fs.mkdirSync(AVATARS_DIR, { recursive: true });
 const BACKGROUNDS_DIR = path.join(UPLOADS_DIR, 'backgrounds');
 if (!fs.existsSync(BACKGROUNDS_DIR)) fs.mkdirSync(BACKGROUNDS_DIR, { recursive: true });
 
-const ALLOWED_MIME = {
-  'image/jpeg': 'image', 'image/png': 'image', 'image/webp': 'image', 'image/gif': 'image',
-  'application/pdf': 'document', 'text/plain': 'document',
-  'application/msword': 'document',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'document',
-  'application/vnd.ms-excel': 'document',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'document',
-  'application/zip': 'document',
-  'application/x-rar-compressed': 'document', 'application/vnd.rar': 'document',
-  'application/x-msdownload': 'document', 'application/octet-stream': 'document',
-  'audio/mpeg': 'audio', 'audio/wav': 'audio', 'audio/ogg': 'audio',
-  'audio/mp4': 'audio', 'audio/x-m4a': 'audio', 'audio/aac': 'audio',
-  'video/mp4': 'video', 'video/webm': 'video', 'video/quicktime': 'video',
-};
-const ALLOWED_EXT = new Set([
-  '.jpg','.jpeg','.png','.webp','.gif',
-  '.pdf','.txt','.doc','.docx','.xls','.xlsx','.zip','.rar','.exe',
-  '.mp3','.wav','.ogg','.m4a',
-  '.mp4','.webm','.mov',
-]);
-const MAX_FILE = 25 * 1024 * 1024;
-
 const storage = multer.diskStorage({
   destination: UPLOADS_DIR,
   filename: (_req, file, cb) => cb(null, uuidv4() + path.extname(file.originalname).toLowerCase()),
 });
 const upload = multer({
-  storage, limits: { fileSize: MAX_FILE },
-  fileFilter: (_req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    if (ALLOWED_MIME[file.mimetype] && ALLOWED_EXT.has(ext)) cb(null, true);
-    else cb(new Error('File type not allowed'));
-  },
+  storage,
+  limits: { fileSize: GENERAL_UPLOAD_LIMIT_BYTES },
 });
 
 const AVATAR_MIME = { 'image/jpeg': true, 'image/png': true, 'image/webp': true };
@@ -1216,6 +1197,41 @@ const movePinnedChatForUserTx = db.transaction((chatId, userId, direction) => {
 function safeUploadPath(storedName, baseDir = UPLOADS_DIR) {
   const name = path.basename(String(storedName || ''));
   return name ? path.join(baseDir, name) : '';
+}
+
+function sanitizeAttachmentFilename(filename) {
+  const value = String(filename || 'Attachment')
+    .replace(/[\/\\?%*:|"<>]/g, '_')
+    .replace(/[\r\n]+/g, ' ')
+    .trim();
+  return value || 'Attachment';
+}
+
+function buildContentDisposition(dispositionType, filename) {
+  const safeFilename = sanitizeAttachmentFilename(filename);
+  const normalized = typeof safeFilename.normalize === 'function'
+    ? safeFilename.normalize('NFKD')
+    : safeFilename;
+  const asciiFallback = normalized
+    .replace(/[^\x20-\x7E]/g, '_')
+    .replace(/["\\]/g, '_')
+    .trim() || 'attachment';
+  const encodedFilename = encodeURIComponent(safeFilename)
+    .replace(/['()]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
+    .replace(/\*/g, '%2A');
+  return `${dispositionType}; filename="${asciiFallback}"; filename*=UTF-8''${encodedFilename}`;
+}
+
+function applyStoredFileHeaders(res, file, { dispositionType = 'attachment' } = {}) {
+  const mimeType = normalizeMimeType(file?.mime_type) || 'application/octet-stream';
+  res.setHeader('Content-Type', mimeType);
+  res.setHeader('Content-Disposition', buildContentDisposition(dispositionType, file?.original_name));
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+}
+
+function applySvgPreviewSecurityHeaders(res) {
+  res.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self' data: blob:; style-src 'unsafe-inline'; sandbox");
 }
 
 function unlinkIfPresent(filePath) {
@@ -2627,21 +2643,24 @@ app.delete('/api/chats/:chatId/members/:userId', auth, (req, res) => {
 app.post('/api/upload', auth, upLimiter, (req, res) => {
   upload.single('file')(req, res, (err) => {
     if (err) {
-      if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'File too large (max 25 MB)' });
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: `File too large (max ${GENERAL_UPLOAD_LIMIT_LABEL})` });
+      }
       return res.status(400).json({ error: err.message || 'Upload failed' });
     }
     if (!req.file) return res.status(400).json({ error: 'No file' });
 
     // Fix multer latin1 encoding for non-ASCII filenames
     const originalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+    const mimeType = normalizeMimeType(req.file.mimetype) || 'application/octet-stream';
+    const fileType = classifyUpload({ mimeType, originalName });
 
-    const fileType = ALLOWED_MIME[req.file.mimetype] || 'document';
     const r = db.prepare('INSERT INTO files(original_name,stored_name,mime_type,size,type,uploaded_by) VALUES(?,?,?,?,?,?)')
-      .run(originalName, req.file.filename, req.file.mimetype, req.file.size, fileType, req.user.id);
+      .run(originalName, req.file.filename, mimeType, req.file.size, fileType, req.user.id);
 
     res.json({
       id: r.lastInsertRowid, original_name: originalName,
-      stored_name: req.file.filename, mime_type: req.file.mimetype,
+      stored_name: req.file.filename, mime_type: mimeType,
       size: req.file.size, type: fileType,
     });
   });
@@ -2737,9 +2756,25 @@ app.get('/uploads/:filename', (req, res) => {
   const file = db.prepare('SELECT * FROM files WHERE stored_name=?').get(filename);
   if (!file) return res.status(404).json({ error: 'Not found' });
 
-  res.setHeader('Content-Type', file.mime_type);
-  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.original_name)}"`);
-  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  applyStoredFileHeaders(res, file, { dispositionType: 'attachment' });
+  res.sendFile(filePath);
+});
+
+app.get('/uploads/:filename/preview', (req, res) => {
+  const filename = path.basename(req.params.filename);
+  const filePath = path.join(UPLOADS_DIR, filename);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
+
+  const file = db.prepare('SELECT * FROM files WHERE stored_name=?').get(filename);
+  if (!file) return res.status(404).json({ error: 'Not found' });
+  if (!isPreviewableFileType(file.type)) {
+    return res.status(404).json({ error: 'Preview not available' });
+  }
+
+  applyStoredFileHeaders(res, file, { dispositionType: 'inline' });
+  if (normalizeMimeType(file.mime_type) === 'image/svg+xml') {
+    applySvgPreviewSecurityHeaders(res);
+  }
   res.sendFile(filePath);
 });
 

@@ -139,13 +139,11 @@ class ApiSession {
   }
 
   async uploadTextFile(filename = 'note.txt', text = 'Bananza attachment') {
-    const form = new FormData();
-    form.append('file', new Blob([text], { type: 'text/plain' }), filename);
-    const { data } = await this.request('/api/upload', {
-      method: 'POST',
-      formData: form,
+    return this.uploadFile({
+      filename,
+      mimeType: 'text/plain',
+      body: text,
     });
-    return data;
   }
 
   async uploadPngFile(filename = 'pixel.png') {
@@ -153,8 +151,16 @@ class ApiSession {
       '89504E470D0A1A0A0000000D49484452000000010000000108060000001F15C4890000000D49444154789C6360606060000000040001F61738550000000049454E44AE426082',
       'hex'
     );
+    return this.uploadFile({
+      filename,
+      mimeType: 'image/png',
+      body: png,
+    });
+  }
+
+  async uploadFile({ filename = 'attachment.bin', mimeType = 'application/octet-stream', body = '' } = {}) {
     const form = new FormData();
-    form.append('file', new Blob([png], { type: 'image/png' }), filename);
+    form.append('file', new Blob([body], { type: mimeType }), filename);
     const { data } = await this.request('/api/upload', {
       method: 'POST',
       formData: form,

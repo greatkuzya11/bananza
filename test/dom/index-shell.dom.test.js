@@ -56,3 +56,13 @@ test('public/index.html exposes core shell nodes used by runtime modules', () =>
     assert.ok(document.getElementById(id), `Expected #${id} to exist in index.html`);
   });
 });
+
+test('public/index.html keeps universal file pickers and mobile media shortcuts', () => {
+  const dom = new JSDOM(indexHtml);
+  const document = dom.window.document;
+
+  assert.equal(document.getElementById('fileInput').getAttribute('accept'), null);
+  assert.equal(document.getElementById('fileInputDocs').getAttribute('accept'), null);
+  assert.equal(document.getElementById('fileInputGallery').getAttribute('accept'), 'image/*,video/*');
+  assert.equal(document.getElementById('fileInputCamera').getAttribute('accept'), 'image/*');
+});

@@ -60,6 +60,78 @@ test('message creation, file upload, edit, search, read and delete work end-to-e
   assert.equal(deleted.data.ok, true);
 });
 
+test('universal uploads keep trusted media previewable and unsafe files download-only', async () => {
+  const { admin, privateChat, groupChat } = scenario;
+
+  const binaryUpload = await admin.uploadFile({
+    filename: 'cover.psd',
+    mimeType: 'application/octet-stream',
+    body: 'layered-binary',
+  });
+  assert.equal(binaryUpload.type, 'document');
+
+  const binaryMessage = await admin.request(`/api/chats/${groupChat.id}/messages`, {
+    method: 'POST',
+    json: {
+      text: 'Binary attachment',
+      fileId: binaryUpload.id,
+    },
+  });
+  assert.equal(binaryMessage.data.file_type, 'document');
+  assert.equal(binaryMessage.data.file_name, 'cover.psd');
+
+  const binaryPreview = await admin.request(`/uploads/${binaryUpload.stored_name}/preview`, {
+    expectedStatus: 404,
+  });
+  assert.equal(binaryPreview.data.error, 'Preview not available');
+
+  const binaryDownload = await admin.request(`/uploads/${binaryUpload.stored_name}`);
+  assert.match(binaryDownload.headers['content-disposition'] || '', /^attachment;/);
+  assert.equal(binaryDownload.headers['x-content-type-options'], 'nosniff');
+
+  const htmlUpload = await admin.uploadFile({
+    filename: 'page.html',
+    mimeType: 'text/html',
+    body: '<!doctype html><html><body><script>alert(1)</script></body></html>',
+  });
+  assert.equal(htmlUpload.type, 'document');
+
+  const htmlDownload = await admin.request(`/uploads/${htmlUpload.stored_name}`);
+  assert.match(htmlDownload.headers['content-disposition'] || '', /^attachment;/);
+  assert.equal(htmlDownload.headers['content-type'], 'text/html');
+
+  const svgUpload = await admin.uploadFile({
+    filename: 'diagram.svg',
+    mimeType: 'image/svg+xml',
+    body: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10" fill="gold"/></svg>',
+  });
+  assert.equal(svgUpload.type, 'image');
+
+  const svgMessage = await admin.request(`/api/chats/${groupChat.id}/messages`, {
+    method: 'POST',
+    json: {
+      text: 'Vector attachment',
+      fileId: svgUpload.id,
+    },
+  });
+  assert.equal(svgMessage.data.file_type, 'image');
+  assert.equal(svgMessage.data.file_name, 'diagram.svg');
+
+  const svgPreview = await admin.request(`/uploads/${svgUpload.stored_name}/preview`);
+  assert.equal(svgPreview.headers['content-type'], 'image/svg+xml');
+  assert.match(svgPreview.headers['content-disposition'] || '', /^inline;/);
+  assert.equal(svgPreview.headers['x-content-type-options'], 'nosniff');
+  assert.match(svgPreview.headers['content-security-policy'] || '', /sandbox/);
+
+  const forwardedBinary = await admin.request(`/api/messages/${binaryMessage.data.id}/forward`, {
+    method: 'POST',
+    json: { targetChatId: privateChat.id },
+  });
+  assert.equal(forwardedBinary.data.forwarded_from_message_id, binaryMessage.data.id);
+  assert.equal(forwardedBinary.data.file_type, 'document');
+  assert.equal(forwardedBinary.data.file_name, 'cover.psd');
+});
+
 test('link previews, reactions, pins, polls, notes and forwarding work through public APIs', async () => {
   const { admin, bob, privateChat, groupChat } = scenario;
 

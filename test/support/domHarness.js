@@ -242,6 +242,16 @@ function installAppBridge(dom, overrides = {}) {
     getCurrentModalAnimationSpeed() {
       return 8;
     },
+    getAttachmentPreviewUrl(source) {
+      if (!source) return '';
+      if (typeof source === 'string') return `/uploads/${encodeURIComponent(source)}/preview`;
+      return source.client_file_url || (source.file_stored ? `/uploads/${encodeURIComponent(source.file_stored)}/preview` : '');
+    },
+    getAttachmentDownloadUrl(source) {
+      if (!source) return '';
+      if (typeof source === 'string') return `/uploads/${encodeURIComponent(source)}`;
+      return source.client_file_url || (source.file_stored ? `/uploads/${encodeURIComponent(source.file_stored)}` : '');
+    },
     isIosWebkit() {
       return false;
     },

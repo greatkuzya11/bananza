@@ -83,7 +83,9 @@
       const root = this.ensureUi();
       const snapshot = this.shapeRegistry?.snapshotFromMessage?.(message);
       const maskUrl = this.shapeRegistry?.getMaskUrl?.(snapshot);
-      const src = message.client_file_url || `/uploads/${message.file_stored}`;
+      const src = this.getBridge()?.getAttachmentPreviewUrl?.(message)
+        || message.client_file_url
+        || `/uploads/${message.file_stored}`;
       this.currentMessageId = Number(message.id || 0);
       if (this.videoEl) {
         this.videoEl.src = src;

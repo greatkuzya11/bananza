@@ -68,5 +68,5 @@ test('video note renderer produces attachment markup with expected controls', ()
 
   assert.ok(html.includes('video-note-stage'));
   assert.ok(html.includes('video-note-shape-toggle-btn'));
-  assert.ok(html.includes('/uploads/video.webm'));
+  assert.ok(html.includes('/uploads/video.webm/preview'));
 });
