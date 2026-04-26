@@ -439,6 +439,7 @@
   let iosComposerFocused = false;
   let iosComposerBlurTimer = null;
   let iosBackNavigationToken = 0;
+  let inAppChatBackSkipNextPopstate = false;
   let mobileViewportPrevHeight = 0;
   let mobileViewportHeightSyncBound = false;
 
@@ -17012,6 +17013,7 @@
     clearTimeout(backBtn.__navTimer);
     clearTimeout(backBtn.__unlockTimer);
     clearTimeout(backBtn.__spinTimer);
+    inAppChatBackSkipNextPopstate = false;
     backBtn.classList.remove('is-spinning');
     backBtn.__isNavigating = false;
   }
@@ -17023,6 +17025,7 @@
     backBtn.__unlockTimer = setTimeout(() => {
       if (!backBtn) return;
       if (isIosViewportFixTarget) iosBackNavigationToken = 0;
+      inAppChatBackSkipNextPopstate = false;
       backBtn.__isNavigating = false;
       backBtn.classList.remove('is-spinning');
     }, isIosViewportFixTarget ? 420 : 260);
@@ -17152,8 +17155,8 @@
 
   function navigateBackToChatList({ fromInAppButton = false } = {}) {
     hideFloatingMessageActions({ immediate: true });
-    if (fromInAppButton && isIosViewportFixTarget && history.state?.chat) {
-      iosBackNavigationToken += 1;
+    if (fromInAppButton && history.state?.chat) {
+      inAppChatBackSkipNextPopstate = true;
       revealSidebarFromChat({ forceAnimation: true });
       history.back();
       return;
@@ -18194,6 +18197,14 @@
 
     // Android back gesture / button
     window.addEventListener('popstate', () => {
+      if (inAppChatBackSkipNextPopstate) {
+        inAppChatBackSkipNextPopstate = false;
+        searchPanelSkipNextPopstate = false;
+        ivSkipNextPopstate = false;
+        iosBackNavigationToken = 0;
+        resetBackButtonNavigationState();
+        return;
+      }
       if (modalSkipPopstateCount > 0) {
         modalSkipPopstateCount -= 1;
         return;
