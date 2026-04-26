@@ -500,7 +500,7 @@ const chatPinsStmt = db.prepare(`
   LEFT JOIN files f ON f.id=m.file_id
   LEFT JOIN voice_messages vm ON vm.message_id=m.id
   WHERE p.chat_id=? AND m.is_deleted=0
-  ORDER BY p.id DESC
+  ORDER BY p.id ASC
 `);
 const pinEventMessageStmt = db.prepare(`
   SELECT
@@ -880,7 +880,14 @@ function broadcastPinsUpdated(chatId, { action = 'updated', actorId = null, mess
     messageId,
     pin_event: pinEvent || null,
   });
-  return { ...payload, pin_event: pinEvent || null };
+  return {
+    ...payload,
+    chatId,
+    action,
+    actorId,
+    messageId,
+    pin_event: pinEvent || null,
+  };
 }
 
 function normalizeClientId(value) {

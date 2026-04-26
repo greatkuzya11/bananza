@@ -164,12 +164,31 @@ test('link previews, reactions, pins, polls, notes and forwarding work through p
     json: {},
   });
   assert.equal(pinned.data.changed, true);
+  assert.equal(pinned.data.action, 'pinned');
+  assert.equal(pinned.data.messageId, previewMessage.data.id);
   assert.equal(pinned.data.pins.length, 1);
 
-  const unpinned = await bob.request(`/api/messages/${previewMessage.data.id}/pin`, {
-    method: 'DELETE',
+  const secondPinnedMessage = await admin.request(`/api/chats/${groupChat.id}/messages`, {
+    method: 'POST',
+    json: { text: 'Second pin target' },
   });
-  assert.equal(unpinned.data.ok, true);
+  const secondPinned = await bob.request(`/api/messages/${secondPinnedMessage.data.id}/pin`, {
+    method: 'POST',
+    json: {},
+  });
+  assert.equal(secondPinned.data.changed, true);
+  assert.equal(secondPinned.data.action, 'pinned');
+  assert.equal(secondPinned.data.messageId, secondPinnedMessage.data.id);
+  assert.deepEqual(
+    secondPinned.data.pins.map((pin) => pin.message_id),
+    [previewMessage.data.id, secondPinnedMessage.data.id]
+  );
+
+  const chatPins = await bob.request(`/api/chats/${groupChat.id}/pins`);
+  assert.deepEqual(
+    chatPins.data.pins.map((pin) => pin.message_id),
+    [previewMessage.data.id, secondPinnedMessage.data.id]
+  );
 
   const pollMessage = await admin.request(`/api/chats/${groupChat.id}/messages`, {
     method: 'POST',
@@ -214,6 +233,13 @@ test('link previews, reactions, pins, polls, notes and forwarding work through p
     json: { targetChatId: privateChat.id },
   });
   assert.equal(forwarded.data.forwarded_from_message_id, previewMessage.data.id);
+
+  const unpinned = await bob.request(`/api/messages/${previewMessage.data.id}/pin`, {
+    method: 'DELETE',
+  });
+  assert.equal(unpinned.data.ok, true);
+  assert.equal(unpinned.data.action, 'unpinned');
+  assert.equal(unpinned.data.messageId, previewMessage.data.id);
 });
 
 test('voice and video note endpoints work in isolated sandbox with mocked providers', async () => {

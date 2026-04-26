@@ -4021,6 +4021,7 @@
     const chatId = Number(data.chatId || data.chat_id || currentChatId || 0);
     if (!chatId) return;
     const previousPins = getChatPins(chatId);
+    const hadActiveSelection = activePinIndexByChat.has(chatId);
     const previousIndex = Math.max(0, Number(activePinIndexByChat.get(chatId) || 0));
     const previousPin = previousPins[previousIndex] || previousPins[0] || null;
     const nextPins = normalizePins(data.pins);
@@ -4028,7 +4029,9 @@
     const pinnedMessageId = Number(data.messageId || data.message_id || 0);
     chatPinsByChat.set(chatId, nextPins);
 
-    let nextIndex = 0;
+    let nextIndex = nextPins.length
+      ? (hadActiveSelection ? Math.min(previousIndex, nextPins.length - 1) : nextPins.length - 1)
+      : 0;
     if (action === 'pinned' && pinnedMessageId) {
       const pinnedIndex = nextPins.findIndex(pin => Number(pin.message_id) === pinnedMessageId);
       if (pinnedIndex >= 0) nextIndex = pinnedIndex;
@@ -4090,7 +4093,7 @@
     if (!id) return [];
     try {
       const data = await api(`/api/chats/${id}/pins`);
-      applyPinsUpdate({ chatId: id, pins: data.pins || [], allow_unpin_any_pin: data.allow_unpin_any_pin });
+      applyPinsUpdate({ ...data, chatId: id });
       return getChatPins(id);
     } catch (e) {
       if (Number(currentChatId || 0) === id) renderPinnedBar(id);
@@ -4222,7 +4225,7 @@
     try {
       const chatId = Number(msg.chat_id || msg.chatId || currentChatId || 0);
       const data = await api(`/api/messages/${msg.id}/pin`, { method: 'POST' });
-      applyPinsUpdate({ chatId, pins: data.pins || [], allow_unpin_any_pin: data.allow_unpin_any_pin });
+      applyPinsUpdate({ ...data, chatId });
       appendPinEventIfVisible(data.pin_event || data.pinEvent);
       showCenterToast('Message pinned');
     } catch (e) {
@@ -4238,7 +4241,7 @@
     }
     try {
       const data = await api(`/api/messages/${pin.message_id}/pin`, { method: 'DELETE' });
-      applyPinsUpdate({ chatId: pin.chat_id, pins: data.pins || [], allow_unpin_any_pin: data.allow_unpin_any_pin });
+      applyPinsUpdate({ ...data, chatId: pin.chat_id });
       showCenterToast('Message unpinned');
     } catch (e) {
       showCenterToast(e.message || 'Could not unpin message');
