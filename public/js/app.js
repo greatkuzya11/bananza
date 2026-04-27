@@ -398,6 +398,9 @@
   let mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [], source: null, keyboardAttached: false };
   let mentionPickerPointerState = null;
   let mentionPickerClickSuppressUntil = 0;
+  let emojiPickerOpen = false;
+  let emojiPickerKeyboardAttached = false;
+  let emojiPickerAnchorEl = null;
   let avatarUserMenuState = null;
   let chatMemberLastReads = new Map();
   const modalRegistry = new Map();
@@ -442,6 +445,8 @@
   let inAppChatBackSkipNextPopstate = false;
   let mobileViewportPrevHeight = 0;
   let mobileViewportHeightSyncBound = false;
+  let mobileViewportRecoveryFrame = 0;
+  let mobileViewportRecoveryTimer = null;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DOM
@@ -713,6 +718,10 @@
     if (!isMobileComposerKeyboardOpen()) return false;
     e.preventDefault();
     return true;
+  }
+
+  function shouldKeepEmojiPickerKeyboard() {
+    return Boolean(emojiPickerKeyboardAttached || isMobileComposerKeyboardOpen());
   }
 
   const appBridge = window.BananzaAppBridge = window.BananzaAppBridge || {};
@@ -2490,6 +2499,29 @@
   function forceMobileViewportLayoutSync() {
     syncMobileAppHeightToViewport({ force: true });
     syncChatAreaMetrics();
+  }
+
+  function scheduleMobileViewportRecovery(retryDelayMs = 140) {
+    if (!window.visualViewport || window.innerWidth > 768) return false;
+    if (mobileViewportRecoveryFrame) cancelAnimationFrame(mobileViewportRecoveryFrame);
+    clearTimeout(mobileViewportRecoveryTimer);
+
+    const runRecovery = () => {
+      forceMobileViewportLayoutSync();
+      syncChatAreaMetrics();
+      queueIosViewportLayoutSync();
+    };
+
+    mobileViewportRecoveryFrame = requestAnimationFrame(() => {
+      mobileViewportRecoveryFrame = 0;
+      runRecovery();
+    });
+
+    mobileViewportRecoveryTimer = setTimeout(() => {
+      mobileViewportRecoveryTimer = null;
+      requestAnimationFrame(runRecovery);
+    }, Math.max(60, Number(retryDelayMs) || 140));
+    return true;
   }
 
   function setupMobileViewportHeightSync() {
@@ -7636,6 +7668,7 @@
 
   function handleAppResume(reason) {
     if (!token || !currentUser) return;
+    scheduleMobileViewportRecovery();
     refreshWebSocketAfterResume();
     scheduleRecoverySync(reason, { immediate: true });
   }
@@ -8047,6 +8080,7 @@
     pauseCurrentChatMediaPlayback();
     hideFloatingMessageActions({ immediate: true });
     hideMentionPicker();
+    closeEmojiPicker({ immediate: true });
     clearActivePulseVoterPopover({ skipRefresh: true });
     hideAvatarUserMenu();
     clearReply();
@@ -11904,6 +11938,7 @@
       pauseCurrentChatMediaPlayback();
     }
     hideMentionPicker();
+    closeEmojiPicker({ immediate: true });
     hideContextConvertPicker();
     clearActivePulseVoterPopover({ skipRefresh: true });
     hideAvatarUserMenu();
@@ -14050,6 +14085,7 @@
     clearPendingFile();
     clearReply();
     window.BananzaVoiceHooks?.refreshComposerState?.();
+    scheduleMobileViewportRecovery();
 
     const items = [];
     const firstAttachment = filesToSend[0] || null;
@@ -14250,6 +14286,7 @@
     updateComposerAiOverrideState().catch(() => {});
     refreshPollComposerActionState();
     window.BananzaVoiceHooks?.refreshComposerState?.();
+    scheduleMobileViewportRecovery();
   }
 
   function renderPendingFiles() {
@@ -14281,6 +14318,7 @@
     fileInput.value = '';
     refreshPollComposerActionState();
     window.BananzaVoiceHooks?.refreshComposerState?.();
+    scheduleMobileViewportRecovery();
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -15153,8 +15191,36 @@
     EMOJIS[cats[0]].forEach(e => { html += `<div class="emoji-item">${e}</div>`; });
     html += '</div>';
     emojiPicker.innerHTML = html;
+    syncEmojiPickerButton();
+
+    const isEmojiPickerScrollSurface = (target) => Boolean(
+      target instanceof Element
+      && (target.classList.contains('emoji-grid') || target.classList.contains('emoji-tabs'))
+    );
+    const keepEmojiPickerInteractionFromBlurringInput = (e) => {
+      if (e.type === 'touchstart' || e.type === 'touchmove') return;
+      if (isEmojiPickerScrollSurface(e.target)) return;
+      if (shouldKeepEmojiPickerKeyboard()) preventMobileComposerBlur(e);
+    };
+
+    emojiPicker.addEventListener('pointerdown', (e) => {
+      keepEmojiPickerInteractionFromBlurringInput(e);
+      e.stopPropagation();
+    });
+    emojiPicker.addEventListener('touchstart', (e) => {
+      e.stopPropagation();
+    }, { passive: true });
+    emojiPicker.addEventListener('touchmove', (e) => {
+      e.stopPropagation();
+    }, { passive: true });
+    emojiPicker.addEventListener('mousedown', (e) => {
+      keepEmojiPickerInteractionFromBlurringInput(e);
+      if (!isEmojiPickerScrollSurface(e.target)) e.preventDefault();
+      e.stopPropagation();
+    });
 
     emojiPicker.addEventListener('click', (e) => {
+      e.stopPropagation();
       const tab = e.target.closest('.emoji-tab');
       if (tab) {
         emojiPicker.querySelectorAll('.emoji-tab').forEach(t => t.classList.remove('active'));
@@ -15162,6 +15228,7 @@
         const grid = emojiPicker.querySelector('.emoji-grid');
         const emojis = EMOJIS[cats[+tab.dataset.cat]];
         grid.innerHTML = emojis.map(em => `<div class="emoji-item">${em}</div>`).join('');
+        positionEmojiPicker();
         return;
       }
       const item = e.target.closest('.emoji-item');
@@ -15172,9 +15239,84 @@
         msgInput.value = before + item.textContent + after;
         msgInput.selectionStart = msgInput.selectionEnd = pos + item.textContent.length;
         msgInput.dispatchEvent(new Event('input', { bubbles: true }));
-        msgInput.focus();
+        if (window.innerWidth > 768 || shouldKeepEmojiPickerKeyboard()) {
+          focusComposerKeepKeyboard(true);
+        }
       }
     });
+  }
+
+  function syncEmojiPickerButton() {
+    if (!emojiBtn) return;
+    const isOpen = Boolean(emojiPickerOpen && isFloatingSurfaceVisible(emojiPicker));
+    emojiBtn.classList.toggle('is-open', isOpen);
+    emojiBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+  }
+
+  function positionEmojiPicker(anchorEl = emojiPickerAnchorEl || emojiBtn) {
+    if (!(emojiPicker instanceof HTMLElement) || !isFloatingSurfaceVisible(emojiPicker)) return;
+    const anchor = anchorEl instanceof HTMLElement ? anchorEl : emojiBtn;
+    if (!(anchor instanceof HTMLElement)) return;
+    const rect = anchor.getBoundingClientRect();
+    const viewport = getFloatingViewportRect();
+    const desiredWidth = window.innerWidth <= 768 ? 300 : 340;
+    const width = Math.min(desiredWidth, Math.max(180, viewport.width - 16));
+    emojiPicker.style.width = `${Math.round(width)}px`;
+    const pickerSize = measureFloatingSurface(
+      emojiPicker,
+      width,
+      Math.min(320, Math.max(180, viewport.height - 16))
+    );
+    const left = clamp(
+      rect.left + viewport.left + ((rect.width - pickerSize.width) / 2),
+      viewport.left + 8,
+      viewport.right - pickerSize.width - 8
+    );
+    const top = clamp(
+      rect.top + viewport.top - pickerSize.height - 8,
+      viewport.top + 8,
+      viewport.bottom - pickerSize.height - 8
+    );
+    positionFloatingElement(emojiPicker, left, top);
+  }
+
+  function openEmojiPicker(anchorEl = emojiBtn) {
+    if (!(emojiPicker instanceof HTMLElement)) return false;
+    emojiPickerAnchorEl = anchorEl instanceof HTMLElement ? anchorEl : emojiBtn;
+    emojiPickerKeyboardAttached = window.innerWidth > 768 || isMobileComposerKeyboardOpen();
+    emojiPickerOpen = true;
+    openFloatingSurface(emojiPicker);
+    syncEmojiPickerButton();
+    positionEmojiPicker(emojiPickerAnchorEl);
+    requestAnimationFrame(() => positionEmojiPicker(emojiPickerAnchorEl));
+    return true;
+  }
+
+  function closeEmojiPicker({ immediate = false } = {}) {
+    emojiPickerOpen = false;
+    syncEmojiPickerButton();
+    return closeFloatingSurface(emojiPicker, {
+      immediate,
+      onAfterClose: () => {
+        emojiPickerKeyboardAttached = false;
+        emojiPickerAnchorEl = null;
+        if (emojiPicker instanceof HTMLElement) {
+          emojiPicker.style.left = '';
+          emojiPicker.style.top = '';
+          emojiPicker.style.width = '';
+        }
+        syncEmojiPickerButton();
+      },
+    });
+  }
+
+  function toggleEmojiPicker(anchorEl = emojiBtn) {
+    if (isFloatingSurfaceVisible(emojiPicker)) {
+      closeEmojiPicker();
+      return false;
+    }
+    openEmojiPicker(anchorEl);
+    return true;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -17161,6 +17303,7 @@
     }
     hideFloatingMessageActions({ immediate: true });
     hideMentionPicker();
+    closeEmojiPicker({ immediate: true });
     cancelPendingSidebarReveal();
 
     if (!sidebar.classList.contains('sidebar-hidden')) {
@@ -17389,9 +17532,17 @@
     msgInput.addEventListener('keyup', (e) => {
       if (!['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(e.key)) updateMentionPicker();
     });
+    const keepEmojiButtonFromBlurringInput = (e) => {
+      if (window.innerWidth > 768) return;
+      if (!isMobileComposerKeyboardOpen()) return;
+      e.preventDefault();
+    };
+    emojiBtn?.addEventListener('pointerdown', keepEmojiButtonFromBlurringInput, { passive: false });
+    emojiBtn?.addEventListener('mousedown', keepEmojiButtonFromBlurringInput);
     window.visualViewport?.addEventListener('resize', () => {
       const mentionPickerDismissed = dismissMentionPickerAfterKeyboardClose();
       if (mentionPickerDismissed) forceMobileViewportLayoutSync();
+      positionEmojiPicker();
       positionMentionPicker();
       positionContextConvertPicker();
       positionAvatarUserMenu(avatarUserMenuState?.anchor);
@@ -17402,6 +17553,7 @@
     window.visualViewport?.addEventListener('scroll', () => {
       const mentionPickerDismissed = dismissMentionPickerAfterKeyboardClose();
       if (mentionPickerDismissed) forceMobileViewportLayoutSync();
+      positionEmojiPicker();
       positionMentionPicker();
       positionContextConvertPicker();
       positionAvatarUserMenu(avatarUserMenuState?.anchor);
@@ -17409,6 +17561,7 @@
       queueIosViewportLayoutSync();
     });
     window.addEventListener('resize', () => {
+      positionEmojiPicker();
       positionContextConvertPicker();
       positionMessageActionSurfaces();
       scheduleRetryLayout();
@@ -17549,8 +17702,9 @@
 
     // Emoji
     emojiBtn.addEventListener('click', (e) => {
+      e.preventDefault();
       e.stopPropagation();
-      emojiPicker.classList.toggle('hidden');
+      toggleEmojiPicker(emojiBtn);
     });
 
     // Media viewer close
@@ -18879,8 +19033,8 @@
 
     // Close emoji picker on outside click
     document.addEventListener('click', (e) => {
-      if (!emojiPicker.classList.contains('hidden') && !emojiPicker.contains(e.target) && e.target !== emojiBtn) {
-        emojiPicker.classList.add('hidden');
+      if (isFloatingSurfaceVisible(emojiPicker) && !emojiPicker.contains(e.target) && !e.target.closest('#emojiBtn')) {
+        closeEmojiPicker();
       }
     });
 

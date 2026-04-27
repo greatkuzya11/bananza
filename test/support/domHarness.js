@@ -133,6 +133,79 @@ function setDocumentHidden(document, hidden) {
   });
 }
 
+function installVisualViewportMock(window, initialMetrics = {}) {
+  const target = new window.EventTarget();
+  const metrics = {
+    width: Math.max(0, Number(initialMetrics.width ?? window.innerWidth ?? 0) || 0),
+    height: Math.max(0, Number(initialMetrics.height ?? window.innerHeight ?? 0) || 0),
+    offsetTop: Math.max(0, Number(initialMetrics.offsetTop ?? 0) || 0),
+    offsetLeft: Math.max(0, Number(initialMetrics.offsetLeft ?? 0) || 0),
+    scale: Number(initialMetrics.scale ?? 1) || 1,
+    pageTop: Math.max(0, Number(initialMetrics.pageTop ?? 0) || 0),
+    pageLeft: Math.max(0, Number(initialMetrics.pageLeft ?? 0) || 0),
+  };
+  const visualViewport = {
+    get width() {
+      return metrics.width;
+    },
+    get height() {
+      return metrics.height;
+    },
+    get offsetTop() {
+      return metrics.offsetTop;
+    },
+    get offsetLeft() {
+      return metrics.offsetLeft;
+    },
+    get scale() {
+      return metrics.scale;
+    },
+    get pageTop() {
+      return metrics.pageTop;
+    },
+    get pageLeft() {
+      return metrics.pageLeft;
+    },
+    addEventListener(...args) {
+      target.addEventListener(...args);
+    },
+    removeEventListener(...args) {
+      target.removeEventListener(...args);
+    },
+    dispatchEvent(event) {
+      return target.dispatchEvent(event);
+    },
+  };
+
+  Object.defineProperty(window, 'visualViewport', {
+    configurable: true,
+    enumerable: true,
+    value: visualViewport,
+  });
+
+  return {
+    visualViewport,
+    metrics,
+    set(nextMetrics = {}) {
+      if ('width' in nextMetrics) metrics.width = Math.max(0, Number(nextMetrics.width) || 0);
+      if ('height' in nextMetrics) metrics.height = Math.max(0, Number(nextMetrics.height) || 0);
+      if ('offsetTop' in nextMetrics) metrics.offsetTop = Math.max(0, Number(nextMetrics.offsetTop) || 0);
+      if ('offsetLeft' in nextMetrics) metrics.offsetLeft = Math.max(0, Number(nextMetrics.offsetLeft) || 0);
+      if ('scale' in nextMetrics) metrics.scale = Number(nextMetrics.scale) || 1;
+      if ('pageTop' in nextMetrics) metrics.pageTop = Math.max(0, Number(nextMetrics.pageTop) || 0);
+      if ('pageLeft' in nextMetrics) metrics.pageLeft = Math.max(0, Number(nextMetrics.pageLeft) || 0);
+      return { ...metrics };
+    },
+    dispatch(type) {
+      return visualViewport.dispatchEvent(new window.Event(type));
+    },
+    setAndDispatch(type, nextMetrics = {}) {
+      this.set(nextMetrics);
+      return this.dispatch(type);
+    },
+  };
+}
+
 function installCommonStubs(window) {
   window.indexedDB = indexedDB;
   window.IDBKeyRange = IDBKeyRange;
@@ -267,6 +340,7 @@ function installAppBridge(dom, overrides = {}) {
 module.exports = {
   createAppDom,
   installAppBridge,
+  installVisualViewportMock,
   loadBrowserScript,
   loadBrowserScripts,
   setDocumentHidden,
