@@ -16215,13 +16215,6 @@
     if (galleryItems.length - galleryIndex <= 2 && galleryHasMoreAfter) ensureGalleryBuffered('after');
   }
 
-  function playCurrentGalleryVideo(delay = 0) {
-    if (galleryItems[galleryIndex]?.type !== 'video') return;
-    setTimeout(() => {
-      ivStrip.querySelectorAll('.iv-slide')[galleryIndex]?.querySelector('video')?.play().catch(() => {});
-    }, delay);
-  }
-
   function moveGalleryToIndex(newIdx) {
     if (newIdx < 0 || newIdx >= galleryItems.length) return false;
     resetImageViewerTouchState();
@@ -16230,7 +16223,6 @@
     galleryIndex = newIdx;
     setGalleryStripPosition(true);
     updateGalleryArrows();
-    playCurrentGalleryVideo(350);
     preloadGalleryAssets();
     queueGalleryBuffering();
     return true;
@@ -16276,7 +16268,6 @@
     } catch (e) {}
 
     imageViewer.classList.remove('hidden');
-    playCurrentGalleryVideo();
     preloadGalleryAssets();
     ensureGalleryBuffered('before');
     ensureGalleryBuffered('after');

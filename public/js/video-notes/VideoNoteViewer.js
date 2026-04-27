@@ -102,7 +102,6 @@
       const bridge = this.getBridge();
       if (bridge?.openManagedModal) bridge.openManagedModal('videoNoteViewer');
       else root.classList.remove('hidden');
-      this.videoEl?.play?.().catch(() => {});
     }
 
     close() {

@@ -70,3 +70,44 @@ test('video note renderer produces attachment markup with expected controls', ()
   assert.ok(html.includes('video-note-shape-toggle-btn'));
   assert.ok(html.includes('/uploads/video.webm/preview'));
 });
+
+test('video note viewer opens without autoplay', (t) => {
+  const dom = createAppDom();
+  const bridge = installAppBridge(dom);
+  loadBrowserScript(dom, 'public/js/video-notes/VideoNoteViewer.js');
+
+  let playCalls = 0;
+  const originalPlay = dom.window.HTMLMediaElement.prototype.play;
+  dom.window.HTMLMediaElement.prototype.play = function play() {
+    playCalls += 1;
+    return Promise.resolve();
+  };
+  t.after(() => {
+    dom.window.HTMLMediaElement.prototype.play = originalPlay;
+  });
+
+  const ns = dom.window.BananzaVideoNotes;
+  const viewer = new ns.VideoNoteViewer({
+    bridge,
+    shapeRegistry: {
+      snapshotFromMessage() {
+        return null;
+      },
+      getMaskUrl() {
+        return '';
+      },
+    },
+  });
+
+  viewer.open({
+    id: 72,
+    file_stored: 'video.webm',
+    transcription_text: 'Привет',
+  });
+
+  assert.ok(viewer.root);
+  assert.equal(viewer.root.classList.contains('hidden'), false);
+  assert.match(viewer.videoEl.src, /\/uploads\/video\.webm\/preview$/);
+  assert.equal(viewer.captionEl.textContent, 'Привет');
+  assert.equal(playCalls, 0);
+});

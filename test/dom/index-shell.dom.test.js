@@ -25,7 +25,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/sounds.js',
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
-    '/js/app.js?v=20260425-provider-interactive',
+    '/js/app.js?v=20260427-fullscreen-video-policy',
     '/js/video-notes/video-note-shapes.js',
     '/js/video-notes/VideoShapeRegistry.js',
     '/js/video-notes/AudioNoteRecorderAdapter.js',
