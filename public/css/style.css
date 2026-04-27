@@ -2546,11 +2546,15 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
 
 .scroll-bottom-btn,
 .composer-context-convert-btn {
+  --composer-fab-size: 42px;
+  --composer-fab-right: 14px;
+  --composer-fab-bottom: calc(100% + 10px);
+  --composer-fab-gap: 8px;
   position: absolute;
-  right: 14px;
-  bottom: calc(100% + 10px);
-  width: 42px;
-  height: 42px;
+  right: var(--composer-fab-right);
+  bottom: var(--composer-fab-bottom);
+  width: var(--composer-fab-size);
+  height: var(--composer-fab-size);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2587,7 +2591,6 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
   --composer-fab-close-transform: translate3d(0, 24px, 0) scale(.88);
   background: var(--accent);
   color: #fff;
-  font-size: 20px;
   visibility: hidden;
   transform: var(--composer-fab-enter-transform);
   transition:
@@ -2622,8 +2625,17 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
 .composer-context-convert-btn.is-closing {
   will-change: opacity, transform;
 }
+.composer-context-convert-btn-icon {
+  display: block;
+  font-size: 18px;
+  line-height: 1;
+  transform: translateY(.5px);
+  pointer-events: none;
+}
 .composer-context-convert-btn:hover { background: var(--accent-hover); }
-.composer-context-convert-btn.with-scroll-bottom { right: 64px; }
+.composer-context-convert-btn.with-scroll-bottom {
+  right: calc(var(--composer-fab-right) + var(--composer-fab-size) + var(--composer-fab-gap));
+}
 .composer-context-convert-btn.is-pending { animation: contextConvertFabPulse 1s ease-in-out infinite; }
 
 html[data-modal-animation="lift"] .composer-context-convert-btn {
@@ -4913,12 +4925,14 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
   .theme-picker { grid-template-columns: 1fr; }
   .theme-card { padding: 11px 10px; }
 
-  .scroll-bottom-btn {
-    right: 12px;
-    width: 40px;
-    height: 40px;
-    bottom: calc(100% + 8px);
+  .scroll-bottom-btn,
+  .composer-context-convert-btn {
+    --composer-fab-size: 40px;
+    --composer-fab-right: 12px;
+    --composer-fab-bottom: calc(100% + 8px);
   }
+
+  .composer-context-convert-btn-icon { font-size: 17px; }
 
   .msg-row,
   .msg-row.own {
