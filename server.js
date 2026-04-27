@@ -2790,14 +2790,19 @@ app.get('/uploads/:filename/preview', (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 app.get('/api/admin/users', auth, adminOnly, (req, res) => {
-  res.json(db.prepare('SELECT id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,created_at,last_activity FROM users').all());
+  res.json(db.prepare(`
+    SELECT id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,created_at,last_activity
+    FROM users
+    WHERE COALESCE(is_ai_bot,0)=0
+  `).all());
 });
 
 app.post('/api/admin/users/:id/block', auth, adminOnly, (req, res) => {
   const uid = +req.params.id;
   if (uid === req.user.id) return res.status(400).json({ error: 'Cannot block yourself' });
-  const u = db.prepare('SELECT is_blocked FROM users WHERE id=?').get(uid);
+  const u = db.prepare('SELECT is_blocked,COALESCE(is_ai_bot,0) as is_ai_bot FROM users WHERE id=?').get(uid);
   if (!u) return res.status(404).json({ error: 'Not found' });
+  if (u.is_ai_bot) return res.status(400).json({ error: 'AI bots are managed from the AI bot settings' });
 
   const next = u.is_blocked ? 0 : 1;
   db.prepare('UPDATE users SET is_blocked=? WHERE id=?').run(next, uid);
@@ -2808,8 +2813,9 @@ app.post('/api/admin/users/:id/block', auth, adminOnly, (req, res) => {
 app.post('/api/admin/users/:id/reset-password', auth, adminOnly, async (req, res) => {
   const uid = +req.params.id;
   if (uid === req.user.id) return res.status(400).json({ error: 'Cannot reset your own password' });
-  const u = db.prepare('SELECT id FROM users WHERE id=?').get(uid);
+  const u = db.prepare('SELECT id,COALESCE(is_ai_bot,0) as is_ai_bot FROM users WHERE id=?').get(uid);
   if (!u) return res.status(404).json({ error: 'Not found' });
+  if (u.is_ai_bot) return res.status(400).json({ error: 'AI bots are managed from the AI bot settings' });
   const hash = await bcrypt.hash('123456', 10);
   db.prepare('UPDATE users SET password=? WHERE id=?').run(hash, uid);
   res.json({ ok: true });

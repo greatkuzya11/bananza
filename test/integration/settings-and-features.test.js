@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('path');
 const { before, after } = require('node:test');
+const Database = require('better-sqlite3');
 
 const { createSandbox } = require('../support/runtimeSandbox');
 const { createBasicChatScenario } = require('../support/scenario');
@@ -128,4 +130,63 @@ test('voice and AI admin settings routes stay isolated and usable locally', asyn
   });
   assert.equal(aiSaved.data.settings.enabled, true);
   assert.equal(aiSaved.data.settings.openai_interactive_enabled, true);
+});
+
+test('admin users API hides AI bot-backed users and rejects admin actions for them', async () => {
+  const { admin } = scenario;
+  const db = new Database(path.join(sandbox.appDir, 'bananza.db'));
+  const suffix = Date.now();
+
+  try {
+    const insertUser = db.prepare(`
+      INSERT INTO users(username, password, display_name, is_admin, is_blocked, is_ai_bot, avatar_color)
+      VALUES(?,?,?,?,?,?,?)
+    `);
+    const humanUserId = Number(insertUser.run(
+      `human_admin_${suffix}`,
+      'human-placeholder-password',
+      `Human Admin ${suffix}`,
+      0,
+      0,
+      0,
+      '#4f8cff'
+    ).lastInsertRowid);
+    const botUserId = Number(insertUser.run(
+      `ai_admin_${suffix}`,
+      'bot-placeholder-password',
+      `AI Admin ${suffix}`,
+      0,
+      0,
+      1,
+      '#8892a0'
+    ).lastInsertRowid);
+
+    const adminUsers = await admin.request('/api/admin/users');
+    assert.ok(adminUsers.data.some((user) => user.id === humanUserId));
+    assert.ok(adminUsers.data.every((user) => user.id !== botUserId));
+
+    const humanBlock = await admin.request(`/api/admin/users/${humanUserId}/block`, {
+      method: 'POST',
+    });
+    assert.equal(humanBlock.data.is_blocked, 1);
+
+    const humanReset = await admin.request(`/api/admin/users/${humanUserId}/reset-password`, {
+      method: 'POST',
+    });
+    assert.equal(humanReset.data.ok, true);
+
+    const botBlock = await admin.request(`/api/admin/users/${botUserId}/block`, {
+      method: 'POST',
+      expectedStatus: 400,
+    });
+    assert.equal(botBlock.data.error, 'AI bots are managed from the AI bot settings');
+
+    const botReset = await admin.request(`/api/admin/users/${botUserId}/reset-password`, {
+      method: 'POST',
+      expectedStatus: 400,
+    });
+    assert.equal(botReset.data.error, 'AI bots are managed from the AI bot settings');
+  } finally {
+    db.close();
+  }
 });
