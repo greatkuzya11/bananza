@@ -3842,8 +3842,10 @@
     if (!currentChatId) return;
     const chat = getChatById(currentChatId);
     const enabled = !!$('#chatContextTransformToggle')?.checked;
+    const previousEnabled = !!chat?.context_transform_enabled;
     if (chat) chat.context_transform_enabled = enabled ? 1 : 0;
     renderChatContextTransformForm(chat);
+    syncCurrentChatContextConvertUi();
     setChatContextTransformStatus('Saving...');
     try {
       const updated = await api(`/api/chats/${currentChatId}/context-transform-settings`, {
@@ -3855,6 +3857,9 @@
       invalidateContextConvertAvailability(currentChatId);
       if (enabled) loadContextConvertAvailability(currentChatId, { force: true }).catch(() => {});
     } catch (error) {
+      if (chat) chat.context_transform_enabled = previousEnabled ? 1 : 0;
+      renderChatContextTransformForm(chat);
+      syncCurrentChatContextConvertUi();
       setChatContextTransformStatus(error.message || 'Could not save context transform setting', 'error');
     }
   }
@@ -9869,7 +9874,7 @@
         const normalized = normalizeContextConvertAvailability(data);
         contextConvertAvailabilityByChat.set(id, normalized);
         contextConvertAvailabilityRequests.delete(id);
-        if (id === Number(currentChatId || 0)) syncContextConvertComposerButton();
+        if (id === Number(currentChatId || 0)) syncCurrentChatContextConvertUi();
         return normalized;
       })
       .catch((error) => {
@@ -9886,8 +9891,7 @@
     contextConvertAvailabilityByChat.delete(id);
     contextConvertAvailabilityRequests.delete(id);
     if (id === Number(currentChatId || 0)) {
-      if (contextConvertPickerState.active && contextConvertPickerState.chatId === id) hideContextConvertPicker();
-      syncContextConvertComposerButton();
+      syncCurrentChatContextConvertUi();
     }
   }
 
@@ -10050,6 +10054,14 @@
     return contextConvertAvailabilityByChat.get(Number(currentChatId || 0)) || { enabled: false, bots: [] };
   }
 
+  function isContextTransformAvailableForChat(chatId = currentChatId) {
+    const id = Number(chatId || 0);
+    if (!id) return false;
+    const chat = getChatById(id);
+    const availability = contextConvertAvailabilityByChat.get(id) || { enabled: false, bots: [] };
+    return Boolean(chat?.context_transform_enabled && availability.enabled && availability.bots.length);
+  }
+
   function setComposerContextConvertButtonVisible(visible) {
     if (!composerContextConvertBtn) return;
     if (visible) {
@@ -10063,11 +10075,77 @@
     }
   }
 
-  function canContextConvertMessage(msg, row = null) {
+  function canContextConvertMessage(msg, row = null, options = {}) {
+    if (!options.ignoreChatAvailability && !isContextTransformAvailableForChat()) return false;
     if (!canEditMessage(msg)) return false;
     if (msg?.ai_generated || msg?.ai_bot_id || msg?.is_ai_bot) return false;
     const text = row ? getEditableText(row) : ((msg?.is_voice_note ? msg?.transcription_text : msg?.text) || '');
     return Boolean(String(text || '').trim());
+  }
+
+  function bindContextConvertMessageButton(button, row) {
+    if (!button || !row || button.dataset.contextConvertBound === '1') return button;
+    button.dataset.contextConvertBound = '1';
+    button.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openMessageContextConvertPicker(row, button, {
+        keepComposerFocus: reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen(),
+      }).catch((error) => {
+        console.warn('[context-convert] picker open failed:', error.message);
+      });
+    });
+    return button;
+  }
+
+  function createContextConvertMessageButton(row) {
+    const msg = row?.__messageData || {};
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `msg-context-convert-btn${contextConvertPendingMessageIds.has(Number(msg.id || 0)) ? ' is-pending' : ''}`;
+    button.title = 'Transform with AI';
+    button.textContent = '🍌';
+    return bindContextConvertMessageButton(button, row);
+  }
+
+  function syncVisibleContextConvertMessageButtons() {
+    if (!messagesEl || !Number(currentChatId || 0)) return;
+    const transformAvailable = isContextTransformAvailableForChat(currentChatId);
+    messagesEl.querySelectorAll('.msg-row[data-msg-id]').forEach((row) => {
+      const msg = row.__messageData || null;
+      const actionsEl = row.querySelector('.msg-actions');
+      if (!msg || !actionsEl) return;
+      const existingButton = actionsEl.querySelector('.msg-context-convert-btn');
+      const shouldShow = transformAvailable && canContextConvertMessage(msg, row, { ignoreChatAvailability: true });
+      if (!shouldShow) {
+        existingButton?.remove();
+        return;
+      }
+      if (existingButton) {
+        existingButton.classList.toggle('is-pending', contextConvertPendingMessageIds.has(Number(msg.id || 0)));
+        bindContextConvertMessageButton(existingButton, row);
+        return;
+      }
+      const button = createContextConvertMessageButton(row);
+      const insertBefore = actionsEl.querySelector('.msg-save-note-btn, .msg-forward-btn, .msg-react-btn');
+      if (insertBefore) actionsEl.insertBefore(button, insertBefore);
+      else actionsEl.appendChild(button);
+    });
+  }
+
+  function syncCurrentChatContextConvertUi() {
+    syncContextConvertComposerButton();
+    const chatId = Number(currentChatId || 0);
+    if (!chatId) return;
+    if (contextConvertPickerState.active && contextConvertPickerState.chatId === chatId && !isContextTransformAvailableForChat(chatId)) {
+      hideContextConvertPicker();
+    }
+    syncVisibleContextConvertMessageButtons();
+    if (activeMessageActionsRow || isFloatingSurfaceVisible(reactionPicker)) {
+      positionMessageActionSurfaces({
+        includeActions: Boolean(activeMessageActionsRow),
+        includePicker: isFloatingSurfaceVisible(reactionPicker),
+      });
+    }
   }
 
   function syncContextConvertComposerButton() {
@@ -10075,7 +10153,7 @@
     const hasText = Boolean(currentChatId && !editTo && String(msgInput?.value || '').trim());
     const currentChat = getChatById(currentChatId);
     const availability = getCurrentChatContextConvertState();
-    const shouldShow = Boolean((hasText || contextConvertComposerPending) && currentChat?.context_transform_enabled && availability.bots.length);
+    const shouldShow = Boolean((hasText || contextConvertComposerPending) && isContextTransformAvailableForChat(currentChatId));
     if (!shouldShow && contextConvertPickerState.active && contextConvertPickerState.mode === 'composer') {
       hideContextConvertPicker();
     }
@@ -12820,16 +12898,7 @@
     }
 
     const contextConvertBtn = row.querySelector('.msg-context-convert-btn');
-    if (contextConvertBtn) {
-      contextConvertBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        openMessageContextConvertPicker(row, contextConvertBtn, {
-          keepComposerFocus: reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen(),
-        }).catch((error) => {
-          console.warn('[context-convert] picker open failed:', error.message);
-        });
-      });
-    }
+    if (contextConvertBtn) bindContextConvertMessageButton(contextConvertBtn, row);
 
     const forwardBtn = row.querySelector('.msg-forward-btn');
     if (forwardBtn) {
@@ -15136,6 +15205,7 @@
   let galleryEdgeBounceTimer = null;
   let ivScale = 1, ivPanX = 0, ivPanY = 0;
   let mediaViewerSuppressClickUntil = 0;
+  let mediaViewerFollowupClickSuppressUntil = 0;
   const IMAGE_VIEWER_DOUBLE_TAP_DELAY_MS = 300;
   const IMAGE_VIEWER_TAP_MAX_DRIFT_PX = 14;
   const IMAGE_VIEWER_DOUBLE_TAP_DISTANCE_PX = 40;
@@ -16215,6 +16285,13 @@
     if (galleryItems.length - galleryIndex <= 2 && galleryHasMoreAfter) ensureGalleryBuffered('after');
   }
 
+  function suppressMediaViewerFollowupClick(ms = 550) {
+    mediaViewerFollowupClickSuppressUntil = Math.max(
+      mediaViewerFollowupClickSuppressUntil,
+      Date.now() + Math.max(0, Number(ms) || 0)
+    );
+  }
+
   function moveGalleryToIndex(newIdx) {
     if (newIdx < 0 || newIdx >= galleryItems.length) return false;
     resetImageViewerTouchState();
@@ -16232,6 +16309,7 @@
     gallerySessionId += 1;
     ivClearZoomTransition();
     mediaViewerSuppressClickUntil = 0;
+    mediaViewerFollowupClickSuppressUntil = 0;
     resetImageViewerTouchState();
     gallerySourceChatId = currentChatId;
     galleryLoadPromises = { before: null, after: null };
@@ -16306,6 +16384,12 @@
     if (!closeBtn || !imageViewer.contains(closeBtn)) return false;
     e.preventDefault();
     e.stopPropagation();
+    if (
+      e.type === 'touchend'
+      || (e.type === 'pointerup' && String(e.pointerType || '').toLowerCase() !== 'mouse')
+    ) {
+      suppressMediaViewerFollowupClick();
+    }
     closeMediaViewer();
     return true;
   }
@@ -17223,6 +17307,7 @@
       if (
         Date.now() >= mentionPickerClickSuppressUntil
         && Date.now() >= contextConvertPickerClickSuppressUntil
+        && Date.now() >= mediaViewerFollowupClickSuppressUntil
       ) return;
       e.preventDefault();
       e.stopImmediatePropagation();
