@@ -818,6 +818,11 @@ a:hover { text-decoration: underline; }
   appearance: none; -webkit-appearance: none;
   outline: none; box-shadow: none;
   -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-user-drag: none;
+  touch-action: manipulation;
 }
 .icon-btn:hover { background: var(--bg-hover); }
 .icon-btn:focus,
