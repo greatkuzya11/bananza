@@ -19,6 +19,28 @@ after(async () => {
   await sandbox?.stop?.();
 });
 
+async function createOpenAiBot(admin, {
+  name,
+  mention,
+  visibleToUsers = true,
+} = {}) {
+  const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const botName = name || `Bot ${token}`.slice(0, 30);
+  const botMention = mention || `bot_${token}`.slice(0, 24);
+  const response = await admin.request('/api/admin/ai-bots', {
+    method: 'POST',
+    json: {
+      name: botName,
+      mention: botMention,
+      enabled: true,
+      visible_to_users: visibleToUsers,
+      response_model: 'gpt-4o-mini',
+      summary_model: 'gpt-4o-mini',
+    },
+  });
+  return response.data.bot;
+}
+
 test('weather, notification and sound settings use deterministic mocked integrations', async () => {
   const { bob } = scenario;
 
@@ -189,4 +211,55 @@ test('admin users API hides AI bot-backed users and rejects admin actions for th
   } finally {
     db.close();
   }
+});
+
+test('admin users API exposes bot access flag and lets admins toggle it for human users', async () => {
+  const { admin, bob } = scenario;
+
+  const usersBefore = await admin.request('/api/admin/users');
+  const bobBefore = usersBefore.data.find((user) => user.id === bob.user.id);
+  assert.ok(bobBefore);
+  assert.equal(Object.prototype.hasOwnProperty.call(bobBefore, 'can_add_bots_to_chats'), true);
+  assert.equal(bobBefore.can_add_bots_to_chats, 0);
+
+  const toggledOn = await admin.request(`/api/admin/users/${bob.user.id}/bot-access`, {
+    method: 'PUT',
+    json: { can_add_bots_to_chats: true },
+  });
+  assert.equal(toggledOn.data.can_add_bots_to_chats, 1);
+
+  const usersAfterOn = await admin.request('/api/admin/users');
+  const bobAfterOn = usersAfterOn.data.find((user) => user.id === bob.user.id);
+  assert.equal(bobAfterOn.can_add_bots_to_chats, 1);
+
+  const toggledOff = await admin.request(`/api/admin/users/${bob.user.id}/bot-access`, {
+    method: 'PUT',
+    json: { can_add_bots_to_chats: false },
+  });
+  assert.equal(toggledOff.data.can_add_bots_to_chats, 0);
+});
+
+test('AI bot export and import preserve visible_to_users for chat bots', async () => {
+  const { admin } = scenario;
+  const created = await createOpenAiBot(admin, { visibleToUsers: true });
+
+  const exported = await admin.request(`/api/admin/ai-bots/${created.id}/export`);
+  assert.equal(exported.data.schema_version, 5);
+  assert.equal(exported.data.bot.visible_to_users, true);
+
+  const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const imported = await admin.request('/api/admin/ai-bots/import', {
+    method: 'POST',
+    json: {
+      bot: {
+        name: `Imported ${token}`.slice(0, 30),
+        mention: `imp_${token}`.slice(0, 24),
+        enabled: true,
+        visible_to_users: true,
+        response_model: 'gpt-4o-mini',
+        summary_model: 'gpt-4o-mini',
+      },
+    },
+  });
+  assert.equal(imported.data.bot.visible_to_users, true);
 });

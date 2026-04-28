@@ -3123,6 +3123,14 @@ html[data-modal-animation="none"] .search-panel {
 .modal-close:active {
   transform: translateY(1px) scale(.96);
 }
+#adminBotAuditModal .modal-close {
+  font-size: 0;
+}
+#adminBotAuditModal .modal-close::before {
+  content: "\2715";
+  font-size: 20px;
+  line-height: 1;
+}
 .modal-tabs {
   display: flex; border-bottom: 1px solid var(--border-light);
 }
@@ -3417,6 +3425,13 @@ html[data-visual-mode="rich"] .poll-card {
 .admin-user-status.bot .status-dot { background: currentColor; }
 .admin-user-joined { color: var(--text-secondary); }
 .admin-user-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.admin-user-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
 .admin-user-row .badge {
   font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600;
 }
@@ -3432,6 +3447,127 @@ html[data-visual-mode="rich"] .poll-card {
   background: var(--accent); color: #fff; margin-right: 4px;
 }
 .admin-user-row .reset-btn:hover { opacity: .85; }
+.admin-user-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+.admin-user-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.admin-user-audit-btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.admin-user-row .reset-btn,
+.admin-user-row .block-btn { white-space: nowrap; }
+.audit-entry-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.audit-entry-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+#adminUserList .admin-user-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 10px 12px;
+}
+#adminUserList .admin-user-row .avatar {
+  grid-column: 1;
+  grid-row: 1 / span 4;
+  align-self: start;
+}
+#adminUserList .admin-user-row .info {
+  grid-column: 2;
+  align-self: start;
+}
+#adminUserList .admin-user-row .admin-user-badges {
+  grid-column: 3;
+  justify-self: end;
+  align-self: start;
+}
+#adminUserList .admin-user-row .admin-user-controls {
+  grid-column: 4;
+  margin-left: 0;
+  justify-self: end;
+  justify-content: flex-end;
+  align-self: start;
+}
+#adminUserList .admin-user-row .admin-user-actions {
+  grid-column: 5;
+  justify-self: end;
+  align-self: start;
+}
+@media (max-width: 720px) {
+  #adminUserList .admin-user-row {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: 8px 12px;
+  }
+  #adminUserList .admin-user-row .avatar {
+    grid-row: 1 / span 5;
+  }
+  #adminUserList .admin-user-row .info,
+  #adminUserList .admin-user-row .admin-user-badges,
+  #adminUserList .admin-user-row .admin-user-controls,
+  #adminUserList .admin-user-row .admin-user-actions {
+    grid-column: 2;
+    justify-self: start;
+  }
+  #adminUserList .admin-user-row .admin-user-controls,
+  #adminUserList .admin-user-row .admin-user-actions {
+    width: 100%;
+  }
+  #adminUserList .admin-user-row .admin-user-controls {
+    justify-content: flex-start;
+  }
+  #adminUserList .admin-user-row .admin-user-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}
+
+.user-list-item .user-list-copy {
+  min-width: 0;
+}
+.user-list-item .user-list-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+.user-list-item.is-ai-bot .name::after {
+  content: 'AI';
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 8px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-hover) 84%);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  vertical-align: middle;
+}
 
 /* ── Settings modal ──────────────────────────────────────────────────────── */
 .settings-item {

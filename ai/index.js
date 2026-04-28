@@ -59,7 +59,7 @@ const {
 const { analyzeAiImageRisk } = require('../public/js/ai-image-risk');
 
 const BOT_COLORS = ['#65aadd', '#7bc862', '#a695e7', '#ee7aae', '#6ec9cb', '#faa774'];
-const AI_BOT_EXPORT_VERSION = 4;
+const AI_BOT_EXPORT_VERSION = 5;
 const MODEL_CACHE_MS = 10 * 60 * 1000;
 const FALLBACK_RESPONSE_MODELS = ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'];
 const FALLBACK_SUMMARY_MODELS = ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'];
@@ -310,6 +310,16 @@ function isContextTransformBot(bot) {
   return String(bot?.kind || '').toLowerCase() === 'convert';
 }
 
+function userFacingBotModel(bot) {
+  const kind = normalizeBotKind(bot?.kind, bot?.provider, 'text');
+  if (kind === 'image') return cleanText(bot?.image_model || '', 160);
+  return cleanText(bot?.response_model || '', 160);
+}
+
+function isChatSelectableBotKind(bot) {
+  return !isContextTransformBot(bot);
+}
+
 function serializeContextConvertBot(bot) {
   return {
     id: Number(bot?.id || 0),
@@ -548,8 +558,113 @@ function createAiBotFeature({
   `);
   const chatSettingsStmt = db.prepare('SELECT * FROM ai_chat_bots ORDER BY chat_id ASC, bot_id ASC');
   const botChatsStmt = db.prepare('SELECT chat_id FROM ai_chat_bots WHERE bot_id=?');
+  const chatRowByIdStmt = db.prepare('SELECT id, name, type, created_by, is_notes FROM chats WHERE id=?');
   const chatContextTransformStmt = db.prepare('SELECT context_transform_enabled FROM chats WHERE id=?');
   const chatMemberStmt = db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?');
+  const chatMemberCountStmt = db.prepare('SELECT COUNT(*) as count FROM chat_members WHERE chat_id=?');
+  const humanMemberCountStmt = db.prepare(`
+    SELECT COUNT(*) as count
+    FROM chat_members cm
+    JOIN users u ON u.id=cm.user_id
+    WHERE cm.chat_id=? AND COALESCE(u.is_ai_bot,0)=0
+  `);
+  const botMemberCountStmt = db.prepare(`
+    SELECT COUNT(*) as count
+    FROM chat_members cm
+    JOIN users u ON u.id=cm.user_id
+    WHERE cm.chat_id=? AND COALESCE(u.is_ai_bot,0)=1
+  `);
+  const humanMemberInChatStmt = db.prepare(`
+    SELECT 1
+    FROM chat_members cm
+    JOIN users u ON u.id=cm.user_id
+    WHERE cm.chat_id=? AND cm.user_id=? AND COALESCE(u.is_ai_bot,0)=0
+    LIMIT 1
+  `);
+  const botMembershipStateStmt = db.prepare(`
+    SELECT enabled
+    FROM ai_chat_bots
+    WHERE chat_id=? AND bot_id=?
+  `);
+  const selectableBotByUserIdStmt = db.prepare(`
+    SELECT
+      b.*,
+      u.username,
+      u.display_name,
+      u.is_blocked,
+      u.avatar_color,
+      u.avatar_url,
+      COALESCE(u.is_ai_bot,0) as is_ai_bot
+    FROM ai_bots b
+    JOIN users u ON u.id=b.user_id
+    WHERE u.id=?
+      AND b.user_id IS NOT NULL
+      AND b.enabled=1
+      AND COALESCE(b.kind,'text')!='convert'
+    LIMIT 1
+  `);
+  const selectableBotDirectoryStmt = db.prepare(`
+    SELECT
+      b.*,
+      u.username,
+      u.display_name,
+      u.is_blocked,
+      u.avatar_color,
+      u.avatar_url,
+      COALESCE(u.is_ai_bot,0) as is_ai_bot
+    FROM ai_bots b
+    JOIN users u ON u.id=b.user_id
+    WHERE b.user_id IS NOT NULL
+      AND b.enabled=1
+      AND COALESCE(b.kind,'text')!='convert'
+    ORDER BY COALESCE(b.visible_to_users,0) DESC, u.display_name COLLATE NOCASE ASC, b.id ASC
+  `);
+  const activeDirectoryBotsForChatStmt = db.prepare(`
+    SELECT
+      b.*,
+      cb.chat_id,
+      u.username,
+      u.display_name,
+      u.avatar_color,
+      u.avatar_url,
+      COALESCE(u.is_ai_bot,0) as is_ai_bot
+    FROM ai_chat_bots cb
+    JOIN ai_bots b ON b.id=cb.bot_id
+    JOIN users u ON u.id=b.user_id
+    WHERE cb.chat_id=?
+      AND cb.enabled=1
+      AND b.enabled=1
+      AND b.user_id IS NOT NULL
+      AND COALESCE(b.kind,'text')!='convert'
+    ORDER BY u.display_name COLLATE NOCASE ASC, b.id ASC
+  `);
+  const insertBotAddAuditStmt = db.prepare(`
+    INSERT INTO bot_chat_add_audit(
+      actor_user_id,
+      bot_id,
+      bot_user_id,
+      chat_id,
+      source,
+      bot_name,
+      bot_mention,
+      bot_provider,
+      bot_kind,
+      bot_model,
+      chat_name,
+      chat_type
+    )
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+  `);
+  const auditRowsByActorStmt = db.prepare(`
+    SELECT
+      a.*,
+      COALESCE(u.avatar_color,'') as bot_avatar_color,
+      u.avatar_url as bot_avatar_url
+    FROM bot_chat_add_audit a
+    LEFT JOIN users u ON u.id=a.bot_user_id
+    WHERE a.actor_user_id=?
+    ORDER BY datetime(a.created_at) DESC, a.id DESC
+  `);
   const activeChatBotsStmt = db.prepare(`
     SELECT
       b.*,
@@ -1642,6 +1757,7 @@ function createAiBotFeature({
       allow_poll_vote: isConvertBot ? false : interactiveActionsEnabled,
       allow_react: isConvertBot ? false : interactiveActionsEnabled,
       allow_pin: isConvertBot ? false : interactiveActionsEnabled,
+      visible_to_users: isConvertBot ? false : boolValue(row.visible_to_users, false),
       image_quality: openAiUniversal ? cleanOpenAiImageQuality(row.image_quality, settings.openai_default_image_quality) : '',
       image_background: openAiUniversal ? cleanOpenAiImageBackground(row.image_background, settings.openai_default_image_background) : '',
       image_output_format: openAiUniversal ? cleanOpenAiImageOutputFormat(row.image_output_format, settings.openai_default_image_output_format) : '',
@@ -1657,6 +1773,14 @@ function createAiBotFeature({
           ),
       avatar_color: row.avatar_color || BOT_COLORS[0],
       avatar_url: row.avatar_url || null,
+      user_facing_model: userFacingBotModel({
+        provider,
+        kind,
+        response_model: row.response_model || defaultResponseModel,
+        image_model: openAiUniversal
+          ? (row.image_model || settings.openai_default_image_model)
+          : (grokImageCapable ? (row.image_model || settings.grok_default_image_model) : ''),
+      }),
       created_at: row.created_at,
       updated_at: row.updated_at,
     };
@@ -1921,6 +2045,124 @@ function createAiBotFeature({
     }
   });
 
+  function canViewerAddBots(viewer = {}) {
+    return Boolean(viewer?.is_admin || boolValue(viewer?.can_add_bots_to_chats, false));
+  }
+
+  function isBotSelectableForViewer(bot, viewer = {}) {
+    if (!bot || !bot.user_id || !bot.enabled || !isChatSelectableBotKind(bot)) return false;
+    if (viewer?.is_admin) return true;
+    if (!canViewerAddBots(viewer)) return false;
+    return boolValue(bot.visible_to_users, false);
+  }
+
+  function serializeSelectableBotUser(bot, row = {}) {
+    if (!bot?.user_id) return null;
+    return {
+      id: Number(bot.user_id),
+      username: row.username || '',
+      display_name: row.display_name || bot.name || '',
+      avatar_color: row.avatar_color || bot.avatar_color || BOT_COLORS[0],
+      avatar_url: row.avatar_url || bot.avatar_url || null,
+      is_blocked: Number(row.is_blocked) || 0,
+      is_ai_bot: 1,
+      ai_bot_id: Number(bot.id || 0),
+      ai_bot_provider: bot.provider || 'openai',
+      ai_bot_kind: bot.kind || 'text',
+      ai_bot_mention: bot.mention || '',
+      ai_bot_model: userFacingBotModel(bot),
+      online: false,
+    };
+  }
+
+  function listSelectableBotUsersForViewer(viewer = {}) {
+    return selectableBotDirectoryStmt.all()
+      .map((row) => {
+        const bot = sanitizeBot(row);
+        if (!isBotSelectableForViewer(bot, viewer)) return null;
+        return serializeSelectableBotUser(bot, row);
+      })
+      .filter(Boolean);
+  }
+
+  function getSelectableBotByUserId(botUserId, viewer = {}) {
+    const row = selectableBotByUserIdStmt.get(Number(botUserId || 0));
+    if (!row) return null;
+    const bot = sanitizeBot(row);
+    if (!isBotSelectableForViewer(bot, viewer)) return null;
+    return bot;
+  }
+
+  function getActiveChatBotsForViewer(chatId) {
+    return activeDirectoryBotsForChatStmt.all(Number(chatId || 0)).map((row) => {
+      const bot = sanitizeBot(row);
+      return {
+        bot_id: Number(bot.id || 0),
+        user_id: Number(bot.user_id || 0),
+        name: bot.name || row.display_name || '',
+        mention: bot.mention || '',
+        provider: bot.provider || 'openai',
+        kind: bot.kind || 'text',
+        model: userFacingBotModel(bot),
+        avatar_color: row.avatar_color || bot.avatar_color || BOT_COLORS[0],
+        avatar_url: row.avatar_url || bot.avatar_url || null,
+      };
+    });
+  }
+
+  function isDirectHumanBotPrivateChat(chatId, humanUserId, botUserId) {
+    const chatIdNumber = Number(chatId || 0);
+    const humanId = Number(humanUserId || 0);
+    const botId = Number(botUserId || 0);
+    if (!chatIdNumber || !humanId || !botId) return false;
+    const chat = chatRowByIdStmt.get(chatIdNumber);
+    if (!chat || String(chat.type) !== 'private' || Number(chat.is_notes || 0) !== 0) return false;
+    if (!humanMemberInChatStmt.get(chatIdNumber, humanId)) return false;
+    if (!chatMemberStmt.get(chatIdNumber, botId)) return false;
+    if (Number(chatMemberCountStmt.get(chatIdNumber)?.count || 0) !== 2) return false;
+    if (Number(humanMemberCountStmt.get(chatIdNumber)?.count || 0) !== 1) return false;
+    if (Number(botMemberCountStmt.get(chatIdNumber)?.count || 0) !== 1) return false;
+    return true;
+  }
+
+  const attachBotToChatWithDefaultsTx = db.transaction(({ chatId, bot, actorUserId, source, chatRow = null }) => {
+    const normalizedChatId = Number(chatId || 0);
+    const sanitizedBot = sanitizeBot(bot);
+    if (!normalizedChatId || !sanitizedBot?.id || !sanitizedBot?.user_id) {
+      return { activated: false, bot: sanitizedBot };
+    }
+    const previous = botMembershipStateStmt.get(normalizedChatId, sanitizedBot.id);
+    const wasEnabled = previous?.enabled !== 0 && previous != null;
+    saveChatBotSettingTx({
+      chatId: normalizedChatId,
+      bot: sanitizedBot,
+      enabled: true,
+      mode: 'simple',
+      hotContextLimit: 50,
+      triggerMode: 'mention_reply',
+      autoReactOnMention: false,
+    });
+    const auditActorId = Number(actorUserId || 0);
+    if (!wasEnabled && auditActorId > 0) {
+      const snapshotChat = chatRow || chatRowByIdStmt.get(normalizedChatId) || {};
+      insertBotAddAuditStmt.run(
+        auditActorId,
+        sanitizedBot.id,
+        sanitizedBot.user_id,
+        normalizedChatId,
+        String(source || 'group_member_add').trim() || 'group_member_add',
+        sanitizedBot.name || '',
+        sanitizedBot.mention || '',
+        sanitizedBot.provider || 'openai',
+        sanitizedBot.kind || 'text',
+        userFacingBotModel(sanitizedBot),
+        snapshotChat.name || '',
+        snapshotChat.type || ''
+      );
+    }
+    return { activated: !wasEnabled, bot: sanitizedBot };
+  });
+
   function defaultBotName(provider, kind = 'text') {
     if (provider === 'openai' && kind === 'convert') return 'OpenAI Convert';
     if (provider === 'yandex' && kind === 'convert') return 'Yandex Convert';
@@ -2027,6 +2269,10 @@ function createAiBotFeature({
       allow_poll_vote: isConvertBot ? false : interactiveActionsEnabled,
       allow_react: isConvertBot ? false : interactiveActionsEnabled,
       allow_pin: isConvertBot ? false : interactiveActionsEnabled,
+      visible_to_users: isConvertBot ? false : boolValue(
+        input.visible_to_users,
+        current.visible_to_users == null ? false : current.visible_to_users !== 0
+      ),
       image_quality: isOpenAiUniversal
         ? cleanOpenAiImageQuality(input.image_quality ?? current.image_quality, settings.openai_default_image_quality)
         : '',
@@ -2061,11 +2307,11 @@ function createAiBotFeature({
         enabled, provider, kind, response_model, summary_model, embedding_model,
         image_model, image_aspect_ratio, image_resolution,
         allow_text, allow_image_generate, allow_image_edit, allow_document,
-        allow_poll_create, allow_poll_vote, allow_react, allow_pin,
+        allow_poll_create, allow_poll_vote, allow_react, allow_pin, visible_to_users,
         image_quality, image_background, image_output_format, document_default_format, transform_prompt,
         temperature, max_tokens
       )
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       userId,
       input.name,
@@ -2091,6 +2337,7 @@ function createAiBotFeature({
       input.allow_poll_vote ? 1 : 0,
       input.allow_react ? 1 : 0,
       input.allow_pin ? 1 : 0,
+      input.visible_to_users ? 1 : 0,
       input.image_quality || '',
       input.image_background || '',
       input.image_output_format || '',
@@ -3085,6 +3332,13 @@ function createAiBotFeature({
 
   function shouldBotRespond(bot, message) {
     if (!message || message.ai_generated || message.is_deleted) return false;
+    if (
+      bot?.user_id
+      && Number(message.user_id || 0) !== Number(bot.user_id || 0)
+      && isDirectHumanBotPrivateChat(message.chat_id, message.user_id, bot.user_id)
+    ) {
+      return true;
+    }
     if (messageMentionsBot(bot, message)) return true;
     if (messageRepliesToBot(bot, message)) return true;
     return false;
@@ -3333,7 +3587,7 @@ function createAiBotFeature({
           enabled=?, provider=?, kind='convert', response_model=?, summary_model='', embedding_model='',
           image_model='', image_aspect_ratio='', image_resolution='',
           allow_text=0, allow_image_generate=0, allow_image_edit=0, allow_document=0,
-          allow_poll_create=0, allow_poll_vote=0, allow_react=0, allow_pin=0,
+          allow_poll_create=0, allow_poll_vote=0, allow_react=0, allow_pin=0, visible_to_users=0,
           image_quality='', image_background='', image_output_format='', document_default_format='',
           transform_prompt=?, temperature=?, max_tokens=?, updated_at=datetime('now')
       WHERE id=?
@@ -4976,6 +5230,44 @@ function createAiBotFeature({
     }
   });
 
+  app.get('/api/chats/:chatId/bots', auth, (req, res) => {
+    const chatId = Number(req.params.chatId);
+    if (!chatId) return res.status(400).json({ error: 'Invalid chat id' });
+    if (!chatMemberStmt.get(chatId, req.user.id)) {
+      return res.status(403).json({ error: 'Not a member' });
+    }
+    return res.json({ bots: getActiveChatBotsForViewer(chatId) });
+  });
+
+  app.get('/api/admin/users/:id(\\d+)/bot-additions', auth, adminOnly, (req, res) => {
+    const userId = Number(req.params.id);
+    if (!userId) return res.status(400).json({ error: 'Invalid user id' });
+    const actor = db.prepare('SELECT id, COALESCE(is_ai_bot,0) as is_ai_bot FROM users WHERE id=?').get(userId);
+    if (!actor) return res.status(404).json({ error: 'User not found' });
+    if (actor.is_ai_bot) return res.status(400).json({ error: 'AI bots are managed from the AI bot settings' });
+    return res.json({
+      user_id: userId,
+      additions: auditRowsByActorStmt.all(userId).map((row) => ({
+        id: Number(row.id || 0),
+        actor_user_id: Number(row.actor_user_id || 0),
+        bot_id: Number(row.bot_id || 0),
+        bot_user_id: Number(row.bot_user_id || 0),
+        chat_id: Number(row.chat_id || 0),
+        source: row.source || 'group_member_add',
+        bot_name: row.bot_name || '',
+        bot_mention: row.bot_mention || '',
+        bot_provider: row.bot_provider || 'openai',
+        bot_kind: row.bot_kind || 'text',
+        bot_model: row.bot_model || '',
+        bot_avatar_color: row.bot_avatar_color || BOT_COLORS[0],
+        bot_avatar_url: row.bot_avatar_url || null,
+        chat_name: row.chat_name || '',
+        chat_type: row.chat_type || '',
+        created_at: row.created_at,
+      })),
+    });
+  });
+
   app.get('/api/admin/ai-bots', auth, adminOnly, (_req, res) => {
     res.json(serializeAdminState());
   });
@@ -5080,6 +5372,7 @@ function createAiBotFeature({
       name: source.name,
       mention: requestedMention,
       enabled: Object.prototype.hasOwnProperty.call(source, 'enabled') ? source.enabled : true,
+      visible_to_users: source.visible_to_users,
       provider: 'openai',
       kind: 'text',
       response_model: responseModel,
@@ -5134,6 +5427,7 @@ function createAiBotFeature({
         provider: bot.provider || 'openai',
         kind: bot.kind || 'text',
         enabled: bot.enabled,
+        visible_to_users: bot.visible_to_users,
         allow_poll_create: bot.allow_poll_create,
         allow_poll_vote: bot.allow_poll_vote,
         allow_react: bot.allow_react,
@@ -5164,7 +5458,7 @@ function createAiBotFeature({
       UPDATE ai_bots
       SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
           enabled=?, provider='openai', kind='text', response_model=?, summary_model=?, embedding_model=?,
-          allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?,
+          allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?, visible_to_users=?,
           temperature=?, max_tokens=?, updated_at=datetime('now')
       WHERE id=?
     `).run(
@@ -5182,6 +5476,7 @@ function createAiBotFeature({
       input.allow_poll_vote ? 1 : 0,
       input.allow_react ? 1 : 0,
       input.allow_pin ? 1 : 0,
+      input.visible_to_users ? 1 : 0,
       input.temperature,
       input.max_tokens,
       botId
@@ -5407,7 +5702,7 @@ function createAiBotFeature({
       SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
           enabled=?, provider='openai', kind='universal', response_model=?, summary_model=?, embedding_model=?,
           image_model=?, image_resolution=?, allow_text=?, allow_image_generate=?, allow_image_edit=?, allow_document=?,
-          allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?,
+          allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?, visible_to_users=?,
           image_quality=?, image_background=?, image_output_format=?, document_default_format=?,
           temperature=?, max_tokens=?, updated_at=datetime('now')
       WHERE id=?
@@ -5432,6 +5727,7 @@ function createAiBotFeature({
       input.allow_poll_vote ? 1 : 0,
       input.allow_react ? 1 : 0,
       input.allow_pin ? 1 : 0,
+      input.visible_to_users ? 1 : 0,
       input.image_quality,
       input.image_background,
       input.image_output_format,
@@ -5530,6 +5826,7 @@ function createAiBotFeature({
         name: bot.name,
         mention: bot.mention,
         enabled: bot.enabled,
+        visible_to_users: bot.visible_to_users,
         response_model: bot.response_model,
         summary_model: bot.summary_model,
         image_model: bot.image_model,
@@ -5751,7 +6048,7 @@ function createAiBotFeature({
       UPDATE ai_bots
       SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
           enabled=?, provider='deepseek', kind='text', response_model=?, summary_model=?, embedding_model=?,
-          allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?,
+          allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?, visible_to_users=?,
           temperature=?, max_tokens=?, updated_at=datetime('now')
       WHERE id=?
     `).run(
@@ -5769,6 +6066,7 @@ function createAiBotFeature({
       input.allow_poll_vote ? 1 : 0,
       input.allow_react ? 1 : 0,
       input.allow_pin ? 1 : 0,
+      input.visible_to_users ? 1 : 0,
       input.temperature,
       input.max_tokens,
       current.id
@@ -5827,6 +6125,7 @@ function createAiBotFeature({
         name: bot.name,
         mention: bot.mention,
         enabled: bot.enabled,
+        visible_to_users: bot.visible_to_users,
         allow_poll_create: bot.allow_poll_create,
         allow_poll_vote: bot.allow_poll_vote,
         allow_react: bot.allow_react,
@@ -5877,6 +6176,7 @@ function createAiBotFeature({
       provider: 'deepseek',
       kind: 'text',
       enabled: Object.prototype.hasOwnProperty.call(source, 'enabled') ? source.enabled : true,
+      visible_to_users: source.visible_to_users,
       response_model: responseModel,
       summary_model: summaryModel,
       allow_poll_create: source.allow_poll_create,
@@ -6130,7 +6430,7 @@ function createAiBotFeature({
       UPDATE ai_bots
       SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
           enabled=?, provider='yandex', response_model=?, summary_model=?, embedding_model=?,
-          allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?,
+          allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?, visible_to_users=?,
           temperature=?, max_tokens=?, updated_at=datetime('now')
       WHERE id=?
     `).run(
@@ -6148,6 +6448,7 @@ function createAiBotFeature({
       input.allow_poll_vote ? 1 : 0,
       input.allow_react ? 1 : 0,
       input.allow_pin ? 1 : 0,
+      input.visible_to_users ? 1 : 0,
       input.temperature,
       input.max_tokens,
       current.id
@@ -6206,6 +6507,7 @@ function createAiBotFeature({
         name: bot.name,
         mention: bot.mention,
         enabled: bot.enabled,
+        visible_to_users: bot.visible_to_users,
         allow_poll_create: bot.allow_poll_create,
         allow_poll_vote: bot.allow_poll_vote,
         allow_react: bot.allow_react,
@@ -6237,6 +6539,7 @@ function createAiBotFeature({
       mention: requestedMention,
       provider: 'yandex',
       enabled: Object.prototype.hasOwnProperty.call(source, 'enabled') ? source.enabled : true,
+      visible_to_users: source.visible_to_users,
       response_model: source.response_model || settings.yandex_default_response_model,
       summary_model: source.summary_model || settings.yandex_default_summary_model,
       allow_poll_create: source.allow_poll_create,
@@ -6509,7 +6812,7 @@ function createAiBotFeature({
       SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
           enabled=?, provider='grok', kind=?, response_model=?, summary_model=?, embedding_model=?,
           image_model=?, image_aspect_ratio=?, image_resolution=?,
-          allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?,
+          allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?, visible_to_users=?,
           temperature=?, max_tokens=?,
           updated_at=datetime('now')
       WHERE id=?
@@ -6532,6 +6835,7 @@ function createAiBotFeature({
       input.allow_poll_vote ? 1 : 0,
       input.allow_react ? 1 : 0,
       input.allow_pin ? 1 : 0,
+      input.visible_to_users ? 1 : 0,
       input.temperature,
       input.max_tokens,
       current.id
@@ -6624,6 +6928,7 @@ function createAiBotFeature({
         name: bot.name,
         mention: bot.mention,
         enabled: bot.enabled,
+        visible_to_users: bot.visible_to_users,
         response_model: bot.response_model,
         summary_model: bot.summary_model,
         image_model: bot.image_model,
@@ -6684,6 +6989,7 @@ function createAiBotFeature({
       provider: 'grok',
       kind,
       enabled: Object.prototype.hasOwnProperty.call(source, 'enabled') ? source.enabled : true,
+      visible_to_users: source.visible_to_users,
       response_model: responseModel,
       summary_model: summaryModel,
       image_model: imageModel,
@@ -6884,7 +7190,7 @@ function createAiBotFeature({
       SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
           enabled=?, provider='grok', kind='universal', response_model=?, summary_model=?, embedding_model=?,
           image_model=?, image_aspect_ratio=?, image_resolution=?, allow_text=?, allow_image_generate=?, allow_image_edit=?, allow_document=?,
-          allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?,
+          allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?, visible_to_users=?,
           temperature=?, max_tokens=?, updated_at=datetime('now')
       WHERE id=?
     `).run(
@@ -6909,6 +7215,7 @@ function createAiBotFeature({
       input.allow_poll_vote ? 1 : 0,
       input.allow_react ? 1 : 0,
       input.allow_pin ? 1 : 0,
+      input.visible_to_users ? 1 : 0,
       input.temperature,
       input.max_tokens,
       current.id
@@ -7004,6 +7311,7 @@ function createAiBotFeature({
         name: bot.name,
         mention: bot.mention,
         enabled: bot.enabled,
+        visible_to_users: bot.visible_to_users,
         response_model: bot.response_model,
         summary_model: bot.summary_model,
         image_model: bot.image_model,
@@ -7081,6 +7389,18 @@ function createAiBotFeature({
     handleMessageDeleted,
     enqueueMemoryForMessage,
     transformText,
+    listSelectableBotUsersForViewer,
+    getSelectableBotByUserId,
+    getActiveChatBotsForViewer,
+    attachBotToChatWithDefaults(chatId, bot, options = {}) {
+      return attachBotToChatWithDefaultsTx({
+        chatId,
+        bot,
+        actorUserId: options.actorUserId,
+        source: options.source,
+        chatRow: options.chatRow || null,
+      });
+    },
     backfillChat(chatId) {
       memoryQueue.enqueue(`ai:backfill:${chatId}`, { type: 'backfill-chat', chatId });
     },
@@ -7093,5 +7413,7 @@ module.exports = {
     normalizeBotKind,
     isContextTransformBot,
     serializeContextConvertBot,
+    isChatSelectableBotKind,
+    userFacingBotModel,
   },
 };

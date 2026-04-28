@@ -215,9 +215,16 @@ function auth(req, res, next) {
   if (!h || !h.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const payload = jwt.verify(h.slice(7), JWT_SECRET);
-    const u = db.prepare(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id=?`).get(payload.id);
+    const u = db.prepare(`SELECT ${USER_PUBLIC_FIELDS}, can_add_bots_to_chats FROM users WHERE id=?`).get(payload.id);
     if (!u || u.is_blocked) return res.status(403).json({ error: 'Blocked' });
-    req.user = publicUser(u);
+    const user = publicUser(u);
+    Object.defineProperty(user, 'can_add_bots_to_chats', {
+      value: Number(u.can_add_bots_to_chats) || 0,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+    req.user = user;
     next();
   } catch { res.status(401).json({ error: 'Invalid token' }); }
 }
@@ -243,6 +250,12 @@ function notifyUserUpdated(userId) {
   const targets = new Set(sharedUserIdsStmt.all(id).map((row) => Number(row.user_id) || 0).filter(Boolean));
   targets.add(id);
   for (const targetId of targets) sendToUser(targetId, payload);
+}
+
+function notifyUserDirectoryChanged(userId) {
+  const id = Number(userId || 0);
+  if (!id) return;
+  sendToUser(id, { type: 'user_directory_changed' });
 }
 
 const pushFeature = createPushFeature({
@@ -441,6 +454,29 @@ const mentionTargetsStmt = db.prepare(`
   WHERE cm.chat_id=?
   ORDER BY COALESCE(u.is_ai_bot, 0) ASC, u.display_name COLLATE NOCASE ASC
 `);
+const privatePeerStmt = db.prepare(`
+  SELECT
+    u.id,
+    u.username,
+    u.display_name,
+    u.avatar_color,
+    u.avatar_url,
+    COALESCE(u.is_ai_bot, 0) as is_ai_bot,
+    ab.id as ai_bot_id,
+    ab.provider as ai_bot_provider,
+    ab.kind as ai_bot_kind,
+    ab.mention as ai_bot_mention,
+    CASE
+      WHEN COALESCE(ab.kind, 'text')='image' THEN ab.image_model
+      ELSE ab.response_model
+    END as ai_bot_model
+  FROM users u
+  JOIN chat_members cm ON cm.user_id=u.id
+  LEFT JOIN ai_bots ab ON ab.user_id=u.id
+  WHERE cm.chat_id=? AND u.id!=?
+  ORDER BY u.id ASC
+  LIMIT 1
+`);
 const deleteMentionsStmt = db.prepare('DELETE FROM message_mentions WHERE message_id=?');
 const insertMentionStmt = db.prepare(`
   INSERT OR IGNORE INTO message_mentions(message_id, chat_id, mentioned_user_id, token)
@@ -631,6 +667,24 @@ function getMentionTargets(chatId) {
       row.mention = token;
       return true;
     });
+}
+
+function privatePeerPayload(chatId, viewerUserId) {
+  const peer = privatePeerStmt.get(chatId, viewerUserId);
+  if (!peer) return null;
+  return {
+    id: Number(peer.id || 0),
+    username: peer.username || '',
+    display_name: peer.display_name || '',
+    avatar_color: peer.avatar_color || '#65aadd',
+    avatar_url: peer.avatar_url || null,
+    is_ai_bot: Number(peer.is_ai_bot) || 0,
+    ai_bot_id: Number(peer.ai_bot_id) || 0,
+    ai_bot_provider: peer.ai_bot_provider || '',
+    ai_bot_kind: peer.ai_bot_kind || '',
+    ai_bot_mention: peer.ai_bot_mention || '',
+    ai_bot_model: peer.ai_bot_model || '',
+  };
 }
 
 function extractMentionTokens(text) {
@@ -1000,9 +1054,13 @@ app.get('/api/auth/me', auth, (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 app.get('/api/users', auth, (req, res) => {
-  const users = db.prepare('SELECT id,username,display_name,avatar_color,avatar_url,is_blocked FROM users WHERE id!=? AND COALESCE(is_ai_bot,0)=0').all(req.user.id);
+  const users = db.prepare('SELECT id,username,display_name,avatar_color,avatar_url,is_blocked,0 as is_ai_bot FROM users WHERE id!=? AND COALESCE(is_ai_bot,0)=0').all(req.user.id);
+  const botUsers = aiBotFeature?.listSelectableBotUsersForViewer(req.user) || [];
   const online = [...clients.keys()];
-  res.json(users.map(u => ({ ...u, online: online.includes(u.id) })));
+  res.json([
+    ...users.map((u) => ({ ...u, online: online.includes(u.id) })),
+    ...botUsers,
+  ]);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1339,10 +1397,7 @@ function decorateChatListRows(rows, viewerUserId) {
     if (isNotesChatRow(chat)) {
       Object.assign(chat, notesChatPayload(chat));
     } else if (chat.type === 'private') {
-      const other = db.prepare(`
-        SELECT u.id,u.username,u.display_name,u.avatar_color,u.avatar_url FROM users u
-        JOIN chat_members cm ON cm.user_id=u.id WHERE cm.chat_id=? AND u.id!=?
-      `).get(chat.id, uid);
+      const other = privatePeerPayload(chat.id, uid);
       if (other) { chat.name = other.display_name; chat.private_user = other; }
     }
     if (chat.type === 'group') {
@@ -1412,10 +1467,7 @@ app.get('/api/chats', auth, (req, res) => {
     if (isNotesChatRow(chat)) {
       Object.assign(chat, notesChatPayload(chat));
     } else if (chat.type === 'private') {
-      const other = db.prepare(`
-        SELECT u.id,u.display_name,u.avatar_color,u.avatar_url FROM users u
-        JOIN chat_members cm ON cm.user_id=u.id WHERE cm.chat_id=? AND u.id!=?
-      `).get(chat.id, req.user.id);
+      const other = privatePeerPayload(chat.id, req.user.id);
       if (other) { chat.name = other.display_name; chat.private_user = other; }
     }
     if (chat.type === 'group') {
@@ -1480,6 +1532,8 @@ app.get('/api/chats/hidden', auth, (req, res) => {
         chat.name || '',
         chat.private_user?.display_name || '',
         chat.private_user?.username || '',
+        chat.private_user?.ai_bot_mention || '',
+        chat.private_user?.ai_bot_model || '',
       ].join(' ').toLowerCase().includes(query);
     })
     .slice(0, 20);
@@ -1490,6 +1544,63 @@ app.post('/api/chats', auth, (req, res) => {
   const { name, type, memberIds } = req.body;
   if (!name || typeof name !== 'string' || name.length > 50) return res.status(400).json({ error: 'Invalid name' });
   if (type !== 'group') return res.status(400).json({ error: 'Invalid type' });
+
+  const requestedIds = [...new Set(
+    (Array.isArray(memberIds) ? memberIds : [])
+      .filter((value) => typeof value === 'number' && Number.isInteger(value) && value > 0 && value !== req.user.id)
+  )];
+  const unavailableError = { error: 'Selected users are unavailable' };
+  const fetchedUsers = requestedIds.length
+    ? db.prepare(`SELECT id, display_name, COALESCE(is_ai_bot,0) as is_ai_bot FROM users WHERE id IN (${requestedIds.map(() => '?').join(',')})`)
+      .all(...requestedIds)
+    : [];
+  if (fetchedUsers.length !== requestedIds.length) {
+    return res.status(400).json(unavailableError);
+  }
+  const humanTargets = fetchedUsers.filter((row) => Number(row.is_ai_bot) === 0);
+  const botTargets = fetchedUsers.filter((row) => Number(row.is_ai_bot) !== 0);
+  const selectableBots = botTargets.map((row) => aiBotFeature?.getSelectableBotByUserId(row.id, req.user)).filter(Boolean);
+  if (selectableBots.length !== botTargets.length) {
+    return res.status(400).json(unavailableError);
+  }
+
+  const groupCreateResult = db.transaction(() => {
+    const created = db.prepare('INSERT INTO chats(name,type,created_by) VALUES(?,?,?)').run(name.trim(), 'group', req.user.id);
+    const createdChatId = Number(created.lastInsertRowid || 0);
+    const addMemberStmt = db.prepare('INSERT OR IGNORE INTO chat_members(chat_id,user_id) VALUES(?,?)');
+    addMemberStmt.run(createdChatId, req.user.id);
+    humanTargets.forEach((user) => addMemberStmt.run(createdChatId, user.id));
+    const createdChat = db.prepare('SELECT * FROM chats WHERE id=?').get(createdChatId);
+    selectableBots.forEach((bot) => {
+      aiBotFeature?.attachBotToChatWithDefaults(createdChatId, bot, {
+        actorUserId: req.user.id,
+        source: 'group_chat_create',
+        chatRow: createdChat,
+      });
+    });
+    return {
+      createdChat,
+      humanMemberIds: [...new Set([req.user.id, ...humanTargets.map((user) => Number(user.id))])],
+    };
+  })();
+
+  groupCreateResult.humanMemberIds.forEach((userId) => {
+    sendToUser(userId, {
+      type: 'chat_created',
+      chat: groupCreateResult.createdChat,
+      actorId: req.user.id,
+      actorName: req.user.display_name,
+      is_invite: userId !== req.user.id,
+    });
+    if (userId !== req.user.id) {
+      pushFeature.notifyChatInvite(userId, {
+        chat: groupCreateResult.createdChat,
+        actorName: req.user.display_name,
+        body: `${req.user.display_name} РґРѕР±Р°РІРёР»(Р°) РІР°СЃ РІ С‡Р°С‚ ${groupCreateResult.createdChat.name}`,
+      });
+    }
+  });
+  return res.json(groupCreateResult.createdChat);
 
   const r = db.prepare('INSERT INTO chats(name,type,created_by) VALUES(?,?,?)').run(name.trim(), 'group', req.user.id);
   const chatId = r.lastInsertRowid;
@@ -1526,6 +1637,64 @@ app.post('/api/chats', auth, (req, res) => {
 app.post('/api/chats/private', auth, (req, res) => {
   const { targetUserId } = req.body;
   if (!targetUserId || typeof targetUserId !== 'number') return res.status(400).json({ error: 'Target user required' });
+  if (Number(targetUserId) === Number(req.user.id)) return res.status(400).json({ error: 'Target user required' });
+
+  const requestedTarget = db.prepare('SELECT id,display_name,COALESCE(is_ai_bot,0) as is_ai_bot FROM users WHERE id=?').get(targetUserId);
+  if (!requestedTarget) return res.status(404).json({ error: 'User not found' });
+
+  const existingPrivateChat = db.prepare(`
+    SELECT c.id FROM chats c
+    JOIN chat_members cm1 ON cm1.chat_id=c.id AND cm1.user_id=?
+    JOIN chat_members cm2 ON cm2.chat_id=c.id AND cm2.user_id=?
+    WHERE c.type='private' AND COALESCE(c.is_notes,0)=0
+  `).get(req.user.id, targetUserId);
+
+  if (existingPrivateChat) {
+    revealHiddenChatForUser(existingPrivateChat.id, req.user.id, { reason: 'private_search' });
+    const existingChat = db.prepare('SELECT * FROM chats WHERE id=?').get(existingPrivateChat.id);
+    return res.json(existingChat);
+  }
+
+  const botTarget = Number(requestedTarget.is_ai_bot) !== 0
+    ? (aiBotFeature?.getSelectableBotByUserId(targetUserId, req.user) || null)
+    : null;
+  if (Number(requestedTarget.is_ai_bot) !== 0 && !botTarget) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  const createdPrivateChat = db.transaction(() => {
+    const result = db.prepare("INSERT INTO chats(name,type,created_by) VALUES('Private','private',?)").run(req.user.id);
+    const createdChatId = Number(result.lastInsertRowid || 0);
+    db.prepare('INSERT INTO chat_members(chat_id,user_id) VALUES(?,?)').run(createdChatId, req.user.id);
+    if (botTarget) {
+      const chatRow = db.prepare('SELECT * FROM chats WHERE id=?').get(createdChatId);
+      aiBotFeature?.attachBotToChatWithDefaults(createdChatId, botTarget, {
+        actorUserId: req.user.id,
+        source: 'private_chat_create',
+        chatRow,
+      });
+      return chatRow;
+    }
+    db.prepare('INSERT INTO chat_members(chat_id,user_id) VALUES(?,?)').run(createdChatId, targetUserId);
+    return db.prepare('SELECT * FROM chats WHERE id=?').get(createdChatId);
+  })();
+
+  if (!botTarget) {
+    sendToUser(targetUserId, {
+      type: 'chat_created',
+      chat: { ...createdPrivateChat, name: req.user.display_name },
+      actorId: req.user.id,
+      actorName: req.user.display_name,
+      is_invite: true,
+    });
+    pushFeature.notifyChatInvite(targetUserId, {
+      chat: { ...createdPrivateChat, name: req.user.display_name },
+      actorName: req.user.display_name,
+      title: req.user.display_name,
+      body: 'РќРѕРІС‹Р№ Р»РёС‡РЅС‹Р№ С‡Р°С‚',
+    });
+  }
+  return res.json(createdPrivateChat);
 
   const target = db.prepare('SELECT id,display_name FROM users WHERE id=?').get(targetUserId);
   if (!target) return res.status(404).json({ error: 'User not found' });
@@ -1772,6 +1941,25 @@ app.post('/api/chats/:chatId/members', auth, (req, res) => {
   if (chat.type === 'private') return res.status(400).json({ error: 'Cannot add to private chat' });
   if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
+  const targetUser = db.prepare('SELECT id,COALESCE(is_ai_bot,0) as is_ai_bot FROM users WHERE id=?').get(userId);
+  if (!targetUser) return res.status(404).json({ error: 'User not found' });
+  if (Number(targetUser.is_ai_bot) !== 0) {
+    const existingBotMember = db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, userId);
+    const selectableBot = existingBotMember
+      ? (aiBotFeature?.getSelectableBotByUserId(userId, { ...req.user, is_admin: true }) || aiBotFeature?.getSelectableBotByUserId(userId, req.user))
+      : (aiBotFeature?.getSelectableBotByUserId(userId, req.user) || null);
+    if (!selectableBot && !existingBotMember) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    if (selectableBot) {
+      aiBotFeature?.attachBotToChatWithDefaults(chatId, selectableBot, {
+        actorUserId: req.user.id,
+        source: 'group_member_add',
+        chatRow: chat,
+      });
+    }
+    return res.json({ ok: true });
+  }
   const user = db.prepare('SELECT id,is_ai_bot FROM users WHERE id=?').get(userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
   if (user.is_ai_bot) return res.status(400).json({ error: 'AI bots are managed from the AI bot settings' });
@@ -2791,10 +2979,22 @@ app.get('/uploads/:filename/preview', (req, res) => {
 
 app.get('/api/admin/users', auth, adminOnly, (req, res) => {
   res.json(db.prepare(`
-    SELECT id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,created_at,last_activity
+    SELECT id,username,display_name,is_admin,is_blocked,can_add_bots_to_chats,avatar_color,avatar_url,created_at,last_activity
     FROM users
     WHERE COALESCE(is_ai_bot,0)=0
   `).all());
+});
+
+app.put('/api/admin/users/:id/bot-access', auth, adminOnly, (req, res) => {
+  const uid = +req.params.id;
+  const u = db.prepare('SELECT id, COALESCE(is_ai_bot,0) as is_ai_bot, is_admin, can_add_bots_to_chats FROM users WHERE id=?').get(uid);
+  if (!u) return res.status(404).json({ error: 'Not found' });
+  if (u.is_ai_bot) return res.status(400).json({ error: 'AI bots are managed from the AI bot settings' });
+  if (u.is_admin) return res.status(400).json({ error: 'Bot access is always enabled for admins' });
+  const enabled = boolValue(req.body?.can_add_bots_to_chats, u.can_add_bots_to_chats !== 0);
+  db.prepare('UPDATE users SET can_add_bots_to_chats=? WHERE id=?').run(enabled ? 1 : 0, uid);
+  notifyUserDirectoryChanged(uid);
+  res.json({ ok: true, can_add_bots_to_chats: enabled ? 1 : 0 });
 });
 
 app.post('/api/admin/users/:id/block', auth, adminOnly, (req, res) => {

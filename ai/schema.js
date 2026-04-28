@@ -138,6 +138,23 @@ function initAiSchema(db) {
       updated_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS bot_chat_add_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      actor_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      bot_id INTEGER NOT NULL REFERENCES ai_bots(id) ON DELETE CASCADE,
+      bot_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      source TEXT NOT NULL,
+      bot_name TEXT DEFAULT '',
+      bot_mention TEXT DEFAULT '',
+      bot_provider TEXT DEFAULT 'openai',
+      bot_kind TEXT DEFAULT 'text',
+      bot_model TEXT DEFAULT '',
+      chat_name TEXT DEFAULT '',
+      chat_type TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS yandex_memory_chunks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
@@ -254,6 +271,8 @@ function initAiSchema(db) {
 
     CREATE INDEX IF NOT EXISTS idx_ai_chat_bots_chat ON ai_chat_bots(chat_id, enabled);
     CREATE INDEX IF NOT EXISTS idx_ai_bots_enabled ON ai_bots(enabled);
+    CREATE INDEX IF NOT EXISTS idx_bot_chat_add_audit_actor_created ON bot_chat_add_audit(actor_user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_bot_chat_add_audit_chat_created ON bot_chat_add_audit(chat_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_message_embeddings_chat ON message_embeddings(chat_id, is_stale);
     CREATE INDEX IF NOT EXISTS idx_memory_chunks_chat ON memory_chunks(chat_id, source_to_message_id);
     CREATE INDEX IF NOT EXISTS idx_memory_facts_chat ON memory_facts(chat_id, is_active, type);
@@ -291,6 +310,7 @@ function initAiSchema(db) {
   addColumnIfMissing(db, 'ai_bots', 'image_output_format', "image_output_format TEXT DEFAULT ''");
   addColumnIfMissing(db, 'ai_bots', 'document_default_format', "document_default_format TEXT DEFAULT 'md'");
   addColumnIfMissing(db, 'ai_bots', 'transform_prompt', "transform_prompt TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'ai_bots', 'visible_to_users', 'visible_to_users INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'ai_chat_bots', 'auto_react_on_mention', 'auto_react_on_mention INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'users', 'is_ai_bot', 'is_ai_bot INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'messages', 'ai_generated', 'ai_generated INTEGER DEFAULT 0');

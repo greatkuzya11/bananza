@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('path');
 const { before, after } = require('node:test');
+const Database = require('better-sqlite3');
 
 const { createSandbox } = require('../support/runtimeSandbox');
 const { createBasicChatScenario } = require('../support/scenario');
@@ -16,6 +18,28 @@ before(async () => {
 after(async () => {
   await sandbox?.stop?.();
 });
+
+async function createOpenAiBot(admin, {
+  name,
+  mention,
+  visibleToUsers = true,
+} = {}) {
+  const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const botName = name || `Bot ${token}`.slice(0, 30);
+  const botMention = mention || `bot_${token}`.slice(0, 24);
+  const response = await admin.request('/api/admin/ai-bots', {
+    method: 'POST',
+    json: {
+      name: botName,
+      mention: botMention,
+      enabled: true,
+      visible_to_users: visibleToUsers,
+      response_model: 'gpt-4o-mini',
+      summary_model: 'gpt-4o-mini',
+    },
+  });
+  return response.data.bot;
+}
 
 test('auth and chat membership endpoints return expected data', async () => {
   const { admin, bob, groupChat, privateChat } = scenario;
@@ -143,4 +167,123 @@ test('creator-only chat management routes enforce permissions and mutate state',
     method: 'DELETE',
   });
   assert.equal(deleted.data.ok, true);
+});
+
+test('bot discovery, private chats, defaults and audit respect user and bot flags', async () => {
+  const { admin, bob } = scenario;
+  const db = new Database(path.join(sandbox.appDir, 'bananza.db'));
+
+  try {
+    const bot = await createOpenAiBot(admin, { visibleToUsers: true });
+    assert.ok(Number(bot.user_id) > 0);
+    db.prepare('UPDATE users SET avatar_url=? WHERE id=?').run('/uploads/avatars/test-bot-avatar.png', Number(bot.user_id));
+
+    const adminUsers = await admin.request('/api/users');
+    const adminBotEntry = adminUsers.data.find((user) => user.id === Number(bot.user_id));
+    assert.ok(adminBotEntry);
+    assert.equal(adminBotEntry.is_ai_bot, 1);
+    assert.equal(adminBotEntry.ai_bot_mention, bot.mention);
+    assert.equal(adminBotEntry.ai_bot_model, 'gpt-4o-mini');
+
+    const bobUsersBefore = await bob.request('/api/users');
+    assert.equal(bobUsersBefore.data.some((user) => user.id === Number(bot.user_id)), false);
+
+    const botAccessEnabled = await admin.request(`/api/admin/users/${bob.user.id}/bot-access`, {
+      method: 'PUT',
+      json: { can_add_bots_to_chats: true },
+    });
+    assert.equal(botAccessEnabled.data.can_add_bots_to_chats, 1);
+
+    const bobUsersAfter = await bob.request('/api/users');
+    const bobBotEntry = bobUsersAfter.data.find((user) => user.id === Number(bot.user_id));
+    assert.ok(bobBotEntry);
+    assert.equal(bobBotEntry.ai_bot_provider, 'openai');
+    assert.equal(bobBotEntry.ai_bot_kind, 'text');
+    assert.equal(bobBotEntry.ai_bot_model, 'gpt-4o-mini');
+
+    const privateChat = await bob.request('/api/chats/private', {
+      method: 'POST',
+      json: { targetUserId: Number(bot.user_id) },
+    });
+    const chatId = Number(privateChat.data.id);
+
+    const chatBots = await bob.request(`/api/chats/${chatId}/bots`);
+    assert.equal(chatBots.data.bots.length, 1);
+    assert.equal(chatBots.data.bots[0].bot_id, Number(bot.id));
+    assert.equal(chatBots.data.bots[0].user_id, Number(bot.user_id));
+    assert.equal(chatBots.data.bots[0].mention, bot.mention);
+    assert.equal(chatBots.data.bots[0].model, 'gpt-4o-mini');
+
+    const botSettings = db.prepare(`
+      SELECT enabled, mode, hot_context_limit, trigger_mode, auto_react_on_mention
+      FROM ai_chat_bots
+      WHERE chat_id=? AND bot_id=?
+    `).get(chatId, Number(bot.id));
+    assert.deepEqual(botSettings, {
+      enabled: 1,
+      mode: 'simple',
+      hot_context_limit: 50,
+      trigger_mode: 'mention_reply',
+      auto_react_on_mention: 0,
+    });
+
+    const auditAfterCreate = await admin.request(`/api/admin/users/${bob.user.id}/bot-additions`);
+    const matchingPrivateAudit = auditAfterCreate.data.additions.filter((entry) => (
+      entry.chat_id === chatId
+      && entry.bot_id === Number(bot.id)
+      && entry.source === 'private_chat_create'
+    ));
+    assert.equal(matchingPrivateAudit.length, 1);
+    assert.equal(matchingPrivateAudit[0].bot_model, 'gpt-4o-mini');
+    assert.equal(matchingPrivateAudit[0].bot_avatar_url, '/uploads/avatars/test-bot-avatar.png');
+    assert.ok(String(matchingPrivateAudit[0].bot_avatar_color || '').length > 0);
+
+    const privateChatAgain = await bob.request('/api/chats/private', {
+      method: 'POST',
+      json: { targetUserId: Number(bot.user_id) },
+    });
+    assert.equal(Number(privateChatAgain.data.id), chatId);
+
+    const auditAfterRepeat = await admin.request(`/api/admin/users/${bob.user.id}/bot-additions`);
+    const repeatAuditRows = auditAfterRepeat.data.additions.filter((entry) => (
+      entry.chat_id === chatId && entry.bot_id === Number(bot.id)
+    ));
+    assert.equal(repeatAuditRows.length, 1);
+
+    await admin.request(`/api/admin/users/${bob.user.id}/bot-access`, {
+      method: 'PUT',
+      json: { can_add_bots_to_chats: false },
+    });
+    await admin.request(`/api/admin/ai-bots/${bot.id}`, {
+      method: 'PUT',
+      json: { visible_to_users: false },
+    });
+
+    const bobUsersHidden = await bob.request('/api/users');
+    assert.equal(bobUsersHidden.data.some((user) => user.id === Number(bot.user_id)), false);
+
+    const persistedChatBots = await bob.request(`/api/chats/${chatId}/bots`);
+    assert.equal(persistedChatBots.data.bots.length, 1);
+    assert.equal(persistedChatBots.data.bots[0].bot_id, Number(bot.id));
+
+    const persistedSettings = db.prepare(`
+      SELECT enabled, mode, hot_context_limit, trigger_mode, auto_react_on_mention
+      FROM ai_chat_bots
+      WHERE chat_id=? AND bot_id=?
+    `).get(chatId, Number(bot.id));
+    assert.deepEqual(persistedSettings, botSettings);
+
+    const blockedGroupCreate = await bob.request('/api/chats', {
+      method: 'POST',
+      json: {
+        name: `Blocked ${Date.now()}`,
+        type: 'group',
+        memberIds: [Number(bot.user_id)],
+      },
+      expectedStatus: 400,
+    });
+    assert.equal(blockedGroupCreate.data.error, 'Selected users are unavailable');
+  } finally {
+    db.close();
+  }
 });

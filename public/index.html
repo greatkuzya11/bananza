@@ -217,6 +217,19 @@
     </div>
   </div>
 
+  <div id="adminBotAuditModal" class="modal hidden">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3 id="adminBotAuditTitle">Bot Audit</h3>
+        <button class="modal-close">вњ•</button>
+      </div>
+      <div class="modal-body">
+        <div id="adminBotAuditStatus" class="settings-hint"></div>
+        <div id="adminBotAuditList" class="admin-user-list"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Settings Modal -->
   <div id="settingsModal" class="modal hidden">
     <div class="modal-content">
@@ -1810,6 +1823,10 @@
 
         <h4 style="margin-bottom:12px;color:#7e8b99">Members</h4>
         <div id="chatMemberList" class="user-list"></div>
+        <div id="chatBotInfoSection" class="hidden" style="margin-top:16px">
+          <h4 style="margin-bottom:12px;color:#7e8b99">Bots in this chat</h4>
+          <div id="chatBotList" class="user-list"></div>
+        </div>
         <div id="addMemberWrap" class="hidden" style="margin-top:16px">
           <h4 style="margin-bottom:12px;color:#7e8b99">Add Member</h4>
           <div id="addMemberList" class="user-list"></div>

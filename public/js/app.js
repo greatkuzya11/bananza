@@ -2449,6 +2449,86 @@
     return `<div class="${cls}" style="background:${color}">${initials(name)}</div>`;
   }
 
+  function isAiBotDirectoryUser(user) {
+    return Number(user?.is_ai_bot) !== 0;
+  }
+
+  function botMentionText(user) {
+    const mention = String(user?.ai_bot_mention || '').trim();
+    if (mention) return `@${mention}`;
+    const username = String(user?.username || '').trim();
+    return username ? `@${username}` : '';
+  }
+
+  function botModelText(user) {
+    return String(user?.ai_bot_model || '').trim();
+  }
+
+  function userSecondaryLineText(user, { showPresence = false } = {}) {
+    if (isAiBotDirectoryUser(user)) {
+      return ['AI bot', botMentionText(user), botModelText(user)].filter(Boolean).join(' • ');
+    }
+    if (showPresence) return user?.online ? 'online' : 'offline';
+    return user?.username ? `@${user.username}` : '';
+  }
+
+  function renderSelectableUserItem(user, { showPresence = false } = {}) {
+    return `
+      <div class="user-list-item${isAiBotDirectoryUser(user) ? ' is-ai-bot' : ''}" data-uid="${user.id}">
+        ${avatarHtml(user.display_name, user.avatar_color, user.avatar_url)}
+        <div class="user-list-copy">
+          <div class="name">${esc(user.display_name)}</div>
+          <div class="user-list-meta">${esc(userSecondaryLineText(user, { showPresence }))}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  function formatBotAuditSource(source) {
+    const value = String(source || '').trim().toLowerCase();
+    if (value === 'private_chat_create') return 'Private chat';
+    if (value === 'group_chat_create') return 'Group creation';
+    if (value === 'group_member_add') return 'Add member';
+    return value || 'Unknown';
+  }
+
+  function ensureBotVisibilityToggles() {
+    const configs = [
+      ['aiBotEnabled', 'aiBotVisibleToUsers'],
+      ['openAiUniversalBotEnabled', 'openAiUniversalBotVisibleToUsers'],
+      ['deepseekAiBotEnabled', 'deepseekAiBotVisibleToUsers'],
+      ['yandexAiBotEnabled', 'yandexAiBotVisibleToUsers'],
+      ['grokAiBotEnabled', 'grokAiBotVisibleToUsers'],
+      ['grokAiImageBotEnabled', 'grokAiImageBotVisibleToUsers'],
+      ['grokAiUniversalBotEnabled', 'grokAiUniversalBotVisibleToUsers'],
+    ];
+    configs.forEach(([enabledId, visibleId]) => {
+      if (document.getElementById(visibleId)) return;
+      const enabledInput = document.getElementById(enabledId);
+      const grid = enabledInput?.closest('.ai-bot-grid');
+      if (!grid) return;
+      const wrap = document.createElement('div');
+      wrap.className = 'ai-bot-toggle-label';
+      wrap.innerHTML = `
+        <span>Display to users</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="${visibleId}">
+          <span class="toggle-slider"></span>
+        </label>
+      `;
+      grid.appendChild(wrap);
+    });
+  }
+
+  function setBotVisibilityToggle(inputId, value = false) {
+    const input = document.getElementById(inputId);
+    if (input) input.checked = !!value;
+  }
+
+  function getBotVisibilityToggle(inputId) {
+    return !!document.getElementById(inputId)?.checked;
+  }
+
   function updateCurrentUserFooter() {
     currentUserInfo.innerHTML = avatarHtml(currentUser.display_name, currentUser.avatar_color, currentUser.avatar_url, 28) +
       `<span class="current-user-name">${esc(currentUser.display_name)}</span>`;
@@ -4669,6 +4749,7 @@
     $('#openAiUniversalBotName').value = bot?.name || 'OpenAI Universal';
     $('#openAiUniversalBotMention').value = bot?.mention || 'openai_universal';
     $('#openAiUniversalBotEnabled').checked = bot ? !!bot.enabled : true;
+    setBotVisibilityToggle('openAiUniversalBotVisibleToUsers', !!bot?.visible_to_users);
     $('#openAiUniversalBotAllowText').checked = bot?.allow_text ?? true;
     $('#openAiUniversalBotAllowImageGenerate').checked = bot?.allow_image_generate ?? true;
     $('#openAiUniversalBotAllowImageEdit').checked = bot?.allow_image_edit ?? true;
@@ -4694,6 +4775,7 @@
       name: $('#openAiUniversalBotName')?.value.trim(),
       mention: $('#openAiUniversalBotMention')?.value.trim(),
       enabled: $('#openAiUniversalBotEnabled')?.checked,
+      visible_to_users: getBotVisibilityToggle('openAiUniversalBotVisibleToUsers'),
       response_model: $('#openAiUniversalBotResponseModel')?.value.trim(),
       summary_model: $('#openAiUniversalBotSummaryModel')?.value.trim(),
       image_model: $('#openAiUniversalBotImageModel')?.value.trim(),
@@ -4795,6 +4877,7 @@
 
   const BOT_SAVE_BOOLEAN_FIELDS = new Set([
     'enabled',
+    'visible_to_users',
     'allow_text',
     'allow_image_generate',
     'allow_image_edit',
@@ -4858,6 +4941,7 @@
     $('#aiBotName').value = bot?.name || 'Bananza AI';
     $('#aiBotMention').value = bot?.mention || 'bananza';
     $('#aiBotEnabled').checked = bot ? !!bot.enabled : true;
+    setBotVisibilityToggle('aiBotVisibleToUsers', !!bot?.visible_to_users);
     $('#aiBotResponseModel').value = bot?.response_model || settings.default_response_model || 'gpt-5.4';
     $('#aiBotSummaryModel').value = bot?.summary_model || settings.default_summary_model || 'gpt-5.4';
     $('#aiBotEmbeddingModel').value = settings.default_embedding_model || 'text-embedding-3-small';
@@ -4878,6 +4962,7 @@
       name: $('#aiBotName')?.value.trim(),
       mention: $('#aiBotMention')?.value.trim(),
       enabled: $('#aiBotEnabled')?.checked,
+      visible_to_users: getBotVisibilityToggle('aiBotVisibleToUsers'),
       response_model: $('#aiBotResponseModel')?.value.trim(),
       summary_model: $('#aiBotSummaryModel')?.value.trim(),
       temperature: Number($('#aiBotTemperature')?.value || 0.55),
@@ -5505,6 +5590,7 @@
     $('#deepseekAiBotName').value = bot?.name || 'DeepSeek AI';
     $('#deepseekAiBotMention').value = bot?.mention || 'deepseek';
     $('#deepseekAiBotEnabled').checked = bot ? !!bot.enabled : true;
+    setBotVisibilityToggle('deepseekAiBotVisibleToUsers', !!bot?.visible_to_users);
     $('#deepseekAiBotResponseModel').value = bot?.response_model || settings.deepseek_default_response_model || 'deepseek-chat';
     $('#deepseekAiBotSummaryModel').value = bot?.summary_model || settings.deepseek_default_summary_model || 'deepseek-chat';
     $('#deepseekAiBotTemperature').value = bot?.temperature ?? settings.deepseek_temperature ?? 0.3;
@@ -5524,6 +5610,7 @@
       name: $('#deepseekAiBotName')?.value.trim(),
       mention: $('#deepseekAiBotMention')?.value.trim(),
       enabled: $('#deepseekAiBotEnabled')?.checked,
+      visible_to_users: getBotVisibilityToggle('deepseekAiBotVisibleToUsers'),
       response_model: $('#deepseekAiBotResponseModel')?.value.trim(),
       summary_model: $('#deepseekAiBotSummaryModel')?.value.trim(),
       temperature: Number($('#deepseekAiBotTemperature')?.value || 0.3),
@@ -6018,6 +6105,7 @@
     $('#yandexAiBotName').value = bot?.name || 'Yandex AI';
     $('#yandexAiBotMention').value = bot?.mention || 'yandex';
     $('#yandexAiBotEnabled').checked = bot ? !!bot.enabled : true;
+    setBotVisibilityToggle('yandexAiBotVisibleToUsers', !!bot?.visible_to_users);
     $('#yandexAiBotResponseModel').value = bot?.response_model || settings.yandex_default_response_model || 'yandexgpt/latest';
     $('#yandexAiBotSummaryModel').value = bot?.summary_model || settings.yandex_default_summary_model || 'yandexgpt-lite/latest';
     $('#yandexAiBotTemperature').value = bot?.temperature ?? settings.yandex_temperature ?? 0.3;
@@ -6037,6 +6125,7 @@
       name: $('#yandexAiBotName')?.value.trim(),
       mention: $('#yandexAiBotMention')?.value.trim(),
       enabled: $('#yandexAiBotEnabled')?.checked,
+      visible_to_users: getBotVisibilityToggle('yandexAiBotVisibleToUsers'),
       response_model: $('#yandexAiBotResponseModel')?.value.trim(),
       summary_model: $('#yandexAiBotSummaryModel')?.value.trim(),
       temperature: Number($('#yandexAiBotTemperature')?.value || 0.3),
@@ -6820,6 +6909,7 @@
     $('#grokAiBotName').value = bot?.name || 'Grok AI';
     $('#grokAiBotMention').value = bot?.mention || 'grok';
     $('#grokAiBotEnabled').checked = bot ? !!bot.enabled : true;
+    setBotVisibilityToggle('grokAiBotVisibleToUsers', !!bot?.visible_to_users);
     $('#grokAiBotTemperature').value = bot?.temperature ?? settings.grok_temperature ?? 0.3;
     $('#grokAiBotMaxTokens').value = bot?.max_tokens ?? settings.grok_max_tokens ?? 1000;
     $('#grokAiBotStyle').value = bot?.style || 'Helpful Grok assistant for chat';
@@ -6839,6 +6929,7 @@
     $('#grokAiImageBotName').value = bot?.name || 'Grok Images';
     $('#grokAiImageBotMention').value = bot?.mention || 'grok_image';
     $('#grokAiImageBotEnabled').checked = bot ? !!bot.enabled : true;
+    setBotVisibilityToggle('grokAiImageBotVisibleToUsers', !!bot?.visible_to_users);
     $('#grokAiImageBotStyle').value = bot?.style || 'Visual prompt specialist for chat';
     $('#grokAiImageBotTone').value = bot?.tone || 'clear, imaginative, precise';
     $('#grokAiImageBotRules').value = bot?.behavior_rules || '';
@@ -6855,6 +6946,7 @@
     $('#grokAiUniversalBotName').value = bot?.name || 'Grok Universal';
     $('#grokAiUniversalBotMention').value = bot?.mention || 'grok_universal';
     $('#grokAiUniversalBotEnabled').checked = bot ? !!bot.enabled : true;
+    setBotVisibilityToggle('grokAiUniversalBotVisibleToUsers', !!bot?.visible_to_users);
     $('#grokAiUniversalBotAllowText').checked = bot?.allow_text ?? true;
     $('#grokAiUniversalBotAllowImageGenerate').checked = bot?.allow_image_generate ?? true;
     $('#grokAiUniversalBotAllowImageEdit').checked = bot?.allow_image_edit ?? true;
@@ -6877,6 +6969,7 @@
       name: $('#grokAiBotName')?.value.trim(),
       mention: $('#grokAiBotMention')?.value.trim(),
       enabled: $('#grokAiBotEnabled')?.checked,
+      visible_to_users: getBotVisibilityToggle('grokAiBotVisibleToUsers'),
       response_model: $('#grokAiBotResponseModel')?.value.trim(),
       summary_model: $('#grokAiBotSummaryModel')?.value.trim(),
       temperature: Number($('#grokAiBotTemperature')?.value || 0.3),
@@ -6941,6 +7034,7 @@
       name: $('#grokAiImageBotName')?.value.trim(),
       mention: $('#grokAiImageBotMention')?.value.trim(),
       enabled: $('#grokAiImageBotEnabled')?.checked,
+      visible_to_users: getBotVisibilityToggle('grokAiImageBotVisibleToUsers'),
       image_model: $('#grokAiImageBotModel')?.value.trim(),
       image_aspect_ratio: $('#grokAiImageBotAspectRatio')?.value.trim(),
       image_resolution: $('#grokAiImageBotResolution')?.value.trim(),
@@ -6957,6 +7051,7 @@
       name: $('#grokAiUniversalBotName')?.value.trim(),
       mention: $('#grokAiUniversalBotMention')?.value.trim(),
       enabled: $('#grokAiUniversalBotEnabled')?.checked,
+      visible_to_users: getBotVisibilityToggle('grokAiUniversalBotVisibleToUsers'),
       response_model: $('#grokAiUniversalBotResponseModel')?.value.trim(),
       summary_model: $('#grokAiUniversalBotSummaryModel')?.value.trim(),
       image_model: $('#grokAiUniversalBotImageModel')?.value.trim(),
@@ -7740,6 +7835,8 @@
       chat?.name || '',
       chat?.private_user?.display_name || '',
       chat?.private_user?.username || '',
+      chat?.private_user?.ai_bot_mention || '',
+      chat?.private_user?.ai_bot_model || '',
     ].join(' ').toLowerCase();
   }
 
@@ -10615,6 +10712,10 @@
         applyUserUpdate(msg.user || {});
         break;
       }
+      case 'user_directory_changed': {
+        loadAllUsers().catch(() => {});
+        break;
+      }
       case 'pins_updated': {
         applyPinsUpdate(msg);
         if (msg.action === 'pinned') {
@@ -10956,15 +11057,17 @@
       const matchingUsers = allUsers.filter(u =>
         !privatePeerIds.has(u.id) &&
         (u.display_name.toLowerCase().includes(normalizedFilter) ||
-         u.username.toLowerCase().includes(normalizedFilter))
+         u.username.toLowerCase().includes(normalizedFilter) ||
+         String(u.ai_bot_mention || '').toLowerCase().includes(normalizedFilter) ||
+         String(u.ai_bot_model || '').toLowerCase().includes(normalizedFilter))
       );
       if (matchingUsers.length > 0) {
-        appendChatListSeparator('Users');
+        appendChatListSeparator('People & bots');
       }
       for (const u of matchingUsers) {
         const el = document.createElement('div');
         el.className = 'chat-item';
-        const isOnline = onlineUsers.has(u.id);
+        const isOnline = !isAiBotDirectoryUser(u) && onlineUsers.has(u.id);
         el.innerHTML = `
           <div class="chat-item-avatar" style="background:${u.avatar_color || '#5eb5f7'}">
             ${u.avatar_url ? `<img class="avatar-img" src="${esc(u.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">` : initials(u.display_name)}
@@ -10974,7 +11077,7 @@
             <div class="chat-item-top">
               <span class="chat-item-name">${esc(u.display_name)}</span>
             </div>
-            <div class="chat-item-last"><span>@${esc(u.username)}</span></div>
+            <div class="chat-item-last"><span>${esc(userSecondaryLineText(u))}</span></div>
           </div>
         `;
         el.addEventListener('click', async () => {
@@ -11605,6 +11708,10 @@
 
   function renderAdminUserRow(u) {
     const isOnline = onlineUsers.has(u.id);
+    const badges = [
+      u.is_admin ? '<span class="badge badge-admin">Admin</span>' : '',
+      u.is_blocked ? '<span class="badge badge-blocked">Blocked</span>' : '',
+    ].filter(Boolean).join('');
     return `
       <div class="admin-user-row" data-uid="${u.id}">
         ${avatarHtml(u.display_name, u.avatar_color, u.avatar_url)}
@@ -11618,8 +11725,17 @@
             <div class="admin-user-last">Last: ${u.last_activity ? formatDate(u.last_activity) + ' ' + formatTime(u.last_activity) : '—'}</div>
           </div>
         </div>
-        ${u.is_admin ? '<span class="badge badge-admin">Admin</span>' : ''}
-        ${u.is_blocked ? '<span class="badge badge-blocked">Blocked</span>' : ''}
+        ${badges ? `<div class="admin-user-badges">${badges}</div>` : ''}
+        <div class="admin-user-controls">
+          ${!u.is_admin ? `<div class="admin-user-toggle">
+            <span>Add bots</span>
+            <label class="toggle-switch">
+              <input type="checkbox" class="bot-access-toggle" data-uid="${u.id}" ${u.can_add_bots_to_chats ? 'checked' : ''}>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>` : ''}
+          <button class="admin-user-audit-btn bot-audit-btn" data-uid="${u.id}" data-name="${esc(u.display_name)}" type="button">Bot audit</button>
+        </div>
         ${!u.is_admin ? `<div class="admin-user-actions">
           <button class="reset-btn" data-uid="${u.id}" title="Reset password to 123456">🔑 Reset</button>
           <button class="block-btn ${u.is_blocked ? 'is-blocked' : ''}" data-uid="${u.id}">${u.is_blocked ? 'Unblock' : 'Block'}</button>
@@ -11655,7 +11771,7 @@
       if (isBot) {
         statusEl.classList.remove('online','offline');
         statusEl.classList.add('bot');
-        statusEl.innerHTML = `<span class="status-dot"></span>bot`;
+        statusEl.innerHTML = `<span class="status-dot"></span>AI bot`;
       } else {
         const isOnline = onlineUsers.has(uid);
         statusEl.classList.toggle('online', isOnline);
@@ -11671,6 +11787,11 @@
     const chat = getChatById(currentChatId);
     syncChatInfoStatusVisibility(chat);
     if (isNotesChat(chat)) return;
+    if (chat?.type === 'private' && Number(chat?.private_user?.is_ai_bot) !== 0) {
+      el.classList.remove('online', 'offline');
+      el.innerHTML = `<span class="status-dot"></span>AI bot`;
+      return;
+    }
     const memberList = $('#chatMemberList');
     if (!memberList) {
       el.classList.remove('online'); el.classList.add('offline');
@@ -11692,7 +11813,7 @@
       } else if (botItems.length === 1 && items.length === 1) {
         // single bot participant
         el.classList.remove('online','offline');
-        el.innerHTML = `<span class="status-dot"></span>bot`;
+        el.innerHTML = `<span class="status-dot"></span>AI bot`;
       } else {
         el.classList.remove('online','offline');
         el.innerHTML = `0/${total} online`;
@@ -12049,6 +12170,12 @@
       return;
     }
     if (chat.type === 'private' && chat.private_user) {
+      if (Number(chat.private_user.is_ai_bot) !== 0) {
+        chatStatus.classList.remove('online', 'offline');
+        chatStatus.textContent = 'AI bot';
+        chatStatus.style.color = '';
+        return;
+      }
       const isOnline = onlineUsers.has(chat.private_user.id);
       chatStatus.textContent = isOnline ? 'online' : 'offline';
       chatStatus.style.color = isOnline ? 'var(--success)' : '';
@@ -16585,24 +16712,10 @@
       const privateList = $('#userListPrivate');
       const groupList = $('#userListGroup');
 
-      privateList.innerHTML = users.map(u => `
-        <div class="user-list-item" data-uid="${u.id}">
-          ${avatarHtml(u.display_name, u.avatar_color, u.avatar_url)}
-          <div>
-            <div class="name">${esc(u.display_name)}</div>
-            <div class="status-text">${u.online ? 'online' : 'offline'}</div>
-          </div>
-        </div>
-      `).join('') || '<div style="color:var(--text-secondary);padding:12px">No other users yet</div>';
+      privateList.innerHTML = users.map((user) => renderSelectableUserItem(user, { showPresence: true })).join('')
+        || '<div style="color:var(--text-secondary);padding:12px">No other users yet</div>';
 
-      groupList.innerHTML = users.map(u => `
-        <div class="user-list-item" data-uid="${u.id}">
-          ${avatarHtml(u.display_name, u.avatar_color, u.avatar_url)}
-          <div>
-            <div class="name">${esc(u.display_name)}</div>
-          </div>
-        </div>
-      `).join('');
+      groupList.innerHTML = users.map((user) => renderSelectableUserItem(user)).join('');
 
       // Private: click to start chat
       privateList.querySelectorAll('.user-list-item').forEach(el => {
@@ -16631,6 +16744,27 @@
       const list = $('#adminUserList');
       list.innerHTML = users.map(renderAdminUserRow).join('');
 
+      list.querySelectorAll('.bot-access-toggle').forEach(input => {
+        input.addEventListener('change', async () => {
+          try {
+            await api(`/api/admin/users/${input.dataset.uid}/bot-access`, {
+              method: 'PUT',
+              body: { can_add_bots_to_chats: !!input.checked },
+            });
+          } catch (e) {
+            input.checked = !input.checked;
+            alert(e.message);
+          }
+        });
+      });
+      list.querySelectorAll('.bot-audit-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          openAdminBotAuditModal(Number(btn.dataset.uid || 0), btn.dataset.name || 'User').catch((error) => {
+            alert(error.message || 'Could not load bot audit');
+          });
+        });
+      });
+
       list.querySelectorAll('.block-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
           try {
@@ -16649,6 +16783,27 @@
         });
       });
     } catch {}
+  }
+
+  async function openAdminBotAuditModal(userId, displayName = 'User') {
+    if (!userId) return;
+    $('#adminBotAuditTitle').textContent = `Bot audit: ${displayName}`;
+    $('#adminBotAuditStatus').textContent = 'Loading...';
+    $('#adminBotAuditList').innerHTML = '';
+    openModal('adminBotAuditModal', { replaceStack: false });
+    const data = await api(`/api/admin/users/${userId}/bot-additions`);
+    const additions = Array.isArray(data?.additions) ? data.additions : [];
+    $('#adminBotAuditStatus').textContent = additions.length ? '' : 'No bot additions recorded yet.';
+    $('#adminBotAuditList').innerHTML = additions.map((entry) => `
+      <div class="admin-user-row">
+        ${avatarHtml(entry.bot_name || 'Bot', entry.bot_avatar_color || 'var(--accent)', entry.bot_avatar_url)}
+        <div class="audit-entry-copy">
+          <div class="name">${esc(entry.bot_name || 'Bot')} <span style="color:var(--text-secondary)">${esc(entry.bot_mention ? '@' + entry.bot_mention : '')}</span></div>
+          <div class="audit-entry-meta">${esc((entry.chat_name || 'Chat') + (entry.chat_type ? ` • ${entry.chat_type}` : ''))}</div>
+          <div class="audit-entry-meta">${esc([entry.bot_model || '', formatBotAuditSource(entry.source), entry.created_at ? `${formatDate(entry.created_at)} ${formatTime(entry.created_at)}` : ''].filter(Boolean).join(' • '))}</div>
+        </div>
+      </div>
+    `).join('');
   }
 
   // Settings modal
@@ -16907,6 +17062,8 @@
     const chat = chats.find(c => c.id === currentChatId);
     $('#chatInfoTitle').textContent = chat ? chat.name : 'Chat Info';
     syncChatInfoStatusVisibility(chat);
+    $('#chatBotInfoSection')?.classList.add('hidden');
+    if ($('#chatBotList')) $('#chatBotList').innerHTML = '';
 
     // Sync compact view toggle
     $('#compactViewToggle').checked = compactView;
@@ -17066,7 +17223,7 @@
           <div>
             <div class="name">${esc(u.display_name)}</div>
             <div class="admin-user-status ${u.is_ai_bot ? 'bot' : (onlineUsers.has(u.id) ? 'online' : 'offline')}">
-              <span class="status-dot"></span>${u.is_ai_bot ? 'bot' : (onlineUsers.has(u.id) ? 'online' : 'offline')}
+              <span class="status-dot"></span>${u.is_ai_bot ? 'AI bot' : (onlineUsers.has(u.id) ? 'online' : 'offline')}
             </div>
           </div>
           ${canRemove && u.id !== currentUser.id ? `<button class="member-remove" data-uid="${u.id}" title="Remove">✕</button>` : ''}
@@ -17077,6 +17234,29 @@
       // Update status indicators in modal
       try { refreshChatMemberStatuses(); } catch (e) {}
       try { refreshChatInfoStatus(); } catch (e) {}
+      try {
+        const botData = await api(`/api/chats/${currentChatId}/bots`);
+        const botSection = $('#chatBotInfoSection');
+        const botList = $('#chatBotList');
+        const bots = Array.isArray(botData?.bots) ? botData.bots : [];
+        if (botSection && botList) {
+          if (!bots.length) {
+            botSection.classList.add('hidden');
+            botList.innerHTML = '';
+          } else {
+            botSection.classList.remove('hidden');
+            botList.innerHTML = bots.map((bot) => `
+              <div class="user-list-item is-ai-bot" data-uid="${bot.user_id}">
+                ${avatarHtml(bot.name, bot.avatar_color, bot.avatar_url)}
+                <div class="user-list-copy">
+                  <div class="name">${esc(bot.name)}</div>
+                  <div class="user-list-meta">${esc(['@' + (bot.mention || ''), bot.model || ''].filter(Boolean).join(' • '))}</div>
+                </div>
+              </div>
+            `).join('');
+          }
+        }
+      } catch (e) {}
 
       // Remove member handlers
       memberList.querySelectorAll('.member-remove').forEach(btn => {
@@ -17101,12 +17281,8 @@
         const nonMembers = allUsers.filter(u => !memberIds.has(u.id));
 
         const addList = $('#addMemberList');
-        addList.innerHTML = nonMembers.map(u => `
-          <div class="user-list-item" data-uid="${u.id}">
-            ${avatarHtml(u.display_name, u.avatar_color, u.avatar_url)}
-            <div><div class="name">${esc(u.display_name)}</div></div>
-          </div>
-        `).join('') || '<div style="color:var(--text-secondary)">All users are already members</div>';
+        addList.innerHTML = nonMembers.map((user) => renderSelectableUserItem(user)).join('')
+          || '<div style="color:var(--text-secondary)">All users are already members</div>';
 
         addList.querySelectorAll('.user-list-item').forEach(el => {
           el.addEventListener('click', async () => {
@@ -18528,6 +18704,13 @@
       });
     });
 
+    const adminBotAuditCloseBtn = document.querySelector('#adminBotAuditModal .modal-close');
+    if (adminBotAuditCloseBtn) {
+      adminBotAuditCloseBtn.textContent = '\u2715';
+      adminBotAuditCloseBtn.setAttribute('aria-label', 'Close');
+      adminBotAuditCloseBtn.setAttribute('title', 'Close');
+    }
+
     // Modal close buttons
     $$('.modal-close').forEach(btn => {
       btn.addEventListener('click', (e) => {
@@ -19146,6 +19329,7 @@
     }
     loadNotificationSettings().catch(() => {});
 
+    ensureBotVisibilityToggles();
     registerBuiltinModals();
     setupEvents();
     setupChatAreaMetricsSync();

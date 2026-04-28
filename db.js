@@ -241,6 +241,11 @@ try {
   db.exec("ALTER TABLE users ADD COLUMN is_ai_bot INTEGER DEFAULT 0");
 }
 try {
+  db.prepare("SELECT can_add_bots_to_chats FROM users LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE users ADD COLUMN can_add_bots_to_chats INTEGER DEFAULT 0");
+}
+try {
   db.prepare("SELECT last_activity FROM users LIMIT 1").get();
 } catch {
   db.exec("ALTER TABLE users ADD COLUMN last_activity TEXT DEFAULT NULL");
