@@ -157,6 +157,10 @@ async function waitForViewportRecovery(dom, delayMs = 240) {
   await new Promise((resolve) => dom.window.setTimeout(resolve, delayMs));
 }
 
+async function wait(dom, delayMs = 0) {
+  await new Promise((resolve) => dom.window.setTimeout(resolve, delayMs));
+}
+
 function createTouchEndEvent(window, { clientX = 0, clientY = 0, identifier = 1 } = {}) {
   const event = new window.Event('touchend', { bubbles: true, cancelable: true });
   const touch = { identifier, clientX, clientY };
@@ -165,6 +169,51 @@ function createTouchEndEvent(window, { clientX = 0, clientY = 0, identifier = 1 
     changedTouches: { configurable: true, value: [touch] },
   });
   return event;
+}
+
+function createPrimaryPointerEvent(window, type = 'pointerdown') {
+  const event = new window.Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'button', {
+    configurable: true,
+    value: 0,
+  });
+  return event;
+}
+
+function appendMessageRow(dom, {
+  id = 101,
+  userId = 2,
+  text = 'Hello from the test row',
+} = {}) {
+  const { document } = dom.window;
+  const messagesEl = document.getElementById('messages');
+  const row = document.createElement('div');
+  row.className = 'msg-row';
+  row.dataset.msgId = String(id);
+  row.innerHTML = `
+    <div class="msg-content">
+      <div class="msg-bubble">
+        <div class="msg-text">${text}</div>
+        <div class="msg-actions">
+          <button type="button" class="msg-react-btn">🙂</button>
+        </div>
+      </div>
+    </div>
+  `;
+  row.__messageData = {
+    id,
+    user_id: userId,
+    text,
+    is_deleted: false,
+    created_at: '2026-04-28T12:00:00.000Z',
+  };
+  row.__replyPayload = {
+    id,
+    display_name: 'Bob',
+    text,
+  };
+  messagesEl.appendChild(row);
+  return row;
 }
 
 test('media viewer close suppresses follow-up click-through to settings', async (t) => {
@@ -346,4 +395,194 @@ test('emoji picker closes when navigating back out of the mobile chat view', asy
   await new Promise((resolve) => dom.window.setTimeout(resolve, 20));
 
   assert.equal(emojiPicker.classList.contains('hidden'), true);
+});
+
+test('scroll-to-bottom stays keyboard-neutral on mobile', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const msgInput = document.getElementById('msgInput');
+  const scrollBottomBtn = document.getElementById('scrollBottomBtn');
+
+  let focusCalls = 0;
+  msgInput.focus = () => {
+    focusCalls += 1;
+  };
+
+  const pointerDown = createPrimaryPointerEvent(dom.window, 'pointerdown');
+  scrollBottomBtn.dispatchEvent(pointerDown);
+  scrollBottomBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+
+  assert.equal(pointerDown.defaultPrevented, true);
+  assert.equal(focusCalls, 0);
+  assert.notEqual(document.activeElement, msgInput);
+});
+
+test('settings modal dismisses the mobile keyboard and restores the composer dock', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const settingsBtn = document.getElementById('settingsBtn');
+  const settingsModal = document.getElementById('settingsModal');
+
+  msgInput.focus();
+  dom.visualViewportMock.setAndDispatch('resize', { height: 420 });
+  await wait(dom, 30);
+  assert.equal(app.style.height, '420px');
+
+  settingsBtn.dispatchEvent(createPrimaryPointerEvent(dom.window, 'pointerdown'));
+  settingsBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  dom.visualViewportMock.set({ height: 844 });
+  await waitForViewportRecovery(dom, 320);
+
+  assert.equal(settingsModal.classList.contains('hidden'), false);
+  assert.equal(app.style.height, '844px');
+  assert.notEqual(document.activeElement, msgInput);
+});
+
+test('fullscreen media viewer dismisses the mobile keyboard and leaves no gap on close', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const imageViewer = document.getElementById('imageViewer');
+
+  msgInput.focus();
+  dom.visualViewportMock.setAndDispatch('resize', { height: 420 });
+  await wait(dom, 30);
+  assert.equal(app.style.height, '420px');
+
+  BananzaAppBridge.__testing.openMediaViewer('https://example.com/test-image.jpg', 'image');
+  dom.visualViewportMock.set({ height: 844 });
+  await waitForViewportRecovery(dom, 320);
+
+  assert.equal(imageViewer.classList.contains('hidden'), false);
+  assert.equal(app.style.height, '844px');
+  assert.notEqual(document.activeElement, msgInput);
+
+  BananzaAppBridge.__testing.closeMediaViewer();
+  await waitForViewportRecovery(dom, 320);
+
+  assert.equal(imageViewer.classList.contains('hidden'), true);
+  assert.equal(app.style.height, '844px');
+});
+
+test('the first ordinary message tap only dismisses the mobile keyboard', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const row = appendMessageRow(dom, { id: 201, userId: 2, text: 'Tap me once' });
+  const bubble = row.querySelector('.msg-bubble');
+
+  msgInput.focus();
+  dom.visualViewportMock.setAndDispatch('resize', { height: 420 });
+  await wait(dom, 30);
+  assert.equal(app.style.height, '420px');
+
+  bubble.dispatchEvent(createPrimaryPointerEvent(dom.window, 'pointerdown'));
+  dom.visualViewportMock.set({ height: 844 });
+  bubble.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await waitForViewportRecovery(dom, 320);
+
+  assert.equal(row.classList.contains('actions-open'), false);
+  assert.equal(app.style.height, '844px');
+  assert.notEqual(document.activeElement, msgInput);
+});
+
+test('a background tap dismisses the mobile keyboard and redocks the composer', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const messagesEl = document.getElementById('messages');
+
+  msgInput.focus();
+  dom.visualViewportMock.setAndDispatch('resize', { height: 420 });
+  await wait(dom, 30);
+  assert.equal(app.style.height, '420px');
+
+  messagesEl.dispatchEvent(createPrimaryPointerEvent(dom.window, 'pointerdown'));
+  dom.visualViewportMock.set({ height: 844 });
+  messagesEl.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await waitForViewportRecovery(dom, 320);
+
+  assert.equal(app.style.height, '844px');
+  assert.notEqual(document.activeElement, msgInput);
+});
+
+test('reply and edit flows still focus the composer when text entry is requested', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const msgInput = document.getElementById('msgInput');
+  const row = appendMessageRow(dom, { id: 301, userId: 1, text: 'Editable draft' });
+
+  BananzaAppBridge.__testing.setReply(91, 'Bob', 'Quoted text');
+  assert.equal(document.activeElement, msgInput);
+
+  msgInput.blur();
+  BananzaAppBridge.__testing.setEditFromRow(row);
+
+  assert.equal(document.activeElement, msgInput);
+  assert.equal(msgInput.value, 'Editable draft');
+});
+
+test('mobile back navigation dismisses the keyboard and removes the composer gap', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const sidebar = document.getElementById('sidebar');
+  const backBtn = document.getElementById('backBtn');
+
+  sidebar.classList.add('sidebar-hidden');
+  msgInput.focus();
+  dom.visualViewportMock.setAndDispatch('resize', { height: 420 });
+  await wait(dom, 30);
+  assert.equal(app.style.height, '420px');
+
+  backBtn.dispatchEvent(createPrimaryPointerEvent(dom.window, 'pointerdown'));
+  backBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  dom.visualViewportMock.set({ height: 844 });
+  await waitForViewportRecovery(dom, 520);
+
+  assert.equal(sidebar.classList.contains('sidebar-hidden'), false);
+  assert.equal(app.style.height, '844px');
+  assert.notEqual(document.activeElement, msgInput);
 });

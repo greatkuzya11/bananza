@@ -447,6 +447,7 @@
   let mobileViewportHeightSyncBound = false;
   let mobileViewportRecoveryFrame = 0;
   let mobileViewportRecoveryTimer = null;
+  let mobileComposerDismissClickSuppressUntil = 0;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DOM
@@ -720,8 +721,85 @@
     return true;
   }
 
+  function isMobileComposerSessionActive() {
+    if (window.innerWidth > 768) return false;
+    return Boolean(document.activeElement === msgInput || iosComposerFocused || isMobileComposerKeyboardOpen());
+  }
+
+  function suppressMobileComposerDismissClick(ms = 520) {
+    mobileComposerDismissClickSuppressUntil = Math.max(mobileComposerDismissClickSuppressUntil, Date.now() + ms);
+  }
+
+  function preserveMobileComposerOnPointerDown(e, { requireOpenKeyboard = true } = {}) {
+    if (window.innerWidth > 768) return false;
+    if (requireOpenKeyboard && !isMobileComposerKeyboardOpen()) return false;
+    if (typeof e.button === 'number' && e.button !== 0) return false;
+    e.preventDefault();
+    return true;
+  }
+
+  function dismissMobileComposer({ consumeTap = false, forceRecovery = true, reason = '', recoveryDelayMs = 240 } = {}) {
+    if (window.innerWidth > 768) return false;
+    const hadComposerSession = isMobileComposerSessionActive();
+    if (consumeTap) suppressMobileComposerDismissClick();
+    if (document.activeElement === msgInput) {
+      try { msgInput.blur(); } catch {}
+    }
+    if (iosComposerFocused) iosComposerFocused = false;
+    queueIosViewportLayoutSync();
+    if (forceRecovery) scheduleMobileViewportRecovery(recoveryDelayMs);
+    return hadComposerSession;
+  }
+
+  function closeMobileComposerTransientUi({ immediate = true, preserveEmoji = false } = {}) {
+    hideMentionPicker();
+    if (contextConvertPickerState.active) hideContextConvertPicker();
+    hideFloatingMessageActions({ immediate, keepComposerState: false });
+    hideAvatarUserMenu();
+    clearActivePulseVoterPopover({ skipRefresh: true });
+    if (!preserveEmoji) closeEmojiPicker({ immediate });
+    const attachMenu = $('#attachMenu');
+    if (attachMenu) attachMenu.classList.add('hidden');
+  }
+
+  function getMobileComposerSafeReturnFocusEl(fallback = null) {
+    const active = rememberActiveElement();
+    if (window.innerWidth <= 768 && active === msgInput) {
+      return fallback instanceof HTMLElement ? fallback : null;
+    }
+    return active instanceof HTMLElement ? active : (fallback instanceof HTMLElement ? fallback : null);
+  }
+
+  function isMobileComposerDismissMessageTarget(target) {
+    if (!(target instanceof Element)) return false;
+    const row = target.closest('.msg-row');
+    if (!row || !messagesEl.contains(row) || row.dataset.outbox === '1' || row.querySelector('.msg-deleted')) return false;
+    if (target.closest(
+      '.msg-actions, button, a, input, textarea, select, label, audio, video, .video-note-stage, .msg-reply, .reaction-badge, .msg-image, .msg-video, .msg-file, .link-preview, .msg-group-avatar'
+    )) return false;
+    return true;
+  }
+
+  function isMobileComposerDismissBackgroundTarget(target) {
+    if (!(target instanceof Element) || !messagesEl.contains(target)) return false;
+    if (target.closest('.msg-row')) return false;
+    if (target.closest('button, a, input, textarea, select, label, audio, video')) return false;
+    return true;
+  }
+
   function shouldKeepEmojiPickerKeyboard() {
     return Boolean(emojiPickerKeyboardAttached || isMobileComposerKeyboardOpen());
+  }
+
+  function shouldBypassLockedMobileViewportSync(newViewportHeight, { force = false, mentionPickerDismissed = false } = {}) {
+    if (force || mentionPickerDismissed || isIosViewportFixTarget) return true;
+    if (!isMobileViewportLayoutLocked()) return true;
+    const nextHeight = Math.max(0, Number(newViewportHeight) || 0);
+    const prevHeight = Math.max(0, Number(mobileViewportPrevHeight) || 0);
+    const delta = nextHeight - prevHeight;
+    if (Math.abs(delta) < 48) return false;
+    if (delta > 0) return true;
+    return Boolean(document.activeElement === msgInput || iosComposerFocused || isMobileComposerKeyboardOpen());
   }
 
   const appBridge = window.BananzaAppBridge = window.BananzaAppBridge || {};
@@ -789,6 +867,12 @@
       return currentChat ? normalizeChatListEntry(currentChat) : null;
     },
     applyChatUpdate: (nextChat = {}) => applyChatUpdate(nextChat),
+    dismissMobileComposer: (options = {}) => dismissMobileComposer(options),
+    openMediaViewer: (src, type = 'image') => openMediaViewer(src, type),
+    closeMediaViewer: () => closeMediaViewer(),
+    openSettingsModal: (opener = $('#settingsBtn')) => openSettingsModal(opener),
+    setReply: (...args) => setReply(...args),
+    setEditFromRow: (row) => setEditFromRow(row),
   });
 
   // Weather widget interactivity: click or keyboard activates a forced refresh
@@ -2583,7 +2667,7 @@
     const mentionPickerDismissed = dismissMentionPickerAfterKeyboardClose();
     getIosViewportBaselineHeight();
     const newAppHeight = getMobileAppViewportHeight();
-    if (!force && !mentionPickerDismissed && isMobileViewportLayoutLocked() && !isIosViewportFixTarget) {
+    if (!shouldBypassLockedMobileViewportSync(newViewportHeight, { force, mentionPickerDismissed })) {
       mobileViewportPrevHeight = newViewportHeight;
       return;
     }
@@ -2592,7 +2676,7 @@
     syncChatAreaMetrics();
     if (newViewportHeight < mobileViewportPrevHeight && messagesEl) {
       requestAnimationFrame(() => {
-        if (!force && !mentionPickerDismissed && isMobileViewportLayoutLocked() && !isIosViewportFixTarget) return;
+        if (!shouldBypassLockedMobileViewportSync(newViewportHeight, { force, mentionPickerDismissed })) return;
         messagesEl.scrollTop = messagesEl.scrollHeight;
       });
     }
@@ -8201,6 +8285,7 @@
     const id = Number(chatId || 0);
     if (!id || Number(currentChatId || 0) !== id) return;
     pauseCurrentChatMediaPlayback();
+    dismissMobileComposer({ forceRecovery: true, reason: 'close-chat-view', recoveryDelayMs: 280 });
     hideFloatingMessageActions({ immediate: true });
     hideMentionPicker();
     closeEmojiPicker({ immediate: true });
@@ -8547,6 +8632,7 @@
     if (!focusElementIfPossible(entry.returnFocusEl)) {
       focusElementIfPossible(getModalFocusableTarget(getTopModal()));
     }
+    scheduleMobileViewportRecovery();
     return true;
   }
 
@@ -8669,6 +8755,8 @@
   function openModal(modalOrId, { replaceStack = false, opener = null } = {}) {
     const entry = registerModal(modalOrId);
     if (!entry?.el) return null;
+    closeMobileComposerTransientUi({ immediate: true });
+    dismissMobileComposer({ forceRecovery: true, reason: `modal:${entry.id}` });
     flushPendingModalHistoryRewind();
     const reuseHistoryEntry = replaceStack && modalHistoryDepth === 1;
     if (replaceStack && modalStack.length) {
@@ -8685,7 +8773,7 @@
       return entry;
     }
 
-    entry.returnFocusEl = opener instanceof HTMLElement ? opener : rememberActiveElement();
+    entry.returnFocusEl = opener instanceof HTMLElement ? opener : getMobileComposerSafeReturnFocusEl();
     entry.isClosing = false;
     clearTimeout(entry.closeTimer);
     if (entry.openFrame) cancelAnimationFrame(entry.openFrame);
@@ -8745,6 +8833,7 @@
       modalHistoryDepth = 0;
     }
     if (includeMedia) closeMediaViewer();
+    scheduleMobileViewportRecovery();
     return true;
   }
 
@@ -14982,6 +15071,8 @@
 
   function openSearchPanel() {
     if (!searchPanel) return;
+    closeMobileComposerTransientUi({ immediate: true });
+    dismissMobileComposer({ forceRecovery: true, reason: 'search-panel' });
     ensureSearchPanelReady();
     if (isSearchPanelOpen() && !searchPanel.classList.contains('is-closing')) {
       if (shouldAutoFocusSearchInput()) focusSearchInput();
@@ -14992,7 +15083,7 @@
     searchDebounce = null;
     searchRequestSeq += 1;
     searchPanelPendingAction = null;
-    searchPanelReturnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : $('#searchBtn');
+    searchPanelReturnFocusEl = getMobileComposerSafeReturnFocusEl($('#searchBtn'));
     searchAllChats = false;
     renderSearchScopeToggle();
     if (searchInput) searchInput.value = '';
@@ -16602,6 +16693,8 @@
 
   function openMediaViewer(src, type = 'image') {
     gallerySessionId += 1;
+    closeMobileComposerTransientUi({ immediate: true });
+    dismissMobileComposer({ forceRecovery: true, reason: 'media-viewer-open', recoveryDelayMs: 280 });
     ivClearZoomTransition();
     mediaViewerSuppressClickUntil = 0;
     mediaViewerFollowupClickSuppressUntil = 0;
@@ -16670,6 +16763,7 @@
       ivSkipNextPopstate = true;
       history.back();
     }
+    scheduleMobileViewportRecovery(280);
   }
 
   function handleMediaViewerControlActivation(e) {
@@ -16833,8 +16927,8 @@
   }
 
   // Settings modal
-  function openSettingsModal() {
-    openModal('settingsModal', { replaceStack: true });
+  function openSettingsModal(opener = $('#settingsBtn')) {
+    openModal('settingsModal', { replaceStack: true, opener });
     const adminItem = $('#settingsAdminPanel');
     if (currentUser.is_admin) adminItem.classList.remove('hidden');
     else adminItem.classList.add('hidden');
@@ -17081,9 +17175,9 @@
   }
 
   // Chat info modal
-  async function openChatInfoModal() {
+  async function openChatInfoModal(opener = $('#chatInfoBtn')) {
     if (!currentChatId) return;
-    openModal('chatInfoModal', { replaceStack: true });
+    openModal('chatInfoModal', { replaceStack: true, opener });
 
     const chat = chats.find(c => c.id === currentChatId);
     $('#chatInfoTitle').textContent = chat ? chat.name : 'Chat Info';
@@ -17329,9 +17423,9 @@
   // Profile editor (menu drawer)
   const AVATAR_COLORS = ['#e17076','#7bc862','#e5ca77','#65aadd','#a695e7','#ee7aae','#6ec9cb','#faa774'];
 
-  function openMenuDrawer() {
+  function openMenuDrawer(opener = $('#menuBtn')) {
     hideFloatingMessageActions({ immediate: true });
-    openModal('menuDrawer', { replaceStack: true });
+    openModal('menuDrawer', { replaceStack: true, opener });
 
     // Avatar
     const avatarEl = $('#profileAvatar');
@@ -17499,10 +17593,7 @@
   function revealSidebarFromChat({ forceAnimation = false } = {}) {
     if (!sidebar) return;
     pauseCurrentChatMediaPlayback();
-    if (isIosViewportFixTarget && document.activeElement === msgInput) {
-      try { msgInput.blur(); } catch {}
-      queueIosViewportLayoutSync();
-    }
+    dismissMobileComposer({ forceRecovery: true, reason: 'reveal-sidebar', recoveryDelayMs: 280 });
     hideFloatingMessageActions({ immediate: true });
     hideMentionPicker();
     closeEmojiPicker({ immediate: true });
@@ -17652,11 +17743,37 @@
       if (
         Date.now() >= mentionPickerClickSuppressUntil
         && Date.now() >= contextConvertPickerClickSuppressUntil
+        && Date.now() >= mobileComposerDismissClickSuppressUntil
         && Date.now() >= mediaViewerFollowupClickSuppressUntil
       ) return;
       e.preventDefault();
       e.stopImmediatePropagation();
     }, true);
+    const dismissMobileComposerMessageTap = (e) => {
+      if (!isMobileComposerSessionActive()) return;
+      if (e.type === 'pointerdown' && typeof e.button === 'number' && e.button !== 0) return;
+      if (!isMobileComposerDismissMessageTarget(e.target) && !isMobileComposerDismissBackgroundTarget(e.target)) return;
+      dismissMobileComposer({ consumeTap: true, forceRecovery: true, reason: 'message-or-background-tap' });
+      e.preventDefault();
+      e.stopImmediatePropagation?.();
+      e.stopPropagation();
+    };
+    messagesEl.addEventListener('pointerdown', dismissMobileComposerMessageTap, { passive: false, capture: true });
+    messagesEl.addEventListener('touchstart', dismissMobileComposerMessageTap, { passive: false, capture: true });
+    const preserveKeyboardUntilUtilityClick = (e) => {
+      preserveMobileComposerOnPointerDown(e, { requireOpenKeyboard: true });
+    };
+    [
+      $('#menuBtn'),
+      $('#searchBtn'),
+      $('#settingsBtn'),
+      $('#chatInfoBtn'),
+      backBtn,
+    ].forEach((btn) => {
+      btn?.addEventListener('pointerdown', preserveKeyboardUntilUtilityClick, { passive: false });
+      btn?.addEventListener('touchstart', preserveKeyboardUntilUtilityClick, { passive: false });
+      btn?.addEventListener('mousedown', preserveKeyboardUntilUtilityClick);
+    });
 
     // Send message
     sendBtn.addEventListener('click', (e) => {
@@ -17735,11 +17852,10 @@
       if (!['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(e.key)) updateMentionPicker();
     });
     const keepEmojiButtonFromBlurringInput = (e) => {
-      if (window.innerWidth > 768) return;
-      if (!isMobileComposerKeyboardOpen()) return;
-      e.preventDefault();
+      preserveMobileComposerOnPointerDown(e, { requireOpenKeyboard: true });
     };
     emojiBtn?.addEventListener('pointerdown', keepEmojiButtonFromBlurringInput, { passive: false });
+    emojiBtn?.addEventListener('touchstart', keepEmojiButtonFromBlurringInput, { passive: false });
     emojiBtn?.addEventListener('mousedown', keepEmojiButtonFromBlurringInput);
     window.visualViewport?.addEventListener('resize', () => {
       const mentionPickerDismissed = dismissMentionPickerAfterKeyboardClose();
@@ -18686,6 +18802,7 @@
         imageViewer.querySelector('.iv-edge-hint')?.classList.remove('visible');
         cleanupGalleryPreloads();
         ivHistoryPushed = false;
+        scheduleMobileViewportRecovery(280);
         return;
       }
       if (window.innerWidth <= 768) {
@@ -18764,7 +18881,7 @@
     });
 
     // Settings button
-    $('#settingsBtn').addEventListener('click', openSettingsModal);
+    $('#settingsBtn').addEventListener('click', (e) => openSettingsModal(e.currentTarget));
 
     // Settings sub-buttons
     $('#settingsThemePanel').addEventListener('click', openThemeSettingsModal);
@@ -19189,12 +19306,12 @@
     });
 
     // Menu button
-    $('#menuBtn').addEventListener('click', openMenuDrawer);
+    $('#menuBtn').addEventListener('click', (e) => openMenuDrawer(e.currentTarget));
 
     // Chat info button
-    $('#chatInfoBtn').addEventListener('click', () => {
+    $('#chatInfoBtn').addEventListener('click', (e) => {
       animateChatHeaderActionButton('#chatInfoBtn');
-      openChatInfoModal();
+      openChatInfoModal(e.currentTarget);
     });
 
     // Compact view toggle (per-chat)
@@ -19218,7 +19335,12 @@
 
     // Load more
     loadMoreBtn.addEventListener('click', loadMore);
-    scrollBottomBtn?.addEventListener('mousedown', (e) => e.preventDefault());
+    const keepScrollBottomButtonNeutral = (e) => {
+      preserveMobileComposerOnPointerDown(e, { requireOpenKeyboard: false });
+    };
+    scrollBottomBtn?.addEventListener('pointerdown', keepScrollBottomButtonNeutral, { passive: false });
+    scrollBottomBtn?.addEventListener('touchstart', keepScrollBottomButtonNeutral, { passive: false });
+    scrollBottomBtn?.addEventListener('mousedown', keepScrollBottomButtonNeutral);
     scrollBottomBtn?.addEventListener('click', () => {
       scrollBottomBtn.blur();
       scrollToBottom(false, true);
