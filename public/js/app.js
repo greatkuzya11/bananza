@@ -767,6 +767,29 @@
     }),
     isMobileLayout: () => window.innerWidth <= 768,
   });
+  Object.assign(appBridge.__testing = appBridge.__testing || {}, {
+    getChats: () => chats.map((chat) => normalizeChatListEntry(chat)),
+    setChats: (nextChats = [], options = {}) => {
+      chats = (Array.isArray(nextChats) ? nextChats : []).map((chat) => normalizeChatListEntry(chat));
+      if (Object.prototype.hasOwnProperty.call(options, 'currentChatId')) {
+        const nextCurrentChatId = Number(options.currentChatId || 0);
+        currentChatId = nextCurrentChatId > 0 ? nextCurrentChatId : null;
+      }
+      renderChatList(chatSearch.value);
+      renderCurrentChatHeader(getChatById(currentChatId));
+      refreshChatInfoPresentation(getChatById(currentChatId));
+      return chats.map((chat) => normalizeChatListEntry(chat));
+    },
+    setCurrentChatId: (chatId) => {
+      const nextCurrentChatId = Number(chatId || 0);
+      currentChatId = nextCurrentChatId > 0 ? nextCurrentChatId : null;
+      const currentChat = getChatById(currentChatId);
+      renderCurrentChatHeader(currentChat);
+      refreshChatInfoPresentation(currentChat);
+      return currentChat ? normalizeChatListEntry(currentChat) : null;
+    },
+    applyChatUpdate: (nextChat = {}) => applyChatUpdate(nextChat),
+  });
 
   // Weather widget interactivity: click or keyboard activates a forced refresh
   if (weatherWidget) {
@@ -3050,7 +3073,10 @@
       background_style: nextChat.background_style || current.background_style || 'cover',
     });
     if ((current.type === 'private' || nextChat.type === 'private') && current.private_user && !nextChat.private_user) {
-      chats[idx].name = current.name;
+      chats[idx].private_user = { ...current.private_user };
+      if (Number(current.private_user.is_ai_bot) === 0) {
+        chats[idx].name = current.name;
+      }
     }
     sortChatsInPlace(chats);
     const updated = getChatById(chatId);
