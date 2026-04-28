@@ -2893,10 +2893,10 @@
     }
     if (chat.type === 'private' && chat.private_user) {
       setAvatarElementVisual(chatHeaderAvatar, {
-        name: chat.name,
+        name: chat.private_user.display_name || chat.name,
         color: chat.private_user.avatar_color || '#65aadd',
         avatarUrl: chat.private_user.avatar_url || '',
-        fallbackText: initials(chat.name || '?'),
+        fallbackText: initials(chat.private_user.display_name || chat.name || '?'),
       });
       return;
     }
@@ -7811,7 +7811,7 @@
       if (u.avatar_url) {
         return `<div class="chat-item-avatar" style="background:${u.avatar_color}"><img class="avatar-img" src="${esc(u.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">`;
       }
-      return `<div class="chat-item-avatar" style="background:${u.avatar_color}">${initials(chat.name)}`;
+      return `<div class="chat-item-avatar" style="background:${u.avatar_color}">${initials(u.display_name || chat.name)}`;
     }
     if (chat.avatar_url) {
       return `<div class="chat-item-avatar" style="background:#5eb5f7"><img class="avatar-img" src="${esc(chat.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">`;
@@ -11049,13 +11049,13 @@
           chatList.appendChild(createChatListItem(chat, { hiddenSearchResult: true }));
         });
       }
-      const privatePeerIds = new Set(
+      const privateHumanPeerIds = new Set(
         [...chats, ...hiddenMatches]
-          .filter(c => c.type === 'private' && c.private_user)
+          .filter(c => c.type === 'private' && c.private_user && Number(c.private_user.is_ai_bot) === 0)
           .map(c => c.private_user.id)
       );
       const matchingUsers = allUsers.filter(u =>
-        !privatePeerIds.has(u.id) &&
+        (Number(u?.is_ai_bot) !== 0 || !privateHumanPeerIds.has(u.id)) &&
         (u.display_name.toLowerCase().includes(normalizedFilter) ||
          u.username.toLowerCase().includes(normalizedFilter) ||
          String(u.ai_bot_mention || '').toLowerCase().includes(normalizedFilter) ||

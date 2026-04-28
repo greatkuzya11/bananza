@@ -581,6 +581,15 @@ function createAiBotFeature({
     WHERE cm.chat_id=? AND cm.user_id=? AND COALESCE(u.is_ai_bot,0)=0
     LIMIT 1
   `);
+  const directPrivateChatBotStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM chat_members cm
+    JOIN users u ON u.id=cm.user_id
+    JOIN ai_bots b ON b.user_id=u.id
+    WHERE cm.chat_id=? AND COALESCE(u.is_ai_bot,0)=1
+    ORDER BY b.id ASC
+    LIMIT 1
+  `);
   const botMembershipStateStmt = db.prepare(`
     SELECT enabled
     FROM ai_chat_bots
@@ -665,6 +674,13 @@ function createAiBotFeature({
     WHERE a.actor_user_id=?
     ORDER BY datetime(a.created_at) DESC, a.id DESC
   `);
+  const privateChatCreateAuditNameStmt = db.prepare(`
+    SELECT bot_name
+    FROM bot_chat_add_audit
+    WHERE chat_id=? AND source='private_chat_create'
+    ORDER BY id ASC
+    LIMIT 1
+  `);
   const activeChatBotsStmt = db.prepare(`
     SELECT
       b.*,
@@ -678,6 +694,21 @@ function createAiBotFeature({
     JOIN ai_bots b ON b.id=cb.bot_id
     WHERE cb.chat_id=? AND cb.enabled=1 AND b.enabled=1
     ORDER BY b.id ASC
+  `);
+  const firstHumanTextMessagesForChatStmt = db.prepare(`
+    SELECT
+      m.id,
+      TRIM(COALESCE(NULLIF(m.text, ''), NULLIF(vm.transcription_text, ''), '')) as text
+    FROM messages m
+    JOIN users u ON u.id=m.user_id
+    LEFT JOIN voice_messages vm ON vm.message_id=m.id
+    WHERE m.chat_id=?
+      AND m.is_deleted=0
+      AND m.ai_generated=0
+      AND COALESCE(u.is_ai_bot,0)=0
+      AND TRIM(COALESCE(NULLIF(m.text, ''), NULLIF(vm.transcription_text, ''), ''))!=''
+    ORDER BY m.id ASC
+    LIMIT 3
   `);
   const hybridEnabledStmt = db.prepare(`
     SELECT 1
@@ -803,6 +834,7 @@ function createAiBotFeature({
     INSERT INTO messages(chat_id, user_id, text, file_id, reply_to_id, ai_generated, ai_bot_id)
     VALUES(?,?,?,?,?,?,?)
   `);
+  const updateChatNameStmt = db.prepare('UPDATE chats SET name=? WHERE id=?');
   const insertPreviewStmt = db.prepare(`
     INSERT INTO link_previews(message_id, url, title, description, image, hostname)
     VALUES(?,?,?,?,?,?)
@@ -2123,6 +2155,176 @@ function createAiBotFeature({
     if (Number(humanMemberCountStmt.get(chatIdNumber)?.count || 0) !== 1) return false;
     if (Number(botMemberCountStmt.get(chatIdNumber)?.count || 0) !== 1) return false;
     return true;
+  }
+
+  function normalizePrivateBotChatTitle(value = '') {
+    let title = String(value || '').replace(/\r/g, '\n').split('\n')[0] || '';
+    title = title.replace(/^(?:title|chat title|topic|name|название|тема)\s*[:\-]\s*/i, '');
+    title = title.replace(/^[`"'«»“”]+|[`"'«»“”]+$/g, '');
+    title = title.replace(/\s+/g, ' ').trim();
+    title = title.replace(/[.,:;!?-]+$/g, '').trim();
+    if (!title) return '';
+    const words = title.split(/\s+/).filter(Boolean).slice(0, 6);
+    title = words.join(' ').trim();
+    if (title.length > 50) {
+      title = title.slice(0, 50).trim().replace(/[^\p{L}\p{N}]+$/u, '').trim();
+    }
+    return title;
+  }
+
+  function fallbackPrivateBotChatTitle(sourceText = '', initialBotName = '') {
+    let title = String(sourceText || '').replace(/\s+/g, ' ').trim();
+    if (!title) return normalizePrivateBotChatTitle(initialBotName);
+    title = title.replace(/https?:\/\/\S+/gi, ' ').replace(/\s+/g, ' ').trim();
+    title = title.split(/[.!?\n]/)[0].trim();
+    title = title.replace(/^[`"'«»“”\s.,:;!?(){}\[\]-]+/, '').trim();
+    if (!title) return normalizePrivateBotChatTitle(initialBotName);
+    const words = title.split(/\s+/).filter(Boolean).slice(0, 6);
+    title = words.join(' ').trim();
+    if (title.length > 50) {
+      title = title.slice(0, 50).trim().replace(/[^\p{L}\p{N}]+$/u, '').trim();
+    }
+    if (!title) return normalizePrivateBotChatTitle(initialBotName);
+    return title.charAt(0).toUpperCase() + title.slice(1);
+  }
+
+  function titleModelForBot(bot, settings = getGlobalSettings()) {
+    if (bot?.provider === 'yandex') {
+      return cleanText(bot?.response_model || settings.yandex_default_response_model, 160) || settings.yandex_default_response_model;
+    }
+    if (bot?.provider === 'deepseek') {
+      return cleanText(bot?.response_model || settings.deepseek_default_response_model, 160) || settings.deepseek_default_response_model;
+    }
+    if (bot?.provider === 'grok') {
+      return cleanText(bot?.response_model || settings.grok_default_response_model, 160) || settings.grok_default_response_model;
+    }
+    return cleanText(bot?.response_model || settings.default_response_model, 160) || settings.default_response_model;
+  }
+
+  async function generatePrivateBotChatTitle(bot, messageTexts = []) {
+    const settings = getGlobalSettings();
+    if (!providerEnabled(bot?.provider, settings)) {
+      throw new Error('Provider is disabled');
+    }
+    const system = [
+      'You create short titles for messaging app chats.',
+      'Return only the title text.',
+      'Use 2 to 6 words.',
+      'Use at most 50 characters.',
+      'No quotes, emojis, speaker labels, markdown, or explanations.',
+      'Describe the topic of the conversation from the first user messages.',
+    ].join('\n');
+    const user = [
+      'First user messages:',
+      ...messageTexts.map((text, index) => `${index + 1}. ${text}`),
+      '',
+      'Return a concise chat title.',
+    ].join('\n');
+    const model = titleModelForBot(bot, settings);
+    let rawText = '';
+    if (bot.provider === 'yandex') {
+      const apiKey = getYandexApiKey();
+      if (!apiKey || !settings.yandex_folder_id) throw new Error('Yandex AI is not configured');
+      rawText = await yandexAi.generateText(yandexClientOptions({
+        apiKey,
+        model,
+        system,
+        user,
+        maxOutputTokens: 80,
+        temperature: 0.2,
+      }));
+    } else if (bot.provider === 'deepseek') {
+      const apiKey = getDeepSeekApiKey();
+      if (!apiKey) throw new Error('DeepSeek AI is not configured');
+      rawText = await deepseekAi.generateText({
+        apiKey,
+        baseUrl: deepseekBaseUrl(),
+        model,
+        system,
+        user,
+        maxOutputTokens: 80,
+        temperature: 0.2,
+      });
+    } else if (bot.provider === 'grok') {
+      const apiKey = getGrokApiKey();
+      if (!apiKey) throw new Error('Grok AI is not configured');
+      rawText = await grokAi.generateText({
+        apiKey,
+        baseUrl: grokBaseUrl(),
+        model,
+        system,
+        user,
+        maxOutputTokens: 80,
+        temperature: 0.2,
+      });
+    } else {
+      const apiKey = getApiKey();
+      if (!apiKey) throw new Error('OpenAI AI is not configured');
+      rawText = await generateText({
+        apiKey,
+        model,
+        system,
+        user,
+        maxOutputTokens: Math.max(OPENAI_MIN_OUTPUT_TOKENS, 80),
+        temperature: 0.2,
+      });
+    }
+    return normalizePrivateBotChatTitle(rawText);
+  }
+
+  async function maybeAutoRenameBotPrivateChat(message) {
+    if (!message || message.ai_generated || message.is_deleted) return;
+    const chatId = positiveId(message.chat_id);
+    const humanUserId = positiveId(message.user_id);
+    if (!chatId || !humanUserId) return;
+
+    const messageText = cleanText(message?.text || message?.transcription_text || '', 5000);
+    if (!messageText) return;
+
+    const chat = chatRowByIdStmt.get(chatId);
+    if (!chat || String(chat.type) !== 'private' || Number(chat.is_notes || 0) !== 0) return;
+
+    const botRow = directPrivateChatBotStmt.get(chatId);
+    if (!botRow) return;
+    const bot = sanitizeBot(botRow);
+    if (!bot?.user_id || !isDirectHumanBotPrivateChat(chatId, humanUserId, bot.user_id)) return;
+
+    const initialNameRow = privateChatCreateAuditNameStmt.get(chatId);
+    const initialBotName = cleanText(initialNameRow?.bot_name || bot.name || chat.name || '', 80);
+    const currentName = cleanText(chat.name || '', 80);
+    if (!initialBotName || currentName !== initialBotName) return;
+
+    const firstMessages = firstHumanTextMessagesForChatStmt.all(chatId)
+      .map((row) => ({
+        id: positiveId(row?.id),
+        text: cleanText(row?.text || '', 5000),
+      }))
+      .filter((row) => row.id && row.text);
+    if (firstMessages.length !== 3) return;
+    if (Number(firstMessages[2].id) !== Number(message.id || 0)) return;
+
+    const fallbackTitle = fallbackPrivateBotChatTitle(firstMessages[0]?.text || '', initialBotName);
+    let nextTitle = '';
+    try {
+      nextTitle = await generatePrivateBotChatTitle(bot, firstMessages.map((row) => row.text));
+    } catch (error) {
+      console.warn('[ai-bot] private chat title generation failed:', errorText(error, 'Unexpected error'));
+    }
+    nextTitle = normalizePrivateBotChatTitle(nextTitle);
+    if (!nextTitle || nextTitle === currentName) {
+      nextTitle = fallbackTitle;
+    }
+    nextTitle = normalizePrivateBotChatTitle(nextTitle || fallbackTitle || initialBotName);
+    if (!nextTitle || nextTitle === currentName) return;
+
+    updateChatNameStmt.run(nextTitle, chatId);
+    broadcastToChatAll(chatId, {
+      type: 'chat_updated',
+      chat: {
+        ...chat,
+        name: nextTitle,
+      },
+    });
   }
 
   const attachBotToChatWithDefaultsTx = db.transaction(({ chatId, bot, actorUserId, source, chatRow = null }) => {
@@ -5127,6 +5329,11 @@ function createAiBotFeature({
   async function handleMessageCreated(message, options = {}) {
     if (!message) return;
     enqueueMemoryForMessage(message);
+    if (!message.ai_generated) {
+      maybeAutoRenameBotPrivateChat(message).catch((error) => {
+        console.warn('[ai-bot] private chat title hook failed:', errorText(error, 'Unexpected error'));
+      });
+    }
     if (options.skipBotTrigger || message.ai_generated) return;
     const settings = getGlobalSettings();
     if (!settings.enabled && !settings.yandex_enabled && !settings.deepseek_enabled && !settings.grok_enabled) return;

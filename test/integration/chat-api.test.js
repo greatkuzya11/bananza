@@ -5,7 +5,7 @@ const { before, after } = require('node:test');
 const Database = require('better-sqlite3');
 
 const { createSandbox } = require('../support/runtimeSandbox');
-const { createBasicChatScenario } = require('../support/scenario');
+const { createBasicChatScenario, waitFor } = require('../support/scenario');
 
 let sandbox;
 let scenario;
@@ -39,6 +39,19 @@ async function createOpenAiBot(admin, {
     },
   });
   return response.data.bot;
+}
+
+async function enableOpenAiForTests(admin, overrides = {}) {
+  const response = await admin.request('/api/admin/ai-bots/settings', {
+    method: 'PUT',
+    json: {
+      enabled: true,
+      openai_api_key: 'sk-ai-test',
+      default_response_model: 'gpt-4o-mini',
+      ...overrides,
+    },
+  });
+  return response.data.settings;
 }
 
 test('auth and chat membership endpoints return expected data', async () => {
@@ -169,6 +182,43 @@ test('creator-only chat management routes enforce permissions and mutate state',
   assert.equal(deleted.data.ok, true);
 });
 
+test('human private chats remain single-threaded while bot private chats always create new threads', async () => {
+  const { admin, bob, privateChat } = scenario;
+
+  const humanPrivateAgain = await admin.request('/api/chats/private', {
+    method: 'POST',
+    json: { targetUserId: bob.user.id },
+  });
+  assert.equal(Number(humanPrivateAgain.data.id), Number(privateChat.id));
+
+  const bot = await createOpenAiBot(admin, { visibleToUsers: true });
+  await admin.request(`/api/admin/users/${bob.user.id}/bot-access`, {
+    method: 'PUT',
+    json: { can_add_bots_to_chats: true },
+  });
+
+  const firstBotChat = await bob.request('/api/chats/private', {
+    method: 'POST',
+    json: { targetUserId: Number(bot.user_id) },
+  });
+  const secondBotChat = await bob.request('/api/chats/private', {
+    method: 'POST',
+    json: { targetUserId: Number(bot.user_id) },
+  });
+
+  assert.notEqual(Number(firstBotChat.data.id), Number(secondBotChat.data.id));
+  assert.equal(firstBotChat.data.name, bot.name);
+  assert.equal(secondBotChat.data.name, bot.name);
+
+  const chatList = await bob.request('/api/chats');
+  const botPrivateChats = chatList.data.filter((chat) => (
+    chat.type === 'private'
+    && Number(chat?.private_user?.id || 0) === Number(bot.user_id)
+  ));
+  assert.ok(botPrivateChats.some((chat) => Number(chat.id) === Number(firstBotChat.data.id)));
+  assert.ok(botPrivateChats.some((chat) => Number(chat.id) === Number(secondBotChat.data.id)));
+});
+
 test('bot discovery, private chats, defaults and audit respect user and bot flags', async () => {
   const { admin, bob } = scenario;
   const db = new Database(path.join(sandbox.appDir, 'bananza.db'));
@@ -177,6 +227,10 @@ test('bot discovery, private chats, defaults and audit respect user and bot flag
     const bot = await createOpenAiBot(admin, { visibleToUsers: true });
     assert.ok(Number(bot.user_id) > 0);
     db.prepare('UPDATE users SET avatar_url=? WHERE id=?').run('/uploads/avatars/test-bot-avatar.png', Number(bot.user_id));
+    await admin.request(`/api/admin/users/${bob.user.id}/bot-access`, {
+      method: 'PUT',
+      json: { can_add_bots_to_chats: false },
+    });
 
     const adminUsers = await admin.request('/api/users');
     const adminBotEntry = adminUsers.data.find((user) => user.id === Number(bot.user_id));
@@ -242,13 +296,25 @@ test('bot discovery, private chats, defaults and audit respect user and bot flag
       method: 'POST',
       json: { targetUserId: Number(bot.user_id) },
     });
-    assert.equal(Number(privateChatAgain.data.id), chatId);
+    const secondChatId = Number(privateChatAgain.data.id);
+    assert.notEqual(secondChatId, chatId);
+    assert.equal(privateChatAgain.data.name, bot.name);
+
+    const secondChatSettings = db.prepare(`
+      SELECT enabled, mode, hot_context_limit, trigger_mode, auto_react_on_mention
+      FROM ai_chat_bots
+      WHERE chat_id=? AND bot_id=?
+    `).get(secondChatId, Number(bot.id));
+    assert.deepEqual(secondChatSettings, botSettings);
 
     const auditAfterRepeat = await admin.request(`/api/admin/users/${bob.user.id}/bot-additions`);
     const repeatAuditRows = auditAfterRepeat.data.additions.filter((entry) => (
-      entry.chat_id === chatId && entry.bot_id === Number(bot.id)
+      entry.bot_id === Number(bot.id)
+      && entry.source === 'private_chat_create'
     ));
-    assert.equal(repeatAuditRows.length, 1);
+    assert.equal(repeatAuditRows.length, 2);
+    assert.ok(repeatAuditRows.some((entry) => entry.chat_id === chatId));
+    assert.ok(repeatAuditRows.some((entry) => entry.chat_id === secondChatId));
 
     await admin.request(`/api/admin/users/${bob.user.id}/bot-access`, {
       method: 'PUT',
@@ -286,4 +352,102 @@ test('bot discovery, private chats, defaults and audit respect user and bot flag
   } finally {
     db.close();
   }
+});
+
+test('bot private chats auto-title after the third user message with fallback when AI is unavailable', async () => {
+  const { admin, bob } = scenario;
+  const bot = await createOpenAiBot(admin, {
+    visibleToUsers: true,
+    name: `Fallback Bot ${Date.now()}`,
+  });
+
+  await admin.request(`/api/admin/users/${bob.user.id}/bot-access`, {
+    method: 'PUT',
+    json: { can_add_bots_to_chats: true },
+  });
+
+  const created = await bob.request('/api/chats/private', {
+    method: 'POST',
+    json: { targetUserId: Number(bot.user_id) },
+  });
+  const chatId = Number(created.data.id);
+  const initialName = String(bot.name || '').trim();
+
+  await bob.request(`/api/chats/${chatId}/messages`, {
+    method: 'POST',
+    json: { text: 'summer trip budget ideas italy july' },
+  });
+  await bob.request(`/api/chats/${chatId}/messages`, {
+    method: 'POST',
+    json: { text: 'need rough costs for flights' },
+  });
+
+  const afterTwoMessages = await bob.request('/api/chats');
+  const chatAfterTwo = afterTwoMessages.data.find((chat) => Number(chat.id) === chatId);
+  assert.ok(chatAfterTwo);
+  assert.equal(chatAfterTwo.name, initialName);
+
+  await bob.request(`/api/chats/${chatId}/messages`, {
+    method: 'POST',
+    json: { text: 'also compare hotels and food' },
+  });
+
+  const renamedChat = await waitFor(async () => {
+    const list = await bob.request('/api/chats');
+    const chat = list.data.find((entry) => Number(entry.id) === chatId);
+    assert.ok(chat);
+    assert.notEqual(chat.name, initialName);
+    return chat;
+  });
+
+  assert.equal(renamedChat.name, 'Summer trip budget ideas italy july');
+  assert.equal(Number(renamedChat.private_user?.is_ai_bot || 0), 1);
+  assert.equal(Number(renamedChat.private_user?.id || 0), Number(bot.user_id));
+  assert.equal(renamedChat.private_user?.display_name, bot.name);
+});
+
+test('bot private chats can auto-title via provider output when AI is configured', async () => {
+  const { admin, bob } = scenario;
+  await enableOpenAiForTests(admin);
+
+  const bot = await createOpenAiBot(admin, {
+    visibleToUsers: true,
+    name: `AI Title Bot ${Date.now()}`,
+  });
+
+  await admin.request(`/api/admin/users/${bob.user.id}/bot-access`, {
+    method: 'PUT',
+    json: { can_add_bots_to_chats: true },
+  });
+
+  const created = await bob.request('/api/chats/private', {
+    method: 'POST',
+    json: { targetUserId: Number(bot.user_id) },
+  });
+  const chatId = Number(created.data.id);
+
+  await bob.request(`/api/chats/${chatId}/messages`, {
+    method: 'POST',
+    json: { text: 'let us plan a launch checklist' },
+  });
+  await bob.request(`/api/chats/${chatId}/messages`, {
+    method: 'POST',
+    json: { text: 'capture the tasks for this week' },
+  });
+  await bob.request(`/api/chats/${chatId}/messages`, {
+    method: 'POST',
+    json: { text: 'and keep it short and clear' },
+  });
+
+  const renamedChat = await waitFor(async () => {
+    const list = await bob.request('/api/chats');
+    const chat = list.data.find((entry) => Number(entry.id) === chatId);
+    assert.ok(chat);
+    assert.equal(chat.name, 'Mock OpenAI response');
+    return chat;
+  });
+
+  assert.equal(Number(renamedChat.private_user?.is_ai_bot || 0), 1);
+  assert.equal(Number(renamedChat.private_user?.id || 0), Number(bot.user_id));
+  assert.equal(renamedChat.private_user?.display_name, bot.name);
 });

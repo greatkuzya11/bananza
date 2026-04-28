@@ -1398,7 +1398,12 @@ function decorateChatListRows(rows, viewerUserId) {
       Object.assign(chat, notesChatPayload(chat));
     } else if (chat.type === 'private') {
       const other = privatePeerPayload(chat.id, uid);
-      if (other) { chat.name = other.display_name; chat.private_user = other; }
+      if (other) {
+        chat.private_user = other;
+        if (Number(other.is_ai_bot) === 0 || !String(chat.name || '').trim()) {
+          chat.name = other.display_name;
+        }
+      }
     }
     if (chat.type === 'group') {
       chat.avatar_url = chat.avatar_url || null;
@@ -1468,7 +1473,12 @@ app.get('/api/chats', auth, (req, res) => {
       Object.assign(chat, notesChatPayload(chat));
     } else if (chat.type === 'private') {
       const other = privatePeerPayload(chat.id, req.user.id);
-      if (other) { chat.name = other.display_name; chat.private_user = other; }
+      if (other) {
+        chat.private_user = other;
+        if (Number(other.is_ai_bot) === 0 || !String(chat.name || '').trim()) {
+          chat.name = other.display_name;
+        }
+      }
     }
     if (chat.type === 'group') {
       chat.avatar_url = chat.avatar_url || null;
@@ -1642,28 +1652,34 @@ app.post('/api/chats/private', auth, (req, res) => {
   const requestedTarget = db.prepare('SELECT id,display_name,COALESCE(is_ai_bot,0) as is_ai_bot FROM users WHERE id=?').get(targetUserId);
   if (!requestedTarget) return res.status(404).json({ error: 'User not found' });
 
-  const existingPrivateChat = db.prepare(`
-    SELECT c.id FROM chats c
-    JOIN chat_members cm1 ON cm1.chat_id=c.id AND cm1.user_id=?
-    JOIN chat_members cm2 ON cm2.chat_id=c.id AND cm2.user_id=?
-    WHERE c.type='private' AND COALESCE(c.is_notes,0)=0
-  `).get(req.user.id, targetUserId);
-
-  if (existingPrivateChat) {
-    revealHiddenChatForUser(existingPrivateChat.id, req.user.id, { reason: 'private_search' });
-    const existingChat = db.prepare('SELECT * FROM chats WHERE id=?').get(existingPrivateChat.id);
-    return res.json(existingChat);
-  }
-
-  const botTarget = Number(requestedTarget.is_ai_bot) !== 0
+  const isBotTarget = Number(requestedTarget.is_ai_bot) !== 0;
+  const botTarget = isBotTarget
     ? (aiBotFeature?.getSelectableBotByUserId(targetUserId, req.user) || null)
     : null;
-  if (Number(requestedTarget.is_ai_bot) !== 0 && !botTarget) {
+  if (isBotTarget && !botTarget) {
     return res.status(404).json({ error: 'User not found' });
   }
 
+  if (!isBotTarget) {
+    const existingPrivateChat = db.prepare(`
+      SELECT c.id FROM chats c
+      JOIN chat_members cm1 ON cm1.chat_id=c.id AND cm1.user_id=?
+      JOIN chat_members cm2 ON cm2.chat_id=c.id AND cm2.user_id=?
+      WHERE c.type='private' AND COALESCE(c.is_notes,0)=0
+    `).get(req.user.id, targetUserId);
+
+    if (existingPrivateChat) {
+      revealHiddenChatForUser(existingPrivateChat.id, req.user.id, { reason: 'private_search' });
+      const existingChat = db.prepare('SELECT * FROM chats WHERE id=?').get(existingPrivateChat.id);
+      return res.json(existingChat);
+    }
+  }
+
   const createdPrivateChat = db.transaction(() => {
-    const result = db.prepare("INSERT INTO chats(name,type,created_by) VALUES('Private','private',?)").run(req.user.id);
+    const initialName = botTarget
+      ? String(botTarget.name || requestedTarget.display_name || 'AI bot').trim() || 'AI bot'
+      : 'Private';
+    const result = db.prepare('INSERT INTO chats(name,type,created_by) VALUES(?,?,?)').run(initialName, 'private', req.user.id);
     const createdChatId = Number(result.lastInsertRowid || 0);
     db.prepare('INSERT INTO chat_members(chat_id,user_id) VALUES(?,?)').run(createdChatId, req.user.id);
     if (botTarget) {
