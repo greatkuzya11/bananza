@@ -7,6 +7,7 @@ const { JSDOM } = require('jsdom');
 const { repoRoot } = require('../support/paths');
 
 const indexHtml = fs.readFileSync(path.join(repoRoot, 'public', 'index.html'), 'utf8');
+const styleCss = fs.readFileSync(path.join(repoRoot, 'public', 'css', 'style.css'), 'utf8');
 
 test('public/index.html keeps expected stylesheet and script order', () => {
   const dom = new JSDOM(indexHtml);
@@ -16,7 +17,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
   const scripts = [...document.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
 
   assert.deepEqual(styles, [
-    '/css/style.css',
+    '/css/style.css?v=20260429-active-unread-badge-chip',
     '/css/voice.css',
     '/css/video-notes.css',
   ]);
@@ -65,4 +66,12 @@ test('public/index.html keeps universal file pickers and mobile media shortcuts'
   assert.equal(document.getElementById('fileInputDocs').getAttribute('accept'), null);
   assert.equal(document.getElementById('fileInputGallery').getAttribute('accept'), 'image/*,video/*');
   assert.equal(document.getElementById('fileInputCamera').getAttribute('accept'), 'image/*');
+});
+
+test('style.css keeps a dedicated unread badge contrast override for active chats', () => {
+  const activeBadgeRuleMatch = styleCss.match(/\.unread-badge--active-chat\s*\{([^}]*)\}/s);
+  assert.ok(activeBadgeRuleMatch, 'Expected .unread-badge--active-chat rule in style.css');
+  const ruleBody = activeBadgeRuleMatch[1];
+  assert.match(ruleBody, /background\s*:/);
+  assert.match(ruleBody, /color\s*:\s*#fff\s*;/);
 });

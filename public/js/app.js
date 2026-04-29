@@ -10841,12 +10841,13 @@
       case 'message': {
         const isOwnIncomingMessage = msg.message.user_id === currentUser.id;
         const isMentionForMe = isMessageMentioningCurrentUser(msg.message);
+        const isVisibleCurrentChat = isCurrentChatActivelyVisible(msg.message.chat_id);
         applyOwnReadStateToMessage(msg.message, msg.message.chat_id);
         if (!isOwnIncomingMessage && !document.hidden) {
           if (isMentionForMe && isMentionSoundEnabled()) {
             playAppSound('mention');
           } else if (isChatIncomingSoundEnabled(msg.message.chat_id)) {
-            playAppSound(msg.message.chat_id === currentChatId ? 'incoming' : 'notification');
+            playAppSound(isVisibleCurrentChat ? 'incoming' : 'notification');
           }
         }
         // If this message echoes a client_id, remove optimistic placeholder first
@@ -10875,7 +10876,7 @@
           }
         } catch (e) {}
         // Track unread for non-current chats
-        if (msg.message.chat_id !== currentChatId && msg.message.user_id !== currentUser.id) {
+        if (!isVisibleCurrentChat && msg.message.user_id !== currentUser.id) {
           const chat = chats.find(c => c.id === msg.message.chat_id);
           if (chat) {
             chat.unread_count = (chat.unread_count || 0) + 1;
@@ -10884,7 +10885,7 @@
           }
         }
         // Only render if we're in the relevant chat
-        if (msg.message.chat_id === currentChatId && !isMessageDisplayed(msg.message.id)) {
+        if (isVisibleCurrentChat && !isMessageDisplayed(msg.message.id)) {
           const wasNearBottom = isNearBottom();
           const isAiBotResponse = msg.message.ai_generated || msg.message.ai_bot_id;
           const shouldPreserveIncomingScroll = scrollRestoreMode === 'restore'
@@ -11001,7 +11002,7 @@
         const readState = await reconcileChatReadState(
           msg.chatId,
           { [msg.userId]: msg.lastReadId },
-          { updateVisible: msg.chatId === currentChatId }
+          { updateVisible: isCurrentChatActivelyVisible(msg.chatId) }
         );
         if (false && msg.chatId === currentChatId) {
           // Update own messages UI (double-check) if applicable.
@@ -11304,9 +11305,10 @@
 
   function createChatListItem(chat, { hiddenSearchResult = false } = {}) {
     const el = document.createElement('div');
+    const isActive = Number(chat.id) === Number(currentChatId);
     const pinned = isChatPinned(chat);
     el.className = 'chat-item'
-      + (Number(chat.id) === Number(currentChatId) ? ' active' : '')
+      + (isActive ? ' active' : '')
       + (pinned ? ' is-pinned' : '')
       + (hiddenSearchResult ? ' is-hidden-search-result' : '');
     el.dataset.chatId = chat.id;
@@ -11316,7 +11318,9 @@
     const isOnline = chat.type === 'private' && chat.private_user && onlineUsers.has(chat.private_user.id);
     const lastMsg = getChatLastPreviewText(chat);
     const lastTime = chat.last_time ? formatTime(chat.last_time) : '';
-    const unread = chat.unread_count > 0 ? `<span class="unread-badge">${chat.unread_count > 99 ? '99+' : chat.unread_count}</span>` : '';
+    const unread = chat.unread_count > 0
+      ? `<span class="unread-badge${isActive ? ' unread-badge--active-chat' : ''}" data-unread-count="${chat.unread_count}">${chat.unread_count > 99 ? '99+' : chat.unread_count}</span>`
+      : '';
     const pinIndicator = pinned ? '<span class="chat-item-state-indicator chat-item-pin-indicator" aria-hidden="true" title="Pinned">&#128204;</span>' : '';
     const notifyDisabledIndicator = pinned && !localChatPreferenceEnabled(chat.notify_enabled)
       ? '<span class="chat-item-state-indicator chat-item-muted-indicator" aria-hidden="true" title="Notifications off">&#128277;</span>'
@@ -11987,6 +11991,13 @@
     const targetChatId = Number(chatId || currentChatId || 0);
     if (!targetChatId || Number(currentChatId || 0) !== targetChatId) return false;
     if (!(messagesEl instanceof HTMLElement) || !messagesEl.isConnected) return false;
+    return isCurrentChatActivelyVisible(targetChatId);
+  }
+
+  function isCurrentChatActivelyVisible(chatId = currentChatId) {
+    const targetChatId = Number(chatId || currentChatId || 0);
+    if (!targetChatId || Number(currentChatId || 0) !== targetChatId) return false;
+    if (!(chatView instanceof HTMLElement) || chatView.classList.contains('hidden')) return false;
     if (!isMobileLayoutViewport()) return true;
     if (!(chatArea instanceof HTMLElement)) return true;
     if (chatArea.hasAttribute('inert') || chatArea.classList.contains('mobile-scene-hidden')) return false;
@@ -12090,7 +12101,7 @@
   }
 
   function markCurrentChatReadIfAtBottom(force = false) {
-    if (!currentChatId || (!force && !isNearBottom(8))) return;
+    if (!isCurrentChatActivelyVisible() || (!force && !isNearBottom(8))) return;
     const chat = chats.find(c => c.id === currentChatId);
     const readId = getMaxRenderedMessageId();
     if (!readId || (chat && Number(chat.last_read_id || 0) >= readId)) return;

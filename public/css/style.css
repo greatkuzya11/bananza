@@ -4786,6 +4786,11 @@ html[data-visual-mode="rich"] .poll-card {
   align-items: center; justify-content: center; padding: 0 6px;
   margin-left: auto; flex-shrink: 0;
 }
+.unread-badge--active-chat {
+  background: rgba(0,0,0,.72);
+  color: #fff;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.16), 0 2px 6px rgba(0,0,0,.22);
+}
 
 /* ── Search panel ────────────────────────────────────────────────────────── */
 .search-panel {

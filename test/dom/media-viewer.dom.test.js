@@ -53,6 +53,7 @@ function installAppRuntimeStubs(dom, { fetchHandler = null } = {}) {
     },
   };
 
+  window.__testWebSockets = [];
   window.WebSocket = class FakeWebSocket {
     static CONNECTING = 0;
     static OPEN = 1;
@@ -62,6 +63,7 @@ function installAppRuntimeStubs(dom, { fetchHandler = null } = {}) {
     constructor(url) {
       this.url = url;
       this.readyState = window.WebSocket.CONNECTING;
+      window.__testWebSockets.push(this);
       window.setTimeout(() => {
         this.readyState = window.WebSocket.OPEN;
         this.onopen?.();
@@ -164,6 +166,13 @@ async function waitForViewportRecovery(dom, delayMs = 240) {
 
 async function wait(dom, delayMs = 0) {
   await new Promise((resolve) => dom.window.setTimeout(resolve, delayMs));
+}
+
+function emitWsMessage(dom, payload) {
+  const sockets = Array.isArray(dom.window.__testWebSockets) ? dom.window.__testWebSockets : [];
+  const socket = sockets[sockets.length - 1];
+  assert.ok(socket, 'Expected a fake WebSocket instance');
+  socket.onmessage?.({ data: JSON.stringify(payload) });
 }
 
 function getMobileSceneSnapshot(dom) {
@@ -422,6 +431,40 @@ function createChatMessages(chatId, count, { startId = chatId * 100 } = {}) {
       client_status: null,
     };
   });
+}
+
+function createIncomingMessage(chatId, messageId, overrides = {}) {
+  return {
+    id: messageId,
+    chat_id: chatId,
+    user_id: 2,
+    display_name: 'Bob',
+    avatar_color: '#7bc862',
+    avatar_url: '',
+    text: `Incoming message ${messageId}`,
+    file_id: null,
+    file_name: null,
+    file_stored: null,
+    file_type: null,
+    file_mime: null,
+    file_size: 0,
+    created_at: '2026-04-29T21:05:00.000Z',
+    is_deleted: 0,
+    is_voice_note: 0,
+    is_video_note: 0,
+    mentions: [],
+    reactions: [],
+    reply_to_id: null,
+    reply_text: null,
+    reply_is_voice_note: 0,
+    poll: null,
+    forwarded_from_chat_id: null,
+    forwarded_from_message_id: null,
+    ai_generated: 0,
+    ai_bot_id: 0,
+    client_status: null,
+    ...overrides,
+  };
 }
 
 function createChatFetchHandler(chatMessagesByChatId) {
@@ -1042,6 +1085,56 @@ test('opening a longer unread chat away from the bottom does not auto-send a rea
   assert.equal(chatState.last_read_id, 104);
   assert.equal(chatState.unread_count, 8);
   assert.equal(chatState.first_unread_id, 105);
+});
+
+test('highlighted chats keep unread messages when the mobile sidebar is visible', async (t) => {
+  const chatMessages = {
+    1: createChatMessages(1, 1, { startId: 9 }),
+  };
+  const chatList = [
+    {
+      ...createChatFixture(1, 'greatkuzya', { lastMessageId: 10 }),
+      last_read_id: 10,
+      first_unread_id: null,
+      unread_count: 0,
+    },
+  ];
+  const { handler, readCalls } = createReadTrackingFetchHandler(chatMessages, chatList);
+  const dom = await bootAppDom({
+    fetchHandler: handler,
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+
+  installMessagesViewportMock(dom);
+  BananzaAppBridge.__testing.setChats(chatList);
+
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 420);
+  BananzaAppBridge.__testing.revealSidebarFromChat();
+  await wait(dom, 80);
+
+  assertMobileScene(dom, 'sidebar');
+
+  emitWsMessage(dom, {
+    type: 'message',
+    message: createIncomingMessage(1, 11, {
+      text: 'greatkuzya: 559',
+    }),
+  });
+  await wait(dom, 420);
+
+  const chatState = BananzaAppBridge.__testing.getChats().find((chat) => chat.id === 1);
+  const unreadBadge = document.querySelector('.chat-item[data-chat-id="1"] .unread-badge');
+
+  assert.equal(readCalls.length, 0);
+  assert.equal(chatState.last_read_id, 10);
+  assert.equal(chatState.last_message_id, 11);
+  assert.equal(chatState.unread_count, 1);
+  assert.equal(chatState.first_unread_id, 11);
+  assert.equal(unreadBadge?.textContent?.trim(), '1');
 });
 
 test('settings modal dismisses the mobile keyboard and restores the composer dock', async (t) => {

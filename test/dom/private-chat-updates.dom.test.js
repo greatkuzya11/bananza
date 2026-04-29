@@ -158,6 +158,16 @@ function chatNameText(document, chatId) {
   return node ? node.textContent.trim() : '';
 }
 
+function chatUnreadBadgeText(document, chatId) {
+  const node = document.querySelector(`.chat-item[data-chat-id="${chatId}"] .unread-badge`);
+  return node ? node.textContent.trim() : '';
+}
+
+function chatUnreadBadgeClassName(document, chatId) {
+  const node = document.querySelector(`.chat-item[data-chat-id="${chatId}"] .unread-badge`);
+  return node ? node.className : '';
+}
+
 test('applyChatUpdate keeps human private display name when chat_updated omits private_user', async (t) => {
   const dom = await bootAppDom();
   t.after(() => {
@@ -241,4 +251,56 @@ test('applyChatUpdate immediately applies bot private chat title changes without
   assert.equal(chatNameText(document, 77), 'Trip Budget Planning');
   assert.equal(document.getElementById('chatTitle').textContent.trim(), 'Trip Budget Planning');
   assert.equal(document.getElementById('chatInfoTitle').textContent.trim(), 'Trip Budget Planning');
+});
+
+test('chat list keeps unread badges rendered for both active and inactive chats', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  BananzaAppBridge.__testing.setChats([
+    {
+      id: 41,
+      type: 'private',
+      name: 'greatkuzya',
+      unread_count: 1,
+      last_text: 'greatkuzya: ккк',
+      last_time: '2026-04-29T20:29:00.000Z',
+      created_at: '2026-04-29 20:00:00',
+      private_user: {
+        id: 2,
+        display_name: 'greatkuzya',
+        username: 'greatkuzya',
+        avatar_color: '#65aadd',
+        avatar_url: null,
+        is_ai_bot: 0,
+      },
+    },
+    {
+      id: 42,
+      type: 'private',
+      name: 'Как правильно жрать',
+      unread_count: 3,
+      last_text: 'Типа Кузя: Че, нормально захожу, как все, не понял...',
+      last_time: '2026-04-29T00:38:00.000Z',
+      created_at: '2026-04-29 00:00:00',
+      private_user: {
+        id: 3,
+        display_name: 'Как правильно жрать',
+        username: 'food_chat',
+        avatar_color: '#f0b020',
+        avatar_url: null,
+        is_ai_bot: 0,
+      },
+    },
+  ], { currentChatId: 41 });
+
+  assert.ok(document.querySelector('.chat-item[data-chat-id="41"].active'));
+  assert.ok(document.querySelector('.chat-item[data-chat-id="42"]:not(.active)'));
+  assert.equal(chatUnreadBadgeText(document, 41), '1');
+  assert.equal(chatUnreadBadgeText(document, 42), '3');
+  assert.match(chatUnreadBadgeClassName(document, 41), /\bunread-badge--active-chat\b/);
+  assert.doesNotMatch(chatUnreadBadgeClassName(document, 42), /\bunread-badge--active-chat\b/);
 });
