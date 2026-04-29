@@ -161,6 +161,28 @@ async function wait(dom, delayMs = 0) {
   await new Promise((resolve) => dom.window.setTimeout(resolve, delayMs));
 }
 
+function getMobileSceneSnapshot(dom) {
+  return dom.window.BananzaAppBridge.__testing.getMobileBaseSceneSnapshot();
+}
+
+function assertMobileScene(dom, scene) {
+  const snapshot = getMobileSceneSnapshot(dom);
+  assert.equal(snapshot.scene, scene);
+  if (scene === 'sidebar') {
+    assert.equal(snapshot.sidebar.mobileSceneHidden, false);
+    assert.equal(snapshot.sidebar.sidebarHidden, false);
+    assert.equal(snapshot.sidebar.inert, false);
+    assert.equal(snapshot.chatArea.mobileSceneHidden, true);
+    assert.equal(snapshot.chatArea.inert, true);
+  } else {
+    assert.equal(snapshot.sidebar.sidebarHidden, true);
+    assert.equal(snapshot.sidebar.mobileSceneHidden, true);
+    assert.equal(snapshot.sidebar.inert, true);
+    assert.equal(snapshot.chatArea.mobileSceneHidden, false);
+    assert.equal(snapshot.chatArea.inert, false);
+  }
+}
+
 function createTouchEndEvent(window, { clientX = 0, clientY = 0, identifier = 1 } = {}) {
   const event = new window.Event('touchend', { bubbles: true, cancelable: true });
   const touch = { identifier, clientX, clientY };
@@ -397,6 +419,67 @@ test('emoji picker closes when navigating back out of the mobile chat view', asy
   assert.equal(emojiPicker.classList.contains('hidden'), true);
 });
 
+test('mobile chat list scene hard-hides the chat area and keeps it hidden across resume and settings', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const settingsBtn = document.getElementById('settingsBtn');
+  const settingsModal = document.getElementById('settingsModal');
+
+  assertMobileScene(dom, 'sidebar');
+
+  dom.window.document.dispatchEvent(new dom.window.Event('visibilitychange'));
+  await waitForViewportRecovery(dom, 320);
+  assertMobileScene(dom, 'sidebar');
+
+  settingsBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await wait(dom, 40);
+
+  assert.equal(settingsModal.classList.contains('hidden'), false);
+  assertMobileScene(dom, 'sidebar');
+});
+
+test('mobile chat scene hard-hides the sidebar and keeps it hidden while search is open', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const searchBtn = document.getElementById('searchBtn');
+  const searchPanel = document.getElementById('searchPanel');
+  const searchClose = document.getElementById('searchClose');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', {
+    hideInactive: true,
+    syncChatMetrics: true,
+  });
+  await wait(dom, 40);
+  assertMobileScene(dom, 'chat');
+
+  searchBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await wait(dom, 40);
+
+  assert.equal(searchPanel.getAttribute('aria-hidden'), 'false');
+  assertMobileScene(dom, 'chat');
+
+  searchClose.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await wait(dom, 320);
+
+  assert.equal(searchPanel.getAttribute('aria-hidden'), 'true');
+  assertMobileScene(dom, 'chat');
+});
+
 test('scroll-to-bottom stays keyboard-neutral on mobile', async (t) => {
   const dom = await bootAppDom();
   t.after(() => {
@@ -450,6 +533,7 @@ test('settings modal dismisses the mobile keyboard and restores the composer doc
   assert.equal(settingsModal.classList.contains('hidden'), false);
   assert.equal(app.style.height, '844px');
   assert.notEqual(document.activeElement, msgInput);
+  assertMobileScene(dom, 'sidebar');
 });
 
 test('fullscreen media viewer dismisses the mobile keyboard and leaves no gap on close', async (t) => {
@@ -562,13 +646,17 @@ test('mobile back navigation dismisses the keyboard and removes the composer gap
   t.after(() => {
     dom.window.close();
   });
-  const { document } = dom.window;
+  const { document, BananzaAppBridge } = dom.window;
   const app = document.getElementById('app');
   const msgInput = document.getElementById('msgInput');
-  const sidebar = document.getElementById('sidebar');
   const backBtn = document.getElementById('backBtn');
 
-  sidebar.classList.add('sidebar-hidden');
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', {
+    hideInactive: true,
+    syncChatMetrics: true,
+  });
+  await wait(dom, 40);
+  assertMobileScene(dom, 'chat');
   msgInput.focus();
   dom.visualViewportMock.setAndDispatch('resize', { height: 420 });
   await wait(dom, 30);
@@ -582,7 +670,7 @@ test('mobile back navigation dismisses the keyboard and removes the composer gap
   dom.visualViewportMock.set({ height: 844 });
   await waitForViewportRecovery(dom, 520);
 
-  assert.equal(sidebar.classList.contains('sidebar-hidden'), false);
   assert.equal(app.style.height, '844px');
   assert.notEqual(document.activeElement, msgInput);
+  assertMobileScene(dom, 'sidebar');
 });

@@ -13,6 +13,22 @@ const {
   sendComposerMessage,
 } = require('./helpers');
 
+async function expectMobileScene(page, scene) {
+  await expect.poll(async () => {
+    return page.evaluate(() => window.BananzaAppBridge.__testing.getMobileBaseSceneSnapshot());
+  }).toMatchObject(scene === 'sidebar'
+    ? {
+      scene: 'sidebar',
+      sidebar: { sidebarHidden: false, mobileSceneHidden: false, inert: false },
+      chatArea: { mobileSceneHidden: true, inert: true },
+    }
+    : {
+      scene: 'chat',
+      sidebar: { sidebarHidden: true, mobileSceneHidden: true, inert: true },
+      chatArea: { mobileSceneHidden: false, inert: false },
+    });
+}
+
 test('UI flow covers register, private chat creation, sending, search and poll composer', async ({ page }, testInfo) => {
   await installMediaMocks(page);
 
@@ -34,6 +50,39 @@ test('UI flow covers register, private chat creation, sending, search and poll c
   await optionInputs.nth(1).fill('Saturday');
   await page.locator('#pollSubmitBtn').click();
   await expect(page.locator('#messages')).toContainText('Which banana day works best?');
+
+  if (testInfo.project.name.includes('mobile')) {
+    await expectMobileScene(page, 'chat');
+
+    for (let index = 0; index < 2; index += 1) {
+      await page.locator('#searchBtn').click();
+      await expect(page.locator('#searchPanel')).toHaveAttribute('aria-hidden', 'false');
+      await expectMobileScene(page, 'chat');
+      await page.locator('#searchClose').click();
+      await expect(page.locator('#searchPanel')).toHaveAttribute('aria-hidden', 'true');
+      await expectMobileScene(page, 'chat');
+
+      await page.locator('#backBtn').click();
+      await expectMobileScene(page, 'sidebar');
+
+      await page.locator('#settingsBtn').click();
+      await expect(page.locator('#settingsModal')).toBeVisible();
+      await expectMobileScene(page, 'sidebar');
+      await page.locator('#settingsModal .modal-close').click();
+      await expect(page.locator('#settingsModal')).toBeHidden();
+      await expectMobileScene(page, 'sidebar');
+
+      await page.locator('#menuBtn').click();
+      await expect(page.locator('#menuDrawer')).toBeVisible();
+      await expectMobileScene(page, 'sidebar');
+      await page.locator('#menuDrawer .modal-close').click();
+      await expect(page.locator('#menuDrawer')).toBeHidden();
+      await expectMobileScene(page, 'sidebar');
+
+      await openExistingChat(page, bobUser.displayName);
+      await expectMobileScene(page, 'chat');
+    }
+  }
 });
 
 test('realtime chat flow and media-note ui hooks work with mocked browser media APIs', async ({ browser, page }) => {

@@ -431,6 +431,10 @@
   let scrollRestoreTimers = new Set();
   let mobileRouteTransitionActive = false;
   let mobileRouteTransitionTimer = null;
+  let mobileBaseScene = 'sidebar';
+  let mobileSceneRepaintFrame = 0;
+  let mobileSceneRepaintCleanupFrame = 0;
+  let mobileSceneRepaintTarget = null;
   const mediaPlaybackStateByChat = new Map();
   let messageBackgroundSyncTimer = null;
   let messageBackgroundSyncRunning = false;
@@ -873,6 +877,27 @@
     openSettingsModal: (opener = $('#settingsBtn')) => openSettingsModal(opener),
     setReply: (...args) => setReply(...args),
     setEditFromRow: (row) => setEditFromRow(row),
+    setMobileBaseScene: (scene, options = {}) => syncMobileBaseSceneState({
+      scene,
+      hideInactive: Object.prototype.hasOwnProperty.call(options, 'hideInactive') ? !!options.hideInactive : true,
+      syncChatMetrics: Boolean(options.syncChatMetrics),
+      repaint: Boolean(options.repaint),
+    }),
+    getMobileBaseSceneSnapshot: () => ({
+      scene: getResolvedMobileBaseScene(),
+      routeTransitionActive: mobileRouteTransitionActive,
+      sidebar: {
+        sidebarHidden: sidebar?.classList?.contains('sidebar-hidden') || false,
+        mobileSceneHidden: sidebar?.classList?.contains('mobile-scene-hidden') || false,
+        inert: sidebar?.hasAttribute?.('inert') || false,
+        ariaHidden: sidebar?.getAttribute?.('aria-hidden') || null,
+      },
+      chatArea: {
+        mobileSceneHidden: chatArea?.classList?.contains('mobile-scene-hidden') || false,
+        inert: chatArea?.hasAttribute?.('inert') || false,
+        ariaHidden: chatArea?.getAttribute?.('aria-hidden') || null,
+      },
+    }),
   });
 
   // Weather widget interactivity: click or keyboard activates a forced refresh
@@ -893,6 +918,135 @@
   // ═══════════════════════════════════════════════════════════════════════════
   // UTILS
   // ═══════════════════════════════════════════════════════════════════════════
+  function isMobileLayoutViewport() {
+    return window.innerWidth <= 768;
+  }
+
+  function normalizeMobileBaseScene(scene) {
+    return scene === 'chat' ? 'chat' : 'sidebar';
+  }
+
+  function clearMobileSceneRepaint() {
+    if (mobileSceneRepaintFrame) {
+      cancelAnimationFrame(mobileSceneRepaintFrame);
+      mobileSceneRepaintFrame = 0;
+    }
+    if (mobileSceneRepaintCleanupFrame) {
+      cancelAnimationFrame(mobileSceneRepaintCleanupFrame);
+      mobileSceneRepaintCleanupFrame = 0;
+    }
+    sidebar?.classList?.remove('mobile-scene-repaint');
+    chatArea?.classList?.remove('mobile-scene-repaint');
+    mobileSceneRepaintTarget = null;
+  }
+
+  function getResolvedMobileBaseScene(scene = mobileBaseScene) {
+    const declaredScene = normalizeMobileBaseScene(document.documentElement?.dataset?.mobileScene || scene);
+    if (!sidebar || !chatArea) return declaredScene;
+    if (!isMobileLayoutViewport()) return declaredScene;
+    if (chatArea.classList.contains('mobile-scene-hidden')) return 'sidebar';
+    if (sidebar.classList.contains('mobile-scene-hidden')) return 'chat';
+    if (mobileRouteTransitionActive) return declaredScene;
+    if (sidebar.classList.contains('sidebar-hidden')) return 'chat';
+    return declaredScene;
+  }
+
+  function isMobileBaseSceneHardHidden(el) {
+    return Boolean(isMobileLayoutViewport() && el instanceof HTMLElement && el.classList.contains('mobile-scene-hidden'));
+  }
+
+  function setMobileSceneElementState(el, { active = false, hardHide = false } = {}) {
+    if (!(el instanceof HTMLElement)) return;
+    el.classList.toggle('mobile-scene-hidden', Boolean(hardHide));
+    el.dataset.mobileSceneState = hardHide ? 'hidden' : (active ? 'active' : 'mounted');
+    if (active) {
+      el.removeAttribute('inert');
+      el.setAttribute('aria-hidden', 'false');
+    } else {
+      el.setAttribute('inert', '');
+      el.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  function clearMobileSceneElementState(el) {
+    if (!(el instanceof HTMLElement)) return;
+    el.classList.remove('mobile-scene-hidden', 'mobile-scene-repaint');
+    delete el.dataset.mobileSceneState;
+    el.removeAttribute('inert');
+    el.removeAttribute('aria-hidden');
+  }
+
+  function scheduleActiveMobileSceneRepaint(scene = mobileBaseScene) {
+    if (!isMobileLayoutViewport()) {
+      clearMobileSceneRepaint();
+      return false;
+    }
+    const target = normalizeMobileBaseScene(scene) === 'chat' ? chatArea : sidebar;
+    if (!(target instanceof HTMLElement)) return false;
+    clearMobileSceneRepaint();
+    mobileSceneRepaintTarget = target;
+    target.classList.add('mobile-scene-repaint');
+    mobileSceneRepaintFrame = requestAnimationFrame(() => {
+      mobileSceneRepaintFrame = 0;
+      mobileSceneRepaintCleanupFrame = requestAnimationFrame(() => {
+        mobileSceneRepaintCleanupFrame = 0;
+        mobileSceneRepaintTarget?.classList?.remove('mobile-scene-repaint');
+        mobileSceneRepaintTarget = null;
+      });
+    });
+    return true;
+  }
+
+  function syncMobileBaseSceneState(options = {}) {
+    if (!sidebar || !chatArea) return normalizeMobileBaseScene(options.scene || mobileBaseScene);
+    const scene = normalizeMobileBaseScene(options.scene || getResolvedMobileBaseScene());
+    mobileBaseScene = scene;
+
+    if (!isMobileLayoutViewport()) {
+      clearMobileSceneRepaint();
+      clearMobileSceneElementState(sidebar);
+      clearMobileSceneElementState(chatArea);
+      sidebar.classList.remove('sidebar-hidden', 'sidebar-no-transition');
+      sidebar.style.transform = '';
+      sidebar.style.willChange = '';
+      delete document.documentElement.dataset.mobileScene;
+      return scene;
+    }
+
+    const hideInactive = Object.prototype.hasOwnProperty.call(options, 'hideInactive')
+      ? !!options.hideInactive
+      : !mobileRouteTransitionActive;
+    const syncChatMetrics = Boolean(options.syncChatMetrics && scene === 'chat');
+    const root = document.documentElement;
+
+    if (scene === 'sidebar') {
+      sidebar.classList.remove('sidebar-hidden');
+      sidebar.classList.remove('mobile-scene-hidden');
+    } else {
+      chatArea.classList.remove('mobile-scene-hidden');
+      sidebar.classList.add('sidebar-hidden');
+    }
+
+    if (syncChatMetrics) {
+      syncMobileAppHeightToViewport({ force: true });
+      syncChatAreaMetrics({ force: true });
+      queueIosViewportLayoutSync();
+    }
+
+    setMobileSceneElementState(sidebar, {
+      active: scene === 'sidebar',
+      hardHide: hideInactive && scene !== 'sidebar',
+    });
+    setMobileSceneElementState(chatArea, {
+      active: scene === 'chat',
+      hardHide: hideInactive && scene !== 'chat',
+    });
+
+    root.dataset.mobileScene = scene;
+    if (options.repaint) scheduleActiveMobileSceneRepaint(scene);
+    return scene;
+  }
+
   function esc(s) {
     const d = document.createElement('div');
     d.textContent = s;
@@ -2646,16 +2800,19 @@
     localStorage.setItem('user', JSON.stringify(currentUser));
   }
 
-  function syncChatAreaMetrics() {
+  function syncChatAreaMetrics(options = {}) {
     if (!chatArea) return;
+    const force = Boolean(options && typeof options === 'object' && options.force);
+    if (!force && isMobileBaseSceneHardHidden(chatArea)) return;
     const rect = chatArea.getBoundingClientRect();
     const root = document.documentElement;
-    const width = Math.max(0, rect.width || window.innerWidth || 0);
-    const height = Math.max(0, rect.height || window.innerHeight || 0);
+    const width = Math.max(0, rect.width || 0);
+    const height = Math.max(0, rect.height || 0);
+    if (!force && isMobileLayoutViewport() && (!width || !height)) return;
     root.style.setProperty('--chat-area-left', `${Math.max(0, rect.left || 0)}px`);
     root.style.setProperty('--chat-area-top', `${Math.max(0, rect.top || 0)}px`);
-    root.style.setProperty('--chat-area-width', `${width}px`);
-    root.style.setProperty('--chat-area-height', `${height}px`);
+    root.style.setProperty('--chat-area-width', `${Math.max(0, width || window.innerWidth || 0)}px`);
+    root.style.setProperty('--chat-area-height', `${Math.max(0, height || window.innerHeight || 0)}px`);
     queueIosViewportLayoutSync();
   }
 
@@ -2712,7 +2869,7 @@
   }
 
   function setupMobileViewportHeightSync() {
-    if (!window.visualViewport || window.innerWidth > 768 || mobileViewportHeightSyncBound) return;
+    if (!window.visualViewport || !isMobileLayoutViewport() || mobileViewportHeightSyncBound) return;
     mobileViewportHeightSyncBound = true;
     mobileViewportPrevHeight = Math.max(0, window.visualViewport.height || 0);
     syncMobileAppHeightToViewport({ force: true });
@@ -2731,7 +2888,9 @@
   }
 
   function setupChatAreaMetricsSync() {
+    syncMobileBaseSceneState({ hideInactive: true, syncChatMetrics: getResolvedMobileBaseScene() === 'chat' });
     syncChatAreaMetrics();
+    window.addEventListener('resize', syncMobileBaseSceneState);
     window.addEventListener('resize', syncChatAreaMetrics);
     window.visualViewport?.addEventListener('resize', syncChatAreaMetricsFromViewport);
     window.visualViewport?.addEventListener('scroll', syncChatAreaMetricsFromViewport);
@@ -2826,7 +2985,7 @@
   }
 
   function beginMobileRouteTransition(durationMs = 340) {
-    if (window.innerWidth > 768) return false;
+    if (!isMobileLayoutViewport()) return false;
     mobileRouteTransitionActive = true;
     clearTimeout(mobileRouteTransitionTimer);
     document.documentElement.classList.add('is-mobile-route-transitioning');
@@ -2837,10 +2996,17 @@
   }
 
   function endMobileRouteTransition() {
+    const finalScene = normalizeMobileBaseScene(mobileBaseScene);
     clearTimeout(mobileRouteTransitionTimer);
     mobileRouteTransitionTimer = null;
     mobileRouteTransitionActive = false;
     document.documentElement.classList.remove('is-mobile-route-transitioning');
+    syncMobileBaseSceneState({
+      scene: finalScene,
+      hideInactive: true,
+      syncChatMetrics: finalScene === 'chat',
+      repaint: true,
+    });
     flushDeferredRecoverySync();
   }
 
@@ -7873,6 +8039,12 @@
 
   function handleAppResume(reason) {
     if (!token || !currentUser) return;
+    syncMobileBaseSceneState({
+      scene: getResolvedMobileBaseScene(),
+      hideInactive: !mobileRouteTransitionActive,
+      syncChatMetrics: getResolvedMobileBaseScene() === 'chat',
+      repaint: true,
+    });
     scheduleMobileViewportRecovery();
     refreshWebSocketAfterResume();
     scheduleRecoverySync(reason, { immediate: true });
@@ -11550,13 +11722,26 @@
   }
 
   function revealActiveMobileChatRoute({ suppressHistoryPush = false, chatId = currentChatId } = {}) {
-    if (window.innerWidth > 768 || !sidebar) return;
+    if (!isMobileLayoutViewport() || !sidebar) return;
     cancelPendingSidebarReveal();
+    syncMobileBaseSceneState({
+      scene: 'chat',
+      hideInactive: false,
+      syncChatMetrics: true,
+    });
     sidebar.classList.remove('sidebar-no-transition');
     sidebar.classList.add('sidebar-hidden');
     if (!suppressHistoryPush) {
       history.pushState({ chat: Number(chatId || currentChatId || 0) }, '');
     }
+    const transitionMs = prefersReducedMotion()
+      ? 0
+      : Math.max(180, Math.ceil(getElementTransitionTotalMs(sidebar) || 250));
+    if (transitionMs <= 0) {
+      endMobileRouteTransition();
+      return;
+    }
+    beginMobileRouteTransition(transitionMs + 90);
   }
 
   function warmMessageWindowAssets(chat, messages = []) {
@@ -15013,6 +15198,23 @@
     }, 0);
   }
 
+  function queueSearchPanelPendingAction(action) {
+    if (typeof action !== 'function') return false;
+    if (typeof searchPanelPendingAction !== 'function') {
+      searchPanelPendingAction = action;
+      return true;
+    }
+    const previousAction = searchPanelPendingAction;
+    searchPanelPendingAction = () => {
+      try {
+        previousAction();
+      } finally {
+        action();
+      }
+    };
+    return true;
+  }
+
   function shouldAutoFocusSearchInput() {
     return window.innerWidth > 768;
   }
@@ -17587,7 +17789,10 @@
     } catch {}
     sidebar.style.transform = '';
     sidebar.style.willChange = '';
-    endMobileRouteTransition();
+    clearTimeout(mobileRouteTransitionTimer);
+    mobileRouteTransitionTimer = null;
+    mobileRouteTransitionActive = false;
+    document.documentElement.classList.remove('is-mobile-route-transitioning');
   }
 
   function revealSidebarFromChat({ forceAnimation = false } = {}) {
@@ -17598,10 +17803,17 @@
     hideMentionPicker();
     closeEmojiPicker({ immediate: true });
     cancelPendingSidebarReveal();
+    syncMobileBaseSceneState({
+      scene: 'sidebar',
+      hideInactive: false,
+    });
 
     if (!sidebar.classList.contains('sidebar-hidden')) {
-      endMobileRouteTransition();
-      if (!forceAnimation) return;
+      if (!forceAnimation) {
+        syncMobileBaseSceneState({ scene: 'sidebar', hideInactive: true, repaint: true });
+        flushDeferredRecoverySync();
+        return;
+      }
       sidebar.classList.add('sidebar-no-transition');
       sidebar.classList.add('sidebar-hidden');
       void sidebar.offsetWidth;
@@ -18722,6 +18934,12 @@
       }
       if (isSearchPanelOpen()) {
         closeSearchPanel();
+        return;
+      }
+      if (searchPanelSkipNextPopstate) {
+        queueSearchPanelPendingAction(() => {
+          navigateBackToChatList({ fromInAppButton: true });
+        });
         return;
       }
       if (backBtn.__isNavigating) return;

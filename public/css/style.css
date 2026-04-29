@@ -944,7 +944,6 @@ a:hover { text-decoration: underline; }
   flex: 1; display: flex; flex-direction: column; min-width: 0;
   background-color: var(--bg-dark);
   background-image: var(--bg-app-gradient);
-  contain: paint;
 }
 
 .empty-state {
@@ -2971,7 +2970,6 @@ html[data-modal-animation="none"] .composer-context-convert-btn {
   visibility: hidden;
   pointer-events: none;
   transition: visibility 0s linear var(--modal-duration);
-  contain: paint;
 }
 .modal::before {
   content: "";
@@ -4798,7 +4796,6 @@ html[data-visual-mode="rich"] .poll-card {
   display: flex; justify-content: flex-end;
   visibility: hidden;
   pointer-events: none;
-  contain: paint;
 }
 .search-panel::before {
   content: "";
@@ -4832,7 +4829,6 @@ html[data-visual-mode="rich"] .poll-card {
   box-shadow: -18px 0 46px rgba(0,0,0,.34);
   transform: translate3d(100%, 0, 0);
   transition: transform var(--search-panel-duration) var(--search-panel-ease);
-  contain: layout paint;
 }
 .search-panel.is-open .search-panel-sheet,
 .search-panel.is-closing .search-panel-sheet {
@@ -4962,28 +4958,27 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
 @media (max-width: 768px) {
   .resize-handle { display: none; }
   #app { height: 100vh; height: 100dvh; }
+  #sidebar.mobile-scene-hidden,
+  #chatArea.mobile-scene-hidden {
+    display: none !important;
+  }
+  #sidebar.mobile-scene-repaint,
+  #chatArea.mobile-scene-repaint {
+    outline: 1px solid transparent;
+  }
   #sidebar {
     position: fixed; inset: 0; width: 100%; min-width: 0; max-width: 100vw;
     z-index: 20; transition: transform .25s ease;
-    contain: paint;
   }
   html[data-visual-mode="rich"] #sidebar {
     border-right: none;
   }
   #sidebar.sidebar-no-transition { transition: none !important; }
   #sidebar.sidebar-hidden { transform: translate3d(-100%,0,0); }
-  #sidebar:not(.sidebar-hidden) ~ #chatArea {
-    visibility: hidden;
-    pointer-events: none;
-  }
 
   html.is-mobile-route-transitioning #app {
     background-color: var(--bg-sidebar);
     background-image: var(--bg-sidebar-gradient);
-  }
-  html.is-mobile-route-transitioning #chatArea {
-    visibility: hidden;
-    pointer-events: none;
   }
   html.is-mobile-route-transitioning #sidebar {
     will-change: transform;
