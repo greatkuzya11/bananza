@@ -5,6 +5,7 @@ const {
   createAppDom,
   installVisualViewportMock,
   loadBrowserScript,
+  setDocumentHidden,
 } = require('../support/domHarness');
 
 function createJsonResponse(dom, data, init = {}) {
@@ -15,7 +16,7 @@ function createJsonResponse(dom, data, init = {}) {
   });
 }
 
-function installAppRuntimeStubs(dom) {
+function installAppRuntimeStubs(dom, { fetchHandler = null } = {}) {
   const { window } = dom;
 
   Object.defineProperty(window, 'innerWidth', {
@@ -89,8 +90,12 @@ function installAppRuntimeStubs(dom) {
   window.localStorage.setItem('token', 'test-token');
   window.localStorage.setItem('user', JSON.stringify(currentUser));
 
-  window.fetch = async (input) => {
+  window.fetch = async (input, init = {}) => {
     const url = new URL(String(input), window.location.origin);
+    if (typeof fetchHandler === 'function') {
+      const handled = await fetchHandler({ dom, window, url, input, init });
+      if (handled) return handled;
+    }
     switch (url.pathname) {
       case '/api/auth/me':
         return createJsonResponse(dom, { user: currentUser });
@@ -134,9 +139,9 @@ function installAppRuntimeStubs(dom) {
   };
 }
 
-async function bootAppDom() {
+async function bootAppDom(options = {}) {
   const dom = createAppDom();
-  installAppRuntimeStubs(dom);
+  installAppRuntimeStubs(dom, options);
   dom.visualViewportMock = installVisualViewportMock(dom.window, {
     width: 390,
     height: 844,
@@ -193,11 +198,15 @@ function createTouchEndEvent(window, { clientX = 0, clientY = 0, identifier = 1 
   return event;
 }
 
-function createPrimaryPointerEvent(window, type = 'pointerdown') {
+function createPrimaryPointerEvent(window, type = 'pointerdown', { pointerType = 'touch' } = {}) {
   const event = new window.Event(type, { bubbles: true, cancelable: true });
   Object.defineProperty(event, 'button', {
     configurable: true,
     value: 0,
+  });
+  Object.defineProperty(event, 'pointerType', {
+    configurable: true,
+    value: pointerType,
   });
   return event;
 }
@@ -236,6 +245,205 @@ function appendMessageRow(dom, {
   };
   messagesEl.appendChild(row);
   return row;
+}
+
+function installMessagesViewportMock(dom, {
+  viewportTop = 100,
+  viewportHeight = 240,
+  viewportWidth = 320,
+  rowHeight = 60,
+} = {}) {
+  const { window } = dom;
+  const { document } = window;
+  const messagesEl = document.getElementById('messages');
+  const chatArea = document.getElementById('chatArea');
+  const originalGetBoundingClientRect = window.Element.prototype.getBoundingClientRect;
+  let scrollTop = 0;
+
+  const getRows = () => [...messagesEl.querySelectorAll('.msg-row[data-msg-id]')];
+  const getContentHeight = () => getRows().length * rowHeight;
+  const getMaxScrollTop = () => Math.max(0, getContentHeight() - viewportHeight);
+  const clampScrollTop = (value) => Math.max(0, Math.min(getMaxScrollTop(), Number(value) || 0));
+  const isChatSceneHidden = () => Boolean(
+    window.innerWidth <= 768
+    && chatArea instanceof window.HTMLElement
+    && (chatArea.classList.contains('mobile-scene-hidden') || chatArea.hasAttribute('inert'))
+  );
+  const buildRect = (top, height = rowHeight, width = viewportWidth) => ({
+    x: 0,
+    y: top,
+    top,
+    left: 0,
+    right: width,
+    bottom: top + height,
+    width,
+    height,
+    toJSON() {
+      return this;
+    },
+  });
+
+  Object.defineProperty(messagesEl, 'clientHeight', {
+    configurable: true,
+    get() {
+      return isChatSceneHidden() ? 0 : viewportHeight;
+    },
+  });
+  Object.defineProperty(messagesEl, 'offsetHeight', {
+    configurable: true,
+    get() {
+      return isChatSceneHidden() ? 0 : viewportHeight;
+    },
+  });
+  Object.defineProperty(messagesEl, 'clientWidth', {
+    configurable: true,
+    get() {
+      return isChatSceneHidden() ? 0 : viewportWidth;
+    },
+  });
+  Object.defineProperty(messagesEl, 'offsetWidth', {
+    configurable: true,
+    get() {
+      return isChatSceneHidden() ? 0 : viewportWidth;
+    },
+  });
+  Object.defineProperty(messagesEl, 'scrollHeight', {
+    configurable: true,
+    get() {
+      return isChatSceneHidden() ? 0 : getContentHeight();
+    },
+  });
+  Object.defineProperty(messagesEl, 'scrollTop', {
+    configurable: true,
+    get() {
+      return scrollTop;
+    },
+    set(value) {
+      scrollTop = clampScrollTop(value);
+    },
+  });
+  messagesEl.scrollTo = (optionsOrTop, maybeTop) => {
+    if (typeof optionsOrTop === 'object' && optionsOrTop) {
+      messagesEl.scrollTop = optionsOrTop.top;
+      return;
+    }
+    messagesEl.scrollTop = maybeTop ?? optionsOrTop;
+  };
+  messagesEl.getBoundingClientRect = () => (
+    isChatSceneHidden()
+      ? buildRect(0, 0, 0)
+      : buildRect(viewportTop, viewportHeight, viewportWidth)
+  );
+
+  window.Element.prototype.getBoundingClientRect = function patchedGetBoundingClientRect() {
+    if (this === messagesEl) {
+      return isChatSceneHidden()
+        ? buildRect(0, 0, 0)
+        : buildRect(viewportTop, viewportHeight, viewportWidth);
+    }
+    if (this instanceof window.HTMLElement && this.classList.contains('msg-row') && messagesEl.contains(this)) {
+      if (isChatSceneHidden()) return buildRect(0, 0, 0);
+      const rowIndex = getRows().indexOf(this);
+      if (rowIndex >= 0) {
+        const top = viewportTop + (rowIndex * rowHeight) - scrollTop;
+        return buildRect(top, rowHeight, viewportWidth);
+      }
+    }
+    return originalGetBoundingClientRect.call(this);
+  };
+
+  return {
+    messagesEl,
+    get scrollTop() {
+      return scrollTop;
+    },
+    setScrollTop(value) {
+      messagesEl.scrollTop = value;
+      return scrollTop;
+    },
+    getBottomScrollTop() {
+      return getMaxScrollTop();
+    },
+    rowHeight,
+    viewportHeight,
+  };
+}
+
+function createChatFixture(chatId, name, { lastMessageId = chatId * 100 + 12 } = {}) {
+  return {
+    id: chatId,
+    name,
+    type: 'group',
+    last_message_id: lastMessageId,
+    last_read_id: lastMessageId,
+    first_unread_id: null,
+    unread_count: 0,
+    created_by: 1,
+    members: [],
+    notify_enabled: 1,
+    sounds_enabled: 1,
+    allow_unpin_any_pin: 0,
+    avatar_url: '',
+    avatar_color: '#5eb5f7',
+  };
+}
+
+function createChatMessages(chatId, count, { startId = chatId * 100 } = {}) {
+  return Array.from({ length: count }, (_, index) => {
+    const id = startId + index + 1;
+    return {
+      id,
+      chat_id: chatId,
+      user_id: index % 2 === 0 ? 2 : 1,
+      display_name: index % 2 === 0 ? 'Bob' : 'Alice',
+      avatar_color: index % 2 === 0 ? '#7bc862' : '#5eb5f7',
+      avatar_url: '',
+      text: `Chat ${chatId} message ${index + 1}`,
+      file_id: null,
+      file_name: null,
+      file_stored: null,
+      file_type: null,
+      file_mime: null,
+      file_size: 0,
+      created_at: `2026-04-29T12:${String(index).padStart(2, '0')}:00.000Z`,
+      is_deleted: 0,
+      is_voice_note: 0,
+      is_video_note: 0,
+      mentions: [],
+      reactions: [],
+      reply_to_id: null,
+      reply_text: null,
+      reply_is_voice_note: 0,
+      poll: null,
+      forwarded_from_chat_id: null,
+      forwarded_from_message_id: null,
+      ai_generated: 0,
+      ai_bot_id: 0,
+      client_status: null,
+    };
+  });
+}
+
+function createChatFetchHandler(chatMessagesByChatId) {
+  return ({ dom, url }) => {
+    const messagesMatch = url.pathname.match(/^\/api\/chats\/(\d+)\/messages$/);
+    if (messagesMatch) {
+      const chatId = Number(messagesMatch[1]);
+      const messages = chatMessagesByChatId[chatId] || [];
+      return createJsonResponse(dom, {
+        messages,
+        pin_events: [],
+        has_more_before: false,
+        has_more_after: false,
+        member_last_reads: [],
+      });
+    }
+    const pinsMatch = url.pathname.match(/^\/api\/chats\/(\d+)\/pins$/);
+    if (pinsMatch) {
+      return createJsonResponse(dom, []);
+    }
+    return null;
+  };
 }
 
 test('media viewer close suppresses follow-up click-through to settings', async (t) => {
@@ -480,30 +688,231 @@ test('mobile chat scene hard-hides the sidebar and keeps it hidden while search 
   assertMobileScene(dom, 'chat');
 });
 
-test('scroll-to-bottom stays keyboard-neutral on mobile', async (t) => {
+test('scroll-to-bottom keeps native click activation when the mobile keyboard is closed', async (t) => {
   const dom = await bootAppDom();
   t.after(() => {
     dom.window.close();
   });
-  const { document } = dom.window;
+  const { document, BananzaAppBridge } = dom.window;
   const msgInput = document.getElementById('msgInput');
   const scrollBottomBtn = document.getElementById('scrollBottomBtn');
+  const layout = installMessagesViewportMock(dom);
 
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true });
+
+  for (let index = 0; index < 12; index += 1) {
+    appendMessageRow(dom, {
+      id: 500 + index,
+      text: `Scroll row ${index + 1}`,
+    });
+  }
+
+  layout.setScrollTop(layout.rowHeight * 3);
   let focusCalls = 0;
   msgInput.focus = () => {
     focusCalls += 1;
   };
 
-  const pointerDown = createPrimaryPointerEvent(dom.window, 'pointerdown');
+  const pointerDown = createPrimaryPointerEvent(dom.window, 'pointerdown', { pointerType: 'touch' });
   scrollBottomBtn.dispatchEvent(pointerDown);
   scrollBottomBtn.dispatchEvent(new dom.window.MouseEvent('click', {
     bubbles: true,
     cancelable: true,
   }));
+  await wait(dom, 40);
 
-  assert.equal(pointerDown.defaultPrevented, true);
+  assert.equal(pointerDown.defaultPrevented, false);
+  assert.equal(layout.scrollTop, layout.getBottomScrollTop());
   assert.equal(focusCalls, 0);
   assert.notEqual(document.activeElement, msgInput);
+});
+
+test('scroll-to-bottom stays keyboard-neutral when the mobile keyboard is already open', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const scrollBottomBtn = document.getElementById('scrollBottomBtn');
+  const layout = installMessagesViewportMock(dom);
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true });
+
+  for (let index = 0; index < 12; index += 1) {
+    appendMessageRow(dom, {
+      id: 700 + index,
+      text: `Keyboard row ${index + 1}`,
+    });
+  }
+
+  layout.setScrollTop(layout.rowHeight * 3);
+  msgInput.focus();
+  dom.visualViewportMock.setAndDispatch('resize', { height: 420 });
+  await wait(dom, 30);
+  assert.equal(app.style.height, '420px');
+
+  const pointerDown = createPrimaryPointerEvent(dom.window, 'pointerdown', { pointerType: 'touch' });
+  const pointerUp = createPrimaryPointerEvent(dom.window, 'pointerup', { pointerType: 'touch' });
+  scrollBottomBtn.dispatchEvent(pointerDown);
+  scrollBottomBtn.dispatchEvent(pointerUp);
+  await wait(dom, 40);
+
+  assert.equal(pointerDown.defaultPrevented, true);
+  assert.equal(layout.scrollTop, layout.getBottomScrollTop());
+  assert.equal(document.activeElement, msgInput);
+  assert.equal(app.style.height, '420px');
+});
+
+test('restore scroll position reopens chat A at the saved anchor after visiting chat B', async (t) => {
+  const chatMessages = {
+    1: createChatMessages(1, 12),
+    2: createChatMessages(2, 8),
+  };
+  const dom = await bootAppDom({
+    fetchHandler: createChatFetchHandler(chatMessages),
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { BananzaAppBridge } = dom.window;
+  const layout = installMessagesViewportMock(dom);
+
+  BananzaAppBridge.__testing.setScrollRestoreMode('restore');
+  BananzaAppBridge.__testing.setChats([
+    createChatFixture(1, 'Chat A'),
+    createChatFixture(2, 'Chat B'),
+  ]);
+
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 80);
+  layout.setScrollTop(layout.rowHeight * 3);
+
+  await BananzaAppBridge.__testing.openChat(2);
+  await wait(dom, 80);
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 80);
+
+  assert.equal(layout.scrollTop, layout.rowHeight * 3);
+});
+
+test('restore scroll position reopens the same chat at the saved anchor after returning to the chat list', async (t) => {
+  const chatMessages = {
+    1: createChatMessages(1, 12),
+  };
+  const dom = await bootAppDom({
+    fetchHandler: createChatFetchHandler(chatMessages),
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { BananzaAppBridge } = dom.window;
+  const layout = installMessagesViewportMock(dom);
+
+  BananzaAppBridge.__testing.setScrollRestoreMode('restore');
+  BananzaAppBridge.__testing.setChats([
+    createChatFixture(1, 'Chat A'),
+  ]);
+
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 80);
+  layout.setScrollTop(layout.rowHeight * 2);
+
+  BananzaAppBridge.__testing.revealSidebarFromChat();
+  await wait(dom, 40);
+  assert.equal(
+    BananzaAppBridge.__testing.readScrollAnchors()['1']?.messageId,
+    chatMessages[1][2].id
+  );
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 80);
+
+  assert.equal(layout.scrollTop, layout.rowHeight * 2);
+});
+
+test('revealing the sidebar blurs focused controls inside chatArea before it becomes inert', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const backBtn = document.getElementById('backBtn');
+  const chatArea = document.getElementById('chatArea');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true });
+  backBtn.focus();
+  assert.equal(document.activeElement, backBtn);
+
+  BananzaAppBridge.__testing.revealSidebarFromChat();
+  await wait(dom, 40);
+
+  assert.notEqual(document.activeElement, backBtn);
+  assert.equal(chatArea.hasAttribute('inert'), true);
+  assert.equal(chatArea.getAttribute('aria-hidden'), 'true');
+});
+
+test('visibility hide flushes the current chat anchor so restore survives a fast app hide', async (t) => {
+  const chatMessages = {
+    1: createChatMessages(1, 12),
+  };
+  const dom = await bootAppDom({
+    fetchHandler: createChatFetchHandler(chatMessages),
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { BananzaAppBridge } = dom.window;
+  const layout = installMessagesViewportMock(dom);
+
+  BananzaAppBridge.__testing.setScrollRestoreMode('restore');
+  BananzaAppBridge.__testing.setChats([
+    createChatFixture(1, 'Chat A'),
+  ]);
+
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 80);
+  layout.setScrollTop(layout.rowHeight * 4);
+
+  setDocumentHidden(dom.window.document, true);
+  dom.window.document.dispatchEvent(new dom.window.Event('visibilitychange'));
+
+  assert.equal(
+    BananzaAppBridge.__testing.readScrollAnchors()['1']?.messageId,
+    chatMessages[1][4].id
+  );
+});
+
+test('when restore scroll position is disabled the chat reopens at the bottom', async (t) => {
+  const chatMessages = {
+    1: createChatMessages(1, 12),
+    2: createChatMessages(2, 8),
+  };
+  const dom = await bootAppDom({
+    fetchHandler: createChatFetchHandler(chatMessages),
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { BananzaAppBridge } = dom.window;
+  const layout = installMessagesViewportMock(dom);
+
+  BananzaAppBridge.__testing.setScrollRestoreMode('bottom');
+  BananzaAppBridge.__testing.setChats([
+    createChatFixture(1, 'Chat A'),
+    createChatFixture(2, 'Chat B'),
+  ]);
+
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 80);
+  layout.setScrollTop(layout.rowHeight * 3);
+
+  await BananzaAppBridge.__testing.openChat(2);
+  await wait(dom, 80);
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 80);
+
+  assert.equal(layout.scrollTop, layout.getBottomScrollTop());
 });
 
 test('settings modal dismisses the mobile keyboard and restores the composer dock', async (t) => {

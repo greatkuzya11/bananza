@@ -171,6 +171,7 @@
   let scrollPositionsUserKey = '';
   let suppressScrollAnchorSave = false;
   let scrollAnchorSaveTimer = null;
+  let scheduledScrollAnchorSaveChatId = 0;
   let currentUiTheme = 'bananza';
   let currentVisualMode = 'classic';
   let pollComposerStyle = 'pulse';
@@ -452,6 +453,7 @@
   let mobileViewportRecoveryFrame = 0;
   let mobileViewportRecoveryTimer = null;
   let mobileComposerDismissClickSuppressUntil = 0;
+  let scrollBottomFollowupClickSuppressUntil = 0;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DOM
@@ -875,6 +877,17 @@
     openMediaViewer: (src, type = 'image') => openMediaViewer(src, type),
     closeMediaViewer: () => closeMediaViewer(),
     openSettingsModal: (opener = $('#settingsBtn')) => openSettingsModal(opener),
+    openChat: (chatId, options = {}) => openChat(chatId, options),
+    revealSidebarFromChat: (options = {}) => revealSidebarFromChat(options),
+    flushCurrentChatScrollAnchor: (chatId, options = {}) => flushCurrentChatScrollAnchor(chatId, options),
+    readScrollAnchors: () => JSON.parse(JSON.stringify(scrollPositions || {})),
+    setScrollRestoreMode: (mode = 'bottom') => {
+      scrollRestoreMode = mode === 'restore' ? 'restore' : 'bottom';
+      localStorage.setItem('scrollRestoreMode', scrollRestoreMode);
+      const toggle = $('#settingsScrollRestore');
+      if (toggle) toggle.checked = scrollRestoreMode === 'restore';
+      return scrollRestoreMode;
+    },
     setReply: (...args) => setReply(...args),
     setEditFromRow: (row) => setEditFromRow(row),
     setMobileBaseScene: (scene, options = {}) => syncMobileBaseSceneState({
@@ -963,6 +976,7 @@
       el.removeAttribute('inert');
       el.setAttribute('aria-hidden', 'false');
     } else {
+      blurFocusedElementWithin(el);
       el.setAttribute('inert', '');
       el.setAttribute('aria-hidden', 'true');
     }
@@ -8053,6 +8067,7 @@
   function setupLifecycleRecovery() {
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
+        flushCurrentChatScrollAnchor(currentChatId, { force: true, allowPendingMedia: true });
         lastHiddenAt = Date.now();
         return;
       }
@@ -8061,7 +8076,10 @@
     window.addEventListener('focus', () => handleAppResume('focus'));
     window.addEventListener('pageshow', () => handleAppResume('pageshow'));
     window.addEventListener('online', () => handleAppResume('online'));
-    window.addEventListener('pagehide', () => { lastHiddenAt = Date.now(); });
+    window.addEventListener('pagehide', () => {
+      flushCurrentChatScrollAnchor(currentChatId, { force: true, allowPendingMedia: true });
+      lastHiddenAt = Date.now();
+    });
   }
 
   async function openChatFromPush(chatId) {
@@ -8456,6 +8474,7 @@
   function closeChatViewForChat(chatId) {
     const id = Number(chatId || 0);
     if (!id || Number(currentChatId || 0) !== id) return;
+    flushCurrentChatScrollAnchor(id, { force: true, allowPendingMedia: true });
     pauseCurrentChatMediaPlayback();
     dismissMobileComposer({ forceRecovery: true, reason: 'close-chat-view', recoveryDelayMs: 280 });
     hideFloatingMessageActions({ immediate: true });
@@ -11928,10 +11947,46 @@
     return true;
   }
 
+  function canCaptureCurrentChatScrollAnchor(chatId = currentChatId) {
+    const targetChatId = Number(chatId || currentChatId || 0);
+    if (!targetChatId || Number(currentChatId || 0) !== targetChatId) return false;
+    if (!(messagesEl instanceof HTMLElement) || !messagesEl.isConnected) return false;
+    if (!isMobileLayoutViewport()) return true;
+    if (!(chatArea instanceof HTMLElement)) return true;
+    if (chatArea.hasAttribute('inert') || chatArea.classList.contains('mobile-scene-hidden')) return false;
+    return getResolvedMobileBaseScene() === 'chat';
+  }
+
+  function clearScheduledScrollAnchorSave() {
+    clearTimeout(scrollAnchorSaveTimer);
+    scrollAnchorSaveTimer = null;
+    scheduledScrollAnchorSaveChatId = 0;
+  }
+
+  function flushCurrentChatScrollAnchor(chatId = currentChatId, { force = true, allowPendingMedia = true } = {}) {
+    const targetChatId = Number(chatId || currentChatId || 0);
+    clearScheduledScrollAnchorSave();
+    if (!targetChatId) return false;
+    if (!canCaptureCurrentChatScrollAnchor(targetChatId)) return false;
+    return saveCurrentScrollAnchor(targetChatId, {
+      force,
+      allowPendingMedia,
+    });
+  }
+
   function scheduleScrollAnchorSave() {
     if (suppressScrollAnchorSave || !currentChatId) return;
-    clearTimeout(scrollAnchorSaveTimer);
-    scrollAnchorSaveTimer = setTimeout(() => saveCurrentScrollAnchor(), 140);
+    const targetChatId = Number(currentChatId || 0);
+    if (!targetChatId) return;
+    clearScheduledScrollAnchorSave();
+    scheduledScrollAnchorSaveChatId = targetChatId;
+    scrollAnchorSaveTimer = setTimeout(() => {
+      scrollAnchorSaveTimer = null;
+      const scheduledChatId = Number(scheduledScrollAnchorSaveChatId || 0);
+      scheduledScrollAnchorSaveChatId = 0;
+      if (!scheduledChatId || Number(currentChatId || 0) !== scheduledChatId) return;
+      saveCurrentScrollAnchor(scheduledChatId);
+    }, 140);
   }
 
   function restoreScrollAnchor(anchor, attempts = 3, options = {}) {
@@ -12353,7 +12408,7 @@
 
     // Save scroll position of previous chat
     if (currentChatId) {
-      saveCurrentScrollAnchor(currentChatId, { force: true });
+      flushCurrentChatScrollAnchor(currentChatId, { force: true, allowPendingMedia: true });
     }
     if (previousChatId && !sameChat) {
       pauseCurrentChatMediaPlayback();
@@ -13965,6 +14020,27 @@
         if (isGuardCurrent()) markCurrentChatReadIfAtBottom(true);
       }, instant ? 0 : 320);
     });
+  }
+
+  function suppressScrollBottomFollowupClick(ms = 520) {
+    scrollBottomFollowupClickSuppressUntil = Math.max(scrollBottomFollowupClickSuppressUntil, Date.now() + ms);
+  }
+
+  function activateScrollBottomButton() {
+    if (!scrollBottomBtn) return false;
+    scrollBottomBtn.blur();
+    scrollToBottom(false, true);
+    return true;
+  }
+
+  function shouldPreserveKeyboardForScrollBottomGesture(e) {
+    if (!scrollBottomBtn || window.innerWidth > 768) return false;
+    if (!isMobileComposerKeyboardOpen()) return false;
+    if (e?.type === 'pointerdown' || e?.type === 'pointerup') {
+      if (typeof e.button === 'number' && e.button !== 0) return false;
+      if (e.pointerType === 'mouse') return false;
+    }
+    return true;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -17797,6 +17873,7 @@
 
   function revealSidebarFromChat({ forceAnimation = false } = {}) {
     if (!sidebar) return;
+    flushCurrentChatScrollAnchor(currentChatId, { force: true, allowPendingMedia: true });
     pauseCurrentChatMediaPlayback();
     dismissMobileComposer({ forceRecovery: true, reason: 'reveal-sidebar', recoveryDelayMs: 280 });
     hideFloatingMessageActions({ immediate: true });
@@ -19553,15 +19630,32 @@
 
     // Load more
     loadMoreBtn.addEventListener('click', loadMore);
-    const keepScrollBottomButtonNeutral = (e) => {
-      preserveMobileComposerOnPointerDown(e, { requireOpenKeyboard: false });
+    const keepScrollBottomButtonKeyboardState = (e) => {
+      if (!shouldPreserveKeyboardForScrollBottomGesture(e)) return;
+      e.preventDefault();
     };
-    scrollBottomBtn?.addEventListener('pointerdown', keepScrollBottomButtonNeutral, { passive: false });
-    scrollBottomBtn?.addEventListener('touchstart', keepScrollBottomButtonNeutral, { passive: false });
-    scrollBottomBtn?.addEventListener('mousedown', keepScrollBottomButtonNeutral);
-    scrollBottomBtn?.addEventListener('click', () => {
-      scrollBottomBtn.blur();
-      scrollToBottom(false, true);
+    const activateScrollBottomFromGesture = (e) => {
+      if (Date.now() < scrollBottomFollowupClickSuppressUntil) {
+        e.preventDefault?.();
+        return;
+      }
+      if (!shouldPreserveKeyboardForScrollBottomGesture(e)) return;
+      suppressScrollBottomFollowupClick();
+      activateScrollBottomButton();
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    scrollBottomBtn?.addEventListener('pointerdown', keepScrollBottomButtonKeyboardState, { passive: false });
+    scrollBottomBtn?.addEventListener('pointerup', activateScrollBottomFromGesture, { passive: false });
+    scrollBottomBtn?.addEventListener('touchstart', keepScrollBottomButtonKeyboardState, { passive: false });
+    scrollBottomBtn?.addEventListener('touchend', activateScrollBottomFromGesture, { passive: false });
+    scrollBottomBtn?.addEventListener('click', (e) => {
+      if (Date.now() < scrollBottomFollowupClickSuppressUntil) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      activateScrollBottomButton();
     });
     messagesEl.addEventListener('wheel', noteMessageScrollUserIntent, { passive: true });
     messagesEl.addEventListener('touchmove', noteMessageScrollUserIntent, { passive: true });
