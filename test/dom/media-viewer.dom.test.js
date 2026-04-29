@@ -545,10 +545,19 @@ test('emoji picker keeps the mobile composer attached when the keyboard is alrea
   const msgInput = document.getElementById('msgInput');
   const emojiBtn = document.getElementById('emojiBtn');
   const emojiPicker = document.getElementById('emojiPicker');
+  const originalFocus = msgInput.focus.bind(msgInput);
+  let focusCalls = 0;
 
-  msgInput.focus();
+  msgInput.focus = (...args) => {
+    focusCalls += 1;
+    const result = originalFocus(...args);
+    dom.visualViewportMock.setAndDispatch('resize', { height: 420 });
+    return result;
+  };
+
+  originalFocus();
   dom.visualViewportMock.setAndDispatch('resize', { height: 420 });
-  await new Promise((resolve) => dom.window.setTimeout(resolve, 30));
+  await wait(dom, 30);
   assert.equal(app.style.height, '420px');
 
   const mouseDown = new dom.window.MouseEvent('mousedown', {
@@ -562,11 +571,16 @@ test('emoji picker keeps the mobile composer attached when the keyboard is alrea
     bubbles: true,
     cancelable: true,
   }));
-  await new Promise((resolve) => dom.window.setTimeout(resolve, 40));
+  dom.window.setTimeout(() => {
+    msgInput.blur();
+    dom.visualViewportMock.setAndDispatch('resize', { height: 844 });
+  }, 25);
+  await waitForViewportRecovery(dom, 320);
 
   assert.equal(emojiPicker.classList.contains('hidden'), false);
   assert.equal(document.activeElement, msgInput);
   assert.equal(app.style.height, '420px');
+  assert.ok(focusCalls >= 1);
 });
 
 test('emoji picker inserts emoji without focusing the composer when the keyboard is closed', async (t) => {

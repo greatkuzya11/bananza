@@ -25,7 +25,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/sounds.js',
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
-    '/js/app.js?v=20260429-mobile-scene-focus-fix',
+    '/js/app.js?v=20260429-emoji-picker-keyboard-fix',
     '/js/video-notes/video-note-shapes.js',
     '/js/video-notes/VideoShapeRegistry.js',
     '/js/video-notes/AudioNoteRecorderAdapter.js',

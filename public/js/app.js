@@ -402,6 +402,8 @@
   let emojiPickerOpen = false;
   let emojiPickerKeyboardAttached = false;
   let emojiPickerAnchorEl = null;
+  let emojiPickerKeyboardStabilizeFrame = 0;
+  let emojiPickerKeyboardStabilizeTimer = null;
   let avatarUserMenuState = null;
   let chatMemberLastReads = new Map();
   const modalRegistry = new Map();
@@ -795,6 +797,39 @@
 
   function shouldKeepEmojiPickerKeyboard() {
     return Boolean(emojiPickerKeyboardAttached || isMobileComposerKeyboardOpen());
+  }
+
+  function clearEmojiPickerKeyboardOpenStabilizer() {
+    if (emojiPickerKeyboardStabilizeFrame) {
+      cancelAnimationFrame(emojiPickerKeyboardStabilizeFrame);
+      emojiPickerKeyboardStabilizeFrame = 0;
+    }
+    if (emojiPickerKeyboardStabilizeTimer) {
+      clearTimeout(emojiPickerKeyboardStabilizeTimer);
+      emojiPickerKeyboardStabilizeTimer = null;
+    }
+  }
+
+  function stabilizeEmojiPickerKeyboardOnOpen(keepKeyboardOpen = emojiPickerKeyboardAttached) {
+    if (window.innerWidth > 768 || !keepKeyboardOpen) return false;
+    clearEmojiPickerKeyboardOpenStabilizer();
+    const apply = () => {
+      if (!emojiPickerOpen || !shouldKeepEmojiPickerKeyboard()) return false;
+      focusComposerKeepKeyboard(true);
+      forceMobileViewportLayoutSync();
+      syncChatAreaMetrics();
+      queueIosViewportLayoutSync();
+      return true;
+    };
+    emojiPickerKeyboardStabilizeFrame = requestAnimationFrame(() => {
+      emojiPickerKeyboardStabilizeFrame = 0;
+      apply();
+    });
+    emojiPickerKeyboardStabilizeTimer = setTimeout(() => {
+      emojiPickerKeyboardStabilizeTimer = null;
+      apply();
+    }, 150);
+    return true;
   }
 
   function shouldBypassLockedMobileViewportSync(newViewportHeight, { force = false, mentionPickerDismissed = false } = {}) {
@@ -15802,20 +15837,25 @@
     positionFloatingElement(emojiPicker, left, top);
   }
 
-  function openEmojiPicker(anchorEl = emojiBtn) {
+  function openEmojiPicker(anchorEl = emojiBtn, { keepKeyboardOpen } = {}) {
     if (!(emojiPicker instanceof HTMLElement)) return false;
+    const keyboardAttached = typeof keepKeyboardOpen === 'boolean'
+      ? keepKeyboardOpen
+      : (window.innerWidth > 768 || isMobileComposerKeyboardOpen());
     emojiPickerAnchorEl = anchorEl instanceof HTMLElement ? anchorEl : emojiBtn;
-    emojiPickerKeyboardAttached = window.innerWidth > 768 || isMobileComposerKeyboardOpen();
+    emojiPickerKeyboardAttached = keyboardAttached;
     emojiPickerOpen = true;
     openFloatingSurface(emojiPicker);
     syncEmojiPickerButton();
     positionEmojiPicker(emojiPickerAnchorEl);
     requestAnimationFrame(() => positionEmojiPicker(emojiPickerAnchorEl));
+    stabilizeEmojiPickerKeyboardOnOpen(keyboardAttached);
     return true;
   }
 
   function closeEmojiPicker({ immediate = false } = {}) {
     emojiPickerOpen = false;
+    clearEmojiPickerKeyboardOpenStabilizer();
     syncEmojiPickerButton();
     return closeFloatingSurface(emojiPicker, {
       immediate,
@@ -15832,12 +15872,12 @@
     });
   }
 
-  function toggleEmojiPicker(anchorEl = emojiBtn) {
+  function toggleEmojiPicker(anchorEl = emojiBtn, options = {}) {
     if (isFloatingSurfaceVisible(emojiPicker)) {
       closeEmojiPicker();
       return false;
     }
-    openEmojiPicker(anchorEl);
+    openEmojiPicker(anchorEl, options);
     return true;
   }
 
@@ -18311,7 +18351,8 @@
     emojiBtn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      toggleEmojiPicker(emojiBtn);
+      const keepKeyboardOpen = window.innerWidth > 768 || isMobileComposerKeyboardOpen();
+      toggleEmojiPicker(emojiBtn, { keepKeyboardOpen });
     });
 
     // Media viewer close
