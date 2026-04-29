@@ -446,6 +446,45 @@ function createChatFetchHandler(chatMessagesByChatId) {
   };
 }
 
+function createReadTrackingFetchHandler(chatMessagesByChatId, initialChats = []) {
+  const chatFetchHandler = createChatFetchHandler(chatMessagesByChatId);
+  const chatRows = (Array.isArray(initialChats) ? initialChats : []).map((chat) => ({ ...chat }));
+  const readCalls = [];
+  return {
+    readCalls,
+    handler: ({ dom, window, url, input, init }) => {
+      if (url.pathname === '/api/chats') {
+        return createJsonResponse(dom, chatRows.map((chat) => ({ ...chat })));
+      }
+      const handled = chatFetchHandler({ dom, window, url, input, init });
+      if (handled) return handled;
+      const readMatch = url.pathname.match(/^\/api\/chats\/(\d+)\/read$/);
+      if (!readMatch) return null;
+      let payload = {};
+      if (typeof init?.body === 'string' && init.body) {
+        try {
+          payload = JSON.parse(init.body);
+        } catch {}
+      } else if (init?.body && typeof init.body === 'object') {
+        payload = init.body;
+      }
+      readCalls.push({
+        chatId: Number(readMatch[1]),
+        lastReadId: Number(payload?.lastReadId || 0),
+      });
+      const chat = chatRows.find((row) => Number(row.id) === Number(readMatch[1]));
+      if (chat) {
+        chat.last_read_id = Math.max(Number(chat.last_read_id || 0), Number(payload?.lastReadId || 0));
+        if (!chat.last_message_id || Number(chat.last_read_id || 0) >= Number(chat.last_message_id || 0)) {
+          chat.unread_count = 0;
+          chat.first_unread_id = null;
+        }
+      }
+      return createJsonResponse(dom, { ok: true });
+    },
+  };
+}
+
 test('media viewer close suppresses follow-up click-through to settings', async (t) => {
   const dom = await bootAppDom();
   t.after(() => {
@@ -927,6 +966,82 @@ test('when restore scroll position is disabled the chat reopens at the bottom', 
   await wait(dom, 80);
 
   assert.equal(layout.scrollTop, layout.getBottomScrollTop());
+});
+
+test('short unread chats send a read receipt on open without requiring a scroll event', async (t) => {
+  const chatMessages = {
+    1: createChatMessages(1, 2, { startId: 8 }),
+  };
+  const chatList = [
+    {
+      ...createChatFixture(1, 'Chat A', { lastMessageId: 10 }),
+      last_read_id: 9,
+      first_unread_id: 10,
+      unread_count: 1,
+    },
+  ];
+  const { handler, readCalls } = createReadTrackingFetchHandler(chatMessages, chatList);
+  const dom = await bootAppDom({
+    fetchHandler: handler,
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { BananzaAppBridge } = dom.window;
+
+  installMessagesViewportMock(dom);
+  BananzaAppBridge.__testing.setChats(chatList);
+
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 420);
+
+  assert.ok(readCalls.some((call) => call.chatId === 1 && call.lastReadId === 10));
+  let chatState = BananzaAppBridge.__testing.getChats().find((chat) => chat.id === 1);
+  assert.equal(chatState.last_read_id, 10);
+  assert.equal(chatState.unread_count, 0);
+  assert.equal(chatState.first_unread_id, null);
+
+  BananzaAppBridge.__testing.revealSidebarFromChat();
+  await wait(dom, 80);
+
+  chatState = BananzaAppBridge.__testing.getChats().find((chat) => chat.id === 1);
+  assert.equal(chatState.last_read_id, 10);
+  assert.equal(chatState.unread_count, 0);
+  assert.equal(chatState.first_unread_id, null);
+});
+
+test('opening a longer unread chat away from the bottom does not auto-send a read receipt', async (t) => {
+  const chatMessages = {
+    1: createChatMessages(1, 12),
+  };
+  const chatList = [
+    {
+      ...createChatFixture(1, 'Chat A'),
+      last_read_id: 104,
+      first_unread_id: 105,
+      unread_count: 8,
+    },
+  ];
+  const { handler, readCalls } = createReadTrackingFetchHandler(chatMessages, chatList);
+  const dom = await bootAppDom({
+    fetchHandler: handler,
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { BananzaAppBridge } = dom.window;
+
+  installMessagesViewportMock(dom);
+  BananzaAppBridge.__testing.setChats(chatList);
+
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 420);
+
+  const chatState = BananzaAppBridge.__testing.getChats().find((chat) => chat.id === 1);
+  assert.equal(readCalls.length, 0);
+  assert.equal(chatState.last_read_id, 104);
+  assert.equal(chatState.unread_count, 8);
+  assert.equal(chatState.first_unread_id, 105);
 });
 
 test('settings modal dismisses the mobile keyboard and restores the composer dock', async (t) => {

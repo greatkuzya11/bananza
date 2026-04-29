@@ -8509,6 +8509,7 @@
   function closeChatViewForChat(chatId) {
     const id = Number(chatId || 0);
     if (!id || Number(currentChatId || 0) !== id) return;
+    markCurrentChatReadIfAtBottom(false);
     flushCurrentChatScrollAnchor(id, { force: true, allowPendingMedia: true });
     pauseCurrentChatMediaPlayback();
     dismissMobileComposer({ forceRecovery: true, reason: 'close-chat-view', recoveryDelayMs: 280 });
@@ -12314,6 +12315,8 @@
           saveCurrentScrollAnchor(targetChatId, { force: true });
           maybeLoadMoreAtTop();
           maybeLoadMoreAtBottom();
+          // Short chats can open fully visible without ever producing a scroll event.
+          markCurrentChatReadIfAtBottom(false);
           endChatOpenTransition(seq, targetChatId);
         }, 260);
       });
@@ -17913,6 +17916,7 @@
 
   function revealSidebarFromChat({ forceAnimation = false } = {}) {
     if (!sidebar) return;
+    markCurrentChatReadIfAtBottom(false);
     flushCurrentChatScrollAnchor(currentChatId, { force: true, allowPendingMedia: true });
     pauseCurrentChatMediaPlayback();
     dismissMobileComposer({ forceRecovery: true, reason: 'reveal-sidebar', recoveryDelayMs: 280 });
