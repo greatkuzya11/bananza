@@ -179,6 +179,17 @@ function getMobileSceneSnapshot(dom) {
   return dom.window.BananzaAppBridge.__testing.getMobileBaseSceneSnapshot();
 }
 
+function getMediaViewerState(dom) {
+  return dom.window.BananzaAppBridge.__testing.getMediaViewerState();
+}
+
+function assertNear(actual, expected, tolerance = 1e-6, label = 'value') {
+  assert.ok(
+    Math.abs(actual - expected) <= tolerance,
+    `${label}: expected ${expected} +/- ${tolerance}, got ${actual}`
+  );
+}
+
 function assertMobileScene(dom, scene) {
   const snapshot = getMobileSceneSnapshot(dom);
   assert.equal(snapshot.scene, scene);
@@ -197,14 +208,24 @@ function assertMobileScene(dom, scene) {
   }
 }
 
-function createTouchEndEvent(window, { clientX = 0, clientY = 0, identifier = 1 } = {}) {
-  const event = new window.Event('touchend', { bubbles: true, cancelable: true });
-  const touch = { identifier, clientX, clientY };
+function createTouchPoint({ clientX = 0, clientY = 0, identifier = 1 } = {}) {
+  return { identifier, clientX, clientY };
+}
+
+function createTouchEvent(window, type, { touches = [], changedTouches = touches } = {}) {
+  const event = new window.Event(type, { bubbles: true, cancelable: true });
   Object.defineProperties(event, {
-    touches: { configurable: true, value: [] },
-    changedTouches: { configurable: true, value: [touch] },
+    touches: { configurable: true, value: touches },
+    changedTouches: { configurable: true, value: changedTouches },
   });
   return event;
+}
+
+function createTouchEndEvent(window, { clientX = 0, clientY = 0, identifier = 1 } = {}) {
+  return createTouchEvent(window, 'touchend', {
+    touches: [],
+    changedTouches: [createTouchPoint({ identifier, clientX, clientY })],
+  });
 }
 
 function createPrimaryPointerEvent(window, type = 'pointerdown', { pointerType = 'touch' } = {}) {
@@ -253,6 +274,24 @@ function appendMessageRow(dom, {
     text,
   };
   messagesEl.appendChild(row);
+  return row;
+}
+
+function appendImageMessageRow(dom, {
+  id = 101,
+  userId = 2,
+  text = 'Image test row',
+  src = `https://example.com/image-${id}.jpg`,
+} = {}) {
+  const row = appendMessageRow(dom, { id, userId, text });
+  const bubble = row.querySelector('.msg-bubble');
+  bubble.insertAdjacentHTML(
+    'beforeend',
+    `<img class="msg-image" src="${src}" alt="Image ${id}">`
+  );
+  row.__messageData.file_type = 'image';
+  row.__messageData.file_name = `image-${id}.jpg`;
+  row.__messageData.file_mime = 'image/jpeg';
   return row;
 }
 
@@ -568,6 +607,210 @@ test('settings button still opens settings without preceding media-viewer close'
   }));
 
   assert.equal(settingsModal.classList.contains('hidden'), false);
+});
+
+test('off-center pinch keeps the fullscreen image anchored under the fingers', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const slideMidX = 190;
+  const slideMidY = 650;
+  const startTouches = [
+    createTouchPoint({ identifier: 1, clientX: 120, clientY: 620 }),
+    createTouchPoint({ identifier: 2, clientX: 260, clientY: 680 }),
+  ];
+  const moveTouches = [
+    createTouchPoint({ identifier: 1, clientX: 90, clientY: 590 }),
+    createTouchPoint({ identifier: 2, clientX: 290, clientY: 710 }),
+  ];
+
+  BananzaAppBridge.__testing.openMediaViewer('https://example.com/pinch-test.jpg', 'image');
+  await wait(dom, 0);
+
+  const slide = document.querySelector('#ivStrip .iv-slide');
+  assert.ok(slide, 'Expected an image slide in the media viewer');
+
+  slide.dispatchEvent(createTouchEvent(dom.window, 'touchstart', { touches: startTouches }));
+  slide.dispatchEvent(createTouchEvent(dom.window, 'touchmove', { touches: moveTouches }));
+
+  const state = getMediaViewerState(dom);
+  const baseDist = Math.hypot(
+    startTouches[1].clientX - startTouches[0].clientX,
+    startTouches[1].clientY - startTouches[0].clientY
+  );
+  const nextDist = Math.hypot(
+    moveTouches[1].clientX - moveTouches[0].clientX,
+    moveTouches[1].clientY - moveTouches[0].clientY
+  );
+  const expectedScale = nextDist / baseDist;
+  const viewerCenterX = dom.window.innerWidth / 2;
+  const viewerCenterY = dom.window.innerHeight / 2;
+  const expectedPanX = slideMidX - viewerCenterX - (slideMidX - viewerCenterX) * expectedScale;
+  const expectedPanY = slideMidY - viewerCenterY - (slideMidY - viewerCenterY) * expectedScale;
+  const anchoredX = viewerCenterX + (slideMidX - viewerCenterX) * state.scale + state.panX;
+  const anchoredY = viewerCenterY + (slideMidY - viewerCenterY) * state.scale + state.panY;
+
+  assertNear(state.scale, expectedScale, 1e-6, 'scale');
+  assertNear(state.panX, expectedPanX, 1e-6, 'panX');
+  assertNear(state.panY, expectedPanY, 1e-6, 'panY');
+  assertNear(anchoredX, slideMidX, 1e-6, 'anchoredX');
+  assertNear(anchoredY, slideMidY, 1e-6, 'anchoredY');
+  assert.match(state.transform, /translate3d\(.+\) scale\(/);
+});
+
+test('double tap zoom targets the tapped area in the fullscreen media viewer', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const tapX = 96;
+  const tapY = 680;
+  const expectedScale = 2.5;
+
+  BananzaAppBridge.__testing.openMediaViewer('https://example.com/double-tap-test.jpg', 'image');
+  await wait(dom, 0);
+
+  const slide = document.querySelector('#ivStrip .iv-slide');
+  assert.ok(slide, 'Expected an image slide in the media viewer');
+  slide.dispatchEvent(new dom.window.MouseEvent('dblclick', {
+    bubbles: true,
+    cancelable: true,
+    clientX: tapX,
+    clientY: tapY,
+  }));
+
+  const state = getMediaViewerState(dom);
+  const viewerCenterX = dom.window.innerWidth / 2;
+  const viewerCenterY = dom.window.innerHeight / 2;
+  const expectedPanX = (tapX - viewerCenterX) * (1 - expectedScale);
+  const expectedPanY = (tapY - viewerCenterY) * (1 - expectedScale);
+  const anchoredX = viewerCenterX + (tapX - viewerCenterX) * state.scale + state.panX;
+  const anchoredY = viewerCenterY + (tapY - viewerCenterY) * state.scale + state.panY;
+
+  assertNear(state.scale, expectedScale, 1e-6, 'scale');
+  assertNear(state.panX, expectedPanX, 1e-6, 'panX');
+  assertNear(state.panY, expectedPanY, 1e-6, 'panY');
+  assertNear(anchoredX, tapX, 1e-6, 'anchoredX');
+  assertNear(anchoredY, tapY, 1e-6, 'anchoredY');
+});
+
+test('dragging a zoomed image pans it without moving the gallery strip', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+
+  BananzaAppBridge.__testing.openMediaViewer('https://example.com/pan-test.jpg', 'image');
+  await wait(dom, 0);
+
+  const slide = document.querySelector('#ivStrip .iv-slide');
+  const strip = document.getElementById('ivStrip');
+  assert.ok(slide, 'Expected an image slide in the media viewer');
+
+  slide.dispatchEvent(new dom.window.MouseEvent('dblclick', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 220,
+    clientY: 520,
+  }));
+  const beforePan = getMediaViewerState(dom);
+
+  const startTouch = createTouchPoint({ identifier: 11, clientX: 220, clientY: 520 });
+  const movedTouch = createTouchPoint({ identifier: 11, clientX: 260, clientY: 565 });
+  slide.dispatchEvent(createTouchEvent(dom.window, 'touchstart', { touches: [startTouch] }));
+  slide.dispatchEvent(createTouchEvent(dom.window, 'touchmove', { touches: [movedTouch] }));
+
+  const state = getMediaViewerState(dom);
+  assertNear(state.panX, beforePan.panX + 40, 1e-6, 'panX');
+  assertNear(state.panY, beforePan.panY + 45, 1e-6, 'panY');
+  assert.equal(strip.style.transform, 'translateX(0px)');
+});
+
+test('gallery swipe stays disabled while zoomed, and navigation resets zoom state', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const firstSrc = 'https://example.com/gallery-1.jpg';
+  const secondSrc = 'https://example.com/gallery-2.jpg';
+
+  appendImageMessageRow(dom, { id: 301, src: firstSrc, text: 'Gallery one' });
+  appendImageMessageRow(dom, { id: 302, src: secondSrc, text: 'Gallery two' });
+
+  BananzaAppBridge.__testing.openMediaViewer(firstSrc, 'image');
+  await wait(dom, 0);
+
+  let slide = document.querySelector('#ivStrip .iv-slide');
+  const strip = document.getElementById('ivStrip');
+  const nextBtn = document.querySelector('.iv-next');
+  assert.ok(slide, 'Expected the first gallery slide to render');
+  assert.ok(nextBtn, 'Expected a next button for multi-image galleries');
+
+  slide.dispatchEvent(new dom.window.MouseEvent('dblclick', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 250,
+    clientY: 520,
+  }));
+  let state = getMediaViewerState(dom);
+  assert.ok(state.scale > 1, 'Expected the image to be zoomed in before the swipe');
+
+  const swipeStart = createTouchPoint({ identifier: 21, clientX: 300, clientY: 500 });
+  const swipeMove = createTouchPoint({ identifier: 21, clientX: 160, clientY: 500 });
+  slide.dispatchEvent(createTouchEvent(dom.window, 'touchstart', { touches: [swipeStart] }));
+  slide.dispatchEvent(createTouchEvent(dom.window, 'touchmove', { touches: [swipeMove] }));
+  slide.dispatchEvent(createTouchEvent(dom.window, 'touchend', {
+    touches: [],
+    changedTouches: [swipeMove],
+  }));
+  state = getMediaViewerState(dom);
+  assert.ok(state.scale > 1, 'Expected swipe navigation to stay disabled while zoomed');
+  assert.equal(strip.style.transform, 'translateX(0px)');
+
+  nextBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await wait(dom, 0);
+
+  state = getMediaViewerState(dom);
+  assert.equal(strip.style.transform, 'translateX(-390px)');
+  assert.equal(state.scale, 1);
+  assert.equal(state.panX, 0);
+  assert.equal(state.panY, 0);
+
+  BananzaAppBridge.__testing.closeMediaViewer();
+  state = getMediaViewerState(dom);
+  assert.equal(state.scale, 1);
+  assert.equal(state.panX, 0);
+  assert.equal(state.panY, 0);
+  assert.equal(state.transform, '');
+
+  BananzaAppBridge.__testing.openMediaViewer(firstSrc, 'image');
+  await wait(dom, 0);
+
+  slide = document.querySelector('#ivStrip .iv-slide');
+  assert.ok(slide, 'Expected the first gallery slide after reopening the viewer');
+  const swipeAtScaleOneStart = createTouchPoint({ identifier: 31, clientX: 280, clientY: 500 });
+  const swipeAtScaleOneMove = createTouchPoint({ identifier: 31, clientX: 180, clientY: 500 });
+  slide.dispatchEvent(createTouchEvent(dom.window, 'touchstart', { touches: [swipeAtScaleOneStart] }));
+  slide.dispatchEvent(createTouchEvent(dom.window, 'touchmove', { touches: [swipeAtScaleOneMove] }));
+  slide.dispatchEvent(createTouchEvent(dom.window, 'touchend', {
+    touches: [],
+    changedTouches: [swipeAtScaleOneMove],
+  }));
+  await wait(dom, 0);
+
+  assert.equal(strip.style.transform, 'translateX(-390px)');
+  state = getMediaViewerState(dom);
+  assert.equal(state.scale, 1);
+  assert.equal(state.panX, 0);
+  assert.equal(state.panY, 0);
 });
 
 test('app resume recovers stale mobile viewport height without a final resize event', async (t) => {

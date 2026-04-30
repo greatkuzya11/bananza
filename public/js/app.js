@@ -911,6 +911,12 @@
     dismissMobileComposer: (options = {}) => dismissMobileComposer(options),
     openMediaViewer: (src, type = 'image') => openMediaViewer(src, type),
     closeMediaViewer: () => closeMediaViewer(),
+    getMediaViewerState: () => ({
+      scale: ivScale,
+      panX: ivPanX,
+      panY: ivPanY,
+      transform: ivCurrentImg()?.style?.transform || '',
+    }),
     openSettingsModal: (opener = $('#settingsBtn')) => openSettingsModal(opener),
     openChat: (chatId, options = {}) => openChat(chatId, options),
     revealSidebarFromChat: (options = {}) => revealSidebarFromChat(options),
@@ -15944,6 +15950,12 @@
     panBaseY: 0,
     pinching: false,
     pinchDist0: 0,
+    pinchMidpoint0X: 0,
+    pinchMidpoint0Y: 0,
+    pinchBasePanX: 0,
+    pinchBasePanY: 0,
+    pinchAnchorX: 0,
+    pinchAnchorY: 0,
     scaleBase: 1,
     lastTapTime: 0,
     lastTapX: 0,
@@ -16703,6 +16715,12 @@
     clearImageViewerActiveTouch();
     ivTouchState.pinching = false;
     ivTouchState.pinchDist0 = 0;
+    ivTouchState.pinchMidpoint0X = 0;
+    ivTouchState.pinchMidpoint0Y = 0;
+    ivTouchState.pinchBasePanX = 0;
+    ivTouchState.pinchBasePanY = 0;
+    ivTouchState.pinchAnchorX = 0;
+    ivTouchState.pinchAnchorY = 0;
     ivTouchState.scaleBase = ivScale;
     if (!preserveLastTap) clearImageViewerLastTap();
   }
@@ -16710,6 +16728,37 @@
     if (!touchList?.length) return null;
     if (ivTouchState.activeTouchId == null) return touchList[0] || null;
     return Array.from(touchList).find((touch) => touch.identifier === ivTouchState.activeTouchId) || null;
+  }
+  function getImageViewerTouchMidpoint(touchList) {
+    if (!touchList?.length || touchList.length < 2) return null;
+    const firstTouch = touchList[0];
+    const secondTouch = touchList[1];
+    return {
+      x: (firstTouch.clientX + secondTouch.clientX) / 2,
+      y: (firstTouch.clientY + secondTouch.clientY) / 2,
+    };
+  }
+  function getImageViewerViewportCenter() {
+    return {
+      x: window.innerWidth / 2,
+      y: window.innerHeight / 2,
+    };
+  }
+  function ivGetImagePointForClient(clientX, clientY, scale = ivScale, panX = ivPanX, panY = ivPanY) {
+    const { x: centerX, y: centerY } = getImageViewerViewportCenter();
+    const safeScale = Math.max(Number(scale) || 1, 0.0001);
+    return {
+      x: centerX + (clientX - centerX - panX) / safeScale,
+      y: centerY + (clientY - centerY - panY) / safeScale,
+    };
+  }
+  function ivResolvePanForAnchor(anchorX, anchorY, clientX, clientY, scale = ivScale) {
+    const { x: centerX, y: centerY } = getImageViewerViewportCenter();
+    const nextScale = Math.max(Number(scale) || 1, 1);
+    return {
+      x: clientX - centerX - (anchorX - centerX) * nextScale,
+      y: clientY - centerY - (anchorY - centerY) * nextScale,
+    };
   }
   function isImageViewerDoubleTap(x, y, time = Date.now()) {
     if (!ivTouchState.lastTapTime) return false;
@@ -16727,14 +16776,40 @@
   }
   function ivApplyTransform() {
     const img = ivCurrentImg();
-    if (img) img.style.transform = `scale(${ivScale}) translate(${ivPanX}px, ${ivPanY}px)`;
+    if (!img) return;
+    if (ivScale === 1 && ivPanX === 0 && ivPanY === 0) {
+      img.style.transform = '';
+      return;
+    }
+    img.style.transform = `translate3d(${ivPanX}px, ${ivPanY}px, 0) scale(${ivScale})`;
+  }
+  function ivSetZoomState(scale, panX = ivPanX, panY = ivPanY) {
+    const nextScale = Math.min(IMAGE_VIEWER_MAX_SCALE, Math.max(1, Number(scale) || 1));
+    ivScale = nextScale;
+    if (nextScale === 1) {
+      ivPanX = 0;
+      ivPanY = 0;
+    } else {
+      ivPanX = Number.isFinite(panX) ? panX : 0;
+      ivPanY = Number.isFinite(panY) ? panY : 0;
+    }
+    ivApplyTransform();
+  }
+  function ivZoomAroundClient(clientX, clientY, scale) {
+    const nextScale = Math.min(IMAGE_VIEWER_MAX_SCALE, Math.max(1, Number(scale) || 1));
+    if (nextScale === 1) {
+      ivSetZoomState(1);
+      return;
+    }
+    const anchor = ivGetImagePointForClient(clientX, clientY);
+    const nextPan = ivResolvePanForAnchor(anchor.x, anchor.y, clientX, clientY, nextScale);
+    ivSetZoomState(nextScale, nextPan.x, nextPan.y);
   }
   function ivResetZoom(animated = false) {
     const img = ivCurrentImg();
     if (animated) ivPrepareZoomTransition(img);
     else ivClearZoomTransition();
-    ivScale = 1; ivPanX = 0; ivPanY = 0;
-    if (img) img.style.transform = '';
+    ivSetZoomState(1);
   }
   function ivToggleZoomAt(clientX = window.innerWidth / 2, clientY = window.innerHeight / 2) {
     if (galleryItems[galleryIndex]?.type === 'video') return false;
@@ -16745,10 +16820,7 @@
     }
     ivPrepareZoomTransition(img);
     const ZOOM = 2.5;
-    ivScale = ZOOM;
-    ivPanX = (clientX - window.innerWidth / 2) * (1 / ZOOM - 1);
-    ivPanY = (clientY - window.innerHeight / 2) * (1 / ZOOM - 1);
-    ivApplyTransform();
+    ivZoomAroundClient(clientX, clientY, ZOOM);
     return true;
   }
 
@@ -17080,6 +17152,7 @@
     mediaViewerSuppressClickUntil = 0;
     resetImageViewerTouchState();
     ivStrip.querySelectorAll('video').forEach(v => v.pause());
+    ivResetZoom();
     imageViewer.classList.add('hidden');
     imageViewer.classList.remove('iv-is-loading');
     galleryLoadPromises = { before: null, after: null };
@@ -18434,6 +18507,16 @@
             ivTouchState.pinching = true;
             const t = e.touches;
             ivTouchState.pinchDist0 = Math.hypot(t[1].clientX - t[0].clientX, t[1].clientY - t[0].clientY);
+            const midpoint = getImageViewerTouchMidpoint(t);
+            ivTouchState.pinchMidpoint0X = midpoint?.x || 0;
+            ivTouchState.pinchMidpoint0Y = midpoint?.y || 0;
+            ivTouchState.pinchBasePanX = ivPanX;
+            ivTouchState.pinchBasePanY = ivPanY;
+            const anchor = midpoint
+              ? ivGetImagePointForClient(midpoint.x, midpoint.y, ivScale, ivPanX, ivPanY)
+              : { x: 0, y: 0 };
+            ivTouchState.pinchAnchorX = anchor.x;
+            ivTouchState.pinchAnchorY = anchor.y;
             ivTouchState.scaleBase = ivScale;
             e.preventDefault();
           }
@@ -18470,8 +18553,17 @@
           const t = e.touches;
           const baseDist = Math.max(ivTouchState.pinchDist0 || 0, 1);
           const dist = Math.hypot(t[1].clientX - t[0].clientX, t[1].clientY - t[0].clientY);
-          ivScale = Math.min(IMAGE_VIEWER_MAX_SCALE, Math.max(1, ivTouchState.scaleBase * dist / baseDist));
-          ivApplyTransform();
+          const midpoint = getImageViewerTouchMidpoint(t);
+          if (!midpoint) return;
+          const nextScale = Math.min(IMAGE_VIEWER_MAX_SCALE, Math.max(1, ivTouchState.scaleBase * dist / baseDist));
+          const nextPan = ivResolvePanForAnchor(
+            ivTouchState.pinchAnchorX,
+            ivTouchState.pinchAnchorY,
+            midpoint.x,
+            midpoint.y,
+            nextScale
+          );
+          ivSetZoomState(nextScale, nextPan.x, nextPan.y);
           e.preventDefault();
           return;
         }
@@ -18489,9 +18581,7 @@
         }
         if (ivScale > 1) {
           ivClearZoomTransition();
-          ivPanX = ivTouchState.panBaseX + moveX / ivScale;
-          ivPanY = ivTouchState.panBaseY + moveY / ivScale;
-          ivApplyTransform();
+          ivSetZoomState(ivScale, ivTouchState.panBaseX + moveX, ivTouchState.panBaseY + moveY);
           e.preventDefault();
           return;
         }
@@ -18510,7 +18600,29 @@
           if (e.touches.length < 2) {
             ivTouchState.pinching = false;
             ivTouchState.pinchDist0 = 0;
+            ivTouchState.pinchMidpoint0X = 0;
+            ivTouchState.pinchMidpoint0Y = 0;
+            ivTouchState.pinchBasePanX = ivPanX;
+            ivTouchState.pinchBasePanY = ivPanY;
+            ivTouchState.pinchAnchorX = 0;
+            ivTouchState.pinchAnchorY = 0;
             ivTouchState.scaleBase = ivScale;
+            if (e.touches.length === 1) {
+              const remainingTouch = e.touches[0];
+              ivTouchState.activeTouchId = remainingTouch.identifier;
+              ivTouchState.startX = remainingTouch.clientX;
+              ivTouchState.startY = remainingTouch.clientY;
+              ivTouchState.currentX = remainingTouch.clientX;
+              ivTouchState.currentY = remainingTouch.clientY;
+              ivTouchState.dx = 0;
+              ivTouchState.dragging = false;
+              ivTouchState.tapCandidate = false;
+              ivTouchState.canTapZoom = false;
+              ivTouchState.panBaseX = ivPanX;
+              ivTouchState.panBaseY = ivPanY;
+              clearImageViewerLastTap();
+              return;
+            }
           }
           clearImageViewerActiveTouch();
           clearImageViewerLastTap();
@@ -18577,6 +18689,7 @@
         if (!imageViewer.classList.contains('hidden')) {
           ivStrip.style.transition = 'none';
           ivStrip.style.transform = `translateX(${-galleryIndex * window.innerWidth}px)`;
+          ivApplyTransform();
         }
       });
     })();
