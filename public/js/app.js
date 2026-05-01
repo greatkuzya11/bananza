@@ -1649,10 +1649,28 @@
     return MOBILE_FONT_SIZE_PERCENTS[normalizeMobileFontSize(size)] || MOBILE_FONT_SIZE_PERCENTS[MOBILE_FONT_SIZE_DEFAULT];
   }
 
+  function hasAndroidNativeBridge() {
+    return Boolean(window.BananzaAndroid && typeof window.BananzaAndroid.postMessage === 'function');
+  }
+
   function setMobileFontAdjustPercent(percent = 100) {
     const value = `${Math.round(Number(percent) || 100)}%`;
     document.documentElement.style.setProperty('-webkit-text-size-adjust', value, 'important');
     document.documentElement.style.setProperty('text-size-adjust', value, 'important');
+  }
+
+  function notifyAndroidMobileFontSize(size = currentMobileFontSize) {
+    if (!hasAndroidNativeBridge()) return;
+    try {
+      const effectiveSize = isMobileLayoutViewport() ? normalizeMobileFontSize(size) : MOBILE_FONT_SIZE_DEFAULT;
+      window.BananzaAndroid.postMessage(JSON.stringify({
+        type: 'mobile_font_size',
+        payload: {
+          size: effectiveSize,
+          mobileLayout: isMobileLayoutViewport(),
+        },
+      }));
+    } catch (e) {}
   }
 
   function syncMobileFontSettingsButton() {
@@ -1695,13 +1713,14 @@
   function applyMobileFontSize(size, persist = true) {
     const nextSize = normalizeMobileFontSize(size);
     currentMobileFontSize = nextSize;
-    setMobileFontAdjustPercent(isMobileLayoutViewport() ? getMobileFontAdjustPercent(nextSize) : 100);
+    setMobileFontAdjustPercent(hasAndroidNativeBridge() ? 100 : (isMobileLayoutViewport() ? getMobileFontAdjustPercent(nextSize) : 100));
     if (currentUser && persist) {
       currentUser.ui_mobile_font_size = nextSize;
       persistCurrentUser();
     }
     syncMobileFontSettingsButton();
     renderMobileFontSizeControl();
+    notifyAndroidMobileFontSize(nextSize);
   }
 
   function syncMobileFontSizeViewportState() {
