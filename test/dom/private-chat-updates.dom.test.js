@@ -15,7 +15,7 @@ function createJsonResponse(dom, data, init = {}) {
   });
 }
 
-function installAppRuntimeStubs(dom) {
+function installAppRuntimeStubs(dom, { fetchHandler = null } = {}) {
   const { window } = dom;
 
   Object.defineProperty(window, 'innerWidth', {
@@ -89,8 +89,12 @@ function installAppRuntimeStubs(dom) {
   window.localStorage.setItem('token', 'test-token');
   window.localStorage.setItem('user', JSON.stringify(currentUser));
 
-  window.fetch = async (input) => {
+  window.fetch = async (input, init = {}) => {
     const url = new URL(String(input), window.location.origin);
+    if (typeof fetchHandler === 'function') {
+      const handled = await fetchHandler({ url, init, dom, currentUser });
+      if (handled) return handled;
+    }
     switch (url.pathname) {
       case '/api/auth/me':
         return createJsonResponse(dom, { user: currentUser });
@@ -134,9 +138,9 @@ function installAppRuntimeStubs(dom) {
   };
 }
 
-async function bootAppDom() {
+async function bootAppDom(options = {}) {
   const dom = createAppDom();
-  installAppRuntimeStubs(dom);
+  installAppRuntimeStubs(dom, options);
   installVisualViewportMock(dom.window, {
     width: 390,
     height: 844,
@@ -251,6 +255,84 @@ test('applyChatUpdate immediately applies bot private chat title changes without
   assert.equal(chatNameText(document, 77), 'Trip Budget Planning');
   assert.equal(document.getElementById('chatTitle').textContent.trim(), 'Trip Budget Planning');
   assert.equal(document.getElementById('chatInfoTitle').textContent.trim(), 'Trip Budget Planning');
+});
+
+test('chat info renders bot members once inside the members list', async (t) => {
+  const chatId = 77;
+  const requests = [];
+  const dom = await bootAppDom({
+    fetchHandler: ({ url, dom, currentUser }) => {
+      requests.push(url.pathname);
+      if (url.pathname === `/api/chats/${chatId}/preferences`) {
+        return createJsonResponse(dom, {
+          preferences: { notify_enabled: true, sounds_enabled: true },
+        });
+      }
+      if (url.pathname === `/api/chats/${chatId}/members`) {
+        return createJsonResponse(dom, [
+          {
+            id: currentUser.id,
+            username: currentUser.username,
+            display_name: currentUser.display_name,
+            avatar_color: '#65aadd',
+            avatar_url: null,
+            is_ai_bot: 0,
+          },
+          {
+            id: 12,
+            username: 'openai_universal',
+            display_name: 'OpenAI Universal',
+            avatar_color: '#55c4c2',
+            avatar_url: null,
+            is_ai_bot: 1,
+            ai_bot_id: 91,
+            ai_bot_provider: 'openai',
+            ai_bot_kind: 'universal',
+            ai_bot_mention: 'openai_universal',
+            ai_bot_model: 'gpt-4o-mini',
+          },
+        ]);
+      }
+      return null;
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  BananzaAppBridge.__testing.setChats([{
+    id: chatId,
+    type: 'private',
+    name: 'OpenAI Universal',
+    created_at: '2026-04-28 10:00:00',
+    private_user: {
+      id: 12,
+      display_name: 'OpenAI Universal',
+      username: 'openai_universal',
+      avatar_color: '#55c4c2',
+      avatar_url: null,
+      is_ai_bot: 1,
+      ai_bot_mention: 'openai_universal',
+      ai_bot_model: 'gpt-4o-mini',
+    },
+  }], { currentChatId: chatId });
+
+  await BananzaAppBridge.__testing.openChatInfoModal(document.getElementById('chatInfoBtn'));
+
+  assert.equal(document.getElementById('chatBotInfoSection'), null);
+  assert.equal(requests.includes(`/api/chats/${chatId}/bots`), false);
+
+  const memberList = document.getElementById('chatMemberList');
+  const rows = memberList.querySelectorAll('.user-list-item');
+  const botRows = memberList.querySelectorAll('.user-list-item.is-ai-bot');
+  const humanStatus = memberList.querySelector('.user-list-item[data-bot="0"] .admin-user-status');
+
+  assert.equal(rows.length, 2);
+  assert.equal(botRows.length, 1);
+  assert.ok(humanStatus);
+  assert.equal(humanStatus.textContent.trim(), 'offline');
+  assert.equal(botRows[0].querySelector('.user-list-meta').textContent.trim(), '@openai_universal \u2022 gpt-4o-mini');
 });
 
 test('chat list keeps unread badges rendered for both active and inactive chats', async (t) => {

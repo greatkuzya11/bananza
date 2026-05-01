@@ -1754,7 +1754,27 @@ app.get('/api/chats/:chatId/members', auth, (req, res) => {
   const chatId = +req.params.chatId;
   if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
-  res.json(db.prepare('SELECT u.id,u.username,u.display_name,u.avatar_color,u.avatar_url,u.is_ai_bot FROM users u JOIN chat_members cm ON cm.user_id=u.id WHERE cm.chat_id=?').all(chatId));
+  res.json(db.prepare(`
+    SELECT
+      u.id,
+      u.username,
+      u.display_name,
+      u.avatar_color,
+      u.avatar_url,
+      COALESCE(u.is_ai_bot, 0) as is_ai_bot,
+      COALESCE(ab.id, 0) as ai_bot_id,
+      COALESCE(ab.provider, '') as ai_bot_provider,
+      COALESCE(ab.kind, '') as ai_bot_kind,
+      COALESCE(ab.mention, '') as ai_bot_mention,
+      CASE
+        WHEN COALESCE(ab.kind, 'text')='image' THEN COALESCE(ab.image_model, '')
+        ELSE COALESCE(ab.response_model, '')
+      END as ai_bot_model
+    FROM users u
+    JOIN chat_members cm ON cm.user_id=u.id
+    LEFT JOIN ai_bots ab ON ab.user_id=u.id
+    WHERE cm.chat_id=?
+  `).all(chatId));
 });
 
 app.get('/api/chats/:chatId/mention-targets', auth, (req, res) => {

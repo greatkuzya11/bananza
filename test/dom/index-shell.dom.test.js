@@ -56,6 +56,8 @@ test('public/index.html exposes core shell nodes used by runtime modules', () =>
   requiredIds.forEach((id) => {
     assert.ok(document.getElementById(id), `Expected #${id} to exist in index.html`);
   });
+
+  assert.equal(document.getElementById('chatBotInfoSection'), null);
 });
 
 test('public/index.html keeps universal file pickers and mobile media shortcuts', () => {

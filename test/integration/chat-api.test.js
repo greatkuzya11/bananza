@@ -220,7 +220,7 @@ test('human private chats remain single-threaded while bot private chats always 
 });
 
 test('bot discovery, private chats, defaults and audit respect user and bot flags', async () => {
-  const { admin, bob } = scenario;
+  const { admin, bob, groupChat } = scenario;
   const db = new Database(path.join(sandbox.appDir, 'bananza.db'));
 
   try {
@@ -267,6 +267,28 @@ test('bot discovery, private chats, defaults and audit respect user and bot flag
     assert.equal(chatBots.data.bots[0].user_id, Number(bot.user_id));
     assert.equal(chatBots.data.bots[0].mention, bot.mention);
     assert.equal(chatBots.data.bots[0].model, 'gpt-4o-mini');
+
+    const privateMembers = await bob.request(`/api/chats/${chatId}/members`);
+    const privateBotMember = privateMembers.data.find((user) => Number(user.id) === Number(bot.user_id));
+    assert.ok(privateBotMember);
+    assert.equal(privateBotMember.ai_bot_id, Number(bot.id));
+    assert.equal(privateBotMember.ai_bot_provider, 'openai');
+    assert.equal(privateBotMember.ai_bot_kind, 'text');
+    assert.equal(privateBotMember.ai_bot_mention, bot.mention);
+    assert.equal(privateBotMember.ai_bot_model, 'gpt-4o-mini');
+
+    await admin.request(`/api/chats/${groupChat.id}/members`, {
+      method: 'POST',
+      json: { userId: Number(bot.user_id) },
+    });
+    const groupMembers = await admin.request(`/api/chats/${groupChat.id}/members`);
+    const groupBotMember = groupMembers.data.find((user) => Number(user.id) === Number(bot.user_id));
+    assert.ok(groupBotMember);
+    assert.equal(groupBotMember.ai_bot_id, Number(bot.id));
+    assert.equal(groupBotMember.ai_bot_provider, 'openai');
+    assert.equal(groupBotMember.ai_bot_kind, 'text');
+    assert.equal(groupBotMember.ai_bot_mention, bot.mention);
+    assert.equal(groupBotMember.ai_bot_model, 'gpt-4o-mini');
 
     const botSettings = db.prepare(`
       SELECT enabled, mode, hot_context_limit, trigger_mode, auto_react_on_mention

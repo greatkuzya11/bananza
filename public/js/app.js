@@ -918,6 +918,7 @@
       transform: ivCurrentImg()?.style?.transform || '',
     }),
     openSettingsModal: (opener = $('#settingsBtn')) => openSettingsModal(opener),
+    openChatInfoModal: (opener = $('#chatInfoBtn')) => openChatInfoModal(opener),
     openChat: (chatId, options = {}) => openChat(chatId, options),
     revealSidebarFromChat: (options = {}) => revealSidebarFromChat(options),
     flushCurrentChatScrollAnchor: (chatId, options = {}) => flushCurrentChatScrollAnchor(chatId, options),
@@ -2780,6 +2781,10 @@
     return String(user?.ai_bot_model || '').trim();
   }
 
+  function botChatMemberMetaText(user) {
+    return [botMentionText(user), botModelText(user)].filter(Boolean).join(' \u2022 ') || 'AI bot';
+  }
+
   function userSecondaryLineText(user, { showPresence = false } = {}) {
     if (isAiBotDirectoryUser(user)) {
       return ['AI bot', botMentionText(user), botModelText(user)].filter(Boolean).join(' • ');
@@ -2796,6 +2801,27 @@
           <div class="name">${esc(user.display_name)}</div>
           <div class="user-list-meta">${esc(userSecondaryLineText(user, { showPresence }))}</div>
         </div>
+      </div>
+    `;
+  }
+
+  function renderChatMemberItem(user, { ownerId = 0, canRemove = false } = {}) {
+    const isOwner = ownerId && Number(user?.id) === Number(ownerId);
+    const isBot = isAiBotDirectoryUser(user);
+    const isOnline = onlineUsers.has(user?.id);
+    return `
+      <div class="user-list-item${isOwner ? ' chat-owner' : ''}${isBot ? ' is-ai-bot' : ''}" data-uid="${user.id}" data-bot="${isBot ? 1 : 0}">
+        <div class="member-avatar-wrap${isOwner ? ' is-owner' : ''}" title="${isOwner ? 'Chat creator' : ''}">
+          ${avatarHtml(user.display_name, user.avatar_color, user.avatar_url)}
+          ${isOwner ? '<span class="member-owner-crown" aria-label="Chat creator" title="Chat creator">&#128081;</span>' : ''}
+        </div>
+        <div class="user-list-copy">
+          <div class="name">${esc(user.display_name)}</div>
+          ${isBot
+            ? `<div class="user-list-meta">${esc(botChatMemberMetaText(user))}</div>`
+            : `<div class="admin-user-status ${isOnline ? 'online' : 'offline'}"><span class="status-dot"></span>${isOnline ? 'online' : 'offline'}</div>`}
+        </div>
+        ${canRemove && Number(user.id) !== Number(currentUser?.id || 0) ? `<button class="member-remove" data-uid="${user.id}" title="Remove">✕</button>` : ''}
       </div>
     `;
   }
@@ -12172,20 +12198,14 @@
     const list = $('#chatMemberList');
     if (!list) return;
     list.querySelectorAll('.user-list-item').forEach(item => {
+      if (item.dataset.bot === '1') return;
       const uid = +item.dataset.uid;
       const statusEl = item.querySelector('.admin-user-status');
       if (!statusEl) return;
-      const isBot = item.dataset.bot === '1';
-      if (isBot) {
-        statusEl.classList.remove('online','offline');
-        statusEl.classList.add('bot');
-        statusEl.innerHTML = `<span class="status-dot"></span>AI bot`;
-      } else {
-        const isOnline = onlineUsers.has(uid);
-        statusEl.classList.toggle('online', isOnline);
-        statusEl.classList.toggle('offline', !isOnline);
-        statusEl.innerHTML = `<span class="status-dot"></span>${isOnline ? 'online' : 'offline'}`;
-      }
+      const isOnline = onlineUsers.has(uid);
+      statusEl.classList.toggle('online', isOnline);
+      statusEl.classList.toggle('offline', !isOnline);
+      statusEl.innerHTML = `<span class="status-dot"></span>${isOnline ? 'online' : 'offline'}`;
     });
   }
 
@@ -17587,8 +17607,6 @@
     const chat = chats.find(c => c.id === currentChatId);
     $('#chatInfoTitle').textContent = chat ? chat.name : 'Chat Info';
     syncChatInfoStatusVisibility(chat);
-    $('#chatBotInfoSection')?.classList.add('hidden');
-    if ($('#chatBotList')) $('#chatBotList').innerHTML = '';
 
     // Sync compact view toggle
     $('#compactViewToggle').checked = compactView;
@@ -17755,12 +17773,13 @@
         </div>
       `;
       }).join('');
+      memberList.innerHTML = members.map((user) => renderChatMemberItem(user, { ownerId, canRemove })).join('');
 
       // Update status indicators in modal
       try { refreshChatMemberStatuses(); } catch (e) {}
       try { refreshChatInfoStatus(); } catch (e) {}
       try {
-        const botData = await api(`/api/chats/${currentChatId}/bots`);
+        const botData = { bots: [] };
         const botSection = $('#chatBotInfoSection');
         const botList = $('#chatBotList');
         const bots = Array.isArray(botData?.bots) ? botData.bots : [];
@@ -18187,8 +18206,12 @@
       $('#chatInfoBtn'),
       backBtn,
     ].forEach((btn) => {
+      // Note: touchstart is intentionally omitted. touchstart.preventDefault() suppresses
+      // synthesized click events on some Android browsers (Samsung Internet, older Chrome,
+      // some Firefox Android builds), causing the button action to never fire.
+      // pointerdown.preventDefault() is sufficient to prevent textarea blur without
+      // suppressing the subsequent click.
       btn?.addEventListener('pointerdown', preserveKeyboardUntilUtilityClick, { passive: false });
-      btn?.addEventListener('touchstart', preserveKeyboardUntilUtilityClick, { passive: false });
       btn?.addEventListener('mousedown', preserveKeyboardUntilUtilityClick);
     });
 
@@ -18268,8 +18291,15 @@
     msgInput.addEventListener('keyup', (e) => {
       if (!['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(e.key)) updateMentionPicker();
     });
+    // Cache keyboard-open state at pointer-down time (before visualViewport may start
+    // shrinking on some Android browsers), so the click handler can rely on a stable value.
+    let emojiPointerDownKeyboardWasOpen = false;
+    let emojiPointerDownKeyboardResetTimer = null;
     const keepEmojiButtonFromBlurringInput = (e) => {
       preserveMobileComposerOnPointerDown(e, { requireOpenKeyboard: true });
+      emojiPointerDownKeyboardWasOpen = isMobileComposerKeyboardOpen();
+      clearTimeout(emojiPointerDownKeyboardResetTimer);
+      emojiPointerDownKeyboardResetTimer = setTimeout(() => { emojiPointerDownKeyboardWasOpen = false; }, 600);
     };
     emojiBtn?.addEventListener('pointerdown', keepEmojiButtonFromBlurringInput, { passive: false });
     emojiBtn?.addEventListener('touchstart', keepEmojiButtonFromBlurringInput, { passive: false });
@@ -18439,7 +18469,11 @@
     emojiBtn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const keepKeyboardOpen = window.innerWidth > 768 || isMobileComposerKeyboardOpen();
+      // Use the state captured at pointerdown time (emojiPointerDownKeyboardWasOpen) as
+      // fallback: on some Android browsers visualViewport has already started shrinking
+      // by the time click fires, making isMobileComposerKeyboardOpen() return false
+      // even though the keyboard was open when the user tapped.
+      const keepKeyboardOpen = window.innerWidth > 768 || emojiPointerDownKeyboardWasOpen || isMobileComposerKeyboardOpen();
       toggleEmojiPicker(emojiBtn, { keepKeyboardOpen });
     });
 
