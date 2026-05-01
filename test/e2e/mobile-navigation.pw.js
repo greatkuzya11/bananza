@@ -1,6 +1,7 @@
 const { test, expect } = require('@playwright/test');
 
 const {
+  createApiSession,
   getContext,
   installMediaMocks,
   makeUser,
@@ -103,4 +104,83 @@ test('mobile chat exit animates for header back button and browser back', async 
     hasSidebarRevealAnimation(browserBackCalls),
     `Expected sidebar reveal animation for browser back, got ${JSON.stringify(browserBackCalls)}`
   ).toBeTruthy();
+});
+
+test('mobile chat exit normalizes stacked chat history for one-tap back flows', async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.includes('mobile'), 'mobile-only regression');
+
+  await installMediaMocks(page);
+
+  const { bobUser, bobUserId } = getContext();
+  const member = makeUser('pwstack');
+  const secondPeer = makeUser('pwpeer');
+
+  const secondPeerSession = createApiSession();
+  await secondPeerSession.register(secondPeer);
+
+  await registerViaUi(page, member);
+
+  const memberSession = createApiSession();
+  await memberSession.login(member);
+  await memberSession.request('/api/chats/private', {
+    method: 'POST',
+    json: { targetUserId: bobUserId },
+  });
+  const secondChat = await memberSession.request('/api/chats/private', {
+    method: 'POST',
+    json: { targetUserId: secondPeerSession.user.id },
+  });
+
+  await page.reload();
+  await expect(page.locator('#chatList')).toContainText(bobUser.displayName);
+  await expect(page.locator('#chatList')).toContainText(secondPeer.displayName);
+  await installSidebarRevealProbe(page);
+
+  await openExistingChat(page, bobUser.displayName);
+  await page.evaluate(async (chatId) => {
+    await window.BananzaAppBridge.__testing.openChat(chatId);
+  }, secondChat.data.id);
+  await expect(page.locator('#chatTitle')).toContainText(secondPeer.displayName);
+  await expectMobileScene(page, 'chat');
+
+  await page.evaluate(() => {
+    window.__sidebarRevealDebug.calls = [];
+  });
+  await page.locator('#backBtn').click();
+  await expectMobileScene(page, 'sidebar');
+  const stackedHeaderBack = await page.evaluate(() => ({
+    calls: window.__sidebarRevealDebug.calls.slice(),
+    historyState: history.state || null,
+    backLocked: Boolean(document.getElementById('backBtn').__isNavigating),
+  }));
+  expect(
+    hasSidebarRevealAnimation(stackedHeaderBack.calls),
+    `Expected stacked sidebar reveal animation for #backBtn, got ${JSON.stringify(stackedHeaderBack.calls)}`
+  ).toBeTruthy();
+  expect(stackedHeaderBack.historyState).toMatchObject({ view: 'chatlist' });
+  expect(stackedHeaderBack.historyState?.chat).toBeUndefined();
+  expect(stackedHeaderBack.backLocked).toBeFalsy();
+
+  await openExistingChat(page, bobUser.displayName);
+  await page.evaluate(async (chatId) => {
+    await window.BananzaAppBridge.__testing.openChat(chatId);
+  }, secondChat.data.id);
+  await expect(page.locator('#chatTitle')).toContainText(secondPeer.displayName);
+  await expectMobileScene(page, 'chat');
+
+  await page.evaluate(() => {
+    window.__sidebarRevealDebug.calls = [];
+  });
+  await page.goBack();
+  await expectMobileScene(page, 'sidebar');
+  const stackedBrowserBack = await page.evaluate(() => ({
+    calls: window.__sidebarRevealDebug.calls.slice(),
+    historyState: history.state || null,
+  }));
+  expect(
+    hasSidebarRevealAnimation(stackedBrowserBack.calls),
+    `Expected stacked sidebar reveal animation for browser back, got ${JSON.stringify(stackedBrowserBack.calls)}`
+  ).toBeTruthy();
+  expect(stackedBrowserBack.historyState).toMatchObject({ view: 'chatlist' });
+  expect(stackedBrowserBack.historyState?.chat).toBeUndefined();
 });

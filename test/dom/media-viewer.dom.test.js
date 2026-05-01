@@ -1475,6 +1475,62 @@ test('emoji picker closes when navigating back out of the mobile chat view', asy
   assert.equal(emojiPicker.classList.contains('hidden'), true);
 });
 
+test('mobile chat exit popstate uses the resolved chat scene instead of raw sidebar-hidden state', async (t) => {
+  const dom = await openSingleChatDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge, history } = dom.window;
+  const sidebar = document.getElementById('sidebar');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', {
+    hideInactive: true,
+    syncChatMetrics: true,
+  });
+  await wait(dom, 40);
+  history.replaceState({ chat: 1 }, '');
+  sidebar.classList.remove('sidebar-hidden');
+
+  assert.equal(sidebar.classList.contains('mobile-scene-hidden'), true);
+  assert.equal(getMobileSceneSnapshot(dom).scene, 'chat');
+
+  dom.window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+  await wait(dom, 320);
+
+  assertMobileScene(dom, 'sidebar');
+  assert.equal(history.state?.view, 'chatlist');
+  assert.equal(Object.prototype.hasOwnProperty.call(history.state || {}, 'chat'), false);
+});
+
+test('mobile chat exit popstate normalizes stale chat history without another history.back call', async (t) => {
+  const dom = await openSingleChatDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { BananzaAppBridge, history } = dom.window;
+  let historyBackCalls = 0;
+  const originalBack = history.back.bind(history);
+
+  history.back = (...args) => {
+    historyBackCalls += 1;
+    return originalBack(...args);
+  };
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', {
+    hideInactive: true,
+    syncChatMetrics: true,
+  });
+  await wait(dom, 40);
+  history.replaceState({ chat: 1 }, '');
+
+  dom.window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+  await wait(dom, 320);
+
+  assert.equal(historyBackCalls, 0);
+  assertMobileScene(dom, 'sidebar');
+  assert.equal(history.state?.view, 'chatlist');
+  assert.equal(Object.prototype.hasOwnProperty.call(history.state || {}, 'chat'), false);
+});
+
 test('mobile chat list scene hard-hides the chat area and keeps it hidden across resume and settings', async (t) => {
   const dom = await bootAppDom();
   t.after(() => {

@@ -478,6 +478,7 @@
   let iosComposerBlurTimer = null;
   let iosBackNavigationToken = 0;
   let inAppChatBackSkipNextPopstate = false;
+  let pendingMobileChatListHistoryNormalization = false;
   let mobileViewportPrevHeight = 0;
   let mobileViewportHeightSyncBound = false;
   let mobileViewportRecoveryFrame = 0;
@@ -16073,15 +16074,13 @@
     if (!currentChatId || Number(targetChatId) === Number(currentChatId)) return;
     if (prefersReducedMotion()) {
       revealSidebarFromChat({ forceAnimation: true });
+      normalizeMobileChatListHistoryState();
       return;
     }
     const transitionMs = Math.max(180, Math.ceil(getElementTransitionTotalMs(sidebar) || 250));
-    if (sidebar.classList.contains('sidebar-hidden')) {
-      if (history.state?.chat) {
-        navigateBackToChatList();
-      } else {
-        revealSidebarFromChat({ forceAnimation: true });
-      }
+    if (isResolvedMobileChatScene()) {
+      revealSidebarFromChat({ forceAnimation: true });
+      normalizeMobileChatListHistoryState();
       await waitForMs(transitionMs + 24);
     }
   }
@@ -18772,6 +18771,28 @@
     document.documentElement.classList.remove('is-mobile-route-transitioning');
   }
 
+  function isMobileChatHistoryState(state = history.state) {
+    return Boolean(state && typeof state === 'object' && Number(state.chat || 0) > 0);
+  }
+
+  function isResolvedMobileChatScene() {
+    return Boolean(isMobileLayoutViewport() && getResolvedMobileBaseScene() === 'chat');
+  }
+
+  function normalizeMobileChatListHistoryState() {
+    if (!isMobileLayoutViewport()) return;
+    pendingMobileChatListHistoryNormalization = false;
+    const currentState = history.state;
+    const alreadyNormalized = Boolean(
+      currentState
+      && typeof currentState === 'object'
+      && currentState.view === 'chatlist'
+      && !Object.prototype.hasOwnProperty.call(currentState, 'chat')
+    );
+    if (alreadyNormalized) return;
+    history.replaceState({ view: 'chatlist' }, '');
+  }
+
   function revealSidebarFromChat({ forceAnimation = false } = {}) {
     if (!sidebar) return;
     const shouldAnimateReveal = Boolean(
@@ -18864,14 +18885,29 @@
 
   function navigateBackToChatList({ fromInAppButton = false } = {}) {
     hideFloatingMessageActions({ immediate: true });
-    if (fromInAppButton && history.state?.chat) {
-      inAppChatBackSkipNextPopstate = true;
+    if (fromInAppButton && isResolvedMobileChatScene()) {
+      if (isMobileChatHistoryState(history.state)) {
+        pendingMobileChatListHistoryNormalization = true;
+        inAppChatBackSkipNextPopstate = true;
+        revealSidebarFromChat({ forceAnimation: true });
+        history.back();
+        return;
+      }
       revealSidebarFromChat({ forceAnimation: true });
+      normalizeMobileChatListHistoryState();
+      return;
+    }
+    if (fromInAppButton && isMobileLayoutViewport()) {
+      normalizeMobileChatListHistoryState();
+      return;
+    }
+    if (isMobileChatHistoryState(history.state)) {
       history.back();
       return;
     }
-    if (history.state && history.state.chat) {
-      history.back();
+    if (isResolvedMobileChatScene()) {
+      revealSidebarFromChat({ forceAnimation: true });
+      normalizeMobileChatListHistoryState();
       return;
     }
     revealSidebarFromChat({ forceAnimation: true });
@@ -19966,6 +20002,9 @@
         searchPanelSkipNextPopstate = false;
         ivSkipNextPopstate = false;
         iosBackNavigationToken = 0;
+        if (pendingMobileChatListHistoryNormalization) {
+          normalizeMobileChatListHistoryState();
+        }
         resetBackButtonNavigationState();
         return;
       }
@@ -20019,13 +20058,18 @@
         return;
       }
       if (window.innerWidth <= 768) {
-        if (sidebar.classList.contains('sidebar-hidden')) {
-          // Going back from chat to chat list
-          navigateBackToChatList();
-        } else {
-          // Already on chat list — push state back to prevent exit
-          history.pushState({ view: 'chatlist' }, '');
+        const resolvedScene = getResolvedMobileBaseScene();
+        if (resolvedScene === 'chat') {
+          revealSidebarFromChat({ forceAnimation: true });
+          normalizeMobileChatListHistoryState();
+          return;
         }
+        if (pendingMobileChatListHistoryNormalization || isMobileChatHistoryState(history.state)) {
+          normalizeMobileChatListHistoryState();
+          return;
+        }
+        // Already on chat list — push state back to prevent exit
+        history.pushState({ view: 'chatlist' }, '');
       }
     });
 
