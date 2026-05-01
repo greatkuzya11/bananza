@@ -1357,7 +1357,7 @@ test('highlighted chats keep unread messages when the mobile sidebar is visible'
   await BananzaAppBridge.__testing.openChat(1);
   await wait(dom, 420);
   BananzaAppBridge.__testing.revealSidebarFromChat();
-  await wait(dom, 80);
+  await wait(dom, 420);
 
   assertMobileScene(dom, 'sidebar');
 

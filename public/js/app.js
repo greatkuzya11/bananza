@@ -18019,6 +18019,11 @@
 
   function revealSidebarFromChat({ forceAnimation = false } = {}) {
     if (!sidebar) return;
+    const shouldAnimateReveal = Boolean(
+      forceAnimation
+      || (isMobileLayoutViewport() && getResolvedMobileBaseScene() === 'chat')
+      || sidebar.classList.contains('sidebar-hidden')
+    );
     markCurrentChatReadIfAtBottom(false);
     flushCurrentChatScrollAnchor(currentChatId, { force: true, allowPendingMedia: true });
     pauseCurrentChatMediaPlayback();
@@ -18032,16 +18037,15 @@
       hideInactive: false,
     });
 
-    if (!sidebar.classList.contains('sidebar-hidden')) {
-      if (!forceAnimation) {
-        syncMobileBaseSceneState({ scene: 'sidebar', hideInactive: true, repaint: true });
-        flushDeferredRecoverySync();
-        return;
-      }
-      sidebar.classList.add('sidebar-no-transition');
-      sidebar.classList.add('sidebar-hidden');
-      void sidebar.offsetWidth;
+    if (!shouldAnimateReveal) {
+      syncMobileBaseSceneState({ scene: 'sidebar', hideInactive: true, repaint: true });
+      flushDeferredRecoverySync();
+      return;
     }
+
+    sidebar.classList.add('sidebar-no-transition');
+    sidebar.classList.add('sidebar-hidden');
+    void sidebar.offsetWidth;
 
     beginMobileRouteTransition(Math.max(260, Math.ceil(getElementTransitionTotalMs(sidebar) || 250)) + 90);
 
@@ -19306,7 +19310,7 @@
       if (window.innerWidth <= 768) {
         if (sidebar.classList.contains('sidebar-hidden')) {
           // Going back from chat to chat list
-          revealSidebarFromChat();
+          navigateBackToChatList();
         } else {
           // Already on chat list — push state back to prevent exit
           history.pushState({ view: 'chatlist' }, '');
