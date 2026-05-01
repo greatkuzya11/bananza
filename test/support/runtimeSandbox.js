@@ -17,6 +17,7 @@ const ROOT_FILES = [
   'push.js',
   'soundSettings.js',
   'uploadUtils.js',
+  'videoPosters.js',
   'weather.js',
   'websocket.js',
 ];

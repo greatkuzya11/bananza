@@ -150,6 +150,8 @@
       const snapshot = this.shapeRegistry?.snapshotFromMessage?.(message);
       const effectiveShapeId = this.getEffectiveShapeId(message);
       const maskUrl = this.shapeRegistry?.getMaskUrl?.(snapshot) || '';
+      const posterUrl = this.getBridge()?.getAttachmentPosterUrl?.(message) || '';
+      const posterAttr = posterUrl ? ` poster="${escapeHtml(posterUrl)}"` : '';
       const src = this.getBridge()?.getAttachmentPreviewUrl?.(message)
         || message.client_file_url
         || `/uploads/${message.file_stored}`;
@@ -164,7 +166,7 @@
           >${escapeHtml(this.getShapeToggleGlyph(effectiveShapeId))}</button>
           <div class="video-note-stage" role="button" tabindex="0" aria-label="${TEXT.playLabel}">
             <div class="video-note-shape" style="--video-note-mask:url('${maskUrl}')">
-              <video class="video-note-video" playsinline preload="metadata">
+              <video class="video-note-video" playsinline preload="metadata"${posterAttr}>
                 <source src="${escapeHtml(src)}" type="${escapeHtml(message.file_mime || 'video/webm')}">
               </video>
               ${this.renderProgressSvg(snapshot, gradientId)}
@@ -225,6 +227,8 @@
 
     decorateMessageRow(row, message) {
       if (!row || !message?.is_video_note) return;
+      row.__messageData = { ...(row.__messageData || {}), ...message };
+      const resolvedMessage = row.__messageData;
       if (row.dataset.videoNoteBound !== '1') {
         row.dataset.videoNoteBound = '1';
         const video = row.querySelector('.video-note-video');
@@ -251,11 +255,19 @@
           this.stopProgressLoop(row);
           syncUi();
         });
-        this.getBridge()?.bindMediaPlayback?.(video, message, 'video-note-video');
+        this.getBridge()?.bindMediaPlayback?.(video, resolvedMessage, 'video-note-video');
       }
       row.classList.add('video-note-row', 'media-message');
-      row.__messageData = { ...(row.__messageData || {}), ...message };
       this.refreshRow(row);
+      const video = row.querySelector('.video-note-video');
+      const posterUrl = this.getBridge()?.getAttachmentPosterUrl?.(resolvedMessage) || '';
+      if (video && posterUrl) {
+        video.setAttribute('poster', posterUrl);
+      } else if (video) {
+        Promise.resolve(
+          this.getBridge()?.ensureAttachmentPoster?.(resolvedMessage, { videoEl: video })
+        ).catch(() => {});
+      }
     }
 
     refreshPlaybackUi(row) {

@@ -459,10 +459,14 @@
       const shapeSnapshot = this.shapeRegistry?.snapshotFor?.(shapeId) || null;
 
       this.cleanup();
+      const posterBlob = await Promise.resolve(
+        this.bridge?.createAttachmentPosterBlob?.(stoppedBlob)
+      ).catch(() => null);
       window.BananzaVoiceHooks?.setRecorderMessage?.('Отправка видео-заметки...', 'pending');
       await this.bridge?.queueVideoNote?.({
         videoBlob: stoppedBlob,
         audioBlob,
+        posterBlob,
         durationMs: elapsed,
         sampleRate: TARGET_SAMPLE_RATE,
         videoMime: normalizeMimeType(stoppedBlob.type, 'video/webm'),

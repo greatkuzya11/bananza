@@ -325,6 +325,29 @@ function installAppBridge(dom, overrides = {}) {
       if (typeof source === 'string') return `/uploads/${encodeURIComponent(source)}`;
       return source.client_file_url || (source.file_stored ? `/uploads/${encodeURIComponent(source.file_stored)}` : '');
     },
+    getAttachmentPosterUrl(source) {
+      if (!source) return '';
+      if (typeof source === 'string') return `/uploads/${encodeURIComponent(source)}/poster`;
+      if (source.client_poster_url) return source.client_poster_url;
+      const hasPoster = Boolean(
+        source.file_poster_available
+        || source.filePosterAvailable
+        || source.poster_available
+        || source.posterAvailable
+      );
+      return hasPoster && source.file_stored
+        ? `/uploads/${encodeURIComponent(source.file_stored)}/poster`
+        : '';
+    },
+    ensureAttachmentPoster(source, { videoEl = null, onReady = null } = {}) {
+      const posterUrl = bridge.getAttachmentPosterUrl(source);
+      if (posterUrl && videoEl?.setAttribute) videoEl.setAttribute('poster', posterUrl);
+      if (posterUrl && typeof onReady === 'function') onReady(posterUrl);
+      return Promise.resolve(posterUrl);
+    },
+    createAttachmentPosterBlob() {
+      return Promise.resolve(null);
+    },
     isIosWebkit() {
       return false;
     },

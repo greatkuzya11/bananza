@@ -77,6 +77,7 @@ function isCacheableImageRequest(request, url) {
   const path = url.pathname.toLowerCase();
   return path.startsWith('/uploads/avatars/')
     || path.startsWith('/uploads/backgrounds/')
+    || /^\/uploads\/[^/]+\/poster$/i.test(path)
     || /\.(png|jpe?g|webp|gif|avif|svg)$/i.test(path);
 }
 

@@ -63,12 +63,14 @@ test('video note renderer produces attachment markup with expected controls', ()
     is_video_note: true,
     file_stored: 'video.webm',
     file_mime: 'video/webm',
+    file_poster_available: true,
     video_note_shape_id: 'banana-fat',
   });
 
   assert.ok(html.includes('video-note-stage'));
   assert.ok(html.includes('video-note-shape-toggle-btn'));
   assert.ok(html.includes('/uploads/video.webm/preview'));
+  assert.ok(html.includes('/uploads/video.webm/poster'));
 });
 
 test('video note viewer opens without autoplay', (t) => {
@@ -102,12 +104,14 @@ test('video note viewer opens without autoplay', (t) => {
   viewer.open({
     id: 72,
     file_stored: 'video.webm',
+    file_poster_available: true,
     transcription_text: 'Привет',
   });
 
   assert.ok(viewer.root);
   assert.equal(viewer.root.classList.contains('hidden'), false);
   assert.match(viewer.videoEl.src, /\/uploads\/video\.webm\/preview$/);
+  assert.match(viewer.videoEl.getAttribute('poster') || '', /\/uploads\/video\.webm\/poster$/);
   assert.equal(viewer.captionEl.textContent, 'Привет');
   assert.equal(playCalls, 0);
 });

@@ -15,6 +15,11 @@
   const MAX_ATTACHMENTS = 10;
   const MAX_FILE_SIZE = 1024 * 1024 * 1024;
   const MAX_FILE_SIZE_LABEL = '1 GB';
+  const VIDEO_POSTER_MIME = 'image/jpeg';
+  const VIDEO_POSTER_MAX_DIMENSION = 960;
+  const VIDEO_POSTER_QUALITY = 0.82;
+  const VIDEO_POSTER_CAPTURE_TIMEOUT_MS = 8000;
+  const VIDEO_POSTER_CAPTURE_SEEKS = Object.freeze([0, 0.05, 0.12, 0.25]);
   const POLL_MIN_OPTIONS = 2;
   const POLL_MAX_OPTIONS = 10;
   const POLL_CLOSE_PRESET_MS = Object.freeze({
@@ -153,6 +158,8 @@
   let activePulseVoterPopover = null;
   let outboxObjectUrls = new Map();
   let outboxSending = new Set();
+  let pendingVideoPosterBackfills = new Map();
+  let failedVideoPosterBackfills = new Set();
   let retryLayoutTimer = null;
   let typingSendTimeout = null;
   let typingDisplayTimeouts = {};
@@ -876,6 +883,9 @@
     bindMediaPlayback: (mediaEl, message, role) => bindMediaPlaybackState(mediaEl, message, role),
     getAttachmentPreviewUrl: (source) => getAttachmentPreviewUrl(source),
     getAttachmentDownloadUrl: (source) => getAttachmentDownloadUrl(source),
+    getAttachmentPosterUrl: (source) => getAttachmentPosterUrl(source),
+    ensureAttachmentPoster: (source, options = {}) => ensureAttachmentPoster(source, options),
+    createAttachmentPosterBlob: (source) => createAttachmentPosterBlob(source),
     getDom: () => ({
       sendBtn,
       msgInput,
@@ -1697,6 +1707,11 @@
     return preview ? `/uploads/${encoded}/preview` : `/uploads/${encoded}`;
   }
 
+  function getStoredAttachmentPosterUrl(storedName) {
+    const name = String(storedName || '').trim();
+    return name ? `/uploads/${encodeURIComponent(name)}/poster` : '';
+  }
+
   function resolveAttachmentUrl(source, { preview = false } = {}) {
     if (!source) return '';
     if (typeof source === 'string') {
@@ -1715,14 +1730,293 @@
     return resolveAttachmentUrl(source, { preview: false });
   }
 
-  function getLocalFileType(file) {
+  function getAttachmentPosterUrl(source) {
+    if (!source) return '';
+    if (typeof source === 'string') {
+      return getStoredAttachmentPosterUrl(source);
+    }
+    const localPosterUrl = String(source.client_poster_url || source.clientPosterUrl || '').trim();
+    if (localPosterUrl) return localPosterUrl;
+    const hasPoster = Boolean(
+      source.file_poster_available
+      || source.filePosterAvailable
+      || source.poster_available
+      || source.posterAvailable
+    );
+    if (!hasPoster) return '';
+    const storedName = source.file_stored || source.stored_name || source.storedName || '';
+    return getStoredAttachmentPosterUrl(storedName);
+  }
+
+  function isVideoAttachmentMessage(source) {
+    return String(source?.file_type || source?.fileType || '').trim().toLowerCase() === 'video';
+  }
+
+  function applyPosterToVideoElement(videoEl, posterUrl) {
+    if (!(videoEl instanceof HTMLVideoElement) || !posterUrl) return;
+    if (videoEl.getAttribute('poster') === posterUrl) return;
+    videoEl.setAttribute('poster', posterUrl);
+    try { videoEl.poster = posterUrl; } catch (e) {}
+  }
+
+  function markAttachmentPosterAvailable(source, { clientPosterUrl = '' } = {}) {
+    if (!source || typeof source !== 'object') return source;
+    source.file_poster_available = true;
+    source.filePosterAvailable = true;
+    source.poster_available = true;
+    source.posterAvailable = true;
+    if (clientPosterUrl) {
+      source.client_poster_url = clientPosterUrl;
+      source.clientPosterUrl = clientPosterUrl;
+    }
+    return source;
+  }
+
+  function createTimeoutError(message = 'Timed out') {
+    const error = new Error(message);
+    error.name = 'TimeoutError';
+    return error;
+  }
+
+  function waitForMediaEvent(target, eventNames = [], {
+    ready = null,
+    timeoutMs = VIDEO_POSTER_CAPTURE_TIMEOUT_MS,
+  } = {}) {
+    return new Promise((resolve, reject) => {
+      if (typeof ready === 'function' && ready()) {
+        resolve();
+        return;
+      }
+
+      const names = [...new Set((Array.isArray(eventNames) ? eventNames : [eventNames]).filter(Boolean))];
+      const cleanup = () => {
+        clearTimeout(timerId);
+        names.forEach((name) => target.removeEventListener(name, onReady));
+        target.removeEventListener('error', onError);
+      };
+      const finish = (callback) => {
+        cleanup();
+        callback();
+      };
+      const onReady = () => {
+        if (typeof ready === 'function' && !ready()) return;
+        finish(resolve);
+      };
+      const onError = () => {
+        finish(() => reject(target.error || new Error('Media load failed')));
+      };
+      const timerId = setTimeout(() => {
+        finish(() => reject(createTimeoutError('Media load timed out')));
+      }, timeoutMs);
+
+      names.forEach((name) => target.addEventListener(name, onReady));
+      target.addEventListener('error', onError);
+    });
+  }
+
+  async function waitForVideoFrame(video) {
+    if (video.readyState >= 2 && video.videoWidth && video.videoHeight) return;
+    await waitForMediaEvent(video, ['loadeddata', 'canplay', 'seeked'], {
+      ready: () => video.readyState >= 2 && video.videoWidth && video.videoHeight,
+    });
+  }
+
+  async function seekVideoFrame(video, time) {
+    const duration = Number(video.duration || 0);
+    const safeTime = duration > 0
+      ? Math.min(Math.max(0, Number(time || 0)), Math.max(0, duration - 0.05))
+      : Math.max(0, Number(time || 0));
+    const epsilon = safeTime > 0 ? 0.02 : 0.001;
+    if (Math.abs(Number(video.currentTime || 0) - safeTime) <= epsilon) {
+      await waitForVideoFrame(video);
+      return;
+    }
+
+    await new Promise((resolve, reject) => {
+      const onSeeked = () => cleanup(resolve);
+      const onError = () => cleanup(() => reject(video.error || new Error('Video seek failed')));
+      const cleanup = (callback) => {
+        clearTimeout(timerId);
+        video.removeEventListener('seeked', onSeeked);
+        video.removeEventListener('error', onError);
+        callback();
+      };
+      const timerId = setTimeout(() => cleanup(resolve), 650);
+      video.addEventListener('seeked', onSeeked, { once: true });
+      video.addEventListener('error', onError, { once: true });
+      try {
+        video.currentTime = safeTime;
+      } catch (error) {
+        cleanup(() => reject(error));
+      }
+    });
+    await waitForVideoFrame(video);
+  }
+
+  async function drawVideoPosterBlob(video) {
+    const width = Number(video.videoWidth || 0);
+    const height = Number(video.videoHeight || 0);
+    if (!width || !height) return null;
+
+    const scale = Math.min(1, VIDEO_POSTER_MAX_DIMENSION / Math.max(width, height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) return null;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    if (typeof canvas.toBlob === 'function') {
+      return new Promise((resolve) => {
+        canvas.toBlob((blob) => resolve(blob && blob.size ? blob : null), VIDEO_POSTER_MIME, VIDEO_POSTER_QUALITY);
+      });
+    }
+
+    const dataUrl = canvas.toDataURL(VIDEO_POSTER_MIME, VIDEO_POSTER_QUALITY);
+    if (!dataUrl) return null;
+    const response = await fetch(dataUrl);
+    const blob = await response.blob();
+    return blob && blob.size ? blob : null;
+  }
+
+  async function createAttachmentPosterBlob(source) {
+    const sourceUrl = source instanceof Blob
+      ? URL.createObjectURL(source)
+      : String(source || '').trim();
+    if (!sourceUrl) return null;
+
+    const shouldRevokeUrl = source instanceof Blob;
+    const video = document.createElement('video');
+    video.muted = true;
+    video.preload = 'auto';
+    video.playsInline = true;
+    video.setAttribute('muted', '');
+    video.setAttribute('playsinline', '');
+
+    try {
+      video.src = sourceUrl;
+      video.load?.();
+      await waitForMediaEvent(video, ['loadedmetadata', 'loadeddata', 'canplay'], {
+        ready: () => video.readyState >= 1 && video.videoWidth && video.videoHeight,
+      });
+
+      const duration = Number(video.duration || 0);
+      const seekTargets = [...new Set(VIDEO_POSTER_CAPTURE_SEEKS
+        .map((time) => {
+          if (duration > 0) return Math.min(Math.max(0, Number(time || 0)), Math.max(0, duration - 0.05));
+          return Math.max(0, Number(time || 0));
+        })
+        .filter((time) => Number.isFinite(time) && time >= 0))];
+
+      if (!seekTargets.length) seekTargets.push(0);
+      for (const seekTarget of seekTargets) {
+        try {
+          await seekVideoFrame(video, seekTarget);
+          const posterBlob = await drawVideoPosterBlob(video);
+          if (posterBlob) return posterBlob;
+        } catch (error) {}
+      }
+    } catch (error) {
+      return null;
+    } finally {
+      try {
+        video.pause?.();
+        video.removeAttribute('src');
+        video.load?.();
+      } catch (error) {}
+      if (shouldRevokeUrl) {
+        try { URL.revokeObjectURL(sourceUrl); } catch (error) {}
+      }
+    }
+
+    return null;
+  }
+
+  function getAttachmentPosterBackfillKey(source) {
+    if (!source || typeof source !== 'object') return '';
+    const messageId = Number(source.id || 0);
+    if (messageId > 0) return `message:${messageId}`;
+    const storedName = String(source.file_stored || source.stored_name || source.storedName || '').trim();
+    return storedName ? `file:${storedName}` : '';
+  }
+
+  async function ensureAttachmentPoster(source, { videoEl = null, onReady = null } = {}) {
+    const existingPosterUrl = getAttachmentPosterUrl(source);
+    if (existingPosterUrl) {
+      applyPosterToVideoElement(videoEl, existingPosterUrl);
+      if (typeof onReady === 'function') onReady(existingPosterUrl);
+      return existingPosterUrl;
+    }
+    if (!source || typeof source !== 'object' || !isVideoAttachmentMessage(source) || isClientSideMessage(source)) return '';
+
+    const backfillKey = getAttachmentPosterBackfillKey(source);
+    if (!backfillKey || failedVideoPosterBackfills.has(backfillKey)) return '';
+
+    let task = pendingVideoPosterBackfills.get(backfillKey);
+    if (!task) {
+      task = (async () => {
+        const previewUrl = getAttachmentPreviewUrl(source);
+        const posterBlob = await createAttachmentPosterBlob(previewUrl);
+        if (!posterBlob) return '';
+
+        const formData = new FormData();
+        formData.append('poster', posterBlob, 'video-poster.jpg');
+        const response = await api(`/api/messages/${Number(source.id || 0)}/poster`, {
+          method: 'POST',
+          body: formData,
+        });
+        const updatedMessage = response?.message || null;
+        if (updatedMessage && typeof source === 'object') {
+          Object.assign(source, updatedMessage);
+          applyMessageUpdate(updatedMessage);
+          return getAttachmentPosterUrl(updatedMessage);
+        }
+        markAttachmentPosterAvailable(source);
+        return getStoredAttachmentPosterUrl(source.file_stored || source.stored_name || source.storedName || '');
+      })().catch((error) => {
+        failedVideoPosterBackfills.add(backfillKey);
+        return '';
+      }).finally(() => {
+        pendingVideoPosterBackfills.delete(backfillKey);
+      });
+      pendingVideoPosterBackfills.set(backfillKey, task);
+    }
+
+    const posterUrl = await task;
+    if (!posterUrl) return '';
+    failedVideoPosterBackfills.delete(backfillKey);
+    markAttachmentPosterAvailable(source);
+    applyPosterToVideoElement(videoEl, posterUrl);
+    if (typeof onReady === 'function') onReady(posterUrl);
+    return posterUrl;
+  }
+
+  async function localAttachmentFromFile(file) {
     if (!file) return null;
     const mime = normalizeMimeType(file.type);
     const ext = fileExtension(file.name);
-    if (IMAGE_MIME_TYPES.has(mime) || IMAGE_EXTENSIONS.has(ext)) return 'image';
-    if (AUDIO_MIME_TYPES.has(mime) || AUDIO_EXTENSIONS.has(ext)) return 'audio';
-    if (VIDEO_MIME_TYPES.has(mime) || VIDEO_EXTENSIONS.has(ext)) return 'video';
-    return 'document';
+    const type = IMAGE_MIME_TYPES.has(mime) || IMAGE_EXTENSIONS.has(ext)
+      ? 'image'
+      : (AUDIO_MIME_TYPES.has(mime) || AUDIO_EXTENSIONS.has(ext)
+          ? 'audio'
+          : (VIDEO_MIME_TYPES.has(mime) || VIDEO_EXTENSIONS.has(ext) ? 'video' : 'document'));
+    if (!type) return null;
+
+    const attachment = {
+      localId: makeClientId('f'),
+      file,
+      name: file.name,
+      size: file.size,
+      mime: file.type || 'application/octet-stream',
+      type,
+    };
+    if (type === 'video') {
+      try {
+        const posterBlob = await createAttachmentPosterBlob(file);
+        if (posterBlob) attachment.posterBlob = posterBlob;
+      } catch (error) {}
+    }
+    return attachment;
   }
 
   function makeClientId(prefix = 'c') {
@@ -13619,6 +13913,12 @@
     const video = row.querySelector('video');
     if (video && !msg.is_video_note) {
       bindMediaPlaybackState(video, msg, 'attachment-video');
+      const initialPosterUrl = getAttachmentPosterUrl(msg);
+      if (initialPosterUrl) {
+        applyPosterToVideoElement(video, initialPosterUrl);
+      } else {
+        ensureAttachmentPoster(msg, { videoEl: video }).catch(() => {});
+      }
       let videoLayoutHandled = false;
       let videoLayoutRetryFrame = 0;
       const markWideVideo = () => {
@@ -13737,6 +14037,8 @@
   function renderResolvedFileAttachment(msg) {
     const previewUrl = getAttachmentPreviewUrl(msg);
     const downloadUrl = getAttachmentDownloadUrl(msg) || previewUrl;
+    const posterUrl = getAttachmentPosterUrl(msg);
+    const posterAttr = posterUrl ? ` poster="${esc(posterUrl)}"` : '';
     switch (msg.file_type) {
       case 'image':
         return `<img class="msg-image" src="${previewUrl}" alt="${esc(msg.file_name)}">`;
@@ -13749,7 +14051,7 @@
       case 'video':
         return `<div class="msg-video">
           <div class="msg-video-wrap">
-            <video controls preload="metadata" playsinline><source src="${previewUrl}" type="${msg.file_mime}"></video>
+            <video controls preload="metadata" playsinline${posterAttr}><source src="${previewUrl}" type="${msg.file_mime}"></video>
             <button class="msg-expand-btn" type="button" title="Fullscreen">&#x26F6;</button>
           </div>
           <div style="font-size:11px;color:var(--text-secondary);margin-top:4px">${esc(msg.file_name)} · ${formatSize(msg.file_size)} · <a href="${downloadUrl}" download="${esc(msg.file_name)}">Download</a></div>
@@ -14134,19 +14436,6 @@
     };
   }
 
-  function localAttachmentFromFile(file) {
-    const type = getLocalFileType(file);
-    if (!type) return null;
-    return {
-      localId: makeClientId('f'),
-      file,
-      name: file.name,
-      size: file.size,
-      mime: file.type || 'application/octet-stream',
-      type,
-    };
-  }
-
   function outboxUrlKey(clientId, part = 'file') {
     return `${clientId}:${part}`;
   }
@@ -14196,11 +14485,19 @@
     const isVideoNote = item.kind === 'video_note';
     const mediaNote = isVideoNote ? (item.videoNote || {}) : (item.voice || {});
     const fileBlob = (isVoice || isVideoNote) ? mediaNote.blob : attachment?.file;
+    const posterBlob = isVideoNote ? (mediaNote.posterBlob || attachment?.posterBlob || null) : (attachment?.posterBlob || null);
     const localUrl = serverMeta?.stored_name ? '' : getOutboxObjectUrl(item.clientId, fileBlob, attachment?.localId || (isVideoNote ? 'video-note' : 'file'));
+    const localPosterUrl = posterBlob ? getOutboxObjectUrl(item.clientId, posterBlob, `${attachment?.localId || (isVideoNote ? 'video-note' : 'file')}-poster`) : '';
     const fileName = serverMeta?.original_name || attachment?.name || mediaNote.name || (isVideoNote ? 'video-note.webm' : 'voice-note.wav');
     const fileSize = serverMeta?.size || attachment?.size || fileBlob?.size || 0;
     const fileMime = serverMeta?.mime_type || attachment?.mime || mediaNote.mime || (isVideoNote ? 'video/webm' : 'audio/wav');
     const fileType = serverMeta?.type || attachment?.type || (isVideoNote ? 'video' : (isVoice ? 'audio' : null));
+    const hasPoster = Boolean(
+      localPosterUrl
+      || serverMeta?.poster_available
+      || serverMeta?.posterAvailable
+      || (fileType === 'video' && posterBlob)
+    );
     const reply = item.reply || null;
 
     return {
@@ -14219,9 +14516,11 @@
       file_name: fileName,
       file_stored: serverMeta?.stored_name || null,
       client_file_url: localUrl,
+      client_poster_url: localPosterUrl,
       file_mime: fileMime,
       file_size: fileSize,
       file_type: fileType,
+      file_poster_available: hasPoster,
       reply_to_id: item.replyToId || null,
       reply_display_name: reply?.display_name || null,
       reply_text: reply?.text || null,
@@ -14340,6 +14639,9 @@
     if (!attachment?.file) throw new Error('Attachment is not available locally');
     const fd = new FormData();
     fd.append('file', attachment.file, attachment.name || 'attachment');
+    if (attachment.posterBlob) {
+      fd.append('poster', attachment.posterBlob, 'video-poster.jpg');
+    }
     const data = await api('/api/upload', { method: 'POST', body: fd });
     item.serverFileId = data.id;
     item.serverFileMeta = data;
@@ -14387,6 +14689,9 @@
     const formData = new FormData();
     formData.append('video', videoNote.blob, videoNote.name || `video-note-${Date.now()}.webm`);
     formData.append('audio', videoNote.audioBlob, videoNote.audioName || `video-note-${Date.now()}.wav`);
+    if (videoNote.posterBlob) {
+      formData.append('poster', videoNote.posterBlob, 'video-note-poster.jpg');
+    }
     formData.append('durationMs', String(videoNote.durationMs || 0));
     formData.append('sampleRate', String(videoNote.sampleRate || 16000));
     formData.append('videoMime', normalizedVideoMime);
@@ -14534,6 +14839,7 @@
   async function queueVideoNoteOutbox({
     videoBlob,
     audioBlob,
+    posterBlob,
     durationMs,
     sampleRate,
     videoMime,
@@ -14563,10 +14869,12 @@
         size: videoBlob.size || 0,
         mime: videoMime || 'video/webm',
         type: 'video',
+        posterBlob: posterBlob || null,
       }],
       videoNote: {
         blob: videoBlob,
         audioBlob,
+        posterBlob: posterBlob || null,
         name: videoName,
         audioName,
         durationMs,
@@ -14752,6 +15060,8 @@
       file_mime: null,
       file_size: null,
       client_file_url: '',
+      client_poster_url: '',
+      file_poster_available: false,
       previews: [],
       reactions: [],
       edited_at: null,
@@ -14857,7 +15167,7 @@
       if (f.size > MAX_FILE_SIZE) { alert(`File too large: ${f.name} (max ${MAX_FILE_SIZE_LABEL})`); return; }
     }
 
-    pendingFiles = files.map(localAttachmentFromFile).filter(Boolean);
+    pendingFiles = (await Promise.all(files.map((file) => localAttachmentFromFile(file)))).filter(Boolean);
     pendingFile = pendingFiles[0] || null;
     renderPendingFiles();
     msgInput.focus();
@@ -15931,7 +16241,7 @@
   const GALLERY_FIRST_TEXT = '\u042d\u0442\u043e \u043f\u0435\u0440\u0432\u043e\u0435 \u043c\u0435\u0434\u0438\u0430';
   const GALLERY_LAST_TEXT = '\u042d\u0442\u043e \u043f\u043e\u0441\u043b\u0435\u0434\u043d\u0435\u0435 \u043c\u0435\u0434\u0438\u0430';
   const GALLERY_LOAD_ERROR_TEXT = '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c. \u041f\u043e\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435 \u0435\u0449\u0451 \u0440\u0430\u0437';
-  let galleryItems = []; // { id, chatId, src, type, fileName, fileMime, fileSize }
+  let galleryItems = []; // { id, chatId, src, type, fileName, fileMime, fileSize, posterSrc, message }
   let galleryIndex = 0;
   let gallerySourceChatId = 0;
   let galleryHasMoreBefore = false;
@@ -16656,19 +16966,24 @@
     return `${item?.type || ''}:${normalizeGallerySrc(item?.src || '')}`;
   }
 
-  function galleryItemFromMessage(msg, fallbackSrc = '') {
+  function galleryItemFromMessage(msg, fallbackSrc = '', fallbackPoster = '') {
     if (msg?.is_video_note) return null;
     const type = msg?.file_type === 'video' ? 'video' : (msg?.file_type === 'image' ? 'image' : '');
     const src = normalizeGallerySrc(fallbackSrc || getAttachmentPreviewUrl(msg));
+    const posterSrc = type === 'video'
+      ? normalizeGallerySrc(fallbackPoster || getAttachmentPosterUrl(msg))
+      : '';
     if (!type || !src) return null;
     return {
       id: Number(msg.id || 0),
       chatId: Number(msg.chat_id || msg.chatId || currentChatId || 0),
       src,
       type,
+      posterSrc,
       fileName: msg.file_name || '',
       fileMime: msg.file_mime || '',
       fileSize: Number(msg.file_size || 0),
+      message: msg && typeof msg === 'object' ? msg : null,
     };
   }
 
@@ -16681,6 +16996,7 @@
       const source = isImage
         ? (el.currentSrc || el.src || el.getAttribute('src') || '')
         : (el.querySelector('source')?.getAttribute('src') || el.currentSrc || el.src || '');
+      const poster = isImage ? '' : (el.getAttribute('poster') || el.poster || '');
       const fallback = {
         ...(row?.__messageData || {}),
         id: Number(row?.dataset.msgId || row?.__messageData?.id || 0),
@@ -16689,7 +17005,7 @@
         file_name: row?.__messageData?.file_name || el.getAttribute('alt') || '',
         file_mime: row?.__messageData?.file_mime || el.querySelector?.('source')?.getAttribute('type') || '',
       };
-      const item = galleryItemFromMessage(fallback, source);
+      const item = galleryItemFromMessage(fallback, source, poster);
       const key = galleryItemKey(item);
       if (!item || seen.has(key)) return;
       seen.add(key);
@@ -16844,11 +17160,54 @@
     return true;
   }
 
+  function getGallerySlideElement(itemOrIndex = galleryIndex) {
+    if (!ivStrip) return null;
+    if (typeof itemOrIndex === 'number') {
+      return ivStrip.querySelectorAll('.iv-slide')[itemOrIndex] || null;
+    }
+    const key = galleryItemKey(itemOrIndex);
+    if (!key) return null;
+    return [...ivStrip.querySelectorAll('.iv-slide')].find((slide) => slide.dataset.galleryKey === key) || null;
+  }
+
+  function getGalleryVideoElement(itemOrIndex = galleryIndex) {
+    return getGallerySlideElement(itemOrIndex)?.querySelector('video') || null;
+  }
+
+  function updateGalleryItemPoster(item, posterUrl) {
+    if (!item || item.type !== 'video' || !posterUrl) return '';
+    item.posterSrc = posterUrl;
+    if (item.message && typeof item.message === 'object') {
+      markAttachmentPosterAvailable(item.message);
+    }
+    applyPosterToVideoElement(getGalleryVideoElement(item), posterUrl);
+    return posterUrl;
+  }
+
+  async function ensureGalleryItemPoster(item, { slideEl = null } = {}) {
+    if (!item || item.type !== 'video') return '';
+    const existingPosterUrl = item.posterSrc || getAttachmentPosterUrl(item.message);
+    const videoEl = slideEl?.querySelector('video') || getGalleryVideoElement(item);
+    if (existingPosterUrl) {
+      return updateGalleryItemPoster(item, existingPosterUrl);
+    }
+    if (!item.message || typeof item.message !== 'object') return '';
+    const posterUrl = await ensureAttachmentPoster(item.message, {
+      videoEl,
+      onReady: (readyPosterUrl) => {
+        if (readyPosterUrl) updateGalleryItemPoster(item, readyPosterUrl);
+      },
+    }).catch(() => '');
+    if (posterUrl) updateGalleryItemPoster(item, posterUrl);
+    return posterUrl;
+  }
+
   function gallerySlideHtml(item) {
     const key = esc(galleryItemKey(item));
     if (item.type === 'video') {
       const mime = item.fileMime ? ` type="${esc(item.fileMime)}"` : '';
-      return `<div class="iv-slide iv-slide-video" data-gallery-key="${key}"><video controls playsinline preload="metadata"><source src="${esc(item.src)}"${mime}></video></div>`;
+      const posterAttr = item.posterSrc ? ` poster="${esc(item.posterSrc)}"` : '';
+      return `<div class="iv-slide iv-slide-video" data-gallery-key="${key}"><video controls playsinline preload="metadata"${posterAttr}><source src="${esc(item.src)}"${mime}></video></div>`;
     }
     return `<div class="iv-slide" data-gallery-key="${key}"><img src="${esc(item.src)}" alt="${esc(item.fileName || '')}"></div>`;
   }
@@ -17030,7 +17389,6 @@
       try {
         video.pause();
         video.removeAttribute('src');
-        video.load();
         video.remove();
       } catch (e) {}
     });
@@ -17042,7 +17400,10 @@
     const start = Math.max(0, galleryIndex - GALLERY_PREFETCH_COUNT);
     const end = Math.min(galleryItems.length, galleryIndex + GALLERY_PREFETCH_COUNT + 1);
     const nearby = galleryItems.slice(start, end);
-    const imageUrls = nearby.filter(item => item.type === 'image').map(item => item.src);
+    const imageUrls = [...new Set([
+      ...nearby.filter(item => item.type === 'image').map(item => item.src),
+      ...nearby.filter(item => item.type === 'video' && item.posterSrc).map(item => item.posterSrc),
+    ])];
     if (imageUrls.length) {
       try { window.cacheAssets?.(imageUrls).catch(() => {}); } catch (e) {}
       const wantedImages = new Set(imageUrls);
@@ -17074,7 +17435,6 @@
       video.style.display = 'none';
       video.setAttribute('aria-hidden', 'true');
       document.body.appendChild(video);
-      try { video.load(); } catch (e) {}
       galleryVideoPreloads.set(item.src, video);
     });
     for (const [src, video] of [...galleryVideoPreloads.entries()]) {
@@ -17082,7 +17442,6 @@
       try {
         video.pause();
         video.removeAttribute('src');
-        video.load();
         video.remove();
       } catch (e) {}
       galleryVideoPreloads.delete(src);
@@ -17110,6 +17469,7 @@
     galleryIndex = newIdx;
     setGalleryStripPosition(true);
     updateGalleryArrows();
+    ensureGalleryItemPoster(galleryItems[galleryIndex]).catch(() => {});
     preloadGalleryAssets();
     queueGalleryBuffering();
     return true;
@@ -17158,6 +17518,7 @@
     } catch (e) {}
 
     imageViewer.classList.remove('hidden');
+    ensureGalleryItemPoster(galleryItems[galleryIndex]).catch(() => {});
     preloadGalleryAssets();
     ensureGalleryBuffered('before');
     ensureGalleryBuffered('after');

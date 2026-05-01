@@ -158,9 +158,21 @@ class ApiSession {
     });
   }
 
-  async uploadFile({ filename = 'attachment.bin', mimeType = 'application/octet-stream', body = '' } = {}) {
+  async uploadFile({
+    filename = 'attachment.bin',
+    mimeType = 'application/octet-stream',
+    body = '',
+    poster = null,
+  } = {}) {
     const form = new FormData();
     form.append('file', new Blob([body], { type: mimeType }), filename);
+    if (poster) {
+      form.append(
+        'poster',
+        new Blob([poster.body ?? ''], { type: poster.mimeType || 'image/jpeg' }),
+        poster.filename || 'poster.jpg'
+      );
+    }
     const { data } = await this.request('/api/upload', {
       method: 'POST',
       formData: form,

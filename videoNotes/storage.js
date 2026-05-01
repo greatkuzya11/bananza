@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const { deleteVideoPoster, duplicateVideoPoster } = require('../videoPosters');
 
 function createVideoNoteStorage({ db, uploadsDir }) {
   const fileByIdStmt = db.prepare(`
@@ -35,6 +36,7 @@ function createVideoNoteStorage({ db, uploadsDir }) {
     if (!file) return false;
     const filePath = getFilePath(file.stored_name);
     if (fs.existsSync(filePath)) fs.unlink(filePath, () => {});
+    deleteVideoPoster(uploadsDir, file.stored_name);
     db.prepare('DELETE FROM files WHERE id=?').run(id);
     return true;
   }
@@ -57,7 +59,7 @@ function createVideoNoteStorage({ db, uploadsDir }) {
     fs.copyFileSync(sourcePath, duplicatedPath);
 
     try {
-      return insertFileStmt.run(
+      const duplicatedFileId = insertFileStmt.run(
         source.original_name,
         duplicatedStoredName,
         source.mime_type,
@@ -65,8 +67,19 @@ function createVideoNoteStorage({ db, uploadsDir }) {
         source.type,
         actorId
       ).lastInsertRowid;
+      if (source.type === 'video') {
+        try {
+          duplicateVideoPoster({
+            uploadsDir,
+            sourceStoredName: source.stored_name,
+            targetStoredName: duplicatedStoredName,
+          });
+        } catch (error) {}
+      }
+      return duplicatedFileId;
     } catch (error) {
       fs.unlink(duplicatedPath, () => {});
+      deleteVideoPoster(uploadsDir, duplicatedStoredName);
       throw error;
     }
   }

@@ -25,6 +25,14 @@ const { createMessageActionsService } = require('./messageActions');
 const { createVideoNoteFeature } = require('./videoNotes');
 const { createVideoNoteStorage } = require('./videoNotes/storage');
 const {
+  deleteVideoPoster,
+  getVideoPosterPath,
+  hasVideoPoster,
+  isSupportedVideoPosterMime,
+  saveVideoPosterFromBuffer,
+  saveVideoPosterFromPath,
+} = require('./videoPosters');
+const {
   GENERAL_UPLOAD_LIMIT_BYTES,
   GENERAL_UPLOAD_LIMIT_LABEL,
   classifyUpload,
@@ -69,6 +77,10 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: { fileSize: GENERAL_UPLOAD_LIMIT_BYTES },
+});
+const videoPosterUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
 });
 
 const AVATAR_MIME = { 'image/jpeg': true, 'image/png': true, 'image/webp': true };
@@ -409,6 +421,18 @@ const messageByIdStmt = db.prepare(`
   LEFT JOIN users ru ON ru.id=rm.user_id
   WHERE m.id=?
 `);
+const messagePosterTargetStmt = db.prepare(`
+  SELECT
+    m.id,
+    m.chat_id,
+    m.is_deleted,
+    f.stored_name as file_stored,
+    f.original_name as file_name,
+    f.type as file_type
+  FROM messages m
+  LEFT JOIN files f ON f.id=m.file_id
+  WHERE m.id=?
+`);
 const messagePreviewsStmt = db.prepare('SELECT * FROM link_previews WHERE message_id=?');
 const messageReactionsStmt = db.prepare('SELECT user_id, emoji FROM reactions WHERE message_id=?');
 const messageMentionsStmt = db.prepare(`
@@ -729,6 +753,16 @@ function attachMessageMentions(row) {
   return row;
 }
 
+function decorateMessageFilePayload(row) {
+  if (!row) return row;
+  row.file_poster_available = Boolean(
+    row.file_type === 'video'
+    && row.file_stored
+    && hasVideoPoster(UPLOADS_DIR, row.file_stored)
+  );
+  return row;
+}
+
 function hydrateMessageById(messageId, viewerUserId = null) {
   const row = applyReplyTextFallback(messageByIdStmt.get(messageId));
   if (!row) return null;
@@ -744,7 +778,9 @@ function hydrateMessageById(messageId, viewerUserId = null) {
   const minRead = readInfo && readInfo.min_read != null ? readInfo.min_read : row.id;
   row.is_read = row.id <= minRead;
   const withVoice = voiceFeature.attachVoiceMetadata([row])[0];
-  return pollFeature.attachPollMetadata([withVoice], viewerUserId, { ensureClosed: false, broadcastOnClose: false })[0];
+  return decorateMessageFilePayload(
+    pollFeature.attachPollMetadata([withVoice], viewerUserId, { ensureClosed: false, broadcastOnClose: false })[0]
+  );
 }
 
 function isChatMember(chatId, userId) {
@@ -1295,6 +1331,13 @@ function applyStoredFileHeaders(res, file, { dispositionType = 'attachment' } = 
   res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
 }
 
+function applyVideoPosterHeaders(res, filename = 'video-poster.jpg') {
+  res.setHeader('Content-Type', 'image/jpeg');
+  res.setHeader('Content-Disposition', buildContentDisposition('inline', filename));
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+}
+
 function applySvgPreviewSecurityHeaders(res) {
   res.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self' data: blob:; style-src 'unsafe-inline'; sandbox");
 }
@@ -1302,6 +1345,20 @@ function applySvgPreviewSecurityHeaders(res) {
 function unlinkIfPresent(filePath) {
   if (!filePath) return;
   fs.unlink(filePath, () => {});
+}
+
+function getUploadedField(reqFiles, fieldName) {
+  return Array.isArray(reqFiles?.[fieldName]) ? reqFiles[fieldName][0] || null : null;
+}
+
+function flattenUploadedFiles(reqFiles = {}) {
+  return Object.values(reqFiles || {}).flat().filter(Boolean);
+}
+
+function cleanupUploadedFileEntries(entries = []) {
+  for (const file of entries) {
+    if (file?.path) fs.unlink(file.path, () => {});
+  }
 }
 
 function chatAssetPathFromUrl(url, baseDir) {
@@ -1385,7 +1442,10 @@ function deleteChatMessageData(chatId, options = {}) {
   for (const file of fileRows) {
     db.prepare('DELETE FROM files WHERE id=?').run(file.id);
   }
-  fileRows.forEach((file) => unlinkIfPresent(safeUploadPath(file.stored_name)));
+  fileRows.forEach((file) => {
+    unlinkIfPresent(safeUploadPath(file.stored_name));
+    deleteVideoPoster(UPLOADS_DIR, file.stored_name);
+  });
   return { fileRows };
 }
 
@@ -2188,7 +2248,7 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
     ),
     req.user.id,
     { ensureClosed: true, broadcastOnClose: true }
-  );
+  ).map(decorateMessageFilePayload);
   const pinEvents = getPinEventsForWindow(chatId, result, {
     openEnded: !before && !after && !anchor,
   });
@@ -2343,7 +2403,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
     voiceFeature.attachVoiceMetadata([msg]),
     req.user.id,
     { ensureClosed: false, broadcastOnClose: false }
-  )[0];
+  ).map(decorateMessageFilePayload)[0];
   // Echo client_id back to clients so optimistic messages can be matched
   if (clientId) hydratedMsg.client_id = clientId;
 
@@ -2458,6 +2518,59 @@ app.post('/api/messages/:id/save-to-notes', auth, msgLimiter, (req, res) => {
   }
 
   return res.json(message);
+});
+
+app.post('/api/messages/:id/poster', auth, upLimiter, (req, res) => {
+  videoPosterUpload.single('poster')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: 'Poster image is too large' });
+      }
+      return res.status(400).json({ error: err.message || 'Poster upload failed' });
+    }
+
+    const messageId = Number(req.params.id);
+    if (!Number.isInteger(messageId) || messageId <= 0) {
+      return res.status(400).json({ error: 'Invalid message id' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: 'Poster image is required' });
+    }
+    if (!isSupportedVideoPosterMime(req.file.mimetype)) {
+      return res.status(400).json({ error: 'Poster must be a JPEG image' });
+    }
+
+    const target = messagePosterTargetStmt.get(messageId);
+    if (!target || Number(target.is_deleted) !== 0) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+    if (!isChatMember(target.chat_id, req.user.id)) {
+      return res.status(403).json({ error: 'Not a member' });
+    }
+    if (target.file_type !== 'video' || !target.file_stored) {
+      return res.status(400).json({ error: 'Video poster can only be attached to a video message' });
+    }
+
+    if (!hasVideoPoster(UPLOADS_DIR, target.file_stored)) {
+      try {
+        const saved = saveVideoPosterFromBuffer({
+          uploadsDir: UPLOADS_DIR,
+          storedName: target.file_stored,
+          buffer: req.file.buffer,
+        });
+        if (!saved) {
+          return res.status(500).json({ error: 'Poster could not be saved' });
+        }
+      } catch (error) {
+        return res.status(500).json({ error: error.message || 'Poster could not be saved' });
+      }
+    }
+
+    const message = hydrateMessageById(messageId, req.user.id);
+    if (!message) return res.status(404).json({ error: 'Message not found' });
+    broadcastToChatAll(target.chat_id, { type: 'message_updated', message });
+    return res.json({ ok: true, message });
+  });
 });
 
 app.get('/api/messages/:id/jump-target', auth, (req, res) => {
@@ -2872,27 +2985,59 @@ app.delete('/api/chats/:chatId/members/:userId', auth, (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 app.post('/api/upload', auth, upLimiter, (req, res) => {
-  upload.single('file')(req, res, (err) => {
+  upload.fields([
+    { name: 'file', maxCount: 1 },
+    { name: 'poster', maxCount: 1 },
+  ])(req, res, (err) => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') {
         return res.status(400).json({ error: `File too large (max ${GENERAL_UPLOAD_LIMIT_LABEL})` });
       }
       return res.status(400).json({ error: err.message || 'Upload failed' });
     }
-    if (!req.file) return res.status(400).json({ error: 'No file' });
+    const uploadedFiles = flattenUploadedFiles(req.files);
+    const mainFile = getUploadedField(req.files, 'file');
+    const posterFile = getUploadedField(req.files, 'poster');
+    if (!mainFile) {
+      cleanupUploadedFileEntries(uploadedFiles);
+      return res.status(400).json({ error: 'No file' });
+    }
 
     // Fix multer latin1 encoding for non-ASCII filenames
-    const originalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
-    const mimeType = normalizeMimeType(req.file.mimetype) || 'application/octet-stream';
+    const originalName = Buffer.from(mainFile.originalname, 'latin1').toString('utf8');
+    const mimeType = normalizeMimeType(mainFile.mimetype) || 'application/octet-stream';
     const fileType = classifyUpload({ mimeType, originalName });
+    if (posterFile && fileType !== 'video') {
+      cleanupUploadedFileEntries(uploadedFiles);
+      return res.status(400).json({ error: 'Poster is only supported for video uploads' });
+    }
+    if (posterFile && !isSupportedVideoPosterMime(posterFile.mimetype)) {
+      cleanupUploadedFileEntries(uploadedFiles);
+      return res.status(400).json({ error: 'Poster must be a JPEG image' });
+    }
 
     const r = db.prepare('INSERT INTO files(original_name,stored_name,mime_type,size,type,uploaded_by) VALUES(?,?,?,?,?,?)')
-      .run(originalName, req.file.filename, mimeType, req.file.size, fileType, req.user.id);
+      .run(originalName, mainFile.filename, mimeType, mainFile.size, fileType, req.user.id);
+
+    let posterAvailable = false;
+    if (posterFile && fileType === 'video') {
+      try {
+        posterAvailable = saveVideoPosterFromPath({
+          uploadsDir: UPLOADS_DIR,
+          storedName: mainFile.filename,
+          sourcePath: posterFile.path,
+        });
+      } catch (error) {
+        posterAvailable = false;
+      }
+    }
+    if (posterFile?.path) fs.unlink(posterFile.path, () => {});
 
     res.json({
       id: r.lastInsertRowid, original_name: originalName,
-      stored_name: req.file.filename, mime_type: mimeType,
-      size: req.file.size, type: fileType,
+      stored_name: mainFile.filename, mime_type: mimeType,
+      size: mainFile.size, type: fileType,
+      poster_available: posterAvailable,
     });
   });
 });
@@ -3009,6 +3154,24 @@ app.get('/uploads/:filename/preview', (req, res) => {
   res.sendFile(filePath);
 });
 
+app.get('/uploads/:filename/poster', (req, res) => {
+  const filename = path.basename(req.params.filename);
+  const file = db.prepare('SELECT * FROM files WHERE stored_name=?').get(filename);
+  if (!file) return res.status(404).json({ error: 'Not found' });
+  if (file.type !== 'video') {
+    return res.status(404).json({ error: 'Poster not available' });
+  }
+
+  const posterPath = getVideoPosterPath(UPLOADS_DIR, filename);
+  if (!posterPath || !fs.existsSync(posterPath)) {
+    return res.status(404).json({ error: 'Poster not available' });
+  }
+
+  const baseName = path.parse(file.original_name || filename).name || 'video';
+  applyVideoPosterHeaders(res, `${baseName}-poster.jpg`);
+  res.sendFile(posterPath);
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // ADMIN ROUTES
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3084,6 +3247,7 @@ app.delete('/api/messages/:id', auth, (req, res) => {
     if (file) {
       const filePath = path.join(UPLOADS_DIR, file.stored_name);
       fs.unlink(filePath, () => {});
+      deleteVideoPoster(UPLOADS_DIR, file.stored_name);
     }
   }
 

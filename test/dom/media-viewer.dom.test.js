@@ -506,6 +506,20 @@ function createIncomingMessage(chatId, messageId, overrides = {}) {
   };
 }
 
+function createVideoMessage(chatId, messageId, overrides = {}) {
+  return createIncomingMessage(chatId, messageId, {
+    text: `Video message ${messageId}`,
+    file_id: 500 + Number(messageId || 0),
+    file_name: `clip-${messageId}.mp4`,
+    file_stored: `clip-${messageId}.mp4`,
+    file_type: 'video',
+    file_mime: 'video/mp4',
+    file_size: 1_024,
+    file_poster_available: true,
+    ...overrides,
+  });
+}
+
 function createChatFetchHandler(chatMessagesByChatId) {
   return ({ dom, url }) => {
     const messagesMatch = url.pathname.match(/^\/api\/chats\/(\d+)\/messages$/);
@@ -1438,6 +1452,61 @@ test('fullscreen media viewer dismisses the mobile keyboard and leaves no gap on
 
   assert.equal(imageViewer.classList.contains('hidden'), true);
   assert.equal(app.style.height, '844px');
+});
+
+test('inline video messages render a poster when one is available', async (t) => {
+  const chatMessages = {
+    1: [createVideoMessage(1, 811, { file_stored: 'clip-inline.mp4', file_name: 'clip-inline.mp4' })],
+  };
+  const dom = await bootAppDom({
+    fetchHandler: createChatFetchHandler(chatMessages),
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+
+  installMessagesViewportMock(dom);
+  BananzaAppBridge.__testing.setChats([
+    createChatFixture(1, 'Chat A'),
+  ]);
+
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 80);
+
+  const videoEl = document.querySelector('.msg-video video');
+  assert.ok(videoEl);
+  assert.match(videoEl.getAttribute('poster') || '', /\/uploads\/clip-inline\.mp4\/poster$/);
+});
+
+test('fullscreen gallery video slides keep the server poster', async (t) => {
+  const chatMessages = {
+    1: [createVideoMessage(1, 812, { file_stored: 'clip-gallery.mp4', file_name: 'clip-gallery.mp4' })],
+  };
+  const dom = await bootAppDom({
+    fetchHandler: createChatFetchHandler(chatMessages),
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const imageViewer = document.getElementById('imageViewer');
+
+  installMessagesViewportMock(dom);
+  BananzaAppBridge.__testing.setChats([
+    createChatFixture(1, 'Chat A'),
+  ]);
+
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 80);
+
+  BananzaAppBridge.__testing.openMediaViewer('/uploads/clip-gallery.mp4/preview', 'video');
+  await wait(dom, 30);
+
+  const viewerVideo = imageViewer.querySelector('.iv-slide video');
+  assert.equal(imageViewer.classList.contains('hidden'), false);
+  assert.ok(viewerVideo);
+  assert.match(viewerVideo.getAttribute('poster') || '', /\/uploads\/clip-gallery\.mp4\/poster$/);
 });
 
 test('the first ordinary message tap only dismisses the mobile keyboard', async (t) => {

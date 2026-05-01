@@ -29,6 +29,17 @@
     node.style.maskSize = '100% 100%';
   }
 
+  function applyPoster(videoEl, posterUrl) {
+    if (!videoEl) return;
+    if (posterUrl) {
+      videoEl.setAttribute('poster', posterUrl);
+      try { videoEl.poster = posterUrl; } catch {}
+      return;
+    }
+    videoEl.removeAttribute('poster');
+    try { videoEl.poster = ''; } catch {}
+  }
+
   class VideoNoteViewer {
     constructor({ bridge, shapeRegistry } = {}) {
       this.bridge = bridge || window.BananzaAppBridge || null;
@@ -83,11 +94,13 @@
       const root = this.ensureUi();
       const snapshot = this.shapeRegistry?.snapshotFromMessage?.(message);
       const maskUrl = this.shapeRegistry?.getMaskUrl?.(snapshot);
+      const posterUrl = this.getBridge()?.getAttachmentPosterUrl?.(message) || '';
       const src = this.getBridge()?.getAttachmentPreviewUrl?.(message)
         || message.client_file_url
         || `/uploads/${message.file_stored}`;
       this.currentMessageId = Number(message.id || 0);
       if (this.videoEl) {
+        applyPoster(this.videoEl, posterUrl);
         this.videoEl.src = src;
         this.videoEl.dataset.messageId = String(this.currentMessageId || '');
         applyMaskStyle(this.videoEl, maskUrl);
@@ -100,6 +113,15 @@
         this.captionEl.innerHTML = caption ? `<span>${escapeHtml(caption)}</span>` : '';
       }
       const bridge = this.getBridge();
+      if (!posterUrl && this.videoEl) {
+        Promise.resolve(bridge?.ensureAttachmentPoster?.(message, {
+          videoEl: this.videoEl,
+          onReady: (readyPosterUrl) => {
+            if (Number(this.currentMessageId || 0) !== Number(message.id || 0)) return;
+            applyPoster(this.videoEl, readyPosterUrl || '');
+          },
+        })).catch(() => {});
+      }
       if (bridge?.openManagedModal) bridge.openManagedModal('videoNoteViewer');
       else root.classList.remove('hidden');
     }

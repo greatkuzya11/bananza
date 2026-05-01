@@ -4,6 +4,10 @@ const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
 
 const { normalizeShapeSnapshot } = require('./meta');
+const {
+  isSupportedVideoPosterMime,
+  saveVideoPosterFromPath,
+} = require('../videoPosters');
 
 const MAX_VIDEO_NOTE_VIDEO_SIZE = 18 * 1024 * 1024;
 const MAX_VIDEO_NOTE_AUDIO_SIZE = 12 * 1024 * 1024;
@@ -86,18 +90,21 @@ function createVideoNoteFeature({
     storage: multer.diskStorage({
       destination: uploadsDir,
       filename: (_req, file, cb) => {
-        const prefix = file.fieldname === 'audio' ? 'video-note-audio' : 'video-note';
+        const prefix = file.fieldname === 'audio'
+          ? 'video-note-audio'
+          : (file.fieldname === 'poster' ? 'video-note-poster' : 'video-note');
         cb(null, `${prefix}-${uuidv4()}${path.extname(file.originalname).toLowerCase()}`);
       },
     }),
     limits: {
       fileSize: MAX_VIDEO_NOTE_VIDEO_SIZE + MAX_VIDEO_NOTE_AUDIO_SIZE,
-      files: 2,
+      files: 3,
     },
     fileFilter: (_req, file, cb) => {
       const mimeType = normalizeMimeType(file.mimetype);
       if (file.fieldname === 'video' && ALLOWED_VIDEO_MIME.has(mimeType)) return cb(null, true);
       if (file.fieldname === 'audio' && ALLOWED_AUDIO_MIME.has(mimeType)) return cb(null, true);
+      if (file.fieldname === 'poster' && isSupportedVideoPosterMime(mimeType)) return cb(null, true);
       cb(new Error('Invalid video note media type'));
     },
   });
@@ -106,6 +113,7 @@ function createVideoNoteFeature({
     upload.fields([
       { name: 'video', maxCount: 1 },
       { name: 'audio', maxCount: 1 },
+      { name: 'poster', maxCount: 1 },
     ])(req, res, (err) => {
       if (err) {
         cleanupUploadedFiles(req.files || {});
@@ -127,6 +135,7 @@ function createVideoNoteFeature({
           || (shapeId === DEFAULT_SHAPE_ID ? DEFAULT_SHAPE_SNAPSHOT : null);
         const videoFile = Array.isArray(req.files?.video) ? req.files.video[0] : null;
         const audioFile = Array.isArray(req.files?.audio) ? req.files.audio[0] : null;
+        const posterFile = Array.isArray(req.files?.poster) ? req.files.poster[0] : null;
         const normalizedVideoFileMime = normalizeMimeType(videoFile?.mimetype);
 
         if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id)) {
@@ -200,6 +209,17 @@ function createVideoNoteFeature({
           );
           return insertedMessage.lastInsertRowid;
         })();
+
+        if (posterFile?.path) {
+          try {
+            saveVideoPosterFromPath({
+              uploadsDir,
+              storedName: videoFile.filename,
+              sourcePath: posterFile.path,
+            });
+          } catch (error) {}
+          fs.unlink(posterFile.path, () => {});
+        }
 
         const message = hydrateMessageById(messageId, req.user.id);
         broadcastToChatAll(chatId, { type: 'message', message });

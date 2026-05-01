@@ -7,6 +7,7 @@ const { createBasicChatScenario, waitFor } = require('../support/scenario');
 
 let sandbox;
 let scenario;
+const POSTER_JPEG_BYTES = Buffer.from('ffd8ffe000104a46494600010100000100010000ffdb000100ffd9', 'hex');
 
 before(async () => {
   sandbox = await createSandbox({ name: 'messages-actions' });
@@ -16,6 +17,12 @@ before(async () => {
 after(async () => {
   await sandbox?.stop?.();
 });
+
+function makePosterForm(filename = 'poster.jpg') {
+  const form = new FormData();
+  form.append('poster', new Blob([POSTER_JPEG_BYTES], { type: 'image/jpeg' }), filename);
+  return form;
+}
 
 test('message creation, file upload, edit, search, read and delete work end-to-end', async () => {
   const { admin, bob, groupChat } = scenario;
@@ -130,6 +137,114 @@ test('universal uploads keep trusted media previewable and unsafe files download
   assert.equal(forwardedBinary.data.forwarded_from_message_id, binaryMessage.data.id);
   assert.equal(forwardedBinary.data.file_type, 'document');
   assert.equal(forwardedBinary.data.file_name, 'cover.psd');
+});
+
+test('video posters are uploaded, copied, deleted and backfilled through public APIs', async () => {
+  const { admin, bob, carol, groupChat, privateChat } = scenario;
+
+  const uploadWithPoster = await admin.uploadFile({
+    filename: 'poster-video.mp4',
+    mimeType: 'video/mp4',
+    body: 'video-with-poster',
+    poster: {
+      filename: 'poster-video.jpg',
+      mimeType: 'image/jpeg',
+      body: POSTER_JPEG_BYTES,
+    },
+  });
+  assert.equal(uploadWithPoster.type, 'video');
+  assert.equal(uploadWithPoster.poster_available, true);
+
+  const uploadedPoster = await admin.request(`/uploads/${uploadWithPoster.stored_name}/poster`);
+  assert.equal(uploadedPoster.headers['content-type'], 'image/jpeg');
+
+  const created = await admin.request(`/api/chats/${groupChat.id}/messages`, {
+    method: 'POST',
+    json: {
+      text: 'Video with poster',
+      fileId: uploadWithPoster.id,
+    },
+  });
+  assert.equal(created.data.file_type, 'video');
+  assert.equal(created.data.file_poster_available, true);
+
+  const hydrated = await admin.request(`/api/chats/${groupChat.id}/messages`, {
+    searchParams: { meta: 1 },
+  });
+  const hydratedMessage = hydrated.data.messages.find((message) => message.id === created.data.id);
+  assert.ok(hydratedMessage);
+  assert.equal(hydratedMessage.file_poster_available, true);
+
+  const forwarded = await admin.request(`/api/messages/${created.data.id}/forward`, {
+    method: 'POST',
+    json: { targetChatId: privateChat.id },
+  });
+  assert.equal(forwarded.data.file_poster_available, true);
+  const forwardedPoster = await admin.request(`/uploads/${forwarded.data.file_stored}/poster`);
+  assert.equal(forwardedPoster.headers['content-type'], 'image/jpeg');
+
+  const savedToNotes = await admin.request(`/api/messages/${created.data.id}/save-to-notes`, {
+    method: 'POST',
+    json: {},
+  });
+  assert.equal(savedToNotes.data.file_poster_available, true);
+  const savedPoster = await admin.request(`/uploads/${savedToNotes.data.file_stored}/poster`);
+  assert.equal(savedPoster.headers['content-type'], 'image/jpeg');
+
+  const legacyUpload = await admin.uploadFile({
+    filename: 'legacy-video.mp4',
+    mimeType: 'video/mp4',
+    body: 'legacy-video',
+  });
+  const legacyMessage = await admin.request(`/api/chats/${privateChat.id}/messages`, {
+    method: 'POST',
+    json: {
+      text: 'Legacy video',
+      fileId: legacyUpload.id,
+    },
+  });
+  assert.equal(legacyMessage.data.file_poster_available, false);
+
+  const backfilled = await bob.request(`/api/messages/${legacyMessage.data.id}/poster`, {
+    method: 'POST',
+    formData: makePosterForm('backfill.jpg'),
+  });
+  assert.equal(backfilled.data.ok, true);
+  assert.equal(backfilled.data.message.file_poster_available, true);
+
+  const backfilledPoster = await admin.request(`/uploads/${legacyUpload.stored_name}/poster`);
+  assert.equal(backfilledPoster.headers['content-type'], 'image/jpeg');
+
+  const forbidden = await carol.request(`/api/messages/${legacyMessage.data.id}/poster`, {
+    method: 'POST',
+    formData: makePosterForm('forbidden.jpg'),
+    expectedStatus: 403,
+  });
+  assert.equal(forbidden.data.error, 'Not a member');
+
+  const textMessage = await admin.request(`/api/chats/${groupChat.id}/messages`, {
+    method: 'POST',
+    json: { text: 'Not a video message' },
+  });
+  const nonVideo = await admin.request(`/api/messages/${textMessage.data.id}/poster`, {
+    method: 'POST',
+    formData: makePosterForm('non-video.jpg'),
+    expectedStatus: 400,
+  });
+  assert.match(nonVideo.data.error, /Video poster can only be attached to a video message/i);
+
+  const deleted = await admin.request(`/api/messages/${created.data.id}`, {
+    method: 'DELETE',
+  });
+  assert.equal(deleted.data.ok, true);
+
+  await admin.request(`/uploads/${uploadWithPoster.stored_name}/poster`, {
+    expectedStatus: 404,
+  });
+  const forwardedPosterAfterDelete = await admin.request(`/uploads/${forwarded.data.file_stored}/poster`);
+  assert.equal(forwardedPosterAfterDelete.headers['content-type'], 'image/jpeg');
+  const savedPosterAfterDelete = await admin.request(`/uploads/${savedToNotes.data.file_stored}/poster`);
+  assert.equal(savedPosterAfterDelete.headers['content-type'], 'image/jpeg');
 });
 
 test('link previews, reactions, pins, polls, notes and forwarding work through public APIs', async () => {
@@ -280,6 +395,7 @@ test('voice and video note endpoints work in isolated sandbox with mocked provid
   const videoForm = new FormData();
   videoForm.append('video', new Blob(['video-note'], { type: 'video/webm' }), 'note.webm');
   videoForm.append('audio', new Blob(['audio-track'], { type: 'audio/wav' }), 'note.wav');
+  videoForm.append('poster', new Blob([POSTER_JPEG_BYTES], { type: 'image/jpeg' }), 'note-poster.jpg');
   videoForm.append('durationMs', '2200');
   videoForm.append('sampleRate', '16000');
   videoForm.append('shapeId', 'circle');
@@ -296,4 +412,7 @@ test('voice and video note endpoints work in isolated sandbox with mocked provid
 
   assert.equal(videoMessage.data.is_video_note, true);
   assert.equal(videoMessage.data.video_note_shape_id, 'circle');
+  assert.equal(videoMessage.data.file_poster_available, true);
+  const videoPoster = await admin.request(`/uploads/${videoMessage.data.file_stored}/poster`);
+  assert.equal(videoPoster.headers['content-type'], 'image/jpeg');
 });

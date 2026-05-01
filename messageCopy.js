@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const { duplicateVideoPoster, deleteVideoPoster } = require('./videoPosters');
 
 function createMessageCopyService({
   db,
@@ -242,10 +243,23 @@ function createMessageCopyService({
         return newMessageId;
       })();
 
+      if (duplicatedFile?.stored_name && source?.file_type === 'video') {
+        try {
+          duplicateVideoPoster({
+            uploadsDir,
+            sourceStoredName: source.file_stored,
+            targetStoredName: duplicatedFile.stored_name,
+          });
+        } catch (error) {}
+      }
+
       return { messageId, duplicatedFile };
     } catch (error) {
       if (duplicatedFile?.path) {
         fs.unlink(duplicatedFile.path, () => {});
+      }
+      if (duplicatedFile?.stored_name) {
+        deleteVideoPoster(uploadsDir, duplicatedFile.stored_name);
       }
       throw error;
     }

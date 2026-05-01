@@ -9,6 +9,7 @@ const { createBasicChatScenario, waitFor } = require('../support/scenario');
 
 let sandbox;
 let scenario;
+const POSTER_JPEG_BYTES = Buffer.from('ffd8ffe000104a46494600010100000100010000ffdb000100ffd9', 'hex');
 
 before(async () => {
   sandbox = await createSandbox({ name: 'chat-api' });
@@ -157,10 +158,31 @@ test('creator-only chat management routes enforce permissions and mutate state',
   });
   assert.equal(ctxSettings.data.context_transform_enabled, 1);
 
+  const uploadedVideo = await admin.uploadFile({
+    filename: 'history-video.mp4',
+    mimeType: 'video/mp4',
+    body: 'history-video',
+    poster: {
+      filename: 'history-video.jpg',
+      mimeType: 'image/jpeg',
+      body: POSTER_JPEG_BYTES,
+    },
+  });
+
   await admin.request(`/api/chats/${managedChat.id}/messages`, {
     method: 'POST',
     json: { text: 'Message before history clear' },
   });
+  const videoMessage = await admin.request(`/api/chats/${managedChat.id}/messages`, {
+    method: 'POST',
+    json: {
+      text: 'Video before history clear',
+      fileId: uploadedVideo.id,
+    },
+  });
+  assert.equal(videoMessage.data.file_poster_available, true);
+  const posterBeforeClear = await admin.request(`/uploads/${uploadedVideo.stored_name}/poster`);
+  assert.equal(posterBeforeClear.headers['content-type'], 'image/jpeg');
 
   await bob.request(`/api/chats/${managedChat.id}/history`, {
     method: 'DELETE',
@@ -175,6 +197,9 @@ test('creator-only chat management routes enforce permissions and mutate state',
     searchParams: { meta: 1 },
   });
   assert.equal(messagesAfterClear.data.messages.length, 0);
+  await admin.request(`/uploads/${uploadedVideo.stored_name}/poster`, {
+    expectedStatus: 404,
+  });
 
   const deleted = await admin.request(`/api/chats/${managedChat.id}`, {
     method: 'DELETE',

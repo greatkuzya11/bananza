@@ -954,6 +954,7 @@
     const path = parsed.pathname.toLowerCase();
     const isUploadImage = path.startsWith('/uploads/avatars/')
       || path.startsWith('/uploads/backgrounds/')
+      || /^\/uploads\/[^/]+\/poster$/i.test(path)
       || /\.(png|jpe?g|webp|gif|avif|svg)$/i.test(path);
     return isUploadImage ? parsed.href : null;
   }
