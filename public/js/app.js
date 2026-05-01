@@ -91,6 +91,21 @@
     9: 0.8,
     10: 0.5,
   });
+  const MOBILE_FONT_SIZE_DEFAULT = 5;
+  const MOBILE_FONT_SIZE_MIN = 1;
+  const MOBILE_FONT_SIZE_MAX = 10;
+  const MOBILE_FONT_SIZE_PERCENTS = Object.freeze({
+    1: 84,
+    2: 88,
+    3: 92,
+    4: 96,
+    5: 100,
+    6: 104,
+    7: 108,
+    8: 112,
+    9: 116,
+    10: 120,
+  });
   const MODAL_TRANSITION_BUFFER_MS = 80;
   const CHAT_LIST_CACHE_VERSION = 3;
   const CHAT_LIST_CACHE_SYNC_DEBOUNCE_MS = 250;
@@ -184,6 +199,7 @@
   let pollComposerStyle = 'pulse';
   let currentModalAnimation = 'soft';
   let currentModalAnimationSpeed = MODAL_ANIMATION_SPEED_DEFAULT;
+  let currentMobileFontSize = MOBILE_FONT_SIZE_DEFAULT;
   let weatherSettings = { enabled: false, refresh_minutes: 30, location: null };
   let weatherSettingsLoaded = false;
   let selectedWeatherLocation = null;
@@ -424,6 +440,10 @@
   let modalAnimationSaveInFlight = false;
   let modalAnimationSaveQueued = false;
   let modalAnimationStatusTimer = null;
+  let mobileFontSizeSaveTimer = null;
+  let mobileFontSizeSaveInFlight = false;
+  let mobileFontSizeSaveQueued = false;
+  let mobileFontSizeStatusTimer = null;
   let chatAreaResizeObserver = null;
   let searchAllChats = false;
   let searchRequestSeq = 0;
@@ -543,6 +563,7 @@
   const visualModeSettingsModal = $('#visualModeSettingsModal');
   const pollStyleSettingsModal = $('#pollStyleSettingsModal');
   const animationSettingsModal = $('#animationSettingsModal');
+  const mobileFontSettingsModal = $('#mobileFontSettingsModal');
   const weatherSettingsModal = $('#weatherSettingsModal');
   const notificationSettingsModal = $('#notificationSettingsModal');
   const soundSettingsModal = $('#soundSettingsModal');
@@ -1616,6 +1637,168 @@
   function updateModalAnimationSpeed(speed, { immediate = false } = {}) {
     applyModalAnimationSpeed(speed, false);
     scheduleModalAnimationSave({ debounce: immediate ? 0 : 350 });
+  }
+
+  function normalizeMobileFontSize(size) {
+    const next = Math.round(Number(size));
+    if (!Number.isFinite(next)) return MOBILE_FONT_SIZE_DEFAULT;
+    return Math.min(MOBILE_FONT_SIZE_MAX, Math.max(MOBILE_FONT_SIZE_MIN, next));
+  }
+
+  function getMobileFontAdjustPercent(size = currentMobileFontSize) {
+    return MOBILE_FONT_SIZE_PERCENTS[normalizeMobileFontSize(size)] || MOBILE_FONT_SIZE_PERCENTS[MOBILE_FONT_SIZE_DEFAULT];
+  }
+
+  function setMobileFontAdjustPercent(percent = 100) {
+    const value = `${Math.round(Number(percent) || 100)}%`;
+    document.documentElement.style.setProperty('-webkit-text-size-adjust', value, 'important');
+    document.documentElement.style.setProperty('text-size-adjust', value, 'important');
+  }
+
+  function syncMobileFontSettingsButton() {
+    const panelBtn = $('#settingsMobileFontPanel');
+    if (!panelBtn) return;
+    panelBtn.textContent = `\uD83D\uDD20 Font Size (mobile): ${normalizeMobileFontSize(currentMobileFontSize)}/10`;
+  }
+
+  function setMobileFontSizeStatus(message, type = '') {
+    const el = $('#settingsMobileFontStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function clearMobileFontSizeStatusTimer() {
+    clearTimeout(mobileFontSizeStatusTimer);
+    mobileFontSizeStatusTimer = null;
+  }
+
+  function scheduleMobileFontSizeStatusClear() {
+    clearMobileFontSizeStatusTimer();
+    mobileFontSizeStatusTimer = setTimeout(() => {
+      if ($('#settingsMobileFontStatus')?.textContent === 'Saved') setMobileFontSizeStatus('');
+    }, 1200);
+  }
+
+  function getPersistedMobileFontSize() {
+    return normalizeMobileFontSize(currentUser?.ui_mobile_font_size);
+  }
+
+  function renderMobileFontSizeControl() {
+    const input = $('#settingsMobileFontSize');
+    const value = $('#settingsMobileFontSizeValue');
+    if (input) input.value = String(normalizeMobileFontSize(currentMobileFontSize));
+    if (value) value.textContent = `${normalizeMobileFontSize(currentMobileFontSize)}/10`;
+  }
+
+  function applyMobileFontSize(size, persist = true) {
+    const nextSize = normalizeMobileFontSize(size);
+    currentMobileFontSize = nextSize;
+    setMobileFontAdjustPercent(isMobileLayoutViewport() ? getMobileFontAdjustPercent(nextSize) : 100);
+    if (currentUser && persist) {
+      currentUser.ui_mobile_font_size = nextSize;
+      persistCurrentUser();
+    }
+    syncMobileFontSettingsButton();
+    renderMobileFontSizeControl();
+  }
+
+  function syncMobileFontSizeViewportState() {
+    applyMobileFontSize(currentMobileFontSize, false);
+  }
+
+  async function flushMobileFontSizeSave() {
+    clearTimeout(mobileFontSizeSaveTimer);
+    mobileFontSizeSaveTimer = null;
+    if (mobileFontSizeSaveInFlight || !currentUser) return;
+    const nextSize = normalizeMobileFontSize(currentMobileFontSize);
+    const prevSize = getPersistedMobileFontSize();
+    if (nextSize === prevSize) {
+      mobileFontSizeSaveQueued = false;
+      setMobileFontSizeStatus('');
+      return;
+    }
+
+    mobileFontSizeSaveInFlight = true;
+    mobileFontSizeSaveQueued = false;
+    clearMobileFontSizeStatusTimer();
+    setMobileFontSizeStatus('Saving...');
+    let didSave = false;
+    const requestSize = nextSize;
+
+    try {
+      const res = await api('/api/user/mobile-font-size', { method: 'PATCH', body: { size: requestSize } });
+      currentUser = { ...currentUser, ...res.user };
+      persistCurrentUser();
+      didSave = true;
+
+      const localChangedSinceRequest = normalizeMobileFontSize(currentMobileFontSize) !== requestSize;
+      if (!localChangedSinceRequest) {
+        applyMobileFontSize(currentUser.ui_mobile_font_size, false);
+      }
+
+      const pendingLocalChanges = normalizeMobileFontSize(currentMobileFontSize) !== getPersistedMobileFontSize();
+      if (!pendingLocalChanges && !mobileFontSizeSaveTimer) {
+        setMobileFontSizeStatus('Saved', 'success');
+        scheduleMobileFontSizeStatusClear();
+      } else {
+        setMobileFontSizeStatus('Saving...');
+      }
+    } catch (e) {
+      const localChangedSinceRequest = normalizeMobileFontSize(currentMobileFontSize) !== requestSize;
+      if (!localChangedSinceRequest) {
+        applyMobileFontSize(prevSize, false);
+      }
+      setMobileFontSizeStatus(e.message || 'Font size save failed', 'error');
+    } finally {
+      mobileFontSizeSaveInFlight = false;
+      const pendingLocalChanges = normalizeMobileFontSize(currentMobileFontSize) !== getPersistedMobileFontSize();
+      if (didSave && !mobileFontSizeSaveTimer && pendingLocalChanges) {
+        mobileFontSizeSaveQueued = false;
+        flushMobileFontSizeSave().catch(() => {});
+      } else if (!pendingLocalChanges && !mobileFontSizeSaveTimer) {
+        mobileFontSizeSaveQueued = false;
+      }
+    }
+  }
+
+  function scheduleMobileFontSizeSave({ debounce = 0 } = {}) {
+    clearMobileFontSizeStatusTimer();
+    const nextSize = normalizeMobileFontSize(currentMobileFontSize);
+    const prevSize = getPersistedMobileFontSize();
+    if (nextSize === prevSize) {
+      clearTimeout(mobileFontSizeSaveTimer);
+      mobileFontSizeSaveTimer = null;
+      mobileFontSizeSaveQueued = false;
+      if (!mobileFontSizeSaveInFlight) setMobileFontSizeStatus('');
+      return;
+    }
+
+    setMobileFontSizeStatus('Saving...');
+    clearTimeout(mobileFontSizeSaveTimer);
+
+    if (debounce > 0) {
+      mobileFontSizeSaveQueued = true;
+      mobileFontSizeSaveTimer = setTimeout(() => {
+        mobileFontSizeSaveTimer = null;
+        if (mobileFontSizeSaveInFlight) return;
+        flushMobileFontSizeSave().catch(() => {});
+      }, debounce);
+      return;
+    }
+
+    if (mobileFontSizeSaveInFlight) {
+      mobileFontSizeSaveQueued = true;
+      return;
+    }
+
+    flushMobileFontSizeSave().catch(() => {});
+  }
+
+  function updateMobileFontSize(size, { immediate = false } = {}) {
+    applyMobileFontSize(size, false);
+    scheduleMobileFontSizeSave({ debounce: immediate ? 0 : 350 });
   }
 
   let singleEmojiPattern = null;
@@ -3748,6 +3931,9 @@
       }
       if (Object.prototype.hasOwnProperty.call(user, 'ui_modal_animation_speed')) {
         applyModalAnimationSpeed(user.ui_modal_animation_speed, false);
+      }
+      if (Object.prototype.hasOwnProperty.call(user, 'ui_mobile_font_size')) {
+        applyMobileFontSize(user.ui_mobile_font_size, false);
       }
       persistCurrentUser();
       updateCurrentUserFooter();
@@ -9275,6 +9461,7 @@
       visualModeSettingsModal,
       pollStyleSettingsModal,
       animationSettingsModal,
+      mobileFontSettingsModal,
       weatherSettingsModal,
       notificationSettingsModal,
       soundSettingsModal,
@@ -11087,6 +11274,7 @@
       applyVisualMode(currentUser.ui_visual_mode, false);
       applyModalAnimation(currentUser.ui_modal_animation, false);
       applyModalAnimationSpeed(currentUser.ui_modal_animation_speed, false);
+      applyMobileFontSize(currentUser.ui_mobile_font_size, false);
     } catch { logout(); return false; }
     return true;
   }
@@ -11095,12 +11283,16 @@
     clearTimeout(chatListCacheSyncTimer);
     clearTimeout(messageBackgroundSyncTimer);
     clearTimeout(wsReconnectTimer);
+    clearTimeout(mobileFontSizeSaveTimer);
+    clearMobileFontSizeStatusTimer();
     if (chatListAbortController) chatListAbortController.abort();
     try { if (window.clearAssetCache) window.clearAssetCache().catch(()=>{}); } catch (e) {}
     try { if (window.messageCache && window.messageCache.clearUserCache) window.messageCache.clearUserCache().catch(()=>{}); } catch (e) {}
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     token = null;
+    currentMobileFontSize = MOBILE_FONT_SIZE_DEFAULT;
+    setMobileFontAdjustPercent(100);
     if (ws) {
       try { ws.onclose = null; ws.close(); } catch (e) {}
       ws = null;
@@ -17765,6 +17957,12 @@
     setModalAnimationStatus('');
   }
 
+  function openMobileFontSettingsModal() {
+    openModal('mobileFontSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
+    renderMobileFontSizeControl();
+    setMobileFontSizeStatus('');
+  }
+
   function openWeatherSettingsModal() {
     openModal('weatherSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
     renderWeatherSettingsForm();
@@ -19750,6 +19948,7 @@
     $('#settingsThemePanel').addEventListener('click', openThemeSettingsModal);
     $('#settingsVisualModePanel')?.addEventListener('click', openVisualModeSettingsModal);
     $('#settingsAnimationPanel')?.addEventListener('click', openAnimationSettingsModal);
+    $('#settingsMobileFontPanel')?.addEventListener('click', openMobileFontSettingsModal);
     $('#settingsWeatherPanel').addEventListener('click', openWeatherSettingsModal);
     $('#settingsNotificationsPanel')?.addEventListener('click', openNotificationSettingsModal);
     $('#settingsSoundsPanel')?.addEventListener('click', openSoundSettingsModal);
@@ -19807,6 +20006,15 @@
     });
     $('#settingsAnimationSpeed')?.addEventListener('blur', (e) => {
       updateModalAnimationSpeed(e.target.value, { immediate: true });
+    });
+    $('#settingsMobileFontSize')?.addEventListener('input', (e) => {
+      updateMobileFontSize(e.target.value, { immediate: false });
+    });
+    $('#settingsMobileFontSize')?.addEventListener('change', (e) => {
+      updateMobileFontSize(e.target.value, { immediate: true });
+    });
+    $('#settingsMobileFontSize')?.addEventListener('blur', (e) => {
+      updateMobileFontSize(e.target.value, { immediate: true });
     });
 
     // Weather settings
@@ -20329,6 +20537,9 @@
     hydrateChatListCache();
 
     setupMobileViewportHeightSync();
+    window.addEventListener('resize', syncMobileFontSizeViewportState, { passive: true });
+    window.addEventListener('orientationchange', syncMobileFontSizeViewportState);
+    window.visualViewport?.addEventListener('resize', syncMobileFontSizeViewportState);
 
     // Mobile navigation: set initial history state for chat list
     if (window.innerWidth <= 768) {
@@ -20343,6 +20554,7 @@
       applyVisualMode(currentUser.ui_visual_mode);
       applyModalAnimation(currentUser.ui_modal_animation);
       applyModalAnimationSpeed(currentUser.ui_modal_animation_speed);
+      applyMobileFontSize(currentUser.ui_mobile_font_size);
       localStorage.setItem('user', JSON.stringify(currentUser));
       await window.messageCache?.init?.(currentUser.id);
     } catch { return; }

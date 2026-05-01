@@ -25,6 +25,7 @@ db.exec(`
     ui_visual_mode TEXT DEFAULT 'classic',
     ui_modal_animation TEXT DEFAULT 'soft',
     ui_modal_animation_speed INTEGER DEFAULT 8,
+    ui_mobile_font_size INTEGER DEFAULT 5,
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -233,8 +234,14 @@ try {
 } catch {
   db.exec("ALTER TABLE users ADD COLUMN ui_modal_animation_speed INTEGER DEFAULT 8");
 }
+try {
+  db.prepare("SELECT ui_mobile_font_size FROM users LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE users ADD COLUMN ui_mobile_font_size INTEGER DEFAULT 5");
+}
 db.prepare("UPDATE users SET ui_poll_style='pulse' WHERE ui_poll_style IS NULL OR TRIM(ui_poll_style)=''").run();
 db.prepare("UPDATE users SET ui_modal_animation_speed=8 WHERE ui_modal_animation_speed IS NULL").run();
+db.prepare("UPDATE users SET ui_mobile_font_size=5 WHERE ui_mobile_font_size IS NULL OR ui_mobile_font_size < 1 OR ui_mobile_font_size > 10").run();
 try {
   db.prepare("SELECT is_ai_bot FROM users LIMIT 1").get();
 } catch {

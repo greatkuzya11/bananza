@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
   <title>🍌 BananZa</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍌</text></svg>">
-  <link rel="stylesheet" href="/css/style.css?v=20260429-active-unread-badge-chip">
+  <link rel="stylesheet" href="/css/style.css?v=20260501-mobile-font-size">
   <link rel="stylesheet" href="/css/voice.css">
   <link rel="stylesheet" href="/css/video-notes.css">
 </head>
@@ -265,6 +265,7 @@
         <button id="settingsThemePanel" class="settings-item">🎨 Theme</button>
         <button id="settingsVisualModePanel" class="settings-item">&#127820; Rich Banan UX</button>
         <button id="settingsAnimationPanel" class="settings-item">✨ Animation</button>
+        <button id="settingsMobileFontPanel" class="settings-item">&#128288; Font Size (mobile)</button>
         <button id="settingsWeatherPanel" class="settings-item">⛅ Weather</button>
         <button id="settingsNotificationsPanel" class="settings-item">🔔 Уведомления</button>
         <button id="settingsSoundsPanel" class="settings-item">🔊 Звуки</button>
@@ -353,6 +354,35 @@
           <div class="animation-speed-hint">1 = slower, 10 = faster, 8 = current</div>
         </div>
         <div id="settingsAnimationStatus" class="theme-settings-status"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mobile Font Size Settings Modal -->
+  <div id="mobileFontSettingsModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Mobile Font Size</h3>
+        <button class="modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="animation-speed-control">
+          <label class="animation-speed-label" for="settingsMobileFontSize">
+            <span>Size</span>
+            <strong id="settingsMobileFontSizeValue">5/10</strong>
+          </label>
+          <input
+            type="range"
+            id="settingsMobileFontSize"
+            class="animation-speed-range"
+            min="1"
+            max="10"
+            step="1"
+            value="5"
+          >
+          <div class="animation-speed-hint">Applies only in mobile layout. 5 = current size.</div>
+        </div>
+        <div id="settingsMobileFontStatus" class="theme-settings-status"></div>
       </div>
     </div>
   </div>
@@ -1915,7 +1945,7 @@
   <script src="/js/sounds.js"></script>
   <script src="/js/messageCache.js"></script>
   <script src="/js/ai-image-risk.js"></script>
-  <script src="/js/app.js?v=20260429-emoji-picker-keyboard-fix"></script>
+  <script src="/js/app.js?v=20260501-mobile-font-size"></script>
   <script src="/js/video-notes/video-note-shapes.js"></script>
   <script src="/js/video-notes/VideoShapeRegistry.js"></script>
   <script src="/js/video-notes/AudioNoteRecorderAdapter.js"></script>
