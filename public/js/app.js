@@ -454,6 +454,7 @@
   let searchPanelTransitionHandler = null;
   let searchPanelPendingAction = null;
   let searchPanelReturnFocusEl = null;
+  let searchPanelFollowupClickSuppressUntil = 0;
   let chatOpenSeq = 0;
   let chatMessageAbortController = null;
   let chatOpenInProgress = false;
@@ -804,6 +805,166 @@
       return fallback instanceof HTMLElement ? fallback : null;
     }
     return active instanceof HTMLElement ? active : (fallback instanceof HTMLElement ? fallback : null);
+  }
+
+  function isTouchLikePointerEvent(event) {
+    return Boolean(event && typeof event.pointerType === 'string' && event.pointerType !== 'mouse');
+  }
+
+  function isPickerDismissPassThroughTarget(target) {
+    return Boolean(
+      target instanceof Element
+      && target.closest(
+        '#menuBtn, #settingsBtn, #searchBtn, #chatInfoBtn, #backBtn, #emojiBtn, #attachBtn, #mentionOpenBtn, #composerContextConvertBtn, #msgInput'
+      )
+    );
+  }
+
+  function consumeOutsidePickerDismissGesture(event, suppressFollowupClick) {
+    suppressFollowupClick();
+    event.preventDefault();
+    event.stopImmediatePropagation?.();
+    event.stopPropagation();
+  }
+
+  function suppressSearchPanelFollowupClick(ms = 550) {
+    searchPanelFollowupClickSuppressUntil = Math.max(searchPanelFollowupClickSuppressUntil, Date.now() + ms);
+  }
+
+  // Touch-first browsers can drop the synthesized click after we prevent textarea blur.
+  // For these controls we execute the action directly from pointerup/touchend and only
+  // keep click as the desktop/mouse fallback.
+  function bindTouchSafeButtonActivation(button, onActivate, { suppressClickMs = 520 } = {}) {
+    if (!(button instanceof HTMLElement) || typeof onActivate !== 'function') return;
+    const gestureState = {
+      source: '',
+      pointerId: null,
+      touchId: null,
+      keyboardOpenAtStart: false,
+    };
+
+    const clearGestureState = () => {
+      gestureState.source = '';
+      gestureState.pointerId = null;
+      gestureState.touchId = null;
+      gestureState.keyboardOpenAtStart = false;
+    };
+
+    const suppressFollowupClick = (ms = suppressClickMs) => {
+      button.__touchSafeSuppressUntil = Math.max(
+        Number(button.__touchSafeSuppressUntil || 0),
+        Date.now() + Math.max(0, Number(ms) || 0)
+      );
+    };
+
+    const isFollowupClickSuppressed = () => Date.now() < Number(button.__touchSafeSuppressUntil || 0);
+
+    const buildActivationContext = (event, source) => {
+      const startKeyboardOpen = Boolean(
+        gestureState.keyboardOpenAtStart
+        || button.__mouseDownKeyboardWasOpen
+        || (source === 'click' && isMobileComposerKeyboardOpen())
+      );
+      return {
+        event,
+        source,
+        startKeyboardOpen,
+        keepKeyboardOpen: window.innerWidth > 768 || startKeyboardOpen || isMobileComposerKeyboardOpen(),
+        isTouchLike: source === 'pointer' || source === 'touch',
+      };
+    };
+
+    const maybePreserveComposerOnGestureStart = (event, keyboardOpenAtStart) => {
+      if (window.innerWidth > 768 || !keyboardOpenAtStart || !event?.cancelable) return false;
+      event.preventDefault();
+      return true;
+    };
+
+    const startGesture = (event, source) => {
+      gestureState.source = source;
+      gestureState.pointerId = source === 'pointer' && Number.isFinite(Number(event.pointerId))
+        ? Number(event.pointerId)
+        : null;
+      const touch = source === 'touch'
+        ? (event.changedTouches?.[0] || event.touches?.[0] || null)
+        : null;
+      gestureState.touchId = touch && Number.isFinite(Number(touch.identifier))
+        ? Number(touch.identifier)
+        : null;
+      gestureState.keyboardOpenAtStart = isMobileComposerKeyboardOpen();
+      maybePreserveComposerOnGestureStart(event, gestureState.keyboardOpenAtStart);
+    };
+
+    const activateFromGesture = (event, source) => {
+      const context = buildActivationContext(event, source);
+      suppressFollowupClick();
+      button.__mouseDownKeyboardWasOpen = false;
+      clearGestureState();
+      onActivate(context);
+      event.preventDefault?.();
+      event.stopPropagation?.();
+    };
+
+    button.addEventListener('pointerdown', (event) => {
+      if (gestureState.source === 'touch') return;
+      if (!isTouchLikePointerEvent(event)) return;
+      if (typeof event.button === 'number' && event.button !== 0) return;
+      startGesture(event, 'pointer');
+    }, { passive: false });
+
+    button.addEventListener('pointerup', (event) => {
+      if (gestureState.source !== 'pointer') return;
+      if (!isTouchLikePointerEvent(event)) {
+        clearGestureState();
+        return;
+      }
+      if (gestureState.pointerId != null && Number(event.pointerId) !== gestureState.pointerId) return;
+      activateFromGesture(event, 'pointer');
+    }, { passive: false });
+
+    button.addEventListener('pointercancel', () => {
+      if (gestureState.source === 'pointer') clearGestureState();
+    }, { passive: true });
+
+    button.addEventListener('touchstart', (event) => {
+      if (gestureState.source === 'pointer' || gestureState.source === 'touch') return;
+      startGesture(event, 'touch');
+    }, { passive: false });
+
+    button.addEventListener('touchend', (event) => {
+      if (gestureState.source !== 'touch') return;
+      if (gestureState.touchId != null) {
+        const matchesTouch = Array.from(event.changedTouches || [])
+          .some((touch) => Number(touch.identifier) === gestureState.touchId);
+        if (!matchesTouch && (event.changedTouches?.length || 0) > 0) return;
+      }
+      activateFromGesture(event, 'touch');
+    }, { passive: false });
+
+    button.addEventListener('touchcancel', () => {
+      if (gestureState.source === 'touch') clearGestureState();
+    }, { passive: true });
+
+    button.addEventListener('mousedown', (event) => {
+      if (typeof event.button === 'number' && event.button !== 0) return;
+      button.__mouseDownKeyboardWasOpen = isMobileComposerKeyboardOpen();
+      if (window.innerWidth <= 768 && button.__mouseDownKeyboardWasOpen && event.cancelable) {
+        event.preventDefault();
+      }
+    });
+
+    button.addEventListener('click', (event) => {
+      if (isFollowupClickSuppressed()) {
+        event.preventDefault();
+        event.stopPropagation();
+        button.__mouseDownKeyboardWasOpen = false;
+        return;
+      }
+      const context = buildActivationContext(event, 'click');
+      button.__mouseDownKeyboardWasOpen = false;
+      clearGestureState();
+      onActivate(context);
+    });
   }
 
   function isMobileComposerDismissMessageTarget(target) {
@@ -10196,11 +10357,12 @@
     syncContextConvertComposerButton();
   }
 
-  function hideMentionPicker() {
+  function hideMentionPicker(options = {}) {
+    const immediate = Boolean(options.immediate);
     mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [], source: null, keyboardAttached: false };
     mentionPickerPointerState = null;
-    closeFloatingSurface($('#mentionPickerBackdrop'));
-    closeFloatingSurface($('#mentionPicker'));
+    closeFloatingSurface($('#mentionPickerBackdrop'), { immediate });
+    closeFloatingSurface($('#mentionPicker'), { immediate });
     syncMentionOpenButton();
   }
 
@@ -10267,7 +10429,6 @@
       </div>
     `;
     mentionPickerState.active = true;
-    openFloatingSurface(ensureMentionPickerBackdrop());
     openFloatingSurface(picker);
     syncMentionOpenButton();
     positionMentionPicker();
@@ -10279,10 +10440,15 @@
     requestAnimationFrame(() => positionMentionPicker());
   }
 
-  async function openMentionPickerFromButton() {
+  async function openMentionPickerFromButton(options = {}) {
+    const keyboardAttached = Boolean(
+      window.innerWidth > 768
+      || (Object.prototype.hasOwnProperty.call(options, 'keyboardAttached')
+        ? options.keyboardAttached
+        : isMobileComposerKeyboardOpen())
+    );
     const chatId = Number(currentChatId || 0);
     if (mentionPickerState.active && mentionPickerState.source === 'button') {
-      const keyboardAttached = Boolean(mentionPickerState.keyboardAttached);
       hideMentionPicker();
       restoreComposerFocusAfterMentionPicker(keyboardAttached);
       return;
@@ -10299,7 +10465,6 @@
       const targets = await loadMentionTargets(chatId);
       if (chatId !== Number(currentChatId || 0) || !isComposerMeaningfullyEmpty()) return;
       const range = getManualMentionRange();
-      const keyboardAttached = window.innerWidth > 768 || isMobileComposerKeyboardOpen();
       mentionPickerState.start = range.start;
       mentionPickerState.end = range.end;
       renderMentionPicker(targets, { source: 'button', preserveSelection: false, keyboardAttached });
@@ -11033,13 +11198,13 @@
       item.classList.add('context-convert-picker-item');
       item.innerHTML = `<span class="context-convert-picker-label">${esc(bot?.name || 'Convert bot')}</span>`;
     });
-    openFloatingSurface(ensureContextConvertPickerBackdrop());
     openFloatingSurface(picker);
     positionContextConvertPicker();
     requestAnimationFrame(() => positionContextConvertPicker());
   }
 
-  function hideContextConvertPicker() {
+  function hideContextConvertPicker(options = {}) {
+    const immediate = Boolean(options.immediate);
     contextConvertPickerState = {
       active: false,
       selected: 0,
@@ -11051,8 +11216,8 @@
       keyboardAttached: false,
     };
     contextConvertPickerPointerState = null;
-    closeFloatingSurface($('#contextConvertPickerBackdrop'));
-    closeFloatingSurface($('#contextConvertPicker'));
+    closeFloatingSurface($('#contextConvertPickerBackdrop'), { immediate });
+    closeFloatingSurface($('#contextConvertPicker'), { immediate });
   }
 
   function getCurrentChatContextConvertState() {
@@ -11175,10 +11340,15 @@
     }
   }
 
-  async function openComposerContextConvertPicker() {
+  async function openComposerContextConvertPicker(options = {}) {
     if (contextConvertComposerPending || !currentChatId || editTo) return;
     const text = String(msgInput?.value || '').trim();
     if (!text) return;
+    const keyboardAttached = Boolean(
+      Object.prototype.hasOwnProperty.call(options, 'keyboardAttached')
+        ? options.keyboardAttached
+        : (window.innerWidth > 768 || isMobileComposerKeyboardOpen())
+    );
     hideMentionPicker();
     const availability = await loadContextConvertAvailability(currentChatId).catch(() => ({ enabled: false, bots: [] }));
     if (!availability.enabled || !availability.bots.length) {
@@ -11187,21 +11357,22 @@
     }
     if (contextConvertPickerState.active && contextConvertPickerState.mode === 'composer') {
       hideContextConvertPicker();
-      focusComposerKeepKeyboard(true);
+      if (keyboardAttached) focusComposerKeepKeyboard(true);
       return;
     }
     renderContextConvertPicker(availability.bots, {
       mode: 'composer',
       chatId: currentChatId,
       anchorEl: composerContextConvertBtn,
-      keyboardAttached: true,
+      keyboardAttached,
     });
-    focusComposerKeepKeyboard(true);
+    if (keyboardAttached) focusComposerKeepKeyboard(true);
   }
 
   async function transformComposerTextWithContextConvertBot(bot) {
     const text = String(msgInput?.value || '').trim();
     if (!bot?.id || !text || !currentChatId) return;
+    const keepKeyboardOpen = Boolean(contextConvertPickerState.keyboardAttached);
     hideContextConvertPicker();
     contextConvertComposerPending = true;
     syncContextConvertComposerButton();
@@ -11215,7 +11386,7 @@
       });
       msgInput.value = data.text || '';
       autoResize();
-      focusComposerKeepKeyboard(true);
+      if (keepKeyboardOpen) focusComposerKeepKeyboard(true);
       msgInput.dispatchEvent(new Event('input', { bubbles: true }));
     } catch (error) {
       alert(error.message || 'Could not transform text');
@@ -15888,7 +16059,7 @@
   }
 
   function shouldAutoFocusSearchInput() {
-    return window.innerWidth > 768;
+    return true;
   }
 
   function waitForMs(ms = 0) {
@@ -15943,13 +16114,18 @@
     return true;
   }
 
-  function openSearchPanel() {
+  function openSearchPanel(options = {}) {
     if (!searchPanel) return;
+    const focusInput = Object.prototype.hasOwnProperty.call(options, 'focusInput')
+      ? Boolean(options.focusInput)
+      : shouldAutoFocusSearchInput();
+    const suppressFollowupClick = Boolean(options.suppressFollowupClick);
+    if (suppressFollowupClick) suppressSearchPanelFollowupClick();
     closeMobileComposerTransientUi({ immediate: true });
     dismissMobileComposer({ forceRecovery: true, reason: 'search-panel' });
     ensureSearchPanelReady();
     if (isSearchPanelOpen() && !searchPanel.classList.contains('is-closing')) {
-      if (shouldAutoFocusSearchInput()) focusSearchInput();
+      if (focusInput) focusSearchInput();
       return;
     }
     clearSearchPanelTransitionState();
@@ -15966,6 +16142,7 @@
     searchPanel.classList.remove('is-open', 'is-closing');
     forceIosAnimationMount(searchPanel, searchPanelSheet);
     updateSearchTriggerState(true);
+    if (focusInput && window.innerWidth <= 768) focusSearchInput();
     if (!searchPanelHistoryPushed) {
       history.pushState({ ...(history.state || {}), searchPanel: true }, '');
       searchPanelHistoryPushed = true;
@@ -15973,7 +16150,7 @@
     searchPanelOpenFrame = requestAnimationFrame(() => {
       searchPanel.classList.add('is-open');
       searchPanelOpenFrame = null;
-      if (shouldAutoFocusSearchInput()) {
+      if (focusInput) {
         requestAnimationFrame(() => {
           if (isSearchPanelOpen()) focusSearchInput();
         });
@@ -18761,6 +18938,7 @@
       if (
         Date.now() >= mentionPickerClickSuppressUntil
         && Date.now() >= contextConvertPickerClickSuppressUntil
+        && Date.now() >= searchPanelFollowupClickSuppressUntil
         && Date.now() >= mobileComposerDismissClickSuppressUntil
         && Date.now() >= mediaViewerFollowupClickSuppressUntil
       ) return;
@@ -18776,26 +18954,30 @@
       e.stopImmediatePropagation?.();
       e.stopPropagation();
     };
+    const dismissMentionPickerOutsideGesture = (e) => {
+      const picker = $('#mentionPicker');
+      if (!picker || picker.classList.contains('hidden')) return;
+      const target = e.target;
+      if (picker.contains(target) || target === msgInput || target?.closest?.('#mentionOpenBtn')) return;
+      hideMentionPicker({ immediate: true });
+      if (isPickerDismissPassThroughTarget(target)) return;
+      consumeOutsidePickerDismissGesture(e, suppressMentionPickerFollowupClick);
+    };
+    const dismissContextConvertPickerOutsideGesture = (e) => {
+      const picker = $('#contextConvertPicker');
+      if (!picker || picker.classList.contains('hidden')) return;
+      const target = e.target;
+      if (picker.contains(target) || target?.closest?.('#composerContextConvertBtn')) return;
+      hideContextConvertPicker({ immediate: true });
+      if (isPickerDismissPassThroughTarget(target)) return;
+      consumeOutsidePickerDismissGesture(e, suppressContextConvertPickerFollowupClick);
+    };
+    document.addEventListener('pointerdown', dismissMentionPickerOutsideGesture, { passive: false, capture: true });
+    document.addEventListener('touchstart', dismissMentionPickerOutsideGesture, { passive: false, capture: true });
+    document.addEventListener('pointerdown', dismissContextConvertPickerOutsideGesture, { passive: false, capture: true });
+    document.addEventListener('touchstart', dismissContextConvertPickerOutsideGesture, { passive: false, capture: true });
     messagesEl.addEventListener('pointerdown', dismissMobileComposerMessageTap, { passive: false, capture: true });
     messagesEl.addEventListener('touchstart', dismissMobileComposerMessageTap, { passive: false, capture: true });
-    const preserveKeyboardUntilUtilityClick = (e) => {
-      preserveMobileComposerOnPointerDown(e, { requireOpenKeyboard: true });
-    };
-    [
-      $('#menuBtn'),
-      $('#searchBtn'),
-      $('#settingsBtn'),
-      $('#chatInfoBtn'),
-      backBtn,
-    ].forEach((btn) => {
-      // Note: touchstart is intentionally omitted. touchstart.preventDefault() suppresses
-      // synthesized click events on some Android browsers (Samsung Internet, older Chrome,
-      // some Firefox Android builds), causing the button action to never fire.
-      // pointerdown.preventDefault() is sufficient to prevent textarea blur without
-      // suppressing the subsequent click.
-      btn?.addEventListener('pointerdown', preserveKeyboardUntilUtilityClick, { passive: false });
-      btn?.addEventListener('mousedown', preserveKeyboardUntilUtilityClick);
-    });
 
     // Send message
     sendBtn.addEventListener('click', (e) => {
@@ -18805,25 +18987,13 @@
       // Keep keyboard open on mobile
       if (window.innerWidth <= 768) msgInput.focus();
     });
-    mentionOpenBtn?.addEventListener('mousedown', (e) => {
-      if (typeof e.button === 'number' && e.button !== 0) return;
-      e.preventDefault();
+    bindTouchSafeButtonActivation(mentionOpenBtn, ({ startKeyboardOpen }) => {
+      openMentionPickerFromButton({ keyboardAttached: startKeyboardOpen }).catch((error) => {
+        console.warn('[mentions] composer picker open failed:', error.message);
+      });
     });
-    mentionOpenBtn?.addEventListener('click', (e) => {
-      e.preventDefault();
-      openMentionPickerFromButton();
-    });
-    composerContextConvertBtn?.addEventListener('pointerdown', (e) => {
-      if (typeof e.button === 'number' && e.button !== 0) return;
-      e.preventDefault();
-    }, { passive: false });
-    composerContextConvertBtn?.addEventListener('mousedown', (e) => {
-      if (typeof e.button === 'number' && e.button !== 0) return;
-      e.preventDefault();
-    });
-    composerContextConvertBtn?.addEventListener('click', (e) => {
-      e.preventDefault();
-      openComposerContextConvertPicker().catch((error) => {
+    bindTouchSafeButtonActivation(composerContextConvertBtn, ({ startKeyboardOpen }) => {
+      openComposerContextConvertPicker({ keyboardAttached: startKeyboardOpen }).catch((error) => {
         console.warn('[context-convert] composer picker open failed:', error.message);
       });
     });
@@ -18873,19 +19043,6 @@
     msgInput.addEventListener('keyup', (e) => {
       if (!['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(e.key)) updateMentionPicker();
     });
-    // Cache keyboard-open state at pointer-down time (before visualViewport may start
-    // shrinking on some Android browsers), so the click handler can rely on a stable value.
-    let emojiPointerDownKeyboardWasOpen = false;
-    let emojiPointerDownKeyboardResetTimer = null;
-    const keepEmojiButtonFromBlurringInput = (e) => {
-      preserveMobileComposerOnPointerDown(e, { requireOpenKeyboard: true });
-      emojiPointerDownKeyboardWasOpen = isMobileComposerKeyboardOpen();
-      clearTimeout(emojiPointerDownKeyboardResetTimer);
-      emojiPointerDownKeyboardResetTimer = setTimeout(() => { emojiPointerDownKeyboardWasOpen = false; }, 600);
-    };
-    emojiBtn?.addEventListener('pointerdown', keepEmojiButtonFromBlurringInput, { passive: false });
-    emojiBtn?.addEventListener('touchstart', keepEmojiButtonFromBlurringInput, { passive: false });
-    emojiBtn?.addEventListener('mousedown', keepEmojiButtonFromBlurringInput);
     window.visualViewport?.addEventListener('resize', () => {
       const mentionPickerDismissed = dismissMentionPickerAfterKeyboardClose();
       if (mentionPickerDismissed) forceMobileViewportLayoutSync();
@@ -18913,12 +19070,6 @@
       positionMessageActionSurfaces();
       scheduleRetryLayout();
       queueIosViewportLayoutSync();
-    });
-    document.addEventListener('pointerdown', (e) => {
-      const picker = $('#mentionPicker');
-      if (!picker || picker.classList.contains('hidden')) return;
-      if (picker.contains(e.target) || e.target === msgInput || e.target.closest('#mentionOpenBtn')) return;
-      hideMentionPicker();
     });
     document.addEventListener('pointerdown', (e) => {
       const menu = $('#avatarUserMenu');
@@ -18963,20 +19114,9 @@
       attachMenu.style.top = top + 'px';
     };
     const closeAttachMenu = () => { attachMenu.classList.add('hidden'); };
-    const keepAttachButtonFromBlurringInput = (e) => {
-      if (!isMobileAttachMenu()) return;
-      e.preventDefault();
-    };
-
-    attachBtn.addEventListener('pointerdown', keepAttachButtonFromBlurringInput, { passive: false });
-    attachBtn.addEventListener('mousedown', keepAttachButtonFromBlurringInput);
-
-    attachBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
+    bindTouchSafeButtonActivation(attachBtn, ({ keepKeyboardOpen }) => {
       if (editTo) return;
       if (isMobileAttachMenu()) {
-        const keepKeyboardOpen = isMobileComposerKeyboardOpen();
         if (!attachMenu.classList.contains('hidden')) {
           attachMenu.classList.add('hidden');
           return;
@@ -19048,14 +19188,7 @@
     $('#pollSubmitBtn')?.addEventListener('click', submitPollComposer);
 
     // Emoji
-    emojiBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      // Use the state captured at pointerdown time (emojiPointerDownKeyboardWasOpen) as
-      // fallback: on some Android browsers visualViewport has already started shrinking
-      // by the time click fires, making isMobileComposerKeyboardOpen() return false
-      // even though the keyboard was open when the user tapped.
-      const keepKeyboardOpen = window.innerWidth > 768 || emojiPointerDownKeyboardWasOpen || isMobileComposerKeyboardOpen();
+    bindTouchSafeButtonActivation(emojiBtn, ({ keepKeyboardOpen }) => {
       toggleEmojiPicker(emojiBtn, { keepKeyboardOpen });
     });
 
@@ -19789,7 +19922,7 @@
     });
 
     // Back button (mobile)
-    backBtn?.addEventListener('click', () => {
+    bindTouchSafeButtonActivation(backBtn, () => {
       if (hasOpenModal()) {
         closeTopModal();
         return;
@@ -19961,7 +20094,7 @@
     });
 
     // Settings button
-    $('#settingsBtn').addEventListener('click', (e) => openSettingsModal(e.currentTarget));
+    bindTouchSafeButtonActivation($('#settingsBtn'), () => openSettingsModal($('#settingsBtn')));
 
     // Settings sub-buttons
     $('#settingsThemePanel').addEventListener('click', openThemeSettingsModal);
@@ -20396,12 +20529,12 @@
     });
 
     // Menu button
-    $('#menuBtn').addEventListener('click', (e) => openMenuDrawer(e.currentTarget));
+    bindTouchSafeButtonActivation($('#menuBtn'), () => openMenuDrawer($('#menuBtn')));
 
     // Chat info button
-    $('#chatInfoBtn').addEventListener('click', (e) => {
+    bindTouchSafeButtonActivation($('#chatInfoBtn'), () => {
       animateChatHeaderActionButton('#chatInfoBtn');
-      openChatInfoModal(e.currentTarget);
+      openChatInfoModal($('#chatInfoBtn'));
     });
 
     // Compact view toggle (per-chat)
@@ -20483,9 +20616,9 @@
     });
 
     // Search
-    $('#searchBtn').addEventListener('click', () => {
+    bindTouchSafeButtonActivation($('#searchBtn'), ({ isTouchLike }) => {
       animateChatHeaderActionButton('#searchBtn');
-      openSearchPanel();
+      openSearchPanel({ focusInput: true, suppressFollowupClick: isTouchLike });
     });
     $('#searchClose').addEventListener('click', () => closeSearchPanel());
     searchInput.addEventListener('input', () => performSearch());

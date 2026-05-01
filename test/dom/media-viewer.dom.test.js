@@ -168,6 +168,12 @@ async function wait(dom, delayMs = 0) {
   await new Promise((resolve) => dom.window.setTimeout(resolve, delayMs));
 }
 
+async function openMobileKeyboard(dom, input, { height = 420 } = {}) {
+  input.focus();
+  dom.visualViewportMock.setAndDispatch('resize', { height });
+  await wait(dom, 30);
+}
+
 function emitWsMessage(dom, payload) {
   const sockets = Array.isArray(dom.window.__testWebSockets) ? dom.window.__testWebSockets : [];
   const socket = sockets[sockets.length - 1];
@@ -221,6 +227,14 @@ function createTouchEvent(window, type, { touches = [], changedTouches = touches
   return event;
 }
 
+function createTouchStartEvent(window, { clientX = 0, clientY = 0, identifier = 1 } = {}) {
+  const touchPoint = createTouchPoint({ identifier, clientX, clientY });
+  return createTouchEvent(window, 'touchstart', {
+    touches: [touchPoint],
+    changedTouches: [touchPoint],
+  });
+}
+
 function createTouchEndEvent(window, { clientX = 0, clientY = 0, identifier = 1 } = {}) {
   return createTouchEvent(window, 'touchend', {
     touches: [],
@@ -228,7 +242,16 @@ function createTouchEndEvent(window, { clientX = 0, clientY = 0, identifier = 1 
   });
 }
 
-function createPrimaryPointerEvent(window, type = 'pointerdown', { pointerType = 'touch' } = {}) {
+function createPrimaryPointerEvent(
+  window,
+  type = 'pointerdown',
+  {
+    pointerType = 'touch',
+    pointerId = 1,
+    clientX = 0,
+    clientY = 0,
+  } = {}
+) {
   const event = new window.Event(type, { bubbles: true, cancelable: true });
   Object.defineProperty(event, 'button', {
     configurable: true,
@@ -238,7 +261,47 @@ function createPrimaryPointerEvent(window, type = 'pointerdown', { pointerType =
     configurable: true,
     value: pointerType,
   });
+  Object.defineProperty(event, 'pointerId', {
+    configurable: true,
+    value: pointerId,
+  });
+  Object.defineProperty(event, 'clientX', {
+    configurable: true,
+    value: clientX,
+  });
+  Object.defineProperty(event, 'clientY', {
+    configurable: true,
+    value: clientY,
+  });
   return event;
+}
+
+function dispatchPointerTap(window, target, { emitClick = false, pointerType = 'touch' } = {}) {
+  const pointerDown = createPrimaryPointerEvent(window, 'pointerdown', { pointerType });
+  const pointerUp = createPrimaryPointerEvent(window, 'pointerup', { pointerType });
+  target.dispatchEvent(pointerDown);
+  target.dispatchEvent(pointerUp);
+  if (emitClick) {
+    target.dispatchEvent(new window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    }));
+  }
+  return { pointerDown, pointerUp };
+}
+
+function dispatchTouchTap(window, target, { emitClick = false } = {}) {
+  const touchStart = createTouchStartEvent(window);
+  const touchEnd = createTouchEndEvent(window);
+  target.dispatchEvent(touchStart);
+  target.dispatchEvent(touchEnd);
+  if (emitClick) {
+    target.dispatchEvent(new window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    }));
+  }
+  return { touchStart, touchEnd };
 }
 
 function appendMessageRow(dom, {
@@ -417,7 +480,7 @@ function installMessagesViewportMock(dom, {
   };
 }
 
-function createChatFixture(chatId, name, { lastMessageId = chatId * 100 + 12 } = {}) {
+function createChatFixture(chatId, name, { lastMessageId = chatId * 100 + 12, ...overrides } = {}) {
   return {
     id: chatId,
     name,
@@ -433,6 +496,7 @@ function createChatFixture(chatId, name, { lastMessageId = chatId * 100 + 12 } =
     allow_unpin_any_pin: 0,
     avatar_url: '',
     avatar_color: '#5eb5f7',
+    ...overrides,
   };
 }
 
@@ -540,6 +604,58 @@ function createChatFetchHandler(chatMessagesByChatId) {
     }
     return null;
   };
+}
+
+function createComposerInteractionFetchHandler({
+  chatMessagesByChatId = {},
+  mentionTargetsByChatId = {},
+  contextConvertAvailabilityByChatId = {},
+} = {}) {
+  const chatFetchHandler = createChatFetchHandler(chatMessagesByChatId);
+  return ({ dom, window, url, input, init }) => {
+    const handled = chatFetchHandler({ dom, window, url, input, init });
+    if (handled) return handled;
+    const mentionMatch = url.pathname.match(/^\/api\/chats\/(\d+)\/mention-targets$/);
+    if (mentionMatch) {
+      const chatId = Number(mentionMatch[1]);
+      return createJsonResponse(dom, {
+        targets: mentionTargetsByChatId[chatId] || [],
+      });
+    }
+    const contextConvertBotsMatch = url.pathname.match(/^\/api\/chats\/(\d+)\/context-convert-bots$/);
+    if (contextConvertBotsMatch) {
+      const chatId = Number(contextConvertBotsMatch[1]);
+      return createJsonResponse(dom, contextConvertAvailabilityByChatId[chatId] || {
+        enabled: false,
+        bots: [],
+      });
+    }
+    const transformMatch = url.pathname.match(/^\/api\/chats\/(\d+)\/context-convert$/);
+    if (transformMatch && String(init?.method || '').toUpperCase() === 'POST') {
+      return createJsonResponse(dom, { text: 'Converted text' });
+    }
+    return null;
+  };
+}
+
+async function openSingleChatDom({
+  chat = createChatFixture(1, 'Chat A'),
+  chatMessagesByChatId = null,
+  mentionTargetsByChatId = {},
+  contextConvertAvailabilityByChatId = {},
+} = {}) {
+  const chatId = Number(chat.id || 1);
+  const dom = await bootAppDom({
+    fetchHandler: createComposerInteractionFetchHandler({
+      chatMessagesByChatId: chatMessagesByChatId || { [chatId]: [] },
+      mentionTargetsByChatId,
+      contextConvertAvailabilityByChatId,
+    }),
+  });
+  dom.window.BananzaAppBridge.__testing.setChats([chat]);
+  await dom.window.BananzaAppBridge.__testing.openChat(chatId);
+  await wait(dom, 60);
+  return dom;
 }
 
 function createReadTrackingFetchHandler(chatMessagesByChatId, initialChats = []) {
@@ -954,6 +1070,385 @@ test('emoji picker inserts emoji without focusing the composer when the keyboard
   assert.notEqual(msgInput.value, '');
   assert.equal(focusCalls, 0);
   assert.notEqual(document.activeElement, msgInput);
+});
+
+test('search button opens on touchend, survives the synthetic click and focuses the mobile search input', async (t) => {
+  const dom = await openSingleChatDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const searchBtn = document.getElementById('searchBtn');
+  const searchPanel = document.getElementById('searchPanel');
+  const searchInput = document.getElementById('searchInput');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+  await openMobileKeyboard(dom, msgInput);
+  assert.equal(app.style.height, '420px');
+
+  const { touchStart } = dispatchTouchTap(dom.window, searchBtn, { emitClick: true });
+  await wait(dom, 80);
+
+  assert.equal(touchStart.defaultPrevented, true);
+  assert.equal(searchPanel.getAttribute('aria-hidden'), 'false');
+  assert.equal(document.activeElement, searchInput);
+  assert.equal(app.style.height, '420px');
+  assertMobileScene(dom, 'chat');
+});
+
+test('chat info button opens on pointerup without a synthetic click and dismisses the mobile keyboard', async (t) => {
+  const dom = await openSingleChatDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const chatInfoBtn = document.getElementById('chatInfoBtn');
+  const chatInfoModal = document.getElementById('chatInfoModal');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+  await openMobileKeyboard(dom, msgInput);
+  assert.equal(app.style.height, '420px');
+
+  const { pointerDown } = dispatchPointerTap(dom.window, chatInfoBtn);
+  dom.visualViewportMock.set({ height: 844 });
+  await waitForViewportRecovery(dom, 320);
+
+  assert.equal(pointerDown.defaultPrevented, true);
+  assert.equal(chatInfoModal.classList.contains('hidden'), false);
+  assert.equal(app.style.height, '844px');
+  assert.notEqual(document.activeElement, msgInput);
+});
+
+test('mention picker opens on pointerup without a synthetic click and keeps the mobile composer attached', async (t) => {
+  const dom = await openSingleChatDom({
+    mentionTargetsByChatId: {
+      1: [
+        { user_id: 2, username: 'bob', token: 'bob', display_name: 'Bob', avatar_color: '#7bc862' },
+      ],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const mentionOpenBtn = document.getElementById('mentionOpenBtn');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+  await openMobileKeyboard(dom, msgInput);
+
+  dispatchPointerTap(dom.window, mentionOpenBtn);
+  await wait(dom, 80);
+
+  const mentionPicker = document.getElementById('mentionPicker');
+  assert.ok(mentionPicker, 'Expected mention picker to be created');
+  assert.equal(mentionPicker.classList.contains('hidden'), false);
+  assert.equal(document.activeElement, msgInput);
+  assert.equal(app.style.height, '420px');
+});
+
+test('attach button opens on touchend without a synthetic click and keeps the mobile composer attached', async (t) => {
+  const dom = await openSingleChatDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const attachBtn = document.getElementById('attachBtn');
+  const attachMenu = document.getElementById('attachMenu');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+  await openMobileKeyboard(dom, msgInput);
+
+  const { touchStart } = dispatchTouchTap(dom.window, attachBtn);
+  await wait(dom, 40);
+
+  assert.equal(touchStart.defaultPrevented, true);
+  assert.equal(attachMenu.classList.contains('hidden'), false);
+  assert.equal(document.activeElement, msgInput);
+  assert.equal(app.style.height, '420px');
+});
+
+test('composer context convert opens on pointerup without a synthetic click and keeps the mobile composer attached', async (t) => {
+  const dom = await openSingleChatDom({
+    chat: createChatFixture(1, 'Chat A', { context_transform_enabled: 1 }),
+    contextConvertAvailabilityByChatId: {
+      1: {
+        enabled: true,
+        bots: [{ id: 7, name: 'Banana Convert', provider: 'openai' }],
+      },
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const composerContextConvertBtn = document.getElementById('composerContextConvertBtn');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+  await openMobileKeyboard(dom, msgInput);
+  msgInput.value = 'Draft to convert';
+  msgInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  await wait(dom, 80);
+
+  assert.equal(composerContextConvertBtn.classList.contains('hidden'), false);
+
+  dispatchPointerTap(dom.window, composerContextConvertBtn);
+  await wait(dom, 80);
+
+  const picker = document.getElementById('contextConvertPicker');
+  assert.ok(picker, 'Expected context convert picker to be created');
+  assert.equal(picker.classList.contains('hidden'), false);
+  assert.equal(document.activeElement, msgInput);
+  assert.equal(app.style.height, '420px');
+});
+
+test('mention picker lets the search button act immediately on one touch gesture', async (t) => {
+  const dom = await openSingleChatDom({
+    mentionTargetsByChatId: {
+      1: [
+        { user_id: 2, username: 'bob', token: 'bob', display_name: 'Bob', avatar_color: '#7bc862' },
+      ],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const mentionOpenBtn = document.getElementById('mentionOpenBtn');
+  const searchBtn = document.getElementById('searchBtn');
+  const searchPanel = document.getElementById('searchPanel');
+  const searchInput = document.getElementById('searchInput');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+  await openMobileKeyboard(dom, msgInput);
+
+  mentionOpenBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await wait(dom, 80);
+  assert.equal(document.getElementById('mentionPicker').classList.contains('hidden'), false);
+
+  dispatchTouchTap(dom.window, searchBtn, { emitClick: true });
+  await wait(dom, 80);
+
+  assert.equal(document.getElementById('mentionPicker').classList.contains('hidden'), true);
+  assert.equal(searchPanel.getAttribute('aria-hidden'), 'false');
+  assert.equal(document.activeElement, searchInput);
+  assert.equal(app.style.height, '420px');
+});
+
+test('mention picker lets chat info and back act immediately on one tap', async (t) => {
+  const mentionTargetsByChatId = {
+    1: [
+      { user_id: 2, username: 'bob', token: 'bob', display_name: 'Bob', avatar_color: '#7bc862' },
+    ],
+  };
+
+  {
+    const dom = await openSingleChatDom({ mentionTargetsByChatId });
+    t.after(() => {
+      dom.window.close();
+    });
+    const { document, BananzaAppBridge } = dom.window;
+    const msgInput = document.getElementById('msgInput');
+    const mentionOpenBtn = document.getElementById('mentionOpenBtn');
+    const chatInfoBtn = document.getElementById('chatInfoBtn');
+    const chatInfoModal = document.getElementById('chatInfoModal');
+
+    BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+    await wait(dom, 40);
+    await openMobileKeyboard(dom, msgInput);
+    mentionOpenBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    }));
+    await wait(dom, 80);
+
+    dispatchPointerTap(dom.window, chatInfoBtn);
+    dom.visualViewportMock.set({ height: 844 });
+    await waitForViewportRecovery(dom, 320);
+
+    assert.equal(document.getElementById('mentionPicker').classList.contains('hidden'), true);
+    assert.equal(chatInfoModal.classList.contains('hidden'), false);
+  }
+
+  {
+    const dom = await openSingleChatDom({ mentionTargetsByChatId });
+    t.after(() => {
+      dom.window.close();
+    });
+    const { document, BananzaAppBridge } = dom.window;
+    const app = document.getElementById('app');
+    const msgInput = document.getElementById('msgInput');
+    const mentionOpenBtn = document.getElementById('mentionOpenBtn');
+    const backBtn = document.getElementById('backBtn');
+
+    BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+    await wait(dom, 40);
+    await openMobileKeyboard(dom, msgInput);
+    mentionOpenBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    }));
+    await wait(dom, 80);
+
+    dispatchPointerTap(dom.window, backBtn);
+    dom.visualViewportMock.set({ height: 844 });
+    await waitForViewportRecovery(dom, 520);
+
+    assert.equal(document.getElementById('mentionPicker').classList.contains('hidden'), true);
+    assert.equal(app.style.height, '844px');
+    assertMobileScene(dom, 'sidebar');
+  }
+});
+
+test('context convert picker lets search act immediately on one touch gesture', async (t) => {
+  const dom = await openSingleChatDom({
+    chat: createChatFixture(1, 'Chat A', { context_transform_enabled: 1 }),
+    contextConvertAvailabilityByChatId: {
+      1: {
+        enabled: true,
+        bots: [{ id: 7, name: 'Banana Convert', provider: 'openai' }],
+      },
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const searchBtn = document.getElementById('searchBtn');
+  const searchPanel = document.getElementById('searchPanel');
+  const searchInput = document.getElementById('searchInput');
+  const composerContextConvertBtn = document.getElementById('composerContextConvertBtn');
+  const row = appendMessageRow(dom, { id: 401, text: 'Just a row' });
+  const bubble = row.querySelector('.msg-bubble');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+  await openMobileKeyboard(dom, msgInput);
+  msgInput.value = 'Draft to convert';
+  msgInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  await wait(dom, 80);
+
+  composerContextConvertBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await wait(dom, 80);
+  assert.equal(document.getElementById('contextConvertPicker').classList.contains('hidden'), false);
+
+  dispatchTouchTap(dom.window, searchBtn, { emitClick: true });
+  await wait(dom, 80);
+
+  assert.equal(document.getElementById('contextConvertPicker').classList.contains('hidden'), true);
+  assert.equal(searchPanel.getAttribute('aria-hidden'), 'false');
+  assert.equal(document.activeElement, searchInput);
+  assert.equal(app.style.height, '420px');
+});
+
+test('context convert picker outside message taps only close the picker without side effects', async (t) => {
+  const dom = await openSingleChatDom({
+    chat: createChatFixture(1, 'Chat A', { context_transform_enabled: 1 }),
+    contextConvertAvailabilityByChatId: {
+      1: {
+        enabled: true,
+        bots: [{ id: 7, name: 'Banana Convert', provider: 'openai' }],
+      },
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const msgInput = document.getElementById('msgInput');
+  const composerContextConvertBtn = document.getElementById('composerContextConvertBtn');
+  const row = appendMessageRow(dom, { id: 402, text: 'Tap outside context convert picker' });
+  const bubble = row.querySelector('.msg-bubble');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+  await openMobileKeyboard(dom, msgInput);
+  msgInput.value = 'Draft to convert';
+  msgInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  await wait(dom, 80);
+  composerContextConvertBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await wait(dom, 80);
+  assert.equal(document.getElementById('contextConvertPicker').classList.contains('hidden'), false);
+
+  bubble.dispatchEvent(createPrimaryPointerEvent(dom.window, 'pointerdown'));
+  bubble.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await wait(dom, 40);
+
+  assert.equal(document.getElementById('contextConvertPicker').classList.contains('hidden'), true);
+  assert.equal(row.classList.contains('actions-open'), false);
+  assert.equal(document.activeElement, msgInput);
+});
+
+test('mention picker outside message taps only close the picker without side effects', async (t) => {
+  const dom = await openSingleChatDom({
+    mentionTargetsByChatId: {
+      1: [
+        { user_id: 2, username: 'bob', token: 'bob', display_name: 'Bob', avatar_color: '#7bc862' },
+      ],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const mentionOpenBtn = document.getElementById('mentionOpenBtn');
+  const row = appendMessageRow(dom, { id: 402, text: 'Tap outside mention picker' });
+  const bubble = row.querySelector('.msg-bubble');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+  await openMobileKeyboard(dom, msgInput);
+  mentionOpenBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await wait(dom, 80);
+  assert.equal(document.getElementById('mentionPicker').classList.contains('hidden'), false);
+
+  bubble.dispatchEvent(createPrimaryPointerEvent(dom.window, 'pointerdown'));
+  bubble.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await wait(dom, 40);
+
+  assert.equal(document.getElementById('mentionPicker').classList.contains('hidden'), true);
+  assert.equal(row.classList.contains('actions-open'), false);
+  assert.equal(document.activeElement, msgInput);
+  assert.equal(app.style.height, '420px');
 });
 
 test('emoji picker closes when navigating back out of the mobile chat view', async (t) => {

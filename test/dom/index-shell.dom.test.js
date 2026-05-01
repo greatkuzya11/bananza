@@ -17,7 +17,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
   const scripts = [...document.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
 
   assert.deepEqual(styles, [
-    '/css/style.css?v=20260429-active-unread-badge-chip',
+    '/css/style.css?v=20260501-mobile-font-size',
     '/css/voice.css',
     '/css/video-notes.css',
   ]);
@@ -26,7 +26,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/sounds.js',
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
-    '/js/app.js?v=20260429-emoji-picker-keyboard-fix',
+    '/js/app.js?v=20260501-mobile-font-size',
     '/js/video-notes/video-note-shapes.js',
     '/js/video-notes/VideoShapeRegistry.js',
     '/js/video-notes/AudioNoteRecorderAdapter.js',
