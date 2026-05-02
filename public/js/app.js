@@ -9324,7 +9324,7 @@
   function positionMediaContextMenu() {
     if (!mediaContextMenuState || !mediaContextMenu || mediaContextMenu.classList.contains('hidden')) return;
     const viewport = getFloatingViewportRect();
-    const size = measureFloatingSurface(mediaContextMenu, mediaContextMenuState.mode === 'sheet' ? 340 : 280, 360);
+    const size = measureFloatingSurface(mediaContextMenu, mediaContextMenuState.mode === 'sheet' ? 240 : 220, 300);
     if (mediaContextMenuState.mode === 'sheet') {
       const left = clamp((viewport.left + viewport.right - size.width) / 2, viewport.left + 10, viewport.right - size.width - 10);
       const top = clamp(viewport.bottom - size.height - 10, viewport.top + 10, viewport.bottom - size.height - 10);
