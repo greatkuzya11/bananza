@@ -145,6 +145,29 @@ html[data-visual-mode="rich"] .msg-row.video-note-row.other .msg-bubble {
   max-width: 100%;
 }
 
+@media (min-width: 769px) {
+  :root {
+    --video-note-desktop-max-height: 33vh;
+    --video-note-desktop-max-width: calc(var(--video-note-desktop-max-height) * .708);
+  }
+
+  .msg-row.video-note-row,
+  .msg-row.video-note-row.own,
+  .msg-row.video-note-row.other,
+  .messages:not(.compact-view) .msg-row.video-note-row,
+  .messages:not(.compact-view) .msg-row.video-note-row.own,
+  .messages.compact-view .msg-row.video-note-row,
+  .messages.compact-view .msg-row.video-note-row.own {
+    width: min(66.666vw, var(--video-note-desktop-max-width), 100%);
+    max-width: min(66.666vw, var(--video-note-desktop-max-width), 100%);
+  }
+
+  .msg-group:has(.msg-row.video-note-row) {
+    width: min(66.666vw, var(--video-note-desktop-max-width), 100%);
+    max-width: min(66.666vw, var(--video-note-desktop-max-width), 100%);
+  }
+}
+
 .video-note-row .msg-footer {
   --video-note-shape-bottom-gap: 15.8%;
   --video-note-footer-height: 22px;
