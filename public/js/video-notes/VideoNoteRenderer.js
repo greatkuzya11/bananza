@@ -239,18 +239,26 @@
         video?.addEventListener('loadedmetadata', syncUi);
         video?.addEventListener('durationchange', syncUi);
         video?.addEventListener('timeupdate', () => this.refreshProgressUi(row));
-        video?.addEventListener('seeking', () => this.refreshProgressUi(row));
+        video?.addEventListener('seeking', () => {
+          this.setPlaybackCompleted(row, false);
+          this.refreshProgressUi(row);
+        });
         video?.addEventListener('play', () => {
+          this.setPlaybackCompleted(row, false);
           row.classList.add('video-note-playing');
           this.startProgressLoop(row);
           syncUi();
         });
         video?.addEventListener('pause', () => {
+          if (video?.ended) {
+            this.setPlaybackCompleted(row, true);
+          }
           row.classList.remove('video-note-playing');
           this.stopProgressLoop(row);
           syncUi();
         });
         video?.addEventListener('ended', () => {
+          this.setPlaybackCompleted(row, true);
           row.classList.remove('video-note-playing');
           this.stopProgressLoop(row);
           syncUi();
@@ -279,6 +287,21 @@
       stage.setAttribute('aria-label', isPlaying ? TEXT.pauseLabel : TEXT.playLabel);
     }
 
+    isPlaybackCompleted(row) {
+      const message = row?.__messageData || {};
+      return Boolean(
+        message.video_playback_completed
+        || this.getBridge()?.isMediaPlaybackCompleted?.(message, 'video-note-video')
+      );
+    }
+
+    setPlaybackCompleted(row, completed) {
+      const message = row?.__messageData || {};
+      const nextCompleted = Boolean(completed);
+      if (row?.__messageData) row.__messageData.video_playback_completed = nextCompleted;
+      this.getBridge()?.setMediaPlaybackCompleted?.(message, 'video-note-video', nextCompleted);
+    }
+
     refreshProgressUi(row) {
       const video = row?.querySelector('.video-note-video');
       const fill = row?.querySelector('.video-note-progress-fill');
@@ -303,10 +326,14 @@
         Number.isFinite(metadataDuration) ? metadataDuration : 0,
         Number.isFinite(declaredDuration) ? declaredDuration : 0
       );
-      let progress = duration > 0
-        ? clamp((Number(video.currentTime || 0) / duration), 0, 1)
-        : 0;
-      if (!video.ended) {
+      const isPlaying = !video.paused && !video.ended;
+      const playbackCompleted = this.isPlaybackCompleted(row);
+      let progress = playbackCompleted && !isPlaying
+        ? 1
+        : duration > 0
+          ? clamp((Number(video.currentTime || 0) / duration), 0, 1)
+          : (video.ended ? 1 : 0);
+      if (!video.ended && !playbackCompleted) {
         const visibleCap = Math.min(
           PLAYING_PROGRESS_MAX,
           Math.max(0, (pathLength - MIN_PLAYING_PROGRESS_GAP_PX) / pathLength)

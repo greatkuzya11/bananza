@@ -5,8 +5,19 @@ const {
   createAppDom,
   installVisualViewportMock,
   loadBrowserScript,
+  loadBrowserScripts,
   setDocumentHidden,
 } = require('../support/domHarness');
+
+const VIDEO_NOTE_SCRIPTS = [
+  'public/js/video-notes/video-note-shapes.js',
+  'public/js/video-notes/VideoShapeRegistry.js',
+  'public/js/video-notes/AudioNoteRecorderAdapter.js',
+  'public/js/video-notes/VideoNoteRecorder.js',
+  'public/js/video-notes/VideoNoteRenderer.js',
+  'public/js/video-notes/MediaNoteComposerController.js',
+  'public/js/video-notes/VideoNoteFeature.js',
+];
 
 function createJsonResponse(dom, data, init = {}) {
   return new dom.window.Response(JSON.stringify(data), {
@@ -158,6 +169,115 @@ async function bootAppDom(options = {}) {
   await ready;
   await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
   return dom;
+}
+
+function installProgressSvgMocks(dom, { pathLength = 100 } = {}) {
+  const { window } = dom;
+  if (window.SVGElement?.prototype) {
+    Object.defineProperty(window.SVGElement.prototype, 'getTotalLength', {
+      configurable: true,
+      writable: true,
+      value() {
+        return pathLength;
+      },
+    });
+  }
+  const originalGetBoundingClientRect = window.Element.prototype.getBoundingClientRect;
+  const buildRect = (width, height) => ({
+    x: 0,
+    y: 0,
+    top: 0,
+    left: 0,
+    right: width,
+    bottom: height,
+    width,
+    height,
+    toJSON() {
+      return this;
+    },
+  });
+  window.Element.prototype.getBoundingClientRect = function patchedGetBoundingClientRect() {
+    if (this instanceof window.HTMLElement && this.classList.contains('msg-bubble')) {
+      return buildRect(248, 104);
+    }
+    return originalGetBoundingClientRect.call(this);
+  };
+}
+
+function installMockMediaElement(dom, mediaEl, initialState = {}) {
+  assert.ok(mediaEl, 'Expected a media element to mock');
+  const { window } = dom;
+  const state = {
+    duration: Number(initialState.duration ?? 0) || 0,
+    currentTime: Number(initialState.currentTime ?? 0) || 0,
+    paused: Object.prototype.hasOwnProperty.call(initialState, 'paused') ? Boolean(initialState.paused) : true,
+    ended: Boolean(initialState.ended),
+    readyState: Number(initialState.readyState ?? 0) || 0,
+  };
+
+  Object.defineProperty(mediaEl, 'duration', {
+    configurable: true,
+    get() {
+      return state.duration;
+    },
+    set(value) {
+      state.duration = Number(value || 0) || 0;
+    },
+  });
+  Object.defineProperty(mediaEl, 'currentTime', {
+    configurable: true,
+    get() {
+      return state.currentTime;
+    },
+    set(value) {
+      state.currentTime = Number(value || 0) || 0;
+    },
+  });
+  Object.defineProperty(mediaEl, 'paused', {
+    configurable: true,
+    get() {
+      return state.paused;
+    },
+    set(value) {
+      state.paused = Boolean(value);
+    },
+  });
+  Object.defineProperty(mediaEl, 'ended', {
+    configurable: true,
+    get() {
+      return state.ended;
+    },
+    set(value) {
+      state.ended = Boolean(value);
+    },
+  });
+  Object.defineProperty(mediaEl, 'readyState', {
+    configurable: true,
+    get() {
+      return state.readyState;
+    },
+    set(value) {
+      state.readyState = Number(value || 0) || 0;
+    },
+  });
+  mediaEl.load = () => {};
+  mediaEl.play = () => {
+    state.paused = false;
+    state.ended = false;
+    mediaEl.dispatchEvent(new window.Event('play'));
+    return Promise.resolve();
+  };
+  mediaEl.pause = () => {
+    state.paused = true;
+    mediaEl.dispatchEvent(new window.Event('pause'));
+  };
+  return state;
+}
+
+function getDasharrayFilledLength(node) {
+  const raw = String(node?.getAttribute?.('stroke-dasharray') || '').trim();
+  const [filled] = raw.split(/[\s,]+/).map((part) => Number(part || 0));
+  return filled;
 }
 
 async function waitForViewportRecovery(dom, delayMs = 240) {
@@ -570,6 +690,53 @@ function createIncomingMessage(chatId, messageId, overrides = {}) {
   };
 }
 
+function createVoiceNoteMessage(chatId, messageId, overrides = {}) {
+  return createIncomingMessage(chatId, messageId, {
+    text: '',
+    file_id: 800 + Number(messageId || 0),
+    file_name: `voice-${messageId}.ogg`,
+    file_stored: `voice-${messageId}.ogg`,
+    file_type: 'audio',
+    file_mime: 'audio/ogg',
+    file_size: 2_048,
+    is_voice_note: 1,
+    is_video_note: 0,
+    voice_duration_ms: 24_000,
+    media_note_duration_ms: 24_000,
+    transcription_status: 'idle',
+    transcription_text: '',
+    transcription_provider: '',
+    transcription_model: '',
+    transcription_error: '',
+    ...overrides,
+  });
+}
+
+function createVideoNoteMessage(chatId, messageId, overrides = {}) {
+  return createIncomingMessage(chatId, messageId, {
+    text: '',
+    file_id: 1_200 + Number(messageId || 0),
+    file_name: `video-note-${messageId}.webm`,
+    file_stored: `video-note-${messageId}.webm`,
+    file_type: 'video',
+    file_mime: 'video/webm',
+    file_size: 4_096,
+    file_poster_available: true,
+    is_voice_note: 1,
+    is_video_note: 1,
+    voice_duration_ms: 18_000,
+    media_note_duration_ms: 18_000,
+    video_note_shape_id: 'banana-fat',
+    video_note_shape_snapshot: null,
+    transcription_status: 'idle',
+    transcription_text: '',
+    transcription_provider: '',
+    transcription_model: '',
+    transcription_error: '',
+    ...overrides,
+  });
+}
+
 function createVideoMessage(chatId, messageId, overrides = {}) {
   return createIncomingMessage(chatId, messageId, {
     text: `Video message ${messageId}`,
@@ -638,6 +805,30 @@ function createComposerInteractionFetchHandler({
   };
 }
 
+function createMediaPlaybackFetchHandler({
+  chatMessagesByChatId = {},
+  mentionTargetsByChatId = {},
+  contextConvertAvailabilityByChatId = {},
+  features = {},
+} = {}) {
+  const composerHandler = createComposerInteractionFetchHandler({
+    chatMessagesByChatId,
+    mentionTargetsByChatId,
+    contextConvertAvailabilityByChatId,
+  });
+  return ({ dom, window, url, input, init }) => {
+    if (url.pathname === '/api/features') {
+      return createJsonResponse(dom, {
+        voice_notes_enabled: true,
+        auto_transcribe_on_send: false,
+        voice_note_ui_mode: 'compact',
+        ...features,
+      });
+    }
+    return composerHandler({ dom, window, url, input, init });
+  };
+}
+
 async function openSingleChatDom({
   chat = createChatFixture(1, 'Chat A'),
   chatMessagesByChatId = null,
@@ -655,6 +846,40 @@ async function openSingleChatDom({
   dom.window.BananzaAppBridge.__testing.setChats([chat]);
   await dom.window.BananzaAppBridge.__testing.openChat(chatId);
   await wait(dom, 60);
+  return dom;
+}
+
+async function openMediaPlaybackDom({
+  activeChat = createChatFixture(1, 'Chat A'),
+  chats = null,
+  chatMessagesByChatId = null,
+  features = {},
+} = {}) {
+  const allChats = Array.isArray(chats) && chats.length
+    ? chats
+    : [activeChat, createChatFixture(2, 'Chat B', { lastMessageId: 0 })];
+  const dom = await bootAppDom({
+    fetchHandler: createMediaPlaybackFetchHandler({
+      chatMessagesByChatId: chatMessagesByChatId || { [Number(activeChat.id || 1)]: [] },
+      features,
+    }),
+  });
+  installProgressSvgMocks(dom);
+  dom.window.HTMLMediaElement.prototype.load = function load() {};
+  dom.window.HTMLMediaElement.prototype.play = function play() {
+    return Promise.resolve();
+  };
+  dom.window.HTMLMediaElement.prototype.pause = function pause() {};
+  loadBrowserScript(dom, 'public/js/messageCache.js');
+  await dom.window.messageCache.init(1);
+  await dom.window.messageCache.clearUserCache();
+  await dom.window.messageCache.init(1);
+  loadBrowserScript(dom, 'public/js/voice.js');
+  loadBrowserScripts(dom, VIDEO_NOTE_SCRIPTS);
+  await wait(dom, 60);
+  dom.window.BananzaAppBridge.__testing.setChats(allChats);
+  await dom.window.BananzaAppBridge.__testing.openChat(Number(activeChat.id || 1));
+  await wait(dom, 120);
   return dom;
 }
 
@@ -1452,27 +1677,34 @@ test('mention picker outside message taps only close the picker without side eff
 });
 
 test('emoji picker closes when navigating back out of the mobile chat view', async (t) => {
-  const dom = await bootAppDom();
+  const dom = await openSingleChatDom();
   t.after(() => {
     dom.window.close();
   });
-  const { document } = dom.window;
-  const sidebar = document.getElementById('sidebar');
+  const { document, BananzaAppBridge, history } = dom.window;
   const emojiBtn = document.getElementById('emojiBtn');
   const emojiPicker = document.getElementById('emojiPicker');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', {
+    hideInactive: true,
+    syncChatMetrics: true,
+  });
+  await wait(dom, 40);
+  history.replaceState({ chat: 1 }, '');
 
   emojiBtn.dispatchEvent(new dom.window.MouseEvent('click', {
     bubbles: true,
     cancelable: true,
   }));
-  await new Promise((resolve) => dom.window.setTimeout(resolve, 40));
+  await wait(dom, 40);
   assert.equal(emojiPicker.classList.contains('hidden'), false);
+  assert.equal(getMobileSceneSnapshot(dom).scene, 'chat');
 
-  sidebar.classList.add('sidebar-hidden');
   dom.window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
-  await new Promise((resolve) => dom.window.setTimeout(resolve, 20));
+  await wait(dom, 320);
 
   assert.equal(emojiPicker.classList.contains('hidden'), true);
+  assertMobileScene(dom, 'sidebar');
 });
 
 test('mobile chat exit popstate uses the resolved chat scene instead of raw sidebar-hidden state', async (t) => {
@@ -2167,4 +2399,226 @@ test('mobile back navigation dismisses the keyboard and removes the composer gap
   assert.equal(app.style.height, '844px');
   assert.notEqual(document.activeElement, msgInput);
   assertMobileScene(dom, 'sidebar');
+});
+
+test('voice note restores playback position after leaving and reopening the chat', async (t) => {
+  const chatA = createChatFixture(1, 'Chat A', { lastMessageId: 411 });
+  const chatB = createChatFixture(2, 'Chat B', { lastMessageId: 0 });
+  const message = createVoiceNoteMessage(1, 411);
+  const dom = await openMediaPlaybackDom({
+    activeChat: chatA,
+    chats: [chatA, chatB],
+    chatMessagesByChatId: {
+      1: [message],
+      2: [],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+
+  const firstAudio = document.querySelector('.msg-row[data-msg-id="411"] audio');
+  installMockMediaElement(dom, firstAudio, {
+    duration: 24,
+    currentTime: 9.5,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+  firstAudio.dispatchEvent(new dom.window.Event('loadedmetadata'));
+  await wait(dom, 30);
+
+  await BananzaAppBridge.__testing.openChat(2);
+  await wait(dom, 80);
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 80);
+
+  const reopenedAudio = document.querySelector('.msg-row[data-msg-id="411"] audio');
+  installMockMediaElement(dom, reopenedAudio, {
+    duration: 24,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+  reopenedAudio.dispatchEvent(new dom.window.Event('loadedmetadata'));
+  await wait(dom, 240);
+
+  assert.ok(Math.abs(Number(reopenedAudio.currentTime || 0) - 9.5) < 0.2);
+  assert.equal(reopenedAudio.paused, true);
+});
+
+test('video note restores playback position after leaving and reopening the chat', async (t) => {
+  const chatA = createChatFixture(1, 'Chat A', { lastMessageId: 422 });
+  const chatB = createChatFixture(2, 'Chat B', { lastMessageId: 0 });
+  const message = createVideoNoteMessage(1, 422);
+  const dom = await openMediaPlaybackDom({
+    activeChat: chatA,
+    chats: [chatA, chatB],
+    chatMessagesByChatId: {
+      1: [message],
+      2: [],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+
+  const firstVideo = document.querySelector('.msg-row[data-msg-id="422"] .video-note-video');
+  installMockMediaElement(dom, firstVideo, {
+    duration: 18,
+    currentTime: 6.75,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+  firstVideo.dispatchEvent(new dom.window.Event('loadedmetadata'));
+  await wait(dom, 30);
+
+  await BananzaAppBridge.__testing.openChat(2);
+  await wait(dom, 80);
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 80);
+
+  const reopenedVideo = document.querySelector('.msg-row[data-msg-id="422"] .video-note-video');
+  installMockMediaElement(dom, reopenedVideo, {
+    duration: 18,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+  reopenedVideo.dispatchEvent(new dom.window.Event('loadedmetadata'));
+  await wait(dom, 240);
+
+  assert.ok(Math.abs(Number(reopenedVideo.currentTime || 0) - 6.75) < 0.2);
+  assert.equal(reopenedVideo.paused, true);
+});
+
+test('voice note keeps completed progress state after leaving and reopening the chat', async (t) => {
+  const chatA = createChatFixture(1, 'Chat A', { lastMessageId: 433 });
+  const chatB = createChatFixture(2, 'Chat B', { lastMessageId: 0 });
+  const message = createVoiceNoteMessage(1, 433);
+  const dom = await openMediaPlaybackDom({
+    activeChat: chatA,
+    chats: [chatA, chatB],
+    chatMessagesByChatId: {
+      1: [message],
+      2: [],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+
+  let row = document.querySelector('.msg-row[data-msg-id="433"]');
+  let audio = row.querySelector('audio');
+  let fill = row.querySelector('.voice-note-progress-fill');
+  installMockMediaElement(dom, audio, {
+    duration: 24,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+  audio.dispatchEvent(new dom.window.Event('durationchange'));
+  await wait(dom, 40);
+
+  audio.currentTime = 24;
+  audio.ended = true;
+  audio.paused = true;
+  audio.dispatchEvent(new dom.window.Event('ended'));
+  await wait(dom, 40);
+
+  const voiceMeta = JSON.parse(JSON.stringify((await dom.window.messageCache.readChatMeta(1))?.mediaPlaybackCompleted || {}));
+  assert.ok(Math.abs(getDasharrayFilledLength(fill) - 100) < 0.1);
+  assert.equal(BananzaAppBridge.isMediaPlaybackCompleted(row.__messageData, 'voice-note-audio'), true);
+  assert.ok(Number(voiceMeta['voice-note-audio:433']) > 0);
+
+  await BananzaAppBridge.__testing.openChat(2);
+  await wait(dom, 80);
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 100);
+
+  row = document.querySelector('.msg-row[data-msg-id="433"]');
+  audio = row.querySelector('audio');
+  fill = row.querySelector('.voice-note-progress-fill');
+  installMockMediaElement(dom, audio, {
+    duration: 24,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+  audio.dispatchEvent(new dom.window.Event('durationchange'));
+  await wait(dom, 40);
+
+  assert.equal(BananzaAppBridge.isMediaPlaybackCompleted(row.__messageData, 'voice-note-audio'), true);
+  assert.ok(Math.abs(getDasharrayFilledLength(fill) - 100) < 0.1);
+});
+
+test('video note keeps completed progress state after leaving and reopening the chat', async (t) => {
+  const chatA = createChatFixture(1, 'Chat A', { lastMessageId: 444 });
+  const chatB = createChatFixture(2, 'Chat B', { lastMessageId: 0 });
+  const message = createVideoNoteMessage(1, 444);
+  const dom = await openMediaPlaybackDom({
+    activeChat: chatA,
+    chats: [chatA, chatB],
+    chatMessagesByChatId: {
+      1: [message],
+      2: [],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+
+  let row = document.querySelector('.msg-row[data-msg-id="444"]');
+  let video = row.querySelector('.video-note-video');
+  let fill = row.querySelector('.video-note-progress-fill');
+  installMockMediaElement(dom, video, {
+    duration: 18,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+  video.dispatchEvent(new dom.window.Event('durationchange'));
+  await wait(dom, 40);
+
+  video.currentTime = 18;
+  video.ended = true;
+  video.paused = true;
+  video.dispatchEvent(new dom.window.Event('ended'));
+  await wait(dom, 40);
+
+  const videoMeta = JSON.parse(JSON.stringify((await dom.window.messageCache.readChatMeta(1))?.mediaPlaybackCompleted || {}));
+  assert.ok(Math.abs(getDasharrayFilledLength(fill) - 100) < 0.1);
+  assert.equal(BananzaAppBridge.isMediaPlaybackCompleted(row.__messageData, 'video-note-video'), true);
+  assert.ok(Number(videoMeta['video-note-video:444']) > 0);
+
+  await BananzaAppBridge.__testing.openChat(2);
+  await wait(dom, 80);
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 100);
+
+  row = document.querySelector('.msg-row[data-msg-id="444"]');
+  video = row.querySelector('.video-note-video');
+  fill = row.querySelector('.video-note-progress-fill');
+  installMockMediaElement(dom, video, {
+    duration: 18,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+  video.dispatchEvent(new dom.window.Event('durationchange'));
+  await wait(dom, 40);
+
+  assert.equal(BananzaAppBridge.isMediaPlaybackCompleted(row.__messageData, 'video-note-video'), true);
+  assert.ok(Math.abs(getDasharrayFilledLength(fill) - 100) < 0.1);
 });

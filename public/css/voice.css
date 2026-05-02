@@ -324,6 +324,61 @@ html[data-modal-animation="none"] .send-btn.voice-enabled.is-mic-mode.is-mode-sw
   padding-bottom: 4px;
 }
 
+.voice-note-row .msg-bubble {
+  isolation: isolate;
+}
+
+.voice-note-row .msg-bubble > .msg-saved-origin,
+.voice-note-row .msg-bubble > .msg-forwarded,
+.voice-note-row .msg-bubble > .msg-reply,
+.voice-note-row .msg-bubble > .msg-audio,
+.voice-note-row .msg-bubble > .msg-text,
+.voice-note-row .msg-bubble > .link-preview,
+.voice-note-row .msg-bubble > .voice-transcription,
+.voice-note-row .msg-bubble > .msg-footer {
+  position: relative;
+  z-index: 1;
+}
+
+.voice-note-row .msg-bubble > .msg-delete-btn {
+  z-index: 2;
+}
+
+.voice-note-progress-shell {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+.voice-note-progress {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.voice-note-progress-track,
+.voice-note-progress-fill {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.voice-note-progress-track {
+  stroke: color-mix(in srgb, var(--accent) 24%, transparent);
+  opacity: .42;
+}
+
+.voice-note-progress-fill {
+  opacity: .02;
+  transition: opacity .12s linear;
+  will-change: stroke-dasharray, stroke-dashoffset;
+}
+
 .voice-note-row.voice-note-compact .msg-audio {
   display: none;
 }

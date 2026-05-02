@@ -474,6 +474,7 @@
   let mobileSceneRepaintCleanupFrame = 0;
   let mobileSceneRepaintTarget = null;
   const mediaPlaybackStateByChat = new Map();
+  const mediaPlaybackCompletedByChat = new Map();
   let messageBackgroundSyncTimer = null;
   let messageBackgroundSyncRunning = false;
   let messageBackgroundSyncRequested = false;
@@ -1073,6 +1074,8 @@
     scrollToBottom: (instant = false) => scrollToBottom(instant),
     playSound: (type, options) => playAppSound(type, options),
     bindMediaPlayback: (mediaEl, message, role) => bindMediaPlaybackState(mediaEl, message, role),
+    isMediaPlaybackCompleted: (message, role) => isMediaPlaybackCompleted(message, role),
+    setMediaPlaybackCompleted: (message, role, completed) => setMediaPlaybackCompleted(message, role, completed),
     getAttachmentPreviewUrl: (source) => getAttachmentPreviewUrl(source),
     getAttachmentDownloadUrl: (source) => getAttachmentDownloadUrl(source),
     getAttachmentPosterUrl: (source) => getAttachmentPosterUrl(source),
@@ -13700,6 +13703,7 @@
       if (window.messageCache) {
         const cacheStartedAt = performance.now();
         cachedRange = await readCachedChatRange(targetChatId);
+        primeMediaPlaybackCompletedCache(targetChatId, cachedRange).catch(() => {});
         const preferLatestCachedWindow = !restoreAnchor?.messageId || restoreAnchor?.atBottom;
         cachedMsgs = preferLatestCachedWindow
           ? await window.messageCache.readLatest(targetChatId, { limit: PAGE_SIZE })
@@ -13868,6 +13872,113 @@
     return `${normalizedRole}:${rawId}`;
   }
 
+  function normalizeMediaPlaybackCompletedEntries(source = null) {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return [];
+    return Object.entries(source)
+      .map(([rawKey, rawUpdatedAt]) => {
+        const key = String(rawKey || '').trim();
+        const updatedAt = Number(rawUpdatedAt || 0);
+        return [
+          key,
+          Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : 1,
+        ];
+      })
+      .filter(([key]) => Boolean(key));
+  }
+
+  function getMediaPlaybackCompletedBucket(chatId, { create = false } = {}) {
+    const id = Number(chatId || 0);
+    if (!id) return null;
+    let bucket = mediaPlaybackCompletedByChat.get(id);
+    if (!bucket && create) {
+      bucket = new Map();
+      mediaPlaybackCompletedByChat.set(id, bucket);
+    }
+    return bucket || null;
+  }
+
+  function applyMediaPlaybackCompletedMeta(chatId, source = null) {
+    const id = Number(chatId || 0);
+    if (!id) return null;
+    const entries = normalizeMediaPlaybackCompletedEntries(source);
+    if (!entries.length) {
+      mediaPlaybackCompletedByChat.delete(id);
+      return null;
+    }
+    const bucket = new Map(entries);
+    mediaPlaybackCompletedByChat.set(id, bucket);
+    return bucket;
+  }
+
+  function exportMediaPlaybackCompletedMeta(chatId) {
+    const bucket = getMediaPlaybackCompletedBucket(chatId);
+    if (!bucket?.size) return null;
+    const trimmedEntries = Array.from(bucket.entries())
+      .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
+      .slice(0, 400);
+    if (!trimmedEntries.length) {
+      mediaPlaybackCompletedByChat.delete(Number(chatId || 0));
+      return null;
+    }
+    if (trimmedEntries.length !== bucket.size) {
+      mediaPlaybackCompletedByChat.set(Number(chatId || 0), new Map(trimmedEntries));
+    }
+    return Object.fromEntries(trimmedEntries);
+  }
+
+  function primeMediaPlaybackCompletedCache(chatId, meta = null) {
+    const id = Number(chatId || 0);
+    if (!id) return Promise.resolve(null);
+    if (meta && Object.prototype.hasOwnProperty.call(meta, 'mediaPlaybackCompleted')) {
+      return Promise.resolve(applyMediaPlaybackCompletedMeta(id, meta.mediaPlaybackCompleted));
+    }
+    if (mediaPlaybackCompletedByChat.has(id)) {
+      return Promise.resolve(getMediaPlaybackCompletedBucket(id));
+    }
+    try {
+      const read = window.messageCache?.readChatMeta?.(id);
+      return Promise.resolve(read)
+        .then((stored) => applyMediaPlaybackCompletedMeta(id, stored?.mediaPlaybackCompleted))
+        .catch(() => getMediaPlaybackCompletedBucket(id));
+    } catch (e) {
+      return Promise.resolve(getMediaPlaybackCompletedBucket(id));
+    }
+  }
+
+  function isMediaPlaybackCompleted(message = {}, role = '') {
+    const chatId = resolveMediaPlaybackChatId(message);
+    const key = resolveMediaPlaybackKey(message, role);
+    if (!chatId || !key) return false;
+    return Boolean(getMediaPlaybackCompletedBucket(chatId)?.has(key));
+  }
+
+  function setMediaPlaybackCompleted(message = {}, role = '', completed) {
+    const chatId = resolveMediaPlaybackChatId(message);
+    const key = resolveMediaPlaybackKey(message, role);
+    if (!chatId || !key) return false;
+    const nextCompleted = Boolean(completed);
+    const bucket = getMediaPlaybackCompletedBucket(chatId, { create: nextCompleted });
+    const hadCompleted = Boolean(bucket?.has(key));
+    if (nextCompleted) {
+      if (hadCompleted) return true;
+      bucket.set(key, Date.now());
+    } else {
+      if (!hadCompleted || !bucket) return false;
+      bucket.delete(key);
+      if (!bucket.size) mediaPlaybackCompletedByChat.delete(chatId);
+    }
+    writeCachedChatMeta(chatId, {
+      mediaPlaybackCompleted: exportMediaPlaybackCompletedMeta(chatId),
+    }).catch(() => {});
+    return nextCompleted;
+  }
+
+  function isMediaPlaybackNearEnd(mediaEl, epsilon = 0.08) {
+    const duration = Number(mediaEl?.duration || 0);
+    if (!(duration > 0)) return Boolean(mediaEl?.ended);
+    return Number(mediaEl.currentTime || 0) >= Math.max(0, duration - Math.max(0.01, Number(epsilon || 0)));
+  }
+
   function getMediaPlaybackBucket(chatId, { create = false } = {}) {
     const id = Number(chatId || 0);
     if (!id) return null;
@@ -13947,6 +14058,11 @@
       lastPersistAt = now;
       captureBoundMediaPlaybackState(mediaEl);
     };
+    const clearCompletedState = () => {
+      if (!isMediaPlaybackNearEnd(mediaEl)) {
+        setMediaPlaybackCompleted(message, resolvedRole, false);
+      }
+    };
 
     const applySavedState = () => {
       if (restored || restoreStarted) return;
@@ -13987,7 +14103,10 @@
       resumePlayback();
     };
 
-    mediaEl.addEventListener('play', () => persistSnapshot({ force: true }));
+    mediaEl.addEventListener('play', () => {
+      clearCompletedState();
+      persistSnapshot({ force: true });
+    });
     mediaEl.addEventListener('pause', () => {
       if (mediaEl.__bananzaAutoPaused) {
         mediaEl.__bananzaAutoPaused = false;
@@ -13997,10 +14116,15 @@
         });
         return;
       }
+      if (mediaEl.ended) {
+        setMediaPlaybackCompleted(message, resolvedRole, true);
+      }
       persistSnapshot({ force: true });
     });
     mediaEl.addEventListener('timeupdate', () => persistSnapshot());
+    mediaEl.addEventListener('seeking', clearCompletedState);
     mediaEl.addEventListener('ended', () => {
+      setMediaPlaybackCompleted(message, resolvedRole, true);
       clearMediaPlaybackState(message, resolvedRole);
     });
     mediaEl.addEventListener('loadedmetadata', applySavedState, { once: true });

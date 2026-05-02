@@ -39,6 +39,7 @@
   };
 
   const hooks = window.BananzaVoiceHooks = window.BananzaVoiceHooks || {};
+  const VOICE_PROGRESS_STROKE_WIDTH = 3;
 
   function safeVibrate(pattern) {
     if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return false;
@@ -99,6 +100,375 @@
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = totalSeconds % 60;
     return `${minutes}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function sanitizeIdPart(value) {
+    return String(value || 'voice-note').replace(/[^a-zA-Z0-9_-]+/g, '-');
+  }
+
+  function parseRadiusValue(value) {
+    const firstPart = String(value || '0').trim().split(/\s+/)[0] || '0';
+    const parsed = Number.parseFloat(firstPart);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function buildRoundedRectPath(width, height, radii = {}, inset = 0) {
+    const safeWidth = Math.max(1, Number(width) || 0);
+    const safeHeight = Math.max(1, Number(height) || 0);
+    const left = inset;
+    const top = inset;
+    const right = Math.max(left, safeWidth - inset);
+    const bottom = Math.max(top, safeHeight - inset);
+    const maxRadius = Math.max(0, Math.min(right - left, bottom - top) / 2);
+    const topLeft = clamp(Number(radii.topLeft || 0) - inset, 0, maxRadius);
+    const topRight = clamp(Number(radii.topRight || 0) - inset, 0, maxRadius);
+    const bottomRight = clamp(Number(radii.bottomRight || 0) - inset, 0, maxRadius);
+    const bottomLeft = clamp(Number(radii.bottomLeft || 0) - inset, 0, maxRadius);
+    const commands = [
+      `M ${left + topLeft} ${top}`,
+      `H ${right - topRight}`,
+    ];
+
+    if (topRight > 0) commands.push(`A ${topRight} ${topRight} 0 0 1 ${right} ${top + topRight}`);
+    else commands.push(`L ${right} ${top}`);
+
+    commands.push(`V ${bottom - bottomRight}`);
+    if (bottomRight > 0) commands.push(`A ${bottomRight} ${bottomRight} 0 0 1 ${right - bottomRight} ${bottom}`);
+    else commands.push(`L ${right} ${bottom}`);
+
+    commands.push(`H ${left + bottomLeft}`);
+    if (bottomLeft > 0) commands.push(`A ${bottomLeft} ${bottomLeft} 0 0 1 ${left} ${bottom - bottomLeft}`);
+    else commands.push(`L ${left} ${bottom}`);
+
+    commands.push(`V ${top + topLeft}`);
+    if (topLeft > 0) commands.push(`A ${topLeft} ${topLeft} 0 0 1 ${left + topLeft} ${top}`);
+    else commands.push(`L ${left} ${top}`);
+
+    commands.push('Z');
+    return commands.join(' ');
+  }
+
+  function resolveVoiceProgressController(row) {
+    if (!row) return null;
+    if (!row.__voiceProgress) {
+      row.__voiceProgress = {
+        gradientId: `voice-note-progress-${sanitizeIdPart(row.dataset.msgId || row.dataset.clientId || 'local')}`,
+        audio: null,
+        bubble: null,
+        shell: null,
+        svg: null,
+        track: null,
+        fill: null,
+        observer: null,
+        observedBubble: null,
+        cleanupAudio: null,
+        frameId: 0,
+        pathLength: 0,
+        completed: Boolean(
+          row.__voiceMessage?.playback_completed
+          || row.__messageData?.voice_playback_completed
+          || getBridge()?.isMediaPlaybackCompleted?.(
+            row.__messageData || row.__voiceMessage || row.__voiceBootstrap || {},
+            'voice-note-audio'
+          )
+        ),
+      };
+    }
+    return row.__voiceProgress;
+  }
+
+  function setVoicePlaybackCompleted(row, completed) {
+    if (!row) return;
+    const controller = resolveVoiceProgressController(row);
+    if (controller) controller.completed = Boolean(completed);
+    if (row.__voiceMessage) row.__voiceMessage.playback_completed = Boolean(completed);
+    if (row.__messageData) row.__messageData.voice_playback_completed = Boolean(completed);
+    if (row.__voiceBootstrap) row.__voiceBootstrap.playback_completed = Boolean(completed);
+    getBridge()?.setMediaPlaybackCompleted?.(
+      row.__messageData || row.__voiceMessage || row.__voiceBootstrap || {},
+      'voice-note-audio',
+      Boolean(completed)
+    );
+  }
+
+  function stopVoiceProgressLoop(row) {
+    const controller = row?.__voiceProgress;
+    if (!controller?.frameId) return;
+    window.cancelAnimationFrame(controller.frameId);
+    controller.frameId = 0;
+  }
+
+  function teardownVoiceProgress(row) {
+    const controller = row?.__voiceProgress;
+    if (!controller) return;
+    stopVoiceProgressLoop(row);
+    if (typeof controller.cleanupAudio === 'function') {
+      controller.cleanupAudio();
+      controller.cleanupAudio = null;
+    }
+    if (controller.observer) {
+      if (controller.observedBubble) {
+        try {
+          controller.observer.unobserve(controller.observedBubble);
+        } catch {}
+      }
+      controller.observer.disconnect();
+    }
+    controller.observer = null;
+    controller.observedBubble = null;
+    controller.audio = null;
+    controller.pathLength = 0;
+    if (controller.shell?.parentNode) controller.shell.parentNode.removeChild(controller.shell);
+    row.classList.remove('voice-note-playing');
+    delete row.__voiceProgress;
+  }
+
+  function ensureVoiceProgressShell(row, bubble) {
+    if (!row || !bubble) return null;
+    const controller = resolveVoiceProgressController(row);
+    if (!controller) return null;
+
+    if (controller.shell?.parentNode && controller.bubble !== bubble) {
+      controller.shell.parentNode.removeChild(controller.shell);
+      controller.shell = null;
+      controller.svg = null;
+      controller.track = null;
+      controller.fill = null;
+    }
+
+    if (!controller.shell) {
+      const shell = document.createElement('div');
+      shell.className = 'voice-note-progress-shell';
+      shell.setAttribute('aria-hidden', 'true');
+      shell.innerHTML = `
+        <svg class="voice-note-progress" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true">
+          <defs>
+            <linearGradient id="${escapeHtml(controller.gradientId)}" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" style="stop-color: var(--accent);"></stop>
+              <stop offset="55%" style="stop-color: var(--link, var(--accent));"></stop>
+              <stop offset="100%" style="stop-color: color-mix(in srgb, var(--accent) 64%, #ffffff 36%);"></stop>
+            </linearGradient>
+          </defs>
+          <path class="voice-note-progress-track"></path>
+          <path class="voice-note-progress-fill" stroke="url(#${escapeHtml(controller.gradientId)})"></path>
+        </svg>
+      `;
+      bubble.insertBefore(shell, bubble.firstChild);
+      controller.shell = shell;
+      controller.svg = shell.querySelector('.voice-note-progress');
+      controller.track = shell.querySelector('.voice-note-progress-track');
+      controller.fill = shell.querySelector('.voice-note-progress-fill');
+    } else if (bubble.firstChild !== controller.shell) {
+      bubble.insertBefore(controller.shell, bubble.firstChild);
+    }
+
+    controller.bubble = bubble;
+    if (!controller.observer && typeof ResizeObserver === 'function') {
+      controller.observer = new ResizeObserver(() => {
+        if (!row.isConnected) {
+          teardownVoiceProgress(row);
+          return;
+        }
+        refreshVoiceProgressShape(row);
+        refreshVoiceProgressUi(row);
+      });
+    }
+    if (controller.observer && controller.observedBubble !== bubble) {
+      if (controller.observedBubble) {
+        try {
+          controller.observer.unobserve(controller.observedBubble);
+        } catch {}
+      }
+      controller.observer.observe(bubble);
+      controller.observedBubble = bubble;
+    }
+    return controller;
+  }
+
+  function refreshVoiceProgressShape(row) {
+    const controller = row?.__voiceProgress;
+    const bubble = controller?.bubble;
+    if (!controller || !bubble || !controller.svg || !controller.track || !controller.fill) return;
+
+    const rect = bubble.getBoundingClientRect();
+    const width = Number(rect.width || 0);
+    const height = Number(rect.height || 0);
+    if (!(width > 0 && height > 0)) return;
+
+    const styles = window.getComputedStyle(bubble);
+    const path = buildRoundedRectPath(width, height, {
+      topLeft: parseRadiusValue(styles.borderTopLeftRadius),
+      topRight: parseRadiusValue(styles.borderTopRightRadius),
+      bottomRight: parseRadiusValue(styles.borderBottomRightRadius),
+      bottomLeft: parseRadiusValue(styles.borderBottomLeftRadius),
+    }, VOICE_PROGRESS_STROKE_WIDTH / 2 + 0.5);
+
+    controller.svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    controller.track.setAttribute('d', path);
+    controller.fill.setAttribute('d', path);
+
+    try {
+      controller.pathLength = controller.fill.getTotalLength();
+      controller.fill.dataset.pathLength = String(controller.pathLength);
+    } catch {
+      controller.pathLength = 0;
+      delete controller.fill.dataset.pathLength;
+    }
+  }
+
+  function refreshVoiceProgressUi(row) {
+    const controller = row?.__voiceProgress;
+    const audio = controller?.audio;
+    const fill = controller?.fill;
+    if (!controller || !fill) return;
+
+    let pathLength = Number(controller.pathLength || fill.dataset.pathLength || 0);
+    if (!pathLength) {
+      try {
+        pathLength = fill.getTotalLength();
+        controller.pathLength = pathLength;
+        fill.dataset.pathLength = String(pathLength);
+      } catch {
+        pathLength = 0;
+      }
+    }
+    if (!pathLength) return;
+
+    if (!audio) {
+      fill.setAttribute('stroke-dasharray', `0 ${pathLength * 2}`);
+      fill.setAttribute('stroke-dashoffset', '0');
+      fill.style.opacity = '.02';
+      row.classList.remove('voice-note-playing');
+      return;
+    }
+
+    const message = row.__voiceMessage || row.__messageData || {};
+    const persistedPlaybackCompleted = Boolean(
+      getBridge()?.isMediaPlaybackCompleted?.(row.__messageData || message, 'voice-note-audio')
+    );
+    const playbackCompleted = Boolean(
+      controller.completed
+      || persistedPlaybackCompleted
+      || message.playback_completed
+      || row.__messageData?.voice_playback_completed
+    );
+    const declaredDurationMs = Number(message.voice_duration_ms || message.media_note_duration_ms || 0);
+    const metadataDuration = Number(audio.duration || 0);
+    const declaredDuration = declaredDurationMs > 0 ? declaredDurationMs / 1000 : 0;
+    const duration = Math.max(
+      Number.isFinite(metadataDuration) ? metadataDuration : 0,
+      Number.isFinite(declaredDuration) ? declaredDuration : 0
+    );
+    const isPlaying = Boolean(audio && !audio.paused && !audio.ended);
+    let progress = playbackCompleted && !isPlaying
+      ? 1
+      : duration > 0
+        ? clamp((Number(audio.currentTime || 0) / duration), 0, 1)
+        : (audio.ended ? 1 : 0);
+    const filledLength = clamp(progress * pathLength, 0, pathLength);
+    fill.setAttribute('stroke-dasharray', `${filledLength} ${pathLength * 2}`);
+    fill.setAttribute('stroke-dashoffset', '0');
+    fill.style.opacity = progress > 0 ? '1' : '.02';
+    row.classList.toggle('voice-note-playing', isPlaying);
+  }
+
+  function startVoiceProgressLoop(row) {
+    const controller = row?.__voiceProgress;
+    if (!row || !controller || controller.frameId) return;
+    const tick = () => {
+      if (!row.isConnected) {
+        teardownVoiceProgress(row);
+        return;
+      }
+      refreshVoiceProgressUi(row);
+      const activeAudio = row.__voiceProgress?.audio;
+      if (activeAudio && !activeAudio.paused && !activeAudio.ended) {
+        controller.frameId = window.requestAnimationFrame(tick);
+        return;
+      }
+      controller.frameId = 0;
+    };
+    controller.frameId = window.requestAnimationFrame(tick);
+  }
+
+  function bindVoiceProgress(row, bubble, audio) {
+    if (!row || !bubble) return;
+    if (!audio) {
+      teardownVoiceProgress(row);
+      return;
+    }
+
+    const controller = ensureVoiceProgressShell(row, bubble);
+    if (!controller) return;
+    if (controller.audio === audio) {
+      refreshVoiceProgressShape(row);
+      refreshVoiceProgressUi(row);
+      if (!audio.paused && !audio.ended) startVoiceProgressLoop(row);
+      return;
+    }
+
+    if (typeof controller.cleanupAudio === 'function') {
+      controller.cleanupAudio();
+      controller.cleanupAudio = null;
+    }
+    stopVoiceProgressLoop(row);
+    controller.audio = audio;
+
+    const syncUi = () => {
+      refreshVoiceProgressShape(row);
+      refreshVoiceProgressUi(row);
+    };
+    const onTimeUpdate = () => refreshVoiceProgressUi(row);
+    const onPlay = () => {
+      setVoicePlaybackCompleted(row, false);
+      row.classList.add('voice-note-playing');
+      startVoiceProgressLoop(row);
+      syncUi();
+    };
+    const onPause = () => {
+      if (audio.ended) {
+        setVoicePlaybackCompleted(row, true);
+      }
+      row.classList.remove('voice-note-playing');
+      stopVoiceProgressLoop(row);
+      syncUi();
+    };
+    const onSeeking = () => {
+      setVoicePlaybackCompleted(row, false);
+      refreshVoiceProgressUi(row);
+    };
+    const onEnded = () => {
+      setVoicePlaybackCompleted(row, true);
+      row.classList.remove('voice-note-playing');
+      stopVoiceProgressLoop(row);
+      syncUi();
+    };
+
+    audio.addEventListener('loadedmetadata', syncUi);
+    audio.addEventListener('durationchange', syncUi);
+    audio.addEventListener('timeupdate', onTimeUpdate);
+    audio.addEventListener('seeking', onSeeking);
+    audio.addEventListener('play', onPlay);
+    audio.addEventListener('pause', onPause);
+    audio.addEventListener('ended', onEnded);
+
+    controller.cleanupAudio = () => {
+      audio.removeEventListener('loadedmetadata', syncUi);
+      audio.removeEventListener('durationchange', syncUi);
+      audio.removeEventListener('timeupdate', onTimeUpdate);
+      audio.removeEventListener('seeking', onSeeking);
+      audio.removeEventListener('play', onPlay);
+      audio.removeEventListener('pause', onPause);
+      audio.removeEventListener('ended', onEnded);
+      if (controller.audio === audio) controller.audio = null;
+    };
+
+    syncUi();
+    if (!audio.paused && !audio.ended) startVoiceProgressLoop(row);
   }
 
   async function ensureReady() {
@@ -772,6 +1142,7 @@
       ...(row.__voiceMessage || {}),
       id: msg.id,
       is_voice_note: Boolean(msg.is_voice_note),
+      is_video_note: Boolean(msg.is_video_note),
       voice_duration_ms: msg.voice_duration_ms,
       transcription_status: msg.transcription_status || 'idle',
       transcription_text: msg.transcription_text || '',
@@ -843,6 +1214,12 @@
 
     button.addEventListener('click', () => {
       if (audioEl.paused) {
+        const duration = Number(audioEl.duration || 0);
+        if (audioEl.ended || (duration > 0 && Number(audioEl.currentTime || 0) >= Math.max(0, duration - 0.05))) {
+          try {
+            audioEl.currentTime = 0;
+          } catch {}
+        }
         stopActiveCompactPlayback(audioEl);
         audioEl.play().catch(() => {
           syncCompactPlayButton(button, false);
@@ -874,7 +1251,6 @@
         state.playback.activeAudio = null;
         state.playback.activeButton = null;
       }
-      audioEl.currentTime = 0;
       syncCompactPlayButton(button, false);
     });
   }
@@ -1006,15 +1382,21 @@
     if (!row || !message?.is_voice_note) return;
     const bubble = row.querySelector('.msg-bubble');
     const audioWrap = row.querySelector('.msg-audio');
-    if (!bubble || !audioWrap) return;
+    const isPlainVoiceNote = !Boolean(message?.is_video_note || row.__messageData?.is_video_note);
+    if (!bubble || !audioWrap || !isPlainVoiceNote) {
+      teardownVoiceProgress(row);
+      return;
+    }
 
     ensureVoiceAudioSnapshot(audioWrap);
     let panel = bubble.querySelector('.voice-transcription');
+    let audioEl = null;
 
     if (!state.features.voice_notes_enabled) {
       row.classList.remove('voice-note-row', 'voice-note-compact', 'voice-note-full');
       restoreVoiceAudioMarkup(audioWrap);
-      getBridge()?.bindMediaPlayback?.(audioWrap.querySelector('audio'), row.__messageData || message, 'voice-note-audio');
+      audioEl = audioWrap.querySelector('audio');
+      getBridge()?.bindMediaPlayback?.(audioEl, row.__messageData || message, 'voice-note-audio');
       removeCompactFooterButton(bubble);
       const titleEl = audioWrap.querySelector('div');
       if (titleEl && audioWrap.dataset.originalTitle) {
@@ -1022,6 +1404,7 @@
         titleEl.classList.remove('voice-note-title');
       }
       if (panel) panel.remove();
+      teardownVoiceProgress(row);
       return;
     }
 
@@ -1034,15 +1417,18 @@
 
     if (isCompactMode) {
       renderCompactVoiceAudio(audioWrap);
-      getBridge()?.bindMediaPlayback?.(audioWrap.querySelector('.voice-compact-audio'), row.__messageData || message, 'voice-note-audio');
+      audioEl = audioWrap.querySelector('.voice-compact-audio');
+      getBridge()?.bindMediaPlayback?.(audioEl, row.__messageData || message, 'voice-note-audio');
       const button = ensureCompactFooterButton(bubble);
       bindCompactVoicePlayer(audioWrap, button);
       renderCompactVoicePanel(panel, message, row);
+      bindVoiceProgress(row, bubble, audioEl);
       return;
     }
 
     restoreVoiceAudioMarkup(audioWrap);
-    getBridge()?.bindMediaPlayback?.(audioWrap.querySelector('audio'), row.__messageData || message, 'voice-note-audio');
+    audioEl = audioWrap.querySelector('audio');
+    getBridge()?.bindMediaPlayback?.(audioEl, row.__messageData || message, 'voice-note-audio');
     removeCompactFooterButton(bubble);
     const titleEl = audioWrap.querySelector('div');
     if (titleEl) {
@@ -1050,6 +1436,7 @@
       titleEl.classList.add('voice-note-title');
     }
     renderFullVoicePanel(panel, message, row);
+    bindVoiceProgress(row, bubble, audioEl);
   }
 
   async function requestManualTranscription(messageId, row) {

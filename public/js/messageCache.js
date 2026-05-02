@@ -231,6 +231,18 @@
     return key ? (memoryChatMeta.get(key) || null) : null;
   }
 
+  function normalizeMediaPlaybackCompletedMeta(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const out = {};
+    for (const [rawKey, rawUpdatedAt] of Object.entries(value)) {
+      const key = String(rawKey || '').trim();
+      if (!key) continue;
+      const updatedAt = Number(rawUpdatedAt || 0);
+      out[key] = Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : 1;
+    }
+    return Object.keys(out).length ? out : null;
+  }
+
   function getMemoryRange(chatId) {
     const rows = sortMessagesAsc(Array.from(memoryMessageMap(chatId)?.values() || []));
     const range = rangeFromMessages(rows);
@@ -247,6 +259,7 @@
 
   function mergeChatMeta(chatId, patch = {}) {
     const cid = normalizeId(chatId);
+    const previousMeta = getMemoryMeta(cid);
     const previous = patch.replaceRange ? null : getMemoryMeta(cid);
     const patchMin = normalizeId(patch.minId);
     const patchMax = normalizeId(patch.maxId);
@@ -254,6 +267,7 @@
     const prevMax = normalizeId(previous?.maxId);
     const prevKnown = normalizeId(previous?.lastKnownServerId);
     const patchKnown = normalizeId(patch.lastKnownServerId);
+    const patchHasMediaPlaybackCompleted = Object.prototype.hasOwnProperty.call(patch, 'mediaPlaybackCompleted');
     return {
       userId: currentUserId,
       chatId: cid,
@@ -265,6 +279,9 @@
       hasMoreAfter: booleanOrNull(patch.hasMoreAfter) ?? booleanOrNull(previous?.hasMoreAfter),
       windowCached: Boolean(patch.windowCached || previous?.windowCached),
       lastKnownServerId: Math.max(patchKnown, prevKnown, patchMax, prevMax),
+      mediaPlaybackCompleted: patchHasMediaPlaybackCompleted
+        ? normalizeMediaPlaybackCompletedMeta(patch.mediaPlaybackCompleted)
+        : normalizeMediaPlaybackCompletedMeta(previousMeta?.mediaPlaybackCompleted),
       savedAt: Date.now(),
     };
   }

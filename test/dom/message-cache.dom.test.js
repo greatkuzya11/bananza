@@ -61,3 +61,59 @@ test('messageCache persists pages and outbox records', async () => {
   assert.equal(outbox.length, 1);
   assert.equal(outbox[0].clientId, 'local-1');
 });
+
+test('messageCache preserves media playback completion inside chat meta', async () => {
+  const dom = createAppDom();
+  loadBrowserScript(dom, 'public/js/messageCache.js');
+
+  const cache = dom.window.messageCache;
+  const normalizeMetaMap = (value) => JSON.parse(JSON.stringify(value || null));
+  await cache.init(31);
+
+  await cache.writeChatMeta(6, {
+    mediaPlaybackCompleted: {
+      'voice-note-audio:11': 111,
+      'video-note-video:12': 222,
+    },
+  });
+
+  let meta = await cache.readChatMeta(6);
+  assert.deepEqual(normalizeMetaMap(meta.mediaPlaybackCompleted), {
+    'voice-note-audio:11': 111,
+    'video-note-video:12': 222,
+  });
+
+  await cache.writeChatMeta(6, {
+    minId: 10,
+    maxId: 20,
+    hasMoreBefore: false,
+  });
+
+  meta = await cache.readChatMeta(6);
+  assert.deepEqual(normalizeMetaMap(meta.mediaPlaybackCompleted), {
+    'voice-note-audio:11': 111,
+    'video-note-video:12': 222,
+  });
+
+  await cache.writeChatMeta(6, {
+    mediaPlaybackCompleted: {
+      'video-note-video:12': 222,
+    },
+  });
+
+  meta = await cache.readChatMeta(6);
+  assert.deepEqual(normalizeMetaMap(meta.mediaPlaybackCompleted), {
+    'video-note-video:12': 222,
+  });
+
+  await cache.writeChatMeta(6, {
+    replaceRange: true,
+    minId: 20,
+    maxId: 40,
+  });
+
+  meta = await cache.readChatMeta(6);
+  assert.deepEqual(normalizeMetaMap(meta.mediaPlaybackCompleted), {
+    'video-note-video:12': 222,
+  });
+});
