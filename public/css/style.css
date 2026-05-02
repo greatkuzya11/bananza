@@ -1929,6 +1929,7 @@ a:hover { text-decoration: underline; }
 .mention-picker,
 .emoji-picker,
 .chat-context-menu,
+.media-context-menu,
 .poll-pulse-voter-popover,
 .chat-context-menu-backdrop {
   --floating-duration-base: .26s;
@@ -1944,6 +1945,7 @@ a:hover { text-decoration: underline; }
 .mention-picker,
 .emoji-picker,
 .chat-context-menu,
+.media-context-menu,
 .poll-pulse-voter-popover {
   position: fixed;
   opacity: 0;
@@ -1965,6 +1967,8 @@ a:hover { text-decoration: underline; }
 .emoji-picker.is-closing,
 .chat-context-menu.is-open,
 .chat-context-menu.is-closing,
+.media-context-menu.is-open,
+.media-context-menu.is-closing,
 .poll-pulse-voter-popover.is-open,
 .poll-pulse-voter-popover.is-closing {
   visibility: visible;
@@ -1974,6 +1978,7 @@ a:hover { text-decoration: underline; }
 .mention-picker.is-open,
 .emoji-picker.is-open,
 .chat-context-menu.is-open,
+.media-context-menu.is-open,
 .poll-pulse-voter-popover.is-open {
   opacity: 1;
   pointer-events: auto;
@@ -1985,6 +1990,7 @@ a:hover { text-decoration: underline; }
 .mention-picker.is-closing,
 .emoji-picker.is-closing,
 .chat-context-menu.is-closing,
+.media-context-menu.is-closing,
 .poll-pulse-voter-popover.is-closing {
   opacity: 0;
   visibility: visible;
@@ -2002,6 +2008,8 @@ a:hover { text-decoration: underline; }
 .emoji-picker.is-closing,
 .chat-context-menu.is-open,
 .chat-context-menu.is-closing,
+.media-context-menu.is-open,
+.media-context-menu.is-closing,
 .poll-pulse-voter-popover.is-open,
 .poll-pulse-voter-popover.is-closing {
   will-change: opacity, transform;
@@ -2011,6 +2019,7 @@ html.is-ios-webkit .reaction-emoji-popover,
 html.is-ios-webkit .mention-picker,
 html.is-ios-webkit .emoji-picker,
 html.is-ios-webkit .chat-context-menu,
+html.is-ios-webkit .media-context-menu,
 html.is-ios-webkit .poll-pulse-voter-popover {
   transform: var(--floating-enter-transform) translateZ(0);
   backface-visibility: hidden;
@@ -2022,6 +2031,7 @@ html.is-ios-webkit .reaction-emoji-popover.is-open,
 html.is-ios-webkit .mention-picker.is-open,
 html.is-ios-webkit .emoji-picker.is-open,
 html.is-ios-webkit .chat-context-menu.is-open,
+html.is-ios-webkit .media-context-menu.is-open,
 html.is-ios-webkit .poll-pulse-voter-popover.is-open {
   transform: translateZ(0);
 }
@@ -2030,6 +2040,7 @@ html.is-ios-webkit .reaction-emoji-popover.is-closing,
 html.is-ios-webkit .mention-picker.is-closing,
 html.is-ios-webkit .emoji-picker.is-closing,
 html.is-ios-webkit .chat-context-menu.is-closing,
+html.is-ios-webkit .media-context-menu.is-closing,
 html.is-ios-webkit .poll-pulse-voter-popover.is-closing {
   transform: var(--floating-close-transform) translateZ(0);
 }
@@ -2038,6 +2049,7 @@ html[data-modal-animation="lift"] .reaction-emoji-popover,
 html[data-modal-animation="lift"] .mention-picker,
 html[data-modal-animation="lift"] .emoji-picker,
 html[data-modal-animation="lift"] .chat-context-menu,
+html[data-modal-animation="lift"] .media-context-menu,
 html[data-modal-animation="lift"] .poll-pulse-voter-popover {
   --floating-duration-base: .3s;
   --floating-close-duration-base: .26s;
@@ -2049,6 +2061,7 @@ html[data-modal-animation="zoom"] .reaction-emoji-popover,
 html[data-modal-animation="zoom"] .mention-picker,
 html[data-modal-animation="zoom"] .emoji-picker,
 html[data-modal-animation="zoom"] .chat-context-menu,
+html[data-modal-animation="zoom"] .media-context-menu,
 html[data-modal-animation="zoom"] .poll-pulse-voter-popover {
   --floating-duration-base: .24s;
   --floating-close-duration-base: .22s;
@@ -2060,6 +2073,7 @@ html[data-modal-animation="slide"] .reaction-emoji-popover,
 html[data-modal-animation="slide"] .mention-picker,
 html[data-modal-animation="slide"] .emoji-picker,
 html[data-modal-animation="slide"] .chat-context-menu,
+html[data-modal-animation="slide"] .media-context-menu,
 html[data-modal-animation="slide"] .poll-pulse-voter-popover {
   --floating-duration-base: .28s;
   --floating-close-duration-base: .24s;
@@ -2071,6 +2085,7 @@ html[data-modal-animation="fade"] .reaction-emoji-popover,
 html[data-modal-animation="fade"] .mention-picker,
 html[data-modal-animation="fade"] .emoji-picker,
 html[data-modal-animation="fade"] .chat-context-menu,
+html[data-modal-animation="fade"] .media-context-menu,
 html[data-modal-animation="fade"] .poll-pulse-voter-popover {
   --floating-duration-base: .24s;
   --floating-close-duration-base: .24s;
@@ -2082,6 +2097,7 @@ html[data-modal-animation="none"] .reaction-picker,
 html[data-modal-animation="none"] .reaction-emoji-popover,
 html[data-modal-animation="none"] .mention-picker,
 html[data-modal-animation="none"] .chat-context-menu,
+html[data-modal-animation="none"] .media-context-menu,
 html[data-modal-animation="none"] .poll-pulse-voter-popover {
   --floating-duration-base: 0s;
   --floating-close-duration-base: 0s;
@@ -2150,12 +2166,36 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
   z-index: 429;
   width: min(240px, calc(100vw - 24px));
 }
+.media-context-menu {
+  z-index: 429;
+  width: min(280px, calc(100vw - 24px));
+}
 .chat-context-menu-sheet {
   background: var(--bg-modal);
   border: 1px solid var(--border-light);
   border-radius: 10px;
   box-shadow: 0 10px 36px rgba(0,0,0,.42);
   overflow: hidden;
+}
+.media-context-menu .chat-context-menu-sheet {
+  border-radius: 14px;
+}
+.media-context-menu.is-sheet {
+  width: min(360px, calc(100vw - 20px));
+}
+.media-context-menu.is-sheet .chat-context-menu-sheet {
+  border-radius: 18px 18px 12px 12px;
+  box-shadow: 0 16px 44px rgba(0,0,0,.48);
+}
+.media-context-menu.is-sheet .chat-context-menu-header {
+  padding-top: 14px;
+}
+.media-context-menu-header-meta {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  opacity: .82;
 }
 .chat-context-menu-header {
   padding: 10px 14px 8px;
@@ -2194,6 +2234,10 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
   opacity: .45;
   cursor: default;
   background: transparent;
+}
+.media-context-menu-button.is-primary .chat-context-menu-icon,
+.media-context-menu-button.is-primary .chat-context-menu-label {
+  color: var(--accent);
 }
 .chat-context-menu-icon {
   width: 18px;
