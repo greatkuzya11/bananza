@@ -1443,6 +1443,48 @@ test('composer context convert opens on pointerup without a synthetic click and 
   assert.equal(app.style.height, '420px');
 });
 
+test('context convert all-chat admin toggle is inactive when the bot is disabled', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+
+  BananzaAppBridge.__testing.setContextConvertAdminState('openai', {
+    bots: [{
+      id: 77,
+      name: 'Global Convert',
+      enabled: false,
+      available_in_all_chats: true,
+      response_model: 'gpt-4o-mini',
+      transform_prompt: 'Rewrite clearly.',
+    }],
+    chats: [{ id: 1, name: 'Chat A', type: 'group' }],
+    chatSettings: [],
+    models: { response: ['gpt-4o-mini'] },
+  }, 77);
+
+  const enabledToggle = document.getElementById('contextConvertBotEnabled');
+  const allChatsToggle = document.getElementById('contextConvertBotAvailableAllChats');
+  const chatEnabledToggle = document.getElementById('contextConvertBotChatEnabled');
+  const chatSave = document.getElementById('contextConvertBotChatSave');
+
+  assert.equal(enabledToggle.checked, false);
+  assert.equal(allChatsToggle.checked, true);
+  assert.equal(allChatsToggle.disabled, true);
+  assert.equal(chatEnabledToggle.checked, true);
+  assert.equal(chatEnabledToggle.disabled, true);
+  assert.equal(chatSave.disabled, true);
+
+  enabledToggle.checked = true;
+  enabledToggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.equal(allChatsToggle.disabled, false);
+
+  enabledToggle.checked = false;
+  enabledToggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.equal(allChatsToggle.disabled, true);
+});
+
 test('mention picker lets the search button act immediately on one touch gesture', async (t) => {
   const dom = await openSingleChatDom({
     mentionTargetsByChatId: {

@@ -43,6 +43,27 @@ async function createOpenAiBot(admin, {
   return response.data.bot;
 }
 
+async function createOpenAiConvertBot(admin, {
+  name,
+  availableInAllChats = false,
+  enabled = true,
+} = {}) {
+  const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const response = await admin.request('/api/admin/openai-convert-bots', {
+    method: 'POST',
+    json: {
+      name: name || `Convert ${token}`.slice(0, 30),
+      enabled,
+      available_in_all_chats: availableInAllChats,
+      response_model: 'gpt-4o-mini',
+      temperature: 0.3,
+      max_tokens: 1000,
+      transform_prompt: 'Rewrite the source text clearly and return only the rewritten text.',
+    },
+  });
+  return response.data.bot;
+}
+
 async function enableOpenAiForTests(admin, overrides = {}) {
   const response = await admin.request('/api/admin/ai-bots/settings', {
     method: 'PUT',
@@ -54,6 +75,11 @@ async function enableOpenAiForTests(admin, overrides = {}) {
     },
   });
   return response.data.settings;
+}
+
+function responseHasBot(response, botId) {
+  return Array.isArray(response.data?.bots)
+    && response.data.bots.some((bot) => Number(bot.id) === Number(botId));
 }
 
 test('auth and chat membership endpoints return expected data', async () => {
@@ -206,6 +232,109 @@ test('creator-only chat management routes enforce permissions and mutate state',
     method: 'DELETE',
   });
   assert.equal(deleted.data.ok, true);
+});
+
+test('context convert all-chat availability respects chat-level gates and bot enabled state', async () => {
+  const { admin, bob, carol } = scenario;
+  const db = new Database(path.join(sandbox.appDir, 'bananza.db'));
+  const suffix = Date.now();
+
+  try {
+    await enableOpenAiForTests(admin);
+
+    const chatA = await admin.request('/api/chats', {
+      method: 'POST',
+      json: {
+        name: `Convert Global A ${suffix}`,
+        type: 'group',
+        memberIds: [bob.user.id, carol.user.id],
+      },
+    });
+    const chatB = await admin.request('/api/chats', {
+      method: 'POST',
+      json: {
+        name: `Convert Global B ${suffix}`,
+        type: 'group',
+        memberIds: [bob.user.id, carol.user.id],
+      },
+    });
+    const chatOff = await admin.request('/api/chats', {
+      method: 'POST',
+      json: {
+        name: `Convert Global Off ${suffix}`,
+        type: 'group',
+        memberIds: [bob.user.id, carol.user.id],
+      },
+    });
+
+    await admin.request(`/api/chats/${chatA.data.id}/context-transform-settings`, {
+      method: 'PUT',
+      json: { context_transform_enabled: true },
+    });
+    await admin.request(`/api/chats/${chatB.data.id}/context-transform-settings`, {
+      method: 'PUT',
+      json: { context_transform_enabled: true },
+    });
+
+    const bot = await createOpenAiConvertBot(admin, { availableInAllChats: true });
+    assert.equal(bot.available_in_all_chats, true);
+
+    const chatAAvailable = await bob.request(`/api/chats/${chatA.data.id}/context-convert-bots`);
+    const chatBAvailable = await bob.request(`/api/chats/${chatB.data.id}/context-convert-bots`);
+    const chatOffAvailable = await bob.request(`/api/chats/${chatOff.data.id}/context-convert-bots`);
+
+    assert.equal(chatAAvailable.data.enabled, true);
+    assert.equal(chatBAvailable.data.enabled, true);
+    assert.equal(chatOffAvailable.data.enabled, false);
+    assert.equal(responseHasBot(chatAAvailable, bot.id), true);
+    assert.equal(responseHasBot(chatBAvailable, bot.id), true);
+    assert.equal(responseHasBot(chatOffAvailable, bot.id), false);
+
+    const explicitAssignments = db.prepare('SELECT COUNT(*) as count FROM ai_chat_bots WHERE bot_id=?').get(Number(bot.id));
+    assert.equal(explicitAssignments.count, 0);
+
+    await admin.request(`/api/admin/openai-convert-bots/${bot.id}`, {
+      method: 'PUT',
+      json: { enabled: true, available_in_all_chats: false },
+    });
+
+    const chatAAfterGlobalOff = await bob.request(`/api/chats/${chatA.data.id}/context-convert-bots`);
+    const chatBAfterGlobalOff = await bob.request(`/api/chats/${chatB.data.id}/context-convert-bots`);
+    assert.equal(responseHasBot(chatAAfterGlobalOff, bot.id), false);
+    assert.equal(responseHasBot(chatBAfterGlobalOff, bot.id), false);
+
+    await admin.request('/api/admin/openai-convert-bots/chat-settings', {
+      method: 'PUT',
+      json: {
+        chatId: chatA.data.id,
+        botId: bot.id,
+        enabled: true,
+      },
+    });
+
+    const chatAAfterAssignment = await bob.request(`/api/chats/${chatA.data.id}/context-convert-bots`);
+    const chatBAfterAssignment = await bob.request(`/api/chats/${chatB.data.id}/context-convert-bots`);
+    assert.equal(responseHasBot(chatAAfterAssignment, bot.id), true);
+    assert.equal(responseHasBot(chatBAfterAssignment, bot.id), false);
+
+    await admin.request(`/api/admin/openai-convert-bots/${bot.id}`, {
+      method: 'PUT',
+      json: { enabled: false, available_in_all_chats: true },
+    });
+
+    const chatAAfterDisable = await bob.request(`/api/chats/${chatA.data.id}/context-convert-bots`);
+    const chatBAfterDisable = await bob.request(`/api/chats/${chatB.data.id}/context-convert-bots`);
+    assert.equal(chatAAfterDisable.data.enabled, true);
+    assert.equal(chatBAfterDisable.data.enabled, true);
+    assert.equal(responseHasBot(chatAAfterDisable, bot.id), false);
+    assert.equal(responseHasBot(chatBAfterDisable, bot.id), false);
+  } finally {
+    await admin.request('/api/admin/ai-bots/settings', {
+      method: 'PUT',
+      json: { enabled: false, openai_interactive_enabled: false },
+    }).catch(() => {});
+    db.close();
+  }
 });
 
 test('human private chats remain single-threaded while bot private chats always create new threads', async () => {

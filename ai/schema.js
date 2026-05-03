@@ -45,6 +45,7 @@ function initAiSchema(db) {
       image_output_format TEXT DEFAULT '',
       document_default_format TEXT DEFAULT 'md',
       transform_prompt TEXT DEFAULT '',
+      available_in_all_chats INTEGER DEFAULT 0,
       temperature REAL DEFAULT NULL,
       max_tokens INTEGER DEFAULT NULL,
       created_at TEXT DEFAULT (datetime('now')),
@@ -310,6 +311,7 @@ function initAiSchema(db) {
   addColumnIfMissing(db, 'ai_bots', 'image_output_format', "image_output_format TEXT DEFAULT ''");
   addColumnIfMissing(db, 'ai_bots', 'document_default_format', "document_default_format TEXT DEFAULT 'md'");
   addColumnIfMissing(db, 'ai_bots', 'transform_prompt', "transform_prompt TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'ai_bots', 'available_in_all_chats', 'available_in_all_chats INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'ai_bots', 'visible_to_users', 'visible_to_users INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'ai_chat_bots', 'auto_react_on_mention', 'auto_react_on_mention INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'users', 'is_ai_bot', 'is_ai_bot INTEGER DEFAULT 0');

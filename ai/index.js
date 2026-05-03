@@ -560,6 +560,7 @@ function createAiBotFeature({
   const botChatsStmt = db.prepare('SELECT chat_id FROM ai_chat_bots WHERE bot_id=?');
   const chatRowByIdStmt = db.prepare('SELECT id, name, type, created_by, is_notes FROM chats WHERE id=?');
   const chatContextTransformStmt = db.prepare('SELECT context_transform_enabled FROM chats WHERE id=?');
+  const contextTransformEnabledChatIdsStmt = db.prepare('SELECT id FROM chats WHERE context_transform_enabled=1');
   const chatMemberStmt = db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?');
   const chatMemberCountStmt = db.prepare('SELECT COUNT(*) as count FROM chat_members WHERE chat_id=?');
   const humanMemberCountStmt = db.prepare(`
@@ -693,6 +694,31 @@ function createAiBotFeature({
     FROM ai_chat_bots cb
     JOIN ai_bots b ON b.id=cb.bot_id
     WHERE cb.chat_id=? AND cb.enabled=1 AND b.enabled=1
+    ORDER BY b.id ASC
+  `);
+  const activeContextConvertBotsStmt = db.prepare(`
+    SELECT
+      b.*,
+      u.avatar_color,
+      u.avatar_url,
+      ? as chat_id,
+      'simple' as mode,
+      50 as hot_context_limit,
+      'mention_reply' as trigger_mode,
+      0 as auto_react_on_mention,
+      1 as chat_enabled
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE b.enabled=1
+      AND COALESCE(b.kind,'text')='convert'
+      AND (
+        COALESCE(b.available_in_all_chats,0)=1
+        OR EXISTS (
+          SELECT 1
+          FROM ai_chat_bots cb
+          WHERE cb.chat_id=? AND cb.bot_id=b.id AND cb.enabled=1
+        )
+      )
     ORDER BY b.id ASC
   `);
   const firstHumanTextMessagesForChatStmt = db.prepare(`
@@ -1767,6 +1793,7 @@ function createAiBotFeature({
       speech_patterns: isConvertBot ? '' : (row.speech_patterns || ''),
       transform_prompt: isConvertBot ? (row.transform_prompt || '') : '',
       enabled: row.enabled !== 0,
+      available_in_all_chats: isConvertBot ? boolValue(row.available_in_all_chats, false) : false,
       provider,
       kind,
       response_model: row.response_model || defaultResponseModel,
@@ -1996,8 +2023,18 @@ function createAiBotFeature({
       });
   }
 
-  function broadcastContextConvertBotUpdatedForBot(botId) {
-    broadcastContextConvertBotsUpdated(botChatsStmt.all(botId).map((row) => Number(row.chat_id || 0)));
+  function contextConvertBroadcastChatIdsForBot(botId, botSnapshots = []) {
+    const chatIds = botChatsStmt.all(botId).map((row) => Number(row.chat_id || 0));
+    const hasGlobalAvailability = (Array.isArray(botSnapshots) ? botSnapshots : [botSnapshots])
+      .some((bot) => boolValue(bot?.available_in_all_chats, false));
+    if (hasGlobalAvailability) {
+      contextTransformEnabledChatIdsStmt.all().forEach((row) => chatIds.push(Number(row.id || 0)));
+    }
+    return chatIds;
+  }
+
+  function broadcastContextConvertBotUpdatedForBot(botId, botSnapshots = []) {
+    broadcastContextConvertBotsUpdated(contextConvertBroadcastChatIdsForBot(botId, botSnapshots));
   }
 
   function buildUniqueMention(input, botId = null) {
@@ -2441,6 +2478,10 @@ function createAiBotFeature({
       speech_patterns: isConvertBot ? '' : cleanText(input.speech_patterns ?? current.speech_patterns ?? '', 4000),
       transform_prompt: isConvertBot ? cleanText(input.transform_prompt ?? current.transform_prompt ?? '', CONTEXT_TRANSFORM_PROMPT_MAX_LENGTH) : '',
       enabled: boolValue(input.enabled, current.enabled == null ? true : current.enabled !== 0),
+      available_in_all_chats: isConvertBot ? boolValue(
+        input.available_in_all_chats,
+        current.available_in_all_chats == null ? false : current.available_in_all_chats !== 0
+      ) : false,
       response_model: kind === 'image'
         ? ''
         : cleanText(input.response_model ?? current.response_model ?? responseFallback, 160),
@@ -2506,14 +2547,14 @@ function createAiBotFeature({
     const result = db.prepare(`
       INSERT INTO ai_bots(
         user_id, name, mention, style, tone, behavior_rules, speech_patterns,
-        enabled, provider, kind, response_model, summary_model, embedding_model,
+        enabled, available_in_all_chats, provider, kind, response_model, summary_model, embedding_model,
         image_model, image_aspect_ratio, image_resolution,
         allow_text, allow_image_generate, allow_image_edit, allow_document,
         allow_poll_create, allow_poll_vote, allow_react, allow_pin, visible_to_users,
         image_quality, image_background, image_output_format, document_default_format, transform_prompt,
         temperature, max_tokens
       )
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       userId,
       input.name,
@@ -2523,6 +2564,7 @@ function createAiBotFeature({
       input.behavior_rules,
       input.speech_patterns,
       input.enabled ? 1 : 0,
+      input.available_in_all_chats ? 1 : 0,
       input.provider || 'openai',
       input.kind || 'text',
       input.response_model,
@@ -3670,12 +3712,16 @@ function createAiBotFeature({
     return boolValue(row?.context_transform_enabled, false);
   }
 
-  function getContextConvertBotsForChat(chatId) {
+  function getActiveContextConvertBotsForChat(chatId) {
     if (!isContextTransformEnabledForChat(chatId)) return [];
     const settings = getGlobalSettings();
-    return activeChatBotsStmt.all(chatId)
+    return activeContextConvertBotsStmt.all(chatId, chatId)
       .map((row) => sanitizeBot(row))
-      .filter((bot) => isContextTransformBot(bot) && providerEnabled(bot.provider, settings))
+      .filter((bot) => isContextTransformBot(bot) && providerEnabled(bot.provider, settings));
+  }
+
+  function getContextConvertBotsForChat(chatId) {
+    return getActiveContextConvertBotsForChat(chatId)
       .map(serializeContextConvertBot);
   }
 
@@ -3685,8 +3731,7 @@ function createAiBotFeature({
       error.status = 403;
       throw error;
     }
-    const bot = activeChatBotsStmt.all(chatId)
-      .map((row) => sanitizeBot(row))
+    const bot = getActiveContextConvertBotsForChat(chatId)
       .find((item) => Number(item?.id || 0) === Number(botId || 0) && isContextTransformBot(item));
     if (!bot) {
       const error = new Error('Context convert bot is not available in this chat');
@@ -3716,6 +3761,7 @@ function createAiBotFeature({
         name: bot.name,
         mention: bot.mention,
         enabled: bot.enabled,
+        available_in_all_chats: boolValue(bot.available_in_all_chats, false),
         response_model: bot.response_model,
         transform_prompt: bot.transform_prompt || '',
         temperature: bot.temperature,
@@ -3779,6 +3825,9 @@ function createAiBotFeature({
       response_model: responseModel,
       transform_prompt: source.transform_prompt,
       enabled: Object.prototype.hasOwnProperty.call(source, 'enabled') ? source.enabled : true,
+      available_in_all_chats: Object.prototype.hasOwnProperty.call(source, 'available_in_all_chats')
+        ? source.available_in_all_chats
+        : false,
     });
   }
 
@@ -3786,7 +3835,7 @@ function createAiBotFeature({
     db.prepare(`
       UPDATE ai_bots
       SET name=?, mention=?, style='', tone='', behavior_rules='', speech_patterns='',
-          enabled=?, provider=?, kind='convert', response_model=?, summary_model='', embedding_model='',
+          enabled=?, available_in_all_chats=?, provider=?, kind='convert', response_model=?, summary_model='', embedding_model='',
           image_model='', image_aspect_ratio='', image_resolution='',
           allow_text=0, allow_image_generate=0, allow_image_edit=0, allow_document=0,
           allow_poll_create=0, allow_poll_vote=0, allow_react=0, allow_pin=0, visible_to_users=0,
@@ -3797,6 +3846,7 @@ function createAiBotFeature({
       input.name,
       input.mention,
       input.enabled ? 1 : 0,
+      input.available_in_all_chats ? 1 : 0,
       provider,
       input.response_model,
       input.transform_prompt || '',
@@ -3814,6 +3864,9 @@ function createAiBotFeature({
     }
     const bot = providerBotByRequestId({ params: { id: botId } }, res, { provider, kind: 'convert' });
     if (!bot) return;
+    if (boolValue(bot.available_in_all_chats, false)) {
+      return res.json({ ok: true, state: serializeConvertAdminStateByProvider(provider) });
+    }
     const enabled = boolValue(req.body?.enabled, false);
     saveChatBotSettingTx({
       chatId,
@@ -5737,6 +5790,7 @@ function createAiBotFeature({
   app.post('/api/admin/openai-convert-bots', auth, adminOnly, (req, res) => {
     const input = normalizeBotInput({ ...(req.body || {}), provider: 'openai', kind: 'convert' });
     const bot = sanitizeBot(createBotTx(input));
+    broadcastContextConvertBotUpdatedForBot(bot.id, [bot]);
     res.json({ bot, state: serializeOpenAiConvertAdminState() });
   });
 
@@ -5750,7 +5804,7 @@ function createAiBotFeature({
     const input = normalizeBotInput({ ...(req.body || {}), provider: 'openai', kind: 'convert' }, current);
     updateContextConvertBot('openai', current, input);
     const updated = botByIdStmt.get(current.id);
-    broadcastContextConvertBotUpdatedForBot(current.id);
+    broadcastContextConvertBotUpdatedForBot(current.id, [current, updated]);
     res.json({ bot: sanitizeBot(updated), state: serializeOpenAiConvertAdminState() });
   });
 
@@ -5759,7 +5813,7 @@ function createAiBotFeature({
     if (!current) return;
     db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
     db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
-    broadcastContextConvertBotUpdatedForBot(current.id);
+    broadcastContextConvertBotUpdatedForBot(current.id, [current]);
     res.json({ ok: true, state: serializeOpenAiConvertAdminState() });
   });
 
@@ -5805,6 +5859,7 @@ function createAiBotFeature({
       warnings.push(`Mention "@${requestedMention}" is already taken; imported as "@${input.mention}".`);
     }
     const bot = sanitizeBot(createBotTx(input));
+    broadcastContextConvertBotUpdatedForBot(bot.id, [bot]);
     res.json({ bot, warnings, state: serializeOpenAiConvertAdminState() });
   });
 
@@ -6411,6 +6466,7 @@ function createAiBotFeature({
   app.post('/api/admin/deepseek-convert-bots', auth, adminOnly, (req, res) => {
     const input = normalizeBotInput({ ...(req.body || {}), provider: 'deepseek', kind: 'convert' });
     const bot = sanitizeBot(createBotTx(input));
+    broadcastContextConvertBotUpdatedForBot(bot.id, [bot]);
     res.json({ bot, state: serializeDeepSeekConvertAdminState() });
   });
 
@@ -6424,7 +6480,7 @@ function createAiBotFeature({
     const input = normalizeBotInput({ ...(req.body || {}), provider: 'deepseek', kind: 'convert' }, current);
     updateContextConvertBot('deepseek', current, input);
     const updated = botByIdStmt.get(current.id);
-    broadcastContextConvertBotUpdatedForBot(current.id);
+    broadcastContextConvertBotUpdatedForBot(current.id, [current, updated]);
     res.json({ bot: sanitizeBot(updated), state: serializeDeepSeekConvertAdminState() });
   });
 
@@ -6433,7 +6489,7 @@ function createAiBotFeature({
     if (!current) return;
     db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
     db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
-    broadcastContextConvertBotUpdatedForBot(current.id);
+    broadcastContextConvertBotUpdatedForBot(current.id, [current]);
     res.json({ ok: true, state: serializeDeepSeekConvertAdminState() });
   });
 
@@ -6479,6 +6535,7 @@ function createAiBotFeature({
       warnings.push(`Mention "@${requestedMention}" is already taken; imported as "@${input.mention}".`);
     }
     const bot = sanitizeBot(createBotTx(input));
+    broadcastContextConvertBotUpdatedForBot(bot.id, [bot]);
     res.json({ bot, warnings, state: serializeDeepSeekConvertAdminState() });
   });
 
@@ -6774,6 +6831,7 @@ function createAiBotFeature({
   app.post('/api/admin/yandex-convert-bots', auth, adminOnly, (req, res) => {
     const input = normalizeBotInput({ ...(req.body || {}), provider: 'yandex', kind: 'convert' });
     const bot = sanitizeBot(createBotTx(input));
+    broadcastContextConvertBotUpdatedForBot(bot.id, [bot]);
     res.json({ bot, state: serializeYandexConvertAdminState() });
   });
 
@@ -6787,7 +6845,7 @@ function createAiBotFeature({
     const input = normalizeBotInput({ ...(req.body || {}), provider: 'yandex', kind: 'convert' }, current);
     updateContextConvertBot('yandex', current, input);
     const updated = botByIdStmt.get(current.id);
-    broadcastContextConvertBotUpdatedForBot(current.id);
+    broadcastContextConvertBotUpdatedForBot(current.id, [current, updated]);
     res.json({ bot: sanitizeBot(updated), state: serializeYandexConvertAdminState() });
   });
 
@@ -6796,7 +6854,7 @@ function createAiBotFeature({
     if (!current) return;
     db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
     db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
-    broadcastContextConvertBotUpdatedForBot(current.id);
+    broadcastContextConvertBotUpdatedForBot(current.id, [current]);
     res.json({ ok: true, state: serializeYandexConvertAdminState() });
   });
 
@@ -6842,6 +6900,7 @@ function createAiBotFeature({
       warnings.push(`Mention "@${requestedMention}" is already taken; imported as "@${input.mention}".`);
     }
     const bot = sanitizeBot(createBotTx(input));
+    broadcastContextConvertBotUpdatedForBot(bot.id, [bot]);
     res.json({ bot, warnings, state: serializeYandexConvertAdminState() });
   });
 
@@ -7227,6 +7286,7 @@ function createAiBotFeature({
   app.post('/api/admin/grok-convert-bots', auth, adminOnly, (req, res) => {
     const input = normalizeBotInput({ ...(req.body || {}), provider: 'grok', kind: 'convert' });
     const bot = sanitizeBot(createBotTx(input));
+    broadcastContextConvertBotUpdatedForBot(bot.id, [bot]);
     res.json({ bot, state: serializeGrokConvertAdminState() });
   });
 
@@ -7240,7 +7300,7 @@ function createAiBotFeature({
     const input = normalizeBotInput({ ...(req.body || {}), provider: 'grok', kind: 'convert' }, current);
     updateContextConvertBot('grok', current, input);
     const updated = botByIdStmt.get(current.id);
-    broadcastContextConvertBotUpdatedForBot(current.id);
+    broadcastContextConvertBotUpdatedForBot(current.id, [current, updated]);
     res.json({ bot: sanitizeBot(updated), state: serializeGrokConvertAdminState() });
   });
 
@@ -7249,7 +7309,7 @@ function createAiBotFeature({
     if (!current) return;
     db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
     db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
-    broadcastContextConvertBotUpdatedForBot(current.id);
+    broadcastContextConvertBotUpdatedForBot(current.id, [current]);
     res.json({ ok: true, state: serializeGrokConvertAdminState() });
   });
 
@@ -7295,6 +7355,7 @@ function createAiBotFeature({
       warnings.push(`Mention "@${requestedMention}" is already taken; imported as "@${input.mention}".`);
     }
     const bot = sanitizeBot(createBotTx(input));
+    broadcastContextConvertBotUpdatedForBot(bot.id, [bot]);
     res.json({ bot, warnings, state: serializeGrokConvertAdminState() });
   });
 

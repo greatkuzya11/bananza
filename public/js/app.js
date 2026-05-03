@@ -1318,6 +1318,16 @@
       });
       return currentUser ? { ...currentUser } : null;
     },
+    setContextConvertAdminState: (provider = 'openai', state = {}, selectedBotId = null) => {
+      const nextProvider = contextConvertAdminStates[provider] ? provider : 'openai';
+      activeContextConvertProvider = nextProvider;
+      mergeContextConvertAdminState(nextProvider, state);
+      if (selectedBotId != null) {
+        selectedContextConvertBotIds[nextProvider] = Number(selectedBotId || 0) || null;
+      }
+      renderContextConvertAdminSettings();
+      return currentContextConvertAdminState();
+    },
     setActiveChatFolder: (folderId, options = {}) => {
       setActiveChatFolder(folderId, {
         persist: Boolean(options.persist),
@@ -12542,7 +12552,7 @@
         <span class="ai-bot-list-main">
           <span class="ai-bot-list-copy">
             <strong>${esc(bot.name || 'Convert bot')}</strong>
-            <small>${bot.enabled ? 'enabled' : 'disabled'}${bot.response_model ? ` · ${esc(bot.response_model)}` : ''}</small>
+            <small>${bot.enabled ? 'enabled' : 'disabled'}${bot.available_in_all_chats ? ' · all chats' : ''}${bot.response_model ? ` · ${esc(bot.response_model)}` : ''}</small>
           </span>
         </span>
       </button>
@@ -12561,7 +12571,13 @@
     $('#contextConvertBotName').value = bot?.name || `${contextConvertProviderLabel(activeContextConvertProvider)} Convert`;
     $('#contextConvertBotTemperature').value = bot?.temperature ?? 0.3;
     $('#contextConvertBotMaxTokens').value = bot?.max_tokens ?? 1000;
-    $('#contextConvertBotEnabled').checked = bot?.enabled !== false;
+    const enabledToggle = $('#contextConvertBotEnabled');
+    const allChatsToggle = $('#contextConvertBotAvailableAllChats');
+    if (enabledToggle) enabledToggle.checked = bot?.enabled !== false;
+    if (allChatsToggle) {
+      allChatsToggle.checked = !!bot?.available_in_all_chats;
+      allChatsToggle.disabled = !enabledToggle?.checked;
+    }
     $('#contextConvertBotPrompt').value = bot?.transform_prompt || '';
   }
 
@@ -12578,7 +12594,15 @@
     if (state.bots.some((bot) => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;
     if (!botSelect.value && state.bots[0]) botSelect.value = String(state.bots[0].id);
     const setting = getContextConvertChatSetting(chatSelect.value, botSelect.value);
-    $('#contextConvertBotChatEnabled').checked = !!setting?.enabled;
+    const bot = state.bots.find((item) => Number(item.id) === Number(botSelect.value));
+    const isGlobalBot = !!bot?.available_in_all_chats;
+    const chatEnabledToggle = $('#contextConvertBotChatEnabled');
+    if (chatEnabledToggle) {
+      chatEnabledToggle.checked = isGlobalBot || !!setting?.enabled;
+      chatEnabledToggle.disabled = isGlobalBot;
+    }
+    const saveButton = $('#contextConvertBotChatSave');
+    if (saveButton) saveButton.disabled = isGlobalBot;
   }
 
   function renderContextConvertAdminSettings() {
@@ -12592,6 +12616,7 @@
     return {
       name: $('#contextConvertBotName')?.value.trim(),
       enabled: $('#contextConvertBotEnabled')?.checked,
+      available_in_all_chats: $('#contextConvertBotAvailableAllChats')?.checked,
       response_model: $('#contextConvertBotResponseModel')?.value.trim(),
       temperature: Number($('#contextConvertBotTemperature')?.value || 0.3),
       max_tokens: Number($('#contextConvertBotMaxTokens')?.value || 1000),
@@ -12745,6 +12770,13 @@
     const botId = Number($('#contextConvertBotChatBotSelect')?.value || 0);
     if (!chatId || !botId) {
       setContextConvertChatStatus('Select chat and bot', 'error');
+      return;
+    }
+    const state = currentContextConvertAdminState();
+    const bot = state.bots.find((item) => Number(item.id) === Number(botId));
+    if (bot?.available_in_all_chats) {
+      renderContextConvertChatSettings();
+      setContextConvertChatStatus('This bot is already available in all context-enabled chats', 'success');
       return;
     }
     setContextConvertChatStatus('Saving...');
@@ -22759,6 +22791,10 @@
     bindAsyncActionButtons('contextConvertBotDisable', null, 'Disabling...', disableContextConvertAdminBot);
     bindAsyncActionButtons('contextConvertBotTest', null, 'Testing...', testContextConvertAdminBot);
     bindAsyncActionButtons('contextConvertBotExportJson', null, 'Preparing...', exportContextConvertAdminBot);
+    $('#contextConvertBotEnabled')?.addEventListener('change', (event) => {
+      const allChatsToggle = $('#contextConvertBotAvailableAllChats');
+      if (allChatsToggle) allChatsToggle.disabled = !event.target.checked;
+    });
     $('#contextConvertBotImportJson')?.addEventListener('click', () => $('#contextConvertBotImportFile')?.click());
     $('#contextConvertBotImportFile')?.addEventListener('change', (event) => {
       importContextConvertAdminBot(event.target.files?.[0]);
