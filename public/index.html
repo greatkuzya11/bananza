@@ -14,7 +14,7 @@
     <!-- Sidebar -->
     <aside id="sidebar">
       <div class="sidebar-header">
-        <button id="menuBtn" class="icon-btn" title="Menu">☰</button>
+        <button id="menuBtn" class="icon-btn" title="Menu">&#9776;</button>
         <h2>🍌 BananZa</h2>
         <button id="refreshChatsBtn" class="icon-btn mobile-only" title="Refresh chats" type="button">
           <span class="refresh-chats-icon" aria-hidden="true">↻</span>
@@ -23,6 +23,11 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="11" cy="11" r="7"></circle>
             <path d="m20 20-4.2-4.2"></path>
+          </svg>
+        </button>
+        <button id="chatFoldersBtn" class="icon-btn" title="Chat folders" aria-label="Chat folders" type="button">
+          <svg class="chat-folders-header-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h4.2l2 2H18a2.5 2.5 0 0 1 2.5 2.5v7A2.5 2.5 0 0 1 18 19H6a2.5 2.5 0 0 1-2.5-2.5z"></path>
           </svg>
         </button>
         <button id="newChatBtn" class="icon-btn" title="New chat">✎</button>
@@ -46,6 +51,14 @@
         >
         <button id="chatSearchClear" class="search-clear" title="Close search" aria-label="Close search" type="button">✕</button>
       </div>
+      <div id="chatFolderContent" class="chat-folder-content">
+        <div id="activeChatFolderBar" class="active-chat-folder-bar hidden" aria-live="polite">
+          <div class="active-chat-folder-strip-shell">
+            <div id="activeChatFolderStrip" class="active-chat-folder-strip" role="tablist" aria-label="Chat folders"></div>
+          </div>
+          <span id="activeChatFolderName" class="active-chat-folder-name hidden" aria-hidden="true"></span>
+        </div>
+        <div id="chatFolderListSurface" class="chat-folder-list-surface">
       <div id="chatListPullIndicator" class="chat-list-pull-indicator hidden" aria-live="polite" aria-hidden="true">
         <div class="chat-list-pull-chip">
           <span id="chatListPullIcon" class="chat-list-pull-icon" aria-hidden="true">↻</span>
@@ -54,6 +67,8 @@
       </div>
       <div id="chatList" class="chat-list"></div>
       <div id="chatListStatus" class="chat-list-status hidden" aria-live="polite"></div>
+      </div>
+      </div>
       <div class="sidebar-footer">
         <div id="currentUserInfo" class="current-user"></div>
         <div id="weatherWidget" class="weather-widget hidden" role="status" aria-live="polite" title="Weather"></div>
@@ -134,7 +149,7 @@
           <div class="input-row">
             <button id="attachBtn" class="icon-btn" title="Attach file">📎</button>
             <button id="pollBtn" class="icon-btn composer-desktop-only" title="Create poll" type="button">📊</button>
-            <button id="emojiBtn" class="icon-btn" title="Emoji">😊</button>
+            <button id="emojiBtn" class="icon-btn" title="Emoji">&#128522;</button>
             <div class="composer-input-wrap">
               <textarea id="msgInput" placeholder="Message..." rows="1"></textarea>
               <button
@@ -171,6 +186,10 @@
   <div id="reactionEmojiPopover" class="reaction-emoji-popover hidden"></div>
   <div id="chatContextMenuBackdrop" class="chat-context-menu-backdrop hidden"></div>
   <div id="chatContextMenu" class="chat-context-menu hidden" aria-hidden="true"></div>
+  <div id="chatFolderPickerBackdrop" class="chat-context-menu-backdrop hidden"></div>
+  <div id="chatFolderPicker" class="chat-context-menu chat-folder-picker hidden" aria-hidden="true"></div>
+  <div id="chatFolderContextMenuBackdrop" class="chat-context-menu-backdrop hidden"></div>
+  <div id="chatFolderContextMenu" class="chat-context-menu hidden" aria-hidden="true"></div>
   <div id="mediaContextMenuBackdrop" class="chat-context-menu-backdrop media-context-menu-backdrop hidden"></div>
   <div id="mediaContextMenu" class="chat-context-menu media-context-menu hidden" aria-hidden="true"></div>
 
@@ -192,6 +211,7 @@
       <div class="modal-tabs">
         <div class="modal-tab active" data-tab="private">Private</div>
         <div class="modal-tab" data-tab="group">Group</div>
+        <div class="modal-tab" data-tab="folder">Folder</div>
       </div>
       <div class="modal-body">
         <div id="privateTab" class="tab-pane active">
@@ -202,6 +222,33 @@
           <div id="userListGroup" class="user-list checkable"></div>
           <button id="createGroupBtn" class="btn-primary">Create Group</button>
         </div>
+        <div id="folderTab" class="tab-pane">
+          <input type="text" id="newFolderName" placeholder="Folder name" maxlength="50" class="modal-input">
+          <input type="search" id="newFolderChatSearch" placeholder="Find chats..." class="modal-input" autocomplete="off">
+          <div id="newFolderChatList" class="user-list checkable folder-chat-selection-list"></div>
+          <button id="createFolderBtn" class="btn-primary">Create Folder</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="chatFolderManageModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="chatFolderManageTitle">Manage folders</h3>
+        <button class="modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="chatFolderManageSystemWrap" class="chat-folder-manage-section hidden">
+          <h4>Автопапки</h4>
+          <div id="chatFolderManageSystemList" class="chat-folder-chip-list"></div>
+        </div>
+        <div class="chat-folder-manage-section">
+          <h4>Ручные папки</h4>
+          <div id="chatFolderManageCustomList" class="user-list checkable"></div>
+        </div>
+        <div id="chatFolderManageStatus" class="chat-preferences-status"></div>
+        <button id="chatFolderManageSaveBtn" class="btn-primary">Save</button>
       </div>
     </div>
   </div>
@@ -1958,3 +2005,6 @@
   <script src="/js/voice.js"></script>
 </body>
 </html>
+
+
+

@@ -584,4 +584,37 @@ initVoiceSchema(db);
 initVideoNoteSchema(db);
 initAiSchema(db);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS chat_folders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('custom', 'bot_auto')),
+    bot_id INTEGER DEFAULT NULL REFERENCES ai_bots(id) ON DELETE CASCADE,
+    sort_order INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS chat_folder_memberships (
+    folder_id INTEGER NOT NULL REFERENCES chat_folders(id) ON DELETE CASCADE,
+    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (folder_id, chat_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS chat_folder_pins (
+    folder_id INTEGER NOT NULL REFERENCES chat_folders(id) ON DELETE CASCADE,
+    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    pin_order INTEGER NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (folder_id, chat_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_chat_folders_user_order ON chat_folders(user_id, sort_order, id);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_folders_user_bot_auto ON chat_folders(user_id, bot_id) WHERE kind='bot_auto';
+  CREATE INDEX IF NOT EXISTS idx_chat_folder_memberships_chat ON chat_folder_memberships(chat_id, folder_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_folder_pins_folder_order ON chat_folder_pins(folder_id, pin_order);
+`);
+
 module.exports = db;

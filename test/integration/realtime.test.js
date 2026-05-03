@@ -2,9 +2,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { before, after } = require('node:test');
 
+const { createSession, makeUser, waitForSocketMessage } = require('../support/api');
 const { createSandbox } = require('../support/runtimeSandbox');
 const { createBasicChatScenario } = require('../support/scenario');
-const { waitForSocketMessage } = require('../support/api');
 
 let sandbox;
 let scenario;
@@ -102,4 +102,47 @@ test('typing, messages, reactions, poll updates, pins and read receipts fan out 
   });
   const readEvent = await readEventPromise;
   assert.equal(readEvent.lastReadId, created.data.id);
+});
+
+test('chat folder mutations emit user-scoped chat_folders_updated websocket events', async () => {
+  const owner = createSession(sandbox.baseUrl);
+  const peer = createSession(sandbox.baseUrl);
+  await owner.register(makeUser('wsfolder'));
+  await peer.register(makeUser('wspeer'));
+
+  const { data: privateChat } = await owner.request('/api/chats/private', {
+    method: 'POST',
+    json: { targetUserId: peer.user.id },
+  });
+
+  const ownerSocket = await owner.openWebSocket();
+  try {
+    const createdEventPromise = waitForSocketMessage(ownerSocket, (message) => (
+      message.type === 'chat_folders_updated'
+      && message.reason === 'folder_created'
+    ));
+
+    const created = await owner.request('/api/chat-folders', {
+      method: 'POST',
+      json: {
+        name: 'Realtime folders',
+        chatIds: [privateChat.id],
+      },
+    });
+    const createdEvent = await createdEventPromise;
+    assert.equal(Number(createdEvent.folderId), Number(created.data.folder.id));
+
+    const renameEventPromise = waitForSocketMessage(ownerSocket, (message) => (
+      message.type === 'chat_folders_updated'
+      && message.reason === 'folder_renamed'
+    ));
+    await owner.request(`/api/chat-folders/${created.data.folder.id}`, {
+      method: 'PUT',
+      json: { name: 'Realtime folders renamed' },
+    });
+    const renameEvent = await renameEventPromise;
+    assert.equal(Number(renameEvent.folderId), Number(created.data.folder.id));
+  } finally {
+    ownerSocket.close();
+  }
 });

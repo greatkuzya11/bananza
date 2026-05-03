@@ -4,6 +4,7 @@ const path = require('path');
 const { before, after } = require('node:test');
 const Database = require('better-sqlite3');
 
+const { createSession, makeUser } = require('../support/api');
 const { createSandbox } = require('../support/runtimeSandbox');
 const { createBasicChatScenario, waitFor } = require('../support/scenario');
 
@@ -497,4 +498,175 @@ test('bot private chats can auto-title via provider output when AI is configured
   assert.equal(Number(renamedChat.private_user?.is_ai_bot || 0), 1);
   assert.equal(Number(renamedChat.private_user?.id || 0), Number(bot.user_id));
   assert.equal(renamedChat.private_user?.display_name, bot.name);
+});
+
+test('chat folder CRUD, multi-membership, ordering and folder-local pins work independently from All chats', async () => {
+  const owner = createSession(sandbox.baseUrl);
+  const peer = createSession(sandbox.baseUrl);
+  await owner.register(makeUser('folderowner'));
+  await peer.register(makeUser('folderpeer'));
+
+  const { data: groupChat } = await owner.request('/api/chats', {
+    method: 'POST',
+    json: {
+      name: `Folder Group ${Date.now()}`,
+      type: 'group',
+      memberIds: [peer.user.id],
+    },
+  });
+  const { data: privateChat } = await owner.request('/api/chats/private', {
+    method: 'POST',
+    json: { targetUserId: peer.user.id },
+  });
+  const { data: sideChat } = await owner.request('/api/chats', {
+    method: 'POST',
+    json: {
+      name: `Folder Side ${Date.now()}`,
+      type: 'group',
+      memberIds: [peer.user.id],
+    },
+  });
+
+  const created = await owner.request('/api/chat-folders', {
+    method: 'POST',
+    json: {
+      name: 'Ops',
+      chatIds: [groupChat.id, privateChat.id],
+    },
+  });
+  const folderId = Number(created.data.folder.id);
+  assert.equal(created.data.folder.kind, 'custom');
+  assert.deepEqual(new Set(created.data.folder.chat_ids), new Set([groupChat.id, privateChat.id]));
+
+  const secondary = await owner.request('/api/chat-folders', {
+    method: 'POST',
+    json: {
+      name: 'Shared',
+      chatIds: [privateChat.id],
+    },
+  });
+  const secondaryFolderId = Number(secondary.data.folder.id);
+
+  let folderList = await owner.request('/api/chat-folders');
+  assert.equal(folderList.data.folders.length, 2);
+  assert.deepEqual(
+    folderList.data.folders.map((folder) => Number(folder.id)).slice(0, 2),
+    [secondaryFolderId, folderId]
+  );
+  assert.ok(folderList.data.folders.find((folder) => Number(folder.id) === folderId).chat_ids.includes(privateChat.id));
+  assert.ok(folderList.data.folders.find((folder) => Number(folder.id) === secondaryFolderId).chat_ids.includes(privateChat.id));
+
+  await owner.request(`/api/chat-folders/${folderId}`, {
+    method: 'PUT',
+    json: { name: 'Ops renamed' },
+  });
+  await owner.request(`/api/chat-folders/${folderId}/chats`, {
+    method: 'POST',
+    json: { chatIds: [sideChat.id] },
+  });
+  await owner.request(`/api/chat-folders/${folderId}/chats/${privateChat.id}`, {
+    method: 'DELETE',
+  });
+
+  await owner.request(`/api/chat-folders/${folderId}/chats/${groupChat.id}/pin`, {
+    method: 'PUT',
+    json: { pinned: true },
+  });
+  await owner.request(`/api/chat-folders/${folderId}/chats/${sideChat.id}/pin`, {
+    method: 'PUT',
+    json: { pinned: true },
+  });
+  await owner.request(`/api/chat-folders/${folderId}/chats/${sideChat.id}/pin/move`, {
+    method: 'POST',
+    json: { direction: 'up' },
+  });
+
+  await owner.request(`/api/chats/${privateChat.id}/sidebar-pin`, {
+    method: 'PUT',
+    json: { pinned: true },
+  });
+
+  folderList = await owner.request('/api/chat-folders');
+  const updatedFolder = folderList.data.folders.find((folder) => Number(folder.id) === folderId);
+  assert.ok(updatedFolder);
+  assert.equal(updatedFolder.name, 'Ops renamed');
+  assert.deepEqual(new Set(updatedFolder.chat_ids), new Set([groupChat.id, sideChat.id]));
+  assert.deepEqual(updatedFolder.pins.map((pin) => Number(pin.chat_id)), [sideChat.id, groupChat.id]);
+  assert.equal(updatedFolder.pins.some((pin) => Number(pin.chat_id) === Number(privateChat.id)), false);
+
+  const chatList = await owner.request('/api/chats');
+  const privateChatState = chatList.data.find((chat) => Number(chat.id) === Number(privateChat.id));
+  const groupChatState = chatList.data.find((chat) => Number(chat.id) === Number(groupChat.id));
+  assert.ok(Number(privateChatState.chat_list_pin_order || 0) > 0);
+  assert.equal(groupChatState.chat_list_pin_order ?? null, null);
+
+  await owner.request('/api/chat-folders/order', {
+    method: 'PUT',
+    json: { folderIds: [folderId, secondaryFolderId] },
+  });
+  folderList = await owner.request('/api/chat-folders');
+  assert.deepEqual(
+    folderList.data.folders.map((folder) => Number(folder.id)).slice(0, 2),
+    [folderId, secondaryFolderId]
+  );
+
+  await owner.request(`/api/chat-folders/${secondaryFolderId}`, {
+    method: 'DELETE',
+  });
+  folderList = await owner.request('/api/chat-folders');
+  assert.equal(folderList.data.folders.some((folder) => Number(folder.id) === secondaryFolderId), false);
+  assert.equal(folderList.data.folders.some((folder) => Number(folder.id) === folderId), true);
+});
+
+test('bot auto folders collect private chats and keep historical group links after bot removal', async () => {
+  const { admin } = scenario;
+  const owner = createSession(sandbox.baseUrl);
+  const peer = createSession(sandbox.baseUrl);
+  await owner.register(makeUser('botfolder'));
+  await peer.register(makeUser('botpeer'));
+
+  const bot = await createOpenAiBot(admin, {
+    visibleToUsers: true,
+    name: `Folder Bot ${Date.now()}`,
+  });
+  await admin.request(`/api/admin/users/${owner.user.id}/bot-access`, {
+    method: 'PUT',
+    json: { can_add_bots_to_chats: true },
+  });
+
+  const { data: groupChat } = await owner.request('/api/chats', {
+    method: 'POST',
+    json: {
+      name: `Bot Folder Group ${Date.now()}`,
+      type: 'group',
+      memberIds: [peer.user.id],
+    },
+  });
+  const { data: privateBotChat } = await owner.request('/api/chats/private', {
+    method: 'POST',
+    json: { targetUserId: Number(bot.user_id) },
+  });
+
+  let folderList = await owner.request('/api/chat-folders');
+  let botFolder = folderList.data.folders.find((folder) => Number(folder.bot_id) === Number(bot.id));
+  assert.ok(botFolder);
+  assert.equal(botFolder.kind, 'bot_auto');
+  assert.equal(botFolder.name, `${bot.name} чаты`);
+  assert.ok(botFolder.chat_ids.includes(privateBotChat.id));
+
+  await owner.request(`/api/chats/${groupChat.id}/members`, {
+    method: 'POST',
+    json: { userId: Number(bot.user_id) },
+  });
+  folderList = await owner.request('/api/chat-folders');
+  botFolder = folderList.data.folders.find((folder) => Number(folder.bot_id) === Number(bot.id));
+  assert.ok(botFolder.chat_ids.includes(groupChat.id));
+
+  await owner.request(`/api/chats/${groupChat.id}/members/${bot.user_id}`, {
+    method: 'DELETE',
+  });
+  folderList = await owner.request('/api/chat-folders');
+  botFolder = folderList.data.folders.find((folder) => Number(folder.bot_id) === Number(bot.id));
+  assert.ok(botFolder.chat_ids.includes(groupChat.id));
+  assert.ok(botFolder.chat_ids.includes(privateBotChat.id));
 });

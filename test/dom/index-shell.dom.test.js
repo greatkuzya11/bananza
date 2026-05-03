@@ -44,6 +44,11 @@ test('public/index.html exposes core shell nodes used by runtime modules', () =>
   const requiredIds = [
     'app',
     'sidebar',
+    'chatFoldersBtn',
+    'chatFolderContent',
+    'chatFolderListSurface',
+    'activeChatFolderBar',
+    'activeChatFolderStrip',
     'chatArea',
     'messages',
     'sendBtn',
@@ -51,6 +56,10 @@ test('public/index.html exposes core shell nodes used by runtime modules', () =>
     'settingsModal',
     'pollComposerModal',
     'chatInfoModal',
+    'chatFolderPicker',
+    'chatFolderManageModal',
+    'folderTab',
+    'createFolderBtn',
   ];
 
   requiredIds.forEach((id) => {
@@ -58,6 +67,7 @@ test('public/index.html exposes core shell nodes used by runtime modules', () =>
   });
 
   assert.equal(document.getElementById('chatBotInfoSection'), null);
+  assert.equal(document.getElementById('activeChatFolderVisibilityToggle'), null);
 });
 
 test('public/index.html keeps universal file pickers and mobile media shortcuts', () => {

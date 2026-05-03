@@ -124,6 +124,12 @@
   const CHAT_CONTEXT_LONG_PRESS_MS = 500;
   const MEDIA_CONTEXT_LONG_PRESS_MS = 500;
   const MEDIA_CONTEXT_TARGET_SELECTOR = '.msg-image, .msg-video video, .msg-audio audio, .msg-file, .video-note-stage';
+  const ALL_CHATS_FOLDER_ID = 0;
+  const CHAT_FOLDER_ICON_EMOJI = Object.freeze({
+    all: '\uD83D\uDCAC',
+    custom: '\uD83D\uDCC1',
+    bot_auto: '\uD83E\uDD16',
+  });
   const aiImageRiskApi = window.BananzaAiImageRisk || null;
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -132,8 +138,12 @@
   let currentUser = null;
   let token = null;
   let chats = [];
+  let chatFolders = [];
+  let chatFoldersLoadedOnce = false;
   let chatListLoadedOnce = false;
   let initialChatLoadFinished = false;
+  let chatFolderRequestSeq = 0;
+  let chatFolderAbortController = null;
   let chatListRequestSeq = 0;
   let chatListAbortController = null;
   let chatListCacheSyncTimer = null;
@@ -185,6 +195,10 @@
   let replyTo = null; // { id, display_name, text }
   let grokImageRiskConfirmResolver = null;
   let editTo = null; // { id, text, is_voice_note, allowEmpty }
+  let chatFolderPickerState = null;
+  let chatFolderContextMenuState = null;
+  let chatFolderManageState = null;
+  let newFolderSelectedChatIds = new Set();
   let allUsers = [];
   let compactViewMap = JSON.parse(localStorage.getItem('compactViewMap') || '{}');
   let compactView = false;
@@ -202,6 +216,10 @@
   let currentModalAnimation = 'soft';
   let currentModalAnimationSpeed = MODAL_ANIMATION_SPEED_DEFAULT;
   let currentMobileFontSize = MOBILE_FONT_SIZE_DEFAULT;
+  let chatFolderSwitchSeq = 0;
+  let pendingChatFolderChipCenterBehavior = 'auto';
+  let chatFolderStripPreviewFolderId = null;
+  let chatFolderBarForceVisible = false;
   let weatherSettings = { enabled: false, refresh_minutes: 30, location: null };
   let weatherSettingsLoaded = false;
   let selectedWeatherLocation = null;
@@ -510,6 +528,12 @@
   const chatSearch = $('#chatSearch');
   const chatSearchToggle = $('#chatSearchToggle');
   const chatSearchClear = $('#chatSearchClear');
+  const chatFoldersBtn = $('#chatFoldersBtn');
+  const chatFolderContent = $('#chatFolderContent');
+  const chatFolderListSurface = $('#chatFolderListSurface');
+  const activeChatFolderBar = $('#activeChatFolderBar');
+  const activeChatFolderStrip = $('#activeChatFolderStrip');
+  const activeChatFolderName = $('#activeChatFolderName');
   const chatArea = $('#chatArea');
   const emptyState = $('#emptyState');
   const chatView = $('#chatView');
@@ -548,6 +572,10 @@
   const reactionEmojiPopover = $('#reactionEmojiPopover');
   const chatContextMenuBackdrop = $('#chatContextMenuBackdrop');
   const chatContextMenu = $('#chatContextMenu');
+  const chatFolderPickerBackdrop = $('#chatFolderPickerBackdrop');
+  const chatFolderPicker = $('#chatFolderPicker');
+  const chatFolderContextMenuBackdrop = $('#chatFolderContextMenuBackdrop');
+  const chatFolderContextMenu = $('#chatFolderContextMenu');
   const mediaContextMenuBackdrop = $('#mediaContextMenuBackdrop');
   const mediaContextMenu = $('#mediaContextMenu');
   const OPENAI_IMAGE_SIZE_OPTIONS = ['auto', '1024x1024', '1024x1536', '1536x1024'];
@@ -565,6 +593,10 @@
   const searchAllChatsToggle = $('#searchAllChatsToggle');
   const dragOverlay = $('#dragOverlay');
   const newChatModal = $('#newChatModal');
+  const newFolderNameInput = $('#newFolderName');
+  const newFolderChatSearchInput = $('#newFolderChatSearch');
+  const newFolderChatList = $('#newFolderChatList');
+  const createFolderBtn = $('#createFolderBtn');
   const adminModal = $('#adminModal');
   const chatInfoModal = $('#chatInfoModal');
   const menuDrawer = $('#menuDrawer');
@@ -609,6 +641,158 @@
   const pollVotersTitle = $('#pollVotersTitle');
   const pollVotersStatus = $('#pollVotersStatus');
   const pollVotersList = $('#pollVotersList');
+  const chatFolderManageModal = $('#chatFolderManageModal');
+  const chatFolderManageSaveBtn = $('#chatFolderManageSaveBtn');
+
+  function chatFolderIconEmoji(kind = 'custom') {
+    if (kind === 'all') return CHAT_FOLDER_ICON_EMOJI.all;
+    if (kind === 'bot_auto') return CHAT_FOLDER_ICON_EMOJI.bot_auto;
+    return CHAT_FOLDER_ICON_EMOJI.custom;
+  }
+
+  function chatFolderEmojiMarkup(kind = 'custom', className = 'chat-folder-picker-emoji') {
+    return `<span class="${className}" aria-hidden="true">${esc(chatFolderIconEmoji(kind))}</span>`;
+  }
+
+  function chatFolderIconMarkup(kind = 'custom') {
+    return chatFolderEmojiMarkup(kind);
+  }
+
+  function normalizeChatFolderEntry(folder = {}) {
+    const next = {
+      id: Number(folder?.id || 0),
+      name: String(folder?.name || '').trim(),
+      kind: String(folder?.kind || 'custom'),
+      system: Boolean(folder?.system || folder?.kind === 'bot_auto'),
+      bot_id: Number(folder?.bot_id || 0) || null,
+      sort_order: Number(folder?.sort_order || 0) || 0,
+      chat_ids: [...new Set((Array.isArray(folder?.chat_ids) ? folder.chat_ids : [])
+        .map((value) => Number(value || 0))
+        .filter((value) => Number.isInteger(value) && value > 0))],
+      pins: [],
+    };
+    next.pins = [...new Map((Array.isArray(folder?.pins) ? folder.pins : [])
+      .map((pin) => {
+        const chatId = Number(pin?.chat_id || 0);
+        const pinOrder = Number(pin?.pin_order || 0);
+        if (!Number.isInteger(chatId) || chatId <= 0 || !Number.isInteger(pinOrder) || pinOrder <= 0) return null;
+        return [chatId, { chat_id: chatId, pin_order: pinOrder }];
+      })
+      .filter(Boolean)).values()].sort((a, b) => a.pin_order - b.pin_order);
+    return next;
+  }
+
+  class ChatFolderStore {
+    constructor() {
+      this.activeFolderId = ALL_CHATS_FOLDER_ID;
+    }
+
+    storageKey() {
+      const userId = Number(currentUser?.id || 0);
+      return userId > 0 ? `bananza:active-chat-folder:${userId}` : '';
+    }
+
+    hydrateActiveFolderId() {
+      const key = this.storageKey();
+      if (!key) {
+        this.activeFolderId = ALL_CHATS_FOLDER_ID;
+        return this.activeFolderId;
+      }
+      const stored = Number(localStorage.getItem(key) || ALL_CHATS_FOLDER_ID);
+      this.activeFolderId = Number.isInteger(stored) && stored >= 0 ? stored : ALL_CHATS_FOLDER_ID;
+      this.ensureActiveFolder();
+      return this.activeFolderId;
+    }
+
+    persistActiveFolderId() {
+      const key = this.storageKey();
+      if (!key) return;
+      localStorage.setItem(key, String(this.activeFolderId || ALL_CHATS_FOLDER_ID));
+    }
+
+    setFolders(nextFolders = [], { persist = true } = {}) {
+      chatFolders = (Array.isArray(nextFolders) ? nextFolders : [])
+        .map((folder) => normalizeChatFolderEntry(folder))
+        .filter((folder) => folder.id > 0)
+        .sort((a, b) => {
+          const byOrder = Number(a.sort_order || 0) - Number(b.sort_order || 0);
+          if (byOrder) return byOrder;
+          return Number(a.id || 0) - Number(b.id || 0);
+        });
+      chatFoldersLoadedOnce = true;
+      this.ensureActiveFolder();
+      if (persist) this.persistActiveFolderId();
+      return this.getFolders();
+    }
+
+    getFolders() {
+      return chatFolders.map((folder) => ({
+        ...folder,
+        chat_ids: [...folder.chat_ids],
+        pins: folder.pins.map((pin) => ({ ...pin })),
+      }));
+    }
+
+    getFolderById(folderId) {
+      const id = Number(folderId || 0);
+      return chatFolders.find((folder) => Number(folder.id || 0) === id) || null;
+    }
+
+    getActiveFolder() {
+      return this.activeFolderId === ALL_CHATS_FOLDER_ID
+        ? null
+        : this.getFolderById(this.activeFolderId);
+    }
+
+    getResolvedActiveFolder() {
+      return this.getActiveFolder() || null;
+    }
+
+    isAllChatsActive() {
+      return Number(this.activeFolderId || 0) === ALL_CHATS_FOLDER_ID;
+    }
+
+    ensureActiveFolder() {
+      if (this.isAllChatsActive()) {
+        this.activeFolderId = ALL_CHATS_FOLDER_ID;
+        return this.activeFolderId;
+      }
+      if (!this.getFolderById(this.activeFolderId)) {
+        this.activeFolderId = ALL_CHATS_FOLDER_ID;
+      }
+      return this.activeFolderId;
+    }
+
+    setActiveFolderId(folderId, { persist = true } = {}) {
+      const nextId = Number(folderId || 0);
+      this.activeFolderId = Number.isInteger(nextId) && nextId > 0 ? nextId : ALL_CHATS_FOLDER_ID;
+      this.ensureActiveFolder();
+      if (persist) this.persistActiveFolderId();
+      return this.activeFolderId;
+    }
+
+    getFolderPinOrder(folderId, chatId) {
+      const folder = this.getFolderById(folderId);
+      if (!folder) return null;
+      const pin = folder.pins.find((entry) => Number(entry.chat_id || 0) === Number(chatId || 0));
+      const order = Number(pin?.pin_order || 0);
+      return Number.isInteger(order) && order > 0 ? order : null;
+    }
+
+    isChatInFolder(folderId, chatId) {
+      const folder = this.getFolderById(folderId);
+      if (!folder) return false;
+      return folder.chat_ids.includes(Number(chatId || 0));
+    }
+
+    getFoldersForChat(chatId) {
+      const id = Number(chatId || 0);
+      if (!id) return [];
+      return chatFolders.filter((folder) => folder.chat_ids.includes(id));
+    }
+  }
+
+  const chatFolderStore = new ChatFolderStore();
   const isIosViewportFixTarget = (() => {
     const ua = navigator.userAgent || '';
     const platform = navigator.platform || '';
@@ -1093,6 +1277,7 @@
   });
   Object.assign(appBridge.__testing = appBridge.__testing || {}, {
     getChats: () => chats.map((chat) => normalizeChatListEntry(chat)),
+    getChatFolders: () => chatFolderStore.getFolders(),
     setChats: (nextChats = [], options = {}) => {
       chats = (Array.isArray(nextChats) ? nextChats : []).map((chat) => normalizeChatListEntry(chat));
       if (Object.prototype.hasOwnProperty.call(options, 'currentChatId')) {
@@ -1112,6 +1297,37 @@
       refreshChatInfoPresentation(currentChat);
       return currentChat ? normalizeChatListEntry(currentChat) : null;
     },
+    setChatFolders: (nextFolders = [], options = {}) => {
+      chatFolderStore.setFolders(nextFolders, { persist: false });
+      if (Object.prototype.hasOwnProperty.call(options, 'activeFolderId')) {
+        chatFolderStore.setActiveFolderId(options.activeFolderId, { persist: false });
+      }
+      renderActiveChatFolderBar();
+      renderChatList(chatSearch?.value || '');
+      return chatFolderStore.getFolders();
+    },
+    getCurrentUser: () => (currentUser ? { ...currentUser } : null),
+    setCurrentUser: (nextUser = {}) => {
+      const nextId = Number(nextUser.id || currentUser?.id || 0);
+      if (!nextId) return null;
+      applyUserUpdate({
+        ...(currentUser || {}),
+        ...nextUser,
+        id: nextId,
+      });
+      return currentUser ? { ...currentUser } : null;
+    },
+    setActiveChatFolder: (folderId, options = {}) => {
+      setActiveChatFolder(folderId, {
+        persist: Boolean(options.persist),
+        render: !Object.prototype.hasOwnProperty.call(options, 'render') || Boolean(options.render),
+        closePicker: Boolean(options.closePicker),
+      });
+      return getActiveChatFolder();
+    },
+    transitionToChatFolder: (folderId, options = {}) => transitionToChatFolder(folderId, options),
+    centerActiveChatFolderChip: (options = {}) => centerActiveChatFolderChip(options),
+    getActiveChatFolder: () => getActiveChatFolder(),
     applyChatUpdate: (nextChat = {}) => applyChatUpdate(nextChat),
     dismissMobileComposer: (options = {}) => dismissMobileComposer(options),
     openMediaViewer: (src, type = 'image') => openMediaViewer(src, type),
@@ -3671,6 +3887,10 @@
     if (searchPanel && searchPanel.getAttribute('aria-hidden') === 'false') return true;
     if (isFloatingSurfaceVisible(chatContextMenuBackdrop)
       || isFloatingSurfaceVisible(chatContextMenu)
+      || isFloatingSurfaceVisible(chatFolderPickerBackdrop)
+      || isFloatingSurfaceVisible(chatFolderPicker)
+      || isFloatingSurfaceVisible(chatFolderContextMenuBackdrop)
+      || isFloatingSurfaceVisible(chatFolderContextMenu)
       || isFloatingSurfaceVisible(mediaContextMenuBackdrop)
       || isFloatingSurfaceVisible(mediaContextMenu)
       || isFloatingSurfaceVisible(reactionPicker)
@@ -3888,6 +4108,358 @@
     setChatListStatus('Showing saved chats while refreshing...', 'info');
     warmChatListAvatarAssets(cachedChats);
     return true;
+  }
+
+  function setChatFolderManageStatus(message, type = '') {
+    const el = $('#chatFolderManageStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-success', type === 'success');
+    el.classList.toggle('is-error', type === 'error');
+  }
+
+  function normalizeChatFolderId(folderId) {
+    return Number(folderId || 0) > 0 ? Number(folderId || 0) : ALL_CHATS_FOLDER_ID;
+  }
+
+  function shouldShowActiveChatFolderBar() {
+    return shouldShowChatFolderBarForSelection();
+  }
+
+  function activeChatFolderStripRows() {
+    return [{
+      id: ALL_CHATS_FOLDER_ID,
+      name: '\u0412\u0441\u0435 \u0447\u0430\u0442\u044b',
+      kind: 'all',
+    }].concat(chatFolderStore.getFolders().map((folder) => ({
+      id: Number(folder.id || 0),
+      name: folder.name || '\u041F\u0430\u043F\u043A\u0430',
+      kind: folder.kind === 'bot_auto' ? 'bot_auto' : 'custom',
+    })));
+  }
+
+  function getRenderedChatFolderSelectionId() {
+    if (chatFolderStripPreviewFolderId != null) return normalizeChatFolderId(chatFolderStripPreviewFolderId);
+    return normalizeChatFolderId(chatFolderStore.activeFolderId);
+  }
+
+  function shouldShowChatFolderBarForSelection(folderId = getRenderedChatFolderSelectionId(), { forceVisible = chatFolderBarForceVisible } = {}) {
+    return chatFolderStore.getFolders().length > 0 && (Boolean(forceVisible) || normalizeChatFolderId(folderId) !== ALL_CHATS_FOLDER_ID);
+  }
+
+  function chatFolderStripStructureSignature(rows = []) {
+    return rows.map((row) => `${Number(row.id || 0)}:${row.kind || 'custom'}:${row.name || ''}`).join('|');
+  }
+
+  function chatFolderStripLabelForSelection(folderId = getRenderedChatFolderSelectionId(), rows = activeChatFolderStripRows()) {
+    const normalizedFolderId = normalizeChatFolderId(folderId);
+    return rows.find((row) => Number(row.id || 0) === normalizedFolderId)?.name || '\u0412\u0441\u0435 \u0447\u0430\u0442\u044b';
+  }
+
+  function consumePendingChatFolderChipCenterBehavior() {
+    const nextBehavior = pendingChatFolderChipCenterBehavior === 'smooth' ? 'smooth' : 'auto';
+    pendingChatFolderChipCenterBehavior = 'auto';
+    return nextBehavior;
+  }
+
+  function setPendingChatFolderChipCenterBehavior(behavior = 'auto') {
+    pendingChatFolderChipCenterBehavior = behavior === 'smooth' ? 'smooth' : 'auto';
+  }
+
+  function cancelScheduledActiveChatFolderChipCenter() {
+    if (!(activeChatFolderStrip instanceof HTMLElement)) return;
+    if (activeChatFolderStrip.__centerChipRafPrimary) {
+      cancelAnimationFrame(activeChatFolderStrip.__centerChipRafPrimary);
+      activeChatFolderStrip.__centerChipRafPrimary = 0;
+    }
+    if (activeChatFolderStrip.__centerChipRafSecondary) {
+      cancelAnimationFrame(activeChatFolderStrip.__centerChipRafSecondary);
+      activeChatFolderStrip.__centerChipRafSecondary = 0;
+    }
+  }
+
+  function centerActiveChatFolderChip({ behavior = 'auto' } = {}) {
+    if (!(activeChatFolderStrip instanceof HTMLElement) || !(activeChatFolderBar instanceof HTMLElement)) return false;
+    if (activeChatFolderBar.classList.contains('hidden')) return false;
+    const activeChip = activeChatFolderStrip.querySelector('.active-chat-folder-chip.is-active[data-folder-chip], [data-folder-chip][aria-selected="true"]');
+    if (!(activeChip instanceof HTMLElement)) return false;
+    const viewportWidth = Number(activeChatFolderStrip.clientWidth || 0);
+    if (viewportWidth <= 0) return false;
+    const maxScrollLeft = Math.max(0, Number(activeChatFolderStrip.scrollWidth || 0) - viewportWidth);
+    const targetLeft = clamp(
+      (Number(activeChip.offsetLeft || 0) + (Number(activeChip.offsetWidth || 0) / 2)) - (viewportWidth / 2),
+      0,
+      maxScrollLeft
+    );
+    const nextBehavior = behavior === 'smooth' && !prefersReducedMotion() && currentModalAnimation !== 'none'
+      ? 'smooth'
+      : 'auto';
+    if (Math.abs(Number(activeChatFolderStrip.scrollLeft || 0) - targetLeft) < 1) return true;
+    if (typeof activeChatFolderStrip.scrollTo === 'function') {
+      try {
+        activeChatFolderStrip.scrollTo({ left: targetLeft, behavior: nextBehavior });
+        if (nextBehavior === 'auto') activeChatFolderStrip.scrollLeft = targetLeft;
+        return true;
+      } catch {}
+    }
+    activeChatFolderStrip.scrollLeft = targetLeft;
+    return true;
+  }
+
+  function scheduleActiveChatFolderChipCenter({ behavior } = {}) {
+    if (!(activeChatFolderStrip instanceof HTMLElement)) return false;
+    cancelScheduledActiveChatFolderChipCenter();
+    const nextBehavior = behavior === 'smooth' ? 'smooth' : consumePendingChatFolderChipCenterBehavior();
+    activeChatFolderStrip.__centerChipRafPrimary = requestAnimationFrame(() => {
+      activeChatFolderStrip.__centerChipRafPrimary = 0;
+      activeChatFolderStrip.__centerChipRafSecondary = requestAnimationFrame(() => {
+        activeChatFolderStrip.__centerChipRafSecondary = 0;
+        centerActiveChatFolderChip({ behavior: nextBehavior });
+      });
+    });
+    return true;
+  }
+
+  function renderChatFolderStripStructure({
+    selectedFolderId = getRenderedChatFolderSelectionId(),
+    forceVisible = chatFolderBarForceVisible,
+  } = {}) {
+    if (!activeChatFolderBar || !activeChatFolderName || !activeChatFolderStrip) return false;
+    const rows = activeChatFolderStripRows();
+    const normalizedFolderId = normalizeChatFolderId(selectedFolderId);
+    const shouldShow = shouldShowChatFolderBarForSelection(normalizedFolderId, { forceVisible });
+    const signature = chatFolderStripStructureSignature(rows);
+    activeChatFolderName.textContent = chatFolderStripLabelForSelection(normalizedFolderId, rows);
+    if (activeChatFolderStrip.dataset.structureSignature !== signature) {
+      activeChatFolderStrip.innerHTML = rows.map((row) => `
+        <button
+          type="button"
+          class="active-chat-folder-chip"
+          data-folder-chip="${Number(row.id || 0)}"
+          role="tab"
+          aria-selected="false"
+        >${esc(row.name)}</button>
+      `).join('');
+      activeChatFolderStrip.dataset.structureSignature = signature;
+    }
+    activeChatFolderBar.classList.toggle('hidden', !shouldShow);
+    if (!shouldShow) {
+      cancelScheduledActiveChatFolderChipCenter();
+      return false;
+    }
+    return true;
+  }
+
+  function syncActiveChatFolderStripState(
+    selectedFolderId = getRenderedChatFolderSelectionId(),
+    {
+      centerBehavior,
+      forceVisible = chatFolderBarForceVisible,
+      skipStructure = false,
+    } = {}
+  ) {
+    if (!activeChatFolderBar || !activeChatFolderName || !activeChatFolderStrip) return false;
+    const normalizedFolderId = normalizeChatFolderId(selectedFolderId);
+    if (!skipStructure && !renderChatFolderStripStructure({ selectedFolderId: normalizedFolderId, forceVisible })) return false;
+    if (activeChatFolderBar.classList.contains('hidden')) return false;
+    const rows = activeChatFolderStripRows();
+    activeChatFolderName.textContent = chatFolderStripLabelForSelection(normalizedFolderId, rows);
+    activeChatFolderStrip.querySelectorAll('[data-folder-chip]').forEach((chip) => {
+      if (!(chip instanceof HTMLElement)) return;
+      const isActive = Number(chip.dataset.folderChip || 0) === normalizedFolderId;
+      chip.classList.toggle('is-active', isActive);
+      chip.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+    scheduleActiveChatFolderChipCenter({
+      behavior: centerBehavior === 'smooth' ? 'smooth' : (centerBehavior === 'auto' ? 'auto' : consumePendingChatFolderChipCenterBehavior()),
+    });
+    return true;
+  }
+
+  function renderActiveChatFolderBar({
+    selectedFolderId = getRenderedChatFolderSelectionId(),
+    forceVisible = chatFolderBarForceVisible,
+    centerBehavior,
+  } = {}) {
+    const normalizedFolderId = normalizeChatFolderId(selectedFolderId);
+    if (!renderChatFolderStripStructure({ selectedFolderId: normalizedFolderId, forceVisible })) return false;
+    return syncActiveChatFolderStripState(normalizedFolderId, {
+      centerBehavior,
+      forceVisible,
+      skipStructure: true,
+    });
+  }
+
+  function beginChatFolderStripPreview(folderId, { forceVisible = false, centerBehavior = 'auto' } = {}) {
+    chatFolderStripPreviewFolderId = normalizeChatFolderId(folderId);
+    chatFolderBarForceVisible = Boolean(forceVisible);
+    renderActiveChatFolderBar({
+      selectedFolderId: chatFolderStripPreviewFolderId,
+      forceVisible: chatFolderBarForceVisible,
+      centerBehavior,
+    });
+    return chatFolderStripPreviewFolderId;
+  }
+
+  function finalizeChatFolderStripPreview({ centerBehavior = 'auto' } = {}) {
+    chatFolderStripPreviewFolderId = null;
+    chatFolderBarForceVisible = false;
+    renderActiveChatFolderBar({
+      selectedFolderId: normalizeChatFolderId(chatFolderStore.activeFolderId),
+      forceVisible: false,
+      centerBehavior,
+    });
+  }
+
+  function getChatFolderSwitchTargets() {
+    return [chatFolderListSurface].filter((el) => (
+      el instanceof HTMLElement && !el.classList.contains('hidden')
+    ));
+  }
+
+  function resetChatFolderSwitchAnimations(targets = []) {
+    targets.forEach((el) => {
+      if (!(el instanceof HTMLElement)) return;
+      el.classList.remove(
+        'is-folder-switching',
+        'is-folder-switching-in',
+        'is-folder-switching-out',
+        'is-folder-switching-active'
+      );
+    });
+  }
+
+  function waitForAnimationFrames(count = 1) {
+    return new Promise((resolve) => {
+      const step = (remaining) => {
+        if (remaining <= 0) {
+          resolve();
+          return;
+        }
+        requestAnimationFrame(() => step(remaining - 1));
+      };
+      step(Math.max(1, Number(count || 1)));
+    });
+  }
+
+  async function playChatFolderSwitchPhase(targets, phase) {
+    if (!targets.length) return;
+    const phaseClass = phase === 'in' ? 'is-folder-switching-in' : 'is-folder-switching-out';
+    resetChatFolderSwitchAnimations(targets);
+    targets.forEach((el) => {
+      el.classList.add('is-folder-switching', phaseClass);
+      void el.offsetWidth;
+    });
+    await waitForAnimationFrames(1);
+    targets.forEach((el) => el.classList.add('is-folder-switching-active'));
+    const transitionMs = Math.max(...targets.map((el) => Math.ceil(getElementTransitionTotalMs(el))), 0);
+    await waitForMs(Math.max(transitionMs, 180) + 24);
+  }
+
+  function canAnimateChatFolderContent({ allowDuringMobileRoute = false } = {}) {
+    return !prefersReducedMotion()
+      && currentModalAnimation !== 'none'
+      && getChatFolderSwitchTargets().length > 0
+      && (allowDuringMobileRoute || !mobileRouteTransitionActive);
+  }
+
+  async function animateChatFolderContentEntry({ allowDuringMobileRoute = false } = {}) {
+    if (!canAnimateChatFolderContent({ allowDuringMobileRoute })) return false;
+    const targets = getChatFolderSwitchTargets();
+    const seq = ++chatFolderSwitchSeq;
+    try {
+      await playChatFolderSwitchPhase(targets, 'in');
+      return seq === chatFolderSwitchSeq;
+    } finally {
+      if (seq === chatFolderSwitchSeq) resetChatFolderSwitchAnimations(targets);
+    }
+  }
+
+  async function transitionToChatFolder(folderId, { persist = true, closePicker = false } = {}) {
+    const nextFolderId = normalizeChatFolderId(folderId);
+    const currentFolderId = normalizeChatFolderId(chatFolderStore.activeFolderId);
+    if (currentFolderId === nextFolderId) {
+      if (closePicker) await hideChatFolderPicker();
+      return getActiveChatFolder();
+    }
+
+    if (closePicker) await hideChatFolderPicker();
+
+    const canAnimate = canAnimateChatFolderContent();
+    const centerBehavior = canAnimate ? 'smooth' : 'auto';
+    const currentShowsBar = shouldShowChatFolderBarForSelection(currentFolderId, { forceVisible: false });
+    const nextShowsBar = shouldShowChatFolderBarForSelection(nextFolderId, { forceVisible: false });
+    const touchedTargets = new Set();
+    const seq = ++chatFolderSwitchSeq;
+    let previewPrepared = false;
+
+    try {
+      if (currentShowsBar) {
+        beginChatFolderStripPreview(nextFolderId, { forceVisible: true, centerBehavior });
+        previewPrepared = true;
+      }
+
+      if (canAnimate) {
+        const exitTargets = getChatFolderSwitchTargets();
+        exitTargets.forEach((el) => touchedTargets.add(el));
+        await playChatFolderSwitchPhase(exitTargets, 'out');
+        if (seq !== chatFolderSwitchSeq) return getActiveChatFolder();
+      }
+
+      if (!previewPrepared && nextShowsBar) {
+        beginChatFolderStripPreview(nextFolderId, { forceVisible: true, centerBehavior });
+        previewPrepared = true;
+      }
+
+      setActiveChatFolder(nextFolderId, { persist, render: false });
+      renderChatList(chatSearch?.value || '');
+
+      if (!canAnimate) return getActiveChatFolder();
+
+      const enterTargets = getChatFolderSwitchTargets();
+      enterTargets.forEach((el) => touchedTargets.add(el));
+      await playChatFolderSwitchPhase(enterTargets, 'in');
+      return getActiveChatFolder();
+    } finally {
+      if (seq === chatFolderSwitchSeq) {
+        resetChatFolderSwitchAnimations([...touchedTargets]);
+        finalizeChatFolderStripPreview({ centerBehavior: 'auto' });
+      }
+    }
+  }
+
+  function setActiveChatFolder(folderId, { persist = true, render = true } = {}) {
+    chatFolderStore.setActiveFolderId(folderId, { persist });
+    renderActiveChatFolderBar();
+    if (render) renderChatList(chatSearch?.value || '');
+    return getActiveChatFolder();
+  }
+
+  async function loadChatFolders({ silent = false, renderAfterLoad = true } = {}) {
+    const requestId = ++chatFolderRequestSeq;
+    if (chatFolderAbortController) chatFolderAbortController.abort();
+    const controller = new AbortController();
+    chatFolderAbortController = controller;
+    try {
+      const data = await api('/api/chat-folders', { signal: controller.signal });
+      if (requestId !== chatFolderRequestSeq) return chatFolderStore.getFolders();
+      chatFolderStore.setFolders(data.folders || data || [], { persist: true });
+      renderActiveChatFolderBar();
+      if (renderAfterLoad) renderChatList(chatSearch?.value || '');
+      renderChatFolderPicker();
+      if (chatFolderManageState?.chatId) renderChatFolderManageModal(chatFolderManageState.chatId);
+      return chatFolderStore.getFolders();
+    } catch (error) {
+      if (!isAbortError(error) && !silent) {
+        console.warn('Failed to load chat folders', error);
+      }
+      if (requestId !== chatFolderRequestSeq) return chatFolderStore.getFolders();
+      renderActiveChatFolderBar();
+      if (renderAfterLoad) renderChatList(chatSearch?.value || '');
+      return chatFolderStore.getFolders();
+    } finally {
+      if (chatFolderAbortController === controller) chatFolderAbortController = null;
+    }
   }
 
   function setAvatarElementVisual(el, { name = '', color = '#65aadd', avatarUrl = '', fallbackText = '' } = {}) {
@@ -4240,9 +4812,9 @@
   }
 
   function weatherIcon(code, isDay) {
-    if (code === 0) return isDay ? '☀️' : '🌙';
-    if (code === 1 || code === 2) return isDay ? '🌤️' : '☁️';
-    if (code === 3) return '☁️';
+    if (code === 0) return isDay ? '\u2600\uFE0F' : '🌙';
+    if (code === 1 || code === 2) return isDay ? '🌤️' : '\u2601\uFE0F';
+    if (code === 3) return '\u2601\uFE0F';
     if (code === 45 || code === 48) return '🌫️';
     if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return '🌧️';
     if ((code >= 71 && code <= 77) || code === 85 || code === 86) return '❄️';
@@ -4742,6 +5314,46 @@
   function isChatPinned(chatOrId) {
     const chat = typeof chatOrId === 'object' && chatOrId !== null ? chatOrId : getChatById(chatOrId);
     return getChatPinOrder(chat) != null || Boolean(chat && (chat.is_pinned === true || chat.is_pinned === 1 || chat.is_pinned === '1'));
+  }
+
+  function getActiveChatFolder() {
+    return chatFolderStore.getResolvedActiveFolder();
+  }
+
+  function isAllChatsFolderActive() {
+    return chatFolderStore.isAllChatsActive();
+  }
+
+  function getFolderPinnedChatOrder(folderId, chatOrId) {
+    const chatId = typeof chatOrId === 'object' && chatOrId !== null
+      ? Number(chatOrId.id || 0)
+      : Number(chatOrId || 0);
+    return chatFolderStore.getFolderPinOrder(folderId, chatId);
+  }
+
+  function isChatPinnedInFolder(folderId, chatOrId) {
+    return getFolderPinnedChatOrder(folderId, chatOrId) != null;
+  }
+
+  function compareChatsForFolder(folderId, a, b) {
+    const pinA = getFolderPinnedChatOrder(folderId, a);
+    const pinB = getFolderPinnedChatOrder(folderId, b);
+    const aPinned = pinA != null;
+    const bPinned = pinB != null;
+    if (aPinned !== bPinned) return aPinned ? -1 : 1;
+    if (aPinned && bPinned && pinA !== pinB) return pinA - pinB;
+    return compareChatActivity(a, b);
+  }
+
+  function folderSummaryText(folder) {
+    if (!folder) return '\u0412\u0441\u0435 \u0447\u0430\u0442\u044b';
+    const folderChatIds = new Set(folder.chat_ids || []);
+    const count = chats.filter((chat) => folderChatIds.has(Number(chat.id || 0))).length;
+    const unread = chats.reduce((total, chat) => (
+      folderChatIds.has(Number(chat.id || 0)) ? total + Number(chat.unread_count || 0) : total
+    ), 0);
+    const unreadText = unread > 0 ? ` • ${unread} непрочит.` : '';
+    return `${count} чатов${unreadText}`;
   }
 
   function normalizeChatListEntry(chat = {}) {
@@ -9455,31 +10067,551 @@
     }
   }
 
+  function getFolderPinnedChatMoveState(folderId, chatId) {
+    const folder = chatFolderStore.getFolderById(folderId);
+    const pinned = Array.isArray(folder?.pins) ? folder.pins : [];
+    const index = pinned.findIndex((entry) => Number(entry.chat_id || 0) === Number(chatId || 0));
+    return {
+      index,
+      total: pinned.length,
+      canMoveUp: index > 0,
+      canMoveDown: index >= 0 && index < pinned.length - 1,
+    };
+  }
+
+  function renderFolderSelectableChatItem(chat, { selected = false } = {}) {
+    const isOnline = chat.type === 'private' && chat.private_user && onlineUsers.has(chat.private_user.id);
+    return `
+      <div class="user-list-item${selected ? ' selected' : ''}" data-chat-id="${Number(chat.id || 0)}">
+        ${chatItemAvatarHtml(chat)}
+        ${isOnline ? '<div class="online-dot"></div>' : ''}
+        </div>
+        <div class="user-list-copy">
+          <div class="name">${esc(chat.name || 'Chat')}</div>
+          <div class="user-list-meta">${esc(getChatLastPreviewText(chat)).substring(0, 80)}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  function totalUnreadForFolder(folder) {
+    if (!folder) return chats.reduce((sum, chat) => sum + Number(chat.unread_count || 0), 0);
+    const ids = new Set(folder.chat_ids || []);
+    return chats.reduce((sum, chat) => (
+      ids.has(Number(chat.id || 0)) ? sum + Number(chat.unread_count || 0) : sum
+    ), 0);
+  }
+
+  function visibleChatCountForFolder(folder) {
+    if (!folder) return chats.length;
+    const ids = new Set(folder.chat_ids || []);
+    return chats.filter((chat) => ids.has(Number(chat.id || 0))).length;
+  }
+
+  function renderChatFolderPicker() {
+    if (!chatFolderPicker) return;
+    const folders = chatFolderStore.getFolders();
+    const activeFolderId = Number(chatFolderStore.activeFolderId || 0);
+    const allUnread = totalUnreadForFolder(null);
+    const allCount = visibleChatCountForFolder(null);
+    const rows = [{
+      id: ALL_CHATS_FOLDER_ID,
+      name: '\u0412\u0441\u0435 \u0447\u0430\u0442\u044b',
+      summary: `${allCount} чатов${allUnread > 0 ? ` • ${allUnread} непрочит.` : ''}`,
+      icon: chatFolderEmojiMarkup('all'),
+      unread: allUnread,
+      system: true,
+      menu: false,
+    }].concat(folders.map((folder) => ({
+      id: Number(folder.id || 0),
+      name: folder.name || '\u041F\u0430\u043F\u043A\u0430',
+      summary: folderSummaryText(folder),
+      icon: chatFolderEmojiMarkup(folder.kind),
+      unread: totalUnreadForFolder(folder),
+      system: Boolean(folder.system),
+      menu: true,
+    })));
+
+    chatFolderPicker.innerHTML = `
+      <div class="chat-context-menu-sheet">
+        <div class="chat-context-menu-header">Папки чатов</div>
+        <div class="chat-folder-picker-list">
+          ${rows.map((row) => `
+            <div class="chat-folder-picker-row${activeFolderId === Number(row.id || 0) ? ' is-active' : ''}" data-folder-id="${Number(row.id || 0)}">
+              <button type="button" class="chat-folder-picker-button" data-folder-select="${Number(row.id || 0)}">
+                ${row.icon}
+                <span class="chat-folder-picker-copy">
+                  <span class="chat-folder-picker-name">${esc(row.name)}</span>
+                  <span class="chat-folder-picker-summary">${esc(row.summary)}</span>
+                </span>
+                ${row.unread > 0 ? `<span class="unread-badge">${row.unread > 99 ? '99+' : row.unread}</span>` : ''}
+              </button>
+              ${row.menu ? `<button type="button" class="chat-folder-picker-menu-btn" data-folder-menu="${Number(row.id || 0)}" aria-label="Folder actions">⋯</button>` : ''}
+            </div>
+          `).join('') || '<div class="chat-folder-picker-empty">Папок пока нет</div>'}
+        </div>
+      </div>
+    `;
+    chatFolderPicker.setAttribute('aria-hidden', 'false');
+    chatFolderPicker.setAttribute('role', 'menu');
+  }
+
+  function positionChatFolderPicker() {
+    if (!chatFolderPicker || chatFolderPicker.classList.contains('hidden') || !chatFoldersBtn) return;
+    const buttonRect = chatFoldersBtn.getBoundingClientRect();
+    const viewport = getFloatingViewportRect();
+    const size = measureFloatingSurface(chatFolderPicker, 320, 420);
+    const left = clamp(buttonRect.right - size.width, viewport.left + 8, viewport.right - size.width - 8);
+    const top = clamp(buttonRect.bottom + 8, viewport.top + 8, viewport.bottom - size.height - 8);
+    chatFolderPicker.style.right = 'auto';
+    chatFolderPicker.style.bottom = 'auto';
+    positionFloatingElement(chatFolderPicker, left, top);
+  }
+
+  function hideChatFolderContextMenu({ immediate = false } = {}) {
+    closeFloatingSurface(chatFolderContextMenuBackdrop, { immediate });
+    closeFloatingSurface(chatFolderContextMenu, {
+      immediate,
+      onAfterClose: () => {
+        if (chatFolderContextMenu) {
+          chatFolderContextMenu.innerHTML = '';
+          chatFolderContextMenu.setAttribute('aria-hidden', 'true');
+          chatFolderContextMenu.style.left = '';
+          chatFolderContextMenu.style.top = '';
+        }
+        chatFolderContextMenuState = null;
+      },
+    });
+  }
+
+  function renderChatFolderContextMenu(folder) {
+    if (!chatFolderContextMenu || !folder) return;
+    const folderRows = chatFolderStore.getFolders();
+    const index = folderRows.findIndex((entry) => Number(entry.id || 0) === Number(folder.id || 0));
+    const actions = [
+      {
+        action: 'move-up-folder',
+        icon: '&#8593;',
+        label: 'Move up',
+        hidden: false,
+        disabled: index <= 0,
+      },
+      {
+        action: 'move-down-folder',
+        icon: '&#8595;',
+        label: 'Move down',
+        hidden: false,
+        disabled: index < 0 || index >= folderRows.length - 1,
+      },
+      {
+        action: 'rename-folder',
+        icon: '&#9998;',
+        label: 'Rename',
+        hidden: folder.kind !== 'custom',
+        disabled: false,
+      },
+      {
+        action: 'delete-folder',
+        icon: '&#128465;',
+        label: 'Delete',
+        hidden: folder.kind !== 'custom',
+        disabled: false,
+        danger: true,
+      },
+    ];
+    chatFolderContextMenu.innerHTML = `
+      <div class="chat-context-menu-sheet">
+        <div class="chat-context-menu-header">${esc(folder.name || 'Folder')}</div>
+        ${actions.filter((item) => !item.hidden).map((item) => `
+          <button
+            type="button"
+            class="chat-context-menu-button${item.danger ? ' is-danger' : ''}"
+            data-folder-action="${esc(item.action)}"
+            ${item.disabled ? 'disabled' : ''}
+          >
+            <span class="chat-context-menu-icon" aria-hidden="true">${item.icon}</span>
+            <span class="chat-context-menu-label">${esc(item.label)}</span>
+          </button>
+        `).join('')}
+      </div>
+    `;
+    chatFolderContextMenu.setAttribute('aria-hidden', 'false');
+    chatFolderContextMenu.setAttribute('role', 'menu');
+    chatFolderContextMenu.dataset.folderId = String(folder.id);
+  }
+
+  function positionChatFolderContextMenu() {
+    if (!chatFolderContextMenuState || !chatFolderContextMenu || chatFolderContextMenu.classList.contains('hidden')) return;
+    const anchor = chatFolderContextMenuState.anchor;
+    if (!(anchor instanceof HTMLElement) || !anchor.isConnected) {
+      hideChatFolderContextMenu({ immediate: true });
+      return;
+    }
+    const anchorRect = anchor.getBoundingClientRect();
+    const viewport = getFloatingViewportRect();
+    const size = measureFloatingSurface(chatFolderContextMenu, 220, 180);
+    const left = clamp(anchorRect.right - size.width, viewport.left + 8, viewport.right - size.width - 8);
+    const top = clamp(anchorRect.bottom + 6, viewport.top + 8, viewport.bottom - size.height - 8);
+    chatFolderContextMenu.style.right = 'auto';
+    chatFolderContextMenu.style.bottom = 'auto';
+    positionFloatingElement(chatFolderContextMenu, left, top);
+  }
+
+  function getChatFolderContextMenuAnchor(folderId) {
+    return chatFolderPicker?.querySelector(`[data-folder-menu="${Number(folderId || 0)}"]`) || null;
+  }
+
+  function refreshChatFolderContextMenu(folderId) {
+    const folder = chatFolderStore.getFolderById(folderId);
+    const anchor = getChatFolderContextMenuAnchor(folderId);
+    if (!folder || !(anchor instanceof HTMLElement)) {
+      hideChatFolderContextMenu({ immediate: true });
+      return;
+    }
+    chatFolderContextMenuState = {
+      folderId: Number(folder.id || 0),
+      anchor,
+    };
+    renderChatFolderContextMenu(folder);
+    positionChatFolderContextMenu();
+    requestAnimationFrame(() => {
+      positionChatFolderContextMenu();
+      chatFolderContextMenu.querySelector('.chat-context-menu-button:not(:disabled)')?.focus({ preventScroll: true });
+    });
+  }
+
+  function showChatFolderContextMenu(folderId, anchor) {
+    const folder = chatFolderStore.getFolderById(folderId);
+    if (!folder || !chatFolderContextMenu || !chatFolderContextMenuBackdrop) return;
+    hideChatFolderContextMenu({ immediate: true });
+    chatFolderContextMenuState = {
+      folderId: Number(folder.id || 0),
+      anchor,
+    };
+    renderChatFolderContextMenu(folder);
+    positionChatFolderContextMenu();
+    openFloatingSurface(chatFolderContextMenuBackdrop);
+    openFloatingSurface(chatFolderContextMenu);
+    requestAnimationFrame(() => {
+      positionChatFolderContextMenu();
+      chatFolderContextMenu.querySelector('.chat-context-menu-button:not(:disabled)')?.focus({ preventScroll: true });
+    });
+  }
+
+  function hideChatFolderPicker({ immediate = false } = {}) {
+    if (!chatFolderPicker) return Promise.resolve();
+    hideChatFolderContextMenu({ immediate: true });
+    closeFloatingSurface(chatFolderPickerBackdrop, { immediate });
+    return new Promise((resolve) => {
+      closeFloatingSurface(chatFolderPicker, {
+        immediate,
+        onAfterClose: () => {
+          if (chatFolderPicker) {
+            chatFolderPicker.innerHTML = '';
+            chatFolderPicker.setAttribute('aria-hidden', 'true');
+            chatFolderPicker.style.left = '';
+            chatFolderPicker.style.top = '';
+            chatFolderPicker.style.right = '';
+            chatFolderPicker.style.bottom = '';
+          }
+          chatFolderPickerState = null;
+          resolve();
+        },
+      });
+    });
+  }
+
+  function showChatFolderPicker(opener = chatFoldersBtn) {
+    if (!chatFolderPicker || !chatFolderPickerBackdrop) return;
+    if (isFloatingSurfaceVisible(chatFolderPicker)) {
+      hideChatFolderPicker();
+      return;
+    }
+    if (!chatFoldersLoadedOnce) {
+      loadChatFolders({ silent: true, renderAfterLoad: false }).catch(() => {});
+    }
+    hideChatContextMenu({ immediate: true });
+    hideMediaContextMenu({ immediate: true });
+    hideChatFolderPicker({ immediate: true });
+    chatFolderPickerState = { opener };
+    renderChatFolderPicker();
+    positionChatFolderPicker();
+    openFloatingSurface(chatFolderPickerBackdrop);
+    openFloatingSurface(chatFolderPicker);
+    requestAnimationFrame(() => {
+      positionChatFolderPicker();
+      chatFolderPicker.querySelector('.chat-folder-picker-button')?.focus({ preventScroll: true });
+    });
+  }
+
+  async function createChatFolder(name, chatIds = []) {
+    const data = await api('/api/chat-folders', {
+      method: 'POST',
+      body: { name, chatIds },
+    });
+    await loadChatFolders({ silent: true });
+    const nextFolderId = Number(data?.folder?.id || 0);
+    if (nextFolderId) await transitionToChatFolder(nextFolderId, { persist: true });
+    showCenterToast('Папка создана');
+    return data.folder || chatFolderStore.getFolderById(nextFolderId) || null;
+  }
+
+  async function renameChatFolder(folderId, nextName = '') {
+    const folder = chatFolderStore.getFolderById(folderId);
+    if (!folder || folder.kind !== 'custom') return null;
+    const targetName = String(nextName || prompt('Название папки', folder.name || '') || '').trim();
+    if (!targetName || targetName === folder.name) return folder;
+    const data = await api(`/api/chat-folders/${folderId}`, {
+      method: 'PUT',
+      body: { name: targetName },
+    });
+    await loadChatFolders({ silent: true });
+    showCenterToast('Папка переименована');
+    return data.folder || chatFolderStore.getFolderById(folderId) || null;
+  }
+
+  async function deleteChatFolder(folderId) {
+    const folder = chatFolderStore.getFolderById(folderId);
+    if (!folder || folder.kind !== 'custom') return false;
+    if (!confirm(`Удалить папку «${folder.name}»?`)) return false;
+    await api(`/api/chat-folders/${folderId}`, { method: 'DELETE' });
+    await loadChatFolders({ silent: true });
+    showCenterToast('Папка удалена');
+    return true;
+  }
+
+  async function setChatFolderOrder(folderIds = []) {
+    await api('/api/chat-folders/order', {
+      method: 'PUT',
+      body: { folderIds },
+    });
+    await loadChatFolders({ silent: true });
+  }
+
+  async function moveChatFolder(folderId, direction) {
+    const folders = chatFolderStore.getFolders();
+    const index = folders.findIndex((folder) => Number(folder.id || 0) === Number(folderId || 0));
+    if (index < 0) return;
+    const delta = direction === 'up' ? -1 : 1;
+    const nextIndex = index + delta;
+    if (nextIndex < 0 || nextIndex >= folders.length) return;
+    const reordered = folders.map((folder) => Number(folder.id || 0));
+    const [moved] = reordered.splice(index, 1);
+    reordered.splice(nextIndex, 0, moved);
+    await setChatFolderOrder(reordered);
+    showCenterToast(direction === 'up' ? 'Папка выше' : 'Папка ниже');
+  }
+
+  async function addChatsToFolder(folderId, chatIds = []) {
+    await api(`/api/chat-folders/${folderId}/chats`, {
+      method: 'POST',
+      body: { chatIds },
+    });
+    await loadChatFolders({ silent: true });
+  }
+
+  async function removeChatFromFolder(folderId, chatId) {
+    await api(`/api/chat-folders/${folderId}/chats/${chatId}`, {
+      method: 'DELETE',
+    });
+    await loadChatFolders({ silent: true });
+  }
+
+  async function setFolderChatPin(folderId, chatId, pinned) {
+    await api(`/api/chat-folders/${folderId}/chats/${chatId}/pin`, {
+      method: 'PUT',
+      body: { pinned },
+    });
+    await loadChatFolders({ silent: true });
+    showCenterToast(pinned ? 'Чат закреплён в папке' : 'Чат откреплён от папки');
+  }
+
+  async function moveFolderChatPin(folderId, chatId, direction) {
+    await api(`/api/chat-folders/${folderId}/chats/${chatId}/pin/move`, {
+      method: 'POST',
+      body: { direction },
+    });
+    await loadChatFolders({ silent: true });
+    showCenterToast(direction === 'up' ? 'Чат выше в папке' : 'Чат ниже в папке');
+  }
+
+  async function handleChatFolderContextMenuAction(action, folderId) {
+    if (!action || !folderId) return false;
+    if (action === 'move-up-folder') {
+      await moveChatFolder(folderId, 'up');
+      refreshChatFolderContextMenu(folderId);
+      return true;
+    }
+    if (action === 'move-down-folder') {
+      await moveChatFolder(folderId, 'down');
+      refreshChatFolderContextMenu(folderId);
+      return true;
+    }
+    if (action === 'rename-folder') {
+      await renameChatFolder(folderId);
+      return false;
+    }
+    if (action === 'delete-folder') {
+      await deleteChatFolder(folderId);
+    }
+    return false;
+  }
+
+  function resetChatFolderManageModal() {
+    chatFolderManageState = null;
+    setChatFolderManageStatus('');
+    $('#chatFolderManageTitle').textContent = 'Manage folders';
+    $('#chatFolderManageSystemList').innerHTML = '';
+    $('#chatFolderManageCustomList').innerHTML = '';
+    $('#chatFolderManageSystemWrap')?.classList.add('hidden');
+  }
+
+  function renderChatFolderManageModal(chatId) {
+    const chat = getChatById(chatId);
+    if (!chat) return;
+    chatFolderManageState = {
+      chatId: Number(chatId || 0),
+    };
+    $('#chatFolderManageTitle').textContent = `Папки: ${chat.name || 'Chat'}`;
+    const foldersForChat = chatFolderStore.getFoldersForChat(chatId);
+    const systemFolders = foldersForChat.filter((folder) => folder.system);
+    const customFolders = chatFolderStore.getFolders().filter((folder) => folder.kind === 'custom');
+    const selectedCustomIds = new Set(
+      foldersForChat.filter((folder) => folder.kind === 'custom').map((folder) => Number(folder.id || 0))
+    );
+    const systemWrap = $('#chatFolderManageSystemWrap');
+    const systemList = $('#chatFolderManageSystemList');
+    const customList = $('#chatFolderManageCustomList');
+    if (systemWrap && systemList) {
+      systemWrap.classList.toggle('hidden', systemFolders.length === 0);
+      systemList.innerHTML = systemFolders.map((folder) => `
+        <span class="chat-folder-chip is-system">${chatFolderIconMarkup('bot_auto')} ${esc(folder.name || '\u041F\u0430\u043F\u043A\u0430')}</span>
+      `).join('');
+    }
+    if (customList) {
+      if (!customFolders.length) {
+        customList.innerHTML = '<div class="chat-folder-picker-empty">Пока нет ручных папок</div>';
+      } else {
+        customList.innerHTML = customFolders.map((folder) => `
+          <div class="user-list-item${selectedCustomIds.has(Number(folder.id || 0)) ? ' selected' : ''}" data-folder-id="${Number(folder.id || 0)}">
+            ${chatFolderEmojiMarkup('custom')}
+            <div class="user-list-copy">
+              <div class="name">${esc(folder.name || 'Folder')}</div>
+              <div class="user-list-meta">${esc(folderSummaryText(folder))}</div>
+            </div>
+          </div>
+        `).join('');
+      }
+    }
+    setChatFolderManageStatus('');
+  }
+
+  async function openChatFolderManageModal(chatId, opener = null) {
+    if (!chatId) return;
+    if (!chatFoldersLoadedOnce) {
+      await loadChatFolders({ silent: true, renderAfterLoad: false }).catch(() => {});
+    }
+    openModal('chatFolderManageModal', { replaceStack: false, opener });
+    renderChatFolderManageModal(chatId);
+  }
+
+  async function saveChatFolderManageChanges() {
+    const chatId = Number(chatFolderManageState?.chatId || 0);
+    if (!chatId) return;
+    const selectedIds = new Set(
+      [...$$('#chatFolderManageCustomList .user-list-item.selected')]
+        .map((el) => Number(el.dataset.folderId || 0))
+        .filter(Boolean)
+    );
+    const currentIds = new Set(
+      chatFolderStore.getFoldersForChat(chatId)
+        .filter((folder) => folder.kind === 'custom')
+        .map((folder) => Number(folder.id || 0))
+    );
+    const toAdd = [...selectedIds].filter((folderId) => !currentIds.has(folderId));
+    const toRemove = [...currentIds].filter((folderId) => !selectedIds.has(folderId));
+    setChatFolderManageStatus('Сохраняю...');
+    try {
+      await Promise.all(toAdd.map((folderId) => addChatsToFolder(folderId, [chatId])));
+      for (const folderId of toRemove) {
+        await removeChatFromFolder(folderId, chatId);
+      }
+      renderChatFolderManageModal(chatId);
+      setChatFolderManageStatus('Сохранено', 'success');
+    } catch (error) {
+      setChatFolderManageStatus(error?.message || 'Не удалось сохранить папки', 'error');
+    }
+  }
+
   function renderChatContextMenu(chat) {
     if (!chatContextMenu || !chat) return;
+    const activeFolder = getActiveChatFolder();
+    const folderId = Number(activeFolder?.id || 0);
     const pinned = isChatPinned(chat);
     const moveState = getPinnedChatMoveState(chat.id);
+    const folderPinned = activeFolder ? isChatPinnedInFolder(folderId, chat) : false;
+    const folderMoveState = activeFolder
+      ? getFolderPinnedChatMoveState(folderId, chat.id)
+      : { canMoveUp: false, canMoveDown: false };
     const notificationsEnabled = localChatPreferenceEnabled(chat.notify_enabled);
     const soundsEnabled = localChatPreferenceEnabled(chat.sounds_enabled);
     const actions = [
       {
+        action: 'manage-folders',
+        icon: '&#128193;',
+        label: 'Manage folders',
+        hidden: false,
+        disabled: false,
+      },
+      {
+        action: 'toggle-folder-pin',
+        icon: '&#128204;',
+        label: folderPinned ? 'Unpin in this folder' : 'Pin in this folder',
+        hidden: !activeFolder,
+        disabled: false,
+      },
+      {
+        action: 'move-folder-up',
+        icon: '&#8593;',
+        label: 'Move up in this folder',
+        hidden: !activeFolder || !folderPinned,
+        disabled: !folderMoveState.canMoveUp,
+      },
+      {
+        action: 'move-folder-down',
+        icon: '&#8595;',
+        label: 'Move down in this folder',
+        hidden: !activeFolder || !folderPinned,
+        disabled: !folderMoveState.canMoveDown,
+      },
+      {
+        action: 'remove-from-folder',
+        icon: '&#10134;',
+        label: 'Remove from this folder',
+        hidden: !activeFolder || activeFolder.kind !== 'custom',
+        disabled: false,
+        danger: true,
+      },
+      {
         action: 'toggle-pin',
         icon: '&#128204;',
-        label: pinned ? 'Unpin' : 'Pin',
+        label: activeFolder
+          ? (pinned ? 'Unpin in All chats' : 'Pin in All chats')
+          : (pinned ? 'Unpin' : 'Pin'),
         hidden: false,
         disabled: false,
       },
       {
         action: 'move-up',
         icon: '&#8593;',
-        label: 'Move up',
+        label: activeFolder ? 'Move up in All chats' : 'Move up',
         hidden: !pinned,
         disabled: !moveState.canMoveUp,
       },
       {
         action: 'move-down',
         icon: '&#8595;',
-        label: 'Move down',
+        label: activeFolder ? 'Move down in All chats' : 'Move down',
         hidden: !pinned,
         disabled: !moveState.canMoveDown,
       },
@@ -9802,7 +10934,7 @@
       await api(`/api/chats/${chatId}/history`, { method: 'DELETE' });
       await clearLocalChatHistory(chatId, { clearCache: true });
       await loadChats({ silent: true });
-      showCenterToast('История очищена');
+      showCenterToast('\u0418\u0441\u0442\u043e\u0440\u0438\u044f \u043e\u0447\u0438\u0449\u0435\u043d\u0430');
     } catch (e) {
       showCenterToast(e.message || 'Не удалось очистить историю');
     }
@@ -9811,6 +10943,36 @@
   async function handleChatContextMenuAction(action, chatId) {
     const chat = getChatById(chatId);
     if (!chat) return;
+    if (action === 'manage-folders') {
+      const row = chatList?.querySelector(`.chat-item[data-chat-id="${Number(chatId || 0)}"]`) || null;
+      await openChatFolderManageModal(chatId, row);
+      return;
+    }
+    if (action === 'toggle-folder-pin') {
+      const activeFolder = getActiveChatFolder();
+      if (!activeFolder) return;
+      await setFolderChatPin(activeFolder.id, chatId, !isChatPinnedInFolder(activeFolder.id, chat));
+      return;
+    }
+    if (action === 'move-folder-up') {
+      const activeFolder = getActiveChatFolder();
+      if (!activeFolder) return;
+      await moveFolderChatPin(activeFolder.id, chatId, 'up');
+      return;
+    }
+    if (action === 'move-folder-down') {
+      const activeFolder = getActiveChatFolder();
+      if (!activeFolder) return;
+      await moveFolderChatPin(activeFolder.id, chatId, 'down');
+      return;
+    }
+    if (action === 'remove-from-folder') {
+      const activeFolder = getActiveChatFolder();
+      if (!activeFolder || activeFolder.kind !== 'custom') return;
+      await removeChatFromFolder(activeFolder.id, chatId);
+      showCenterToast('Chat removed from folder');
+      return;
+    }
     if (action === 'toggle-pin') {
       await setChatSidebarPin(chatId, !isChatPinned(chat));
       return;
@@ -10150,8 +11312,10 @@
       grokAiUniversalBotsModal,
       changePasswordModal,
       grokImageRiskConfirmModal,
+      chatFolderManageModal,
     ].forEach((modal) => registerModal(modal));
     registerModal(grokImageRiskConfirmModal, { onAfterClose: handleGrokImageRiskModalClosed });
+    registerModal(chatFolderManageModal, { onAfterClose: resetChatFolderManageModal });
     registerModal(forwardMessageModal, { onAfterClose: resetForwardMessageModal });
     registerModal(pollComposerModal, { onAfterClose: resetPollComposer });
     registerModal(pollVotersModal, { onAfterClose: resetPollVotersModal });
@@ -12199,6 +13363,10 @@
         loadChats({ silent: true }).catch(() => {});
         break;
       }
+      case 'chat_folders_updated': {
+        loadChatFolders({ silent: true }).catch(() => {});
+        break;
+      }
       case 'messages_read': {
         const readState = await reconcileChatReadState(
           msg.chatId,
@@ -12318,6 +13486,7 @@
       if (requestId !== chatListRequestSeq) return chats;
       chats = normalizeCachedChats(nextChats);
       chatListLoadedOnce = true;
+      await loadChatFolders({ silent: true, renderAfterLoad: false }).catch(() => {});
       renderChatList(chatSearch.value);
       const currentChat = getChatById(currentChatId);
       if (currentChat) {
@@ -12504,10 +13673,18 @@
     return sep;
   }
 
-  function createChatListItem(chat, { hiddenSearchResult = false } = {}) {
+  function appendChatListEmptyState(message, parent = chatList) {
+    const empty = document.createElement('div');
+    empty.className = 'chat-folder-picker-empty';
+    empty.textContent = message;
+    parent.appendChild(empty);
+    return empty;
+  }
+
+  function createChatListItem(chat, { hiddenSearchResult = false, pinnedOverride = null } = {}) {
     const el = document.createElement('div');
     const isActive = Number(chat.id) === Number(currentChatId);
-    const pinned = isChatPinned(chat);
+    const pinned = typeof pinnedOverride === 'boolean' ? pinnedOverride : isChatPinned(chat);
     el.className = 'chat-item'
       + (isActive ? ' active' : '')
       + (pinned ? ' is-pinned' : '')
@@ -12565,27 +13742,46 @@
     hideChatContextMenu({ immediate: true });
     chatList.innerHTML = '';
     const normalizedFilter = String(filter || '').trim().toLowerCase();
-    const filteredChats = normalizedFilter
-      ? chats.filter((chat) => getChatSearchHaystack(chat).includes(normalizedFilter))
+    const activeFolder = getActiveChatFolder();
+    const folderId = Number(activeFolder?.id || 0);
+    const sourceChats = activeFolder
+      ? chats.filter((chat) => activeFolder.chat_ids.includes(Number(chat.id || 0)))
       : chats;
-    const pinnedChats = filteredChats.filter((chat) => isChatPinned(chat));
-    const regularChats = filteredChats.filter((chat) => !isChatPinned(chat));
+    const filteredChats = normalizedFilter
+      ? sourceChats.filter((chat) => getChatSearchHaystack(chat).includes(normalizedFilter))
+      : sourceChats;
+    const pinnedChats = activeFolder
+      ? filteredChats.filter((chat) => isChatPinnedInFolder(folderId, chat))
+      : filteredChats.filter((chat) => isChatPinned(chat));
+    const regularChats = activeFolder
+      ? filteredChats.filter((chat) => !isChatPinnedInFolder(folderId, chat))
+      : filteredChats.filter((chat) => !isChatPinned(chat));
+    if (activeFolder) {
+      pinnedChats.sort((a, b) => compareChatsForFolder(folderId, a, b));
+      regularChats.sort((a, b) => compareChatsForFolder(folderId, a, b));
+    }
 
     if (pinnedChats.length) {
       const pinnedGroup = document.createElement('div');
       pinnedGroup.className = 'chat-list-group chat-list-group--pinned';
       pinnedChats.forEach((chat) => {
-        pinnedGroup.appendChild(createChatListItem(chat));
+        pinnedGroup.appendChild(createChatListItem(chat, { pinnedOverride: true }));
       });
       chatList.appendChild(pinnedGroup);
     }
 
     regularChats.forEach((chat) => {
-      chatList.appendChild(createChatListItem(chat));
+      chatList.appendChild(createChatListItem(chat, {
+        pinnedOverride: activeFolder ? false : null,
+      }));
     });
 
-    // When searching, also show users without existing private chats
-    if (normalizedFilter) {
+    if (!pinnedChats.length && !regularChats.length) {
+      appendChatListEmptyState(activeFolder ? 'В этой папке пока нет чатов' : 'Чаты не найдены');
+    }
+
+    // When searching in "All chats", also show users without existing private chats
+    if (normalizedFilter && !activeFolder) {
       scheduleHiddenChatSearch(normalizedFilter);
       const hiddenMatches = hiddenChatSearchQuery === normalizedFilter
         ? hiddenChatSearchResults.filter((chat) => !chats.some((visible) => Number(visible.id) === Number(chat.id)))
@@ -12638,6 +13834,7 @@
         chatList.appendChild(el);
       }
     }
+    renderChatFolderPicker();
     scheduleChatListCacheSync();
   }
 
@@ -15040,7 +16237,7 @@
         return `<img class="msg-image" src="${previewUrl}" alt="${esc(msg.file_name)}">`;
       case 'audio':
         return `<div class="msg-audio">
-          <div style="font-size:13px;margin-bottom:4px">рџЋµ ${esc(msg.file_name)}</div>
+          <div style="font-size:13px;margin-bottom:4px">\uD83C\uDFB5 ${esc(msg.file_name)}</div>
           <audio controls preload="none"><source src="${previewUrl}" type="${msg.file_mime}"></audio>
           <div style="font-size:11px;color:var(--text-secondary)">${formatSize(msg.file_size)} · <a href="${downloadUrl}" download="${esc(msg.file_name)}">Download</a></div>
         </div>`;
@@ -15054,7 +16251,7 @@
         </div>`;
       default:
         return `<a class="msg-file" href="${downloadUrl}" download="${esc(msg.file_name)}">
-          <div class="msg-file-icon">рџ“„</div>
+          <div class="msg-file-icon">\uD83D\uDCC4</div>
           <div class="msg-file-info">
             <div class="msg-file-name">${esc(msg.file_name)}</div>
             <div class="msg-file-size">${formatSize(msg.file_size)}</div>
@@ -17116,12 +18313,12 @@
   // EMOJI PICKER
   // ═══════════════════════════════════════════════════════════════════════════
   const EMOJIS = {
-    '😀': ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','😉','😊','😇','🥰','😍','🤩','😘','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','🤨','😐','😑','😶','😏','😒','🙄','😬','😮‍💨','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤮','🥵','🥶','🥴','😵','🤯','🤠','🥳','🥸','😎','🤓','🧐','😕','😟','🙁','☹️','😮','😯','😲','😳','🥺','😦','😧','😨','😰','😥','😢','😭','😱','😖','😣','😞','😓','😩','😫','🥱','😤','😡','😠','🤬','😈','👿','💀','☠️','💩','🤡','👹','👺','👻','👽','👾','🤖'],
-    '👋': ['👋','🤚','🖐️','✋','🖖','🫱','🫲','🫳','🫴','👌','🤌','🤏','✌️','🤞','🫰','🤟','🤘','🤙','👈','👉','👆','🖕','👇','☝️','🫵','👍','👎','✊','👊','🤛','🤜','👏','🙌','🫶','👐','🤲','🤝','🙏','💪','🦾','🖤'],
-    '❤️': ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝','💟','❤️‍🔥','❤️‍🩹','♥️'],
+    '\uD83D\uDE00': ['\uD83D\uDE00','\uD83D\uDE03','\uD83D\uDE04','\uD83D\uDE01','\uD83D\uDE06','\uD83D\uDE05','\uD83E\uDD23','\uD83D\uDE02','\uD83D\uDE42','\uD83D\uDE09','\uD83D\uDE0A','\uD83D\uDE07','\uD83E\uDD70','\uD83D\uDE0D','\uD83E\uDD29','\uD83D\uDE18','\uD83D\uDE0B','\uD83D\uDE1B','\uD83D\uDE1C','\uD83E\uDD2A','\uD83D\uDE1D','\uD83E\uDD11','\uD83E\uDD17','\uD83E\uDD2D','\uD83E\uDD2B','\uD83E\uDD14','\uD83E\uDD10','\uD83E\uDD28','\uD83D\uDE10','\uD83D\uDE11','\uD83D\uDE36','\uD83D\uDE0F','\uD83D\uDE12','\uD83D\uDE44','\uD83D\uDE2C','\uD83D\uDE2E\u200D\uD83D\uDCA8','\uD83E\uDD25','\uD83D\uDE0C','\uD83D\uDE14','\uD83D\uDE2A','\uD83E\uDD24','\uD83D\uDE34','\uD83D\uDE37','\uD83E\uDD12','\uD83E\uDD15','\uD83E\uDD22','\uD83E\uDD2E','\uD83E\uDD75','\uD83E\uDD76','\uD83E\uDD74','\uD83D\uDE35','\uD83E\uDD2F','\uD83E\uDD20','\uD83E\uDD73','\uD83E\uDD78','\uD83D\uDE0E','\uD83E\uDD13','\uD83E\uDDD0','\uD83D\uDE15','\uD83D\uDE1F','\uD83D\uDE41','\u2639\uFE0F','\uD83D\uDE2E','\uD83D\uDE2F','\uD83D\uDE32','\uD83D\uDE33','\uD83E\uDD7A','\uD83D\uDE26','\uD83D\uDE27','\uD83D\uDE28','\uD83D\uDE30','\uD83D\uDE25','\uD83D\uDE22','\uD83D\uDE2D','\uD83D\uDE31','\uD83D\uDE16','\uD83D\uDE23','\uD83D\uDE1E','\uD83D\uDE13','\uD83D\uDE29','\uD83D\uDE2B','\uD83E\uDD71','\uD83D\uDE24','\uD83D\uDE21','\uD83D\uDE20','\uD83E\uDD2C','\uD83D\uDE08','\uD83D\uDC7F','\uD83D\uDC80','\u2620\uFE0F','\uD83D\uDCA9','\uD83E\uDD21','\uD83D\uDC79','\uD83D\uDC7A','\uD83D\uDC7B','\uD83D\uDC7D','\uD83D\uDC7E','\uD83E\uDD16'],
+    '\uD83D\uDC4B': ['\uD83D\uDC4B','\uD83E\uDD1A','\uD83D\uDD90\uFE0F','\u270B','\uD83D\uDD96','\uD83E\uDEF1','\uD83E\uDEF2','\uD83E\uDEF3','\uD83E\uDEF4','\uD83D\uDC4C','\uD83E\uDD0C','\uD83E\uDD0F','\u270C\uFE0F','\uD83E\uDD1E','\uD83E\uDEF0','\uD83E\uDD1F','\uD83E\uDD18','\uD83E\uDD19','\uD83D\uDC48','\uD83D\uDC49','\uD83D\uDC46','\uD83D\uDD95','\uD83D\uDC47','\u261D\uFE0F','\uD83E\uDEF5','\uD83D\uDC4D','\uD83D\uDC4E','\u270A','\uD83D\uDC4A','\uD83E\uDD1B','\uD83E\uDD1C','\uD83D\uDC4F','\uD83D\uDE4C','\uD83E\uDEF6','\uD83D\uDC50','\uD83E\uDD32','\uD83E\uDD1D','\uD83D\uDE4F','\uD83D\uDCAA','\uD83E\uDDBE','\uD83D\uDDA4'],
+    '\u2764\uFE0F': ['\u2764\uFE0F','\uD83E\uDDE1','\uD83D\uDC9B','\uD83D\uDC9A','\uD83D\uDC99','\uD83D\uDC9C','\uD83D\uDDA4','\uD83E\uDD0D','\uD83E\uDD0E','\uD83D\uDC94','\u2763\uFE0F','\uD83D\uDC95','\uD83D\uDC9E','\uD83D\uDC93','\uD83D\uDC97','\uD83D\uDC96','\uD83D\uDC98','\uD83D\uDC9D','\uD83D\uDC9F','\u2764\uFE0F\u200D\uD83D\uDD25','\u2764\uFE0F\u200D\uD83E\uDE79','\u2665\uFE0F'],
     '🎉': ['🎉','🎊','🎈','🎁','🏆','🥇','🥈','🥉','⚽','🏀','🎾','🎮','🎯','🎲','🔔','🎵','🎶','🎤','🎧','📱','💻','💡','📷','🎬','📚','✏️','📝','🔑','🔒','⭐','🌟','💫','✨','⚡','🔥','💯','🚀','🛸'],
-    '🍕': ['🍕','🍔','🍟','🌭','🍿','🧀','🥚','🍳','🥞','🧇','🥓','🍗','🍖','🌮','🌯','🍝','🍜','🍣','🍱','🥟','🍦','🍩','🍪','🎂','🍰','🧁','🍫','🍬','🍭','☕','🍵','🧃','🧋','🍺','🍻','🥂','🍷','🍸','🍹','🥤','🍌'],
-    '🌿': ['🌸','🌺','🌻','🌹','🌷','🌼','🌿','☘️','🍀','🍁','🍂','🌲','🌳','🌴','🌵','🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🦄','🐝','🐛','🦋','🐌','🐞','🌍','🌙','☀️','⛅','🌈','💧','❄️'],
+    '\uD83C\uDF55': ['\uD83C\uDF55','\uD83C\uDF54','\uD83C\uDF5F','\uD83C\uDF2D','\uD83C\uDF7F','\uD83E\uDDC0','\uD83E\uDD5A','\uD83C\uDF73','\uD83E\uDD5E','\uD83E\uDDC7','\uD83E\uDD53','\uD83C\uDF57','\uD83C\uDF56','\uD83C\uDF2E','\uD83C\uDF2F','\uD83C\uDF5D','\uD83C\uDF5C','\uD83C\uDF63','\uD83C\uDF71','\uD83E\uDD5F','\uD83C\uDF66','\uD83C\uDF69','\uD83C\uDF6A','\uD83C\uDF82','\uD83C\uDF70','\uD83E\uDDC1','\uD83C\uDF6B','\uD83C\uDF6C','\uD83C\uDF6D','\u2615','\uD83C\uDF75','\uD83E\uDDC3','\uD83E\uDDCB','\uD83C\uDF7A','\uD83C\uDF7B','\uD83E\uDD42','\uD83C\uDF77','\uD83C\uDF78','\uD83C\uDF79','\uD83E\uDD64','\uD83C\uDF4C'],
+    '\uD83C\uDF3F': ['\uD83C\uDF38','\uD83C\uDF3A','\uD83C\uDF3B','\uD83C\uDF39','\uD83C\uDF37','\uD83C\uDF3C','\uD83C\uDF3F','\u2618\uFE0F','\uD83C\uDF40','\uD83C\uDF41','\uD83C\uDF42','\uD83C\uDF32','\uD83C\uDF33','\uD83C\uDF34','\uD83C\uDF35','\uD83D\uDC36','\uD83D\uDC31','\uD83D\uDC2D','\uD83D\uDC39','\uD83D\uDC30','\uD83E\uDD8A','\uD83D\uDC3B','\uD83D\uDC3C','\uD83D\uDC28','\uD83D\uDC2F','\uD83E\uDD81','\uD83D\uDC2E','\uD83D\uDC37','\uD83D\uDC38','\uD83D\uDC35','\uD83D\uDC14','\uD83D\uDC27','\uD83D\uDC26','\uD83E\uDD84','\uD83D\uDC1D','\uD83D\uDC1B','\uD83E\uDD8B','\uD83D\uDC0C','\uD83D\uDC1E','\uD83C\uDF0D','\uD83C\uDF19','\u2600\uFE0F','\u26C5','\uD83C\uDF08','\uD83D\uDCA7','\u2744\uFE0F'],
   };
 
   function initEmojiPicker() {
@@ -17335,7 +18532,7 @@
   // ═══════════════════════════════════════════════════════════════════════════
   // REACTIONS
   // ═══════════════════════════════════════════════════════════════════════════
-  const QUICK_REACTIONS = Object.freeze(['👍', '👎', '❤️', '🔥', '😂', '😮', '😢', '💩', '🎉', '🤡']);
+  const QUICK_REACTIONS = Object.freeze(['\uD83D\uDC4D', '\uD83D\uDC4E', '\u2764\uFE0F', '\uD83D\uDD25', '\uD83D\uDE02', '\uD83D\uDE2E', '\uD83D\uDE22', '\uD83D\uDCA9', '\uD83C\uDF89', '\uD83E\uDD21']);
   const FLOATING_ACTION_MARGIN = 8;
   const FLOATING_ACTION_GAP = 8;
   const REACTION_PICKER_IDLE_MS = 5000;
@@ -18647,8 +19844,56 @@
   // MODALS
   // ═══════════════════════════════════════════════════════════════════════════
   // New chat modal
+  function getSelectableFolderChats() {
+    return [...chats].sort(compareChatsForList);
+  }
+
+  function getSelectedNewFolderChatIds() {
+    const availableChatIds = new Set(chats.map((chat) => Number(chat.id || 0)));
+    return [...newFolderSelectedChatIds].filter((chatId) => availableChatIds.has(Number(chatId || 0)));
+  }
+
+  function renderNewFolderChatList(filter = '') {
+    if (!newFolderChatList) return;
+    const normalizedFilter = String(filter || '').trim().toLowerCase();
+    const selectableChats = getSelectableFolderChats().filter((chat) => (
+      !normalizedFilter || getChatSearchHaystack(chat).includes(normalizedFilter)
+    ));
+    if (!selectableChats.length) {
+      newFolderChatList.innerHTML = '<div class="chat-folder-picker-empty">No chats found</div>';
+      return;
+    }
+    newFolderChatList.innerHTML = selectableChats.map((chat) => renderFolderSelectableChatItem(chat, {
+      selected: newFolderSelectedChatIds.has(Number(chat.id || 0)),
+    })).join('');
+  }
+
+  function resetNewFolderForm() {
+    newFolderSelectedChatIds = new Set();
+    if (newFolderNameInput) newFolderNameInput.value = '';
+    if (newFolderChatSearchInput) newFolderChatSearchInput.value = '';
+    renderNewFolderChatList();
+  }
+
+  function setNewChatModalTab(tabName = 'private') {
+    if (!newChatModal) return;
+    const nextTab = String(tabName || 'private');
+    newChatModal.querySelectorAll('.modal-tab').forEach((tab) => {
+      tab.classList.toggle('active', tab.dataset.tab === nextTab);
+    });
+    newChatModal.querySelectorAll('.tab-pane').forEach((pane) => {
+      pane.classList.toggle('active', pane.id === `${nextTab}Tab`);
+    });
+    if (nextTab === 'folder') {
+      renderNewFolderChatList(newFolderChatSearchInput?.value || '');
+    }
+  }
+
   async function openNewChatModal() {
     openModal('newChatModal', { replaceStack: true });
+    setNewChatModalTab('private');
+    $('#groupName').value = '';
+    resetNewFolderForm();
     try {
       const users = await api('/api/users');
       const privateList = $('#userListPrivate');
@@ -18675,6 +19920,7 @@
       groupList.querySelectorAll('.user-list-item').forEach(el => {
         el.addEventListener('click', () => el.classList.toggle('selected'));
       });
+      renderNewFolderChatList();
     } catch {}
   }
 
@@ -19503,6 +20749,7 @@
     sidebar.classList.remove('sidebar-hidden');
     void sidebar.offsetWidth;
     sidebar.classList.remove('sidebar-no-transition');
+    void animateChatFolderContentEntry({ allowDuringMobileRoute: true });
 
     if (!isIosViewportFixTarget && typeof sidebar.animate === 'function') {
       const animation = sidebar.animate(
@@ -20486,6 +21733,85 @@
     })();
 
     (() => {
+      chatFolderPicker?.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+      });
+      chatFolderPicker?.addEventListener('mousedown', (e) => {
+        e.stopPropagation();
+      });
+      chatFolderPicker?.addEventListener('touchstart', (e) => {
+        e.stopPropagation();
+      }, { passive: true });
+      chatFolderPicker?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const menuBtn = e.target.closest('[data-folder-menu]');
+        if (menuBtn) {
+          const folderId = Number(menuBtn.dataset.folderMenu || 0);
+          if (folderId) showChatFolderContextMenu(folderId, menuBtn);
+          return;
+        }
+        const selectBtn = e.target.closest('[data-folder-select]');
+        if (!selectBtn) return;
+        const folderId = Number(selectBtn.dataset.folderSelect || 0);
+        transitionToChatFolder(folderId, { persist: true, closePicker: true }).catch((error) => {
+          console.warn('Failed to switch chat folder', error);
+          showCenterToast(error?.message || 'Could not open folder');
+        });
+      });
+      chatFolderPickerBackdrop?.addEventListener('click', () => {
+        hideChatFolderPicker();
+      });
+      chatFolderPickerBackdrop?.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        hideChatFolderPicker();
+      });
+      chatFolderContextMenu?.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+      });
+      chatFolderContextMenu?.addEventListener('mousedown', (e) => {
+        e.stopPropagation();
+      });
+      chatFolderContextMenu?.addEventListener('touchstart', (e) => {
+        e.stopPropagation();
+      }, { passive: true });
+      chatFolderContextMenu?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const btn = e.target.closest('.chat-context-menu-button[data-folder-action]');
+        if (!btn || btn.disabled || !chatFolderContextMenuState?.folderId) return;
+        const folderId = Number(chatFolderContextMenuState.folderId || 0);
+        const action = btn.dataset.folderAction || '';
+        const keepOpen = action === 'move-up-folder' || action === 'move-down-folder';
+        if (!keepOpen) hideChatFolderContextMenu();
+        try {
+          await handleChatFolderContextMenuAction(action, folderId);
+        } catch (error) {
+          if (keepOpen) refreshChatFolderContextMenu(folderId);
+          console.warn('Failed to handle folder menu action', error);
+          showCenterToast(error?.message || 'Could not update folder');
+        }
+      });
+      chatFolderContextMenuBackdrop?.addEventListener('click', () => {
+        hideChatFolderContextMenu();
+      });
+      chatFolderContextMenuBackdrop?.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        hideChatFolderContextMenu();
+      });
+      const syncChatFolderLayout = () => {
+        if (isFloatingSurfaceVisible(chatFolderPicker)) positionChatFolderPicker();
+        if (isFloatingSurfaceVisible(chatFolderContextMenu)) positionChatFolderContextMenu();
+        if (shouldShowActiveChatFolderBar()) scheduleActiveChatFolderChipCenter({ behavior: 'auto' });
+      };
+      window.addEventListener('resize', syncChatFolderLayout, { passive: true });
+      window.visualViewport?.addEventListener('resize', syncChatFolderLayout);
+      window.visualViewport?.addEventListener('scroll', syncChatFolderLayout);
+      chatList?.addEventListener('scroll', () => {
+        if (isFloatingSurfaceVisible(chatFolderPicker)) hideChatFolderPicker({ immediate: true });
+        else if (isFloatingSurfaceVisible(chatFolderContextMenu)) hideChatFolderContextMenu({ immediate: true });
+      }, { passive: true });
+    })();
+
+    (() => {
       mediaContextMenu?.addEventListener('pointerdown', (e) => {
         e.stopPropagation();
       });
@@ -20771,6 +22097,22 @@
         return;
       }
       resetBackButtonNavigationState();
+      if (isFloatingSurfaceVisible(chatFolderContextMenu)) {
+        hideChatFolderContextMenu();
+        return;
+      }
+      if (isFloatingSurfaceVisible(chatFolderPicker)) {
+        hideChatFolderPicker();
+        return;
+      }
+      if (isFloatingSurfaceVisible(chatContextMenu)) {
+        hideChatContextMenu();
+        return;
+      }
+      if (isFloatingSurfaceVisible(mediaContextMenu)) {
+        hideMediaContextMenu();
+        return;
+      }
       if (hasOpenModal()) {
         closeTopModal({ fromHistory: true });
         return;
@@ -20812,7 +22154,20 @@
       }
     });
 
-    // New chat
+    // New chat / folders
+    bindTouchSafeButtonActivation(chatFoldersBtn, () => {
+      animateChatHeaderActionButton('#chatFoldersBtn');
+      showChatFolderPicker(chatFoldersBtn);
+    });
+    activeChatFolderBar?.addEventListener('click', (e) => {
+      const chip = e.target.closest('[data-folder-chip]');
+      if (!chip) return;
+      const folderId = Number(chip.dataset.folderChip || 0);
+      transitionToChatFolder(folderId, { persist: true }).catch((error) => {
+        console.warn('Failed to switch chat folder', error);
+        showCenterToast(error?.message || 'Could not open folder');
+      });
+    });
     $('#newChatBtn').addEventListener('click', openNewChatModal);
     $('#refreshChatsBtn')?.addEventListener('click', async () => {
       animateChatHeaderActionButton('#refreshChatsBtn');
@@ -20832,14 +22187,49 @@
         openChat(chat.id);
       } catch (e) { alert(e.message); }
     });
+    createFolderBtn?.addEventListener('click', async () => {
+      const name = String(newFolderNameInput?.value || '').trim();
+      if (!name) {
+        alert('Enter folder name');
+        newFolderNameInput?.focus();
+        return;
+      }
+      try {
+        await createChatFolder(name, getSelectedNewFolderChatIds());
+        closeAllModals();
+        resetNewFolderForm();
+      } catch (e) {
+        alert(e.message || 'Could not create folder');
+      }
+    });
 
     // Modal tabs
     newChatModal.querySelectorAll('.modal-tab').forEach(tab => {
       tab.addEventListener('click', () => {
-        newChatModal.querySelectorAll('.modal-tab').forEach(t => t.classList.remove('active'));
-        newChatModal.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
-        tab.classList.add('active');
-        document.getElementById(tab.dataset.tab + 'Tab').classList.add('active');
+        setNewChatModalTab(tab.dataset.tab);
+      });
+    });
+    newFolderChatSearchInput?.addEventListener('input', () => {
+      renderNewFolderChatList(newFolderChatSearchInput.value);
+    });
+    newFolderChatList?.addEventListener('click', (e) => {
+      const item = e.target.closest('.user-list-item[data-chat-id]');
+      if (!item) return;
+      const chatId = Number(item.dataset.chatId || 0);
+      if (!chatId) return;
+      if (newFolderSelectedChatIds.has(chatId)) newFolderSelectedChatIds.delete(chatId);
+      else newFolderSelectedChatIds.add(chatId);
+      item.classList.toggle('selected', newFolderSelectedChatIds.has(chatId));
+    });
+    $('#chatFolderManageCustomList')?.addEventListener('click', (e) => {
+      const item = e.target.closest('.user-list-item[data-folder-id]');
+      if (!item) return;
+      item.classList.toggle('selected');
+      setChatFolderManageStatus('');
+    });
+    chatFolderManageSaveBtn?.addEventListener('click', () => {
+      saveChatFolderManageChanges().catch((error) => {
+        setChatFolderManageStatus(error?.message || 'Could not save folders', 'error');
       });
     });
 
@@ -21437,6 +22827,16 @@
           hideContextConvertPicker();
           return;
         }
+        if (isFloatingSurfaceVisible(chatFolderContextMenu)) {
+          e.preventDefault();
+          hideChatFolderContextMenu();
+          return;
+        }
+        if (isFloatingSurfaceVisible(chatFolderPicker)) {
+          e.preventDefault();
+          hideChatFolderPicker();
+          return;
+        }
         if (isFloatingSurfaceVisible(chatContextMenu)) {
           e.preventDefault();
           hideChatContextMenu();
@@ -21490,6 +22890,7 @@
     try {
       const data = await api('/api/auth/me');
       currentUser = data.user;
+      chatFolderStore.hydrateActiveFolderId();
       applyUiTheme(currentUser.ui_theme);
       applyVisualMode(currentUser.ui_visual_mode);
       applyModalAnimation(currentUser.ui_modal_animation);
@@ -21501,6 +22902,7 @@
 
     // Update UI
     updateCurrentUserFooter();
+    renderActiveChatFolderBar();
     loadWeatherSettings().then(() => loadCurrentWeather(false)).catch(() => {});
     await loadSoundSettings().catch(() => {});
     if ('serviceWorker' in navigator) {
@@ -21541,3 +22943,6 @@
 
   init();
 })();
+
+
+

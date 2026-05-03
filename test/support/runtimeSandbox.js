@@ -9,6 +9,7 @@ const ROOT_FILES = [
   'package-lock.json',
   'server.js',
   'db.js',
+  'chatFolders.js',
   'forwarding.js',
   'linkPreview.js',
   'messageActions.js',

@@ -84,6 +84,7 @@ function installAppRuntimeStubs(dom, { fetchHandler = null } = {}) {
     ui_visual_mode: 'classic',
     ui_modal_animation: 'soft',
     ui_modal_animation_speed: 8,
+    ui_mobile_font_size: 5,
   };
 
   window.localStorage.setItem('token', 'test-token');
@@ -155,6 +156,16 @@ async function bootAppDom(options = {}) {
   await ready;
   await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
   return dom;
+}
+
+async function waitForAnimationFrames(window, count = 2) {
+  for (let index = 0; index < count; index += 1) {
+    await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+  }
+}
+
+async function waitForMs(window, ms = 0) {
+  await new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function chatNameText(document, chatId) {
@@ -348,7 +359,7 @@ test('chat list keeps unread badges rendered for both active and inactive chats'
       type: 'private',
       name: 'greatkuzya',
       unread_count: 1,
-      last_text: 'greatkuzya: ккк',
+      last_text: 'greatkuzya: \u043a\u043a\u043a',
       last_time: '2026-04-29T20:29:00.000Z',
       created_at: '2026-04-29 20:00:00',
       private_user: {
@@ -363,14 +374,14 @@ test('chat list keeps unread badges rendered for both active and inactive chats'
     {
       id: 42,
       type: 'private',
-      name: 'Как правильно жрать',
+      name: '\u041a\u0430\u043a \u043f\u0440\u0430\u0432\u0438\u043b\u044c\u043d\u043e \u0436\u0440\u0430\u0442\u044c',
       unread_count: 3,
-      last_text: 'Типа Кузя: Че, нормально захожу, как все, не понял...',
+      last_text: '\u0422\u0438\u043f\u0430 \u041a\u0443\u0437\u044f: \u0427\u0435, \u043d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\u043e \u0437\u0430\u0445\u043e\u0436\u0443, \u043a\u0430\u043a \u0432\u0441\u0435, \u043d\u0435 \u043f\u043e\u043d\u044f\u043b...',
       last_time: '2026-04-29T00:38:00.000Z',
       created_at: '2026-04-29 00:00:00',
       private_user: {
         id: 3,
-        display_name: 'Как правильно жрать',
+        display_name: '\u041a\u0430\u043a \u043f\u0440\u0430\u0432\u0438\u043b\u044c\u043d\u043e \u0436\u0440\u0430\u0442\u044c',
         username: 'food_chat',
         avatar_color: '#f0b020',
         avatar_url: null,
@@ -385,4 +396,364 @@ test('chat list keeps unread badges rendered for both active and inactive chats'
   assert.equal(chatUnreadBadgeText(document, 42), '3');
   assert.match(chatUnreadBadgeClassName(document, 41), /\bunread-badge--active-chat\b/);
   assert.doesNotMatch(chatUnreadBadgeClassName(document, 42), /\bunread-badge--active-chat\b/);
+});
+
+test('chat folders testing helpers filter the list and keep folder-local pins separate from All chats', async (t) => {
+  const initialChats = [
+    {
+      id: 11,
+      type: 'private',
+      name: 'Pinned all chats',
+      chat_list_pin_order: 1,
+      unread_count: 0,
+      last_text: 'Global pin',
+      last_time: '2026-04-29T20:00:00.000Z',
+      created_at: '2026-04-29 19:00:00',
+      private_user: {
+        id: 2,
+        display_name: 'Pinned all chats',
+        username: 'pinned_all',
+        avatar_color: '#65aadd',
+        avatar_url: null,
+        is_ai_bot: 0,
+      },
+    },
+    {
+      id: 12,
+      type: 'private',
+      name: 'Folder pinned',
+      unread_count: 2,
+      last_text: 'Folder pin',
+      last_time: '2026-04-29T18:00:00.000Z',
+      created_at: '2026-04-29 18:00:00',
+      private_user: {
+        id: 3,
+        display_name: 'Folder pinned',
+        username: 'folder_pin',
+        avatar_color: '#55c4c2',
+        avatar_url: null,
+        is_ai_bot: 0,
+      },
+    },
+    {
+      id: 13,
+      type: 'private',
+      name: 'Folder regular',
+      unread_count: 1,
+      last_text: 'Folder regular',
+      last_time: '2026-04-29T21:00:00.000Z',
+      created_at: '2026-04-29 17:00:00',
+      private_user: {
+        id: 4,
+        display_name: 'Folder regular',
+        username: 'folder_regular',
+        avatar_color: '#f0b020',
+        avatar_url: null,
+        is_ai_bot: 0,
+      },
+    },
+  ];
+  const dom = await bootAppDom({
+    fetchHandler: ({ url, dom }) => {
+      if (url.pathname === '/api/chats') return createJsonResponse(dom, initialChats);
+      return null;
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  const strip = document.getElementById('activeChatFolderStrip');
+  let stripScrollLeft = 0;
+  const centerCalls = [];
+  Object.defineProperty(strip, 'clientWidth', {
+    configurable: true,
+    get: () => 120,
+  });
+  Object.defineProperty(strip, 'scrollWidth', {
+    configurable: true,
+    get: () => 320,
+  });
+  Object.defineProperty(strip, 'scrollLeft', {
+    configurable: true,
+    get: () => stripScrollLeft,
+    set: (value) => {
+      stripScrollLeft = Number(value || 0);
+    },
+  });
+  strip.scrollTo = ({ left, behavior }) => {
+    centerCalls.push({ left: Number(left || 0), behavior: behavior || 'auto' });
+    stripScrollLeft = Number(left || 0);
+  };
+  Object.defineProperty(dom.window.HTMLElement.prototype, 'offsetLeft', {
+    configurable: true,
+    get() {
+      if (this.dataset?.folderChip === '0') return 0;
+      if (this.dataset?.folderChip === '9') return 164;
+      return 0;
+    },
+  });
+  Object.defineProperty(dom.window.HTMLElement.prototype, 'offsetWidth', {
+    configurable: true,
+    get() {
+      if (this.dataset?.folderChip === '0') return 86;
+      if (this.dataset?.folderChip === '9') return 82;
+      return 0;
+    },
+  });
+
+  BananzaAppBridge.__testing.setChats(initialChats, { currentChatId: 11 });
+
+  BananzaAppBridge.__testing.setChatFolders([{
+    id: 9,
+    name: 'Launch',
+    kind: 'custom',
+    sort_order: 1,
+    chat_ids: [12, 13],
+    pins: [{ chat_id: 12, pin_order: 1 }],
+  }], {
+    activeFolderId: 9,
+  });
+  await waitForAnimationFrames(dom.window, 3);
+
+  assert.equal(document.getElementById('activeChatFolderBar').classList.contains('hidden'), false);
+  assert.equal(document.getElementById('activeChatFolderName').textContent.trim(), 'Launch');
+  assert.deepEqual(
+    [...document.querySelectorAll('#activeChatFolderStrip [data-folder-chip]')].map((node) => node.textContent.trim()),
+    ['\u0412\u0441\u0435 \u0447\u0430\u0442\u044b', 'Launch']
+  );
+  assert.equal(document.querySelector('#activeChatFolderStrip [data-folder-chip="9"]').classList.contains('is-active'), true);
+  assert.deepEqual(centerCalls.at(-1), { left: 145, behavior: 'auto' });
+
+  let renderedIds = [...document.querySelectorAll('#chatList .chat-item[data-chat-id]')]
+    .map((node) => Number(node.dataset.chatId));
+  assert.deepEqual(renderedIds, [12, 13]);
+  assert.equal(document.querySelector('.chat-item[data-chat-id="12"]').classList.contains('is-pinned'), true);
+  assert.equal(document.querySelector('.chat-item[data-chat-id="11"]'), null);
+
+  BananzaAppBridge.__testing.setActiveChatFolder(0, { render: true });
+
+  assert.equal(document.getElementById('activeChatFolderBar').classList.contains('hidden'), true);
+  renderedIds = [...document.querySelectorAll('#chatList .chat-item[data-chat-id]')]
+    .map((node) => Number(node.dataset.chatId));
+  assert.equal(renderedIds[0], 11);
+  assert.equal(document.querySelector('.chat-item[data-chat-id="12"]').classList.contains('is-pinned'), false);
+});
+
+test('chat folder transitions animate the shared list container and use smooth centering for user switches only', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  const strip = document.getElementById('activeChatFolderStrip');
+  const content = document.getElementById('chatFolderListSurface');
+  const bar = document.getElementById('activeChatFolderBar');
+  let stripScrollLeft = 0;
+  const centerCalls = [];
+  Object.defineProperty(strip, 'clientWidth', {
+    configurable: true,
+    get: () => 140,
+  });
+  Object.defineProperty(strip, 'scrollWidth', {
+    configurable: true,
+    get: () => 420,
+  });
+  Object.defineProperty(strip, 'scrollLeft', {
+    configurable: true,
+    get: () => stripScrollLeft,
+    set: (value) => {
+      stripScrollLeft = Number(value || 0);
+    },
+  });
+  strip.scrollTo = ({ left, behavior }) => {
+    centerCalls.push({ left: Number(left || 0), behavior: behavior || 'auto' });
+    stripScrollLeft = Number(left || 0);
+  };
+  Object.defineProperty(dom.window.HTMLElement.prototype, 'offsetLeft', {
+    configurable: true,
+    get() {
+      if (this.dataset?.folderChip === '0') return 0;
+      if (this.dataset?.folderChip === '9') return 120;
+      if (this.dataset?.folderChip === '10') return 260;
+      return 0;
+    },
+  });
+  Object.defineProperty(dom.window.HTMLElement.prototype, 'offsetWidth', {
+    configurable: true,
+    get() {
+      if (this.dataset?.folderChip === '0') return 86;
+      if (this.dataset?.folderChip === '9') return 88;
+      if (this.dataset?.folderChip === '10') return 92;
+      return 0;
+    },
+  });
+
+  BananzaAppBridge.__testing.setChats([
+    {
+      id: 21,
+      type: 'private',
+      name: 'Launch chat',
+      unread_count: 1,
+      last_text: 'Launch',
+      last_time: '2026-04-29T20:29:00.000Z',
+      created_at: '2026-04-29 20:00:00',
+      private_user: {
+        id: 21,
+        display_name: 'Launch chat',
+        username: 'launch_chat',
+        avatar_color: '#65aadd',
+        avatar_url: null,
+        is_ai_bot: 0,
+      },
+    },
+    {
+      id: 22,
+      type: 'private',
+      name: 'Ops chat',
+      unread_count: 2,
+      last_text: 'Ops',
+      last_time: '2026-04-29T20:30:00.000Z',
+      created_at: '2026-04-29 20:01:00',
+      private_user: {
+        id: 22,
+        display_name: 'Ops chat',
+        username: 'ops_chat',
+        avatar_color: '#55c4c2',
+        avatar_url: null,
+        is_ai_bot: 0,
+      },
+    },
+  ], { currentChatId: 21 });
+
+  BananzaAppBridge.__testing.setChatFolders([
+    {
+      id: 9,
+      name: 'Launch',
+      kind: 'custom',
+      sort_order: 1,
+      chat_ids: [21],
+      pins: [],
+    },
+    {
+      id: 10,
+      name: 'Ops',
+      kind: 'custom',
+      sort_order: 2,
+      chat_ids: [22],
+      pins: [],
+    },
+  ], {
+    activeFolderId: 9,
+  });
+  await waitForAnimationFrames(dom.window, 3);
+  assert.deepEqual(centerCalls.at(-1), { left: 94, behavior: 'auto' });
+  const launchChipBefore = document.querySelector('#activeChatFolderStrip [data-folder-chip="9"]');
+  const opsChipBefore = document.querySelector('#activeChatFolderStrip [data-folder-chip="10"]');
+
+  const transitionPromise = BananzaAppBridge.__testing.transitionToChatFolder(10, { persist: false });
+  assert.equal(bar.classList.contains('is-folder-switching'), false);
+  assert.equal(content.classList.contains('is-folder-switching'), true);
+  assert.equal(content.classList.contains('is-folder-switching-out'), true);
+  assert.equal(document.querySelector('#activeChatFolderStrip [data-folder-chip="10"]').classList.contains('is-active'), true);
+  await transitionPromise;
+
+  assert.equal(BananzaAppBridge.__testing.getActiveChatFolder().id, 10);
+  assert.deepEqual(centerCalls.at(-1), { left: 236, behavior: 'smooth' });
+  assert.equal(content.classList.contains('is-folder-switching'), false);
+  assert.equal(document.querySelector('#activeChatFolderStrip [data-folder-chip="9"]'), launchChipBefore);
+  assert.equal(document.querySelector('#activeChatFolderStrip [data-folder-chip="10"]'), opsChipBefore);
+
+  BananzaAppBridge.__testing.setChats([
+    {
+      id: 21,
+      type: 'private',
+      name: 'Launch chat',
+      unread_count: 3,
+      last_text: 'Launch updated',
+      last_time: '2026-04-29T20:31:00.000Z',
+      created_at: '2026-04-29 20:00:00',
+      private_user: {
+        id: 21,
+        display_name: 'Launch chat',
+        username: 'launch_chat',
+        avatar_color: '#65aadd',
+        avatar_url: null,
+        is_ai_bot: 0,
+      },
+    },
+    {
+      id: 22,
+      type: 'private',
+      name: 'Ops chat',
+      unread_count: 4,
+      last_text: 'Ops updated',
+      last_time: '2026-04-29T20:32:00.000Z',
+      created_at: '2026-04-29 20:01:00',
+      private_user: {
+        id: 22,
+        display_name: 'Ops chat',
+        username: 'ops_chat',
+        avatar_color: '#55c4c2',
+        avatar_url: null,
+        is_ai_bot: 0,
+      },
+    },
+  ], { currentChatId: 21 });
+
+  assert.equal(content.classList.contains('is-folder-switching'), false);
+  assert.equal(document.querySelector('#activeChatFolderStrip [data-folder-chip="9"]'), launchChipBefore);
+  assert.equal(document.querySelector('#activeChatFolderStrip [data-folder-chip="10"]'), opsChipBefore);
+
+  const toAllPromise = BananzaAppBridge.__testing.transitionToChatFolder(0, { persist: false });
+  assert.equal(bar.classList.contains('hidden'), false);
+  assert.equal(document.querySelector('#activeChatFolderStrip [data-folder-chip="0"]').classList.contains('is-active'), true);
+  assert.equal(content.classList.contains('is-folder-switching'), true);
+  await toAllPromise;
+  assert.equal(bar.classList.contains('hidden'), true);
+});
+
+test('mobile return to the chat list animates the folder content enter phase', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  const content = document.getElementById('chatFolderListSurface');
+  const bar = document.getElementById('activeChatFolderBar');
+  const sidebar = document.getElementById('sidebar');
+
+  BananzaAppBridge.__testing.setChats([
+    {
+      id: 31,
+      type: 'private',
+      name: 'Mobile chat',
+      unread_count: 0,
+      last_text: 'Hello',
+      last_time: '2026-04-29T20:29:00.000Z',
+      created_at: '2026-04-29 20:00:00',
+      private_user: {
+        id: 31,
+        display_name: 'Mobile chat',
+        username: 'mobile_chat',
+        avatar_color: '#65aadd',
+        avatar_url: null,
+        is_ai_bot: 0,
+      },
+    },
+  ], { currentChatId: 31 });
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: false });
+  sidebar.classList.add('sidebar-hidden');
+
+  BananzaAppBridge.__testing.revealSidebarFromChat({ forceAnimation: true });
+
+  assert.equal(content.classList.contains('is-folder-switching'), true);
+  assert.equal(content.classList.contains('is-folder-switching-in'), true);
+  assert.equal(bar.classList.contains('is-folder-switching'), false);
+  await waitForMs(dom.window, 360);
+  assert.equal(content.classList.contains('is-folder-switching'), false);
 });

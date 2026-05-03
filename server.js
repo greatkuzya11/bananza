@@ -20,6 +20,7 @@ const { createMessageCopyService } = require('./messageCopy');
 const { createPushFeature } = require('./push');
 const { createSoundSettingsFeature } = require('./soundSettings');
 const { createAiBotFeature } = require('./ai');
+const { createChatFoldersFeature } = require('./chatFolders');
 const { createPollService, POLL_CLOSE_PRESETS, toDbDate } = require('./polls');
 const { createMessageActionsService } = require('./messageActions');
 const { createVideoNoteFeature } = require('./videoNotes');
@@ -40,7 +41,7 @@ const {
   normalizeMimeType,
 } = require('./uploadUtils');
 
-// ── JWT Secret ──────────────────────────────────────────────────────────────
+// JWT Secret
 const SECRET_PATH = path.join(__dirname, '.secret');
 let JWT_SECRET;
 if (fs.existsSync(SECRET_PATH)) {
@@ -50,7 +51,7 @@ if (fs.existsSync(SECRET_PATH)) {
   fs.writeFileSync(SECRET_PATH, JWT_SECRET, { mode: 0o600 });
 }
 
-// ── Express setup ───────────────────────────────────────────────────────────
+// Express setup
 const app = express();
 app.set('trust proxy', 1);
 const server = http.createServer(app);
@@ -61,7 +62,7 @@ app.use(express.json({ limit: '1mb' }));
 app.use('/api', (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ── Uploads ─────────────────────────────────────────────────────────────────
+// Uploads
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 const AVATARS_DIR = path.join(UPLOADS_DIR, 'avatars');
@@ -109,12 +110,12 @@ const backgroundUpload = multer({
   },
 });
 
-// ── Rate limiters ───────────────────────────────────────────────────────────
+// Rate limiters
 const authLimiter = rateLimit({ windowMs: 60_000, max: 10, message: { error: 'Too many attempts' } });
 const msgLimiter  = rateLimit({ windowMs: 60_000, max: 60, message: { error: 'Too many messages' } });
 const upLimiter   = rateLimit({ windowMs: 60_000, max: 20, message: { error: 'Too many uploads' } });
 
-// ── Auth middleware ─────────────────────────────────────────────────────────
+// Auth middleware
 const AVATAR_COLORS = ['#e17076','#7bc862','#e5ca77','#65aadd','#a695e7','#ee7aae','#6ec9cb','#faa774'];
 const UI_THEMES = new Set(['bananza', 'banan-hero', 'midnight-ocean', 'nord-aurora', 'rose-pine', 'dracula-neon', 'tokyo-night']);
 const UI_VISUAL_MODES = new Set(['classic', 'rich']);
@@ -311,6 +312,7 @@ const messageActions = createMessageActionsService({
 });
 
 let aiBotFeature = null;
+let chatFoldersFeature = null;
 const videoNoteStorage = createVideoNoteStorage({
   db,
   uploadsDir: UPLOADS_DIR,
@@ -407,13 +409,20 @@ aiBotFeature = createAiBotFeature({
   messageActions,
 });
 
+chatFoldersFeature = createChatFoldersFeature({
+  app,
+  db,
+  auth,
+  sendToUser,
+});
+
 const messageByIdStmt = db.prepare(`
   SELECT m.*, u.username, u.display_name, u.avatar_color, u.avatar_url,
     COALESCE(u.is_ai_bot, 0) as is_ai_bot, ab.mention as ai_bot_mention,
     ab.provider as ai_bot_provider, ab.kind as ai_bot_kind,
     f.original_name as file_name, f.stored_name as file_stored,
     f.mime_type as file_mime, f.size as file_size, f.type as file_type,
-    COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN 'Голосовое сообщение' END) as reply_text,
+    COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435' END) as reply_text,
     CASE WHEN rvm.message_id IS NOT NULL THEN 1 ELSE 0 END as reply_is_voice_note,
     COALESCE(rvm.note_kind, 'voice') as reply_note_kind,
     CASE
@@ -656,7 +665,7 @@ const pinEventsBetweenStmt = db.prepare(`
 function applyReplyTextFallback(row) {
   if (!row || Number(row.reply_text_is_fallback || 0) !== 1) return row;
   const noteKind = String(row.reply_note_kind || 'voice');
-  row.reply_text = noteKind === 'video_note' ? 'Видео-заметка' : 'Голосовое сообщение';
+  row.reply_text = noteKind === 'video_note' ? '\u0412\u0438\u0434\u0435\u043e-\u0437\u0430\u043c\u0435\u0442\u043a\u0430' : '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435';
   return row;
 }
 
@@ -888,7 +897,7 @@ function applyEditableMessageText(messageRow, { actorUserId, viewerUserId = null
 function pinPreviewText(row) {
   const text = String(row?.text || row?.transcription_text || '').trim();
   if (text) return text.substring(0, 160);
-  if (row?.voice_message_id) return row?.voice_note_kind === 'video_note' ? 'Видео-заметка' : 'Голосовое сообщение';
+  if (row?.voice_message_id) return row?.voice_note_kind === 'video_note' ? '\u0412\u0438\u0434\u0435\u043e-\u0437\u0430\u043c\u0435\u0442\u043a\u0430' : '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435';
   if (row?.file_name) return String(row.file_name).substring(0, 160);
   return 'Attachment';
 }
@@ -997,8 +1006,8 @@ function normalizeClientId(value) {
   return id;
 }
 
-const NOTES_CHAT_NAME = 'Заметки';
-const NOTES_CHAT_EMOJI = '📝';
+const NOTES_CHAT_NAME = '\u0417\u0430\u043c\u0435\u0442\u043a\u0438';
+const NOTES_CHAT_EMOJI = '\uD83D\uDCDD';
 
 function isNotesChatRow(chat) {
   return Number(chat?.is_notes) === 1;
@@ -1033,9 +1042,7 @@ function ensureNotesChatForUser(userId) {
   return chat;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // AUTH ROUTES
-// ═══════════════════════════════════════════════════════════════════════════
 
 app.post('/api/auth/register', authLimiter, async (req, res) => {
   try {
@@ -1095,9 +1102,7 @@ app.get('/api/auth/me', auth, (req, res) => {
   res.json({ user: req.user });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
 // USER ROUTES
-// ═══════════════════════════════════════════════════════════════════════════
 
 app.get('/api/users', auth, (req, res) => {
   const users = db.prepare('SELECT id,username,display_name,avatar_color,avatar_url,is_blocked,0 as is_ai_bot FROM users WHERE id!=? AND COALESCE(is_ai_bot,0)=0').all(req.user.id);
@@ -1109,9 +1114,7 @@ app.get('/api/users', auth, (req, res) => {
   ]);
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
 // CHAT ROUTES
-// ═══════════════════════════════════════════════════════════════════════════
 
 function boolPreferenceValue(value, fallback = true) {
   if (typeof value === 'boolean') return value;
@@ -1482,7 +1485,7 @@ function decorateChatListRows(rows, viewerUserId) {
     const unread = db.prepare('SELECT COUNT(*) as c FROM messages WHERE chat_id=? AND id>? AND is_deleted=0 AND user_id!=?').get(chat.id, lastRead, uid);
     chat.unread_count = unread ? unread.c : 0;
     if (!String(chat.last_text || '').trim() && Number(chat.last_voice_message_id || 0) > 0) {
-      chat.last_text = chat.last_note_kind === 'video_note' ? 'Р’РёРґРµРѕ-Р·Р°РјРµС‚РєР°' : 'Р“РѕР»РѕСЃРѕРІРѕРµ СЃРѕРѕР±С‰РµРЅРёРµ';
+      chat.last_text = chat.last_note_kind === 'video_note' ? 'Видео-заметка' : 'Голосовое сообщение';
     }
   }
   return rows;
@@ -1558,7 +1561,7 @@ app.get('/api/chats', auth, (req, res) => {
     const unread = db.prepare('SELECT COUNT(*) as c FROM messages WHERE chat_id=? AND id>? AND is_deleted=0 AND user_id!=?').get(chat.id, lastRead, req.user.id);
     chat.unread_count = unread ? unread.c : 0;
     if (!String(chat.last_text || '').trim() && Number(chat.last_voice_message_id || 0) > 0) {
-      chat.last_text = chat.last_note_kind === 'video_note' ? 'Видео-заметка' : 'Голосовое сообщение';
+      chat.last_text = chat.last_note_kind === 'video_note' ? '\u0412\u0438\u0434\u0435\u043e-\u0437\u0430\u043c\u0435\u0442\u043a\u0430' : '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435';
     }
   }
   res.json(rows);
@@ -1676,7 +1679,7 @@ app.post('/api/chats', auth, (req, res) => {
       pushFeature.notifyChatInvite(userId, {
         chat: groupCreateResult.createdChat,
         actorName: req.user.display_name,
-        body: `${req.user.display_name} РґРѕР±Р°РІРёР»(Р°) РІР°СЃ РІ С‡Р°С‚ ${groupCreateResult.createdChat.name}`,
+        body: `${req.user.display_name} добавил(а) вас в чат ${groupCreateResult.createdChat.name}`,
       });
     }
   });
@@ -1707,7 +1710,7 @@ app.post('/api/chats', auth, (req, res) => {
       pushFeature.notifyChatInvite(user_id, {
         chat,
         actorName: req.user.display_name,
-        body: `${req.user.display_name} добавил(а) вас в чат ${chat.name}`,
+        body: `${req.user.display_name} \u0434\u043e\u0431\u0430\u0432\u0438\u043b(\u0430) \u0432\u0430\u0441 \u0432 \u0447\u0430\u0442 ${chat.name}`,
       });
     }
   });
@@ -1777,7 +1780,7 @@ app.post('/api/chats/private', auth, (req, res) => {
       chat: { ...createdPrivateChat, name: req.user.display_name },
       actorName: req.user.display_name,
       title: req.user.display_name,
-      body: 'РќРѕРІС‹Р№ Р»РёС‡РЅС‹Р№ С‡Р°С‚',
+      body: 'Новый личный чат',
     });
   }
   return res.json(createdPrivateChat);
@@ -1815,7 +1818,7 @@ app.post('/api/chats/private', auth, (req, res) => {
     chat: { ...chat, name: req.user.display_name },
     actorName: req.user.display_name,
     title: req.user.display_name,
-    body: 'Новый личный чат',
+    body: '\u041d\u043e\u0432\u044b\u0439 \u043b\u0438\u0447\u043d\u044b\u0439 \u0447\u0430\u0442',
   });
   res.json(chat);
 });
@@ -1939,6 +1942,7 @@ app.delete('/api/chats/:chatId', auth, (req, res) => {
   unlinkIfPresent(avatarPath);
   unlinkIfPresent(backgroundPath);
   members.forEach(({ user_id }) => {
+    chatFoldersFeature?.removeChatFromUserFolders(user_id, chatId);
     sendToUser(user_id, { type: 'chat_removed', chatId, reason: 'deleted' });
   });
   res.json({ ok: true });
@@ -2064,6 +2068,7 @@ app.post('/api/chats/:chatId/members', auth, (req, res) => {
         chatRow: chat,
       });
     }
+    chatFoldersFeature?.notifyChatMembersChatFoldersUpdated(chatId, { reason: 'bot_attached' });
     return res.json({ ok: true });
   }
   const user = db.prepare('SELECT id,is_ai_bot FROM users WHERE id=?').get(userId);
@@ -2081,15 +2086,13 @@ app.post('/api/chats/:chatId/members', auth, (req, res) => {
     pushFeature.notifyChatInvite(userId, {
       chat,
       actorName: req.user.display_name,
-      body: `${req.user.display_name} добавил(а) вас в чат ${chat.name}`,
+      body: `${req.user.display_name} \u0434\u043e\u0431\u0430\u0432\u0438\u043b(\u0430) \u0432\u0430\u0441 \u0432 \u0447\u0430\u0442 ${chat.name}`,
     });
   }
   res.json({ ok: true });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
 // MESSAGE ROUTES
-// ═══════════════════════════════════════════════════════════════════════════
 
 app.delete('/api/chats/:chatId/members/me', auth, (req, res) => {
   const chatId = +req.params.chatId;
@@ -2111,6 +2114,7 @@ app.delete('/api/chats/:chatId/members/me', auth, (req, res) => {
     SET enabled=0, updated_at=datetime('now')
     WHERE chat_id=? AND bot_id IN (SELECT id FROM ai_bots WHERE user_id=?)
   `).run(chatId, req.user.id);
+  chatFoldersFeature?.removeChatFromUserFolders(req.user.id, chatId);
   sendToUser(req.user.id, { type: 'chat_removed', chatId, reason: 'left' });
   res.json({ ok: true });
 });
@@ -2180,7 +2184,7 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
       ab.provider as ai_bot_provider, ab.kind as ai_bot_kind,
       f.original_name as file_name, f.stored_name as file_stored,
       f.mime_type as file_mime, f.size as file_size, f.type as file_type,
-      COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN 'Голосовое сообщение' END) as reply_text,
+      COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435' END) as reply_text,
       CASE WHEN rvm.message_id IS NOT NULL THEN 1 ELSE 0 END as reply_is_voice_note,
       COALESCE(rvm.note_kind, 'voice') as reply_note_kind,
       CASE
@@ -2388,7 +2392,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
       ab.provider as ai_bot_provider, ab.kind as ai_bot_kind,
       f.original_name as file_name, f.stored_name as file_stored,
       f.mime_type as file_mime, f.size as file_size, f.type as file_type,
-      COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN 'Голосовое сообщение' END) as reply_text,
+      COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435' END) as reply_text,
       CASE WHEN rvm.message_id IS NOT NULL THEN 1 ELSE 0 END as reply_is_voice_note,
       COALESCE(rvm.note_kind, 'voice') as reply_note_kind,
       CASE
@@ -2791,9 +2795,7 @@ app.post('/api/messages/:id/context-convert', auth, msgLimiter, async (req, res)
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
 // USER PROFILE ROUTES
-// ═══════════════════════════════════════════════════════════════════════════
 
 app.put('/api/profile', auth, (req, res) => {
   const { displayName, avatarColor } = req.body;
@@ -2913,9 +2915,7 @@ app.delete('/api/profile/avatar', auth, (req, res) => {
   res.json({ ok: true, user: publicUser(user) });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
 // GROUP EDIT ROUTES
-// ═══════════════════════════════════════════════════════════════════════════
 
 app.put('/api/chats/:chatId', auth, (req, res) => {
   const chatId = +req.params.chatId;
@@ -2982,7 +2982,9 @@ app.delete('/api/chats/:chatId/members/:userId', auth, (req, res) => {
   const chatId = +req.params.chatId;
   const userId = +req.params.userId;
   const chat = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+  const targetUser = db.prepare('SELECT id, COALESCE(is_ai_bot,0) as is_ai_bot FROM users WHERE id=?').get(userId);
   if (!chat) return res.status(404).json({ error: 'Chat not found' });
+  if (!targetUser) return res.status(404).json({ error: 'User not found' });
   if (chat.type !== 'group') return res.status(400).json({ error: 'Cannot remove from this chat' });
   if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
@@ -2999,13 +3001,15 @@ app.delete('/api/chats/:chatId/members/:userId', auth, (req, res) => {
     SET enabled=0, updated_at=datetime('now')
     WHERE chat_id=? AND bot_id IN (SELECT id FROM ai_bots WHERE user_id=?)
   `).run(chatId, userId);
+  chatFoldersFeature?.removeChatFromUserFolders(userId, chatId);
+  if (Number(targetUser.is_ai_bot) !== 0) {
+    chatFoldersFeature?.notifyChatMembersChatFoldersUpdated(chatId, { reason: 'bot_detached' });
+  }
   sendToUser(userId, { type: 'chat_removed', chatId });
   res.json({ ok: true });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
 // FILE ROUTES
-// ═══════════════════════════════════════════════════════════════════════════
 
 app.post('/api/upload', auth, upLimiter, (req, res) => {
   upload.fields([
@@ -3195,9 +3199,7 @@ app.get('/uploads/:filename/poster', (req, res) => {
   res.sendFile(posterPath);
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
 // ADMIN ROUTES
-// ═══════════════════════════════════════════════════════════════════════════
 
 app.get('/api/admin/users', auth, adminOnly, (req, res) => {
   res.json(db.prepare(`
@@ -3303,9 +3305,7 @@ app.delete('/api/messages/:id', auth, (req, res) => {
   res.json({ ok: true });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SEARCH & READ
-// ═══════════════════════════════════════════════════════════════════════════
 
 app.get('/api/messages/search', auth, (req, res) => {
   const { q, chatId } = req.query;
@@ -3365,9 +3365,7 @@ app.post('/api/chats/:chatId/read', auth, (req, res) => {
   res.json({ ok: true });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
 // REACTIONS
-// ═══════════════════════════════════════════════════════════════════════════
 let reactionEmojiPattern = null;
 const reactionGraphemeSegmenter = (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function')
   ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
@@ -3420,7 +3418,7 @@ app.post('/api/messages/:id/reactions', auth, (req, res) => {
   }
 });
 
-// ── SPA fallback ────────────────────────────────────────────────────────────
+// SPA fallback
 app.use('/api', (_req, res) => {
   res.status(404).json({ error: 'API endpoint not found' });
 });
@@ -3431,6 +3429,6 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// ── Start ───────────────────────────────────────────────────────────────────
+// Start
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🍌 BananZa running on http://localhost:${PORT}`));
+server.listen(PORT, () => console.log(`\uD83C\uDF4C BananZa running on http://localhost:${PORT}`));

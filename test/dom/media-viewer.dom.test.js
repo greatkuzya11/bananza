@@ -98,6 +98,7 @@ function installAppRuntimeStubs(dom, { fetchHandler = null } = {}) {
     ui_visual_mode: 'classic',
     ui_modal_animation: 'soft',
     ui_modal_animation_speed: 8,
+    ui_mobile_font_size: 5,
   };
 
   window.localStorage.setItem('token', 'test-token');
