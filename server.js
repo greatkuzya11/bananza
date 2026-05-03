@@ -111,7 +111,11 @@ const backgroundUpload = multer({
 });
 
 // Rate limiters
-const authLimiter = rateLimit({ windowMs: 60_000, max: 10, message: { error: 'Too many attempts' } });
+const authLimiter = rateLimit({
+  windowMs: 60_000,
+  max: process.env.BANANZA_TEST_MOCKS === '1' ? 200 : 10,
+  message: { error: 'Too many attempts' },
+});
 const msgLimiter  = rateLimit({ windowMs: 60_000, max: 60, message: { error: 'Too many messages' } });
 const upLimiter   = rateLimit({ windowMs: 60_000, max: 20, message: { error: 'Too many uploads' } });
 
@@ -127,7 +131,9 @@ const UI_MODAL_ANIMATION_SPEED_MAX = 10;
 const UI_MOBILE_FONT_SIZE_DEFAULT = 5;
 const UI_MOBILE_FONT_SIZE_MIN = 1;
 const UI_MOBILE_FONT_SIZE_MAX = 10;
-const USER_PUBLIC_FIELDS = 'id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,ui_theme,ui_visual_mode,ui_modal_animation,ui_modal_animation_speed,ui_mobile_font_size,ui_show_chat_folder_strip_in_all_chats';
+const UI_LANGUAGES = new Set(['ru', 'en']);
+const UI_LANGUAGE_DEFAULT = 'ru';
+const USER_PUBLIC_FIELDS = 'id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,ui_theme,ui_visual_mode,ui_modal_animation,ui_modal_animation_speed,ui_mobile_font_size,ui_language,ui_show_chat_folder_strip_in_all_chats';
 const USER_REALTIME_FIELDS = `${USER_PUBLIC_FIELDS},is_ai_bot`;
 const POLL_MAX_OPTIONS = 10;
 const POLL_MIN_OPTIONS = 2;
@@ -142,6 +148,11 @@ function normalizeMobileFontSize(size) {
   const next = Math.round(Number(size));
   if (!Number.isFinite(next)) return UI_MOBILE_FONT_SIZE_DEFAULT;
   return Math.min(UI_MOBILE_FONT_SIZE_MAX, Math.max(UI_MOBILE_FONT_SIZE_MIN, next));
+}
+
+function normalizeUiLanguage(language) {
+  const next = String(language || '').trim().toLowerCase();
+  return UI_LANGUAGES.has(next) ? next : UI_LANGUAGE_DEFAULT;
 }
 
 function boolValue(value, fallback = false) {
@@ -223,6 +234,7 @@ function publicUser(u) {
     ui_modal_animation: UI_MODAL_ANIMATIONS.has(u.ui_modal_animation) ? u.ui_modal_animation : 'soft',
     ui_modal_animation_speed: normalizeModalAnimationSpeed(u.ui_modal_animation_speed),
     ui_mobile_font_size: normalizeMobileFontSize(u.ui_mobile_font_size),
+    ui_language: normalizeUiLanguage(u.ui_language),
     ui_show_chat_folder_strip_in_all_chats: boolValue(u.ui_show_chat_folder_strip_in_all_chats, false),
   };
 }
@@ -1065,9 +1077,10 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     const color = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
     const name = (displayName && typeof displayName === 'string')
       ? displayName.trim().substring(0, 30) || username : username;
+    const language = normalizeUiLanguage(req.body?.language);
 
-    const r = db.prepare('INSERT INTO users(username,password,display_name,is_admin,avatar_color) VALUES(?,?,?,?,?)')
-      .run(username.toLowerCase(), hash, name, isAdmin, color);
+    const r = db.prepare('INSERT INTO users(username,password,display_name,is_admin,avatar_color,ui_language) VALUES(?,?,?,?,?,?)')
+      .run(username.toLowerCase(), hash, name, isAdmin, color, language);
     const userId = r.lastInsertRowid;
 
     const gen = db.prepare("SELECT id FROM chats WHERE type='general'").get();
@@ -1075,7 +1088,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     ensureNotesChatForUser(userId);
 
     const token = jwt.sign({ id: userId, username: username.toLowerCase() }, JWT_SECRET, { expiresIn: '30d' });
-    res.json({ token, user: publicUser({ id: userId, username: username.toLowerCase(), display_name: name, is_admin: isAdmin, is_blocked: 0, avatar_color: color, avatar_url: null, ui_theme: 'bananza', ui_visual_mode: 'classic', ui_modal_animation: 'soft', ui_modal_animation_speed: UI_MODAL_ANIMATION_SPEED_DEFAULT, ui_mobile_font_size: UI_MOBILE_FONT_SIZE_DEFAULT, ui_show_chat_folder_strip_in_all_chats: 0 }) });
+    res.json({ token, user: publicUser({ id: userId, username: username.toLowerCase(), display_name: name, is_admin: isAdmin, is_blocked: 0, avatar_color: color, avatar_url: null, ui_theme: 'bananza', ui_visual_mode: 'classic', ui_modal_animation: 'soft', ui_modal_animation_speed: UI_MODAL_ANIMATION_SPEED_DEFAULT, ui_mobile_font_size: UI_MOBILE_FONT_SIZE_DEFAULT, ui_language: language, ui_show_chat_folder_strip_in_all_chats: 0 }) });
   } catch (e) { console.error(e); res.status(500).json({ error: 'Server error' }); }
 });
 
@@ -1680,7 +1693,6 @@ app.post('/api/chats', auth, (req, res) => {
       pushFeature.notifyChatInvite(userId, {
         chat: groupCreateResult.createdChat,
         actorName: req.user.display_name,
-        body: `${req.user.display_name} добавил(а) вас в чат ${groupCreateResult.createdChat.name}`,
       });
     }
   });
@@ -1711,7 +1723,6 @@ app.post('/api/chats', auth, (req, res) => {
       pushFeature.notifyChatInvite(user_id, {
         chat,
         actorName: req.user.display_name,
-        body: `${req.user.display_name} \u0434\u043e\u0431\u0430\u0432\u0438\u043b(\u0430) \u0432\u0430\u0441 \u0432 \u0447\u0430\u0442 ${chat.name}`,
       });
     }
   });
@@ -1781,7 +1792,6 @@ app.post('/api/chats/private', auth, (req, res) => {
       chat: { ...createdPrivateChat, name: req.user.display_name },
       actorName: req.user.display_name,
       title: req.user.display_name,
-      body: 'Новый личный чат',
     });
   }
   return res.json(createdPrivateChat);
@@ -1819,7 +1829,6 @@ app.post('/api/chats/private', auth, (req, res) => {
     chat: { ...chat, name: req.user.display_name },
     actorName: req.user.display_name,
     title: req.user.display_name,
-    body: '\u041d\u043e\u0432\u044b\u0439 \u043b\u0438\u0447\u043d\u044b\u0439 \u0447\u0430\u0442',
   });
   res.json(chat);
 });
@@ -2087,7 +2096,6 @@ app.post('/api/chats/:chatId/members', auth, (req, res) => {
     pushFeature.notifyChatInvite(userId, {
       chat,
       actorName: req.user.display_name,
-      body: `${req.user.display_name} \u0434\u043e\u0431\u0430\u0432\u0438\u043b(\u0430) \u0432\u0430\u0441 \u0432 \u0447\u0430\u0442 ${chat.name}`,
     });
   }
   res.json({ ok: true });
@@ -2879,6 +2887,15 @@ app.patch('/api/user/mobile-font-size', auth, (req, res) => {
   }
 
   db.prepare('UPDATE users SET ui_mobile_font_size=? WHERE id=?').run(size, req.user.id);
+  const user = db.prepare(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id=?`).get(req.user.id);
+  notifyUserUpdated(req.user.id);
+  res.json({ user: publicUser(user) });
+});
+
+app.patch('/api/user/language', auth, (req, res) => {
+  const rawLanguage = String(req.body?.language || '').trim().toLowerCase();
+  if (!UI_LANGUAGES.has(rawLanguage)) return res.status(400).json({ error: 'Unknown interface language' });
+  db.prepare('UPDATE users SET ui_language=? WHERE id=?').run(rawLanguage, req.user.id);
   const user = db.prepare(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id=?`).get(req.user.id);
   notifyUserUpdated(req.user.id);
   res.json({ user: publicUser(user) });

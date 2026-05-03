@@ -131,6 +131,17 @@
     bot_auto: '\uD83E\uDD16',
   });
   const aiImageRiskApi = window.BananzaAiImageRisk || null;
+  const i18n = window.BananzaI18n || null;
+
+  function t(key, params = {}) {
+    return i18n?.t ? i18n.t(key, params) : String(key || '');
+  }
+
+  function tx(text, params = {}) {
+    if (i18n?.text) return i18n.text(text, params);
+    if (i18n?.t) return i18n.t(text, params);
+    return String(text == null ? '' : text);
+  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STATE
@@ -216,6 +227,7 @@
   let currentModalAnimation = 'soft';
   let currentModalAnimationSpeed = MODAL_ANIMATION_SPEED_DEFAULT;
   let currentMobileFontSize = MOBILE_FONT_SIZE_DEFAULT;
+  let currentUiLanguage = i18n?.getLanguage?.() || 'ru';
   let chatFolderSwitchSeq = 0;
   let pendingChatFolderChipCenterBehavior = 'auto';
   let chatFolderStripPreviewFolderId = null;
@@ -604,6 +616,7 @@
   const currentUserInfo = $('#currentUserInfo');
   const weatherWidget = $('#weatherWidget');
   const settingsModal = $('#settingsModal');
+  const languageSettingsModal = $('#languageSettingsModal');
   const themeSettingsModal = $('#themeSettingsModal');
   const visualModeSettingsModal = $('#visualModeSettingsModal');
   const pollStyleSettingsModal = $('#pollStyleSettingsModal');
@@ -1245,6 +1258,11 @@
     isIosWebkit: () => isIosViewportFixTarget,
     getCurrentModalAnimation: () => currentModalAnimation,
     getCurrentModalAnimationSpeed: () => currentModalAnimationSpeed,
+    getCurrentLanguage: () => currentUiLanguage,
+    t: (key, params) => t(key, params),
+    tx: (text, params) => tx(text, params),
+    onLanguageChange: (listener) => i18n?.onChange?.(listener) || (() => {}),
+    applyLocalizedDom: (root) => i18n?.applyStaticDom?.(root || document),
     getPendingFiles: () => [...pendingFiles],
     getReplyTo: () => replyTo ? { ...replyTo } : null,
     getEditTo: () => editTo ? { ...editTo } : null,
@@ -1611,7 +1629,7 @@
   function setPollStyleStatus(message, type = '') {
     const el = $('#settingsPollStyleStatus');
     if (!el) return;
-    el.textContent = message || '';
+    el.textContent = tx(message || '');
     el.classList.toggle('is-error', type === 'error');
     el.classList.toggle('is-success', type === 'success');
   }
@@ -1692,7 +1710,7 @@
   function setThemeStatus(message, type = '') {
     const el = $('#settingsThemeStatus');
     if (!el) return;
-    el.textContent = message || '';
+    el.textContent = tx(message || '');
     el.classList.toggle('is-error', type === 'error');
     el.classList.toggle('is-success', type === 'success');
   }
@@ -1713,7 +1731,7 @@
   function setVisualModeStatus(message, type = '') {
     const el = $('#settingsVisualModeStatus');
     if (!el) return;
-    el.textContent = message || '';
+    el.textContent = tx(message || '');
     el.classList.toggle('is-error', type === 'error');
     el.classList.toggle('is-success', type === 'success');
   }
@@ -1765,7 +1783,7 @@
       if (persist) localStorage.setItem('user', JSON.stringify(currentUser));
     }
     const panelBtn = $('#settingsVisualModePanel');
-    if (panelBtn) panelBtn.textContent = `\uD83C\uDF4C Rich Banan UX: ${visualModeStateLabel(nextMode)}`;
+    if (panelBtn) panelBtn.textContent = `\uD83C\uDF4C ${t('Rich Banan UX')}: ${t(visualModeStateLabel(nextMode))}`;
     renderVisualModePicker();
     renderThemePicker();
   }
@@ -1781,6 +1799,93 @@
     renderThemePicker();
   }
 
+  function normalizeUiLanguage(language) {
+    return i18n?.normalizeLanguage?.(language) || (String(language || '').toLowerCase() === 'en' ? 'en' : 'ru');
+  }
+
+  function languageDisplayName(language = currentUiLanguage) {
+    return normalizeUiLanguage(language) === 'en' ? t('English') : t('Russian');
+  }
+
+  function setLanguageStatus(message, type = '') {
+    const el = $('#settingsLanguageStatus');
+    if (!el) return;
+    el.textContent = tx(message || '');
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  function syncLanguageSettingsButton() {
+    const panelBtn = $('#settingsLanguagePanel');
+    if (!panelBtn) return;
+    panelBtn.textContent = `\uD83C\uDF10 ${t('Interface language')}: ${languageDisplayName(currentUiLanguage)}`;
+  }
+
+  function renderLanguagePicker() {
+    const picker = $('#settingsLanguagePicker');
+    if (!picker) return;
+    picker.querySelectorAll('[data-language-option]').forEach((button) => {
+      const lang = normalizeUiLanguage(button.dataset.languageOption);
+      button.classList.toggle('active', lang === currentUiLanguage);
+    });
+  }
+
+  function applyUiLanguage(language, persist = true) {
+    const nextLanguage = normalizeUiLanguage(language);
+    currentUiLanguage = nextLanguage;
+    i18n?.setLanguage?.(nextLanguage, { persist });
+    document.documentElement.lang = nextLanguage;
+    if (currentUser) {
+      currentUser.ui_language = nextLanguage;
+      if (persist) localStorage.setItem('user', JSON.stringify(currentUser));
+    }
+    syncLanguageSettingsButton();
+    renderLanguagePicker();
+    refreshLocalizedUi();
+  }
+
+  async function selectUiLanguage(language) {
+    const nextLanguage = normalizeUiLanguage(language);
+    if (nextLanguage === currentUiLanguage) return;
+    const previousLanguage = currentUiLanguage;
+    applyUiLanguage(nextLanguage);
+    setLanguageStatus('Saving...');
+    try {
+      const res = await api('/api/user/language', { method: 'PATCH', body: { language: nextLanguage } });
+      currentUser = { ...currentUser, ...res.user };
+      applyUiLanguage(currentUser.ui_language);
+      setLanguageStatus('Saved', 'success');
+      setTimeout(() => {
+        if ($('#settingsLanguageStatus')?.textContent === tx('Saved')) setLanguageStatus('');
+      }, 1200);
+    } catch (error) {
+      applyUiLanguage(previousLanguage);
+      setLanguageStatus(error.message || 'Language save failed', 'error');
+    }
+  }
+
+  function refreshLocalizedUi() {
+    syncLanguageSettingsButton();
+    syncModalAnimationSettingsButton();
+    syncMobileFontSettingsButton();
+    applyVisualMode(currentVisualMode, false);
+    renderThemePicker();
+    renderVisualModePicker();
+    renderPollStylePicker();
+    renderModalAnimationOptions();
+    renderLanguagePicker();
+    i18n?.applyStaticDom?.(document);
+    if (chatList) renderChatList(chatSearch?.value || '');
+    if (currentChatId) {
+      renderCurrentChatHeader(getChatById(currentChatId));
+      updateChatStatus();
+      renderPinnedBar(currentChatId);
+    }
+    if (isFloatingSurfaceVisible(chatContextMenu) && chatContextMenuState?.chatId) renderChatContextMenu(getChatById(chatContextMenuState.chatId));
+    if (isFloatingSurfaceVisible(chatFolderPicker)) renderChatFolderPicker();
+    if (isFloatingSurfaceVisible(chatFolderContextMenu) && chatFolderContextMenuState?.folderId) refreshChatFolderContextMenu(chatFolderContextMenuState.folderId);
+  }
+
   async function selectVisualMode(mode) {
     const nextMode = normalizeVisualMode(mode);
     if (nextMode === currentVisualMode) return;
@@ -1793,7 +1898,7 @@
       applyVisualMode(currentUser.ui_visual_mode);
       setVisualModeStatus('Saved', 'success');
       setTimeout(() => {
-        if ($('#settingsVisualModeStatus')?.textContent === 'Saved') setVisualModeStatus('');
+        if ($('#settingsVisualModeStatus')?.textContent === tx('Saved')) setVisualModeStatus('');
       }, 1200);
     } catch (e) {
       applyVisualMode(prevMode);
@@ -1813,7 +1918,7 @@
       applyUiTheme(currentUser.ui_theme);
       setThemeStatus('Saved', 'success');
       setTimeout(() => {
-        if ($('#settingsThemeStatus')?.textContent === 'Saved') setThemeStatus('');
+        if ($('#settingsThemeStatus')?.textContent === tx('Saved')) setThemeStatus('');
       }, 1200);
     } catch (e) {
       applyUiTheme(prevTheme);
@@ -1834,7 +1939,7 @@
     const panelBtn = $('#settingsAnimationPanel');
     if (!panelBtn) return;
     const meta = modalAnimationMeta(currentModalAnimation);
-    panelBtn.textContent = `✨ Animation: ${meta.name}, ${normalizeModalAnimationSpeed(currentModalAnimationSpeed)}/10`;
+    panelBtn.textContent = `✨ ${t('Animation')}: ${t(meta.name)}, ${normalizeModalAnimationSpeed(currentModalAnimationSpeed)}/10`;
   }
 
   function normalizeModalAnimationSpeed(speed) {
@@ -1850,7 +1955,7 @@
   function setModalAnimationStatus(message, type = '') {
     const el = $('#settingsAnimationStatus');
     if (!el) return;
-    el.textContent = message || '';
+    el.textContent = tx(message || '');
     el.classList.toggle('is-error', type === 'error');
     el.classList.toggle('is-success', type === 'success');
   }
@@ -1863,7 +1968,7 @@
   function scheduleModalAnimationStatusClear() {
     clearModalAnimationStatusTimer();
     modalAnimationStatusTimer = setTimeout(() => {
-      if ($('#settingsAnimationStatus')?.textContent === 'Saved') setModalAnimationStatus('');
+      if ($('#settingsAnimationStatus')?.textContent === tx('Saved')) setModalAnimationStatus('');
     }, 1200);
   }
 
@@ -2077,13 +2182,13 @@
   function syncMobileFontSettingsButton() {
     const panelBtn = $('#settingsMobileFontPanel');
     if (!panelBtn) return;
-    panelBtn.textContent = `\uD83D\uDD20 Font Size (mobile): ${normalizeMobileFontSize(currentMobileFontSize)}/10`;
+    panelBtn.textContent = `\uD83D\uDD20 ${t('Font Size (mobile)')}: ${normalizeMobileFontSize(currentMobileFontSize)}/10`;
   }
 
   function setMobileFontSizeStatus(message, type = '') {
     const el = $('#settingsMobileFontStatus');
     if (!el) return;
-    el.textContent = message || '';
+    el.textContent = tx(message || '');
     el.classList.toggle('is-error', type === 'error');
     el.classList.toggle('is-success', type === 'success');
   }
@@ -2096,7 +2201,7 @@
   function scheduleMobileFontSizeStatusClear() {
     clearMobileFontSizeStatusTimer();
     mobileFontSizeStatusTimer = setTimeout(() => {
-      if ($('#settingsMobileFontStatus')?.textContent === 'Saved') setMobileFontSizeStatus('');
+      if ($('#settingsMobileFontStatus')?.textContent === tx('Saved')) setMobileFontSizeStatus('');
     }, 1200);
   }
 
@@ -4058,7 +4163,7 @@
 
   function setChatListStatus(message = '', type = '') {
     if (!chatListStatus) return;
-    chatListStatus.textContent = message;
+    chatListStatus.textContent = tx(message);
     chatListStatus.classList.toggle('hidden', !message);
     chatListStatus.classList.toggle('is-loading', type === 'loading');
     chatListStatus.classList.toggle('is-info', type === 'info');
@@ -4774,6 +4879,9 @@
       }
       if (Object.prototype.hasOwnProperty.call(user, 'ui_mobile_font_size')) {
         applyMobileFontSize(user.ui_mobile_font_size, false);
+      }
+      if (Object.prototype.hasOwnProperty.call(user, 'ui_language')) {
+        applyUiLanguage(user.ui_language, false);
       }
       if (Object.prototype.hasOwnProperty.call(user, 'ui_show_chat_folder_strip_in_all_chats')) {
         renderActiveChatFolderBar({ centerBehavior: 'auto' });
@@ -6133,7 +6241,7 @@
     ids.forEach((targetId) => {
       const el = resolveUiTarget(targetId);
       if (!el) return;
-      el.textContent = message || '';
+      el.textContent = tx(message || '');
       el.classList.toggle('is-error', type === 'error');
       el.classList.toggle('is-success', type === 'success');
       el.classList.toggle('is-pending', type === 'pending');
@@ -6155,7 +6263,7 @@
         btn.disabled = true;
         btn.classList.add('is-pending');
         btn.setAttribute('aria-busy', 'true');
-        if (pendingLabel) btn.textContent = pendingLabel;
+        if (pendingLabel) btn.textContent = tx(pendingLabel);
         return;
       }
       const restoreDisabled = btn.dataset.pendingRestoreDisabled === '1';
@@ -7731,12 +7839,12 @@
   }
 
   function formatUiErrorMessage(value, fallback = 'Unexpected error') {
-    if (value == null) return fallback;
-    if (typeof value === 'string') return value.trim() || fallback;
+    if (value == null) return tx(fallback);
+    if (typeof value === 'string') return tx(value.trim() || fallback);
     if (value instanceof Error) return formatUiErrorMessage(value.message, fallback);
     if (Array.isArray(value)) {
       const text = value.map((item) => formatUiErrorMessage(item, '')).filter(Boolean).join('; ');
-      return text || fallback;
+      return tx(text || fallback);
     }
     if (typeof value === 'object') {
       const nested = formatUiErrorMessage(
@@ -7751,15 +7859,15 @@
         || value.reason,
         ''
       );
-      if (nested) return nested;
+      if (nested) return tx(nested);
       try {
         const text = JSON.stringify(value);
-        return text === '{}' ? fallback : text;
+        return tx(text === '{}' ? fallback : text);
       } catch {
-        return fallback;
+        return tx(fallback);
       }
     }
-    return String(value).trim() || fallback;
+    return tx(String(value).trim() || fallback);
   }
 
   function currentYandexBot() {
@@ -9647,7 +9755,7 @@
       document.body.appendChild(toast);
     }
     clearTimeout(centerToastTimer);
-    toast.textContent = message;
+    toast.textContent = tx(message);
     toast.classList.remove('is-visible');
     void toast.offsetWidth;
     toast.classList.add('is-visible');
@@ -11388,6 +11496,7 @@
       chatInfoModal,
       menuDrawer,
       settingsModal,
+      languageSettingsModal,
       themeSettingsModal,
       visualModeSettingsModal,
       pollStyleSettingsModal,
@@ -11688,10 +11797,10 @@
     }
     if (!res.ok) {
       if (res.status === 401) { logout(); return; }
-      throw new Error(data?.error || `HTTP ${res.status}`);
+      throw new Error(tx(data?.error || `HTTP ${res.status}`));
     }
     if (!contentType.includes('application/json')) {
-      throw new Error(data?.error || 'Unexpected server response');
+      throw new Error(tx(data?.error || 'Unexpected server response'));
     }
     return data;
   }
@@ -20134,7 +20243,14 @@
     $('#settingsSendEnter').checked = sendByEnter;
     $('#settingsScrollRestore').checked = scrollRestoreMode === 'restore';
     $('#settingsOpenLastChat').checked = openLastChatOnReload;
+    syncLanguageSettingsButton();
     window.BananzaVoiceHooks?.onSettingsOpened?.({ currentUser });
+  }
+
+  function openLanguageSettingsModal() {
+    openModal('languageSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
+    renderLanguagePicker();
+    setLanguageStatus('');
   }
 
   function openThemeSettingsModal() {
@@ -22405,6 +22521,7 @@
     $('#settingsWeatherPanel').addEventListener('click', openWeatherSettingsModal);
     $('#settingsNotificationsPanel')?.addEventListener('click', openNotificationSettingsModal);
     $('#settingsSoundsPanel')?.addEventListener('click', openSoundSettingsModal);
+    $('#settingsLanguagePanel')?.addEventListener('click', openLanguageSettingsModal);
     $('#settingsAiBotsPanel')?.addEventListener('click', openAiBotSettingsModal);
     $('#settingsYandexAiPanel')?.addEventListener('click', openYandexAiSettingsModal);
     $('#settingsDeepSeekAiPanel')?.addEventListener('click', openDeepseekAiSettingsModal);
@@ -22445,6 +22562,11 @@
       const card = e.target.closest('[data-poll-style-option]');
       if (!card) return;
       selectPollStyle(card.dataset.pollStyleOption);
+    });
+    $('#settingsLanguagePicker')?.addEventListener('click', (e) => {
+      const card = e.target.closest('[data-language-option]');
+      if (!card) return;
+      selectUiLanguage(card.dataset.languageOption);
     });
     $('#settingsAnimationOptions')?.addEventListener('click', (e) => {
       const card = e.target.closest('[data-modal-animation-style]');
@@ -23031,6 +23153,7 @@
       applyModalAnimation(currentUser.ui_modal_animation);
       applyModalAnimationSpeed(currentUser.ui_modal_animation_speed);
       applyMobileFontSize(currentUser.ui_mobile_font_size);
+      applyUiLanguage(currentUser.ui_language || 'ru');
       localStorage.setItem('user', JSON.stringify(currentUser));
       await window.messageCache?.init?.(currentUser.id);
     } catch { return; }

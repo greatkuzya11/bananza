@@ -20,13 +20,13 @@
   });
 
   const TEXT = {
-    recordingVideo: '\u0418\u0434\u0435\u0442 \u0437\u0430\u043f\u0438\u0441\u044c \u0432\u0438\u0434\u0435\u043e',
-    holdVideo: '\u0423\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0439\u0442\u0435 \u0434\u043b\u044f \u0437\u0430\u043f\u0438\u0441\u0438 \u0432\u0438\u0434\u0435\u043e',
-    holdAudio: '\u0423\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0439\u0442\u0435 \u0434\u043b\u044f \u0437\u0430\u043f\u0438\u0441\u0438 \u0430\u0443\u0434\u0438\u043e',
-    videoNote: '\u0412\u0438\u0434\u0435\u043e-\u0437\u0430\u043c\u0435\u0442\u043a\u0430',
-    voiceNote: '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435',
-    startError: '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043d\u0430\u0447\u0430\u0442\u044c \u0437\u0430\u043f\u0438\u0441\u044c',
-    sendError: '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435',
+    recordingVideo: 'Recording video',
+    holdVideo: 'Hold to record video',
+    holdAudio: 'Hold to record audio',
+    videoNote: 'Video note',
+    voiceNote: 'Voice message',
+    startError: 'Could not start recording',
+    sendError: 'Could not send message',
   };
 
   class MediaNoteComposerController {
@@ -53,6 +53,12 @@
 
     getBridge() {
       return this.bridge || window.BananzaAppBridge || null;
+    }
+
+    t(key, params = {}) {
+      return this.getBridge()?.t?.(key, params)
+        || window.BananzaI18n?.t?.(key, params)
+        || String(key || '');
     }
 
     ownsComposer() {
@@ -112,6 +118,8 @@
 
       document.addEventListener('touchend', (event) => this.handleTouchEnd(event), { passive: false });
       document.addEventListener('touchcancel', (event) => this.handleTouchCancel(event), { passive: false });
+      this.getBridge()?.onLanguageChange?.(() => this.refreshComposerState());
+      window.addEventListener('bananza:languagechange', () => this.refreshComposerState());
 
       this.refreshComposerState();
     }
@@ -159,11 +167,11 @@
       sendBtn.classList.toggle('is-hold-armed', showMicMode && this.holdArmed && !isRecording);
 
       if (!showMicMode) return;
-      if (isRecording && this.activeMode === 'video') sendBtn.title = TEXT.recordingVideo;
-      else if (isRecording) sendBtn.title = TEXT.holdAudio;
-      else if (startPending) sendBtn.title = this.activeMode === 'video' ? TEXT.holdVideo : TEXT.holdAudio;
-      else if (isRecording || this.holdArmed) sendBtn.title = this.mode === 'video' ? TEXT.holdVideo : TEXT.holdAudio;
-      else sendBtn.title = this.mode === 'video' ? TEXT.videoNote : TEXT.voiceNote;
+      if (isRecording && this.activeMode === 'video') sendBtn.title = this.t(TEXT.recordingVideo);
+      else if (isRecording) sendBtn.title = this.t(TEXT.holdAudio);
+      else if (startPending) sendBtn.title = this.t(this.activeMode === 'video' ? TEXT.holdVideo : TEXT.holdAudio);
+      else if (isRecording || this.holdArmed) sendBtn.title = this.t(this.mode === 'video' ? TEXT.holdVideo : TEXT.holdAudio);
+      else sendBtn.title = this.t(this.mode === 'video' ? TEXT.videoNote : TEXT.voiceNote);
     }
 
     canUseGesture() {
@@ -237,7 +245,7 @@
           this.activeMode = '';
           this.refreshComposerState();
           this.resetGestureSession();
-          window.BananzaVoiceHooks?.setRecorderMessage?.(error.message || TEXT.startError, 'error');
+          window.BananzaVoiceHooks?.setRecorderMessage?.(error.message || this.t(TEXT.startError), 'error');
         });
       }, HOLD_DELAY_MS);
 
@@ -346,7 +354,7 @@
       event?.preventDefault?.();
       const action = cancelOnly ? this.cancelActiveRecorder() : this.stopActiveRecorder();
       action.catch((error) => {
-        window.BananzaVoiceHooks?.setRecorderMessage?.(error.message || TEXT.sendError, 'error');
+        window.BananzaVoiceHooks?.setRecorderMessage?.(error.message || this.t(TEXT.sendError), 'error');
       });
     }
 

@@ -20,6 +20,7 @@
 - Feature script не находит bridge/hooks: проверь `app.js`, script order в `public/index.html` и feature hooks.
 
 ## How to add features
+- Любая новая видимая строка в JS должна проходить через `window.BananzaI18n`/`BananzaAppBridge.t` или иметь точный literal в `public/js/i18n.js` для `ru` и `en`. Это касается toast/status, aria/title/placeholder, модалок, контекстных меню, alert/confirm/prompt и feature-скриптов.
 - Новую основную клиентскую функциональность сначала пытайся встроить в существующие state flows `app.js`, а не делать параллельный mini-app.
 - Если фича должна интегрироваться модульно, используй существующий pattern:
   - `window.BananzaAppBridge`

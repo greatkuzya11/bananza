@@ -76,6 +76,19 @@
     return window.BananzaAppBridge || null;
   }
 
+  function t(key, params = {}) {
+    return getBridge()?.t?.(key, params) || window.BananzaI18n?.t?.(key, params) || String(key || '');
+  }
+
+  function tx(text, params = {}) {
+    return getBridge()?.tx?.(text, params) || window.BananzaI18n?.text?.(text, params) || String(text == null ? '' : text);
+  }
+
+  function applyLocalizedDom(root = document) {
+    getBridge()?.applyLocalizedDom?.(root);
+    window.BananzaI18n?.applyStaticDom?.(root);
+  }
+
   function getDom() {
     return getBridge()?.getDom?.() || {};
   }
@@ -489,8 +502,9 @@
       const btn = document.createElement('button');
       btn.id = 'settingsVoicePanel';
       btn.className = 'settings-item hidden';
-      btn.textContent = '🎙️ Голос и расшифровка';
+      btn.textContent = `🎙️ ${t('Voice and transcription')}`;
       settingsAdminPanel.insertAdjacentElement('afterend', btn);
+      applyLocalizedDom(btn);
       btn.addEventListener('click', openVoiceAdminModal);
     }
 
@@ -500,26 +514,26 @@
         <div id="voiceAdminModal" class="modal hidden">
           <div class="modal-content voice-admin-modal">
             <div class="modal-header">
-              <h3>Голос и расшифровка</h3>
-              <button type="button" class="modal-close" id="voiceAdminClose">×</button>
+              <h3>${t('Voice and transcription')}</h3>
+              <button type="button" class="modal-close" id="voiceAdminClose" aria-label="${t('Close')}">×</button>
             </div>
             <div class="modal-body">
               <div class="settings-item settings-toggle-item">
-                <span>Включить голосовые сообщения</span>
+                <span>${t('Enable voice messages')}</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="voiceEnabledToggle">
                   <span class="toggle-slider"></span>
                 </label>
               </div>
               <div class="settings-item settings-toggle-item">
-                <span>Расшифровывать сразу после записи</span>
+                <span>${t('Transcribe right after recording')}</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="voiceAutoTranscribeToggle">
                   <span class="toggle-slider"></span>
                 </label>
               </div>
               <div class="settings-item settings-toggle-item">
-                <span>Fallback на OpenAI</span>
+                <span>${t('Fallback to OpenAI')}</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="voiceFallbackToggle">
                   <span class="toggle-slider"></span>
@@ -527,31 +541,31 @@
               </div>
 
               <div class="field-group">
-                <label>Интерфейс голосовых сообщений</label>
+                <label>${t('Voice message interface')}</label>
                 <select id="voiceNoteUiMode" class="modal-input"></select>
               </div>
 
               <div class="field-group">
-                <label>Активный провайдер</label>
+                <label>${t('Active provider')}</label>
                 <select id="voiceActiveProvider" class="modal-input"></select>
-                <div id="voiceProviderHint" class="voice-form-hint">Выберите провайдер. Модель для него появится в блоке ниже.</div>
+                <div id="voiceProviderHint" class="voice-form-hint">${t('Choose a provider. Its model appears in the block below.')}</div>
               </div>
 
               <div class="field-grid">
                 <div class="field-group">
-                  <label>Минимальная длина записи, мс</label>
+                  <label>${t('Minimum recording length, ms')}</label>
                   <input type="number" id="voiceMinRecordMs" class="modal-input" min="300" max="10000">
                 </div>
                 <div class="field-group">
-                  <label>Максимальная длина записи, мс</label>
+                  <label>${t('Maximum recording length, ms')}</label>
                   <input type="number" id="voiceMaxRecordMs" class="modal-input" min="5000" max="600000">
                 </div>
                 <div class="field-group">
-                  <label>Таймаут расшифровки, мс</label>
+                  <label>${t('Transcription timeout, ms')}</label>
                   <input type="number" id="voiceTimeoutMs" class="modal-input" min="5000" max="300000">
                 </div>
                 <div class="field-group">
-                  <label>Concurrency очереди</label>
+                  <label>${t('Queue concurrency')}</label>
                   <input type="number" id="voiceQueueConcurrency" class="modal-input" min="1" max="4">
                 </div>
               </div>
@@ -562,59 +576,59 @@
                   <input type="text" id="voiceVoskHelperUrl" class="modal-input" placeholder="http://127.0.0.1:2700">
                 </div>
                 <div class="field-group">
-                  <label>Модель Vosk</label>
+                  <label>${t('Vosk model')}</label>
                   <select id="voiceVoskModel" class="modal-input"></select>
                 </div>
                 <div class="field-group">
-                  <label>Путь к модели Vosk (необязательно)</label>
+                  <label>${t('Vosk model path (optional)')}</label>
                   <input type="text" id="voiceVoskModelPath" class="modal-input">
                 </div>
               </div>
 
               <div id="voiceProviderOpenAI" class="voice-provider-panel">
                 <div class="field-group">
-                  <label>Модель OpenAI</label>
+                  <label>${t('OpenAI model')}</label>
                   <select id="voiceOpenAIModel" class="modal-input"></select>
                 </div>
                 <div class="field-group">
-                  <label>Язык</label>
+                  <label>${t('Language')}</label>
                   <input type="text" id="voiceOpenAILanguage" class="modal-input" placeholder="ru">
                 </div>
                 <div class="field-group">
-                  <label>API-ключ OpenAI</label>
-                  <input type="password" id="voiceOpenAIKey" class="modal-input" placeholder="Введите новый ключ">
+                  <label>${t('OpenAI API key')}</label>
+                  <input type="password" id="voiceOpenAIKey" class="modal-input" placeholder="${t('Enter a new key')}">
                   <div id="voiceOpenAIKeyState" class="voice-key-state"></div>
                 </div>
                 <div class="voice-inline-actions">
-                  <button type="button" id="voiceReplaceKeyBtn" class="btn-sm voice-inline-btn">Заменить ключ</button>
-                  <button type="button" id="voiceDeleteKeyBtn" class="btn-text voice-inline-danger">Удалить ключ</button>
+                  <button type="button" id="voiceReplaceKeyBtn" class="btn-sm voice-inline-btn">${t('Replace key')}</button>
+                  <button type="button" id="voiceDeleteKeyBtn" class="btn-text voice-inline-danger">${t('Delete key')}</button>
                 </div>
               </div>
 
               <div id="voiceProviderGrok" class="voice-provider-panel">
                 <div class="field-group">
-                  <label>Модель Grok</label>
+                  <label>${t('Grok model')}</label>
                   <select id="voiceGrokModel" class="modal-input"></select>
                 </div>
                 <div class="field-group">
-                  <label>Язык</label>
+                  <label>${t('Language')}</label>
                   <input type="text" id="voiceGrokLanguage" class="modal-input" placeholder="ru">
                 </div>
                 <div class="field-group">
-                  <label>API-ключ Grok</label>
-                  <input type="password" id="voiceGrokKey" class="modal-input" placeholder="Введите новый ключ">
+                  <label>${t('Grok API key')}</label>
+                  <input type="password" id="voiceGrokKey" class="modal-input" placeholder="${t('Enter a new key')}">
                   <div id="voiceGrokKeyState" class="voice-key-state"></div>
                 </div>
                 <div class="voice-inline-actions">
-                  <button type="button" id="voiceReplaceGrokKeyBtn" class="btn-sm voice-inline-btn">Заменить ключ</button>
-                  <button type="button" id="voiceDeleteGrokKeyBtn" class="btn-text voice-inline-danger">Удалить ключ</button>
+                  <button type="button" id="voiceReplaceGrokKeyBtn" class="btn-sm voice-inline-btn">${t('Replace key')}</button>
+                  <button type="button" id="voiceDeleteGrokKeyBtn" class="btn-text voice-inline-danger">${t('Delete key')}</button>
                 </div>
               </div>
 
               <div class="voice-inline-actions voice-admin-actions">
                 <div id="voiceSelectedModelMeta" class="voice-selected-model-meta"></div>
-                <button type="button" id="voiceTestModelBtn" class="btn-sm voice-inline-btn">Проверить модель</button>
-                <button type="button" id="voiceSaveSettingsBtn" class="btn-primary">Сохранить</button>
+                <button type="button" id="voiceTestModelBtn" class="btn-sm voice-inline-btn">${t('Test model')}</button>
+                <button type="button" id="voiceSaveSettingsBtn" class="btn-primary">${t('Save')}</button>
               </div>
 
               <div id="voiceAdminStatus" class="voice-admin-status hidden"></div>
@@ -624,6 +638,7 @@
         </div>
       `;
       document.body.appendChild(wrapper.firstElementChild);
+      applyLocalizedDom(document.getElementById('voiceAdminModal'));
     }
 
     getBridge()?.registerManagedModal?.('voiceAdminModal');
@@ -637,10 +652,11 @@
         bar.className = 'voice-recorder-bar hidden';
         bar.innerHTML = `
           <div class="voice-recorder-dot"></div>
-          <div class="voice-recorder-text">Запись...</div>
+          <div class="voice-recorder-text">${t('Recording...')}</div>
           <div class="voice-recorder-time">0:00</div>
         `;
         inputArea.insertBefore(bar, pendingFile);
+        applyLocalizedDom(bar);
       }
     }
 
@@ -719,14 +735,14 @@
     sendBtn.classList.toggle('is-recording', Boolean(state.recorder.recording));
     sendBtn.classList.toggle('is-uploading', Boolean(state.recorder.uploading));
     sendBtn.title = state.recorder.recording
-      ? 'Идет запись'
+      ? t('Recording in progress')
       : state.recorder.uploading
-        ? 'Отправка голосового сообщения'
+        ? t('Sending voice message')
         : isEditing
-          ? 'Сохранить'
+          ? t('Save')
           : showMicMode
-            ? 'Удерживайте для записи'
-            : 'Отправить';
+            ? t('Hold to record voice message')
+            : t('Send');
     window.BananzaMediaNoteHooks?.refreshComposerState?.({
       showMicMode: keepMicMode,
       isEditing,
@@ -812,7 +828,7 @@
       return;
     }
     el.className = `voice-admin-status ${kind || ''}`;
-    el.textContent = message;
+    el.textContent = tx(message);
   }
 
   function resolveActionButtons(targetIds) {
@@ -832,7 +848,7 @@
         btn.disabled = true;
         btn.classList.add('is-pending');
         btn.setAttribute('aria-busy', 'true');
-        if (pendingLabel) btn.textContent = pendingLabel;
+        if (pendingLabel) btn.textContent = tx(pendingLabel);
         return;
       }
       const restoreDisabled = btn.dataset.pendingRestoreDisabled === '1';
@@ -877,7 +893,7 @@
   async function loadAdminSettings() {
     if (state.admin.loading) return;
     state.admin.loading = true;
-    setAdminStatus('Загрузка настроек...', 'pending');
+    setAdminStatus('Loading settings...', 'pending');
     try {
       const data = await getBridge().api('/api/admin/voice-settings');
       state.admin.settings = data.settings;
@@ -886,25 +902,25 @@
       renderLastTest();
       setAdminStatus('', '');
     } catch (error) {
-      setAdminStatus(error.message || 'Не удалось загрузить настройки', 'error');
+      setAdminStatus(error.message || 'Could not load settings', 'error');
     } finally {
       state.admin.loading = false;
     }
   }
 
-  function fillSelect(selectId, items, selectedValue, emptyLabel = 'Нет доступных вариантов') {
+  function fillSelect(selectId, items, selectedValue, emptyLabel = 'No available options') {
     const select = document.getElementById(selectId);
     if (!select) return;
     const normalizedItems = Array.isArray(items) ? items : [];
     if (!normalizedItems.length) {
-      select.innerHTML = `<option value="">${escapeHtml(emptyLabel)}</option>`;
+      select.innerHTML = `<option value="">${escapeHtml(tx(emptyLabel))}</option>`;
       select.value = '';
       select.disabled = true;
       return;
     }
     select.disabled = false;
     select.innerHTML = normalizedItems
-      .map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`)
+      .map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(tx(item.label))}</option>`)
       .join('');
     select.value = selectedValue || (normalizedItems[0] ? normalizedItems[0].value : '');
   }
@@ -918,8 +934,8 @@
     document.getElementById('voiceAutoTranscribeToggle').checked = Boolean(settings.auto_transcribe_on_send);
     document.getElementById('voiceFallbackToggle').checked = Boolean(settings.fallback_to_openai);
     fillSelect('voiceNoteUiMode', options.ui_modes || [
-      { value: 'compact', label: 'Compact' },
-      { value: 'full', label: 'Full' },
+      { value: 'compact', label: t('Compact') },
+      { value: 'full', label: t('Full') },
     ], settings.voice_note_ui_mode || 'compact');
     document.getElementById('voiceMinRecordMs').value = settings.min_record_ms;
     document.getElementById('voiceMaxRecordMs').value = settings.max_record_ms;
@@ -936,20 +952,20 @@
     document.getElementById('voiceOpenAILanguage').value = settings.openai_language || 'ru';
     document.getElementById('voiceOpenAIKey').value = '';
     document.getElementById('voiceOpenAIKey').placeholder = settings.masked_openai_key
-      ? `Сохранён ключ ${settings.masked_openai_key}`
-      : 'Введите новый ключ';
+      ? t('Saved key {key}', { key: settings.masked_openai_key })
+      : t('Enter a new key');
     document.getElementById('voiceOpenAIKeyState').textContent = settings.has_openai_key
-      ? `Ключ сохранён: ${settings.masked_openai_key}`
-      : 'Ключ не сохранён';
+      ? t('Key saved: {key}', { key: settings.masked_openai_key })
+      : t('Key not saved');
     document.getElementById('voiceDeleteKeyBtn').classList.toggle('hidden', !settings.has_openai_key);
     document.getElementById('voiceGrokLanguage').value = settings.grok_language || 'ru';
     document.getElementById('voiceGrokKey').value = '';
     document.getElementById('voiceGrokKey').placeholder = settings.masked_grok_key
-      ? `Сохранён ключ ${settings.masked_grok_key}`
-      : 'Введите новый ключ';
+      ? t('Saved key {key}', { key: settings.masked_grok_key })
+      : t('Enter a new key');
     document.getElementById('voiceGrokKeyState').textContent = settings.has_grok_key
-      ? `Ключ сохранён: ${settings.masked_grok_key}`
-      : 'Ключ не сохранён';
+      ? t('Key saved: {key}', { key: settings.masked_grok_key })
+      : t('Key not saved');
     document.getElementById('voiceDeleteGrokKeyBtn').classList.toggle('hidden', !settings.has_grok_key);
     syncProviderPanels();
   }
@@ -960,30 +976,32 @@
     const selectedMeta = document.getElementById('voiceSelectedModelMeta');
     const testBtn = document.getElementById('voiceTestModelBtn');
     const selectedModel = provider === 'openai'
-      ? (document.getElementById('voiceOpenAIModel')?.value || 'не выбрана')
+      ? (document.getElementById('voiceOpenAIModel')?.value || t('not selected'))
       : provider === 'grok'
         ? (document.getElementById('voiceGrokModel')?.value || 'speech-to-text')
-        : (document.getElementById('voiceVoskModel')?.value || 'не выбрана');
+        : (document.getElementById('voiceVoskModel')?.value || t('not selected'));
 
     document.getElementById('voiceProviderVosk')?.classList.toggle('hidden', provider !== 'vosk');
     document.getElementById('voiceProviderOpenAI')?.classList.toggle('hidden', provider !== 'openai');
     document.getElementById('voiceProviderGrok')?.classList.toggle('hidden', provider !== 'grok');
     if (providerHint) {
       providerHint.textContent = provider === 'openai'
-        ? 'Выберите модель OpenAI ниже. Для проверки нужен сохранённый API-ключ.'
+        ? t('Choose an OpenAI model below. A saved API key is required for testing.')
         : provider === 'grok'
-          ? 'Выберите профиль Grok STT ниже. Для проверки нужен сохранённый API-ключ Grok.'
-          : 'Выберите модель Vosk ниже и затем нажмите «Проверить модель».';
+          ? t('Choose a Grok STT profile below. A saved Grok API key is required for testing.')
+          : t('Choose a Vosk model below, then press Test model.');
     }
     if (selectedMeta) {
-      selectedMeta.textContent = `Сейчас выбрано: ${
-        provider === 'openai' ? 'OpenAI' : (provider === 'grok' ? 'Grok' : 'Vosk')
-      } / ${selectedModel}`;
+      selectedMeta.textContent = t('Selected now: {provider} / {model}', {
+        provider: provider === 'openai' ? 'OpenAI' : (provider === 'grok' ? 'Grok' : 'Vosk'),
+        model: selectedModel,
+      });
     }
     if (testBtn) {
-      testBtn.title = `Проверить ${
-        provider === 'openai' ? 'OpenAI' : (provider === 'grok' ? 'Grok' : 'Vosk')
-      }: ${selectedModel}`;
+      testBtn.title = t('Test {provider}: {model}', {
+        provider: provider === 'openai' ? 'OpenAI' : (provider === 'grok' ? 'Grok' : 'Vosk'),
+        model: selectedModel,
+      });
     }
   }
 
@@ -1010,7 +1028,7 @@
   }
 
   async function saveVoiceSettings() {
-    setAdminStatus('Сохранение настроек...', 'pending');
+    setAdminStatus('Saving settings...', 'pending');
     try {
       const data = await getBridge().api('/api/admin/voice-settings', {
         method: 'PUT',
@@ -1023,15 +1041,15 @@
       renderLastTest();
       syncSendButtonState();
       refreshVisibleVoiceRows();
-      setAdminStatus('Настройки сохранены', 'success');
+      setAdminStatus('Settings saved', 'success');
     } catch (error) {
-      setAdminStatus(error.message || 'Не удалось сохранить настройки', 'error');
+      setAdminStatus(error.message || 'Could not save settings', 'error');
     }
   }
 
   async function deleteOpenAIKey() {
-    if (!confirm('Удалить сохранённый OpenAI API-ключ?')) return;
-    setAdminStatus('Удаление ключа...', 'pending');
+    if (!confirm(t('Delete saved OpenAI API key?'))) return;
+    setAdminStatus('Deleting key...', 'pending');
     try {
       const data = await getBridge().api('/api/admin/voice-settings/openai-key', {
         method: 'DELETE',
@@ -1039,15 +1057,15 @@
       state.admin.settings = data.settings;
       state.admin.options = data.options;
       fillAdminForm();
-      setAdminStatus('Ключ удалён', 'success');
+      setAdminStatus('Key deleted', 'success');
     } catch (error) {
-      setAdminStatus(error.message || 'Не удалось удалить ключ', 'error');
+      setAdminStatus(error.message || 'Could not delete key', 'error');
     }
   }
 
   async function deleteGrokKey() {
-    if (!confirm('Удалить сохранённый Grok API-ключ?')) return;
-    setAdminStatus('Удаление ключа...', 'pending');
+    if (!confirm(t('Delete saved Grok API key?'))) return;
+    setAdminStatus('Deleting key...', 'pending');
     try {
       const data = await getBridge().api('/api/admin/voice-settings/grok-key', {
         method: 'DELETE',
@@ -1055,14 +1073,14 @@
       state.admin.settings = data.settings;
       state.admin.options = data.options;
       fillAdminForm();
-      setAdminStatus('Ключ удалён', 'success');
+      setAdminStatus('Key deleted', 'success');
     } catch (error) {
-      setAdminStatus(error.message || 'Не удалось удалить ключ', 'error');
+      setAdminStatus(error.message || 'Could not delete key', 'error');
     }
   }
 
   async function testCurrentModel() {
-    setAdminStatus('Проверка модели...', 'pending');
+    setAdminStatus('Testing model...', 'pending');
     try {
       const data = await getBridge().api('/api/admin/voice-settings/test-model', {
         method: 'POST',
@@ -1072,11 +1090,11 @@
       fillAdminForm();
       renderLastTest(data.result);
       setAdminStatus(
-        data.ok === false ? (data.error || 'Проверка модели завершилась ошибкой') : 'Проверка модели прошла успешно',
+        data.ok === false ? (data.error || 'Model test failed') : 'Model test passed',
         data.ok === false ? 'error' : 'success'
       );
     } catch (error) {
-      setAdminStatus(error.message || 'Проверка модели завершилась ошибкой', 'error');
+      setAdminStatus(error.message || 'Model test failed', 'error');
     }
   }
 
@@ -1106,15 +1124,15 @@
     const testedAt = result.testedAt ? new Date(result.testedAt).toLocaleString() : '—';
     const bodyText = result.status === 'success'
       ? escapeHtml(result.text || '—')
-      : escapeHtml(result.error || 'Ошибка');
+      : escapeHtml(result.error || t('Error'));
     el.className = `voice-last-test ${result.status === 'success' ? 'success' : 'error'}`;
     el.innerHTML = `
-      <div class="voice-last-test-title">Последняя проверка модели</div>
-      <div><strong>Статус:</strong> ${result.status === 'success' ? 'успешно' : 'ошибка'}</div>
-      <div><strong>Провайдер:</strong> ${escapeHtml(result.provider || '—')}</div>
-      <div><strong>Модель:</strong> ${escapeHtml(result.model || '—')}</div>
-      <div><strong>Время ответа:</strong> ${result.latencyMs != null ? `${result.latencyMs} мс` : '—'}</div>
-      <div><strong>Проверено:</strong> ${escapeHtml(testedAt)}</div>
+      <div class="voice-last-test-title">${t('Last model test')}</div>
+      <div><strong>${t('Status')}:</strong> ${result.status === 'success' ? t('success') : t('error')}</div>
+      <div><strong>${t('Provider')}:</strong> ${escapeHtml(result.provider || '—')}</div>
+      <div><strong>${t('Model')}:</strong> ${escapeHtml(result.model || '—')}</div>
+      <div><strong>${t('Response time')}:</strong> ${result.latencyMs != null ? `${result.latencyMs} ${t('ms')}` : '—'}</div>
+      <div><strong>${t('Tested')}:</strong> ${escapeHtml(testedAt)}</div>
       <div class="voice-last-test-body">${bodyText}</div>
     `;
   }
@@ -1202,7 +1220,7 @@
     if (!button) return;
     button.textContent = isPlaying ? '❚❚' : '▶';
     button.classList.toggle('is-playing', isPlaying);
-    button.setAttribute('aria-label', isPlaying ? 'Pause voice note' : 'Play voice note');
+    button.setAttribute('aria-label', t(isPlaying ? 'Pause voice note' : 'Play voice note'));
   }
 
   function bindCompactVoicePlayer(audioWrap, button) {
@@ -1293,7 +1311,7 @@
       button = document.createElement('button');
       button.type = 'button';
       button.className = 'voice-footer-play';
-      button.setAttribute('aria-label', 'Play voice note');
+      button.setAttribute('aria-label', t('Play voice note'));
       footer.insertBefore(button, footer.firstChild);
     }
     return button;
@@ -1323,14 +1341,14 @@
   function renderFullVoicePanel(panel, message, row) {
     const status = message.transcription_status || 'idle';
     if (status === 'pending') {
-      panel.innerHTML = '<div class="voice-transcription-status pending">Расшифровка...</div>';
+      panel.innerHTML = `<div class="voice-transcription-status pending">${t('Transcription...')}</div>`;
       return;
     }
 
     if (status === 'completed' && message.transcription_text) {
       panel.innerHTML = `
         <div class="voice-transcription-block">
-          <div class="voice-transcription-label">Текст</div>
+          <div class="voice-transcription-label">${t('Text')}</div>
           <div class="voice-transcription-text">${escapeHtml(message.transcription_text)}</div>
         </div>
       `;
@@ -1340,21 +1358,21 @@
     if (status === 'error') {
       panel.innerHTML = `
         <div class="voice-transcription-block error">
-          <div class="voice-transcription-label">Ошибка расшифровки</div>
-          <div class="voice-transcription-text">${escapeHtml(message.transcription_error || 'Не удалось получить текст')}</div>
-          <button type="button" class="voice-transcribe-btn retry">Повторить</button>
+          <div class="voice-transcription-label">${t('Transcription error')}</div>
+          <div class="voice-transcription-text">${escapeHtml(message.transcription_error || t('Could not get text'))}</div>
+          <button type="button" class="voice-transcribe-btn retry">${t('Retry')}</button>
         </div>
       `;
       return;
     }
 
-    panel.innerHTML = '<button type="button" class="voice-transcribe-btn">В текст</button>';
+    panel.innerHTML = `<button type="button" class="voice-transcribe-btn">${t('To text')}</button>`;
   }
 
   function renderCompactVoicePanel(panel, message, row) {
     const status = message.transcription_status || 'idle';
     if (status === 'pending') {
-      panel.innerHTML = '<div class="voice-transcription-inline pending">Расшифровка...</div>';
+      panel.innerHTML = `<div class="voice-transcription-inline pending">${t('Transcription...')}</div>`;
       return;
     }
 
@@ -1368,14 +1386,14 @@
     if (status === 'error') {
       panel.innerHTML = `
         <div class="voice-transcription-inline error">
-          <span class="voice-transcription-inline-text">${escapeHtml(message.transcription_error || 'Ошибка расшифровки')}</span>
-          <button type="button" class="voice-transcribe-btn compact retry">Повторить</button>
+          <span class="voice-transcription-inline-text">${escapeHtml(message.transcription_error || t('Transcription error'))}</span>
+          <button type="button" class="voice-transcribe-btn compact retry">${t('Retry')}</button>
         </div>
       `;
       return;
     }
 
-    panel.innerHTML = '<button type="button" class="voice-transcribe-btn compact">В текст</button>';
+    panel.innerHTML = `<button type="button" class="voice-transcribe-btn compact">${t('To text')}</button>`;
   }
 
   function renderVoiceRow(row, message) {
@@ -1432,7 +1450,7 @@
     removeCompactFooterButton(bubble);
     const titleEl = audioWrap.querySelector('div');
     if (titleEl) {
-      titleEl.textContent = `Голосовое сообщение · ${formatDurationMs(message.voice_duration_ms)}`;
+      titleEl.textContent = `${t('Voice message')} · ${formatDurationMs(message.voice_duration_ms)}`;
       titleEl.classList.add('voice-note-title');
     }
     renderFullVoicePanel(panel, message, row);
@@ -1487,7 +1505,7 @@
     } catch (error) {
       if (row?.__voiceMessage) {
         row.__voiceMessage.transcription_status = 'error';
-        row.__voiceMessage.transcription_error = error.message || 'Не удалось запустить расшифровку';
+        row.__voiceMessage.transcription_error = error.message || t('Could not start transcription');
         renderVoiceRow(row, row.__voiceMessage);
       }
     }
@@ -1612,14 +1630,14 @@
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error('Микрофон не поддерживается браузером');
+      throw new Error(t('Microphone is not supported by this browser'));
     }
     const preparePromise = (async () => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (!AudioContextClass) {
         stream.getTracks().forEach((track) => track.stop());
-        throw new Error('AudioContext недоступен');
+        throw new Error(t('AudioContext is unavailable'));
       }
 
       let audioContext = null;
@@ -1686,7 +1704,7 @@
       state.recorder.holdTimer = null;
       state.recorder.suppressNextClick = true;
       startRecording().catch((error) => {
-        setRecorderMessage(error.message || 'Не удалось начать запись', 'error');
+        setRecorderMessage(error.message || 'Could not start recording', 'error');
       });
     }, state.recorder.holdDelayMs);
     event.preventDefault();
@@ -1705,7 +1723,7 @@
     event.preventDefault();
     state.recorder.suppressNextClick = true;
     stopRecordingAndSend().catch((error) => {
-      setRecorderMessage(error.message || 'Не удалось отправить голосовое сообщение', 'error');
+      setRecorderMessage(error.message || 'Could not send voice message', 'error');
     });
   }
 
@@ -1725,43 +1743,11 @@
     state.recorder.timerId = window.setInterval(updateRecorderBar, 200);
 
     syncSendButtonState();
-    setRecorderMessage('Запись...', 'recording');
+    setRecorderMessage('Recording...', 'recording');
     updateRecorderBar();
     safeVibrate(30);
     getBridge()?.playSound?.('voice_start');
     return;
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error('Микрофон не поддерживается браузером');
-    }
-
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextClass) {
-      stream.getTracks().forEach((track) => track.stop());
-      throw new Error('AudioContext недоступен');
-    }
-
-    const audioContext = new AudioContextClass();
-    await audioContext.resume();
-    const chunks = [];
-    const { source, processor, sink } = await createRecorderGraph(audioContext, stream, chunks);
-
-    state.recorder.recording = true;
-    state.recorder.startAt = Date.now();
-    state.recorder.stream = stream;
-    state.recorder.audioContext = audioContext;
-    state.recorder.source = source;
-    state.recorder.processor = processor;
-    state.recorder.sink = sink;
-    state.recorder.chunks = chunks;
-    state.recorder.sampleRate = audioContext.sampleRate || 16000;
-    state.recorder.timerId = window.setInterval(updateRecorderBar, 200);
-
-    syncSendButtonState();
-    setRecorderMessage('Запись...', 'recording');
-    updateRecorderBar();
-    safeVibrate(30);
-    getBridge()?.playSound?.('voice_start');
   }
 
   async function stopRecordingAndSend() {
@@ -1774,7 +1760,7 @@
     const minRecordMs = 0;
     const maxRecordMs = durationMs;
     if (false) {
-      setRecorderMessage('Слишком короткая запись', 'error');
+      setRecorderMessage('Recording is too short', 'error');
       return;
     }
 
@@ -1782,7 +1768,7 @@
     const wavBlob = encodeVoiceBlob(state.recorder.chunks, state.recorder.sampleRate, 16000);
     state.recorder.uploading = true;
     syncSendButtonState();
-    setRecorderMessage('Отправка голосового сообщения...', 'pending');
+    setRecorderMessage('Sending voice message', 'pending');
 
     try {
       await getBridge().queueVoiceMessage?.({
@@ -1913,7 +1899,7 @@
     if (!bar) return;
     bar.className = `voice-recorder-bar ${kind || ''}`;
     bar.classList.remove('hidden');
-    bar.querySelector('.voice-recorder-text').textContent = text;
+    bar.querySelector('.voice-recorder-text').textContent = tx(text);
     if (kind !== 'recording') {
       bar.querySelector('.voice-recorder-dot').classList.add('hidden');
       bar.querySelector('.voice-recorder-time').textContent = '';
@@ -1930,7 +1916,7 @@
     if (!bar) return;
     bar.className = 'voice-recorder-bar hidden';
     bar.querySelector('.voice-recorder-dot').classList.remove('hidden');
-    bar.querySelector('.voice-recorder-text').textContent = 'Запись...';
+    bar.querySelector('.voice-recorder-text').textContent = tx('Recording...');
     bar.querySelector('.voice-recorder-time').textContent = '0:00';
   }
 
@@ -1944,6 +1930,17 @@
 
   window.addEventListener('bananza:ready', () => {
     ensureReady().catch(() => {});
+  });
+  window.addEventListener('bananza:languagechange', () => {
+    if (state.admin.settings && state.admin.options) {
+      fillAdminForm();
+      renderLastTest();
+      syncProviderPanels();
+    }
+    applyLocalizedDom(document.getElementById('voiceAdminModal') || document);
+    applyLocalizedDom(document.getElementById('voiceRecorderBar') || document);
+    refreshVisibleVoiceRows();
+    syncSendButtonState();
   });
 
   if (document.readyState === 'loading') {

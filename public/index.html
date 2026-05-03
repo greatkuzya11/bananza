@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
@@ -318,12 +318,36 @@
         <button id="settingsWeatherPanel" class="settings-item">⛅ Weather</button>
         <button id="settingsNotificationsPanel" class="settings-item">🔔 Уведомления</button>
         <button id="settingsSoundsPanel" class="settings-item">🔊 Звуки</button>
+        <button id="settingsLanguagePanel" class="settings-item">🌐 Язык интерфейса: русский</button>
         <button id="settingsChangePassword" class="settings-item">🔑 Change Password</button>
         <button id="settingsAdminPanel" class="settings-item hidden">🛡 Admin Panel</button>
         <button id="settingsAiBotsPanel" class="settings-item hidden">🤖 OpenAI AI</button>
         <button id="settingsYandexAiPanel" class="settings-item hidden">🐓 AI-&#1071;&#1085;&#1076;&#1077;&#1082;&#1089;</button>
         <button id="settingsDeepSeekAiPanel" class="settings-item hidden">🐋 DeepSeek AI</button>
         <button id="settingsGrokAiPanel" class="settings-item hidden"> &#x1D54F;  Grok AI</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Language Settings Modal -->
+  <div id="languageSettingsModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Язык интерфейса</h3>
+        <button class="modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="settingsLanguagePicker" class="language-picker">
+          <button type="button" class="language-card" data-language-option="ru">
+            <strong>Русский</strong>
+            <small>Интерфейс приложения на русском языке</small>
+          </button>
+          <button type="button" class="language-card" data-language-option="en">
+            <strong>English</strong>
+            <small>Application interface in English</small>
+          </button>
+        </div>
+        <div id="settingsLanguageStatus" class="theme-settings-status"></div>
       </div>
     </div>
   </div>
@@ -2000,6 +2024,7 @@
   <script src="/js/sounds.js"></script>
   <script src="/js/messageCache.js"></script>
   <script src="/js/ai-image-risk.js"></script>
+  <script src="/js/i18n.js"></script>
   <script src="/js/app.js?v=20260501-mobile-font-size"></script>
   <script src="/js/video-notes/video-note-shapes.js"></script>
   <script src="/js/video-notes/VideoShapeRegistry.js"></script>

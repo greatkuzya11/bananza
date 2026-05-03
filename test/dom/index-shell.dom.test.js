@@ -26,6 +26,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/sounds.js',
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
+    '/js/i18n.js',
     '/js/app.js?v=20260501-mobile-font-size',
     '/js/video-notes/video-note-shapes.js',
     '/js/video-notes/VideoShapeRegistry.js',

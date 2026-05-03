@@ -5,6 +5,12 @@
 
   const TARGET_SAMPLE_RATE = 16000;
 
+  function t(key, params = {}) {
+    return window.BananzaAppBridge?.t?.(key, params)
+      || window.BananzaI18n?.t?.(key, params)
+      || String(key || '');
+  }
+
   function normalizeMimeType(value, fallback = '') {
     const base = String(value || '')
       .split(';')[0]
@@ -115,6 +121,9 @@
       this.getSelectedShapeId = typeof getSelectedShapeId === 'function' ? getSelectedShapeId : (() => 'banana-fat');
       this.onStateChange = typeof onStateChange === 'function' ? onStateChange : (() => {});
       this.reset();
+      window.addEventListener('bananza:languagechange', () => {
+        if (this.previewHint) this.previewHint.textContent = t('Video note');
+      });
     }
 
     reset() {
@@ -166,13 +175,13 @@
         return;
       }
       if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error('РљР°РјРµСЂР° РЅРµРґРѕСЃС‚СѓРїРЅР° РІ СЌС‚РѕРј Р±СЂР°СѓР·РµСЂРµ');
+        throw new Error(t('Camera is unavailable in this browser'));
       }
 
       const preparePromise = (async () => {
         const mimeType = this.pickVideoMime();
         if (!mimeType) {
-          throw new Error('MediaRecorder РЅРµ РїРѕРґРґРµСЂР¶РёРІР°РµС‚ Р·Р°РїРёСЃСЊ РІРёРґРµРѕ');
+          throw new Error(t('MediaRecorder does not support video recording'));
         }
 
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -189,7 +198,7 @@
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         if (!AudioContextClass) {
           stream.getTracks().forEach((track) => track.stop());
-          throw new Error('AudioContext РЅРµРґРѕСЃС‚СѓРїРµРЅ');
+          throw new Error(t('AudioContext is unavailable'));
         }
 
         let audioContext = null;
@@ -274,7 +283,7 @@
           <video class="video-note-recorder-preview-video" autoplay muted playsinline></video>
         </div>
         <div class="video-note-recorder-preview-copy">
-          <div class="video-note-recorder-preview-title">Видео</div>
+          <div class="video-note-recorder-preview-title">${t('Video note')}</div>
           <div class="video-note-recorder-preview-meta">
             <span class="video-note-recorder-preview-dot"></span>
             <span class="video-note-recorder-preview-time">0:00</span>
@@ -318,7 +327,7 @@
       await this.ensurePreparedResources();
       const preparedMimeType = this.preparedMimeType || this.pickVideoMime();
       if (!preparedMimeType) {
-        throw new Error('MediaRecorder РЅРµ РїРѕРґРґРµСЂР¶РёРІР°РµС‚ Р·Р°РїРёСЃСЊ РІРёРґРµРѕ');
+        throw new Error(t('MediaRecorder does not support video recording'));
       }
       const preparedRecorder = new MediaRecorder(this.stream, { mimeType: preparedMimeType });
       this.prepared = false;
@@ -346,76 +355,6 @@
       preparedRecorder.start();
       this.onStateChange({ recording: true });
       return;
-      if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error('Камера недоступна в этом браузере');
-      }
-      const mimeType = this.pickVideoMime();
-      if (!mimeType) {
-        throw new Error('MediaRecorder не поддерживает запись видео');
-      }
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: {
-          facingMode: 'user',
-          width: { ideal: 360, max: 480 },
-          height: { ideal: 360, max: 480 },
-          aspectRatio: { ideal: 1 },
-          frameRate: { ideal: 24, max: 24 },
-        },
-      });
-
-      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-      if (!AudioContextClass) {
-        stream.getTracks().forEach((track) => track.stop());
-        throw new Error('AudioContext недоступен');
-      }
-
-      const audioContext = new AudioContextClass();
-      await audioContext.resume();
-      const source = audioContext.createMediaStreamSource(stream);
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
-      const sink = audioContext.createGain();
-      sink.gain.value = 0;
-      processor.onaudioprocess = (event) => {
-        if (!this.recording) return;
-        this.audioChunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
-      };
-      source.connect(processor);
-      processor.connect(sink);
-      sink.connect(audioContext.destination);
-
-      const recorder = new MediaRecorder(stream, { mimeType });
-      const videoChunks = [];
-      recorder.ondataavailable = (event) => {
-        if (event.data?.size) videoChunks.push(event.data);
-      };
-
-      this.recording = true;
-      this.startAt = Date.now();
-      this.stream = stream;
-      this.mediaRecorder = recorder;
-      this.videoChunks = videoChunks;
-      this.audioChunks = [];
-      this.audioContext = audioContext;
-      this.audioSource = source;
-      this.audioProcessor = processor;
-      this.audioSink = sink;
-      this.sampleRate = audioContext.sampleRate || TARGET_SAMPLE_RATE;
-      this.stoppingPromise = null;
-
-      const preview = this.ensurePreview();
-      if (preview && this.previewVideo) {
-        this.applyPreviewShapeMask();
-        this.previewVideo.srcObject = stream;
-        preview.classList.remove('hidden');
-      }
-
-      this.updatePreview();
-      this.timerId = window.setInterval(() => this.updatePreview(), 200);
-
-      recorder.start();
-      this.onStateChange({ recording: true });
     }
 
     updatePreview() {
@@ -446,7 +385,7 @@
             type: normalizeMimeType(mediaRecorder.mimeType, 'video/webm'),
           }));
         };
-        mediaRecorder.onerror = () => reject(mediaRecorder.error || new Error('Video note record failed'));
+        mediaRecorder.onerror = () => reject(mediaRecorder.error || new Error(t('Video note record failed')));
         try {
           mediaRecorder.stop();
         } catch (error) {
@@ -462,7 +401,7 @@
       const posterBlob = await Promise.resolve(
         this.bridge?.createAttachmentPosterBlob?.(stoppedBlob)
       ).catch(() => null);
-      window.BananzaVoiceHooks?.setRecorderMessage?.('Отправка видео-заметки...', 'pending');
+      window.BananzaVoiceHooks?.setRecorderMessage?.(t('Sending video note'), 'pending');
       await this.bridge?.queueVideoNote?.({
         videoBlob: stoppedBlob,
         audioBlob,

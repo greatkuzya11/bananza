@@ -126,6 +126,34 @@ test('chat folder strip visibility is stored on the user account and exposed via
   assert.equal(after.data.user.ui_show_chat_folder_strip_in_all_chats, true);
 });
 
+test('interface language defaults to ru and can be stored on the user account', async () => {
+  const { bob } = scenario;
+
+  const before = await bob.request('/api/auth/me');
+  assert.equal(before.data.user.ui_language, 'ru');
+
+  const updated = await bob.request('/api/user/language', {
+    method: 'PATCH',
+    json: { language: 'en' },
+  });
+  assert.equal(updated.data.user.ui_language, 'en');
+
+  const after = await bob.request('/api/auth/me');
+  assert.equal(after.data.user.ui_language, 'en');
+
+  const invalid = await bob.request('/api/user/language', {
+    method: 'PATCH',
+    json: { language: 'de' },
+    expectedStatus: 400,
+  });
+  assert.equal(invalid.data.error, 'Unknown interface language');
+
+  await bob.request('/api/user/language', {
+    method: 'PATCH',
+    json: { language: 'ru' },
+  });
+});
+
 test('voice and AI admin settings routes stay isolated and usable locally', async () => {
   const { admin, bob } = scenario;
 

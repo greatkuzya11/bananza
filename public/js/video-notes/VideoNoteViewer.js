@@ -9,6 +9,12 @@
     return div.innerHTML;
   }
 
+  function t(key, params = {}) {
+    return window.BananzaAppBridge?.t?.(key, params)
+      || window.BananzaI18n?.t?.(key, params)
+      || String(key || '');
+  }
+
   function formatDurationMs(durationMs) {
     const totalSeconds = Math.max(0, Math.round(Number(durationMs || 0) / 1000));
     const minutes = Math.floor(totalSeconds / 60);
@@ -64,7 +70,7 @@
       wrapper.innerHTML = `
         <div class="video-note-viewer-backdrop"></div>
         <div class="video-note-viewer-shell">
-          <button type="button" class="video-note-viewer-close" aria-label="Close">&times;</button>
+          <button type="button" class="video-note-viewer-close" aria-label="${escapeHtml(t('Close'))}" data-i18n-aria-label="Close">&times;</button>
           <div class="video-note-viewer-stage">
             <video class="video-note-viewer-video" playsinline controls preload="metadata"></video>
           </div>

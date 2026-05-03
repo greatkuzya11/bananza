@@ -4266,6 +4266,37 @@ html[data-visual-mode="rich"] .poll-card {
   box-shadow: 0 5px 14px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 .theme-card.active .theme-card-preview { display: none; }
+.language-picker {
+  display: grid;
+  gap: 10px;
+}
+.language-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+.language-card:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-border-strong);
+}
+.language-card small {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.language-card.active {
+  border-color: var(--accent);
+  background: var(--accent-soft-bg);
+}
 .visual-mode-hint {
   padding-left: 0;
   padding-right: 0;

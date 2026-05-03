@@ -6,14 +6,14 @@
   const TEXT = {
     playLabel: 'Play video note',
     pauseLabel: 'Pause video note',
-    transcriptLabel: '\u0420\u0430\u0441\u0448\u0438\u0444\u0440\u043e\u0432\u043a\u0430',
+    transcriptLabel: 'Transcript',
     shapeCircleLabel: 'Switch video note to circle',
     shapeBananaLabel: 'Switch video note to banana',
-    pending: '\u0420\u0430\u0441\u0448\u0438\u0444\u0440\u043e\u0432\u043a\u0430...',
-    hidden: '\u0420\u0430\u0441\u0448\u0438\u0444\u0440\u043e\u0432\u043a\u0430 \u0441\u043a\u0440\u044b\u0442\u0430',
-    defaultError: '\u041e\u0448\u0438\u0431\u043a\u0430 \u0440\u0430\u0441\u0448\u0438\u0444\u0440\u043e\u0432\u043a\u0438',
-    requestError: '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u0440\u0430\u0441\u0448\u0438\u0444\u0440\u043e\u0432\u043a\u0443',
-    bridgeError: '\u041d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u0430 \u043a API \u0447\u0430\u0442\u0430',
+    pending: 'Transcription...',
+    hidden: 'Transcription hidden',
+    defaultError: 'Transcription error',
+    requestError: 'Could not start transcription',
+    bridgeError: 'No chat API access',
   };
 
   const PLAYING_PROGRESS_MAX = 0.9;
@@ -35,6 +35,12 @@
     const div = document.createElement('div');
     div.textContent = value == null ? '' : String(value);
     return div.innerHTML;
+  }
+
+  function t(key, params = {}) {
+    return window.BananzaAppBridge?.t?.(key, params)
+      || window.BananzaI18n?.t?.(key, params)
+      || String(key || '');
   }
 
   function applyMaskStyle(node, maskUrl) {
@@ -66,6 +72,8 @@
       this.expandedIds = new Set();
       this.boundContainers = new WeakSet();
       this.progressFrames = new WeakMap();
+      this.getBridge()?.onLanguageChange?.(() => this.refreshAllRows());
+      window.addEventListener('bananza:languagechange', () => this.refreshAllRows());
     }
 
     getBridge() {
@@ -127,6 +135,10 @@
       window.setTimeout(() => bridge.scrollToBottom(), 220);
     }
 
+    refreshAllRows() {
+      document.querySelectorAll('.msg-row.video-note-row').forEach((row) => this.refreshRow(row));
+    }
+
     renderProgressSvg(snapshot, gradientId) {
       const viewBox = escapeHtml(snapshot?.viewBox || '0 0 320 220');
       const path = escapeHtml(snapshot?.path || '');
@@ -164,7 +176,7 @@
             aria-label="${escapeHtml(this.getShapeToggleLabel(effectiveShapeId))}"
             data-shape-id="${escapeHtml(effectiveShapeId)}"
           >${escapeHtml(this.getShapeToggleGlyph(effectiveShapeId))}</button>
-          <div class="video-note-stage" role="button" tabindex="0" aria-label="${TEXT.playLabel}">
+          <div class="video-note-stage" role="button" tabindex="0" aria-label="${escapeHtml(t(TEXT.playLabel))}">
             <div class="video-note-shape" style="--video-note-mask:url('${maskUrl}')">
               <video class="video-note-video" playsinline preload="metadata"${posterAttr}>
                 <source src="${escapeHtml(src)}" type="${escapeHtml(message.file_mime || 'video/webm')}">
@@ -173,7 +185,7 @@
             </div>
           </div>
           <div class="video-note-toolbar">
-            <button type="button" class="video-note-transcript-btn" aria-label="${TEXT.transcriptLabel}">&#127908;</button>
+            <button type="button" class="video-note-transcript-btn" aria-label="${escapeHtml(t(TEXT.transcriptLabel))}">&#127908;</button>
           </div>
           <div class="video-note-transcript" aria-hidden="true"></div>
         </div>
@@ -284,7 +296,7 @@
       if (!video || !stage) return;
       const isPlaying = !video.paused && !video.ended;
       row.classList.toggle('video-note-playing', isPlaying);
-      stage.setAttribute('aria-label', isPlaying ? TEXT.pauseLabel : TEXT.playLabel);
+      stage.setAttribute('aria-label', t(isPlaying ? TEXT.pauseLabel : TEXT.playLabel));
     }
 
     isPlaybackCompleted(row) {
@@ -389,7 +401,7 @@
     }
 
     getShapeToggleLabel(shapeId) {
-      return shapeId === 'circle' ? TEXT.shapeBananaLabel : TEXT.shapeCircleLabel;
+      return t(shapeId === 'circle' ? TEXT.shapeBananaLabel : TEXT.shapeCircleLabel);
     }
 
     syncShapeState(row, message) {
@@ -436,15 +448,15 @@
         transcript.innerHTML = `<div class="video-note-transcript-text">${escapeHtml(message.transcription_text)}</div>`;
         transcriptBtn.classList.remove('is-pending', 'is-error');
       } else if (status === 'pending') {
-        transcript.innerHTML = `<div class="video-note-transcript-status pending">${TEXT.pending}</div>`;
+        transcript.innerHTML = `<div class="video-note-transcript-status pending">${escapeHtml(t(TEXT.pending))}</div>`;
         transcriptBtn.classList.add('is-pending');
         transcriptBtn.classList.remove('is-error');
       } else if (status === 'error') {
-        transcript.innerHTML = `<div class="video-note-transcript-status error">${escapeHtml(message.transcription_error || TEXT.defaultError)}</div>`;
+        transcript.innerHTML = `<div class="video-note-transcript-status error">${escapeHtml(message.transcription_error || t(TEXT.defaultError))}</div>`;
         transcriptBtn.classList.remove('is-pending');
         transcriptBtn.classList.add('is-error');
       } else {
-        transcript.innerHTML = `<div class="video-note-transcript-status">${TEXT.hidden}</div>`;
+        transcript.innerHTML = `<div class="video-note-transcript-status">${escapeHtml(t(TEXT.hidden))}</div>`;
         transcriptBtn.classList.remove('is-pending', 'is-error');
       }
 
@@ -492,7 +504,7 @@
         });
         try {
           const bridge = this.getBridge();
-          if (!bridge?.api) throw new Error(TEXT.bridgeError);
+          if (!bridge?.api) throw new Error(t(TEXT.bridgeError));
           const response = await bridge.api(`/api/messages/${messageId}/transcribe`, { method: 'POST' });
           const patch = {
             transcription_status: response?.status || 'pending',
@@ -521,7 +533,7 @@
         } catch (error) {
           this.updateMessage(row, {
             transcription_status: 'error',
-            transcription_error: error.message || TEXT.requestError,
+            transcription_error: error.message || t(TEXT.requestError),
           });
         }
         return;

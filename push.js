@@ -27,6 +27,51 @@ const SOUND_TYPE_FLAGS = {
   mentions: 'play_mentions',
 };
 const MAX_BODY_LENGTH = 120;
+const PUSH_LANGUAGES = new Set(['ru', 'en']);
+const PUSH_TEXT = {
+  ru: {
+    voiceMessage: 'Голосовое сообщение',
+    photo: 'Фото',
+    video: 'Видео',
+    audio: 'Аудио',
+    file: 'Файл',
+    attachment: 'Вложение',
+    newMessage: 'Новое сообщение',
+    pinnedMessage: 'Закрепленное сообщение',
+    newChat: 'Новый чат',
+    you: 'Вас',
+    user: 'Пользователь',
+    someone: 'Кто-то',
+    mentioned: '{name} упомянул(а) вас: {preview}',
+    addedToChat: '{name} добавили в чат {chat}',
+    newReaction: 'Новая реакция',
+    reacted: '{name} поставил(а) {emoji} на ваше сообщение',
+    pinnedPrivate: 'Закрепил(а) сообщение: {preview}',
+    pinnedInChat: '{name} закрепил(а) сообщение: {preview}',
+    testWorks: 'Тестовое уведомление работает',
+  },
+  en: {
+    voiceMessage: 'Voice message',
+    photo: 'Photo',
+    video: 'Video',
+    audio: 'Audio',
+    file: 'File',
+    attachment: 'Attachment',
+    newMessage: 'New message',
+    pinnedMessage: 'Pinned message',
+    newChat: 'New chat',
+    you: 'You',
+    user: 'User',
+    someone: 'Someone',
+    mentioned: '{name} mentioned you: {preview}',
+    addedToChat: '{name} added you to chat {chat}',
+    newReaction: 'New reaction',
+    reacted: '{name} reacted {emoji} to your message',
+    pinnedPrivate: 'Pinned a message: {preview}',
+    pinnedInChat: '{name} pinned a message: {preview}',
+    testWorks: 'Test notification works',
+  },
+};
 
 function boolValue(value, fallback = false) {
   if (typeof value === 'boolean') return value;
@@ -39,6 +84,40 @@ function truncate(text, limit = MAX_BODY_LENGTH) {
   const value = String(text || '').replace(/\s+/g, ' ').trim();
   if (value.length <= limit) return value;
   return value.slice(0, Math.max(0, limit - 1)).trimEnd() + '…';
+}
+
+function normalizePushLanguage(language) {
+  const next = String(language || '').trim().toLowerCase();
+  return PUSH_LANGUAGES.has(next) ? next : 'ru';
+}
+
+function pushText(language, key, params = {}) {
+  const lang = normalizePushLanguage(language);
+  let text = PUSH_TEXT[lang]?.[key] || PUSH_TEXT.ru[key] || key;
+  Object.entries(params || {}).forEach(([name, value]) => {
+    text = text.replaceAll(`{${name}}`, String(value ?? ''));
+  });
+  return text;
+}
+
+function messagePreviewForLanguage(message, language) {
+  const text = message?.text || message?.transcription_text || '';
+  if (String(text).trim()) return truncate(text);
+  if (message?.is_voice_note) return pushText(language, 'voiceMessage');
+  if (message?.file_type === 'image') return pushText(language, 'photo');
+  if (message?.file_type === 'video') return pushText(language, 'video');
+  if (message?.file_type === 'audio') return pushText(language, 'audio');
+  if (message?.file_type === 'document' || message?.file_id) return pushText(language, 'file');
+  return pushText(language, 'newMessage');
+}
+
+function pinPreviewForLanguage(message, language) {
+  const text = String(message?.text || message?.transcription_text || '').trim();
+  if (text) return truncate(text, 160);
+  if (message?.is_voice_note || message?.voice_message_id) return pushText(language, 'voiceMessage');
+  if (message?.file_name) return truncate(message.file_name, 160);
+  if (message?.file_type || message?.file_id) return pushText(language, 'attachment');
+  return pushText(language, 'pinnedMessage');
 }
 
 function readVapidConfig() {
@@ -120,6 +199,7 @@ function createPushFeature({ app, db, auth, rateLimit }) {
 
   const settingsStmt = db.prepare('SELECT * FROM user_notification_settings WHERE user_id=?');
   const soundSettingsStmt = db.prepare('SELECT * FROM user_sound_settings WHERE user_id=?');
+  const userLanguageStmt = db.prepare('SELECT ui_language FROM users WHERE id=?');
   const activeSubscriptionsStmt = db.prepare(`
     SELECT * FROM push_subscriptions
     WHERE user_id=? AND disabled_at IS NULL
@@ -160,6 +240,10 @@ function createPushFeature({ app, db, auth, rateLimit }) {
 
   function getSettings(userId) {
     return normalizeSettings(settingsStmt.get(userId));
+  }
+
+  function getUserLanguage(userId) {
+    return normalizePushLanguage(userLanguageStmt.get(userId)?.ui_language);
   }
 
   function saveSettings(userId, input = {}) {
@@ -287,24 +371,12 @@ function createPushFeature({ app, db, auth, rateLimit }) {
     });
   }
 
-  function messagePreview(message) {
-    const text = message?.text || message?.transcription_text || '';
-    if (String(text).trim()) return truncate(text);
-    if (message?.is_voice_note) return 'Голосовое сообщение';
-    if (message?.file_type === 'image') return 'Фото';
-    if (message?.file_type === 'video') return 'Видео';
-    if (message?.file_type === 'audio') return 'Аудио';
-    if (message?.file_type === 'document' || message?.file_id) return 'Файл';
-    return 'Новое сообщение';
+  function messagePreview(message, language) {
+    return messagePreviewForLanguage(message, language);
   }
 
-  function pinPreview(message) {
-    const text = String(message?.text || message?.transcription_text || '').trim();
-    if (text) return truncate(text, 160);
-    if (message?.is_voice_note || message?.voice_message_id) return '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435';
-    if (message?.file_name) return truncate(message.file_name, 160);
-    if (message?.file_type || message?.file_id) return '\u0412\u043b\u043e\u0436\u0435\u043d\u0438\u0435';
-    return '\u0417\u0430\u043a\u0440\u0435\u043f\u043b\u0435\u043d\u043d\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435';
+  function pinPreview(message, language) {
+    return pinPreviewForLanguage(message, language);
   }
 
   function notifyMessageCreated(message) {
@@ -314,7 +386,6 @@ function createPushFeature({ app, db, auth, rateLimit }) {
     const members = chatMembersExceptStmt.all(message.chat_id, message.user_id);
     if (members.length === 0) return;
 
-    const preview = messagePreview(message);
     const mentionedIds = new Set(
       message.forwarded_from_message_id
         ? []
@@ -324,13 +395,16 @@ function createPushFeature({ app, db, auth, rateLimit }) {
     );
     for (const { user_id: userId } of members) {
       const isPrivate = chat.type === 'private';
+      const language = getUserLanguage(userId);
+      const preview = messagePreview(message, language);
+      const senderName = message.display_name || pushText(language, 'user');
       if (mentionedIds.has(Number(userId))) {
         queueUserNotification(userId, 'mentions', {
           type: 'mention',
           chatId: message.chat_id,
           messageId: message.id,
           title: isPrivate ? (message.display_name || 'BananZa') : (chat.name || 'BananZa'),
-          body: `${message.display_name || 'User'} \u0443\u043f\u043e\u043c\u044f\u043d\u0443\u043b(\u0430) \u0432\u0430\u0441: ${preview}`,
+          body: pushText(language, 'mentioned', { name: senderName, preview }),
           url: `/?chatId=${message.chat_id}`,
           tag: `mention:${message.id}:${userId}`,
           urgency: 'high',
@@ -342,7 +416,7 @@ function createPushFeature({ app, db, auth, rateLimit }) {
         chatId: message.chat_id,
         messageId: message.id,
         title: isPrivate ? (message.display_name || 'BananZa') : (chat.name || 'BananZa'),
-        body: isPrivate ? preview : `${message.display_name || 'User'}: ${preview}`,
+        body: isPrivate ? preview : `${senderName}: ${preview}`,
         url: `/?chatId=${message.chat_id}`,
         tag: `chat:${message.chat_id}`,
       }, { chatId: message.chat_id });
@@ -351,11 +425,13 @@ function createPushFeature({ app, db, auth, rateLimit }) {
 
   function notifyChatInvite(userId, { chat, actorName, title, body } = {}) {
     if (!userId || !chat?.id) return;
+    const language = getUserLanguage(userId);
+    const resolvedActorName = actorName || pushText(language, 'you');
     queueUserNotification(userId, 'chat_invites', {
       type: 'chat_invite',
       chatId: chat.id,
-      title: title || 'Новый чат',
-      body: body || `${actorName || 'Вас'} добавили в чат ${chat.name || ''}`.trim(),
+      title: title || pushText(language, 'newChat'),
+      body: body || pushText(language, 'addedToChat', { name: resolvedActorName, chat: chat.name || '' }).trim(),
       url: `/?chatId=${chat.id}`,
       tag: `chat-invite:${chat.id}`,
     });
@@ -364,12 +440,14 @@ function createPushFeature({ app, db, auth, rateLimit }) {
   function notifyReaction({ messageId, emoji, actor }) {
     const message = reactionMessageStmt.get(messageId);
     if (!message || !actor?.id || message.user_id === actor.id) return;
+    const language = getUserLanguage(message.user_id);
+    const actorName = actor.display_name || actor.username || pushText(language, 'someone');
     queueUserNotification(message.user_id, 'reactions', {
       type: 'reaction',
       chatId: message.chat_id,
       messageId,
-      title: 'Новая реакция',
-      body: `${actor.display_name || actor.username || 'Кто-то'} поставил ${emoji} на ваше сообщение`,
+      title: pushText(language, 'newReaction'),
+      body: pushText(language, 'reacted', { name: actorName, emoji }),
       url: `/?chatId=${message.chat_id}`,
       tag: `reaction:${messageId}:${actor.id}:${emoji}`,
     }, { chatId: message.chat_id });
@@ -388,15 +466,16 @@ function createPushFeature({ app, db, auth, rateLimit }) {
     const members = chatMembersExceptStmt.all(message.chat_id, actorId);
     if (members.length === 0) return;
 
-    const actorName = actor.display_name || actor.username || 'User';
-    const preview = pinPreview(message);
     const isPrivate = chat.type === 'private';
-    const title = isPrivate ? actorName : (chat.name || 'BananZa');
-    const body = isPrivate
-      ? `\u0417\u0430\u043a\u0440\u0435\u043f\u0438\u043b(\u0430) \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435: ${preview}`
-      : `${actorName} \u0437\u0430\u043a\u0440\u0435\u043f\u0438\u043b(\u0430) \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435: ${preview}`;
 
     for (const { user_id: userId } of members) {
+      const language = getUserLanguage(userId);
+      const actorName = actor.display_name || actor.username || pushText(language, 'user');
+      const preview = pinPreview(message, language);
+      const title = isPrivate ? actorName : (chat.name || 'BananZa');
+      const body = isPrivate
+        ? pushText(language, 'pinnedPrivate', { preview })
+        : pushText(language, 'pinnedInChat', { name: actorName, preview });
       queueUserNotification(userId, 'pins', {
         type: 'pin',
         chatId: message.chat_id,
@@ -450,10 +529,11 @@ function createPushFeature({ app, db, auth, rateLimit }) {
 
   app.post('/api/push/test', auth, pushLimiter, async (req, res) => {
     if (!isConfigured) return res.status(503).json({ error: 'Push server keys are not configured' });
+    const language = getUserLanguage(req.user.id);
     const result = await sendUserNotification(req.user.id, 'test', {
       type: 'test',
       title: 'BananZa',
-      body: 'Тестовое уведомление работает',
+      body: pushText(language, 'testWorks'),
       url: currentChatUrl(req.body?.chatId),
       chatId: Number(req.body?.chatId) || null,
       tag: `push-test:${req.user.id}:${Date.now()}`,
@@ -481,4 +561,10 @@ function createPushFeature({ app, db, auth, rateLimit }) {
   };
 }
 
-module.exports = { createPushFeature };
+module.exports = {
+  createPushFeature,
+  normalizePushLanguage,
+  pushText,
+  messagePreviewForLanguage,
+  pinPreviewForLanguage,
+};

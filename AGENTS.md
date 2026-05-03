@@ -31,6 +31,7 @@
 - Проблема только на клиенте: смотри `public/index.html`, `public/js/app.js`, потом ближайшие feature-скрипты.
 
 ## How to add features
+- Любой новый видимый UI-текст добавляй сразу на двух языках (`ru` и `en`) через `public/js/i18n.js`: кнопки, заголовки, подсказки, placeholders, aria/title, toast/status, alert/confirm/prompt, контекстные меню и push-тексты. Не добавляй hardcoded visible strings без i18n-ключа.
 - Для серверной фичи сначала реши, это:
   - расширение существующего модуля;
   - новый top-level feature-модуль;

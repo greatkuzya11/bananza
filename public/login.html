@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -31,6 +31,9 @@
     .btn:disabled{opacity:.5;cursor:not-allowed}
     .error{color:#e17076;font-size:13px;margin-top:8px;min-height:18px}
     .hint{color:#7e8b99;font-size:12px;margin-top:12px;text-align:center}
+    .language-switch{display:flex;gap:8px;justify-content:center;margin:-8px 0 18px}
+    .language-switch button{background:#242f3d;border:1px solid #3a4a5c;color:#9fb7cf;border-radius:999px;padding:6px 12px;cursor:pointer;font-weight:700}
+    .language-switch button.active{background:#5eb5f7;border-color:#5eb5f7;color:#fff}
   </style>
 </head>
 <body>
@@ -38,6 +41,10 @@
     <div class="logo">
       <h1>🍌 BananZa</h1>
       <p>Self-hosted messenger</p>
+    </div>
+    <div class="language-switch" aria-label="Interface language">
+      <button type="button" data-login-language="ru">RU</button>
+      <button type="button" data-login-language="en">EN</button>
     </div>
     <div class="tabs">
       <div class="tab active" data-tab="login">Sign In</div>
@@ -98,8 +105,25 @@
     </div>
   </div>
 
+  <script src="/js/i18n.js"></script>
   <script>
+    const i18n = window.BananzaI18n;
     if (localStorage.getItem('token')) location.href = '/';
+    function t(key){ return i18n?.t ? i18n.t(key) : key; }
+    function tx(text){ return i18n?.text ? i18n.text(text) : text; }
+    function selectedLanguage(){ return i18n?.getLanguage?.() || 'ru'; }
+    function syncLanguageButtons(){
+      document.querySelectorAll('[data-login-language]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.loginLanguage === selectedLanguage());
+      });
+    }
+    document.querySelectorAll('[data-login-language]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        i18n?.setLanguage?.(btn.dataset.loginLanguage);
+        syncLanguageButtons();
+      });
+    });
+    syncLanguageButtons();
 
     const tabs = document.querySelectorAll('.tab');
     const forms = document.querySelectorAll('.form');
@@ -116,8 +140,27 @@
         body: JSON.stringify(body),
       });
       const data = await r.json();
-      if (!r.ok) throw new Error(data.error || 'Error');
+      if (!r.ok) throw new Error(tx(data.error || 'Error'));
       return data;
+    }
+
+    async function syncServerLanguage(token, user) {
+      const language = selectedLanguage();
+      if (!token || user?.ui_language === language) return user;
+      try {
+        const response = await fetch('/api/user/language', {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + token,
+          },
+          body: JSON.stringify({ language }),
+        });
+        const data = await response.json().catch(() => ({}));
+        return response.ok && data.user ? data.user : user;
+      } catch {
+        return user;
+      }
     }
 
     document.getElementById('loginForm').addEventListener('submit', async (e) => {
@@ -129,8 +172,9 @@
           username: document.getElementById('loginUser').value.trim(),
           password: document.getElementById('loginPass').value,
         });
+        const user = await syncServerLanguage(data.token, data.user);
         localStorage.setItem('token', data.token);
-        localStorage.setItem('user', JSON.stringify(data.user));
+        localStorage.setItem('user', JSON.stringify(user));
         location.href = '/';
       } catch (ex) { err.textContent = ex.message; }
     });
@@ -141,12 +185,13 @@
       err.textContent = '';
       const pass = document.getElementById('regPass').value;
       const passConfirm = document.getElementById('regPassConfirm').value;
-      if (pass !== passConfirm) { err.textContent = 'Passwords do not match'; return; }
+      if (pass !== passConfirm) { err.textContent = t('Passwords do not match'); return; }
       try {
         const data = await api('/api/auth/register', {
           username: document.getElementById('regUser').value.trim(),
           password: pass,
           displayName: document.getElementById('regName').value.trim(),
+          language: selectedLanguage(),
         });
         localStorage.setItem('token', data.token);
         localStorage.setItem('user', JSON.stringify(data.user));
