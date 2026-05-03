@@ -220,6 +220,7 @@
   let pendingChatFolderChipCenterBehavior = 'auto';
   let chatFolderStripPreviewFolderId = null;
   let chatFolderBarForceVisible = false;
+  let chatFolderStripVisibilitySaveInFlight = false;
   let weatherSettings = { enabled: false, refresh_minutes: 30, location: null };
   let weatherSettingsLoaded = false;
   let selectedWeatherLocation = null;
@@ -4143,8 +4144,69 @@
     return normalizeChatFolderId(chatFolderStore.activeFolderId);
   }
 
+  function isChatFolderStripVisibleInAllChatsEnabled() {
+    return Boolean(currentUser?.ui_show_chat_folder_strip_in_all_chats);
+  }
+
+  function syncChatFolderPickerAllChatsToggleState() {
+    const toggle = chatFolderPicker?.querySelector('[data-chat-folder-strip-toggle]');
+    if (!(toggle instanceof HTMLElement)) return false;
+    const enabled = isChatFolderStripVisibleInAllChatsEnabled();
+    toggle.classList.toggle('is-active', enabled);
+    toggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+    toggle.disabled = chatFolderStripVisibilitySaveInFlight;
+    return true;
+  }
+
+  function applyChatFolderStripVisibilityInAllChats(enabled, { persist = true, renderBar = true, syncPicker = true } = {}) {
+    if (!currentUser) return false;
+    currentUser.ui_show_chat_folder_strip_in_all_chats = Boolean(enabled);
+    if (persist) persistCurrentUser();
+    if (renderBar) renderActiveChatFolderBar({ centerBehavior: 'auto' });
+    if (syncPicker && isFloatingSurfaceVisible(chatFolderPicker)) syncChatFolderPickerAllChatsToggleState();
+    return Boolean(enabled);
+  }
+
+  async function saveChatFolderStripVisibilityInAllChats(nextValue) {
+    if (!currentUser || chatFolderStripVisibilitySaveInFlight) return isChatFolderStripVisibleInAllChatsEnabled();
+    const desired = Boolean(nextValue);
+    const previous = isChatFolderStripVisibleInAllChatsEnabled();
+    if (desired === previous) {
+      syncChatFolderPickerAllChatsToggleState();
+      renderActiveChatFolderBar({ centerBehavior: 'auto' });
+      return previous;
+    }
+
+    chatFolderStripVisibilitySaveInFlight = true;
+    applyChatFolderStripVisibilityInAllChats(desired, { persist: true, renderBar: true, syncPicker: true });
+
+    try {
+      const res = await api('/api/user/chat-folder-strip-visibility', {
+        method: 'PATCH',
+        body: { show_in_all_chats: desired },
+      });
+      currentUser = {
+        ...currentUser,
+        ...res.user,
+        ui_show_chat_folder_strip_in_all_chats: Boolean(res.user?.ui_show_chat_folder_strip_in_all_chats),
+      };
+      persistCurrentUser();
+      renderActiveChatFolderBar({ centerBehavior: 'auto' });
+      return isChatFolderStripVisibleInAllChatsEnabled();
+    } catch (error) {
+      applyChatFolderStripVisibilityInAllChats(previous, { persist: true, renderBar: true, syncPicker: true });
+      throw error;
+    } finally {
+      chatFolderStripVisibilitySaveInFlight = false;
+      syncChatFolderPickerAllChatsToggleState();
+    }
+  }
+
   function shouldShowChatFolderBarForSelection(folderId = getRenderedChatFolderSelectionId(), { forceVisible = chatFolderBarForceVisible } = {}) {
-    return chatFolderStore.getFolders().length > 0 && (Boolean(forceVisible) || normalizeChatFolderId(folderId) !== ALL_CHATS_FOLDER_ID);
+    return chatFolderStore.getFolders().length > 0
+      && (Boolean(forceVisible)
+        || normalizeChatFolderId(folderId) !== ALL_CHATS_FOLDER_ID
+        || isChatFolderStripVisibleInAllChatsEnabled());
   }
 
   function chatFolderStripStructureSignature(rows = []) {
@@ -4689,6 +4751,7 @@
         ...user,
         avatar_url: user.avatar_url,
       };
+      currentUser.ui_show_chat_folder_strip_in_all_chats = Boolean(currentUser.ui_show_chat_folder_strip_in_all_chats);
       if (user.ui_theme) applyUiTheme(user.ui_theme, false);
       if (Object.prototype.hasOwnProperty.call(user, 'ui_visual_mode')) {
         applyVisualMode(user.ui_visual_mode, false);
@@ -4701,6 +4764,10 @@
       }
       if (Object.prototype.hasOwnProperty.call(user, 'ui_mobile_font_size')) {
         applyMobileFontSize(user.ui_mobile_font_size, false);
+      }
+      if (Object.prototype.hasOwnProperty.call(user, 'ui_show_chat_folder_strip_in_all_chats')) {
+        renderActiveChatFolderBar({ centerBehavior: 'auto' });
+        if (isFloatingSurfaceVisible(chatFolderPicker)) syncChatFolderPickerAllChatsToggleState();
       }
       persistCurrentUser();
       updateCurrentUserFooter();
@@ -10112,6 +10179,7 @@
     if (!chatFolderPicker) return;
     const folders = chatFolderStore.getFolders();
     const activeFolderId = Number(chatFolderStore.activeFolderId || 0);
+    const showStripInAllChats = isChatFolderStripVisibleInAllChatsEnabled();
     const allUnread = totalUnreadForFolder(null);
     const allCount = visibleChatCountForFolder(null);
     const rows = [{
@@ -10146,6 +10214,24 @@
                 </span>
                 ${row.unread > 0 ? `<span class="unread-badge">${row.unread > 99 ? '99+' : row.unread}</span>` : ''}
               </button>
+              ${Number(row.id || 0) === ALL_CHATS_FOLDER_ID ? `
+                <button
+                  type="button"
+                  class="chat-folder-picker-strip-toggle${showStripInAllChats ? ' is-active' : ''}"
+                  data-chat-folder-strip-toggle
+                  aria-pressed="${showStripInAllChats ? 'true' : 'false'}"
+                  aria-label="Показывать полосу папок"
+                  ${chatFolderStripVisibilitySaveInFlight ? 'disabled' : ''}
+                >
+                  <span class="chat-folder-picker-strip-toggle-label">
+                    <span>Показывать</span>
+                    <span>полосу папок</span>
+                  </span>
+                  <span class="chat-folder-picker-strip-toggle-switch" aria-hidden="true">
+                    <span class="chat-folder-picker-strip-toggle-knob"></span>
+                  </span>
+                </button>
+              ` : ''}
               ${row.menu ? `<button type="button" class="chat-folder-picker-menu-btn" data-folder-menu="${Number(row.id || 0)}" aria-label="Folder actions">⋯</button>` : ''}
             </div>
           `).join('') || '<div class="chat-folder-picker-empty">Папок пока нет</div>'}
@@ -13117,6 +13203,7 @@
     if (!token || !userStr) { location.href = '/login.html'; return false; }
     try {
       currentUser = JSON.parse(userStr);
+      currentUser.ui_show_chat_folder_strip_in_all_chats = Boolean(currentUser.ui_show_chat_folder_strip_in_all_chats);
       applyUiTheme(currentUser.ui_theme, false);
       applyVisualMode(currentUser.ui_visual_mode, false);
       applyModalAnimation(currentUser.ui_modal_animation, false);
@@ -21744,6 +21831,15 @@
       }, { passive: true });
       chatFolderPicker?.addEventListener('click', (e) => {
         e.stopPropagation();
+        const stripToggle = e.target.closest('[data-chat-folder-strip-toggle]');
+        if (stripToggle) {
+          const nextValue = !isChatFolderStripVisibleInAllChatsEnabled();
+          saveChatFolderStripVisibilityInAllChats(nextValue).catch((error) => {
+            console.warn('Failed to update chat folder strip visibility', error);
+            showCenterToast(error?.message || 'Could not update setting');
+          });
+          return;
+        }
         const menuBtn = e.target.closest('[data-folder-menu]');
         if (menuBtn) {
           const folderId = Number(menuBtn.dataset.folderMenu || 0);
@@ -22889,7 +22985,10 @@
     // Verify token
     try {
       const data = await api('/api/auth/me');
-      currentUser = data.user;
+      currentUser = {
+        ...data.user,
+        ui_show_chat_folder_strip_in_all_chats: Boolean(data.user?.ui_show_chat_folder_strip_in_all_chats),
+      };
       chatFolderStore.hydrateActiveFolderId();
       applyUiTheme(currentUser.ui_theme);
       applyVisualMode(currentUser.ui_visual_mode);

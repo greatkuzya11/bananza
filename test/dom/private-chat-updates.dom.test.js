@@ -85,6 +85,7 @@ function installAppRuntimeStubs(dom, { fetchHandler = null } = {}) {
     ui_modal_animation: 'soft',
     ui_modal_animation_speed: 8,
     ui_mobile_font_size: 5,
+    ui_show_chat_folder_strip_in_all_chats: false,
   };
 
   window.localStorage.setItem('token', 'test-token');
@@ -713,6 +714,76 @@ test('chat folder transitions animate the shared list container and use smooth c
   assert.equal(content.classList.contains('is-folder-switching'), true);
   await toAllPromise;
   assert.equal(bar.classList.contains('hidden'), true);
+});
+
+test('chat folder strip visibility toggle lives on the All chats row and keeps the picker open', async (t) => {
+  const dom = await bootAppDom({
+    fetchHandler: async ({ url, init, dom: testDom, currentUser }) => {
+      if (url.pathname !== '/api/user/chat-folder-strip-visibility') return null;
+      const payload = typeof init.body === 'string' ? JSON.parse(init.body) : (init.body || {});
+      currentUser.ui_show_chat_folder_strip_in_all_chats = Boolean(payload.show_in_all_chats);
+      return createJsonResponse(testDom, { user: currentUser });
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  const bar = document.getElementById('activeChatFolderBar');
+  const picker = document.getElementById('chatFolderPicker');
+
+  BananzaAppBridge.__testing.setChats([
+    {
+      id: 41,
+      type: 'private',
+      name: 'Folder chat',
+      unread_count: 0,
+      last_text: 'Hello',
+      last_time: '2026-04-29T20:29:00.000Z',
+      created_at: '2026-04-29 20:00:00',
+      private_user: {
+        id: 41,
+        display_name: 'Folder chat',
+        username: 'folder_chat',
+        avatar_color: '#65aadd',
+        avatar_url: null,
+        is_ai_bot: 0,
+      },
+    },
+  ], { currentChatId: 41 });
+
+  BananzaAppBridge.__testing.setChatFolders([
+    {
+      id: 9,
+      name: 'Launch',
+      kind: 'custom',
+      sort_order: 1,
+      chat_ids: [41],
+      pins: [],
+    },
+  ], {
+    activeFolderId: 0,
+  });
+  await waitForAnimationFrames(dom.window, 3);
+
+  assert.equal(bar.classList.contains('hidden'), true);
+
+  document.getElementById('chatFoldersBtn').click();
+  await waitForAnimationFrames(dom.window, 2);
+
+  const toggle = picker.querySelector('[data-chat-folder-strip-toggle]');
+  assert.ok(toggle);
+  assert.equal(toggle.getAttribute('aria-pressed'), 'false');
+  assert.equal(picker.classList.contains('hidden'), false);
+
+  toggle.click();
+  await waitForAnimationFrames(dom.window, 2);
+
+  assert.equal(toggle.getAttribute('aria-pressed'), 'true');
+  assert.equal(bar.classList.contains('hidden'), false);
+  assert.equal(picker.classList.contains('hidden'), false);
+  assert.equal(BananzaAppBridge.__testing.getCurrentUser().ui_show_chat_folder_strip_in_all_chats, true);
 });
 
 test('mobile return to the chat list animates the folder content enter phase', async (t) => {

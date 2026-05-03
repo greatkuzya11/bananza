@@ -26,6 +26,7 @@ db.exec(`
     ui_modal_animation TEXT DEFAULT 'soft',
     ui_modal_animation_speed INTEGER DEFAULT 8,
     ui_mobile_font_size INTEGER DEFAULT 5,
+    ui_show_chat_folder_strip_in_all_chats INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -239,9 +240,15 @@ try {
 } catch {
   db.exec("ALTER TABLE users ADD COLUMN ui_mobile_font_size INTEGER DEFAULT 5");
 }
+try {
+  db.prepare("SELECT ui_show_chat_folder_strip_in_all_chats FROM users LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE users ADD COLUMN ui_show_chat_folder_strip_in_all_chats INTEGER DEFAULT 0");
+}
 db.prepare("UPDATE users SET ui_poll_style='pulse' WHERE ui_poll_style IS NULL OR TRIM(ui_poll_style)=''").run();
 db.prepare("UPDATE users SET ui_modal_animation_speed=8 WHERE ui_modal_animation_speed IS NULL").run();
 db.prepare("UPDATE users SET ui_mobile_font_size=5 WHERE ui_mobile_font_size IS NULL OR ui_mobile_font_size < 1 OR ui_mobile_font_size > 10").run();
+db.prepare("UPDATE users SET ui_show_chat_folder_strip_in_all_chats=0 WHERE ui_show_chat_folder_strip_in_all_chats IS NULL").run();
 try {
   db.prepare("SELECT is_ai_bot FROM users LIMIT 1").get();
 } catch {

@@ -87,3 +87,11 @@ test('style.css keeps a dedicated unread badge contrast override for active chat
   assert.match(ruleBody, /background\s*:/);
   assert.match(ruleBody, /color\s*:\s*#fff\s*;/);
 });
+
+test('style.css keeps New Chat modal folder tab height aligned with the other tabs', () => {
+  assert.match(styleCss, /#newChatModal\s+\.modal-content\s*\{[^}]*height\s*:\s*min\(620px,\s*80vh\)/s);
+  assert.match(styleCss, /#newChatModal\s+\.modal-body\s*\{[^}]*display\s*:\s*flex[^}]*overflow\s*:\s*hidden/s);
+  assert.match(styleCss, /#newChatModal\s+\.tab-pane\.active\s*\{[^}]*display\s*:\s*flex[^}]*flex\s*:\s*1/s);
+  assert.match(styleCss, /#newChatModal\s+#newFolderChatList\s*\{[^}]*overflow-y\s*:\s*auto/s);
+  assert.match(styleCss, /#newChatModal\s+\.folder-chat-selection-list\s*\{[^}]*max-height\s*:\s*none\s*;/s);
+});

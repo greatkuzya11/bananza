@@ -127,7 +127,7 @@ const UI_MODAL_ANIMATION_SPEED_MAX = 10;
 const UI_MOBILE_FONT_SIZE_DEFAULT = 5;
 const UI_MOBILE_FONT_SIZE_MIN = 1;
 const UI_MOBILE_FONT_SIZE_MAX = 10;
-const USER_PUBLIC_FIELDS = 'id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,ui_theme,ui_visual_mode,ui_modal_animation,ui_modal_animation_speed,ui_mobile_font_size';
+const USER_PUBLIC_FIELDS = 'id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,ui_theme,ui_visual_mode,ui_modal_animation,ui_modal_animation_speed,ui_mobile_font_size,ui_show_chat_folder_strip_in_all_chats';
 const USER_REALTIME_FIELDS = `${USER_PUBLIC_FIELDS},is_ai_bot`;
 const POLL_MAX_OPTIONS = 10;
 const POLL_MIN_OPTIONS = 2;
@@ -223,6 +223,7 @@ function publicUser(u) {
     ui_modal_animation: UI_MODAL_ANIMATIONS.has(u.ui_modal_animation) ? u.ui_modal_animation : 'soft',
     ui_modal_animation_speed: normalizeModalAnimationSpeed(u.ui_modal_animation_speed),
     ui_mobile_font_size: normalizeMobileFontSize(u.ui_mobile_font_size),
+    ui_show_chat_folder_strip_in_all_chats: boolValue(u.ui_show_chat_folder_strip_in_all_chats, false),
   };
 }
 
@@ -1074,7 +1075,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     ensureNotesChatForUser(userId);
 
     const token = jwt.sign({ id: userId, username: username.toLowerCase() }, JWT_SECRET, { expiresIn: '30d' });
-    res.json({ token, user: publicUser({ id: userId, username: username.toLowerCase(), display_name: name, is_admin: isAdmin, is_blocked: 0, avatar_color: color, avatar_url: null, ui_theme: 'bananza', ui_visual_mode: 'classic', ui_modal_animation: 'soft', ui_modal_animation_speed: UI_MODAL_ANIMATION_SPEED_DEFAULT, ui_mobile_font_size: UI_MOBILE_FONT_SIZE_DEFAULT }) });
+    res.json({ token, user: publicUser({ id: userId, username: username.toLowerCase(), display_name: name, is_admin: isAdmin, is_blocked: 0, avatar_color: color, avatar_url: null, ui_theme: 'bananza', ui_visual_mode: 'classic', ui_modal_animation: 'soft', ui_modal_animation_speed: UI_MODAL_ANIMATION_SPEED_DEFAULT, ui_mobile_font_size: UI_MOBILE_FONT_SIZE_DEFAULT, ui_show_chat_folder_strip_in_all_chats: 0 }) });
   } catch (e) { console.error(e); res.status(500).json({ error: 'Server error' }); }
 });
 
@@ -2878,6 +2879,16 @@ app.patch('/api/user/mobile-font-size', auth, (req, res) => {
   }
 
   db.prepare('UPDATE users SET ui_mobile_font_size=? WHERE id=?').run(size, req.user.id);
+  const user = db.prepare(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id=?`).get(req.user.id);
+  notifyUserUpdated(req.user.id);
+  res.json({ user: publicUser(user) });
+});
+
+app.patch('/api/user/chat-folder-strip-visibility', auth, (req, res) => {
+  const hasValue = Object.prototype.hasOwnProperty.call(req.body || {}, 'show_in_all_chats');
+  if (!hasValue) return res.status(400).json({ error: 'No visibility change provided' });
+  const showInAllChats = boolValue(req.body?.show_in_all_chats, false) ? 1 : 0;
+  db.prepare('UPDATE users SET ui_show_chat_folder_strip_in_all_chats=? WHERE id=?').run(showInAllChats, req.user.id);
   const user = db.prepare(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id=?`).get(req.user.id);
   notifyUserUpdated(req.user.id);
   res.json({ user: publicUser(user) });

@@ -108,6 +108,24 @@ test('weather, notification and sound settings use deterministic mocked integrat
   assert.equal(pushTest.data.sent, 1);
 });
 
+test('chat folder strip visibility is stored on the user account and exposed via auth/me', async () => {
+  const { bob } = scenario;
+
+  const before = await bob.request('/api/auth/me');
+  assert.equal(before.data.user.ui_show_chat_folder_strip_in_all_chats, false);
+
+  const updated = await bob.request('/api/user/chat-folder-strip-visibility', {
+    method: 'PATCH',
+    json: {
+      show_in_all_chats: true,
+    },
+  });
+  assert.equal(updated.data.user.ui_show_chat_folder_strip_in_all_chats, true);
+
+  const after = await bob.request('/api/auth/me');
+  assert.equal(after.data.user.ui_show_chat_folder_strip_in_all_chats, true);
+});
+
 test('voice and AI admin settings routes stay isolated and usable locally', async () => {
   const { admin, bob } = scenario;
 
