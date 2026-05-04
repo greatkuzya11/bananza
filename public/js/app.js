@@ -1880,10 +1880,15 @@
       renderCurrentChatHeader(getChatById(currentChatId));
       updateChatStatus();
       renderPinnedBar(currentChatId);
+      refreshDateSeparators();
     }
     if (isFloatingSurfaceVisible(chatContextMenu) && chatContextMenuState?.chatId) renderChatContextMenu(getChatById(chatContextMenuState.chatId));
     if (isFloatingSurfaceVisible(chatFolderPicker)) renderChatFolderPicker();
     if (isFloatingSurfaceVisible(chatFolderContextMenu) && chatFolderContextMenuState?.folderId) refreshChatFolderContextMenu(chatFolderContextMenuState.folderId);
+    if (isFloatingSurfaceVisible(mediaContextMenu) && mediaContextMenuState?.context) {
+      renderMediaContextMenu(mediaContextMenuState.context);
+      positionMediaContextMenu();
+    }
   }
 
   async function selectVisualMode(mode) {
@@ -2384,8 +2389,8 @@
       const today = new Date();
       const yesterday = new Date(today);
       yesterday.setDate(yesterday.getDate() - 1);
-      if (d.toDateString() === today.toDateString()) return 'Today';
-      if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+      if (d.toDateString() === today.toDateString()) return t('Today');
+      if (d.toDateString() === yesterday.toDateString()) return t('Yesterday');
       return d.toLocaleDateString([], { day: 'numeric', month: 'long', year: 'numeric' });
     } catch {
       return 'Invalid Date';
@@ -10024,79 +10029,79 @@
       {
         action: 'copy-text',
         icon: '&#10697;',
-        label: 'Copy text',
+        label: t('Copy text'),
         hidden: !context.canCopyText,
       },
       {
         action: 'copy-image',
         icon: '&#128247;',
-        label: 'Copy image',
+        label: t('Copy image'),
         hidden: !canCopyImage,
         primary: true,
       },
       {
         action: 'copy-link',
         icon: '&#128279;',
-        label: 'Copy link',
+        label: t('Copy link'),
         hidden: !context.absoluteUrl,
       },
       {
         action: 'save-media',
         icon: '&#128190;',
-        label: 'Save',
+        label: t('Save'),
         hidden: !context.absoluteUrl,
         primary: true,
       },
       {
         action: 'share-media',
         icon: '&#128257;',
-        label: 'Share',
+        label: t('Share'),
         hidden: !canShareMedia,
         primary: true,
       },
       {
         action: 'reply',
         icon: '&#8617;',
-        label: 'Reply',
+        label: t('Reply'),
         hidden: !context.canReply,
       },
       {
         action: 'forward',
         icon: '&#128228;',
-        label: 'Forward',
+        label: t('Forward'),
         hidden: !context.canForward,
       },
       {
         action: 'save-note',
         icon: '&#128221;',
-        label: 'Save to notes',
+        label: t('Save to notes'),
         hidden: !context.canSaveNote,
       },
       {
         action: 'edit',
         icon: '&#9998;',
-        label: 'Edit',
+        label: t('Edit'),
         hidden: !context.canEdit,
       },
       {
         action: 'toggle-pin',
         icon: '&#128204;',
-        label: pinState.isPinned ? 'Unpin' : 'Pin',
+        label: t(pinState.isPinned ? 'Unpin' : 'Pin'),
         hidden: !pinState.show,
         disabled: Boolean(pinState.disabled),
       },
       {
         action: 'react',
         icon: '&#128578;',
-        label: 'React',
+        label: t('React'),
         hidden: false,
       },
     ];
     mediaContextMenu.innerHTML = `
       <div class="chat-context-menu-sheet">
         <div class="chat-context-menu-header">
-          ${esc(context.filename || 'Attachment')}
-          <span class="media-context-menu-header-meta">${esc(context.mediaKindLabel || 'Attachment')}</span>
+          ${esc(context.filename || t('Attachment'))}
+          <span class="media-context-menu-header-meta">${esc(tx(context.mediaKindLabel || 'Attachment'))}</span>
         </div>
         ${actions
           .filter((item) => !item.hidden)
@@ -15711,6 +15716,7 @@
         currentGroupBody = null;
         const sep = document.createElement('div');
         sep.className = 'date-separator';
+        sep.dataset.dateIso = createdAt || '';
         sep.innerHTML = `<span>${msgDate}</span>`;
         fragment.appendChild(sep);
       }
@@ -15933,6 +15939,7 @@
     if (lastSepDate !== msgDate) {
       const sep = document.createElement('div');
       sep.className = 'date-separator';
+      sep.dataset.dateIso = msg.created_at || '';
       sep.innerHTML = `<span>${msgDate}</span>`;
       insertAtMessagesEnd(sep);
       lastChild = null;
@@ -16540,6 +16547,21 @@
       if (seenDates.has(text)) sep.remove();
       else seenDates.add(text);
     });
+  }
+
+  function refreshDateSeparators() {
+    if (!messagesEl) return;
+    messagesEl.querySelectorAll('.date-separator').forEach((sep) => {
+      const createdAt = sep.dataset.dateIso || '';
+      const target = sep.querySelector('span') || sep;
+      if (createdAt) target.textContent = formatDate(createdAt);
+      else target.textContent = tx(target.textContent);
+    });
+    getRenderedMessageRows().forEach((row) => {
+      const createdAt = row.__messageData?.created_at || '';
+      if (createdAt) row.dataset.date = formatDate(createdAt);
+    });
+    cleanupDuplicateDateSeparators();
   }
 
   async function catchUpCurrentChat(chatId, { fromPush = false } = {}) {

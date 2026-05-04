@@ -60,3 +60,60 @@ test('i18n translates static index and login shell text and attributes', () => {
   loginI18n.setLanguage('en');
   assert.equal(loginDom.window.document.querySelector('[data-tab="login"]').textContent, 'Sign In');
 });
+
+test('i18n translates media menu labels and chat date chips', () => {
+  const dom = new JSDOM('<!doctype html><html lang="ru"><body></body></html>', {
+    url: 'http://localhost/',
+    runScripts: 'outside-only',
+  });
+  const i18n = loadI18n(dom);
+  const keys = [
+    'Today',
+    'Yesterday',
+    'Copy text',
+    'Copy image',
+    'Copy link',
+    'Share',
+    'Reply',
+    'Forward',
+    'Save to notes',
+    'Edit',
+    'Pin',
+    'Unpin',
+    'React',
+    'Copy image is not available',
+    'Share is not available',
+    'Image copied',
+    'Text copied',
+    'Link copied',
+    'Could not copy text',
+    'Could not copy link',
+    'Download started',
+  ];
+
+  i18n.setLanguage('ru');
+  assert.equal(i18n.t('Today'), '\u0421\u0435\u0433\u043e\u0434\u043d\u044f');
+  assert.equal(i18n.t('Yesterday'), '\u0412\u0447\u0435\u0440\u0430');
+  assert.equal(i18n.t('Copy text'), '\u041a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u0442\u0435\u043a\u0441\u0442');
+  assert.equal(i18n.t('Copy image'), '\u041a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u0435');
+  assert.equal(i18n.t('Copy link'), '\u041a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u0441\u0441\u044b\u043b\u043a\u0443');
+  assert.equal(i18n.t('Share'), '\u041f\u043e\u0434\u0435\u043b\u0438\u0442\u044c\u0441\u044f');
+  assert.equal(i18n.t('Reply'), '\u041e\u0442\u0432\u0435\u0442\u0438\u0442\u044c');
+  assert.equal(i18n.t('Forward'), '\u041f\u0435\u0440\u0435\u0441\u043b\u0430\u0442\u044c');
+  assert.equal(i18n.t('Save to notes'), '\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0432 \u0437\u0430\u043c\u0435\u0442\u043a\u0438');
+  assert.equal(i18n.t('Edit'), '\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c');
+  assert.equal(i18n.t('Pin'), '\u0417\u0430\u043a\u0440\u0435\u043f\u0438\u0442\u044c');
+  assert.equal(i18n.t('Unpin'), '\u041e\u0442\u043a\u0440\u0435\u043f\u0438\u0442\u044c');
+  assert.equal(i18n.t('React'), '\u0420\u0435\u0430\u043a\u0446\u0438\u044f');
+  for (const key of keys) {
+    assert.ok(i18n.t(key).trim(), `Missing ru text for ${key}`);
+  }
+
+  i18n.setLanguage('en');
+  assert.equal(i18n.t('Today'), 'Today');
+  assert.equal(i18n.t('Yesterday'), 'Yesterday');
+  assert.equal(i18n.t('Copy image'), 'Copy image');
+  for (const key of keys) {
+    assert.ok(i18n.t(key).trim(), `Missing en text for ${key}`);
+  }
+});
