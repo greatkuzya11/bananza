@@ -42,11 +42,13 @@ test('i18n translates static index and login shell text and attributes', () => {
   i18n.setLanguage('ru');
   assert.equal(document.querySelector('#emptyState h3').textContent, 'Добро пожаловать в BananZa');
   assert.equal(document.getElementById('chatSearch').getAttribute('placeholder'), 'Искать чаты...');
+  assert.equal(document.getElementById('msgInput').getAttribute('placeholder'), '\u0421\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435...');
   assert.equal(document.getElementById('settingsBtn').getAttribute('aria-label'), 'Настройки');
 
   i18n.setLanguage('en');
   assert.equal(document.querySelector('#emptyState h3').textContent, 'Welcome to BananZa');
   assert.equal(document.getElementById('chatSearch').getAttribute('placeholder'), 'Search chats...');
+  assert.equal(document.getElementById('msgInput').getAttribute('placeholder'), 'Message...');
   assert.equal(document.getElementById('settingsBtn').getAttribute('aria-label'), 'Settings');
 
   const loginHtml = fs.readFileSync(path.join(repoRoot, 'public', 'login.html'), 'utf8');
@@ -81,6 +83,13 @@ test('i18n translates media menu labels and chat date chips', () => {
     'Pin',
     'Unpin',
     'React',
+    'Pinned message',
+    'Pinned messages',
+    'Pinned by {name}',
+    'Pin message',
+    'Unpin message',
+    'Unpin pinned message',
+    'Pinned',
     'Copy image is not available',
     'Share is not available',
     'Image copied',
@@ -105,6 +114,9 @@ test('i18n translates media menu labels and chat date chips', () => {
   assert.equal(i18n.t('Pin'), '\u0417\u0430\u043a\u0440\u0435\u043f\u0438\u0442\u044c');
   assert.equal(i18n.t('Unpin'), '\u041e\u0442\u043a\u0440\u0435\u043f\u0438\u0442\u044c');
   assert.equal(i18n.t('React'), '\u0420\u0435\u0430\u043a\u0446\u0438\u044f');
+  assert.equal(i18n.t('Pinned by {name}', { name: 'Kuzya' }), '\u0417\u0430\u043a\u0440\u0435\u043f\u0438\u043b(\u0430): Kuzya');
+  assert.equal(i18n.t('Pin message'), '\u0417\u0430\u043a\u0440\u0435\u043f\u0438\u0442\u044c \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435');
+  assert.equal(i18n.t('Unpin message'), '\u041e\u0442\u043a\u0440\u0435\u043f\u0438\u0442\u044c \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435');
   for (const key of keys) {
     assert.ok(i18n.t(key).trim(), `Missing ru text for ${key}`);
   }
@@ -113,6 +125,7 @@ test('i18n translates media menu labels and chat date chips', () => {
   assert.equal(i18n.t('Today'), 'Today');
   assert.equal(i18n.t('Yesterday'), 'Yesterday');
   assert.equal(i18n.t('Copy image'), 'Copy image');
+  assert.equal(i18n.t('Pinned by {name}', { name: 'Kuzya' }), 'Pinned by Kuzya');
   for (const key of keys) {
     assert.ok(i18n.t(key).trim(), `Missing en text for ${key}`);
   }

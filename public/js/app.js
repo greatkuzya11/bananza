@@ -5889,19 +5889,23 @@
   }
 
   function getPinPreviewText(pin) {
+    const fallback = pin?.is_voice_note ? t(pin?.is_video_note ? 'Video note' : 'Voice message') : t('Pinned message');
     return String(
       pin?.preview_text
       || pin?.file_name
-      || (pin?.is_voice_note ? (pin?.is_video_note ? 'Видео-заметка' : 'Голосовое сообщение') : 'Pinned message')
-    ).trim() || 'Pinned message';
+      || fallback
+    ).trim() || fallback;
   }
 
   function getPinActorName(pin) {
-    return String(pin?.pinned_by_name || 'Someone').trim() || 'Someone';
+    return String(pin?.pinned_by_name || t('Someone')).trim() || t('Someone');
   }
 
   function getPinToastText(pin) {
-    return `${getPinActorName(pin)} pinned: ${getPinPreviewText(pin)}`;
+    return t('{name} pinned: {preview}', {
+      name: getPinActorName(pin),
+      preview: getPinPreviewText(pin),
+    });
   }
 
   function buildPinBrowserNotification(pin, chatId) {
@@ -5911,8 +5915,8 @@
     return {
       title: chat?.type === 'private' ? actorName : (chat?.name || 'BananZa'),
       body: chat?.type === 'private'
-        ? `Pinned message: ${preview}`
-        : `${actorName} pinned: ${preview}`,
+        ? t('Pinned message: {preview}', { preview })
+        : t('{name} pinned: {preview}', { name: actorName, preview }),
     };
   }
 
@@ -5942,8 +5946,8 @@
         show: true,
         isPinned: false,
         disabled: false,
-        title: 'Pin message',
-        label: 'Pin',
+        title: t('Pin message'),
+        label: t('Pin'),
         iconHtml: '&#128204;',
       };
     }
@@ -5953,8 +5957,8 @@
       isPinned: true,
       disabled: !canUnpin,
       pin,
-      title: canUnpin ? 'Unpin message' : `Pinned by ${pin.pinned_by_name || 'another user'}`,
-      label: canUnpin ? 'Unpin' : 'Pinned',
+      title: canUnpin ? t('Unpin message') : t('Pinned by {name}', { name: pin.pinned_by_name || t('another user') }),
+      label: canUnpin ? t('Unpin') : t('Pinned'),
       iconHtml: '&#128204;',
     };
   }
@@ -6076,13 +6080,13 @@
     const isMultiple = pins.length > 1;
 
     pinnedBar.innerHTML = `
-      <div class="pinned-bar-viewport" role="list" aria-label="Pinned messages">
+      <div class="pinned-bar-viewport" role="list" aria-label="${esc(t('Pinned messages'))}">
         ${pins.map((pin, pinIndex) => {
-          const preview = pin.preview_text || pin.file_name || (pin.is_voice_note ? (pin.is_video_note ? 'Видео-заметка' : 'Голосовое сообщение') : 'Pinned message');
-          const author = pin.message_author_name ? `${pin.message_author_name}` : 'Message';
-          const pinnedBy = pin.pinned_by_name ? `Pinned by ${pin.pinned_by_name}` : 'Pinned message';
+          const preview = getPinPreviewText(pin);
+          const author = pin.message_author_name ? `${pin.message_author_name}` : t('Message');
+          const pinnedBy = pin.pinned_by_name ? t('Pinned by {name}', { name: pin.pinned_by_name }) : t('Pinned message');
           return `
-            <button type="button" class="pinned-bar-item${pinIndex === index ? ' active' : ''}" data-pin-index="${pinIndex}" title="Jump to pinned message">
+            <button type="button" class="pinned-bar-item${pinIndex === index ? ' active' : ''}" data-pin-index="${pinIndex}" title="${esc(t('Jump to pinned message'))}">
               <span class="pinned-bar-icon" aria-hidden="true">&#128204;</span>
               <span class="pinned-bar-copy">
                 <strong>${esc(preview)}</strong>
@@ -6093,7 +6097,7 @@
         }).join('')}
       </div>
       <div class="pinned-bar-side">
-        <button type="button" class="pinned-bar-close${canUnpinActive ? '' : ' hidden'}" title="Unpin message" aria-label="Unpin pinned message">&times;</button>
+        <button type="button" class="pinned-bar-close${canUnpinActive ? '' : ' hidden'}" title="${esc(t('Unpin message'))}" aria-label="${esc(t('Unpin pinned message'))}">&times;</button>
         ${isMultiple ? `<span class="pinned-bar-count">${index + 1}/${pins.length}</span>` : ''}
       </div>
       ${isMultiple ? '<div class="pinned-bar-scrollbar" aria-hidden="true"><span class="pinned-bar-scrollbar-thumb"></span></div>' : ''}
@@ -13932,7 +13936,7 @@
     const unread = chat.unread_count > 0
       ? `<span class="unread-badge${isActive ? ' unread-badge--active-chat' : ''}" data-unread-count="${chat.unread_count}">${chat.unread_count > 99 ? '99+' : chat.unread_count}</span>`
       : '';
-    const pinIndicator = pinned ? '<span class="chat-item-state-indicator chat-item-pin-indicator" aria-hidden="true" title="Pinned">&#128204;</span>' : '';
+    const pinIndicator = pinned ? `<span class="chat-item-state-indicator chat-item-pin-indicator" aria-hidden="true" title="${esc(t('Pinned'))}">&#128204;</span>` : '';
     const notifyDisabledIndicator = pinned && !localChatPreferenceEnabled(chat.notify_enabled)
       ? '<span class="chat-item-state-indicator chat-item-muted-indicator" aria-hidden="true" title="Notifications off">&#128277;</span>'
       : '';
@@ -15681,12 +15685,12 @@
     row.dataset.chatId = String(item.chat_id);
     row.tabIndex = 0;
     row.setAttribute('role', 'button');
-    row.title = 'Jump to pinned message';
-    const actor = String(item.actor_name || 'Someone').trim() || 'Someone';
-    const preview = String(item.message_preview || 'Pinned message').trim() || 'Pinned message';
+    row.title = t('Jump to pinned message');
+    const actor = String(item.actor_name || t('Someone')).trim() || t('Someone');
+    const preview = String(item.message_preview || t('Pinned message')).trim() || t('Pinned message');
     row.innerHTML = `
       <span class="pin-system-icon" aria-hidden="true">&#128204;</span>
-      <span class="pin-system-copy"><strong>${esc(actor)}</strong> запинил(а): ${esc(preview)}</span>
+      <span class="pin-system-copy">${esc(t('{name} pinned: {preview}', { name: actor, preview }))}</span>
     `;
     const jump = () => jumpToPinnedMessage({ chat_id: item.chat_id, message_id: item.message_id });
     row.addEventListener('click', (e) => {

@@ -489,6 +489,18 @@
     'Could not update vote': 'Не удалось обновить голос',
     'Could not close poll': 'Не удалось закрыть опрос',
     'Pinned message not found': 'Закрепленное сообщение не найдено',
+    'Pinned message': '\u0417\u0430\u043a\u0440\u0435\u043f\u043b\u0435\u043d\u043d\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435',
+    'Pinned messages': '\u0417\u0430\u043a\u0440\u0435\u043f\u043b\u0435\u043d\u043d\u044b\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f',
+    'Pinned by {name}': '\u0417\u0430\u043a\u0440\u0435\u043f\u0438\u043b(\u0430): {name}',
+    '{name} pinned: {preview}': '{name} \u0437\u0430\u043a\u0440\u0435\u043f\u0438\u043b(\u0430): {preview}',
+    'Pinned message: {preview}': '\u0417\u0430\u043a\u0440\u0435\u043f\u043b\u0435\u043d\u043d\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435: {preview}',
+    'Pin message': '\u0417\u0430\u043a\u0440\u0435\u043f\u0438\u0442\u044c \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435',
+    'Unpin message': '\u041e\u0442\u043a\u0440\u0435\u043f\u0438\u0442\u044c \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435',
+    'Unpin pinned message': '\u041e\u0442\u043a\u0440\u0435\u043f\u0438\u0442\u044c \u0437\u0430\u043a\u0440\u0435\u043f\u043b\u0435\u043d\u043d\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435',
+    'Pinned': '\u0417\u0430\u043a\u0440\u0435\u043f\u043b\u0435\u043d\u043e',
+    'Message': '\u0421\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435',
+    'Someone': '\u041a\u0442\u043e-\u0442\u043e',
+    'another user': '\u0434\u0440\u0443\u0433\u043e\u0439 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c',
     'Message pinned': 'Сообщение закреплено',
     'Could not pin message': 'Не удалось закрепить сообщение',
     'Only the pin owner or admin can unpin this': 'Открепить может только автор закрепления или админ',
@@ -752,10 +764,17 @@
     return `${prefix}${translated}${suffix}`;
   }
 
+  const SKIP_SUBTREE_SELECTOR = '[data-i18n-skip], .msg-text, .msg-reply-text, .link-preview, .chat-list, .user-list, .admin-user-list, .chat-title, #chatTitle, #currentUserInfo';
+
+  function isSkippedSubtree(node) {
+    const el = node?.nodeType === 1 ? node : node?.parentElement;
+    return Boolean(el?.closest(SKIP_SUBTREE_SELECTOR));
+  }
+
   function shouldSkipNode(node) {
     const el = node?.nodeType === 1 ? node : node?.parentElement;
     if (!el) return true;
-    if (el.closest('[data-i18n-skip], .msg-text, .msg-reply-text, .link-preview, .chat-list, .user-list, .admin-user-list, .chat-title, #chatTitle, #currentUserInfo')) return true;
+    if (isSkippedSubtree(el)) return true;
     const tag = el.tagName;
     return tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEXTAREA';
   }
@@ -767,17 +786,25 @@
   }
 
   function applyElementAttributes(el) {
-    if (!el || el.nodeType !== 1 || shouldSkipNode(el)) return;
+    if (!el || el.nodeType !== 1) return;
+    if (isSkippedSubtree(el)) return;
+    const tag = el.tagName;
+    if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') return;
     const attrMap = [
       ['data-i18n-title', 'title'],
       ['data-i18n-placeholder', 'placeholder'],
       ['data-i18n-aria-label', 'aria-label'],
       ['data-i18n-value', 'value'],
     ];
-    if (el.dataset?.i18n) el.textContent = t(el.dataset.i18n);
+    if (el.dataset?.i18n) {
+      const next = t(el.dataset.i18n);
+      if (el.textContent !== next) el.textContent = next;
+    }
     attrMap.forEach(([dataAttr, attr]) => {
       const key = el.getAttribute(dataAttr);
-      if (key) el.setAttribute(attr, t(key));
+      if (!key) return;
+      const next = t(key);
+      if (el.getAttribute(attr) !== next) el.setAttribute(attr, next);
     });
     ['title', 'placeholder', 'aria-label'].forEach((attr) => {
       if (!el.hasAttribute(attr)) return;
@@ -793,7 +820,12 @@
       applyTextNode(target);
       return;
     }
-    if (target.nodeType === 1) applyElementAttributes(target);
+    if (target.nodeType === 1) {
+      applyElementAttributes(target);
+      if (isSkippedSubtree(target)) return;
+      const tag = target.tagName;
+      if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEXTAREA') return;
+    }
     const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
     const textNodes = [];
     while (walker.nextNode()) textNodes.push(walker.currentNode);
