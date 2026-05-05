@@ -109,6 +109,7 @@
             <div id="chatStatus" class="chat-status"></div>
           </div>
           <button id="searchBtn" class="icon-btn chat-header-action-btn" title="Search messages" aria-label="Search messages" type="button">🔍</button>
+          <button id="chatShotBtn" class="icon-btn chat-header-action-btn chat-shot-btn hidden" title="ChatShot" aria-label="ChatShot" type="button">&#128247;</button>
           <button id="chatInfoBtn" class="icon-btn chat-header-action-btn" title="Chat settings" aria-label="Chat settings" type="button">⚙️</button>
         </div>
 
@@ -711,6 +712,7 @@
               <button id="openAiOpenTextBots" type="button" class="weather-action-btn">Open text bots</button>
               <button id="openAiOpenUniversalBots" type="button" class="weather-action-btn">Open universal bots</button>
               <button id="openAiOpenConvertBots" type="button" class="weather-action-btn">Open convert bots</button>
+              <button id="openAiOpenChatShotBots" type="button" class="weather-action-btn">Open ChatShot bots</button>
             </div>
           </div>
 
@@ -1018,6 +1020,83 @@
           </div>
 
           <div id="contextConvertStatus" class="ai-bot-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ChatShot Bot Settings Modal -->
+  <div id="chatShotBotsModal" class="modal hidden">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3 id="chatShotModalTitle">ChatShot Bots</h3>
+        <button class="modal-close">&#10005;</button>
+      </div>
+      <div class="modal-body">
+        <div class="ai-bot-settings-block">
+          <div class="ai-bot-panel">
+            <h4>ChatShot bots</h4>
+            <div id="chatShotBotList" class="ai-bot-list"></div>
+            <div class="ai-bot-actions">
+              <button id="chatShotBotCreateNew" type="button" class="weather-action-btn">New ChatShot bot</button>
+              <button id="chatShotBotSave" type="button" class="btn-primary">Save bot</button>
+              <button id="chatShotBotDisable" type="button" class="weather-action-btn">Disable</button>
+              <button id="chatShotBotTest" type="button" class="weather-action-btn">Test prompt</button>
+              <button id="chatShotBotExportJson" type="button" class="weather-action-btn">Export JSON</button>
+              <button id="chatShotBotImportJson" type="button" class="weather-action-btn">Import JSON</button>
+              <input id="chatShotBotImportFile" class="hidden" type="file" accept="application/json,.json">
+            </div>
+            <div id="chatShotBotEditorStatus" class="ai-bot-status admin-action-status"></div>
+            <div class="ai-bot-grid">
+              <label>Name<input id="chatShotBotName" class="modal-input" value="ChatShot"></label>
+              <label>Text model<select id="chatShotBotResponseModel" class="modal-input"></select></label>
+              <label>Image model<select id="chatShotBotImageModel" class="modal-input"></select></label>
+              <label id="chatShotBotOpenAiSizeWrap">Image size<select id="chatShotBotImageResolution" class="modal-input"></select></label>
+              <label id="chatShotBotOpenAiQualityWrap">Image quality<select id="chatShotBotImageQuality" class="modal-input"></select></label>
+              <label id="chatShotBotOpenAiBackgroundWrap">Image background<select id="chatShotBotImageBackground" class="modal-input"></select></label>
+              <label id="chatShotBotOpenAiOutputWrap">Image output<select id="chatShotBotImageOutputFormat" class="modal-input"></select></label>
+              <label id="chatShotBotGrokAspectWrap" class="hidden">Aspect ratio<select id="chatShotBotAspectRatio" class="modal-input"></select></label>
+              <label>Context messages<input id="chatShotBotContextLimit" class="modal-input" type="number" min="2" max="100" step="1" value="50"></label>
+              <label>Temperature<input id="chatShotBotTemperature" class="modal-input" type="number" min="0" max="1" step="0.05" value="0.3"></label>
+              <label>Max tokens<input id="chatShotBotMaxTokens" class="modal-input" type="number" min="16" max="8000" step="50" value="900"></label>
+              <div class="ai-bot-toggle-label"><span>Enabled</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="chatShotBotEnabled" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Available in all chats</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="chatShotBotAvailableAllChats">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="settings-hint">ChatShot uses the text model to compress chat context into a safe image prompt, then sends it to the image model. Messages are always posted as chatShot with a banana avatar.</div>
+            <div class="ai-bot-actions">
+              <button id="chatShotBotSaveBottom" type="button" class="btn-primary">Save bot</button>
+            </div>
+            <div id="chatShotBotEditorStatusBottom" class="ai-bot-status admin-action-status"></div>
+          </div>
+
+          <div class="ai-bot-panel">
+            <h4>ChatShot bots in chats</h4>
+            <div class="ai-bot-grid">
+              <label>Chat<select id="chatShotBotChatSelect" class="modal-input"></select></label>
+              <label>Bot<select id="chatShotBotChatBotSelect" class="modal-input"></select></label>
+              <div class="ai-bot-toggle-label"><span>Available in chat</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="chatShotBotChatEnabled">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            <button id="chatShotBotChatSave" type="button" class="btn-primary">Save for chat</button>
+            <div id="chatShotBotChatStatus" class="ai-bot-status admin-action-status"></div>
+            <div class="settings-hint">Chat members still enable ChatShot inside the chat info panel. This admin setting only decides which ChatShot bot is available there.</div>
+          </div>
+
+          <div id="chatShotAdminStatus" class="ai-bot-status"></div>
         </div>
       </div>
     </div>
@@ -1617,6 +1696,7 @@
               <button id="grokAiOpenImageBots" type="button" class="weather-action-btn">Open image bots</button>
               <button id="grokAiOpenUniversalBots" type="button" class="weather-action-btn">Open universal bots</button>
               <button id="grokAiOpenConvertBots" type="button" class="weather-action-btn">Open convert bots</button>
+              <button id="grokAiOpenChatShotBots" type="button" class="weather-action-btn">Open ChatShot bots</button>
             </div>
           </div>
 
@@ -1882,6 +1962,38 @@
           </div>
           <div class="settings-hint">When enabled, members can run assigned convert bots on draft text and editable human messages. Bot assignment itself is still managed by admins in AI settings.</div>
           <div id="chatContextTransformStatus" class="chat-preferences-status"></div>
+        </div>
+        <div id="chatShotSection" class="chat-preferences-block hidden">
+          <h4>ChatShot</h4>
+          <div class="settings-item settings-toggle-item">
+            <span>Enable ChatShot in this chat</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="chatShotToggle">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="field-group">
+            <label>Bot</label>
+            <select id="chatShotBotSelect" class="modal-input"></select>
+          </div>
+          <div class="field-group">
+            <label>Style</label>
+            <select id="chatShotStyleSelect" class="modal-input">
+              <option value="comic">Comic</option>
+              <option value="illustration">Picture without text</option>
+              <option value="photo">Photo</option>
+            </select>
+          </div>
+          <div class="settings-item settings-toggle-item">
+            <span data-i18n="Banana safety filter">Banana safety filter</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="chatShotBananaFilterToggle" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="settings-hint" data-i18n="When off, Bananza will not rewrite risky prompts into banana-safe prompts. Provider safety rules may still block generation.">When off, Bananza will not rewrite risky prompts into banana-safe prompts. Provider safety rules may still block generation.</div>
+          <div class="settings-hint">When enabled and the chat has at least two messages, a camera button appears near search and posts a generated chat snapshot as chatShot.</div>
+          <div id="chatShotChatStatus" class="chat-preferences-status"></div>
         </div>
         <div id="chatDangerSection" class="chat-preferences-block chat-danger-section hidden">
           <h4>Управление чатом</h4>

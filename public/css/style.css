@@ -994,6 +994,10 @@ html[data-modal-animation="none"] .chat-folder-list-surface {
 .chat-header-action-btn.is-spinning {
   animation: chatHeaderActionSpin .38s cubic-bezier(.2, .8, .2, 1);
 }
+.chat-shot-btn.is-pending {
+  color: var(--accent);
+  animation: contextConvertFabPulse 1s ease-in-out infinite;
+}
 @keyframes chatHeaderActionSpin {
   0% { transform: rotate(0deg) scale(1); }
   45% { transform: rotate(160deg) scale(1.08); }

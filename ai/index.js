@@ -110,6 +110,13 @@ const BOT_ACTION_REACTION_KEYS = new Set(REACTION_KEYS);
 const BOT_ACTION_REACTION_MODES = new Set(REACTION_MODES);
 const BOT_REACTION_ALLOWED_KEYS = Object.freeze(Object.keys(REACTION_KEY_TO_EMOJI));
 const CONTEXT_TRANSFORM_PROMPT_MAX_LENGTH = 20000;
+const CHATSHOT_PUBLIC_NAME = 'chatShot';
+const CHATSHOT_AVATAR_TEXT = '\uD83C\uDF4C';
+const CHATSHOT_STYLE_OPTIONS = new Set(['comic', 'illustration', 'photo']);
+const CHATSHOT_DEFAULT_CONTEXT_LIMIT = 50;
+const CHATSHOT_MIN_CONTEXT_LIMIT = 2;
+const CHATSHOT_MAX_CONTEXT_LIMIT = 100;
+const CHATSHOT_GENERATION_ACTIVITY = 'chatshot_generating';
 
 function boolValue(value, fallback = false) {
   if (typeof value === 'boolean') return value;
@@ -136,6 +143,11 @@ function floatValue(value, fallback, min, max) {
 
 function cleanText(value, limit = 5000) {
   return String(value || '').trim().slice(0, limit);
+}
+
+function normalizeChatShotStyle(value, fallback = 'comic') {
+  const style = String(value || fallback).trim().toLowerCase();
+  return CHATSHOT_STYLE_OPTIONS.has(style) ? style : fallback;
 }
 
 function normalizeMention(value, fallback = 'bot') {
@@ -301,6 +313,7 @@ function normalizeProvider(value, fallback = 'openai') {
 function normalizeBotKind(value, provider = 'openai', fallback = 'text') {
   const kind = String(value || fallback).trim().toLowerCase();
   if (kind === 'convert') return 'convert';
+  if ((provider === 'openai' || provider === 'grok') && kind === 'chatshot') return 'chatshot';
   if ((provider === 'openai' || provider === 'grok') && kind === 'universal') return 'universal';
   if (provider === 'grok' && kind === 'image') return 'image';
   return 'text';
@@ -310,14 +323,18 @@ function isContextTransformBot(bot) {
   return String(bot?.kind || '').toLowerCase() === 'convert';
 }
 
+function isChatShotBot(bot) {
+  return String(bot?.kind || '').toLowerCase() === 'chatshot';
+}
+
 function userFacingBotModel(bot) {
   const kind = normalizeBotKind(bot?.kind, bot?.provider, 'text');
-  if (kind === 'image') return cleanText(bot?.image_model || '', 160);
+  if (kind === 'image' || kind === 'chatshot') return cleanText(bot?.image_model || '', 160);
   return cleanText(bot?.response_model || '', 160);
 }
 
 function isChatSelectableBotKind(bot) {
-  return !isContextTransformBot(bot);
+  return !isContextTransformBot(bot) && !isChatShotBot(bot);
 }
 
 function serializeContextConvertBot(bot) {
@@ -332,6 +349,28 @@ function serializeContextConvertBot(bot) {
   };
 }
 
+function serializeChatShotBot(bot) {
+  return {
+    id: Number(bot?.id || 0),
+    name: bot?.name || '',
+    provider: bot?.provider || 'openai',
+    kind: bot?.kind || 'chatshot',
+    response_model: bot?.response_model || '',
+    image_model: bot?.image_model || '',
+    image_resolution: bot?.image_resolution || '',
+    image_quality: bot?.image_quality || '',
+    image_background: bot?.image_background || '',
+    image_output_format: bot?.image_output_format || '',
+    image_aspect_ratio: bot?.image_aspect_ratio || '',
+    chatshot_context_limit: intValue(
+      bot?.chatshot_context_limit,
+      CHATSHOT_DEFAULT_CONTEXT_LIMIT,
+      CHATSHOT_MIN_CONTEXT_LIMIT,
+      CHATSHOT_MAX_CONTEXT_LIMIT
+    ),
+  };
+}
+
 function normalizeAiResponseMode(value, provider = 'openai', fallback = 'auto') {
   const mode = String(value || fallback).trim().toLowerCase();
   if (mode === 'text' || mode === 'image' || mode === 'auto') return mode;
@@ -341,6 +380,15 @@ function normalizeAiResponseMode(value, provider = 'openai', fallback = 'auto') 
 
 function escapeRegExp(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function escapeXml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
 }
 
 function stripBotSpeakerLabel(value, bot = {}) {
@@ -365,6 +413,99 @@ function stripBotSpeakerLabel(value, bot = {}) {
     }
   }
   return text;
+}
+
+const CHATSHOT_SAFE_REPLACEMENTS = [
+  { pattern: /\b(fight|brawl|beating|assault)\b/ig, value: 'friendly banana tussle' },
+  { pattern: /\b(kill|murder|execution|slaughter)\b/ig, value: 'silly scene with overripe bananas' },
+  { pattern: /\b(gun|pistol|rifle|shotgun|weapon|knife|blade|sword)\b/ig, value: 'banana in hand' },
+  { pattern: /\b(explosion|explode|bomb|blast|grenade)\b/ig, value: 'banana fireworks' },
+  { pattern: /\b(blood|gore|wound|corpse|dead body)\b/ig, value: 'strawberry jam' },
+  { pattern: /\b(drugs|cocaine|heroin|meth|weed|narcotics)\b/ig, value: 'banana smoothies' },
+  { pattern: /\b(nude|naked|sex|sexual|porn|erotic)\b/ig, value: 'fully clothed playful scene' },
+  { pattern: /\b(politics|political|election|president|minister|war)\b/ig, value: 'community festival' },
+  { pattern: /[\u0434]\u0440\u0430\u043a[^\s,.!?;:]*/giu, value: '\u0434\u0440\u0443\u0436\u0435\u0441\u043a\u0430\u044f \u0432\u043e\u0437\u043d\u044f \u0441 \u0431\u0430\u043d\u0430\u043d\u0430\u043c\u0438' },
+  { pattern: /[\u0443]\u0431\u0438\u0439\u0441\u0442\u0432[^\s,.!?;:]*/giu, value: '\u0441\u0446\u0435\u043d\u043a\u0430 \u0441 \u043f\u0435\u0440\u0435\u0437\u0440\u0435\u043b\u044b\u043c\u0438 \u0431\u0430\u043d\u0430\u043d\u0430\u043c\u0438' },
+  { pattern: /[\u0443]\u0431\u0438\u0442[^\s,.!?;:]*/giu, value: '\u043e\u0431\u043d\u0438\u043c\u0430\u0442\u044c' },
+  { pattern: /[\u043f]\u0438\u0441\u0442\u043e\u043b\u0435\u0442[^\s,.!?;:]*|[\u043d]\u043e\u0436[^\s,.!?;:]*|[\u043e]\u0440\u0443\u0436\u0438[^\s,.!?;:]*/giu, value: '\u0431\u0430\u043d\u0430\u043d \u0432 \u0440\u0443\u043a\u0435' },
+  { pattern: /[\u0432]\u0437\u0440\u044b\u0432[^\s,.!?;:]*/giu, value: '\u0431\u0430\u043d\u0430\u043d\u043e\u0432\u044b\u0439 \u0444\u0435\u0439\u0435\u0440\u0432\u0435\u0440\u043a' },
+  { pattern: /[\u043a]\u0440\u043e\u0432[^\s,.!?;:]*/giu, value: '\u043a\u043b\u0443\u0431\u043d\u0438\u0447\u043d\u044b\u0439 \u0434\u0436\u0435\u043c' },
+  { pattern: /[\u043d]\u0430\u0440\u043a\u043e\u0442[^\s,.!?;:]*|[\u043a]\u043e\u043a\u0430\u0438\u043d[^\s,.!?;:]*|[\u0433]\u0435\u0440\u043e\u0438\u043d[^\s,.!?;:]*/giu, value: '\u0431\u0430\u043d\u0430\u043d\u043e\u0432\u044b\u0439 \u0441\u043c\u0443\u0437\u0438' },
+  { pattern: /[\u0433]\u043e\u043b[^\s,.!?;:]*|[\u0441]\u0435\u043a\u0441[^\s,.!?;:]*|[\u043f]\u043e\u0440\u043d[^\s,.!?;:]*/giu, value: '\u043f\u043e\u043b\u043d\u043e\u0441\u0442\u044c\u044e \u043e\u0434\u0435\u0442\u0430\u044f \u0438\u0433\u0440\u0438\u0432\u0430\u044f \u0441\u0446\u0435\u043d\u0430' },
+  { pattern: /[\u043f]\u043e\u043b\u0438\u0442\u0438\u043a[^\s,.!?;:]*|[\u0432]\u044b\u0431\u043e\u0440[^\s,.!?;:]*|[\u0432]\u043e\u0439\u043d[^\s,.!?;:]*/giu, value: '\u0433\u043e\u0440\u043e\u0434\u0441\u043a\u043e\u0439 \u043f\u0440\u0430\u0437\u0434\u043d\u0438\u043a' },
+];
+
+function bananaReplaceMatchedRiskTerms(text, risk) {
+  let result = String(text || '');
+  for (const match of risk?.matches || []) {
+    const term = String(match?.term || '').trim();
+    if (!term) continue;
+    const replacement = match.category === 'gore'
+      ? 'strawberry jam'
+      : (match.category === 'sexual_acts' || match.category === 'genitals'
+        ? 'fully clothed banana comedy'
+        : 'banana');
+    result = result.replace(new RegExp(`(^|[^\\p{L}\\p{N}_])(${escapeRegExp(term)})(?=$|[^\\p{L}\\p{N}_])`, 'giu'), `$1${replacement}`);
+  }
+  return result;
+}
+
+function chatShotPromptStyleHint(style = 'comic', bananaFilterEnabled = true) {
+  const normalizedStyle = normalizeChatShotStyle(style);
+  if (normalizedStyle === 'photo') {
+    return 'Realistic photo style, no visible text, natural lighting.';
+  }
+  if (normalizedStyle === 'illustration') {
+    return 'Detailed colorful illustration, no visible text.';
+  }
+  return bananaFilterEnabled
+    ? 'Colorful comic style, expressive faces, safe playful energy.'
+    : 'Colorful comic style, expressive faces, dynamic composition.';
+}
+
+function normalizeChatShotPromptText(value, style = 'comic', fallback = 'A vivid scene inspired by a chat conversation.') {
+  let text = cleanText(value, 4000)
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) text = fallback;
+  return cleanText(`${text} ${chatShotPromptStyleHint(style, false)}`, 4000);
+}
+
+function sanitizeChatShotPrompt(value, style = 'comic') {
+  let text = cleanText(value, 4000)
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) text = 'A cheerful banana-themed scene inspired by a friendly chat.';
+  for (const rule of CHATSHOT_SAFE_REPLACEMENTS) {
+    text = text.replace(rule.pattern, rule.value);
+  }
+  let risk = analyzeAiImageRisk(text);
+  if (risk.risky) {
+    text = bananaReplaceMatchedRiskTerms(text, risk);
+    text = text
+      .replace(/\b(kill|murder|shoot|stab|explode|attack|hurt)\b/ig, 'play')
+      .replace(/[\u0443]\u0431\u0438[^\s,.!?;:]*|[\u0441]\u0442\u0440\u0435\u043b\u044f[^\s,.!?;:]*|[\u0440]\u0435\u0437\u0430[^\s,.!?;:]*/giu, '\u0438\u0433\u0440\u0430\u0442\u044c');
+  }
+  risk = analyzeAiImageRisk(text);
+  if (risk.risky) {
+    text = 'A bright, safe banana-themed scene showing friends playing, smiling, and sharing a cheerful moment inspired by the chat mood.';
+  }
+  return cleanText(`${text} ${chatShotPromptStyleHint(style, true)}`, 4000);
+}
+
+function buildChatShotBananaFallbackPrompt(contextText = '', style = 'comic') {
+  const mood = truncate(contextText, 280) || 'friendly chat energy';
+  return sanitizeChatShotPrompt(
+    `A safe cheerful banana-themed scene inspired by this chat mood: ${mood}. Friends are playing and smiling with bananas, bright colors, no violence, no weapons, no politics, no nudity, no drugs.`,
+    style
+  );
+}
+
+function buildChatShotRawFallbackPrompt(contextText = '', style = 'comic') {
+  const mood = truncate(contextText, 280) || 'the current chat mood';
+  return `A scene inspired by this chat mood: ${mood}.`;
 }
 
 function parseEmbedding(json) {
@@ -478,6 +619,14 @@ function createAiBotFeature({
       AND COALESCE(b.kind,'text')='convert'
     ORDER BY b.enabled DESC, b.id ASC
   `);
+  const allOpenAiChatShotBotsStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE COALESCE(b.provider,'openai')='openai'
+      AND COALESCE(b.kind,'text')='chatshot'
+    ORDER BY b.enabled DESC, b.id ASC
+  `);
   const allYandexBotsStmt = db.prepare(`
     SELECT b.*, u.avatar_color, u.avatar_url
     FROM ai_bots b
@@ -556,11 +705,20 @@ function createAiBotFeature({
       AND COALESCE(b.kind,'text')='convert'
     ORDER BY b.enabled DESC, b.id ASC
   `);
+  const allGrokChatShotBotsStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE COALESCE(b.provider,'openai')='grok'
+      AND COALESCE(b.kind,'text')='chatshot'
+    ORDER BY b.enabled DESC, b.id ASC
+  `);
   const chatSettingsStmt = db.prepare('SELECT * FROM ai_chat_bots ORDER BY chat_id ASC, bot_id ASC');
   const botChatsStmt = db.prepare('SELECT chat_id FROM ai_chat_bots WHERE bot_id=?');
-  const chatRowByIdStmt = db.prepare('SELECT id, name, type, created_by, is_notes FROM chats WHERE id=?');
+  const chatRowByIdStmt = db.prepare('SELECT id, name, type, created_by, is_notes, chatshot_enabled, chatshot_bot_id, chatshot_style, chatshot_banana_filter_enabled FROM chats WHERE id=?');
   const chatContextTransformStmt = db.prepare('SELECT context_transform_enabled FROM chats WHERE id=?');
   const contextTransformEnabledChatIdsStmt = db.prepare('SELECT id FROM chats WHERE context_transform_enabled=1');
+  const chatShotEnabledChatIdsStmt = db.prepare('SELECT id FROM chats WHERE chatshot_enabled=1');
   const chatMemberStmt = db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?');
   const chatMemberCountStmt = db.prepare('SELECT COUNT(*) as count FROM chat_members WHERE chat_id=?');
   const humanMemberCountStmt = db.prepare(`
@@ -588,6 +746,7 @@ function createAiBotFeature({
     JOIN users u ON u.id=cm.user_id
     JOIN ai_bots b ON b.user_id=u.id
     WHERE cm.chat_id=? AND COALESCE(u.is_ai_bot,0)=1
+      AND COALESCE(b.kind,'text')!='chatshot'
     ORDER BY b.id ASC
     LIMIT 1
   `);
@@ -610,7 +769,7 @@ function createAiBotFeature({
     WHERE u.id=?
       AND b.user_id IS NOT NULL
       AND b.enabled=1
-      AND COALESCE(b.kind,'text')!='convert'
+      AND COALESCE(b.kind,'text') NOT IN ('convert','chatshot')
     LIMIT 1
   `);
   const selectableBotDirectoryStmt = db.prepare(`
@@ -626,7 +785,7 @@ function createAiBotFeature({
     JOIN users u ON u.id=b.user_id
     WHERE b.user_id IS NOT NULL
       AND b.enabled=1
-      AND COALESCE(b.kind,'text')!='convert'
+      AND COALESCE(b.kind,'text') NOT IN ('convert','chatshot')
     ORDER BY COALESCE(b.visible_to_users,0) DESC, u.display_name COLLATE NOCASE ASC, b.id ASC
   `);
   const activeDirectoryBotsForChatStmt = db.prepare(`
@@ -645,7 +804,7 @@ function createAiBotFeature({
       AND cb.enabled=1
       AND b.enabled=1
       AND b.user_id IS NOT NULL
-      AND COALESCE(b.kind,'text')!='convert'
+      AND COALESCE(b.kind,'text') NOT IN ('convert','chatshot')
     ORDER BY u.display_name COLLATE NOCASE ASC, b.id ASC
   `);
   const insertBotAddAuditStmt = db.prepare(`
@@ -694,6 +853,7 @@ function createAiBotFeature({
     FROM ai_chat_bots cb
     JOIN ai_bots b ON b.id=cb.bot_id
     WHERE cb.chat_id=? AND cb.enabled=1 AND b.enabled=1
+      AND COALESCE(b.kind,'text')!='chatshot'
     ORDER BY b.id ASC
   `);
   const activeContextConvertBotsStmt = db.prepare(`
@@ -711,6 +871,32 @@ function createAiBotFeature({
     LEFT JOIN users u ON u.id=b.user_id
     WHERE b.enabled=1
       AND COALESCE(b.kind,'text')='convert'
+      AND (
+        COALESCE(b.available_in_all_chats,0)=1
+        OR EXISTS (
+          SELECT 1
+          FROM ai_chat_bots cb
+          WHERE cb.chat_id=? AND cb.bot_id=b.id AND cb.enabled=1
+        )
+      )
+    ORDER BY b.id ASC
+  `);
+  const activeChatShotBotsStmt = db.prepare(`
+    SELECT
+      b.*,
+      u.avatar_color,
+      u.avatar_url,
+      ? as chat_id,
+      'simple' as mode,
+      b.chatshot_context_limit as hot_context_limit,
+      'manual' as trigger_mode,
+      0 as auto_react_on_mention,
+      1 as chat_enabled
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE b.enabled=1
+      AND COALESCE(b.provider,'openai') IN ('openai','grok')
+      AND COALESCE(b.kind,'text')='chatshot'
       AND (
         COALESCE(b.available_in_all_chats,0)=1
         OR EXISTS (
@@ -846,6 +1032,29 @@ function createAiBotFeature({
     ORDER BY m.id DESC
     LIMIT ?
   `);
+  const recentChatShotContextMessagesStmt = db.prepare(`
+    SELECT m.*, u.username, u.display_name, f.original_name as file_name, f.type as file_type,
+      vm.transcription_text, p.message_id as poll_message_id, COALESCE(ab.kind,'') as ai_bot_kind
+    FROM messages m
+    JOIN users u ON u.id=m.user_id
+    LEFT JOIN files f ON f.id=m.file_id
+    LEFT JOIN voice_messages vm ON vm.message_id=m.id
+    LEFT JOIN polls p ON p.message_id=m.id
+    LEFT JOIN ai_bots ab ON ab.id=m.ai_bot_id
+    WHERE m.chat_id=?
+      AND m.is_deleted=0
+      AND COALESCE(ab.kind,'')!='chatshot'
+    ORDER BY m.id DESC
+    LIMIT ?
+  `);
+  const chatShotMessageCountStmt = db.prepare(`
+    SELECT COUNT(*) as count
+    FROM messages m
+    LEFT JOIN ai_bots ab ON ab.id=m.ai_bot_id
+    WHERE m.chat_id=?
+      AND m.is_deleted=0
+      AND COALESCE(ab.kind,'')!='chatshot'
+  `);
   const messageForMemoryStmt = db.prepare(`
     SELECT m.*, u.username, u.display_name, f.original_name as file_name, f.type as file_type,
       vm.transcription_text, p.message_id as poll_message_id
@@ -861,6 +1070,11 @@ function createAiBotFeature({
     VALUES(?,?,?,?,?,?,?)
   `);
   const updateChatNameStmt = db.prepare('UPDATE chats SET name=? WHERE id=?');
+  const updateChatShotSettingsStmt = db.prepare(`
+    UPDATE chats
+    SET chatshot_enabled=?, chatshot_bot_id=?, chatshot_style=?, chatshot_banana_filter_enabled=?
+    WHERE id=?
+  `);
   const insertPreviewStmt = db.prepare(`
     INSERT INTO link_previews(message_id, url, title, description, image, hostname)
     VALUES(?,?,?,?,?,?)
@@ -919,6 +1133,7 @@ function createAiBotFeature({
     },
   });
   const responseLocks = new Set();
+  const chatShotLocks = new Set();
 
   function getGlobalSettings() {
     return getAiSettings(db);
@@ -1049,6 +1264,7 @@ function createAiBotFeature({
     const bots = [
       ...allGrokTextBotsStmt.all(),
       ...allGrokUniversalBotsStmt.all(),
+      ...allGrokChatShotBotsStmt.all(),
     ];
     const imageBots = allGrokImageBotsStmt.all();
     return {
@@ -1750,7 +1966,8 @@ function createAiBotFeature({
     const provider = normalizeProvider(row.provider, 'openai');
     const kind = normalizeBotKind(row.kind, provider, 'text');
     const isConvertBot = kind === 'convert';
-    const interactiveActionsEnabled = kind !== 'image' && !isConvertBot && providerInteractiveEnabled(provider, settings);
+    const isChatShot = kind === 'chatshot';
+    const interactiveActionsEnabled = kind !== 'image' && !isConvertBot && !isChatShot && providerInteractiveEnabled(provider, settings);
     const defaultResponseModel = provider === 'yandex'
       ? settings.yandex_default_response_model
       : (provider === 'grok'
@@ -1777,9 +1994,10 @@ function createAiBotFeature({
         ? settings.grok_max_tokens
         : (provider === 'deepseek' ? settings.deepseek_max_tokens : null));
     const openAiUniversal = provider === 'openai' && kind === 'universal';
-    const grokImageCapable = provider === 'grok' && (kind === 'image' || kind === 'universal');
-    const defaultAllowText = kind !== 'image' && !isConvertBot;
-    const defaultAllowImageGenerate = kind === 'image' || kind === 'universal';
+    const openAiImageCapable = provider === 'openai' && (kind === 'universal' || isChatShot);
+    const grokImageCapable = provider === 'grok' && (kind === 'image' || kind === 'universal' || isChatShot);
+    const defaultAllowText = kind !== 'image' && !isConvertBot && !isChatShot;
+    const defaultAllowImageGenerate = kind === 'image' || kind === 'universal' || isChatShot;
     const defaultAllowImageEdit = kind === 'universal';
     const defaultAllowDocument = openAiUniversal;
     return {
@@ -1787,40 +2005,41 @@ function createAiBotFeature({
       user_id: row.user_id,
       name: row.name,
       mention: row.mention,
-      style: isConvertBot ? '' : (row.style || ''),
-      tone: isConvertBot ? '' : (row.tone || ''),
-      behavior_rules: isConvertBot ? '' : (row.behavior_rules || ''),
-      speech_patterns: isConvertBot ? '' : (row.speech_patterns || ''),
+      style: (isConvertBot || isChatShot) ? '' : (row.style || ''),
+      tone: (isConvertBot || isChatShot) ? '' : (row.tone || ''),
+      behavior_rules: (isConvertBot || isChatShot) ? '' : (row.behavior_rules || ''),
+      speech_patterns: (isConvertBot || isChatShot) ? '' : (row.speech_patterns || ''),
       transform_prompt: isConvertBot ? (row.transform_prompt || '') : '',
       enabled: row.enabled !== 0,
-      available_in_all_chats: isConvertBot ? boolValue(row.available_in_all_chats, false) : false,
+      available_in_all_chats: (isConvertBot || isChatShot) ? boolValue(row.available_in_all_chats, false) : false,
       provider,
       kind,
-      response_model: row.response_model || defaultResponseModel,
-      summary_model: isConvertBot || kind === 'image' ? '' : (row.summary_model || defaultSummaryModel),
-      embedding_model: isConvertBot || kind === 'image' ? '' : (row.embedding_model || defaultEmbeddingModel),
-      image_model: openAiUniversal
+      response_model: kind === 'image' ? '' : (row.response_model || defaultResponseModel),
+      summary_model: isConvertBot || isChatShot || kind === 'image' ? '' : (row.summary_model || defaultSummaryModel),
+      embedding_model: isConvertBot || isChatShot || kind === 'image' ? '' : (row.embedding_model || defaultEmbeddingModel),
+      image_model: openAiImageCapable
         ? (row.image_model || settings.openai_default_image_model)
         : (grokImageCapable ? (row.image_model || settings.grok_default_image_model) : ''),
       image_aspect_ratio: grokImageCapable
         ? cleanGrokAspectRatio(row.image_aspect_ratio, settings.grok_default_image_aspect_ratio)
         : '',
-      image_resolution: openAiUniversal
+      image_resolution: openAiImageCapable
         ? cleanOpenAiImageSize(row.image_resolution, settings.openai_default_image_size)
         : (grokImageCapable ? cleanGrokResolution(row.image_resolution, settings.grok_default_image_resolution) : ''),
-      allow_text: boolValue(row.allow_text, defaultAllowText),
-      allow_image_generate: boolValue(row.allow_image_generate, defaultAllowImageGenerate),
-      allow_image_edit: boolValue(row.allow_image_edit, defaultAllowImageEdit),
+      allow_text: isChatShot ? false : boolValue(row.allow_text, defaultAllowText),
+      allow_image_generate: isChatShot ? true : boolValue(row.allow_image_generate, defaultAllowImageGenerate),
+      allow_image_edit: isChatShot ? false : boolValue(row.allow_image_edit, defaultAllowImageEdit),
       allow_document: openAiUniversal ? boolValue(row.allow_document, defaultAllowDocument) : false,
-      allow_poll_create: isConvertBot ? false : interactiveActionsEnabled,
-      allow_poll_vote: isConvertBot ? false : interactiveActionsEnabled,
-      allow_react: isConvertBot ? false : interactiveActionsEnabled,
-      allow_pin: isConvertBot ? false : interactiveActionsEnabled,
-      visible_to_users: isConvertBot ? false : boolValue(row.visible_to_users, false),
-      image_quality: openAiUniversal ? cleanOpenAiImageQuality(row.image_quality, settings.openai_default_image_quality) : '',
-      image_background: openAiUniversal ? cleanOpenAiImageBackground(row.image_background, settings.openai_default_image_background) : '',
-      image_output_format: openAiUniversal ? cleanOpenAiImageOutputFormat(row.image_output_format, settings.openai_default_image_output_format) : '',
+      allow_poll_create: (isConvertBot || isChatShot) ? false : interactiveActionsEnabled,
+      allow_poll_vote: (isConvertBot || isChatShot) ? false : interactiveActionsEnabled,
+      allow_react: (isConvertBot || isChatShot) ? false : interactiveActionsEnabled,
+      allow_pin: (isConvertBot || isChatShot) ? false : interactiveActionsEnabled,
+      visible_to_users: (isConvertBot || isChatShot) ? false : boolValue(row.visible_to_users, false),
+      image_quality: openAiImageCapable ? cleanOpenAiImageQuality(row.image_quality, settings.openai_default_image_quality) : '',
+      image_background: openAiImageCapable ? cleanOpenAiImageBackground(row.image_background, settings.openai_default_image_background) : '',
+      image_output_format: openAiImageCapable ? cleanOpenAiImageOutputFormat(row.image_output_format, settings.openai_default_image_output_format) : '',
       document_default_format: openAiUniversal ? cleanDocumentFormat(row.document_default_format, settings.openai_default_document_format) : '',
+      chatshot_context_limit: intValue(row.chatshot_context_limit, CHATSHOT_DEFAULT_CONTEXT_LIMIT, CHATSHOT_MIN_CONTEXT_LIMIT, CHATSHOT_MAX_CONTEXT_LIMIT),
       temperature: row.temperature == null ? defaultTemperature : Number(row.temperature),
       max_tokens: row.max_tokens == null
         ? defaultMaxTokens
@@ -1836,7 +2055,7 @@ function createAiBotFeature({
         provider,
         kind,
         response_model: row.response_model || defaultResponseModel,
-        image_model: openAiUniversal
+        image_model: openAiImageCapable
           ? (row.image_model || settings.openai_default_image_model)
           : (grokImageCapable ? (row.image_model || settings.grok_default_image_model) : ''),
       }),
@@ -2016,6 +2235,48 @@ function createAiBotFeature({
     };
   }
 
+  function serializeOpenAiChatShotAdminState() {
+    const state = serializeAdminState();
+    const bots = allOpenAiChatShotBotsStmt.all().map(sanitizeBot);
+    const botIds = new Set(bots.map((bot) => Number(bot.id)));
+    const settings = sanitizeSettings(getGlobalSettings());
+    return {
+      settings,
+      bots,
+      chatSettings: serializeChatSettingsForBotIds(botIds, { forceSimple: true }),
+      chats: state.chats,
+      models: {
+        response: openAiConvertModelOptions(),
+        image: (modelCatalogCache?.image && modelCatalogCache.image.length)
+          ? modelCatalogCache.image
+          : uniqueList([settings.openai_default_image_model, ...FALLBACK_OPENAI_IMAGE_MODELS]),
+        image_size: ['auto', '1024x1024', '1024x1536', '1536x1024'],
+        image_quality: ['auto', 'low', 'medium', 'high'],
+        image_background: ['auto', 'transparent', 'opaque'],
+        image_output_format: ['png', 'webp', 'jpeg'],
+      },
+    };
+  }
+
+  function serializeGrokChatShotAdminState() {
+    const state = serializeAdminState();
+    const bots = allGrokChatShotBotsStmt.all().map(sanitizeBot);
+    const botIds = new Set(bots.map((bot) => Number(bot.id)));
+    const catalog = grokModelCatalogCache || getGrokModelCatalog();
+    return {
+      settings: sanitizeSettings(getGlobalSettings()),
+      bots,
+      chatSettings: serializeChatSettingsForBotIds(botIds, { forceSimple: true }),
+      chats: state.chats,
+      models: {
+        response: catalog.response || ['grok-4.20-reasoning'],
+        image: catalog.image || [],
+        aspect_ratio: catalog.aspect_ratio || [...GROK_IMAGE_ASPECT_RATIO_OPTIONS],
+        resolution: catalog.resolution || [...GROK_IMAGE_RESOLUTION_OPTIONS],
+      },
+    };
+  }
+
   function broadcastContextConvertBotsUpdated(chatIds = []) {
     [...new Set((Array.isArray(chatIds) ? chatIds : []).map((value) => Number(value || 0)).filter((value) => value > 0))]
       .forEach((chatId) => {
@@ -2035,6 +2296,27 @@ function createAiBotFeature({
 
   function broadcastContextConvertBotUpdatedForBot(botId, botSnapshots = []) {
     broadcastContextConvertBotsUpdated(contextConvertBroadcastChatIdsForBot(botId, botSnapshots));
+  }
+
+  function broadcastChatShotBotsUpdated(chatIds = []) {
+    [...new Set((Array.isArray(chatIds) ? chatIds : []).map((value) => Number(value || 0)).filter((value) => value > 0))]
+      .forEach((chatId) => {
+        broadcastToChatAll(chatId, { type: 'chatshot_bots_updated', chatId });
+      });
+  }
+
+  function chatShotBroadcastChatIdsForBot(botId, botSnapshots = []) {
+    const chatIds = botChatsStmt.all(botId).map((row) => Number(row.chat_id || 0));
+    const hasGlobalAvailability = (Array.isArray(botSnapshots) ? botSnapshots : [botSnapshots])
+      .some((bot) => boolValue(bot?.available_in_all_chats, false));
+    if (hasGlobalAvailability) {
+      chatShotEnabledChatIdsStmt.all().forEach((row) => chatIds.push(Number(row.id || 0)));
+    }
+    return chatIds;
+  }
+
+  function broadcastChatShotBotUpdatedForBot(botId, botSnapshots = []) {
+    broadcastChatShotBotsUpdated(chatShotBroadcastChatIdsForBot(botId, botSnapshots));
   }
 
   function buildUniqueMention(input, botId = null) {
@@ -2059,14 +2341,17 @@ function createAiBotFeature({
     return username;
   }
 
-  function createBackingUser({ name, mention }) {
+  function createBackingUser({ name, mention, kind }) {
     const username = buildUniqueBotUsername(mention);
     const password = bcrypt.hashSync(crypto.randomBytes(24).toString('hex'), 10);
-    const color = BOT_COLORS[Math.floor(Math.random() * BOT_COLORS.length)];
+    const publicName = String(kind || '').toLowerCase() === 'chatshot' ? CHATSHOT_PUBLIC_NAME : name;
+    const color = String(kind || '').toLowerCase() === 'chatshot'
+      ? '#f4c542'
+      : BOT_COLORS[Math.floor(Math.random() * BOT_COLORS.length)];
     const result = db.prepare(`
       INSERT INTO users(username, password, display_name, is_admin, is_blocked, avatar_color, is_ai_bot)
       VALUES(?,?,?,?,?,?,?)
-    `).run(username, password, name, 0, 0, color, 1);
+    `).run(username, password, publicName, 0, 0, color, 1);
     return result.lastInsertRowid;
   }
 
@@ -2074,7 +2359,7 @@ function createAiBotFeature({
     if (bot?.user_id && db.prepare('SELECT 1 FROM users WHERE id=?').get(bot.user_id)) {
       return bot.user_id;
     }
-    const userId = createBackingUser({ name: bot.name, mention: bot.mention });
+    const userId = createBackingUser({ name: bot.name, mention: bot.mention, kind: bot.kind });
     db.prepare('UPDATE ai_bots SET user_id=?, updated_at=datetime(\'now\') WHERE id=?').run(userId, bot.id);
     const updated = botByIdStmt.get(bot.id);
     syncBotMemberships(updated, updated?.enabled !== 0);
@@ -2090,6 +2375,7 @@ function createAiBotFeature({
   function syncBotMemberships(bot, isEnabled = true) {
     if (!bot?.user_id) return;
     removeBotFromAllChatsStmt.run(bot.user_id);
+    if (isChatShotBot(bot)) return;
     if (!isEnabled) return;
     enabledBotChatsStmt.all(bot.id).forEach((row) => {
       addBotMemberStmt.run(row.chat_id, bot.user_id);
@@ -2107,6 +2393,10 @@ function createAiBotFeature({
       autoReactOnMention ? 1 : 0
     );
     if (!bot.user_id) return;
+    if (isChatShotBot(bot)) {
+      removeBotMemberStmt.run(chatId, bot.user_id);
+      return;
+    }
     if (enabled && bot.enabled !== 0) {
       addBotMemberStmt.run(chatId, bot.user_id);
     } else {
@@ -2404,12 +2694,14 @@ function createAiBotFeature({
 
   function defaultBotName(provider, kind = 'text') {
     if (provider === 'openai' && kind === 'convert') return 'OpenAI Convert';
+    if (provider === 'openai' && kind === 'chatshot') return 'OpenAI ChatShot';
     if (provider === 'yandex' && kind === 'convert') return 'Yandex Convert';
     if (provider === 'deepseek' && kind === 'convert') return 'DeepSeek Convert';
     if (provider === 'openai' && kind === 'universal') return 'OpenAI Universal';
     if (provider === 'grok' && kind === 'universal') return 'Grok Universal';
     if (provider === 'grok' && kind === 'image') return 'Grok Images';
     if (provider === 'grok' && kind === 'convert') return 'Grok Convert';
+    if (provider === 'grok' && kind === 'chatshot') return 'Grok ChatShot';
     if (provider === 'yandex') return 'Yandex AI';
     if (provider === 'deepseek') return 'DeepSeek AI';
     if (provider === 'grok') return 'Grok AI';
@@ -2435,7 +2727,8 @@ function createAiBotFeature({
     const provider = normalizeProvider(input.provider || current.provider, 'openai');
     const kind = normalizeBotKind(input.kind ?? current.kind, provider, 'text');
     const isConvertBot = kind === 'convert';
-    const interactiveActionsEnabled = kind !== 'image' && !isConvertBot && providerInteractiveEnabled(provider, settings);
+    const isChatShot = kind === 'chatshot';
+    const interactiveActionsEnabled = kind !== 'image' && !isConvertBot && !isChatShot && providerInteractiveEnabled(provider, settings);
     const name = cleanText(input.name ?? current.name ?? defaultBotName(provider, kind), 50) || defaultBotName(provider, kind);
     const mention = buildUniqueMention(input.mention ?? current.mention ?? name, current.id || null);
     const responseFallback = provider === 'yandex'
@@ -2464,32 +2757,34 @@ function createAiBotFeature({
         ? settings.grok_max_tokens
         : (provider === 'deepseek' ? settings.deepseek_max_tokens : 1000));
     const isOpenAiUniversal = provider === 'openai' && kind === 'universal';
+    const isOpenAiChatShot = provider === 'openai' && isChatShot;
     const isGrokUniversal = provider === 'grok' && kind === 'universal';
     const isGrokImageBot = provider === 'grok' && kind === 'image';
-    const isImageCapable = isOpenAiUniversal || isGrokUniversal || isGrokImageBot;
+    const isGrokChatShot = provider === 'grok' && isChatShot;
+    const isImageCapable = isOpenAiUniversal || isOpenAiChatShot || isGrokUniversal || isGrokImageBot || isGrokChatShot;
     return {
       name,
       mention,
       provider,
       kind,
-      style: isConvertBot ? '' : cleanText(input.style ?? current.style ?? 'Helpful chat assistant', 1000),
-      tone: isConvertBot ? '' : cleanText(input.tone ?? current.tone ?? 'warm, concise, attentive', 1000),
-      behavior_rules: isConvertBot ? '' : cleanText(input.behavior_rules ?? current.behavior_rules ?? '', 4000),
-      speech_patterns: isConvertBot ? '' : cleanText(input.speech_patterns ?? current.speech_patterns ?? '', 4000),
+      style: (isConvertBot || isChatShot) ? '' : cleanText(input.style ?? current.style ?? 'Helpful chat assistant', 1000),
+      tone: (isConvertBot || isChatShot) ? '' : cleanText(input.tone ?? current.tone ?? 'warm, concise, attentive', 1000),
+      behavior_rules: (isConvertBot || isChatShot) ? '' : cleanText(input.behavior_rules ?? current.behavior_rules ?? '', 4000),
+      speech_patterns: (isConvertBot || isChatShot) ? '' : cleanText(input.speech_patterns ?? current.speech_patterns ?? '', 4000),
       transform_prompt: isConvertBot ? cleanText(input.transform_prompt ?? current.transform_prompt ?? '', CONTEXT_TRANSFORM_PROMPT_MAX_LENGTH) : '',
       enabled: boolValue(input.enabled, current.enabled == null ? true : current.enabled !== 0),
-      available_in_all_chats: isConvertBot ? boolValue(
+      available_in_all_chats: (isConvertBot || isChatShot) ? boolValue(
         input.available_in_all_chats,
         current.available_in_all_chats == null ? false : current.available_in_all_chats !== 0
       ) : false,
       response_model: kind === 'image'
         ? ''
         : cleanText(input.response_model ?? current.response_model ?? responseFallback, 160),
-      summary_model: kind === 'image' || isConvertBot
+      summary_model: kind === 'image' || isConvertBot || isChatShot
         ? ''
         : cleanText(input.summary_model ?? current.summary_model ?? summaryFallback, 160),
-      embedding_model: isConvertBot ? '' : embeddingFallback,
-      image_model: isOpenAiUniversal
+      embedding_model: isConvertBot || isChatShot ? '' : embeddingFallback,
+      image_model: (isOpenAiUniversal || isOpenAiChatShot)
         ? cleanText(input.image_model ?? current.image_model ?? settings.openai_default_image_model, 160)
         : (provider === 'grok' && isImageCapable
           ? cleanText(input.image_model ?? current.image_model ?? settings.grok_default_image_model, 160)
@@ -2497,32 +2792,32 @@ function createAiBotFeature({
       image_aspect_ratio: provider === 'grok' && isImageCapable
         ? cleanGrokAspectRatio(input.image_aspect_ratio ?? current.image_aspect_ratio, settings.grok_default_image_aspect_ratio)
         : '',
-      image_resolution: isOpenAiUniversal
+      image_resolution: (isOpenAiUniversal || isOpenAiChatShot)
         ? cleanOpenAiImageSize(input.image_resolution ?? current.image_resolution, settings.openai_default_image_size)
         : (provider === 'grok' && isImageCapable
           ? cleanGrokResolution(input.image_resolution ?? current.image_resolution, settings.grok_default_image_resolution)
           : ''),
-      allow_text: boolValue(input.allow_text, current.allow_text == null ? (kind !== 'image' && !isConvertBot) : current.allow_text !== 0),
-      allow_image_generate: boolValue(input.allow_image_generate, current.allow_image_generate == null ? isImageCapable : current.allow_image_generate !== 0),
-      allow_image_edit: boolValue(input.allow_image_edit, current.allow_image_edit == null ? (isOpenAiUniversal || isGrokUniversal) : current.allow_image_edit !== 0),
+      allow_text: isChatShot ? false : boolValue(input.allow_text, current.allow_text == null ? (kind !== 'image' && !isConvertBot) : current.allow_text !== 0),
+      allow_image_generate: isChatShot ? true : boolValue(input.allow_image_generate, current.allow_image_generate == null ? isImageCapable : current.allow_image_generate !== 0),
+      allow_image_edit: isChatShot ? false : boolValue(input.allow_image_edit, current.allow_image_edit == null ? (isOpenAiUniversal || isGrokUniversal) : current.allow_image_edit !== 0),
       allow_document: isOpenAiUniversal
         ? boolValue(input.allow_document, current.allow_document == null ? true : current.allow_document !== 0)
         : false,
-      allow_poll_create: isConvertBot ? false : interactiveActionsEnabled,
-      allow_poll_vote: isConvertBot ? false : interactiveActionsEnabled,
-      allow_react: isConvertBot ? false : interactiveActionsEnabled,
-      allow_pin: isConvertBot ? false : interactiveActionsEnabled,
-      visible_to_users: isConvertBot ? false : boolValue(
+      allow_poll_create: (isConvertBot || isChatShot) ? false : interactiveActionsEnabled,
+      allow_poll_vote: (isConvertBot || isChatShot) ? false : interactiveActionsEnabled,
+      allow_react: (isConvertBot || isChatShot) ? false : interactiveActionsEnabled,
+      allow_pin: (isConvertBot || isChatShot) ? false : interactiveActionsEnabled,
+      visible_to_users: (isConvertBot || isChatShot) ? false : boolValue(
         input.visible_to_users,
         current.visible_to_users == null ? false : current.visible_to_users !== 0
       ),
-      image_quality: isOpenAiUniversal
+      image_quality: (isOpenAiUniversal || isOpenAiChatShot)
         ? cleanOpenAiImageQuality(input.image_quality ?? current.image_quality, settings.openai_default_image_quality)
         : '',
-      image_background: isOpenAiUniversal
+      image_background: (isOpenAiUniversal || isOpenAiChatShot)
         ? cleanOpenAiImageBackground(input.image_background ?? current.image_background, settings.openai_default_image_background)
         : '',
-      image_output_format: isOpenAiUniversal
+      image_output_format: (isOpenAiUniversal || isOpenAiChatShot)
         ? cleanOpenAiImageOutputFormat(input.image_output_format ?? current.image_output_format, settings.openai_default_image_output_format)
         : '',
       document_default_format: isOpenAiUniversal
@@ -2539,6 +2834,12 @@ function createAiBotFeature({
             provider === 'openai' ? OPENAI_MIN_OUTPUT_TOKENS : 1,
             8000
           ),
+      chatshot_context_limit: intValue(
+        input.chatshot_context_limit ?? current.chatshot_context_limit,
+        CHATSHOT_DEFAULT_CONTEXT_LIMIT,
+        CHATSHOT_MIN_CONTEXT_LIMIT,
+        CHATSHOT_MAX_CONTEXT_LIMIT
+      ),
     };
   }
 
@@ -2552,9 +2853,9 @@ function createAiBotFeature({
         allow_text, allow_image_generate, allow_image_edit, allow_document,
         allow_poll_create, allow_poll_vote, allow_react, allow_pin, visible_to_users,
         image_quality, image_background, image_output_format, document_default_format, transform_prompt,
-        temperature, max_tokens
+        temperature, max_tokens, chatshot_context_limit
       )
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       userId,
       input.name,
@@ -2588,7 +2889,8 @@ function createAiBotFeature({
       input.document_default_format || '',
       input.transform_prompt || '',
       input.temperature,
-      input.max_tokens
+      input.max_tokens,
+      input.chatshot_context_limit || CHATSHOT_DEFAULT_CONTEXT_LIMIT
     );
     return botByIdStmt.get(result.lastInsertRowid);
   });
@@ -3598,15 +3900,16 @@ function createAiBotFeature({
     }).catch(() => {});
   }
 
-  function broadcastBotTyping(bot, chatId, isTyping = true) {
+  function broadcastBotTyping(bot, chatId, isTyping = true, options = {}) {
     if (!bot?.user_id || !chatId) return;
     broadcastToChatAll(chatId, {
       type: 'typing',
       chatId,
       userId: bot.user_id,
-      username: bot.name || bot.mention || 'AI bot',
+      username: options.username || bot.name || bot.mention || 'AI bot',
       isTyping,
       isBot: true,
+      activity: options.activity || 'typing',
     });
   }
 
@@ -3744,11 +4047,361 @@ function createAiBotFeature({
     };
   }
 
+  function getActiveChatShotBotsForChat(chatId) {
+    const settings = getGlobalSettings();
+    return activeChatShotBotsStmt.all(chatId, chatId)
+      .map((row) => sanitizeBot(row))
+      .filter((bot) => isChatShotBot(bot) && providerEnabled(bot.provider, settings));
+  }
+
+  function getChatShotMessageCount(chatId) {
+    return Number(chatShotMessageCountStmt.get(chatId)?.count || 0);
+  }
+
+  function resolveChatShotBotForChat(chat, bots = []) {
+    const selectedId = Number(chat?.chatshot_bot_id || 0);
+    const selected = selectedId ? bots.find((bot) => Number(bot.id || 0) === selectedId) : null;
+    if (selected) return selected;
+    return bots.length === 1 ? bots[0] : null;
+  }
+
+  function getChatShotState(chatId) {
+    const chat = chatRowByIdStmt.get(Number(chatId || 0));
+    if (!chat) return null;
+    const bots = getActiveChatShotBotsForChat(chat.id);
+    const selectedBot = resolveChatShotBotForChat(chat, bots);
+    const messageCount = getChatShotMessageCount(chat.id);
+    const enabled = boolValue(chat.chatshot_enabled, false) && Boolean(selectedBot);
+    return {
+      chatId: Number(chat.id || 0),
+      enabled,
+      requested_enabled: boolValue(chat.chatshot_enabled, false),
+      botId: selectedBot ? Number(selectedBot.id || 0) : null,
+      style: normalizeChatShotStyle(chat.chatshot_style, 'comic'),
+      banana_filter_enabled: boolValue(chat.chatshot_banana_filter_enabled, true),
+      ready: enabled && messageCount >= 2,
+      message_count: messageCount,
+      bots: bots.map(serializeChatShotBot),
+      selectedBot: selectedBot ? serializeChatShotBot(selectedBot) : null,
+    };
+  }
+
+  function saveChatShotSettings({ chatId, enabled, botId, style, bananaFilterEnabled }) {
+    const chat = chatRowByIdStmt.get(Number(chatId || 0));
+    if (!chat) {
+      const error = new Error('Chat not found');
+      error.status = 404;
+      throw error;
+    }
+    const bots = getActiveChatShotBotsForChat(chat.id);
+    const desiredEnabled = boolValue(enabled, boolValue(chat.chatshot_enabled, false));
+    const normalizedStyle = normalizeChatShotStyle(style, normalizeChatShotStyle(chat.chatshot_style, 'comic'));
+    const normalizedBananaFilterEnabled = boolValue(
+      bananaFilterEnabled,
+      boolValue(chat.chatshot_banana_filter_enabled, true)
+    );
+    let selectedBot = null;
+    const requestedBotId = Number(botId || 0);
+    if (requestedBotId) {
+      selectedBot = bots.find((bot) => Number(bot.id || 0) === requestedBotId) || null;
+      if (!selectedBot) {
+        const error = new Error('ChatShot bot is not available in this chat');
+        error.status = 400;
+        throw error;
+      }
+    } else {
+      selectedBot = resolveChatShotBotForChat(chat, bots);
+    }
+    if (desiredEnabled && !selectedBot) {
+      const error = new Error(bots.length ? 'Select a ChatShot bot' : 'No ChatShot bot is available in this chat');
+      error.status = 400;
+      throw error;
+    }
+    updateChatShotSettingsStmt.run(
+      desiredEnabled ? 1 : 0,
+      selectedBot ? Number(selectedBot.id || 0) : null,
+      normalizedStyle,
+      normalizedBananaFilterEnabled ? 1 : 0,
+      chat.id
+    );
+    const updated = db.prepare('SELECT * FROM chats WHERE id=?').get(chat.id);
+    broadcastToChatAll(chat.id, { type: 'chat_updated', chat: updated });
+    broadcastChatShotBotsUpdated([chat.id]);
+    return getChatShotState(chat.id);
+  }
+
+  function chatShotStyleInstruction(style = 'comic') {
+    const normalized = normalizeChatShotStyle(style);
+    if (normalized === 'photo') {
+      return 'Style: realistic photo, natural lighting, cinematic composition, no visible text or captions.';
+    }
+    if (normalized === 'illustration') {
+      return 'Style: detailed colorful illustration, bright palette, no visible text or captions.';
+    }
+    return 'Style: colorful comic panel, expressive characters, dynamic composition, no speech bubbles, no visible text.';
+  }
+
+  function buildChatShotPromptSystem(style = 'comic', bananaFilterEnabled = true) {
+    const base = [
+      'You are an image prompt assistant for a chat app.',
+      bananaFilterEnabled
+        ? 'You receive the latest chat messages as context and convert them into a safe image prompt.'
+        : 'You receive the latest chat messages as context and convert them into an image prompt.',
+      'Compress the context into 3-5 concise sentences that preserve the key events, mood, and one short representative dialogue beat when useful.',
+      'Output only the image prompt. Do not add markdown, explanations, policy notes, labels, or quotes around the prompt.',
+      chatShotStyleInstruction(style),
+      'Use vivid colors, clear composition, rich details, and make the scene visibly inspired by the chat.',
+    ];
+    if (!bananaFilterEnabled) return base.join('\n');
+    return [
+      ...base,
+      'Before finalizing, sanitize unsafe topics: violence, blood, weapons, drugs, nudity, insults, politics, war, and hate.',
+      'Replace fights with a friendly banana tussle; killing with a silly scene with overripe bananas; guns, knives, and weapons with bananas in hand; explosions with banana fireworks; blood with strawberry jam.',
+      'For any other unsafe term, replace nouns with bananas and risky verbs with hugging, playing, or smiling.',
+    ].join('\n');
+  }
+
+  async function generateChatShotSafePrompt(bot, style, contextText, bananaFilterEnabled = true) {
+    const settings = getGlobalSettings();
+    const user = [
+      'Latest chat context:',
+      contextText || '(empty chat context)',
+      '',
+      bananaFilterEnabled ? 'Create the final safe image prompt now.' : 'Create the final image prompt now.',
+    ].join('\n');
+    let rawText = '';
+    try {
+      if (bot.provider === 'grok') {
+        rawText = await grokAi.generateText({
+          apiKey: getGrokApiKey(),
+          baseUrl: grokBaseUrl(),
+          model: bot.response_model || settings.grok_default_response_model,
+          system: buildChatShotPromptSystem(style, bananaFilterEnabled),
+          user,
+          maxOutputTokens: Math.min(intValue(bot.max_tokens, settings.grok_max_tokens, 1, 8000), 900),
+          temperature: floatValue(bot.temperature, settings.grok_temperature, 0, 1),
+        });
+      } else {
+        rawText = await generateText({
+          apiKey: getApiKey(),
+          model: bot.response_model || settings.default_response_model,
+          system: buildChatShotPromptSystem(style, bananaFilterEnabled),
+          user,
+          maxOutputTokens: Math.min(intValue(bot.max_tokens, 900, OPENAI_MIN_OUTPUT_TOKENS, 8000), 900),
+          temperature: floatValue(bot.temperature, 0.45, 0, 1),
+        });
+      }
+    } catch (error) {
+      if (bananaFilterEnabled) {
+        console.warn('[chatshot] prompt generation failed, using banana fallback:', errorText(error, 'Unexpected error'));
+        rawText = buildChatShotBananaFallbackPrompt(contextText, style);
+      } else {
+        console.warn('[chatshot] prompt generation failed, using raw fallback:', errorText(error, 'Unexpected error'));
+        rawText = buildChatShotRawFallbackPrompt(contextText, style);
+      }
+    }
+    if (bananaFilterEnabled) {
+      return sanitizeChatShotPrompt(rawText || buildChatShotBananaFallbackPrompt(contextText, style), style);
+    }
+    return normalizeChatShotPromptText(rawText || buildChatShotRawFallbackPrompt(contextText, style), style);
+  }
+
+  async function createOpenAiChatShotImage(bot, prompt, bananaFilterEnabled = true) {
+    const settings = getGlobalSettings();
+    const response = await createOpenAIResponse({
+      apiKey: getApiKey(),
+      model: bot.response_model || settings.default_response_model,
+      input: [
+        {
+          role: 'system',
+          content: bananaFilterEnabled
+            ? 'Use the image_generation tool to create exactly one safe image for the chat. Do not answer with text only.'
+            : 'Use the image_generation tool to create exactly one image for the chat. Do not answer with text only.',
+        },
+        { role: 'user', content: [{ type: 'input_text', text: prompt }] },
+      ],
+      tools: [buildOpenAiUniversalImageTool(bot, null, settings)],
+      toolChoice: { type: 'image_generation' },
+      maxOutputTokens: OPENAI_MIN_OUTPUT_TOKENS,
+      temperature: floatValue(bot.temperature, 0.45, 0, 1),
+    });
+    const generatedImage = findOpenAiGeneratedImage(response);
+    if (!generatedImage?.result) {
+      throw new Error('OpenAI image generation returned no image');
+    }
+    const imageFormat = cleanOpenAiImageOutputFormat(bot.image_output_format, settings.openai_default_image_output_format);
+    const ext = imageFormat === 'jpeg' ? '.jpg' : (imageFormat === 'webp' ? '.webp' : '.png');
+    return {
+      buffer: Buffer.from(generatedImage.result, 'base64'),
+      mimeType: mimeTypeForOpenAiImageOutput(imageFormat),
+      originalName: `chatshot-openai-${Date.now()}${ext}`,
+    };
+  }
+
+  async function createGrokChatShotImage(bot, prompt) {
+    const settings = getGlobalSettings();
+    const imageResult = await grokAi.generateImage({
+      apiKey: getGrokApiKey(),
+      baseUrl: grokBaseUrl(),
+      model: bot.image_model || settings.grok_default_image_model,
+      prompt,
+      n: 1,
+      aspectRatio: cleanGrokAspectRatio(bot.image_aspect_ratio, settings.grok_default_image_aspect_ratio),
+      resolution: cleanGrokResolution(bot.image_resolution, settings.grok_default_image_resolution),
+      responseFormat: 'b64_json',
+    });
+    const { buffer, mimeType } = await loadGrokImageBytes(imageResult);
+    return {
+      buffer,
+      mimeType,
+      originalName: `chatshot-grok-${Date.now()}${imageExtensionForMime(mimeType)}`,
+    };
+  }
+
+  function buildChatShotFallbackSvg(prompt, style = 'comic') {
+    const sanitized = sanitizeChatShotPrompt(prompt, style);
+    const title = normalizeChatShotStyle(style) === 'photo'
+      ? 'chatShot photo'
+      : (normalizeChatShotStyle(style) === 'illustration' ? 'chatShot illustration' : 'chatShot comic');
+    const lines = truncate(sanitized, 260).split(/(?<=[.!?])\s+/).slice(0, 4);
+    const textLines = lines.length ? lines : ['A bright banana-themed snapshot of the chat.'];
+    const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="${escapeXml(title)}">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffef8a"/>
+      <stop offset="0.52" stop-color="#62d0ff"/>
+      <stop offset="1" stop-color="#ff8aa6"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#47350d" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <circle cx="176" cy="196" r="92" fill="#ffffff" opacity="0.55"/>
+  <circle cx="838" cy="214" r="118" fill="#ffffff" opacity="0.35"/>
+  <circle cx="794" cy="812" r="160" fill="#ffffff" opacity="0.28"/>
+  <g filter="url(#shadow)">
+    <path d="M319 252c110 220 262 335 455 342-59 138-195 219-354 178-143-37-234-152-251-302-9-83 41-172 150-218z" fill="#ffd73f"/>
+    <path d="M301 253c36-31 78-48 126-51-13 40-40 72-81 95-19-12-34-27-45-44z" fill="#6e4a1e"/>
+    <path d="M769 593c31 6 58 2 83-12-5 43-24 78-57 105-23-23-32-54-26-93z" fill="#6e4a1e"/>
+    <path d="M266 358c137 196 295 296 474 302" fill="none" stroke="#f2b51d" stroke-width="34" stroke-linecap="round" opacity="0.6"/>
+  </g>
+  <g font-family="Arial, Helvetica, sans-serif" text-anchor="middle">
+    <text x="512" y="118" font-size="56" font-weight="700" fill="#2d2a18">chatShot</text>
+    ${textLines.map((line, index) => `<text x="512" y="${842 + index * 40}" font-size="28" fill="#2d2a18">${escapeXml(line)}</text>`).join('\n    ')}
+  </g>
+</svg>`;
+    return {
+      buffer: Buffer.from(svg, 'utf8'),
+      mimeType: 'image/svg+xml',
+      originalName: `chatshot-fallback-${Date.now()}.svg`,
+    };
+  }
+
+  async function createChatShotImage(bot, prompt, style, bananaFilterEnabled = true) {
+    try {
+      if (bot.provider === 'grok') return await createGrokChatShotImage(bot, prompt);
+      return await createOpenAiChatShotImage(bot, prompt, bananaFilterEnabled);
+    } catch (error) {
+      if (!bananaFilterEnabled) throw error;
+      console.warn('[chatshot] image generation failed, using SVG fallback:', errorText(error, 'Unexpected error'));
+      return buildChatShotFallbackSvg(prompt, style);
+    }
+  }
+
+  function ensureChatShotBackingUser(bot) {
+    const userId = ensureBackingUser(bot);
+    const user = db.prepare('SELECT display_name, avatar_color FROM users WHERE id=?').get(userId);
+    if (user && (user.display_name !== CHATSHOT_PUBLIC_NAME || user.avatar_color !== '#f4c542')) {
+      db.prepare('UPDATE users SET display_name=?, avatar_color=? WHERE id=?').run(CHATSHOT_PUBLIC_NAME, '#f4c542', userId);
+      if (typeof notifyUserUpdated === 'function') notifyUserUpdated(userId);
+    }
+    return userId;
+  }
+
+  async function generateChatShotForChat({ chatId, actorUserId }) {
+    const id = Number(chatId || 0);
+    const state = getChatShotState(id);
+    if (!state) {
+      const error = new Error('Chat not found');
+      error.status = 404;
+      throw error;
+    }
+    if (!chatMemberStmt.get(id, actorUserId)) {
+      const error = new Error('Not a member');
+      error.status = 403;
+      throw error;
+    }
+    if (!state.enabled || !state.selectedBot) {
+      const error = new Error('ChatShot is disabled in this chat');
+      error.status = 403;
+      throw error;
+    }
+    if (!state.ready) {
+      const error = new Error('ChatShot needs at least two chat messages');
+      error.status = 400;
+      throw error;
+    }
+    const lockKey = String(id);
+    if (chatShotLocks.has(lockKey)) {
+      const error = new Error('ChatShot is already generating');
+      error.status = 409;
+      throw error;
+    }
+    chatShotLocks.add(lockKey);
+    const typingOptions = { username: CHATSHOT_PUBLIC_NAME, activity: CHATSHOT_GENERATION_ACTIVITY };
+    let bot = null;
+    let typingTimer = null;
+    try {
+      bot = sanitizeBot(botByIdStmt.get(state.selectedBot.id));
+      if (!bot || !isChatShotBot(bot)) {
+        const error = new Error('ChatShot bot is not available in this chat');
+        error.status = 404;
+        throw error;
+      }
+      ensureChatShotBackingUser(bot);
+      broadcastBotTyping(bot, id, true, typingOptions);
+      typingTimer = setInterval(() => {
+        broadcastBotTyping(bot, id, true, typingOptions);
+      }, 2200);
+
+      const limit = intValue(bot.chatshot_context_limit, CHATSHOT_DEFAULT_CONTEXT_LIMIT, CHATSHOT_MIN_CONTEXT_LIMIT, CHATSHOT_MAX_CONTEXT_LIMIT);
+      const contextRows = recentChatShotContextMessagesStmt.all(id, limit).reverse();
+      const contextLines = trimRecentLines(contextRows.map(formatAiChatLine).filter(Boolean), 12000);
+      const contextText = contextLines.join('\n') || 'A quiet chat with friendly participants.';
+      const prompt = await generateChatShotSafePrompt(bot, state.style, contextText, state.banana_filter_enabled);
+      const image = await createChatShotImage(bot, prompt, state.style, state.banana_filter_enabled);
+      const message = await createBotFileMessage(bot, { chat_id: id, id: null }, {
+        buffer: image.buffer,
+        mimeType: image.mimeType,
+        fileType: 'image',
+        originalName: image.originalName,
+        text: null,
+      });
+      finalizePublishedBotMessage(message, { enqueueMemoryMessage: false });
+      return {
+        message,
+        bot,
+        prompt,
+      };
+    } finally {
+      if (typingTimer) clearInterval(typingTimer);
+      if (bot) broadcastBotTyping(bot, id, false, typingOptions);
+      chatShotLocks.delete(lockKey);
+    }
+  }
+
   function serializeConvertAdminStateByProvider(provider = 'openai') {
     if (provider === 'yandex') return serializeYandexConvertAdminState();
     if (provider === 'deepseek') return serializeDeepSeekConvertAdminState();
     if (provider === 'grok') return serializeGrokConvertAdminState();
     return serializeOpenAiConvertAdminState();
+  }
+
+  function serializeChatShotAdminStateByProvider(provider = 'openai') {
+    if (provider === 'grok') return serializeGrokChatShotAdminState();
+    return serializeOpenAiChatShotAdminState();
   }
 
   function buildContextConvertExportPayload(bot) {
@@ -3764,6 +4417,31 @@ function createAiBotFeature({
         available_in_all_chats: boolValue(bot.available_in_all_chats, false),
         response_model: bot.response_model,
         transform_prompt: bot.transform_prompt || '',
+        temperature: bot.temperature,
+        max_tokens: bot.max_tokens,
+      },
+    };
+  }
+
+  function buildChatShotExportPayload(bot) {
+    return {
+      schema_version: AI_BOT_EXPORT_VERSION,
+      exported_at: new Date().toISOString(),
+      bot: {
+        provider: bot.provider || 'openai',
+        kind: 'chatshot',
+        name: bot.name,
+        mention: bot.mention,
+        enabled: bot.enabled,
+        available_in_all_chats: boolValue(bot.available_in_all_chats, false),
+        response_model: bot.response_model,
+        image_model: bot.image_model,
+        image_resolution: bot.image_resolution,
+        image_quality: bot.image_quality,
+        image_background: bot.image_background,
+        image_output_format: bot.image_output_format,
+        image_aspect_ratio: bot.image_aspect_ratio,
+        chatshot_context_limit: bot.chatshot_context_limit,
         temperature: bot.temperature,
         max_tokens: bot.max_tokens,
       },
@@ -3831,6 +4509,62 @@ function createAiBotFeature({
     });
   }
 
+  async function buildChatShotImportInput(provider = 'openai', source = {}, warnings = []) {
+    const settings = getGlobalSettings();
+    const requestedMention = normalizeMention(source.mention || source.name || `${provider}_chatshot`);
+    let responseModel = cleanText(
+      source.response_model || (provider === 'grok' ? settings.grok_default_response_model : settings.default_response_model),
+      160
+    );
+    let imageModel = cleanText(
+      source.image_model || (provider === 'grok' ? settings.grok_default_image_model : settings.openai_default_image_model),
+      160
+    );
+
+    if (provider === 'grok') {
+      const catalog = await getGrokModelCatalogCached();
+      if (catalog?.source === 'live') {
+        if (responseModel && !catalog.response.includes(responseModel)) {
+          warnings.push(`Response model "${responseModel}" is not available; default model was used.`);
+          responseModel = settings.grok_default_response_model;
+        }
+        if (imageModel && !catalog.image.includes(imageModel)) {
+          warnings.push(`Image model "${imageModel}" is not available; default model was used.`);
+          imageModel = settings.grok_default_image_model;
+        }
+      } else if (catalog?.error) {
+        warnings.push(`Model availability was not verified: ${catalog.error}`);
+      }
+    } else {
+      const catalog = await getModelCatalog();
+      if (catalog?.source === 'openai') {
+        if (responseModel && !catalog.response.includes(responseModel)) {
+          warnings.push(`Response model "${responseModel}" is not available; default model was used.`);
+          responseModel = settings.default_response_model;
+        }
+        if (imageModel && !catalog.image.includes(imageModel)) {
+          warnings.push(`Image model "${imageModel}" is not available; default model was used.`);
+          imageModel = settings.openai_default_image_model;
+        }
+      } else if (catalog?.error) {
+        warnings.push(`Model availability was not verified: ${catalog.error}`);
+      }
+    }
+
+    return normalizeBotInput({
+      ...(source || {}),
+      provider,
+      kind: 'chatshot',
+      mention: requestedMention,
+      response_model: responseModel,
+      image_model: imageModel,
+      enabled: Object.prototype.hasOwnProperty.call(source, 'enabled') ? source.enabled : true,
+      available_in_all_chats: Object.prototype.hasOwnProperty.call(source, 'available_in_all_chats')
+        ? source.available_in_all_chats
+        : false,
+    });
+  }
+
   function updateContextConvertBot(provider, current, input) {
     db.prepare(`
       UPDATE ai_bots
@@ -3856,6 +4590,41 @@ function createAiBotFeature({
     );
   }
 
+  function updateChatShotBot(provider, current, input) {
+    db.prepare(`
+      UPDATE ai_bots
+      SET name=?, mention=?, style='', tone='', behavior_rules='', speech_patterns='',
+          enabled=?, available_in_all_chats=?, provider=?, kind='chatshot', response_model=?, summary_model='', embedding_model='',
+          image_model=?, image_aspect_ratio=?, image_resolution=?,
+          allow_text=0, allow_image_generate=1, allow_image_edit=0, allow_document=0,
+          allow_poll_create=0, allow_poll_vote=0, allow_react=0, allow_pin=0, visible_to_users=0,
+          image_quality=?, image_background=?, image_output_format=?, document_default_format='',
+          transform_prompt='', temperature=?, max_tokens=?, chatshot_context_limit=?, updated_at=datetime('now')
+      WHERE id=?
+    `).run(
+      input.name,
+      input.mention,
+      input.enabled ? 1 : 0,
+      input.available_in_all_chats ? 1 : 0,
+      provider,
+      input.response_model,
+      input.image_model || '',
+      input.image_aspect_ratio || '',
+      input.image_resolution || '',
+      input.image_quality || '',
+      input.image_background || '',
+      input.image_output_format || '',
+      input.temperature,
+      input.max_tokens,
+      input.chatshot_context_limit || CHATSHOT_DEFAULT_CONTEXT_LIMIT,
+      current.id
+    );
+    if (current.user_id) {
+      db.prepare('UPDATE users SET display_name=?, avatar_color=? WHERE id=?').run(CHATSHOT_PUBLIC_NAME, '#f4c542', current.user_id);
+      if (typeof notifyUserUpdated === 'function') notifyUserUpdated(current.user_id);
+    }
+  }
+
   function saveContextConvertChatSetting(req, res, { provider = 'openai' } = {}) {
     const chatId = Number(req.body?.chatId);
     const botId = Number(req.body?.botId);
@@ -3879,6 +4648,31 @@ function createAiBotFeature({
     });
     broadcastContextConvertBotsUpdated([chatId]);
     return res.json({ ok: true, state: serializeConvertAdminStateByProvider(provider) });
+  }
+
+  function saveChatShotAdminChatSetting(req, res, { provider = 'openai' } = {}) {
+    const chatId = Number(req.body?.chatId);
+    const botId = Number(req.body?.botId);
+    if (!db.prepare('SELECT 1 FROM chats WHERE id=?').get(chatId)) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+    const bot = providerBotByRequestId({ params: { id: botId } }, res, { provider, kind: 'chatshot' });
+    if (!bot) return;
+    if (boolValue(bot.available_in_all_chats, false)) {
+      return res.json({ ok: true, state: serializeChatShotAdminStateByProvider(provider) });
+    }
+    const enabled = boolValue(req.body?.enabled, false);
+    saveChatBotSettingTx({
+      chatId,
+      bot,
+      enabled,
+      mode: 'simple',
+      hotContextLimit: intValue(bot.chatshot_context_limit, CHATSHOT_DEFAULT_CONTEXT_LIMIT, CHATSHOT_MIN_CONTEXT_LIMIT, CHATSHOT_MAX_CONTEXT_LIMIT),
+      triggerMode: 'manual',
+      autoReactOnMention: false,
+    });
+    broadcastChatShotBotsUpdated([chatId]);
+    return res.json({ ok: true, state: serializeChatShotAdminStateByProvider(provider) });
   }
 
   function extractBotPromptText(bot, message) {
@@ -3994,7 +4788,7 @@ function createAiBotFeature({
       bot.user_id,
       cleanText(text, 4000) || null,
       fileRow.lastInsertRowid,
-      sourceMessage.id,
+      sourceMessage.id || null,
       1,
       bot.id
     );
@@ -5396,6 +6190,7 @@ function createAiBotFeature({
     for (const row of rows) {
       const bot = sanitizeBot(row);
       if (isContextTransformBot(bot)) continue;
+      if (isChatShotBot(bot)) continue;
       if (bot.provider === 'yandex' && !settings.yandex_enabled) continue;
       if (bot.provider === 'deepseek' && !settings.deepseek_enabled) continue;
       if (bot.provider === 'grok' && !settings.grok_enabled) continue;
@@ -5487,6 +6282,56 @@ function createAiBotFeature({
       });
     } catch (error) {
       return res.status(error.status || 400).json({ error: errorText(error, 'Context transform failed') });
+    }
+  });
+
+  app.get('/api/chats/:chatId/chatshot', auth, (req, res) => {
+    const chatId = Number(req.params.chatId);
+    if (!chatId) return res.status(400).json({ error: 'Invalid chat id' });
+    if (!chatMemberStmt.get(chatId, req.user.id)) {
+      return res.status(403).json({ error: 'Not a member' });
+    }
+    const state = getChatShotState(chatId);
+    if (!state) return res.status(404).json({ error: 'Chat not found' });
+    return res.json(state);
+  });
+
+  app.put('/api/chats/:chatId/chatshot', auth, (req, res) => {
+    const chatId = Number(req.params.chatId);
+    if (!chatId) return res.status(400).json({ error: 'Invalid chat id' });
+    if (!chatMemberStmt.get(chatId, req.user.id)) {
+      return res.status(403).json({ error: 'Not a member' });
+    }
+    try {
+      const state = saveChatShotSettings({
+        chatId,
+        enabled: req.body?.enabled,
+        botId: req.body?.botId,
+        style: req.body?.style,
+        bananaFilterEnabled: req.body?.bananaFilterEnabled,
+      });
+      return res.json(state);
+    } catch (error) {
+      return res.status(error.status || 400).json({ error: errorText(error, 'Could not save ChatShot settings') });
+    }
+  });
+
+  app.post('/api/chats/:chatId/chatshot', auth, async (req, res) => {
+    const chatId = Number(req.params.chatId);
+    if (!chatId) return res.status(400).json({ error: 'Invalid chat id' });
+    try {
+      const result = await generateChatShotForChat({
+        chatId,
+        actorUserId: req.user.id,
+      });
+      return res.json({
+        ok: true,
+        chatId,
+        bot: serializeChatShotBot(result.bot),
+        message: result.message,
+      });
+    } catch (error) {
+      return res.status(error.status || 400).json({ error: errorText(error, 'ChatShot generation failed') });
     }
   });
 
@@ -5861,6 +6706,89 @@ function createAiBotFeature({
     const bot = sanitizeBot(createBotTx(input));
     broadcastContextConvertBotUpdatedForBot(bot.id, [bot]);
     res.json({ bot, warnings, state: serializeOpenAiConvertAdminState() });
+  });
+
+  app.get('/api/admin/openai-chatshot-bots', auth, adminOnly, (_req, res) => {
+    res.json(serializeOpenAiChatShotAdminState());
+  });
+
+  app.post('/api/admin/openai-chatshot-bots', auth, adminOnly, (req, res) => {
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'openai', kind: 'chatshot' });
+    const bot = sanitizeBot(createBotTx(input));
+    broadcastChatShotBotUpdatedForBot(bot.id, [bot]);
+    res.json({ bot, state: serializeOpenAiChatShotAdminState() });
+  });
+
+  app.put('/api/admin/openai-chatshot-bots/chat-settings', auth, adminOnly, (req, res) => {
+    return saveChatShotAdminChatSetting(req, res, { provider: 'openai' });
+  });
+
+  app.put('/api/admin/openai-chatshot-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = providerBotByRequestId(req, res, { provider: 'openai', kind: 'chatshot' });
+    if (!current) return;
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'openai', kind: 'chatshot' }, current);
+    updateChatShotBot('openai', current, input);
+    const updated = botByIdStmt.get(current.id);
+    syncBotMemberships(updated, updated?.enabled !== 0);
+    broadcastChatShotBotUpdatedForBot(current.id, [current, updated]);
+    res.json({ bot: sanitizeBot(updated), state: serializeOpenAiChatShotAdminState() });
+  });
+
+  app.delete('/api/admin/openai-chatshot-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = providerBotByRequestId(req, res, { provider: 'openai', kind: 'chatshot' });
+    if (!current) return;
+    db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
+    db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
+    syncBotMemberships(current, false);
+    broadcastChatShotBotUpdatedForBot(current.id, [current]);
+    res.json({ ok: true, state: serializeOpenAiChatShotAdminState() });
+  });
+
+  app.post('/api/admin/openai-chatshot-bots/:id(\\d+)/test', auth, adminOnly, async (req, res) => {
+    const rawBot = providerBotByRequestId(req, res, { provider: 'openai', kind: 'chatshot' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
+    const context = cleanText(req.body?.text || req.body?.context || 'User: We planned a friendly weekend meetup. Friend: Bring something bright and funny.', 4000);
+    const style = normalizeChatShotStyle(req.body?.style, 'comic');
+    const startedAt = Date.now();
+    try {
+      const prompt = await generateChatShotSafePrompt(bot, style, context);
+      res.json({
+        ok: true,
+        result: {
+          text: prompt,
+          latencyMs: Date.now() - startedAt,
+          model: bot.response_model || getGlobalSettings().default_response_model,
+        },
+      });
+    } catch (error) {
+      res.status(error.status || 400).json({ ok: false, error: errorText(error, 'OpenAI ChatShot test failed') });
+    }
+  });
+
+  app.get('/api/admin/openai-chatshot-bots/:id(\\d+)/export', auth, adminOnly, (req, res) => {
+    const rawBot = providerBotByRequestId(req, res, { provider: 'openai', kind: 'chatshot' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
+    const payload = buildChatShotExportPayload(bot);
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = `bananza-openai-chatshot-${safeFilenamePart(bot.mention || bot.name)}-${date}.json`;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(JSON.stringify(payload, null, 2));
+  });
+
+  app.post('/api/admin/openai-chatshot-bots/import', auth, adminOnly, async (req, res) => {
+    const source = req.body?.bot && typeof req.body.bot === 'object' ? req.body.bot : (req.body || {});
+    const warnings = [];
+    const input = await buildChatShotImportInput('openai', source, warnings);
+    const requestedMention = normalizeMention(source.mention || source.name || 'openai_chatshot');
+    if (input.mention !== requestedMention) {
+      warnings.push(`Mention "@${requestedMention}" is already taken; imported as "@${input.mention}".`);
+    }
+    const bot = sanitizeBot(createBotTx(input));
+    broadcastChatShotBotUpdatedForBot(bot.id, [bot]);
+    res.json({ bot, warnings, state: serializeOpenAiChatShotAdminState() });
   });
 
   app.get('/api/admin/openai-universal-bots', auth, adminOnly, (_req, res) => {
@@ -7359,6 +8287,89 @@ function createAiBotFeature({
     res.json({ bot, warnings, state: serializeGrokConvertAdminState() });
   });
 
+  app.get('/api/admin/grok-chatshot-bots', auth, adminOnly, (_req, res) => {
+    res.json(serializeGrokChatShotAdminState());
+  });
+
+  app.post('/api/admin/grok-chatshot-bots', auth, adminOnly, (req, res) => {
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'grok', kind: 'chatshot' });
+    const bot = sanitizeBot(createBotTx(input));
+    broadcastChatShotBotUpdatedForBot(bot.id, [bot]);
+    res.json({ bot, state: serializeGrokChatShotAdminState() });
+  });
+
+  app.put('/api/admin/grok-chatshot-bots/chat-settings', auth, adminOnly, (req, res) => {
+    return saveChatShotAdminChatSetting(req, res, { provider: 'grok' });
+  });
+
+  app.put('/api/admin/grok-chatshot-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = providerBotByRequestId(req, res, { provider: 'grok', kind: 'chatshot' });
+    if (!current) return;
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'grok', kind: 'chatshot' }, current);
+    updateChatShotBot('grok', current, input);
+    const updated = botByIdStmt.get(current.id);
+    syncBotMemberships(updated, updated?.enabled !== 0);
+    broadcastChatShotBotUpdatedForBot(current.id, [current, updated]);
+    res.json({ bot: sanitizeBot(updated), state: serializeGrokChatShotAdminState() });
+  });
+
+  app.delete('/api/admin/grok-chatshot-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = providerBotByRequestId(req, res, { provider: 'grok', kind: 'chatshot' });
+    if (!current) return;
+    db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
+    db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
+    syncBotMemberships(current, false);
+    broadcastChatShotBotUpdatedForBot(current.id, [current]);
+    res.json({ ok: true, state: serializeGrokChatShotAdminState() });
+  });
+
+  app.post('/api/admin/grok-chatshot-bots/:id(\\d+)/test', auth, adminOnly, async (req, res) => {
+    const rawBot = providerBotByRequestId(req, res, { provider: 'grok', kind: 'chatshot' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
+    const context = cleanText(req.body?.text || req.body?.context || 'User: We planned a friendly weekend meetup. Friend: Bring something bright and funny.', 4000);
+    const style = normalizeChatShotStyle(req.body?.style, 'comic');
+    const startedAt = Date.now();
+    try {
+      const prompt = await generateChatShotSafePrompt(bot, style, context);
+      res.json({
+        ok: true,
+        result: {
+          text: prompt,
+          latencyMs: Date.now() - startedAt,
+          model: bot.response_model || getGlobalSettings().grok_default_response_model,
+        },
+      });
+    } catch (error) {
+      res.status(error.status || 400).json({ ok: false, error: errorText(error, 'Grok ChatShot test failed') });
+    }
+  });
+
+  app.get('/api/admin/grok-chatshot-bots/:id(\\d+)/export', auth, adminOnly, (req, res) => {
+    const rawBot = providerBotByRequestId(req, res, { provider: 'grok', kind: 'chatshot' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
+    const payload = buildChatShotExportPayload(bot);
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = `bananza-grok-chatshot-${safeFilenamePart(bot.mention || bot.name)}-${date}.json`;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(JSON.stringify(payload, null, 2));
+  });
+
+  app.post('/api/admin/grok-chatshot-bots/import', auth, adminOnly, async (req, res) => {
+    const source = req.body?.bot && typeof req.body.bot === 'object' ? req.body.bot : (req.body || {});
+    const warnings = [];
+    const input = await buildChatShotImportInput('grok', source, warnings);
+    const requestedMention = normalizeMention(source.mention || source.name || 'grok_chatshot');
+    if (input.mention !== requestedMention) {
+      warnings.push(`Mention "@${requestedMention}" is already taken; imported as "@${input.mention}".`);
+    }
+    const bot = sanitizeBot(createBotTx(input));
+    broadcastChatShotBotUpdatedForBot(bot.id, [bot]);
+    res.json({ bot, warnings, state: serializeGrokChatShotAdminState() });
+  });
+
   app.get('/api/admin/grok-universal-bots', auth, adminOnly, (_req, res) => {
     res.json(serializeGrokUniversalAdminState());
   });
@@ -7657,6 +8668,8 @@ function createAiBotFeature({
     handleMessageDeleted,
     enqueueMemoryForMessage,
     transformText,
+    getChatShotState,
+    generateChatShotForChat,
     listSelectableBotUsersForViewer,
     getSelectableBotByUserId,
     getActiveChatBotsForViewer,
@@ -7680,7 +8693,12 @@ module.exports = {
   __private: {
     normalizeBotKind,
     isContextTransformBot,
+    isChatShotBot,
     serializeContextConvertBot,
+    serializeChatShotBot,
+    sanitizeChatShotPrompt,
+    normalizeChatShotStyle,
+    normalizeChatShotPromptText,
     isChatSelectableBotKind,
     userFacingBotModel,
   },

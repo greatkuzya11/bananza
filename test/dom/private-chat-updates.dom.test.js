@@ -97,6 +97,20 @@ function installAppRuntimeStubs(dom, { fetchHandler = null } = {}) {
       const handled = await fetchHandler({ url, init, dom, currentUser });
       if (handled) return handled;
     }
+    const chatShotMatch = url.pathname.match(/^\/api\/chats\/(\d+)\/chatshot$/);
+    if (chatShotMatch) {
+      return createJsonResponse(dom, {
+        chatId: Number(chatShotMatch[1]),
+        enabled: false,
+        requested_enabled: false,
+        botId: null,
+        style: 'comic',
+        ready: false,
+        message_count: 0,
+        bots: [],
+        selectedBot: null,
+      });
+    }
     switch (url.pathname) {
       case '/api/auth/me':
         return createJsonResponse(dom, { user: currentUser });

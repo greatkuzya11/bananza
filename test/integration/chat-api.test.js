@@ -64,6 +64,32 @@ async function createOpenAiConvertBot(admin, {
   return response.data.bot;
 }
 
+async function createOpenAiChatShotBot(admin, {
+  name,
+  availableInAllChats = false,
+  enabled = true,
+} = {}) {
+  const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const response = await admin.request('/api/admin/openai-chatshot-bots', {
+    method: 'POST',
+    json: {
+      name: name || `ChatShot ${token}`.slice(0, 30),
+      enabled,
+      available_in_all_chats: availableInAllChats,
+      response_model: 'gpt-4o-mini',
+      image_model: 'gpt-image-2',
+      image_resolution: '1024x1024',
+      image_quality: 'auto',
+      image_background: 'auto',
+      image_output_format: 'png',
+      temperature: 0.3,
+      max_tokens: 900,
+      chatshot_context_limit: 12,
+    },
+  });
+  return response.data.bot;
+}
+
 async function enableOpenAiForTests(admin, overrides = {}) {
   const response = await admin.request('/api/admin/ai-bots/settings', {
     method: 'PUT',
@@ -328,6 +354,98 @@ test('context convert all-chat availability respects chat-level gates and bot en
     assert.equal(chatBAfterDisable.data.enabled, true);
     assert.equal(responseHasBot(chatAAfterDisable, bot.id), false);
     assert.equal(responseHasBot(chatBAfterDisable, bot.id), false);
+  } finally {
+    await admin.request('/api/admin/ai-bots/settings', {
+      method: 'PUT',
+      json: { enabled: false, openai_interactive_enabled: false },
+    }).catch(() => {});
+    db.close();
+  }
+});
+
+test('ChatShot can be enabled by a member and posts an image as chatShot without joining the chat', async () => {
+  const { admin, bob, carol } = scenario;
+  const db = new Database(path.join(sandbox.appDir, 'bananza.db'));
+
+  try {
+    await enableOpenAiForTests(admin, {
+      openai_default_image_model: 'gpt-image-2',
+      openai_default_image_size: '1024x1024',
+    });
+
+    const suffix = Date.now();
+    const chat = await admin.request('/api/chats', {
+      method: 'POST',
+      json: {
+        name: `ChatShot ${suffix}`,
+        type: 'group',
+        memberIds: [bob.user.id, carol.user.id],
+      },
+    });
+    const chatId = chat.data.id;
+    const bot = await createOpenAiChatShotBot(admin, { availableInAllChats: true });
+
+    const initialState = await bob.request(`/api/chats/${chatId}/chatshot`);
+    assert.equal(responseHasBot(initialState, bot.id), true);
+    assert.equal(initialState.data.enabled, false);
+    assert.equal(initialState.data.ready, false);
+    assert.equal(initialState.data.banana_filter_enabled, true);
+
+    const enabledState = await bob.request(`/api/chats/${chatId}/chatshot`, {
+      method: 'PUT',
+      json: {
+        enabled: true,
+        botId: bot.id,
+        style: 'photo',
+        bananaFilterEnabled: false,
+      },
+    });
+    assert.equal(enabledState.data.enabled, true);
+    assert.equal(enabledState.data.ready, false);
+    assert.equal(enabledState.data.style, 'photo');
+    assert.equal(enabledState.data.banana_filter_enabled, false);
+
+    const savedState = await bob.request(`/api/chats/${chatId}/chatshot`);
+    assert.equal(savedState.data.banana_filter_enabled, false);
+
+    await admin.request(`/api/chats/${chatId}/messages`, {
+      method: 'POST',
+      json: { text: 'Let us make a bright recap of this chat.' },
+    });
+    await bob.request(`/api/chats/${chatId}/messages`, {
+      method: 'POST',
+      json: { text: 'Yes, make it playful and banana friendly.' },
+    });
+
+    const readyState = await bob.request(`/api/chats/${chatId}/chatshot`);
+    assert.equal(readyState.data.ready, true);
+    assert.equal(readyState.data.message_count >= 2, true);
+    assert.equal(readyState.data.banana_filter_enabled, false);
+
+    const safeState = await bob.request(`/api/chats/${chatId}/chatshot`, {
+      method: 'PUT',
+      json: {
+        enabled: true,
+        botId: bot.id,
+        style: 'photo',
+        bananaFilterEnabled: true,
+      },
+    });
+    assert.equal(safeState.data.banana_filter_enabled, true);
+
+    const generated = await bob.request(`/api/chats/${chatId}/chatshot`, {
+      method: 'POST',
+      json: {},
+    });
+    assert.equal(generated.data.ok, true);
+    assert.equal(generated.data.message.display_name, 'chatShot');
+    assert.equal(generated.data.message.ai_bot_kind, 'chatshot');
+    assert.equal(generated.data.message.file_type, 'image');
+    assert.equal(generated.data.message.file_mime, 'image/svg+xml');
+
+    const botRow = db.prepare('SELECT user_id FROM ai_bots WHERE id=?').get(Number(bot.id));
+    const membership = db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, botRow.user_id);
+    assert.equal(Boolean(membership), false);
   } finally {
     await admin.request('/api/admin/ai-bots/settings', {
       method: 'PUT',

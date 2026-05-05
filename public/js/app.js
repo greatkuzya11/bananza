@@ -435,6 +435,37 @@
   };
   let contextConvertPickerPointerState = null;
   let contextConvertPickerClickSuppressUntil = 0;
+  let chatShotAdminStates = {
+    openai: {
+      settings: { ...aiBotState.settings },
+      bots: [],
+      chats: [],
+      chatSettings: [],
+      models: {
+        response: ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'],
+        image: ['gpt-image-2', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini'],
+        image_size: ['auto', '1024x1024', '1024x1536', '1536x1024'],
+        image_quality: ['auto', 'low', 'medium', 'high'],
+        image_background: ['auto', 'transparent', 'opaque'],
+        image_output_format: ['png', 'webp', 'jpeg'],
+      },
+    },
+    grok: {
+      settings: { ...grokBotState.settings },
+      bots: [],
+      chats: [],
+      chatSettings: [],
+      models: { ...grokBotState.models },
+    },
+  };
+  let selectedChatShotBotIds = {
+    openai: null,
+    grok: null,
+  };
+  let activeChatShotProvider = 'openai';
+  let chatShotStateByChat = new Map();
+  let chatShotStateRequests = new Map();
+  let chatShotGeneratingByChat = new Set();
   let composerAiOverrideState = {
     target: null,
     mode: 'auto',
@@ -555,6 +586,7 @@
   const chatTitle = $('#chatTitle');
   const chatHeaderAvatar = $('#chatHeaderAvatar');
   const chatStatus = $('#chatStatus');
+  const chatShotBtn = $('#chatShotBtn');
   const pinnedBar = $('#pinnedBar');
   const messagesEl = $('#messages');
   const loadMoreWrap = $('#loadMoreWrap');
@@ -629,6 +661,7 @@
   const openAiTextBotsModal = $('#openAiTextBotsModal');
   const openAiUniversalBotsModal = $('#openAiUniversalBotsModal');
   const contextConvertBotsModal = $('#contextConvertBotsModal');
+  const chatShotBotsModal = $('#chatShotBotsModal');
   const yandexAiSettingsModal = $('#yandexAiSettingsModal');
   const deepseekAiSettingsModal = $('#deepseekAiSettingsModal');
   const deepseekAiTextBotsModal = $('#deepseekAiTextBotsModal');
@@ -1024,7 +1057,7 @@
     return Boolean(
       target instanceof Element
       && target.closest(
-        '#menuBtn, #settingsBtn, #searchBtn, #chatInfoBtn, #backBtn, #emojiBtn, #attachBtn, #mentionOpenBtn, #composerContextConvertBtn, #msgInput'
+        '#menuBtn, #settingsBtn, #searchBtn, #chatShotBtn, #chatInfoBtn, #backBtn, #emojiBtn, #attachBtn, #mentionOpenBtn, #composerContextConvertBtn, #msgInput'
       )
     );
   }
@@ -4658,6 +4691,7 @@
     if (!chat) {
       chatTitle.textContent = 'Chat';
       chatHeaderAvatar.style.display = 'none';
+      syncChatShotButton();
       return;
     }
     chatTitle.textContent = chat.name || 'Chat';
@@ -4669,6 +4703,7 @@
         avatarUrl: '',
         fallbackText: chat.avatar_emoji || NOTES_CHAT_EMOJI,
       });
+      syncChatShotButton();
       return;
     }
     if (chat.type === 'private' && chat.private_user) {
@@ -4678,6 +4713,7 @@
         avatarUrl: chat.private_user.avatar_url || '',
         fallbackText: initials(chat.private_user.display_name || chat.name || '?'),
       });
+      syncChatShotButton();
       return;
     }
     setAvatarElementVisual(chatHeaderAvatar, {
@@ -4686,6 +4722,7 @@
       avatarUrl: chat.avatar_url || '',
       fallbackText: chat.type === 'general' ? '🌐' : '👥',
     });
+    syncChatShotButton();
   }
 
   function refreshChatInfoPresentation(chat = chats.find(c => c.id === currentChatId)) {
@@ -4725,6 +4762,7 @@
       }
     }
     if (bgStyleSelect) bgStyleSelect.value = chat.background_style || 'cover';
+    renderChatShotForm(getCurrentChatShotState());
     renderChatDangerControls(chat);
   }
 
@@ -4821,6 +4859,10 @@
     if (idx < 0) return null;
     const current = chats[idx] || {};
     const previousContextTransform = !!current.context_transform_enabled;
+    const previousChatShotEnabled = !!current.chatshot_enabled;
+    const previousChatShotBotId = Number(current.chatshot_bot_id || 0);
+    const previousChatShotStyle = String(current.chatshot_style || '');
+    const previousChatShotBananaFilterEnabled = current.chatshot_banana_filter_enabled !== 0;
     chats[idx] = normalizeChatListEntry({
       ...current,
       ...nextChat,
@@ -4840,6 +4882,14 @@
     if (previousContextTransform !== !!updated?.context_transform_enabled) {
       invalidateContextConvertAvailability(chatId);
     }
+    if (
+      previousChatShotEnabled !== !!updated?.chatshot_enabled
+      || previousChatShotBotId !== Number(updated?.chatshot_bot_id || 0)
+      || previousChatShotStyle !== String(updated?.chatshot_style || '')
+      || previousChatShotBananaFilterEnabled !== (updated?.chatshot_banana_filter_enabled !== 0)
+    ) {
+      invalidateChatShotState(chatId);
+    }
     renderChatList(chatSearch.value);
     if (currentChatId === chatId) {
       renderCurrentChatHeader(updated);
@@ -4852,6 +4902,7 @@
     refreshChatInfoPresentation(updated);
     renderChatPinSettingsForm(updated);
     renderChatContextTransformForm(updated);
+    renderChatShotForm(getCurrentChatShotState());
     return updated;
   }
 
@@ -11517,6 +11568,8 @@
       aiBotSettingsModal,
       openAiTextBotsModal,
       openAiUniversalBotsModal,
+      contextConvertBotsModal,
+      chatShotBotsModal,
       yandexAiSettingsModal,
       deepseekAiSettingsModal,
       deepseekAiTextBotsModal,
@@ -12915,6 +12968,327 @@
     }
   }
 
+  function chatShotRouteBase(provider = 'openai') {
+    if (provider === 'grok') return '/api/admin/grok-chatshot-bots';
+    return '/api/admin/openai-chatshot-bots';
+  }
+
+  function currentChatShotAdminState() {
+    return chatShotAdminStates[activeChatShotProvider] || chatShotAdminStates.openai;
+  }
+
+  function currentChatShotAdminBot() {
+    const state = currentChatShotAdminState();
+    const selectedId = Number(selectedChatShotBotIds[activeChatShotProvider] || 0);
+    return state.bots.find((bot) => Number(bot.id) === selectedId) || null;
+  }
+
+  function getChatShotAdminChatSetting(chatId, botId) {
+    const state = currentChatShotAdminState();
+    return state.chatSettings.find((item) => Number(item.chat_id) === Number(chatId) && Number(item.bot_id) === Number(botId)) || null;
+  }
+
+  function setChatShotModalStatus(message, type = '') {
+    setInlineStatus('chatShotAdminStatus', message, type);
+  }
+
+  function setChatShotBotStatus(message, type = '') {
+    setInlineStatus(['chatShotBotEditorStatus', 'chatShotBotEditorStatusBottom'], message, type);
+  }
+
+  function setChatShotAdminChatStatus(message, type = '') {
+    setInlineStatus('chatShotBotChatStatus', message, type);
+  }
+
+  function mergeChatShotAdminState(provider = 'openai', data = {}) {
+    const state = data.state || data;
+    if (!chatShotAdminStates[provider]) return;
+    chatShotAdminStates[provider] = {
+      settings: state.settings || chatShotAdminStates[provider].settings,
+      bots: state.bots || chatShotAdminStates[provider].bots,
+      chats: state.chats || chatShotAdminStates[provider].chats,
+      chatSettings: state.chatSettings || chatShotAdminStates[provider].chatSettings,
+      models: state.models || chatShotAdminStates[provider].models,
+    };
+    if (provider === 'openai' && state.settings) syncSharedOpenAiSettings(state.settings);
+    if (provider === 'grok' && state.settings) grokBotState.settings = { ...grokBotState.settings, ...state.settings };
+    const bots = chatShotAdminStates[provider].bots || [];
+    if (selectedChatShotBotIds[provider] && !bots.some((bot) => Number(bot.id) === Number(selectedChatShotBotIds[provider]))) {
+      selectedChatShotBotIds[provider] = null;
+    }
+    if (!selectedChatShotBotIds[provider] && bots[0]) {
+      selectedChatShotBotIds[provider] = Number(bots[0].id);
+    }
+    chatShotStateByChat.clear();
+  }
+
+  function renderChatShotBotList() {
+    const list = $('#chatShotBotList');
+    if (!list) return;
+    const state = currentChatShotAdminState();
+    const selectedId = Number(selectedChatShotBotIds[activeChatShotProvider] || 0);
+    if (!state.bots.length) {
+      list.innerHTML = '<div class="ai-bot-empty">No ChatShot bots yet. Create the first one.</div>';
+      return;
+    }
+    list.innerHTML = state.bots.map((bot) => `
+      <button type="button" class="ai-bot-list-item${Number(bot.id) === selectedId ? ' active' : ''}" data-chat-shot-bot-id="${bot.id}">
+        <span class="ai-bot-list-main">
+          <span class="ai-bot-list-copy">
+            <strong>${esc(bot.name || 'ChatShot')}</strong>
+            <small>${bot.enabled ? 'enabled' : 'disabled'}${bot.available_in_all_chats ? ' В· all chats' : ''}${bot.image_model ? ` В· ${esc(bot.image_model)}` : ''}</small>
+          </span>
+        </span>
+      </button>
+    `).join('');
+  }
+
+  function renderChatShotAdminForm() {
+    const state = currentChatShotAdminState();
+    const bot = currentChatShotAdminBot() || null;
+    const isGrok = activeChatShotProvider === 'grok';
+    const responseModels = state.models?.response || [];
+    const imageModels = state.models?.image || [];
+    setAiModelSelectOptions('chatShotBotResponseModel', responseModels, bot?.response_model || responseModels[0] || '');
+    setAiModelSelectOptions('chatShotBotImageModel', imageModels, bot?.image_model || imageModels[0] || '');
+    setStaticSelectOptions('chatShotBotImageResolution', isGrok ? (state.models?.resolution || ['1k', '2k']) : (state.models?.image_size || OPENAI_IMAGE_SIZE_OPTIONS), bot?.image_resolution || (isGrok ? '1k' : '1024x1024'));
+    setStaticSelectOptions('chatShotBotImageQuality', state.models?.image_quality || OPENAI_IMAGE_QUALITY_OPTIONS, bot?.image_quality || 'auto');
+    setStaticSelectOptions('chatShotBotImageBackground', state.models?.image_background || OPENAI_IMAGE_BACKGROUND_OPTIONS, bot?.image_background || 'auto');
+    setStaticSelectOptions('chatShotBotImageOutputFormat', state.models?.image_output_format || OPENAI_IMAGE_OUTPUT_OPTIONS, bot?.image_output_format || 'png');
+    setStaticSelectOptions('chatShotBotAspectRatio', state.models?.aspect_ratio || ['1:1', '16:9', '9:16', 'auto'], bot?.image_aspect_ratio || '1:1');
+    $('#chatShotBotName').value = bot?.name || `${contextConvertProviderLabel(activeChatShotProvider)} ChatShot`;
+    $('#chatShotBotContextLimit').value = bot?.chatshot_context_limit ?? 50;
+    $('#chatShotBotTemperature').value = bot?.temperature ?? 0.3;
+    $('#chatShotBotMaxTokens').value = bot?.max_tokens ?? 900;
+    $('#chatShotBotEnabled').checked = bot?.enabled !== false;
+    const allChatsToggle = $('#chatShotBotAvailableAllChats');
+    if (allChatsToggle) {
+      allChatsToggle.checked = !!bot?.available_in_all_chats;
+      allChatsToggle.disabled = !$('#chatShotBotEnabled')?.checked;
+    }
+    $('#chatShotBotGrokAspectWrap')?.classList.toggle('hidden', !isGrok);
+    $('#chatShotBotOpenAiQualityWrap')?.classList.toggle('hidden', isGrok);
+    $('#chatShotBotOpenAiBackgroundWrap')?.classList.toggle('hidden', isGrok);
+    $('#chatShotBotOpenAiOutputWrap')?.classList.toggle('hidden', isGrok);
+  }
+
+  function renderChatShotAdminChatSettings() {
+    const state = currentChatShotAdminState();
+    const chatSelect = $('#chatShotBotChatSelect');
+    const botSelect = $('#chatShotBotChatBotSelect');
+    if (!chatSelect || !botSelect) return;
+    const currentChatValue = chatSelect.value || String(currentChatId || state.chats[0]?.id || '');
+    const currentBotValue = botSelect.value || String(selectedChatShotBotIds[activeChatShotProvider] || state.bots[0]?.id || '');
+    chatSelect.innerHTML = state.chats.map((chat) => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+    botSelect.innerHTML = state.bots.map((bot) => `<option value="${bot.id}">${esc(bot.name)}</option>`).join('');
+    if (state.chats.some((chat) => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
+    if (state.bots.some((bot) => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;
+    if (!botSelect.value && state.bots[0]) botSelect.value = String(state.bots[0].id);
+    const setting = getChatShotAdminChatSetting(chatSelect.value, botSelect.value);
+    const bot = state.bots.find((item) => Number(item.id) === Number(botSelect.value));
+    const isGlobalBot = !!bot?.available_in_all_chats;
+    const chatEnabledToggle = $('#chatShotBotChatEnabled');
+    if (chatEnabledToggle) {
+      chatEnabledToggle.checked = isGlobalBot || !!setting?.enabled;
+      chatEnabledToggle.disabled = isGlobalBot;
+    }
+    const saveButton = $('#chatShotBotChatSave');
+    if (saveButton) saveButton.disabled = isGlobalBot;
+  }
+
+  function renderChatShotAdminSettings() {
+    $('#chatShotModalTitle').textContent = `${contextConvertProviderLabel(activeChatShotProvider)} ChatShot Bots`;
+    renderChatShotBotList();
+    renderChatShotAdminForm();
+    renderChatShotAdminChatSettings();
+  }
+
+  function chatShotAdminFormPayload() {
+    return {
+      name: $('#chatShotBotName')?.value.trim(),
+      enabled: $('#chatShotBotEnabled')?.checked,
+      available_in_all_chats: $('#chatShotBotAvailableAllChats')?.checked,
+      response_model: $('#chatShotBotResponseModel')?.value.trim(),
+      image_model: $('#chatShotBotImageModel')?.value.trim(),
+      image_resolution: $('#chatShotBotImageResolution')?.value.trim(),
+      image_quality: $('#chatShotBotImageQuality')?.value.trim(),
+      image_background: $('#chatShotBotImageBackground')?.value.trim(),
+      image_output_format: $('#chatShotBotImageOutputFormat')?.value.trim(),
+      image_aspect_ratio: $('#chatShotBotAspectRatio')?.value.trim(),
+      chatshot_context_limit: Number($('#chatShotBotContextLimit')?.value || 50),
+      temperature: Number($('#chatShotBotTemperature')?.value || 0.3),
+      max_tokens: Number($('#chatShotBotMaxTokens')?.value || 900),
+    };
+  }
+
+  async function loadChatShotAdminState(provider = activeChatShotProvider) {
+    const data = await api(chatShotRouteBase(provider));
+    mergeChatShotAdminState(provider, data);
+    if (provider === activeChatShotProvider) renderChatShotAdminSettings();
+    return data;
+  }
+
+  function openChatShotBotsModal(provider = 'openai') {
+    if (!currentUser?.is_admin) return;
+    activeChatShotProvider = provider === 'grok' ? 'grok' : 'openai';
+    const openerId = activeChatShotProvider === 'grok' ? 'grokAiOpenChatShotBots' : 'openAiOpenChatShotBots';
+    openModal('chatShotBotsModal', { replaceStack: false, opener: $(`#${openerId}`) });
+    resetManagedModalScroll('chatShotBotsModal');
+    setChatShotModalStatus('Loading...');
+    const state = chatShotAdminStates[activeChatShotProvider];
+    if (state?.bots?.length || state?.chats?.length) {
+      renderChatShotAdminSettings();
+      setChatShotModalStatus('Refreshing...');
+    }
+    loadChatShotAdminState(activeChatShotProvider).then(() => {
+      renderChatShotAdminSettings();
+      resetManagedModalScroll('chatShotBotsModal');
+      setChatShotModalStatus('');
+    }).catch((error) => {
+      setChatShotModalStatus(error.message || 'Could not load ChatShot bots', 'error');
+    });
+  }
+
+  async function saveChatShotAdminBot() {
+    const payload = chatShotAdminFormPayload();
+    if (!payload.name) {
+      setChatShotBotStatus('Enter bot name', 'error');
+      return;
+    }
+    const selectedId = Number(selectedChatShotBotIds[activeChatShotProvider] || 0);
+    const state = currentChatShotAdminState();
+    const shouldUpdate = Boolean(selectedId && state.bots.some((bot) => Number(bot.id) === selectedId));
+    const url = shouldUpdate ? `${chatShotRouteBase(activeChatShotProvider)}/${selectedId}` : chatShotRouteBase(activeChatShotProvider);
+    setChatShotBotStatus('Saving...');
+    try {
+      const data = await api(url, { method: shouldUpdate ? 'PUT' : 'POST', body: payload });
+      mergeChatShotAdminState(activeChatShotProvider, data);
+      selectedChatShotBotIds[activeChatShotProvider] = Number(data.bot?.id || selectedId || 0) || null;
+      renderChatShotAdminSettings();
+      setChatShotBotStatus('ChatShot bot saved', 'success');
+    } catch (error) {
+      setChatShotBotStatus(error.message || 'Could not save ChatShot bot', 'error');
+    }
+  }
+
+  async function disableChatShotAdminBot() {
+    const bot = currentChatShotAdminBot();
+    if (!bot) return;
+    if (!confirm('Disable this ChatShot bot in all chats?')) return;
+    try {
+      const data = await api(`${chatShotRouteBase(activeChatShotProvider)}/${bot.id}`, { method: 'DELETE' });
+      mergeChatShotAdminState(activeChatShotProvider, data);
+      renderChatShotAdminSettings();
+      setChatShotBotStatus('ChatShot bot disabled', 'success');
+    } catch (error) {
+      setChatShotBotStatus(error.message || 'Could not disable ChatShot bot', 'error');
+    }
+  }
+
+  async function testChatShotAdminBot() {
+    const bot = currentChatShotAdminBot();
+    if (!bot) {
+      setChatShotBotStatus('Save a ChatShot bot first', 'error');
+      return;
+    }
+    const sample = window.prompt('Chat context for test prompt:', 'User: We planned a friendly weekend meetup. Friend: Bring something bright and funny.');
+    if (sample == null) return;
+    setChatShotBotStatus('Testing...');
+    try {
+      const data = await api(`${chatShotRouteBase(activeChatShotProvider)}/${bot.id}/test`, {
+        method: 'POST',
+        body: { text: sample, style: 'comic' },
+      });
+      const text = String(data.result?.text || '').trim().slice(0, 600);
+      setChatShotBotStatus(`Success (${data.result?.latencyMs || 0} ms): ${text}`, 'success');
+    } catch (error) {
+      setChatShotBotStatus(error.message || 'ChatShot bot test failed', 'error');
+    }
+  }
+
+  async function exportChatShotAdminBot() {
+    const bot = currentChatShotAdminBot();
+    if (!bot) {
+      setChatShotBotStatus('Select a saved ChatShot bot first', 'error');
+      return;
+    }
+    setChatShotBotStatus('Preparing JSON...');
+    try {
+      const res = await fetch(`${chatShotRouteBase(activeChatShotProvider)}/${bot.id}/export`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Export failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filenameFromContentDisposition(
+        res.headers.get('content-disposition'),
+        `bananza-${activeChatShotProvider}-chatshot-${bot.id}.json`
+      );
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setChatShotBotStatus('JSON exported', 'success');
+    } catch (error) {
+      setChatShotBotStatus(error.message || 'Could not export JSON', 'error');
+    }
+  }
+
+  async function importChatShotAdminBot(file) {
+    if (!file) return;
+    setChatShotBotStatus('Importing JSON...');
+    try {
+      const raw = await file.text();
+      const payload = JSON.parse(raw);
+      const data = await api(`${chatShotRouteBase(activeChatShotProvider)}/import`, {
+        method: 'POST',
+        body: payload,
+      });
+      mergeChatShotAdminState(activeChatShotProvider, data);
+      selectedChatShotBotIds[activeChatShotProvider] = Number(data.bot?.id || 0) || selectedChatShotBotIds[activeChatShotProvider];
+      renderChatShotAdminSettings();
+      const warnings = Array.isArray(data.warnings) && data.warnings.length ? ` ${data.warnings.join(' ')}` : '';
+      setChatShotBotStatus(`JSON imported.${warnings}`.trim(), warnings ? 'warning' : 'success');
+    } catch (error) {
+      setChatShotBotStatus(error.message || 'Could not import JSON', 'error');
+    }
+  }
+
+  async function saveChatShotAdminChatSetting() {
+    const chatId = Number($('#chatShotBotChatSelect')?.value || 0);
+    const botId = Number($('#chatShotBotChatBotSelect')?.value || 0);
+    if (!chatId || !botId) {
+      setChatShotAdminChatStatus('Select chat and bot', 'error');
+      return;
+    }
+    const state = currentChatShotAdminState();
+    const bot = state.bots.find((item) => Number(item.id) === Number(botId));
+    if (bot?.available_in_all_chats) {
+      renderChatShotAdminChatSettings();
+      setChatShotAdminChatStatus('This bot is already available in all chats', 'success');
+      return;
+    }
+    setChatShotAdminChatStatus('Saving...');
+    try {
+      const data = await api(`${chatShotRouteBase(activeChatShotProvider)}/chat-settings`, {
+        method: 'PUT',
+        body: {
+          chatId,
+          botId,
+          enabled: $('#chatShotBotChatEnabled')?.checked,
+        },
+      });
+      mergeChatShotAdminState(activeChatShotProvider, data);
+      invalidateChatShotState(chatId);
+      renderChatShotAdminChatSettings();
+      setChatShotAdminChatStatus('Chat setting saved', 'success');
+    } catch (error) {
+      setChatShotAdminChatStatus(error.message || 'Could not save chat setting', 'error');
+    }
+  }
+
   function normalizeContextConvertAvailability(data = {}) {
     return {
       enabled: !!data.enabled,
@@ -12955,6 +13329,168 @@
     contextConvertAvailabilityRequests.delete(id);
     if (id === Number(currentChatId || 0)) {
       syncCurrentChatContextConvertUi();
+    }
+  }
+
+  function normalizeChatShotState(data = {}) {
+    return {
+      chatId: Number(data.chatId || data.chat_id || 0),
+      enabled: !!data.enabled,
+      requested_enabled: !!data.requested_enabled,
+      botId: Number(data.botId || data.bot_id || 0) || null,
+      style: ['comic', 'illustration', 'photo'].includes(String(data.style || '').toLowerCase()) ? String(data.style).toLowerCase() : 'comic',
+      banana_filter_enabled: data.banana_filter_enabled !== false
+        && data.banana_filter_enabled !== 0
+        && data.bananaFilterEnabled !== false
+        && data.bananaFilterEnabled !== 0,
+      ready: !!data.ready,
+      message_count: Number(data.message_count || 0),
+      bots: Array.isArray(data.bots) ? data.bots.map((bot) => ({
+        id: Number(bot.id || 0),
+        name: bot.name || 'ChatShot',
+        provider: bot.provider || 'openai',
+        image_model: bot.image_model || '',
+      })).filter((bot) => bot.id > 0) : [],
+      selectedBot: data.selectedBot || data.selected_bot || null,
+    };
+  }
+
+  function getCurrentChatShotState() {
+    return chatShotStateByChat.get(Number(currentChatId || 0)) || null;
+  }
+
+  function setChatShotChatStatus(message, type = '') {
+    const el = $('#chatShotChatStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', type === 'error');
+    el.classList.toggle('is-success', type === 'success');
+  }
+
+  async function loadChatShotState(chatId = currentChatId, { force = false } = {}) {
+    const id = Number(chatId || 0);
+    if (!id) return null;
+    if (!force && chatShotStateByChat.has(id)) return chatShotStateByChat.get(id);
+    if (!force && chatShotStateRequests.has(id)) return chatShotStateRequests.get(id);
+    const request = api(`/api/chats/${id}/chatshot`)
+      .then((data) => {
+        const normalized = normalizeChatShotState(data);
+        chatShotStateByChat.set(id, normalized);
+        chatShotStateRequests.delete(id);
+        if (id === Number(currentChatId || 0)) {
+          renderChatShotForm(normalized);
+          syncChatShotButton();
+        }
+        return normalized;
+      })
+      .catch((error) => {
+        chatShotStateRequests.delete(id);
+        if (id === Number(currentChatId || 0)) {
+          chatShotStateByChat.delete(id);
+          syncChatShotButton();
+        }
+        throw error;
+      });
+    chatShotStateRequests.set(id, request);
+    return request;
+  }
+
+  function invalidateChatShotState(chatId) {
+    const id = Number(chatId || 0);
+    if (!id) return;
+    chatShotStateByChat.delete(id);
+    chatShotStateRequests.delete(id);
+    if (id === Number(currentChatId || 0)) {
+      syncChatShotButton();
+      if (!chatInfoModal?.classList.contains('hidden')) {
+        loadChatShotState(id, { force: true }).catch((error) => {
+          renderChatShotForm(null);
+          setChatShotChatStatus(error.message || 'Could not load ChatShot', 'error');
+        });
+      }
+    }
+  }
+
+  function renderChatShotForm(state = getCurrentChatShotState()) {
+    const section = $('#chatShotSection');
+    const toggle = $('#chatShotToggle');
+    const botSelect = $('#chatShotBotSelect');
+    const styleSelect = $('#chatShotStyleSelect');
+    const bananaFilterToggle = $('#chatShotBananaFilterToggle');
+    if (!section || !toggle || !botSelect || !styleSelect || !bananaFilterToggle) return;
+    const bots = Array.isArray(state?.bots) ? state.bots : [];
+    section.classList.toggle('hidden', !bots.length);
+    toggle.checked = !!state?.enabled || !!state?.requested_enabled;
+    toggle.disabled = !bots.length;
+    const selectedBotId = Number(state?.botId || state?.selectedBot?.id || bots[0]?.id || 0);
+    botSelect.innerHTML = bots.map((bot) => `<option value="${bot.id}">${esc(bot.name)} (${esc(contextConvertProviderLabel(bot.provider))})</option>`).join('');
+    if (bots.some((bot) => Number(bot.id) === selectedBotId)) botSelect.value = String(selectedBotId);
+    botSelect.disabled = !bots.length || bots.length === 1;
+    styleSelect.value = state?.style || 'comic';
+    bananaFilterToggle.checked = state?.banana_filter_enabled !== false;
+    bananaFilterToggle.disabled = !bots.length;
+    const messageCount = Number(state?.message_count || 0);
+    if (!bots.length) setChatShotChatStatus('');
+    else if (toggle.checked && messageCount < 2) setChatShotChatStatus('ChatShot включится после двух сообщений в чате.');
+    else setChatShotChatStatus('');
+  }
+
+  async function saveChatShotChatSetting() {
+    if (!currentChatId) return;
+    const previous = getCurrentChatShotState();
+    const payload = {
+      enabled: $('#chatShotToggle')?.checked,
+      botId: Number($('#chatShotBotSelect')?.value || previous?.botId || 0) || null,
+      style: $('#chatShotStyleSelect')?.value || previous?.style || 'comic',
+      bananaFilterEnabled: $('#chatShotBananaFilterToggle')?.checked !== false,
+    };
+    setChatShotChatStatus('Saving...');
+    try {
+      const data = await api(`/api/chats/${currentChatId}/chatshot`, {
+        method: 'PUT',
+        body: payload,
+      });
+      const normalized = normalizeChatShotState(data);
+      chatShotStateByChat.set(Number(currentChatId), normalized);
+      renderChatShotForm(normalized);
+      syncChatShotButton();
+      setChatShotChatStatus('Saved', 'success');
+    } catch (error) {
+      if (previous) {
+        chatShotStateByChat.set(Number(currentChatId), previous);
+        renderChatShotForm(previous);
+      }
+      syncChatShotButton();
+      setChatShotChatStatus(error.message || 'Could not save ChatShot setting', 'error');
+    }
+  }
+
+  function syncChatShotButton() {
+    if (!chatShotBtn) return;
+    const chatId = Number(currentChatId || 0);
+    const state = getCurrentChatShotState();
+    const generating = chatShotGeneratingByChat.has(chatId);
+    const shouldShow = Boolean(chatId && (generating || (state?.enabled && state?.ready && state?.botId)));
+    chatShotBtn.classList.toggle('hidden', !shouldShow);
+    chatShotBtn.classList.toggle('is-pending', generating);
+    chatShotBtn.disabled = generating || !shouldShow;
+    if (chatId && !state && !chatShotStateRequests.has(chatId)) {
+      loadChatShotState(chatId).catch(() => {});
+    }
+  }
+
+  async function runChatShotGeneration() {
+    const chatId = Number(currentChatId || 0);
+    if (!chatId || chatShotGeneratingByChat.has(chatId)) return;
+    chatShotGeneratingByChat.add(chatId);
+    syncChatShotButton();
+    try {
+      await api(`/api/chats/${chatId}/chatshot`, { method: 'POST', body: {} });
+    } catch (error) {
+      showCenterToast(error.message || 'ChatShot generation failed');
+    } finally {
+      chatShotGeneratingByChat.delete(chatId);
+      syncChatShotButton();
     }
   }
 
@@ -13521,6 +14057,19 @@
             }
           }
         }
+        if (
+          Number(msg.message.chat_id || 0) === Number(currentChatId || 0)
+          && String(msg.message.ai_bot_kind || '').toLowerCase() !== 'chatshot'
+        ) {
+          const state = getCurrentChatShotState();
+          if (state) {
+            state.message_count = Number(state.message_count || 0) + 1;
+            state.ready = Boolean(state.enabled && state.botId && state.message_count >= 2);
+            chatShotStateByChat.set(Number(currentChatId), state);
+            syncChatShotButton();
+            if (!chatInfoModal?.classList.contains('hidden')) renderChatShotForm(state);
+          }
+        }
         // Fallback notification for old/no-push browsers while this page is still running.
         if (
           document.hidden &&
@@ -13584,7 +14133,7 @@
       case 'typing': {
         if (msg.chatId === currentChatId && msg.userId !== currentUser.id) {
           if (msg.isTyping === false) hideTyping(msg.username);
-          else showTyping(msg.username);
+          else showTyping(msg.username, msg);
         }
         break;
       }
@@ -13681,6 +14230,13 @@
         invalidateContextConvertAvailability(msg.chatId || msg.chat_id);
         if (Number(msg.chatId || msg.chat_id || 0) === Number(currentChatId || 0)) {
           loadContextConvertAvailability(currentChatId, { force: true }).catch(() => {});
+        }
+        break;
+      }
+      case 'chatshot_bots_updated': {
+        invalidateChatShotState(msg.chatId || msg.chat_id);
+        if (Number(msg.chatId || msg.chat_id || 0) === Number(currentChatId || 0)) {
+          loadChatShotState(currentChatId, { force: true }).catch(() => {});
         }
         break;
       }
@@ -14936,6 +15492,8 @@
       if (editTo) clearEdit({ clearInput: true });
       syncMentionOpenButton();
       loadContextConvertAvailability(targetChatId).catch(() => {});
+      loadChatShotState(targetChatId).catch(() => {});
+      syncChatShotButton();
       if (window.innerWidth > 768) msgInput.focus();
       refreshPollComposerActionState();
       window.BananzaVoiceHooks?.refreshComposerState?.();
@@ -15897,9 +16455,10 @@
     const group = document.createElement('div');
     group.className = 'msg-group';
     group.dataset.userId = msg.user_id;
+    const isChatShotMessage = String(msg.ai_bot_kind || '').toLowerCase() === 'chatshot';
     const avatarColor = isOwn ? (currentUser.avatar_color || '#65aadd') : (msg.avatar_color || '#65aadd');
-    const avatarUrl = isOwn ? currentUser.avatar_url : msg.avatar_url;
-    const name = isOwn ? currentUser.display_name : msg.display_name;
+    const avatarUrl = isChatShotMessage ? '' : (isOwn ? currentUser.avatar_url : msg.avatar_url);
+    const name = isChatShotMessage ? 'chatShot' : (isOwn ? currentUser.display_name : msg.display_name);
     const isAiBot = !isOwn && (Number(msg.is_ai_bot) !== 0 || Number(msg.ai_bot_id) > 0 || Number(msg.ai_generated) > 0);
     const mentionToken = isAiBot ? (msg.ai_bot_mention || msg.username) : (isOwn ? currentUser.username : msg.username);
     const avatar = document.createElement('div');
@@ -15915,6 +16474,7 @@
       name: name || '',
       color: avatarColor,
       avatarUrl: avatarUrl || '',
+      fallbackText: isChatShotMessage ? '🍌' : '',
     });
     group.appendChild(avatar);
     const body = document.createElement('div');
@@ -16023,6 +16583,9 @@
   }
 
   function createMessageEl(msg, showName = true, options = {}) {
+    if (String(msg?.ai_bot_kind || '').toLowerCase() === 'chatshot') {
+      msg = { ...msg, display_name: 'chatShot', avatar_url: '', avatar_color: msg.avatar_color || '#f4c542' };
+    }
     applyOwnReadStateToMessage(msg, msg?.chat_id || msg?.chatId || currentChatId);
     const isOwn = msg.user_id === currentUser.id;
     const isClientMessage = isClientSideMessage(msg);
@@ -18518,8 +19081,11 @@
   // TYPING INDICATOR
   // ═══════════════════════════════════════════════════════════════════════════
   function renderTypingBar() {
-    const names = Object.keys(typingDisplayTimeouts);
-    if (names.length === 0) {
+    const entries = Object.entries(typingDisplayTimeouts).map(([name, item]) => ({
+      name,
+      activity: item?.activity || 'typing',
+    }));
+    if (entries.length === 0) {
       typingBar.classList.add('hidden');
       typingBar.replaceChildren();
       return;
@@ -18527,9 +19093,11 @@
 
     const label = document.createElement('span');
     label.className = 'typing-bar-label';
-    label.textContent = names.length === 1
-      ? `${names[0]} печатает`
-      : `${names.join(', ')} печатают`;
+    const chatShotEntry = entries.find((entry) => entry.activity === 'chatshot_generating');
+    const names = entries.map((entry) => entry.name);
+    label.textContent = chatShotEntry
+      ? 'chatShot генерируется'
+      : (names.length === 1 ? `${names[0]} печатает` : `${names.join(', ')} печатают`);
 
     const dots = document.createElement('span');
     dots.className = 'typing-bar-dots';
@@ -18546,19 +19114,22 @@
     typingBar.replaceChildren(label, dots);
   }
 
-  function showTyping(username) {
+  function showTyping(username, options = {}) {
     const name = username || 'Someone';
-    clearTimeout(typingDisplayTimeouts[name]);
-    typingDisplayTimeouts[name] = setTimeout(() => {
-      delete typingDisplayTimeouts[name];
-      renderTypingBar();
-    }, 3000);
+    clearTimeout(typingDisplayTimeouts[name]?.timer || typingDisplayTimeouts[name]);
+    typingDisplayTimeouts[name] = {
+      activity: options.activity || 'typing',
+      timer: setTimeout(() => {
+        delete typingDisplayTimeouts[name];
+        renderTypingBar();
+      }, 3000),
+    };
     renderTypingBar();
   }
 
   function hideTyping(username) {
     const name = username || 'Someone';
-    clearTimeout(typingDisplayTimeouts[name]);
+    clearTimeout(typingDisplayTimeouts[name]?.timer || typingDisplayTimeouts[name]);
     delete typingDisplayTimeouts[name];
     renderTypingBar();
   }
@@ -20523,6 +21094,11 @@
     await loadChatPreferences(currentChatId);
     renderChatPinSettingsForm(chat);
     renderChatContextTransformForm(chat);
+    renderChatShotForm(getCurrentChatShotState());
+    loadChatShotState(currentChatId, { force: true }).catch((error) => {
+      renderChatShotForm(null);
+      setChatShotChatStatus(error.message || 'Could not load ChatShot', 'error');
+    });
     renderChatDangerControls(chat);
     const contextTransformToggle = $('#chatContextTransformToggle');
     if (contextTransformToggle) {
@@ -20532,6 +21108,16 @@
         });
       };
     }
+    ['chatShotToggle', 'chatShotBotSelect', 'chatShotStyleSelect', 'chatShotBananaFilterToggle'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.onchange = () => {
+          saveChatShotChatSetting().catch((error) => {
+            setChatShotChatStatus(error.message || 'Could not save ChatShot setting', 'error');
+          });
+        };
+      }
+    });
 
     // Group edit section
     const editSection = $('#chatEditSection');
@@ -22719,6 +23305,7 @@
     $('#openAiOpenTextBots')?.addEventListener('click', openOpenAiTextBotsModal);
     $('#openAiOpenUniversalBots')?.addEventListener('click', openOpenAiUniversalBotsModal);
     $('#openAiOpenConvertBots')?.addEventListener('click', () => openContextConvertBotsModal('openai'));
+    $('#openAiOpenChatShotBots')?.addEventListener('click', () => openChatShotBotsModal('openai'));
     $('#aiBotCreateNew')?.addEventListener('click', () => {
       fillAiBotForm(null);
       setAiBotStatus('Новый бот: заполните поля и сохраните');
@@ -22840,6 +23427,7 @@
     $('#grokAiOpenImageBots')?.addEventListener('click', openGrokImageBotsModal);
     $('#grokAiOpenUniversalBots')?.addEventListener('click', openGrokUniversalBotsModal);
     $('#grokAiOpenConvertBots')?.addEventListener('click', () => openContextConvertBotsModal('grok'));
+    $('#grokAiOpenChatShotBots')?.addEventListener('click', () => openChatShotBotsModal('grok'));
     $('#grokAiBotCreateNew')?.addEventListener('click', () => {
       fillGrokBotForm(null);
       setGrokTextEditorStatus('New Grok text bot: fill fields and save');
@@ -22959,6 +23547,36 @@
     $('#contextConvertBotChatSelect')?.addEventListener('change', renderContextConvertChatSettings);
     $('#contextConvertBotChatBotSelect')?.addEventListener('change', renderContextConvertChatSettings);
     bindAsyncActionButtons('contextConvertBotChatSave', null, 'Saving...', saveContextConvertAdminChatSetting);
+    $('#chatShotBotCreateNew')?.addEventListener('click', () => {
+      selectedChatShotBotIds[activeChatShotProvider] = null;
+      renderChatShotAdminSettings();
+      setChatShotBotStatus('New ChatShot bot: fill fields and save');
+      setChatShotAdminChatStatus('');
+    });
+    bindAsyncActionButtons(['chatShotBotSave', 'chatShotBotSaveBottom'], null, 'Saving...', saveChatShotAdminBot);
+    bindAsyncActionButtons('chatShotBotDisable', null, 'Disabling...', disableChatShotAdminBot);
+    bindAsyncActionButtons('chatShotBotTest', null, 'Testing...', testChatShotAdminBot);
+    bindAsyncActionButtons('chatShotBotExportJson', null, 'Preparing...', exportChatShotAdminBot);
+    $('#chatShotBotEnabled')?.addEventListener('change', (event) => {
+      const allChatsToggle = $('#chatShotBotAvailableAllChats');
+      if (allChatsToggle) allChatsToggle.disabled = !event.target.checked;
+    });
+    $('#chatShotBotImportJson')?.addEventListener('click', () => $('#chatShotBotImportFile')?.click());
+    $('#chatShotBotImportFile')?.addEventListener('change', (event) => {
+      importChatShotAdminBot(event.target.files?.[0]);
+      event.target.value = '';
+    });
+    $('#chatShotBotList')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-chat-shot-bot-id]');
+      if (!btn) return;
+      selectedChatShotBotIds[activeChatShotProvider] = Number(btn.dataset.chatShotBotId || 0) || null;
+      renderChatShotAdminSettings();
+      setChatShotBotStatus('');
+      setChatShotAdminChatStatus('');
+    });
+    $('#chatShotBotChatSelect')?.addEventListener('change', renderChatShotAdminChatSettings);
+    $('#chatShotBotChatBotSelect')?.addEventListener('change', renderChatShotAdminChatSettings);
+    bindAsyncActionButtons('chatShotBotChatSave', null, 'Saving...', saveChatShotAdminChatSetting);
 
     // Change password save
     $('#cpSaveBtn').addEventListener('click', async () => {
@@ -22988,6 +23606,10 @@
     bindTouchSafeButtonActivation($('#chatInfoBtn'), () => {
       animateChatHeaderActionButton('#chatInfoBtn');
       openChatInfoModal($('#chatInfoBtn'));
+    });
+    bindTouchSafeButtonActivation(chatShotBtn, () => {
+      animateChatHeaderActionButton('#chatShotBtn');
+      runChatShotGeneration();
     });
 
     // Compact view toggle (per-chat)

@@ -771,6 +771,21 @@ function createChatFetchHandler(chatMessagesByChatId) {
     if (pinsMatch) {
       return createJsonResponse(dom, []);
     }
+    const chatShotMatch = url.pathname.match(/^\/api\/chats\/(\d+)\/chatshot$/);
+    if (chatShotMatch) {
+      const chatId = Number(chatShotMatch[1]);
+      return createJsonResponse(dom, {
+        chatId,
+        enabled: false,
+        requested_enabled: false,
+        botId: null,
+        style: 'comic',
+        ready: false,
+        message_count: (chatMessagesByChatId[chatId] || []).length,
+        bots: [],
+        selectedBot: null,
+      });
+    }
     return null;
   };
 }
@@ -779,6 +794,7 @@ function createComposerInteractionFetchHandler({
   chatMessagesByChatId = {},
   mentionTargetsByChatId = {},
   contextConvertAvailabilityByChatId = {},
+  chatShotStateByChatId = {},
 } = {}) {
   const chatFetchHandler = createChatFetchHandler(chatMessagesByChatId);
   return ({ dom, window, url, input, init }) => {
@@ -799,6 +815,21 @@ function createComposerInteractionFetchHandler({
         bots: [],
       });
     }
+    const chatShotMatch = url.pathname.match(/^\/api\/chats\/(\d+)\/chatshot$/);
+    if (chatShotMatch) {
+      const chatId = Number(chatShotMatch[1]);
+      return createJsonResponse(dom, chatShotStateByChatId[chatId] || {
+        chatId,
+        enabled: false,
+        requested_enabled: false,
+        botId: null,
+        style: 'comic',
+        ready: false,
+        message_count: (chatMessagesByChatId[chatId] || []).length,
+        bots: [],
+        selectedBot: null,
+      });
+    }
     const transformMatch = url.pathname.match(/^\/api\/chats\/(\d+)\/context-convert$/);
     if (transformMatch && String(init?.method || '').toUpperCase() === 'POST') {
       return createJsonResponse(dom, { text: 'Converted text' });
@@ -811,12 +842,14 @@ function createMediaPlaybackFetchHandler({
   chatMessagesByChatId = {},
   mentionTargetsByChatId = {},
   contextConvertAvailabilityByChatId = {},
+  chatShotStateByChatId = {},
   features = {},
 } = {}) {
   const composerHandler = createComposerInteractionFetchHandler({
     chatMessagesByChatId,
     mentionTargetsByChatId,
     contextConvertAvailabilityByChatId,
+    chatShotStateByChatId,
   });
   return ({ dom, window, url, input, init }) => {
     if (url.pathname === '/api/features') {
@@ -836,6 +869,7 @@ async function openSingleChatDom({
   chatMessagesByChatId = null,
   mentionTargetsByChatId = {},
   contextConvertAvailabilityByChatId = {},
+  chatShotStateByChatId = {},
 } = {}) {
   const chatId = Number(chat.id || 1);
   const dom = await bootAppDom({
@@ -843,6 +877,7 @@ async function openSingleChatDom({
       chatMessagesByChatId: chatMessagesByChatId || { [chatId]: [] },
       mentionTargetsByChatId,
       contextConvertAvailabilityByChatId,
+      chatShotStateByChatId,
     }),
   });
   dom.window.BananzaAppBridge.__testing.setChats([chat]);

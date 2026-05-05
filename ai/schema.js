@@ -46,6 +46,7 @@ function initAiSchema(db) {
       document_default_format TEXT DEFAULT 'md',
       transform_prompt TEXT DEFAULT '',
       available_in_all_chats INTEGER DEFAULT 0,
+      chatshot_context_limit INTEGER DEFAULT 50,
       temperature REAL DEFAULT NULL,
       max_tokens INTEGER DEFAULT NULL,
       created_at TEXT DEFAULT (datetime('now')),
@@ -312,7 +313,12 @@ function initAiSchema(db) {
   addColumnIfMissing(db, 'ai_bots', 'document_default_format', "document_default_format TEXT DEFAULT 'md'");
   addColumnIfMissing(db, 'ai_bots', 'transform_prompt', "transform_prompt TEXT DEFAULT ''");
   addColumnIfMissing(db, 'ai_bots', 'available_in_all_chats', 'available_in_all_chats INTEGER DEFAULT 0');
+  addColumnIfMissing(db, 'ai_bots', 'chatshot_context_limit', 'chatshot_context_limit INTEGER DEFAULT 50');
   addColumnIfMissing(db, 'ai_bots', 'visible_to_users', 'visible_to_users INTEGER DEFAULT 0');
+  addColumnIfMissing(db, 'chats', 'chatshot_enabled', 'chatshot_enabled INTEGER DEFAULT 0');
+  addColumnIfMissing(db, 'chats', 'chatshot_bot_id', 'chatshot_bot_id INTEGER DEFAULT NULL');
+  addColumnIfMissing(db, 'chats', 'chatshot_style', "chatshot_style TEXT DEFAULT 'comic'");
+  addColumnIfMissing(db, 'chats', 'chatshot_banana_filter_enabled', 'chatshot_banana_filter_enabled INTEGER DEFAULT 1');
   addColumnIfMissing(db, 'ai_chat_bots', 'auto_react_on_mention', 'auto_react_on_mention INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'users', 'is_ai_bot', 'is_ai_bot INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'messages', 'ai_generated', 'ai_generated INTEGER DEFAULT 0');
@@ -321,6 +327,9 @@ function initAiSchema(db) {
   addColumnIfMissing(db, 'messages', 'ai_document_format_hint', "ai_document_format_hint TEXT DEFAULT NULL");
 
   db.exec('CREATE INDEX IF NOT EXISTS idx_ai_bots_provider ON ai_bots(provider, enabled)');
+  db.prepare("UPDATE chats SET chatshot_enabled=0 WHERE chatshot_enabled IS NULL").run();
+  db.prepare("UPDATE chats SET chatshot_style='comic' WHERE chatshot_style IS NULL OR chatshot_style NOT IN ('comic','illustration','photo')").run();
+  db.prepare("UPDATE chats SET chatshot_banana_filter_enabled=1 WHERE chatshot_banana_filter_enabled IS NULL").run();
 }
 
 module.exports = { initAiSchema };
