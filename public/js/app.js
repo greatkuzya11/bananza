@@ -16898,11 +16898,13 @@
         bindMediaPlaybackState(audio, msg, 'attachment-audio');
       }
       audio.addEventListener('loadedmetadata', () => {
+        const audioWrap = audio.parentElement;
+        if (!audioWrap) return;
         const dur = formatDuration(audio.duration);
         const durEl = document.createElement('span');
         durEl.className = 'media-duration';
         durEl.textContent = dur;
-        audio.parentElement.querySelector('div:last-child')?.prepend(durEl);
+        audioWrap.querySelector('div:last-child')?.prepend(durEl);
       });
     }
     const video = row.querySelector('video');
@@ -16940,11 +16942,16 @@
         const anchor = !shouldAutoScroll && !isNearBottom(8) ? captureScrollAnchor() : null;
         markWideVideo();
         if (anchor) requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
+        const videoWrap = video.parentElement;
+        if (!videoWrap) {
+          clearPendingMediaBottomScroll(row);
+          return;
+        }
         const dur = formatDuration(video.duration);
         const durEl = document.createElement('span');
         durEl.className = 'media-duration';
         durEl.textContent = dur;
-        video.parentElement.querySelector('div:last-child')?.prepend(durEl);
+        videoWrap.querySelector('div:last-child')?.prepend(durEl);
         clearPendingMediaBottomScroll(row);
         if (shouldAutoScroll) settleDeferredMediaBottomScroll(rowChatId);
         else scheduleMediaBottomScrollAnchorSave(rowChatId);
