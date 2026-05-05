@@ -16,6 +16,28 @@ function normalizeMaxOutputTokens(value, fallback = 900) {
   return Math.max(OPENAI_MIN_OUTPUT_TOKENS, Math.round(parsed));
 }
 
+function errorText(error) {
+  if (error == null) return '';
+  if (typeof error === 'string') return error;
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === 'object') {
+    return String(
+      error.message
+      || error.error?.message
+      || error.error
+      || error.code
+      || ''
+    );
+  }
+  return String(error);
+}
+
+function isUnsupportedParameterError(error, parameter) {
+  const text = errorText(error).toLowerCase();
+  const needle = String(parameter || '').toLowerCase();
+  return text.includes('unsupported parameter') && text.includes(needle);
+}
+
 function extractResponseText(response) {
   if (!response) return '';
   if (typeof response.output_text === 'string') return response.output_text.trim();
@@ -116,7 +138,17 @@ async function createResponse({
   if (toolChoice) payload.tool_choice = toolChoice;
   if (Array.isArray(include) && include.length) payload.include = include;
   if (typeof temperature === 'number' && Number.isFinite(temperature)) payload.temperature = temperature;
-  return client.responses.create(payload);
+  try {
+    return await client.responses.create(payload);
+  } catch (error) {
+    if (Object.prototype.hasOwnProperty.call(payload, 'temperature') && isUnsupportedParameterError(error, 'temperature')) {
+      const retryPayload = { ...payload };
+      delete retryPayload.temperature;
+      console.warn(`[openai] model ${model || '(default)'} rejected temperature; retrying without it.`);
+      return client.responses.create(retryPayload);
+    }
+    throw error;
+  }
 }
 
 async function generateText({ apiKey, model, system, user, maxOutputTokens = 900, temperature = 0.45 }) {

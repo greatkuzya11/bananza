@@ -171,6 +171,15 @@ function truncate(value, limit = 500) {
   return text.slice(0, Math.max(0, limit - 1)).trimEnd() + '...';
 }
 
+function compactJson(value, limit = 700) {
+  if (value == null) return '';
+  try {
+    return truncate(JSON.stringify(value), limit);
+  } catch {
+    return truncate(String(value), limit);
+  }
+}
+
 function uniqueList(values = []) {
   const seen = new Set();
   const result = [];
@@ -4222,12 +4231,12 @@ function createAiBotFeature({
       ],
       tools: [buildOpenAiUniversalImageTool(bot, null, settings)],
       toolChoice: { type: 'image_generation' },
-      maxOutputTokens: OPENAI_MIN_OUTPUT_TOKENS,
+      maxOutputTokens: Math.min(intValue(bot.max_tokens, 900, OPENAI_MIN_OUTPUT_TOKENS, 8000), 1200),
       temperature: floatValue(bot.temperature, 0.45, 0, 1),
     });
     const generatedImage = findOpenAiGeneratedImage(response);
     if (!generatedImage?.result) {
-      throw new Error('OpenAI image generation returned no image');
+      throw new Error(`OpenAI image generation returned no image; response=${summarizeOpenAiImageGenerationResponse(response)}`);
     }
     const imageFormat = cleanOpenAiImageOutputFormat(bot.image_output_format, settings.openai_default_image_output_format);
     const ext = imageFormat === 'jpeg' ? '.jpg' : (imageFormat === 'webp' ? '.webp' : '.png');
@@ -5677,6 +5686,36 @@ function createAiBotFeature({
     const call = collectImageGenerationCalls(response).find((item) => item?.status === 'completed' && item?.result);
     if (!call?.result) return null;
     return call;
+  }
+
+  function summarizeOpenAiImageGenerationResponse(response) {
+    const calls = collectImageGenerationCalls(response).map((call, index) => ({
+      index,
+      id: call?.id || '',
+      status: call?.status || '',
+      action: call?.action || '',
+      has_result: Boolean(call?.result),
+      revised_prompt: truncate(call?.revised_prompt || '', 220),
+      error: call?.error ? compactJson(call.error, 350) : '',
+    }));
+    const output = (response?.output || []).map((item, index) => ({
+      index,
+      id: item?.id || '',
+      type: item?.type || '',
+      status: item?.status || '',
+      role: item?.role || '',
+      content_types: (item?.content || []).map(content => content?.type || '').filter(Boolean),
+    }));
+    return compactJson({
+      id: response?.id || '',
+      status: response?.status || '',
+      model: response?.model || '',
+      incomplete_details: response?.incomplete_details || null,
+      error: response?.error || null,
+      image_generation_calls: calls,
+      output,
+      output_text: truncate(response?.output_text || extractResponseText(response), 350),
+    }, 1800);
   }
 
   async function createOpenAiUniversalMessage(bot, chatConfig, sourceMessage) {
