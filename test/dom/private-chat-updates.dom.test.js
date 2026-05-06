@@ -90,6 +90,7 @@ function installAppRuntimeStubs(dom, { fetchHandler = null } = {}) {
 
   window.localStorage.setItem('token', 'test-token');
   window.localStorage.setItem('user', JSON.stringify(currentUser));
+  window.localStorage.removeItem('lastChat');
 
   window.fetch = async (input, init = {}) => {
     const url = new URL(String(input), window.location.origin);
@@ -183,6 +184,48 @@ async function waitForMs(window, ms = 0) {
   await new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function createTouchPoint({ identifier = 1, clientX = 0, clientY = 0 } = {}) {
+  return { identifier, clientX, clientY };
+}
+
+function createTouchEvent(window, type, { touches = [], changedTouches = touches } = {}) {
+  const event = new window.Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperties(event, {
+    touches: { configurable: true, value: touches },
+    changedTouches: { configurable: true, value: changedTouches },
+  });
+  return event;
+}
+
+function dispatchTouchSwipe(window, target, {
+  identifier = 1,
+  startX = 320,
+  startY = 420,
+  moveX = 180,
+  moveY = startY,
+  endX = moveX,
+  endY = moveY,
+} = {}) {
+  const startTouch = createTouchPoint({ identifier, clientX: startX, clientY: startY });
+  const moveTouch = createTouchPoint({ identifier, clientX: moveX, clientY: moveY });
+  const endTouch = createTouchPoint({ identifier, clientX: endX, clientY: endY });
+  target.dispatchEvent(createTouchEvent(window, 'touchstart', {
+    touches: [startTouch],
+    changedTouches: [startTouch],
+  }));
+  const moveEvent = createTouchEvent(window, 'touchmove', {
+    touches: [moveTouch],
+    changedTouches: [moveTouch],
+  });
+  target.dispatchEvent(moveEvent);
+  const endEvent = createTouchEvent(window, 'touchend', {
+    touches: [],
+    changedTouches: [endTouch],
+  });
+  target.dispatchEvent(endEvent);
+  return { moveEvent, endEvent };
+}
+
 function chatNameText(document, chatId) {
   const node = document.querySelector(`.chat-item[data-chat-id="${chatId}"] .chat-item-name`);
   return node ? node.textContent.trim() : '';
@@ -211,6 +254,76 @@ function localIsoWithOffset(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
     + `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
     + `${sign}${pad(Math.floor(absoluteOffset / 60))}:${pad(absoluteOffset % 60)}`;
+}
+
+function makeFolderSwipeChat(id, name, lastTime = `2026-04-29T20:${String(Number(id || 0) % 50).padStart(2, '0')}:00.000Z`) {
+  return {
+    id,
+    type: 'private',
+    name,
+    unread_count: 0,
+    last_text: name,
+    last_time: lastTime,
+    created_at: '2026-04-29 20:00:00',
+    private_user: {
+      id,
+      display_name: name,
+      username: name.toLowerCase().replace(/\s+/g, '_'),
+      avatar_color: '#65aadd',
+      avatar_url: null,
+      is_ai_bot: 0,
+    },
+  };
+}
+
+function createChatListFetchHandler(chatList) {
+  return ({ url, dom }) => {
+    if (url.pathname === '/api/chats') return createJsonResponse(dom, chatList);
+    return null;
+  };
+}
+
+function installFolderStripMetrics(dom, centerCalls = []) {
+  const { document } = dom.window;
+  const strip = document.getElementById('activeChatFolderStrip');
+  let stripScrollLeft = 0;
+  Object.defineProperty(strip, 'clientWidth', {
+    configurable: true,
+    get: () => 140,
+  });
+  Object.defineProperty(strip, 'scrollWidth', {
+    configurable: true,
+    get: () => 460,
+  });
+  Object.defineProperty(strip, 'scrollLeft', {
+    configurable: true,
+    get: () => stripScrollLeft,
+    set: (value) => {
+      stripScrollLeft = Number(value || 0);
+    },
+  });
+  strip.scrollTo = ({ left, behavior }) => {
+    centerCalls.push({ left: Number(left || 0), behavior: behavior || 'auto' });
+    stripScrollLeft = Number(left || 0);
+  };
+  Object.defineProperty(dom.window.HTMLElement.prototype, 'offsetLeft', {
+    configurable: true,
+    get() {
+      if (this.dataset?.folderChip === '0') return 0;
+      if (this.dataset?.folderChip === '9') return 120;
+      if (this.dataset?.folderChip === '10') return 260;
+      return 0;
+    },
+  });
+  Object.defineProperty(dom.window.HTMLElement.prototype, 'offsetWidth', {
+    configurable: true,
+    get() {
+      if (this.dataset?.folderChip === '0') return 86;
+      if (this.dataset?.folderChip === '9') return 88;
+      if (this.dataset?.folderChip === '10') return 92;
+      return 0;
+    },
+  });
 }
 
 test('applyChatUpdate keeps human private display name when chat_updated omits private_user', async (t) => {
@@ -798,6 +911,171 @@ test('chat folder transitions animate the shared list container and use smooth c
   assert.equal(content.classList.contains('is-folder-switching'), true);
   await toAllPromise;
   assert.equal(bar.classList.contains('hidden'), true);
+});
+
+test('mobile folder swipe switches pages and centers the active folder chip', async (t) => {
+  const initialChats = [
+    makeFolderSwipeChat(101, 'All chat'),
+    makeFolderSwipeChat(102, 'Launch chat'),
+    makeFolderSwipeChat(103, 'Ops chat'),
+  ];
+  const dom = await bootAppDom({ fetchHandler: createChatListFetchHandler(initialChats) });
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  const centerCalls = [];
+  installFolderStripMetrics(dom, centerCalls);
+
+  BananzaAppBridge.__testing.setChats(initialChats);
+  BananzaAppBridge.__testing.setChatFolders([
+    { id: 9, name: 'Launch', kind: 'custom', sort_order: 1, chat_ids: [102], pins: [] },
+    { id: 10, name: 'Ops', kind: 'custom', sort_order: 2, chat_ids: [103], pins: [] },
+  ], { activeFolderId: 0 });
+  BananzaAppBridge.__testing.setMobileBaseScene('sidebar', { hideInactive: false });
+  await waitForMs(dom.window, 360);
+
+  assert.equal(document.getElementById('activeChatFolderBar').classList.contains('hidden'), true);
+
+  dispatchTouchSwipe(dom.window, document.getElementById('chatList'), {
+    startX: 330,
+    moveX: 160,
+    endX: 160,
+  });
+  await waitForMs(dom.window, 560);
+
+  assert.equal(BananzaAppBridge.__testing.getActiveChatFolder().id, 9);
+  assert.deepEqual(
+    [...document.querySelectorAll('#chatList .chat-item[data-chat-id]')].map((node) => Number(node.dataset.chatId)),
+    [102]
+  );
+  assert.equal(document.querySelector('#activeChatFolderStrip [data-folder-chip="9"]').classList.contains('is-active'), true);
+  assert.deepEqual(centerCalls.at(-1), { left: 94, behavior: 'smooth' });
+
+  dispatchTouchSwipe(dom.window, document.getElementById('chatList'), {
+    identifier: 2,
+    startX: 100,
+    moveX: 250,
+    endX: 250,
+  });
+  await waitForMs(dom.window, 560);
+
+  assert.equal(BananzaAppBridge.__testing.getActiveChatFolder(), null);
+  assert.equal(document.getElementById('activeChatFolderBar').classList.contains('hidden'), true);
+});
+
+test('mobile folder swipe ignores vertical and short drags, snaps at edges, and suppresses row taps', async (t) => {
+  const initialChats = [
+    makeFolderSwipeChat(101, 'All chat'),
+    makeFolderSwipeChat(102, 'Launch chat'),
+    makeFolderSwipeChat(103, 'Current chat'),
+  ];
+  const dom = await bootAppDom({ fetchHandler: createChatListFetchHandler(initialChats) });
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  installFolderStripMetrics(dom, []);
+
+  BananzaAppBridge.__testing.setChats(initialChats);
+  BananzaAppBridge.__testing.setChatFolders([
+    { id: 9, name: 'Launch', kind: 'custom', sort_order: 1, chat_ids: [102], pins: [] },
+    { id: 10, name: 'Current', kind: 'custom', sort_order: 2, chat_ids: [103], pins: [] },
+  ], { activeFolderId: 9 });
+  BananzaAppBridge.__testing.setMobileBaseScene('sidebar', { hideInactive: false });
+  await waitForMs(dom.window, 360);
+
+  const chatList = document.getElementById('chatList');
+  const content = document.getElementById('chatFolderListSurface');
+
+  dispatchTouchSwipe(dom.window, chatList, {
+    startX: 260,
+    moveX: 232,
+    endX: 232,
+  });
+  await waitForMs(dom.window, 260);
+  assert.equal(BananzaAppBridge.__testing.getActiveChatFolder().id, 9);
+  assert.equal(content.style.transform, '');
+
+  dispatchTouchSwipe(dom.window, chatList, {
+    identifier: 2,
+    startX: 260,
+    startY: 410,
+    moveX: 130,
+    moveY: 220,
+    endX: 130,
+    endY: 220,
+  });
+  await waitForMs(dom.window, 260);
+  assert.equal(BananzaAppBridge.__testing.getActiveChatFolder().id, 9);
+  assert.equal(content.style.transform, '');
+
+  BananzaAppBridge.__testing.setActiveChatFolder(0, { render: true });
+  await waitForAnimationFrames(dom.window, 2);
+  dispatchTouchSwipe(dom.window, chatList, {
+    identifier: 3,
+    startX: 120,
+    moveX: 300,
+    endX: 300,
+  });
+  await waitForMs(dom.window, 280);
+  assert.equal(BananzaAppBridge.__testing.getActiveChatFolder(), null);
+  assert.equal(content.style.transform, '');
+
+  const firstRow = document.querySelector('.chat-item[data-chat-id="101"]');
+  dispatchTouchSwipe(dom.window, firstRow, {
+    identifier: 4,
+    startX: 330,
+    moveX: 150,
+    endX: 150,
+  });
+  firstRow.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await waitForMs(dom.window, 560);
+
+  assert.equal(BananzaAppBridge.getCurrentChatId(), null);
+  assert.equal(BananzaAppBridge.__testing.getActiveChatFolder().id, 9);
+});
+
+test('desktop width does not enable chat folder page swiping', async (t) => {
+  const initialChats = [
+    makeFolderSwipeChat(101, 'All chat'),
+    makeFolderSwipeChat(102, 'Launch chat'),
+  ];
+  const dom = await bootAppDom({ fetchHandler: createChatListFetchHandler(initialChats) });
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  Object.defineProperty(dom.window, 'innerWidth', {
+    configurable: true,
+    value: 1024,
+  });
+
+  BananzaAppBridge.__testing.setChats(initialChats, { currentChatId: 101 });
+  BananzaAppBridge.__testing.setChatFolders([
+    { id: 9, name: 'Launch', kind: 'custom', sort_order: 1, chat_ids: [102], pins: [] },
+  ], { activeFolderId: 0 });
+  await waitForAnimationFrames(dom.window, 2);
+
+  dispatchTouchSwipe(dom.window, document.getElementById('chatList'), {
+    startX: 800,
+    moveX: 520,
+    endX: 520,
+  });
+  await waitForMs(dom.window, 260);
+
+  assert.equal(BananzaAppBridge.__testing.getActiveChatFolder(), null);
+  assert.deepEqual(
+    [...document.querySelectorAll('#chatList .chat-item[data-chat-id]')].map((node) => Number(node.dataset.chatId)),
+    [102, 101]
+  );
+  assert.equal(document.getElementById('chatFolderListSurface').style.transform, '');
 });
 
 test('chat folder strip visibility toggle lives on the All chats row and keeps the picker open', async (t) => {

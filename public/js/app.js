@@ -119,6 +119,11 @@
   const CHAT_LIST_PULL_THRESHOLD = 64;
   const CHAT_LIST_PULL_MAX_OFFSET = 96;
   const CHAT_LIST_PULL_REFRESH_OFFSET = 56;
+  const CHAT_FOLDER_SWIPE_START_PX = 10;
+  const CHAT_FOLDER_SWIPE_COMMIT_MIN_PX = 64;
+  const CHAT_FOLDER_SWIPE_COMMIT_RATIO = 0.22;
+  const CHAT_FOLDER_SWIPE_EDGE_DAMPING = 0.34;
+  const CHAT_FOLDER_SWIPE_EDGE_MAX_PX = 52;
   const RESUME_WS_REFRESH_AFTER_MS = 25000;
   const NOTES_CHAT_EMOJI = '📝';
   const CHAT_CONTEXT_LONG_PRESS_MS = 500;
@@ -4562,6 +4567,16 @@
     });
   }
 
+  function resetChatFolderSwipeSurface() {
+    if (!(chatFolderListSurface instanceof HTMLElement)) return;
+    chatFolderListSurface.classList.remove(
+      'is-folder-swipe-dragging',
+      'is-folder-swipe-settling',
+      'is-folder-swipe-preparing'
+    );
+    chatFolderListSurface.style.transform = '';
+  }
+
   function waitForAnimationFrames(count = 1) {
     return new Promise((resolve) => {
       const step = (remaining) => {
@@ -4608,8 +4623,144 @@
     }
   }
 
-  async function transitionToChatFolder(folderId, { persist = true, closePicker = false } = {}) {
+  function getChatFolderPageRows() {
+    return activeChatFolderStripRows()
+      .map((row) => ({
+        ...row,
+        id: normalizeChatFolderId(row?.id),
+      }))
+      .filter((row, index, rows) => rows.findIndex((entry) => entry.id === row.id) === index);
+  }
+
+  function getChatFolderPageIndex(folderId = chatFolderStore.activeFolderId, rows = getChatFolderPageRows()) {
+    const normalizedFolderId = normalizeChatFolderId(folderId);
+    const index = rows.findIndex((row) => Number(row.id || 0) === normalizedFolderId);
+    return index >= 0 ? index : 0;
+  }
+
+  function getAdjacentChatFolderPage(direction, folderId = chatFolderStore.activeFolderId) {
+    const rows = getChatFolderPageRows();
+    if (rows.length <= 1) return null;
+    const dir = direction < 0 ? -1 : 1;
+    const currentIndex = getChatFolderPageIndex(folderId, rows);
+    const nextIndex = currentIndex + dir;
+    return nextIndex >= 0 && nextIndex < rows.length ? rows[nextIndex] : null;
+  }
+
+  function getChatFolderSwipeSurfaceWidth() {
+    return Math.max(
+      1,
+      Math.round(
+        Number(chatFolderListSurface?.clientWidth || 0)
+        || Number(sidebar?.clientWidth || 0)
+        || Number(window.innerWidth || 0)
+        || 1
+      )
+    );
+  }
+
+  function getChatFolderSwipeCommitDistance() {
+    const width = getChatFolderSwipeSurfaceWidth();
+    return Math.min(128, Math.max(CHAT_FOLDER_SWIPE_COMMIT_MIN_PX, Math.round(width * CHAT_FOLDER_SWIPE_COMMIT_RATIO)));
+  }
+
+  function canAnimateChatFolderSwipe() {
+    return !prefersReducedMotion()
+      && currentModalAnimation !== 'none'
+      && chatFolderListSurface instanceof HTMLElement
+      && !mobileRouteTransitionActive;
+  }
+
+  function setChatFolderSwipeOffset(offset, mode = 'dragging') {
+    if (!(chatFolderListSurface instanceof HTMLElement)) return false;
+    chatFolderListSurface.classList.toggle('is-folder-swipe-dragging', mode === 'dragging');
+    chatFolderListSurface.classList.toggle('is-folder-swipe-settling', mode === 'settling');
+    chatFolderListSurface.classList.toggle('is-folder-swipe-preparing', mode === 'preparing');
+    chatFolderListSurface.style.transform = `translate3d(${Math.round(Number(offset || 0))}px, 0, 0)`;
+    return true;
+  }
+
+  async function settleChatFolderSwipeOffset(offset) {
+    if (!(chatFolderListSurface instanceof HTMLElement)) return false;
+    setChatFolderSwipeOffset(offset, 'settling');
+    const transitionMs = Math.ceil(getElementTransitionTotalMs(chatFolderListSurface));
+    await waitForMs(Math.max(transitionMs, 180) + 24);
+    return true;
+  }
+
+  async function snapChatFolderSwipeBack() {
+    if (!canAnimateChatFolderSwipe()) {
+      resetChatFolderSwipeSurface();
+      return false;
+    }
+    try {
+      await settleChatFolderSwipeOffset(0);
+      return true;
+    } finally {
+      resetChatFolderSwipeSurface();
+    }
+  }
+
+  async function transitionToChatFolderBySwipe(folderId, { persist = true, closePicker = false, direction = 1 } = {}) {
     const nextFolderId = normalizeChatFolderId(folderId);
+    const currentFolderId = normalizeChatFolderId(chatFolderStore.activeFolderId);
+    if (currentFolderId === nextFolderId) {
+      if (closePicker) await hideChatFolderPicker();
+      await snapChatFolderSwipeBack();
+      return getActiveChatFolder();
+    }
+
+    if (closePicker) await hideChatFolderPicker();
+
+    const swipeDirection = direction < 0 ? -1 : 1;
+    const canAnimate = canAnimateChatFolderSwipe();
+    const centerBehavior = canAnimate ? 'smooth' : 'auto';
+    const currentShowsBar = shouldShowChatFolderBarForSelection(currentFolderId, { forceVisible: false });
+    const nextShowsBar = shouldShowChatFolderBarForSelection(nextFolderId, { forceVisible: false });
+    const seq = ++chatFolderSwitchSeq;
+    const previewPrepared = currentShowsBar || nextShowsBar;
+
+    try {
+      if (previewPrepared) {
+        beginChatFolderStripPreview(nextFolderId, { forceVisible: true, centerBehavior });
+      }
+
+      if (!canAnimate) {
+        setActiveChatFolder(nextFolderId, { persist, render: false });
+        renderChatList(chatSearch?.value || '');
+        return getActiveChatFolder();
+      }
+
+      const width = getChatFolderSwipeSurfaceWidth();
+      await settleChatFolderSwipeOffset(-swipeDirection * width);
+      if (seq !== chatFolderSwitchSeq) return getActiveChatFolder();
+
+      setActiveChatFolder(nextFolderId, { persist, render: false });
+      renderChatList(chatSearch?.value || '');
+      if (seq !== chatFolderSwitchSeq) return getActiveChatFolder();
+
+      setChatFolderSwipeOffset(swipeDirection * width, 'preparing');
+      void chatFolderListSurface.offsetWidth;
+      await waitForAnimationFrames(1);
+      if (seq !== chatFolderSwitchSeq) return getActiveChatFolder();
+
+      await settleChatFolderSwipeOffset(0);
+      return getActiveChatFolder();
+    } finally {
+      if (seq === chatFolderSwitchSeq) {
+        resetChatFolderSwipeSurface();
+        if (previewPrepared) finalizeChatFolderStripPreview({ centerBehavior: 'auto' });
+      } else {
+        resetChatFolderSwipeSurface();
+      }
+    }
+  }
+
+  async function transitionToChatFolder(folderId, { persist = true, closePicker = false, swipeDirection = 0 } = {}) {
+    const nextFolderId = normalizeChatFolderId(folderId);
+    if (swipeDirection) {
+      return transitionToChatFolderBySwipe(nextFolderId, { persist, closePicker, direction: swipeDirection });
+    }
     const currentFolderId = normalizeChatFolderId(chatFolderStore.activeFolderId);
     if (currentFolderId === nextFolderId) {
       if (closePicker) await hideChatFolderPicker();
@@ -22696,6 +22847,159 @@
       chatList?.addEventListener('scroll', () => {
         if (isFloatingSurfaceVisible(chatFolderPicker)) hideChatFolderPicker({ immediate: true });
         else if (isFloatingSurfaceVisible(chatFolderContextMenu)) hideChatFolderContextMenu({ immediate: true });
+      }, { passive: true });
+    })();
+
+    (() => {
+      if (!chatFolderListSurface || !chatList || !sidebar) return;
+
+      const state = {
+        tracking: false,
+        dragging: false,
+        switching: false,
+        touchId: null,
+        startX: 0,
+        startY: 0,
+        dx: 0,
+      };
+
+      const clearTracking = () => {
+        state.tracking = false;
+        state.dragging = false;
+        state.touchId = null;
+        state.startX = 0;
+        state.startY = 0;
+        state.dx = 0;
+      };
+
+      const getTrackedTouch = (touches) => {
+        if (!touches?.length) return null;
+        if (state.touchId == null) return touches[0] || null;
+        return Array.from(touches).find((touch) => Number(touch.identifier) === Number(state.touchId)) || null;
+      };
+
+      const isAllowedStartTarget = (target) => {
+        if (!target || !chatFolderListSurface.contains(target)) return false;
+        return !target.closest('button, a, input, textarea, select, label, [contenteditable="true"], .chat-context-menu, .modal');
+      };
+
+      const isSwipeAvailable = () => (
+        isMobileLayoutViewport()
+        && !sidebar.classList.contains('sidebar-hidden')
+        && !sidebar.classList.contains('mobile-scene-hidden')
+        && !isMobileViewportLayoutLocked()
+        && !state.switching
+        && !String(chatSearch?.value || '').trim()
+        && chatFolderStore.getFolders().length > 0
+        && getChatFolderPageRows().length > 1
+      );
+
+      const dampEdgeOffset = (dx) => clamp(
+        Math.round(dx * CHAT_FOLDER_SWIPE_EDGE_DAMPING),
+        -CHAT_FOLDER_SWIPE_EDGE_MAX_PX,
+        CHAT_FOLDER_SWIPE_EDGE_MAX_PX
+      );
+
+      const finishSwipeAsync = async (promise) => {
+        state.switching = true;
+        try {
+          await promise;
+        } catch (error) {
+          console.warn('Failed to swipe chat folder', error);
+          showCenterToast(error?.message || 'Could not open folder');
+          resetChatFolderSwipeSurface();
+        } finally {
+          clearTracking();
+          state.switching = false;
+        }
+      };
+
+      chatFolderListSurface.addEventListener('touchstart', (e) => {
+        if (e.touches.length !== 1 || !isSwipeAvailable() || !isAllowedStartTarget(e.target)) return;
+        const touch = e.touches[0];
+        state.tracking = true;
+        state.dragging = false;
+        state.touchId = Number(touch.identifier);
+        state.startX = touch.clientX;
+        state.startY = touch.clientY;
+        state.dx = 0;
+      }, { passive: true });
+
+      chatFolderListSurface.addEventListener('touchmove', (e) => {
+        if (!state.tracking || state.switching || e.touches.length !== 1) return;
+        const touch = getTrackedTouch(e.touches);
+        if (!touch) return;
+        const dx = touch.clientX - state.startX;
+        const dy = touch.clientY - state.startY;
+        const absX = Math.abs(dx);
+        const absY = Math.abs(dy);
+
+        if (!state.dragging) {
+          if (absY > CHAT_FOLDER_SWIPE_START_PX && absY >= absX) {
+            clearTracking();
+            return;
+          }
+          if (absX <= CHAT_FOLDER_SWIPE_START_PX || absX <= absY + 4) return;
+          state.dragging = true;
+          clearChatContextLongPress();
+          resetChatFolderSwipeSurface();
+        }
+
+        if (!isSwipeAvailable()) {
+          clearTracking();
+          resetChatFolderSwipeSurface();
+          return;
+        }
+
+        state.dx = dx;
+        const direction = dx < 0 ? 1 : -1;
+        const adjacent = getAdjacentChatFolderPage(direction);
+        const visualOffset = adjacent ? dx : dampEdgeOffset(dx);
+        setChatFolderSwipeOffset(visualOffset, 'dragging');
+        if (e.cancelable) e.preventDefault();
+      }, { passive: false });
+
+      const finishGesture = (e) => {
+        if (!state.tracking) return;
+        const wasDragging = state.dragging;
+        const dx = state.dx;
+        clearTracking();
+
+        if (!wasDragging) {
+          resetChatFolderSwipeSurface();
+          return;
+        }
+
+        suppressNextChatItemTap();
+        if (e?.cancelable) e.preventDefault();
+
+        const direction = dx < 0 ? 1 : -1;
+        const adjacent = getAdjacentChatFolderPage(direction);
+        const shouldSwitch = Boolean(adjacent && Math.abs(dx) >= getChatFolderSwipeCommitDistance());
+        const swipePromise = shouldSwitch
+          ? transitionToChatFolder(adjacent.id, { persist: true, swipeDirection: direction })
+          : snapChatFolderSwipeBack();
+        finishSwipeAsync(swipePromise);
+      };
+
+      chatFolderListSurface.addEventListener('touchend', finishGesture, { passive: false });
+      chatFolderListSurface.addEventListener('touchcancel', () => {
+        if (!state.tracking) return;
+        const wasDragging = state.dragging;
+        clearTracking();
+        if (!wasDragging) {
+          resetChatFolderSwipeSurface();
+          return;
+        }
+        suppressNextChatItemTap();
+        finishSwipeAsync(snapChatFolderSwipeBack());
+      }, { passive: true });
+
+      window.addEventListener('resize', () => {
+        if (!state.tracking && !state.switching) return;
+        clearTracking();
+        state.switching = false;
+        resetChatFolderSwipeSurface();
       }, { passive: true });
     })();
 

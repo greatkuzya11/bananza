@@ -681,6 +681,19 @@ a:hover { text-decoration: underline; }
     transform var(--folder-switch-duration) var(--folder-switch-ease);
   will-change: opacity, transform;
 }
+.chat-folder-list-surface.is-folder-swipe-dragging,
+.chat-folder-list-surface.is-folder-swipe-settling,
+.chat-folder-list-surface.is-folder-swipe-preparing {
+  will-change: transform;
+}
+.chat-folder-list-surface.is-folder-swipe-dragging,
+.chat-folder-list-surface.is-folder-swipe-preparing {
+  transition: none;
+}
+.chat-folder-list-surface.is-folder-swipe-settling {
+  pointer-events: none;
+  transition: transform .22s cubic-bezier(.22, .84, .24, 1);
+}
 .chat-folder-list-surface.is-folder-switching-out {
   pointer-events: none;
 }
