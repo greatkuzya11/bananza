@@ -2415,6 +2415,21 @@
     }
   }
 
+  function formatChatListTimestamp(iso) {
+    if (!iso) return '';
+    try {
+      const s = String(iso);
+      const needsZ = !(/[zZ]$/.test(s) || /[+\-]\d{2}:?\d{2}$/.test(s));
+      const d = new Date(needsZ ? s + 'Z' : s);
+      if (isNaN(d.getTime())) return 'Invalid Date';
+      const today = new Date();
+      if (d.toDateString() === today.toDateString()) return formatTime(iso);
+      return d.toLocaleDateString([], { day: 'numeric', month: 'short' });
+    } catch {
+      return 'Invalid Date';
+    }
+  }
+
   function formatDate(iso) {
     if (!iso) return '';
     try {
@@ -11709,7 +11724,7 @@
     forwardChatList.innerHTML = filtered.map((chat) => {
       const isOnline = chat.type === 'private' && chat.private_user && onlineUsers.has(chat.private_user.id);
       const lastMsg = getChatLastPreviewText(chat);
-      const lastTime = chat.last_time ? formatTime(chat.last_time) : '';
+      const lastTime = chat.last_time ? formatChatListTimestamp(chat.last_time) : '';
       return `
         <button type="button" class="chat-item forward-chat-item${chat.id === currentChatId ? ' is-current' : ''}" data-chat-id="${chat.id}">
           ${chatItemAvatarHtml(chat)}
@@ -14492,7 +14507,7 @@
     const displayName = chat.name;
     const isOnline = chat.type === 'private' && chat.private_user && onlineUsers.has(chat.private_user.id);
     const lastMsg = getChatLastPreviewText(chat);
-    const lastTime = chat.last_time ? formatTime(chat.last_time) : '';
+    const lastTime = chat.last_time ? formatChatListTimestamp(chat.last_time) : '';
     const unread = chat.unread_count > 0
       ? `<span class="unread-badge${isActive ? ' unread-badge--active-chat' : ''}" data-unread-count="${chat.unread_count}">${chat.unread_count > 99 ? '99+' : chat.unread_count}</span>`
       : '';

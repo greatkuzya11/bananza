@@ -198,6 +198,21 @@ function chatUnreadBadgeClassName(document, chatId) {
   return node ? node.className : '';
 }
 
+function chatItemTimeText(document, chatId) {
+  const node = document.querySelector(`.chat-item[data-chat-id="${chatId}"] .chat-item-time`);
+  return node ? node.textContent.trim() : '';
+}
+
+function localIsoWithOffset(date) {
+  const pad = (value) => String(value).padStart(2, '0');
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const absoluteOffset = Math.abs(offsetMinutes);
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+    + `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+    + `${sign}${pad(Math.floor(absoluteOffset / 60))}:${pad(absoluteOffset % 60)}`;
+}
+
 test('applyChatUpdate keeps human private display name when chat_updated omits private_user', async (t) => {
   const dom = await bootAppDom();
   t.after(() => {
@@ -411,6 +426,61 @@ test('chat list keeps unread badges rendered for both active and inactive chats'
   assert.equal(chatUnreadBadgeText(document, 42), '3');
   assert.match(chatUnreadBadgeClassName(document, 41), /\bunread-badge--active-chat\b/);
   assert.doesNotMatch(chatUnreadBadgeClassName(document, 42), /\bunread-badge--active-chat\b/);
+});
+
+test('chat list shows time only for today and short date for older last messages', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  const today = new Date();
+  today.setHours(12, 34, 0, 0);
+  const older = new Date(today);
+  older.setDate(older.getDate() - 8);
+  older.setHours(9, 5, 0, 0);
+
+  BananzaAppBridge.__testing.setChats([
+    {
+      id: 51,
+      type: 'private',
+      name: 'Today chat',
+      unread_count: 0,
+      last_text: 'Fresh message',
+      last_time: localIsoWithOffset(today),
+      created_at: localIsoWithOffset(today),
+      private_user: {
+        id: 5,
+        display_name: 'Today chat',
+        username: 'today_chat',
+        avatar_color: '#65aadd',
+        avatar_url: null,
+        is_ai_bot: 0,
+      },
+    },
+    {
+      id: 52,
+      type: 'private',
+      name: 'Older chat',
+      unread_count: 0,
+      last_text: 'Older message',
+      last_time: localIsoWithOffset(older),
+      created_at: localIsoWithOffset(older),
+      private_user: {
+        id: 6,
+        display_name: 'Older chat',
+        username: 'older_chat',
+        avatar_color: '#f0b020',
+        avatar_url: null,
+        is_ai_bot: 0,
+      },
+    },
+  ], { currentChatId: 51 });
+
+  assert.equal(chatItemTimeText(document, 51), today.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+  assert.equal(chatItemTimeText(document, 52), older.toLocaleDateString([], { day: 'numeric', month: 'short' }));
+  assert.doesNotMatch(chatItemTimeText(document, 52), /\d{1,2}:\d{2}/);
 });
 
 test('chat folders testing helpers filter the list and keep folder-local pins separate from All chats', async (t) => {
