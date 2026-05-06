@@ -22858,7 +22858,7 @@
           return;
         }
         state.engaged = true;
-        e.preventDefault();
+        if (e.cancelable) e.preventDefault();
         setChatListPullUi(dampPullDistance(delta), { dragging: true });
       }, { passive: false });
 
