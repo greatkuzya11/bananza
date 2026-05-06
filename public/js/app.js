@@ -1037,8 +1037,11 @@
     hideAvatarUserMenu();
     clearActivePulseVoterPopover({ skipRefresh: true });
     if (!preserveEmoji) closeEmojiPicker({ immediate });
-    const attachMenu = $('#attachMenu');
-    if (attachMenu) attachMenu.classList.add('hidden');
+    hideAttachMenu({ immediate });
+  }
+
+  function hideAttachMenu({ immediate = false } = {}) {
+    return closeFloatingSurface($('#attachMenu'), { immediate });
   }
 
   function getMobileComposerSafeReturnFocusEl(fallback = null) {
@@ -11097,6 +11100,7 @@
     hideFloatingMessageActions({ immediate: true });
     hideMentionPicker();
     closeEmojiPicker({ immediate: true });
+    hideAttachMenu({ immediate: true });
     clearActivePulseVoterPopover({ skipRefresh: true });
     hideAvatarUserMenu();
     clearReply();
@@ -15651,6 +15655,7 @@
     }
     hideMentionPicker();
     closeEmojiPicker({ immediate: true });
+    hideAttachMenu({ immediate: true });
     hideContextConvertPicker();
     clearActivePulseVoterPopover({ skipRefresh: true });
     hideAvatarUserMenu();
@@ -21556,6 +21561,7 @@
     hideFloatingMessageActions({ immediate: true });
     hideMentionPicker();
     closeEmojiPicker({ immediate: true });
+    hideAttachMenu({ immediate: true });
     cancelPendingSidebarReveal();
     syncMobileBaseSceneState({
       scene: 'sidebar',
@@ -21899,17 +21905,21 @@
       attachMenu.style.left = left + 'px';
       attachMenu.style.top = top + 'px';
     };
-    const closeAttachMenu = () => { attachMenu.classList.add('hidden'); };
+    const closeAttachMenu = (options = {}) => closeFloatingSurface(attachMenu, options);
+    const openAttachMenu = ({ keepKeyboardOpen } = {}) => {
+      openFloatingSurface(attachMenu);
+      positionAttachMenu();
+      requestAnimationFrame(positionAttachMenu);
+      if (keepKeyboardOpen) focusComposerKeepKeyboard(true);
+    };
     bindTouchSafeButtonActivation(attachBtn, ({ keepKeyboardOpen }) => {
       if (editTo) return;
       if (isMobileAttachMenu()) {
-        if (!attachMenu.classList.contains('hidden')) {
-          attachMenu.classList.add('hidden');
+        if (isFloatingSurfaceVisible(attachMenu)) {
+          closeAttachMenu();
           return;
         }
-        attachMenu.classList.remove('hidden');
-        positionAttachMenu();
-        if (keepKeyboardOpen) focusComposerKeepKeyboard(true);
+        openAttachMenu({ keepKeyboardOpen });
       } else {
         fileInput.click();
       }
@@ -21921,8 +21931,8 @@
     });
     // Close on outside click (no overlay needed)
     document.addEventListener('click', (e) => {
-      if (!attachMenu.classList.contains('hidden') && !attachMenu.contains(e.target) && e.target !== attachBtn) {
-        attachMenu.classList.add('hidden');
+      if (isFloatingSurfaceVisible(attachMenu) && !attachMenu.contains(e.target) && !e.target.closest('#attachBtn')) {
+        closeAttachMenu();
       }
     });
     attachMenuOverlay.addEventListener('click', closeAttachMenu);

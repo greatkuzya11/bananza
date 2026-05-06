@@ -2075,6 +2075,7 @@ html[data-modal-animation="none"] .chat-folder-list-surface {
 .reaction-emoji-popover,
 .mention-picker,
 .emoji-picker,
+.attach-menu,
 .chat-context-menu,
 .media-context-menu,
 .poll-pulse-voter-popover,
@@ -2091,6 +2092,7 @@ html[data-modal-animation="none"] .chat-folder-list-surface {
 .reaction-emoji-popover,
 .mention-picker,
 .emoji-picker,
+.attach-menu,
 .chat-context-menu,
 .media-context-menu,
 .poll-pulse-voter-popover {
@@ -2112,6 +2114,8 @@ html[data-modal-animation="none"] .chat-folder-list-surface {
 .mention-picker.is-closing,
 .emoji-picker.is-open,
 .emoji-picker.is-closing,
+.attach-menu.is-open,
+.attach-menu.is-closing,
 .chat-context-menu.is-open,
 .chat-context-menu.is-closing,
 .media-context-menu.is-open,
@@ -2124,6 +2128,7 @@ html[data-modal-animation="none"] .chat-folder-list-surface {
 .reaction-emoji-popover.is-open,
 .mention-picker.is-open,
 .emoji-picker.is-open,
+.attach-menu.is-open,
 .chat-context-menu.is-open,
 .media-context-menu.is-open,
 .poll-pulse-voter-popover.is-open {
@@ -2136,6 +2141,7 @@ html[data-modal-animation="none"] .chat-folder-list-surface {
 .reaction-emoji-popover.is-closing,
 .mention-picker.is-closing,
 .emoji-picker.is-closing,
+.attach-menu.is-closing,
 .chat-context-menu.is-closing,
 .media-context-menu.is-closing,
 .poll-pulse-voter-popover.is-closing {
@@ -2153,6 +2159,8 @@ html[data-modal-animation="none"] .chat-folder-list-surface {
 .mention-picker.is-closing,
 .emoji-picker.is-open,
 .emoji-picker.is-closing,
+.attach-menu.is-open,
+.attach-menu.is-closing,
 .chat-context-menu.is-open,
 .chat-context-menu.is-closing,
 .media-context-menu.is-open,
@@ -2165,6 +2173,7 @@ html.is-ios-webkit .reaction-picker,
 html.is-ios-webkit .reaction-emoji-popover,
 html.is-ios-webkit .mention-picker,
 html.is-ios-webkit .emoji-picker,
+html.is-ios-webkit .attach-menu,
 html.is-ios-webkit .chat-context-menu,
 html.is-ios-webkit .media-context-menu,
 html.is-ios-webkit .poll-pulse-voter-popover {
@@ -2177,6 +2186,7 @@ html.is-ios-webkit .reaction-picker.is-open,
 html.is-ios-webkit .reaction-emoji-popover.is-open,
 html.is-ios-webkit .mention-picker.is-open,
 html.is-ios-webkit .emoji-picker.is-open,
+html.is-ios-webkit .attach-menu.is-open,
 html.is-ios-webkit .chat-context-menu.is-open,
 html.is-ios-webkit .media-context-menu.is-open,
 html.is-ios-webkit .poll-pulse-voter-popover.is-open {
@@ -2186,6 +2196,7 @@ html.is-ios-webkit .reaction-picker.is-closing,
 html.is-ios-webkit .reaction-emoji-popover.is-closing,
 html.is-ios-webkit .mention-picker.is-closing,
 html.is-ios-webkit .emoji-picker.is-closing,
+html.is-ios-webkit .attach-menu.is-closing,
 html.is-ios-webkit .chat-context-menu.is-closing,
 html.is-ios-webkit .media-context-menu.is-closing,
 html.is-ios-webkit .poll-pulse-voter-popover.is-closing {
@@ -2195,6 +2206,7 @@ html[data-modal-animation="lift"] .reaction-picker,
 html[data-modal-animation="lift"] .reaction-emoji-popover,
 html[data-modal-animation="lift"] .mention-picker,
 html[data-modal-animation="lift"] .emoji-picker,
+html[data-modal-animation="lift"] .attach-menu,
 html[data-modal-animation="lift"] .chat-context-menu,
 html[data-modal-animation="lift"] .media-context-menu,
 html[data-modal-animation="lift"] .poll-pulse-voter-popover {
@@ -2207,6 +2219,7 @@ html[data-modal-animation="zoom"] .reaction-picker,
 html[data-modal-animation="zoom"] .reaction-emoji-popover,
 html[data-modal-animation="zoom"] .mention-picker,
 html[data-modal-animation="zoom"] .emoji-picker,
+html[data-modal-animation="zoom"] .attach-menu,
 html[data-modal-animation="zoom"] .chat-context-menu,
 html[data-modal-animation="zoom"] .media-context-menu,
 html[data-modal-animation="zoom"] .poll-pulse-voter-popover {
@@ -2219,6 +2232,7 @@ html[data-modal-animation="slide"] .reaction-picker,
 html[data-modal-animation="slide"] .reaction-emoji-popover,
 html[data-modal-animation="slide"] .mention-picker,
 html[data-modal-animation="slide"] .emoji-picker,
+html[data-modal-animation="slide"] .attach-menu,
 html[data-modal-animation="slide"] .chat-context-menu,
 html[data-modal-animation="slide"] .media-context-menu,
 html[data-modal-animation="slide"] .poll-pulse-voter-popover {
@@ -2231,6 +2245,7 @@ html[data-modal-animation="fade"] .reaction-picker,
 html[data-modal-animation="fade"] .reaction-emoji-popover,
 html[data-modal-animation="fade"] .mention-picker,
 html[data-modal-animation="fade"] .emoji-picker,
+html[data-modal-animation="fade"] .attach-menu,
 html[data-modal-animation="fade"] .chat-context-menu,
 html[data-modal-animation="fade"] .media-context-menu,
 html[data-modal-animation="fade"] .poll-pulse-voter-popover {
@@ -2243,6 +2258,7 @@ html[data-modal-animation="fade"] .poll-pulse-voter-popover {
 html[data-modal-animation="none"] .reaction-picker,
 html[data-modal-animation="none"] .reaction-emoji-popover,
 html[data-modal-animation="none"] .mention-picker,
+html[data-modal-animation="none"] .attach-menu,
 html[data-modal-animation="none"] .chat-context-menu,
 html[data-modal-animation="none"] .media-context-menu,
 html[data-modal-animation="none"] .poll-pulse-voter-popover {
@@ -5646,7 +5662,6 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
   position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 300;
 }
 .attach-menu {
-  position: fixed;
   z-index: 302;
   background: var(--bg-modal);
   border-radius: 12px;
@@ -5656,15 +5671,10 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
   display: flex; flex-direction: column; gap: 2px;
   min-width: 155px;
   transform-origin: bottom left;
-  animation: attachMenuIn .15s ease;
-}
-@keyframes attachMenuIn {
-  from { opacity: 0; transform: scale(.92); }
-  to   { opacity: 1; transform: scale(1); }
 }
 .attach-menu-item {
-  display: flex; align-items: center; gap: 12px;
-  padding: 9px 14px; border-radius: 8px;
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 12px; border-radius: 8px;
   font-size: 14px; font-weight: 500;
   color: var(--text-primary); text-align: left; width: 100%;
   transition: background .12s;
@@ -5677,9 +5687,9 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
   pointer-events: none;
 }
 .attach-menu-icon {
-  width: 36px; height: 36px; border-radius: 50%;
+  width: 22px; height: 22px;
   display: flex; align-items: center; justify-content: center;
-  font-size: 18px; flex-shrink: 0;
+  font-size: 17px; line-height: 1; flex-shrink: 0;
 }
 
 .composer-desktop-only {
