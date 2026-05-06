@@ -459,29 +459,64 @@ function bananaReplaceMatchedRiskTerms(text, risk) {
   return result;
 }
 
-function chatShotPromptStyleHint(style = 'comic', bananaFilterEnabled = true) {
-  const normalizedStyle = normalizeChatShotStyle(style);
-  if (normalizedStyle === 'photo') {
-    return 'Realistic photo style, no visible text, natural lighting.';
-  }
-  if (normalizedStyle === 'illustration') {
-    return 'Detailed colorful illustration, no visible text.';
-  }
-  return bananaFilterEnabled
-    ? 'Colorful comic style, expressive faces, safe playful energy.'
-    : 'Colorful comic style, expressive faces, dynamic composition.';
+function detectChatShotContextLanguage(contextText = '') {
+  const text = String(contextText || '')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^[^:\n]{1,80}:\s*/, ''))
+    .join('\n');
+  const cyrillicCount = (text.match(/[\u0400-\u04FF]/gu) || []).length;
+  const latinCount = (text.match(/[A-Za-z]/g) || []).length;
+  if (cyrillicCount > latinCount) return 'Russian (Cyrillic)';
+  if (latinCount > cyrillicCount) return 'English/Latin';
+  return 'the dominant language of the chat context';
 }
 
-function normalizeChatShotPromptText(value, style = 'comic', fallback = 'A vivid scene inspired by a chat conversation.') {
+function chatShotLanguageInstruction(languageContract = 'the dominant language of the chat context') {
+  const language = String(languageContract || 'the dominant language of the chat context').trim();
+  const lines = [
+    `Visible text language contract: ${language}.`,
+    `If the image naturally contains visible text, signs, labels, captions, memes, interface text, or character speech, every such text element must use ${language}.`,
+    'Avoid unnecessary visible text; include it only when it fits the scene, but never switch visible text to another language.',
+  ];
+  if (language === 'Russian (Cyrillic)') {
+    lines.push('For Russian chat context, all visible text and character speech must be natural Russian written in Cyrillic. Do not translate Russian chat text into English, do not use English signage, and do not use Latin transliteration unless it was explicitly present in the chat.');
+  }
+  return lines.join('\n');
+}
+
+function chatShotVisibleTextPromptHint(languageContract = 'the dominant language of the chat context') {
+  const language = String(languageContract || 'the dominant language of the chat context').trim();
+  const base = `Visible text, signs, labels, captions, memes, interface text, and character speech must use ${language}.`;
+  if (language === 'Russian (Cyrillic)') {
+    return `${base} Use natural Russian Cyrillic only for visible text; do not translate Russian chat text into English, do not add English signage, and do not use Latin transliteration unless it was explicitly present in the chat.`;
+  }
+  return base;
+}
+
+function chatShotPromptStyleHint(style = 'comic', bananaFilterEnabled = true, languageContract = 'the dominant language of the chat context') {
+  const normalizedStyle = normalizeChatShotStyle(style);
+  const textRule = `Avoid unnecessary visible text; if text is natural for the scene, follow this rule: ${chatShotVisibleTextPromptHint(languageContract)}`;
+  if (normalizedStyle === 'photo') {
+    return `Realistic photo style, natural lighting. ${textRule}`;
+  }
+  if (normalizedStyle === 'illustration') {
+    return `Detailed colorful illustration. ${textRule}`;
+  }
+  return bananaFilterEnabled
+    ? `Colorful comic style, expressive faces, safe playful energy. ${textRule}`
+    : `Colorful comic style, expressive faces, dynamic composition. ${textRule}`;
+}
+
+function normalizeChatShotPromptText(value, style = 'comic', fallback = 'A vivid scene inspired by a chat conversation.', languageContract = 'the dominant language of the chat context') {
   let text = cleanText(value, 4000)
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   if (!text) text = fallback;
-  return cleanText(`${text} ${chatShotPromptStyleHint(style, false)}`, 4000);
+  return cleanText(`${text} ${chatShotPromptStyleHint(style, false, languageContract)}`, 4000);
 }
 
-function sanitizeChatShotPrompt(value, style = 'comic') {
+function sanitizeChatShotPrompt(value, style = 'comic', languageContract = 'the dominant language of the chat context') {
   let text = cleanText(value, 4000)
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/\s+/g, ' ')
@@ -501,20 +536,54 @@ function sanitizeChatShotPrompt(value, style = 'comic') {
   if (risk.risky) {
     text = 'A bright, safe banana-themed scene showing friends playing, smiling, and sharing a cheerful moment inspired by the chat mood.';
   }
-  return cleanText(`${text} ${chatShotPromptStyleHint(style, true)}`, 4000);
+  return cleanText(`${text} ${chatShotPromptStyleHint(style, true, languageContract)}`, 4000);
 }
 
-function buildChatShotBananaFallbackPrompt(contextText = '', style = 'comic') {
+function buildChatShotBananaFallbackPrompt(contextText = '', style = 'comic', languageContract = detectChatShotContextLanguage(contextText)) {
   const mood = truncate(contextText, 280) || 'friendly chat energy';
   return sanitizeChatShotPrompt(
-    `A safe cheerful banana-themed scene inspired by this chat mood: ${mood}. Friends are playing and smiling with bananas, bright colors, no violence, no weapons, no politics, no nudity, no drugs.`,
-    style
+    `A safe cheerful banana-themed scene inspired by this chat mood: ${mood}. Friends are playing and smiling with bananas, bright colors, no violence, no weapons, no politics, no nudity, no drugs. ${chatShotLanguageInstruction(languageContract)}`,
+    style,
+    languageContract
   );
 }
 
-function buildChatShotRawFallbackPrompt(contextText = '', style = 'comic') {
+function buildChatShotRawFallbackPrompt(contextText = '', style = 'comic', languageContract = detectChatShotContextLanguage(contextText)) {
   const mood = truncate(contextText, 280) || 'the current chat mood';
-  return `A scene inspired by this chat mood: ${mood}.`;
+  return `A scene inspired by this chat mood: ${mood}. ${chatShotLanguageInstruction(languageContract)}`;
+}
+
+function chatShotStyleInstruction(style = 'comic', languageContract = 'the dominant language of the chat context') {
+  const normalized = normalizeChatShotStyle(style);
+  const textRule = `Avoid unnecessary visible text, but when text or speech is natural for the scene, use ${languageContract}.`;
+  if (normalized === 'photo') {
+    return `Style: realistic photo, natural lighting, cinematic composition. ${textRule}`;
+  }
+  if (normalized === 'illustration') {
+    return `Style: detailed colorful illustration, bright palette. ${textRule}`;
+  }
+  return `Style: colorful comic panel, expressive characters, dynamic composition. ${textRule}`;
+}
+
+function buildChatShotPromptSystem(style = 'comic', bananaFilterEnabled = true, languageContract = 'the dominant language of the chat context') {
+  const base = [
+    'You are an image prompt assistant for a chat app.',
+    bananaFilterEnabled
+      ? 'You receive the latest chat messages as context and convert them into a safe image prompt.'
+      : 'You receive the latest chat messages as context and convert them into an image prompt.',
+    'Compress the context into 3-5 concise sentences that preserve the key events, mood, and one short representative dialogue beat when useful.',
+    'Output only the image prompt. Do not add markdown, explanations, policy notes, labels, or quotes around the prompt.',
+    chatShotStyleInstruction(style, languageContract),
+    chatShotLanguageInstruction(languageContract),
+    'Use vivid colors, clear composition, rich details, and make the scene visibly inspired by the chat.',
+  ];
+  if (!bananaFilterEnabled) return base.join('\n');
+  return [
+    ...base,
+    'Before finalizing, sanitize unsafe topics: violence, blood, weapons, drugs, nudity, insults, politics, war, and hate.',
+    'Replace fights with a friendly banana tussle; killing with a silly scene with overripe bananas; guns, knives, and weapons with bananas in hand; explosions with banana fireworks; blood with strawberry jam.',
+    'For any other unsafe term, replace nouns with bananas and risky verbs with hugging, playing, or smiling.',
+  ].join('\n');
 }
 
 function parseEmbedding(json) {
@@ -4139,39 +4208,9 @@ function createAiBotFeature({
     return getChatShotState(chat.id);
   }
 
-  function chatShotStyleInstruction(style = 'comic') {
-    const normalized = normalizeChatShotStyle(style);
-    if (normalized === 'photo') {
-      return 'Style: realistic photo, natural lighting, cinematic composition, no visible text or captions.';
-    }
-    if (normalized === 'illustration') {
-      return 'Style: detailed colorful illustration, bright palette, no visible text or captions.';
-    }
-    return 'Style: colorful comic panel, expressive characters, dynamic composition, no speech bubbles, no visible text.';
-  }
-
-  function buildChatShotPromptSystem(style = 'comic', bananaFilterEnabled = true) {
-    const base = [
-      'You are an image prompt assistant for a chat app.',
-      bananaFilterEnabled
-        ? 'You receive the latest chat messages as context and convert them into a safe image prompt.'
-        : 'You receive the latest chat messages as context and convert them into an image prompt.',
-      'Compress the context into 3-5 concise sentences that preserve the key events, mood, and one short representative dialogue beat when useful.',
-      'Output only the image prompt. Do not add markdown, explanations, policy notes, labels, or quotes around the prompt.',
-      chatShotStyleInstruction(style),
-      'Use vivid colors, clear composition, rich details, and make the scene visibly inspired by the chat.',
-    ];
-    if (!bananaFilterEnabled) return base.join('\n');
-    return [
-      ...base,
-      'Before finalizing, sanitize unsafe topics: violence, blood, weapons, drugs, nudity, insults, politics, war, and hate.',
-      'Replace fights with a friendly banana tussle; killing with a silly scene with overripe bananas; guns, knives, and weapons with bananas in hand; explosions with banana fireworks; blood with strawberry jam.',
-      'For any other unsafe term, replace nouns with bananas and risky verbs with hugging, playing, or smiling.',
-    ].join('\n');
-  }
-
   async function generateChatShotSafePrompt(bot, style, contextText, bananaFilterEnabled = true) {
     const settings = getGlobalSettings();
+    const languageContract = detectChatShotContextLanguage(contextText);
     const user = [
       'Latest chat context:',
       contextText || '(empty chat context)',
@@ -4185,7 +4224,7 @@ function createAiBotFeature({
           apiKey: getGrokApiKey(),
           baseUrl: grokBaseUrl(),
           model: bot.response_model || settings.grok_default_response_model,
-          system: buildChatShotPromptSystem(style, bananaFilterEnabled),
+          system: buildChatShotPromptSystem(style, bananaFilterEnabled, languageContract),
           user,
           maxOutputTokens: Math.min(intValue(bot.max_tokens, settings.grok_max_tokens, 1, 8000), 900),
           temperature: floatValue(bot.temperature, settings.grok_temperature, 0, 1),
@@ -4194,7 +4233,7 @@ function createAiBotFeature({
         rawText = await generateText({
           apiKey: getApiKey(),
           model: bot.response_model || settings.default_response_model,
-          system: buildChatShotPromptSystem(style, bananaFilterEnabled),
+          system: buildChatShotPromptSystem(style, bananaFilterEnabled, languageContract),
           user,
           maxOutputTokens: Math.min(intValue(bot.max_tokens, 900, OPENAI_MIN_OUTPUT_TOKENS, 8000), 900),
           temperature: floatValue(bot.temperature, 0.45, 0, 1),
@@ -4203,16 +4242,16 @@ function createAiBotFeature({
     } catch (error) {
       if (bananaFilterEnabled) {
         console.warn('[chatshot] prompt generation failed, using banana fallback:', errorText(error, 'Unexpected error'));
-        rawText = buildChatShotBananaFallbackPrompt(contextText, style);
+        rawText = buildChatShotBananaFallbackPrompt(contextText, style, languageContract);
       } else {
         console.warn('[chatshot] prompt generation failed, using raw fallback:', errorText(error, 'Unexpected error'));
-        rawText = buildChatShotRawFallbackPrompt(contextText, style);
+        rawText = buildChatShotRawFallbackPrompt(contextText, style, languageContract);
       }
     }
     if (bananaFilterEnabled) {
-      return sanitizeChatShotPrompt(rawText || buildChatShotBananaFallbackPrompt(contextText, style), style);
+      return sanitizeChatShotPrompt(rawText || buildChatShotBananaFallbackPrompt(contextText, style, languageContract), style, languageContract);
     }
-    return normalizeChatShotPromptText(rawText || buildChatShotRawFallbackPrompt(contextText, style), style);
+    return normalizeChatShotPromptText(rawText || buildChatShotRawFallbackPrompt(contextText, style, languageContract), style, undefined, languageContract);
   }
 
   async function createOpenAiChatShotImage(bot, prompt, bananaFilterEnabled = true) {
@@ -4224,8 +4263,8 @@ function createAiBotFeature({
         {
           role: 'system',
           content: bananaFilterEnabled
-            ? 'Use the image_generation tool to create exactly one safe image for the chat. Do not answer with text only.'
-            : 'Use the image_generation tool to create exactly one image for the chat. Do not answer with text only.',
+            ? 'Use the image_generation tool to create exactly one safe image for the chat. Follow the prompt visible-text language contract exactly. Do not answer with text only.'
+            : 'Use the image_generation tool to create exactly one image for the chat. Follow the prompt visible-text language contract exactly. Do not answer with text only.',
         },
         { role: 'user', content: [{ type: 'input_text', text: prompt }] },
       ],
@@ -8738,6 +8777,8 @@ module.exports = {
     sanitizeChatShotPrompt,
     normalizeChatShotStyle,
     normalizeChatShotPromptText,
+    detectChatShotContextLanguage,
+    buildChatShotPromptSystem,
     isChatSelectableBotKind,
     userFacingBotModel,
   },

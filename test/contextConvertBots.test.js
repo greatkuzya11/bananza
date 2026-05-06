@@ -105,3 +105,40 @@ test('normalizeChatShotPromptText keeps risky words when banana filter is off', 
   assert.doesNotMatch(prompt, /banana|strawberry jam/i);
   assert.match(prompt, /Colorful comic style/i);
 });
+
+test('detectChatShotContextLanguage picks Russian Cyrillic for Russian chat text', () => {
+  const context = [
+    'Alice: \u041f\u0440\u0438\u0432\u0435\u0442, \u0434\u0435\u043b\u0430\u0435\u043c \u0447\u0430\u0442\u0448\u043e\u0442 \u043f\u0440\u043e \u043d\u0430\u0448 \u0432\u0435\u0447\u0435\u0440.',
+    'Bob: \u0414\u0430, \u043d\u0443\u0436\u043d\u044b \u0440\u0435\u043f\u043b\u0438\u043a\u0438 \u043d\u0430 \u0440\u0443\u0441\u0441\u043a\u043e\u043c.',
+  ].join('\n');
+  assert.equal(__private.detectChatShotContextLanguage(context), 'Russian (Cyrillic)');
+});
+
+test('detectChatShotContextLanguage picks English Latin for English chat text', () => {
+  const context = [
+    'Alice: Let us make a poster for tonight.',
+    'Bob: The speech bubbles should stay in English.',
+  ].join('\n');
+  assert.equal(__private.detectChatShotContextLanguage(context), 'English/Latin');
+});
+
+test('detectChatShotContextLanguage uses the dominant mixed chat language', () => {
+  const mostlyRussian = [
+    'Alice: \u041f\u0440\u0438\u0432\u0435\u0442, \u043d\u0443\u0436\u043d\u0430 \u0430\u0444\u0438\u0448\u0430 \u0441 \u0440\u0443\u0441\u0441\u043a\u0438\u043c\u0438 \u0440\u0435\u043f\u043b\u0438\u043a\u0430\u043c\u0438.',
+    'Bob: ok',
+  ].join('\n');
+  const mostlyEnglish = [
+    '\u0410\u043b\u0438\u0441\u0430: ok',
+    'Bob: Make the visible signs and speech bubbles stay in English.',
+  ].join('\n');
+  assert.equal(__private.detectChatShotContextLanguage(mostlyRussian), 'Russian (Cyrillic)');
+  assert.equal(__private.detectChatShotContextLanguage(mostlyEnglish), 'English/Latin');
+});
+
+test('buildChatShotPromptSystem enforces Russian Cyrillic visible text contract', () => {
+  const system = __private.buildChatShotPromptSystem('comic', true, 'Russian (Cyrillic)');
+  assert.match(system, /Russian \(Cyrillic\)/);
+  assert.match(system, /natural Russian written in Cyrillic/i);
+  assert.match(system, /Do not translate Russian chat text into English/i);
+  assert.doesNotMatch(system, /no visible text|no speech bubbles/i);
+});
