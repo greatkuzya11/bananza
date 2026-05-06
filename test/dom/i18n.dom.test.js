@@ -30,6 +30,26 @@ test('i18n catalog has matching non-empty ru/en keys', () => {
   }
 });
 
+test('i18n translates chat list pull refresh states', () => {
+  const dom = new JSDOM('<!doctype html><html lang="ru"><body></body></html>', {
+    url: 'http://localhost/',
+    runScripts: 'outside-only',
+  });
+  const i18n = loadI18n(dom);
+
+  i18n.setLanguage('ru');
+  assert.equal(i18n.t('Pull to refresh'), '\u041f\u043e\u0442\u044f\u043d\u0438\u0442\u0435 \u0434\u043b\u044f \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f');
+  assert.equal(i18n.t('Release to refresh'), '\u041e\u0442\u043f\u0443\u0441\u0442\u0438\u0442\u0435 \u0434\u043b\u044f \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f');
+  assert.equal(i18n.t('Refreshing chats...'), '\u041e\u0431\u043d\u043e\u0432\u043b\u044f\u0435\u043c \u0447\u0430\u0442\u044b...');
+  assert.equal(i18n.t('Reloading app...'), '\u041f\u0435\u0440\u0435\u0437\u0430\u0433\u0440\u0443\u0436\u0430\u0435\u043c \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435...');
+
+  i18n.setLanguage('en');
+  assert.equal(i18n.t('Pull to refresh'), 'Pull to refresh');
+  assert.equal(i18n.t('Release to refresh'), 'Release to refresh');
+  assert.equal(i18n.t('Refreshing chats...'), 'Refreshing chats...');
+  assert.equal(i18n.t('Reloading app...'), 'Reloading app...');
+});
+
 test('i18n translates static index and login shell text and attributes', () => {
   const html = fs.readFileSync(path.join(repoRoot, 'public', 'index.html'), 'utf8');
   const dom = new JSDOM(html, {

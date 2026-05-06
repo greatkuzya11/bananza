@@ -1003,22 +1003,6 @@ html[data-modal-animation="none"] .chat-folder-list-surface {
   45% { transform: rotate(160deg) scale(1.08); }
   100% { transform: rotate(360deg) scale(1); }
 }
-#refreshChatsBtn .refresh-chats-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transform-origin: 50% 50%;
-}
-#refreshChatsBtn,
-#refreshChatsBtn:hover,
-#refreshChatsBtn:focus,
-#refreshChatsBtn:focus-visible,
-#refreshChatsBtn:active {
-  background: transparent !important;
-}
-#refreshChatsBtn.is-spinning .refresh-chats-icon {
-  animation: refreshChatsSpin .48s cubic-bezier(.22, .84, .3, 1);
-}
 @keyframes refreshChatsSpin {
   0% { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
@@ -4184,8 +4168,7 @@ html[data-visual-mode="rich"] .poll-card {
 @media (prefers-reduced-motion: reduce) {
   .center-toast.is-visible,
   .chat-back-btn.is-spinning .chat-back-btn-icon,
-  .chat-header-action-btn.is-spinning,
-  #refreshChatsBtn.is-spinning .refresh-chats-icon {
+  .chat-header-action-btn.is-spinning {
     animation: none;
   }
   .modal,
@@ -5505,7 +5488,6 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
   }
   .chat-header .icon-btn { width: 40px; height: 40px; font-size: 20px; }
   .chat-header-avatar { width: 40px; height: 40px; font-size: 16px; }
-  #refreshChatsBtn { font-size: 21px; }
   .chat-title { font-size: 16px; }
   .chat-status { font-size: 12px; }
   .pinned-bar {

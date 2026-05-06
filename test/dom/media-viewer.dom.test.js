@@ -155,8 +155,9 @@ function installAppRuntimeStubs(dom, { fetchHandler = null } = {}) {
 }
 
 async function bootAppDom(options = {}) {
+  const { i18nStub = null, ...runtimeOptions } = options;
   const dom = createAppDom();
-  installAppRuntimeStubs(dom, options);
+  installAppRuntimeStubs(dom, runtimeOptions);
   dom.visualViewportMock = installVisualViewportMock(dom.window, {
     width: 390,
     height: 844,
@@ -167,6 +168,7 @@ async function bootAppDom(options = {}) {
     dom.window.addEventListener('bananza:ready', resolve, { once: true });
   });
   loadBrowserScript(dom, 'public/js/ai-image-risk.js');
+  if (i18nStub) dom.window.BananzaI18n = i18nStub;
   loadBrowserScript(dom, 'public/js/app.js');
   await ready;
   await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
@@ -1332,6 +1334,77 @@ test('emoji picker inserts emoji without focusing the composer when the keyboard
   assert.notEqual(msgInput.value, '');
   assert.equal(focusCalls, 0);
   assert.notEqual(document.activeElement, msgInput);
+});
+
+test('mobile chat list pull refresh label is localized and positioned inside the pull gap', async (t) => {
+  const pullRefreshTranslations = {
+    'Pull to refresh': '\u041f\u043e\u0442\u044f\u043d\u0438\u0442\u0435 \u0434\u043b\u044f \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f',
+    'Release to refresh': '\u041e\u0442\u043f\u0443\u0441\u0442\u0438\u0442\u0435 \u0434\u043b\u044f \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f',
+    'Refreshing chats...': '\u041e\u0431\u043d\u043e\u0432\u043b\u044f\u0435\u043c \u0447\u0430\u0442\u044b...',
+    'Reloading app...': '\u041f\u0435\u0440\u0435\u0437\u0430\u0433\u0440\u0443\u0436\u0430\u0435\u043c \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435...',
+  };
+  const dom = await bootAppDom({
+    i18nStub: {
+      t: (key) => pullRefreshTranslations[key] || key,
+      text: (key) => pullRefreshTranslations[key] || key,
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const surface = document.getElementById('chatFolderListSurface');
+  const chatList = document.getElementById('chatList');
+  const indicator = document.getElementById('chatListPullIndicator');
+  const chip = indicator.querySelector('.chat-list-pull-chip');
+  const label = document.getElementById('chatListPullLabel');
+
+  await wait(dom, 80);
+
+  const makeRect = ({ top, left = 0, width = 390, height }) => ({
+    x: left,
+    y: top,
+    top,
+    left,
+    right: left + width,
+    bottom: top + height,
+    width,
+    height,
+    toJSON() {
+      return this;
+    },
+  });
+  Object.defineProperty(surface, 'clientHeight', {
+    configurable: true,
+    value: 700,
+  });
+  surface.getBoundingClientRect = () => makeRect({ top: 92, height: 700 });
+  chatList.getBoundingClientRect = () => makeRect({ top: 100, height: 660 });
+  chip.getBoundingClientRect = () => makeRect({ top: 0, width: 156, height: 34 });
+  chatList.scrollTop = 0;
+
+  chatList.dispatchEvent(createTouchEvent(dom.window, 'touchstart', {
+    touches: [createTouchPoint({ clientY: 100 })],
+  }));
+  const move = createTouchEvent(dom.window, 'touchmove', {
+    touches: [createTouchPoint({ clientY: 220 })],
+  });
+  chatList.dispatchEvent(move);
+
+  const listTopInSurface = 8;
+  const chipHeight = 34;
+  const offset = Number.parseFloat(chatList.style.paddingTop);
+  const indicatorTop = Number.parseFloat(indicator.style.top);
+
+  assert.equal(move.defaultPrevented, true);
+  assert.ok(offset >= 64, `Expected pull offset above threshold, got ${offset}`);
+  assert.equal(label.dataset.i18n, 'Release to refresh');
+  assert.equal(label.textContent, '\u041e\u0442\u043f\u0443\u0441\u0442\u0438\u0442\u0435 \u0434\u043b\u044f \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f');
+  assert.ok(indicatorTop >= listTopInSurface, `Expected indicator inside pull gap, got top ${indicatorTop}`);
+  assert.ok(
+    indicatorTop + chipHeight <= listTopInSurface + offset,
+    `Expected indicator bottom inside pull gap, got ${indicatorTop + chipHeight} for gap ${listTopInSurface + offset}`
+  );
 });
 
 test('search button opens on touchend, survives the synthetic click and focuses the mobile search input', async (t) => {

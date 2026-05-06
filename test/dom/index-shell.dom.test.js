@@ -17,7 +17,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
   const scripts = [...document.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
 
   assert.deepEqual(styles, [
-    '/css/style.css?v=20260501-mobile-font-size',
+    '/css/style.css?v=20260506-chat-pull-refresh',
     '/css/voice.css',
     '/css/video-notes.css',
   ]);
@@ -26,8 +26,8 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/sounds.js',
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
-    '/js/i18n.js?v=20260504-chatlist-skip',
-    '/js/app.js?v=20260504-i18n-chatlist-fix',
+    '/js/i18n.js?v=20260506-chat-pull-refresh',
+    '/js/app.js?v=20260506-chat-pull-refresh',
     '/js/video-notes/video-note-shapes.js',
     '/js/video-notes/VideoShapeRegistry.js',
     '/js/video-notes/AudioNoteRecorderAdapter.js',
@@ -69,6 +69,7 @@ test('public/index.html exposes core shell nodes used by runtime modules', () =>
 
   assert.equal(document.getElementById('chatBotInfoSection'), null);
   assert.equal(document.getElementById('activeChatFolderVisibilityToggle'), null);
+  assert.equal(document.getElementById('refreshChatsBtn'), null);
 });
 
 test('public/index.html keeps universal file pickers and mobile media shortcuts', () => {

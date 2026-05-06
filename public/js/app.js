@@ -22754,6 +22754,12 @@
         resetPullUiTimer = null;
       };
 
+      const setChatListPullLabel = (key) => {
+        chatListPullLabel.dataset.i18n = key;
+        chatListPullLabel.textContent = tx(key);
+      };
+      setChatListPullLabel('Pull to refresh');
+
       const isSidebarListPullAvailable = () => (
         window.innerWidth <= 768
         && !sidebar.classList.contains('sidebar-hidden')
@@ -22762,9 +22768,18 @@
       );
 
       const positionChatListPullIndicator = () => {
-        const sidebarRect = sidebar.getBoundingClientRect();
+        const anchor = chatListPullIndicator.offsetParent || chatFolderListSurface || sidebar;
+        const anchorRect = anchor.getBoundingClientRect();
         const listRect = chatList.getBoundingClientRect();
-        const top = Math.max(0, Math.round(listRect.top - sidebarRect.top + 8));
+        const chipRect = chatListPullIndicator.querySelector('.chat-list-pull-chip')?.getBoundingClientRect?.();
+        const chipHeight = Math.max(28, Math.round(chipRect?.height || 34));
+        const anchorHeight = Math.max(0, Math.round(anchor.clientHeight || anchorRect.height || 0));
+        const minTop = 6;
+        const listTop = Math.max(0, Math.round(listRect.top - anchorRect.top));
+        const gap = Math.max(0, state.offset);
+        const centeredInGap = listTop + Math.max(minTop, Math.round((gap - chipHeight) / 2));
+        const maxTop = anchorHeight > 0 ? Math.max(minTop, anchorHeight - chipHeight - minTop) : centeredInGap;
+        const top = Math.max(minTop, Math.min(maxTop, centeredInGap));
         chatListPullIndicator.style.top = `${top}px`;
       };
 
@@ -22776,15 +22791,15 @@
         chatList.style.transition = dragging ? 'none' : 'padding-top .18s cubic-bezier(.22, .84, .24, 1)';
         chatList.style.paddingTop = `${state.offset}px`;
         chatListPullIndicator.setAttribute('aria-hidden', 'false');
-        chatListPullIndicator.style.transform = `translateY(${Math.max(0, Math.min(18, Math.round(state.offset * 0.26)))}px)`;
+        chatListPullIndicator.style.transform = 'translateY(0)';
         sidebar.classList.toggle('is-chat-list-pull-visible', state.offset > 0 || refreshing);
         sidebar.classList.toggle('is-chat-list-pull-ready', ready);
         sidebar.classList.toggle('is-chat-list-refreshing', refreshing);
-        chatListPullLabel.textContent = refreshing
+        setChatListPullLabel(refreshing
           ? 'Refreshing chats...'
           : ready
             ? 'Release to refresh'
-            : 'Pull to refresh';
+            : 'Pull to refresh');
       };
 
       const resetChatListPullUi = ({ immediate = false } = {}) => {
@@ -22798,14 +22813,14 @@
           chatList.style.paddingTop = '';
           chatListPullIndicator.style.transform = '';
           chatListPullIndicator.setAttribute('aria-hidden', 'true');
-          chatListPullLabel.textContent = 'Pull to refresh';
+          setChatListPullLabel('Pull to refresh');
           return;
         }
         chatList.style.transition = 'padding-top .18s cubic-bezier(.22, .84, .24, 1)';
         chatList.style.paddingTop = '0px';
         chatListPullIndicator.style.transform = '';
         chatListPullIndicator.setAttribute('aria-hidden', 'true');
-        chatListPullLabel.textContent = 'Pull to refresh';
+        setChatListPullLabel('Pull to refresh');
         resetPullUiTimer = setTimeout(() => {
           if (state.tracking || state.refreshing) return;
           sidebar.classList.remove('is-chat-list-pull-visible', 'is-chat-list-refreshing');
@@ -22824,8 +22839,7 @@
         if (state.refreshing) return;
         state.refreshing = true;
         setChatListPullUi(CHAT_LIST_PULL_REFRESH_OFFSET, { refreshing: true });
-        chatListPullLabel.textContent = 'Reloading app...';
-        animateChatHeaderActionButton('#refreshChatsBtn');
+        setChatListPullLabel('Reloading app...');
         requestAnimationFrame(() => {
           setTimeout(() => {
             window.location.reload();
@@ -23057,12 +23071,6 @@
       });
     });
     $('#newChatBtn').addEventListener('click', openNewChatModal);
-    $('#refreshChatsBtn')?.addEventListener('click', async () => {
-      animateChatHeaderActionButton('#refreshChatsBtn');
-      await loadChats();
-      if (currentChatId) updateChatStatus();
-    });
-
     // Create group
     $('#createGroupBtn').addEventListener('click', async () => {
       const name = $('#groupName').value.trim();
