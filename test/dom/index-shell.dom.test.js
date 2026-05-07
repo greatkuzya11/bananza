@@ -17,7 +17,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
   const scripts = [...document.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
 
   assert.deepEqual(styles, [
-    '/css/style.css?v=20260506-chat-pull-refresh',
+    '/css/style.css?v=20260507-chat-tools',
     '/css/voice.css',
     '/css/video-notes.css',
   ]);
@@ -26,8 +26,8 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/sounds.js',
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
-    '/js/i18n.js?v=20260506-chat-pull-refresh',
-    '/js/app.js?v=20260506-chat-pull-refresh',
+    '/js/i18n.js?v=20260507-chat-tools',
+    '/js/app.js?v=20260507-grok-risk-direct-chat',
     '/js/video-notes/video-note-shapes.js',
     '/js/video-notes/VideoShapeRegistry.js',
     '/js/video-notes/AudioNoteRecorderAdapter.js',
@@ -80,6 +80,25 @@ test('public/index.html keeps universal file pickers and mobile media shortcuts'
   assert.equal(document.getElementById('fileInputDocs').getAttribute('accept'), null);
   assert.equal(document.getElementById('fileInputGallery').getAttribute('accept'), 'image/*,video/*');
   assert.equal(document.getElementById('fileInputCamera').getAttribute('accept'), 'image/*');
+});
+
+test('profile settings modal exposes accessible profile controls', () => {
+  const dom = new JSDOM(indexHtml);
+  const document = dom.window.document;
+  const menuDrawer = document.getElementById('menuDrawer');
+
+  assert.ok(menuDrawer.querySelector('.profile-settings-modal'));
+  assert.ok(menuDrawer.querySelector('.profile-hero'));
+  assert.ok(document.getElementById('profileForm'));
+  assert.ok(document.getElementById('profileDisplayPreview'));
+  assert.equal(document.getElementById('profileAvatarInput').getAttribute('accept'), '.jpg,.jpeg,.png,.webp');
+  assert.equal(document.getElementById('profileAvatarPickBtn').getAttribute('type'), 'button');
+  assert.equal(document.getElementById('removeProfileAvatar').getAttribute('type'), 'button');
+  assert.equal(document.getElementById('saveProfileBtn').getAttribute('type'), 'submit');
+  assert.equal(document.getElementById('profileStatus').getAttribute('role'), 'status');
+  assert.equal(document.getElementById('profileStatus').getAttribute('aria-live'), 'polite');
+  assert.equal(document.getElementById('colorPicker').getAttribute('role'), 'radiogroup');
+  assert.equal(document.getElementById('colorPicker').getAttribute('aria-labelledby'), 'profileColorLegend');
 });
 
 test('style.css keeps a dedicated unread badge contrast override for active chats', () => {

@@ -2051,37 +2051,58 @@
 
   <!-- Menu Drawer / Profile Editor -->
   <div id="menuDrawer" class="modal hidden">
-    <div class="modal-content">
+    <div class="modal-content profile-settings-modal">
       <div class="modal-header">
-        <h3>Profile</h3>
-        <button class="modal-close">✕</button>
+        <h3 data-i18n="Profile">Profile</h3>
+        <button class="modal-close" type="button" aria-label="Close" data-i18n-aria-label="Close">&times;</button>
       </div>
-      <div class="modal-body menu-body">
-        <div class="menu-user-info">
-          <div class="avatar-upload-wrap center">
-            <div id="profileAvatar" class="avatar-large"></div>
-            <label class="avatar-upload-label" title="Change avatar">📷
-              <input type="file" id="profileAvatarInput" accept=".jpg,.jpeg,.png,.webp" hidden>
-            </label>
+      <div class="modal-body menu-body profile-settings-body">
+        <section class="profile-hero" aria-labelledby="profileDisplayPreview">
+          <div class="avatar-upload-wrap profile-avatar-wrap">
+            <div id="profileAvatar" class="avatar-large profile-avatar-preview" aria-hidden="true"></div>
+            <button id="profileAvatarPickIcon" class="avatar-upload-label profile-avatar-upload profile-avatar-picker" type="button" title="Change avatar" data-i18n-title="Change avatar" aria-label="Change avatar" data-i18n-aria-label="Change avatar">
+              <span aria-hidden="true">&#128247;</span>
+            </button>
+            <input type="file" id="profileAvatarInput" accept=".jpg,.jpeg,.png,.webp" hidden>
           </div>
-          <button id="removeProfileAvatar" class="btn-text hidden">Remove avatar</button>
-          <div class="profile-meta">
+          <div class="profile-identity">
+            <span class="profile-kicker" data-i18n="Account">Account</span>
+            <strong id="profileDisplayPreview" class="profile-display-preview"></strong>
             <span id="profileUsername" class="meta-username"></span>
           </div>
-        </div>
-        <hr class="divider">
-        <div class="field-group">
-          <label>Display Name</label>
-          <input type="text" id="profileName" maxlength="30" class="modal-input">
-        </div>
-        <div class="field-group">
-          <label>Avatar Color</label>
-          <div id="colorPicker" class="color-picker"></div>
-        </div>
-        <button id="saveProfileBtn" class="btn-primary" style="width:100%;margin-top:8px">Save</button>
-        <div class="profile-danger-section">
+        </section>
+
+        <div id="profileStatus" class="profile-status" role="status" aria-live="polite"></div>
+
+        <form id="profileForm" class="profile-form" autocomplete="off">
+          <section class="profile-section">
+            <label for="profileName" class="profile-section-title" data-i18n="Display Name">Display Name</label>
+            <input type="text" id="profileName" maxlength="30" class="modal-input" autocomplete="nickname" aria-describedby="profileStatus">
+          </section>
+
+          <fieldset class="profile-section profile-photo-section">
+            <legend class="profile-section-title" data-i18n="Profile photo">Profile photo</legend>
+            <div class="profile-avatar-actions">
+              <button id="profileAvatarPickBtn" class="profile-action-btn profile-avatar-picker" type="button" title="Change avatar" data-i18n-title="Change avatar">
+                <span data-i18n="Change avatar">Change avatar</span>
+              </button>
+              <button id="removeProfileAvatar" class="profile-action-btn profile-action-btn-danger hidden" type="button" data-i18n="Remove avatar">Remove avatar</button>
+            </div>
+          </fieldset>
+
+          <fieldset class="profile-section profile-color-section">
+            <legend id="profileColorLegend" class="profile-section-title" data-i18n="Choose avatar color">Choose avatar color</legend>
+            <div id="colorPicker" class="color-picker profile-color-picker" role="radiogroup" aria-labelledby="profileColorLegend"></div>
+          </fieldset>
+
+          <div class="profile-save-row">
+            <button id="saveProfileBtn" class="btn-primary profile-save-btn" type="submit" data-i18n="Save">Save</button>
+          </div>
+        </form>
+
+        <section class="profile-section profile-danger-section">
           <button id="profileLogoutBtn" type="button" class="settings-item chat-danger-action profile-logout-btn">Logout</button>
-        </div>
+        </section>
       </div>
     </div>
   </div>

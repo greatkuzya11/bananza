@@ -74,6 +74,12 @@ test('UI flow covers register, private chat creation, sending, search and poll c
 
       await page.locator('#menuBtn').click();
       await expect(page.locator('#menuDrawer')).toBeVisible();
+      await expect(page.locator('#profileForm')).toBeVisible();
+      await expect(page.locator('#profileName')).toHaveValue(member.displayName);
+      await expect(page.locator('#profileUsername')).toContainText(`@${member.username}`);
+      await expect(page.locator('#colorPicker input[name="profileAvatarColor"]')).toHaveCount(8);
+      await page.locator('#colorPicker .color-swatch').nth(1).click();
+      await expect(page.locator('#colorPicker input[name="profileAvatarColor"]').nth(1)).toBeChecked();
       await expectMobileScene(page, 'sidebar');
       await page.locator('#menuDrawer .modal-close').click();
       await expect(page.locator('#menuDrawer')).toBeHidden();

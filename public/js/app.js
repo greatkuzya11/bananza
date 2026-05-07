@@ -5230,7 +5230,7 @@
       }
       persistCurrentUser();
       updateCurrentUserFooter();
-      if (!menuDrawer.classList.contains('hidden')) openMenuDrawer();
+      if (!menuDrawer.classList.contains('hidden')) renderProfileEditor({ preserveStatus: true });
     }
 
     let shouldRenderChats = false;
@@ -21723,72 +21723,156 @@
   // Profile editor (menu drawer)
   const AVATAR_COLORS = ['#e17076','#7bc862','#e5ca77','#65aadd','#a695e7','#ee7aae','#6ec9cb','#faa774'];
 
-  function openMenuDrawer(opener = $('#menuBtn')) {
-    hideFloatingMessageActions({ immediate: true });
-    openModal('menuDrawer', { replaceStack: true, opener });
+  function setProfileStatus(message, type = '') {
+    setInlineStatus('profileStatus', message, type);
+  }
 
-    // Avatar
+  function getProfileSelectedColor() {
+    const checked = $('#colorPicker input[name="profileAvatarColor"]:checked');
+    return checked?.value || currentUser?.avatar_color || AVATAR_COLORS[3];
+  }
+
+  function setProfileAvatarUploadPending(pending) {
+    const input = $('#profileAvatarInput');
+    if (input) input.disabled = !!pending;
+    document.querySelectorAll('.profile-avatar-picker').forEach((button) => {
+      button.classList.toggle('is-pending', !!pending);
+      if (pending) button.setAttribute('aria-busy', 'true');
+      else button.removeAttribute('aria-busy');
+      if ('disabled' in button) button.disabled = !!pending;
+    });
+  }
+
+  function renderProfileAvatarPreview(color = currentUser?.avatar_color) {
     const avatarEl = $('#profileAvatar');
-    avatarEl.style.background = currentUser.avatar_color;
-    if (currentUser.avatar_url) {
-      avatarEl.innerHTML = `<img class="avatar-img" src="${esc(currentUser.avatar_url)}" alt="">`;
-      $('#removeProfileAvatar').classList.remove('hidden');
-    } else {
-      avatarEl.innerHTML = initials(currentUser.display_name);
-      $('#removeProfileAvatar').classList.add('hidden');
-    }
+    setAvatarElementVisual(avatarEl, {
+      name: currentUser?.display_name || currentUser?.username || '',
+      color: color || currentUser?.avatar_color || AVATAR_COLORS[3],
+      avatarUrl: currentUser?.avatar_url || '',
+    });
+    $('#removeProfileAvatar')?.classList.toggle('hidden', !currentUser?.avatar_url);
+  }
 
-    // Fields
-    $('#profileUsername').textContent = '@' + currentUser.username;
-    $('#profileName').value = currentUser.display_name;
+  function syncProfileColorSelection(color) {
+    const selected = color || getProfileSelectedColor();
+    $('#colorPicker')?.querySelectorAll('.color-swatch').forEach((swatch) => {
+      const input = swatch.querySelector('input[name="profileAvatarColor"]');
+      const isActive = input?.value === selected;
+      swatch.classList.toggle('active', isActive);
+      if (input) input.checked = isActive;
+    });
+    if (!currentUser?.avatar_url) renderProfileAvatarPreview(selected);
+  }
 
-    // Color picker
+  function renderProfileColorPicker() {
     const picker = $('#colorPicker');
-    picker.innerHTML = AVATAR_COLORS.map(c =>
-      `<div class="color-swatch${c === currentUser.avatar_color ? ' active' : ''}" data-color="${c}" style="background:${c}"></div>`
+    if (!picker) return;
+    const selectedColor = currentUser?.avatar_color || AVATAR_COLORS[3];
+    picker.innerHTML = AVATAR_COLORS.map((color, index) =>
+      `<label class="color-swatch${color === selectedColor ? ' active' : ''}" style="--profile-color:${esc(color)}">
+        <input type="radio" name="profileAvatarColor" value="${esc(color)}" ${color === selectedColor ? 'checked' : ''} aria-label="${esc(`${t('Avatar Color')} ${index + 1}`)}">
+        <span class="color-swatch-dot" aria-hidden="true"></span>
+      </label>`
     ).join('');
   }
 
+  function renderProfileEditor({ preserveStatus = false } = {}) {
+    if (!currentUser) return;
+    renderProfileAvatarPreview();
+    $('#profileDisplayPreview').textContent = currentUser.display_name || currentUser.username || '';
+    $('#profileUsername').textContent = '@' + currentUser.username;
+    $('#profileName').value = currentUser.display_name || '';
+    renderProfileColorPicker();
+    if (!preserveStatus) setProfileStatus('');
+  }
+
+  function openMenuDrawer(opener = $('#menuBtn')) {
+    hideFloatingMessageActions({ immediate: true });
+    renderProfileEditor();
+    openModal('menuDrawer', { replaceStack: true, opener });
+  }
+
+  async function uploadProfileAvatar(file) {
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('avatar', file);
+    setProfileStatus('Uploading...', 'pending');
+    setProfileAvatarUploadPending(true);
+    try {
+      const res = await api('/api/profile/avatar', { method: 'POST', body: fd });
+      applyUserUpdate(res.user || {});
+      setProfileStatus('Profile saved', 'success');
+    } catch (e) {
+      setProfileStatus(e.message || 'Upload failed', 'error');
+    } finally {
+      setProfileAvatarUploadPending(false);
+    }
+  }
+
+  async function removeProfileAvatar() {
+    setProfileStatus('Removing...', 'pending');
+    try {
+      const res = await api('/api/profile/avatar', { method: 'DELETE' });
+      applyUserUpdate(res.user || { id: currentUser.id, avatar_url: null });
+      setProfileStatus('Profile saved', 'success');
+    } catch (e) {
+      setProfileStatus(e.message || 'Remove avatar failed', 'error');
+    }
+  }
+
+  async function saveProfileChanges() {
+    const name = $('#profileName')?.value.trim() || '';
+    if (!name) {
+      setProfileStatus('Name is required', 'error');
+      $('#profileName')?.focus();
+      return;
+    }
+    const color = getProfileSelectedColor();
+    setProfileStatus('Saving...', 'pending');
+    try {
+      const res = await api('/api/profile', { method: 'PUT', body: { displayName: name, avatarColor: color } });
+      applyUserUpdate(res.user || {});
+      setProfileStatus('Profile saved', 'success');
+    } catch (e) {
+      setProfileStatus(e.message || 'Profile save failed', 'error');
+    }
+  }
+
   function setupProfileEvents() {
-    // Upload avatar
-    $('#profileAvatarInput').addEventListener('change', async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const fd = new FormData();
-      fd.append('avatar', file);
-      try {
-        const res = await api('/api/profile/avatar', { method: 'POST', body: fd });
-        applyUserUpdate(res.user || {});
-      } catch (e) { alert(e.message); }
+    $$('.profile-avatar-picker').forEach((button) => {
+      button.addEventListener('click', () => $('#profileAvatarInput')?.click());
     });
 
-    // Remove avatar
-    $('#removeProfileAvatar').addEventListener('click', async () => {
-      try {
-        const res = await api('/api/profile/avatar', { method: 'DELETE' });
-        applyUserUpdate(res.user || { id: currentUser.id, avatar_url: null });
-      } catch (e) { alert(e.message); }
+    $('#profileAvatarInput')?.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      await uploadProfileAvatar(file);
+      e.target.value = '';
     });
 
-    // Color picker
-    $('#colorPicker').addEventListener('click', (e) => {
-      const swatch = e.target.closest('.color-swatch');
-      if (!swatch) return;
-      $('#colorPicker').querySelectorAll('.color-swatch').forEach(s => s.classList.remove('active'));
-      swatch.classList.add('active');
+    $('#removeProfileAvatar')?.addEventListener('click', () => {
+      withActionButtons('removeProfileAvatar', 'Removing...', removeProfileAvatar).catch((e) => {
+        setProfileStatus(e.message || 'Remove avatar failed', 'error');
+      });
     });
 
-    // Save
-    $('#saveProfileBtn').addEventListener('click', async () => {
-      const name = $('#profileName').value.trim();
-      if (!name) return;
-      const activeSwatch = $('#colorPicker .color-swatch.active');
-      const color = activeSwatch ? activeSwatch.dataset.color : currentUser.avatar_color;
-      try {
-        const res = await api('/api/profile', { method: 'PUT', body: { displayName: name, avatarColor: color } });
-        applyUserUpdate(res.user || {});
-        closeAllModals();
-      } catch (e) { alert(e.message); }
+    $('#colorPicker')?.addEventListener('change', (e) => {
+      const input = e.target.closest('input[name="profileAvatarColor"]');
+      if (!input) return;
+      syncProfileColorSelection(input.value);
+      setProfileStatus('');
+    });
+
+    $('#profileName')?.addEventListener('input', (e) => {
+      const value = e.target.value.trim();
+      if (value) $('#profileDisplayPreview').textContent = value;
+      setProfileStatus('');
+    });
+
+    $('#profileForm')?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      withActionButtons('saveProfileBtn', 'Saving...', saveProfileChanges).catch((error) => {
+        setProfileStatus(error.message || 'Profile save failed', 'error');
+      });
     });
   }
 
