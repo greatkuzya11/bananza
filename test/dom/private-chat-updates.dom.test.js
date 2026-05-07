@@ -184,6 +184,24 @@ async function waitForMs(window, ms = 0) {
   await new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function createDeferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function waitForCondition(window, predicate, { attempts = 50, delayMs = 0 } = {}) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (predicate()) return;
+    await waitForMs(window, delayMs);
+  }
+  throw new Error('Timed out waiting for condition');
+}
+
 function createTouchPoint({ identifier = 1, clientX = 0, clientY = 0 } = {}) {
   return { identifier, clientX, clientY };
 }
@@ -276,6 +294,11 @@ function chatUnreadBadgeClassName(document, chatId) {
 function chatItemTimeText(document, chatId) {
   const node = document.querySelector(`.chat-item[data-chat-id="${chatId}"] .chat-item-time`);
   return node ? node.textContent.trim() : '';
+}
+
+function renderedChatIds(document) {
+  return [...document.querySelectorAll('#chatList .chat-item[data-chat-id]')]
+    .map((node) => Number(node.dataset.chatId));
 }
 
 function localIsoWithOffset(date) {
@@ -678,6 +701,228 @@ test('chat list shows compact tool badges for context convert and ChatShot', asy
   assert.equal(contextBadge.textContent, String.fromCodePoint(0x1F34C));
   assert.equal(chatShotBadge.textContent, String.fromCodePoint(0x1F4F8));
   assert.equal(document.querySelector('.chat-item[data-chat-id="63"] .chat-item-tool-indicator'), null);
+});
+
+test('saved active chat folder is restored after startup folders load', async (t) => {
+  const initialChats = [
+    {
+      id: 71,
+      type: 'group',
+      name: 'All chats only',
+      unread_count: 0,
+      last_text: 'Outside folder',
+      last_time: '2026-04-29T20:00:00.000Z',
+      created_at: '2026-04-29 20:00:00',
+    },
+    {
+      id: 72,
+      type: 'group',
+      name: 'Saved folder first',
+      unread_count: 0,
+      last_text: 'Inside folder',
+      last_time: '2026-04-29T19:00:00.000Z',
+      created_at: '2026-04-29 19:00:00',
+    },
+    {
+      id: 73,
+      type: 'group',
+      name: 'Saved folder second',
+      unread_count: 0,
+      last_text: 'Inside folder',
+      last_time: '2026-04-29T18:00:00.000Z',
+      created_at: '2026-04-29 18:00:00',
+    },
+  ];
+  const folderPayload = {
+    id: 9,
+    name: 'Saved',
+    kind: 'custom',
+    sort_order: 1,
+    chat_ids: [72, 73],
+    pins: [],
+  };
+  const switchFolderPayload = {
+    id: 10,
+    name: 'Manual switch',
+    kind: 'custom',
+    sort_order: 2,
+    chat_ids: [71],
+    pins: [],
+  };
+  const dom = await bootAppDom({
+    fetchHandler: ({ url, dom }) => {
+      if (url.pathname === '/api/auth/me') {
+        dom.window.localStorage.setItem('bananza:active-chat-folder:1', '9');
+        return null;
+      }
+      if (url.pathname === '/api/chats') return createJsonResponse(dom, initialChats);
+      if (url.pathname === '/api/chat-folders') {
+        return createJsonResponse(dom, { folders: [folderPayload, switchFolderPayload] });
+      }
+      return null;
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge, localStorage } = dom.window;
+  assert.equal(BananzaAppBridge.__testing.getActiveChatFolder()?.id, 9);
+  assert.deepEqual(renderedChatIds(document), [72, 73]);
+  assert.equal(localStorage.getItem('bananza:active-chat-folder:1'), '9');
+
+  await BananzaAppBridge.__testing.transitionToChatFolder(10, { persist: true });
+  assert.equal(BananzaAppBridge.__testing.getActiveChatFolder()?.id, 10);
+  assert.deepEqual(renderedChatIds(document), [71]);
+  assert.equal(localStorage.getItem('bananza:active-chat-folder:1'), '10');
+});
+
+test('startup cache does not flash all chats while saved active folder is loading', async (t) => {
+  const initialChats = [
+    {
+      id: 71,
+      type: 'group',
+      name: 'All chats only',
+      unread_count: 0,
+      last_text: 'Outside folder',
+      last_time: '2026-04-29T20:00:00.000Z',
+      created_at: '2026-04-29 20:00:00',
+    },
+    {
+      id: 72,
+      type: 'group',
+      name: 'Saved folder first',
+      unread_count: 0,
+      last_text: 'Inside folder',
+      last_time: '2026-04-29T19:00:00.000Z',
+      created_at: '2026-04-29 19:00:00',
+    },
+    {
+      id: 73,
+      type: 'group',
+      name: 'Saved folder second',
+      unread_count: 0,
+      last_text: 'Inside folder',
+      last_time: '2026-04-29T18:00:00.000Z',
+      created_at: '2026-04-29 18:00:00',
+    },
+  ];
+  const folderGate = createDeferred();
+  let foldersRequested = false;
+  const dom = createAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  installAppRuntimeStubs(dom, {
+    fetchHandler: async ({ url, dom }) => {
+      if (url.pathname === '/api/chats') return createJsonResponse(dom, initialChats);
+      if (url.pathname === '/api/chat-folders') {
+        foldersRequested = true;
+        await folderGate.promise;
+        return createJsonResponse(dom, {
+          folders: [{
+            id: 9,
+            name: 'Saved',
+            kind: 'custom',
+            sort_order: 1,
+            chat_ids: [72, 73],
+            pins: [],
+          }],
+        });
+      }
+      return null;
+    },
+  });
+  installVisualViewportMock(dom.window, {
+    width: 390,
+    height: 844,
+    offsetTop: 0,
+    offsetLeft: 0,
+  });
+  dom.window.localStorage.setItem('bananza:active-chat-folder:1', '9');
+  dom.window.localStorage.setItem('bananza:chat-list:1', JSON.stringify({
+    version: 3,
+    chats: initialChats,
+  }));
+
+  const ready = new Promise((resolve) => {
+    dom.window.addEventListener('bananza:ready', resolve, { once: true });
+  });
+  const paintedChatIdSnapshots = [];
+  const observer = new dom.window.MutationObserver(() => {
+    paintedChatIdSnapshots.push(renderedChatIds(dom.window.document));
+  });
+  observer.observe(dom.window.document.getElementById('chatList'), { childList: true, subtree: true });
+  loadBrowserScript(dom, 'public/js/ai-image-risk.js');
+  loadBrowserScript(dom, 'public/js/app.js');
+  await waitForCondition(dom.window, () => foldersRequested);
+  await waitForMs(dom.window, 0);
+
+  assert.deepEqual(renderedChatIds(dom.window.document), []);
+  assert.equal(
+    paintedChatIdSnapshots.some((ids) => ids.includes(71) && ids.includes(72) && ids.includes(73)),
+    false
+  );
+
+  folderGate.resolve();
+  await ready;
+  await waitForMs(dom.window, 0);
+  observer.disconnect();
+
+  assert.deepEqual(renderedChatIds(dom.window.document), [72, 73]);
+});
+
+test('stale saved active chat folder falls back to all chats after startup folders load', async (t) => {
+  const initialChats = [
+    {
+      id: 81,
+      type: 'group',
+      name: 'Fallback first',
+      unread_count: 0,
+      last_text: 'A',
+      last_time: '2026-04-29T20:00:00.000Z',
+      created_at: '2026-04-29 20:00:00',
+    },
+    {
+      id: 82,
+      type: 'group',
+      name: 'Fallback second',
+      unread_count: 0,
+      last_text: 'B',
+      last_time: '2026-04-29T19:00:00.000Z',
+      created_at: '2026-04-29 19:00:00',
+    },
+  ];
+  const dom = await bootAppDom({
+    fetchHandler: ({ url, dom }) => {
+      if (url.pathname === '/api/auth/me') {
+        dom.window.localStorage.setItem('bananza:active-chat-folder:1', '404');
+        return null;
+      }
+      if (url.pathname === '/api/chats') return createJsonResponse(dom, initialChats);
+      if (url.pathname === '/api/chat-folders') {
+        return createJsonResponse(dom, {
+          folders: [{
+            id: 9,
+            name: 'Existing',
+            kind: 'custom',
+            sort_order: 1,
+            chat_ids: [82],
+            pins: [],
+          }],
+        });
+      }
+      return null;
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge, localStorage } = dom.window;
+  assert.equal(BananzaAppBridge.__testing.getActiveChatFolder(), null);
+  assert.deepEqual(renderedChatIds(document), [81, 82]);
+  assert.equal(localStorage.getItem('bananza:active-chat-folder:1'), '0');
 });
 
 test('chat folders testing helpers filter the list and keep folder-local pins separate from All chats', async (t) => {

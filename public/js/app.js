@@ -156,6 +156,7 @@
   let chats = [];
   let chatFolders = [];
   let chatFoldersLoadedOnce = false;
+  let chatFoldersLoadFailed = false;
   let chatListLoadedOnce = false;
   let initialChatLoadFinished = false;
   let chatFolderRequestSeq = 0;
@@ -753,7 +754,6 @@
       }
       const stored = Number(localStorage.getItem(key) || ALL_CHATS_FOLDER_ID);
       this.activeFolderId = Number.isInteger(stored) && stored >= 0 ? stored : ALL_CHATS_FOLDER_ID;
-      this.ensureActiveFolder();
       return this.activeFolderId;
     }
 
@@ -773,6 +773,7 @@
           return Number(a.id || 0) - Number(b.id || 0);
         });
       chatFoldersLoadedOnce = true;
+      chatFoldersLoadFailed = false;
       this.ensureActiveFolder();
       if (persist) this.persistActiveFolderId();
       return this.getFolders();
@@ -4232,6 +4233,12 @@
     chatListStatus.classList.toggle('is-error', type === 'error');
   }
 
+  function isChatListWaitingForActiveFolder(folderId = chatFolderStore.activeFolderId) {
+    return normalizeChatFolderId(folderId) !== ALL_CHATS_FOLDER_ID
+      && !chatFoldersLoadedOnce
+      && !chatFoldersLoadFailed;
+  }
+
   function isChatSearchOpen() {
     return Boolean(sidebarSearch && sidebarSearch.getAttribute('aria-hidden') === 'false');
   }
@@ -4281,9 +4288,13 @@
     const cachedChats = readChatListCache();
     if (!cachedChats.length) return false;
     chats = cachedChats;
-    chatListLoadedOnce = true;
-    renderChatList(chatSearch?.value || '');
-    setChatListStatus('Showing saved chats while refreshing...', 'info');
+    if (isChatListWaitingForActiveFolder()) {
+      setChatListStatus('Loading chats...', 'loading');
+    } else {
+      chatListLoadedOnce = true;
+      renderChatList(chatSearch?.value || '');
+      setChatListStatus('Showing saved chats while refreshing...', 'info');
+    }
     warmChatListAvatarAssets(cachedChats);
     return true;
   }
@@ -4927,6 +4938,7 @@
     if (chatFolderAbortController) chatFolderAbortController.abort();
     const controller = new AbortController();
     chatFolderAbortController = controller;
+    chatFoldersLoadFailed = false;
     try {
       const data = await api('/api/chat-folders', { signal: controller.signal });
       if (requestId !== chatFolderRequestSeq) return chatFolderStore.getFolders();
@@ -4941,6 +4953,7 @@
         console.warn('Failed to load chat folders', error);
       }
       if (requestId !== chatFolderRequestSeq) return chatFolderStore.getFolders();
+      if (!isAbortError(error)) chatFoldersLoadFailed = true;
       renderActiveChatFolderBar();
       if (renderAfterLoad) renderChatList(chatSearch?.value || '');
       return chatFolderStore.getFolders();
@@ -14928,6 +14941,10 @@
   }
 
   function renderChatList(filter = '') {
+    if (isChatListWaitingForActiveFolder()) {
+      renderChatFolderPicker();
+      return;
+    }
     hideChatContextMenu({ immediate: true });
     renderChatListInto(chatList, {
       filter,
@@ -24261,6 +24278,7 @@
   // ═══════════════════════════════════════════════════════════════════════════
   async function init() {
     if (!checkAuth()) return;
+    chatFolderStore.hydrateActiveFolderId();
     setChatSearchOpen(false, { clear: true, focus: false, render: false });
     hydrateChatListCache();
 
