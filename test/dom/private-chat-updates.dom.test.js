@@ -226,6 +226,38 @@ function dispatchTouchSwipe(window, target, {
   return { moveEvent, endEvent };
 }
 
+function startTouchSwipe(window, target, {
+  identifier = 1,
+  startX = 320,
+  startY = 420,
+  moveX = 180,
+  moveY = startY,
+} = {}) {
+  const startTouch = createTouchPoint({ identifier, clientX: startX, clientY: startY });
+  const moveTouch = createTouchPoint({ identifier, clientX: moveX, clientY: moveY });
+  target.dispatchEvent(createTouchEvent(window, 'touchstart', {
+    touches: [startTouch],
+    changedTouches: [startTouch],
+  }));
+  const moveEvent = createTouchEvent(window, 'touchmove', {
+    touches: [moveTouch],
+    changedTouches: [moveTouch],
+  });
+  target.dispatchEvent(moveEvent);
+  return {
+    moveEvent,
+    end(endX = moveX, endY = moveY) {
+      const endTouch = createTouchPoint({ identifier, clientX: endX, clientY: endY });
+      const endEvent = createTouchEvent(window, 'touchend', {
+        touches: [],
+        changedTouches: [endTouch],
+      });
+      target.dispatchEvent(endEvent);
+      return endEvent;
+    },
+  };
+}
+
 function chatNameText(document, chatId) {
   const node = document.querySelector(`.chat-item[data-chat-id="${chatId}"] .chat-item-name`);
   return node ? node.textContent.trim() : '';
@@ -938,14 +970,27 @@ test('mobile folder swipe switches pages and centers the active folder chip', as
 
   assert.equal(document.getElementById('activeChatFolderBar').classList.contains('hidden'), true);
 
-  dispatchTouchSwipe(dom.window, document.getElementById('chatList'), {
+  const nextGesture = startTouchSwipe(dom.window, document.getElementById('chatList'), {
     startX: 330,
     moveX: 160,
-    endX: 160,
   });
+
+  const swipeStage = document.querySelector('.chat-folder-swipe-stage');
+  assert.ok(swipeStage, 'swipe stage is visible while the finger is still dragging');
+  assert.deepEqual(
+    [...swipeStage.querySelectorAll('[data-folder-swipe-role="adjacent"] .chat-item[data-chat-id]')]
+      .map((node) => Number(node.dataset.chatId)),
+    [102]
+  );
+  assert.match(
+    document.querySelector('.chat-folder-swipe-track').style.transform,
+    /translate3d\(-170px, 0, 0\)/
+  );
+  nextGesture.end();
   await waitForMs(dom.window, 560);
 
   assert.equal(BananzaAppBridge.__testing.getActiveChatFolder().id, 9);
+  assert.equal(document.querySelector('.chat-folder-swipe-stage'), null);
   assert.deepEqual(
     [...document.querySelectorAll('#chatList .chat-item[data-chat-id]')].map((node) => Number(node.dataset.chatId)),
     [102]
@@ -1014,12 +1059,13 @@ test('mobile folder swipe ignores vertical and short drags, snaps at edges, and 
 
   BananzaAppBridge.__testing.setActiveChatFolder(0, { render: true });
   await waitForAnimationFrames(dom.window, 2);
-  dispatchTouchSwipe(dom.window, chatList, {
+  const edgeGesture = startTouchSwipe(dom.window, chatList, {
     identifier: 3,
     startX: 120,
     moveX: 300,
-    endX: 300,
   });
+  assert.equal(document.querySelector('.chat-folder-swipe-stage'), null);
+  edgeGesture.end();
   await waitForMs(dom.window, 280);
   assert.equal(BananzaAppBridge.__testing.getActiveChatFolder(), null);
   assert.equal(content.style.transform, '');
@@ -1076,6 +1122,7 @@ test('desktop width does not enable chat folder page swiping', async (t) => {
     [102, 101]
   );
   assert.equal(document.getElementById('chatFolderListSurface').style.transform, '');
+  assert.equal(document.querySelector('.chat-folder-swipe-stage'), null);
 });
 
 test('chat folder strip visibility toggle lives on the All chats row and keeps the picker open', async (t) => {

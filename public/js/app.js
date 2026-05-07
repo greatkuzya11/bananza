@@ -234,6 +234,7 @@
   let currentMobileFontSize = MOBILE_FONT_SIZE_DEFAULT;
   let currentUiLanguage = i18n?.getLanguage?.() || 'ru';
   let chatFolderSwitchSeq = 0;
+  let chatFolderSwipePagerState = null;
   let pendingChatFolderChipCenterBehavior = 'auto';
   let chatFolderStripPreviewFolderId = null;
   let chatFolderBarForceVisible = false;
@@ -4567,12 +4568,24 @@
     });
   }
 
+  function destroyChatFolderSwipePager() {
+    const state = chatFolderSwipePagerState;
+    chatFolderSwipePagerState = null;
+    if (state?.stage instanceof HTMLElement) state.stage.remove();
+    if (chatFolderListSurface instanceof HTMLElement) {
+      chatFolderListSurface.classList.remove('is-folder-swipe-paging');
+    }
+    if (chatList instanceof HTMLElement) chatList.classList.remove('is-folder-swipe-source');
+  }
+
   function resetChatFolderSwipeSurface() {
     if (!(chatFolderListSurface instanceof HTMLElement)) return;
+    destroyChatFolderSwipePager();
     chatFolderListSurface.classList.remove(
       'is-folder-swipe-dragging',
       'is-folder-swipe-settling',
-      'is-folder-swipe-preparing'
+      'is-folder-swipe-preparing',
+      'is-folder-swipe-paging'
     );
     chatFolderListSurface.style.transform = '';
   }
@@ -4671,19 +4684,101 @@
       && !mobileRouteTransitionActive;
   }
 
+  function getChatFolderSwipeTransformTarget() {
+    return chatFolderSwipePagerState?.track instanceof HTMLElement
+      ? chatFolderSwipePagerState.track
+      : chatFolderListSurface;
+  }
+
+  function createChatFolderSwipePage(folderId, role = '') {
+    const page = document.createElement('div');
+    page.className = 'chat-list chat-folder-swipe-page';
+    page.dataset.folderSwipePage = String(normalizeChatFolderId(folderId));
+    if (role) page.dataset.folderSwipeRole = role;
+    renderChatListInto(page, {
+      filter: chatSearch?.value || '',
+      folderId,
+      includeSearchExtras: false,
+    });
+    return page;
+  }
+
+  function prepareChatFolderSwipePager(direction, adjacentFolderId) {
+    if (!canAnimateChatFolderSwipe() || !(chatFolderListSurface instanceof HTMLElement) || !(chatList instanceof HTMLElement)) {
+      destroyChatFolderSwipePager();
+      return null;
+    }
+    const swipeDirection = direction < 0 ? -1 : 1;
+    const width = getChatFolderSwipeSurfaceWidth();
+    const currentFolderId = normalizeChatFolderId(chatFolderStore.activeFolderId);
+    const nextFolderId = normalizeChatFolderId(adjacentFolderId);
+    const currentState = chatFolderSwipePagerState;
+    if (
+      currentState
+      && currentState.direction === swipeDirection
+      && currentState.currentFolderId === currentFolderId
+      && currentState.nextFolderId === nextFolderId
+      && currentState.width === width
+      && currentState.track instanceof HTMLElement
+      && currentState.stage instanceof HTMLElement
+    ) {
+      return currentState;
+    }
+
+    destroyChatFolderSwipePager();
+
+    const stage = document.createElement('div');
+    stage.className = 'chat-folder-swipe-stage';
+    stage.setAttribute('aria-hidden', 'true');
+
+    const track = document.createElement('div');
+    track.className = 'chat-folder-swipe-track';
+
+    const currentPage = createChatFolderSwipePage(currentFolderId, 'current');
+    const adjacentPage = createChatFolderSwipePage(nextFolderId, 'adjacent');
+    currentPage.scrollTop = chatList.scrollTop;
+
+    if (swipeDirection > 0) {
+      track.append(currentPage, adjacentPage);
+    } else {
+      track.append(adjacentPage, currentPage);
+    }
+    stage.appendChild(track);
+    chatFolderListSurface.appendChild(stage);
+
+    chatFolderSwipePagerState = {
+      stage,
+      track,
+      direction: swipeDirection,
+      currentFolderId,
+      nextFolderId,
+      width,
+      baseOffset: swipeDirection > 0 ? 0 : -width,
+    };
+    chatFolderListSurface.classList.add('is-folder-swipe-paging');
+    chatList.classList.add('is-folder-swipe-source');
+    setChatFolderSwipeOffset(chatFolderSwipePagerState.baseOffset, 'preparing');
+    return chatFolderSwipePagerState;
+  }
+
   function setChatFolderSwipeOffset(offset, mode = 'dragging') {
     if (!(chatFolderListSurface instanceof HTMLElement)) return false;
     chatFolderListSurface.classList.toggle('is-folder-swipe-dragging', mode === 'dragging');
     chatFolderListSurface.classList.toggle('is-folder-swipe-settling', mode === 'settling');
     chatFolderListSurface.classList.toggle('is-folder-swipe-preparing', mode === 'preparing');
-    chatFolderListSurface.style.transform = `translate3d(${Math.round(Number(offset || 0))}px, 0, 0)`;
+    chatFolderListSurface.classList.toggle('is-folder-swipe-paging', Boolean(chatFolderSwipePagerState));
+    const target = getChatFolderSwipeTransformTarget();
+    if (!(target instanceof HTMLElement)) return false;
+    if (target !== chatFolderListSurface) chatFolderListSurface.style.transform = '';
+    target.style.transform = `translate3d(${Math.round(Number(offset || 0))}px, 0, 0)`;
     return true;
   }
 
   async function settleChatFolderSwipeOffset(offset) {
     if (!(chatFolderListSurface instanceof HTMLElement)) return false;
     setChatFolderSwipeOffset(offset, 'settling');
-    const transitionMs = Math.ceil(getElementTransitionTotalMs(chatFolderListSurface));
+    const target = getChatFolderSwipeTransformTarget();
+    const transitionMs = Math.ceil(getElementTransitionTotalMs(target));
     await waitForMs(Math.max(transitionMs, 180) + 24);
     return true;
   }
@@ -4726,25 +4821,33 @@
       }
 
       if (!canAnimate) {
+        resetChatFolderSwipeSurface();
         setActiveChatFolder(nextFolderId, { persist, render: false });
         renderChatList(chatSearch?.value || '');
         return getActiveChatFolder();
       }
 
-      const width = getChatFolderSwipeSurfaceWidth();
-      await settleChatFolderSwipeOffset(-swipeDirection * width);
+      let pager = chatFolderSwipePagerState;
+      if (
+        !pager
+        || pager.direction !== swipeDirection
+        || pager.currentFolderId !== currentFolderId
+        || pager.nextFolderId !== nextFolderId
+      ) {
+        pager = prepareChatFolderSwipePager(swipeDirection, nextFolderId);
+      }
+      if (!pager) {
+        setActiveChatFolder(nextFolderId, { persist, render: false });
+        renderChatList(chatSearch?.value || '');
+        return getActiveChatFolder();
+      }
+
+      const finalOffset = swipeDirection > 0 ? -pager.width : 0;
+      await settleChatFolderSwipeOffset(finalOffset);
       if (seq !== chatFolderSwitchSeq) return getActiveChatFolder();
 
       setActiveChatFolder(nextFolderId, { persist, render: false });
       renderChatList(chatSearch?.value || '');
-      if (seq !== chatFolderSwitchSeq) return getActiveChatFolder();
-
-      setChatFolderSwipeOffset(swipeDirection * width, 'preparing');
-      void chatFolderListSurface.offsetWidth;
-      await waitForAnimationFrames(1);
-      if (seq !== chatFolderSwitchSeq) return getActiveChatFolder();
-
-      await settleChatFolderSwipeOffset(0);
       return getActiveChatFolder();
     } finally {
       if (seq === chatFolderSwitchSeq) {
@@ -14701,12 +14804,23 @@
     return el;
   }
 
-  function renderChatList(filter = '') {
-    hideChatContextMenu({ immediate: true });
-    chatList.innerHTML = '';
+  function getChatFolderForListRender(folderId = chatFolderStore.activeFolderId) {
+    const normalizedFolderId = normalizeChatFolderId(folderId);
+    return normalizedFolderId === ALL_CHATS_FOLDER_ID
+      ? null
+      : chatFolderStore.getFolderById(normalizedFolderId);
+  }
+
+  function renderChatListInto(parent = chatList, {
+    filter = '',
+    folderId = chatFolderStore.activeFolderId,
+    includeSearchExtras = parent === chatList,
+  } = {}) {
+    if (!(parent instanceof HTMLElement)) return null;
+    parent.innerHTML = '';
     const normalizedFilter = String(filter || '').trim().toLowerCase();
-    const activeFolder = getActiveChatFolder();
-    const folderId = Number(activeFolder?.id || 0);
+    const activeFolder = getChatFolderForListRender(folderId);
+    const renderFolderId = Number(activeFolder?.id || 0);
     const sourceChats = activeFolder
       ? chats.filter((chat) => activeFolder.chat_ids.includes(Number(chat.id || 0)))
       : chats;
@@ -14714,14 +14828,14 @@
       ? sourceChats.filter((chat) => getChatSearchHaystack(chat).includes(normalizedFilter))
       : sourceChats;
     const pinnedChats = activeFolder
-      ? filteredChats.filter((chat) => isChatPinnedInFolder(folderId, chat))
+      ? filteredChats.filter((chat) => isChatPinnedInFolder(renderFolderId, chat))
       : filteredChats.filter((chat) => isChatPinned(chat));
     const regularChats = activeFolder
-      ? filteredChats.filter((chat) => !isChatPinnedInFolder(folderId, chat))
+      ? filteredChats.filter((chat) => !isChatPinnedInFolder(renderFolderId, chat))
       : filteredChats.filter((chat) => !isChatPinned(chat));
     if (activeFolder) {
-      pinnedChats.sort((a, b) => compareChatsForFolder(folderId, a, b));
-      regularChats.sort((a, b) => compareChatsForFolder(folderId, a, b));
+      pinnedChats.sort((a, b) => compareChatsForFolder(renderFolderId, a, b));
+      regularChats.sort((a, b) => compareChatsForFolder(renderFolderId, a, b));
     }
 
     if (pinnedChats.length) {
@@ -14730,29 +14844,29 @@
       pinnedChats.forEach((chat) => {
         pinnedGroup.appendChild(createChatListItem(chat, { pinnedOverride: true }));
       });
-      chatList.appendChild(pinnedGroup);
+      parent.appendChild(pinnedGroup);
     }
 
     regularChats.forEach((chat) => {
-      chatList.appendChild(createChatListItem(chat, {
+      parent.appendChild(createChatListItem(chat, {
         pinnedOverride: activeFolder ? false : null,
       }));
     });
 
     if (!pinnedChats.length && !regularChats.length) {
-      appendChatListEmptyState(activeFolder ? 'В этой папке пока нет чатов' : 'Чаты не найдены');
+      appendChatListEmptyState(activeFolder ? 'В этой папке пока нет чатов' : 'Чаты не найдены', parent);
     }
 
     // When searching in "All chats", also show users without existing private chats
-    if (normalizedFilter && !activeFolder) {
+    if (includeSearchExtras && normalizedFilter && !activeFolder) {
       scheduleHiddenChatSearch(normalizedFilter);
       const hiddenMatches = hiddenChatSearchQuery === normalizedFilter
         ? hiddenChatSearchResults.filter((chat) => !chats.some((visible) => Number(visible.id) === Number(chat.id)))
         : [];
       if (hiddenMatches.length > 0) {
-        appendChatListSeparator('Скрытые чаты');
+        appendChatListSeparator('Скрытые чаты', parent);
         hiddenMatches.forEach((chat) => {
-          chatList.appendChild(createChatListItem(chat, { hiddenSearchResult: true }));
+          parent.appendChild(createChatListItem(chat, { hiddenSearchResult: true }));
         });
       }
       const privateHumanPeerIds = new Set(
@@ -14768,7 +14882,7 @@
          String(u.ai_bot_model || '').toLowerCase().includes(normalizedFilter))
       );
       if (matchingUsers.length > 0) {
-        appendChatListSeparator('People & bots');
+        appendChatListSeparator('People & bots', parent);
       }
       for (const u of matchingUsers) {
         const el = document.createElement('div');
@@ -14794,9 +14908,24 @@
             setChatSearchOpen(false, { clear: true, focus: false });
           } catch (e) { alert(e.message); }
         });
-        chatList.appendChild(el);
+        parent.appendChild(el);
       }
     }
+    return {
+      activeFolder,
+      folderId: renderFolderId,
+      pinnedChats,
+      regularChats,
+    };
+  }
+
+  function renderChatList(filter = '') {
+    hideChatContextMenu({ immediate: true });
+    renderChatListInto(chatList, {
+      filter,
+      folderId: chatFolderStore.activeFolderId,
+      includeSearchExtras: true,
+    });
     renderChatFolderPicker();
     scheduleChatListCacheSync();
   }
@@ -22954,8 +23083,13 @@
         state.dx = dx;
         const direction = dx < 0 ? 1 : -1;
         const adjacent = getAdjacentChatFolderPage(direction);
-        const visualOffset = adjacent ? dx : dampEdgeOffset(dx);
-        setChatFolderSwipeOffset(visualOffset, 'dragging');
+        if (adjacent && canAnimateChatFolderSwipe()) {
+          const pager = prepareChatFolderSwipePager(direction, adjacent.id);
+          if (pager) setChatFolderSwipeOffset(pager.baseOffset + dx, 'dragging');
+        } else {
+          destroyChatFolderSwipePager();
+          if (canAnimateChatFolderSwipe()) setChatFolderSwipeOffset(adjacent ? dx : dampEdgeOffset(dx), 'dragging');
+        }
         if (e.cancelable) e.preventDefault();
       }, { passive: false });
 
