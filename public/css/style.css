@@ -727,7 +727,7 @@ a:hover { text-decoration: underline; }
   min-width: 100%;
   height: 100%;
   min-height: 0;
-  background: var(--bg-sidebar);
+  background: transparent;
 }
 .chat-folder-swipe-page::-webkit-scrollbar {
   width: 0;
@@ -765,6 +765,18 @@ html[data-modal-animation="fade"] .chat-folder-list-surface,
 html[data-modal-animation="none"] .chat-folder-list-surface {
   --folder-switch-enter-transform: translate3d(0, 0, 0) scale(1);
   --folder-switch-exit-transform: translate3d(0, 0, 0) scale(1);
+}
+@media (max-width: 768px) {
+  .active-chat-folder-bar {
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .active-chat-folder-strip {
+    padding-left: 12px;
+    padding-right: 12px;
+    scroll-padding-left: 12px;
+    scroll-padding-right: 12px;
+  }
 }
 @media (max-width: 560px) {
   .active-chat-folder-bar {
