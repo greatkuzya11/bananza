@@ -14772,6 +14772,12 @@
     const soundDisabledIndicator = pinned && !localChatPreferenceEnabled(chat.sounds_enabled)
       ? '<span class="chat-item-state-indicator chat-item-muted-indicator" aria-hidden="true" title="Sound off">&#128263;</span>'
       : '';
+    const contextConvertIndicator = Number(chat.context_transform_enabled || 0) !== 0
+      ? `<span class="chat-item-state-indicator chat-item-tool-indicator chat-item-context-convert-indicator" role="img" aria-label="${esc(t('Context convert enabled'))}" title="${esc(t('Context convert enabled'))}">&#127820;</span>`
+      : '';
+    const chatShotIndicator = Number(chat.chatshot_enabled || 0) !== 0
+      ? `<span class="chat-item-state-indicator chat-item-tool-indicator chat-item-chatshot-indicator" role="img" aria-label="${esc(t('ChatShot enabled'))}" title="${esc(t('ChatShot enabled'))}">&#128248;</span>`
+      : '';
 
     el.innerHTML = `
       ${chatItemAvatarHtml(chat)}
@@ -14784,6 +14790,8 @@
             ${pinIndicator}
             ${notifyDisabledIndicator}
             ${soundDisabledIndicator}
+            ${contextConvertIndicator}
+            ${chatShotIndicator}
             <span class="chat-item-time">${lastTime}</span>
           </span>
         </div>

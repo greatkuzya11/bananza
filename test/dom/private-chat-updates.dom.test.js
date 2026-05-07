@@ -628,6 +628,58 @@ test('chat list shows time only for today and short date for older last messages
   assert.doesNotMatch(chatItemTimeText(document, 52), /\d{1,2}:\d{2}/);
 });
 
+test('chat list shows compact tool badges for context convert and ChatShot', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  BananzaAppBridge.__testing.setChats([
+    {
+      id: 61,
+      type: 'group',
+      name: 'Context tools',
+      unread_count: 0,
+      last_text: 'Tool status',
+      last_time: '2026-04-29T20:00:00.000Z',
+      created_at: '2026-04-29 20:00:00',
+      context_transform_enabled: 1,
+      chatshot_enabled: 0,
+    },
+    {
+      id: 62,
+      type: 'group',
+      name: 'ChatShot tools',
+      unread_count: 0,
+      last_text: 'Tool status',
+      last_time: '2026-04-29T19:00:00.000Z',
+      created_at: '2026-04-29 19:00:00',
+      context_transform_enabled: 0,
+      chatshot_enabled: 1,
+    },
+    {
+      id: 63,
+      type: 'group',
+      name: 'Plain chat',
+      unread_count: 0,
+      last_text: 'No tools',
+      last_time: '2026-04-29T18:00:00.000Z',
+      created_at: '2026-04-29 18:00:00',
+      context_transform_enabled: 0,
+      chatshot_enabled: 0,
+    },
+  ]);
+
+  const contextBadge = document.querySelector('.chat-item[data-chat-id="61"] .chat-item-context-convert-indicator');
+  const chatShotBadge = document.querySelector('.chat-item[data-chat-id="62"] .chat-item-chatshot-indicator');
+  assert.ok(contextBadge);
+  assert.ok(chatShotBadge);
+  assert.equal(contextBadge.textContent, String.fromCodePoint(0x1F34C));
+  assert.equal(chatShotBadge.textContent, String.fromCodePoint(0x1F4F8));
+  assert.equal(document.querySelector('.chat-item[data-chat-id="63"] .chat-item-tool-indicator'), null);
+});
+
 test('chat folders testing helpers filter the list and keep folder-local pins separate from All chats', async (t) => {
   const initialChats = [
     {

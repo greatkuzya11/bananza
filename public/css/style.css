@@ -964,6 +964,13 @@ html[data-modal-animation="none"] .chat-folder-list-surface {
 .chat-item-muted-indicator {
   color: var(--text-secondary);
 }
+.chat-item-tool-indicator {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  font-size: 12px;
+  opacity: .86;
+}
 .chat-item-last {
   font-size: 14px; color: var(--text-secondary); white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; margin-top: 2px;

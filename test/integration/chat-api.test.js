@@ -108,6 +108,11 @@ function responseHasBot(response, botId) {
     && response.data.bots.some((bot) => Number(bot.id) === Number(botId));
 }
 
+function responseHasFolderForBot(response, botId) {
+  return Array.isArray(response.data?.folders)
+    && response.data.folders.some((folder) => Number(folder.bot_id) === Number(botId));
+}
+
 test('auth and chat membership endpoints return expected data', async () => {
   const { admin, bob, groupChat, privateChat } = scenario;
 
@@ -342,6 +347,8 @@ test('context convert all-chat availability respects chat-level gates and bot en
     const chatBAfterAssignment = await bob.request(`/api/chats/${chatB.data.id}/context-convert-bots`);
     assert.equal(responseHasBot(chatAAfterAssignment, bot.id), true);
     assert.equal(responseHasBot(chatBAfterAssignment, bot.id), false);
+    const foldersAfterConvertAssignment = await bob.request('/api/chat-folders');
+    assert.equal(responseHasFolderForBot(foldersAfterConvertAssignment, bot.id), false);
 
     await admin.request(`/api/admin/openai-convert-bots/${bot.id}`, {
       method: 'PUT',
@@ -442,6 +449,8 @@ test('ChatShot can be enabled by a member and posts an image as chatShot without
     assert.equal(generated.data.message.ai_bot_kind, 'chatshot');
     assert.equal(generated.data.message.file_type, 'image');
     assert.equal(generated.data.message.file_mime, 'image/svg+xml');
+    const foldersAfterChatShotMessage = await bob.request('/api/chat-folders');
+    assert.equal(responseHasFolderForBot(foldersAfterChatShotMessage, bot.id), false);
 
     const botRow = db.prepare('SELECT user_id FROM ai_bots WHERE id=?').get(Number(bot.id));
     const membership = db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, botRow.user_id);

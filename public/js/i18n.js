@@ -600,6 +600,8 @@
     'Source text for test transform:': 'Исходный текст для тестового преобразования:',
     'Can you rewrite this text to sound clearer and more concise?': 'Можешь переписать этот текст яснее и короче?',
     'Transform with AI': 'Преобразовать через AI',
+    'Context convert enabled': '\u041f\u0440\u0435\u043e\u0431\u0440\u0430\u0437\u043e\u0432\u0430\u043d\u0438\u0435 \u0442\u0435\u043a\u0441\u0442\u0430 \u0432\u043a\u043b\u044e\u0447\u0435\u043d\u043e',
+    'ChatShot enabled': 'ChatShot \u0432\u043a\u043b\u044e\u0447\u0435\u043d',
     'Could not transform text': 'Не удалось преобразовать текст',
     'Could not transform message': 'Не удалось преобразовать сообщение',
     'Your account has been blocked by an administrator.': 'Ваш аккаунт заблокирован администратором.',

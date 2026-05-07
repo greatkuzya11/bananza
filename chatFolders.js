@@ -208,6 +208,7 @@ function createChatFoldersFeature({
     FROM bot_sources bs
     JOIN chat_members cm ON cm.chat_id=bs.chat_id AND cm.user_id=?
     JOIN ai_bots b ON b.id=bs.bot_id
+      AND COALESCE(b.kind,'text') NOT IN ('convert','chatshot')
     ORDER BY lower(bot_name) ASC, bs.bot_id ASC, bs.chat_id ASC
   `);
 
