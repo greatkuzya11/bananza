@@ -12208,6 +12208,17 @@
     return (provider === 'openai' || provider === 'grok') && kind === 'universal';
   }
 
+  function isGrokUniversalBotTarget(target) {
+    if (!target) return false;
+    return String(target.bot_provider || target.ai_bot_provider || '').toLowerCase() === 'grok'
+      && String(target.bot_kind || target.ai_bot_kind || '').toLowerCase() === 'universal';
+  }
+
+  function grokUniversalTargetAllowsImage(target) {
+    if (!isGrokUniversalBotTarget(target)) return false;
+    return target.allow_image_generate !== false || target.allow_image_edit !== false;
+  }
+
   function buildReplyBotTarget(replySnapshot, loadedTarget = null) {
     const source = loadedTarget || replySnapshot || {};
     const token = String(source.token || source.mention || source.ai_bot_mention || '').replace(/^@+/, '').trim();
@@ -12229,6 +12240,27 @@
       allow_pin: source.allow_pin ?? false,
       document_default_format: String(source.document_default_format || 'md').toLowerCase() === 'txt' ? 'txt' : 'md',
     };
+  }
+
+  function getDirectPrivateAiBotTarget(loadedTargets = []) {
+    const chat = getChatById(currentChatId);
+    const peer = chat?.type === 'private' ? chat.private_user : null;
+    if (!peer || Number(peer.is_ai_bot || 0) === 0) return null;
+    const peerUserId = Number(peer.id || peer.user_id || 0);
+    const peerBotId = Number(peer.ai_bot_id || peer.bot_id || 0);
+    const loaded = (loadedTargets || []).find((target) => {
+      const targetUserId = Number(target.user_id || target.id || 0);
+      const targetBotId = Number(target.bot_id || target.ai_bot_id || 0);
+      return (peerUserId && targetUserId === peerUserId) || (peerBotId && targetBotId === peerBotId);
+    }) || null;
+    return buildReplyBotTarget({
+      user_id: peerUserId,
+      display_name: peer.display_name || chat.name || '',
+      ai_bot_id: peerBotId,
+      ai_bot_mention: peer.ai_bot_mention || peer.username || '',
+      ai_bot_provider: peer.ai_bot_provider || '',
+      ai_bot_kind: peer.ai_bot_kind || '',
+    }, loaded);
   }
 
   function getUniversalBotModes(target) {
@@ -12265,6 +12297,8 @@
       const loadedTarget = byId.get(Number(replySnapshot.ai_bot_id || replySnapshot.bot_id || 0)) || null;
       return buildReplyBotTarget(replySnapshot, loadedTarget);
     }
+    const directPrivateTarget = getDirectPrivateAiBotTarget(targets);
+    if (isUniversalBotTarget(directPrivateTarget)) return directPrivateTarget;
     return null;
   }
 
@@ -12403,12 +12437,37 @@
         bot_kind: replySnapshot.ai_bot_kind || '',
       };
     }
+    const directPrivateTarget = getDirectPrivateAiBotTarget(targets);
+    if (isGrokImageBotTarget(directPrivateTarget)) return directPrivateTarget;
     return null;
   }
 
-  async function analyzeOutgoingGrokImageRisk(text, replySnapshot = null) {
+  async function analyzeOutgoingGrokImageRisk(text, replySnapshot = null, composerAiOverride = {}) {
     if (!aiImageRiskApi?.analyzeAiImageRisk) return { risky: false, matches: [], prompt: '', target: null };
-    const target = await resolveTriggeredGrokImageBot(text, replySnapshot);
+    const overrideTarget = composerAiOverride?.ai_override_target || null;
+    const overrideMode = String(composerAiOverride?.ai_response_mode_hint || '').toLowerCase();
+    let target = null;
+    if (
+      grokUniversalTargetAllowsImage(overrideTarget)
+      && overrideMode !== 'text'
+      && overrideMode !== 'document'
+    ) {
+      target = overrideTarget;
+    }
+    if (!target) target = await resolveTriggeredGrokImageBot(text, replySnapshot);
+    if (!target) {
+      const universalTarget = await resolveComposerUniversalBotTarget(text, replySnapshot);
+      const sameOverrideTarget = Number(overrideTarget?.bot_id || overrideTarget?.ai_bot_id || 0)
+        && Number(overrideTarget?.bot_id || overrideTarget?.ai_bot_id || 0) === Number(universalTarget?.bot_id || universalTarget?.ai_bot_id || 0);
+      const universalMode = sameOverrideTarget ? overrideMode : 'auto';
+      if (
+        grokUniversalTargetAllowsImage(universalTarget)
+        && universalMode !== 'text'
+        && universalMode !== 'document'
+      ) {
+        target = universalTarget;
+      }
+    }
     if (!target) return { risky: false, matches: [], prompt: '', target: null };
     const prompt = stripTriggeredBotMention(text, target);
     if (!prompt) return { risky: false, matches: [], prompt: '', target };
@@ -18285,18 +18344,7 @@
     let aiImageRiskAccepted = false;
     if (text) {
       try {
-        let risk;
-        const forcedUniversalGrokImage = composerAiOverride.ai_response_mode_hint === 'image'
-          && String(composerAiOverride.ai_override_target?.bot_provider || '').toLowerCase() === 'grok'
-          && isUniversalBotTarget(composerAiOverride.ai_override_target);
-        if (forcedUniversalGrokImage && aiImageRiskApi?.analyzeAiImageRisk) {
-          const prompt = stripTriggeredBotMention(text, composerAiOverride.ai_override_target);
-          risk = prompt
-            ? { ...aiImageRiskApi.analyzeAiImageRisk(prompt), prompt, target: composerAiOverride.ai_override_target }
-            : { risky: false, matches: [], prompt: '', target: composerAiOverride.ai_override_target };
-        } else {
-          risk = await analyzeOutgoingGrokImageRisk(text, replySnapshot);
-        }
+        const risk = await analyzeOutgoingGrokImageRisk(text, replySnapshot, composerAiOverride);
         if (risk.risky) {
           const confirmed = await openGrokImageRiskConfirm(risk.matches);
           if (!confirmed) return;
