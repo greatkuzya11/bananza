@@ -45,6 +45,10 @@
     disconnectingIntentionally: false,
     leaveSentForCallId: 0,
     debugLines: [],
+    pendingPublishStream: null,
+    publishingLocalTracks: false,
+    publishRetryTimer: 0,
+    publishRetryCount: 0,
   };
 
   function bridge() {
@@ -938,6 +942,7 @@
     room.on?.(events.Reconnected || 'reconnected', () => {
       addCallDebug('room reconnected');
       setSurfaceStatus(t('Connected'));
+      scheduleLocalPublishRetry(room, LK, 250);
     });
     room.on?.(events.Disconnected || 'disconnected', () => {
       state.room = null;
@@ -953,7 +958,11 @@
     state.leaveSentForCallId = 0;
     state.micEnabled = options.micEnabled !== false;
     state.cameraEnabled = options.cameraEnabled !== false;
-    const published = await publishPreviewTracks(room, LK, options.previewStream);
+    if (options.previewStream) {
+      state.pendingPublishStream = options.previewStream;
+      state.publishRetryCount = 0;
+    }
+    const published = await publishPreviewTracks(room, LK, state.pendingPublishStream);
     addCallDebug('preview publish result', `audio=${published.audio} video=${published.video}`);
     if (state.micEnabled && !published.audio) {
       await room.localParticipant?.setMicrophoneEnabled?.(true, options.audioDeviceId ? { deviceId: options.audioDeviceId } : undefined).then(() => {
@@ -976,17 +985,27 @@
       });
     }
     applySpeakerDevice();
+    if ((!state.micEnabled || hasLocalAudioPublication(room)) && (!state.cameraEnabled || hasLocalVideoPublication(room))) {
+      MEDIA.stopStream?.(state.pendingPublishStream);
+      state.pendingPublishStream = null;
+      state.publishRetryCount = 0;
+    }
     renderSurfaceControls();
     renderRoomTiles();
     renderCallDebug();
+    if ((state.micEnabled && !hasLocalAudioPublication(room)) || (state.cameraEnabled && !hasLocalVideoPublication(room))) {
+      scheduleLocalPublishRetry(room, LK, 1500);
+    }
   }
 
   async function publishPreviewTracks(room, LK, stream) {
     const result = { audio: false, video: false };
+    if (state.publishingLocalTracks) return result;
     if (!stream || !room?.localParticipant?.publishTrack) {
       addCallDebug('preview stream unavailable');
       return result;
     }
+    state.publishingLocalTracks = true;
     const streamName = `call-${state.currentCall?.id || 'local'}-${currentUser()?.id || 'me'}`;
     const publishOne = async (track, source) => {
       if (!track) {
@@ -1004,19 +1023,57 @@
         return false;
       }
     };
-    if (state.micEnabled) {
-      result.audio = await publishOne(stream.getAudioTracks?.()[0], LK.Track?.Source?.Microphone);
-      if (!result.audio) stream.getAudioTracks?.().forEach((track) => track.stop?.());
-    } else {
-      stream.getAudioTracks?.().forEach((track) => track.stop?.());
-    }
-    if (state.cameraEnabled) {
-      result.video = await publishOne(stream.getVideoTracks?.()[0], LK.Track?.Source?.Camera);
-      if (!result.video) stream.getVideoTracks?.().forEach((track) => track.stop?.());
-    } else {
-      stream.getVideoTracks?.().forEach((track) => track.stop?.());
+    try {
+      if (state.micEnabled && !hasLocalAudioPublication(room)) {
+        result.audio = await publishOne(stream.getAudioTracks?.()[0], LK.Track?.Source?.Microphone);
+      } else {
+        result.audio = hasLocalAudioPublication(room);
+      }
+      if (state.cameraEnabled && !hasLocalVideoPublication(room)) {
+        result.video = await publishOne(stream.getVideoTracks?.()[0], LK.Track?.Source?.Camera);
+      } else {
+        result.video = hasLocalVideoPublication(room);
+      }
+      if ((!state.micEnabled || result.audio) && (!state.cameraEnabled || result.video)) {
+        state.pendingPublishStream = null;
+        state.publishRetryCount = 0;
+        if (!state.micEnabled) stream.getAudioTracks?.().forEach((track) => track.stop?.());
+        if (!state.cameraEnabled) stream.getVideoTracks?.().forEach((track) => track.stop?.());
+      }
+    } finally {
+      state.publishingLocalTracks = false;
     }
     return result;
+  }
+
+  function hasLocalAudioPublication(room = state.room) {
+    return Number(room?.localParticipant?.audioTrackPublications?.size || 0) > 0;
+  }
+
+  function hasLocalVideoPublication(room = state.room) {
+    return Number(room?.localParticipant?.videoTrackPublications?.size || 0) > 0;
+  }
+
+  function scheduleLocalPublishRetry(room = state.room, LK = window.LivekitClient, delay = 1500) {
+    if (!state.pendingPublishStream || !room?.localParticipant || state.publishRetryTimer) return;
+    if (state.publishRetryCount >= 8) {
+      addCallDebug('publish retry stopped', 'too many attempts');
+      return;
+    }
+    state.publishRetryTimer = window.setTimeout(async () => {
+      state.publishRetryTimer = 0;
+      if (!state.pendingPublishStream || !state.room) return;
+      state.publishRetryCount += 1;
+      addCallDebug('publish retry', String(state.publishRetryCount));
+      const published = await publishPreviewTracks(state.room, LK, state.pendingPublishStream);
+      addCallDebug('retry result', `audio=${published.audio} video=${published.video}`);
+      renderSurfaceControls();
+      renderRoomTiles();
+      renderCallDebug();
+      if ((state.micEnabled && !hasLocalAudioPublication()) || (state.cameraEnabled && !hasLocalVideoPublication())) {
+        scheduleLocalPublishRetry(state.room, LK, 2000);
+      }
+    }, delay);
   }
 
   function ensureLiveKitClient() {
@@ -1065,6 +1122,11 @@
     const room = state.room;
     state.room = null;
     state.screenShareEnabled = false;
+    if (state.publishRetryTimer) window.clearTimeout(state.publishRetryTimer);
+    state.publishRetryTimer = 0;
+    state.publishingLocalTracks = false;
+    MEDIA.stopStream?.(state.pendingPublishStream);
+    state.pendingPublishStream = null;
     const previousIntent = state.disconnectingIntentionally;
     state.disconnectingIntentionally = Boolean(options.intentional);
     try {
