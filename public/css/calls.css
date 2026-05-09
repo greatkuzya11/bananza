@@ -477,6 +477,9 @@ html[data-visual-mode="rich"] .call-admin-status {
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-auto-rows: max-content;
+  align-content: start;
+  align-items: start;
   gap: 8px;
   padding: 8px;
   overflow-x: hidden;

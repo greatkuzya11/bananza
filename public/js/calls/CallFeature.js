@@ -937,6 +937,7 @@
         const key = videoTileKey(participant, false);
         if (state.subscriptionChangingTiles.has(key)) {
           state.subscriptionChangingTiles.delete(key);
+          state.videoCollapsedTiles.delete(key);
           replaceCallTile(participant, false);
           return;
         }
@@ -949,7 +950,6 @@
       if (participant) {
         const key = videoTileKey(participant, false);
         if (state.subscriptionChangingTiles.has(key)) {
-          state.subscriptionChangingTiles.delete(key);
           replaceCallTile(participant, false);
           return;
         }
@@ -1363,13 +1363,35 @@
   function setRemoteVideoCollapsed(participant, key, collapsed) {
     if (!participant || key === 'local') return;
     const publication = firstVideoPublication(participant);
-    if (collapsed) state.videoCollapsedTiles.add(key);
-    else state.videoCollapsedTiles.delete(key);
-    state.subscriptionChangingTiles.add(key);
+    if (collapsed) {
+      state.videoCollapsedTiles.add(key);
+      state.subscriptionChangingTiles.delete(key);
+      try {
+        publication?.setEnabled?.(false);
+      } catch {}
+      replaceCallTile(participant, false);
+      return;
+    }
+
     try {
-      publication?.setSubscribed?.(!collapsed);
+      publication?.setEnabled?.(true);
+      publication?.setSubscribed?.(true);
     } catch {}
-    replaceCallTile(participant, false);
+    if (publication?.track) {
+      state.videoCollapsedTiles.delete(key);
+      state.subscriptionChangingTiles.delete(key);
+      replaceCallTile(participant, false);
+      return;
+    }
+    state.subscriptionChangingTiles.add(key);
+    window.setTimeout(() => {
+      const fresh = firstVideoPublication(participant);
+      if (fresh?.track) {
+        state.subscriptionChangingTiles.delete(key);
+        state.videoCollapsedTiles.delete(key);
+        replaceCallTile(participant, false);
+      }
+    }, 450);
   }
 
   function setVideoTileCollapsed(participant, key, collapsed, local = false) {
