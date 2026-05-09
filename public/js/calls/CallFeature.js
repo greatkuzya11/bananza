@@ -54,6 +54,7 @@
     roomConnectionState: '',
     roomConnectedAt: 0,
     videoFillTiles: new Set(),
+    videoCollapsedTiles: new Set(),
   };
 
   function bridge() {
@@ -1184,6 +1185,8 @@
     state.localMediaOptions = null;
     state.roomConnectionState = '';
     state.roomConnectedAt = 0;
+    state.videoCollapsedTiles.clear();
+    state.videoFillTiles.clear();
     const previousIntent = state.disconnectingIntentionally;
     state.disconnectingIntentionally = Boolean(options.intentional);
     try {
@@ -1286,7 +1289,18 @@
     return participant?.name || participant?.identity || fallback || t('Participant');
   }
 
-  function firstVideoTrack(participant) {
+  function firstVideoPublication(participant) {
+    const publications = participant?.videoTrackPublications || participant?.trackPublications;
+    if (!publications?.values) return null;
+    for (const publication of publications.values()) {
+      const track = publication?.track;
+      const kind = publication?.kind || track?.kind || track?.mediaStreamTrack?.kind;
+      if (kind !== 'audio') return publication;
+    }
+    return null;
+  }
+
+  function firstVisibleVideoTrack(participant) {
     const publications = participant?.videoTrackPublications || participant?.trackPublications;
     if (!publications?.values) return null;
     for (const publication of publications.values()) {
@@ -1309,18 +1323,44 @@
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'call-tile-fit-btn call-icon-fill';
-    button.title = isFill ? t('Show full video') : t('Fill video tile');
-    button.setAttribute('aria-label', button.title);
-    button.setAttribute('aria-pressed', isFill ? 'true' : 'false');
+    const applyButtonState = (fill) => {
+      button.title = fill ? t('Show full video') : t('Fill video tile');
+      button.setAttribute('aria-label', button.title);
+      button.setAttribute('aria-pressed', fill ? 'true' : 'false');
+    };
+    applyButtonState(isFill);
     button.innerHTML = '<span class="call-icon" aria-hidden="true"></span>';
     button.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      if (state.videoFillTiles.has(key)) state.videoFillTiles.delete(key);
-      else state.videoFillTiles.add(key);
-      renderRoomTiles();
+      const nextFill = !state.videoFillTiles.has(key);
+      if (nextFill) state.videoFillTiles.add(key);
+      else state.videoFillTiles.delete(key);
+      tile.classList.toggle('is-video-fill', nextFill);
+      applyButtonState(nextFill);
     });
     tile.appendChild(button);
+  }
+
+  function setRemoteVideoCollapsed(participant, key, collapsed) {
+    if (!participant || key === 'local') return;
+    const publication = firstVideoPublication(participant);
+    if (collapsed) state.videoCollapsedTiles.add(key);
+    else state.videoCollapsedTiles.delete(key);
+    try {
+      publication?.setSubscribed?.(!collapsed);
+    } catch {}
+    renderRoomTiles();
+  }
+
+  function setVideoTileCollapsed(participant, key, collapsed, local = false) {
+    if (local) {
+      if (collapsed) state.videoCollapsedTiles.add(key);
+      else state.videoCollapsedTiles.delete(key);
+      renderRoomTiles();
+      return;
+    }
+    setRemoteVideoCollapsed(participant, key, collapsed);
   }
 
   function renderRoomTiles() {
@@ -1346,17 +1386,22 @@
       tile.className = 'call-tile';
       const meta = callParticipantForRoomParticipant(participant, local);
       const name = meta?.display_name || meta?.username || getParticipantName(participant, local ? t('You') : t('Participant'));
-      const track = firstVideoTrack(participant);
       const tileKey = videoTileKey(participant, local);
+      const isCollapsed = state.videoCollapsedTiles.has(tileKey);
+      const track = isCollapsed ? null : firstVisibleVideoTrack(participant);
       const isFill = state.videoFillTiles.has(tileKey);
       tile.classList.toggle('is-video-fill', isFill);
+      tile.classList.toggle('is-video-collapsed', isCollapsed);
       if (track?.attach) {
         try {
           const video = track.attach();
           video.autoplay = true;
           video.playsInline = true;
+          video.setAttribute('playsinline', '');
           video.muted = Boolean(local);
           video.controls = false;
+          video.removeAttribute('controls');
+          video.preload = 'auto';
           tile.appendChild(video);
           video.play?.().catch(() => {});
           renderVideoFitButton(tile, tileKey, isFill);
@@ -1368,7 +1413,23 @@
       }
       const label = document.createElement('div');
       label.className = 'call-tile-name';
-      label.textContent = local ? `${name} (${t('you')})` : name;
+      const labelText = document.createElement('span');
+      labelText.className = 'call-tile-name-text';
+      labelText.textContent = local ? `${name} (${t('you')})` : name;
+      label.appendChild(labelText);
+      const collapseBtn = document.createElement('button');
+      collapseBtn.type = 'button';
+      collapseBtn.className = 'call-tile-subscribe-btn';
+      collapseBtn.textContent = isCollapsed ? '+' : '-';
+      collapseBtn.title = isCollapsed ? t('Resume video') : (local ? t('Hide local preview') : t('Pause video'));
+      collapseBtn.setAttribute('aria-label', collapseBtn.title);
+      collapseBtn.setAttribute('aria-pressed', isCollapsed ? 'true' : 'false');
+      collapseBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setVideoTileCollapsed(participant, tileKey, !state.videoCollapsedTiles.has(tileKey), local);
+      });
+      label.appendChild(collapseBtn);
       tile.appendChild(label);
       grid.appendChild(tile);
     });

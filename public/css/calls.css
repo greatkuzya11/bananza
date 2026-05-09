@@ -565,6 +565,14 @@ html[data-visual-mode="rich"] .call-admin-status {
   object-position: center center;
 }
 
+.call-tile video::-webkit-media-controls,
+.call-tile video::-webkit-media-controls-panel,
+.call-tile video::-webkit-media-controls-start-playback-button {
+  display: none !important;
+  opacity: 0 !important;
+  pointer-events: none;
+}
+
 .call-tile.is-video-fill video {
   object-fit: cover;
 }
@@ -586,15 +594,63 @@ html[data-visual-mode="rich"] .call-admin-status {
   position: absolute;
   left: 10px;
   bottom: 9px;
-  max-width: calc(100% - 20px);
+  max-width: calc(100% - 58px);
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   border-radius: 999px;
-  padding: 4px 9px;
+  padding: 3px 4px 3px 9px;
   background: color-mix(in srgb, var(--bg-dark, #0e1621) 78%, transparent);
   color: var(--text-primary);
   font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.call-tile-name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.call-tile-subscribe-btn {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  padding: 0 0 1px;
+  background: color-mix(in srgb, var(--call-bg-panel) 86%, transparent);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.call-tile-subscribe-btn:hover,
+.call-tile-subscribe-btn:focus-visible {
+  background: color-mix(in srgb, var(--accent) 24%, var(--call-bg-panel));
+  outline: none;
+}
+
+.call-tile.is-video-collapsed {
+  min-height: 54px;
+  aspect-ratio: auto;
+}
+
+.call-tile.is-video-collapsed .call-tile-placeholder {
+  display: none;
+}
+
+.call-tile.is-video-collapsed .call-tile-name {
+  position: static;
+  max-width: calc(100% - 20px);
+  justify-self: start;
+  margin-left: 10px;
 }
 
 .call-tile-fit-btn {
