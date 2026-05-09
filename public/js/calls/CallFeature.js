@@ -588,6 +588,16 @@
     el.classList.toggle('success', type === 'success');
   }
 
+  function setPrejoinBusy(busy) {
+    const joinBtn = document.getElementById('callPrejoinJoinBtn');
+    const cancelBtn = document.getElementById('callPrejoinCancelBtn');
+    if (joinBtn) {
+      joinBtn.disabled = Boolean(busy);
+      joinBtn.classList.toggle('is-busy', Boolean(busy));
+    }
+    if (cancelBtn) cancelBtn.disabled = Boolean(busy);
+  }
+
   function selectedDevice(kind) {
     return String(state.selectedDevices?.[kind] || '');
   }
@@ -737,6 +747,7 @@
       : t('Choose devices before joining');
     const joinBtn = document.getElementById('callPrejoinJoinBtn');
     if (joinBtn) joinBtn.textContent = state.prejoinMode === 'devices' ? t('Apply') : t('Join');
+    setPrejoinBusy(false);
     wrap?.classList.remove('hidden');
     await populateDeviceSelects();
     await refreshPreview();
@@ -748,6 +759,7 @@
     state.previewStream = null;
     state.pendingJoinCall = null;
     state.prejoinMode = 'join';
+    setPrejoinBusy(false);
     document.getElementById('callPrejoin')?.classList.add('hidden');
     document.getElementById('callSurface')?.classList.remove('is-behind-prejoin');
     renderPrejoinControls();
@@ -813,6 +825,8 @@
     state.joining = true;
     state.incomingCall = null;
     NOTIFICATIONS.stopRingtone?.();
+    setPrejoinBusy(true);
+    setPrejoinStatus(t('Joining call...'));
     showSurface(call);
     setSurfaceStatus(t('Joining call...'));
     try {
@@ -820,6 +834,9 @@
       const nextCall = data.call || call;
       upsertCall(nextCall);
       state.currentCall = nextCall;
+      closePrejoin();
+      showSurface(nextCall);
+      setSurfaceStatus(t('Connecting...'));
       await connectRoom(data.livekit?.url, data.livekit?.token, {
         micEnabled: state.prejoinMicEnabled,
         cameraEnabled: state.prejoinCameraEnabled,
@@ -831,15 +848,19 @@
         upsertCall(joined.call);
         state.currentCall = joined.call;
       }
-      closePrejoin();
       setSurfaceStatus(t('Connected'));
     } catch (error) {
       await notifyLeaveCurrentCall({ fireAndForget: false }).catch(() => {});
       await disconnectRoom({ intentional: true });
       state.currentCall = null;
       document.getElementById('callSurface')?.classList.add('hidden');
+      state.pendingJoinCall = call;
+      state.prejoinMode = 'join';
+      document.getElementById('callPrejoin')?.classList.remove('hidden');
+      document.getElementById('callSurface')?.classList.add('is-behind-prejoin');
       throw error;
     } finally {
+      setPrejoinBusy(false);
       state.joining = false;
       renderAll();
     }

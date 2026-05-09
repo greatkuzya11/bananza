@@ -143,6 +143,13 @@
   box-shadow: var(--call-focus-ring);
 }
 
+.call-action-btn:disabled,
+.call-admin-btn:disabled {
+  cursor: wait;
+  opacity: .72;
+  transform: none;
+}
+
 .call-incoming {
   position: fixed;
   inset: 0;
@@ -225,9 +232,11 @@
   background: #15191f;
   display: grid;
   place-items: center;
+  overflow: hidden;
 }
 
 .call-prejoin-preview video {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -890,29 +899,36 @@ html[data-visual-mode="rich"] .call-admin-status {
 
 @media (max-width: 768px) {
   .call-prejoin {
-    display: block;
-    padding: max(10px, env(safe-area-inset-top)) 10px max(18px, env(safe-area-inset-bottom));
+    display: grid;
+    place-items: center;
+    padding: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom));
     background: rgba(0, 0, 0, .82);
   }
 
   .call-prejoin-card {
     width: min(100%, 430px);
-    max-height: none;
+    max-height: calc(100dvh - max(16px, env(safe-area-inset-top) + env(safe-area-inset-bottom)));
     margin: 0 auto;
     grid-template-columns: 1fr;
+    grid-template-rows: minmax(150px, 34dvh) minmax(0, auto);
     border-radius: 16px;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .call-prejoin-preview {
-    min-height: 220px;
-    height: min(42dvh, 320px);
-    max-height: 42dvh;
+    min-height: 150px;
+    height: auto;
+    max-height: none;
   }
 
   .call-prejoin-panel {
-    padding: 18px;
+    position: relative;
+    z-index: 1;
+    padding: 14px 18px 18px;
     overflow: visible;
     align-content: start;
+    background: var(--call-bg-modal);
   }
 
   .call-device-select {
