@@ -933,6 +933,7 @@
     });
     room.on?.(events.LocalTrackUnpublished || 'localTrackUnpublished', (publication) => {
       addCallDebug('local track unpublished', `${publication?.kind || publication?.track?.kind || 'unknown'} ${publication?.source || publication?.track?.source || ''}`.trim());
+      scheduleLocalMediaRetry(1200, { resetCount: true });
       renderRoomTiles();
     });
     room.on?.(events.Reconnecting || 'reconnecting', () => {
@@ -942,7 +943,7 @@
     room.on?.(events.Reconnected || 'reconnected', () => {
       addCallDebug('room reconnected');
       setSurfaceStatus(t('Connected'));
-      scheduleLocalMediaRetry(250);
+      scheduleLocalMediaRetry(1600, { resetCount: true });
     });
     room.on?.(events.Disconnected || 'disconnected', () => {
       state.room = null;
@@ -964,15 +965,12 @@
     };
     state.publishRetryCount = 0;
     MEDIA.stopStream?.(options.previewStream);
-    const enabled = await enableLocalMedia('initial');
-    addCallDebug('local media result', `audio=${enabled.audio} video=${enabled.video}`);
     applySpeakerDevice();
     renderSurfaceControls();
     renderRoomTiles();
     renderCallDebug();
-    if ((state.micEnabled && !hasLocalAudioPublication(room)) || (state.cameraEnabled && !hasLocalVideoPublication(room))) {
-      scheduleLocalMediaRetry(1500);
-    }
+    addCallDebug('local media scheduled', 'after connect settle');
+    scheduleLocalMediaRetry(1400, { resetCount: true });
   }
 
   async function enableLocalMedia(reason = 'retry') {
@@ -982,42 +980,48 @@
     if (state.publishingLocalTracks || !room?.localParticipant) return result;
     state.publishingLocalTracks = true;
     addCallDebug('enable local media', reason);
+    const enableWithTimeout = async (label, action, hasPublication) => {
+      if (hasPublication()) return true;
+      try {
+        await Promise.race([
+          action(),
+          new Promise((_, reject) => window.setTimeout(() => reject(new Error(`${label} enable timed out`)), 22000)),
+        ]);
+        window.setTimeout(renderCallDebug, 0);
+        return hasPublication();
+      } catch (error) {
+        addCallDebug(`${label} enable failed`, error?.message || String(error || ''));
+        return hasPublication();
+      }
+    };
     try {
       if (state.micEnabled) {
-        if (hasLocalAudioPublication(room)) {
-          result.audio = true;
-        } else {
-          await room.localParticipant.setMicrophoneEnabled?.(
+        result.audio = await enableWithTimeout(
+          'microphone',
+          () => room.localParticipant.setMicrophoneEnabled?.(
             true,
             options.audioDeviceId ? { deviceId: options.audioDeviceId } : undefined
           ).then(() => {
-            result.audio = true;
             addCallDebug('microphone enabled');
-          }).catch((error) => {
-            const message = error?.message || String(error || '');
-            addCallDebug('microphone enable failed', message);
-            setSurfaceStatus(`${t('Microphone unavailable')}: ${message}`.trim());
-          });
-        }
+          }),
+          () => hasLocalAudioPublication(room)
+        );
+        if (!result.audio) setSurfaceStatus(t('Microphone unavailable'));
       } else {
         await room.localParticipant.setMicrophoneEnabled?.(false).catch(() => {});
       }
       if (state.cameraEnabled) {
-        if (hasLocalVideoPublication(room)) {
-          result.video = true;
-        } else {
-          await room.localParticipant.setCameraEnabled?.(
+        result.video = await enableWithTimeout(
+          'camera',
+          () => room.localParticipant.setCameraEnabled?.(
             true,
             options.videoDeviceId ? { deviceId: options.videoDeviceId } : undefined
           ).then(() => {
-            result.video = true;
             addCallDebug('camera enabled');
-          }).catch((error) => {
-            const message = error?.message || String(error || '');
-            addCallDebug('camera enable failed', message);
-            setSurfaceStatus(`${t('Camera unavailable')}: ${message}`.trim());
-          });
-        }
+          }),
+          () => hasLocalVideoPublication(room)
+        );
+        if (!result.video) setSurfaceStatus(t('Camera unavailable'));
       } else {
         await room.localParticipant.setCameraEnabled?.(false).catch(() => {});
       }
@@ -1038,8 +1042,14 @@
     return Number(room?.localParticipant?.videoTrackPublications?.size || 0) > 0;
   }
 
-  function scheduleLocalMediaRetry(delay = 1500) {
-    if (!state.room?.localParticipant || state.publishRetryTimer) return;
+  function scheduleLocalMediaRetry(delay = 1500, options = {}) {
+    if (!state.room?.localParticipant) return;
+    if (options.resetCount && state.publishRetryTimer) {
+      window.clearTimeout(state.publishRetryTimer);
+      state.publishRetryTimer = 0;
+    }
+    if (state.publishRetryTimer) return;
+    if (options.resetCount) state.publishRetryCount = 0;
     if (state.publishRetryCount >= 8) {
       addCallDebug('media retry stopped', 'too many attempts');
       return;
@@ -1047,6 +1057,10 @@
     state.publishRetryTimer = window.setTimeout(async () => {
       state.publishRetryTimer = 0;
       if (!state.room) return;
+      if (state.publishingLocalTracks) {
+        scheduleLocalMediaRetry(1000);
+        return;
+      }
       state.publishRetryCount += 1;
       addCallDebug('media retry', String(state.publishRetryCount));
       const enabled = await enableLocalMedia(`retry ${state.publishRetryCount}`);
