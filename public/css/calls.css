@@ -448,6 +448,17 @@ html[data-visual-mode="rich"] .call-admin-status {
   color: var(--text-secondary);
 }
 
+.call-debug-log {
+  max-width: min(520px, 78vw);
+  max-height: 92px;
+  margin-top: 4px;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: #ffd85c;
+  font: 11px/1.25 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  opacity: .95;
+}
+
 .call-room-layout {
   min-height: 0;
   display: grid;

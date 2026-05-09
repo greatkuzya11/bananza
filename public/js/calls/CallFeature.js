@@ -44,6 +44,7 @@
     adminSettings: null,
     disconnectingIntentionally: false,
     leaveSentForCallId: 0,
+    debugLines: [],
   };
 
   function bridge() {
@@ -62,6 +63,13 @@
     const div = document.createElement('div');
     div.textContent = String(value ?? '');
     return div.innerHTML;
+  }
+
+  function addCallDebug(message, detail = '') {
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const line = detail ? `${time} ${message}: ${detail}` : `${time} ${message}`;
+    state.debugLines = [...state.debugLines.slice(-10), line];
+    renderCallDebug();
   }
 
   function api(url, opts) {
@@ -319,6 +327,7 @@
             <div>
               <div class="call-surface-title" id="callSurfaceTitle">${escapeHtml(t('Video call'))}</div>
               <div class="call-surface-status" id="callSurfaceStatus"></div>
+              <div class="call-debug-log" id="callDebugLog"></div>
             </div>
             <div class="call-inline-actions">
               <button type="button" id="callParticipantsBtn" class="call-control-btn call-tool-btn call-icon-users" title="${escapeHtml(t('Participants'))}" aria-label="${escapeHtml(t('Participants'))}" aria-pressed="false">
@@ -894,23 +903,45 @@
     await disconnectRoom({ intentional: true });
     const room = new LK.Room({ adaptiveStream: true, dynacast: true });
     state.room = room;
+    addCallDebug('connectRoom', url);
     const events = LK.RoomEvent || {};
     room.on?.(events.TrackSubscribed || 'trackSubscribed', (track) => {
+      addCallDebug('remote track subscribed', `${track?.kind || track?.mediaStreamTrack?.kind || 'unknown'} ${track?.source || ''}`.trim());
       attachSubscribedTrack(track);
       renderRoomTiles();
     });
     room.on?.(events.TrackUnsubscribed || 'trackUnsubscribed', (track) => {
+      addCallDebug('remote track unsubscribed', `${track?.kind || track?.mediaStreamTrack?.kind || 'unknown'} ${track?.source || ''}`.trim());
       detachTrack(track);
       renderRoomTiles();
     });
-    room.on?.(events.ParticipantConnected || 'participantConnected', renderRoomTiles);
-    room.on?.(events.ParticipantDisconnected || 'participantDisconnected', renderRoomTiles);
-    room.on?.(events.LocalTrackPublished || 'localTrackPublished', renderRoomTiles);
-    room.on?.(events.LocalTrackUnpublished || 'localTrackUnpublished', renderRoomTiles);
-    room.on?.(events.Reconnecting || 'reconnecting', () => setSurfaceStatus(t('Reconnecting...')));
-    room.on?.(events.Reconnected || 'reconnected', () => setSurfaceStatus(t('Connected')));
+    room.on?.(events.ParticipantConnected || 'participantConnected', (participant) => {
+      addCallDebug('participant connected', participant?.identity || '');
+      renderRoomTiles();
+    });
+    room.on?.(events.ParticipantDisconnected || 'participantDisconnected', (participant) => {
+      addCallDebug('participant disconnected', participant?.identity || '');
+      renderRoomTiles();
+    });
+    room.on?.(events.LocalTrackPublished || 'localTrackPublished', (publication) => {
+      addCallDebug('local track published', `${publication?.kind || publication?.track?.kind || 'unknown'} ${publication?.source || publication?.track?.source || ''}`.trim());
+      renderRoomTiles();
+    });
+    room.on?.(events.LocalTrackUnpublished || 'localTrackUnpublished', (publication) => {
+      addCallDebug('local track unpublished', `${publication?.kind || publication?.track?.kind || 'unknown'} ${publication?.source || publication?.track?.source || ''}`.trim());
+      renderRoomTiles();
+    });
+    room.on?.(events.Reconnecting || 'reconnecting', () => {
+      addCallDebug('room reconnecting');
+      setSurfaceStatus(t('Reconnecting...'));
+    });
+    room.on?.(events.Reconnected || 'reconnected', () => {
+      addCallDebug('room reconnected');
+      setSurfaceStatus(t('Connected'));
+    });
     room.on?.(events.Disconnected || 'disconnected', () => {
       state.room = null;
+      addCallDebug('room disconnected');
       if (!state.disconnectingIntentionally && state.currentCall?.id) {
         notifyLeaveCurrentCall({ fireAndForget: true }).catch(() => {});
       }
@@ -918,37 +949,58 @@
       renderRoomTiles();
     });
     await room.connect(url, token);
+    addCallDebug('room connected');
     state.leaveSentForCallId = 0;
     state.micEnabled = options.micEnabled !== false;
     state.cameraEnabled = options.cameraEnabled !== false;
     const published = await publishPreviewTracks(room, LK, options.previewStream);
+    addCallDebug('preview publish result', `audio=${published.audio} video=${published.video}`);
     if (state.micEnabled && !published.audio) {
-      await room.localParticipant?.setMicrophoneEnabled?.(true, options.audioDeviceId ? { deviceId: options.audioDeviceId } : undefined).catch(() => {
+      await room.localParticipant?.setMicrophoneEnabled?.(true, options.audioDeviceId ? { deviceId: options.audioDeviceId } : undefined).then(() => {
+        addCallDebug('microphone fallback enabled');
+      }).catch((error) => {
         state.micEnabled = false;
-        setSurfaceStatus(t('Microphone unavailable'));
+        const message = error?.message || String(error || '');
+        addCallDebug('microphone fallback failed', message);
+        setSurfaceStatus(`${t('Microphone unavailable')}: ${message}`.trim());
       });
     }
     if (state.cameraEnabled && !published.video) {
-      await room.localParticipant?.setCameraEnabled?.(true, options.videoDeviceId ? { deviceId: options.videoDeviceId } : undefined).catch(() => {
+      await room.localParticipant?.setCameraEnabled?.(true, options.videoDeviceId ? { deviceId: options.videoDeviceId } : undefined).then(() => {
+        addCallDebug('camera fallback enabled');
+      }).catch((error) => {
         state.cameraEnabled = false;
-        setSurfaceStatus(t('Camera unavailable'));
+        const message = error?.message || String(error || '');
+        addCallDebug('camera fallback failed', message);
+        setSurfaceStatus(`${t('Camera unavailable')}: ${message}`.trim());
       });
     }
     applySpeakerDevice();
     renderSurfaceControls();
     renderRoomTiles();
+    renderCallDebug();
   }
 
   async function publishPreviewTracks(room, LK, stream) {
     const result = { audio: false, video: false };
-    if (!stream || !room?.localParticipant?.publishTrack) return result;
+    if (!stream || !room?.localParticipant?.publishTrack) {
+      addCallDebug('preview stream unavailable');
+      return result;
+    }
     const streamName = `call-${state.currentCall?.id || 'local'}-${currentUser()?.id || 'me'}`;
     const publishOne = async (track, source) => {
-      if (!track || track.readyState === 'ended') return false;
+      if (!track) {
+        addCallDebug('publish skipped', `${source || 'unknown'} missing`);
+        return false;
+      }
+      addCallDebug('publish try', `${source || track.kind} readyState=${track.readyState} enabled=${track.enabled} muted=${track.muted}`);
+      if (track.readyState === 'ended') return false;
       try {
         await room.localParticipant.publishTrack(track, { source, stream: streamName });
+        addCallDebug('publish ok', `${source || track.kind}`);
         return true;
-      } catch {
+      } catch (error) {
+        addCallDebug('publish failed', error?.message || String(error || ''));
         return false;
       }
     };
@@ -1214,6 +1266,20 @@
     renderSurfaceControls();
     renderRoomTiles();
     renderParticipantsPanel();
+    renderCallDebug();
+  }
+
+  function renderCallDebug() {
+    const el = document.getElementById('callDebugLog');
+    if (!el) return;
+    const room = state.room;
+    const local = room?.localParticipant;
+    const audioCount = local?.audioTrackPublications?.size ?? 0;
+    const videoCount = local?.videoTrackPublications?.size ?? 0;
+    const summary = room
+      ? `local audio=${audioCount} video=${videoCount}`
+      : 'room=null';
+    el.textContent = [summary, ...state.debugLines].join('\n');
   }
 
   function renderSurfaceControls() {
