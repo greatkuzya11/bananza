@@ -53,6 +53,7 @@
     localMediaOptions: null,
     roomConnectionState: '',
     roomConnectedAt: 0,
+    videoFillTiles: new Set(),
   };
 
   function bridge() {
@@ -954,6 +955,14 @@
       scheduleLocalMediaRetry(3000, { resetCount: true });
       renderRoomTiles();
     });
+    room.on?.(events.TrackMuted || 'trackMuted', (publication, participant) => {
+      addCallDebug('track muted', `${participant?.identity || ''} ${publication?.kind || publication?.track?.kind || 'unknown'} ${publication?.source || publication?.track?.source || ''}`.trim());
+      renderRoomTiles();
+    });
+    room.on?.(events.TrackUnmuted || 'trackUnmuted', (publication, participant) => {
+      addCallDebug('track unmuted', `${participant?.identity || ''} ${publication?.kind || publication?.track?.kind || 'unknown'} ${publication?.source || publication?.track?.source || ''}`.trim());
+      renderRoomTiles();
+    });
     room.on?.(events.Reconnecting || 'reconnecting', () => {
       state.roomConnectionState = 'reconnecting';
       state.roomConnectedAt = 0;
@@ -1283,9 +1292,35 @@
     for (const publication of publications.values()) {
       const track = publication?.track;
       const kind = track?.kind || track?.mediaStreamTrack?.kind;
-      if (track && kind !== 'audio') return track;
+      const mediaTrack = track?.mediaStreamTrack;
+      const isMuted = Boolean(publication?.isMuted || publication?.muted || track?.isMuted || mediaTrack?.muted);
+      const isLive = !mediaTrack || mediaTrack.readyState === 'live';
+      const isEnabled = !mediaTrack || mediaTrack.enabled !== false;
+      if (track && kind !== 'audio' && !isMuted && isLive && isEnabled) return track;
     }
     return null;
+  }
+
+  function videoTileKey(participant, local = false) {
+    return local ? 'local' : String(participant?.identity || participant?.sid || participant?.name || 'remote');
+  }
+
+  function renderVideoFitButton(tile, key, isFill) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'call-tile-fit-btn call-icon-fill';
+    button.title = isFill ? t('Show full video') : t('Fill video tile');
+    button.setAttribute('aria-label', button.title);
+    button.setAttribute('aria-pressed', isFill ? 'true' : 'false');
+    button.innerHTML = '<span class="call-icon" aria-hidden="true"></span>';
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (state.videoFillTiles.has(key)) state.videoFillTiles.delete(key);
+      else state.videoFillTiles.add(key);
+      renderRoomTiles();
+    });
+    tile.appendChild(button);
   }
 
   function renderRoomTiles() {
@@ -1312,13 +1347,19 @@
       const meta = callParticipantForRoomParticipant(participant, local);
       const name = meta?.display_name || meta?.username || getParticipantName(participant, local ? t('You') : t('Participant'));
       const track = firstVideoTrack(participant);
+      const tileKey = videoTileKey(participant, local);
+      const isFill = state.videoFillTiles.has(tileKey);
+      tile.classList.toggle('is-video-fill', isFill);
       if (track?.attach) {
         try {
           const video = track.attach();
           video.autoplay = true;
           video.playsInline = true;
           video.muted = Boolean(local);
+          video.controls = false;
           tile.appendChild(video);
+          video.play?.().catch(() => {});
+          renderVideoFitButton(tile, tileKey, isFill);
         } catch {
           tile.innerHTML = bananaTilePlaceholder(name);
         }

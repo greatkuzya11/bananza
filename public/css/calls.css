@@ -562,6 +562,11 @@ html[data-visual-mode="rich"] .call-admin-status {
   min-height: 0;
   background: #000;
   object-fit: contain;
+  object-position: center center;
+}
+
+.call-tile.is-video-fill video {
+  object-fit: cover;
 }
 
 .call-tile-placeholder {
@@ -590,6 +595,37 @@ html[data-visual-mode="rich"] .call-admin-status {
   background: color-mix(in srgb, var(--bg-dark, #0e1621) 78%, transparent);
   color: var(--text-primary);
   font-size: 12px;
+}
+
+.call-tile-fit-btn {
+  position: absolute;
+  right: 10px;
+  bottom: 9px;
+  z-index: 2;
+  width: 30px;
+  height: 30px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--call-border));
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: color-mix(in srgb, var(--bg-dark, #0e1621) 82%, transparent);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.call-tile-fit-btn:hover,
+.call-tile-fit-btn:focus-visible {
+  background: color-mix(in srgb, var(--accent) 22%, var(--call-bg-panel));
+  outline: none;
+}
+
+.call-tile-fit-btn .call-icon {
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  -webkit-mask: var(--call-icon-mask) center / contain no-repeat;
+  mask: var(--call-icon-mask) center / contain no-repeat;
 }
 
 .call-controls {
@@ -755,6 +791,10 @@ html[data-visual-mode="rich"] .call-admin-status {
 
 .call-icon-expand {
   --call-icon-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M5 4h6a1 1 0 1 1 0 2H7.41l4.3 4.29a1 1 0 1 1-1.42 1.42L6 7.41V11a1 1 0 1 1-2 0V5a1 1 0 0 1 1-1Zm8 1a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v6a1 1 0 1 1-2 0V7.41l-4.29 4.3a1 1 0 0 1-1.42-1.42L16.59 6H14a1 1 0 0 1-1-1ZM4 13a1 1 0 1 1 2 0v3.59l4.29-4.3a1 1 0 0 1 1.42 1.42L7.41 18H11a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1v-6Zm14 0a1 1 0 1 1 2 0v6a1 1 0 0 1-1 1h-5a1 1 0 1 1 0-2h2.59l-4.3-4.29a1 1 0 0 1 1.42-1.42l4.29 4.3V13Z'/%3E%3C/svg%3E");
+}
+
+.call-icon-fill {
+  --call-icon-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M5 4h5a1 1 0 1 1 0 2H7.41l3.3 3.29a1 1 0 1 1-1.42 1.42L6 7.41V10a1 1 0 1 1-2 0V5a1 1 0 0 1 1-1Zm9 1a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v5a1 1 0 1 1-2 0V7.41l-3.29 3.3a1 1 0 1 1-1.42-1.42L16.59 6H15a1 1 0 0 1-1-1ZM4 14a1 1 0 1 1 2 0v2.59l3.29-3.3a1 1 0 1 1 1.42 1.42L7.41 18H10a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1v-5Zm10.29-.71a1 1 0 0 1 1.42 0l3.29 3.3V14a1 1 0 1 1 2 0v5a1 1 0 0 1-1 1h-5a1 1 0 1 1 0-2h2.59l-3.3-3.29a1 1 0 0 1 0-1.42Z'/%3E%3C/svg%3E");
 }
 
 .call-prejoin-toggles .call-icon-toggle {
@@ -976,14 +1016,19 @@ html[data-visual-mode="rich"] .call-admin-status {
   }
 
   .call-surface {
-    padding: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom));
+    align-items: flex-start;
+    justify-content: stretch;
+    padding: env(safe-area-inset-top) 0 0;
   }
 
   .call-surface-card {
     width: 100%;
-    height: calc(100dvh - max(16px, env(safe-area-inset-top) + env(safe-area-inset-bottom)));
-    max-height: 90dvh;
-    border-radius: 12px;
+    height: calc(100dvh - env(safe-area-inset-top));
+    max-height: none;
+    border-radius: 0;
+    border-left: 0;
+    border-right: 0;
+    border-bottom: 0;
   }
 
   .call-surface-head {
