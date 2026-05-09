@@ -45,10 +45,10 @@
     disconnectingIntentionally: false,
     leaveSentForCallId: 0,
     debugLines: [],
-    pendingPublishStream: null,
     publishingLocalTracks: false,
     publishRetryTimer: 0,
     publishRetryCount: 0,
+    localMediaOptions: null,
   };
 
   function bridge() {
@@ -942,7 +942,7 @@
     room.on?.(events.Reconnected || 'reconnected', () => {
       addCallDebug('room reconnected');
       setSurfaceStatus(t('Connected'));
-      scheduleLocalPublishRetry(room, LK, 250);
+      scheduleLocalMediaRetry(250);
     });
     room.on?.(events.Disconnected || 'disconnected', () => {
       state.room = null;
@@ -958,92 +958,76 @@
     state.leaveSentForCallId = 0;
     state.micEnabled = options.micEnabled !== false;
     state.cameraEnabled = options.cameraEnabled !== false;
-    if (options.previewStream) {
-      state.pendingPublishStream = options.previewStream;
-      state.publishRetryCount = 0;
-    }
-    const published = await publishPreviewTracks(room, LK, state.pendingPublishStream);
-    addCallDebug('preview publish result', `audio=${published.audio} video=${published.video}`);
-    if (state.micEnabled && !published.audio) {
-      await room.localParticipant?.setMicrophoneEnabled?.(true, options.audioDeviceId ? { deviceId: options.audioDeviceId } : undefined).then(() => {
-        addCallDebug('microphone fallback enabled');
-      }).catch((error) => {
-        state.micEnabled = false;
-        const message = error?.message || String(error || '');
-        addCallDebug('microphone fallback failed', message);
-        setSurfaceStatus(`${t('Microphone unavailable')}: ${message}`.trim());
-      });
-    }
-    if (state.cameraEnabled && !published.video) {
-      await room.localParticipant?.setCameraEnabled?.(true, options.videoDeviceId ? { deviceId: options.videoDeviceId } : undefined).then(() => {
-        addCallDebug('camera fallback enabled');
-      }).catch((error) => {
-        state.cameraEnabled = false;
-        const message = error?.message || String(error || '');
-        addCallDebug('camera fallback failed', message);
-        setSurfaceStatus(`${t('Camera unavailable')}: ${message}`.trim());
-      });
-    }
+    state.localMediaOptions = {
+      audioDeviceId: options.audioDeviceId || '',
+      videoDeviceId: options.videoDeviceId || '',
+    };
+    state.publishRetryCount = 0;
+    MEDIA.stopStream?.(options.previewStream);
+    const enabled = await enableLocalMedia('initial');
+    addCallDebug('local media result', `audio=${enabled.audio} video=${enabled.video}`);
     applySpeakerDevice();
-    if ((!state.micEnabled || hasLocalAudioPublication(room)) && (!state.cameraEnabled || hasLocalVideoPublication(room))) {
-      MEDIA.stopStream?.(state.pendingPublishStream);
-      state.pendingPublishStream = null;
-      state.publishRetryCount = 0;
-    }
     renderSurfaceControls();
     renderRoomTiles();
     renderCallDebug();
     if ((state.micEnabled && !hasLocalAudioPublication(room)) || (state.cameraEnabled && !hasLocalVideoPublication(room))) {
-      scheduleLocalPublishRetry(room, LK, 1500);
+      scheduleLocalMediaRetry(1500);
     }
   }
 
-  async function publishPreviewTracks(room, LK, stream) {
+  async function enableLocalMedia(reason = 'retry') {
     const result = { audio: false, video: false };
-    if (state.publishingLocalTracks) return result;
-    if (!stream || !room?.localParticipant?.publishTrack) {
-      addCallDebug('preview stream unavailable');
-      return result;
-    }
+    const room = state.room;
+    const options = state.localMediaOptions || {};
+    if (state.publishingLocalTracks || !room?.localParticipant) return result;
     state.publishingLocalTracks = true;
-    const streamName = `call-${state.currentCall?.id || 'local'}-${currentUser()?.id || 'me'}`;
-    const publishOne = async (track, source) => {
-      if (!track) {
-        addCallDebug('publish skipped', `${source || 'unknown'} missing`);
-        return false;
-      }
-      addCallDebug('publish try', `${source || track.kind} readyState=${track.readyState} enabled=${track.enabled} muted=${track.muted}`);
-      if (track.readyState === 'ended') return false;
-      try {
-        await room.localParticipant.publishTrack(track, { source, stream: streamName });
-        addCallDebug('publish ok', `${source || track.kind}`);
-        return true;
-      } catch (error) {
-        addCallDebug('publish failed', error?.message || String(error || ''));
-        return false;
-      }
-    };
+    addCallDebug('enable local media', reason);
     try {
-      if (state.micEnabled && !hasLocalAudioPublication(room)) {
-        result.audio = await publishOne(stream.getAudioTracks?.()[0], LK.Track?.Source?.Microphone);
+      if (state.micEnabled) {
+        if (hasLocalAudioPublication(room)) {
+          result.audio = true;
+        } else {
+          await room.localParticipant.setMicrophoneEnabled?.(
+            true,
+            options.audioDeviceId ? { deviceId: options.audioDeviceId } : undefined
+          ).then(() => {
+            result.audio = true;
+            addCallDebug('microphone enabled');
+          }).catch((error) => {
+            const message = error?.message || String(error || '');
+            addCallDebug('microphone enable failed', message);
+            setSurfaceStatus(`${t('Microphone unavailable')}: ${message}`.trim());
+          });
+        }
       } else {
-        result.audio = hasLocalAudioPublication(room);
+        await room.localParticipant.setMicrophoneEnabled?.(false).catch(() => {});
       }
-      if (state.cameraEnabled && !hasLocalVideoPublication(room)) {
-        result.video = await publishOne(stream.getVideoTracks?.()[0], LK.Track?.Source?.Camera);
+      if (state.cameraEnabled) {
+        if (hasLocalVideoPublication(room)) {
+          result.video = true;
+        } else {
+          await room.localParticipant.setCameraEnabled?.(
+            true,
+            options.videoDeviceId ? { deviceId: options.videoDeviceId } : undefined
+          ).then(() => {
+            result.video = true;
+            addCallDebug('camera enabled');
+          }).catch((error) => {
+            const message = error?.message || String(error || '');
+            addCallDebug('camera enable failed', message);
+            setSurfaceStatus(`${t('Camera unavailable')}: ${message}`.trim());
+          });
+        }
       } else {
-        result.video = hasLocalVideoPublication(room);
-      }
-      if ((!state.micEnabled || result.audio) && (!state.cameraEnabled || result.video)) {
-        state.pendingPublishStream = null;
-        state.publishRetryCount = 0;
-        if (!state.micEnabled) stream.getAudioTracks?.().forEach((track) => track.stop?.());
-        if (!state.cameraEnabled) stream.getVideoTracks?.().forEach((track) => track.stop?.());
+        await room.localParticipant.setCameraEnabled?.(false).catch(() => {});
       }
     } finally {
       state.publishingLocalTracks = false;
     }
-    return result;
+    return {
+      audio: result.audio || hasLocalAudioPublication(room),
+      video: result.video || hasLocalVideoPublication(room),
+    };
   }
 
   function hasLocalAudioPublication(room = state.room) {
@@ -1054,24 +1038,24 @@
     return Number(room?.localParticipant?.videoTrackPublications?.size || 0) > 0;
   }
 
-  function scheduleLocalPublishRetry(room = state.room, LK = window.LivekitClient, delay = 1500) {
-    if (!state.pendingPublishStream || !room?.localParticipant || state.publishRetryTimer) return;
+  function scheduleLocalMediaRetry(delay = 1500) {
+    if (!state.room?.localParticipant || state.publishRetryTimer) return;
     if (state.publishRetryCount >= 8) {
-      addCallDebug('publish retry stopped', 'too many attempts');
+      addCallDebug('media retry stopped', 'too many attempts');
       return;
     }
     state.publishRetryTimer = window.setTimeout(async () => {
       state.publishRetryTimer = 0;
-      if (!state.pendingPublishStream || !state.room) return;
+      if (!state.room) return;
       state.publishRetryCount += 1;
-      addCallDebug('publish retry', String(state.publishRetryCount));
-      const published = await publishPreviewTracks(state.room, LK, state.pendingPublishStream);
-      addCallDebug('retry result', `audio=${published.audio} video=${published.video}`);
+      addCallDebug('media retry', String(state.publishRetryCount));
+      const enabled = await enableLocalMedia(`retry ${state.publishRetryCount}`);
+      addCallDebug('retry result', `audio=${enabled.audio} video=${enabled.video}`);
       renderSurfaceControls();
       renderRoomTiles();
       renderCallDebug();
       if ((state.micEnabled && !hasLocalAudioPublication()) || (state.cameraEnabled && !hasLocalVideoPublication())) {
-        scheduleLocalPublishRetry(state.room, LK, 2000);
+        scheduleLocalMediaRetry(2000);
       }
     }, delay);
   }
@@ -1125,8 +1109,7 @@
     if (state.publishRetryTimer) window.clearTimeout(state.publishRetryTimer);
     state.publishRetryTimer = 0;
     state.publishingLocalTracks = false;
-    MEDIA.stopStream?.(state.pendingPublishStream);
-    state.pendingPublishStream = null;
+    state.localMediaOptions = null;
     const previousIntent = state.disconnectingIntentionally;
     state.disconnectingIntentionally = Boolean(options.intentional);
     try {
