@@ -951,8 +951,8 @@
       setSurfaceStatus(t('Connected'));
       scheduleLocalMediaRetry(3500, { resetCount: true });
     });
-    room.on?.(events.ConnectionStateChanged || 'connectionStateChanged', (state) => {
-      state.roomConnectionState = String(state || '');
+    room.on?.(events.ConnectionStateChanged || 'connectionStateChanged', (connectionState) => {
+      state.roomConnectionState = String(connectionState || '');
       if (state.roomConnectionState === 'connected') state.roomConnectedAt = Date.now();
       if (state.roomConnectionState && state.roomConnectionState !== 'connected') state.roomConnectedAt = 0;
       addCallDebug('connection state', state.roomConnectionState);
