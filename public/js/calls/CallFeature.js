@@ -55,6 +55,7 @@
     roomConnectedAt: 0,
     videoFillTiles: new Set(),
     videoCollapsedTiles: new Set(),
+    subscriptionChangingTiles: new Set(),
   };
 
   function bridge() {
@@ -929,14 +930,30 @@
     state.room = room;
     addCallDebug('connectRoom', `${url} client=${LK.version || 'unknown'}`);
     const events = LK.RoomEvent || {};
-    room.on?.(events.TrackSubscribed || 'trackSubscribed', (track) => {
+    room.on?.(events.TrackSubscribed || 'trackSubscribed', (track, _publication, participant) => {
       addCallDebug('remote track subscribed', `${track?.kind || track?.mediaStreamTrack?.kind || 'unknown'} ${track?.source || ''}`.trim());
       attachSubscribedTrack(track);
+      if (participant) {
+        const key = videoTileKey(participant, false);
+        if (state.subscriptionChangingTiles.has(key)) {
+          state.subscriptionChangingTiles.delete(key);
+          replaceCallTile(participant, false);
+          return;
+        }
+      }
       renderRoomTiles();
     });
-    room.on?.(events.TrackUnsubscribed || 'trackUnsubscribed', (track) => {
+    room.on?.(events.TrackUnsubscribed || 'trackUnsubscribed', (track, _publication, participant) => {
       addCallDebug('remote track unsubscribed', `${track?.kind || track?.mediaStreamTrack?.kind || 'unknown'} ${track?.source || ''}`.trim());
       detachTrack(track);
+      if (participant) {
+        const key = videoTileKey(participant, false);
+        if (state.subscriptionChangingTiles.has(key)) {
+          state.subscriptionChangingTiles.delete(key);
+          replaceCallTile(participant, false);
+          return;
+        }
+      }
       renderRoomTiles();
     });
     room.on?.(events.ParticipantConnected || 'participantConnected', (participant) => {
@@ -1187,6 +1204,7 @@
     state.roomConnectedAt = 0;
     state.videoCollapsedTiles.clear();
     state.videoFillTiles.clear();
+    state.subscriptionChangingTiles.clear();
     const previousIntent = state.disconnectingIntentionally;
     state.disconnectingIntentionally = Boolean(options.intentional);
     try {
@@ -1347,20 +1365,84 @@
     const publication = firstVideoPublication(participant);
     if (collapsed) state.videoCollapsedTiles.add(key);
     else state.videoCollapsedTiles.delete(key);
+    state.subscriptionChangingTiles.add(key);
     try {
       publication?.setSubscribed?.(!collapsed);
     } catch {}
-    renderRoomTiles();
+    replaceCallTile(participant, false);
   }
 
   function setVideoTileCollapsed(participant, key, collapsed, local = false) {
     if (local) {
       if (collapsed) state.videoCollapsedTiles.add(key);
       else state.videoCollapsedTiles.delete(key);
-      renderRoomTiles();
+      replaceCallTile(participant, true);
       return;
     }
     setRemoteVideoCollapsed(participant, key, collapsed);
+  }
+
+  function replaceCallTile(participant, local = false) {
+    const grid = document.getElementById('callGrid');
+    if (!grid) return;
+    const key = videoTileKey(participant, local);
+    const current = Array.from(grid.children).find((item) => item.dataset.callTileKey === key);
+    if (!current) return;
+    current.replaceWith(renderCallTile(participant, local));
+  }
+
+  function renderCallTile(participant, local) {
+    const tile = document.createElement('div');
+    tile.className = 'call-tile';
+    const meta = callParticipantForRoomParticipant(participant, local);
+    const name = meta?.display_name || meta?.username || getParticipantName(participant, local ? t('You') : t('Participant'));
+    const tileKey = videoTileKey(participant, local);
+    tile.dataset.callTileKey = tileKey;
+    const isCollapsed = state.videoCollapsedTiles.has(tileKey);
+    const track = isCollapsed ? null : firstVisibleVideoTrack(participant);
+    const isFill = state.videoFillTiles.has(tileKey);
+    tile.classList.toggle('is-video-fill', isFill);
+    tile.classList.toggle('is-video-collapsed', isCollapsed);
+    if (track?.attach) {
+      try {
+        const video = track.attach();
+        video.autoplay = true;
+        video.playsInline = true;
+        video.setAttribute('playsinline', '');
+        video.muted = Boolean(local);
+        video.controls = false;
+        video.removeAttribute('controls');
+        video.preload = 'auto';
+        tile.appendChild(video);
+        video.play?.().catch(() => {});
+        renderVideoFitButton(tile, tileKey, isFill);
+      } catch {
+        tile.innerHTML = bananaTilePlaceholder(name);
+      }
+    } else {
+      tile.innerHTML = bananaTilePlaceholder(name);
+    }
+    const label = document.createElement('div');
+    label.className = 'call-tile-name';
+    const labelText = document.createElement('span');
+    labelText.className = 'call-tile-name-text';
+    labelText.textContent = local ? `${name} (${t('you')})` : name;
+    label.appendChild(labelText);
+    const collapseBtn = document.createElement('button');
+    collapseBtn.type = 'button';
+    collapseBtn.className = 'call-tile-subscribe-btn';
+    collapseBtn.textContent = isCollapsed ? '+' : '-';
+    collapseBtn.title = isCollapsed ? t('Resume video') : (local ? t('Hide local preview') : t('Pause video'));
+    collapseBtn.setAttribute('aria-label', collapseBtn.title);
+    collapseBtn.setAttribute('aria-pressed', isCollapsed ? 'true' : 'false');
+    collapseBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setVideoTileCollapsed(participant, tileKey, !state.videoCollapsedTiles.has(tileKey), local);
+    });
+    label.appendChild(collapseBtn);
+    tile.appendChild(label);
+    return tile;
   }
 
   function renderRoomTiles() {
@@ -1382,56 +1464,7 @@
       return;
     }
     participants.forEach(({ participant, local }) => {
-      const tile = document.createElement('div');
-      tile.className = 'call-tile';
-      const meta = callParticipantForRoomParticipant(participant, local);
-      const name = meta?.display_name || meta?.username || getParticipantName(participant, local ? t('You') : t('Participant'));
-      const tileKey = videoTileKey(participant, local);
-      const isCollapsed = state.videoCollapsedTiles.has(tileKey);
-      const track = isCollapsed ? null : firstVisibleVideoTrack(participant);
-      const isFill = state.videoFillTiles.has(tileKey);
-      tile.classList.toggle('is-video-fill', isFill);
-      tile.classList.toggle('is-video-collapsed', isCollapsed);
-      if (track?.attach) {
-        try {
-          const video = track.attach();
-          video.autoplay = true;
-          video.playsInline = true;
-          video.setAttribute('playsinline', '');
-          video.muted = Boolean(local);
-          video.controls = false;
-          video.removeAttribute('controls');
-          video.preload = 'auto';
-          tile.appendChild(video);
-          video.play?.().catch(() => {});
-          renderVideoFitButton(tile, tileKey, isFill);
-        } catch {
-          tile.innerHTML = bananaTilePlaceholder(name);
-        }
-      } else {
-        tile.innerHTML = bananaTilePlaceholder(name);
-      }
-      const label = document.createElement('div');
-      label.className = 'call-tile-name';
-      const labelText = document.createElement('span');
-      labelText.className = 'call-tile-name-text';
-      labelText.textContent = local ? `${name} (${t('you')})` : name;
-      label.appendChild(labelText);
-      const collapseBtn = document.createElement('button');
-      collapseBtn.type = 'button';
-      collapseBtn.className = 'call-tile-subscribe-btn';
-      collapseBtn.textContent = isCollapsed ? '+' : '-';
-      collapseBtn.title = isCollapsed ? t('Resume video') : (local ? t('Hide local preview') : t('Pause video'));
-      collapseBtn.setAttribute('aria-label', collapseBtn.title);
-      collapseBtn.setAttribute('aria-pressed', isCollapsed ? 'true' : 'false');
-      collapseBtn.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        setVideoTileCollapsed(participant, tileKey, !state.videoCollapsedTiles.has(tileKey), local);
-      });
-      label.appendChild(collapseBtn);
-      tile.appendChild(label);
-      grid.appendChild(tile);
+      grid.appendChild(renderCallTile(participant, local));
     });
     renderParticipantsPanel();
   }

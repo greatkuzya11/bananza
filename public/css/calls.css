@@ -638,7 +638,9 @@ html[data-visual-mode="rich"] .call-admin-status {
 }
 
 .call-tile.is-video-collapsed {
+  height: 54px;
   min-height: 54px;
+  max-height: 54px;
   aspect-ratio: auto;
 }
 
@@ -1121,6 +1123,12 @@ html[data-visual-mode="rich"] .call-admin-status {
   .call-tile {
     max-width: 100%;
     min-height: clamp(180px, 31dvh, 260px);
+  }
+
+  .call-tile.is-video-collapsed {
+    height: 54px;
+    min-height: 54px;
+    max-height: 54px;
   }
 
   .call-room-layout {
