@@ -1,6 +1,15 @@
 const fs = require('fs');
 const path = require('path');
 
+function mimeForAudioFile(filePath) {
+  const ext = path.extname(String(filePath || '')).toLowerCase();
+  if (ext === '.mp3') return 'audio/mpeg';
+  if (ext === '.m4a' || ext === '.mp4') return 'audio/mp4';
+  if (ext === '.ogg' || ext === '.oga' || ext === '.opus') return 'audio/ogg';
+  if (ext === '.webm') return 'audio/webm';
+  return 'audio/wav';
+}
+
 async function parseJsonResponse(res) {
   const text = await res.text();
   try {
@@ -56,7 +65,7 @@ async function transcribeWithOpenAI({ filePath, settings, apiKey }) {
   const formData = new FormData();
   formData.append('model', settings.openai_model);
   formData.append('language', settings.openai_language || 'ru');
-  formData.append('file', new Blob([fileBuffer], { type: 'audio/wav' }), path.basename(filePath));
+  formData.append('file', new Blob([fileBuffer], { type: mimeForAudioFile(filePath) }), path.basename(filePath));
 
   const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
@@ -87,7 +96,7 @@ async function transcribeWithGrok({ filePath, settings, grokApiKey }) {
   if (!grokApiKey) throw new Error('Grok API key is not configured');
   const fileBuffer = await fs.promises.readFile(filePath);
   const formData = new FormData();
-  formData.append('file', new Blob([fileBuffer], { type: 'audio/wav' }), path.basename(filePath));
+  formData.append('file', new Blob([fileBuffer], { type: mimeForAudioFile(filePath) }), path.basename(filePath));
   if (settings.grok_language) {
     formData.append('language', settings.grok_language);
   }

@@ -12,6 +12,11 @@ const DEFAULT_CALL_SETTINGS = {
   ringtone_enabled: true,
   call_messages_enabled: true,
   call_debug_enabled: false,
+  call_ai_notes_enabled: false,
+  call_recording_path: process.env.CALL_RECORDING_PATH || '/opt/livekit-egress/recordings',
+  call_transcription_provider: 'voice',
+  call_transcription_max_chunk_mb: 24,
+  call_transcription_chunk_minutes: 12,
   max_call_participants: 20,
 };
 
@@ -55,6 +60,24 @@ function normalizeCallSettings(raw = {}) {
   next.ringtone_enabled = normalizeBoolean(next.ringtone_enabled, DEFAULT_CALL_SETTINGS.ringtone_enabled);
   next.call_messages_enabled = normalizeBoolean(next.call_messages_enabled, DEFAULT_CALL_SETTINGS.call_messages_enabled);
   next.call_debug_enabled = normalizeBoolean(next.call_debug_enabled, DEFAULT_CALL_SETTINGS.call_debug_enabled);
+  next.call_ai_notes_enabled = normalizeBoolean(next.call_ai_notes_enabled, DEFAULT_CALL_SETTINGS.call_ai_notes_enabled);
+  next.call_recording_path = String(next.call_recording_path || DEFAULT_CALL_SETTINGS.call_recording_path).trim() || DEFAULT_CALL_SETTINGS.call_recording_path;
+  next.call_transcription_provider = String(next.call_transcription_provider || DEFAULT_CALL_SETTINGS.call_transcription_provider).trim();
+  if (!['voice'].includes(next.call_transcription_provider)) {
+    next.call_transcription_provider = DEFAULT_CALL_SETTINGS.call_transcription_provider;
+  }
+  next.call_transcription_max_chunk_mb = clampNumber(
+    next.call_transcription_max_chunk_mb,
+    DEFAULT_CALL_SETTINGS.call_transcription_max_chunk_mb,
+    1,
+    100
+  );
+  next.call_transcription_chunk_minutes = clampNumber(
+    next.call_transcription_chunk_minutes,
+    DEFAULT_CALL_SETTINGS.call_transcription_chunk_minutes,
+    1,
+    60
+  );
   next.ring_timeout_ms = clampNumber(
     next.ring_timeout_ms,
     DEFAULT_CALL_SETTINGS.ring_timeout_ms,
@@ -281,6 +304,7 @@ function getPublicCallSettings(db, secretOrEnv = '', env = process.env) {
     ringtone_enabled: Boolean(settings.ringtone_enabled),
     call_messages_enabled: Boolean(settings.call_messages_enabled),
     call_debug_enabled: Boolean(settings.call_debug_enabled),
+    call_ai_notes_enabled: Boolean(settings.call_ai_notes_enabled && livekit.ready),
     max_call_participants: settings.max_call_participants,
   };
 }

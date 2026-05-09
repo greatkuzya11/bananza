@@ -17540,6 +17540,7 @@
     const status = String(call.status || msg?.call_message?.status || 'active');
     const active = status === 'active' && call.can_join !== false;
     const duration = Number(call.duration_ms || msg?.call_message?.duration_ms || 0);
+    const notes = call.ai_notes || msg?.call_message?.ai_notes || null;
     const labels = {
       active: t('Call started'),
       ended: t('Call ended'),
@@ -17550,6 +17551,17 @@
     const meta = [];
     if (call.started_by_name) meta.push(t('Started by {name}', { name: call.started_by_name }));
     if (duration > 0) meta.push(t('Duration {duration}', { duration: formatDuration(duration / 1000) }));
+    if (notes?.status === 'recording') meta.push(t('AI notes recording'));
+    else if (notes?.transcript_status === 'processing' || notes?.status === 'processing') meta.push(t('Transcript processing'));
+    else if (notes?.transcript_status === 'completed' && notes?.transcript_ready) meta.push(t('Transcript ready'));
+    else if (notes?.transcript_status === 'error') meta.push(t('Transcription error'));
+    const actions = [];
+    if (active) {
+      actions.push(`<button type="button" class="call-message-action primary" data-call-card-join="${Number(call.id || 0)}">${esc(t('Join call'))}</button>`);
+    }
+    if (notes?.transcript_ready) {
+      actions.push(`<button type="button" class="call-message-action" data-call-card-transcript="${Number(call.id || 0)}">${esc(t('Transcript'))}</button>`);
+    }
     return `
       <div class="call-message-card" data-call-card="${Number(call.id || 0)}">
         <div class="call-message-icon" aria-hidden="true">☎</div>
@@ -17557,7 +17569,7 @@
           <div class="call-message-title">${esc(labels[status] || labels.active)}</div>
           <div class="call-message-meta">${esc(meta.join(' / ') || t('Video call'))}</div>
         </div>
-        ${active ? `<button type="button" class="call-message-join" data-call-card-join="${Number(call.id || 0)}">${esc(t('Join call'))}</button>` : ''}
+        ${actions.length ? `<div class="call-message-actions">${actions.join('')}</div>` : ''}
       </div>
     `;
   }
@@ -17569,6 +17581,10 @@
     row.querySelector('[data-call-card-join]')?.addEventListener('click', (event) => {
       event.stopPropagation();
       window.BananzaCallHooks?.joinCallFromMessage?.(call);
+    });
+    row.querySelector('[data-call-card-transcript]')?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      window.BananzaCallHooks?.openTranscript?.(call.id);
     });
   }
 

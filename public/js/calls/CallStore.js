@@ -45,6 +45,7 @@
       ringtone_enabled: true,
       call_messages_enabled: true,
       call_debug_enabled: false,
+      call_ai_notes_enabled: false,
       max_call_participants: 20,
     };
   }

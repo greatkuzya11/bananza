@@ -22,6 +22,7 @@
       ringtone_enabled: true,
       call_messages_enabled: true,
       call_debug_enabled: false,
+      call_ai_notes_enabled: false,
       max_call_participants: 20,
     },
     activeCalls: new Map(),
@@ -58,6 +59,7 @@
     subscriptionChangingTiles: new Set(),
     focusedVideoTileKey: '',
     lastTileTap: { key: '', at: 0 },
+    transcriptModal: { callId: 0, text: '', segments: [] },
   };
 
   function bridge() {
@@ -136,7 +138,7 @@
 
   function userIdFromIdentity(identity) {
     const text = String(identity || '').trim();
-    const match = text.match(/(?:^|:)user:(\d+)$/i) || text.match(/^(\d+)$/);
+    const match = text.match(/^user:(\d+)(?::|$)/i) || text.match(/^(\d+)$/);
     return match ? Number(match[1]) : 0;
   }
 
@@ -165,6 +167,7 @@
       ringtone_enabled: settings.ringtone_enabled !== false,
       call_messages_enabled: settings.call_messages_enabled !== false,
       call_debug_enabled: settings.call_debug_enabled === true,
+      call_ai_notes_enabled: settings.call_ai_notes_enabled === true,
       max_call_participants: Number(settings.max_call_participants || state.settings.max_call_participants || 20),
     };
     if (!state.settings.call_debug_enabled) state.debugLines = [];
@@ -378,6 +381,10 @@
               <span class="call-icon" aria-hidden="true"></span>
               <span class="call-control-label">${escapeHtml(t('Share screen'))}</span>
             </button>
+            <button type="button" id="callAiNotesBtn" class="call-control-btn call-tool-btn call-icon-ai-notes" title="${escapeHtml(t('AI notes'))}" aria-label="${escapeHtml(t('AI notes'))}" aria-pressed="false">
+              <span class="call-icon" aria-hidden="true"></span>
+              <span class="call-control-label">${escapeHtml(t('AI notes'))}</span>
+            </button>
             <button type="button" id="callLeaveBtn" class="call-control-btn call-tool-btn call-icon-phone-off danger" title="${escapeHtml(t('Leave'))}" aria-label="${escapeHtml(t('Leave'))}">
               <span class="call-icon" aria-hidden="true"></span>
               <span class="call-control-label">${escapeHtml(t('Leave'))}</span>
@@ -396,13 +403,46 @@
       document.getElementById('callCameraBtn')?.addEventListener('click', toggleCamera);
       document.getElementById('callDeviceBtn')?.addEventListener('click', () => openPrejoin(state.currentCall, { keepIncoming: true, mode: 'devices' }).catch(() => {}));
       document.getElementById('callScreenBtn')?.addEventListener('click', toggleScreenShare);
+      document.getElementById('callAiNotesBtn')?.addEventListener('click', toggleAiNotes);
       document.getElementById('callLeaveBtn')?.addEventListener('click', () => leaveCall(false).catch(() => {}));
       document.getElementById('callEndBtn')?.addEventListener('click', () => leaveCall(true).catch(() => {}));
       applyLocalized(surface);
     }
 
     ensureAdminUi();
+    ensureTranscriptUi();
     state.uiReady = true;
+  }
+
+  function ensureTranscriptUi() {
+    if (document.getElementById('callTranscriptModal')) return;
+    const modal = document.createElement('div');
+    modal.id = 'callTranscriptModal';
+    modal.className = 'modal hidden';
+    modal.innerHTML = `
+      <div class="modal-content call-transcript-modal">
+        <div class="modal-header">
+          <h3>${escapeHtml(t('Call transcript'))}</h3>
+          <button type="button" class="modal-close" id="callTranscriptClose" aria-label="${escapeHtml(t('Close'))}">x</button>
+        </div>
+        <div class="modal-body">
+          <div class="call-transcript-toolbar">
+            <input type="search" id="callTranscriptSearch" class="modal-input" placeholder="${escapeHtml(t('Search'))}">
+            <button type="button" id="callTranscriptCopy" class="call-admin-btn">${escapeHtml(t('Copy'))}</button>
+            <button type="button" id="callTranscriptDownload" class="call-admin-btn">${escapeHtml(t('Download'))}</button>
+          </div>
+          <div id="callTranscriptStatus" class="call-admin-status hidden"></div>
+          <pre id="callTranscriptText" class="call-transcript-text"></pre>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    document.getElementById('callTranscriptClose')?.addEventListener('click', () => bridge()?.closeManagedModal?.('callTranscriptModal'));
+    document.getElementById('callTranscriptSearch')?.addEventListener('input', renderTranscriptFilter);
+    document.getElementById('callTranscriptCopy')?.addEventListener('click', copyTranscriptText);
+    document.getElementById('callTranscriptDownload')?.addEventListener('click', downloadTranscriptText);
+    bridge()?.registerManagedModal?.('callTranscriptModal');
+    applyLocalized(modal);
   }
 
   function ensureAdminUi() {
@@ -493,6 +533,25 @@
                 <input type="checkbox" id="callDebugToggle">
                 <span class="toggle-slider"></span>
               </label>
+            </div>
+            <div class="settings-item settings-toggle-item">
+              <span>${escapeHtml(t('AI notes'))}</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="callAiNotesToggle">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="field-group">
+              <label>${escapeHtml(t('Recording path'))}</label>
+              <input type="text" id="callRecordingPath" class="modal-input" placeholder="/opt/livekit-egress/recordings">
+            </div>
+            <div class="field-group">
+              <label>${escapeHtml(t('Transcription max chunk, MB'))}</label>
+              <input type="number" id="callTranscriptionMaxChunkMb" class="modal-input" min="1" max="100" step="1">
+            </div>
+            <div class="field-group">
+              <label>${escapeHtml(t('Transcription chunk, minutes'))}</label>
+              <input type="number" id="callTranscriptionChunkMinutes" class="modal-input" min="1" max="60" step="1">
             </div>
             <div class="field-group">
               <label>${escapeHtml(t('Ring timeout, ms'))}</label>
@@ -1305,6 +1364,89 @@
     renderRoomTiles();
   }
 
+  async function toggleAiNotes() {
+    const callId = Number(state.currentCall?.id || 0);
+    if (!callId || !state.settings.call_ai_notes_enabled) return;
+    const notes = state.currentCall?.ai_notes || null;
+    const recording = notes?.status === 'recording';
+    try {
+      const data = await api(`/api/calls/${callId}/ai-notes/${recording ? 'cancel' : 'start'}`, { method: 'POST', body: {} });
+      if (data?.call) {
+        state.currentCall = data.call;
+        upsertCall(data.call);
+      }
+      renderAll();
+    } catch (error) {
+      addCallDebug('AI notes failed', error.message || '');
+      const status = document.getElementById('callSurfaceStatus');
+      if (status) status.textContent = error.message || t('AI notes failed');
+    }
+  }
+
+  function transcriptStatus(message, type = '') {
+    const el = document.getElementById('callTranscriptStatus');
+    if (!el) return;
+    el.classList.toggle('hidden', !message);
+    el.classList.toggle('error', type === 'error');
+    el.classList.toggle('success', type === 'success');
+    el.textContent = message || '';
+  }
+
+  function renderTranscriptFilter() {
+    const pre = document.getElementById('callTranscriptText');
+    const query = String(document.getElementById('callTranscriptSearch')?.value || '').trim().toLowerCase();
+    if (!pre) return;
+    const text = state.transcriptModal.text || '';
+    if (!query) {
+      pre.textContent = text;
+      return;
+    }
+    pre.textContent = text.split('\n').filter((line) => line.toLowerCase().includes(query)).join('\n');
+  }
+
+  async function openTranscript(callId) {
+    ensureUi();
+    state.transcriptModal = { callId: Number(callId || 0), text: '', segments: [] };
+    document.getElementById('callTranscriptSearch').value = '';
+    document.getElementById('callTranscriptText').textContent = '';
+    transcriptStatus(t('Loading...'));
+    bridge()?.openManagedModal?.('callTranscriptModal', { replaceStack: false });
+    try {
+      const data = await api(`/api/calls/${Number(callId)}/transcript`);
+      state.transcriptModal = {
+        callId: Number(callId || 0),
+        text: data.transcript_text || '',
+        segments: Array.isArray(data.segments) ? data.segments : [],
+      };
+      document.getElementById('callTranscriptText').textContent = state.transcriptModal.text || t('Transcript is empty');
+      const approximate = data.ai_notes?.timing_approximate;
+      transcriptStatus(approximate ? t('Timing is approximate') : '', approximate ? '' : 'success');
+    } catch (error) {
+      transcriptStatus(error.message || t('Could not load transcript'), 'error');
+    }
+  }
+
+  async function copyTranscriptText() {
+    const text = state.transcriptModal.text || document.getElementById('callTranscriptText')?.textContent || '';
+    if (!text) return;
+    await navigator.clipboard?.writeText(text).catch(() => {});
+    transcriptStatus(t('Copied'), 'success');
+  }
+
+  function downloadTranscriptText() {
+    const text = state.transcriptModal.text || document.getElementById('callTranscriptText')?.textContent || '';
+    if (!text) return;
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `bananza-call-${state.transcriptModal.callId || 'transcript'}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   function toggleMinimized() {
     state.minimized = !state.minimized;
     const surface = document.getElementById('callSurface');
@@ -1615,6 +1757,14 @@
     if (!surface || !state.currentCall) return;
     surface.classList.toggle('is-minimized', state.minimized);
     document.getElementById('callSurfaceTitle').textContent = state.currentCall.chat_name || t('Video call');
+    const notes = state.currentCall.ai_notes || null;
+    const status = document.getElementById('callSurfaceStatus');
+    if (status) {
+      status.textContent = notes?.status === 'recording'
+        ? t('AI notes recording')
+        : (notes?.transcript_status === 'processing' ? t('Transcript processing') : '');
+      status.classList.toggle('is-recording', notes?.status === 'recording');
+    }
     renderMinimizeButton();
     renderSurfaceControls();
     renderRoomTiles();
@@ -1646,6 +1796,7 @@
     const participants = document.getElementById('callParticipantsBtn');
     const devices = document.getElementById('callDeviceBtn');
     const screen = document.getElementById('callScreenBtn');
+    const aiNotes = document.getElementById('callAiNotesBtn');
     const leave = document.getElementById('callLeaveBtn');
     const end = document.getElementById('callEndBtn');
     setIconToggleState(mic, state.micEnabled, t('Mic'), t('Mic off'));
@@ -1663,6 +1814,16 @@
       screen.classList.remove('is-off');
       screen.classList.toggle('is-active', state.screenShareEnabled);
       screen.setAttribute('aria-pressed', state.screenShareEnabled ? 'true' : 'false');
+    }
+    if (aiNotes) {
+      const notes = state.currentCall?.ai_notes || null;
+      const recording = notes?.status === 'recording';
+      const available = Boolean(state.settings.call_ai_notes_enabled && state.currentCall?.status === 'active');
+      aiNotes.classList.toggle('hidden', !state.settings.call_ai_notes_enabled);
+      aiNotes.disabled = !available || ['processing', 'completed'].includes(notes?.transcript_status || '');
+      setToolButtonLabel(aiNotes, recording ? t('Stop AI notes') : t('AI notes'));
+      aiNotes.classList.toggle('is-active', recording);
+      aiNotes.setAttribute('aria-pressed', recording ? 'true' : 'false');
     }
   }
 
@@ -1723,6 +1884,7 @@
       callRingtoneToggle: settings.ringtone_enabled,
       callMessagesToggle: settings.call_messages_enabled,
       callDebugToggle: settings.call_debug_enabled,
+      callAiNotesToggle: settings.call_ai_notes_enabled,
     };
     Object.entries(fields).forEach(([id, checked]) => {
       const input = document.getElementById(id);
@@ -1732,6 +1894,12 @@
     if (ring) ring.value = Number(settings.ring_timeout_ms || 60000);
     const max = document.getElementById('callMaxParticipants');
     if (max) max.value = Number(settings.max_call_participants || 20);
+    const recordingPath = document.getElementById('callRecordingPath');
+    if (recordingPath) recordingPath.value = settings.call_recording_path || '/opt/livekit-egress/recordings';
+    const maxChunk = document.getElementById('callTranscriptionMaxChunkMb');
+    if (maxChunk) maxChunk.value = Number(settings.call_transcription_max_chunk_mb || 24);
+    const chunkMinutes = document.getElementById('callTranscriptionChunkMinutes');
+    if (chunkMinutes) chunkMinutes.value = Number(settings.call_transcription_chunk_minutes || 12);
   }
 
   function adminPayload() {
@@ -1743,6 +1911,11 @@
       ringtone_enabled: document.getElementById('callRingtoneToggle')?.checked !== false,
       call_messages_enabled: document.getElementById('callMessagesToggle')?.checked !== false,
       call_debug_enabled: document.getElementById('callDebugToggle')?.checked === true,
+      call_ai_notes_enabled: document.getElementById('callAiNotesToggle')?.checked === true,
+      call_recording_path: document.getElementById('callRecordingPath')?.value || '',
+      call_transcription_provider: 'voice',
+      call_transcription_max_chunk_mb: Number(document.getElementById('callTranscriptionMaxChunkMb')?.value || 24),
+      call_transcription_chunk_minutes: Number(document.getElementById('callTranscriptionChunkMinutes')?.value || 12),
       ring_timeout_ms: Number(document.getElementById('callRingTimeoutMs')?.value || 60000),
       max_call_participants: Number(document.getElementById('callMaxParticipants')?.value || 20),
       livekit_ws_url: document.getElementById('callLiveKitWsUrl')?.value || '',
@@ -1774,7 +1947,8 @@
     setAdminStatus(t('Testing...'));
     try {
       const data = await api('/api/admin/call-settings/test', { method: 'POST', body: {} });
-      setAdminStatus(data.ok ? t('LiveKit test passed') : t('LiveKit test failed'), data.ok ? 'success' : 'error');
+      const extra = data.egress_ready ? t('Egress ready') : (data.egress_error ? `${t('Egress not ready')}: ${data.egress_error}` : '');
+      setAdminStatus(data.ok ? [t('LiveKit test passed'), extra].filter(Boolean).join(' / ') : t('LiveKit test failed'), data.ok && data.egress_ready ? 'success' : '');
     } catch (error) {
       setAdminStatus(error.message || t('LiveKit test failed'), 'error');
     }
@@ -1810,7 +1984,10 @@
         });
         return;
       }
-      else upsertCall(msg.call);
+      else {
+        upsertCall(msg.call);
+        if (state.currentCall?.id === msg.call.id) state.currentCall = { ...state.currentCall, ...msg.call };
+      }
     }
     if (msg.type === 'call_invite' && msg.call && Number(msg.call.started_by) !== Number(currentUser()?.id || 0)) {
       state.incomingCall = msg.call;
@@ -1837,6 +2014,7 @@
 
   hooks.openPrejoin = (call) => openPrejoin(call);
   hooks.joinCallFromMessage = (call) => openPrejoin(call);
+  hooks.openTranscript = (callId) => openTranscript(callId);
   hooks.getActiveCallForChat = (chatId) => state.activeCalls.get(Number(chatId || 0)) || null;
   hooks.getActiveCalls = () => Array.from(state.activeCalls.values()).map((call) => ({ ...call }));
 

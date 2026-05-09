@@ -128,6 +128,62 @@ function initCallSchema(db) {
       updated_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS call_ai_notes (
+      call_id INTEGER PRIMARY KEY REFERENCES call_sessions(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'idle' CHECK(status IN ('idle','recording','processing','completed','error','canceled')),
+      requested_by INTEGER DEFAULT NULL REFERENCES users(id),
+      started_at TEXT DEFAULT NULL,
+      ended_at TEXT DEFAULT NULL,
+      transcript_status TEXT NOT NULL DEFAULT 'idle' CHECK(transcript_status IN ('idle','recording','processing','completed','error','canceled')),
+      transcript_text TEXT DEFAULT '',
+      transcript_error TEXT DEFAULT '',
+      timing_approximate INTEGER DEFAULT 1,
+      summary_status TEXT NOT NULL DEFAULT 'idle' CHECK(summary_status IN ('idle','processing','completed','error')),
+      short_summary TEXT DEFAULT '',
+      decisions_json TEXT DEFAULT '[]',
+      action_items_json TEXT DEFAULT '[]',
+      open_questions_json TEXT DEFAULT '[]',
+      suggested_polls_json TEXT DEFAULT '[]',
+      summary_model TEXT DEFAULT '',
+      summary_error TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS call_recordings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      call_id INTEGER NOT NULL REFERENCES call_sessions(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      livekit_identity TEXT NOT NULL DEFAULT '',
+      track_id TEXT NOT NULL DEFAULT '',
+      egress_id TEXT NOT NULL DEFAULT '',
+      file_path TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'recording' CHECK(status IN ('recording','processing','completed','error','canceled')),
+      started_at TEXT DEFAULT NULL,
+      ended_at TEXT DEFAULT NULL,
+      duration_ms INTEGER DEFAULT NULL,
+      size_bytes INTEGER DEFAULT NULL,
+      transcription_text TEXT DEFAULT '',
+      transcription_provider TEXT DEFAULT '',
+      transcription_model TEXT DEFAULT '',
+      transcription_error TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS call_transcript_segments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      call_id INTEGER NOT NULL REFERENCES call_sessions(id) ON DELETE CASCADE,
+      recording_id INTEGER DEFAULT NULL REFERENCES call_recordings(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      speaker_name TEXT NOT NULL DEFAULT '',
+      start_ms INTEGER NOT NULL DEFAULT 0,
+      end_ms INTEGER NOT NULL DEFAULT 0,
+      text TEXT NOT NULL DEFAULT '',
+      timing_approximate INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE UNIQUE INDEX IF NOT EXISTS idx_call_sessions_active_chat
       ON call_sessions(chat_id)
       WHERE status='active';
@@ -139,6 +195,15 @@ function initCallSchema(db) {
       ON call_participants(user_id, state);
     CREATE INDEX IF NOT EXISTS idx_call_messages_call
       ON call_messages(call_id);
+    CREATE INDEX IF NOT EXISTS idx_call_recordings_call
+      ON call_recordings(call_id, status);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_call_recordings_active_track
+      ON call_recordings(call_id, track_id)
+      WHERE status IN ('recording','processing');
+    CREATE INDEX IF NOT EXISTS idx_call_recordings_egress
+      ON call_recordings(egress_id);
+    CREATE INDEX IF NOT EXISTS idx_call_transcript_segments_call
+      ON call_transcript_segments(call_id, start_ms, user_id);
   `);
 }
 
