@@ -1245,8 +1245,9 @@ function createCallFeature({
   app.post('/api/calls/:callId/leave', auth, callLimiter, (req, res) => {
     const callId = normalizeId(req.params.callId);
     const row = callByIdStmt.get(callId);
-    if (!row || row.status !== 'active') return boolError(res, 404, 'Call not found', 'call_not_found');
+    if (!row) return boolError(res, 404, 'Call not found', 'call_not_found');
     if (!isMember(row.chat_id, req.user.id)) return boolError(res, 403, 'Forbidden', 'forbidden');
+    if (row.status !== 'active') return res.json({ call: serializeCall(row) });
     const call = participantLeft(callId, req.user.id);
     if (call?.status === 'active') broadcastCall(row.chat_id, { type: 'call_updated', call });
     res.json({ call });
