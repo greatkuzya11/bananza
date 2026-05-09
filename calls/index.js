@@ -20,6 +20,7 @@ const {
 
 const CALL_TOKEN_TTL_SECONDS = 60 * 30;
 const TEST_ROOM_TIMEOUT_MS = 4000;
+const AI_NOTES_PARTICIPANT_LOOKUP_TIMEOUT_MS = 12_000;
 const CALL_RING_WORKER_MS = 10_000;
 const CALL_RECONCILE_WORKER_MS = 30_000;
 const CALL_RECONCILE_MIN_AGE_MS = 90_000;
@@ -1237,16 +1238,26 @@ function createCallFeature({
       const client = livekitRoomClient();
       const participants = await Promise.race([
         client.listParticipants(row.livekit_room_name),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('LiveKit participants lookup timed out')), TEST_ROOM_TIMEOUT_MS)),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('LiveKit participants lookup timed out')), AI_NOTES_PARTICIPANT_LOOKUP_TIMEOUT_MS)),
       ]);
-      await Promise.all((participants || []).flatMap((participant) => {
+      const results = await Promise.all((participants || []).flatMap((participant) => {
         const tracks = participant.tracks || participant.trackPublications || [];
         return tracks.filter(isMicrophoneTrack).map((track) => startRecordingForTrack(callId, participant, track));
       }));
+      const failedNotes = aiNotesByCallStmt.get(callId);
+      if (failedNotes?.status === 'error') {
+        const message = failedNotes.error || 'Could not start recording';
+        return res.status(502).json({ error: message, code: 'ai_notes_start_failed', call: getCall(callId) });
+      }
+      if (!results.some(Boolean)) {
+        console.warn('[calls] AI notes started without active microphone tracks', { callId, room: row.livekit_room_name });
+      }
     } catch (error) {
-      updateAiNotesStatusStmt.run('error', 'error', new Date().toISOString(), error.message || 'Could not start AI notes', callId);
+      const message = error.message || 'Could not start AI notes';
+      console.warn('[calls] AI notes participant lookup failed:', message);
+      updateAiNotesStatusStmt.run('error', 'error', new Date().toISOString(), message, callId);
       broadcastAiNotesUpdated(callId);
-      return res.status(502).json({ error: error.message || 'Could not start AI notes', code: 'ai_notes_start_failed', call: getCall(callId) });
+      return res.status(502).json({ error: message, code: 'ai_notes_start_failed', call: getCall(callId) });
     }
     res.json({ call: getCall(callId) });
   });
