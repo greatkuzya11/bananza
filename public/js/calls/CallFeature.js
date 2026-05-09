@@ -823,6 +823,7 @@
   async function joinCall(call) {
     if (!call?.id || state.joining) return;
     state.joining = true;
+    let handoffPreviewStream = null;
     state.incomingCall = null;
     NOTIFICATIONS.stopRingtone?.();
     setPrejoinBusy(true);
@@ -834,6 +835,10 @@
       const nextCall = data.call || call;
       upsertCall(nextCall);
       state.currentCall = nextCall;
+      const publishStream = state.previewStream;
+      handoffPreviewStream = publishStream;
+      state.previewStream = null;
+      MEDIA.attachPreview?.(document.getElementById('callPrejoinVideo'), null);
       closePrejoin();
       showSurface(nextCall);
       setSurfaceStatus(t('Connecting...'));
@@ -842,6 +847,7 @@
         cameraEnabled: state.prejoinCameraEnabled,
         audioDeviceId: selectedDevice('audioinput'),
         videoDeviceId: selectedDevice('videoinput'),
+        previewStream: publishStream,
       });
       const joined = await api(`/api/calls/${call.id}/joined`, { method: 'POST', body: {} }).catch(() => null);
       if (joined?.call) {
@@ -850,6 +856,7 @@
       }
       setSurfaceStatus(t('Connected'));
     } catch (error) {
+      MEDIA.stopStream?.(handoffPreviewStream);
       await notifyLeaveCurrentCall({ fireAndForget: false }).catch(() => {});
       await disconnectRoom({ intentional: true });
       state.currentCall = null;
@@ -914,16 +921,50 @@
     state.leaveSentForCallId = 0;
     state.micEnabled = options.micEnabled !== false;
     state.cameraEnabled = options.cameraEnabled !== false;
-    await room.localParticipant?.setMicrophoneEnabled?.(state.micEnabled, options.audioDeviceId ? { deviceId: options.audioDeviceId } : undefined).catch(() => {
-      state.micEnabled = false;
-      setSurfaceStatus(t('Microphone unavailable'));
-    });
-    await room.localParticipant?.setCameraEnabled?.(state.cameraEnabled, options.videoDeviceId ? { deviceId: options.videoDeviceId } : undefined).catch(() => {
-      state.cameraEnabled = false;
-      setSurfaceStatus(t('Camera unavailable'));
-    });
+    const published = await publishPreviewTracks(room, LK, options.previewStream);
+    if (state.micEnabled && !published.audio) {
+      await room.localParticipant?.setMicrophoneEnabled?.(true, options.audioDeviceId ? { deviceId: options.audioDeviceId } : undefined).catch(() => {
+        state.micEnabled = false;
+        setSurfaceStatus(t('Microphone unavailable'));
+      });
+    }
+    if (state.cameraEnabled && !published.video) {
+      await room.localParticipant?.setCameraEnabled?.(true, options.videoDeviceId ? { deviceId: options.videoDeviceId } : undefined).catch(() => {
+        state.cameraEnabled = false;
+        setSurfaceStatus(t('Camera unavailable'));
+      });
+    }
     applySpeakerDevice();
+    renderSurfaceControls();
     renderRoomTiles();
+  }
+
+  async function publishPreviewTracks(room, LK, stream) {
+    const result = { audio: false, video: false };
+    if (!stream || !room?.localParticipant?.publishTrack) return result;
+    const streamName = `call-${state.currentCall?.id || 'local'}-${currentUser()?.id || 'me'}`;
+    const publishOne = async (track, source) => {
+      if (!track || track.readyState === 'ended') return false;
+      try {
+        await room.localParticipant.publishTrack(track, { source, stream: streamName });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    if (state.micEnabled) {
+      result.audio = await publishOne(stream.getAudioTracks?.()[0], LK.Track?.Source?.Microphone);
+      if (!result.audio) stream.getAudioTracks?.().forEach((track) => track.stop?.());
+    } else {
+      stream.getAudioTracks?.().forEach((track) => track.stop?.());
+    }
+    if (state.cameraEnabled) {
+      result.video = await publishOne(stream.getVideoTracks?.()[0], LK.Track?.Source?.Camera);
+      if (!result.video) stream.getVideoTracks?.().forEach((track) => track.stop?.());
+    } else {
+      stream.getVideoTracks?.().forEach((track) => track.stop?.());
+    }
+    return result;
   }
 
   function ensureLiveKitClient() {
