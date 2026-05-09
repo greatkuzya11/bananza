@@ -328,6 +328,14 @@ function createCallFeature({
     return root;
   }
 
+  function checkRecordingPath() {
+    const root = ensureRecordingRoot();
+    const probe = path.join(root, `.bananza-write-test-${process.pid}-${Date.now()}`);
+    fs.writeFileSync(probe, 'ok');
+    fs.unlinkSync(probe);
+    return root;
+  }
+
   function safePathPart(value, fallback = 'item') {
     const text = String(value || '').trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
     return text || fallback;
@@ -1384,9 +1392,13 @@ function createCallFeature({
         : (typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody || {}));
       const receiver = new WebhookReceiver(config.apiKey, config.apiSecret);
       const event = await receiver.receive(body, req.get('Authorization') || req.get('Authorize'));
+      if (getCallSettings(db).call_ai_notes_enabled) {
+        console.info('[calls] LiveKit webhook received:', event.event || 'unknown');
+      }
       handleLiveKitWebhook(event);
       res.json({ ok: true });
     } catch (error) {
+      console.warn('[calls] Invalid LiveKit webhook:', error.message || error);
       res.status(401).json({ error: 'Invalid LiveKit webhook', code: 'invalid_livekit_webhook' });
     }
   });
@@ -1436,6 +1448,16 @@ function createCallFeature({
     const jwt = await token.toJwt();
     const client = new RoomServiceClient(liveKitHttpUrl(config.wsUrl), config.apiKey, config.apiSecret);
     try {
+      let recordingPathReady = false;
+      let recordingPath = '';
+      let recordingPathError = '';
+      try {
+        recordingPath = checkRecordingPath();
+        recordingPathReady = true;
+      } catch (error) {
+        recordingPath = recordingRoot();
+        recordingPathError = error.message || 'Recording path is not writable';
+      }
       await Promise.race([
         client.createRoom({ name: roomName, emptyTimeout: 30, departureTimeout: 10 }),
         new Promise((_, reject) => setTimeout(() => reject(new Error('LiveKit test timed out')), TEST_ROOM_TIMEOUT_MS)),
@@ -1453,7 +1475,16 @@ function createCallFeature({
         egressError = error.message || 'LiveKit Egress test failed';
       }
       client.deleteRoom(roomName).catch(() => {});
-      res.json({ ok: true, token_generated: Boolean(jwt), room_created: true, egress_ready: egressReady, egress_error: egressError });
+      res.json({
+        ok: true,
+        token_generated: Boolean(jwt),
+        room_created: true,
+        egress_ready: egressReady,
+        egress_error: egressError,
+        recording_path_ready: recordingPathReady,
+        recording_path: recordingPath,
+        recording_path_error: recordingPathError,
+      });
     } catch (error) {
       res.status(502).json({
         ok: false,

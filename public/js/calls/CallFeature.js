@@ -1947,8 +1947,11 @@
     setAdminStatus(t('Testing...'));
     try {
       const data = await api('/api/admin/call-settings/test', { method: 'POST', body: {} });
-      const extra = data.egress_ready ? t('Egress ready') : (data.egress_error ? `${t('Egress not ready')}: ${data.egress_error}` : '');
-      setAdminStatus(data.ok ? [t('LiveKit test passed'), extra].filter(Boolean).join(' / ') : t('LiveKit test failed'), data.ok && data.egress_ready ? 'success' : '');
+      const extra = [];
+      extra.push(data.egress_ready ? t('Egress ready') : (data.egress_error ? `${t('Egress not ready')}: ${data.egress_error}` : ''));
+      extra.push(data.recording_path_ready ? t('Recording path ready') : (data.recording_path_error ? `${t('Recording path error')}: ${data.recording_path_error}` : ''));
+      const ok = data.ok && data.egress_ready && data.recording_path_ready;
+      setAdminStatus(data.ok ? [t('LiveKit test passed'), ...extra.filter(Boolean)].join(' / ') : t('LiveKit test failed'), ok ? 'success' : 'error');
     } catch (error) {
       setAdminStatus(error.message || t('LiveKit test failed'), 'error');
     }
