@@ -25,6 +25,7 @@ const ROOT_FILES = [
 
 const ROOT_DIRS = [
   'ai',
+  'calls',
   'public',
   'videoNotes',
   'voice',
@@ -142,7 +143,7 @@ async function stopSandbox({ pid, rootDir } = {}) {
   }
 }
 
-async function createSandbox({ name = 'sandbox', enableMocks = true } = {}) {
+async function createSandbox({ name = 'sandbox', enableMocks = true, env = {} } = {}) {
   ensureDir(runtimeRoot);
   const id = runId(name);
   const rootDir = path.join(runtimeRoot, id);
@@ -162,6 +163,7 @@ async function createSandbox({ name = 'sandbox', enableMocks = true } = {}) {
     cwd: appDir,
     env: {
       ...process.env,
+      ...env,
       PORT: String(port),
       BANANZA_TEST_MOCKS: enableMocks ? '1' : '0',
       NODE_OPTIONS: enableMocks ? buildNodeOptions(preloadPath) : process.env.NODE_OPTIONS,

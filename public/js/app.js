@@ -472,6 +472,7 @@
   let activeChatShotProvider = 'openai';
   let chatShotStateByChat = new Map();
   let chatShotStateRequests = new Map();
+  let chatShotStateFailuresByChat = new Set();
   let chatShotGeneratingByChat = new Set();
   let composerAiOverrideState = {
     target: null,
@@ -1298,6 +1299,7 @@
     getToken: () => token || localStorage.getItem('token'),
     getCurrentUser: () => currentUser,
     getCurrentChatId: () => currentChatId,
+    getCurrentChat: () => getChatById(currentChatId) ? { ...getChatById(currentChatId) } : null,
     isIosWebkit: () => isIosViewportFixTarget,
     getCurrentModalAnimation: () => currentModalAnimation,
     getCurrentModalAnimationSpeed: () => currentModalAnimationSpeed,
@@ -4977,6 +4979,7 @@
       chatTitle.textContent = 'Chat';
       chatHeaderAvatar.style.display = 'none';
       syncChatShotButton();
+      window.BananzaCallHooks?.onChatChanged?.(null, null);
       return;
     }
     chatTitle.textContent = chat.name || 'Chat';
@@ -4989,6 +4992,7 @@
         fallbackText: chat.avatar_emoji || NOTES_CHAT_EMOJI,
       });
       syncChatShotButton();
+      window.BananzaCallHooks?.onChatChanged?.(chat.id, chat);
       return;
     }
     if (chat.type === 'private' && chat.private_user) {
@@ -4999,6 +5003,7 @@
         fallbackText: initials(chat.private_user.display_name || chat.name || '?'),
       });
       syncChatShotButton();
+      window.BananzaCallHooks?.onChatChanged?.(chat.id, chat);
       return;
     }
     setAvatarElementVisual(chatHeaderAvatar, {
@@ -5008,6 +5013,7 @@
       fallbackText: chat.type === 'general' ? '🌐' : '👥',
     });
     syncChatShotButton();
+    window.BananzaCallHooks?.onChatChanged?.(chat.id, chat);
   }
 
   function refreshChatInfoPresentation(chat = chats.find(c => c.id === currentChatId)) {
@@ -5546,6 +5552,7 @@
     const enabledInput = $('#settingsNotificationsEnabled');
     const messagesInput = $('#settingsNotifyMessages');
     const invitesInput = $('#settingsNotifyChatInvites');
+    const callsInput = $('#settingsNotifyCalls');
     const reactionsInput = $('#settingsNotifyReactions');
     const pinsInput = $('#settingsNotifyPins');
     const mentionsInput = $('#settingsNotifyMentions');
@@ -5564,6 +5571,7 @@
     enabledInput.checked = !!notificationSettings.push_enabled;
     messagesInput.checked = !!notificationSettings.notify_messages;
     invitesInput.checked = !!notificationSettings.notify_chat_invites;
+    if (callsInput) callsInput.checked = notificationSettings.notify_calls !== false;
     reactionsInput.checked = !!notificationSettings.notify_reactions;
     if (pinsInput) pinsInput.checked = notificationSettings.notify_pins !== false;
     if (mentionsInput) mentionsInput.checked = notificationSettings.notify_mentions !== false;
@@ -5621,6 +5629,7 @@
       ...patch,
       notify_messages: $('#settingsNotifyMessages')?.checked ?? notificationSettings.notify_messages,
       notify_chat_invites: $('#settingsNotifyChatInvites')?.checked ?? notificationSettings.notify_chat_invites,
+      notify_calls: $('#settingsNotifyCalls')?.checked ?? notificationSettings.notify_calls,
       notify_reactions: $('#settingsNotifyReactions')?.checked ?? notificationSettings.notify_reactions,
       notify_pins: $('#settingsNotifyPins')?.checked ?? notificationSettings.notify_pins,
       notify_mentions: $('#settingsNotifyMentions')?.checked ?? notificationSettings.notify_mentions,
@@ -13365,6 +13374,7 @@
       selectedChatShotBotIds[provider] = Number(bots[0].id);
     }
     chatShotStateByChat.clear();
+    chatShotStateFailuresByChat.clear();
   }
 
   function renderChatShotBotList() {
@@ -13717,10 +13727,13 @@
     if (!id) return null;
     if (!force && chatShotStateByChat.has(id)) return chatShotStateByChat.get(id);
     if (!force && chatShotStateRequests.has(id)) return chatShotStateRequests.get(id);
+    if (!force && chatShotStateFailuresByChat.has(id)) return null;
+    if (force) chatShotStateFailuresByChat.delete(id);
     const request = api(`/api/chats/${id}/chatshot`)
       .then((data) => {
         const normalized = normalizeChatShotState(data);
         chatShotStateByChat.set(id, normalized);
+        chatShotStateFailuresByChat.delete(id);
         chatShotStateRequests.delete(id);
         if (id === Number(currentChatId || 0)) {
           renderChatShotForm(normalized);
@@ -13730,6 +13743,7 @@
       })
       .catch((error) => {
         chatShotStateRequests.delete(id);
+        chatShotStateFailuresByChat.add(id);
         if (id === Number(currentChatId || 0)) {
           chatShotStateByChat.delete(id);
           syncChatShotButton();
@@ -13745,6 +13759,7 @@
     if (!id) return;
     chatShotStateByChat.delete(id);
     chatShotStateRequests.delete(id);
+    chatShotStateFailuresByChat.delete(id);
     if (id === Number(currentChatId || 0)) {
       syncChatShotButton();
       if (!chatInfoModal?.classList.contains('hidden')) {
@@ -13819,7 +13834,7 @@
     chatShotBtn.classList.toggle('hidden', !shouldShow);
     chatShotBtn.classList.toggle('is-pending', generating);
     chatShotBtn.disabled = generating || !shouldShow;
-    if (chatId && !state && !chatShotStateRequests.has(chatId)) {
+    if (chatId && !state && !chatShotStateRequests.has(chatId) && !chatShotStateFailuresByChat.has(chatId)) {
       loadChatShotState(chatId).catch(() => {});
     }
   }
@@ -14549,6 +14564,14 @@
       case 'voice_settings_updated': {
         window.BananzaVoiceHooks?.handleWSMessage?.(msg);
         window.BananzaVideoNoteHooks?.handleWSMessage?.(msg);
+        break;
+      }
+      case 'call_invite':
+      case 'call_updated':
+      case 'call_participant_updated':
+      case 'call_ended':
+      case 'call_settings_updated': {
+        window.BananzaCallHooks?.handleWSMessage?.(msg);
         break;
       }
       case 'user_updated': {
@@ -21222,6 +21245,7 @@
     $('#settingsOpenLastChat').checked = openLastChatOnReload;
     syncLanguageSettingsButton();
     window.BananzaVoiceHooks?.onSettingsOpened?.({ currentUser });
+    window.BananzaCallHooks?.onSettingsOpened?.({ currentUser });
   }
 
   function openLanguageSettingsModal() {
@@ -23889,7 +23913,7 @@
         }
       }
     });
-    ['settingsNotifyMessages', 'settingsNotifyChatInvites', 'settingsNotifyReactions', 'settingsNotifyPins', 'settingsNotifyMentions'].forEach((id) => {
+    ['settingsNotifyMessages', 'settingsNotifyChatInvites', 'settingsNotifyCalls', 'settingsNotifyReactions', 'settingsNotifyPins', 'settingsNotifyMentions'].forEach((id) => {
       document.getElementById(id)?.addEventListener('change', () => saveNotificationSettings());
     });
 

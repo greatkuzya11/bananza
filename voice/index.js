@@ -31,7 +31,7 @@ function normalizeClientId(value) {
   return id;
 }
 
-function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, uploadsDir, broadcastToChatAll, clients, secret, notifyMessageCreated, onMessageCreated, onMessageTextAvailable }) {
+function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, uploadsDir, broadcastToChatAll, clients, secret, notifyMessageCreated, onMessageCreated, onMessageTextAvailable, getAdditionalPublicFeatures }) {
   const replyFallbackLabelSql = `
     CASE
       WHEN rvm.message_id IS NOT NULL THEN
@@ -260,7 +260,10 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
   }
 
   app.get('/api/features', auth, (_req, res) => {
-    res.json(getPublicVoiceSettings(db));
+    res.json({
+      ...getPublicVoiceSettings(db),
+      ...(typeof getAdditionalPublicFeatures === 'function' ? getAdditionalPublicFeatures() : {}),
+    });
   });
 
   app.get('/api/admin/voice-settings', auth, adminOnly, (_req, res) => {

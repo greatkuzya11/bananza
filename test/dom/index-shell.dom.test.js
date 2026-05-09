@@ -18,6 +18,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
 
   assert.deepEqual(styles, [
     '/css/style.css?v=20260507-chat-tools',
+    '/css/calls.css',
     '/css/voice.css',
     '/css/video-notes.css',
   ]);
@@ -28,6 +29,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/ai-image-risk.js',
     '/js/i18n.js?v=20260507-chat-tools',
     '/js/app.js?v=20260507-grok-risk-direct-chat',
+    '/js/calls/CallFeature.js',
     '/js/video-notes/video-note-shapes.js',
     '/js/video-notes/VideoShapeRegistry.js',
     '/js/video-notes/AudioNoteRecorderAdapter.js',

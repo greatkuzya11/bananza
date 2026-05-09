@@ -3,6 +3,7 @@ const path = require('path');
 const { initVoiceSchema } = require('./voice/schema');
 const { initAiSchema } = require('./ai/schema');
 const { initVideoNoteSchema } = require('./videoNotes/schema');
+const { initCallSchema } = require('./calls/schema');
 
 const db = new Database(path.join(__dirname, 'bananza.db'));
 
@@ -125,6 +126,7 @@ db.exec(`
     push_enabled INTEGER DEFAULT 0,
     notify_messages INTEGER DEFAULT 1,
     notify_chat_invites INTEGER DEFAULT 1,
+    notify_calls INTEGER DEFAULT 1,
     notify_reactions INTEGER DEFAULT 1,
     notify_pins INTEGER DEFAULT 1,
     notify_mentions INTEGER DEFAULT 1,
@@ -462,6 +464,11 @@ try {
   db.exec("ALTER TABLE user_notification_settings ADD COLUMN notify_mentions INTEGER DEFAULT 1");
 }
 try {
+  db.prepare("SELECT notify_calls FROM user_notification_settings LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE user_notification_settings ADD COLUMN notify_calls INTEGER DEFAULT 1");
+}
+try {
   db.prepare("SELECT notify_pins FROM user_notification_settings LIMIT 1").get();
 } catch {
   db.exec("ALTER TABLE user_notification_settings ADD COLUMN notify_pins INTEGER DEFAULT 1");
@@ -624,6 +631,7 @@ try {
 
 initVoiceSchema(db);
 initVideoNoteSchema(db);
+initCallSchema(db);
 initAiSchema(db);
 
 db.exec(`

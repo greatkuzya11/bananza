@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const express = require('express');
 const http = require('http');
 const path = require('path');
@@ -21,6 +23,7 @@ const { createPushFeature } = require('./push');
 const { createSoundSettingsFeature } = require('./soundSettings');
 const { createAiBotFeature } = require('./ai');
 const { createChatFoldersFeature } = require('./chatFolders');
+const { createCallFeature } = require('./calls');
 const { createPollService, POLL_CLOSE_PRESETS, toDbDate } = require('./polls');
 const { createMessageActionsService } = require('./messageActions');
 const { createVideoNoteFeature } = require('./videoNotes');
@@ -61,6 +64,13 @@ app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false 
 app.use(express.json({ limit: '1mb' }));
 app.use('/api', (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
 app.use(express.static(path.join(__dirname, 'public')));
+app.get('/vendor/livekit-client.umd.js', (_req, res) => {
+  try {
+    res.type('application/javascript').sendFile(require.resolve('livekit-client'));
+  } catch {
+    res.status(404).end();
+  }
+});
 
 // Uploads
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
@@ -326,9 +336,23 @@ const messageActions = createMessageActionsService({
 
 let aiBotFeature = null;
 let chatFoldersFeature = null;
+let callFeature = null;
 const videoNoteStorage = createVideoNoteStorage({
   db,
   uploadsDir: UPLOADS_DIR,
+});
+
+callFeature = createCallFeature({
+  app,
+  db,
+  auth,
+  adminOnly,
+  rateLimit,
+  sendToUser,
+  broadcastToChatAll,
+  clients,
+  secret: JWT_SECRET,
+  notifyCallInvite: (userId, payload) => pushFeature.notifyCallInvite(userId, payload),
 });
 
 const voiceFeature = createVoiceFeature({
@@ -345,6 +369,7 @@ const voiceFeature = createVoiceFeature({
   notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),
   onMessageCreated: (message) => handleChatListMessageCreated(message),
   onMessageTextAvailable: (message) => aiBotFeature?.handleMessageCreated(message),
+  getAdditionalPublicFeatures: () => callFeature?.getPublicSettings?.() || {},
 });
 
 const messageCopyService = createMessageCopyService({

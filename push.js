@@ -8,6 +8,7 @@ const DEFAULT_SETTINGS = {
   push_enabled: false,
   notify_messages: true,
   notify_chat_invites: true,
+  notify_calls: true,
   notify_reactions: true,
   notify_pins: true,
   notify_mentions: true,
@@ -15,6 +16,7 @@ const DEFAULT_SETTINGS = {
 const TYPE_FLAGS = {
   messages: 'notify_messages',
   chat_invites: 'notify_chat_invites',
+  calls: 'notify_calls',
   reactions: 'notify_reactions',
   pins: 'notify_pins',
   mentions: 'notify_mentions',
@@ -72,6 +74,17 @@ const PUSH_TEXT = {
     testWorks: 'Test notification works',
   },
 };
+
+Object.assign(PUSH_TEXT.ru, {
+  incomingCall: '\u0412\u0445\u043e\u0434\u044f\u0449\u0438\u0439 \u0437\u0432\u043e\u043d\u043e\u043a',
+  callInvitePrivate: '{name} \u0437\u0432\u043e\u043d\u0438\u0442',
+  callInviteInChat: '{name} \u0437\u0432\u043e\u043d\u0438\u0442 \u0432 {chat}',
+});
+Object.assign(PUSH_TEXT.en, {
+  incomingCall: 'Incoming call',
+  callInvitePrivate: '{name} is calling',
+  callInviteInChat: '{name} is calling in {chat}',
+});
 
 function boolValue(value, fallback = false) {
   if (typeof value === 'boolean') return value;
@@ -160,6 +173,7 @@ function normalizeSettings(row) {
     push_enabled: !!row.push_enabled,
     notify_messages: !!row.notify_messages,
     notify_chat_invites: !!row.notify_chat_invites,
+    notify_calls: row.notify_calls == null ? true : !!row.notify_calls,
     notify_reactions: !!row.notify_reactions,
     notify_pins: row.notify_pins == null ? true : !!row.notify_pins,
     notify_mentions: row.notify_mentions == null ? true : !!row.notify_mentions,
@@ -252,18 +266,20 @@ function createPushFeature({ app, db, auth, rateLimit }) {
       push_enabled: boolValue(input.push_enabled, current.push_enabled),
       notify_messages: boolValue(input.notify_messages, current.notify_messages),
       notify_chat_invites: boolValue(input.notify_chat_invites, current.notify_chat_invites),
+      notify_calls: boolValue(input.notify_calls, current.notify_calls),
       notify_reactions: boolValue(input.notify_reactions, current.notify_reactions),
       notify_pins: boolValue(input.notify_pins, current.notify_pins),
       notify_mentions: boolValue(input.notify_mentions, current.notify_mentions),
     };
     db.prepare(`
       INSERT INTO user_notification_settings (
-        user_id, push_enabled, notify_messages, notify_chat_invites, notify_reactions, notify_pins, notify_mentions, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        user_id, push_enabled, notify_messages, notify_chat_invites, notify_calls, notify_reactions, notify_pins, notify_mentions, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(user_id) DO UPDATE SET
         push_enabled=excluded.push_enabled,
         notify_messages=excluded.notify_messages,
         notify_chat_invites=excluded.notify_chat_invites,
+        notify_calls=excluded.notify_calls,
         notify_reactions=excluded.notify_reactions,
         notify_pins=excluded.notify_pins,
         notify_mentions=excluded.notify_mentions,
@@ -273,6 +289,7 @@ function createPushFeature({ app, db, auth, rateLimit }) {
       next.push_enabled ? 1 : 0,
       next.notify_messages ? 1 : 0,
       next.notify_chat_invites ? 1 : 0,
+      next.notify_calls ? 1 : 0,
       next.notify_reactions ? 1 : 0,
       next.notify_pins ? 1 : 0,
       next.notify_mentions ? 1 : 0
@@ -437,6 +454,29 @@ function createPushFeature({ app, db, auth, rateLimit }) {
     });
   }
 
+  function notifyCallInvite(userId, { call, chat, actorName } = {}) {
+    const chatId = Number(call?.chat_id || call?.chatId || chat?.id || 0);
+    if (!userId || !chatId) return;
+    const resolvedChat = chat || chatStmt.get(chatId);
+    if (!resolvedChat) return;
+    const language = getUserLanguage(userId);
+    const resolvedActorName = actorName || call?.started_by_name || pushText(language, 'someone');
+    const isPrivate = resolvedChat.type === 'private';
+    queueUserNotification(userId, 'calls', {
+      type: 'call_invite',
+      callId: Number(call?.id || 0) || null,
+      chatId,
+      title: isPrivate ? resolvedActorName : (resolvedChat.name || pushText(language, 'incomingCall')),
+      body: isPrivate
+        ? pushText(language, 'callInvitePrivate', { name: resolvedActorName })
+        : pushText(language, 'callInviteInChat', { name: resolvedActorName, chat: resolvedChat.name || '' }).trim(),
+      url: `/?chatId=${chatId}`,
+      tag: `call:${Number(call?.id || 0) || chatId}:${userId}`,
+      urgency: 'high',
+      forceShow: true,
+    }, { chatId });
+  }
+
   function notifyReaction({ messageId, emoji, actor }) {
     const message = reactionMessageStmt.get(messageId);
     if (!message || !actor?.id || message.user_id === actor.id) return;
@@ -555,6 +595,7 @@ function createPushFeature({ app, db, auth, rateLimit }) {
     getSettings,
     notifyMessageCreated,
     notifyChatInvite,
+    notifyCallInvite,
     notifyReaction,
     notifyPinCreated,
     sendUserNotification,

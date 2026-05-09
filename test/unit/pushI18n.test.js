@@ -37,6 +37,7 @@ function createPushDb() {
       push_enabled INTEGER DEFAULT 0,
       notify_messages INTEGER DEFAULT 1,
       notify_chat_invites INTEGER DEFAULT 1,
+      notify_calls INTEGER DEFAULT 1,
       notify_reactions INTEGER DEFAULT 1,
       notify_pins INTEGER DEFAULT 1,
       notify_mentions INTEGER DEFAULT 1,
@@ -129,8 +130,8 @@ test('message push payload is localized per recipient and keeps routing ids', as
       VALUES (10, 1, 1), (10, 2, 1), (10, 3, 1);
       INSERT INTO user_notification_settings (
         user_id, push_enabled, notify_messages, notify_chat_invites,
-        notify_reactions, notify_pins, notify_mentions
-      ) VALUES (2, 1, 1, 1, 1, 1, 1), (3, 1, 1, 1, 1, 1, 1);
+        notify_calls, notify_reactions, notify_pins, notify_mentions
+      ) VALUES (2, 1, 1, 1, 1, 1, 1, 1), (3, 1, 1, 1, 1, 1, 1, 1);
       INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at, updated_at)
       VALUES
         (1, 2, 'https://push.example/ru', 'key-ru', 'auth-ru', datetime('now'), datetime('now')),
@@ -167,6 +168,62 @@ test('message push payload is localized per recipient and keeps routing ids', as
       assert.equal(payload.title, 'Team');
       assert.equal(payload.url, '/?chatId=10');
     }
+  } finally {
+    webpush.sendNotification = originalSendNotification;
+    db.close();
+  }
+});
+
+test('call invite push payload is localized and routes to chat', async () => {
+  const db = createPushDb();
+  const captured = [];
+  const originalSendNotification = webpush.sendNotification;
+  webpush.sendNotification = async (subscription, payload) => {
+    captured.push({ endpoint: subscription.endpoint, payload: JSON.parse(payload) });
+  };
+
+  try {
+    db.exec(`
+      INSERT INTO users (id, ui_language) VALUES (1, 'ru'), (2, 'ru'), (3, 'en');
+      INSERT INTO chats (id, name, type) VALUES (20, 'Standup', 'group');
+      INSERT INTO chat_members (chat_id, user_id, notify_enabled)
+      VALUES (20, 1, 1), (20, 2, 1), (20, 3, 1);
+      INSERT INTO user_notification_settings (
+        user_id, push_enabled, notify_messages, notify_chat_invites,
+        notify_calls, notify_reactions, notify_pins, notify_mentions
+      ) VALUES (2, 1, 1, 1, 1, 1, 1, 1), (3, 1, 1, 1, 1, 1, 1, 1);
+      INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at, updated_at)
+      VALUES
+        (1, 2, 'https://push.example/call-ru', 'key-ru', 'auth-ru', datetime('now'), datetime('now')),
+        (2, 3, 'https://push.example/call-en', 'key-en', 'auth-en', datetime('now'), datetime('now'));
+    `);
+
+    const pushFeature = createPushFeature({
+      app: createAppStub(),
+      db,
+      auth: (_req, _res, next) => next(),
+      rateLimit: null,
+    });
+
+    pushFeature.notifyCallInvite(2, {
+      actorName: 'Alice',
+      chat: { id: 20, name: 'Standup', type: 'group' },
+      call: { id: 7, chat_id: 20 },
+    });
+    pushFeature.notifyCallInvite(3, {
+      actorName: 'Alice',
+      chat: { id: 20, name: 'Standup', type: 'group' },
+      call: { id: 7, chat_id: 20 },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    const byEndpoint = Object.fromEntries(captured.map(item => [item.endpoint, item.payload]));
+    assert.equal(byEndpoint['https://push.example/call-ru'].body, 'Alice \u0437\u0432\u043e\u043d\u0438\u0442 \u0432 Standup');
+    assert.equal(byEndpoint['https://push.example/call-en'].body, 'Alice is calling in Standup');
+    assert.equal(byEndpoint['https://push.example/call-ru'].type, 'call_invite');
+    assert.equal(byEndpoint['https://push.example/call-en'].callId, 7);
+    assert.equal(byEndpoint['https://push.example/call-en'].url, '/?chatId=20');
   } finally {
     webpush.sendNotification = originalSendNotification;
     db.close();
