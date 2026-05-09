@@ -4,6 +4,7 @@
 .call-prejoin,
 .call-surface,
 .call-admin-modal,
+.call-transcript-modal,
 .call-message-card {
   --call-bg-modal: var(--bg-modal, #1e2c3a);
   --call-bg-panel: var(--bg-input, #242f3d);
@@ -1125,6 +1126,25 @@ html[data-visual-mode="rich"] .call-admin-status {
   margin-bottom: 10px;
 }
 
+.call-transcript-toolbar .modal-input {
+  min-height: var(--call-control-height);
+  border: 1px solid var(--call-border);
+  border-radius: var(--call-control-radius);
+  background: var(--call-bg-panel);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.call-transcript-toolbar .call-admin-btn {
+  min-width: 112px;
+  background: color-mix(in srgb, var(--call-bg-panel) 88%, var(--accent) 12%);
+}
+
+.call-transcript-toolbar .call-admin-btn:hover,
+.call-transcript-toolbar .call-admin-btn:focus-visible {
+  background: color-mix(in srgb, var(--call-bg-hover) 80%, var(--accent) 20%);
+}
+
 .call-transcript-text {
   min-height: 320px;
   max-height: min(64vh, 620px);
@@ -1261,6 +1281,19 @@ html[data-visual-mode="rich"] .call-admin-status {
 
   .call-grid.is-video-focus-mode .call-tile.is-video-secondary:nth-child(4) {
     left: calc(26px + min(76vw, 264px));
+  }
+
+  .call-transcript-toolbar {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .call-transcript-toolbar .modal-input {
+    grid-column: 1 / -1;
+  }
+
+  .call-transcript-toolbar .call-admin-btn {
+    width: 100%;
+    min-width: 0;
   }
 
   .call-room-layout {
