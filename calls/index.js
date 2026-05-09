@@ -757,6 +757,13 @@ function createCallFeature({
         trackId
       );
       updateRecordingStartedStmt.run(String(info?.egressId || ''), bigintNsToIso(info?.startedAt) || startedAt, recordingId);
+      console.info('[calls] AI notes recording started:', {
+        callId,
+        userId,
+        trackId,
+        egressId: String(info?.egressId || ''),
+        filepath,
+      });
       return info;
     } catch (error) {
       const message = error.message || 'Could not start recording';
@@ -1301,6 +1308,34 @@ function createCallFeature({
       broadcastAiNotesUpdated(callId);
     });
     res.json({ call });
+  });
+
+  app.post('/api/calls/:callId/ai-notes/local-track', auth, callLimiter, async (req, res) => {
+    const callId = normalizeId(req.params.callId);
+    const row = callByIdStmt.get(callId);
+    if (!row || row.status !== 'active') return boolError(res, 404, 'Call not found', 'call_not_found');
+    if (!isMember(row.chat_id, req.user.id)) return boolError(res, 403, 'Forbidden', 'forbidden');
+    if (!hasParticipant(callId, req.user.id)) return boolError(res, 403, 'Not invited to this call', 'not_call_participant');
+    const notes = activeAiNotesStmt.get(callId);
+    if (!notes) return res.json({ call: getCall(callId), recording: null });
+    const trackId = String(req.body?.track_id || req.body?.trackId || '').trim();
+    if (!/^TR_[a-zA-Z0-9_-]+$/.test(trackId)) return boolError(res, 400, 'Invalid microphone track id', 'invalid_track_id');
+    const info = await startRecordingForTrack(
+      callId,
+      {
+        identity: `user:${req.user.id}`,
+        participantIdentity: `user:${req.user.id}`,
+        metadata: JSON.stringify({ userId: req.user.id, callId, chatId: row.chat_id }),
+      },
+      {
+        sid: trackId,
+        id: trackId,
+        source: TrackSource.MICROPHONE,
+        type: 0,
+        kind: 'audio',
+      }
+    );
+    res.json({ call: getCall(callId), recording: info ? { egress_id: String(info.egressId || '') } : null });
   });
 
   app.post('/api/calls/:callId/ai-notes/cancel', auth, callLimiter, (req, res) => {

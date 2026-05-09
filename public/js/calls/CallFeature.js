@@ -59,6 +59,7 @@
     subscriptionChangingTiles: new Set(),
     focusedVideoTileKey: '',
     lastTileTap: { key: '', at: 0 },
+    aiNotesTrackNotified: new Set(),
     transcriptModal: { callId: 0, text: '', segments: [] },
   };
 
@@ -1050,6 +1051,7 @@
     });
     room.on?.(events.LocalTrackPublished || 'localTrackPublished', (publication) => {
       addCallDebug('local track published', `${publication?.kind || publication?.track?.kind || 'unknown'} ${publication?.source || publication?.track?.source || ''}`.trim());
+      notifyLocalMicrophoneTrackForAiNotes().catch(() => {});
       renderRoomTiles();
     });
     room.on?.(events.LocalTrackUnpublished || 'localTrackUnpublished', (publication) => {
@@ -1115,6 +1117,7 @@
     refreshRoomTilesSoon();
     addCallDebug('local media scheduled', 'after connect settle');
     scheduleLocalMediaRetry(3500, { resetCount: true });
+    notifyLocalMicrophoneTrackForAiNotes().catch(() => {});
   }
 
   async function enableLocalMedia(reason = 'retry') {
@@ -1181,6 +1184,46 @@
       audio: result.audio || hasLocalAudioPublication(room),
       video: result.video || hasLocalVideoPublication(room),
     };
+  }
+
+  function localMicrophoneTrackId() {
+    const publications = state.room?.localParticipant?.audioTrackPublications;
+    if (!publications?.values) return '';
+    for (const publication of publications.values()) {
+      const source = String(publication?.source || publication?.track?.source || '').toLowerCase();
+      const kind = String(publication?.kind || publication?.track?.kind || publication?.track?.mediaStreamTrack?.kind || '').toLowerCase();
+      if (source && !source.includes('microphone') && !source.includes('unknown')) continue;
+      if (kind && kind !== 'audio') continue;
+      const trackId = String(
+        publication?.trackSid
+        || publication?.sid
+        || publication?.track?.sid
+        || publication?.track?.trackSid
+        || ''
+      ).trim();
+      if (trackId) return trackId;
+    }
+    return '';
+  }
+
+  async function notifyLocalMicrophoneTrackForAiNotes() {
+    const callId = Number(state.currentCall?.id || 0);
+    if (!callId || state.currentCall?.ai_notes?.status !== 'recording') return;
+    const trackId = localMicrophoneTrackId();
+    if (!trackId) return;
+    const key = `${callId}:${trackId}`;
+    if (state.aiNotesTrackNotified.has(key)) return;
+    state.aiNotesTrackNotified.add(key);
+    try {
+      await api(`/api/calls/${callId}/ai-notes/local-track`, {
+        method: 'POST',
+        body: { track_id: trackId },
+      });
+      addCallDebug('AI notes local track sent', trackId);
+    } catch (error) {
+      state.aiNotesTrackNotified.delete(key);
+      addCallDebug('AI notes local track failed', error.message || '');
+    }
   }
 
   function hasLocalAudioPublication(room = state.room) {
@@ -1292,6 +1335,7 @@
     state.subscriptionChangingTiles.clear();
     state.focusedVideoTileKey = '';
     state.lastTileTap = { key: '', at: 0 };
+    state.aiNotesTrackNotified.clear();
     const previousIntent = state.disconnectingIntentionally;
     state.disconnectingIntentionally = Boolean(options.intentional);
     try {
@@ -1375,6 +1419,7 @@
         state.currentCall = data.call;
         upsertCall(data.call);
       }
+      notifyLocalMicrophoneTrackForAiNotes().catch(() => {});
       renderAll();
     } catch (error) {
       addCallDebug('AI notes failed', error.message || '');
@@ -1990,6 +2035,9 @@
       else {
         upsertCall(msg.call);
         if (state.currentCall?.id === msg.call.id) state.currentCall = { ...state.currentCall, ...msg.call };
+        if (msg.type === 'call_ai_notes_updated') {
+          notifyLocalMicrophoneTrackForAiNotes().catch(() => {});
+        }
       }
     }
     if (msg.type === 'call_invite' && msg.call && Number(msg.call.started_by) !== Number(currentUser()?.id || 0)) {
