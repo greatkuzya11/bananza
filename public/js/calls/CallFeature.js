@@ -907,7 +907,7 @@
     await disconnectRoom({ intentional: true });
     const room = new LK.Room({ adaptiveStream: true, dynacast: true });
     state.room = room;
-    addCallDebug('connectRoom', url);
+    addCallDebug('connectRoom', `${url} client=${LK.version || 'unknown'}`);
     const events = LK.RoomEvent || {};
     room.on?.(events.TrackSubscribed || 'trackSubscribed', (track) => {
       addCallDebug('remote track subscribed', `${track?.kind || track?.mediaStreamTrack?.kind || 'unknown'} ${track?.source || ''}`.trim());
@@ -945,9 +945,12 @@
       setSurfaceStatus(t('Connected'));
       scheduleLocalMediaRetry(1600, { resetCount: true });
     });
-    room.on?.(events.Disconnected || 'disconnected', () => {
+    room.on?.(events.ConnectionStateChanged || 'connectionStateChanged', (state) => {
+      addCallDebug('connection state', String(state || ''));
+    });
+    room.on?.(events.Disconnected || 'disconnected', (reason) => {
       state.room = null;
-      addCallDebug('room disconnected');
+      addCallDebug('room disconnected', String(reason || ''));
       if (!state.disconnectingIntentionally && state.currentCall?.id) {
         notifyLeaveCurrentCall({ fireAndForget: true }).catch(() => {});
       }
@@ -955,7 +958,7 @@
       renderRoomTiles();
     });
     await room.connect(url, token);
-    addCallDebug('room connected');
+    addCallDebug('room connected', room.localParticipant?.identity || '');
     state.leaveSentForCallId = 0;
     state.micEnabled = options.micEnabled !== false;
     state.cameraEnabled = options.cameraEnabled !== false;

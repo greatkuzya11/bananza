@@ -274,8 +274,17 @@ function createCallFeature({
   }
 
   function userIdFromLiveKitIdentity(identity) {
-    const match = String(identity || '').trim().match(/^user:(\d+)$/);
+    const match = String(identity || '').trim().match(/^user:(\d+)(?::|$)/);
     return match ? normalizeId(match[1]) : 0;
+  }
+
+  function userIdFromLiveKitParticipant(participant = {}) {
+    try {
+      const metadata = participant.metadata ? JSON.parse(participant.metadata) : null;
+      const metadataUserId = normalizeId(metadata?.userId);
+      if (metadataUserId) return metadataUserId;
+    } catch {}
+    return userIdFromLiveKitIdentity(participant.identity || participant.participantIdentity || '');
   }
 
   function broadcastAll(payload) {
@@ -440,7 +449,7 @@ function createCallFeature({
       canPublishSources.push(TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO);
     }
     const token = new AccessToken(config.apiKey, config.apiSecret, {
-      identity: `user:${user.id}`,
+      identity: `user:${user.id}:${randomUUID()}`,
       name: user.display_name || user.username || `User ${user.id}`,
       ttl: CALL_TOKEN_TTL_SECONDS,
       metadata: JSON.stringify({ callId: call.id, chatId: call.chat_id, userId: user.id }),
@@ -572,7 +581,7 @@ function createCallFeature({
           continue;
         }
         if (Array.isArray(participants)) {
-          const liveUserIds = new Set(participants.map((participant) => userIdFromLiveKitIdentity(participant.identity)).filter(Boolean));
+          const liveUserIds = new Set(participants.map(userIdFromLiveKitParticipant).filter(Boolean));
           participantsStmt.all(row.id)
             .filter((participant) => participant.state === 'joined' && !liveUserIds.has(Number(participant.user_id)))
             .forEach((participant) => participantState(row.id, participant.user_id, 'left'));
@@ -776,7 +785,7 @@ function createCallFeature({
     const roomName = event.room?.name || event.roomName || '';
     const row = roomName ? callByRoomStmt.get(roomName) : null;
     if (!row || row.status !== 'active') return null;
-    const userId = userIdFromLiveKitIdentity(event.participant?.identity || event.participantIdentity || '');
+    const userId = userIdFromLiveKitParticipant(event.participant || { participantIdentity: event.participantIdentity });
     if (event.event === 'participant_joined' && userId) return participantJoined(row.id, userId);
     if ((event.event === 'participant_left' || event.event === 'participant_connection_aborted') && userId) {
       return participantLeft(row.id, userId);
