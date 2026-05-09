@@ -872,12 +872,31 @@ function createCallFeature({
     if (!recording || recording.status === 'completed') return;
     const filepath = path.resolve(recording.file_path || '');
     if (!filepath || !fs.existsSync(filepath)) {
+      console.warn('[calls] transcript failed: recording file not found', {
+        recordingId,
+        callId: recording?.call_id,
+        filePath: recording?.file_path || '',
+      });
       updateRecordingTranscriptStmt.run('error', '', '', '', 'Recording file not found', recording.id);
       maybeCompleteTranscript(recording.call_id);
       return;
     }
     updateRecordingEndedStmt.run('processing', recording.ended_at || new Date().toISOString(), recording.duration_ms || null, recording.size_bytes || null, '', '', recording.id);
-    const settings = getVoiceSettings(db);
+    const callSettings = getCallSettings(db);
+    const voiceSettings = getVoiceSettings(db);
+    const settings = {
+      ...voiceSettings,
+      active_provider: callSettings.call_transcription_provider === 'voice'
+        ? voiceSettings.active_provider
+        : callSettings.call_transcription_provider,
+    };
+    console.info('[calls] transcript started:', {
+      recordingId: recording.id,
+      callId: recording.call_id,
+      userId: recording.user_id,
+      provider: settings.active_provider,
+      filePath: filepath,
+    });
     try {
       deleteSegmentsForRecordingStmt.run(recording.id);
       const chunks = splitRecordingIntoChunks(filepath, recording.id);
@@ -891,6 +910,12 @@ function createCallFeature({
       let provider = settings.active_provider;
       let model = '';
       for (const chunk of chunks) {
+        console.info('[calls] transcript chunk:', {
+          recordingId: recording.id,
+          provider,
+          filePath: chunk.filePath,
+          offsetMs: chunk.offsetMs || 0,
+        });
         const result = await transcribeAudio({
           filePath: chunk.filePath,
           settings,
@@ -919,7 +944,20 @@ function createCallFeature({
         );
       }
       updateRecordingTranscriptStmt.run('completed', texts.join('\n').trim(), provider, model, '', recording.id);
+      console.info('[calls] transcript completed:', {
+        recordingId: recording.id,
+        callId: recording.call_id,
+        provider,
+        model,
+        textLength: texts.join('\n').trim().length,
+      });
     } catch (error) {
+      console.warn('[calls] transcript failed:', {
+        recordingId: recording.id,
+        callId: recording.call_id,
+        provider: settings.active_provider,
+        error: error.message || String(error || ''),
+      });
       updateRecordingTranscriptStmt.run(
         'error',
         '',
@@ -933,18 +971,32 @@ function createCallFeature({
   }
 
   function enqueueRecordingTranscription(recordingId) {
-    transcriptQueue.enqueue(`call-recording:${recordingId}`, { recordingId });
+    const queued = transcriptQueue.enqueue(`call-recording:${recordingId}`, { recordingId });
+    console.info('[calls] transcript queued:', { recordingId, queued });
   }
 
   function handleEgressEnded(egressInfo = {}) {
     const egressId = String(egressInfo.egressId || egressInfo.egress_id || '');
-    if (!egressId) return;
+    if (!egressId) {
+      console.warn('[calls] egress ended without egress id');
+      return;
+    }
     const recording = recordingByEgressStmt.get(egressId);
-    if (!recording) return;
+    if (!recording) {
+      console.warn('[calls] egress ended for unknown recording:', egressId);
+      return;
+    }
     const file = fileInfoFromEgress(egressInfo);
     const resolvedFilePath = file.path && (path.isAbsolute(file.path) || fs.existsSync(file.path))
       ? file.path
       : recording.file_path;
+    console.info('[calls] egress ended:', {
+      egressId,
+      recordingId: recording.id,
+      callId: recording.call_id,
+      filePath: resolvedFilePath,
+      error: egressInfo.error || '',
+    });
     updateRecordingEndedStmt.run(
       egressInfo.error ? 'error' : 'processing',
       file.endedAt || new Date().toISOString(),

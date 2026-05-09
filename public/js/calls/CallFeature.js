@@ -547,6 +547,15 @@
               <input type="text" id="callRecordingPath" class="modal-input" placeholder="/opt/livekit-egress/recordings">
             </div>
             <div class="field-group">
+              <label>${escapeHtml(t('Call transcription provider'))}</label>
+              <select id="callTranscriptionProvider" class="modal-input">
+                <option value="voice">${escapeHtml(t('Same as voice messages'))}</option>
+                <option value="vosk">Vosk</option>
+                <option value="openai">OpenAI</option>
+                <option value="grok">Grok</option>
+              </select>
+            </div>
+            <div class="field-group">
               <label>${escapeHtml(t('Transcription max chunk, MB'))}</label>
               <input type="number" id="callTranscriptionMaxChunkMb" class="modal-input" min="1" max="100" step="1">
             </div>
@@ -1941,6 +1950,8 @@
     if (max) max.value = Number(settings.max_call_participants || 20);
     const recordingPath = document.getElementById('callRecordingPath');
     if (recordingPath) recordingPath.value = settings.call_recording_path || '/opt/livekit-egress/recordings';
+    const provider = document.getElementById('callTranscriptionProvider');
+    if (provider) provider.value = settings.call_transcription_provider || 'voice';
     const maxChunk = document.getElementById('callTranscriptionMaxChunkMb');
     if (maxChunk) maxChunk.value = Number(settings.call_transcription_max_chunk_mb || 24);
     const chunkMinutes = document.getElementById('callTranscriptionChunkMinutes');
@@ -1958,7 +1969,7 @@
       call_debug_enabled: document.getElementById('callDebugToggle')?.checked === true,
       call_ai_notes_enabled: document.getElementById('callAiNotesToggle')?.checked === true,
       call_recording_path: document.getElementById('callRecordingPath')?.value || '',
-      call_transcription_provider: 'voice',
+      call_transcription_provider: document.getElementById('callTranscriptionProvider')?.value || 'voice',
       call_transcription_max_chunk_mb: Number(document.getElementById('callTranscriptionMaxChunkMb')?.value || 24),
       call_transcription_chunk_minutes: Number(document.getElementById('callTranscriptionChunkMinutes')?.value || 12),
       ring_timeout_ms: Number(document.getElementById('callRingTimeoutMs')?.value || 60000),

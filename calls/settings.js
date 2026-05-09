@@ -63,7 +63,7 @@ function normalizeCallSettings(raw = {}) {
   next.call_ai_notes_enabled = normalizeBoolean(next.call_ai_notes_enabled, DEFAULT_CALL_SETTINGS.call_ai_notes_enabled);
   next.call_recording_path = String(next.call_recording_path || DEFAULT_CALL_SETTINGS.call_recording_path).trim() || DEFAULT_CALL_SETTINGS.call_recording_path;
   next.call_transcription_provider = String(next.call_transcription_provider || DEFAULT_CALL_SETTINGS.call_transcription_provider).trim();
-  if (!['voice'].includes(next.call_transcription_provider)) {
+  if (!['voice', 'vosk', 'openai', 'grok'].includes(next.call_transcription_provider)) {
     next.call_transcription_provider = DEFAULT_CALL_SETTINGS.call_transcription_provider;
   }
   next.call_transcription_max_chunk_mb = clampNumber(
