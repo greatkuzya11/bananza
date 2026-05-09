@@ -56,6 +56,8 @@
     videoFillTiles: new Set(),
     videoCollapsedTiles: new Set(),
     subscriptionChangingTiles: new Set(),
+    focusedVideoTileKey: '',
+    lastTileTap: { key: '', at: 0 },
   };
 
   function bridge() {
@@ -922,6 +924,16 @@
     if (el) el.textContent = message || '';
   }
 
+  function refreshRoomTilesSoon(participant = null, local = false) {
+    const render = () => {
+      if (participant) replaceCallTile(participant, local);
+      else renderRoomTiles();
+    };
+    window.setTimeout(render, 0);
+    window.setTimeout(render, 180);
+    window.setTimeout(render, 650);
+  }
+
   async function connectRoom(url, token, options = {}) {
     if (!url || !token) throw new Error(t('LiveKit token is missing'));
     const LK = await ensureLiveKitClient();
@@ -930,6 +942,10 @@
     state.room = room;
     addCallDebug('connectRoom', `${url} client=${LK.version || 'unknown'}`);
     const events = LK.RoomEvent || {};
+    room.on?.(events.TrackPublished || 'trackPublished', (publication, participant) => {
+      addCallDebug('remote track published', `${participant?.identity || ''} ${publication?.kind || publication?.source || ''}`.trim());
+      refreshRoomTilesSoon(participant, false);
+    });
     room.on?.(events.TrackSubscribed || 'trackSubscribed', (track, _publication, participant) => {
       addCallDebug('remote track subscribed', `${track?.kind || track?.mediaStreamTrack?.kind || 'unknown'} ${track?.source || ''}`.trim());
       attachSubscribedTrack(track);
@@ -943,6 +959,14 @@
         }
       }
       renderRoomTiles();
+    });
+    room.on?.(events.TrackSubscriptionFailed || 'trackSubscriptionFailed', (_trackSid, participant) => {
+      addCallDebug('track subscription failed', participant?.identity || '');
+      refreshRoomTilesSoon(participant, false);
+    });
+    room.on?.(events.TrackUnpublished || 'trackUnpublished', (publication, participant) => {
+      addCallDebug('remote track unpublished', `${participant?.identity || ''} ${publication?.kind || publication?.source || ''}`.trim());
+      refreshRoomTilesSoon(participant, false);
     });
     room.on?.(events.TrackUnsubscribed || 'trackUnsubscribed', (track, _publication, participant) => {
       addCallDebug('remote track unsubscribed', `${track?.kind || track?.mediaStreamTrack?.kind || 'unknown'} ${track?.source || ''}`.trim());
@@ -959,6 +983,7 @@
     room.on?.(events.ParticipantConnected || 'participantConnected', (participant) => {
       addCallDebug('participant connected', participant?.identity || '');
       renderRoomTiles();
+      refreshRoomTilesSoon(participant, false);
     });
     room.on?.(events.ParticipantDisconnected || 'participantDisconnected', (participant) => {
       addCallDebug('participant disconnected', participant?.identity || '');
@@ -979,7 +1004,7 @@
     });
     room.on?.(events.TrackUnmuted || 'trackUnmuted', (publication, participant) => {
       addCallDebug('track unmuted', `${participant?.identity || ''} ${publication?.kind || publication?.track?.kind || 'unknown'} ${publication?.source || publication?.track?.source || ''}`.trim());
-      renderRoomTiles();
+      refreshRoomTilesSoon(participant, participant?.isLocal === true);
     });
     room.on?.(events.Reconnecting || 'reconnecting', () => {
       state.roomConnectionState = 'reconnecting';
@@ -1028,6 +1053,7 @@
     renderSurfaceControls();
     renderRoomTiles();
     renderCallDebug();
+    refreshRoomTilesSoon();
     addCallDebug('local media scheduled', 'after connect settle');
     scheduleLocalMediaRetry(3500, { resetCount: true });
   }
@@ -1205,6 +1231,8 @@
     state.videoCollapsedTiles.clear();
     state.videoFillTiles.clear();
     state.subscriptionChangingTiles.clear();
+    state.focusedVideoTileKey = '';
+    state.lastTileTap = { key: '', at: 0 };
     const previousIntent = state.disconnectingIntentionally;
     state.disconnectingIntentionally = Boolean(options.intentional);
     try {
@@ -1360,11 +1388,49 @@
     tile.appendChild(button);
   }
 
+  function canFocusVideoTile(local, isCollapsed, track) {
+    return !local && !isCollapsed && Boolean(track?.attach);
+  }
+
+  function applyVideoFocusClasses() {
+    const grid = document.getElementById('callGrid');
+    if (!grid) return;
+    const focusKey = state.focusedVideoTileKey;
+    grid.classList.toggle('is-video-focus-mode', Boolean(focusKey));
+    Array.from(grid.children).forEach((tile) => {
+      const isFocused = Boolean(focusKey && tile.dataset.callTileKey === focusKey);
+      tile.classList.toggle('is-video-focused', isFocused);
+      tile.classList.toggle('is-video-secondary', Boolean(focusKey && !isFocused));
+    });
+  }
+
+  function setFocusedVideoTile(key = '') {
+    state.focusedVideoTileKey = key;
+    applyVideoFocusClasses();
+  }
+
+  function handleVideoTileDoubleTap(tile, key, canFocus) {
+    if (!canFocus) return;
+    const nextKey = state.focusedVideoTileKey === key ? '' : key;
+    setFocusedVideoTile(nextKey);
+    if (nextKey && !state.videoFillTiles.has(key)) {
+      state.videoFillTiles.add(key);
+      tile.classList.add('is-video-fill');
+      const button = tile.querySelector('.call-tile-fit-btn');
+      if (button) {
+        button.title = t('Show full video');
+        button.setAttribute('aria-label', button.title);
+        button.setAttribute('aria-pressed', 'true');
+      }
+    }
+  }
+
   function setRemoteVideoCollapsed(participant, key, collapsed) {
     if (!participant || key === 'local') return;
     const publication = firstVideoPublication(participant);
     if (collapsed) {
       state.videoCollapsedTiles.add(key);
+      if (state.focusedVideoTileKey === key) setFocusedVideoTile('');
       state.subscriptionChangingTiles.delete(key);
       try {
         publication?.setEnabled?.(false);
@@ -1422,6 +1488,9 @@
     tile.dataset.callTileKey = tileKey;
     const isCollapsed = state.videoCollapsedTiles.has(tileKey);
     const track = isCollapsed ? null : firstVisibleVideoTrack(participant);
+    if (state.focusedVideoTileKey === tileKey && !canFocusVideoTile(local, isCollapsed, track)) {
+      state.focusedVideoTileKey = '';
+    }
     const isFill = state.videoFillTiles.has(tileKey);
     tile.classList.toggle('is-video-fill', isFill);
     tile.classList.toggle('is-video-collapsed', isCollapsed);
@@ -1464,6 +1533,22 @@
     });
     label.appendChild(collapseBtn);
     tile.appendChild(label);
+    const focusable = canFocusVideoTile(local, isCollapsed, track);
+    tile.classList.toggle('is-video-focusable', focusable);
+    tile.addEventListener('dblclick', (event) => {
+      if (event.target?.closest?.('button')) return;
+      event.preventDefault();
+      handleVideoTileDoubleTap(tile, tileKey, focusable);
+    });
+    tile.addEventListener('touchend', (event) => {
+      if (event.target?.closest?.('button')) return;
+      const now = Date.now();
+      const isDoubleTap = state.lastTileTap.key === tileKey && now - state.lastTileTap.at < 320;
+      state.lastTileTap = { key: tileKey, at: now };
+      if (!isDoubleTap) return;
+      event.preventDefault();
+      handleVideoTileDoubleTap(tile, tileKey, focusable);
+    }, { passive: false });
     return tile;
   }
 
@@ -1488,6 +1573,7 @@
     participants.forEach(({ participant, local }) => {
       grid.appendChild(renderCallTile(participant, local));
     });
+    applyVideoFocusClasses();
     renderParticipantsPanel();
   }
 

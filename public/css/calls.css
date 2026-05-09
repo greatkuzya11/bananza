@@ -689,6 +689,63 @@ html[data-visual-mode="rich"] .call-admin-status {
   mask: var(--call-icon-mask) center / contain no-repeat;
 }
 
+.call-grid.is-video-focus-mode {
+  position: relative;
+  display: block;
+  padding: 0;
+  overflow: hidden;
+}
+
+.call-grid.is-video-focus-mode .call-tile {
+  margin: 0;
+}
+
+.call-grid.is-video-focus-mode .call-tile.is-video-focused {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border-radius: 0;
+  border: 0;
+  aspect-ratio: auto;
+}
+
+.call-grid.is-video-focus-mode .call-tile.is-video-focused video {
+  object-fit: cover;
+}
+
+.call-grid.is-video-focus-mode .call-tile.is-video-secondary {
+  position: absolute;
+  z-index: 3;
+  left: 10px;
+  bottom: 10px;
+  width: min(34vw, 168px);
+  min-width: 104px;
+  max-width: 168px;
+  min-height: 58px;
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .35);
+}
+
+.call-grid.is-video-focus-mode .call-tile.is-video-secondary:nth-child(2) {
+  left: 10px;
+}
+
+.call-grid.is-video-focus-mode .call-tile.is-video-secondary:nth-child(3) {
+  left: calc(20px + min(34vw, 168px));
+}
+
+.call-grid.is-video-focus-mode .call-tile.is-video-secondary:nth-child(4) {
+  left: calc(30px + min(68vw, 336px));
+}
+
+.call-grid.is-video-focus-mode .call-tile.is-video-secondary .call-tile-fit-btn {
+  display: none;
+}
+
+.call-grid.is-video-focus-mode .call-tile.is-video-secondary .call-tile-name {
+  max-width: calc(100% - 20px);
+}
+
 .call-controls {
   justify-content: center;
   align-content: center;
@@ -1132,6 +1189,21 @@ html[data-visual-mode="rich"] .call-admin-status {
     height: 54px;
     min-height: 54px;
     max-height: 54px;
+  }
+
+  .call-grid.is-video-focus-mode .call-tile.is-video-secondary {
+    width: min(38vw, 132px);
+    min-width: 92px;
+    max-width: 132px;
+    bottom: 8px;
+  }
+
+  .call-grid.is-video-focus-mode .call-tile.is-video-secondary:nth-child(3) {
+    left: calc(18px + min(38vw, 132px));
+  }
+
+  .call-grid.is-video-focus-mode .call-tile.is-video-secondary:nth-child(4) {
+    left: calc(26px + min(76vw, 264px));
   }
 
   .call-room-layout {
