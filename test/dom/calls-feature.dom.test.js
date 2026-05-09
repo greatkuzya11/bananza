@@ -30,6 +30,17 @@ function installCallBridge(dom, state) {
       if (url === `/api/calls/${state.chatCall?.id}/token`) {
         return { call: state.chatCall, livekit: { url: 'ws://livekit.test', token: 'test-token' } };
       }
+      if (url === `/api/calls/${state.chatCall?.id}/joined`) {
+        state.chatCall = {
+          ...state.chatCall,
+          participants: (state.chatCall?.participants || []).map((participant) => (
+            Number(participant.user_id) === Number(state.user.id)
+              ? { ...participant, state: 'joined' }
+              : participant
+          )),
+        };
+        return { call: state.chatCall };
+      }
       if (url === '/api/admin/call-settings' && !opts.method) return state.adminCallSettings;
       if (url === '/api/admin/call-settings' && opts.method === 'PUT') {
         state.savedAdminPayload = opts.body || {};
@@ -259,6 +270,7 @@ test('CallFeature joins and leaves a mocked LiveKit room', async (t) => {
   assert.equal(prejoinMic.getAttribute('aria-label'), dom.window.BananzaI18n.t('Mic off'));
   dom.window.document.getElementById('callPrejoinJoinBtn').click();
   await waitForCondition(dom.window, () => connected);
+  await waitForCondition(dom.window, () => state.requests.some((request) => request.url === '/api/calls/92/joined'));
   assert.equal(dom.window.document.getElementById('callSurface').classList.contains('hidden'), false);
   assert.equal(dom.window.document.getElementById('callMicBtn').textContent.trim(), '');
   assert.ok(dom.window.document.getElementById('callCameraBtn').querySelector('.call-icon'));

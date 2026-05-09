@@ -112,6 +112,17 @@ test('admin can enable calls and users can run call lifecycle', async () => {
     assert.ok(tokenResponse.data.livekit.token.length > 20);
     assert.equal(
       tokenResponse.data.call.participants.some((participant) => (
+        Number(participant.user_id) === Number(bob.user.id) && participant.state === 'invited'
+      )),
+      true
+    );
+
+    const joinedResponse = await bob.request(`/api/calls/${created.data.call.id}/joined`, {
+      method: 'POST',
+      json: {},
+    });
+    assert.equal(
+      joinedResponse.data.call.participants.some((participant) => (
         Number(participant.user_id) === Number(bob.user.id) && participant.state === 'joined'
       )),
       true

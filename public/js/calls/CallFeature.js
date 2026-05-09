@@ -42,6 +42,8 @@
     prejoinMode: 'join',
     adminLoaded: false,
     adminSettings: null,
+    disconnectingIntentionally: false,
+    leaveSentForCallId: 0,
   };
 
   function bridge() {
@@ -66,6 +68,11 @@
     const call = bridge()?.api;
     if (!call) return Promise.reject(new Error(t('App is not ready')));
     return call(url, opts);
+  }
+
+  function authHeaders() {
+    const token = bridge()?.getToken?.();
+    return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
   function currentChat() {
@@ -173,7 +180,7 @@
       document.getElementById('callSurface')?.classList.remove('is-behind-prejoin');
     }
     if (isCurrentCall) {
-      await disconnectRoom();
+      await disconnectRoom({ intentional: true });
       state.currentCall = null;
       state.minimized = false;
       state.participantsOpen = false;
@@ -531,7 +538,7 @@
       state.activeCalls.clear();
       state.incomingCall = null;
       NOTIFICATIONS.stopRingtone?.();
-      if (state.room) await disconnectRoom();
+      if (state.room) await disconnectRoom({ intentional: true });
     }
     renderAll();
     return state.settings;
@@ -819,8 +826,19 @@
         audioDeviceId: selectedDevice('audioinput'),
         videoDeviceId: selectedDevice('videoinput'),
       });
+      const joined = await api(`/api/calls/${call.id}/joined`, { method: 'POST', body: {} }).catch(() => null);
+      if (joined?.call) {
+        upsertCall(joined.call);
+        state.currentCall = joined.call;
+      }
       closePrejoin();
       setSurfaceStatus(t('Connected'));
+    } catch (error) {
+      await notifyLeaveCurrentCall({ fireAndForget: false }).catch(() => {});
+      await disconnectRoom({ intentional: true });
+      state.currentCall = null;
+      document.getElementById('callSurface')?.classList.add('hidden');
+      throw error;
     } finally {
       state.joining = false;
       renderAll();
@@ -845,7 +863,7 @@
   async function connectRoom(url, token, options = {}) {
     if (!url || !token) throw new Error(t('LiveKit token is missing'));
     const LK = await ensureLiveKitClient();
-    await disconnectRoom();
+    await disconnectRoom({ intentional: true });
     const room = new LK.Room({ adaptiveStream: true, dynacast: true });
     state.room = room;
     const events = LK.RoomEvent || {};
@@ -865,10 +883,14 @@
     room.on?.(events.Reconnected || 'reconnected', () => setSurfaceStatus(t('Connected')));
     room.on?.(events.Disconnected || 'disconnected', () => {
       state.room = null;
+      if (!state.disconnectingIntentionally && state.currentCall?.id) {
+        notifyLeaveCurrentCall({ fireAndForget: true }).catch(() => {});
+      }
       setSurfaceStatus(t('Disconnected'));
       renderRoomTiles();
     });
     await room.connect(url, token);
+    state.leaveSentForCallId = 0;
     state.micEnabled = options.micEnabled !== false;
     state.cameraEnabled = options.cameraEnabled !== false;
     await room.localParticipant?.setMicrophoneEnabled?.(state.micEnabled, options.audioDeviceId ? { deviceId: options.audioDeviceId } : undefined).catch(() => {
@@ -925,14 +947,38 @@
     document.querySelectorAll('[data-call-remote-audio="1"]').forEach((el) => el.remove());
   }
 
-  async function disconnectRoom() {
+  async function disconnectRoom(options = {}) {
     const room = state.room;
     state.room = null;
     state.screenShareEnabled = false;
+    const previousIntent = state.disconnectingIntentionally;
+    state.disconnectingIntentionally = Boolean(options.intentional);
     try {
       room?.disconnect?.();
     } catch {}
+    window.setTimeout(() => {
+      state.disconnectingIntentionally = previousIntent;
+    }, 0);
     document.querySelectorAll('[data-call-remote-audio="1"]').forEach((el) => el.remove());
+  }
+
+  async function notifyLeaveCurrentCall(options = {}) {
+    const callId = Number(state.currentCall?.id || 0);
+    if (!callId || state.leaveSentForCallId === callId) return;
+    state.leaveSentForCallId = callId;
+    const url = `/api/calls/${callId}/leave`;
+    if (options.fireAndForget) {
+      try {
+        window.fetch?.(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: '{}',
+          keepalive: true,
+        }).catch(() => {});
+      } catch {}
+      return;
+    }
+    await api(url, { method: 'POST', body: {} }).catch(() => {});
   }
 
   function applySpeakerDevice(targetAudio = null) {
@@ -992,9 +1038,11 @@
 
   async function leaveCall(endForEveryone) {
     const call = state.currentCall;
-    await disconnectRoom();
+    state.leaveSentForCallId = 0;
+    await disconnectRoom({ intentional: true });
     if (call?.id) {
       await api(`/api/calls/${call.id}/${endForEveryone ? 'end' : 'leave'}`, { method: 'POST', body: {} }).catch(() => {});
+      state.leaveSentForCallId = call.id;
     }
     state.currentCall = null;
     document.getElementById('callSurface')?.classList.add('hidden');
@@ -1312,5 +1360,12 @@
     renderAll();
   }
 
+  function handlePageLeaving() {
+    if (!state.currentCall?.id) return;
+    notifyLeaveCurrentCall({ fireAndForget: true }).catch(() => {});
+  }
+
+  window.addEventListener('pagehide', handlePageLeaving);
+  window.addEventListener('beforeunload', handlePageLeaving);
   window.addEventListener('bananza:ready', bootstrap);
 })();

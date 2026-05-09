@@ -49,7 +49,7 @@ function createAppStub() {
   };
 }
 
-function createFeature(db) {
+function createFeature(db, overrides = {}) {
   return createCallFeature({
     app: createAppStub(),
     db,
@@ -61,6 +61,7 @@ function createFeature(db) {
     clients: new Map(),
     notifyCallInvite: () => {},
     hydrateMessageById: (messageId) => db.prepare('SELECT * FROM messages WHERE id=?').get(messageId),
+    ...overrides,
   });
 }
 
@@ -130,6 +131,75 @@ test('ring timeout marks unanswered group participants missed without ending joi
     assert.equal(db.prepare('SELECT status FROM call_sessions WHERE id=?').get(callId).status, 'active');
     assert.equal(db.prepare('SELECT ring_expires_at FROM call_sessions WHERE id=?').get(callId).ring_expires_at, null);
     assert.equal(db.prepare('SELECT state FROM call_participants WHERE call_id=? AND user_id=2').get(callId).state, 'missed');
+  } finally {
+    feature.stopWorkers();
+    db.close();
+  }
+});
+
+test('token issuance does not mark participant joined before connect confirmation', () => {
+  const db = createDb();
+  const feature = createFeature(db);
+  try {
+    seedUsersAndChat(db, 'private');
+    const { callId } = seedCall(db);
+
+    const call = feature.getCall(callId);
+    assert.equal(call.participants.find((participant) => participant.user_id === 2).state, 'invited');
+
+    // Token generation is pure with respect to participant presence; joined is confirmed separately.
+    assert.equal(db.prepare('SELECT state FROM call_participants WHERE call_id=? AND user_id=2').get(callId).state, 'invited');
+    feature._private.participantJoined(callId, 2);
+    assert.equal(db.prepare('SELECT state FROM call_participants WHERE call_id=? AND user_id=2').get(callId).state, 'joined');
+  } finally {
+    feature.stopWorkers();
+    db.close();
+  }
+});
+
+test('ending a call deletes the LiveKit room best-effort', () => {
+  const db = createDb();
+  const deletedRooms = [];
+  const feature = createFeature(db, {
+    roomServiceClientFactory: () => ({
+      deleteRoom: async (roomName) => {
+        deletedRooms.push(roomName);
+      },
+    }),
+  });
+  try {
+    seedUsersAndChat(db, 'private');
+    const { callId } = seedCall(db);
+
+    const ended = feature._private.endCall(callId, 1, 'ended');
+    assert.equal(ended.status, 'ended');
+    assert.deepEqual(deletedRooms, ['room-1']);
+  } finally {
+    feature.stopWorkers();
+    db.close();
+  }
+});
+
+test('LiveKit webhook participant events synchronize call participants', () => {
+  const db = createDb();
+  const feature = createFeature(db);
+  try {
+    seedUsersAndChat(db, 'private');
+    const { callId } = seedCall(db);
+
+    feature._private.handleLiveKitWebhook({
+      event: 'participant_joined',
+      room: { name: 'room-1' },
+      participant: { identity: 'user:2' },
+    });
+    assert.equal(db.prepare('SELECT state FROM call_participants WHERE call_id=? AND user_id=2').get(callId).state, 'joined');
+
+    feature._private.handleLiveKitWebhook({
+      event: 'participant_left',
+      room: { name: 'room-1' },
+      participant: { identity: 'user:2' },
+    });
+    assert.equal(db.prepare('SELECT state FROM call_participants WHERE call_id=? AND user_id=2').get(callId).state, 'left');
   } finally {
     feature.stopWorkers();
     db.close();

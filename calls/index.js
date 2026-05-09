@@ -1,5 +1,6 @@
 const { randomUUID } = require('crypto');
-const { AccessToken, RoomServiceClient } = require('livekit-server-sdk');
+const express = require('express');
+const { AccessToken, RoomServiceClient, WebhookReceiver } = require('livekit-server-sdk');
 const { TrackSource } = require('@livekit/protocol');
 const {
   getCallSettings,
@@ -11,7 +12,7 @@ const {
   liveKitHttpUrl,
 } = require('./settings');
 
-const CALL_TOKEN_TTL_SECONDS = 60 * 60 * 2;
+const CALL_TOKEN_TTL_SECONDS = 60 * 30;
 const TEST_ROOM_TIMEOUT_MS = 4000;
 const CALL_RING_WORKER_MS = 10_000;
 const CALL_RECONCILE_WORKER_MS = 30_000;
@@ -39,6 +40,7 @@ function createCallFeature({
   hydrateMessageById,
   onMessageCreated,
   secret = '',
+  roomServiceClientFactory = null,
 }) {
   const callLimiter = rateLimit
     ? rateLimit({ windowMs: 60_000, max: 60, message: { error: 'Too many call requests' } })
@@ -92,6 +94,21 @@ function createCallFeature({
     JOIN users u ON u.id=cp.user_id
     WHERE cp.call_id=?
     ORDER BY u.display_name COLLATE NOCASE
+  `);
+  const participantStmt = db.prepare(`
+    SELECT cp.call_id, cp.user_id, cp.state, cp.joined_at, cp.left_at, cp.updated_at,
+      u.display_name, u.username, u.avatar_color, u.avatar_url, COALESCE(u.is_ai_bot,0) as is_ai_bot
+    FROM call_participants cp
+    JOIN users u ON u.id=cp.user_id
+    WHERE cp.call_id=? AND cp.user_id=?
+  `);
+  const callByRoomStmt = db.prepare(`
+    SELECT cs.*, c.name as chat_name, c.type as chat_type, c.is_notes as chat_is_notes,
+      u.display_name as started_by_name, u.username as started_by_username
+    FROM call_sessions cs
+    JOIN chats c ON c.id=cs.chat_id
+    JOIN users u ON u.id=cs.started_by
+    WHERE cs.livekit_room_name=?
   `);
   const joinedHumanCountStmt = db.prepare(`
     SELECT COUNT(*) as total
@@ -150,6 +167,13 @@ function createCallFeature({
 
   function livekitConfig() {
     return getLiveKitConfig(db, secret, process.env);
+  }
+
+  function livekitRoomClient() {
+    const config = livekitConfig();
+    if (typeof roomServiceClientFactory === 'function') return roomServiceClientFactory(config);
+    if (!config.ready) return null;
+    return new RoomServiceClient(liveKitHttpUrl(config.wsUrl), config.apiKey, config.apiSecret);
   }
 
   function publicSettings() {
@@ -245,6 +269,15 @@ function createCallFeature({
     return serializeCall(callByIdStmt.get(callId));
   }
 
+  function hasParticipant(callId, userId) {
+    return Boolean(participantStmt.get(callId, userId));
+  }
+
+  function userIdFromLiveKitIdentity(identity) {
+    const match = String(identity || '').trim().match(/^user:(\d+)$/);
+    return match ? normalizeId(match[1]) : 0;
+  }
+
   function broadcastAll(payload) {
     const json = JSON.stringify(payload);
     clients.forEach((connections) => {
@@ -311,6 +344,18 @@ function createCallFeature({
     );
   }
 
+  function deleteLiveKitRoomForCall(row) {
+    if (!row?.livekit_room_name) return;
+    const client = livekitRoomClient();
+    if (!client || typeof client.deleteRoom !== 'function') return;
+    client.deleteRoom(row.livekit_room_name).catch((error) => {
+      const message = String(error?.message || '');
+      if (!/not found|does not exist|room.*missing/i.test(message)) {
+        console.warn('[calls] LiveKit room cleanup failed:', message || error);
+      }
+    });
+  }
+
   function endCall(callId, endedBy = null, reason = 'ended') {
     const row = callByIdStmt.get(callId);
     if (!row || row.status !== 'active') return serializeCall(row);
@@ -339,6 +384,7 @@ function createCallFeature({
       syncCallMessage(callByIdStmt.get(callId));
       broadcastCall(call.chat_id, { type: 'call_ended', call, reason });
       broadcastCallMessageUpdated(call);
+      deleteLiveKitRoomForCall(row);
     }
     return call;
   }
@@ -356,6 +402,7 @@ function createCallFeature({
   }
 
   function participantState(callId, userId, state) {
+    if (!hasParticipant(callId, userId)) return getCall(callId);
     const joinedAt = state === 'joined' ? 'datetime(\'now\')' : 'joined_at';
     const leftAt = state === 'left' ? 'datetime(\'now\')' : 'left_at';
     db.prepare(`
@@ -374,6 +421,15 @@ function createCallFeature({
       broadcastCallMessageUpdated(call);
     }
     return call;
+  }
+
+  function participantJoined(callId, userId) {
+    return participantState(callId, userId, 'joined');
+  }
+
+  function participantLeft(callId, userId) {
+    participantState(callId, userId, 'left');
+    return maybeEndWhenEmpty(callId);
   }
 
   async function createTokenForCall(call, user) {
@@ -444,7 +500,7 @@ function createCallFeature({
     members
       .filter((member) => Number(member.is_ai_bot) === 0)
       .forEach((member) => {
-        const state = Number(member.id) === Number(user.id) ? 'joined' : 'invited';
+        const state = 'invited';
         insertParticipant.run(callId, member.id, state, state);
       });
     let messageId = null;
@@ -499,7 +555,7 @@ function createCallFeature({
     const rows = activeCallsStmt.all();
     if (!rows.length) return 0;
     const minAgeMs = Math.max(CALL_RECONCILE_MIN_AGE_MS, getCallSettings(db).ring_timeout_ms + 30_000);
-    const client = new RoomServiceClient(liveKitHttpUrl(config.wsUrl), config.apiKey, config.apiSecret);
+    const client = livekitRoomClient();
     if (typeof client.listParticipants !== 'function') return 0;
     let ended = 0;
     for (const row of rows) {
@@ -513,6 +569,13 @@ function createCallFeature({
         if (Array.isArray(participants) && participants.length === 0) {
           endCall(row.id, null, 'stale_empty');
           ended += 1;
+          continue;
+        }
+        if (Array.isArray(participants)) {
+          const liveUserIds = new Set(participants.map((participant) => userIdFromLiveKitIdentity(participant.identity)).filter(Boolean));
+          participantsStmt.all(row.id)
+            .filter((participant) => participant.state === 'joined' && !liveUserIds.has(Number(participant.user_id)))
+            .forEach((participant) => participantState(row.id, participant.user_id, 'left'));
         }
       } catch (error) {
         const message = String(error?.message || '');
@@ -608,7 +671,7 @@ function createCallFeature({
     const call = callByIdStmt.get(callId);
     if (!call || call.status !== 'active') return boolError(res, 404, 'Call not found', 'call_not_found');
     if (!isMember(call.chat_id, req.user.id)) return boolError(res, 403, 'Forbidden', 'forbidden');
-    participantState(callId, req.user.id, 'joined');
+    if (!hasParticipant(callId, req.user.id)) return boolError(res, 403, 'Not invited to this call', 'not_call_participant');
     const updatedCall = getCall(callId);
     const token = await createTokenForCall(updatedCall, req.user);
     res.json({
@@ -618,6 +681,15 @@ function createCallFeature({
         token,
       },
     });
+  });
+
+  app.post('/api/calls/:callId/joined', auth, callLimiter, (req, res) => {
+    const callId = normalizeId(req.params.callId);
+    const row = callByIdStmt.get(callId);
+    if (!row || row.status !== 'active') return boolError(res, 404, 'Call not found', 'call_not_found');
+    if (!isMember(row.chat_id, req.user.id)) return boolError(res, 403, 'Forbidden', 'forbidden');
+    if (!hasParticipant(callId, req.user.id)) return boolError(res, 403, 'Not invited to this call', 'not_call_participant');
+    res.json({ call: participantJoined(callId, req.user.id) });
   });
 
   app.post('/api/calls/:callId/decline', auth, callLimiter, (req, res) => {
@@ -664,13 +736,16 @@ function createCallFeature({
 
   app.put('/api/admin/call-settings', auth, adminOnly, (req, res) => {
     const before = getCallSettings(db);
+    const beforeConfig = livekitConfig();
     const settings = setCallSettings(db, req.body || {});
     setLiveKitConfig(db, req.body || {}, secret);
     let ended = 0;
+    const config = livekitConfig();
     if (before.calls_enabled && !settings.calls_enabled) {
       ended = endAllActiveCalls('disabled');
+    } else if (settings.calls_enabled && beforeConfig.ready && !config.ready) {
+      ended = endAllActiveCalls('livekit_unconfigured');
     }
-    const config = livekitConfig();
     const publicPayload = publicSettings();
     broadcastAll({ type: 'call_settings_updated', settings: publicPayload });
     res.json({
@@ -682,6 +757,33 @@ function createCallFeature({
       ended_calls: ended,
     });
   });
+
+  app.post('/api/livekit/webhook', express.raw({ type: 'application/webhook+json', limit: '1mb' }), async (req, res) => {
+    const config = livekitConfig();
+    if (!config.ready) return boolError(res, 503, 'LiveKit is not configured', 'livekit_not_configured');
+    try {
+      const body = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : String(req.body || '');
+      const receiver = new WebhookReceiver(config.apiKey, config.apiSecret);
+      const event = await receiver.receive(body, req.get('Authorization') || req.get('Authorize'));
+      handleLiveKitWebhook(event);
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(401).json({ error: 'Invalid LiveKit webhook', code: 'invalid_livekit_webhook' });
+    }
+  });
+
+  function handleLiveKitWebhook(event = {}) {
+    const roomName = event.room?.name || event.roomName || '';
+    const row = roomName ? callByRoomStmt.get(roomName) : null;
+    if (!row || row.status !== 'active') return null;
+    const userId = userIdFromLiveKitIdentity(event.participant?.identity || event.participantIdentity || '');
+    if (event.event === 'participant_joined' && userId) return participantJoined(row.id, userId);
+    if ((event.event === 'participant_left' || event.event === 'participant_connection_aborted') && userId) {
+      return participantLeft(row.id, userId);
+    }
+    if (event.event === 'room_finished') return endCall(row.id, null, 'livekit_room_finished');
+    return getCall(row.id);
+  }
 
   app.post('/api/admin/call-settings/test', auth, adminOnly, callLimiter, async (_req, res) => {
     const config = livekitConfig();
@@ -726,9 +828,14 @@ function createCallFeature({
     _private: {
       createTokenForCall,
       livekitConfig,
+      livekitRoomClient,
       validateChatForCall,
       expireRingingCalls,
       reconcileLiveKitRooms,
+      handleLiveKitWebhook,
+      participantJoined,
+      participantLeft,
+      endCall,
       attachCallMetadata,
     },
   };
