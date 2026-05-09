@@ -14573,6 +14573,7 @@
       case 'call_updated':
       case 'call_participant_updated':
       case 'call_ended':
+      case 'call_ai_notes_updated':
       case 'call_settings_updated': {
         window.BananzaCallHooks?.handleWSMessage?.(msg);
         break;

@@ -61,7 +61,14 @@ const server = http.createServer(app);
 setupWebSocket(server, JWT_SECRET);
 
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({
+  limit: '1mb',
+  verify: (req, _res, buf) => {
+    if (req.originalUrl === '/api/livekit/webhook') {
+      req.rawBody = Buffer.from(buf);
+    }
+  },
+}));
 app.use('/api', (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/vendor/livekit-client.umd.js', (_req, res) => {

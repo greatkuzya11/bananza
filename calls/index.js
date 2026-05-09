@@ -727,20 +727,20 @@ function createCallFeature({
     const userId = userIdFromLiveKitParticipant(participant);
     if (!userId || !hasParticipant(callId, userId)) return null;
 
-    const filepath = callRecordingPath(callId, userId, trackId);
-    const startedAt = new Date().toISOString();
-    const inserted = insertRecordingStmt.run(
-      callId,
-      userId,
-      String(participant.identity || participant.participantIdentity || ''),
-      trackId,
-      '',
-      filepath,
-      startedAt
-    );
-    const recordingId = Number(inserted.lastInsertRowid);
-
+    let recordingId = 0;
     try {
+      const filepath = callRecordingPath(callId, userId, trackId);
+      const startedAt = new Date().toISOString();
+      const inserted = insertRecordingStmt.run(
+        callId,
+        userId,
+        String(participant.identity || participant.participantIdentity || ''),
+        trackId,
+        '',
+        filepath,
+        startedAt
+      );
+      recordingId = Number(inserted.lastInsertRowid);
       const client = livekitEgressClient();
       if (!client) throw new Error('LiveKit Egress is not configured');
       const info = await client.startTrackEgress(
@@ -751,8 +751,18 @@ function createCallFeature({
       updateRecordingStartedStmt.run(String(info?.egressId || ''), bigintNsToIso(info?.startedAt) || startedAt, recordingId);
       return info;
     } catch (error) {
-      updateRecordingEndedStmt.run('error', new Date().toISOString(), null, null, '', error.message || 'Could not start recording', recordingId);
-      updateAiNotesStatusStmt.run('error', 'error', new Date().toISOString(), error.message || 'Could not start recording', callId);
+      const message = error.message || 'Could not start recording';
+      console.warn('[calls] AI notes recording start failed:', {
+        callId,
+        userId,
+        trackId,
+        room: notes.livekit_room_name,
+        error: message,
+      });
+      if (recordingId) {
+        updateRecordingEndedStmt.run('error', new Date().toISOString(), null, null, '', message, recordingId);
+      }
+      updateAiNotesStatusStmt.run('error', 'error', new Date().toISOString(), message, callId);
       broadcastAiNotesUpdated(callId);
       return null;
     }
@@ -832,6 +842,8 @@ function createCallFeature({
     if (transcript.trim()) {
       const timingApproximate = transcriptSegmentsStmt.all(callId).some((row) => Number(row.timing_approximate) !== 0) ? 1 : 0;
       updateAiNotesTranscriptStmt.run('completed', 'completed', transcript, '', timingApproximate, callId);
+    } else if (Number(counts.total || 0) <= 0) {
+      updateAiNotesTranscriptStmt.run('error', 'error', '', 'No microphone tracks were recorded', 1, callId);
     } else if (Number(counts.errors || 0) > 0) {
       updateAiNotesTranscriptStmt.run('error', 'error', '', 'Transcription failed for every recording', 1, callId);
     } else {
@@ -1366,7 +1378,10 @@ function createCallFeature({
     const config = livekitConfig();
     if (!config.ready) return boolError(res, 503, 'LiveKit is not configured', 'livekit_not_configured');
     try {
-      const body = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : String(req.body || '');
+      const rawBody = req.rawBody || req.body;
+      const body = Buffer.isBuffer(rawBody)
+        ? rawBody.toString('utf8')
+        : (typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody || {}));
       const receiver = new WebhookReceiver(config.apiKey, config.apiSecret);
       const event = await receiver.receive(body, req.get('Authorization') || req.get('Authorize'));
       handleLiveKitWebhook(event);
