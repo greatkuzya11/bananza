@@ -49,6 +49,8 @@
     publishRetryTimer: 0,
     publishRetryCount: 0,
     localMediaOptions: null,
+    roomConnectionState: '',
+    roomConnectedAt: 0,
   };
 
   function bridge() {
@@ -933,23 +935,32 @@
     });
     room.on?.(events.LocalTrackUnpublished || 'localTrackUnpublished', (publication) => {
       addCallDebug('local track unpublished', `${publication?.kind || publication?.track?.kind || 'unknown'} ${publication?.source || publication?.track?.source || ''}`.trim());
-      scheduleLocalMediaRetry(1200, { resetCount: true });
+      scheduleLocalMediaRetry(3000, { resetCount: true });
       renderRoomTiles();
     });
     room.on?.(events.Reconnecting || 'reconnecting', () => {
+      state.roomConnectionState = 'reconnecting';
+      state.roomConnectedAt = 0;
       addCallDebug('room reconnecting');
       setSurfaceStatus(t('Reconnecting...'));
     });
     room.on?.(events.Reconnected || 'reconnected', () => {
+      state.roomConnectionState = 'connected';
+      state.roomConnectedAt = Date.now();
       addCallDebug('room reconnected');
       setSurfaceStatus(t('Connected'));
-      scheduleLocalMediaRetry(1600, { resetCount: true });
+      scheduleLocalMediaRetry(3500, { resetCount: true });
     });
     room.on?.(events.ConnectionStateChanged || 'connectionStateChanged', (state) => {
-      addCallDebug('connection state', String(state || ''));
+      state.roomConnectionState = String(state || '');
+      if (state.roomConnectionState === 'connected') state.roomConnectedAt = Date.now();
+      if (state.roomConnectionState && state.roomConnectionState !== 'connected') state.roomConnectedAt = 0;
+      addCallDebug('connection state', state.roomConnectionState);
     });
     room.on?.(events.Disconnected || 'disconnected', (reason) => {
       state.room = null;
+      state.roomConnectionState = 'disconnected';
+      state.roomConnectedAt = 0;
       addCallDebug('room disconnected', String(reason || ''));
       if (!state.disconnectingIntentionally && state.currentCall?.id) {
         notifyLeaveCurrentCall({ fireAndForget: true }).catch(() => {});
@@ -958,6 +969,8 @@
       renderRoomTiles();
     });
     await room.connect(url, token);
+    state.roomConnectionState = 'connected';
+    state.roomConnectedAt = Date.now();
     addCallDebug('room connected', room.localParticipant?.identity || '');
     state.leaveSentForCallId = 0;
     state.micEnabled = options.micEnabled !== false;
@@ -973,7 +986,7 @@
     renderRoomTiles();
     renderCallDebug();
     addCallDebug('local media scheduled', 'after connect settle');
-    scheduleLocalMediaRetry(1400, { resetCount: true });
+    scheduleLocalMediaRetry(3500, { resetCount: true });
   }
 
   async function enableLocalMedia(reason = 'retry') {
@@ -981,6 +994,11 @@
     const room = state.room;
     const options = state.localMediaOptions || {};
     if (state.publishingLocalTracks || !room?.localParticipant) return result;
+    if (!isRoomStableForLocalPublish()) {
+      addCallDebug('publish delayed', state.roomConnectionState || 'not connected');
+      scheduleLocalMediaRetry(3000);
+      return result;
+    }
     state.publishingLocalTracks = true;
     addCallDebug('enable local media', reason);
     const enableWithTimeout = async (label, action, hasPublication) => {
@@ -1045,6 +1063,13 @@
     return Number(room?.localParticipant?.videoTrackPublications?.size || 0) > 0;
   }
 
+  function isRoomStableForLocalPublish() {
+    if (!state.room?.localParticipant) return false;
+    if (state.roomConnectionState && state.roomConnectionState !== 'connected') return false;
+    if (!state.roomConnectedAt) return false;
+    return Date.now() - state.roomConnectedAt >= 2500;
+  }
+
   function scheduleLocalMediaRetry(delay = 1500, options = {}) {
     if (!state.room?.localParticipant) return;
     if (options.resetCount && state.publishRetryTimer) {
@@ -1062,6 +1087,11 @@
       if (!state.room) return;
       if (state.publishingLocalTracks) {
         scheduleLocalMediaRetry(1000);
+        return;
+      }
+      if (!isRoomStableForLocalPublish()) {
+        addCallDebug('media retry delayed', state.roomConnectionState || 'not connected');
+        scheduleLocalMediaRetry(2500);
         return;
       }
       state.publishRetryCount += 1;
@@ -1127,6 +1157,8 @@
     state.publishRetryTimer = 0;
     state.publishingLocalTracks = false;
     state.localMediaOptions = null;
+    state.roomConnectionState = '';
+    state.roomConnectedAt = 0;
     const previousIntent = state.disconnectingIntentionally;
     state.disconnectingIntentionally = Boolean(options.intentional);
     try {
