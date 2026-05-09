@@ -11,6 +11,7 @@ const DEFAULT_CALL_SETTINGS = {
   screen_share_enabled: true,
   ringtone_enabled: true,
   call_messages_enabled: true,
+  call_debug_enabled: false,
   max_call_participants: 20,
 };
 
@@ -53,6 +54,7 @@ function normalizeCallSettings(raw = {}) {
   next.screen_share_enabled = normalizeBoolean(next.screen_share_enabled, DEFAULT_CALL_SETTINGS.screen_share_enabled);
   next.ringtone_enabled = normalizeBoolean(next.ringtone_enabled, DEFAULT_CALL_SETTINGS.ringtone_enabled);
   next.call_messages_enabled = normalizeBoolean(next.call_messages_enabled, DEFAULT_CALL_SETTINGS.call_messages_enabled);
+  next.call_debug_enabled = normalizeBoolean(next.call_debug_enabled, DEFAULT_CALL_SETTINGS.call_debug_enabled);
   next.ring_timeout_ms = clampNumber(
     next.ring_timeout_ms,
     DEFAULT_CALL_SETTINGS.ring_timeout_ms,
@@ -278,6 +280,7 @@ function getPublicCallSettings(db, secretOrEnv = '', env = process.env) {
     screen_share_enabled: Boolean(settings.screen_share_enabled),
     ringtone_enabled: Boolean(settings.ringtone_enabled),
     call_messages_enabled: Boolean(settings.call_messages_enabled),
+    call_debug_enabled: Boolean(settings.call_debug_enabled),
     max_call_participants: settings.max_call_participants,
   };
 }

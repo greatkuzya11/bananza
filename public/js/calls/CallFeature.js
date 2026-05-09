@@ -2,6 +2,7 @@
   'use strict';
 
   const hooks = window.BananzaCallHooks = window.BananzaCallHooks || {};
+  const BANANA_ICON = String.fromCodePoint(0x1F34C);
   const VIDEO_ICON = String.fromCodePoint(0x1F4F9);
   const PHONE_ICON = String.fromCodePoint(0x260E);
   const STORE = window.BananzaCallStore || {};
@@ -20,6 +21,7 @@
       screen_share_enabled: true,
       ringtone_enabled: true,
       call_messages_enabled: true,
+      call_debug_enabled: false,
       max_call_participants: 20,
     },
     activeCalls: new Map(),
@@ -72,6 +74,7 @@
   }
 
   function addCallDebug(message, detail = '') {
+    if (!state.settings.call_debug_enabled) return;
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const line = detail ? `${time} ${message}: ${detail}` : `${time} ${message}`;
     state.debugLines = [...state.debugLines.slice(-10), line];
@@ -122,6 +125,10 @@
     return `<span class="${className}" style="background:${escapeHtml(color)}" title="${title}">${escapeHtml(initials(name))}</span>`;
   }
 
+  function bananaTilePlaceholder(title = '') {
+    return `<div class="call-tile-placeholder" aria-hidden="true" title="${escapeHtml(title)}">${BANANA_ICON}</div>`;
+  }
+
   function userIdFromIdentity(identity) {
     const text = String(identity || '').trim();
     const match = text.match(/(?:^|:)user:(\d+)$/i) || text.match(/^(\d+)$/);
@@ -152,8 +159,10 @@
       screen_share_enabled: settings.screen_share_enabled !== false,
       ringtone_enabled: settings.ringtone_enabled !== false,
       call_messages_enabled: settings.call_messages_enabled !== false,
+      call_debug_enabled: settings.call_debug_enabled === true,
       max_call_participants: Number(settings.max_call_participants || state.settings.max_call_participants || 20),
     };
+    if (!state.settings.call_debug_enabled) state.debugLines = [];
   }
 
   function isCallableChat(chat = currentChat()) {
@@ -470,6 +479,13 @@
               <span>${escapeHtml(t('Call messages in chat'))}</span>
               <label class="toggle-switch">
                 <input type="checkbox" id="callMessagesToggle">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="settings-item settings-toggle-item">
+              <span>${escapeHtml(t('Call debug log'))}</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="callDebugToggle">
                 <span class="toggle-slider"></span>
               </label>
             </div>
@@ -1285,7 +1301,7 @@
     if (!participants.length) {
       const empty = document.createElement('div');
       empty.className = 'call-tile';
-      empty.innerHTML = `${avatarMarkup(currentUser(), 'call-tile-placeholder')}<div class="call-tile-name">${escapeHtml(t('Waiting'))}</div>`;
+      empty.innerHTML = `${bananaTilePlaceholder(t('Waiting'))}<div class="call-tile-name">${escapeHtml(t('Waiting'))}</div>`;
       grid.appendChild(empty);
       renderParticipantsPanel();
       return;
@@ -1304,10 +1320,10 @@
           video.muted = Boolean(local);
           tile.appendChild(video);
         } catch {
-          tile.innerHTML = avatarMarkup({ ...meta, display_name: name }, 'call-tile-placeholder');
+          tile.innerHTML = bananaTilePlaceholder(name);
         }
       } else {
-        tile.innerHTML = avatarMarkup({ ...meta, display_name: name }, 'call-tile-placeholder');
+        tile.innerHTML = bananaTilePlaceholder(name);
       }
       const label = document.createElement('div');
       label.className = 'call-tile-name';
@@ -1366,6 +1382,11 @@
   function renderCallDebug() {
     const el = document.getElementById('callDebugLog');
     if (!el) return;
+    el.classList.toggle('hidden', !state.settings.call_debug_enabled);
+    if (!state.settings.call_debug_enabled) {
+      el.textContent = '';
+      return;
+    }
     const room = state.room;
     const local = room?.localParticipant;
     const audioCount = local?.audioTrackPublications?.size ?? 0;
@@ -1458,6 +1479,7 @@
       callScreenShareToggle: settings.screen_share_enabled,
       callRingtoneToggle: settings.ringtone_enabled,
       callMessagesToggle: settings.call_messages_enabled,
+      callDebugToggle: settings.call_debug_enabled,
     };
     Object.entries(fields).forEach(([id, checked]) => {
       const input = document.getElementById(id);
@@ -1477,6 +1499,7 @@
       screen_share_enabled: document.getElementById('callScreenShareToggle')?.checked !== false,
       ringtone_enabled: document.getElementById('callRingtoneToggle')?.checked !== false,
       call_messages_enabled: document.getElementById('callMessagesToggle')?.checked !== false,
+      call_debug_enabled: document.getElementById('callDebugToggle')?.checked === true,
       ring_timeout_ms: Number(document.getElementById('callRingTimeoutMs')?.value || 60000),
       max_call_participants: Number(document.getElementById('callMaxParticipants')?.value || 20),
       livekit_ws_url: document.getElementById('callLiveKitWsUrl')?.value || '',

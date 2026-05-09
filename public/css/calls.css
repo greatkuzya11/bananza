@@ -239,7 +239,10 @@
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  min-width: 0;
+  min-height: 0;
+  background: #000;
+  object-fit: contain;
 }
 
 .call-prejoin-avatar {
@@ -381,6 +384,7 @@ html[data-visual-mode="rich"] .call-admin-status {
   max-height: 80vh;
   display: grid;
   grid-template-rows: auto 1fr auto;
+  min-width: 0;
   min-height: 0;
   border-radius: 12px;
   border: 1px solid var(--call-border-soft);
@@ -460,19 +464,23 @@ html[data-visual-mode="rich"] .call-admin-status {
 }
 
 .call-room-layout {
+  min-width: 0;
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  overflow: hidden;
   background: var(--call-bg-muted);
 }
 
 .call-grid {
+  min-width: 0;
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 8px;
   padding: 8px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   background: var(--call-bg-muted);
 }
 
@@ -534,30 +542,39 @@ html[data-visual-mode="rich"] .call-admin-status {
 
 .call-tile {
   position: relative;
+  width: 100%;
+  min-width: 0;
   min-height: 180px;
+  aspect-ratio: 16 / 9;
   border: 1px solid var(--call-border-soft);
   border-radius: 8px;
   overflow: hidden;
-  background: var(--call-bg-panel);
+  background: #000;
   display: grid;
   place-items: center;
 }
 
 .call-tile video {
+  display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  min-width: 0;
+  min-height: 0;
+  background: #000;
+  object-fit: contain;
 }
 
 .call-tile-placeholder {
-  width: 58px;
-  height: 58px;
-  border-radius: 50%;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
   display: grid;
   place-items: center;
-  background: var(--accent);
-  font-weight: 800;
-  font-size: 22px;
+  background:
+    radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 38%),
+    linear-gradient(135deg, var(--call-bg-panel), var(--call-bg-muted));
+  font-size: clamp(46px, 9vw, 76px);
+  line-height: 1;
 }
 
 .call-tile-name {
@@ -998,6 +1015,11 @@ html[data-visual-mode="rich"] .call-admin-status {
 
   .call-grid {
     grid-template-columns: 1fr;
+  }
+
+  .call-tile {
+    max-width: 100%;
+    min-height: clamp(180px, 31dvh, 260px);
   }
 
   .call-room-layout {

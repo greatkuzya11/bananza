@@ -44,6 +44,7 @@
       screen_share_enabled: true,
       ringtone_enabled: true,
       call_messages_enabled: true,
+      call_debug_enabled: false,
       max_call_participants: 20,
     };
   }
