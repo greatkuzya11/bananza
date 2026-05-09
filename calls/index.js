@@ -13,6 +13,9 @@ const {
 
 const CALL_TOKEN_TTL_SECONDS = 60 * 60 * 2;
 const TEST_ROOM_TIMEOUT_MS = 4000;
+const CALL_RING_WORKER_MS = 10_000;
+const CALL_RECONCILE_WORKER_MS = 30_000;
+const CALL_RECONCILE_MIN_AGE_MS = 90_000;
 
 function boolError(res, status, message, code = '') {
   return res.status(status).json({ error: message, code: code || message });
@@ -33,6 +36,8 @@ function createCallFeature({
   broadcastToChatAll,
   clients,
   notifyCallInvite,
+  hydrateMessageById,
+  onMessageCreated,
   secret = '',
 }) {
   const callLimiter = rateLimit
@@ -109,6 +114,39 @@ function createCallFeature({
     WHERE cm.chat_id=? AND COALESCE(u.is_ai_bot,0)=0
   `);
   const userStmt = db.prepare('SELECT id, username, display_name FROM users WHERE id=?');
+  const insertMessageStmt = db.prepare(`
+    INSERT INTO messages(chat_id, user_id, text)
+    VALUES(?, ?, ?)
+  `);
+  const insertCallMessageStmt = db.prepare(`
+    INSERT INTO call_messages(
+      message_id,
+      call_id,
+      status,
+      started_by,
+      started_at,
+      updated_at
+    )
+    VALUES(?, ?, 'active', ?, datetime('now'), datetime('now'))
+  `);
+  const updateCallMessageStmt = db.prepare(`
+    UPDATE call_messages
+    SET status=?,
+      ended_by=?,
+      ended_at=?,
+      ended_reason=?,
+      duration_ms=?,
+      updated_at=datetime('now')
+    WHERE call_id=?
+  `);
+  const callByMessageIdStmt = db.prepare(`
+    SELECT cs.*, c.name as chat_name, c.type as chat_type, c.is_notes as chat_is_notes,
+      u.display_name as started_by_name, u.username as started_by_username
+    FROM call_sessions cs
+    JOIN chats c ON c.id=cs.chat_id
+    JOIN users u ON u.id=cs.started_by
+    WHERE cs.message_id=?
+  `);
 
   function livekitConfig() {
     return getLiveKitConfig(db, secret, process.env);
@@ -151,9 +189,34 @@ function createCallFeature({
     };
   }
 
+  function parseTimeMs(value) {
+    if (!value) return 0;
+    const text = String(value);
+    const normalized = text.includes('T') ? text : `${text.replace(' ', 'T')}Z`;
+    const parsed = Date.parse(normalized);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function callDurationMs(row, endedAt = row?.ended_at) {
+    const started = parseTimeMs(row?.started_at);
+    const ended = parseTimeMs(endedAt);
+    if (!started || !ended || ended < started) return null;
+    return Math.max(0, ended - started);
+  }
+
+  function terminalStatusForReason(reason = 'ended') {
+    if (reason === 'missed' || reason === 'timeout') return 'missed';
+    if (reason === 'declined') return 'declined';
+    if (reason === 'failed') return 'failed';
+    return 'ended';
+  }
+
   function serializeCall(row) {
     if (!row) return null;
     const participants = participantsStmt.all(row.id).map(serializeParticipant);
+    const settings = getCallSettings(db);
+    const isActive = row.status === 'active';
+    const duration = row.duration_ms == null ? callDurationMs(row) : Number(row.duration_ms);
     return {
       id: Number(row.id),
       chat_id: Number(row.chat_id),
@@ -162,14 +225,19 @@ function createCallFeature({
       chat_type: row.chat_type || '',
       livekit_room_name: row.livekit_room_name,
       status: row.status,
+      message_id: row.message_id ? Number(row.message_id) : null,
       started_by: Number(row.started_by),
       started_by_name: row.started_by_name || row.started_by_username || 'User',
       started_at: row.started_at,
       ended_at: row.ended_at || null,
       ended_by: row.ended_by ? Number(row.ended_by) : null,
+      ended_reason: row.ended_reason || null,
+      duration_ms: Number.isFinite(duration) ? duration : null,
       ring_expires_at: row.ring_expires_at || null,
       participants,
       participant_count: participants.filter((item) => item.state === 'joined').length,
+      can_join: isActive,
+      can_screen_share: Boolean(isActive && settings.screen_share_enabled),
     };
   }
 
@@ -190,14 +258,75 @@ function createCallFeature({
     broadcastToChatAll(chatId, payload);
   }
 
+  function attachCallMetadata(messages = []) {
+    if (!Array.isArray(messages) || messages.length === 0) return messages;
+    return messages.map((message) => {
+      if (!message?.id) return message;
+      const row = callByMessageIdStmt.get(message.id);
+      if (!row) return message;
+      const call = serializeCall(row);
+      message.call = call;
+      message.is_call_message = true;
+      message.call_message = {
+        call_id: call.id,
+        status: call.status,
+        duration_ms: call.duration_ms,
+        ended_reason: call.ended_reason,
+      };
+      return message;
+    });
+  }
+
+  function hydrateCallMessage(messageId) {
+    if (!messageId || typeof hydrateMessageById !== 'function') return null;
+    return hydrateMessageById(messageId);
+  }
+
+  function broadcastCallMessageCreated(messageId) {
+    const message = hydrateCallMessage(messageId);
+    if (!message?.chat_id) return null;
+    onMessageCreated?.(message);
+    broadcastCall(message.chat_id, { type: 'message', message });
+    return message;
+  }
+
+  function broadcastCallMessageUpdated(callOrRow) {
+    const messageId = Number(callOrRow?.message_id || 0);
+    if (!messageId) return null;
+    const message = hydrateCallMessage(messageId);
+    if (!message?.chat_id) return null;
+    broadcastCall(message.chat_id, { type: 'message_updated', message });
+    return message;
+  }
+
+  function syncCallMessage(row) {
+    if (!row?.message_id) return;
+    updateCallMessageStmt.run(
+      row.status,
+      row.ended_by || null,
+      row.ended_at || null,
+      row.ended_reason || null,
+      row.duration_ms == null ? null : Number(row.duration_ms),
+      row.id
+    );
+  }
+
   function endCall(callId, endedBy = null, reason = 'ended') {
     const row = callByIdStmt.get(callId);
     if (!row || row.status !== 'active') return serializeCall(row);
+    const endedAt = new Date().toISOString();
+    const status = terminalStatusForReason(reason);
+    const durationMs = callDurationMs(row, endedAt);
     db.prepare(`
       UPDATE call_sessions
-      SET status='ended', ended_by=?, ended_at=datetime('now'), updated_at=datetime('now')
+      SET status=?,
+        ended_by=?,
+        ended_at=?,
+        ended_reason=?,
+        duration_ms=?,
+        updated_at=datetime('now')
       WHERE id=? AND status='active'
-    `).run(endedBy || null, callId);
+    `).run(status, endedBy || null, endedAt, reason || status, durationMs, callId);
     db.prepare(`
       UPDATE call_participants
       SET state=CASE WHEN state='joined' THEN 'left' WHEN state='invited' THEN 'missed' ELSE state END,
@@ -206,7 +335,11 @@ function createCallFeature({
       WHERE call_id=?
     `).run(callId);
     const call = getCall(callId);
-    if (call) broadcastCall(call.chat_id, { type: 'call_ended', call, reason });
+    if (call) {
+      syncCallMessage(callByIdStmt.get(callId));
+      broadcastCall(call.chat_id, { type: 'call_ended', call, reason });
+      broadcastCallMessageUpdated(call);
+    }
     return call;
   }
 
@@ -238,12 +371,18 @@ function createCallFeature({
         call,
         participant: call.participants.find((item) => Number(item.user_id) === Number(userId)) || null,
       });
+      broadcastCallMessageUpdated(call);
     }
     return call;
   }
 
   async function createTokenForCall(call, user) {
     const config = livekitConfig();
+    const settings = getCallSettings(db);
+    const canPublishSources = [TrackSource.CAMERA, TrackSource.MICROPHONE];
+    if (settings.screen_share_enabled) {
+      canPublishSources.push(TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO);
+    }
     const token = new AccessToken(config.apiKey, config.apiSecret, {
       identity: `user:${user.id}`,
       name: user.display_name || user.username || `User ${user.id}`,
@@ -257,7 +396,7 @@ function createCallFeature({
       canSubscribe: true,
       canPublishData: false,
       canUpdateOwnMetadata: false,
-      canPublishSources: [TrackSource.CAMERA, TrackSource.MICROPHONE],
+      canPublishSources,
     });
     return token.toJwt();
   }
@@ -283,10 +422,13 @@ function createCallFeature({
     if (humanMembers.length < 2) {
       return boolError(res, 403, 'Calls need at least two human members', 'not_enough_members');
     }
+    if (humanMembers.length > settings.max_call_participants) {
+      return boolError(res, 403, 'Too many participants for a call', 'too_many_call_participants');
+    }
     return null;
   }
 
-  const createCallTx = db.transaction(({ chat, members, user, roomName, ringExpiresAt }) => {
+  const createCallTx = db.transaction(({ chat, members, user, roomName, ringExpiresAt, settings }) => {
     const inserted = db.prepare(`
       INSERT INTO call_sessions(chat_id, livekit_room_name, status, started_by, ring_expires_at)
       VALUES(?, ?, 'active', ?, ?)
@@ -305,8 +447,99 @@ function createCallFeature({
         const state = Number(member.id) === Number(user.id) ? 'joined' : 'invited';
         insertParticipant.run(callId, member.id, state, state);
       });
-    return callId;
+    let messageId = null;
+    if (settings.call_messages_enabled) {
+      const message = insertMessageStmt.run(chat.id, user.id, 'Video call');
+      messageId = Number(message.lastInsertRowid);
+      insertCallMessageStmt.run(messageId, callId, user.id);
+      db.prepare('UPDATE call_sessions SET message_id=?, updated_at=datetime(\'now\') WHERE id=?')
+        .run(messageId, callId);
+    }
+    return { callId, messageId };
   });
+
+  function expireRingingCalls() {
+    let changed = 0;
+    const now = Date.now();
+    const markMissed = db.prepare(`
+      UPDATE call_participants
+      SET state='missed', updated_at=datetime('now')
+      WHERE call_id=? AND state='invited'
+    `);
+    const clearRing = db.prepare(`
+      UPDATE call_sessions
+      SET ring_expires_at=NULL, updated_at=datetime('now')
+      WHERE id=? AND status='active'
+    `);
+
+    activeCallsStmt.all().forEach((row) => {
+      const expiresAt = parseTimeMs(row.ring_expires_at);
+      if (!expiresAt || expiresAt > now) return;
+      markMissed.run(row.id);
+      const joinedTotal = Number(joinedHumanCountStmt.get(row.id)?.total || 0);
+      if ((row.chat_type === 'private' && joinedTotal < 2) || joinedTotal <= 0) {
+        endCall(row.id, null, 'missed');
+        changed += 1;
+        return;
+      }
+      clearRing.run(row.id);
+      const call = getCall(row.id);
+      if (call) {
+        broadcastCall(row.chat_id, { type: 'call_updated', call });
+        broadcastCallMessageUpdated(call);
+      }
+      changed += 1;
+    });
+    return changed;
+  }
+
+  async function reconcileLiveKitRooms() {
+    const config = livekitConfig();
+    if (!config.ready) return 0;
+    const rows = activeCallsStmt.all();
+    if (!rows.length) return 0;
+    const minAgeMs = Math.max(CALL_RECONCILE_MIN_AGE_MS, getCallSettings(db).ring_timeout_ms + 30_000);
+    const client = new RoomServiceClient(liveKitHttpUrl(config.wsUrl), config.apiKey, config.apiSecret);
+    if (typeof client.listParticipants !== 'function') return 0;
+    let ended = 0;
+    for (const row of rows) {
+      const startedAt = parseTimeMs(row.started_at);
+      if (startedAt && Date.now() - startedAt < minAgeMs) continue;
+      try {
+        const participants = await Promise.race([
+          client.listParticipants(row.livekit_room_name),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('LiveKit reconcile timed out')), TEST_ROOM_TIMEOUT_MS)),
+        ]);
+        if (Array.isArray(participants) && participants.length === 0) {
+          endCall(row.id, null, 'stale_empty');
+          ended += 1;
+        }
+      } catch (error) {
+        const message = String(error?.message || '');
+        if (/not found|does not exist|room.*missing/i.test(message)) {
+          endCall(row.id, null, 'stale_empty');
+          ended += 1;
+        }
+      }
+    }
+    return ended;
+  }
+
+  const ringTimer = setInterval(() => {
+    try {
+      expireRingingCalls();
+    } catch (error) {
+      console.warn('[calls] ring timeout worker failed:', error.message);
+    }
+  }, CALL_RING_WORKER_MS);
+  ringTimer.unref?.();
+
+  const reconcileTimer = setInterval(() => {
+    reconcileLiveKitRooms().catch((error) => {
+      console.warn('[calls] LiveKit reconciliation failed:', error.message);
+    });
+  }, CALL_RECONCILE_WORKER_MS);
+  reconcileTimer.unref?.();
 
   app.get('/api/calls/active', auth, (req, res) => {
     res.json({
@@ -334,16 +567,21 @@ function createCallFeature({
     const existing = activeCallByChatStmt.get(chatId);
     if (existing) return boolError(res, 409, 'Call already active', 'call_already_active');
 
-    const ringExpiresAt = new Date(Date.now() + getCallSettings(db).ring_timeout_ms).toISOString();
+    const settings = getCallSettings(db);
+    const ringExpiresAt = new Date(Date.now() + settings.ring_timeout_ms).toISOString();
     let callId;
+    let messageId;
     try {
-      callId = createCallTx({
+      const created = createCallTx({
         chat,
         members,
         user: req.user,
         roomName: `bananza-call-pending-${randomUUID()}`,
         ringExpiresAt,
+        settings,
       });
+      callId = created.callId;
+      messageId = created.messageId;
     } catch (error) {
       if (String(error?.message || '').includes('idx_call_sessions_active_chat')) {
         return boolError(res, 409, 'Call already active', 'call_already_active');
@@ -352,6 +590,7 @@ function createCallFeature({
     }
 
     const call = getCall(callId);
+    if (messageId) broadcastCallMessageCreated(messageId);
     broadcastCall(chatId, { type: 'call_updated', call });
     const actorName = req.user.display_name || req.user.username || 'User';
     call.participants
@@ -477,12 +716,20 @@ function createCallFeature({
     getPublicSettings: publicSettings,
     getSettings: () => getCallSettings(db),
     endAllActiveCalls,
+    attachCallMetadata,
     serializeCall,
     getCall,
+    stopWorkers: () => {
+      clearInterval(ringTimer);
+      clearInterval(reconcileTimer);
+    },
     _private: {
       createTokenForCall,
       livekitConfig,
       validateChatForCall,
+      expireRingingCalls,
+      reconcileLiveKitRooms,
+      attachCallMetadata,
     },
   };
 }

@@ -42,6 +42,9 @@ function createForwardingFeature({
     if (Number(source.is_poll_message) !== 0) {
       return res.status(400).json({ error: 'Poll messages cannot be forwarded' });
     }
+    if (Number(source.is_call_message) !== 0) {
+      return res.status(400).json({ error: 'Call messages cannot be forwarded' });
+    }
 
     const isSourceMember = db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?')
       .get(source.chat_id, req.user.id);

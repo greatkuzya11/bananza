@@ -352,6 +352,8 @@ callFeature = createCallFeature({
   broadcastToChatAll,
   clients,
   secret: JWT_SECRET,
+  hydrateMessageById: (messageId, viewerUserId) => hydrateMessageById(messageId, viewerUserId),
+  onMessageCreated: (message) => handleChatListMessageCreated(message),
   notifyCallInvite: (userId, payload) => pushFeature.notifyCallInvite(userId, payload),
 });
 
@@ -584,11 +586,13 @@ const editableMessageForUpdateStmt = db.prepare(`
     vm.note_kind as voice_note_kind,
     vm.transcription_text,
     p.message_id as poll_message_id,
+    cm.call_id as call_message_id,
     COALESCE(u.is_ai_bot, 0) as is_ai_author
   FROM messages m
   JOIN users u ON u.id=m.user_id
   LEFT JOIN voice_messages vm ON vm.message_id=m.id
   LEFT JOIN polls p ON p.message_id=m.id
+  LEFT JOIN call_messages cm ON cm.message_id=m.id
   WHERE m.id=? AND m.is_deleted=0
 `);
 const messagePinExistsStmt = db.prepare('SELECT 1 FROM message_pins WHERE message_id=?');
@@ -835,9 +839,9 @@ function hydrateMessageById(messageId, viewerUserId = null) {
   const minRead = readInfo && readInfo.min_read != null ? readInfo.min_read : row.id;
   row.is_read = row.id <= minRead;
   const withVoice = voiceFeature.attachVoiceMetadata([row])[0];
-  return decorateMessageFilePayload(
-    pollFeature.attachPollMetadata([withVoice], viewerUserId, { ensureClosed: false, broadcastOnClose: false })[0]
-  );
+  const withPoll = pollFeature.attachPollMetadata([withVoice], viewerUserId, { ensureClosed: false, broadcastOnClose: false })[0];
+  const withCall = callFeature?.attachCallMetadata?.([withPoll])?.[0] || withPoll;
+  return decorateMessageFilePayload(withCall);
 }
 
 function isChatMember(chatId, userId) {
@@ -2290,13 +2294,15 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
   ).get(chatId, req.user.id);
   const minRead = readInfo && readInfo.min_read != null ? readInfo.min_read : Number.MAX_SAFE_INTEGER;
 
-  const result = pollFeature.attachPollMetadata(
+  const decoratedMessages = pollFeature.attachPollMetadata(
     voiceFeature.attachVoiceMetadata(
       msgs.map(m => attachMessageMentions({ ...m, previews: prevStmt.all(m.id), reactions: reactStmt.all(m.id), is_read: m.id <= minRead }))
     ),
     req.user.id,
     { ensureClosed: true, broadcastOnClose: true }
-  ).map(decorateMessageFilePayload);
+  );
+  const result = (callFeature?.attachCallMetadata?.(decoratedMessages) || decoratedMessages)
+    .map(decorateMessageFilePayload);
   const pinEvents = getPinEventsForWindow(chatId, result, {
     openEnded: !before && !after && !anchor,
   });
@@ -2488,6 +2494,9 @@ app.post('/api/messages/:id/save-to-notes', auth, msgLimiter, (req, res) => {
   if (!source) return res.status(404).json({ error: 'Message not found' });
   if (Number(source.is_poll_message) !== 0) {
     return res.status(400).json({ error: 'Poll messages cannot be saved to notes' });
+  }
+  if (Number(source.is_call_message) !== 0) {
+    return res.status(400).json({ error: 'Call messages cannot be saved to notes' });
   }
   if (!isChatMember(source.chat_id, req.user.id)) {
     return res.status(403).json({ error: 'Not a member of source chat' });
@@ -2769,6 +2778,7 @@ app.patch('/api/messages/:id', auth, msgLimiter, (req, res) => {
   if (!req.user.is_admin && !db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(m.chat_id, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
   if (m.poll_message_id) return res.status(400).json({ error: 'Poll messages cannot be edited' });
+  if (m.call_message_id) return res.status(400).json({ error: 'Call messages cannot be edited' });
 
   try {
     const updated = applyEditableMessageText(m, {
@@ -2791,6 +2801,7 @@ app.post('/api/messages/:id/context-convert', auth, msgLimiter, async (req, res)
   if (!req.user.is_admin && !db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(m.chat_id, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
   if (m.poll_message_id) return res.status(400).json({ error: 'Poll messages cannot be transformed' });
+  if (m.call_message_id) return res.status(400).json({ error: 'Call messages cannot be transformed' });
   if (m.ai_generated || Number(m.is_ai_author || 0) === 1) {
     return res.status(400).json({ error: 'AI messages cannot be transformed' });
   }
@@ -3318,6 +3329,9 @@ app.delete('/api/messages/:id', auth, (req, res) => {
   if (!m) return res.status(404).json({ error: 'Not found' });
   if (!req.user.is_admin && m.user_id !== req.user.id)
     return res.status(403).json({ error: 'Not allowed' });
+  if (db.prepare('SELECT 1 FROM call_messages WHERE message_id=?').get(mid)) {
+    return res.status(400).json({ error: 'Call messages cannot be deleted' });
+  }
 
   // Delete attached file from disk and DB
   if (m.file_id) {

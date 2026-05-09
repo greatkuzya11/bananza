@@ -28,12 +28,20 @@ test('call settings default to disabled and normalize incoming values', () => {
     allow_private_calls: '0',
     allow_group_calls: 1,
     ring_timeout_ms: 999999,
+    screen_share_enabled: 'false',
+    ringtone_enabled: '1',
+    call_messages_enabled: 0,
+    max_call_participants: 999,
     ignored: true,
   }), {
     calls_enabled: true,
     allow_private_calls: false,
     allow_group_calls: true,
     ring_timeout_ms: 300000,
+    screen_share_enabled: false,
+    ringtone_enabled: true,
+    call_messages_enabled: false,
+    max_call_participants: 100,
   });
 });
 

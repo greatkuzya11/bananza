@@ -37,7 +37,8 @@ function createMessageCopyService({
       vm.transcription_file_id as voice_transcription_file_id,
       vm.shape_id as voice_shape_id,
       vm.shape_snapshot as voice_shape_snapshot,
-      EXISTS(SELECT 1 FROM polls p WHERE p.message_id=m.id) as is_poll_message
+      EXISTS(SELECT 1 FROM polls p WHERE p.message_id=m.id) as is_poll_message,
+      EXISTS(SELECT 1 FROM call_messages cm WHERE cm.message_id=m.id) as is_call_message
     FROM messages m
     JOIN users u ON u.id = m.user_id
     LEFT JOIN files f ON f.id = m.file_id
@@ -167,6 +168,9 @@ function createMessageCopyService({
     try {
       if (Number(source?.is_poll_message) !== 0) {
         throw new Error('Poll messages cannot be copied');
+      }
+      if (Number(source?.is_call_message) !== 0) {
+        throw new Error('Call messages cannot be copied');
       }
       duplicatedFile = duplicateMessageFile(source, actorUserId);
 

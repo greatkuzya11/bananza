@@ -8,6 +8,10 @@ const DEFAULT_CALL_SETTINGS = {
   ring_timeout_ms: 60000,
   allow_private_calls: true,
   allow_group_calls: true,
+  screen_share_enabled: true,
+  ringtone_enabled: true,
+  call_messages_enabled: true,
+  max_call_participants: 20,
 };
 
 const CALL_SETTING_KEYS = Object.keys(DEFAULT_CALL_SETTINGS);
@@ -46,11 +50,20 @@ function normalizeCallSettings(raw = {}) {
   next.calls_enabled = normalizeBoolean(next.calls_enabled, DEFAULT_CALL_SETTINGS.calls_enabled);
   next.allow_private_calls = normalizeBoolean(next.allow_private_calls, DEFAULT_CALL_SETTINGS.allow_private_calls);
   next.allow_group_calls = normalizeBoolean(next.allow_group_calls, DEFAULT_CALL_SETTINGS.allow_group_calls);
+  next.screen_share_enabled = normalizeBoolean(next.screen_share_enabled, DEFAULT_CALL_SETTINGS.screen_share_enabled);
+  next.ringtone_enabled = normalizeBoolean(next.ringtone_enabled, DEFAULT_CALL_SETTINGS.ringtone_enabled);
+  next.call_messages_enabled = normalizeBoolean(next.call_messages_enabled, DEFAULT_CALL_SETTINGS.call_messages_enabled);
   next.ring_timeout_ms = clampNumber(
     next.ring_timeout_ms,
     DEFAULT_CALL_SETTINGS.ring_timeout_ms,
     10000,
     300000
+  );
+  next.max_call_participants = clampNumber(
+    next.max_call_participants,
+    DEFAULT_CALL_SETTINGS.max_call_participants,
+    2,
+    100
   );
   return next;
 }
@@ -262,6 +275,10 @@ function getPublicCallSettings(db, secretOrEnv = '', env = process.env) {
     allow_private_calls: settings.allow_private_calls,
     allow_group_calls: settings.allow_group_calls,
     ring_timeout_ms: settings.ring_timeout_ms,
+    screen_share_enabled: Boolean(settings.screen_share_enabled),
+    ringtone_enabled: Boolean(settings.ringtone_enabled),
+    call_messages_enabled: Boolean(settings.call_messages_enabled),
+    max_call_participants: settings.max_call_participants,
   };
 }
 

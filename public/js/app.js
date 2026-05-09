@@ -17015,8 +17015,9 @@
       isSingleEmojiMessage(msg.text)
     );
     const isPollMessage = Boolean(!msg.is_deleted && msg.poll);
+    const isCallMessage = Boolean(!msg.is_deleted && msg.call);
     const row = document.createElement('div');
-    row.className = `msg-row ${isOwn ? 'own' : 'other'}${isEmojiOnly ? ' emoji-only-message' : ''}${isMediaMessage ? ' media-message' : ''}${isPollMessage ? ' poll-message' : ''}`;
+    row.className = `msg-row ${isOwn ? 'own' : 'other'}${isEmojiOnly ? ' emoji-only-message' : ''}${isMediaMessage ? ' media-message' : ''}${isPollMessage ? ' poll-message' : ''}${isCallMessage ? ' call-message' : ''}`;
     if (contextConvertPendingMessageIds.has(Number(msg.id || 0))) row.classList.add('context-convert-pending');
     row.dataset.msgId = msg.id;
     if (msg.client_id) row.dataset.clientId = msg.client_id;
@@ -17089,8 +17090,12 @@
         html += renderFileAttachment(msg);
       }
 
+      if (isCallMessage) {
+        html += renderCallMessageCard(msg);
+      }
+
       // Text
-      if (msg.text) {
+      if (msg.text && !isCallMessage) {
         const textClasses = isPulsePollMessage ? 'msg-text poll-question-block' : 'msg-text';
         html += `<div class="${textClasses}">${isEmojiOnly ? esc(msg.text.trim()) : renderMessageText(msg.text, msg.mentions)}</div>`;
       }
@@ -17107,7 +17112,7 @@
       }
 
       // Delete button (inside bubble)
-        if (!isClientMessage && (isOwn || currentUser.is_admin)) {
+        if (!isClientMessage && !isCallMessage && (isOwn || currentUser.is_admin)) {
           html += `<button class="msg-delete-btn" data-id="${msg.id}" title="Delete">🗑</button>`;
         }
     }
@@ -17205,6 +17210,7 @@
     }
 
     bindPollControls(row);
+    bindCallMessageControls(row);
     hydratePulseInlineVoters(row);
 
     const pinBtn = row.querySelector('.msg-pin-btn');
@@ -17508,6 +17514,43 @@
           </div>
         </a>`;
     }
+  }
+
+  function renderCallMessageCard(msg) {
+    const call = msg?.call || {};
+    const status = String(call.status || msg?.call_message?.status || 'active');
+    const active = status === 'active' && call.can_join !== false;
+    const duration = Number(call.duration_ms || msg?.call_message?.duration_ms || 0);
+    const labels = {
+      active: t('Call started'),
+      ended: t('Call ended'),
+      missed: t('Call missed'),
+      declined: t('Call declined'),
+      failed: t('Call failed'),
+    };
+    const meta = [];
+    if (call.started_by_name) meta.push(t('Started by {name}', { name: call.started_by_name }));
+    if (duration > 0) meta.push(t('Duration {duration}', { duration: formatDuration(duration / 1000) }));
+    return `
+      <div class="call-message-card" data-call-card="${Number(call.id || 0)}">
+        <div class="call-message-icon" aria-hidden="true">☎</div>
+        <div class="call-message-main">
+          <div class="call-message-title">${esc(labels[status] || labels.active)}</div>
+          <div class="call-message-meta">${esc(meta.join(' / ') || t('Video call'))}</div>
+        </div>
+        ${active ? `<button type="button" class="call-message-join" data-call-card-join="${Number(call.id || 0)}">${esc(t('Join call'))}</button>` : ''}
+      </div>
+    `;
+  }
+
+  function bindCallMessageControls(row) {
+    const message = row?.__messageData || {};
+    const call = message.call || null;
+    if (!call?.id) return;
+    row.querySelector('[data-call-card-join]')?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      window.BananzaCallHooks?.joinCallFromMessage?.(call);
+    });
   }
 
   function renderLinkPreview(p) {
@@ -18689,6 +18732,7 @@
     if (!currentUser || !msg || msg.is_deleted) return false;
     if (isClientSideMessage(msg)) return false;
     if (isPollMessage(msg)) return false;
+    if (msg.call || msg.is_call_message) return false;
     if (!currentUser.is_admin && msg.user_id !== currentUser.id) return false;
     return Boolean(msg.is_voice_note || msg.file_id || msg.text);
   }
@@ -18697,6 +18741,7 @@
     if (!currentUser || !msg || msg.is_deleted) return false;
     if (isClientSideMessage(msg)) return false;
     if (isPollMessage(msg)) return false;
+    if (msg.call || msg.is_call_message) return false;
     return Boolean(msg.is_voice_note || msg.file_id || msg.text);
   }
 

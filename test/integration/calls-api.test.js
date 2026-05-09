@@ -78,6 +78,16 @@ test('admin can enable calls and users can run call lifecycle', async () => {
     assert.equal(created.data.call.status, 'active');
     assert.equal(created.data.call.chat_id, groupChat.id);
     assert.equal(created.data.call.livekit_room_name, `bananza-call-${created.data.call.id}`);
+    assert.ok(created.data.call.message_id);
+
+    const activeMessages = await admin.request(`/api/chats/${groupChat.id}/messages`, {
+      searchParams: { meta: 1 },
+    });
+    const activeCard = activeMessages.data.messages.find((message) => Number(message.id) === Number(created.data.call.message_id));
+    assert.ok(activeCard);
+    assert.equal(activeCard.is_call_message, true);
+    assert.equal(activeCard.call.status, 'active');
+    assert.equal(activeCard.call.can_join, true);
 
     const invite = await invitePromise;
     assert.equal(invite.call.id, created.data.call.id);
@@ -112,6 +122,16 @@ test('admin can enable calls and users can run call lifecycle', async () => {
       json: {},
     });
     assert.equal(ended.data.call.status, 'ended');
+    assert.equal(ended.data.call.ended_reason, 'ended');
+    assert.equal(typeof ended.data.call.duration_ms, 'number');
+
+    const endedMessages = await admin.request(`/api/chats/${groupChat.id}/messages`, {
+      searchParams: { meta: 1 },
+    });
+    const endedCard = endedMessages.data.messages.find((message) => Number(message.id) === Number(created.data.call.message_id));
+    assert.ok(endedCard);
+    assert.equal(endedCard.call.status, 'ended');
+    assert.equal(endedCard.call.can_join, false);
 
     const activeAfterEnd = await bob.request(`/api/chats/${groupChat.id}/calls/active`);
     assert.equal(activeAfterEnd.data.call, null);

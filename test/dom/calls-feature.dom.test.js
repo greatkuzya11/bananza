@@ -41,6 +41,10 @@ function installCallBridge(dom, state) {
             allow_private_calls: state.savedAdminPayload.allow_private_calls !== false,
             allow_group_calls: state.savedAdminPayload.allow_group_calls !== false,
             ring_timeout_ms: Number(state.savedAdminPayload.ring_timeout_ms || 60000),
+            screen_share_enabled: state.savedAdminPayload.screen_share_enabled !== false,
+            ringtone_enabled: state.savedAdminPayload.ringtone_enabled !== false,
+            call_messages_enabled: state.savedAdminPayload.call_messages_enabled !== false,
+            max_call_participants: Number(state.savedAdminPayload.max_call_participants || 20),
           },
           livekit_ready: true,
           livekit_config: {
@@ -73,6 +77,9 @@ async function bootCallFeature(state) {
   const dom = createAppDom();
   installCallBridge(dom, state);
   loadBrowserScript(dom, 'public/js/i18n.js');
+  loadBrowserScript(dom, 'public/js/calls/CallStore.js');
+  loadBrowserScript(dom, 'public/js/calls/CallMedia.js');
+  loadBrowserScript(dom, 'public/js/calls/CallNotifications.js');
   loadBrowserScript(dom, 'public/js/calls/CallFeature.js');
   dom.window.dispatchEvent(new dom.window.Event('bananza:ready'));
   await waitForCondition(dom.window, () => state.requests.some((request) => request.url === '/api/calls/active'));
@@ -95,6 +102,10 @@ function defaultState(overrides = {}) {
       allow_private_calls: true,
       allow_group_calls: true,
       ring_timeout_ms: 60000,
+      screen_share_enabled: true,
+      ringtone_enabled: true,
+      call_messages_enabled: true,
+      max_call_participants: 20,
     },
     activeCalls: [],
     chatCall: null,
@@ -104,6 +115,10 @@ function defaultState(overrides = {}) {
         allow_private_calls: true,
         allow_group_calls: true,
         ring_timeout_ms: 60000,
+        screen_share_enabled: true,
+        ringtone_enabled: true,
+        call_messages_enabled: true,
+        max_call_participants: 20,
       },
       livekit_ready: false,
       livekit_ws_url_present: false,
@@ -227,6 +242,8 @@ test('CallFeature joins and leaves a mocked LiveKit room', async (t) => {
   assert.equal(banner.classList.contains('hidden'), false);
 
   dom.window.document.getElementById('callBannerJoin').click();
+  await waitForCondition(dom.window, () => !dom.window.document.getElementById('callPrejoin').classList.contains('hidden'));
+  dom.window.document.getElementById('callPrejoinJoinBtn').click();
   await waitForCondition(dom.window, () => connected);
   assert.equal(dom.window.document.getElementById('callSurface').classList.contains('hidden'), false);
   assert.equal(
