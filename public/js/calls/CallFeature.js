@@ -85,6 +85,39 @@
     return clean.split(/\s+/).slice(0, 2).map((part) => part[0] || '').join('').toUpperCase() || '?';
   }
 
+  function safeAvatarColor(value) {
+    const color = String(value || '').trim();
+    return /^#[0-9a-fA-F]{6}$/.test(color) ? color : '#65aadd';
+  }
+
+  function avatarMarkup(user, className) {
+    const name = user?.display_name || user?.name || user?.username || t('Participant');
+    const color = safeAvatarColor(user?.avatar_color);
+    const url = String(user?.avatar_url || '').trim();
+    const title = escapeHtml(name);
+    if (url) {
+      return `<span class="${className}" style="background:${escapeHtml(color)}" title="${title}"><img class="avatar-img" src="${escapeHtml(url)}" alt="" loading="lazy" onerror="this.remove()"></span>`;
+    }
+    return `<span class="${className}" style="background:${escapeHtml(color)}" title="${title}">${escapeHtml(initials(name))}</span>`;
+  }
+
+  function userIdFromIdentity(identity) {
+    const text = String(identity || '').trim();
+    const match = text.match(/(?:^|:)user:(\d+)$/i) || text.match(/^(\d+)$/);
+    return match ? Number(match[1]) : 0;
+  }
+
+  function callParticipantForRoomParticipant(participant, local = false) {
+    if (local) return { ...(currentUser() || {}), ...(state.currentCall?.participants || []).find((item) => Number(item.user_id) === Number(currentUser()?.id || 0)) };
+    const userId = userIdFromIdentity(participant?.identity);
+    if (userId) {
+      const byId = (state.currentCall?.participants || []).find((item) => Number(item.user_id) === userId);
+      if (byId) return byId;
+    }
+    const name = String(participant?.name || participant?.identity || '').trim();
+    return (state.currentCall?.participants || []).find((item) => [item.display_name, item.username].some((value) => String(value || '').trim() === name)) || null;
+  }
+
   function formatDuration(ms) {
     return STORE.formatDuration?.(ms) || '0:00';
   }
@@ -127,6 +160,30 @@
       NOTIFICATIONS.stopRingtone?.();
     }
     if (state.currentCall?.id === call?.id) state.currentCall = { ...state.currentCall, ...call, status: 'ended' };
+  }
+
+  async function closeEndedCall(call) {
+    const isCurrentCall = Boolean(call?.id && state.currentCall?.id === call.id);
+    const isPendingJoinCall = Boolean(call?.id && state.pendingJoinCall?.id === call.id);
+    removeCall(call);
+    if (isPendingJoinCall) {
+      state.pendingJoinCall = null;
+      state.prejoinMode = 'join';
+      document.getElementById('callPrejoin')?.classList.add('hidden');
+      document.getElementById('callSurface')?.classList.remove('is-behind-prejoin');
+    }
+    if (isCurrentCall) {
+      await disconnectRoom();
+      state.currentCall = null;
+      state.minimized = false;
+      state.participantsOpen = false;
+      document.getElementById('callSurface')?.classList.add('hidden');
+    }
+    renderAll();
+  }
+
+  function notifyChatCallIndicatorsChanged() {
+    bridge()?.refreshCallIndicators?.();
   }
 
   function ensureUi() {
@@ -207,8 +264,12 @@
             <div class="call-prejoin-title" id="callPrejoinTitle">${escapeHtml(t('Ready to join?'))}</div>
             <div class="call-prejoin-meta" id="callPrejoinMeta"></div>
             <div class="call-prejoin-toggles">
-              <button type="button" id="callPrejoinMicBtn" class="call-control-btn">${escapeHtml(t('Mic'))}</button>
-              <button type="button" id="callPrejoinCameraBtn" class="call-control-btn">${escapeHtml(t('Camera'))}</button>
+              <button type="button" id="callPrejoinMicBtn" class="call-control-btn call-icon-toggle call-icon-mic" aria-label="${escapeHtml(t('Mic'))}" title="${escapeHtml(t('Mic'))}" aria-pressed="true">
+                <span class="call-icon" aria-hidden="true"></span>
+              </button>
+              <button type="button" id="callPrejoinCameraBtn" class="call-control-btn call-icon-toggle call-icon-camera" aria-label="${escapeHtml(t('Camera'))}" title="${escapeHtml(t('Camera'))}" aria-pressed="true">
+                <span class="call-icon" aria-hidden="true"></span>
+              </button>
             </div>
             <div class="call-device-list">
               <label>${escapeHtml(t('Microphone'))}<select id="callMicSelect" class="call-device-select"></select></label>
@@ -246,27 +307,50 @@
       surface.id = 'callSurface';
       surface.className = 'call-surface hidden';
       surface.innerHTML = `
-        <div class="call-surface-head">
-          <div>
-            <div class="call-surface-title" id="callSurfaceTitle">${escapeHtml(t('Video call'))}</div>
-            <div class="call-surface-status" id="callSurfaceStatus"></div>
+        <div class="call-surface-card">
+          <div class="call-surface-head">
+            <div>
+              <div class="call-surface-title" id="callSurfaceTitle">${escapeHtml(t('Video call'))}</div>
+              <div class="call-surface-status" id="callSurfaceStatus"></div>
+            </div>
+            <div class="call-inline-actions">
+              <button type="button" id="callParticipantsBtn" class="call-control-btn call-tool-btn call-icon-users" title="${escapeHtml(t('Participants'))}" aria-label="${escapeHtml(t('Participants'))}" aria-pressed="false">
+                <span class="call-icon" aria-hidden="true"></span>
+                <span class="call-control-label">${escapeHtml(t('Participants'))}</span>
+              </button>
+              <button type="button" id="callMinimizeBtn" class="call-control-btn call-window-btn call-icon-pip" title="${escapeHtml(t('Minimize'))}" aria-label="${escapeHtml(t('Minimize'))}" aria-pressed="false">
+                <span class="call-icon" aria-hidden="true"></span>
+              </button>
+            </div>
           </div>
-          <div class="call-inline-actions">
-            <button type="button" id="callParticipantsBtn" class="call-control-btn" title="${escapeHtml(t('Participants'))}" aria-label="${escapeHtml(t('Participants'))}">${escapeHtml(t('Participants'))}</button>
-            <button type="button" id="callMinimizeBtn" class="call-control-btn" title="${escapeHtml(t('Minimize'))}" aria-label="${escapeHtml(t('Minimize'))}">_</button>
+          <div class="call-room-layout">
+            <div id="callGrid" class="call-grid"></div>
+            <aside id="callParticipantsPanel" class="call-participants-panel hidden"></aside>
           </div>
-        </div>
-        <div class="call-room-layout">
-          <div id="callGrid" class="call-grid"></div>
-          <aside id="callParticipantsPanel" class="call-participants-panel hidden"></aside>
-        </div>
-        <div class="call-controls">
-          <button type="button" id="callMicBtn" class="call-control-btn">${escapeHtml(t('Mic'))}</button>
-          <button type="button" id="callCameraBtn" class="call-control-btn">${escapeHtml(t('Camera'))}</button>
-          <button type="button" id="callDeviceBtn" class="call-control-btn">${escapeHtml(t('Devices'))}</button>
-          <button type="button" id="callScreenBtn" class="call-control-btn">${escapeHtml(t('Share screen'))}</button>
-          <button type="button" id="callLeaveBtn" class="call-control-btn danger">${escapeHtml(t('Leave'))}</button>
-          <button type="button" id="callEndBtn" class="call-control-btn danger">${escapeHtml(t('End for everyone'))}</button>
+          <div class="call-controls">
+            <button type="button" id="callMicBtn" class="call-control-btn call-icon-toggle call-icon-mic" aria-label="${escapeHtml(t('Mic'))}" title="${escapeHtml(t('Mic'))}" aria-pressed="true">
+              <span class="call-icon" aria-hidden="true"></span>
+            </button>
+            <button type="button" id="callCameraBtn" class="call-control-btn call-icon-toggle call-icon-camera" aria-label="${escapeHtml(t('Camera'))}" title="${escapeHtml(t('Camera'))}" aria-pressed="true">
+              <span class="call-icon" aria-hidden="true"></span>
+            </button>
+            <button type="button" id="callDeviceBtn" class="call-control-btn call-tool-btn call-icon-devices" title="${escapeHtml(t('Devices'))}" aria-label="${escapeHtml(t('Devices'))}">
+              <span class="call-icon" aria-hidden="true"></span>
+              <span class="call-control-label">${escapeHtml(t('Devices'))}</span>
+            </button>
+            <button type="button" id="callScreenBtn" class="call-control-btn call-tool-btn call-icon-screen" title="${escapeHtml(t('Share screen'))}" aria-label="${escapeHtml(t('Share screen'))}" aria-pressed="false">
+              <span class="call-icon" aria-hidden="true"></span>
+              <span class="call-control-label">${escapeHtml(t('Share screen'))}</span>
+            </button>
+            <button type="button" id="callLeaveBtn" class="call-control-btn call-tool-btn call-icon-phone-off danger" title="${escapeHtml(t('Leave'))}" aria-label="${escapeHtml(t('Leave'))}">
+              <span class="call-icon" aria-hidden="true"></span>
+              <span class="call-control-label">${escapeHtml(t('Leave'))}</span>
+            </button>
+            <button type="button" id="callEndBtn" class="call-control-btn call-tool-btn call-icon-end danger" title="${escapeHtml(t('End for everyone'))}" aria-label="${escapeHtml(t('End for everyone'))}">
+              <span class="call-icon" aria-hidden="true"></span>
+              <span class="call-control-label">${escapeHtml(t('End for everyone'))}</span>
+            </button>
+          </div>
         </div>
       `;
       document.body.appendChild(surface);
@@ -431,6 +515,7 @@
     renderIncoming();
     renderSurface();
     renderAdminEntry();
+    notifyChatCallIndicatorsChanged();
   }
 
   function renderAdminEntry() {
@@ -526,19 +611,68 @@
     fillDeviceSelect('callSpeakerSelect', 'audiooutput', t('Speaker'));
   }
 
+  function setIconToggleState(button, enabled, onLabel, offLabel) {
+    if (!button) return;
+    const label = enabled ? onLabel : offLabel;
+    if (!button.querySelector('.call-icon')) {
+      button.textContent = '';
+      const icon = document.createElement('span');
+      icon.className = 'call-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      button.appendChild(icon);
+    }
+    button.classList.toggle('is-off', !enabled);
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
+    button.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+  }
+
+  function renderMinimizeButton() {
+    const button = document.getElementById('callMinimizeBtn');
+    if (!button) return;
+    const minimized = Boolean(state.minimized);
+    const label = minimized ? t('Restore call') : t('Minimize');
+    if (!button.querySelector('.call-icon')) {
+      button.textContent = '';
+      const icon = document.createElement('span');
+      icon.className = 'call-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      button.appendChild(icon);
+    }
+    button.classList.toggle('call-icon-pip', !minimized);
+    button.classList.toggle('call-icon-expand', minimized);
+    button.setAttribute('title', label);
+    button.setAttribute('aria-label', label);
+    button.setAttribute('aria-pressed', minimized ? 'true' : 'false');
+  }
+
+  function setToolButtonLabel(button, label) {
+    if (!button) return;
+    let icon = button.querySelector('.call-icon');
+    let text = button.querySelector('.call-control-label');
+    if (!icon) {
+      icon = document.createElement('span');
+      icon.className = 'call-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      button.prepend(icon);
+    }
+    if (!text) {
+      text = document.createElement('span');
+      text.className = 'call-control-label';
+      button.appendChild(text);
+    }
+    text.textContent = label;
+    button.setAttribute('title', label);
+    button.setAttribute('aria-label', label);
+  }
+
   function renderPrejoinControls() {
     const mic = document.getElementById('callPrejoinMicBtn');
     const camera = document.getElementById('callPrejoinCameraBtn');
     const avatar = document.getElementById('callPrejoinAvatar');
     const video = document.getElementById('callPrejoinVideo');
-    if (mic) {
-      mic.textContent = state.prejoinMicEnabled ? t('Mic') : t('Mic off');
-      mic.classList.toggle('is-off', !state.prejoinMicEnabled);
-    }
-    if (camera) {
-      camera.textContent = state.prejoinCameraEnabled ? t('Camera') : t('Camera off');
-      camera.classList.toggle('is-off', !state.prejoinCameraEnabled);
-    }
+    setIconToggleState(mic, state.prejoinMicEnabled, t('Mic'), t('Mic off'));
+    setIconToggleState(camera, state.prejoinCameraEnabled, t('Camera'), t('Camera off'));
     if (avatar) {
       const name = currentUser()?.display_name || t('You');
       avatar.textContent = initials(name);
@@ -587,6 +721,7 @@
       NOTIFICATIONS.stopRingtone?.();
     }
     const wrap = document.getElementById('callPrejoin');
+    document.getElementById('callSurface')?.classList.add('is-behind-prejoin');
     const title = document.getElementById('callPrejoinTitle');
     const meta = document.getElementById('callPrejoinMeta');
     if (title) title.textContent = call.chat_name || t('Video call');
@@ -607,6 +742,7 @@
     state.pendingJoinCall = null;
     state.prejoinMode = 'join';
     document.getElementById('callPrejoin')?.classList.add('hidden');
+    document.getElementById('callSurface')?.classList.remove('is-behind-prejoin');
     renderPrejoinControls();
   }
 
@@ -845,11 +981,13 @@
     state.minimized = !state.minimized;
     const surface = document.getElementById('callSurface');
     surface?.classList.toggle('is-minimized', state.minimized);
+    renderMinimizeButton();
   }
 
   function toggleParticipantsPanel() {
     state.participantsOpen = !state.participantsOpen;
     renderParticipantsPanel();
+    renderSurfaceControls();
   }
 
   async function leaveCall(endForEveryone) {
@@ -891,7 +1029,7 @@
     if (!participants.length) {
       const empty = document.createElement('div');
       empty.className = 'call-tile';
-      empty.innerHTML = `<div class="call-tile-placeholder">${escapeHtml(initials(currentUser()?.display_name || 'Me'))}</div><div class="call-tile-name">${escapeHtml(t('Waiting'))}</div>`;
+      empty.innerHTML = `${avatarMarkup(currentUser(), 'call-tile-placeholder')}<div class="call-tile-name">${escapeHtml(t('Waiting'))}</div>`;
       grid.appendChild(empty);
       renderParticipantsPanel();
       return;
@@ -899,7 +1037,8 @@
     participants.forEach(({ participant, local }) => {
       const tile = document.createElement('div');
       tile.className = 'call-tile';
-      const name = getParticipantName(participant, local ? t('You') : t('Participant'));
+      const meta = callParticipantForRoomParticipant(participant, local);
+      const name = meta?.display_name || meta?.username || getParticipantName(participant, local ? t('You') : t('Participant'));
       const track = firstVideoTrack(participant);
       if (track?.attach) {
         try {
@@ -909,10 +1048,10 @@
           video.muted = Boolean(local);
           tile.appendChild(video);
         } catch {
-          tile.innerHTML = `<div class="call-tile-placeholder">${escapeHtml(initials(name))}</div>`;
+          tile.innerHTML = avatarMarkup({ ...meta, display_name: name }, 'call-tile-placeholder');
         }
       } else {
-        tile.innerHTML = `<div class="call-tile-placeholder">${escapeHtml(initials(name))}</div>`;
+        tile.innerHTML = avatarMarkup({ ...meta, display_name: name }, 'call-tile-placeholder');
       }
       const label = document.createElement('div');
       label.className = 'call-tile-name';
@@ -945,7 +1084,7 @@
       <div class="call-participants-list">
         ${participants.map((participant) => `
           <div class="call-participant-row">
-            <span class="call-participant-avatar">${escapeHtml(initials(participant.display_name || participant.username || t('Participant')))}</span>
+            ${avatarMarkup(participant, 'call-participant-avatar')}
             <span class="call-participant-main">
               <strong>${escapeHtml(participant.display_name || participant.username || t('Participant'))}</strong>
               <small>${escapeHtml(participantStateText(participant.state))}</small>
@@ -961,6 +1100,7 @@
     if (!surface || !state.currentCall) return;
     surface.classList.toggle('is-minimized', state.minimized);
     document.getElementById('callSurfaceTitle').textContent = state.currentCall.chat_name || t('Video call');
+    renderMinimizeButton();
     renderSurfaceControls();
     renderRoomTiles();
     renderParticipantsPanel();
@@ -969,20 +1109,26 @@
   function renderSurfaceControls() {
     const mic = document.getElementById('callMicBtn');
     const camera = document.getElementById('callCameraBtn');
+    const participants = document.getElementById('callParticipantsBtn');
+    const devices = document.getElementById('callDeviceBtn');
     const screen = document.getElementById('callScreenBtn');
-    if (mic) {
-      mic.textContent = state.micEnabled ? t('Mic') : t('Mic off');
-      mic.classList.toggle('is-off', !state.micEnabled);
-    }
-    if (camera) {
-      camera.textContent = state.cameraEnabled ? t('Camera') : t('Camera off');
-      camera.classList.toggle('is-off', !state.cameraEnabled);
-    }
+    const leave = document.getElementById('callLeaveBtn');
+    const end = document.getElementById('callEndBtn');
+    setIconToggleState(mic, state.micEnabled, t('Mic'), t('Mic off'));
+    setIconToggleState(camera, state.cameraEnabled, t('Camera'), t('Camera off'));
+    setToolButtonLabel(participants, t('Participants'));
+    participants?.classList.toggle('is-active', state.participantsOpen);
+    participants?.setAttribute('aria-pressed', state.participantsOpen ? 'true' : 'false');
+    setToolButtonLabel(devices, t('Devices'));
+    setToolButtonLabel(leave, t('Leave'));
+    setToolButtonLabel(end, t('End for everyone'));
     if (screen) {
       const supported = Boolean(state.settings.screen_share_enabled && MEDIA.isScreenShareSupported?.());
       screen.classList.toggle('hidden', !supported);
-      screen.textContent = state.screenShareEnabled ? t('Stop sharing') : t('Share screen');
-      screen.classList.toggle('is-off', !state.screenShareEnabled);
+      setToolButtonLabel(screen, state.screenShareEnabled ? t('Stop sharing') : t('Share screen'));
+      screen.classList.remove('is-off');
+      screen.classList.toggle('is-active', state.screenShareEnabled);
+      screen.setAttribute('aria-pressed', state.screenShareEnabled ? 'true' : 'false');
     }
   }
 
@@ -1121,7 +1267,13 @@
       return;
     }
     if (msg.call) {
-      if (msg.type === 'call_ended') removeCall(msg.call);
+      if (msg.type === 'call_ended') {
+        closeEndedCall(msg.call).catch(() => {
+          removeCall(msg.call);
+          renderAll();
+        });
+        return;
+      }
       else upsertCall(msg.call);
     }
     if (msg.type === 'call_invite' && msg.call && Number(msg.call.started_by) !== Number(currentUser()?.id || 0)) {
@@ -1149,6 +1301,8 @@
 
   hooks.openPrejoin = (call) => openPrejoin(call);
   hooks.joinCallFromMessage = (call) => openPrejoin(call);
+  hooks.getActiveCallForChat = (chatId) => state.activeCalls.get(Number(chatId || 0)) || null;
+  hooks.getActiveCalls = () => Array.from(state.activeCalls.values()).map((call) => ({ ...call }));
 
   async function bootstrap() {
     ensureUi();

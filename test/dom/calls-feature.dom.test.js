@@ -189,6 +189,7 @@ test('CallFeature shows and declines incoming call overlay', async (t) => {
 
 test('CallFeature joins and leaves a mocked LiveKit room', async (t) => {
   const state = defaultState({
+    user: { id: 1, display_name: 'Alice', is_admin: 1, avatar_color: '#112233', avatar_url: '/uploads/avatars/alice.png' },
     features: {
       calls_enabled: true,
       livekit_ready: true,
@@ -204,6 +205,10 @@ test('CallFeature joins and leaves a mocked LiveKit room', async (t) => {
     participant_count: 1,
     started_by: 2,
     status: 'active',
+    participants: [
+      { user_id: 1, display_name: 'Alice', username: 'alice', state: 'joined', avatar_color: '#112233', avatar_url: '/uploads/avatars/alice.png' },
+      { user_id: 2, display_name: 'Bob', username: 'bob', state: 'invited', avatar_color: '#445566', avatar_url: '/uploads/avatars/bob.png' },
+    ],
   };
   const dom = await bootCallFeature(state);
   t.after(() => dom.window.close());
@@ -214,7 +219,7 @@ test('CallFeature joins and leaves a mocked LiveKit room', async (t) => {
     Room: class {
       constructor() {
         this.localParticipant = {
-          identity: '1',
+          identity: 'user:1',
           name: 'Alice',
           trackPublications: new Map(),
           setCameraEnabled: async () => {},
@@ -243,9 +248,27 @@ test('CallFeature joins and leaves a mocked LiveKit room', async (t) => {
 
   dom.window.document.getElementById('callBannerJoin').click();
   await waitForCondition(dom.window, () => !dom.window.document.getElementById('callPrejoin').classList.contains('hidden'));
+  const prejoinMic = dom.window.document.getElementById('callPrejoinMicBtn');
+  const prejoinCamera = dom.window.document.getElementById('callPrejoinCameraBtn');
+  assert.equal(prejoinMic.textContent.trim(), '');
+  assert.equal(prejoinCamera.textContent.trim(), '');
+  assert.ok(prejoinMic.querySelector('.call-icon'));
+  assert.ok(prejoinCamera.querySelector('.call-icon'));
+  prejoinMic.click();
+  await waitForCondition(dom.window, () => prejoinMic.classList.contains('is-off'));
+  assert.equal(prejoinMic.getAttribute('aria-label'), dom.window.BananzaI18n.t('Mic off'));
   dom.window.document.getElementById('callPrejoinJoinBtn').click();
   await waitForCondition(dom.window, () => connected);
   assert.equal(dom.window.document.getElementById('callSurface').classList.contains('hidden'), false);
+  assert.equal(dom.window.document.getElementById('callMicBtn').textContent.trim(), '');
+  assert.ok(dom.window.document.getElementById('callCameraBtn').querySelector('.call-icon'));
+  assert.ok(dom.window.document.querySelector('.call-tile-placeholder img[src="/uploads/avatars/alice.png"]'));
+  assert.ok(dom.window.document.querySelector('#callParticipantsBtn .call-icon'));
+  assert.ok(dom.window.document.querySelector('#callDeviceBtn .call-icon'));
+  assert.ok(dom.window.document.querySelector('#callLeaveBtn .call-icon'));
+  dom.window.document.getElementById('callParticipantsBtn').click();
+  await waitForCondition(dom.window, () => !dom.window.document.getElementById('callParticipantsPanel').classList.contains('hidden'));
+  assert.equal(dom.window.document.querySelectorAll('.call-participant-avatar img').length, 2);
   assert.equal(
     dom.window.document.getElementById('callSurfaceStatus').textContent,
     dom.window.BananzaI18n.t('Connected')

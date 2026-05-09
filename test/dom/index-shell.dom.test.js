@@ -18,7 +18,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
 
   assert.deepEqual(styles, [
     '/css/style.css?v=20260507-chat-tools',
-    '/css/calls.css',
+    '/css/calls.css?v=20260509-call-modal-surface',
     '/css/voice.css',
     '/css/video-notes.css',
   ]);
@@ -27,12 +27,12 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/sounds.js',
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
-    '/js/i18n.js?v=20260507-chat-tools',
+    '/js/i18n.js?v=20260509-call-modal-surface',
     '/js/app.js?v=20260507-grok-risk-direct-chat',
-    '/js/calls/CallStore.js',
-    '/js/calls/CallMedia.js',
-    '/js/calls/CallNotifications.js',
-    '/js/calls/CallFeature.js',
+    '/js/calls/CallStore.js?v=20260509-call-modal-surface',
+    '/js/calls/CallMedia.js?v=20260509-call-modal-surface',
+    '/js/calls/CallNotifications.js?v=20260509-call-modal-surface',
+    '/js/calls/CallFeature.js?v=20260509-call-modal-surface',
     '/js/video-notes/video-note-shapes.js',
     '/js/video-notes/VideoShapeRegistry.js',
     '/js/video-notes/AudioNoteRecorderAdapter.js',

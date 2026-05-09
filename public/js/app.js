@@ -1308,6 +1308,9 @@
     tx: (text, params) => tx(text, params),
     onLanguageChange: (listener) => i18n?.onChange?.(listener) || (() => {}),
     applyLocalizedDom: (root) => i18n?.applyStaticDom?.(root || document),
+    refreshCallIndicators: () => {
+      if (chatList) renderChatList(chatSearch?.value || '');
+    },
     getPendingFiles: () => [...pendingFiles],
     getReplyTo: () => replyTo ? { ...replyTo } : null,
     getEditTo: () => editTo ? { ...editTo } : null,
@@ -14842,14 +14845,25 @@
     return empty;
   }
 
+  function getActiveCallForChatListItem(chatId) {
+    try {
+      return window.BananzaCallHooks?.getActiveCallForChat?.(chatId) || null;
+    } catch {
+      return null;
+    }
+  }
+
   function createChatListItem(chat, { hiddenSearchResult = false, pinnedOverride = null } = {}) {
     const el = document.createElement('div');
     const isActive = Number(chat.id) === Number(currentChatId);
     const pinned = typeof pinnedOverride === 'boolean' ? pinnedOverride : isChatPinned(chat);
+    const activeCall = getActiveCallForChatListItem(chat.id);
+    const hasActiveCall = Boolean(activeCall);
     el.className = 'chat-item'
       + (isActive ? ' active' : '')
       + (pinned ? ' is-pinned' : '')
-      + (hiddenSearchResult ? ' is-hidden-search-result' : '');
+      + (hiddenSearchResult ? ' is-hidden-search-result' : '')
+      + (hasActiveCall ? ' has-active-call' : '');
     el.dataset.chatId = chat.id;
     el.dataset.pinned = pinned ? '1' : '0';
 
@@ -14873,6 +14887,10 @@
     const chatShotIndicator = Number(chat.chatshot_enabled || 0) !== 0
       ? `<span class="chat-item-state-indicator chat-item-tool-indicator chat-item-chatshot-indicator" role="img" aria-label="${esc(t('ChatShot enabled'))}" title="${esc(t('ChatShot enabled'))}">&#128248;</span>`
       : '';
+    const callIndicatorLabel = t('Call in progress');
+    const callIndicator = hasActiveCall
+      ? `<span class="chat-item-call-chip" aria-label="${esc(callIndicatorLabel)}" title="${esc(callIndicatorLabel)}"><span class="chat-item-call-dot" aria-hidden="true"></span>${esc(callIndicatorLabel)}</span>`
+      : '';
 
     el.innerHTML = `
       ${chatItemAvatarHtml(chat)}
@@ -14891,6 +14909,7 @@
           </span>
         </div>
         <div class="chat-item-last">
+          ${callIndicator}
           <span>${esc(lastMsg).substring(0, 60)}</span>
           ${unread}
         </div>
