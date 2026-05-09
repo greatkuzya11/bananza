@@ -21,6 +21,8 @@ const {
 const CALL_TOKEN_TTL_SECONDS = 60 * 30;
 const TEST_ROOM_TIMEOUT_MS = 4000;
 const AI_NOTES_PARTICIPANT_LOOKUP_TIMEOUT_MS = 12_000;
+const AI_NOTES_START_RETRIES = 3;
+const AI_NOTES_START_RETRY_MS = 2500;
 const CALL_RING_WORKER_MS = 10_000;
 const CALL_RECONCILE_WORKER_MS = 30_000;
 const CALL_RECONCILE_MIN_AGE_MS = 90_000;
@@ -756,6 +758,44 @@ function createCallFeature({
     }
   }
 
+  async function startExistingMicrophoneRecordingsForCall(callId, roomName, attempt = 1) {
+    const notes = activeAiNotesStmt.get(callId);
+    if (!notes) return;
+    try {
+      const client = livekitRoomClient();
+      const participants = await Promise.race([
+        client.listParticipants(roomName),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('LiveKit participants lookup timed out')), AI_NOTES_PARTICIPANT_LOOKUP_TIMEOUT_MS)),
+      ]);
+      const recordings = await Promise.all((participants || []).flatMap((participant) => {
+        const tracks = participant.tracks || participant.trackPublications || [];
+        return tracks.filter(isMicrophoneTrack).map((track) => startRecordingForTrack(callId, participant, track));
+      }));
+      const failedNotes = aiNotesByCallStmt.get(callId);
+      if (failedNotes?.status === 'error') {
+        console.warn('[calls] AI notes recording start failed:', failedNotes.error || 'unknown error');
+        return;
+      }
+      if (!recordings.some(Boolean)) {
+        console.warn('[calls] AI notes started without active microphone tracks', { callId, room: roomName, attempt });
+      }
+    } catch (error) {
+      const message = error.message || 'Could not start AI notes';
+      if (attempt < AI_NOTES_START_RETRIES) {
+        console.warn('[calls] AI notes participant lookup failed, retrying:', message);
+        setTimeout(() => {
+          startExistingMicrophoneRecordingsForCall(callId, roomName, attempt + 1).catch((retryError) => {
+            console.warn('[calls] AI notes retry failed:', retryError.message || retryError);
+          });
+        }, AI_NOTES_START_RETRY_MS).unref?.();
+        return;
+      }
+      console.warn('[calls] AI notes participant lookup failed:', message);
+      updateAiNotesStatusStmt.run('error', 'error', new Date().toISOString(), message, callId);
+      broadcastAiNotesUpdated(callId);
+    }
+  }
+
   async function stopRecording(recording) {
     if (!recording || recording.status !== 'recording') return;
     const egressId = String(recording.egress_id || '');
@@ -1233,33 +1273,13 @@ function createCallFeature({
     if (aiNotesByCallStmt.get(callId)?.status === 'recording') return res.json({ call: getCall(callId) });
 
     insertAiNotesStmt.run(callId, req.user.id);
-    broadcastAiNotesUpdated(callId);
-    try {
-      const client = livekitRoomClient();
-      const participants = await Promise.race([
-        client.listParticipants(row.livekit_room_name),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('LiveKit participants lookup timed out')), AI_NOTES_PARTICIPANT_LOOKUP_TIMEOUT_MS)),
-      ]);
-      const results = await Promise.all((participants || []).flatMap((participant) => {
-        const tracks = participant.tracks || participant.trackPublications || [];
-        return tracks.filter(isMicrophoneTrack).map((track) => startRecordingForTrack(callId, participant, track));
-      }));
-      const failedNotes = aiNotesByCallStmt.get(callId);
-      if (failedNotes?.status === 'error') {
-        const message = failedNotes.error || 'Could not start recording';
-        return res.status(502).json({ error: message, code: 'ai_notes_start_failed', call: getCall(callId) });
-      }
-      if (!results.some(Boolean)) {
-        console.warn('[calls] AI notes started without active microphone tracks', { callId, room: row.livekit_room_name });
-      }
-    } catch (error) {
-      const message = error.message || 'Could not start AI notes';
-      console.warn('[calls] AI notes participant lookup failed:', message);
-      updateAiNotesStatusStmt.run('error', 'error', new Date().toISOString(), message, callId);
+    const call = broadcastAiNotesUpdated(callId) || getCall(callId);
+    startExistingMicrophoneRecordingsForCall(callId, row.livekit_room_name).catch((error) => {
+      console.warn('[calls] AI notes start failed:', error.message || error);
+      updateAiNotesStatusStmt.run('error', 'error', new Date().toISOString(), error.message || 'Could not start AI notes', callId);
       broadcastAiNotesUpdated(callId);
-      return res.status(502).json({ error: message, code: 'ai_notes_start_failed', call: getCall(callId) });
-    }
-    res.json({ call: getCall(callId) });
+    });
+    res.json({ call });
   });
 
   app.post('/api/calls/:callId/ai-notes/cancel', auth, callLimiter, (req, res) => {
