@@ -27,7 +27,6 @@ const CALL_RING_WORKER_MS = 10_000;
 const CALL_RECONCILE_WORKER_MS = 30_000;
 const CALL_RECONCILE_MIN_AGE_MS = 90_000;
 const CALL_TRANSCRIPT_MERGE_GAP_MS = 2500;
-const CALL_ARTIFACT_SOURCE_CHUNK_CHARS = 14_000;
 const CALL_VOSK_CHUNK_SECONDS = 2 * 60;
 const CALL_OPENAI_CHUNK_SECONDS = 5 * 60;
 const CALL_VOSK_TRANSCRIPTION_TIMEOUT_MS = 20 * 60 * 1000;
@@ -1759,23 +1758,6 @@ function createCallFeature({
     return transcriptRunQueue.enqueue(`call-transcript-run:${runId}`, { runId });
   }
 
-  function splitLongText(text, maxChars = CALL_ARTIFACT_SOURCE_CHUNK_CHARS) {
-    const source = String(text || '').trim();
-    if (source.length <= maxChars) return [source];
-    const lines = source.split('\n');
-    const chunks = [];
-    let current = '';
-    for (const line of lines) {
-      if ((current.length + line.length + 1) > maxChars && current.trim()) {
-        chunks.push(current.trim());
-        current = '';
-      }
-      current += `${current ? '\n' : ''}${line}`;
-    }
-    if (current.trim()) chunks.push(current.trim());
-    return chunks.length ? chunks : [source.slice(0, maxChars)];
-  }
-
   function artifactInstruction(key) {
     const instructions = {
       main_idea: 'Выдели главную идею разговора. Верни короткий заголовок и 1-2 предложения сути. Не выдумывай факты.',
@@ -1859,13 +1841,12 @@ function createCallFeature({
 
       const call = serializeCall(callRow);
       const sourceText = artifactSourceText({ call, run: transcriptRun, transcript, setting, artifactKey: run.artifact_key });
-      const chunks = splitLongText(sourceText);
       const result = await aiFeature.runCallArtifactBot({
         botId: setting.bot_id,
         artifactKey: run.artifact_key,
         artifactLabel: artifactMeta(run.artifact_key)?.label || run.artifact_key,
         outputType: run.output_type,
-        sourceChunks: chunks,
+        sourceText,
         instruction: artifactInstruction(run.artifact_key),
       });
       updateArtifactRunStatusStmt.run(
@@ -2579,7 +2560,7 @@ function createCallFeature({
         artifactKey: key,
         artifactLabel: meta.label,
         outputType: setting.output_type,
-        sourceChunks: splitLongText(sourceText),
+        sourceText,
         instruction: artifactInstruction(key),
       });
       res.json({ ok: true, artifact_key: key, result });

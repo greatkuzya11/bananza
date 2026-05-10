@@ -67,6 +67,8 @@ const FALLBACK_EMBEDDING_MODELS = ['text-embedding-3-small'];
 const FALLBACK_OPENAI_IMAGE_MODELS = ['gpt-image-2', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini'];
 const FALLBACK_DEEPSEEK_RESPONSE_MODELS = ['deepseek-chat', 'deepseek-reasoner'];
 const FALLBACK_DEEPSEEK_SUMMARY_MODELS = ['deepseek-chat', 'deepseek-reasoner'];
+const CALL_ARTIFACT_DEFAULT_CHUNK_CHARS = 14_000;
+const CALL_ARTIFACT_DEEPSEEK_CHUNK_CHARS = 700_000;
 const FALLBACK_YANDEX_RESPONSE_MODELS = [
   'yandexgpt/latest',
   'yandexgpt/rc',
@@ -4511,6 +4513,39 @@ function createAiBotFeature({
     });
   }
 
+  function callArtifactChunkLimitForBot(bot) {
+    return bot?.provider === 'deepseek' ? CALL_ARTIFACT_DEEPSEEK_CHUNK_CHARS : CALL_ARTIFACT_DEFAULT_CHUNK_CHARS;
+  }
+
+  function splitCallArtifactText(text, maxChars = CALL_ARTIFACT_DEFAULT_CHUNK_CHARS) {
+    const source = String(text || '').trim();
+    const limit = Math.max(1000, Number(maxChars || CALL_ARTIFACT_DEFAULT_CHUNK_CHARS));
+    if (!source || source.length <= limit) return [source];
+    const lines = source.split('\n');
+    const chunks = [];
+    let current = '';
+    for (const line of lines) {
+      if ((current.length + line.length + 1) > limit && current.trim()) {
+        chunks.push(current.trim());
+        current = '';
+      }
+      if (line.length > limit) {
+        if (current.trim()) {
+          chunks.push(current.trim());
+          current = '';
+        }
+        for (let offset = 0; offset < line.length; offset += limit) {
+          const slice = line.slice(offset, offset + limit).trim();
+          if (slice) chunks.push(slice);
+        }
+        continue;
+      }
+      current += `${current ? '\n' : ''}${line}`;
+    }
+    if (current.trim()) chunks.push(current.trim());
+    return chunks.filter(Boolean);
+  }
+
   async function runCallArtifactTextBot(bot, { artifactLabel, instruction, sourceChunks }) {
     const isConvert = isContextTransformBot(bot);
     const system = isConvert
@@ -4523,7 +4558,10 @@ function createAiBotFeature({
           `Артефакт: ${artifactLabel || 'итог звонка'}.`,
           instruction || '',
         ].join('\n');
-    const chunks = Array.isArray(sourceChunks) && sourceChunks.length ? sourceChunks : [''];
+    const chunkLimit = callArtifactChunkLimitForBot(bot);
+    const chunks = Array.isArray(sourceChunks) && sourceChunks.length
+      ? sourceChunks.map((chunk) => String(chunk || '').trim()).filter(Boolean)
+      : [''];
     if (chunks.length === 1) {
       const raw = await generateCallArtifactText(bot, {
         system,
@@ -4544,13 +4582,32 @@ function createAiBotFeature({
       });
       partials.push(cleanText(stripBotSpeakerLabel(raw, bot), 12000));
     }
+    let reduceChunks = splitCallArtifactText(partials.join('\n\n---\n\n'), chunkLimit);
+    let reducePasses = 0;
+    while (reduceChunks.length > 1 && reducePasses < 8) {
+      reducePasses += 1;
+      const nextPartials = [];
+      for (let index = 0; index < reduceChunks.length; index += 1) {
+        const raw = await generateCallArtifactText(bot, {
+          system,
+          user: [
+            `Reduce part ${index + 1} of ${reduceChunks.length} for a large call artifact.`,
+            'Merge and compress only the facts below. Remove duplicates. Do not add new facts.',
+            '',
+            reduceChunks[index],
+          ].join('\n'),
+        });
+        nextPartials.push(cleanText(stripBotSpeakerLabel(raw, bot), 12000));
+      }
+      reduceChunks = splitCallArtifactText(nextPartials.join('\n\n---\n\n'), chunkLimit);
+    }
     const finalRaw = await generateCallArtifactText(bot, {
       system,
       user: [
         `Собери финальный артефакт "${artifactLabel || 'итог звонка'}" из промежуточных результатов.`,
         'Убери повторы, сохрани важные факты и не добавляй ничего сверх данных ниже.',
         '',
-        partials.join('\n\n---\n\n'),
+        reduceChunks.join('\n\n---\n\n'),
       ].join('\n'),
     });
     return cleanText(stripBotSpeakerLabel(finalRaw, bot), 20000);
@@ -4594,11 +4651,14 @@ function createAiBotFeature({
     throw new Error('Selected bot cannot generate images');
   }
 
-  async function runCallArtifactBot({ botId, artifactKey, artifactLabel, outputType, sourceChunks, instruction }) {
+  async function runCallArtifactBot({ botId, artifactKey, artifactLabel, outputType, sourceText, sourceChunks, instruction }) {
     const bot = sanitizeBot(botByIdStmt.get(Number(botId || 0)));
     if (!bot?.id) throw new Error('Bot not found');
     if (!bot.enabled) throw new Error('Bot is disabled');
-    const text = await runCallArtifactTextBot(bot, { artifactLabel, instruction, sourceChunks });
+    const chunks = sourceText != null
+      ? splitCallArtifactText(sourceText, callArtifactChunkLimitForBot(bot))
+      : sourceChunks;
+    const text = await runCallArtifactTextBot(bot, { artifactLabel, instruction, sourceChunks: chunks });
     if (outputType === 'image') {
       const image = await createCallArtifactImage(bot, text, artifactKey);
       return {
