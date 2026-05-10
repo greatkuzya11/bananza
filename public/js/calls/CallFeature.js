@@ -45,6 +45,8 @@
     prejoinMode: 'join',
     adminLoaded: false,
     adminSettings: null,
+    adminArtifacts: [],
+    adminArtifactBots: [],
     disconnectingIntentionally: false,
     leaveSentForCallId: 0,
     debugLines: [],
@@ -576,6 +578,11 @@
             <div class="field-group">
               <label>${escapeHtml(t('Max call participants'))}</label>
               <input type="number" id="callMaxParticipants" class="modal-input" min="2" max="100" step="1">
+            </div>
+            <div class="call-admin-section">
+              <div class="call-admin-subtitle">${escapeHtml(t('Call AI Artifacts'))}</div>
+              <div id="callArtifactSettings" class="call-artifact-settings"></div>
+              <div class="call-admin-hint">${escapeHtml(t('Choose an existing AI bot for each call artifact. Convert bots are recommended for text artifacts.'))}</div>
             </div>
             <div class="call-admin-actions">
               <button type="button" id="callTestBtn" class="call-admin-btn">${escapeHtml(t('Test LiveKit'))}</button>
@@ -1899,11 +1906,77 @@
   }
 
   async function loadAdminSettings() {
-    const data = await api('/api/admin/call-settings');
+    const [data, artifacts] = await Promise.all([
+      api('/api/admin/call-settings'),
+      api('/api/admin/call-artifacts').catch(() => ({ artifacts: [], bots: [] })),
+    ]);
     state.adminSettings = data.settings || {};
+    state.adminArtifacts = Array.isArray(artifacts.artifacts) ? artifacts.artifacts : [];
+    state.adminArtifactBots = Array.isArray(artifacts.bots) ? artifacts.bots : [];
     state.adminLoaded = true;
     renderAdminSettings(data);
     return data;
+  }
+
+  function botOptionLabel(bot) {
+    const status = bot.enabled === false ? ` ${t('(disabled)')}` : '';
+    return `${bot.name || bot.mention || `#${bot.id}`} · ${bot.provider || 'ai'} / ${bot.kind || 'text'}${status}`;
+  }
+
+  function renderArtifactSettings() {
+    const root = document.getElementById('callArtifactSettings');
+    if (!root) return;
+    const bots = state.adminArtifactBots || [];
+    const options = [
+      `<option value="">${escapeHtml(t('Bot not selected'))}</option>`,
+      ...bots.map((bot) => `<option value="${Number(bot.id || 0)}">${escapeHtml(botOptionLabel(bot))}</option>`),
+    ].join('');
+    root.innerHTML = (state.adminArtifacts || []).map((artifact) => {
+      const key = artifact.artifact_key || artifact.key || '';
+      const selected = Number(artifact.bot_id || 0);
+      const warning = selected && bots.find((bot) => Number(bot.id || 0) === selected)
+        ? ''
+        : (selected ? `<div class="call-admin-hint error">${escapeHtml(t('Selected bot is unavailable'))}</div>` : '');
+      return `
+        <div class="call-artifact-row" data-call-artifact-key="${escapeHtml(key)}">
+          <label class="call-artifact-enabled">
+            <input type="checkbox" data-call-artifact-enabled ${artifact.enabled ? 'checked' : ''}>
+            <span>${escapeHtml(artifact.label || key)}</span>
+          </label>
+          <select class="modal-input" data-call-artifact-bot>${options}</select>
+          <select class="modal-input" data-call-artifact-output>
+            <option value="text">text</option>
+            <option value="json">json</option>
+            <option value="image">image</option>
+          </select>
+          <button type="button" class="call-admin-btn" data-call-artifact-test>${escapeHtml(t('Test'))}</button>
+          <div class="call-admin-hint">${escapeHtml(t('Recommended: {value}', { value: artifact.recommended || 'convert' }))}</div>
+          ${warning}
+        </div>
+      `;
+    }).join('') || `<div class="call-admin-hint">${escapeHtml(t('No call artifacts configured'))}</div>`;
+    root.querySelectorAll('[data-call-artifact-key]').forEach((row) => {
+      const key = row.dataset.callArtifactKey || '';
+      const artifact = (state.adminArtifacts || []).find((item) => (item.artifact_key || item.key) === key) || {};
+      const bot = row.querySelector('[data-call-artifact-bot]');
+      if (bot) bot.value = artifact.bot_id ? String(artifact.bot_id) : '';
+      const output = row.querySelector('[data-call-artifact-output]');
+      if (output) output.value = artifact.output_type || 'text';
+      row.querySelector('[data-call-artifact-test]')?.addEventListener('click', async (event) => {
+        const button = event.currentTarget;
+        button.disabled = true;
+        setAdminStatus(t('Testing...'));
+        try {
+          const data = await api(`/api/admin/call-artifacts/${encodeURIComponent(key)}/test`, { method: 'POST', body: {} });
+          const text = String(data.result?.text || data.result?.fileId || 'ok').slice(0, 240);
+          setAdminStatus(`${t('Success')}: ${text}`, 'success');
+        } catch (error) {
+          setAdminStatus(error.message || t('Artifact test failed'), 'error');
+        } finally {
+          button.disabled = false;
+        }
+      });
+    });
   }
 
   function renderAdminSettings(data = {}) {
@@ -1970,6 +2043,7 @@
     if (maxChunk) maxChunk.value = Number(settings.call_transcription_max_chunk_mb || 24);
     const chunkMinutes = document.getElementById('callTranscriptionChunkMinutes');
     if (chunkMinutes) chunkMinutes.value = Number(settings.call_transcription_chunk_minutes || 12);
+    renderArtifactSettings();
   }
 
   function adminPayload() {
@@ -2001,8 +2075,18 @@
   async function saveAdminSettings() {
     setAdminStatus(t('Saving...'));
     try {
+      const artifacts = Array.from(document.querySelectorAll('[data-call-artifact-key]')).map((row) => ({
+        artifact_key: row.dataset.callArtifactKey || '',
+        enabled: row.querySelector('[data-call-artifact-enabled]')?.checked === true,
+        bot_id: Number(row.querySelector('[data-call-artifact-bot]')?.value || 0) || null,
+        output_type: row.querySelector('[data-call-artifact-output]')?.value || 'text',
+      }));
       const data = await api('/api/admin/call-settings', { method: 'PUT', body: adminPayload() });
+      const artifactData = await api('/api/admin/call-artifacts', { method: 'PUT', body: { artifacts } })
+        .catch(() => ({ artifacts: state.adminArtifacts, bots: state.adminArtifactBots }));
       state.adminSettings = data.settings || state.adminSettings;
+      state.adminArtifacts = Array.isArray(artifactData.artifacts) ? artifactData.artifacts : state.adminArtifacts;
+      state.adminArtifactBots = Array.isArray(artifactData.bots) ? artifactData.bots : state.adminArtifactBots;
       if (data.publicSettings) {
         mergePublicSettings(data.publicSettings);
       }

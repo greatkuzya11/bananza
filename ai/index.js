@@ -4440,6 +4440,181 @@ function createAiBotFeature({
     }
   }
 
+  function listCallArtifactBots() {
+    return [
+      ...allOpenAiTextBotsStmt.all(),
+      ...allOpenAiUniversalBotsStmt.all(),
+      ...allOpenAiConvertBotsStmt.all(),
+      ...allOpenAiChatShotBotsStmt.all(),
+      ...allYandexTextBotsStmt.all(),
+      ...allYandexConvertBotsStmt.all(),
+      ...allDeepSeekTextBotsStmt.all(),
+      ...allDeepSeekConvertBotsStmt.all(),
+      ...allGrokTextBotsStmt.all(),
+      ...allGrokUniversalBotsStmt.all(),
+      ...allGrokConvertBotsStmt.all(),
+      ...allGrokImageBotsStmt.all(),
+      ...allGrokChatShotBotsStmt.all(),
+    ].map(sanitizeBot);
+  }
+
+  async function generateCallArtifactText(bot, { system, user, maxOutputTokens = 1800 }) {
+    const settings = getGlobalSettings();
+    if (!providerEnabled(bot.provider, settings)) throw new Error('Provider is disabled');
+    if (bot.provider === 'yandex') {
+      const apiKey = getYandexApiKey();
+      if (!apiKey || !settings.yandex_folder_id) throw new Error('Yandex AI is not configured');
+      return yandexAi.generateText(yandexClientOptions({
+        apiKey,
+        model: bot.response_model || settings.yandex_default_response_model,
+        system,
+        user,
+        maxOutputTokens: intValue(bot.max_tokens, settings.yandex_max_tokens, 1, 8000),
+        temperature: floatValue(bot.temperature, settings.yandex_temperature, 0, 1),
+      }));
+    }
+    if (bot.provider === 'deepseek') {
+      const apiKey = getDeepSeekApiKey();
+      if (!apiKey) throw new Error('DeepSeek AI is not configured');
+      return deepseekAi.generateText({
+        apiKey,
+        baseUrl: deepseekBaseUrl(),
+        model: bot.response_model || settings.deepseek_default_response_model,
+        system,
+        user,
+        maxOutputTokens: intValue(bot.max_tokens, settings.deepseek_max_tokens, 1, 8000),
+        temperature: floatValue(bot.temperature, settings.deepseek_temperature, 0, 1),
+      });
+    }
+    if (bot.provider === 'grok') {
+      const apiKey = getGrokApiKey();
+      if (!apiKey) throw new Error('Grok AI is not configured');
+      return grokAi.generateText({
+        apiKey,
+        baseUrl: grokBaseUrl(),
+        model: bot.response_model || settings.grok_default_response_model,
+        system,
+        user,
+        maxOutputTokens: intValue(bot.max_tokens, settings.grok_max_tokens, 1, 8000),
+        temperature: floatValue(bot.temperature, settings.grok_temperature, 0, 1),
+      });
+    }
+    const apiKey = getApiKey();
+    if (!apiKey) throw new Error('OpenAI AI is not configured');
+    return generateText({
+      apiKey,
+      model: bot.response_model || settings.default_response_model,
+      system,
+      user,
+      maxOutputTokens: intValue(bot.max_tokens, maxOutputTokens, OPENAI_MIN_OUTPUT_TOKENS, 8000),
+      temperature: floatValue(bot.temperature, 0.45, 0, 1),
+    });
+  }
+
+  async function runCallArtifactTextBot(bot, { artifactLabel, instruction, sourceChunks }) {
+    const isConvert = isContextTransformBot(bot);
+    const system = isConvert
+      ? buildContextTransformPrompt(bot)
+      : [
+          botSystemPrompt(bot),
+          '',
+          'Ты обрабатываешь расшифровку звонка BananZa и возвращаешь только нужный артефакт.',
+          'Не выдумывай факты. Если данных мало, честно укажи это.',
+          `Артефакт: ${artifactLabel || 'итог звонка'}.`,
+          instruction || '',
+        ].join('\n');
+    const chunks = Array.isArray(sourceChunks) && sourceChunks.length ? sourceChunks : [''];
+    if (chunks.length === 1) {
+      const raw = await generateCallArtifactText(bot, {
+        system,
+        user: isConvert ? `Source text:\n${chunks[0]}` : chunks[0],
+      });
+      return cleanText(stripBotSpeakerLabel(raw, bot), 20000);
+    }
+    const partials = [];
+    for (let index = 0; index < chunks.length; index += 1) {
+      const raw = await generateCallArtifactText(bot, {
+        system,
+        user: [
+          `Это часть ${index + 1} из ${chunks.length} длинной расшифровки.`,
+          'Сделай промежуточный результат только по этой части. Не делай финальный вывод по всему звонку.',
+          '',
+          chunks[index],
+        ].join('\n'),
+      });
+      partials.push(cleanText(stripBotSpeakerLabel(raw, bot), 12000));
+    }
+    const finalRaw = await generateCallArtifactText(bot, {
+      system,
+      user: [
+        `Собери финальный артефакт "${artifactLabel || 'итог звонка'}" из промежуточных результатов.`,
+        'Убери повторы, сохрани важные факты и не добавляй ничего сверх данных ниже.',
+        '',
+        partials.join('\n\n---\n\n'),
+      ].join('\n'),
+    });
+    return cleanText(stripBotSpeakerLabel(finalRaw, bot), 20000);
+  }
+
+  async function createCallArtifactImage(bot, prompt, artifactKey = 'callshot') {
+    const settings = getGlobalSettings();
+    if (isChatShotBot(bot) || (bot.provider === 'openai' && bot.kind === 'universal')) {
+      if (!bot.user_id) throw new Error('Image bot has no backing user');
+      const safePrompt = sanitizeChatShotPrompt(prompt, 'illustration');
+      const image = isChatShotBot(bot)
+        ? await createChatShotImage(bot, safePrompt, 'illustration', true)
+        : await createOpenAiChatShotImage(bot, safePrompt, true);
+      const ext = fileExtensionFromOriginalName(image.originalName) || imageExtensionForMime(image.mimeType);
+      const storedName = `call-${artifactKey}-${crypto.randomUUID()}${ext}`;
+      await fs.promises.writeFile(path.join(uploadsDir, storedName), image.buffer);
+      const fileRow = insertFileStmt.run(image.originalName || `${artifactKey}${ext}`, storedName, image.mimeType, image.buffer.length, 'image', bot.user_id);
+      return { fileId: Number(fileRow.lastInsertRowid), prompt: safePrompt };
+    }
+    if (bot.provider === 'grok' && (bot.kind === 'image' || bot.kind === 'universal')) {
+      if (!bot.user_id) throw new Error('Image bot has no backing user');
+      const apiKey = getGrokApiKey();
+      if (!apiKey) throw new Error('Grok AI is not configured');
+      const imageResult = await grokAi.generateImage({
+        apiKey,
+        baseUrl: grokBaseUrl(),
+        model: bot.image_model || settings.grok_default_image_model,
+        prompt: cleanText(prompt, 4000),
+        n: 1,
+        aspectRatio: cleanGrokAspectRatio(bot.image_aspect_ratio, settings.grok_default_image_aspect_ratio),
+        resolution: cleanGrokResolution(bot.image_resolution, settings.grok_default_image_resolution),
+        responseFormat: 'b64_json',
+      });
+      const { buffer, mimeType } = await loadGrokImageBytes(imageResult);
+      const ext = imageExtensionForMime(mimeType);
+      const storedName = `call-${artifactKey}-${crypto.randomUUID()}${ext}`;
+      await fs.promises.writeFile(path.join(uploadsDir, storedName), buffer);
+      const fileRow = insertFileStmt.run(`${artifactKey}${ext}`, storedName, mimeType, buffer.length, 'image', bot.user_id);
+      return { fileId: Number(fileRow.lastInsertRowid), prompt };
+    }
+    throw new Error('Selected bot cannot generate images');
+  }
+
+  async function runCallArtifactBot({ botId, artifactKey, artifactLabel, outputType, sourceChunks, instruction }) {
+    const bot = sanitizeBot(botByIdStmt.get(Number(botId || 0)));
+    if (!bot?.id) throw new Error('Bot not found');
+    if (!bot.enabled) throw new Error('Bot is disabled');
+    const text = await runCallArtifactTextBot(bot, { artifactLabel, instruction, sourceChunks });
+    if (outputType === 'image') {
+      const image = await createCallArtifactImage(bot, text, artifactKey);
+      return {
+        text,
+        fileId: image.fileId,
+        provider: bot.provider || '',
+        model: bot.image_model || bot.response_model || '',
+      };
+    }
+    return {
+      text,
+      provider: bot.provider || '',
+      model: bot.response_model || '',
+    };
+  }
+
   function serializeConvertAdminStateByProvider(provider = 'openai') {
     if (provider === 'yandex') return serializeYandexConvertAdminState();
     if (provider === 'deepseek') return serializeDeepSeekConvertAdminState();
@@ -8748,6 +8923,8 @@ function createAiBotFeature({
     transformText,
     getChatShotState,
     generateChatShotForChat,
+    listCallArtifactBots,
+    runCallArtifactBot,
     listSelectableBotUsersForViewer,
     getSelectableBotByUserId,
     getActiveChatBotsForViewer,

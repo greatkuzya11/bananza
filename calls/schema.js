@@ -219,6 +219,50 @@ function initCallSchema(db) {
       created_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS call_artifact_settings (
+      artifact_key TEXT PRIMARY KEY,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      bot_id INTEGER DEFAULT NULL,
+      output_type TEXT NOT NULL DEFAULT 'text' CHECK(output_type IN ('text','json','image')),
+      include_transcript INTEGER NOT NULL DEFAULT 1,
+      include_call_meta INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS call_artifact_batches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      call_id INTEGER NOT NULL REFERENCES call_sessions(id) ON DELETE CASCADE,
+      transcript_run_id INTEGER NOT NULL REFERENCES call_transcript_runs(id) ON DELETE CASCADE,
+      message_id INTEGER DEFAULT NULL REFERENCES messages(id) ON DELETE SET NULL,
+      requested_by INTEGER DEFAULT NULL REFERENCES users(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','processing','completed','partial','error','canceled')),
+      error TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      completed_at TEXT DEFAULT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS call_artifact_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      batch_id INTEGER NOT NULL REFERENCES call_artifact_batches(id) ON DELETE CASCADE,
+      call_id INTEGER NOT NULL REFERENCES call_sessions(id) ON DELETE CASCADE,
+      transcript_run_id INTEGER NOT NULL REFERENCES call_transcript_runs(id) ON DELETE CASCADE,
+      artifact_key TEXT NOT NULL,
+      bot_id INTEGER DEFAULT NULL,
+      output_type TEXT NOT NULL DEFAULT 'text' CHECK(output_type IN ('text','json','image')),
+      status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','processing','completed','error','canceled','skipped')),
+      result_text TEXT DEFAULT '',
+      result_json TEXT DEFAULT '',
+      file_id INTEGER DEFAULT NULL,
+      provider TEXT DEFAULT '',
+      model TEXT DEFAULT '',
+      error TEXT DEFAULT '',
+      started_at TEXT DEFAULT NULL,
+      completed_at TEXT DEFAULT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE UNIQUE INDEX IF NOT EXISTS idx_call_sessions_active_chat
       ON call_sessions(chat_id)
       WHERE status='active';
@@ -245,6 +289,12 @@ function initCallSchema(db) {
       ON call_transcript_runs(message_id);
     CREATE INDEX IF NOT EXISTS idx_call_transcript_run_segments_run
       ON call_transcript_run_segments(run_id, start_ms, id);
+    CREATE INDEX IF NOT EXISTS idx_call_artifact_batches_call
+      ON call_artifact_batches(call_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_call_artifact_batches_message
+      ON call_artifact_batches(message_id);
+    CREATE INDEX IF NOT EXISTS idx_call_artifact_runs_batch
+      ON call_artifact_runs(batch_id, artifact_key);
   `);
 
   addColumnIfMissing(db, 'call_recordings', 'scope', "scope TEXT NOT NULL DEFAULT 'participant'");

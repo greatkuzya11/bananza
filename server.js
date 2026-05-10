@@ -362,6 +362,7 @@ callFeature = createCallFeature({
   hydrateMessageById: (messageId, viewerUserId) => hydrateMessageById(messageId, viewerUserId),
   onMessageCreated: (message) => handleChatListMessageCreated(message),
   notifyCallInvite: (userId, payload) => pushFeature.notifyCallInvite(userId, payload),
+  getAiBotFeature: () => aiBotFeature,
 });
 
 const voiceFeature = createVoiceFeature({

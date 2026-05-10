@@ -1094,6 +1094,46 @@ html[data-visual-mode="rich"] .call-admin-status {
   background: color-mix(in srgb, var(--accent) 14%, var(--call-bg-panel));
 }
 
+.call-artifact-card .call-message-icon {
+  background: color-mix(in srgb, var(--accent) 20%, var(--call-bg-panel));
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.call-artifacts-body {
+  display: grid;
+  gap: 12px;
+  max-height: min(70vh, 680px);
+  overflow: auto;
+}
+
+.call-artifact-section {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--call-border);
+  border-radius: 8px;
+  background: var(--call-bg-panel);
+}
+
+.call-artifact-section-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  color: var(--text-primary);
+}
+
+.call-artifact-image {
+  display: block;
+  width: min(100%, 520px);
+  max-height: 420px;
+  object-fit: contain;
+  border-radius: 8px;
+  border: 1px solid var(--call-border);
+  background: #000;
+}
+
 .call-admin-modal .field-group {
   margin: 12px 0;
 }
@@ -1117,6 +1157,35 @@ html[data-visual-mode="rich"] .call-admin-status {
   font-size: 12px;
   line-height: 1.4;
   color: var(--text-secondary);
+}
+
+.call-admin-hint.error {
+  color: var(--danger);
+}
+
+.call-artifact-settings {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.call-artifact-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) minmax(180px, 1.4fr) minmax(80px, .55fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--call-border);
+  border-radius: 8px;
+  background: var(--call-bg-muted);
+}
+
+.call-artifact-enabled {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--text-primary);
+  font-weight: 650;
 }
 
 .call-admin-status {
@@ -1303,6 +1372,10 @@ html[data-visual-mode="rich"] .call-admin-status {
   .call-transcript-toolbar .call-admin-btn {
     width: 100%;
     min-width: 0;
+  }
+
+  .call-artifact-row {
+    grid-template-columns: 1fr;
   }
 
   .call-room-layout {

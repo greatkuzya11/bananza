@@ -27,6 +27,28 @@ const CALL_RING_WORKER_MS = 10_000;
 const CALL_RECONCILE_WORKER_MS = 30_000;
 const CALL_RECONCILE_MIN_AGE_MS = 90_000;
 const CALL_TRANSCRIPT_MERGE_GAP_MS = 2500;
+const CALL_ARTIFACT_SOURCE_CHUNK_CHARS = 14_000;
+const CALL_VOSK_CHUNK_SECONDS = 2 * 60;
+const CALL_OPENAI_CHUNK_SECONDS = 5 * 60;
+const CALL_VOSK_TRANSCRIPTION_TIMEOUT_MS = 20 * 60 * 1000;
+const CALL_REMOTE_TRANSCRIPTION_TIMEOUT_MS = 15 * 60 * 1000;
+const CALL_DIARIZATION_TIMEOUT_MS = 30 * 60 * 1000;
+
+const CALL_ARTIFACTS = [
+  { key: 'main_idea', label: 'Главная идея', outputType: 'text', recommended: 'convert' },
+  { key: 'summary', label: 'Саммари', outputType: 'text', recommended: 'convert' },
+  { key: 'decisions', label: 'Решения', outputType: 'text', recommended: 'convert' },
+  { key: 'tasks', label: 'Задачи', outputType: 'text', recommended: 'convert' },
+  { key: 'questions', label: 'Вопросы', outputType: 'text', recommended: 'convert' },
+  { key: 'participants', label: 'Участники', outputType: 'text', recommended: 'convert' },
+  { key: 'risks', label: 'Риски', outputType: 'text', recommended: 'convert' },
+  { key: 'timeline', label: 'Хронология', outputType: 'text', recommended: 'convert' },
+  { key: 'followup', label: 'Сообщение в чат', outputType: 'text', recommended: 'convert' },
+  { key: 'polls', label: 'Опросы', outputType: 'text', recommended: 'convert' },
+  { key: 'tags', label: 'Теги', outputType: 'text', recommended: 'convert' },
+  { key: 'callshot', label: 'CallShot', outputType: 'image', recommended: 'image/chatshot' },
+];
+const CALL_ARTIFACT_BY_KEY = new Map(CALL_ARTIFACTS.map((artifact) => [artifact.key, artifact]));
 
 function boolError(res, status, message, code = '') {
   return res.status(status).json({ error: message, code: code || message });
@@ -51,6 +73,7 @@ function createCallFeature({
   onMessageCreated,
   secret = '',
   roomServiceClientFactory = null,
+  getAiBotFeature = null,
 }) {
   const callLimiter = rateLimit
     ? rateLimit({ windowMs: 60_000, max: 60, message: { error: 'Too many call requests' } })
@@ -327,12 +350,62 @@ function createCallFeature({
     WHERE call_id=? AND status NOT IN ('recording','canceled') AND file_path!=''
     ORDER BY scope DESC, started_at ASC, id ASC
   `);
+  const callArtifactSettingsStmt = db.prepare('SELECT * FROM call_artifact_settings ORDER BY artifact_key ASC');
+  const callArtifactSettingByKeyStmt = db.prepare('SELECT * FROM call_artifact_settings WHERE artifact_key=?');
+  const upsertCallArtifactSettingStmt = db.prepare(`
+    INSERT INTO call_artifact_settings(artifact_key, enabled, bot_id, output_type, include_transcript, include_call_meta, updated_at)
+    VALUES(?, ?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(artifact_key) DO UPDATE SET
+      enabled=excluded.enabled,
+      bot_id=excluded.bot_id,
+      output_type=excluded.output_type,
+      include_transcript=excluded.include_transcript,
+      include_call_meta=excluded.include_call_meta,
+      updated_at=datetime('now')
+  `);
+  const insertArtifactBatchStmt = db.prepare(`
+    INSERT INTO call_artifact_batches(call_id, transcript_run_id, message_id, requested_by, status, created_at, updated_at)
+    VALUES(?, ?, ?, ?, 'queued', datetime('now'), datetime('now'))
+  `);
+  const updateArtifactBatchMessageStmt = db.prepare('UPDATE call_artifact_batches SET message_id=?, updated_at=datetime(\'now\') WHERE id=?');
+  const artifactBatchByIdStmt = db.prepare('SELECT * FROM call_artifact_batches WHERE id=?');
+  const artifactBatchByMessageStmt = db.prepare('SELECT * FROM call_artifact_batches WHERE message_id=?');
+  const artifactBatchesForCallStmt = db.prepare('SELECT * FROM call_artifact_batches WHERE call_id=? ORDER BY id DESC');
+  const insertArtifactRunStmt = db.prepare(`
+    INSERT INTO call_artifact_runs(batch_id, call_id, transcript_run_id, artifact_key, bot_id, output_type, status, created_at, updated_at)
+    VALUES(?, ?, ?, ?, ?, ?, 'queued', datetime('now'), datetime('now'))
+  `);
+  const artifactRunByIdStmt = db.prepare('SELECT * FROM call_artifact_runs WHERE id=?');
+  const artifactRunsForBatchStmt = db.prepare('SELECT * FROM call_artifact_runs WHERE batch_id=? ORDER BY id ASC');
+  const updateArtifactRunStatusStmt = db.prepare(`
+    UPDATE call_artifact_runs
+    SET status=?,
+      result_text=COALESCE(?, result_text),
+      result_json=COALESCE(?, result_json),
+      file_id=COALESCE(?, file_id),
+      provider=COALESCE(NULLIF(?, ''), provider),
+      model=COALESCE(NULLIF(?, ''), model),
+      error=?,
+      started_at=CASE WHEN ?='processing' AND started_at IS NULL THEN datetime('now') ELSE started_at END,
+      completed_at=CASE WHEN ? IN ('completed','error','canceled','skipped') THEN datetime('now') ELSE completed_at END,
+      updated_at=datetime('now')
+    WHERE id=?
+  `);
+  const resetArtifactRunStmt = db.prepare(`
+    UPDATE call_artifact_runs
+    SET status='queued', result_text='', result_json='', file_id=NULL, error='', started_at=NULL, completed_at=NULL, updated_at=datetime('now')
+    WHERE id=?
+  `);
   const transcriptQueue = new AsyncJobQueue({
     handler: processRecordingTranscript,
     getConcurrency: () => Math.max(1, Math.min(2, Number(getVoiceSettings(db).queue_concurrency || 1))),
   });
   const transcriptRunQueue = new AsyncJobQueue({
     handler: processTranscriptRun,
+    getConcurrency: () => 1,
+  });
+  const artifactQueue = new AsyncJobQueue({
+    handler: processArtifactRun,
     getConcurrency: () => 1,
   });
 
@@ -527,6 +600,143 @@ function createCallFeature({
     };
   }
 
+  function artifactMeta(key) {
+    return CALL_ARTIFACT_BY_KEY.get(String(key || '').trim()) || null;
+  }
+
+  function normalizeArtifactOutputType(value, fallback = 'text') {
+    const text = String(value || fallback).trim().toLowerCase();
+    return ['text', 'json', 'image'].includes(text) ? text : fallback;
+  }
+
+  function normalizeArtifactSetting(row) {
+    const meta = artifactMeta(row?.artifact_key);
+    if (!meta) return null;
+    return {
+      artifact_key: meta.key,
+      key: meta.key,
+      label: meta.label,
+      recommended: meta.recommended,
+      enabled: Number(row?.enabled || 0) !== 0,
+      bot_id: row?.bot_id ? Number(row.bot_id) : null,
+      output_type: normalizeArtifactOutputType(row?.output_type, meta.outputType),
+      include_transcript: row?.include_transcript == null ? true : Number(row.include_transcript) !== 0,
+      include_call_meta: row?.include_call_meta == null ? true : Number(row.include_call_meta) !== 0,
+      updated_at: row?.updated_at || null,
+    };
+  }
+
+  function defaultArtifactSettings() {
+    return CALL_ARTIFACTS.map((meta) => normalizeArtifactSetting({
+      artifact_key: meta.key,
+      enabled: 0,
+      bot_id: null,
+      output_type: meta.outputType,
+      include_transcript: 1,
+      include_call_meta: 1,
+    }));
+  }
+
+  function artifactSettings() {
+    const rowsByKey = new Map(callArtifactSettingsStmt.all().map((row) => [row.artifact_key, row]));
+    return CALL_ARTIFACTS.map((meta) => normalizeArtifactSetting(rowsByKey.get(meta.key) || {
+      artifact_key: meta.key,
+      enabled: 0,
+      bot_id: null,
+      output_type: meta.outputType,
+      include_transcript: 1,
+      include_call_meta: 1,
+    }));
+  }
+
+  function serializeArtifactFile(fileId) {
+    let file = null;
+    try {
+      file = fileId
+        ? db.prepare('SELECT id, original_name, stored_name, mime_type, size, type FROM files WHERE id=?').get(fileId)
+        : null;
+    } catch {
+      file = null;
+    }
+    if (!file) return null;
+    return {
+      id: Number(file.id),
+      original_name: file.original_name || '',
+      stored_name: file.stored_name || '',
+      mime_type: file.mime_type || '',
+      size: Number(file.size || 0),
+      type: file.type || '',
+      url: `/uploads/${encodeURIComponent(file.stored_name || '')}`,
+    };
+  }
+
+  function serializeArtifactRun(row) {
+    if (!row) return null;
+    const meta = artifactMeta(row.artifact_key) || { key: row.artifact_key, label: row.artifact_key || 'Artifact' };
+    return {
+      id: Number(row.id),
+      batch_id: Number(row.batch_id),
+      call_id: Number(row.call_id),
+      transcript_run_id: Number(row.transcript_run_id),
+      artifact_key: meta.key,
+      key: meta.key,
+      label: meta.label,
+      bot_id: row.bot_id ? Number(row.bot_id) : null,
+      output_type: normalizeArtifactOutputType(row.output_type, meta.outputType || 'text'),
+      status: row.status || 'queued',
+      result_text: row.result_text || '',
+      result_json: row.result_json || '',
+      file: serializeArtifactFile(row.file_id),
+      provider: row.provider || '',
+      model: row.model || '',
+      error: row.error || '',
+      created_at: row.created_at || null,
+      started_at: row.started_at || null,
+      completed_at: row.completed_at || null,
+      updated_at: row.updated_at || null,
+    };
+  }
+
+  function artifactBatchStatus(runs = []) {
+    if (!runs.length) return 'error';
+    if (runs.every((run) => run.status === 'completed' || run.status === 'skipped')) return 'completed';
+    if (runs.some((run) => run.status === 'completed') && runs.some((run) => run.status === 'error')) return 'partial';
+    if (runs.some((run) => run.status === 'processing' || run.status === 'queued')) return 'processing';
+    if (runs.every((run) => run.status === 'error')) return 'error';
+    return 'partial';
+  }
+
+  function updateArtifactBatchStatus(batchId) {
+    const runs = artifactRunsForBatchStmt.all(batchId);
+    const status = artifactBatchStatus(runs);
+    const firstError = runs.find((run) => run.status === 'error')?.error || '';
+    db.prepare(`
+      UPDATE call_artifact_batches
+      SET status=?, error=?, updated_at=datetime('now'),
+        completed_at=CASE WHEN ? IN ('completed','partial','error','canceled') THEN datetime('now') ELSE completed_at END
+      WHERE id=?
+    `).run(status, firstError, status, batchId);
+    return artifactBatchByIdStmt.get(batchId);
+  }
+
+  function serializeArtifactBatch(row) {
+    if (!row) return null;
+    const runs = artifactRunsForBatchStmt.all(row.id).map(serializeArtifactRun);
+    return {
+      id: Number(row.id),
+      call_id: Number(row.call_id),
+      transcript_run_id: Number(row.transcript_run_id),
+      message_id: row.message_id ? Number(row.message_id) : null,
+      requested_by: row.requested_by ? Number(row.requested_by) : null,
+      status: row.status || artifactBatchStatus(runs),
+      error: row.error || '',
+      runs,
+      created_at: row.created_at || null,
+      updated_at: row.updated_at || null,
+      completed_at: row.completed_at || null,
+    };
+  }
+
   function transcriptTextFromRows(rows) {
     const merged = [];
     rows.forEach((row) => {
@@ -696,12 +906,18 @@ function createCallFeature({
           ended_reason: call.ended_reason,
           ai_notes: call.ai_notes || null,
           transcript_runs: transcriptRunsForCallStmt.all(call.id).map(serializeTranscriptRun),
+          artifact_batches: artifactBatchesForCallStmt.all(call.id).map(serializeArtifactBatch),
         };
       }
       const run = transcriptRunByMessageStmt.get(message.id);
       if (run) {
         message.is_call_transcript_message = true;
         message.call_transcript_run = serializeTranscriptRun(run);
+      }
+      const batch = artifactBatchByMessageStmt.get(message.id);
+      if (batch) {
+        message.is_call_artifact_message = true;
+        message.call_artifact_batch = serializeArtifactBatch(batch);
       }
       return message;
     });
@@ -1219,16 +1435,23 @@ function createCallFeature({
     console.info('[calls] transcript queued:', { recordingId, queued });
   }
 
-  function settingsForProvider(provider) {
+  function settingsForProvider(provider, options = {}) {
     const voiceSettings = getVoiceSettings(db);
     const callSettings = getCallSettings(db);
     const requested = String(provider || 'voice').trim();
     const activeProvider = requested === 'voice'
       ? (callSettings.call_transcription_provider === 'voice' ? voiceSettings.active_provider : callSettings.call_transcription_provider)
       : requested;
+    const resolvedProvider = ['vosk', 'openai', 'grok'].includes(activeProvider) ? activeProvider : voiceSettings.active_provider;
+    const minTimeout = options.diarize
+      ? CALL_DIARIZATION_TIMEOUT_MS
+      : (resolvedProvider === 'vosk'
+        ? CALL_VOSK_TRANSCRIPTION_TIMEOUT_MS
+        : (['openai', 'grok'].includes(resolvedProvider) ? CALL_REMOTE_TRANSCRIPTION_TIMEOUT_MS : voiceSettings.transcription_timeout_ms));
     return {
       ...voiceSettings,
-      active_provider: ['vosk', 'openai', 'grok'].includes(activeProvider) ? activeProvider : voiceSettings.active_provider,
+      active_provider: resolvedProvider,
+      transcription_timeout_ms: Math.max(Number(voiceSettings.transcription_timeout_ms || 0), minTimeout),
     };
   }
 
@@ -1244,12 +1467,17 @@ function createCallFeature({
   async function transcribeRecordingToSegments({ recording, provider, diarize = false }) {
     const filepath = path.resolve(recording.file_path || '');
     if (!filepath || !fs.existsSync(filepath)) throw new Error(`Recording file not found: ${recording.file_path || recording.id}`);
-    const settings = settingsForProvider(provider);
+    const settings = settingsForProvider(provider, { diarize });
     const callRow = callByIdStmt.get(recording.call_id);
     const callStart = parseTimeMs(callRow?.started_at);
     const recordingStart = parseTimeMs(recording.started_at) || callStart;
     const baseStartMs = callStart && recordingStart ? Math.max(0, recordingStart - callStart) : 0;
-    const chunks = splitRecordingIntoChunks(filepath, `${recording.id}-${diarize ? 'diarized' : settings.active_provider}`);
+    const forcedChunkSeconds = diarize || settings.active_provider === 'openai'
+      ? CALL_OPENAI_CHUNK_SECONDS
+      : (settings.active_provider === 'vosk' ? CALL_VOSK_CHUNK_SECONDS : 0);
+    const chunks = splitRecordingIntoChunks(filepath, `${recording.id}-${diarize ? 'diarized' : settings.active_provider}`, {
+      forceChunkSeconds: forcedChunkSeconds,
+    });
     const texts = [];
     const allSegments = [];
     let resolvedProvider = diarize ? 'openai' : settings.active_provider;
@@ -1260,12 +1488,25 @@ function createCallFeature({
       const result = diarize
         ? await transcribeWithOpenAIDiarization({
             filePath: chunk.filePath,
-            settings,
+            settings: {
+              ...settings,
+              transcription_timeout_ms: Math.max(
+                settings.transcription_timeout_ms,
+                Number(chunk.durationMs || 0) * 4 + 120_000,
+                CALL_DIARIZATION_TIMEOUT_MS
+              ),
+            },
             apiKey: getVoiceOpenAIKey(db, secret),
           })
         : await transcribeAudio({
             filePath: chunk.filePath,
-            settings,
+            settings: {
+              ...settings,
+              transcription_timeout_ms: Math.max(
+                settings.transcription_timeout_ms,
+                Number(chunk.durationMs || 0) * 3 + 120_000
+              ),
+            },
             apiKey: getVoiceOpenAIKey(db, secret),
             grokApiKey: getVoiceGrokKey(db, secret),
           });
@@ -1275,7 +1516,7 @@ function createCallFeature({
       model = result.model || model;
       const chunkStartMs = baseStartMs + Number(chunk.offsetMs || 0);
       const chunkDuration = Math.min(
-        Math.max(0, Number(getCallSettings(db).call_transcription_chunk_minutes || 12) * 60 * 1000),
+        Math.max(0, Number(chunk.durationMs || 0) || Number(getCallSettings(db).call_transcription_chunk_minutes || 12) * 60 * 1000),
         Math.max(0, Number(recording.duration_ms || 0) - Number(chunk.offsetMs || 0))
       );
       const resultSegments = Array.isArray(result.segments) ? result.segments : [];
@@ -1498,6 +1739,138 @@ function createCallFeature({
     return transcriptRunQueue.enqueue(`call-transcript-run:${runId}`, { runId });
   }
 
+  function splitLongText(text, maxChars = CALL_ARTIFACT_SOURCE_CHUNK_CHARS) {
+    const source = String(text || '').trim();
+    if (source.length <= maxChars) return [source];
+    const lines = source.split('\n');
+    const chunks = [];
+    let current = '';
+    for (const line of lines) {
+      if ((current.length + line.length + 1) > maxChars && current.trim()) {
+        chunks.push(current.trim());
+        current = '';
+      }
+      current += `${current ? '\n' : ''}${line}`;
+    }
+    if (current.trim()) chunks.push(current.trim());
+    return chunks.length ? chunks : [source.slice(0, maxChars)];
+  }
+
+  function artifactInstruction(key) {
+    const instructions = {
+      main_idea: 'Выдели главную идею разговора. Верни короткий заголовок и 1-2 предложения сути. Не выдумывай факты.',
+      summary: 'Сделай структурированное саммари звонка: контекст, ключевые темы, что обсуждали и к чему пришли.',
+      decisions: 'Найди только реально принятые решения. Не включай предположения и обсуждения без финального согласия.',
+      tasks: 'Выдели задачи, следующие шаги, ответственных и сроки. Если ответственный или срок не названы, так и укажи.',
+      questions: 'Выдели открытые вопросы, спорные моменты и темы, которые требуют продолжения.',
+      participants: 'Опиши участие каждого человека в этом звонке. Не оценивай личность, только роль, вклад, обещания, позицию и стиль участия в рамках разговора.',
+      risks: 'Найди риски, блокеры, неопределенности и возможные проблемы. Для каждого риска предложи способ снизить риск.',
+      timeline: 'Собери хронологию звонка по таймкодам. Группируй разговор по темам, не делай слишком мелкую нарезку.',
+      followup: 'Составь готовое сообщение в чат по итогам звонка. Тон простой, человеческий, без канцелярита.',
+      polls: 'Предложи опросы, если в разговоре были развилки, спорные решения или открытые варианты. Дай вопрос и 2-6 вариантов ответа.',
+      tags: 'Сделай теги, ключевые слова и сущности для поиска по звонкам.',
+      callshot: 'Создай визуальную идею картинки по смыслу звонка. Не изображай реальные лица участников. Сцена должна быть выразительной и связанной с эстетикой BananZa.',
+    };
+    return instructions[key] || `Сформируй артефакт звонка: ${key}`;
+  }
+
+  function artifactSourceText({ call, run, transcript, setting, artifactKey }) {
+    const parts = [];
+    if (setting.include_call_meta) {
+      const participants = participantsStmt.all(call.id)
+        .map((participant) => participant.display_name || participant.username || `user:${participant.user_id}`)
+        .filter(Boolean)
+        .join(', ');
+      parts.push([
+        'Метаданные звонка:',
+        `ID: ${call.id}`,
+        `Чат: ${call.chat_name || call.chat_id}`,
+        `Статус: ${call.status}`,
+        `Начало: ${call.started_at || ''}`,
+        `Окончание: ${call.ended_at || ''}`,
+        `Длительность: ${call.duration_ms || 0} ms`,
+        `Участники: ${participants || 'не указаны'}`,
+        `Расшифровка: ${run.provider || ''} / ${strategyLabel(run.strategy || '')} / ${run.model || ''}`,
+      ].join('\n'));
+    }
+    parts.push([
+      `Задача артефакта: ${artifactMeta(artifactKey)?.label || artifactKey}`,
+      artifactInstruction(artifactKey),
+    ].join('\n'));
+    if (setting.include_transcript) {
+      parts.push(`Расшифровка:\n${transcript}`);
+    }
+    return parts.filter(Boolean).join('\n\n');
+  }
+
+  function hydrateArtifactBatchMessage(batchOrId) {
+    const batch = typeof batchOrId === 'object' ? batchOrId : artifactBatchByIdStmt.get(batchOrId);
+    if (!batch?.message_id || typeof hydrateMessageById !== 'function') return null;
+    return hydrateMessageById(batch.message_id);
+  }
+
+  function broadcastArtifactBatchMessage(batchOrId) {
+    const batch = typeof batchOrId === 'object' ? batchOrId : artifactBatchByIdStmt.get(batchOrId);
+    const message = hydrateArtifactBatchMessage(batch);
+    if (!message?.chat_id) return null;
+    broadcastCall(message.chat_id, { type: 'message_updated', message });
+    return message;
+  }
+
+  async function processArtifactRun({ runId }) {
+    const run = artifactRunByIdStmt.get(runId);
+    if (!run || ['completed', 'processing', 'skipped'].includes(run.status)) return;
+    const batch = artifactBatchByIdStmt.get(run.batch_id);
+    const callRow = batch ? callByIdStmt.get(batch.call_id) : null;
+    const transcriptRun = batch ? transcriptRunByIdStmt.get(batch.transcript_run_id) : null;
+    const setting = normalizeArtifactSetting(callArtifactSettingByKeyStmt.get(run.artifact_key));
+    const aiFeature = typeof getAiBotFeature === 'function' ? getAiBotFeature() : null;
+    try {
+      if (!batch || !callRow || !transcriptRun) throw new Error('Call artifact source is missing');
+      if (!setting?.enabled) throw new Error('Artifact is disabled');
+      if (!setting.bot_id) throw new Error('Bot is not selected');
+      if (!aiFeature?.runCallArtifactBot) throw new Error('AI bot feature is unavailable');
+      const transcript = transcriptRun.transcript_text || transcriptTextForRun(transcriptRun.id);
+      if (!String(transcript || '').trim()) throw new Error('Transcript is empty');
+
+      updateArtifactRunStatusStmt.run('processing', null, null, null, '', '', '', 'processing', 'processing', run.id);
+      updateArtifactBatchStatus(batch.id);
+      broadcastArtifactBatchMessage(batch.id);
+
+      const call = serializeCall(callRow);
+      const sourceText = artifactSourceText({ call, run: transcriptRun, transcript, setting, artifactKey: run.artifact_key });
+      const chunks = splitLongText(sourceText);
+      const result = await aiFeature.runCallArtifactBot({
+        botId: setting.bot_id,
+        artifactKey: run.artifact_key,
+        artifactLabel: artifactMeta(run.artifact_key)?.label || run.artifact_key,
+        outputType: run.output_type,
+        sourceChunks: chunks,
+        instruction: artifactInstruction(run.artifact_key),
+      });
+      updateArtifactRunStatusStmt.run(
+        'completed',
+        result.text || '',
+        result.json ? JSON.stringify(result.json) : '',
+        result.fileId || null,
+        result.provider || '',
+        result.model || '',
+        '',
+        'completed',
+        'completed',
+        run.id
+      );
+    } catch (error) {
+      updateArtifactRunStatusStmt.run('error', '', '', null, '', '', error.message || 'Artifact generation failed', 'error', 'error', run.id);
+    }
+    const updatedBatch = updateArtifactBatchStatus(run.batch_id);
+    broadcastArtifactBatchMessage(updatedBatch);
+  }
+
+  function enqueueArtifactRun(runId) {
+    return artifactQueue.enqueue(`call-artifact-run:${runId}`, { runId });
+  }
+
   function handleEgressEnded(egressInfo = {}) {
     const egressId = String(egressInfo.egressId || egressInfo.egress_id || '');
     if (!egressId) {
@@ -1545,13 +1918,17 @@ function createCallFeature({
     broadcastAiNotesUpdated(recording.call_id);
   }
 
-  function splitRecordingIntoChunks(filePath, recordingId) {
+  function splitRecordingIntoChunks(filePath, recordingId, options = {}) {
     const settings = getCallSettings(db);
     const maxBytes = Math.max(1, Number(settings.call_transcription_max_chunk_mb || 24)) * 1024 * 1024;
+    const forcedChunkSeconds = Math.max(0, Number(options.forceChunkSeconds || 0));
     const stat = fs.statSync(filePath);
-    if (stat.size <= maxBytes) return [{ filePath, offsetMs: 0, temp: false }];
+    if (stat.size <= maxBytes && forcedChunkSeconds < 60) return [{ filePath, offsetMs: 0, durationMs: 0, temp: false }];
 
-    const chunkSeconds = Math.max(60, Number(settings.call_transcription_chunk_minutes || 12) * 60);
+    const configuredChunkSeconds = Math.max(60, Number(settings.call_transcription_chunk_minutes || 12) * 60);
+    const chunkSeconds = forcedChunkSeconds >= 60
+      ? Math.min(configuredChunkSeconds, forcedChunkSeconds)
+      : configuredChunkSeconds;
     const ext = path.extname(filePath) || '.ogg';
     const dir = path.join(path.dirname(filePath), `chunks-${recordingId}`);
     fs.mkdirSync(dir, { recursive: true });
@@ -1575,7 +1952,12 @@ function createCallFeature({
     const files = fs.readdirSync(dir)
       .filter((name) => name.startsWith('chunk-'))
       .sort()
-      .map((name, index) => ({ filePath: path.join(dir, name), offsetMs: index * chunkSeconds * 1000, temp: true }));
+      .map((name, index) => ({
+        filePath: path.join(dir, name),
+        offsetMs: index * chunkSeconds * 1000,
+        durationMs: chunkSeconds * 1000,
+        temp: true,
+      }));
     if (!files.length) throw new Error('ffmpeg did not create transcription chunks');
     return files;
   }
@@ -1982,6 +2364,77 @@ function createCallFeature({
   app.post('/api/calls/:callId/transcript-runs', auth, callLimiter, handleCreateTranscriptRun);
   app.post('/api/calls/:callId/transcribe', auth, callLimiter, handleCreateTranscriptRun);
 
+  app.post('/api/calls/:callId/artifacts', auth, callLimiter, (req, res) => {
+    const callId = normalizeId(req.params.callId);
+    const row = callByIdStmt.get(callId);
+    if (!row) return boolError(res, 404, 'Call not found', 'call_not_found');
+    if (!isMember(row.chat_id, req.user.id)) return boolError(res, 403, 'Forbidden', 'forbidden');
+    const transcriptRunId = normalizeId(req.body?.transcript_run_id || req.body?.transcriptRunId);
+    const transcriptRun = transcriptRunId
+      ? transcriptRunByIdStmt.get(transcriptRunId)
+      : db.prepare(`
+          SELECT * FROM call_transcript_runs
+          WHERE call_id=? AND status='completed' AND transcript_text!=''
+          ORDER BY CASE WHEN strategy='openai_diarization' THEN 0 ELSE 1 END, id DESC
+          LIMIT 1
+        `).get(callId);
+    if (!transcriptRun || Number(transcriptRun.call_id) !== callId) {
+      return boolError(res, 409, 'Completed transcript run is required', 'transcript_required');
+    }
+    if (transcriptRun.status !== 'completed' || !String(transcriptRun.transcript_text || '').trim()) {
+      return boolError(res, 409, 'Transcript is not ready', 'transcript_not_ready');
+    }
+
+    const requestedKey = String(req.body?.artifact_key || req.body?.artifactKey || '').trim();
+    const settings = artifactSettings().filter((setting) => setting.enabled && setting.bot_id);
+    const selected = requestedKey
+      ? settings.filter((setting) => setting.artifact_key === requestedKey)
+      : settings;
+    if (!selected.length) return boolError(res, 409, 'No enabled call artifacts with selected bots', 'no_call_artifacts');
+
+    const created = db.transaction(() => {
+      const message = insertMessageStmt.run(row.chat_id, req.user.id, 'AI итоги звонка: готовится');
+      const messageId = Number(message.lastInsertRowid);
+      const batchInsert = insertArtifactBatchStmt.run(callId, transcriptRun.id, messageId, req.user.id);
+      const batchId = Number(batchInsert.lastInsertRowid);
+      updateArtifactBatchMessageStmt.run(messageId, batchId);
+      const runIds = [];
+      for (const setting of selected) {
+        const inserted = insertArtifactRunStmt.run(
+          batchId,
+          callId,
+          transcriptRun.id,
+          setting.artifact_key,
+          setting.bot_id,
+          setting.output_type
+        );
+        runIds.push(Number(inserted.lastInsertRowid));
+      }
+      return { batchId, messageId, runIds };
+    })();
+    const hydrated = hydrateArtifactBatchMessage(created.batchId);
+    if (hydrated) {
+      onMessageCreated?.(hydrated);
+      broadcastCall(row.chat_id, { type: 'message', message: hydrated });
+    }
+    created.runIds.forEach(enqueueArtifactRun);
+    res.status(201).json({ batch: serializeArtifactBatch(artifactBatchByIdStmt.get(created.batchId)), message: hydrated });
+  });
+
+  app.post('/api/calls/artifact-runs/:runId/retry', auth, callLimiter, (req, res) => {
+    const runId = normalizeId(req.params.runId);
+    const run = artifactRunByIdStmt.get(runId);
+    if (!run) return boolError(res, 404, 'Artifact run not found', 'artifact_run_not_found');
+    const row = callByIdStmt.get(run.call_id);
+    if (!row) return boolError(res, 404, 'Call not found', 'call_not_found');
+    if (!isMember(row.chat_id, req.user.id)) return boolError(res, 403, 'Forbidden', 'forbidden');
+    resetArtifactRunStmt.run(runId);
+    updateArtifactBatchStatus(run.batch_id);
+    broadcastArtifactBatchMessage(run.batch_id);
+    enqueueArtifactRun(runId);
+    res.json({ batch: serializeArtifactBatch(artifactBatchByIdStmt.get(run.batch_id)) });
+  });
+
   app.get('/api/calls/:callId/transcript', auth, (req, res) => {
     const callId = normalizeId(req.params.callId);
     const row = callByIdStmt.get(callId);
@@ -2039,6 +2492,80 @@ function createCallFeature({
       livekit_ws_url: config.wsUrl ? config.wsUrl.replace(/\/\/.*@/, '//') : '',
       livekit_config: getAdminLiveKitConfig(db, secret, process.env),
     });
+  });
+
+  app.get('/api/admin/call-artifacts', auth, adminOnly, (_req, res) => {
+    const aiFeature = typeof getAiBotFeature === 'function' ? getAiBotFeature() : null;
+    res.json({
+      artifacts: artifactSettings(),
+      defaults: defaultArtifactSettings(),
+      bots: aiFeature?.listCallArtifactBots?.() || [],
+    });
+  });
+
+  app.put('/api/admin/call-artifacts', auth, adminOnly, (req, res) => {
+    const incoming = Array.isArray(req.body?.artifacts) ? req.body.artifacts : [];
+    const known = new Set(CALL_ARTIFACTS.map((item) => item.key));
+    for (const raw of incoming) {
+      const key = String(raw?.artifact_key || raw?.key || '').trim();
+      if (!known.has(key)) continue;
+      const meta = artifactMeta(key);
+      const outputType = normalizeArtifactOutputType(raw?.output_type, meta.outputType);
+      const botId = normalizeId(raw?.bot_id);
+      upsertCallArtifactSettingStmt.run(
+        key,
+        raw?.enabled ? 1 : 0,
+        botId || null,
+        outputType,
+        raw?.include_transcript === false ? 0 : 1,
+        raw?.include_call_meta === false ? 0 : 1
+      );
+    }
+    const aiFeature = typeof getAiBotFeature === 'function' ? getAiBotFeature() : null;
+    res.json({
+      artifacts: artifactSettings(),
+      bots: aiFeature?.listCallArtifactBots?.() || [],
+    });
+  });
+
+  app.post('/api/admin/call-artifacts/:key/test', auth, adminOnly, async (req, res) => {
+    const key = String(req.params.key || '').trim();
+    const meta = artifactMeta(key);
+    if (!meta) return boolError(res, 404, 'Artifact not found', 'artifact_not_found');
+    const setting = normalizeArtifactSetting(callArtifactSettingByKeyStmt.get(key));
+    if (!setting?.enabled || !setting.bot_id) return boolError(res, 409, 'Select and enable a bot first', 'artifact_bot_missing');
+    const aiFeature = typeof getAiBotFeature === 'function' ? getAiBotFeature() : null;
+    if (!aiFeature?.runCallArtifactBot) return boolError(res, 503, 'AI bot feature is unavailable', 'ai_unavailable');
+    const transcriptRun = db.prepare(`
+      SELECT * FROM call_transcript_runs
+      WHERE status='completed' AND transcript_text!=''
+      ORDER BY id DESC
+      LIMIT 1
+    `).get();
+    if (!transcriptRun) return boolError(res, 409, 'No completed transcript run found', 'no_transcript_run');
+    const callRow = callByIdStmt.get(transcriptRun.call_id);
+    if (!callRow) return boolError(res, 404, 'Call not found', 'call_not_found');
+    try {
+      const call = serializeCall(callRow);
+      const sourceText = artifactSourceText({
+        call,
+        run: transcriptRun,
+        transcript: transcriptRun.transcript_text || transcriptTextForRun(transcriptRun.id),
+        setting,
+        artifactKey: key,
+      });
+      const result = await aiFeature.runCallArtifactBot({
+        botId: setting.bot_id,
+        artifactKey: key,
+        artifactLabel: meta.label,
+        outputType: setting.output_type,
+        sourceChunks: splitLongText(sourceText),
+        instruction: artifactInstruction(key),
+      });
+      res.json({ ok: true, artifact_key: key, result });
+    } catch (error) {
+      boolError(res, 500, error.message || 'Artifact test failed', 'artifact_test_failed');
+    }
   });
 
   app.put('/api/admin/call-settings', auth, adminOnly, (req, res) => {

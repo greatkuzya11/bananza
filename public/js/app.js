@@ -17035,10 +17035,11 @@
       isSingleEmojiMessage(msg.text)
     );
     const isPollMessage = Boolean(!msg.is_deleted && msg.poll);
-    const isCallMessage = Boolean(!msg.is_deleted && msg.call);
-    const isCallTranscriptMessage = Boolean(!msg.is_deleted && msg.call_transcript_run);
+    const isCallMessage = Boolean(!msg.is_deleted && (msg.call || msg.call_message || msg.is_call_message));
+    const isCallTranscriptMessage = Boolean(!msg.is_deleted && (msg.call_transcript_run || msg.is_call_transcript_message));
+    const isCallArtifactMessage = Boolean(!msg.is_deleted && (msg.call_artifact_batch || msg.is_call_artifact_message));
     const row = document.createElement('div');
-    row.className = `msg-row ${isOwn ? 'own' : 'other'}${isEmojiOnly ? ' emoji-only-message' : ''}${isMediaMessage ? ' media-message' : ''}${isPollMessage ? ' poll-message' : ''}${isCallMessage ? ' call-message' : ''}${isCallTranscriptMessage ? ' call-transcript-message' : ''}`;
+    row.className = `msg-row ${isOwn ? 'own' : 'other'}${isEmojiOnly ? ' emoji-only-message' : ''}${isMediaMessage ? ' media-message' : ''}${isPollMessage ? ' poll-message' : ''}${isCallMessage ? ' call-message' : ''}${isCallTranscriptMessage ? ' call-transcript-message' : ''}${isCallArtifactMessage ? ' call-artifact-message' : ''}`;
     if (contextConvertPendingMessageIds.has(Number(msg.id || 0))) row.classList.add('context-convert-pending');
     row.dataset.msgId = msg.id;
     if (msg.client_id) row.dataset.clientId = msg.client_id;
@@ -17119,8 +17120,12 @@
         html += renderCallTranscriptRunCard(msg);
       }
 
+      if (isCallArtifactMessage) {
+        html += renderCallArtifactBatchCard(msg);
+      }
+
       // Text
-      if (msg.text && !isCallMessage && !isCallTranscriptMessage) {
+      if (msg.text && !isCallMessage && !isCallTranscriptMessage && !isCallArtifactMessage) {
         const textClasses = isPulsePollMessage ? 'msg-text poll-question-block' : 'msg-text';
         html += `<div class="${textClasses}">${isEmojiOnly ? esc(msg.text.trim()) : renderMessageText(msg.text, msg.mentions)}</div>`;
       }
@@ -17137,7 +17142,7 @@
       }
 
       // Delete button (inside bubble)
-        if (!isClientMessage && !isCallMessage && !isCallTranscriptMessage && (isOwn || currentUser.is_admin)) {
+        if (!isClientMessage && !isCallMessage && !isCallTranscriptMessage && !isCallArtifactMessage && (isOwn || currentUser.is_admin)) {
           html += `<button class="msg-delete-btn" data-id="${msg.id}" title="Delete">🗑</button>`;
         }
     }
@@ -17237,6 +17242,7 @@
     bindPollControls(row);
     bindCallMessageControls(row);
     bindCallTranscriptMessageControls(row);
+    bindCallArtifactMessageControls(row);
     hydratePulseInlineVoters(row);
 
     const pinBtn = row.querySelector('.msg-pin-btn');
@@ -17542,12 +17548,18 @@
     }
   }
 
+  function normalizeCallMessageData(msg) {
+    const rawCall = msg?.call || msg?.call_message || {};
+    const id = Number(rawCall.id || rawCall.call_id || msg?.call_id || 0) || 0;
+    return { ...rawCall, id };
+  }
+
   function renderCallMessageCard(msg) {
-    const call = msg?.call || {};
-    const status = String(call.status || msg?.call_message?.status || 'active');
+    const call = normalizeCallMessageData(msg);
+    const status = String(call.status || 'active');
     const active = status === 'active' && call.can_join !== false;
-    const duration = Number(call.duration_ms || msg?.call_message?.duration_ms || 0);
-    const notes = call.ai_notes || msg?.call_message?.ai_notes || null;
+    const duration = Number(call.duration_ms || 0);
+    const notes = call.ai_notes || null;
     const labels = {
       active: t('Call started'),
       ended: t('Call ended'),
@@ -17570,6 +17582,8 @@
       actions.push(`<button type="button" class="call-message-action" data-call-card-transcript="${Number(call.id || 0)}">${esc(t('Transcript'))}</button>`);
     }
     if (!active && Number(call.id || 0)) {
+      const transcriptRuns = Array.isArray(call.transcript_runs) ? call.transcript_runs : [];
+      const completedRuns = transcriptRuns.filter((run) => run && run.status === 'completed' && run.transcript_ready);
       actions.push(`
         <span class="call-message-transcribe">
           <select class="call-message-select" data-call-card-transcribe-select="${Number(call.id || 0)}" aria-label="${esc(t('Transcribe'))}">
@@ -17582,6 +17596,16 @@
             <option value="voice:mixed">${esc(t('Mixed recording'))}</option>
           </select>
           <button type="button" class="call-message-action" data-call-card-transcribe="${Number(call.id || 0)}">${esc(t('Transcribe'))}</button>
+        </span>
+      `);
+      actions.push(`
+        <span class="call-message-transcribe">
+          ${completedRuns.length ? `
+            <select class="call-message-select" data-call-card-artifacts-select="${Number(call.id || 0)}" aria-label="${esc(t('AI summary'))}">
+              ${completedRuns.map((run) => `<option value="${Number(run.id || 0)}">${esc(`${run.resolved_provider || run.provider || 'AI'} / ${run.strategy_label || run.strategy || ''}`)}</option>`).join('')}
+            </select>
+          ` : ''}
+          <button type="button" class="call-message-action" data-call-card-artifacts="${Number(call.id || 0)}">${esc(t('AI summary'))}</button>
         </span>
       `);
     }
@@ -17628,9 +17652,48 @@
     `;
   }
 
+  function callArtifactStatusLabel(status) {
+    const labels = {
+      queued: t('Queued'),
+      processing: t('Processing'),
+      completed: t('Ready'),
+      partial: t('Partially ready'),
+      error: t('Error'),
+      canceled: t('Canceled'),
+      skipped: t('Skipped'),
+    };
+    return labels[status] || status || '';
+  }
+
+  function renderCallArtifactBatchCard(msg) {
+    const batch = msg?.call_artifact_batch || {};
+    const runs = Array.isArray(batch.runs) ? batch.runs : [];
+    const ready = runs.filter((run) => run.status === 'completed').length;
+    const total = runs.length;
+    const meta = [`${ready}/${total || 0}`, callArtifactStatusLabel(batch.status || 'queued')].filter(Boolean);
+    const preview = runs
+      .filter((run) => run.status === 'completed' && run.result_text)
+      .slice(0, 2)
+      .map((run) => `${run.label || run.artifact_key}: ${String(run.result_text || '').slice(0, 140)}`)
+      .join(' / ');
+    return `
+      <div class="call-message-card call-artifact-card" data-call-artifact-card="${Number(batch.id || 0)}">
+        <div class="call-message-icon" aria-hidden="true">AI</div>
+        <div class="call-message-main">
+          <div class="call-message-title">${esc(t('Call AI summary'))}</div>
+          <div class="call-message-meta">${esc(meta.join(' / '))}</div>
+          ${preview ? `<div class="call-message-meta">${esc(preview)}</div>` : ''}
+        </div>
+        <div class="call-message-actions">
+          <button type="button" class="call-message-action" data-call-artifacts-open="${Number(batch.id || 0)}">${esc(t('Open'))}</button>
+        </div>
+      </div>
+    `;
+  }
+
   function bindCallMessageControls(row) {
     const message = row?.__messageData || {};
-    const call = message.call || null;
+    const call = normalizeCallMessageData(message);
     if (!call?.id) return;
     row.querySelector('[data-call-card-join]')?.addEventListener('click', (event) => {
       event.stopPropagation();
@@ -17659,6 +17722,81 @@
       } finally {
         button.disabled = false;
       }
+    });
+    row.querySelector('[data-call-card-artifacts]')?.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      const button = event.currentTarget;
+      const select = row.querySelector(`[data-call-card-artifacts-select="${Number(call.id || 0)}"]`);
+      button.disabled = true;
+      try {
+        await api(`/api/calls/${Number(call.id || 0)}/artifacts`, {
+          method: 'POST',
+          body: { transcript_run_id: Number(select?.value || 0) || null },
+        });
+      } catch (error) {
+        showCenterToast(error.message || t('Could not start AI summary'));
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
+
+  function openCallArtifactsModal(batch) {
+    if (!batch) return;
+    let modal = $('#callArtifactsModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'callArtifactsModal';
+      modal.className = 'modal hidden';
+      modal.innerHTML = `
+        <div class="modal-content call-transcript-modal">
+          <button type="button" class="modal-close" id="callArtifactsClose">×</button>
+          <h2>${esc(t('Call AI summary'))}</h2>
+          <div id="callArtifactsBody" class="call-artifacts-body"></div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+      $('#callArtifactsClose')?.addEventListener('click', () => closeModal('callArtifactsModal'));
+      modal.addEventListener('click', (event) => {
+        if (event.target === modal) closeModal('callArtifactsModal');
+      });
+    }
+    const body = $('#callArtifactsBody');
+    const runs = Array.isArray(batch.runs) ? batch.runs : [];
+    if (body) {
+      body.innerHTML = runs.map((run) => `
+        <section class="call-artifact-section">
+          <div class="call-artifact-section-head">
+            <strong>${esc(run.label || run.artifact_key || '')}</strong>
+            <span>${esc(callArtifactStatusLabel(run.status))}</span>
+          </div>
+          ${run.file?.url ? `<img class="call-artifact-image" src="${esc(run.file.url)}" alt="">` : ''}
+          ${run.result_text ? `<pre class="call-transcript-text">${esc(run.result_text)}</pre>` : ''}
+          ${run.error ? `<div class="call-admin-status error">${esc(run.error)}</div>` : ''}
+          ${run.status === 'error' ? `<button type="button" class="call-admin-btn" data-call-artifact-retry="${Number(run.id || 0)}">${esc(t('Retry'))}</button>` : ''}
+        </section>
+      `).join('') || `<div class="call-admin-status">${esc(t('No artifacts yet'))}</div>`;
+      body.querySelectorAll('[data-call-artifact-retry]').forEach((button) => {
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          try {
+            await api(`/api/calls/artifact-runs/${Number(button.dataset.callArtifactRetry || 0)}/retry`, { method: 'POST', body: {} });
+            closeModal('callArtifactsModal');
+          } catch (error) {
+            showCenterToast(error.message || t('Could not retry artifact'));
+          } finally {
+            button.disabled = false;
+          }
+        });
+      });
+    }
+    openModal('callArtifactsModal');
+  }
+
+  function bindCallArtifactMessageControls(row) {
+    row.querySelector('[data-call-artifacts-open]')?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      openCallArtifactsModal(row.__messageData?.call_artifact_batch);
     });
   }
 
@@ -18848,8 +18986,9 @@
     if (!currentUser || !msg || msg.is_deleted) return false;
     if (isClientSideMessage(msg)) return false;
     if (isPollMessage(msg)) return false;
-    if (msg.call || msg.is_call_message) return false;
+    if (msg.call || msg.call_message || msg.is_call_message) return false;
     if (msg.call_transcript_run || msg.is_call_transcript_message) return false;
+    if (msg.call_artifact_batch || msg.is_call_artifact_message) return false;
     if (!currentUser.is_admin && msg.user_id !== currentUser.id) return false;
     return Boolean(msg.is_voice_note || msg.file_id || msg.text);
   }
@@ -18858,8 +18997,9 @@
     if (!currentUser || !msg || msg.is_deleted) return false;
     if (isClientSideMessage(msg)) return false;
     if (isPollMessage(msg)) return false;
-    if (msg.call || msg.is_call_message) return false;
+    if (msg.call || msg.call_message || msg.is_call_message) return false;
     if (msg.call_transcript_run || msg.is_call_transcript_message) return false;
+    if (msg.call_artifact_batch || msg.is_call_artifact_message) return false;
     return Boolean(msg.is_voice_note || msg.file_id || msg.text);
   }
 
