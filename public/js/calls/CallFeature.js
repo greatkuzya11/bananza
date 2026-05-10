@@ -428,7 +428,6 @@
         </div>
         <div class="modal-body">
           <div class="call-transcript-toolbar">
-            <input type="search" id="callTranscriptSearch" class="modal-input" placeholder="${escapeHtml(t('Search'))}">
             <button type="button" id="callTranscriptCopy" class="call-admin-btn">${escapeHtml(t('Copy'))}</button>
             <button type="button" id="callTranscriptDownload" class="call-admin-btn">${escapeHtml(t('Download'))}</button>
           </div>
@@ -439,7 +438,6 @@
     `;
     document.body.appendChild(modal);
     document.getElementById('callTranscriptClose')?.addEventListener('click', () => bridge()?.closeManagedModal?.('callTranscriptModal'));
-    document.getElementById('callTranscriptSearch')?.addEventListener('input', renderTranscriptFilter);
     document.getElementById('callTranscriptCopy')?.addEventListener('click', copyTranscriptText);
     document.getElementById('callTranscriptDownload')?.addEventListener('click', downloadTranscriptText);
     bridge()?.registerManagedModal?.('callTranscriptModal');
@@ -1446,22 +1444,9 @@
     el.textContent = message || '';
   }
 
-  function renderTranscriptFilter() {
-    const pre = document.getElementById('callTranscriptText');
-    const query = String(document.getElementById('callTranscriptSearch')?.value || '').trim().toLowerCase();
-    if (!pre) return;
-    const text = state.transcriptModal.text || '';
-    if (!query) {
-      pre.textContent = text;
-      return;
-    }
-    pre.textContent = text.split('\n').filter((line) => line.toLowerCase().includes(query)).join('\n');
-  }
-
   async function openTranscript(callId) {
     ensureUi();
     state.transcriptModal = { callId: Number(callId || 0), text: '', segments: [] };
-    document.getElementById('callTranscriptSearch').value = '';
     document.getElementById('callTranscriptText').textContent = '';
     transcriptStatus(t('Loading...'));
     bridge()?.openManagedModal?.('callTranscriptModal', { replaceStack: false });
@@ -1490,15 +1475,29 @@
   function downloadTranscriptText() {
     const text = state.transcriptModal.text || document.getElementById('callTranscriptText')?.textContent || '';
     if (!text) return;
-    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `bananza-call-${state.transcriptModal.callId || 'transcript'}.txt`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    const filename = `bananza-call-${state.transcriptModal.callId || 'transcript'}.txt`;
+    try {
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.rel = 'noopener';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 4000);
+      transcriptStatus(t('Download started'), 'success');
+    } catch {
+      const fallback = window.open('', '_blank', 'noopener,noreferrer');
+      if (fallback) {
+        fallback.document.title = filename;
+        fallback.document.body.style.whiteSpace = 'pre-wrap';
+        fallback.document.body.style.font = '14px/1.5 monospace';
+        fallback.document.body.textContent = text;
+      }
+    }
   }
 
   function toggleMinimized() {

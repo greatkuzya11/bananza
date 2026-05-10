@@ -1119,20 +1119,11 @@ html[data-visual-mode="rich"] .call-admin-status {
 }
 
 .call-transcript-toolbar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  display: flex;
+  justify-content: flex-end;
   gap: 8px;
   align-items: center;
   margin-bottom: 10px;
-}
-
-.call-transcript-toolbar .modal-input {
-  min-height: var(--call-control-height);
-  border: 1px solid var(--call-border);
-  border-radius: var(--call-control-radius);
-  background: var(--call-bg-panel);
-  color: var(--text-primary);
-  font: inherit;
 }
 
 .call-transcript-toolbar .call-admin-btn {
@@ -1284,11 +1275,8 @@ html[data-visual-mode="rich"] .call-admin-status {
   }
 
   .call-transcript-toolbar {
+    display: grid;
     grid-template-columns: 1fr 1fr;
-  }
-
-  .call-transcript-toolbar .modal-input {
-    grid-column: 1 / -1;
   }
 
   .call-transcript-toolbar .call-admin-btn {
