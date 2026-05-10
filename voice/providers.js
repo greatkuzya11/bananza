@@ -1,5 +1,7 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 function mimeForAudioFile(filePath) {
   const ext = path.extname(String(filePath || '')).toLowerCase();
@@ -22,6 +24,7 @@ async function parseJsonResponse(res) {
 async function transcribeWithVosk({ filePath, settings }) {
   const helperUrl = String(settings.vosk_helper_url || '').replace(/\/+$/, '');
   if (!helperUrl) throw new Error('Vosk helper URL is not configured');
+  const wavPath = await prepareVoskWav(filePath);
 
   let res;
   try {
@@ -29,7 +32,7 @@ async function transcribeWithVosk({ filePath, settings }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        file_path: filePath,
+        file_path: wavPath,
         model_name: settings.vosk_model,
         model_path: settings.vosk_model_path || '',
         language_hint: settings.openai_language || 'ru',
@@ -41,6 +44,10 @@ async function transcribeWithVosk({ filePath, settings }) {
       throw new Error(`Vosk helper did not respond in time: ${helperUrl}`);
     }
     throw new Error(`Vosk helper is unavailable at ${helperUrl}`);
+  } finally {
+    if (wavPath !== filePath) {
+      fs.promises.rm(path.dirname(wavPath), { recursive: true, force: true }).catch(() => {});
+    }
   }
 
   const data = await parseJsonResponse(res);
@@ -57,6 +64,37 @@ async function transcribeWithVosk({ filePath, settings }) {
     provider: 'vosk',
     model: data.model || settings.vosk_model,
   };
+}
+
+async function prepareVoskWav(filePath) {
+  const ext = path.extname(String(filePath || '')).toLowerCase();
+  if (ext === '.wav') return filePath;
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bananza-vosk-'));
+  const wavPath = path.join(dir, 'audio.wav');
+  const result = spawnSync('ffmpeg', [
+    '-hide_banner',
+    '-loglevel',
+    'error',
+    '-y',
+    '-i',
+    filePath,
+    '-ac',
+    '1',
+    '-ar',
+    '16000',
+    '-acodec',
+    'pcm_s16le',
+    wavPath,
+  ], { encoding: 'utf8' });
+  if (result.error) {
+    await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
+    throw new Error(`ffmpeg is required for Vosk transcription: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
+    throw new Error(`ffmpeg audio conversion failed: ${result.stderr || result.stdout || 'unknown error'}`);
+  }
+  return wavPath;
 }
 
 async function transcribeWithOpenAI({ filePath, settings, apiKey }) {
