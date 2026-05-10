@@ -237,8 +237,6 @@ function initCallSchema(db) {
       WHERE status IN ('recording','processing');
     CREATE INDEX IF NOT EXISTS idx_call_recordings_egress
       ON call_recordings(egress_id);
-    CREATE INDEX IF NOT EXISTS idx_call_recordings_call_scope
-      ON call_recordings(call_id, scope, status);
     CREATE INDEX IF NOT EXISTS idx_call_transcript_segments_call
       ON call_transcript_segments(call_id, start_ms, user_id);
     CREATE INDEX IF NOT EXISTS idx_call_transcript_runs_call
@@ -250,6 +248,10 @@ function initCallSchema(db) {
   `);
 
   addColumnIfMissing(db, 'call_recordings', 'scope', "scope TEXT NOT NULL DEFAULT 'participant'");
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_call_recordings_call_scope
+      ON call_recordings(call_id, scope, status);
+  `);
 }
 
 module.exports = { initCallSchema };
