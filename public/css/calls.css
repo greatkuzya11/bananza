@@ -1073,6 +1073,27 @@ html[data-visual-mode="rich"] .call-admin-status {
   color: #fff;
 }
 
+.call-message-transcribe {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.call-message-select {
+  min-height: 30px;
+  max-width: 190px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--call-border));
+  border-radius: 8px;
+  padding: 0 8px;
+  background: var(--call-bg-panel);
+  color: var(--text-primary);
+}
+
+.call-transcript-card .call-message-icon {
+  background: color-mix(in srgb, var(--accent) 14%, var(--call-bg-panel));
+}
+
 .call-admin-modal .field-group {
   margin: 12px 0;
 }

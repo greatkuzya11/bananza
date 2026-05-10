@@ -34,6 +34,7 @@ test('call settings default to disabled and normalize incoming values', () => {
     max_call_participants: 999,
     ignored: true,
   }), {
+    ...DEFAULT_CALL_SETTINGS,
     calls_enabled: true,
     allow_private_calls: false,
     allow_group_calls: true,

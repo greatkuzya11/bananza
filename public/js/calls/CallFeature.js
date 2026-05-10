@@ -545,6 +545,14 @@
               <input type="text" id="callRecordingPath" class="modal-input" placeholder="/opt/livekit-egress/recordings">
             </div>
             <div class="field-group">
+              <label>${escapeHtml(t('Recording mode'))}</label>
+              <select id="callRecordingMode" class="modal-input">
+                <option value="mixed_participant">${escapeHtml(t('Mixed + per-user'))}</option>
+                <option value="participant">${escapeHtml(t('Per-user tracks'))}</option>
+                <option value="mixed">${escapeHtml(t('Mixed recording'))}</option>
+              </select>
+            </div>
+            <div class="field-group">
               <label>${escapeHtml(t('Call transcription provider'))}</label>
               <select id="callTranscriptionProvider" class="modal-input">
                 <option value="voice">${escapeHtml(t('Same as voice messages'))}</option>
@@ -1444,21 +1452,24 @@
     el.textContent = message || '';
   }
 
-  async function openTranscript(callId) {
+  async function openTranscript(callId, runId = 0) {
     ensureUi();
-    state.transcriptModal = { callId: Number(callId || 0), text: '', segments: [] };
+    state.transcriptModal = { callId: Number(callId || 0), runId: Number(runId || 0), text: '', segments: [] };
     document.getElementById('callTranscriptText').textContent = '';
     transcriptStatus(t('Loading...'));
     bridge()?.openManagedModal?.('callTranscriptModal', { replaceStack: false });
     try {
-      const data = await api(`/api/calls/${Number(callId)}/transcript`);
+      const data = runId
+        ? await api(`/api/calls/transcript-runs/${Number(runId)}`)
+        : await api(`/api/calls/${Number(callId)}/transcript`);
       state.transcriptModal = {
-        callId: Number(callId || 0),
+        callId: Number(data.call?.id || callId || 0),
+        runId: Number(runId || data.run?.id || 0),
         text: data.transcript_text || '',
         segments: Array.isArray(data.segments) ? data.segments : [],
       };
       document.getElementById('callTranscriptText').textContent = state.transcriptModal.text || t('Transcript is empty');
-      const approximate = data.ai_notes?.timing_approximate;
+      const approximate = runId ? data.run?.timing_approximate : data.ai_notes?.timing_approximate;
       transcriptStatus(approximate ? t('Timing is approximate') : '', approximate ? '' : 'success');
     } catch (error) {
       transcriptStatus(error.message || t('Could not load transcript'), 'error');
@@ -1475,7 +1486,9 @@
   function downloadTranscriptText() {
     const text = state.transcriptModal.text || document.getElementById('callTranscriptText')?.textContent || '';
     if (!text) return;
-    const filename = `bananza-call-${state.transcriptModal.callId || 'transcript'}.txt`;
+    const filename = state.transcriptModal.runId
+      ? `bananza-call-${state.transcriptModal.callId || 'transcript'}-run-${state.transcriptModal.runId}.txt`
+      : `bananza-call-${state.transcriptModal.callId || 'transcript'}.txt`;
     try {
       const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
@@ -1949,6 +1962,8 @@
     if (max) max.value = Number(settings.max_call_participants || 20);
     const recordingPath = document.getElementById('callRecordingPath');
     if (recordingPath) recordingPath.value = settings.call_recording_path || '/opt/livekit-egress/recordings';
+    const recordingMode = document.getElementById('callRecordingMode');
+    if (recordingMode) recordingMode.value = settings.call_recording_mode || 'mixed_participant';
     const provider = document.getElementById('callTranscriptionProvider');
     if (provider) provider.value = settings.call_transcription_provider || 'voice';
     const maxChunk = document.getElementById('callTranscriptionMaxChunkMb');
@@ -1968,6 +1983,7 @@
       call_debug_enabled: document.getElementById('callDebugToggle')?.checked === true,
       call_ai_notes_enabled: document.getElementById('callAiNotesToggle')?.checked === true,
       call_recording_path: document.getElementById('callRecordingPath')?.value || '',
+      call_recording_mode: document.getElementById('callRecordingMode')?.value || 'mixed_participant',
       call_transcription_provider: document.getElementById('callTranscriptionProvider')?.value || 'voice',
       call_transcription_max_chunk_mb: Number(document.getElementById('callTranscriptionMaxChunkMb')?.value || 24),
       call_transcription_chunk_minutes: Number(document.getElementById('callTranscriptionChunkMinutes')?.value || 12),
@@ -2076,6 +2092,7 @@
   hooks.openPrejoin = (call) => openPrejoin(call);
   hooks.joinCallFromMessage = (call) => openPrejoin(call);
   hooks.openTranscript = (callId) => openTranscript(callId);
+  hooks.openTranscriptRun = (runId) => openTranscript(0, runId);
   hooks.getActiveCallForChat = (chatId) => state.activeCalls.get(Number(chatId || 0)) || null;
   hooks.getActiveCalls = () => Array.from(state.activeCalls.values()).map((call) => ({ ...call }));
 

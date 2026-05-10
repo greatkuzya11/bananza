@@ -14,6 +14,7 @@ const DEFAULT_CALL_SETTINGS = {
   call_debug_enabled: false,
   call_ai_notes_enabled: false,
   call_recording_path: process.env.CALL_RECORDING_PATH || '/opt/livekit-egress/recordings',
+  call_recording_mode: 'mixed_participant',
   call_transcription_provider: 'voice',
   call_transcription_max_chunk_mb: 24,
   call_transcription_chunk_minutes: 12,
@@ -62,6 +63,10 @@ function normalizeCallSettings(raw = {}) {
   next.call_debug_enabled = normalizeBoolean(next.call_debug_enabled, DEFAULT_CALL_SETTINGS.call_debug_enabled);
   next.call_ai_notes_enabled = normalizeBoolean(next.call_ai_notes_enabled, DEFAULT_CALL_SETTINGS.call_ai_notes_enabled);
   next.call_recording_path = String(next.call_recording_path || DEFAULT_CALL_SETTINGS.call_recording_path).trim() || DEFAULT_CALL_SETTINGS.call_recording_path;
+  next.call_recording_mode = String(next.call_recording_mode || DEFAULT_CALL_SETTINGS.call_recording_mode).trim();
+  if (!['participant', 'mixed', 'mixed_participant'].includes(next.call_recording_mode)) {
+    next.call_recording_mode = DEFAULT_CALL_SETTINGS.call_recording_mode;
+  }
   next.call_transcription_provider = String(next.call_transcription_provider || DEFAULT_CALL_SETTINGS.call_transcription_provider).trim();
   if (!['voice', 'vosk', 'openai', 'grok'].includes(next.call_transcription_provider)) {
     next.call_transcription_provider = DEFAULT_CALL_SETTINGS.call_transcription_provider;

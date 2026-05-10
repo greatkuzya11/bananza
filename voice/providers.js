@@ -38,6 +38,21 @@ function normalizeProviderSegments(data = {}) {
   }).filter((segment) => segment.text);
 }
 
+function normalizeDiarizedSegments(data = {}) {
+  return (Array.isArray(data.segments) ? data.segments : []).map((segment) => {
+    const text = String(segment?.text || '').trim();
+    const start = segment?.start_ms ?? segment?.start ?? 0;
+    const end = segment?.end_ms ?? segment?.end ?? start;
+    const multiplier = Number(start) > 10000 || Number(end) > 10000 ? 1 : 1000;
+    return {
+      text,
+      speaker: String(segment?.speaker || '').trim(),
+      start_ms: Math.max(0, Math.round(Number(start || 0) * multiplier)),
+      end_ms: Math.max(0, Math.round(Number(end || 0) * multiplier)),
+    };
+  }).filter((segment) => segment.text);
+}
+
 async function transcribeWithVosk({ filePath, settings }) {
   const helperUrl = String(settings.vosk_helper_url || '').replace(/\/+$/, '');
   if (!helperUrl) throw new Error('Vosk helper URL is not configured');
@@ -149,6 +164,40 @@ async function transcribeWithOpenAI({ filePath, settings, apiKey }) {
   };
 }
 
+async function transcribeWithOpenAIDiarization({ filePath, settings, apiKey }) {
+  if (!apiKey) throw new Error('OpenAI API key is not configured');
+  const fileBuffer = await fs.promises.readFile(filePath);
+  const formData = new FormData();
+  formData.append('model', 'gpt-4o-transcribe-diarize');
+  formData.append('response_format', 'diarized_json');
+  formData.append('chunking_strategy', 'auto');
+  if (settings.openai_language) formData.append('language', settings.openai_language || 'ru');
+  formData.append('file', new Blob([fileBuffer], { type: mimeForAudioFile(filePath) }), path.basename(filePath));
+
+  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: formData,
+    signal: AbortSignal.timeout(settings.transcription_timeout_ms),
+  });
+
+  const data = await parseJsonResponse(res);
+  if (!res.ok) {
+    throw new Error(data.error?.message || data.error || data.raw || 'OpenAI diarization request failed');
+  }
+  const text = String(data.text || '').trim();
+  const segments = normalizeDiarizedSegments(data);
+  if (!text && !segments.length) throw new Error('OpenAI diarization returned empty transcription');
+  return {
+    text: text || segments.map((segment) => segment.text).join(' ').trim(),
+    segments,
+    provider: 'openai',
+    model: 'gpt-4o-transcribe-diarize',
+  };
+}
+
 async function transcribeWithGrok({ filePath, settings, grokApiKey }) {
   if (!grokApiKey) throw new Error('Grok API key is not configured');
   const fileBuffer = await fs.promises.readFile(filePath);
@@ -214,5 +263,6 @@ async function testProviderModel({ filePath, settings, apiKey, grokApiKey }) {
 
 module.exports = {
   transcribeAudio,
+  transcribeWithOpenAIDiarization,
   testProviderModel,
 };

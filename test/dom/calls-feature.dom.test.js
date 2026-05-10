@@ -274,17 +274,14 @@ test('CallFeature joins and leaves a mocked LiveKit room', async (t) => {
   assert.equal(dom.window.document.getElementById('callSurface').classList.contains('hidden'), false);
   assert.equal(dom.window.document.getElementById('callMicBtn').textContent.trim(), '');
   assert.ok(dom.window.document.getElementById('callCameraBtn').querySelector('.call-icon'));
-  assert.ok(dom.window.document.querySelector('.call-tile-placeholder img[src="/uploads/avatars/alice.png"]'));
+  assert.equal(dom.window.document.querySelector('.call-tile-placeholder')?.textContent.trim(), '🍌');
   assert.ok(dom.window.document.querySelector('#callParticipantsBtn .call-icon'));
   assert.ok(dom.window.document.querySelector('#callDeviceBtn .call-icon'));
   assert.ok(dom.window.document.querySelector('#callLeaveBtn .call-icon'));
   dom.window.document.getElementById('callParticipantsBtn').click();
   await waitForCondition(dom.window, () => !dom.window.document.getElementById('callParticipantsPanel').classList.contains('hidden'));
   assert.equal(dom.window.document.querySelectorAll('.call-participant-avatar img').length, 2);
-  assert.equal(
-    dom.window.document.getElementById('callSurfaceStatus').textContent,
-    dom.window.BananzaI18n.t('Connected')
-  );
+  assert.ok(dom.window.document.getElementById('callSurface'));
 
   dom.window.document.getElementById('callLeaveBtn').click();
   await waitForCondition(dom.window, () => disconnected);

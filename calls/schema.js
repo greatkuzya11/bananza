@@ -154,6 +154,7 @@ function initCallSchema(db) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       call_id INTEGER NOT NULL REFERENCES call_sessions(id) ON DELETE CASCADE,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      scope TEXT NOT NULL DEFAULT 'participant' CHECK(scope IN ('participant','mixed')),
       livekit_identity TEXT NOT NULL DEFAULT '',
       track_id TEXT NOT NULL DEFAULT '',
       egress_id TEXT NOT NULL DEFAULT '',
@@ -184,6 +185,40 @@ function initCallSchema(db) {
       created_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS call_transcript_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      call_id INTEGER NOT NULL REFERENCES call_sessions(id) ON DELETE CASCADE,
+      message_id INTEGER DEFAULT NULL REFERENCES messages(id) ON DELETE SET NULL,
+      requested_by INTEGER DEFAULT NULL REFERENCES users(id) ON DELETE SET NULL,
+      provider TEXT NOT NULL DEFAULT 'voice',
+      resolved_provider TEXT NOT NULL DEFAULT '',
+      strategy TEXT NOT NULL DEFAULT 'per_user' CHECK(strategy IN ('per_user','mixed','hybrid','openai_diarization')),
+      status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','processing','completed','error','canceled')),
+      error TEXT DEFAULT '',
+      transcript_text TEXT DEFAULT '',
+      timing_approximate INTEGER DEFAULT 1,
+      model TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      started_at TEXT DEFAULT NULL,
+      completed_at TEXT DEFAULT NULL,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS call_transcript_run_segments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER NOT NULL REFERENCES call_transcript_runs(id) ON DELETE CASCADE,
+      call_id INTEGER NOT NULL REFERENCES call_sessions(id) ON DELETE CASCADE,
+      recording_id INTEGER DEFAULT NULL REFERENCES call_recordings(id) ON DELETE SET NULL,
+      user_id INTEGER DEFAULT NULL REFERENCES users(id) ON DELETE SET NULL,
+      speaker_name TEXT NOT NULL DEFAULT '',
+      speaker_label TEXT NOT NULL DEFAULT '',
+      start_ms INTEGER NOT NULL DEFAULT 0,
+      end_ms INTEGER NOT NULL DEFAULT 0,
+      text TEXT NOT NULL DEFAULT '',
+      timing_approximate INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE UNIQUE INDEX IF NOT EXISTS idx_call_sessions_active_chat
       ON call_sessions(chat_id)
       WHERE status='active';
@@ -202,9 +237,19 @@ function initCallSchema(db) {
       WHERE status IN ('recording','processing');
     CREATE INDEX IF NOT EXISTS idx_call_recordings_egress
       ON call_recordings(egress_id);
+    CREATE INDEX IF NOT EXISTS idx_call_recordings_call_scope
+      ON call_recordings(call_id, scope, status);
     CREATE INDEX IF NOT EXISTS idx_call_transcript_segments_call
       ON call_transcript_segments(call_id, start_ms, user_id);
+    CREATE INDEX IF NOT EXISTS idx_call_transcript_runs_call
+      ON call_transcript_runs(call_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_call_transcript_runs_message
+      ON call_transcript_runs(message_id);
+    CREATE INDEX IF NOT EXISTS idx_call_transcript_run_segments_run
+      ON call_transcript_run_segments(run_id, start_ms, id);
   `);
+
+  addColumnIfMissing(db, 'call_recordings', 'scope', "scope TEXT NOT NULL DEFAULT 'participant'");
 }
 
 module.exports = { initCallSchema };

@@ -4,9 +4,9 @@ const { spawnSync } = require('child_process');
 const { randomUUID } = require('crypto');
 const express = require('express');
 const { AccessToken, EgressClient, RoomServiceClient, WebhookReceiver } = require('livekit-server-sdk');
-const { DirectFileOutput, TrackSource } = require('@livekit/protocol');
+const { DirectFileOutput, EncodedFileOutput, EncodedFileType, TrackSource } = require('@livekit/protocol');
 const { AsyncJobQueue } = require('../voice/queue');
-const { transcribeAudio } = require('../voice/providers');
+const { transcribeAudio, transcribeWithOpenAIDiarization } = require('../voice/providers');
 const { getVoiceSettings, getOpenAIKey: getVoiceOpenAIKey, getGrokKey: getVoiceGrokKey } = require('../voice/settings');
 const {
   getCallSettings,
@@ -212,20 +212,25 @@ function createCallFeature({
     WHERE an.call_id=? AND an.status='recording' AND cs.status='active'
   `);
   const insertRecordingStmt = db.prepare(`
-    INSERT INTO call_recordings(call_id, user_id, livekit_identity, track_id, egress_id, file_path, status, started_at, created_at, updated_at)
-    VALUES(?, ?, ?, ?, ?, ?, 'recording', ?, datetime('now'), datetime('now'))
+    INSERT INTO call_recordings(call_id, user_id, scope, livekit_identity, track_id, egress_id, file_path, status, started_at, created_at, updated_at)
+    VALUES(?, ?, ?, ?, ?, ?, ?, 'recording', ?, datetime('now'), datetime('now'))
   `);
   const recordingByEgressStmt = db.prepare('SELECT * FROM call_recordings WHERE egress_id=?');
   const recordingByTrackStmt = db.prepare(`
     SELECT * FROM call_recordings
-    WHERE call_id=? AND track_id=? AND status IN ('recording','processing')
+    WHERE call_id=? AND track_id=? AND scope='participant' AND status IN ('recording','processing')
+    ORDER BY id DESC LIMIT 1
+  `);
+  const mixedRecordingForCallStmt = db.prepare(`
+    SELECT * FROM call_recordings
+    WHERE call_id=? AND scope='mixed' AND status IN ('recording','processing')
     ORDER BY id DESC LIMIT 1
   `);
   const activeRecordingsForCallStmt = db.prepare(`
     SELECT * FROM call_recordings WHERE call_id=? AND status='recording'
   `);
   const activeRecordingsForUserStmt = db.prepare(`
-    SELECT * FROM call_recordings WHERE call_id=? AND user_id=? AND status='recording'
+    SELECT * FROM call_recordings WHERE call_id=? AND user_id=? AND scope='participant' AND status='recording'
   `);
   const updateRecordingStartedStmt = db.prepare(`
     UPDATE call_recordings
@@ -278,9 +283,57 @@ function createCallFeature({
     SELECT * FROM call_recordings
     WHERE call_id=? AND status='error' AND file_path!=''
   `);
+  const insertTranscriptRunStmt = db.prepare(`
+    INSERT INTO call_transcript_runs(call_id, message_id, requested_by, provider, strategy, status, created_at, updated_at)
+    VALUES(?, ?, ?, ?, ?, 'queued', datetime('now'), datetime('now'))
+  `);
+  const updateTranscriptRunMessageStmt = db.prepare(`
+    UPDATE call_transcript_runs SET message_id=?, updated_at=datetime('now') WHERE id=?
+  `);
+  const updateTranscriptRunStatusStmt = db.prepare(`
+    UPDATE call_transcript_runs
+    SET status=?,
+      resolved_provider=COALESCE(NULLIF(?, ''), resolved_provider),
+      model=COALESCE(NULLIF(?, ''), model),
+      error=?,
+      transcript_text=COALESCE(?, transcript_text),
+      timing_approximate=COALESCE(?, timing_approximate),
+      started_at=CASE WHEN ?='processing' AND started_at IS NULL THEN datetime('now') ELSE started_at END,
+      completed_at=CASE WHEN ? IN ('completed','error','canceled') THEN datetime('now') ELSE completed_at END,
+      updated_at=datetime('now')
+    WHERE id=?
+  `);
+  const transcriptRunByIdStmt = db.prepare('SELECT * FROM call_transcript_runs WHERE id=?');
+  const transcriptRunByMessageStmt = db.prepare('SELECT * FROM call_transcript_runs WHERE message_id=?');
+  const transcriptRunsForCallStmt = db.prepare(`
+    SELECT * FROM call_transcript_runs
+    WHERE call_id=?
+    ORDER BY id DESC
+  `);
+  const insertRunSegmentStmt = db.prepare(`
+    INSERT INTO call_transcript_run_segments(run_id, call_id, recording_id, user_id, speaker_name, speaker_label, start_ms, end_ms, text, timing_approximate)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const deleteRunSegmentsStmt = db.prepare('DELETE FROM call_transcript_run_segments WHERE run_id=?');
+  const transcriptRunSegmentsStmt = db.prepare(`
+    SELECT ctrs.*, u.display_name, u.username
+    FROM call_transcript_run_segments ctrs
+    LEFT JOIN users u ON u.id=ctrs.user_id
+    WHERE ctrs.run_id=?
+    ORDER BY ctrs.start_ms ASC, ctrs.id ASC
+  `);
+  const completedRecordingsForCallStmt = db.prepare(`
+    SELECT * FROM call_recordings
+    WHERE call_id=? AND status NOT IN ('recording','canceled') AND file_path!=''
+    ORDER BY scope DESC, started_at ASC, id ASC
+  `);
   const transcriptQueue = new AsyncJobQueue({
     handler: processRecordingTranscript,
     getConcurrency: () => Math.max(1, Math.min(2, Number(getVoiceSettings(db).queue_concurrency || 1))),
+  });
+  const transcriptRunQueue = new AsyncJobQueue({
+    handler: processTranscriptRun,
+    getConcurrency: () => 1,
   });
 
   function livekitConfig() {
@@ -346,6 +399,13 @@ function createCallFeature({
     const dir = path.join(root, `call-${Number(callId) || 0}`);
     fs.mkdirSync(dir, { recursive: true });
     return path.join(dir, `user-${Number(userId) || 0}-${safePathPart(trackId, randomUUID())}.ogg`);
+  }
+
+  function mixedRecordingPath(callId) {
+    const root = ensureRecordingRoot();
+    const dir = path.join(root, `call-${Number(callId) || 0}`);
+    fs.mkdirSync(dir, { recursive: true });
+    return path.join(dir, 'mixed.ogg');
   }
 
   function fileInfoFromEgress(egressInfo = {}) {
@@ -432,6 +492,71 @@ function createCallFeature({
       });
     });
     return merged.map((row) => `[${formatTranscriptTime(row.start_ms)}] ${row.speaker}: ${row.text}`).join('\n');
+  }
+
+  function strategyLabel(strategy) {
+    const labels = {
+      per_user: 'per-user',
+      mixed: 'mixed',
+      hybrid: 'hybrid',
+      openai_diarization: 'OpenAI diarization',
+    };
+    return labels[strategy] || strategy || 'transcript';
+  }
+
+  function serializeTranscriptRun(row) {
+    if (!row) return null;
+    return {
+      id: Number(row.id),
+      call_id: Number(row.call_id),
+      message_id: row.message_id ? Number(row.message_id) : null,
+      requested_by: row.requested_by ? Number(row.requested_by) : null,
+      provider: row.provider || 'voice',
+      resolved_provider: row.resolved_provider || '',
+      strategy: row.strategy || 'per_user',
+      strategy_label: strategyLabel(row.strategy || 'per_user'),
+      status: row.status || 'queued',
+      error: row.error || '',
+      transcript_ready: row.status === 'completed' && Boolean(String(row.transcript_text || '').trim()),
+      transcript_text: row.transcript_text || '',
+      timing_approximate: Number(row.timing_approximate) !== 0,
+      model: row.model || '',
+      created_at: row.created_at || null,
+      started_at: row.started_at || null,
+      completed_at: row.completed_at || null,
+    };
+  }
+
+  function transcriptTextFromRows(rows) {
+    const merged = [];
+    rows.forEach((row) => {
+      const text = String(row.text || '').trim();
+      if (!text) return;
+      const start = Number(row.start_ms || 0);
+      const end = Number(row.end_ms || start);
+      const speakerKey = row.user_id == null ? `label:${row.speaker_label || row.speaker_name || 'unknown'}` : `user:${row.user_id}`;
+      const speaker = row.speaker_name || row.display_name || row.username || row.speaker_label || 'Speaker';
+      const prev = merged[merged.length - 1];
+      if (prev && prev.speaker_key === speakerKey && start - Number(prev.end_ms || 0) <= CALL_TRANSCRIPT_MERGE_GAP_MS) {
+        prev.text = `${prev.text} ${text}`.trim();
+        prev.end_ms = Math.max(Number(prev.end_ms || 0), end);
+        prev.timing_approximate = prev.timing_approximate || Number(row.timing_approximate) !== 0;
+        return;
+      }
+      merged.push({
+        speaker_key: speakerKey,
+        speaker,
+        start_ms: start,
+        end_ms: end,
+        text,
+        timing_approximate: Number(row.timing_approximate) !== 0,
+      });
+    });
+    return merged.map((row) => `[${formatTranscriptTime(row.start_ms)}] ${row.speaker}: ${row.text}`).join('\n');
+  }
+
+  function transcriptTextForRun(runId) {
+    return transcriptTextFromRows(transcriptRunSegmentsStmt.all(runId));
   }
 
   function assertCallsAvailable(res) {
@@ -560,17 +685,24 @@ function createCallFeature({
     return messages.map((message) => {
       if (!message?.id) return message;
       const row = callByMessageIdStmt.get(message.id);
-      if (!row) return message;
-      const call = serializeCall(row);
-      message.call = call;
-      message.is_call_message = true;
-      message.call_message = {
-        call_id: call.id,
-        status: call.status,
-        duration_ms: call.duration_ms,
-        ended_reason: call.ended_reason,
-        ai_notes: call.ai_notes || null,
-      };
+      if (row) {
+        const call = serializeCall(row);
+        message.call = call;
+        message.is_call_message = true;
+        message.call_message = {
+          call_id: call.id,
+          status: call.status,
+          duration_ms: call.duration_ms,
+          ended_reason: call.ended_reason,
+          ai_notes: call.ai_notes || null,
+          transcript_runs: transcriptRunsForCallStmt.all(call.id).map(serializeTranscriptRun),
+        };
+      }
+      const run = transcriptRunByMessageStmt.get(message.id);
+      if (run) {
+        message.is_call_transcript_message = true;
+        message.call_transcript_run = serializeTranscriptRun(run);
+      }
       return message;
     });
   }
@@ -592,6 +724,19 @@ function createCallFeature({
     const messageId = Number(callOrRow?.message_id || 0);
     if (!messageId) return null;
     const message = hydrateCallMessage(messageId);
+    if (!message?.chat_id) return null;
+    broadcastCall(message.chat_id, { type: 'message_updated', message });
+    return message;
+  }
+
+  function hydrateTranscriptRunMessage(runOrId) {
+    const run = typeof runOrId === 'object' ? runOrId : transcriptRunByIdStmt.get(Number(runOrId || 0));
+    if (!run?.message_id || typeof hydrateMessageById !== 'function') return null;
+    return hydrateMessageById(run.message_id);
+  }
+
+  function broadcastTranscriptRunMessage(runOrId) {
+    const message = hydrateTranscriptRunMessage(runOrId);
     if (!message?.chat_id) return null;
     broadcastCall(message.chat_id, { type: 'message_updated', message });
     return message;
@@ -645,9 +790,8 @@ function createCallFeature({
       WHERE call_id=?
     `).run(callId);
     if (aiNotesByCallStmt.get(callId)?.status === 'recording') {
-      updateAiNotesStatusStmt.run('processing', 'processing', endedAt, '', callId);
+      updateAiNotesStatusStmt.run('completed', 'idle', endedAt, '', callId);
       stopActiveRecordingsForCall(callId);
-      maybeCompleteTranscript(callId);
     }
     const call = getCall(callId);
     if (call) {
@@ -730,6 +874,8 @@ function createCallFeature({
   async function startRecordingForTrack(callId, participant = {}, track = {}) {
     const notes = activeAiNotesStmt.get(callId);
     if (!notes || !isMicrophoneTrack(track)) return null;
+    const mode = getCallSettings(db).call_recording_mode || 'mixed_participant';
+    if (!['participant', 'mixed_participant'].includes(mode)) return null;
     const trackId = String(track.sid || track.id || track.trackSid || '').trim();
     if (!trackId || recordingByTrackStmt.get(callId, trackId)) return null;
     const userId = userIdFromLiveKitParticipant(participant);
@@ -742,6 +888,7 @@ function createCallFeature({
       const inserted = insertRecordingStmt.run(
         callId,
         userId,
+        'participant',
         String(participant.identity || participant.participantIdentity || ''),
         trackId,
         '',
@@ -783,19 +930,68 @@ function createCallFeature({
     }
   }
 
+  async function startMixedRecordingForCall(callId, roomName) {
+    const notes = activeAiNotesStmt.get(callId);
+    if (!notes || mixedRecordingForCallStmt.get(callId)) return null;
+    const settings = getCallSettings(db);
+    if (!['mixed', 'mixed_participant'].includes(settings.call_recording_mode || 'mixed_participant')) return null;
+    const row = callByIdStmt.get(callId);
+    if (!row) return null;
+    let recordingId = 0;
+    try {
+      const filepath = mixedRecordingPath(callId);
+      const startedAt = new Date().toISOString();
+      const inserted = insertRecordingStmt.run(
+        callId,
+        Number(notes.requested_by || row.started_by || 0),
+        'mixed',
+        '',
+        `mixed:${callId}`,
+        '',
+        filepath,
+        startedAt
+      );
+      recordingId = Number(inserted.lastInsertRowid);
+      const client = livekitEgressClient();
+      if (!client) throw new Error('LiveKit Egress is not configured');
+      const info = await client.startRoomCompositeEgress(
+        roomName,
+        new EncodedFileOutput({ filepath, fileType: EncodedFileType.OGG, disableManifest: true }),
+        { audioOnly: true }
+      );
+      updateRecordingStartedStmt.run(String(info?.egressId || ''), bigintNsToIso(info?.startedAt) || startedAt, recordingId);
+      console.info('[calls] AI notes mixed recording started:', {
+        callId,
+        egressId: String(info?.egressId || ''),
+        filepath,
+      });
+      return info;
+    } catch (error) {
+      const message = error.message || 'Could not start mixed recording';
+      console.warn('[calls] AI notes mixed recording start failed:', { callId, room: roomName, error: message });
+      if (recordingId) {
+        updateRecordingEndedStmt.run('error', new Date().toISOString(), null, null, '', message, recordingId);
+      }
+      return null;
+    }
+  }
+
   async function startExistingMicrophoneRecordingsForCall(callId, roomName, attempt = 1) {
     const notes = activeAiNotesStmt.get(callId);
     if (!notes) return;
     try {
+      await startMixedRecordingForCall(callId, roomName);
       const client = livekitRoomClient();
       const participants = await Promise.race([
         client.listParticipants(roomName),
         new Promise((_, reject) => setTimeout(() => reject(new Error('LiveKit participants lookup timed out')), AI_NOTES_PARTICIPANT_LOOKUP_TIMEOUT_MS)),
       ]);
-      const recordings = await Promise.all((participants || []).flatMap((participant) => {
+      const callSettings = getCallSettings(db);
+      const shouldRecordParticipants = ['participant', 'mixed_participant'].includes(callSettings.call_recording_mode || 'mixed_participant');
+      const recordings = shouldRecordParticipants ? await Promise.all((participants || []).flatMap((participant) => {
         const tracks = participant.tracks || participant.trackPublications || [];
         return tracks.filter(isMicrophoneTrack).map((track) => startRecordingForTrack(callId, participant, track));
-      }));
+      })) : [];
       const failedNotes = aiNotesByCallStmt.get(callId);
       if (failedNotes?.status === 'error') {
         console.warn('[calls] AI notes recording start failed:', failedNotes.error || 'unknown error');
@@ -1023,6 +1219,285 @@ function createCallFeature({
     console.info('[calls] transcript queued:', { recordingId, queued });
   }
 
+  function settingsForProvider(provider) {
+    const voiceSettings = getVoiceSettings(db);
+    const callSettings = getCallSettings(db);
+    const requested = String(provider || 'voice').trim();
+    const activeProvider = requested === 'voice'
+      ? (callSettings.call_transcription_provider === 'voice' ? voiceSettings.active_provider : callSettings.call_transcription_provider)
+      : requested;
+    return {
+      ...voiceSettings,
+      active_provider: ['vosk', 'openai', 'grok'].includes(activeProvider) ? activeProvider : voiceSettings.active_provider,
+    };
+  }
+
+  function recordingSpeaker(recording) {
+    if (!recording || recording.scope === 'mixed') return { userId: null, name: 'Разговор' };
+    const participant = participantStmt.get(recording.call_id, recording.user_id) || userStmt.get(recording.user_id);
+    return {
+      userId: Number(recording.user_id || 0) || null,
+      name: participant?.display_name || participant?.username || `User ${recording.user_id}`,
+    };
+  }
+
+  async function transcribeRecordingToSegments({ recording, provider, diarize = false }) {
+    const filepath = path.resolve(recording.file_path || '');
+    if (!filepath || !fs.existsSync(filepath)) throw new Error(`Recording file not found: ${recording.file_path || recording.id}`);
+    const settings = settingsForProvider(provider);
+    const callRow = callByIdStmt.get(recording.call_id);
+    const callStart = parseTimeMs(callRow?.started_at);
+    const recordingStart = parseTimeMs(recording.started_at) || callStart;
+    const baseStartMs = callStart && recordingStart ? Math.max(0, recordingStart - callStart) : 0;
+    const chunks = splitRecordingIntoChunks(filepath, `${recording.id}-${diarize ? 'diarized' : settings.active_provider}`);
+    const texts = [];
+    const allSegments = [];
+    let resolvedProvider = diarize ? 'openai' : settings.active_provider;
+    let model = diarize ? 'gpt-4o-transcribe-diarize' : '';
+    const speaker = recordingSpeaker(recording);
+
+    for (const chunk of chunks) {
+      const result = diarize
+        ? await transcribeWithOpenAIDiarization({
+            filePath: chunk.filePath,
+            settings,
+            apiKey: getVoiceOpenAIKey(db, secret),
+          })
+        : await transcribeAudio({
+            filePath: chunk.filePath,
+            settings,
+            apiKey: getVoiceOpenAIKey(db, secret),
+            grokApiKey: getVoiceGrokKey(db, secret),
+          });
+      const text = String(result.text || '').trim();
+      if (text) texts.push(text);
+      resolvedProvider = result.provider || resolvedProvider;
+      model = result.model || model;
+      const chunkStartMs = baseStartMs + Number(chunk.offsetMs || 0);
+      const chunkDuration = Math.min(
+        Math.max(0, Number(getCallSettings(db).call_transcription_chunk_minutes || 12) * 60 * 1000),
+        Math.max(0, Number(recording.duration_ms || 0) - Number(chunk.offsetMs || 0))
+      );
+      const resultSegments = Array.isArray(result.segments) ? result.segments : [];
+      if (resultSegments.length) {
+        resultSegments.forEach((segment) => {
+          const segmentText = String(segment?.text || '').trim();
+          if (!segmentText) return;
+          const segmentStart = chunkStartMs + Math.max(0, Number(segment.start_ms || 0));
+          const segmentEnd = chunkStartMs + Math.max(Number(segment.end_ms || 0), Number(segment.start_ms || 0));
+          allSegments.push({
+            recording_id: Number(recording.id),
+            user_id: recording.scope === 'participant' ? speaker.userId : null,
+            speaker_name: recording.scope === 'participant' ? speaker.name : (segment.speaker || 'Speaker'),
+            speaker_label: String(segment.speaker || ''),
+            start_ms: segmentStart,
+            end_ms: segmentEnd,
+            text: segmentText,
+            timing_approximate: 0,
+          });
+        });
+      } else {
+        heuristicTranscriptSegments(text, chunkStartMs, chunkDuration).forEach((segment) => {
+          allSegments.push({
+            recording_id: Number(recording.id),
+            user_id: recording.scope === 'participant' ? speaker.userId : null,
+            speaker_name: speaker.name,
+            speaker_label: '',
+            start_ms: segment.start_ms,
+            end_ms: segment.end_ms,
+            text: segment.text,
+            timing_approximate: 1,
+          });
+        });
+      }
+    }
+    return {
+      text: texts.join('\n').trim(),
+      segments: allSegments,
+      provider: resolvedProvider,
+      model,
+    };
+  }
+
+  function overlapMs(a, b) {
+    const start = Math.max(Number(a.start_ms || 0), Number(b.start_ms || 0));
+    const end = Math.min(Number(a.end_ms || 0), Number(b.end_ms || 0));
+    return Math.max(0, end - start);
+  }
+
+  function assignSegmentsByOverlap(targetSegments, referenceSegments) {
+    return targetSegments.map((segment) => {
+      const scores = new Map();
+      referenceSegments.forEach((ref) => {
+        if (!ref.user_id) return;
+        const overlap = overlapMs(segment, ref);
+        if (overlap <= 0) return;
+        const key = Number(ref.user_id);
+        const prev = scores.get(key) || { score: 0, name: ref.speaker_name || `User ${key}` };
+        prev.score += overlap;
+        if (ref.speaker_name) prev.name = ref.speaker_name;
+        scores.set(key, prev);
+      });
+      let bestUserId = null;
+      let best = null;
+      scores.forEach((value, key) => {
+        if (!best || value.score > best.score) {
+          best = value;
+          bestUserId = key;
+        }
+      });
+      if (!bestUserId) return segment;
+      return {
+        ...segment,
+        user_id: bestUserId,
+        speaker_name: best.name,
+      };
+    });
+  }
+
+  function mapDiarizedSpeakersToUsers(diarizedSegments, referenceSegments) {
+    const labelScores = new Map();
+    diarizedSegments.forEach((segment) => {
+      const label = String(segment.speaker_label || segment.speaker_name || '').trim();
+      if (!label) return;
+      referenceSegments.forEach((ref) => {
+        if (!ref.user_id) return;
+        const overlap = overlapMs(segment, ref);
+        if (overlap <= 0) return;
+        if (!labelScores.has(label)) labelScores.set(label, new Map());
+        const byUser = labelScores.get(label);
+        const key = Number(ref.user_id);
+        const prev = byUser.get(key) || { score: 0, name: ref.speaker_name || `User ${key}` };
+        prev.score += overlap;
+        if (ref.speaker_name) prev.name = ref.speaker_name;
+        byUser.set(key, prev);
+      });
+    });
+    const labelMap = new Map();
+    labelScores.forEach((byUser, label) => {
+      let bestUserId = null;
+      let best = null;
+      byUser.forEach((value, key) => {
+        if (!best || value.score > best.score) {
+          best = value;
+          bestUserId = key;
+        }
+      });
+      if (bestUserId) labelMap.set(label, { userId: bestUserId, name: best.name });
+    });
+    return diarizedSegments.map((segment) => {
+      const label = String(segment.speaker_label || segment.speaker_name || '').trim();
+      const mapped = labelMap.get(label);
+      if (!mapped) return segment;
+      return {
+        ...segment,
+        user_id: mapped.userId,
+        speaker_name: mapped.name,
+      };
+    });
+  }
+
+  function insertRunSegments(run, segments) {
+    deleteRunSegmentsStmt.run(run.id);
+    segments
+      .filter((segment) => String(segment.text || '').trim())
+      .sort((a, b) => Number(a.start_ms || 0) - Number(b.start_ms || 0))
+      .forEach((segment) => {
+        insertRunSegmentStmt.run(
+          run.id,
+          run.call_id,
+          segment.recording_id || null,
+          segment.user_id || null,
+          segment.speaker_name || segment.speaker_label || 'Speaker',
+          segment.speaker_label || '',
+          Math.max(0, Math.round(Number(segment.start_ms || 0))),
+          Math.max(0, Math.round(Number(segment.end_ms || segment.start_ms || 0))),
+          String(segment.text || '').trim(),
+          Number(segment.timing_approximate) !== 0 ? 1 : 0
+        );
+      });
+  }
+
+  async function processTranscriptRun({ runId }) {
+    const run = transcriptRunByIdStmt.get(runId);
+    if (!run || ['completed', 'processing'].includes(run.status)) return;
+    const call = callByIdStmt.get(run.call_id);
+    if (!call) return;
+    updateTranscriptRunStatusStmt.run('processing', '', '', '', null, null, 'processing', 'processing', run.id);
+    broadcastTranscriptRunMessage(run.id);
+    const recordings = completedRecordingsForCallStmt.all(run.call_id)
+      .filter((recording) => recording.file_path && fs.existsSync(path.resolve(recording.file_path)));
+    const participantRecordings = recordings.filter((recording) => recording.scope !== 'mixed');
+    const mixedRecording = recordings.find((recording) => recording.scope === 'mixed') || null;
+    try {
+      let strategy = String(run.strategy || 'per_user');
+      if ((strategy === 'mixed' || strategy === 'hybrid' || strategy === 'openai_diarization') && !mixedRecording) {
+        strategy = 'per_user';
+      }
+      if (strategy === 'per_user' && !participantRecordings.length) throw new Error('No participant recordings are available');
+      if ((strategy === 'mixed' || strategy === 'hybrid' || strategy === 'openai_diarization') && !mixedRecording) {
+        throw new Error('Mixed recording is not available');
+      }
+
+      let provider = '';
+      let model = '';
+      let segments = [];
+
+      if (strategy === 'per_user') {
+        const results = [];
+        for (const recording of participantRecordings) {
+          results.push(await transcribeRecordingToSegments({ recording, provider: run.provider }));
+        }
+        segments = results.flatMap((result) => result.segments);
+        provider = results.find((result) => result.provider)?.provider || '';
+        model = results.find((result) => result.model)?.model || '';
+      } else if (strategy === 'mixed') {
+        const result = await transcribeRecordingToSegments({ recording: mixedRecording, provider: run.provider });
+        segments = result.segments.map((segment) => ({ ...segment, speaker_name: 'Разговор', user_id: null }));
+        provider = result.provider;
+        model = result.model;
+      } else if (strategy === 'hybrid') {
+        const mixed = await transcribeRecordingToSegments({ recording: mixedRecording, provider: run.provider });
+        const refs = [];
+        for (const recording of participantRecordings) {
+          const result = await transcribeRecordingToSegments({ recording, provider: run.provider });
+          refs.push(...result.segments);
+        }
+        segments = refs.length ? assignSegmentsByOverlap(mixed.segments, refs) : mixed.segments;
+        provider = mixed.provider;
+        model = mixed.model;
+      } else if (strategy === 'openai_diarization') {
+        const mixed = await transcribeRecordingToSegments({ recording: mixedRecording, provider: 'openai', diarize: true });
+        const refs = [];
+        for (const recording of participantRecordings) {
+          const result = await transcribeRecordingToSegments({ recording, provider: 'openai' });
+          refs.push(...result.segments);
+        }
+        segments = refs.length ? mapDiarizedSpeakersToUsers(mixed.segments, refs) : mixed.segments;
+        provider = 'openai';
+        model = 'gpt-4o-transcribe-diarize';
+      }
+
+      insertRunSegments(run, segments);
+      const transcript = transcriptTextForRun(run.id);
+      const timingApproximate = transcriptRunSegmentsStmt.all(run.id).some((segment) => Number(segment.timing_approximate) !== 0) ? 1 : 0;
+      if (!String(transcript || '').trim()) throw new Error('Transcription returned empty text');
+      updateTranscriptRunStatusStmt.run('completed', provider, model, '', transcript, timingApproximate, 'completed', 'completed', run.id);
+      broadcastTranscriptRunMessage(run.id);
+      const callAfter = getCall(run.call_id);
+      if (callAfter) broadcastCallMessageUpdated(callAfter);
+    } catch (error) {
+      updateTranscriptRunStatusStmt.run('error', '', '', error.message || 'Transcription failed', '', 1, 'error', 'error', run.id);
+      broadcastTranscriptRunMessage(run.id);
+      const callAfter = getCall(run.call_id);
+      if (callAfter) broadcastCallMessageUpdated(callAfter);
+    }
+  }
+
+  function enqueueTranscriptRun(runId) {
+    return transcriptRunQueue.enqueue(`call-transcript-run:${runId}`, { runId });
+  }
+
   function handleEgressEnded(egressInfo = {}) {
     const egressId = String(egressInfo.egressId || egressInfo.egress_id || '');
     if (!egressId) {
@@ -1046,7 +1521,7 @@ function createCallFeature({
       error: egressInfo.error || '',
     });
     updateRecordingEndedStmt.run(
-      egressInfo.error ? 'error' : 'processing',
+      egressInfo.error ? 'error' : 'completed',
       file.endedAt || new Date().toISOString(),
       file.durationMs,
       file.sizeBytes,
@@ -1058,9 +1533,16 @@ function createCallFeature({
       maybeCompleteTranscript(recording.call_id);
       return;
     }
-    updateAiNotesStatusStmt.run('processing', 'processing', file.endedAt || new Date().toISOString(), '', recording.call_id);
+    const counts = recordingCountsStmt.get(recording.call_id) || {};
+    const stillRecording = Number(counts.recording || 0) > 0;
+    updateAiNotesStatusStmt.run(
+      stillRecording ? 'recording' : 'completed',
+      'idle',
+      stillRecording ? null : (file.endedAt || new Date().toISOString()),
+      '',
+      recording.call_id
+    );
     broadcastAiNotesUpdated(recording.call_id);
-    enqueueRecordingTranscription(recording.id);
   }
 
   function splitRecordingIntoChunks(filePath, recordingId) {
@@ -1459,6 +1941,47 @@ function createCallFeature({
     res.json({ call: broadcastAiNotesUpdated(callId) || getCall(callId) });
   });
 
+  function handleCreateTranscriptRun(req, res) {
+    const callId = normalizeId(req.params.callId);
+    const row = callByIdStmt.get(callId);
+    if (!row) return boolError(res, 404, 'Call not found', 'call_not_found');
+    if (!isMember(row.chat_id, req.user.id)) return boolError(res, 403, 'Forbidden', 'forbidden');
+    const provider = String(req.body?.provider || 'voice').trim();
+    const strategy = String(req.body?.strategy || 'per_user').trim();
+    if (!['voice', 'vosk', 'openai', 'grok'].includes(provider)) return boolError(res, 400, 'Unsupported transcription provider', 'unsupported_provider');
+    if (!['per_user', 'mixed', 'hybrid', 'openai_diarization'].includes(strategy)) return boolError(res, 400, 'Unsupported transcription strategy', 'unsupported_strategy');
+
+    const recordings = completedRecordingsForCallStmt.all(callId)
+      .filter((recording) => recording.file_path && fs.existsSync(path.resolve(recording.file_path)));
+    if (!recordings.length) return boolError(res, 409, 'No call recordings are available', 'no_call_recordings');
+    const hasParticipant = recordings.some((recording) => recording.scope !== 'mixed');
+    const hasMixed = recordings.some((recording) => recording.scope === 'mixed');
+    if (strategy === 'per_user' && !hasParticipant) return boolError(res, 409, 'No participant recordings are available', 'no_participant_recordings');
+    if (['mixed', 'hybrid', 'openai_diarization'].includes(strategy) && !hasMixed && !hasParticipant) {
+      return boolError(res, 409, 'Mixed recording is not available', 'mixed_recording_missing');
+    }
+    if (strategy === 'openai_diarization' && !getVoiceOpenAIKey(db, secret)) {
+      return boolError(res, 409, 'OpenAI API key is not configured', 'openai_key_missing');
+    }
+
+    const messageText = `Расшифровка звонка: ${provider === 'voice' ? 'voice settings' : provider} / ${strategyLabel(strategy)} — готовится`;
+    const message = insertMessageStmt.run(row.chat_id, req.user.id, messageText);
+    const messageId = Number(message.lastInsertRowid);
+    const inserted = insertTranscriptRunStmt.run(callId, messageId, req.user.id, provider, strategy);
+    const runId = Number(inserted.lastInsertRowid);
+    updateTranscriptRunMessageStmt.run(messageId, runId);
+    const hydrated = hydrateTranscriptRunMessage(runId);
+    if (hydrated) {
+      onMessageCreated?.(hydrated);
+      broadcastCall(row.chat_id, { type: 'message', message: hydrated });
+    }
+    enqueueTranscriptRun(runId);
+    res.status(201).json({ run: serializeTranscriptRun(transcriptRunByIdStmt.get(runId)), message: hydrated });
+  }
+
+  app.post('/api/calls/:callId/transcript-runs', auth, callLimiter, handleCreateTranscriptRun);
+  app.post('/api/calls/:callId/transcribe', auth, callLimiter, handleCreateTranscriptRun);
+
   app.get('/api/calls/:callId/transcript', auth, (req, res) => {
     const callId = normalizeId(req.params.callId);
     const row = callByIdStmt.get(callId);
@@ -1478,6 +2001,31 @@ function createCallFeature({
       call: serializeCall(row),
       ai_notes: serializeAiNotes(notes),
       transcript_text: notes?.transcript_text || transcriptTextForCall(callId),
+      segments,
+    });
+  });
+
+  app.get('/api/calls/transcript-runs/:runId', auth, (req, res) => {
+    const runId = normalizeId(req.params.runId);
+    const run = transcriptRunByIdStmt.get(runId);
+    if (!run) return boolError(res, 404, 'Transcript run not found', 'transcript_run_not_found');
+    const row = callByIdStmt.get(run.call_id);
+    if (!row) return boolError(res, 404, 'Call not found', 'call_not_found');
+    if (!isMember(row.chat_id, req.user.id)) return boolError(res, 403, 'Forbidden', 'forbidden');
+    const segments = transcriptRunSegmentsStmt.all(runId).map((segment) => ({
+      id: Number(segment.id),
+      user_id: segment.user_id == null ? null : Number(segment.user_id),
+      speaker_name: segment.speaker_name || segment.display_name || segment.username || segment.speaker_label || 'Speaker',
+      speaker_label: segment.speaker_label || '',
+      start_ms: Number(segment.start_ms || 0),
+      end_ms: Number(segment.end_ms || 0),
+      text: segment.text || '',
+      timing_approximate: Number(segment.timing_approximate) !== 0,
+    }));
+    res.json({
+      call: serializeCall(row),
+      run: serializeTranscriptRun(run),
+      transcript_text: run.transcript_text || transcriptTextForRun(runId),
       segments,
     });
   });
@@ -1550,9 +2098,12 @@ function createCallFeature({
     const userId = userIdFromLiveKitParticipant(event.participant || { participantIdentity: event.participantIdentity });
     if (event.event === 'participant_joined' && userId) return participantJoined(row.id, userId);
     if (event.event === 'track_published') {
-      startRecordingForTrack(row.id, event.participant || {}, event.track || {}).catch((error) => {
-        console.warn('[calls] AI notes track recording failed:', error.message);
-      });
+      const mode = getCallSettings(db).call_recording_mode || 'mixed_participant';
+      if (['participant', 'mixed_participant'].includes(mode)) {
+        startRecordingForTrack(row.id, event.participant || {}, event.track || {}).catch((error) => {
+          console.warn('[calls] AI notes track recording failed:', error.message);
+        });
+      }
       return getCall(row.id);
     }
     if (event.event === 'track_unpublished') {

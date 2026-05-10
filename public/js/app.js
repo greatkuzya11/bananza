@@ -17036,8 +17036,9 @@
     );
     const isPollMessage = Boolean(!msg.is_deleted && msg.poll);
     const isCallMessage = Boolean(!msg.is_deleted && msg.call);
+    const isCallTranscriptMessage = Boolean(!msg.is_deleted && msg.call_transcript_run);
     const row = document.createElement('div');
-    row.className = `msg-row ${isOwn ? 'own' : 'other'}${isEmojiOnly ? ' emoji-only-message' : ''}${isMediaMessage ? ' media-message' : ''}${isPollMessage ? ' poll-message' : ''}${isCallMessage ? ' call-message' : ''}`;
+    row.className = `msg-row ${isOwn ? 'own' : 'other'}${isEmojiOnly ? ' emoji-only-message' : ''}${isMediaMessage ? ' media-message' : ''}${isPollMessage ? ' poll-message' : ''}${isCallMessage ? ' call-message' : ''}${isCallTranscriptMessage ? ' call-transcript-message' : ''}`;
     if (contextConvertPendingMessageIds.has(Number(msg.id || 0))) row.classList.add('context-convert-pending');
     row.dataset.msgId = msg.id;
     if (msg.client_id) row.dataset.clientId = msg.client_id;
@@ -17114,8 +17115,12 @@
         html += renderCallMessageCard(msg);
       }
 
+      if (isCallTranscriptMessage) {
+        html += renderCallTranscriptRunCard(msg);
+      }
+
       // Text
-      if (msg.text && !isCallMessage) {
+      if (msg.text && !isCallMessage && !isCallTranscriptMessage) {
         const textClasses = isPulsePollMessage ? 'msg-text poll-question-block' : 'msg-text';
         html += `<div class="${textClasses}">${isEmojiOnly ? esc(msg.text.trim()) : renderMessageText(msg.text, msg.mentions)}</div>`;
       }
@@ -17132,7 +17137,7 @@
       }
 
       // Delete button (inside bubble)
-        if (!isClientMessage && !isCallMessage && (isOwn || currentUser.is_admin)) {
+        if (!isClientMessage && !isCallMessage && !isCallTranscriptMessage && (isOwn || currentUser.is_admin)) {
           html += `<button class="msg-delete-btn" data-id="${msg.id}" title="Delete">🗑</button>`;
         }
     }
@@ -17231,6 +17236,7 @@
 
     bindPollControls(row);
     bindCallMessageControls(row);
+    bindCallTranscriptMessageControls(row);
     hydratePulseInlineVoters(row);
 
     const pinBtn = row.querySelector('.msg-pin-btn');
@@ -17563,12 +17569,59 @@
     if (notes?.transcript_ready) {
       actions.push(`<button type="button" class="call-message-action" data-call-card-transcript="${Number(call.id || 0)}">${esc(t('Transcript'))}</button>`);
     }
+    if (!active && Number(call.id || 0)) {
+      actions.push(`
+        <span class="call-message-transcribe">
+          <select class="call-message-select" data-call-card-transcribe-select="${Number(call.id || 0)}" aria-label="${esc(t('Transcribe'))}">
+            <option value="voice:hybrid">${esc(t('Same as voice messages'))}</option>
+            <option value="vosk:hybrid">Vosk</option>
+            <option value="grok:hybrid">Grok</option>
+            <option value="openai:hybrid">OpenAI</option>
+            <option value="openai:openai_diarization">OpenAI diarization</option>
+            <option value="voice:per_user">${esc(t('Per-user tracks'))}</option>
+            <option value="voice:mixed">${esc(t('Mixed recording'))}</option>
+          </select>
+          <button type="button" class="call-message-action" data-call-card-transcribe="${Number(call.id || 0)}">${esc(t('Transcribe'))}</button>
+        </span>
+      `);
+    }
     return `
       <div class="call-message-card" data-call-card="${Number(call.id || 0)}">
         <div class="call-message-icon" aria-hidden="true">☎</div>
         <div class="call-message-main">
           <div class="call-message-title">${esc(labels[status] || labels.active)}</div>
           <div class="call-message-meta">${esc(meta.join(' / ') || t('Video call'))}</div>
+        </div>
+        ${actions.length ? `<div class="call-message-actions">${actions.join('')}</div>` : ''}
+      </div>
+    `;
+  }
+
+  function renderCallTranscriptRunCard(msg) {
+    const run = msg?.call_transcript_run || {};
+    const status = String(run.status || 'queued');
+    const provider = run.resolved_provider || run.provider || 'voice';
+    const strategy = run.strategy_label || run.strategy || 'transcript';
+    const labels = {
+      queued: t('Transcript queued'),
+      processing: t('Transcript processing'),
+      completed: t('Transcript ready'),
+      error: t('Transcription error'),
+      canceled: t('Canceled'),
+    };
+    const meta = [`${provider} / ${strategy}`];
+    if (run.model) meta.push(run.model);
+    if (run.error && status === 'error') meta.push(run.error);
+    const actions = [];
+    if (run.transcript_ready || status === 'completed') {
+      actions.push(`<button type="button" class="call-message-action" data-call-transcript-run="${Number(run.id || 0)}">${esc(t('Transcript'))}</button>`);
+    }
+    return `
+      <div class="call-message-card call-transcript-card" data-call-transcript-card="${Number(run.id || 0)}">
+        <div class="call-message-icon" aria-hidden="true">☰</div>
+        <div class="call-message-main">
+          <div class="call-message-title">${esc(labels[status] || labels.queued)}</div>
+          <div class="call-message-meta">${esc(meta.filter(Boolean).join(' / '))}</div>
         </div>
         ${actions.length ? `<div class="call-message-actions">${actions.join('')}</div>` : ''}
       </div>
@@ -17586,6 +17639,33 @@
     row.querySelector('[data-call-card-transcript]')?.addEventListener('click', (event) => {
       event.stopPropagation();
       window.BananzaCallHooks?.openTranscript?.(call.id);
+    });
+    row.querySelector('[data-call-card-transcribe]')?.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      const button = event.currentTarget;
+      const select = row.querySelector(`[data-call-card-transcribe-select="${Number(call.id || 0)}"]`);
+      const [provider, strategy] = String(select?.value || 'voice:hybrid').split(':');
+      button.disabled = true;
+      try {
+        const payload = { provider: provider || 'voice', strategy: strategy || 'hybrid' };
+        try {
+          await api(`/api/calls/${Number(call.id || 0)}/transcript-runs`, { method: 'POST', body: payload });
+        } catch (error) {
+          if (!/endpoint not found|not found/i.test(String(error?.message || ''))) throw error;
+          await api(`/api/calls/${Number(call.id || 0)}/transcribe`, { method: 'POST', body: payload });
+        }
+      } catch (error) {
+        showCenterToast(error.message || t('Could not start transcription'));
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
+
+  function bindCallTranscriptMessageControls(row) {
+    row.querySelector('[data-call-transcript-run]')?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      window.BananzaCallHooks?.openTranscriptRun?.(Number(event.currentTarget.dataset.callTranscriptRun || 0));
     });
   }
 
@@ -18769,6 +18849,7 @@
     if (isClientSideMessage(msg)) return false;
     if (isPollMessage(msg)) return false;
     if (msg.call || msg.is_call_message) return false;
+    if (msg.call_transcript_run || msg.is_call_transcript_message) return false;
     if (!currentUser.is_admin && msg.user_id !== currentUser.id) return false;
     return Boolean(msg.is_voice_note || msg.file_id || msg.text);
   }
@@ -18778,6 +18859,7 @@
     if (isClientSideMessage(msg)) return false;
     if (isPollMessage(msg)) return false;
     if (msg.call || msg.is_call_message) return false;
+    if (msg.call_transcript_run || msg.is_call_transcript_message) return false;
     return Boolean(msg.is_voice_note || msg.file_id || msg.text);
   }
 
