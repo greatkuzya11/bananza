@@ -867,6 +867,32 @@ function createCallFeature({
     broadcastAiNotesUpdated(callId);
   }
 
+  function heuristicTranscriptSegments(text, startMs, durationMs) {
+    const clean = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!clean) return [];
+    const parts = clean
+      .split(/(?<=[.!?…。！？])\s+|\n+/u)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    const chunks = parts.length > 1 ? parts : clean.match(/.{1,140}(?:\s+|$)/g)?.map((part) => part.trim()).filter(Boolean) || [clean];
+    const totalChars = Math.max(1, chunks.reduce((sum, part) => sum + part.length, 0));
+    const safeDuration = Math.max(1000, Number(durationMs || 0) || chunks.length * 4000);
+    let cursor = Math.max(0, Number(startMs || 0));
+    return chunks.map((part, index) => {
+      const isLast = index === chunks.length - 1;
+      const partDuration = isLast
+        ? Math.max(500, startMs + safeDuration - cursor)
+        : Math.max(700, Math.round(safeDuration * (part.length / totalChars)));
+      const segment = {
+        text: part,
+        start_ms: cursor,
+        end_ms: cursor + partDuration,
+      };
+      cursor += partDuration;
+      return segment;
+    });
+  }
+
   async function processRecordingTranscript({ recordingId }) {
     const recording = db.prepare('SELECT * FROM call_recordings WHERE id=?').get(recordingId);
     if (!recording || recording.status === 'completed') return;
@@ -928,20 +954,42 @@ function createCallFeature({
         if (!text) continue;
         texts.push(text);
         const startMs = baseStartMs + Number(chunk.offsetMs || 0);
+        const segments = Array.isArray(result.segments) ? result.segments : [];
         const chunkDuration = Math.min(
           Math.max(0, Number(getCallSettings(db).call_transcription_chunk_minutes || 12) * 60 * 1000),
           Math.max(0, Number(recording.duration_ms || 0) - Number(chunk.offsetMs || 0))
         );
-        insertTranscriptSegmentStmt.run(
-          recording.call_id,
-          recording.id,
-          recording.user_id,
-          speaker,
-          startMs,
-          chunkDuration > 0 ? startMs + chunkDuration : startMs,
-          text,
-          1
-        );
+        if (segments.length) {
+          segments.forEach((segment) => {
+            const segmentText = String(segment?.text || '').trim();
+            if (!segmentText) return;
+            const segmentStart = startMs + Math.max(0, Number(segment.start_ms || 0));
+            const segmentEnd = startMs + Math.max(Number(segment.end_ms || 0), Number(segment.start_ms || 0));
+            insertTranscriptSegmentStmt.run(
+              recording.call_id,
+              recording.id,
+              recording.user_id,
+              speaker,
+              segmentStart,
+              segmentEnd,
+              segmentText,
+              0
+            );
+          });
+        } else {
+          heuristicTranscriptSegments(text, startMs, chunkDuration).forEach((segment) => {
+            insertTranscriptSegmentStmt.run(
+              recording.call_id,
+              recording.id,
+              recording.user_id,
+              speaker,
+              segment.start_ms,
+              segment.end_ms,
+              segment.text,
+              1
+            );
+          });
+        }
       }
       updateRecordingTranscriptStmt.run('completed', texts.join('\n').trim(), provider, model, '', recording.id);
       console.info('[calls] transcript completed:', {

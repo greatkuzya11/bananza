@@ -51,18 +51,42 @@ def transcribe_wav(file_path: str, model_name: str, model_path: str) -> dict:
             raise RuntimeError("Compressed WAV is not supported")
 
         recognizer = KaldiRecognizer(model, wf.getframerate())
-        recognizer.SetWords(False)
+        recognizer.SetWords(True)
+        segments = []
+
+        def append_result(raw: str) -> None:
+            try:
+                parsed = json.loads(raw or "{}")
+            except Exception:
+                return
+            text = (parsed.get("text") or "").strip()
+            words = parsed.get("result") or []
+            if not text:
+                return
+            if words:
+                start = float(words[0].get("start") or 0)
+                end = float(words[-1].get("end") or start)
+            else:
+                start = segments[-1]["end"] if segments else 0
+                end = start
+            segments.append({
+                "start": start,
+                "end": end,
+                "text": text,
+            })
 
         while True:
             data = wf.readframes(4000)
             if len(data) == 0:
                 break
-            recognizer.AcceptWaveform(data)
+            if recognizer.AcceptWaveform(data):
+                append_result(recognizer.Result())
 
-        result = json.loads(recognizer.FinalResult())
-        text = (result.get("text") or "").strip()
+        append_result(recognizer.FinalResult())
+        text = " ".join(item["text"] for item in segments).strip()
         return {
             "text": text,
+            "segments": segments,
             "model": os.path.basename(resolved_model),
             "sample_rate": wf.getframerate(),
         }

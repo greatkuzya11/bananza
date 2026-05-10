@@ -21,6 +21,23 @@ async function parseJsonResponse(res) {
   }
 }
 
+function normalizeProviderSegments(data = {}) {
+  const rawSegments = Array.isArray(data.segments)
+    ? data.segments
+    : (Array.isArray(data.words) ? data.words : []);
+  return rawSegments.map((segment) => {
+    const text = String(segment?.text || segment?.word || '').trim();
+    const start = segment?.start_ms ?? segment?.start ?? segment?.startTime ?? 0;
+    const end = segment?.end_ms ?? segment?.end ?? segment?.endTime ?? start;
+    const multiplier = Number(start) > 10000 || Number(end) > 10000 ? 1 : 1000;
+    return {
+      text,
+      start_ms: Math.max(0, Math.round(Number(start || 0) * multiplier)),
+      end_ms: Math.max(0, Math.round(Number(end || 0) * multiplier)),
+    };
+  }).filter((segment) => segment.text);
+}
+
 async function transcribeWithVosk({ filePath, settings }) {
   const helperUrl = String(settings.vosk_helper_url || '').replace(/\/+$/, '');
   if (!helperUrl) throw new Error('Vosk helper URL is not configured');
@@ -61,6 +78,7 @@ async function transcribeWithVosk({ filePath, settings }) {
 
   return {
     text: String(data.text).trim(),
+    segments: normalizeProviderSegments(data),
     provider: 'vosk',
     model: data.model || settings.vosk_model,
   };
@@ -125,6 +143,7 @@ async function transcribeWithOpenAI({ filePath, settings, apiKey }) {
 
   return {
     text: String(data.text).trim(),
+    segments: normalizeProviderSegments(data),
     provider: 'openai',
     model: settings.openai_model,
   };
@@ -159,6 +178,7 @@ async function transcribeWithGrok({ filePath, settings, grokApiKey }) {
 
   return {
     text: String(data.text).trim(),
+    segments: normalizeProviderSegments(data),
     provider: 'grok',
     model: data.model || 'speech-to-text',
   };
