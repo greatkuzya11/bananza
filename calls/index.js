@@ -1464,6 +1464,10 @@ function createCallFeature({
     };
   }
 
+  function isEmptyTranscriptionError(error) {
+    return /returned empty transcription|returned empty text|empty transcription/i.test(String(error?.message || error || ''));
+  }
+
   async function transcribeRecordingToSegments({ recording, provider, diarize = false }) {
     const filepath = path.resolve(recording.file_path || '');
     if (!filepath || !fs.existsSync(filepath)) throw new Error(`Recording file not found: ${recording.file_path || recording.id}`);
@@ -1485,31 +1489,45 @@ function createCallFeature({
     const speaker = recordingSpeaker(recording);
 
     for (const chunk of chunks) {
-      const result = diarize
-        ? await transcribeWithOpenAIDiarization({
-            filePath: chunk.filePath,
-            settings: {
-              ...settings,
-              transcription_timeout_ms: Math.max(
-                settings.transcription_timeout_ms,
-                Number(chunk.durationMs || 0) * 4 + 120_000,
-                CALL_DIARIZATION_TIMEOUT_MS
-              ),
-            },
-            apiKey: getVoiceOpenAIKey(db, secret),
-          })
-        : await transcribeAudio({
-            filePath: chunk.filePath,
-            settings: {
-              ...settings,
-              transcription_timeout_ms: Math.max(
-                settings.transcription_timeout_ms,
-                Number(chunk.durationMs || 0) * 3 + 120_000
-              ),
-            },
-            apiKey: getVoiceOpenAIKey(db, secret),
-            grokApiKey: getVoiceGrokKey(db, secret),
+      let result;
+      try {
+        result = diarize
+          ? await transcribeWithOpenAIDiarization({
+              filePath: chunk.filePath,
+              settings: {
+                ...settings,
+                transcription_timeout_ms: Math.max(
+                  settings.transcription_timeout_ms,
+                  Number(chunk.durationMs || 0) * 4 + 120_000,
+                  CALL_DIARIZATION_TIMEOUT_MS
+                ),
+              },
+              apiKey: getVoiceOpenAIKey(db, secret),
+            })
+          : await transcribeAudio({
+              filePath: chunk.filePath,
+              settings: {
+                ...settings,
+                transcription_timeout_ms: Math.max(
+                  settings.transcription_timeout_ms,
+                  Number(chunk.durationMs || 0) * 3 + 120_000
+                ),
+              },
+              apiKey: getVoiceOpenAIKey(db, secret),
+              grokApiKey: getVoiceGrokKey(db, secret),
+            });
+      } catch (error) {
+        if (isEmptyTranscriptionError(error)) {
+          console.info('[calls] empty transcription chunk skipped:', {
+            callId: recording.call_id,
+            recordingId: recording.id,
+            provider: diarize ? 'openai_diarization' : settings.active_provider,
+            offsetMs: chunk.offsetMs || 0,
           });
+          continue;
+        }
+        throw error;
+      }
       const text = String(result.text || '').trim();
       if (text) texts.push(text);
       resolvedProvider = result.provider || resolvedProvider;
@@ -1704,7 +1722,9 @@ function createCallFeature({
           const result = await transcribeRecordingToSegments({ recording, provider: run.provider });
           refs.push(...result.segments);
         }
-        segments = refs.length ? assignSegmentsByOverlap(mixed.segments, refs) : mixed.segments;
+        segments = mixed.segments.length
+          ? (refs.length ? assignSegmentsByOverlap(mixed.segments, refs) : mixed.segments)
+          : refs;
         provider = mixed.provider;
         model = mixed.model;
       } else if (strategy === 'openai_diarization') {
