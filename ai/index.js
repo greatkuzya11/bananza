@@ -1102,25 +1102,69 @@ function createAiBotFeature({
   `);
   const recentMessagesStmt = db.prepare(`
     SELECT m.*, u.username, u.display_name, f.original_name as file_name, f.type as file_type,
-      vm.transcription_text, p.message_id as poll_message_id
+      vm.transcription_text, p.message_id as poll_message_id,
+      cs.id as call_context_id,
+      cs.status as call_context_status,
+      cs.duration_ms as call_context_duration_ms,
+      ctr.status as call_transcript_status,
+      ctr.provider as call_transcript_provider,
+      ctr.resolved_provider as call_transcript_resolved_provider,
+      ctr.strategy as call_transcript_strategy,
+      substr(ctr.transcript_text, 1, 1200) as call_transcript_preview,
+      cab.status as call_artifact_status,
+      (
+        SELECT group_concat(car.artifact_key || ':' || car.status || CASE WHEN car.result_text!='' THEN '=' || substr(car.result_text, 1, 220) ELSE '' END, ' | ')
+        FROM call_artifact_runs car
+        WHERE car.batch_id=cab.id
+      ) as call_artifact_preview
     FROM messages m
     JOIN users u ON u.id=m.user_id
     LEFT JOIN files f ON f.id=m.file_id
     LEFT JOIN voice_messages vm ON vm.message_id=m.id
     LEFT JOIN polls p ON p.message_id=m.id
+    LEFT JOIN call_messages cm ON cm.message_id=m.id
+    LEFT JOIN call_sessions cs ON cs.id=cm.call_id
+    LEFT JOIN call_transcript_runs ctr ON ctr.id=(
+      SELECT id FROM call_transcript_runs WHERE call_id=cs.id ORDER BY id DESC LIMIT 1
+    )
+    LEFT JOIN call_artifact_batches cab ON cab.id=(
+      SELECT id FROM call_artifact_batches WHERE call_id=cs.id ORDER BY id DESC LIMIT 1
+    )
     WHERE m.chat_id=? AND m.is_deleted=0
     ORDER BY m.id DESC
     LIMIT ?
   `);
   const recentChatShotContextMessagesStmt = db.prepare(`
     SELECT m.*, u.username, u.display_name, f.original_name as file_name, f.type as file_type,
-      vm.transcription_text, p.message_id as poll_message_id, COALESCE(ab.kind,'') as ai_bot_kind
+      vm.transcription_text, p.message_id as poll_message_id, COALESCE(ab.kind,'') as ai_bot_kind,
+      cs.id as call_context_id,
+      cs.status as call_context_status,
+      cs.duration_ms as call_context_duration_ms,
+      ctr.status as call_transcript_status,
+      ctr.provider as call_transcript_provider,
+      ctr.resolved_provider as call_transcript_resolved_provider,
+      ctr.strategy as call_transcript_strategy,
+      substr(ctr.transcript_text, 1, 1200) as call_transcript_preview,
+      cab.status as call_artifact_status,
+      (
+        SELECT group_concat(car.artifact_key || ':' || car.status || CASE WHEN car.result_text!='' THEN '=' || substr(car.result_text, 1, 220) ELSE '' END, ' | ')
+        FROM call_artifact_runs car
+        WHERE car.batch_id=cab.id
+      ) as call_artifact_preview
     FROM messages m
     JOIN users u ON u.id=m.user_id
     LEFT JOIN files f ON f.id=m.file_id
     LEFT JOIN voice_messages vm ON vm.message_id=m.id
     LEFT JOIN polls p ON p.message_id=m.id
     LEFT JOIN ai_bots ab ON ab.id=m.ai_bot_id
+    LEFT JOIN call_messages cm ON cm.message_id=m.id
+    LEFT JOIN call_sessions cs ON cs.id=cm.call_id
+    LEFT JOIN call_transcript_runs ctr ON ctr.id=(
+      SELECT id FROM call_transcript_runs WHERE call_id=cs.id ORDER BY id DESC LIMIT 1
+    )
+    LEFT JOIN call_artifact_batches cab ON cab.id=(
+      SELECT id FROM call_artifact_batches WHERE call_id=cs.id ORDER BY id DESC LIMIT 1
+    )
     WHERE m.chat_id=?
       AND m.is_deleted=0
       AND COALESCE(ab.kind,'')!='chatshot'
@@ -1935,6 +1979,22 @@ function createAiBotFeature({
 
   function formatAiChatLine(row) {
     const who = row.display_name || row.username || `user:${row.user_id}`;
+    if (row?.call_context_id) {
+      const parts = [
+        `call #${row.call_context_id}`,
+        `status=${row.call_context_status || 'unknown'}`,
+      ];
+      if (row.call_context_duration_ms) parts.push(`duration_ms=${Number(row.call_context_duration_ms || 0)}`);
+      if (row.call_transcript_status) {
+        parts.push(`transcript=${row.call_transcript_status}`);
+        parts.push(`transcript_provider=${row.call_transcript_resolved_provider || row.call_transcript_provider || 'unknown'}`);
+        parts.push(`transcript_strategy=${row.call_transcript_strategy || 'unknown'}`);
+      }
+      if (row.call_artifact_status) parts.push(`ai_summary=${row.call_artifact_status}`);
+      if (row.call_artifact_preview) parts.push(`artifacts=${truncate(row.call_artifact_preview, 1200)}`);
+      if (row.call_transcript_preview) parts.push(`transcript_preview=${truncate(row.call_transcript_preview, 1200)}`);
+      return `${who}: [${parts.join('; ')}]`;
+    }
     const text = aiMessageMemoryText(row, { includeVoters: true });
     if (!text) return '';
     return `${who}: ${truncate(text, 1600)}`;

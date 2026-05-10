@@ -15,7 +15,9 @@ const DEFAULT_CALL_SETTINGS = {
   call_ai_notes_enabled: false,
   call_recording_path: process.env.CALL_RECORDING_PATH || '/opt/livekit-egress/recordings',
   call_recording_mode: 'mixed_participant',
+  call_transcription_mode: 'manual',
   call_transcription_provider: 'voice',
+  call_transcription_strategy: 'hybrid',
   call_transcription_max_chunk_mb: 24,
   call_transcription_chunk_minutes: 12,
   max_call_participants: 20,
@@ -67,9 +69,20 @@ function normalizeCallSettings(raw = {}) {
   if (!['participant', 'mixed', 'mixed_participant'].includes(next.call_recording_mode)) {
     next.call_recording_mode = DEFAULT_CALL_SETTINGS.call_recording_mode;
   }
+  next.call_transcription_mode = String(next.call_transcription_mode || DEFAULT_CALL_SETTINGS.call_transcription_mode).trim();
+  if (!['manual', 'auto'].includes(next.call_transcription_mode)) {
+    next.call_transcription_mode = DEFAULT_CALL_SETTINGS.call_transcription_mode;
+  }
   next.call_transcription_provider = String(next.call_transcription_provider || DEFAULT_CALL_SETTINGS.call_transcription_provider).trim();
   if (!['voice', 'vosk', 'openai', 'grok'].includes(next.call_transcription_provider)) {
     next.call_transcription_provider = DEFAULT_CALL_SETTINGS.call_transcription_provider;
+  }
+  next.call_transcription_strategy = String(next.call_transcription_strategy || DEFAULT_CALL_SETTINGS.call_transcription_strategy).trim();
+  if (!['per_user', 'mixed', 'hybrid', 'openai_diarization'].includes(next.call_transcription_strategy)) {
+    next.call_transcription_strategy = DEFAULT_CALL_SETTINGS.call_transcription_strategy;
+  }
+  if (next.call_transcription_strategy === 'openai_diarization') {
+    next.call_transcription_provider = 'openai';
   }
   next.call_transcription_max_chunk_mb = clampNumber(
     next.call_transcription_max_chunk_mb,

@@ -555,12 +555,22 @@
               </select>
             </div>
             <div class="field-group">
-              <label>${escapeHtml(t('Call transcription provider'))}</label>
-              <select id="callTranscriptionProvider" class="modal-input">
-                <option value="voice">${escapeHtml(t('Same as voice messages'))}</option>
-                <option value="vosk">Vosk</option>
-                <option value="openai">OpenAI</option>
-                <option value="grok">Grok</option>
+              <label>${escapeHtml(t('Call transcription mode'))}</label>
+              <select id="callTranscriptionMode" class="modal-input">
+                <option value="manual">${escapeHtml(t('Manual transcription'))}</option>
+                <option value="auto">${escapeHtml(t('Automatic transcription'))}</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label>${escapeHtml(t('Call transcription option'))}</label>
+              <select id="callTranscriptionPreset" class="modal-input">
+                <option value="voice:hybrid">${escapeHtml(t('Same as voice messages'))} / hybrid</option>
+                <option value="vosk:hybrid">Vosk / hybrid</option>
+                <option value="grok:hybrid">Grok / hybrid</option>
+                <option value="openai:hybrid">OpenAI / hybrid</option>
+                <option value="openai:openai_diarization">OpenAI diarization</option>
+                <option value="voice:per_user">${escapeHtml(t('Same as voice messages'))} / ${escapeHtml(t('Per-user tracks'))}</option>
+                <option value="voice:mixed">${escapeHtml(t('Same as voice messages'))} / ${escapeHtml(t('Mixed recording'))}</option>
               </select>
             </div>
             <div class="field-group">
@@ -2037,8 +2047,14 @@
     if (recordingPath) recordingPath.value = settings.call_recording_path || '/opt/livekit-egress/recordings';
     const recordingMode = document.getElementById('callRecordingMode');
     if (recordingMode) recordingMode.value = settings.call_recording_mode || 'mixed_participant';
-    const provider = document.getElementById('callTranscriptionProvider');
-    if (provider) provider.value = settings.call_transcription_provider || 'voice';
+    const transcriptionMode = document.getElementById('callTranscriptionMode');
+    if (transcriptionMode) transcriptionMode.value = settings.call_transcription_mode || 'manual';
+    const preset = document.getElementById('callTranscriptionPreset');
+    if (preset) {
+      const provider = settings.call_transcription_provider || 'voice';
+      const strategy = settings.call_transcription_strategy || 'hybrid';
+      preset.value = `${provider}:${strategy}`;
+    }
     const maxChunk = document.getElementById('callTranscriptionMaxChunkMb');
     if (maxChunk) maxChunk.value = Number(settings.call_transcription_max_chunk_mb || 24);
     const chunkMinutes = document.getElementById('callTranscriptionChunkMinutes');
@@ -2058,7 +2074,9 @@
       call_ai_notes_enabled: document.getElementById('callAiNotesToggle')?.checked === true,
       call_recording_path: document.getElementById('callRecordingPath')?.value || '',
       call_recording_mode: document.getElementById('callRecordingMode')?.value || 'mixed_participant',
-      call_transcription_provider: document.getElementById('callTranscriptionProvider')?.value || 'voice',
+      call_transcription_mode: document.getElementById('callTranscriptionMode')?.value || 'manual',
+      call_transcription_provider: String(document.getElementById('callTranscriptionPreset')?.value || 'voice:hybrid').split(':')[0] || 'voice',
+      call_transcription_strategy: String(document.getElementById('callTranscriptionPreset')?.value || 'voice:hybrid').split(':')[1] || 'hybrid',
       call_transcription_max_chunk_mb: Number(document.getElementById('callTranscriptionMaxChunkMb')?.value || 24),
       call_transcription_chunk_minutes: Number(document.getElementById('callTranscriptionChunkMinutes')?.value || 12),
       ring_timeout_ms: Number(document.getElementById('callRingTimeoutMs')?.value || 60000),

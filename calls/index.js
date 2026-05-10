@@ -312,6 +312,21 @@ function createCallFeature({
   const updateTranscriptRunMessageStmt = db.prepare(`
     UPDATE call_transcript_runs SET message_id=?, updated_at=datetime('now') WHERE id=?
   `);
+  const resetTranscriptRunStmt = db.prepare(`
+    UPDATE call_transcript_runs
+    SET provider=?,
+      resolved_provider='',
+      strategy=?,
+      status='queued',
+      model='',
+      error='',
+      transcript_text='',
+      timing_approximate=1,
+      started_at=NULL,
+      completed_at=NULL,
+      updated_at=datetime('now')
+    WHERE id=?
+  `);
   const updateTranscriptRunStatusStmt = db.prepare(`
     UPDATE call_transcript_runs
     SET status=?,
@@ -331,6 +346,18 @@ function createCallFeature({
     SELECT * FROM call_transcript_runs
     WHERE call_id=?
     ORDER BY id DESC
+  `);
+  const primaryTranscriptRunForCallStmt = db.prepare(`
+    SELECT * FROM call_transcript_runs
+    WHERE call_id=?
+    ORDER BY id DESC
+    LIMIT 1
+  `);
+  const completedTranscriptRunForCallStmt = db.prepare(`
+    SELECT * FROM call_transcript_runs
+    WHERE call_id=? AND status='completed' AND transcript_text!=''
+    ORDER BY CASE WHEN strategy='openai_diarization' THEN 0 ELSE 1 END, id DESC
+    LIMIT 1
   `);
   const insertRunSegmentStmt = db.prepare(`
     INSERT INTO call_transcript_run_segments(run_id, call_id, recording_id, user_id, speaker_name, speaker_label, start_ms, end_ms, text, timing_approximate)
@@ -370,6 +397,8 @@ function createCallFeature({
   const artifactBatchByIdStmt = db.prepare('SELECT * FROM call_artifact_batches WHERE id=?');
   const artifactBatchByMessageStmt = db.prepare('SELECT * FROM call_artifact_batches WHERE message_id=?');
   const artifactBatchesForCallStmt = db.prepare('SELECT * FROM call_artifact_batches WHERE call_id=? ORDER BY id DESC');
+  const artifactBatchForTranscriptStmt = db.prepare('SELECT * FROM call_artifact_batches WHERE call_id=? AND transcript_run_id=? ORDER BY id DESC LIMIT 1');
+  const latestArtifactBatchForCallStmt = db.prepare('SELECT * FROM call_artifact_batches WHERE call_id=? ORDER BY id DESC LIMIT 1');
   const insertArtifactRunStmt = db.prepare(`
     INSERT INTO call_artifact_runs(batch_id, call_id, transcript_run_id, artifact_key, bot_id, output_type, status, created_at, updated_at)
     VALUES(?, ?, ?, ?, ?, ?, 'queued', datetime('now'), datetime('now'))
@@ -736,6 +765,42 @@ function createCallFeature({
     };
   }
 
+  function selectedTranscriptConfig() {
+    const settings = getCallSettings(db);
+    const strategy = String(settings.call_transcription_strategy || 'hybrid').trim();
+    const provider = strategy === 'openai_diarization'
+      ? 'openai'
+      : String(settings.call_transcription_provider || 'voice').trim();
+    return {
+      provider: ['voice', 'vosk', 'openai', 'grok'].includes(provider) ? provider : 'voice',
+      strategy: ['per_user', 'mixed', 'hybrid', 'openai_diarization'].includes(strategy) ? strategy : 'hybrid',
+    };
+  }
+
+  function validateTranscriptRunInput(callId, provider, strategy) {
+    if (!['voice', 'vosk', 'openai', 'grok'].includes(provider)) {
+      return { ok: false, status: 400, message: 'Unsupported transcription provider', code: 'unsupported_provider' };
+    }
+    if (!['per_user', 'mixed', 'hybrid', 'openai_diarization'].includes(strategy)) {
+      return { ok: false, status: 400, message: 'Unsupported transcription strategy', code: 'unsupported_strategy' };
+    }
+    const recordings = completedRecordingsForCallStmt.all(callId)
+      .filter((recording) => recording.file_path && fs.existsSync(path.resolve(recording.file_path)));
+    if (!recordings.length) return { ok: false, status: 409, message: 'No call recordings are available', code: 'no_call_recordings' };
+    const hasParticipant = recordings.some((recording) => recording.scope !== 'mixed');
+    const hasMixed = recordings.some((recording) => recording.scope === 'mixed');
+    if (strategy === 'per_user' && !hasParticipant) {
+      return { ok: false, status: 409, message: 'No participant recordings are available', code: 'no_participant_recordings' };
+    }
+    if (['mixed', 'hybrid', 'openai_diarization'].includes(strategy) && !hasMixed && !hasParticipant) {
+      return { ok: false, status: 409, message: 'Mixed recording is not available', code: 'mixed_recording_missing' };
+    }
+    if (strategy === 'openai_diarization' && !getVoiceOpenAIKey(db, secret)) {
+      return { ok: false, status: 409, message: 'OpenAI API key is not configured', code: 'openai_key_missing' };
+    }
+    return { ok: true, recordings };
+  }
+
   function transcriptTextFromRows(rows) {
     const merged = [];
     rows.forEach((row) => {
@@ -896,6 +961,8 @@ function createCallFeature({
       const row = callByMessageIdStmt.get(message.id);
       if (row) {
         const call = serializeCall(row);
+        const primaryRun = primaryTranscriptRunForCallStmt.get(call.id);
+        const artifactBatch = latestArtifactBatchForCallStmt.get(call.id);
         message.call = call;
         message.is_call_message = true;
         message.call_message = {
@@ -904,6 +971,8 @@ function createCallFeature({
           duration_ms: call.duration_ms,
           ended_reason: call.ended_reason,
           ai_notes: call.ai_notes || null,
+          primary_transcript_run: serializeTranscriptRun(primaryRun),
+          artifact_batch: serializeArtifactBatch(artifactBatch),
           transcript_runs: transcriptRunsForCallStmt.all(call.id).map(serializeTranscriptRun),
           artifact_batches: artifactBatchesForCallStmt.all(call.id).map(serializeArtifactBatch),
         };
@@ -951,7 +1020,12 @@ function createCallFeature({
   }
 
   function broadcastTranscriptRunMessage(runOrId) {
-    const message = hydrateTranscriptRunMessage(runOrId);
+    const run = typeof runOrId === 'object' ? runOrId : transcriptRunByIdStmt.get(Number(runOrId || 0));
+    if (run?.call_id) {
+      const call = getCall(run.call_id);
+      if (call) broadcastCallMessageUpdated(call);
+    }
+    const message = hydrateTranscriptRunMessage(run);
     if (!message?.chat_id) return null;
     broadcastCall(message.chat_id, { type: 'message_updated', message });
     return message;
@@ -1014,6 +1088,7 @@ function createCallFeature({
       broadcastCall(call.chat_id, { type: 'call_ended', call, reason });
       broadcastCallMessageUpdated(call);
       deleteLiveKitRoomForCall(row);
+      maybeStartAutoTranscript(callId);
     }
     return call;
   }
@@ -1813,6 +1888,10 @@ function createCallFeature({
 
   function broadcastArtifactBatchMessage(batchOrId) {
     const batch = typeof batchOrId === 'object' ? batchOrId : artifactBatchByIdStmt.get(batchOrId);
+    if (batch?.call_id) {
+      const call = getCall(batch.call_id);
+      if (call) broadcastCallMessageUpdated(call);
+    }
     const message = hydrateArtifactBatchMessage(batch);
     if (!message?.chat_id) return null;
     broadcastCall(message.chat_id, { type: 'message_updated', message });
@@ -1917,6 +1996,7 @@ function createCallFeature({
       recording.call_id
     );
     broadcastAiNotesUpdated(recording.call_id);
+    if (!stillRecording) maybeStartAutoTranscript(recording.call_id);
   }
 
   function splitRecordingIntoChunks(filePath, recordingId, options = {}) {
@@ -2324,46 +2404,60 @@ function createCallFeature({
     res.json({ call: broadcastAiNotesUpdated(callId) || getCall(callId) });
   });
 
+  function createOrReusePrimaryTranscriptRun(callId, requestedBy, { retry = false } = {}) {
+    const { provider, strategy } = selectedTranscriptConfig();
+    const validation = validateTranscriptRunInput(callId, provider, strategy);
+    if (!validation.ok) return { error: validation };
+    const existing = primaryTranscriptRunForCallStmt.get(callId);
+    if (existing && !retry) {
+      return { run: serializeTranscriptRun(existing), rawRun: existing, created: false };
+    }
+    if (existing && retry) {
+      deleteRunSegmentsStmt.run(existing.id);
+      resetTranscriptRunStmt.run(provider, strategy, existing.id);
+      enqueueTranscriptRun(existing.id);
+      broadcastTranscriptRunMessage(existing.id);
+      return {
+        run: serializeTranscriptRun(transcriptRunByIdStmt.get(existing.id)),
+        rawRun: transcriptRunByIdStmt.get(existing.id),
+        created: false,
+        retried: true,
+      };
+    }
+    const inserted = insertTranscriptRunStmt.run(callId, null, requestedBy || null, provider, strategy);
+    const runId = Number(inserted.lastInsertRowid);
+    enqueueTranscriptRun(runId);
+    broadcastTranscriptRunMessage(runId);
+    return { run: serializeTranscriptRun(transcriptRunByIdStmt.get(runId)), rawRun: transcriptRunByIdStmt.get(runId), created: true };
+  }
+
+  function maybeStartAutoTranscript(callId) {
+    const settings = getCallSettings(db);
+    if (settings.call_transcription_mode !== 'auto') return null;
+    const row = callByIdStmt.get(callId);
+    if (!row || row.status === 'active') return null;
+    if (primaryTranscriptRunForCallStmt.get(callId)) return null;
+    const counts = recordingCountsStmt.get(callId) || {};
+    if (Number(counts.recording || 0) > 0 || Number(counts.processing || 0) > 0) return null;
+    return createOrReusePrimaryTranscriptRun(callId, row.ended_by || row.started_by || null);
+  }
+
   function handleCreateTranscriptRun(req, res) {
     const callId = normalizeId(req.params.callId);
     const row = callByIdStmt.get(callId);
     if (!row) return boolError(res, 404, 'Call not found', 'call_not_found');
     if (!isMember(row.chat_id, req.user.id)) return boolError(res, 403, 'Forbidden', 'forbidden');
-    const provider = String(req.body?.provider || 'voice').trim();
-    const strategy = String(req.body?.strategy || 'per_user').trim();
-    if (!['voice', 'vosk', 'openai', 'grok'].includes(provider)) return boolError(res, 400, 'Unsupported transcription provider', 'unsupported_provider');
-    if (!['per_user', 'mixed', 'hybrid', 'openai_diarization'].includes(strategy)) return boolError(res, 400, 'Unsupported transcription strategy', 'unsupported_strategy');
-
-    const recordings = completedRecordingsForCallStmt.all(callId)
-      .filter((recording) => recording.file_path && fs.existsSync(path.resolve(recording.file_path)));
-    if (!recordings.length) return boolError(res, 409, 'No call recordings are available', 'no_call_recordings');
-    const hasParticipant = recordings.some((recording) => recording.scope !== 'mixed');
-    const hasMixed = recordings.some((recording) => recording.scope === 'mixed');
-    if (strategy === 'per_user' && !hasParticipant) return boolError(res, 409, 'No participant recordings are available', 'no_participant_recordings');
-    if (['mixed', 'hybrid', 'openai_diarization'].includes(strategy) && !hasMixed && !hasParticipant) {
-      return boolError(res, 409, 'Mixed recording is not available', 'mixed_recording_missing');
-    }
-    if (strategy === 'openai_diarization' && !getVoiceOpenAIKey(db, secret)) {
-      return boolError(res, 409, 'OpenAI API key is not configured', 'openai_key_missing');
-    }
-
-    const messageText = `Расшифровка звонка: ${provider === 'voice' ? 'voice settings' : provider} / ${strategyLabel(strategy)} — готовится`;
-    const message = insertMessageStmt.run(row.chat_id, req.user.id, messageText);
-    const messageId = Number(message.lastInsertRowid);
-    const inserted = insertTranscriptRunStmt.run(callId, messageId, req.user.id, provider, strategy);
-    const runId = Number(inserted.lastInsertRowid);
-    updateTranscriptRunMessageStmt.run(messageId, runId);
-    const hydrated = hydrateTranscriptRunMessage(runId);
-    if (hydrated) {
-      onMessageCreated?.(hydrated);
-      broadcastCall(row.chat_id, { type: 'message', message: hydrated });
-    }
-    enqueueTranscriptRun(runId);
-    res.status(201).json({ run: serializeTranscriptRun(transcriptRunByIdStmt.get(runId)), message: hydrated });
+    const result = createOrReusePrimaryTranscriptRun(callId, req.user.id, { retry: Boolean(req.retryTranscriptRun) });
+    if (result.error) return boolError(res, result.error.status, result.error.message, result.error.code);
+    return res.status(result.created ? 201 : 200).json({ run: result.run, call: getCall(callId), message: null });
   }
 
   app.post('/api/calls/:callId/transcript-runs', auth, callLimiter, handleCreateTranscriptRun);
   app.post('/api/calls/:callId/transcribe', auth, callLimiter, handleCreateTranscriptRun);
+  app.post('/api/calls/:callId/transcribe/retry', auth, callLimiter, (req, res) => {
+    req.retryTranscriptRun = true;
+    return handleCreateTranscriptRun(req, res);
+  });
 
   app.post('/api/calls/:callId/artifacts', auth, callLimiter, (req, res) => {
     const callId = normalizeId(req.params.callId);
@@ -2373,12 +2467,7 @@ function createCallFeature({
     const transcriptRunId = normalizeId(req.body?.transcript_run_id || req.body?.transcriptRunId);
     const transcriptRun = transcriptRunId
       ? transcriptRunByIdStmt.get(transcriptRunId)
-      : db.prepare(`
-          SELECT * FROM call_transcript_runs
-          WHERE call_id=? AND status='completed' AND transcript_text!=''
-          ORDER BY CASE WHEN strategy='openai_diarization' THEN 0 ELSE 1 END, id DESC
-          LIMIT 1
-        `).get(callId);
+      : completedTranscriptRunForCallStmt.get(callId);
     if (!transcriptRun || Number(transcriptRun.call_id) !== callId) {
       return boolError(res, 409, 'Completed transcript run is required', 'transcript_required');
     }
@@ -2392,6 +2481,31 @@ function createCallFeature({
       ? settings.filter((setting) => setting.artifact_key === requestedKey)
       : settings;
     if (!selected.length) return boolError(res, 409, 'No enabled call artifacts with selected bots', 'no_call_artifacts');
+    const existingBatch = artifactBatchForTranscriptStmt.get(callId, transcriptRun.id);
+    if (existingBatch && !requestedKey) {
+      return res.json({ batch: serializeArtifactBatch(existingBatch), message: null, call: getCall(callId) });
+    }
+
+    const createdBatch = db.transaction(() => {
+      const batchInsert = insertArtifactBatchStmt.run(callId, transcriptRun.id, null, req.user.id);
+      const batchId = Number(batchInsert.lastInsertRowid);
+      const runIds = [];
+      for (const setting of selected) {
+        const inserted = insertArtifactRunStmt.run(
+          batchId,
+          callId,
+          transcriptRun.id,
+          setting.artifact_key,
+          setting.bot_id,
+          setting.output_type
+        );
+        runIds.push(Number(inserted.lastInsertRowid));
+      }
+      return { batchId, runIds };
+    })();
+    broadcastArtifactBatchMessage(createdBatch.batchId);
+    createdBatch.runIds.forEach(enqueueArtifactRun);
+    return res.status(201).json({ batch: serializeArtifactBatch(artifactBatchByIdStmt.get(createdBatch.batchId)), message: null, call: getCall(callId) });
 
     const created = db.transaction(() => {
       const message = insertMessageStmt.run(row.chat_id, req.user.id, 'AI итоги звонка: готовится');
@@ -2422,6 +2536,15 @@ function createCallFeature({
     res.status(201).json({ batch: serializeArtifactBatch(artifactBatchByIdStmt.get(created.batchId)), message: hydrated });
   });
 
+  app.get('/api/calls/:callId/artifacts', auth, callLimiter, (req, res) => {
+    const callId = normalizeId(req.params.callId);
+    const row = callByIdStmt.get(callId);
+    if (!row) return boolError(res, 404, 'Call not found', 'call_not_found');
+    if (!isMember(row.chat_id, req.user.id)) return boolError(res, 403, 'Forbidden', 'forbidden');
+    const batch = latestArtifactBatchForCallStmt.get(callId);
+    res.json({ batch: serializeArtifactBatch(batch), call: getCall(callId) });
+  });
+
   app.post('/api/calls/artifact-runs/:runId/retry', auth, callLimiter, (req, res) => {
     const runId = normalizeId(req.params.runId);
     const run = artifactRunByIdStmt.get(runId);
@@ -2441,6 +2564,25 @@ function createCallFeature({
     const row = callByIdStmt.get(callId);
     if (!row) return boolError(res, 404, 'Call not found', 'call_not_found');
     if (!isMember(row.chat_id, req.user.id)) return boolError(res, 403, 'Forbidden', 'forbidden');
+    const primaryRun = primaryTranscriptRunForCallStmt.get(callId);
+    if (primaryRun?.status === 'completed') {
+      const segments = transcriptRunSegmentsStmt.all(primaryRun.id).map((segment) => ({
+        id: Number(segment.id),
+        user_id: segment.user_id == null ? null : Number(segment.user_id),
+        speaker_name: segment.speaker_name || segment.display_name || segment.username || segment.speaker_label || 'Speaker',
+        speaker_label: segment.speaker_label || '',
+        start_ms: Number(segment.start_ms || 0),
+        end_ms: Number(segment.end_ms || 0),
+        text: segment.text || '',
+        timing_approximate: Number(segment.timing_approximate) !== 0,
+      }));
+      return res.json({
+        call: serializeCall(row),
+        run: serializeTranscriptRun(primaryRun),
+        transcript_text: primaryRun.transcript_text || transcriptTextForRun(primaryRun.id),
+        segments,
+      });
+    }
     const notes = aiNotesByCallStmt.get(callId);
     const segments = transcriptSegmentsStmt.all(callId).map((segment) => ({
       id: Number(segment.id),

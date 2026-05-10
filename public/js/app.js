@@ -17549,9 +17549,31 @@
   }
 
   function normalizeCallMessageData(msg) {
-    const rawCall = msg?.call || msg?.call_message || {};
+    const rawCall = { ...(msg?.call_message || {}), ...(msg?.call || {}) };
     const id = Number(rawCall.id || rawCall.call_id || msg?.call_id || 0) || 0;
     return { ...rawCall, id };
+  }
+
+  function latestCallTranscriptRun(call) {
+    return call?.primary_transcript_run
+      || (Array.isArray(call?.transcript_runs) ? call.transcript_runs[0] : null)
+      || null;
+  }
+
+  function latestCallArtifactBatch(call) {
+    return call?.artifact_batch
+      || (Array.isArray(call?.artifact_batches) ? call.artifact_batches[0] : null)
+      || null;
+  }
+
+  function callArtifactProgress(batch) {
+    const runs = Array.isArray(batch?.runs) ? batch.runs : [];
+    if (!runs.length) return '';
+    const ready = runs.filter((run) => run.status === 'completed').length;
+    const failed = runs.filter((run) => run.status === 'error').length;
+    const total = runs.length;
+    if (failed) return `${callArtifactStatusLabel(batch.status || 'error')} ${ready}/${total}, ${t('Error')} ${failed}/${total}`;
+    return `${callArtifactStatusLabel(batch.status || 'queued')} ${ready}/${total}`;
   }
 
   function renderCallMessageCard(msg) {
@@ -17578,36 +17600,36 @@
     if (active) {
       actions.push(`<button type="button" class="call-message-action primary" data-call-card-join="${Number(call.id || 0)}">${esc(t('Join call'))}</button>`);
     }
-    if (notes?.transcript_ready) {
-      actions.push(`<button type="button" class="call-message-action" data-call-card-transcript="${Number(call.id || 0)}">${esc(t('Transcript'))}</button>`);
-    }
     if (!active && Number(call.id || 0)) {
-      const transcriptRuns = Array.isArray(call.transcript_runs) ? call.transcript_runs : [];
-      const completedRuns = transcriptRuns.filter((run) => run && run.status === 'completed' && run.transcript_ready);
-      actions.push(`
-        <span class="call-message-transcribe">
-          <select class="call-message-select" data-call-card-transcribe-select="${Number(call.id || 0)}" aria-label="${esc(t('Transcribe'))}">
-            <option value="voice:hybrid">${esc(t('Same as voice messages'))}</option>
-            <option value="vosk:hybrid">Vosk</option>
-            <option value="grok:hybrid">Grok</option>
-            <option value="openai:hybrid">OpenAI</option>
-            <option value="openai:openai_diarization">OpenAI diarization</option>
-            <option value="voice:per_user">${esc(t('Per-user tracks'))}</option>
-            <option value="voice:mixed">${esc(t('Mixed recording'))}</option>
-          </select>
-          <button type="button" class="call-message-action" data-call-card-transcribe="${Number(call.id || 0)}">${esc(t('Transcribe'))}</button>
-        </span>
-      `);
-      actions.push(`
-        <span class="call-message-transcribe">
-          ${completedRuns.length ? `
-            <select class="call-message-select" data-call-card-artifacts-select="${Number(call.id || 0)}" aria-label="${esc(t('AI summary'))}">
-              ${completedRuns.map((run) => `<option value="${Number(run.id || 0)}">${esc(`${run.resolved_provider || run.provider || 'AI'} / ${run.strategy_label || run.strategy || ''}`)}</option>`).join('')}
-            </select>
-          ` : ''}
-          <button type="button" class="call-message-action" data-call-card-artifacts="${Number(call.id || 0)}">${esc(t('AI summary'))}</button>
-        </span>
-      `);
+      const transcriptRun = latestCallTranscriptRun(call);
+      const transcriptStatus = String(transcriptRun?.status || '');
+      if (transcriptStatus === 'completed' || notes?.transcript_ready) {
+        actions.push(`<button type="button" class="call-message-action" data-call-card-transcript="${Number(call.id || 0)}">${esc(t('Transcript'))}</button>`);
+      } else if (transcriptStatus === 'queued' || transcriptStatus === 'processing') {
+        meta.push(t('Transcript processing'));
+        actions.push(`<button type="button" class="call-message-action" disabled>${esc(t('Transcript processing'))}</button>`);
+      } else if (transcriptStatus === 'error') {
+        if (transcriptRun?.error) meta.push(transcriptRun.error);
+        actions.push(`<button type="button" class="call-message-action" data-call-card-transcribe-retry="${Number(call.id || 0)}">${esc(t('Retry'))}</button>`);
+      } else {
+        actions.push(`<button type="button" class="call-message-action" data-call-card-transcribe="${Number(call.id || 0)}">${esc(t('Transcribe'))}</button>`);
+      }
+      const batch = latestCallArtifactBatch(call);
+      const batchStatus = String(batch?.status || '');
+      const artifactsReadyToOpen = ['completed', 'partial', 'error'].includes(batchStatus);
+      if (batch) {
+        const progress = callArtifactProgress(batch);
+        if (progress) meta.push(progress);
+      }
+      if (transcriptStatus === 'completed') {
+        if (batchStatus === 'queued' || batchStatus === 'processing') {
+          actions.push(`<button type="button" class="call-message-action" disabled>${esc(t('AI summary'))}...</button>`);
+        } else {
+          actions.push(`<button type="button" class="call-message-action" data-call-card-artifacts="${Number(call.id || 0)}">${esc(t('AI summary'))}</button>`);
+        }
+      } else if (artifactsReadyToOpen) {
+        actions.push(`<button type="button" class="call-message-action" data-call-card-artifacts="${Number(call.id || 0)}">${esc(t('AI summary'))}</button>`);
+      }
     }
     return `
       <div class="call-message-card" data-call-card="${Number(call.id || 0)}">
@@ -17701,22 +17723,28 @@
     });
     row.querySelector('[data-call-card-transcript]')?.addEventListener('click', (event) => {
       event.stopPropagation();
-      window.BananzaCallHooks?.openTranscript?.(call.id);
+      const run = latestCallTranscriptRun(call);
+      if (run?.id) window.BananzaCallHooks?.openTranscriptRun?.(Number(run.id));
+      else window.BananzaCallHooks?.openTranscript?.(call.id);
     });
     row.querySelector('[data-call-card-transcribe]')?.addEventListener('click', async (event) => {
       event.stopPropagation();
       const button = event.currentTarget;
-      const select = row.querySelector(`[data-call-card-transcribe-select="${Number(call.id || 0)}"]`);
-      const [provider, strategy] = String(select?.value || 'voice:hybrid').split(':');
       button.disabled = true;
       try {
-        const payload = { provider: provider || 'voice', strategy: strategy || 'hybrid' };
-        try {
-          await api(`/api/calls/${Number(call.id || 0)}/transcript-runs`, { method: 'POST', body: payload });
-        } catch (error) {
-          if (!/endpoint not found|not found/i.test(String(error?.message || ''))) throw error;
-          await api(`/api/calls/${Number(call.id || 0)}/transcribe`, { method: 'POST', body: payload });
-        }
+        await api(`/api/calls/${Number(call.id || 0)}/transcribe`, { method: 'POST', body: {} });
+      } catch (error) {
+        showCenterToast(error.message || t('Could not start transcription'));
+      } finally {
+        button.disabled = false;
+      }
+    });
+    row.querySelector('[data-call-card-transcribe-retry]')?.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      const button = event.currentTarget;
+      button.disabled = true;
+      try {
+        await api(`/api/calls/${Number(call.id || 0)}/transcribe/retry`, { method: 'POST', body: {} });
       } catch (error) {
         showCenterToast(error.message || t('Could not start transcription'));
       } finally {
@@ -17726,13 +17754,17 @@
     row.querySelector('[data-call-card-artifacts]')?.addEventListener('click', async (event) => {
       event.stopPropagation();
       const button = event.currentTarget;
-      const select = row.querySelector(`[data-call-card-artifacts-select="${Number(call.id || 0)}"]`);
+      const existing = latestCallArtifactBatch(call);
+      if (existing && ['completed', 'partial', 'error'].includes(String(existing.status || ''))) {
+        openCallArtifactsModal(existing);
+        return;
+      }
       button.disabled = true;
       try {
-        await api(`/api/calls/${Number(call.id || 0)}/artifacts`, {
-          method: 'POST',
-          body: { transcript_run_id: Number(select?.value || 0) || null },
-        });
+        const result = await api(`/api/calls/${Number(call.id || 0)}/artifacts`, { method: 'POST', body: {} });
+        if (result?.batch && ['completed', 'partial', 'error'].includes(String(result.batch.status || ''))) {
+          openCallArtifactsModal(result.batch);
+        }
       } catch (error) {
         showCenterToast(error.message || t('Could not start AI summary'));
       } finally {
