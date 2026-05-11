@@ -3036,7 +3036,54 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
   margin-bottom: 0;
 }
 
-.input-row { display: flex; align-items: flex-end; gap: 4px; }
+.input-row {
+  --composer-tool-size: 36px;
+  --composer-tool-gap: 4px;
+  --composer-tool-step: calc(var(--composer-tool-size) + var(--composer-tool-gap));
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.composer-tool-stack {
+  position: relative;
+  flex: 0 0 calc(var(--composer-tool-size) + var(--composer-tool-step) + var(--composer-tool-step));
+  width: calc(var(--composer-tool-size) + var(--composer-tool-step) + var(--composer-tool-step));
+  height: var(--composer-tool-size);
+  transition:
+    flex-basis .24s cubic-bezier(.2, .8, .2, 1),
+    width .24s cubic-bezier(.2, .8, .2, 1),
+    height .24s cubic-bezier(.2, .8, .2, 1);
+}
+
+.composer-tool-stack .icon-btn {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  transition:
+    transform .24s cubic-bezier(.2, .8, .2, 1),
+    background .15s ease,
+    opacity .15s ease;
+  will-change: transform;
+}
+
+#attachBtn { transform: translate3d(0, 0, 0); }
+#pollBtn { transform: translate3d(var(--composer-tool-step), 0, 0); }
+#emojiBtn { transform: translate3d(calc(var(--composer-tool-step) + var(--composer-tool-step)), 0, 0); }
+
+.input-row.is-multiline .composer-tool-stack {
+  flex-basis: var(--composer-tool-size);
+  width: var(--composer-tool-size);
+  height: calc(var(--composer-tool-size) + var(--composer-tool-step) + var(--composer-tool-step));
+}
+
+.input-row.is-multiline #attachBtn { transform: translate3d(0, 0, 0); }
+.input-row.is-multiline #pollBtn { transform: translate3d(0, calc(0px - var(--composer-tool-step)), 0); }
+.input-row.is-multiline #emojiBtn { transform: translate3d(0, calc(0px - var(--composer-tool-step) - var(--composer-tool-step)), 0); }
+
+.input-row.is-multiline #msgInput {
+  min-height: calc(var(--composer-tool-size) + var(--composer-tool-step) + var(--composer-tool-step));
+}
 
 .composer-input-wrap {
   position: relative;
@@ -3044,6 +3091,39 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
   min-width: 0;
   display: flex;
   align-items: flex-end;
+}
+
+@media (max-width: 768px) {
+  .composer-tool-stack {
+    flex-basis: calc(var(--composer-tool-size) + var(--composer-tool-step));
+    width: calc(var(--composer-tool-size) + var(--composer-tool-step));
+  }
+
+  #emojiBtn { transform: translate3d(var(--composer-tool-step), 0, 0); }
+
+  .input-row.is-multiline .composer-tool-stack {
+    flex-basis: var(--composer-tool-size);
+    width: var(--composer-tool-size);
+    height: calc(var(--composer-tool-size) + var(--composer-tool-step));
+  }
+
+  .input-row.is-multiline #emojiBtn { transform: translate3d(0, calc(0px - var(--composer-tool-step)), 0); }
+
+  .input-row.is-multiline #msgInput {
+    min-height: calc(var(--composer-tool-size) + var(--composer-tool-step));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-tool-stack,
+  .composer-tool-stack .icon-btn {
+    transition-duration: 0s;
+  }
+}
+
+html[data-modal-animation="none"] .composer-tool-stack,
+html[data-modal-animation="none"] .composer-tool-stack .icon-btn {
+  transition-duration: 0s;
 }
 
 .scroll-bottom-btn,

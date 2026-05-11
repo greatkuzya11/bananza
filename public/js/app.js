@@ -604,6 +604,7 @@
   const typingBar = $('#typingBar');
   const msgInput = $('#msgInput');
   const inputArea = chatView?.querySelector('.input-area');
+  const inputRow = chatView?.querySelector('.input-row');
   const mentionOpenBtn = $('#mentionOpenBtn');
   const sendBtn = $('#sendBtn');
   const scrollBottomBtn = $('#scrollBottomBtn');
@@ -22368,9 +22369,82 @@
   // ═══════════════════════════════════════════════════════════════════════════
   // AUTO RESIZE TEXTAREA
   // ═══════════════════════════════════════════════════════════════════════════
+  let msgInputMeasureMirror = null;
+
+  function getVisibleComposerToolCount() {
+    return [attachBtn, pollBtn, emojiBtn].filter((button) => {
+      if (!(button instanceof HTMLElement)) return false;
+      const styles = getComputedStyle(button);
+      return styles.display !== 'none' && styles.visibility !== 'hidden';
+    }).length || 1;
+  }
+
+  function getNormalComposerInputWidth() {
+    if (!inputRow || !msgInput) return msgInput?.clientWidth || 1;
+    const rowStyles = getComputedStyle(inputRow);
+    const toolSize = parseFloat(rowStyles.getPropertyValue('--composer-tool-size')) || 36;
+    const toolGap = parseFloat(rowStyles.getPropertyValue('--composer-tool-gap')) || 4;
+    const rowGap = parseFloat(rowStyles.columnGap || rowStyles.gap) || 4;
+    const toolCount = getVisibleComposerToolCount();
+    const normalToolWidth = (toolCount * toolSize) + (Math.max(0, toolCount - 1) * toolGap);
+    const sendWidth = sendBtn?.getBoundingClientRect?.().width || 44;
+    const rowWidth = inputRow.getBoundingClientRect().width || msgInput.clientWidth || 1;
+    return Math.max(1, rowWidth - normalToolWidth - sendWidth - (rowGap * 2));
+  }
+
+  function measureMsgInputScrollHeight(width) {
+    if (!msgInputMeasureMirror) {
+      msgInputMeasureMirror = document.createElement('textarea');
+      msgInputMeasureMirror.setAttribute('aria-hidden', 'true');
+      msgInputMeasureMirror.tabIndex = -1;
+      msgInputMeasureMirror.rows = 1;
+      Object.assign(msgInputMeasureMirror.style, {
+        position: 'fixed',
+        left: '-9999px',
+        top: '0',
+        visibility: 'hidden',
+        pointerEvents: 'none',
+        overflow: 'hidden',
+        resize: 'none',
+      });
+      document.body.appendChild(msgInputMeasureMirror);
+    }
+
+    const sourceStyles = getComputedStyle(msgInput);
+    [
+      'boxSizing', 'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'letterSpacing',
+      'lineHeight', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+      'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
+      'whiteSpace', 'wordBreak', 'overflowWrap', 'textTransform', 'textIndent'
+    ].forEach((property) => {
+      msgInputMeasureMirror.style[property] = sourceStyles[property];
+    });
+    msgInputMeasureMirror.style.width = `${Math.max(1, Math.round(width))}px`;
+    msgInputMeasureMirror.value = msgInput.value || '';
+    msgInputMeasureMirror.style.height = 'auto';
+    return msgInputMeasureMirror.scrollHeight;
+  }
+
   function autoResize() {
-    msgInput.style.height = 'auto';
-    msgInput.style.height = Math.min(msgInput.scrollHeight, 150) + 'px';
+    const wasMultiline = Boolean(inputRow?.classList.contains('is-multiline'));
+    const normalInputWidth = getNormalComposerInputWidth();
+    const measuredScrollHeight = measureMsgInputScrollHeight(normalInputWidth);
+    const nextHeight = Math.min(measuredScrollHeight, 150);
+    msgInput.style.height = nextHeight + 'px';
+    if (inputRow) {
+      const styles = getComputedStyle(msgInput);
+      const fontSize = parseFloat(styles.fontSize) || 15;
+      const lineHeight = parseFloat(styles.lineHeight) || (fontSize * 1.35);
+      const paddingY = (parseFloat(styles.paddingTop) || 0) + (parseFloat(styles.paddingBottom) || 0);
+      const borderY = (parseFloat(styles.borderTopWidth) || 0) + (parseFloat(styles.borderBottomWidth) || 0);
+      const singleLineHeight = lineHeight + paddingY + borderY;
+      const isMultiline = measuredScrollHeight > singleLineHeight + 2;
+      inputRow.classList.toggle('is-multiline', isMultiline);
+      const changed = wasMultiline !== isMultiline;
+      if (changed && emojiPickerOpen && isFloatingSurfaceVisible(emojiPicker)) {
+        requestAnimationFrame(() => positionEmojiPicker(emojiBtn));
+      }
+    }
     queueIosViewportLayoutSync();
   }
 
