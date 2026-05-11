@@ -150,6 +150,7 @@ const UI_MOBILE_FONT_SIZE_MIN = 1;
 const UI_MOBILE_FONT_SIZE_MAX = 10;
 const UI_LANGUAGES = new Set(['ru', 'en']);
 const UI_LANGUAGE_DEFAULT = 'ru';
+const RECENT_EMOJI_LIMIT = 32;
 const USER_PUBLIC_FIELDS = 'id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,ui_theme,ui_visual_mode,ui_modal_animation,ui_modal_animation_speed,ui_mobile_font_size,ui_language,ui_show_chat_folder_strip_in_all_chats';
 const USER_REALTIME_FIELDS = `${USER_PUBLIC_FIELDS},is_ai_bot`;
 const POLL_MAX_OPTIONS = 10;
@@ -609,6 +610,29 @@ const editableMessageForUpdateStmt = db.prepare(`
 const messagePinExistsStmt = db.prepare('SELECT 1 FROM message_pins WHERE message_id=?');
 const deleteLinkPreviewsByMessageStmt = db.prepare('DELETE FROM link_previews WHERE message_id=?');
 const insertLinkPreviewStmt = db.prepare('INSERT INTO link_previews(message_id,url,title,description,image,hostname) VALUES(?,?,?,?,?,?)');
+const recentEmojiListStmt = db.prepare(`
+  SELECT emoji
+  FROM user_recent_emojis
+  WHERE user_id=?
+  ORDER BY last_used_at DESC, emoji ASC
+  LIMIT ?
+`);
+const upsertRecentEmojiStmt = db.prepare(`
+  INSERT INTO user_recent_emojis(user_id, emoji, last_used_at)
+  VALUES(?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  ON CONFLICT(user_id, emoji) DO UPDATE SET last_used_at=excluded.last_used_at
+`);
+const trimRecentEmojiStmt = db.prepare(`
+  DELETE FROM user_recent_emojis
+  WHERE user_id=?
+    AND emoji NOT IN (
+      SELECT emoji
+      FROM user_recent_emojis
+      WHERE user_id=?
+      ORDER BY last_used_at DESC, emoji ASC
+      LIMIT ?
+    )
+`);
 const chatPinsStmt = db.prepare(`
   SELECT
     p.id,
@@ -3573,6 +3597,22 @@ function isValidReactionEmoji(value) {
   if (pattern) return pattern.test(graphemes[0]);
   return /^(?:[\u00A9\u00AE]|[\u203C-\u3299]\uFE0F?|[\uD800-\uDBFF][\uDC00-\uDFFF])$/.test(graphemes[0]);
 }
+
+function getRecentEmojisForUser(userId) {
+  return recentEmojiListStmt.all(userId, RECENT_EMOJI_LIMIT).map((row) => row.emoji);
+}
+
+app.get('/api/user/recent-emojis', auth, (req, res) => {
+  res.json({ emojis: getRecentEmojisForUser(req.user.id) });
+});
+
+app.post('/api/user/recent-emojis', auth, (req, res) => {
+  const emoji = typeof req.body?.emoji === 'string' ? req.body.emoji.trim() : '';
+  if (!isValidReactionEmoji(emoji)) return res.status(400).json({ error: 'Invalid emoji' });
+  upsertRecentEmojiStmt.run(req.user.id, emoji);
+  trimRecentEmojiStmt.run(req.user.id, req.user.id, RECENT_EMOJI_LIMIT);
+  res.json({ emojis: getRecentEmojisForUser(req.user.id) });
+});
 
 app.post('/api/messages/:id/reactions', auth, (req, res) => {
   const mid = +req.params.id;

@@ -149,6 +149,13 @@ db.exec(`
     updated_at TEXT DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS user_recent_emojis (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    emoji TEXT NOT NULL,
+    last_used_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (user_id, emoji)
+  );
+
   CREATE TABLE IF NOT EXISTS message_mentions (
     message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
     chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
@@ -203,6 +210,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_message_pins_message ON message_pins(message_id);
   CREATE INDEX IF NOT EXISTS idx_message_pin_events_chat ON message_pin_events(chat_id, id);
   CREATE INDEX IF NOT EXISTS idx_message_pin_events_message ON message_pin_events(message_id, id);
+  CREATE INDEX IF NOT EXISTS idx_user_recent_emojis_user_time ON user_recent_emojis(user_id, last_used_at DESC);
 `);
 
 // Seed general chat

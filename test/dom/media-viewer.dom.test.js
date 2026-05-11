@@ -114,6 +114,8 @@ function installAppRuntimeStubs(dom, { fetchHandler = null } = {}) {
     switch (url.pathname) {
       case '/api/auth/me':
         return createJsonResponse(dom, { user: currentUser });
+      case '/api/user/recent-emojis':
+        return createJsonResponse(dom, { emojis: [] });
       case '/api/weather/settings':
         return createJsonResponse(dom, {
           settings: { enabled: false, location: null, refresh_minutes: 30 },
@@ -1334,6 +1336,88 @@ test('emoji picker inserts emoji without focusing the composer when the keyboard
   assert.notEqual(msgInput.value, '');
   assert.equal(focusCalls, 0);
   assert.notEqual(document.activeElement, msgInput);
+});
+
+test('emoji picker shows recent as the second tab and stores picked emoji locally', async (t) => {
+  const recentRequests = [];
+  const dom = await bootAppDom({
+    fetchHandler: async ({ dom, url, init }) => {
+      if (url.pathname !== '/api/user/recent-emojis') return null;
+      if ((init.method || 'GET').toUpperCase() === 'POST') {
+        const body = JSON.parse(init.body || '{}');
+        recentRequests.push(body.emoji);
+        return createJsonResponse(dom, { emojis: [body.emoji] });
+      }
+      return createJsonResponse(dom, { emojis: [] });
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const emojiBtn = document.getElementById('emojiBtn');
+  const emojiPicker = document.getElementById('emojiPicker');
+
+  emojiBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await new Promise((resolve) => dom.window.setTimeout(resolve, 40));
+
+  const tabs = Array.from(emojiPicker.querySelectorAll('.emoji-tab')).map((tab) => tab.textContent);
+  assert.equal(tabs[0], '😀');
+  assert.equal(tabs[1], '🕘');
+
+  const picked = emojiPicker.querySelector('.emoji-item');
+  assert.ok(picked, 'Expected a picker emoji item');
+  picked.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  assert.equal(recentRequests[0], picked.textContent);
+
+  emojiPicker.querySelectorAll('.emoji-tab')[1].dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  assert.equal(emojiPicker.querySelector('.emoji-item')?.textContent, picked.textContent);
+});
+
+test('emoji picker recent tab is capped at 32 items from the server', async (t) => {
+  const serverRecent = [
+    '😀','😃','😄','😁','😆','😅','😂','🙂',
+    '😉','😊','😍','🤩','😘','😋','😜','🤪',
+    '🤔','😎','🥳','😭','😡','👍','👎','❤️',
+    '🎉','🍕','🌿','🚗','💡','🐶','🍌','⚡',
+    '🔥','💯','⭐','🌟','✨','🚀','🛸','🎮',
+  ];
+  const dom = await bootAppDom({
+    fetchHandler: async ({ dom, url }) => {
+      if (url.pathname !== '/api/user/recent-emojis') return null;
+      return createJsonResponse(dom, { emojis: serverRecent });
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const emojiBtn = document.getElementById('emojiBtn');
+  const emojiPicker = document.getElementById('emojiPicker');
+
+  emojiBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await new Promise((resolve) => dom.window.setTimeout(resolve, 40));
+
+  emojiPicker.querySelectorAll('.emoji-tab')[1].dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+
+  const recentItems = Array.from(emojiPicker.querySelectorAll('.emoji-item')).map((item) => item.textContent);
+  assert.equal(recentItems.length, 32);
+  assert.deepEqual(recentItems, serverRecent.slice(0, 32));
 });
 
 test('mobile chat list pull refresh label is localized and positioned inside the pull gap', async (t) => {

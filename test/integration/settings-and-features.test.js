@@ -5,7 +5,7 @@ const { before, after } = require('node:test');
 const Database = require('better-sqlite3');
 
 const { createSandbox } = require('../support/runtimeSandbox');
-const { createBasicChatScenario } = require('../support/scenario');
+const { createBasicChatScenario, sleep } = require('../support/scenario');
 
 let sandbox;
 let scenario;
@@ -152,6 +152,55 @@ test('interface language defaults to ru and can be stored on the user account', 
     method: 'PATCH',
     json: { language: 'ru' },
   });
+});
+
+test('recent emojis are stored per user and capped', async () => {
+  const { bob } = scenario;
+
+  const before = await bob.request('/api/user/recent-emojis');
+  assert.deepEqual(before.data.emojis, []);
+
+  const first = await bob.request('/api/user/recent-emojis', {
+    method: 'POST',
+    json: { emoji: '😀' },
+  });
+  assert.deepEqual(first.data.emojis, ['😀']);
+
+  await bob.request('/api/user/recent-emojis', {
+    method: 'POST',
+    json: { emoji: '🔥' },
+  });
+  await sleep(5);
+
+  const repeated = await bob.request('/api/user/recent-emojis', {
+    method: 'POST',
+    json: { emoji: '😀' },
+  });
+  assert.equal(repeated.data.emojis[0], '😀');
+  assert.equal(repeated.data.emojis.filter((emoji) => emoji === '😀').length, 1);
+
+  const many = [
+    '😃','😄','😁','😆','😅','😂','🙂','😉',
+    '😊','😍','🤩','😘','😋','😜','🤪','🤔',
+    '😎','🥳','😭','😡','👍','👎','❤️','🎉',
+    '🍕','🌿','🚗','💡','🔣','🏳️','🐶','🍌','⚡',
+  ];
+  let capped = repeated;
+  for (const emoji of many) {
+    capped = await bob.request('/api/user/recent-emojis', {
+      method: 'POST',
+      json: { emoji },
+    });
+  }
+  assert.equal(capped.data.emojis.length, 32);
+  assert.equal(new Set(capped.data.emojis).size, 32);
+
+  const invalid = await bob.request('/api/user/recent-emojis', {
+    method: 'POST',
+    json: { emoji: 'not-an-emoji' },
+    expectedStatus: 400,
+  });
+  assert.equal(invalid.data.error, 'Invalid emoji');
 });
 
 test('voice and AI admin settings routes stay isolated and usable locally', async () => {

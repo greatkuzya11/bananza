@@ -115,6 +115,8 @@ function installAppRuntimeStubs(dom, { fetchHandler = null } = {}) {
     switch (url.pathname) {
       case '/api/auth/me':
         return createJsonResponse(dom, { user: currentUser });
+      case '/api/user/recent-emojis':
+        return createJsonResponse(dom, { emojis: [] });
       case '/api/weather/settings':
         return createJsonResponse(dom, {
           settings: { enabled: false, location: null, refresh_minutes: 30 },

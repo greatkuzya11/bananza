@@ -19933,21 +19933,95 @@
   // ═══════════════════════════════════════════════════════════════════════════
   const EMOJIS = {
     '\uD83D\uDE00': ['\uD83D\uDE00','\uD83D\uDE03','\uD83D\uDE04','\uD83D\uDE01','\uD83D\uDE06','\uD83D\uDE05','\uD83E\uDD23','\uD83D\uDE02','\uD83D\uDE42','\uD83D\uDE09','\uD83D\uDE0A','\uD83D\uDE07','\uD83E\uDD70','\uD83D\uDE0D','\uD83E\uDD29','\uD83D\uDE18','\uD83D\uDE0B','\uD83D\uDE1B','\uD83D\uDE1C','\uD83E\uDD2A','\uD83D\uDE1D','\uD83E\uDD11','\uD83E\uDD17','\uD83E\uDD2D','\uD83E\uDD2B','\uD83E\uDD14','\uD83E\uDD10','\uD83E\uDD28','\uD83D\uDE10','\uD83D\uDE11','\uD83D\uDE36','\uD83D\uDE0F','\uD83D\uDE12','\uD83D\uDE44','\uD83D\uDE2C','\uD83D\uDE2E\u200D\uD83D\uDCA8','\uD83E\uDD25','\uD83D\uDE0C','\uD83D\uDE14','\uD83D\uDE2A','\uD83E\uDD24','\uD83D\uDE34','\uD83D\uDE37','\uD83E\uDD12','\uD83E\uDD15','\uD83E\uDD22','\uD83E\uDD2E','\uD83E\uDD75','\uD83E\uDD76','\uD83E\uDD74','\uD83D\uDE35','\uD83E\uDD2F','\uD83E\uDD20','\uD83E\uDD73','\uD83E\uDD78','\uD83D\uDE0E','\uD83E\uDD13','\uD83E\uDDD0','\uD83D\uDE15','\uD83D\uDE1F','\uD83D\uDE41','\u2639\uFE0F','\uD83D\uDE2E','\uD83D\uDE2F','\uD83D\uDE32','\uD83D\uDE33','\uD83E\uDD7A','\uD83D\uDE26','\uD83D\uDE27','\uD83D\uDE28','\uD83D\uDE30','\uD83D\uDE25','\uD83D\uDE22','\uD83D\uDE2D','\uD83D\uDE31','\uD83D\uDE16','\uD83D\uDE23','\uD83D\uDE1E','\uD83D\uDE13','\uD83D\uDE29','\uD83D\uDE2B','\uD83E\uDD71','\uD83D\uDE24','\uD83D\uDE21','\uD83D\uDE20','\uD83E\uDD2C','\uD83D\uDE08','\uD83D\uDC7F','\uD83D\uDC80','\u2620\uFE0F','\uD83D\uDCA9','\uD83E\uDD21','\uD83D\uDC79','\uD83D\uDC7A','\uD83D\uDC7B','\uD83D\uDC7D','\uD83D\uDC7E','\uD83E\uDD16'],
-    '\uD83D\uDC4B': ['\uD83D\uDC4B','\uD83E\uDD1A','\uD83D\uDD90\uFE0F','\u270B','\uD83D\uDD96','\uD83E\uDEF1','\uD83E\uDEF2','\uD83E\uDEF3','\uD83E\uDEF4','\uD83D\uDC4C','\uD83E\uDD0C','\uD83E\uDD0F','\u270C\uFE0F','\uD83E\uDD1E','\uD83E\uDEF0','\uD83E\uDD1F','\uD83E\uDD18','\uD83E\uDD19','\uD83D\uDC48','\uD83D\uDC49','\uD83D\uDC46','\uD83D\uDD95','\uD83D\uDC47','\u261D\uFE0F','\uD83E\uDEF5','\uD83D\uDC4D','\uD83D\uDC4E','\u270A','\uD83D\uDC4A','\uD83E\uDD1B','\uD83E\uDD1C','\uD83D\uDC4F','\uD83D\uDE4C','\uD83E\uDEF6','\uD83D\uDC50','\uD83E\uDD32','\uD83E\uDD1D','\uD83D\uDE4F','\uD83D\uDCAA','\uD83E\uDDBE','\uD83D\uDDA4'],
+    '\uD83D\uDC4B': ['\uD83D\uDC4B','\uD83E\uDD1A','\uD83D\uDD90\uFE0F','\u270B','\uD83D\uDD96','\uD83E\uDEF1','\uD83E\uDEF2','\uD83E\uDEF3','\uD83E\uDEF4','\uD83D\uDC4C','\uD83E\uDD0C','\uD83E\uDD0F','\u270C\uFE0F','\uD83E\uDD1E','\uD83E\uDEF0','\uD83E\uDD1F','\uD83E\uDD18','\uD83E\uDD19','\uD83D\uDC48','\uD83D\uDC49','\uD83D\uDC46','\uD83D\uDD95','\uD83D\uDC47','\u261D\uFE0F','\uD83E\uDEF5','\uD83D\uDC4D','\uD83D\uDC4E','\u270A','\uD83D\uDC4A','\uD83E\uDD1B','\uD83E\uDD1C','\uD83D\uDC4F','\uD83D\uDE4C','\uD83E\uDEF6','\uD83D\uDC50','\uD83E\uDD32','\uD83E\uDD1D','\uD83D\uDE4F','\uD83D\uDCAA','\uD83E\uDDBE','\uD83D\uDDA4','👶','🧒','👦','👧','🧑','👨','👩','🧔','👱','👴','👵','🙍','🙎','🙅','🙆','💁','🙋','🧏','🙇','🤦','🤷','👮','🕵️','💂','🥷','👷','🧑‍⚕️','🧑‍🎓','🧑‍🏫','🧑‍⚖️','🧑‍🌾','🧑‍🍳','🧑‍🔧','🧑‍💻','🧑‍🎤','🧑‍🎨','🧑‍🚀','🧑‍🚒','👰','🤵','🧙','🧚','🧛','🧜','🧝','🧞','🧟','💆','💇','🚶','🏃','💃','🕺','🧍','🧎','🧘','🛀','🛌','👭','👫','👬','💏','💑','👪'],
     '\u2764\uFE0F': ['\u2764\uFE0F','\uD83E\uDDE1','\uD83D\uDC9B','\uD83D\uDC9A','\uD83D\uDC99','\uD83D\uDC9C','\uD83D\uDDA4','\uD83E\uDD0D','\uD83E\uDD0E','\uD83D\uDC94','\u2763\uFE0F','\uD83D\uDC95','\uD83D\uDC9E','\uD83D\uDC93','\uD83D\uDC97','\uD83D\uDC96','\uD83D\uDC98','\uD83D\uDC9D','\uD83D\uDC9F','\u2764\uFE0F\u200D\uD83D\uDD25','\u2764\uFE0F\u200D\uD83E\uDE79','\u2665\uFE0F'],
-    '🎉': ['🎉','🎊','🎈','🎁','🏆','🥇','🥈','🥉','⚽','🏀','🎾','🎮','🎯','🎲','🔔','🎵','🎶','🎤','🎧','📱','💻','💡','📷','🎬','📚','✏️','📝','🔑','🔒','⭐','🌟','💫','✨','⚡','🔥','💯','🚀','🛸'],
+    '🎉': ['🎉','🎊','🎈','🎁','🎀','🎗️','🎟️','🎫','🏆','🥇','🥈','🥉','⚽','🏀','🏈','⚾','🥎','🎾','🏐','🏉','🥏','🎱','🪀','🏓','🏸','🥅','🏒','🏑','🥍','🏏','⛳','🪁','🏹','🎣','🤿','🥊','🥋','🎽','🛹','🛼','🛷','⛸️','🥌','🎿','⛷️','🏂','🪂','🏋️','🤼','🤸','⛹️','🤺','🤾','🏌️','🏇','🧘','🏄','🏊','🤽','🚣','🧗','🚴','🚵','🎮','🕹️','🎲','♟️','🎯','🎳','🎰','🧩','🎭','🎨','🧵','🪡','🎤','🎧','🎼','🎹','🥁','🪘','🎷','🎺','🪗','🎸','🪕','🎻','🎬','🎪'],
     '\uD83C\uDF55': ['\uD83C\uDF55','\uD83C\uDF54','\uD83C\uDF5F','\uD83C\uDF2D','\uD83C\uDF7F','\uD83E\uDDC0','\uD83E\uDD5A','\uD83C\uDF73','\uD83E\uDD5E','\uD83E\uDDC7','\uD83E\uDD53','\uD83C\uDF57','\uD83C\uDF56','\uD83C\uDF2E','\uD83C\uDF2F','\uD83C\uDF5D','\uD83C\uDF5C','\uD83C\uDF63','\uD83C\uDF71','\uD83E\uDD5F','\uD83C\uDF66','\uD83C\uDF69','\uD83C\uDF6A','\uD83C\uDF82','\uD83C\uDF70','\uD83E\uDDC1','\uD83C\uDF6B','\uD83C\uDF6C','\uD83C\uDF6D','\u2615','\uD83C\uDF75','\uD83E\uDDC3','\uD83E\uDDCB','\uD83C\uDF7A','\uD83C\uDF7B','\uD83E\uDD42','\uD83C\uDF77','\uD83C\uDF78','\uD83C\uDF79','\uD83E\uDD64','\uD83C\uDF4C'],
-    '\uD83C\uDF3F': ['\uD83C\uDF38','\uD83C\uDF3A','\uD83C\uDF3B','\uD83C\uDF39','\uD83C\uDF37','\uD83C\uDF3C','\uD83C\uDF3F','\u2618\uFE0F','\uD83C\uDF40','\uD83C\uDF41','\uD83C\uDF42','\uD83C\uDF32','\uD83C\uDF33','\uD83C\uDF34','\uD83C\uDF35','\uD83D\uDC36','\uD83D\uDC31','\uD83D\uDC2D','\uD83D\uDC39','\uD83D\uDC30','\uD83E\uDD8A','\uD83D\uDC3B','\uD83D\uDC3C','\uD83D\uDC28','\uD83D\uDC2F','\uD83E\uDD81','\uD83D\uDC2E','\uD83D\uDC37','\uD83D\uDC38','\uD83D\uDC35','\uD83D\uDC14','\uD83D\uDC27','\uD83D\uDC26','\uD83E\uDD84','\uD83D\uDC1D','\uD83D\uDC1B','\uD83E\uDD8B','\uD83D\uDC0C','\uD83D\uDC1E','\uD83C\uDF0D','\uD83C\uDF19','\u2600\uFE0F','\u26C5','\uD83C\uDF08','\uD83D\uDCA7','\u2744\uFE0F'],
+    '\uD83C\uDF3F': ['\uD83C\uDF38','\uD83C\uDF3A','\uD83C\uDF3B','\uD83C\uDF39','\uD83C\uDF37','\uD83C\uDF3C','\uD83C\uDF3F','\u2618\uFE0F','\uD83C\uDF40','\uD83C\uDF41','\uD83C\uDF42','\uD83C\uDF32','\uD83C\uDF33','\uD83C\uDF34','\uD83C\uDF35','\uD83D\uDC36','\uD83D\uDC31','\uD83D\uDC2D','\uD83D\uDC39','\uD83D\uDC30','\uD83E\uDD8A','\uD83D\uDC3B','\uD83D\uDC3C','\uD83D\uDC28','\uD83D\uDC2F','\uD83E\uDD81','\uD83D\uDC2E','\uD83D\uDC37','\uD83D\uDC38','\uD83D\uDC35','\uD83D\uDC14','\uD83D\uDC27','\uD83D\uDC26','\uD83E\uDD84','\uD83D\uDC1D','\uD83D\uDC1B','\uD83E\uDD8B','\uD83D\uDC0C','\uD83D\uDC1E','🦁','🐵','🐒','🦍','🦧','🐺','🐴','🫎','🫏','🦓','🦌','🐮','🐂','🐃','🐄','🐷','🐖','🐗','🐏','🐑','🐐','🐪','🐫','🦙','🦒','🐘','🦣','🦏','🦛','🐁','🐀','🐿️','🦫','🦔','🦇','🐻‍❄️','🐨','🐼','🦥','🦦','🦨','🦘','🦡','🐾','🦃','🐓','🦆','🦅','🦉','🦤','🪶','🦩','🦚','🦜','🐦‍⬛','🪿','🐦‍🔥','🐸','🐊','🐢','🦎','🐍','🐲','🐉','🦕','🦖','🐳','🐋','🐬','🦭','🐟','🐠','🐡','🦈','🐙','🐚','🪸','🪼','🦀','🦞','🦐','🦑','🦪','🪲','🪳','🦟','🪰','🪱','🦠','🌍','🌎','🌏','🌕','🌙','⭐','🌟','💫','✨','⚡','🔥','💯','🌪️','🌈','☀️','⛅','☁️','🌧️','⛈️','🌨️','❄️','☃️','💧','🌊'],
+    '🚗': ['🚗','🚕','🚙','🚌','🚎','🏎️','🚓','🚑','🚒','🚐','🛻','🚚','🚛','🚜','🦯','🦽','🦼','🛴','🚲','🛵','🏍️','🛺','🚨','🚔','🚍','🚘','🚖','🚡','🚠','🚟','🚃','🚋','🚞','🚝','🚄','🚅','🚈','🚂','🚆','🚇','🚊','🚉','✈️','🛫','🛬','🛩️','💺','🚁','🚟','🚀','🛸','⛵','🚤','🛥️','🛳️','⛴️','🚢','⚓','🛟','🪝','⛽','🚧','🚦','🚥','🗺️','🗿','🗽','🗼','🏰','🏯','🏟️','🎡','🎢','🎠','⛲','⛱️','🏖️','🏝️','🏜️','🌋','⛰️','🏔️','🗻','🏕️','⛺','🛖','🏠','🏡','🏘️','🏚️','🏗️','🏭','🏢','🏬','🏣','🏤','🏥','🏦','🏨','🏪','🏫','🏩','💒','🏛️','⛪','🕌','🕍','🛕','🕋'],
+    '💡': ['💡','🔦','🏮','🪔','📱','📲','☎️','📞','📟','📠','🔋','🪫','🔌','💻','🖥️','🖨️','⌨️','🖱️','🖲️','💽','💾','💿','📀','🧮','🎥','🎞️','📽️','📺','📷','📸','📹','📼','🔍','🔎','🕯️','📔','📕','📖','📗','📘','📙','📚','📓','📒','📃','📜','📄','📰','🗞️','📑','🔖','🏷️','💰','🪙','💴','💵','💶','💷','💸','💳','🧾','💎','⚖️','🪜','🧰','🪛','🔧','🔨','⚒️','🛠️','⛏️','🪚','🔩','⚙️','🪤','🧱','⛓️','🧲','🔫','💣','🧨','🪓','🔪','🗡️','⚔️','🛡️','🚬','⚰️','🪦','⚱️','🏺','🔮','📿','🧿','🪬','💈','⚗️','🔭','🔬','🕳️','🩹','🩺','💊','💉','🩸','🧬','🦠','🧫','🧪','🌡️','🧹','🧺','🧻','🚽','🚿','🛁','🛋️','🪑','🛏️','🪞','🪟','🧴','🧷','🧸','🖼️','🛍️','🛒','🎁','🎈','🎏','🎀','🪄','🪅','🎊','🎉'],
+    '🔣': ['💯','🔢','#️⃣','*️⃣','0️⃣','1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟','‼️','⁉️','❓','❔','❕','❗','〰️','➰','➿','❤️‍🔥','💔','❤️‍🩹','✅','☑️','✔️','❌','❎','➕','➖','➗','✖️','🟰','♾️','™️','©️','®️','〽️','⚠️','🚸','🔱','⚜️','🔰','♻️','✅','🈯','💹','❇️','✳️','❎','🌐','💠','Ⓜ️','🌀','💤','🏧','🚾','♿','🅿️','🛗','🈳','🈂️','🛂','🛃','🛄','🛅','🚹','🚺','🚼','⚧️','🚻','🚮','🎦','📶','🈁','🔣','ℹ️','🔤','🔡','🔠','🆖','🆗','🆙','🆒','🆕','🆓','0️⃣','1️⃣','2️⃣','🟥','🟧','🟨','🟩','🟦','🟪','⬛','⬜','🟫','🔴','🟠','🟡','🟢','🔵','🟣','⚫','⚪','🟤','🔺','🔻','🔸','🔹','🔶','🔷','🔳','🔲'],
+    '🏳️': ['🏳️','🏴','🏁','🚩','🏳️‍🌈','🏳️‍⚧️','🏴‍☠️','🇺🇳','🇷🇺','🇺🇸','🇬🇧','🇩🇪','🇫🇷','🇪🇸','🇮🇹','🇵🇹','🇳🇱','🇧🇪','🇨🇭','🇦🇹','🇵🇱','🇨🇿','🇸🇰','🇺🇦','🇧🇾','🇰🇿','🇬🇪','🇦🇲','🇦🇿','🇹🇷','🇬🇷','🇧🇬','🇷🇴','🇭🇺','🇫🇮','🇸🇪','🇳🇴','🇩🇰','🇮🇸','🇮🇪','🇨🇦','🇲🇽','🇧🇷','🇦🇷','🇨🇱','🇨🇴','🇵🇪','🇯🇵','🇰🇷','🇨🇳','🇮🇳','🇮🇩','🇹🇭','🇻🇳','🇵🇭','🇸🇬','🇦🇺','🇳🇿','🇿🇦','🇪🇬','🇮🇱','🇦🇪','🇸🇦'],
   };
+  const RECENT_EMOJI_CATEGORY = '🕘';
+  const RECENT_EMOJI_LIMIT = 32;
+  let recentEmojis = [];
+
+  function normalizeRecentEmojiList(value) {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set();
+    const list = [];
+    value.forEach((item) => {
+      const emoji = String(item || '').trim();
+      if (!emoji || seen.has(emoji)) return;
+      seen.add(emoji);
+      list.push(emoji);
+    });
+    return list.slice(0, RECENT_EMOJI_LIMIT);
+  }
+
+  function getEmojiPickerCategories() {
+    const cats = Object.keys(EMOJIS);
+    if (!cats.length) return [RECENT_EMOJI_CATEGORY];
+    return [cats[0], RECENT_EMOJI_CATEGORY, ...cats.slice(1)];
+  }
+
+  function getEmojiCategoryItems(category) {
+    return category === RECENT_EMOJI_CATEGORY ? recentEmojis : (EMOJIS[category] || []);
+  }
+
+  function renderEmojiPickerGrid(category) {
+    const grid = emojiPicker?.querySelector?.('.emoji-grid');
+    if (!grid) return;
+    grid.innerHTML = getEmojiCategoryItems(category).map((em) => `<div class="emoji-item">${em}</div>`).join('');
+  }
+
+  function getActiveEmojiPickerCategory() {
+    return emojiPicker?.querySelector?.('.emoji-tab.active')?.dataset?.cat || '';
+  }
+
+  function updateRecentEmojiGridIfActive() {
+    if (getActiveEmojiPickerCategory() === RECENT_EMOJI_CATEGORY) {
+      renderEmojiPickerGrid(RECENT_EMOJI_CATEGORY);
+      positionEmojiPicker();
+    }
+  }
+
+  function applyRecentEmojis(list) {
+    recentEmojis = normalizeRecentEmojiList(list);
+    updateRecentEmojiGridIfActive();
+  }
+
+  function rememberRecentEmoji(emoji, { sync = true } = {}) {
+    const value = String(emoji || '').trim();
+    if (!value) return;
+    applyRecentEmojis([value, ...recentEmojis.filter((item) => item !== value)]);
+    if (!sync) return;
+    api('/api/user/recent-emojis', { method: 'POST', body: { emoji: value } })
+      .then((data) => {
+        if (data?.emojis) applyRecentEmojis(data.emojis);
+      })
+      .catch((error) => console.warn('[emoji] recent save failed:', error));
+  }
+
+  async function loadRecentEmojis() {
+    try {
+      const data = await api('/api/user/recent-emojis');
+      applyRecentEmojis(data?.emojis || []);
+    } catch (error) {
+      console.warn('[emoji] recent load failed:', error);
+      applyRecentEmojis([]);
+    }
+  }
 
   function initEmojiPicker() {
-    const cats = Object.keys(EMOJIS);
+    const cats = getEmojiPickerCategories();
     let html = '<div class="emoji-tabs">';
     cats.forEach((cat, i) => {
-      html += `<div class="emoji-tab ${i === 0 ? 'active' : ''}" data-cat="${i}">${cat}</div>`;
+      html += `<div class="emoji-tab ${i === 0 ? 'active' : ''}" data-cat="${esc(cat)}">${cat}</div>`;
     });
     html += '</div><div class="emoji-grid">';
-    EMOJIS[cats[0]].forEach(e => { html += `<div class="emoji-item">${e}</div>`; });
+    getEmojiCategoryItems(cats[0]).forEach(e => { html += `<div class="emoji-item">${e}</div>`; });
     html += '</div>';
     emojiPicker.innerHTML = html;
     syncEmojiPickerButton();
@@ -19984,9 +20058,7 @@
       if (tab) {
         emojiPicker.querySelectorAll('.emoji-tab').forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
-        const grid = emojiPicker.querySelector('.emoji-grid');
-        const emojis = EMOJIS[cats[+tab.dataset.cat]];
-        grid.innerHTML = emojis.map(em => `<div class="emoji-item">${em}</div>`).join('');
+        renderEmojiPickerGrid(tab.dataset.cat || '');
         positionEmojiPicker();
         return;
       }
@@ -19998,6 +20070,7 @@
         msgInput.value = before + item.textContent + after;
         msgInput.selectionStart = msgInput.selectionEnd = pos + item.textContent.length;
         msgInput.dispatchEvent(new Event('input', { bubbles: true }));
+        rememberRecentEmoji(item.textContent);
         if (window.innerWidth > 768 || shouldKeepEmojiPickerKeyboard()) {
           focusComposerKeepKeyboard(true);
         }
@@ -20388,12 +20461,12 @@
 
   function getAdditionalReactionCategories() {
     const quickSet = new Set(QUICK_REACTIONS);
-    return Object.entries(EMOJIS || {})
-      .map(([key, emojis]) => ({
+    return getEmojiPickerCategories()
+      .map((key) => ({
         key,
-        emojis: (Array.isArray(emojis) ? emojis : []).filter((emoji) => !quickSet.has(emoji)),
+        emojis: getEmojiCategoryItems(key).filter((emoji) => !quickSet.has(emoji)),
       }))
-      .filter((category) => category.emojis.length > 0);
+      .filter((category) => category.key === RECENT_EMOJI_CATEGORY || category.emojis.length > 0);
   }
 
   function getReactionEmojiCategoryKey(value) {
@@ -20798,6 +20871,7 @@
     try {
       const data = await api(`/api/messages/${msgId}/reactions`, { method: 'POST', body: { emoji } });
       if (data && data.reactions) updateReactionBar(msgId, data.reactions);
+      rememberRecentEmoji(emoji);
     } catch (err) {
       console.warn('[reaction] failed:', err);
     } finally {
@@ -24876,6 +24950,7 @@
     resetPollVotersModal();
     refreshPollComposerActionState();
     setupProfileEvents();
+    await loadRecentEmojis();
     initEmojiPicker();
     connectWS();
     await loadChats();
