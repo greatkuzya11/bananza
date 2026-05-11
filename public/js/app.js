@@ -18045,31 +18045,34 @@
     if (!active && Number(call.id || 0)) {
       const transcriptRun = latestCallTranscriptRun(call);
       const transcriptStatus = String(transcriptRun?.status || '');
-      if (transcriptStatus === 'completed' || notes?.transcript_ready) {
-        actions.push(`<button type="button" class="call-message-action" data-call-card-transcript="${Number(call.id || 0)}">${esc(t('Transcript'))}</button>`);
-      } else if (transcriptStatus === 'queued' || transcriptStatus === 'processing') {
-        meta.push(t('Transcript processing'));
-        actions.push(`<button type="button" class="call-message-action" disabled>${esc(t('Transcript processing'))}</button>`);
-      } else if (transcriptStatus === 'error') {
-        if (transcriptRun?.error) meta.push(transcriptRun.error);
-        actions.push(`<button type="button" class="call-message-action" data-call-card-transcribe-retry="${Number(call.id || 0)}">${esc(t('Retry'))}</button>`);
-      } else {
-        actions.push(`<button type="button" class="call-message-action" data-call-card-transcribe="${Number(call.id || 0)}">${esc(t('Transcribe'))}</button>`);
-      }
       const batch = latestCallArtifactBatch(call);
       const batchStatus = String(batch?.status || '');
       const artifactsReadyToOpen = ['completed', 'partial', 'error'].includes(batchStatus);
+      const hasTranscriptionSource = Boolean(recordingUrl || notes || transcriptRun || batch);
+      if (hasTranscriptionSource) {
+        if (transcriptStatus === 'completed' || notes?.transcript_ready) {
+          actions.push(`<button type="button" class="call-message-action" data-call-card-transcript="${Number(call.id || 0)}">${esc(t('Transcript'))}</button>`);
+        } else if (transcriptStatus === 'queued' || transcriptStatus === 'processing') {
+          meta.push(t('Transcript processing'));
+          actions.push(`<button type="button" class="call-message-action" disabled>${esc(t('Transcript processing'))}</button>`);
+        } else if (transcriptStatus === 'error') {
+          if (transcriptRun?.error) meta.push(transcriptRun.error);
+          actions.push(`<button type="button" class="call-message-action" data-call-card-transcribe-retry="${Number(call.id || 0)}">${esc(t('Retry'))}</button>`);
+        } else {
+          actions.push(`<button type="button" class="call-message-action" data-call-card-transcribe="${Number(call.id || 0)}">${esc(t('Transcribe'))}</button>`);
+        }
+      }
       if (batch) {
         const progress = callArtifactProgress(batch);
         if (progress) meta.push(progress);
       }
-      if (transcriptStatus === 'completed') {
+      if (hasTranscriptionSource && transcriptStatus === 'completed') {
         if (batchStatus === 'queued' || batchStatus === 'processing') {
           actions.push(`<button type="button" class="call-message-action" disabled>${esc(t('AI summary'))}...</button>`);
         } else {
           actions.push(`<button type="button" class="call-message-action" data-call-card-artifacts="${Number(call.id || 0)}">${esc(t('AI summary'))}</button>`);
         }
-      } else if (artifactsReadyToOpen) {
+      } else if (hasTranscriptionSource && artifactsReadyToOpen) {
         actions.push(`<button type="button" class="call-message-action" data-call-card-artifacts="${Number(call.id || 0)}">${esc(t('AI summary'))}</button>`);
       }
     }
