@@ -259,15 +259,24 @@ html[data-visual-mode="rich"] .msg-row.video-note-row.other .msg-bubble {
   height: 100%;
   overflow: hidden;
   pointer-events: none;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.video-note-progress-track,
+.video-note-progress-fill,
+.video-note-progress-press,
+.video-note-progress-hit {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
 }
 
 .video-note-progress-track,
 .video-note-progress-fill {
-  fill: none;
   stroke-width: 3;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  vector-effect: non-scaling-stroke;
 }
 
 .video-note-progress-track {
@@ -279,6 +288,28 @@ html[data-visual-mode="rich"] .msg-row.video-note-row.other .msg-bubble {
   opacity: 0;
   transition: opacity .12s linear;
   will-change: stroke-dashoffset;
+}
+
+.video-note-progress-press {
+  stroke: color-mix(in srgb, var(--accent) 62%, #ffffff 38%);
+  stroke-width: 5;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .08s linear;
+}
+
+.video-note-row.video-note-progress-pressed .video-note-progress-press {
+  opacity: .86;
+}
+
+.video-note-progress-hit {
+  stroke: transparent;
+  stroke-width: 22;
+  pointer-events: stroke;
+  cursor: pointer;
+  touch-action: manipulation;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .video-note-video {

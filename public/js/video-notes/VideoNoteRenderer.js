@@ -18,6 +18,7 @@
 
   const PLAYING_PROGRESS_MAX = 0.9;
   const MIN_PLAYING_PROGRESS_GAP_PX = 72;
+  const PROGRESS_HIT_RADIUS_PX = 14;
   const MODAL_ANIMATION_SPEED_FACTORS = Object.freeze({
     1: 4.5,
     2: 4.0,
@@ -72,6 +73,10 @@
       this.expandedIds = new Set();
       this.boundContainers = new WeakSet();
       this.progressFrames = new WeakMap();
+      this.contourGlobalSeekBound = false;
+      this.suppressNextStageClick = false;
+      this.suppressNextStageClickTimer = 0;
+      this.handleContourPointerCapture = (event) => this.handleContourPointerCaptureEvent(event);
       this.getBridge()?.onLanguageChange?.(() => this.refreshAllRows());
       window.addEventListener('bananza:languagechange', () => this.refreshAllRows());
     }
@@ -153,6 +158,8 @@
           </defs>
           <path class="video-note-progress-track" d="${path}"></path>
           <path class="video-note-progress-fill" d="${path}" stroke="url(#${gradientId})"></path>
+          <path class="video-note-progress-press" d="${path}"></path>
+          <path class="video-note-progress-hit" d="${path}"></path>
         </svg>
       `;
     }
@@ -221,6 +228,16 @@
         if (!stage) return;
         const row = stage.closest('.msg-row');
         if (!row?.querySelector('.video-note')) return;
+        if (this.suppressNextStageClick) {
+          this.suppressNextStageClick = false;
+          if (this.suppressNextStageClickTimer) {
+            window.clearTimeout(this.suppressNextStageClickTimer);
+            this.suppressNextStageClickTimer = 0;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
         event.preventDefault();
         event.stopPropagation();
         this.togglePlayback(row);
@@ -277,6 +294,7 @@
         });
         this.getBridge()?.bindMediaPlayback?.(video, resolvedMessage, 'video-note-video');
       }
+      this.ensureContourGlobalSeek();
       row.classList.add('video-note-row', 'media-message');
       this.refreshRow(row);
       const video = row.querySelector('.video-note-video');
@@ -330,14 +348,7 @@
       }
       if (!pathLength) return;
 
-      const message = row?.__messageData || {};
-      const declaredDurationMs = Number(message.media_note_duration_ms || message.voice_duration_ms || 0);
-      const metadataDuration = Number(video.duration || 0);
-      const declaredDuration = declaredDurationMs > 0 ? declaredDurationMs / 1000 : 0;
-      const duration = Math.max(
-        Number.isFinite(metadataDuration) ? metadataDuration : 0,
-        Number.isFinite(declaredDuration) ? declaredDuration : 0
-      );
+      const duration = this.getPlaybackDurationSeconds(row, video);
       const isPlaying = !video.paused && !video.ended;
       const playbackCompleted = this.isPlaybackCompleted(row);
       let progress = playbackCompleted && !isPlaying
@@ -357,6 +368,165 @@
       fill.setAttribute('stroke-dasharray', `${filledLength} ${pathLength * 2}`);
       fill.setAttribute('stroke-dashoffset', '0');
       fill.style.opacity = progress > 0 ? '1' : '.02';
+    }
+
+    getPlaybackDurationSeconds(row, video) {
+      const message = row?.__messageData || {};
+      const declaredDurationMs = Number(message.media_note_duration_ms || message.voice_duration_ms || 0);
+      const metadataDuration = Number(video?.duration || 0);
+      const declaredDuration = declaredDurationMs > 0 ? declaredDurationMs / 1000 : 0;
+      return Math.max(
+        Number.isFinite(metadataDuration) ? metadataDuration : 0,
+        Number.isFinite(declaredDuration) ? declaredDuration : 0
+      );
+    }
+
+    readProgressViewBox(svg) {
+      const viewBox = svg?.viewBox?.baseVal;
+      const fallbackViewBox = String(svg?.getAttribute?.('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+      const viewBoxX = Number.isFinite(viewBox?.x) ? viewBox.x : (fallbackViewBox[0] || 0);
+      const viewBoxY = Number.isFinite(viewBox?.y) ? viewBox.y : (fallbackViewBox[1] || 0);
+      const viewBoxWidth = Number.isFinite(viewBox?.width) && viewBox.width > 0 ? viewBox.width : (fallbackViewBox[2] || 0);
+      const viewBoxHeight = Number.isFinite(viewBox?.height) && viewBox.height > 0 ? viewBox.height : (fallbackViewBox[3] || 0);
+      return { viewBoxX, viewBoxY, viewBoxWidth, viewBoxHeight };
+    }
+
+    resolveSeekHit(row, event) {
+      const svg = row?.querySelector('.video-note-progress');
+      const fill = row?.querySelector('.video-note-progress-fill');
+      const hitPath = row?.querySelector('.video-note-progress-hit') || fill;
+      if (!svg || !fill || !hitPath || typeof hitPath.getPointAtLength !== 'function') return null;
+
+      let pathLength = Number(fill.dataset.pathLength || hitPath.dataset.pathLength || 0);
+      if (!(pathLength > 0)) {
+        try {
+          pathLength = hitPath.getTotalLength();
+          fill.dataset.pathLength = String(pathLength);
+          hitPath.dataset.pathLength = String(pathLength);
+        } catch {
+          pathLength = 0;
+        }
+      }
+      if (!(pathLength > 0)) return null;
+
+      const rect = svg.getBoundingClientRect();
+      const width = Number(rect.width || 0);
+      const height = Number(rect.height || 0);
+      const { viewBoxX, viewBoxY, viewBoxWidth, viewBoxHeight } = this.readProgressViewBox(svg);
+      if (!(width > 0 && height > 0 && viewBoxWidth > 0 && viewBoxHeight > 0)) return null;
+
+      const pointerX = Number(event.clientX || 0);
+      const pointerY = Number(event.clientY || 0);
+      const localX = viewBoxX + ((pointerX - rect.left) / width) * viewBoxWidth;
+      const localY = viewBoxY + ((pointerY - rect.top) / height) * viewBoxHeight;
+
+      let bestLength = 0;
+      let bestDistanceSq = Infinity;
+      const samples = Math.max(64, Math.min(280, Math.ceil(pathLength / 3)));
+      for (let index = 0; index <= samples; index += 1) {
+        const length = (pathLength * index) / samples;
+        let point = null;
+        try {
+          point = hitPath.getPointAtLength(length);
+        } catch {
+          return null;
+        }
+        const dx = Number(point.x || 0) - localX;
+        const dy = Number(point.y || 0) - localY;
+        const distanceSq = (dx * dx) + (dy * dy);
+        if (distanceSq < bestDistanceSq) {
+          bestDistanceSq = distanceSq;
+          bestLength = length;
+        }
+      }
+
+      const scaleX = width / viewBoxWidth;
+      const scaleY = height / viewBoxHeight;
+      return {
+        progress: clamp(bestLength / pathLength, 0, 1),
+        distancePx: Math.sqrt(bestDistanceSq) * Math.max(scaleX, scaleY),
+      };
+    }
+
+    seekProgress(row, event) {
+      const video = row?.querySelector('.video-note-video');
+      if (!row || !video) return false;
+      const duration = this.getPlaybackDurationSeconds(row, video);
+      if (!(duration > 0)) return false;
+      const hit = this.resolveSeekHit(row, event);
+      if (!hit) return false;
+
+      const targetTime = clamp(hit.progress * duration, 0, Math.max(0, duration - 0.02));
+      this.setPlaybackCompleted(row, false);
+      try {
+        video.currentTime = targetTime;
+      } catch (error) {}
+      this.refreshProgressUi(row);
+      if (!video.paused && !video.ended) this.startProgressLoop(row);
+      return true;
+    }
+
+    shouldSkipContourGlobalSeek(event) {
+      const target = event?.target;
+      if (!(target instanceof Element)) return false;
+      if (target.closest('.video-note-progress-hit')) return false;
+      return Boolean(target.closest(
+        '.video-note-shape-toggle-btn, .video-note-transcript-btn, button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-file, .link-preview, .msg-group-avatar'
+      ));
+    }
+
+    clearPressed(row) {
+      row?.classList?.remove('video-note-progress-pressed');
+    }
+
+    markPressed(row) {
+      row?.classList?.add('video-note-progress-pressed');
+      const clear = () => this.clearPressed(row);
+      document.addEventListener('pointerup', clear, { once: true });
+      document.addEventListener('pointercancel', clear, { once: true });
+    }
+
+    handleContourPointerCaptureEvent(event) {
+      if (event.button != null && event.button !== 0) return;
+      if (this.shouldSkipContourGlobalSeek(event)) return;
+
+      let best = null;
+      document.querySelectorAll('.msg-row.video-note-row').forEach((row) => {
+        const video = row.querySelector('.video-note-video');
+        if (!video || !row.isConnected) return;
+        const duration = this.getPlaybackDurationSeconds(row, video);
+        if (!(duration > 0)) return;
+        const hit = this.resolveSeekHit(row, event);
+        if (!hit || hit.distancePx > PROGRESS_HIT_RADIUS_PX) return;
+        if (!best || hit.distancePx < best.hit.distancePx) {
+          best = { row, hit };
+        }
+      });
+      if (!best) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
+      this.suppressUpcomingStageClick();
+      this.markPressed(best.row);
+      this.seekProgress(best.row, event);
+    }
+
+    suppressUpcomingStageClick() {
+      this.suppressNextStageClick = true;
+      if (this.suppressNextStageClickTimer) {
+        window.clearTimeout(this.suppressNextStageClickTimer);
+      }
+      this.suppressNextStageClickTimer = window.setTimeout(() => {
+        this.suppressNextStageClick = false;
+        this.suppressNextStageClickTimer = 0;
+      }, 700);
+    }
+
+    ensureContourGlobalSeek() {
+      if (this.contourGlobalSeekBound) return;
+      document.addEventListener('pointerdown', this.handleContourPointerCapture, true);
+      this.contourGlobalSeekBound = true;
     }
 
     startProgressLoop(row) {
@@ -411,6 +581,8 @@
       const progress = row?.querySelector('.video-note-progress');
       const track = row?.querySelector('.video-note-progress-track');
       const fill = row?.querySelector('.video-note-progress-fill');
+      const press = row?.querySelector('.video-note-progress-press');
+      const hit = row?.querySelector('.video-note-progress-hit');
       const toggleBtn = row?.querySelector('.video-note-shape-toggle-btn');
       if (!note || !shape || !video || !progress || !track || !fill || !toggleBtn) return;
 
@@ -424,7 +596,11 @@
       progress.setAttribute('viewBox', snapshot?.viewBox || '0 0 320 220');
       track.setAttribute('d', snapshot?.path || '');
       fill.setAttribute('d', snapshot?.path || '');
+      press?.setAttribute('d', snapshot?.path || '');
+      hit?.setAttribute('d', snapshot?.path || '');
       delete fill.dataset.pathLength;
+      if (press) delete press.dataset.pathLength;
+      if (hit) delete hit.dataset.pathLength;
 
       toggleBtn.dataset.shapeId = effectiveShapeId;
       toggleBtn.textContent = this.getShapeToggleGlyph(effectiveShapeId);

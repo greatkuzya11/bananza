@@ -192,8 +192,13 @@ function installProgressSvgMocks(dom, { pathLength = 100 } = {}) {
       configurable: true,
       writable: true,
       value(length) {
+        const svg = this.ownerSVGElement;
+        const rawViewBox = String(svg?.getAttribute?.('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+        const viewBoxWidth = Number.isFinite(svg?.viewBox?.baseVal?.width) && svg.viewBox.baseVal.width > 0
+          ? svg.viewBox.baseVal.width
+          : (rawViewBox[2] || 248);
         return {
-          x: (Math.max(0, Math.min(pathLength, Number(length || 0))) / pathLength) * 248,
+          x: (Math.max(0, Math.min(pathLength, Number(length || 0))) / pathLength) * viewBoxWidth,
           y: 0,
         };
       },
@@ -219,6 +224,9 @@ function installProgressSvgMocks(dom, { pathLength = 100 } = {}) {
     }
     if (this instanceof window.SVGElement && this.classList.contains('voice-note-progress')) {
       return buildRect(248, 104);
+    }
+    if (this instanceof window.SVGElement && this.classList.contains('video-note-progress')) {
+      return buildRect(248, 350);
     }
     return originalGetBoundingClientRect.call(this);
   };
@@ -2822,6 +2830,162 @@ test('video note restores playback position after leaving and reopening the chat
   assert.equal(reopenedVideo.paused, true);
 });
 
+test('video note banana progress outline seeks without starting paused video', async (t) => {
+  const chat = createChatFixture(1, 'Chat A', { lastMessageId: 501 });
+  const message = createVideoNoteMessage(1, 501, {
+    video_note_shape_id: 'banana-fat',
+    media_note_duration_ms: 18_000,
+  });
+  const dom = await openMediaPlaybackDom({
+    activeChat: chat,
+    chats: [chat],
+    chatMessagesByChatId: {
+      1: [message],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+
+  const row = document.querySelector('.msg-row[data-msg-id="501"]');
+  const video = row.querySelector('.video-note-video');
+  const hit = row.querySelector('.video-note-progress-hit');
+  const mediaState = installMockMediaElement(dom, video, {
+    duration: 18,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+  video.dispatchEvent(new dom.window.Event('durationchange'));
+  await wait(dom, 40);
+
+  hit.dispatchEvent(new dom.window.MouseEvent('pointerdown', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 124,
+    clientY: 0,
+  }));
+  await wait(dom, 20);
+
+  assert.ok(Math.abs(Number(video.currentTime || 0) - 9) < 0.2);
+  assert.equal(mediaState.paused, true);
+});
+
+test('video note circle progress outline uses the active shape path for seeking', async (t) => {
+  const chat = createChatFixture(1, 'Chat A', { lastMessageId: 502 });
+  const message = createVideoNoteMessage(1, 502, {
+    video_note_shape_id: 'circle',
+    media_note_duration_ms: 18_000,
+  });
+  const dom = await openMediaPlaybackDom({
+    activeChat: chat,
+    chats: [chat],
+    chatMessagesByChatId: {
+      1: [message],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+
+  const row = document.querySelector('.msg-row[data-msg-id="502"]');
+  const video = row.querySelector('.video-note-video');
+  const hit = row.querySelector('.video-note-progress-hit');
+  const note = row.querySelector('.video-note');
+  installMockMediaElement(dom, video, {
+    duration: 18,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+  video.dispatchEvent(new dom.window.Event('durationchange'));
+  await wait(dom, 40);
+
+  assert.equal(note.dataset.shapeId, 'circle');
+  hit.dispatchEvent(new dom.window.MouseEvent('pointerdown', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 124,
+    clientY: 0,
+  }));
+  await wait(dom, 20);
+
+  assert.ok(Math.abs(Number(video.currentTime || 0) - 9) < 0.2);
+});
+
+test('video note progress outline can seek an upper adjacent message when the lower stage receives the pointer event', async (t) => {
+  const chat = createChatFixture(1, 'Chat A', { lastMessageId: 504 });
+  const upperMessage = createVideoNoteMessage(1, 503, { media_note_duration_ms: 18_000 });
+  const lowerMessage = createVideoNoteMessage(1, 504, { media_note_duration_ms: 18_000 });
+  const dom = await openMediaPlaybackDom({
+    activeChat: chat,
+    chats: [chat],
+    chatMessagesByChatId: {
+      1: [upperMessage, lowerMessage],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+
+  const upperRow = document.querySelector('.msg-row[data-msg-id="503"]');
+  const lowerRow = document.querySelector('.msg-row[data-msg-id="504"]');
+  const upperVideo = upperRow.querySelector('.video-note-video');
+  const lowerVideo = lowerRow.querySelector('.video-note-video');
+  installMockMediaElement(dom, upperVideo, {
+    duration: 18,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+  installMockMediaElement(dom, lowerVideo, {
+    duration: 18,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+
+  const upperSvg = upperRow.querySelector('.video-note-progress');
+  const lowerSvg = lowerRow.querySelector('.video-note-progress');
+  const rectFor = (top) => ({
+    x: 0,
+    y: top,
+    top,
+    left: 0,
+    right: 248,
+    bottom: top + 350,
+    width: 248,
+    height: 350,
+    toJSON() {
+      return this;
+    },
+  });
+  upperSvg.getBoundingClientRect = () => rectFor(0);
+  lowerSvg.getBoundingClientRect = () => rectFor(24);
+
+  upperVideo.dispatchEvent(new dom.window.Event('durationchange'));
+  lowerVideo.dispatchEvent(new dom.window.Event('durationchange'));
+  await wait(dom, 40);
+
+  lowerRow.querySelector('.video-note-stage').dispatchEvent(new dom.window.MouseEvent('pointerdown', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 124,
+    clientY: 0,
+  }));
+  await wait(dom, 20);
+
+  assert.ok(Math.abs(Number(upperVideo.currentTime || 0) - 9) < 0.2);
+  assert.equal(Number(lowerVideo.currentTime || 0), 0);
+});
+
 test('voice note keeps completed progress state after leaving and reopening the chat', async (t) => {
   const chatA = createChatFixture(1, 'Chat A', { lastMessageId: 433 });
   const chatB = createChatFixture(2, 'Chat B', { lastMessageId: 0 });
@@ -3044,6 +3208,56 @@ test('voice note progress outline can seek an upper adjacent message when the lo
 
   assert.ok(Math.abs(Number(upperAudio.currentTime || 0) - 12) < 0.2);
   assert.equal(Number(lowerAudio.currentTime || 0), 0);
+});
+
+test('video note progress outline clears completed state when seeking', async (t) => {
+  const chat = createChatFixture(1, 'Chat A', { lastMessageId: 505 });
+  const message = createVideoNoteMessage(1, 505, { media_note_duration_ms: 18_000 });
+  const dom = await openMediaPlaybackDom({
+    activeChat: chat,
+    chats: [chat],
+    chatMessagesByChatId: {
+      1: [message],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+
+  const row = document.querySelector('.msg-row[data-msg-id="505"]');
+  const video = row.querySelector('.video-note-video');
+  const hit = row.querySelector('.video-note-progress-hit');
+  const fill = row.querySelector('.video-note-progress-fill');
+  installMockMediaElement(dom, video, {
+    duration: 18,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+  video.dispatchEvent(new dom.window.Event('durationchange'));
+  await wait(dom, 40);
+
+  video.currentTime = 18;
+  video.ended = true;
+  video.paused = true;
+  video.dispatchEvent(new dom.window.Event('ended'));
+  await wait(dom, 40);
+  assert.equal(BananzaAppBridge.isMediaPlaybackCompleted(row.__messageData, 'video-note-video'), true);
+  assert.ok(Math.abs(getDasharrayFilledLength(fill) - 100) < 0.1);
+
+  hit.dispatchEvent(new dom.window.MouseEvent('pointerdown', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 124,
+    clientY: 0,
+  }));
+  await wait(dom, 20);
+
+  assert.equal(BananzaAppBridge.isMediaPlaybackCompleted(row.__messageData, 'video-note-video'), false);
+  assert.ok(Math.abs(Number(video.currentTime || 0) - 9) < 0.2);
+  assert.ok(getDasharrayFilledLength(fill) < 100);
 });
 
 test('video note keeps completed progress state after leaving and reopening the chat', async (t) => {
