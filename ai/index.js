@@ -2170,6 +2170,7 @@ function createAiBotFeature({
       allow_image_generate: isChatShot ? true : boolValue(row.allow_image_generate, defaultAllowImageGenerate),
       allow_image_edit: isChatShot ? false : boolValue(row.allow_image_edit, defaultAllowImageEdit),
       allow_document: openAiUniversal ? boolValue(row.allow_document, defaultAllowDocument) : false,
+      image_risk_filter_enabled: grokImageCapable ? boolValue(row.image_risk_filter_enabled, true) : true,
       allow_poll_create: (isConvertBot || isChatShot) ? false : interactiveActionsEnabled,
       allow_poll_vote: (isConvertBot || isChatShot) ? false : interactiveActionsEnabled,
       allow_react: (isConvertBot || isChatShot) ? false : interactiveActionsEnabled,
@@ -2570,6 +2571,7 @@ function createAiBotFeature({
       ai_bot_kind: bot.kind || 'text',
       ai_bot_mention: bot.mention || '',
       ai_bot_model: userFacingBotModel(bot),
+      ai_bot_image_risk_filter_enabled: bot.image_risk_filter_enabled !== false,
       online: false,
     };
   }
@@ -2602,6 +2604,7 @@ function createAiBotFeature({
         mention: bot.mention || '',
         provider: bot.provider || 'openai',
         kind: bot.kind || 'text',
+        image_risk_filter_enabled: bot.image_risk_filter_enabled !== false,
         model: userFacingBotModel(bot),
         avatar_color: row.avatar_color || bot.avatar_color || BOT_COLORS[0],
         avatar_url: row.avatar_url || bot.avatar_url || null,
@@ -2943,6 +2946,9 @@ function createAiBotFeature({
       allow_document: isOpenAiUniversal
         ? boolValue(input.allow_document, current.allow_document == null ? true : current.allow_document !== 0)
         : false,
+      image_risk_filter_enabled: (isGrokImageBot || isGrokUniversal)
+        ? boolValue(input.image_risk_filter_enabled, current.image_risk_filter_enabled == null ? true : current.image_risk_filter_enabled !== 0)
+        : true,
       allow_poll_create: (isConvertBot || isChatShot) ? false : interactiveActionsEnabled,
       allow_poll_vote: (isConvertBot || isChatShot) ? false : interactiveActionsEnabled,
       allow_react: (isConvertBot || isChatShot) ? false : interactiveActionsEnabled,
@@ -2991,11 +2997,12 @@ function createAiBotFeature({
         enabled, available_in_all_chats, provider, kind, response_model, summary_model, embedding_model,
         image_model, image_aspect_ratio, image_resolution,
         allow_text, allow_image_generate, allow_image_edit, allow_document,
+        image_risk_filter_enabled,
         allow_poll_create, allow_poll_vote, allow_react, allow_pin, visible_to_users,
         image_quality, image_background, image_output_format, document_default_format, transform_prompt,
         temperature, max_tokens, chatshot_context_limit
       )
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       userId,
       input.name,
@@ -3018,6 +3025,7 @@ function createAiBotFeature({
       input.allow_image_generate ? 1 : 0,
       input.allow_image_edit ? 1 : 0,
       input.allow_document ? 1 : 0,
+      input.image_risk_filter_enabled ? 1 : 0,
       input.allow_poll_create ? 1 : 0,
       input.allow_poll_vote ? 1 : 0,
       input.allow_react ? 1 : 0,
@@ -5146,12 +5154,8 @@ function createAiBotFeature({
     const prompt = cleanText(extractBotPromptText(bot, sourceMessage), 4000);
     if (!prompt) return null;
     const risk = analyzeAiImageRisk(prompt);
-    if (risk.risky && Number(sourceMessage?.ai_image_risk_confirmed || 0) !== 1) {
-      const matchedTerms = risk.matches.slice(0, 4).map((item) => item.term).join(', ');
-      const notice = matchedTerms
-        ? `⚠️ Risky prompt detected (${matchedTerms}). Grok image moderation may reject it and still bill the request. Send it again and confirm the warning dialog first. If the dialog did not appear, reload the page and try again.`
-        : '⚠️ Risky prompt detected. Grok image moderation may reject it and still bill the request. Send it again and confirm the warning dialog first. If the dialog did not appear, reload the page and try again.';
-      return publishBotTextMessage(bot, sourceMessage, notice);
+    if (isGrokImageRiskFilterEnabled(bot) && risk.risky && Number(sourceMessage?.ai_image_risk_confirmed || 0) !== 1) {
+      return publishBotTextMessage(bot, sourceMessage, buildGrokImageRiskNotice(risk), { noticeType: 'grok_image_risk' });
     }
 
     const imageResult = await grokAi.generateImage({
@@ -5187,7 +5191,7 @@ function createAiBotFeature({
     });
   }
 
-  function publishBotTextMessage(bot, sourceMessage, text) {
+  function publishBotTextMessage(bot, sourceMessage, text, options = {}) {
     const body = cleanText(text, 4000);
     if (!body) return null;
     const result = insertBotMessageStmt.run(
@@ -5200,6 +5204,11 @@ function createAiBotFeature({
       bot.id
     );
     const message = hydrateMessageById(result.lastInsertRowid);
+    if (message && options.noticeType) {
+      const noticeType = cleanText(options.noticeType, 80);
+      db.prepare('UPDATE messages SET ai_notice_type=? WHERE id=?').run(noticeType, message.id);
+      message.ai_notice_type = noticeType;
+    }
     if (!message) return null;
     notifyPublishedMessage(message);
     broadcastToChatAll(sourceMessage.chat_id, { type: 'message', message });
@@ -6209,8 +6218,14 @@ function createAiBotFeature({
   function buildGrokImageRiskNotice(risk) {
     const matchedTerms = risk.matches.slice(0, 4).map((item) => item.term).join(', ');
     return matchedTerms
-      ? `Risky prompt detected (${matchedTerms}). Grok image moderation may reject it and still bill the request. Send it again and confirm the warning dialog first.`
-      : 'Risky prompt detected. Grok image moderation may reject it and still bill the request. Send it again and confirm the warning dialog first.';
+      ? `Warning: risky prompt detected (${matchedTerms}). Grok image moderation may reject it and may still bill the request. Confirm and send it again.`
+      : 'Warning: risky prompt detected. Grok image moderation may reject it and may still bill the request. Confirm and send it again.';
+  }
+
+  function isGrokImageRiskFilterEnabled(bot) {
+    if (!bot || bot.provider !== 'grok') return false;
+    if (bot.kind !== 'image' && bot.kind !== 'universal') return false;
+    return Number(bot.image_risk_filter_enabled) !== 0;
   }
 
   async function createGrokUniversalMessage(bot, chatConfig, sourceMessage) {
@@ -6254,8 +6269,12 @@ function createAiBotFeature({
 
     if (mode === 'image_generate' || mode === 'image_edit') {
       const risk = analyzeAiImageRisk(prompt);
-      if (risk.risky && Number(sourceMessage?.ai_image_risk_confirmed || 0) !== 1) {
-        return { message: publishBotTextMessage(bot, sourceMessage, buildGrokImageRiskNotice(risk)), memory: false, alreadyPublished: true };
+      if (isGrokImageRiskFilterEnabled(bot) && risk.risky && Number(sourceMessage?.ai_image_risk_confirmed || 0) !== 1) {
+        return {
+          message: publishBotTextMessage(bot, sourceMessage, buildGrokImageRiskNotice(risk), { noticeType: 'grok_image_risk' }),
+          memory: false,
+          alreadyPublished: true,
+        };
       }
     }
 
@@ -8379,6 +8398,7 @@ function createAiBotFeature({
       SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
           enabled=?, provider='grok', kind=?, response_model=?, summary_model=?, embedding_model=?,
           image_model=?, image_aspect_ratio=?, image_resolution=?,
+          image_risk_filter_enabled=?,
           allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?, visible_to_users=?,
           temperature=?, max_tokens=?,
           updated_at=datetime('now')
@@ -8398,6 +8418,7 @@ function createAiBotFeature({
       input.image_model,
       input.image_aspect_ratio,
       input.image_resolution,
+      input.image_risk_filter_enabled ? 1 : 0,
       input.allow_poll_create ? 1 : 0,
       input.allow_poll_vote ? 1 : 0,
       input.allow_react ? 1 : 0,
@@ -8501,6 +8522,7 @@ function createAiBotFeature({
         image_model: bot.image_model,
         image_aspect_ratio: bot.image_aspect_ratio,
         image_resolution: bot.image_resolution,
+        image_risk_filter_enabled: bot.image_risk_filter_enabled,
         allow_poll_create: bot.allow_poll_create,
         allow_poll_vote: bot.allow_poll_vote,
         allow_react: bot.allow_react,
@@ -8562,6 +8584,7 @@ function createAiBotFeature({
       image_model: imageModel,
       image_aspect_ratio: source.image_aspect_ratio || settings.grok_default_image_aspect_ratio,
       image_resolution: source.image_resolution || settings.grok_default_image_resolution,
+      image_risk_filter_enabled: source.image_risk_filter_enabled,
       allow_poll_create: source.allow_poll_create,
       allow_poll_vote: source.allow_poll_vote,
       allow_react: source.allow_react,
@@ -8842,6 +8865,7 @@ function createAiBotFeature({
       SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
           enabled=?, provider='grok', kind='universal', response_model=?, summary_model=?, embedding_model=?,
           image_model=?, image_aspect_ratio=?, image_resolution=?, allow_text=?, allow_image_generate=?, allow_image_edit=?, allow_document=?,
+          image_risk_filter_enabled=?,
           allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?, visible_to_users=?,
           temperature=?, max_tokens=?, updated_at=datetime('now')
       WHERE id=?
@@ -8863,6 +8887,7 @@ function createAiBotFeature({
       input.allow_image_generate ? 1 : 0,
       input.allow_image_edit ? 1 : 0,
       0,
+      input.image_risk_filter_enabled ? 1 : 0,
       input.allow_poll_create ? 1 : 0,
       input.allow_poll_vote ? 1 : 0,
       input.allow_react ? 1 : 0,
@@ -8969,6 +8994,7 @@ function createAiBotFeature({
         image_model: bot.image_model,
         image_aspect_ratio: bot.image_aspect_ratio,
         image_resolution: bot.image_resolution,
+        image_risk_filter_enabled: bot.image_risk_filter_enabled,
         allow_text: bot.allow_text,
         allow_image_generate: bot.allow_image_generate,
         allow_image_edit: bot.allow_image_edit,

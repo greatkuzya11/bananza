@@ -82,6 +82,7 @@ db.exec(`
     ai_bot_id INTEGER DEFAULT NULL,
     client_id TEXT DEFAULT NULL,
     ai_image_risk_confirmed INTEGER DEFAULT 0,
+    ai_notice_type TEXT DEFAULT NULL,
     ai_response_mode_hint TEXT DEFAULT NULL,
     ai_document_format_hint TEXT DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now'))
@@ -413,6 +414,11 @@ try {
   db.prepare("SELECT ai_image_risk_confirmed FROM messages LIMIT 1").get();
 } catch {
   db.exec("ALTER TABLE messages ADD COLUMN ai_image_risk_confirmed INTEGER DEFAULT 0");
+}
+try {
+  db.prepare("SELECT ai_notice_type FROM messages LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE messages ADD COLUMN ai_notice_type TEXT DEFAULT NULL");
 }
 try {
   db.prepare("SELECT ai_response_mode_hint FROM messages LIMIT 1").get();

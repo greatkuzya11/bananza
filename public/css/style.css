@@ -1602,6 +1602,20 @@ html[data-modal-animation="none"] .chat-folder-list-surface {
 .msg-text { white-space: pre-wrap; }
 .msg-text a { color: var(--link); }
 
+.grok-risk-notice-actions {
+  display: flex;
+  justify-content: flex-start;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.grok-risk-retry-btn.weather-action-btn {
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
 .msg-time {
   font-size: 11px; color: var(--text-time);
   margin-left: auto; line-height: 20px;

@@ -468,6 +468,7 @@ const messageByIdStmt = db.prepare(`
   SELECT m.*, u.username, u.display_name, u.avatar_color, u.avatar_url,
     COALESCE(u.is_ai_bot, 0) as is_ai_bot, ab.mention as ai_bot_mention,
     ab.provider as ai_bot_provider, ab.kind as ai_bot_kind,
+    ab.image_risk_filter_enabled as ai_bot_image_risk_filter_enabled,
     f.original_name as file_name, f.stored_name as file_stored,
     f.mime_type as file_mime, f.size as file_size, f.type as file_type,
     COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435' END) as reply_text,
@@ -538,6 +539,7 @@ const mentionTargetsStmt = db.prepare(`
     ab.allow_poll_vote as bot_allow_poll_vote,
     ab.allow_react as bot_allow_react,
     ab.allow_pin as bot_allow_pin,
+    ab.image_risk_filter_enabled as bot_image_risk_filter_enabled,
     ab.document_default_format as bot_document_default_format
   FROM chat_members cm
   JOIN users u ON u.id=cm.user_id
@@ -557,6 +559,7 @@ const privatePeerStmt = db.prepare(`
     ab.provider as ai_bot_provider,
     ab.kind as ai_bot_kind,
     ab.mention as ai_bot_mention,
+    ab.image_risk_filter_enabled as ai_bot_image_risk_filter_enabled,
     CASE
       WHEN COALESCE(ab.kind, 'text')='image' THEN ab.image_model
       ELSE ab.response_model
@@ -740,6 +743,7 @@ function mentionPayload(row) {
     allow_poll_vote: isAiBot ? Number(row.bot_allow_poll_vote) !== 0 : false,
     allow_react: isAiBot ? Number(row.bot_allow_react) !== 0 : false,
     allow_pin: isAiBot ? Number(row.bot_allow_pin) !== 0 : false,
+    image_risk_filter_enabled: isAiBot ? Number(row.bot_image_risk_filter_enabled) !== 0 : true,
     document_default_format: row.bot_document_default_format || '',
     avatar_color: row.avatar_color,
     avatar_url: row.avatar_url,
@@ -777,6 +781,7 @@ function privatePeerPayload(chatId, viewerUserId) {
     ai_bot_kind: peer.ai_bot_kind || '',
     ai_bot_mention: peer.ai_bot_mention || '',
     ai_bot_model: peer.ai_bot_model || '',
+    ai_bot_image_risk_filter_enabled: Number(peer.ai_bot_image_risk_filter_enabled) !== 0,
   };
 }
 
@@ -1886,6 +1891,7 @@ app.get('/api/chats/:chatId/members', auth, (req, res) => {
       COALESCE(ab.provider, '') as ai_bot_provider,
       COALESCE(ab.kind, '') as ai_bot_kind,
       COALESCE(ab.mention, '') as ai_bot_mention,
+      COALESCE(ab.image_risk_filter_enabled, 1) as ai_bot_image_risk_filter_enabled,
       CASE
         WHEN COALESCE(ab.kind, 'text')='image' THEN COALESCE(ab.image_model, '')
         ELSE COALESCE(ab.response_model, '')
@@ -2228,6 +2234,7 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
     SELECT m.*, u.username, u.display_name, u.avatar_color, u.avatar_url,
       COALESCE(u.is_ai_bot, 0) as is_ai_bot, ab.mention as ai_bot_mention,
       ab.provider as ai_bot_provider, ab.kind as ai_bot_kind,
+      ab.image_risk_filter_enabled as ai_bot_image_risk_filter_enabled,
       f.original_name as file_name, f.stored_name as file_stored,
       f.mime_type as file_mime, f.size as file_size, f.type as file_type,
       COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435' END) as reply_text,
@@ -2438,6 +2445,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
     SELECT m.*, u.username, u.display_name, u.avatar_color, u.avatar_url,
       COALESCE(u.is_ai_bot, 0) as is_ai_bot, ab.mention as ai_bot_mention,
       ab.provider as ai_bot_provider, ab.kind as ai_bot_kind,
+      ab.image_risk_filter_enabled as ai_bot_image_risk_filter_enabled,
       f.original_name as file_name, f.stored_name as file_stored,
       f.mime_type as file_mime, f.size as file_size, f.type as file_type,
       COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435' END) as reply_text,
@@ -2485,6 +2493,92 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
         db.prepare('INSERT INTO link_previews(message_id,url,title,description,image,hostname) VALUES(?,?,?,?,?,?)')
           .run(msg.id, preview.url, preview.title, preview.description, preview.image, preview.hostname);
         broadcastToChatAll(chatId, { type: 'link_preview', chatId, messageId: msg.id, preview });
+      }).catch(() => {});
+    }
+  }
+
+  res.json(hydratedMsg);
+});
+
+app.post('/api/messages/:id/grok-image-risk-retry', auth, msgLimiter, (req, res) => {
+  const noticeId = Number(req.params.id);
+  if (!Number.isInteger(noticeId) || noticeId <= 0) {
+    return res.status(400).json({ error: 'Invalid notice message id' });
+  }
+
+  const notice = db.prepare(`
+    SELECT m.*
+    FROM messages m
+    WHERE m.id=? AND m.is_deleted=0
+  `).get(noticeId);
+  if (!notice || notice.ai_notice_type !== 'grok_image_risk' || !notice.reply_to_id) {
+    return res.status(404).json({ error: 'Retry notice not found' });
+  }
+  if (!isChatMember(notice.chat_id, req.user.id)) {
+    return res.status(403).json({ error: 'Not a member' });
+  }
+
+  const source = db.prepare(`
+    SELECT *
+    FROM messages
+    WHERE id=? AND chat_id=? AND is_deleted=0
+  `).get(notice.reply_to_id, notice.chat_id);
+  if (!source) return res.status(404).json({ error: 'Original message not found' });
+  if (Number(source.user_id) !== Number(req.user.id)) {
+    return res.status(403).json({ error: 'Only the original sender can retry this prompt' });
+  }
+
+  const cleanText = source.text ? String(source.text).trim() : null;
+  const fileId = Number(source.file_id || 0) || null;
+  if (!cleanText && !fileId) return res.status(400).json({ error: 'Original message is empty' });
+
+  const createRetryMessageTx = db.transaction(() => {
+    const inserted = db.prepare(`
+      INSERT INTO messages(
+        chat_id,
+        user_id,
+        text,
+        file_id,
+        reply_to_id,
+        ai_image_risk_confirmed,
+        ai_response_mode_hint,
+        ai_document_format_hint
+      ) VALUES(?,?,?,?,?,?,?,?)
+    `).run(
+      notice.chat_id,
+      req.user.id,
+      cleanText,
+      fileId,
+      source.reply_to_id || null,
+      1,
+      source.ai_response_mode_hint || null,
+      source.ai_document_format_hint || null
+    );
+    return Number(inserted.lastInsertRowid);
+  });
+
+  const messageId = createRetryMessageTx();
+  try { db.prepare("UPDATE users SET last_activity = datetime('now') WHERE id = ?").run(req.user.id); } catch (e) {}
+  if (cleanText) saveMessageMentions(messageId, notice.chat_id, cleanText);
+
+  const hydratedMsg = hydrateMessageById(messageId, req.user.id);
+  if (!hydratedMsg) return res.status(500).json({ error: 'Message could not be loaded' });
+
+  handleChatListMessageCreated(hydratedMsg);
+  broadcastToChatAll(notice.chat_id, { type: 'message', message: hydratedMsg });
+  pushFeature.notifyMessageCreated(hydratedMsg);
+  aiBotFeature.handleMessageCreated(hydratedMsg).catch((error) => {
+    console.warn('[ai-bot] message hook failed:', error.message);
+  });
+
+  if (cleanText) {
+    const urls = extractUrls(cleanText);
+    if (urls.length > 0) {
+      fetchPreview(urls[0]).then(preview => {
+        if (!preview) return;
+        db.prepare('INSERT INTO link_previews(message_id,url,title,description,image,hostname) VALUES(?,?,?,?,?,?)')
+          .run(hydratedMsg.id, preview.url, preview.title, preview.description, preview.image, preview.hostname);
+        broadcastToChatAll(notice.chat_id, { type: 'link_preview', chatId: notice.chat_id, messageId: hydratedMsg.id, preview });
       }).catch(() => {});
     }
   }

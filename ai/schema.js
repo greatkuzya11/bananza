@@ -47,6 +47,7 @@ function initAiSchema(db) {
       transform_prompt TEXT DEFAULT '',
       available_in_all_chats INTEGER DEFAULT 0,
       chatshot_context_limit INTEGER DEFAULT 50,
+      image_risk_filter_enabled INTEGER DEFAULT 1,
       temperature REAL DEFAULT NULL,
       max_tokens INTEGER DEFAULT NULL,
       created_at TEXT DEFAULT (datetime('now')),
@@ -314,6 +315,7 @@ function initAiSchema(db) {
   addColumnIfMissing(db, 'ai_bots', 'transform_prompt', "transform_prompt TEXT DEFAULT ''");
   addColumnIfMissing(db, 'ai_bots', 'available_in_all_chats', 'available_in_all_chats INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'ai_bots', 'chatshot_context_limit', 'chatshot_context_limit INTEGER DEFAULT 50');
+  addColumnIfMissing(db, 'ai_bots', 'image_risk_filter_enabled', 'image_risk_filter_enabled INTEGER DEFAULT 1');
   addColumnIfMissing(db, 'ai_bots', 'visible_to_users', 'visible_to_users INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'chats', 'chatshot_enabled', 'chatshot_enabled INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'chats', 'chatshot_bot_id', 'chatshot_bot_id INTEGER DEFAULT NULL');
@@ -323,6 +325,7 @@ function initAiSchema(db) {
   addColumnIfMissing(db, 'users', 'is_ai_bot', 'is_ai_bot INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'messages', 'ai_generated', 'ai_generated INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'messages', 'ai_bot_id', 'ai_bot_id INTEGER DEFAULT NULL');
+  addColumnIfMissing(db, 'messages', 'ai_notice_type', 'ai_notice_type TEXT DEFAULT NULL');
   addColumnIfMissing(db, 'messages', 'ai_response_mode_hint', "ai_response_mode_hint TEXT DEFAULT NULL");
   addColumnIfMissing(db, 'messages', 'ai_document_format_hint', "ai_document_format_hint TEXT DEFAULT NULL");
 

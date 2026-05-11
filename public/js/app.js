@@ -137,6 +137,7 @@
   });
   const aiImageRiskApi = window.BananzaAiImageRisk || null;
   const i18n = window.BananzaI18n || null;
+  const grokImageRiskRetryPending = new Set();
 
   function t(key, params = {}) {
     return i18n?.t ? i18n.t(key, params) : String(key || '');
@@ -9115,6 +9116,7 @@
     $('#grokAiImageBotName').value = bot?.name || 'Grok Images';
     $('#grokAiImageBotMention').value = bot?.mention || 'grok_image';
     $('#grokAiImageBotEnabled').checked = bot ? !!bot.enabled : true;
+    $('#grokAiImageBotRiskFilter').checked = bot?.image_risk_filter_enabled ?? true;
     setBotVisibilityToggle('grokAiImageBotVisibleToUsers', !!bot?.visible_to_users);
     $('#grokAiImageBotStyle').value = bot?.style || 'Visual prompt specialist for chat';
     $('#grokAiImageBotTone').value = bot?.tone || 'clear, imaginative, precise';
@@ -9132,6 +9134,7 @@
     $('#grokAiUniversalBotName').value = bot?.name || 'Grok Universal';
     $('#grokAiUniversalBotMention').value = bot?.mention || 'grok_universal';
     $('#grokAiUniversalBotEnabled').checked = bot ? !!bot.enabled : true;
+    $('#grokAiUniversalBotRiskFilter').checked = bot?.image_risk_filter_enabled ?? true;
     setBotVisibilityToggle('grokAiUniversalBotVisibleToUsers', !!bot?.visible_to_users);
     $('#grokAiUniversalBotAllowText').checked = bot?.allow_text ?? true;
     $('#grokAiUniversalBotAllowImageGenerate').checked = bot?.allow_image_generate ?? true;
@@ -9220,6 +9223,7 @@
       name: $('#grokAiImageBotName')?.value.trim(),
       mention: $('#grokAiImageBotMention')?.value.trim(),
       enabled: $('#grokAiImageBotEnabled')?.checked,
+      image_risk_filter_enabled: $('#grokAiImageBotRiskFilter')?.checked,
       visible_to_users: getBotVisibilityToggle('grokAiImageBotVisibleToUsers'),
       image_model: $('#grokAiImageBotModel')?.value.trim(),
       image_aspect_ratio: $('#grokAiImageBotAspectRatio')?.value.trim(),
@@ -9237,6 +9241,7 @@
       name: $('#grokAiUniversalBotName')?.value.trim(),
       mention: $('#grokAiUniversalBotMention')?.value.trim(),
       enabled: $('#grokAiUniversalBotEnabled')?.checked,
+      image_risk_filter_enabled: $('#grokAiUniversalBotRiskFilter')?.checked,
       visible_to_users: getBotVisibilityToggle('grokAiUniversalBotVisibleToUsers'),
       response_model: $('#grokAiUniversalBotResponseModel')?.value.trim(),
       summary_model: $('#grokAiUniversalBotSummaryModel')?.value.trim(),
@@ -12105,6 +12110,35 @@
     }
   }
 
+  async function retryGrokImageRiskPrompt(row, button = null) {
+    const noticeId = Number(row?.dataset?.msgId || row?.__messageData?.id || 0);
+    if (!noticeId || grokImageRiskRetryPending.has(noticeId)) return;
+    grokImageRiskRetryPending.add(noticeId);
+    if (button) {
+      button.disabled = true;
+      button.classList.add('is-pending');
+    }
+    try {
+      const message = await api(`/api/messages/${noticeId}/grok-image-risk-retry`, { method: 'POST' });
+      if (message) {
+        if (Number(message.chat_id || message.chatId || 0) === Number(currentChatId || 0)) {
+          appendTimelineItems([message]);
+          scrollToBottom();
+        }
+        showCenterToast(t('Sent again'));
+        playAppSound('send');
+      }
+    } catch (e) {
+      showCenterToast(e.message || t('Could not send again'));
+    } finally {
+      grokImageRiskRetryPending.delete(noticeId);
+      if (button) {
+        button.disabled = false;
+        button.classList.remove('is-pending');
+      }
+    }
+  }
+
   async function jumpToSavedOriginal(message) {
     const originalId = Number(message?.saved_from_message_id || 0);
     if (!originalId) {
@@ -12186,6 +12220,7 @@
       allow_poll_vote: Boolean(raw.allow_poll_vote),
       allow_react: Boolean(raw.allow_react),
       allow_pin: Boolean(raw.allow_pin),
+      image_risk_filter_enabled: raw.image_risk_filter_enabled !== false,
       document_default_format: String(raw.document_default_format || '').trim().toLowerCase() === 'txt' ? 'txt' : 'md',
     };
   }
@@ -12250,6 +12285,7 @@
       allow_poll_vote: source.allow_poll_vote ?? false,
       allow_react: source.allow_react ?? false,
       allow_pin: source.allow_pin ?? false,
+      image_risk_filter_enabled: source.image_risk_filter_enabled ?? source.ai_bot_image_risk_filter_enabled ?? true,
       document_default_format: String(source.document_default_format || 'md').toLowerCase() === 'txt' ? 'txt' : 'md',
     };
   }
@@ -12272,6 +12308,7 @@
       ai_bot_mention: peer.ai_bot_mention || peer.username || '',
       ai_bot_provider: peer.ai_bot_provider || '',
       ai_bot_kind: peer.ai_bot_kind || '',
+      ai_bot_image_risk_filter_enabled: peer.ai_bot_image_risk_filter_enabled ?? true,
     }, loaded);
   }
 
@@ -12481,6 +12518,9 @@
       }
     }
     if (!target) return { risky: false, matches: [], prompt: '', target: null };
+    if (target.image_risk_filter_enabled === false || target.ai_bot_image_risk_filter_enabled === false) {
+      return { risky: false, matches: [], prompt: '', target };
+    }
     const prompt = stripTriggeredBotMention(text, target);
     if (!prompt) return { risky: false, matches: [], prompt: '', target };
     const result = aiImageRiskApi.analyzeAiImageRisk(prompt);
@@ -17058,6 +17098,7 @@
       ai_bot_mention: msg.ai_bot_mention || '',
       ai_bot_provider: msg.ai_bot_provider || '',
       ai_bot_kind: msg.ai_bot_kind || '',
+      ai_bot_image_risk_filter_enabled: msg.ai_bot_image_risk_filter_enabled ?? true,
     };
     row.__voiceBootstrap = {
       id: msg.id,
@@ -17128,6 +17169,13 @@
       if (msg.text && !isCallMessage && !isCallTranscriptMessage && !isCallArtifactMessage) {
         const textClasses = isPulsePollMessage ? 'msg-text poll-question-block' : 'msg-text';
         html += `<div class="${textClasses}">${isEmojiOnly ? esc(msg.text.trim()) : renderMessageText(msg.text, msg.mentions)}</div>`;
+      }
+
+      if (msg.ai_notice_type === 'grok_image_risk' && msg.reply_to_id) {
+        const pending = grokImageRiskRetryPending.has(Number(msg.id || 0));
+        html += `<div class="grok-risk-notice-actions">
+          <button type="button" class="grok-risk-retry-btn weather-action-btn${pending ? ' is-pending' : ''}" data-grok-risk-retry="${Number(msg.id) || 0}"${pending ? ' disabled' : ''}>${esc(t('Send again'))}</button>
+        </div>`;
       }
 
       if (msg.poll) {
@@ -17256,6 +17304,14 @@
     const retryBtn = row.querySelector('.msg-retry-btn');
     if (retryBtn) {
       retryBtn.addEventListener('click', (e) => { e.stopPropagation(); retrySend(row); });
+    }
+
+    const grokRiskRetryBtn = row.querySelector('.grok-risk-retry-btn');
+    if (grokRiskRetryBtn) {
+      grokRiskRetryBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        retryGrokImageRiskPrompt(row, grokRiskRetryBtn);
+      });
     }
 
     row.querySelectorAll('.mention-link').forEach((btn) => {
