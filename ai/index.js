@@ -7565,6 +7565,32 @@ function createAiBotFeature({
     }
   });
 
+  app.post('/api/admin/deepseek-ai-bots/balance', auth, adminOnly, async (req, res) => {
+    const settings = getGlobalSettings();
+    const body = req.body || {};
+    const apiKey = cleanText(body.deepseek_api_key, 500) || getDeepSeekApiKey();
+    const baseUrl = deepseekAi.cleanBaseUrl(body.deepseek_base_url || settings.deepseek_base_url);
+    if (!apiKey) return res.status(400).json({ ok: false, error: 'Enter DeepSeek API key.' });
+    const startedAt = Date.now();
+    try {
+      const balance = await deepseekAi.getUserBalance({
+        apiKey,
+        baseUrl,
+        timeoutMs: 30000,
+      });
+      res.json({
+        ok: true,
+        balance: {
+          ...balance,
+          latencyMs: Date.now() - startedAt,
+          fetchedAt: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      res.status(400).json({ ok: false, error: errorText(error, 'Could not load DeepSeek balance') });
+    }
+  });
+
   app.delete('/api/admin/deepseek-ai-bots/key', auth, adminOnly, (_req, res) => {
     const settings = deleteDeepSeekKey(db);
     deepseekModelCatalogCache = null;

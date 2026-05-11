@@ -76,3 +76,97 @@ test('generateText reports DeepSeek timeout aborts with stable error text', asyn
     );
   });
 });
+
+test('getUserBalance normalizes DeepSeek balance response', async () => {
+  let capturedUrl = '';
+
+  await withPatchedGlobals({
+    fetch: async (url, options) => {
+      capturedUrl = String(url);
+      assert.equal(options.method, 'GET');
+      assert.equal(options.headers.Authorization, 'Bearer test-key');
+      return {
+        ok: true,
+        text: async () => JSON.stringify({
+          is_available: true,
+          balance_infos: [
+            {
+              currency: 'USD',
+              total_balance: '12.34',
+              granted_balance: '1.00',
+              topped_up_balance: '11.34',
+            },
+          ],
+        }),
+      };
+    },
+  }, async () => {
+    const balance = await deepseek.getUserBalance({ apiKey: 'test-key' });
+
+    assert.equal(capturedUrl, 'https://api.deepseek.com/user/balance');
+    assert.deepEqual(balance, {
+      is_available: true,
+      balance_infos: [
+        {
+          currency: 'USD',
+          total_balance: '12.34',
+          granted_balance: '1.00',
+          topped_up_balance: '11.34',
+        },
+      ],
+    });
+  });
+});
+
+test('getUserBalance returns an empty balance list when DeepSeek omits entries', async () => {
+  await withPatchedGlobals({
+    fetch: async () => ({
+      ok: true,
+      text: async () => JSON.stringify({ is_available: false }),
+    }),
+  }, async () => {
+    const balance = await deepseek.getUserBalance({ apiKey: 'test-key' });
+
+    assert.deepEqual(balance, {
+      is_available: false,
+      balance_infos: [],
+    });
+  });
+});
+
+test('getUserBalance reports DeepSeek HTTP errors', async () => {
+  await withPatchedGlobals({
+    fetch: async () => ({
+      ok: false,
+      status: 401,
+      text: async () => JSON.stringify({ error: { message: 'Invalid API key' } }),
+    }),
+  }, async () => {
+    await assert.rejects(
+      () => deepseek.getUserBalance({ apiKey: 'bad-key' }),
+      /Invalid API key/
+    );
+  });
+});
+
+test('getUserBalance reports DeepSeek timeout aborts with stable error text', async () => {
+  await withPatchedGlobals({
+    setTimeout(callback, ms) {
+      assert.equal(ms, 30000);
+      callback();
+      return {};
+    },
+    clearTimeout() {},
+    fetch: async (_url, options) => {
+      assert.equal(options.signal.aborted, true);
+      const error = new Error('aborted');
+      error.name = 'AbortError';
+      throw error;
+    },
+  }, async () => {
+    await assert.rejects(
+      () => deepseek.getUserBalance({ apiKey: 'test-key', timeoutMs: 30000 }),
+      /DeepSeek API request timed out/
+    );
+  });
+});

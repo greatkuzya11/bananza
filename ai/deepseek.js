@@ -177,6 +177,26 @@ async function listModelIds({ apiKey, baseUrl = DEFAULT_BASE_URL }) {
   return [...new Set(ids)].sort((a, b) => a.localeCompare(b));
 }
 
+function normalizeBalanceInfo(row = {}) {
+  return {
+    currency: String(row?.currency || '').trim(),
+    total_balance: String(row?.total_balance ?? '').trim(),
+    granted_balance: String(row?.granted_balance ?? '').trim(),
+    topped_up_balance: String(row?.topped_up_balance ?? '').trim(),
+  };
+}
+
+async function getUserBalance({ apiKey, baseUrl = DEFAULT_BASE_URL, timeoutMs = 30000 }) {
+  const payload = await getJson(`${cleanBaseUrl(baseUrl)}/user/balance`, { apiKey, timeoutMs });
+  const balanceInfos = Array.isArray(payload?.balance_infos)
+    ? payload.balance_infos.map(normalizeBalanceInfo)
+    : [];
+  return {
+    is_available: Boolean(payload?.is_available),
+    balance_infos: balanceInfos,
+  };
+}
+
 async function generateText(options) {
   const result = await createChatCompletion(options);
   return result.text;
@@ -220,6 +240,7 @@ module.exports = {
   DEFAULT_BASE_URL,
   cleanBaseUrl,
   listModelIds,
+  getUserBalance,
   generateText,
   generateJson,
   testConnection,

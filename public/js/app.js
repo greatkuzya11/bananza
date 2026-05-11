@@ -7706,6 +7706,10 @@
     setInlineStatus('deepseekAiProviderStatus', message, type);
   }
 
+  function setDeepseekAiBalanceStatus(message, type = '') {
+    setInlineStatus('deepseekAiBalanceStatus', message, type);
+  }
+
   function setDeepseekBotStatus(message, type = '') {
     setInlineStatus('deepseekAiBotEditorStatus', message, type);
   }
@@ -7948,6 +7952,48 @@
       setDeepseekAiProviderStatus(`Key verified (${data.result?.latencyMs || 0} ms). ${text}`, 'success');
     } catch (e) {
       setDeepseekAiProviderStatus(formatUiErrorMessage(e, 'Could not check DeepSeek key'), 'error');
+    }
+  }
+
+  function formatDeepseekBalanceValue(value) {
+    const text = String(value ?? '').trim();
+    return text || '0.00';
+  }
+
+  function formatDeepseekBalanceResult(balance = {}) {
+    const latency = Number(balance.latencyMs);
+    const latencyText = Number.isFinite(latency) ? ` (${Math.round(latency)} ms)` : '';
+    const availability = balance.is_available ? 'API calls available' : 'API calls unavailable';
+    const rows = Array.isArray(balance.balance_infos) ? balance.balance_infos : [];
+    const balanceLines = rows.length
+      ? rows.map((row) => {
+        const currency = String(row?.currency || 'Unknown').trim() || 'Unknown';
+        return `${currency}: total ${formatDeepseekBalanceValue(row?.total_balance)}, granted ${formatDeepseekBalanceValue(row?.granted_balance)}, topped up ${formatDeepseekBalanceValue(row?.topped_up_balance)}`;
+      })
+      : ['No balance entries returned.'];
+    return `${availability}${latencyText}\n${balanceLines.join('\n')}`;
+  }
+
+  async function checkDeepseekAiBalance() {
+    const keyInput = $('#deepseekAiApiKey');
+    const hasKey = Boolean(keyInput?.value.trim() || deepseekBotState.settings?.has_deepseek_key);
+    if (!hasKey) {
+      setDeepseekAiBalanceStatus('Enter or save DeepSeek API key before checking balance.', 'error');
+      keyInput?.focus();
+      return;
+    }
+    setDeepseekAiBalanceStatus('Checking DeepSeek balance...', 'pending');
+    try {
+      const data = await api('/api/admin/deepseek-ai-bots/balance', {
+        method: 'POST',
+        body: deepseekAiSettingsPayload(),
+      });
+      setDeepseekAiBalanceStatus(
+        formatDeepseekBalanceResult(data.balance || {}),
+        data.balance?.is_available ? 'success' : 'error'
+      );
+    } catch (e) {
+      setDeepseekAiBalanceStatus(formatUiErrorMessage(e, 'Could not load DeepSeek balance'), 'error');
     }
   }
 
@@ -25036,6 +25082,7 @@
     bindAsyncActionButtons('deepseekAiSaveSettings', null, 'Saving...', saveDeepseekAiSettings);
     bindAsyncActionButtons('deepseekAiTestConnection', null, 'Testing...', testDeepseekAiConnection);
     bindAsyncActionButtons('deepseekAiRefreshModels', null, 'Refreshing...', refreshDeepseekAiModels);
+    bindAsyncActionButtons('deepseekAiCheckBalance', null, 'Checking...', checkDeepseekAiBalance);
     bindAsyncActionButtons('deepseekAiDeleteKey', null, 'Deleting...', deleteDeepseekAiKey);
     $('#deepseekAiOpenTextBots')?.addEventListener('click', openDeepseekTextBotsModal);
     $('#deepseekAiOpenConvertBots')?.addEventListener('click', () => openContextConvertBotsModal('deepseek'));
