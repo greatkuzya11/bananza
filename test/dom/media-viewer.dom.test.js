@@ -228,6 +228,12 @@ function installProgressSvgMocks(dom, { pathLength = 100 } = {}) {
     if (this instanceof window.SVGElement && this.classList.contains('video-note-progress')) {
       return buildRect(248, 350);
     }
+    if (this instanceof window.HTMLElement && this.classList.contains('call-recording-card')) {
+      return buildRect(320, 84);
+    }
+    if (this instanceof window.SVGElement && this.classList.contains('call-recording-progress')) {
+      return buildRect(320, 84);
+    }
     return originalGetBoundingClientRect.call(this);
   };
 }
@@ -761,6 +767,44 @@ function createVideoNoteMessage(chatId, messageId, overrides = {}) {
     transcription_provider: '',
     transcription_model: '',
     transcription_error: '',
+    ...overrides,
+  });
+}
+
+function createCallMessage(chatId, messageId, overrides = {}) {
+  const callId = Number(overrides.call_id || overrides.call?.id || overrides.call_message?.call_id || messageId + 1000);
+  const mixedRecording = Object.prototype.hasOwnProperty.call(overrides, 'mixed_recording')
+    ? overrides.mixed_recording
+    : {
+        id: callId + 2000,
+        call_id: callId,
+        status: 'completed',
+        duration_ms: 24_000,
+        size_bytes: 4096,
+        mime_type: 'audio/ogg',
+        url: `/api/calls/${callId}/recording/mixed`,
+      };
+  return createIncomingMessage(chatId, messageId, {
+    text: 'Video call',
+    is_call_message: true,
+    call: {
+      id: callId,
+      call_id: callId,
+      status: 'ended',
+      duration_ms: 24_000,
+      ended_reason: 'ended',
+      can_join: false,
+      mixed_recording: mixedRecording,
+      ...(overrides.call || {}),
+    },
+    call_message: {
+      call_id: callId,
+      status: 'ended',
+      duration_ms: 24_000,
+      ended_reason: 'ended',
+      mixed_recording: mixedRecording,
+      ...(overrides.call_message || {}),
+    },
     ...overrides,
   });
 }
@@ -3139,6 +3183,170 @@ test('voice note progress outline clears completed state when seeking', async (t
   assert.equal(BananzaAppBridge.isMediaPlaybackCompleted(row.__messageData, 'voice-note-audio'), false);
   assert.ok(Math.abs(Number(audio.currentTime || 0) - 12) < 0.2);
   assert.ok(Math.abs(getDasharrayFilledLength(fill) - 50) < 1);
+});
+
+test('call recording card renders media controls and seeks without starting paused audio', async (t) => {
+  const chat = createChatFixture(1, 'Chat A', { lastMessageId: 467 });
+  const message = createCallMessage(1, 467);
+  const dom = await openMediaPlaybackDom({
+    activeChat: chat,
+    chats: [chat],
+    chatMessagesByChatId: {
+      1: [message],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+
+  const row = document.querySelector('.msg-row[data-msg-id="467"]');
+  const audio = row.querySelector('.call-recording-audio');
+  const play = row.querySelector('.call-recording-play');
+  const hit = row.querySelector('.call-recording-progress-hit');
+  const fill = row.querySelector('.call-recording-progress-fill');
+  assert.ok(row.querySelector('.call-recording-card.has-call-recording'));
+  assert.ok(audio);
+  assert.ok(play);
+  assert.ok(hit);
+
+  const mediaState = installMockMediaElement(dom, audio, {
+    duration: 24,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+  audio.dispatchEvent(new dom.window.Event('durationchange'));
+  await wait(dom, 40);
+
+  hit.dispatchEvent(new dom.window.MouseEvent('pointerdown', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 160,
+    clientY: 0,
+  }));
+  await wait(dom, 20);
+
+  assert.ok(Math.abs(Number(audio.currentTime || 0) - 12) < 0.2);
+  assert.equal(mediaState.paused, true);
+  assert.ok(Math.abs(getDasharrayFilledLength(fill) - 50) < 1);
+});
+
+test('call recording contour seek clears completed state and updates fill', async (t) => {
+  const chat = createChatFixture(1, 'Chat A', { lastMessageId: 468 });
+  const message = createCallMessage(1, 468);
+  const dom = await openMediaPlaybackDom({
+    activeChat: chat,
+    chats: [chat],
+    chatMessagesByChatId: {
+      1: [message],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+
+  const row = document.querySelector('.msg-row[data-msg-id="468"]');
+  const audio = row.querySelector('.call-recording-audio');
+  const hit = row.querySelector('.call-recording-progress-hit');
+  const fill = row.querySelector('.call-recording-progress-fill');
+  installMockMediaElement(dom, audio, {
+    duration: 24,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+  audio.dispatchEvent(new dom.window.Event('durationchange'));
+  await wait(dom, 40);
+
+  audio.currentTime = 24;
+  audio.ended = true;
+  audio.paused = true;
+  audio.dispatchEvent(new dom.window.Event('ended'));
+  await wait(dom, 40);
+  assert.equal(BananzaAppBridge.isMediaPlaybackCompleted(row.__messageData, 'call-recording-audio'), true);
+  assert.ok(Math.abs(getDasharrayFilledLength(fill) - 100) < 0.1);
+
+  hit.dispatchEvent(new dom.window.MouseEvent('pointerdown', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 160,
+    clientY: 0,
+  }));
+  await wait(dom, 20);
+
+  assert.equal(BananzaAppBridge.isMediaPlaybackCompleted(row.__messageData, 'call-recording-audio'), false);
+  assert.ok(Math.abs(Number(audio.currentTime || 0) - 12) < 0.2);
+  assert.ok(Math.abs(getDasharrayFilledLength(fill) - 50) < 1);
+});
+
+test('call recording contour can seek an upper adjacent card when the lower card receives the pointer event', async (t) => {
+  const chat = createChatFixture(1, 'Chat A', { lastMessageId: 470 });
+  const upperMessage = createCallMessage(1, 469, { call_id: 1469 });
+  const lowerMessage = createCallMessage(1, 470, { call_id: 1470 });
+  const dom = await openMediaPlaybackDom({
+    activeChat: chat,
+    chats: [chat],
+    chatMessagesByChatId: {
+      1: [upperMessage, lowerMessage],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+
+  const upperRow = document.querySelector('.msg-row[data-msg-id="469"]');
+  const lowerRow = document.querySelector('.msg-row[data-msg-id="470"]');
+  const upperAudio = upperRow.querySelector('.call-recording-audio');
+  const lowerAudio = lowerRow.querySelector('.call-recording-audio');
+  installMockMediaElement(dom, upperAudio, {
+    duration: 24,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+  installMockMediaElement(dom, lowerAudio, {
+    duration: 24,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+
+  const rectFor = (top) => ({
+    x: 0,
+    y: top,
+    top,
+    left: 0,
+    right: 320,
+    bottom: top + 84,
+    width: 320,
+    height: 84,
+    toJSON() { return this; },
+  });
+  upperRow.querySelector('.call-recording-card').getBoundingClientRect = () => rectFor(0);
+  upperRow.querySelector('.call-recording-progress').getBoundingClientRect = () => rectFor(0);
+  lowerRow.querySelector('.call-recording-card').getBoundingClientRect = () => rectFor(34);
+  lowerRow.querySelector('.call-recording-progress').getBoundingClientRect = () => rectFor(34);
+  upperAudio.dispatchEvent(new dom.window.Event('durationchange'));
+  lowerAudio.dispatchEvent(new dom.window.Event('durationchange'));
+  await wait(dom, 40);
+
+  lowerRow.querySelector('.call-recording-card').dispatchEvent(new dom.window.MouseEvent('pointerdown', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 160,
+    clientY: 0,
+  }));
+  await wait(dom, 20);
+
+  assert.ok(Math.abs(Number(upperAudio.currentTime || 0) - 12) < 0.2);
+  assert.equal(Number(lowerAudio.currentTime || 0), 0);
 });
 
 test('voice note progress outline can seek an upper adjacent message when the lower bubble receives the pointer event', async (t) => {

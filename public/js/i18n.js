@@ -647,6 +647,8 @@
     'Recording...': 'Запись...',
     'Play video note': 'Воспроизвести видеозаметку',
     'Pause video note': 'Пауза видеозаметки',
+    'Play call recording': 'Воспроизвести запись звонка',
+    'Pause call recording': 'Пауза записи звонка',
     'Switch video note to circle': 'Переключить видеозаметку в круг',
     'Switch video note to banana': 'Переключить видеозаметку в банан',
     'Transcript': 'Расшифровка',

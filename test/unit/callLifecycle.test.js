@@ -1,9 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const Database = require('better-sqlite3');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const { initCallSchema } = require('../../calls/schema');
 const { createCallFeature } = require('../../calls');
+const { setCallSettings } = require('../../calls/settings');
 
 function createDb() {
   const db = new Database(':memory:');
@@ -46,6 +50,22 @@ function createAppStub() {
     get() {},
     post() {},
     put() {},
+  };
+}
+
+function createRoutingAppStub() {
+  const routes = [];
+  return {
+    routes,
+    get(pathname, ...handlers) {
+      routes.push({ method: 'GET', pathname, handlers });
+    },
+    post(pathname, ...handlers) {
+      routes.push({ method: 'POST', pathname, handlers });
+    },
+    put(pathname, ...handlers) {
+      routes.push({ method: 'PUT', pathname, handlers });
+    },
   };
 }
 
@@ -93,6 +113,21 @@ function seedCall(db) {
     VALUES(?, 1, 'joined', datetime('now')), (?, 2, 'invited', NULL)
   `).run(callId, callId);
   return { callId, messageId };
+}
+
+function seedCompletedMixedRecording(db, callId, filePath, overrides = {}) {
+  return Number(db.prepare(`
+    INSERT INTO call_recordings(call_id, user_id, scope, livekit_identity, track_id, egress_id, file_path, status, started_at, ended_at, duration_ms, size_bytes)
+    VALUES(?, 1, ?, '', ?, 'egress-mixed', ?, ?, datetime('now'), datetime('now'), ?, ?)
+  `).run(
+    callId,
+    overrides.scope || 'mixed',
+    overrides.track_id || `mixed:${callId}`,
+    filePath,
+    overrides.status || 'completed',
+    overrides.duration_ms || 12000,
+    overrides.size_bytes || 0
+  ).lastInsertRowid);
 }
 
 test('ring timeout marks unanswered private calls as missed and updates call card metadata', () => {
@@ -151,6 +186,123 @@ test('token issuance does not mark participant joined before connect confirmatio
     assert.equal(db.prepare('SELECT state FROM call_participants WHERE call_id=? AND user_id=2').get(callId).state, 'invited');
     feature._private.participantJoined(callId, 2);
     assert.equal(db.prepare('SELECT state FROM call_participants WHERE call_id=? AND user_id=2').get(callId).state, 'joined');
+  } finally {
+    feature.stopWorkers();
+    db.close();
+  }
+});
+
+test('call card metadata exposes only completed mixed recordings with an existing file', (t) => {
+  const db = createDb();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bananza-call-recordings-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const feature = createFeature(db);
+  try {
+    seedUsersAndChat(db, 'private');
+    setCallSettings(db, { call_recording_path: root });
+    const { callId, messageId } = seedCall(db);
+    const filePath = path.join(root, 'call-10-mixed.ogg');
+    fs.writeFileSync(filePath, Buffer.from('0123456789abcdef'));
+
+    seedCompletedMixedRecording(db, callId, filePath, { duration_ms: 24000, size_bytes: 16 });
+    const [hydrated] = feature.attachCallMetadata([db.prepare('SELECT * FROM messages WHERE id=?').get(messageId)]);
+    assert.equal(hydrated.call.mixed_recording.status, 'completed');
+    assert.equal(hydrated.call.mixed_recording.duration_ms, 24000);
+    assert.equal(hydrated.call.mixed_recording.mime_type, 'audio/ogg');
+    assert.equal(hydrated.call.mixed_recording.url, `/api/calls/${callId}/recording/mixed`);
+    assert.deepEqual(hydrated.call_message.mixed_recording, hydrated.call.mixed_recording);
+
+    db.prepare('UPDATE call_recordings SET status=? WHERE call_id=?').run('error', callId);
+    const [withoutRecording] = feature.attachCallMetadata([db.prepare('SELECT * FROM messages WHERE id=?').get(messageId)]);
+    assert.equal(withoutRecording.call.mixed_recording, null);
+    assert.equal(withoutRecording.call_message.mixed_recording, null);
+  } finally {
+    feature.stopWorkers();
+    db.close();
+  }
+});
+
+test('mixed call recording playback route requires membership and supports byte ranges', async (t) => {
+  const db = createDb();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bananza-call-recordings-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const app = createRoutingAppStub();
+  const feature = createFeature(db, {
+    app,
+    auth: (_req, _res, next) => next(),
+  });
+  try {
+    seedUsersAndChat(db, 'private');
+    setCallSettings(db, { call_recording_path: root });
+    const { callId } = seedCall(db);
+    const filePath = path.join(root, 'mixed.ogg');
+    fs.writeFileSync(filePath, Buffer.from('0123456789abcdef'));
+    seedCompletedMixedRecording(db, callId, filePath, { size_bytes: 16 });
+
+    const route = app.routes.find((item) => item.method === 'GET' && item.pathname === '/api/calls/:callId/recording/mixed');
+    assert.ok(route);
+    const handler = route.handlers.at(-1);
+
+    const chunks = [];
+    const headers = {};
+    const res = {
+      statusCode: 200,
+      setHeader(name, value) {
+        headers[name.toLowerCase()] = String(value);
+      },
+      status(code) {
+        this.statusCode = code;
+        return this;
+      },
+      end() {},
+      write(chunk) {
+        chunks.push(Buffer.from(chunk));
+      },
+      on() {},
+      once() {},
+      emit() {},
+    };
+    await new Promise((resolve, reject) => {
+      res.end = resolve;
+      res.once = (event, cb) => {
+        if (event === 'error') res._onError = cb;
+      };
+      res.emit = (event, error) => {
+        if (event === 'error') {
+          res._onError?.(error);
+          reject(error);
+        }
+      };
+      handler({
+        params: { callId: String(callId) },
+        user: { id: 1 },
+        headers: { range: 'bytes=4-7' },
+      }, res);
+    });
+    assert.equal(res.statusCode, 206);
+    assert.equal(headers['content-range'], 'bytes 4-7/16');
+    assert.equal(headers['content-length'], '4');
+    assert.equal(Buffer.concat(chunks).toString(), '4567');
+
+    const forbidden = {
+      statusCode: 200,
+      body: null,
+      setHeader() {},
+      status(code) {
+        this.statusCode = code;
+        return this;
+      },
+      json(payload) {
+        this.body = payload;
+      },
+    };
+    handler({
+      params: { callId: String(callId) },
+      user: { id: 999 },
+      headers: {},
+    }, forbidden);
+    assert.equal(forbidden.statusCode, 403);
+    assert.equal(forbidden.body.code, 'forbidden');
   } finally {
     feature.stopWorkers();
     db.close();

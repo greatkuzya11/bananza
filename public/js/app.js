@@ -17720,6 +17720,238 @@
     return `${callArtifactStatusLabel(batch.status || 'queued')} ${ready}/${total}`;
   }
 
+  const CALL_RECORDING_ROLE = 'call-recording-audio';
+  let callRecordingProgressCaptureInstalled = false;
+
+  function normalizeCallMixedRecording(call = {}) {
+    const recording = call?.mixed_recording || call?.recording || null;
+    if (!recording || String(recording.status || '').toLowerCase() !== 'completed') return null;
+    const url = String(recording.url || '').trim();
+    if (!url) return null;
+    return {
+      ...recording,
+      url,
+      duration_ms: recording.duration_ms == null ? null : Number(recording.duration_ms),
+    };
+  }
+
+  function callRecordingDurationSeconds(row, audio) {
+    const mediaDuration = Number(audio?.duration || 0);
+    if (Number.isFinite(mediaDuration) && mediaDuration > 0) return mediaDuration;
+    const recordingMs = Number(row?.dataset?.callRecordingDurationMs || row?.querySelector?.('.call-recording-card')?.dataset?.callRecordingDurationMs || 0);
+    if (Number.isFinite(recordingMs) && recordingMs > 0) return recordingMs / 1000;
+    const messageDurationMs = Number(row?.__callRecordingCall?.duration_ms || 0);
+    if (Number.isFinite(messageDurationMs) && messageDurationMs > 0) return messageDurationMs / 1000;
+    return 0;
+  }
+
+  function callRecordingPathD(width, height) {
+    const w = Math.max(32, Number(width || 0));
+    const h = Math.max(32, Number(height || 0));
+    const r = Math.min(12, Math.max(8, Math.min(w, h) * 0.12));
+    const inset = 2;
+    const x0 = inset;
+    const y0 = inset;
+    const x1 = Math.max(x0 + 1, w - inset);
+    const y1 = Math.max(y0 + 1, h - inset);
+    return `M ${x0 + r} ${y0} H ${x1 - r} Q ${x1} ${y0} ${x1} ${y0 + r} V ${y1 - r} Q ${x1} ${y1} ${x1 - r} ${y1} H ${x0 + r} Q ${x0} ${y1} ${x0} ${y1 - r} V ${y0 + r} Q ${x0} ${y0} ${x0 + r} ${y0} Z`;
+  }
+
+  function ensureCallRecordingProgress(row) {
+    const card = row?.querySelector?.('.call-recording-card');
+    if (!row || !card) return null;
+    let controller = row.__callRecordingProgress || null;
+    if (!controller) {
+      controller = row.__callRecordingProgress = {};
+    }
+    controller.card = card;
+    controller.audio = row.querySelector('.call-recording-audio');
+    controller.playButton = row.querySelector('.call-recording-play');
+    controller.message = row.__messageData || {};
+    controller.call = normalizeCallMessageData(controller.message);
+    controller.recording = normalizeCallMixedRecording(controller.call);
+    if (!controller.svg) {
+      const shell = document.createElement('div');
+      shell.className = 'call-recording-progress-shell';
+      shell.innerHTML = `
+        <svg class="call-recording-progress" viewBox="0 0 320 76" preserveAspectRatio="none" aria-hidden="true">
+          <path class="call-recording-progress-track"></path>
+          <path class="call-recording-progress-fill"></path>
+          <path class="call-recording-progress-press"></path>
+          <path class="call-recording-progress-hit"></path>
+        </svg>
+      `;
+      card.prepend(shell);
+      controller.shell = shell;
+      controller.svg = shell.querySelector('.call-recording-progress');
+      controller.track = shell.querySelector('.call-recording-progress-track');
+      controller.fill = shell.querySelector('.call-recording-progress-fill');
+      controller.press = shell.querySelector('.call-recording-progress-press');
+      controller.hit = shell.querySelector('.call-recording-progress-hit');
+    }
+    refreshCallRecordingProgressShape(row);
+    return controller;
+  }
+
+  function refreshCallRecordingProgressShape(row) {
+    const controller = row?.__callRecordingProgress;
+    if (!controller?.card || !controller.svg) return;
+    const rect = controller.card.getBoundingClientRect?.() || {};
+    const width = Math.max(120, Math.round(Number(rect.width || controller.card.offsetWidth || 320)));
+    const height = Math.max(48, Math.round(Number(rect.height || controller.card.offsetHeight || 76)));
+    const d = callRecordingPathD(width, height);
+    controller.svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    [controller.track, controller.fill, controller.press, controller.hit].forEach((pathEl) => {
+      if (!pathEl) return;
+      pathEl.setAttribute('d', d);
+      pathEl.style.strokeDasharray = '';
+      pathEl.style.strokeDashoffset = '';
+    });
+    try {
+      controller.pathLength = Number(controller.fill?.getTotalLength?.() || controller.track?.getTotalLength?.() || 0);
+    } catch {
+      controller.pathLength = 0;
+    }
+    updateCallRecordingProgress(row);
+  }
+
+  function updateCallRecordingProgress(row) {
+    const controller = row?.__callRecordingProgress;
+    const audio = controller?.audio;
+    if (!controller?.fill || !audio) return;
+    const duration = callRecordingDurationSeconds(row, audio);
+    const completed = Boolean(isMediaPlaybackCompleted(row.__messageData || {}, CALL_RECORDING_ROLE));
+    const isPlaying = Boolean(!audio.paused && !audio.ended);
+    const progress = completed && !isPlaying
+      ? 1
+      : (duration > 0 ? Math.max(0, Math.min(1, Number(audio.currentTime || 0) / duration)) : 0);
+    const length = Number(controller.pathLength || 0);
+    if (length > 0) {
+      controller.fill.style.strokeDasharray = `${length}`;
+      controller.fill.style.strokeDashoffset = `${Math.max(0, length * (1 - progress))}`;
+      controller.fill.setAttribute('stroke-dasharray', `${length * progress} ${Math.max(0, length * (1 - progress))}`);
+      controller.fill.setAttribute('stroke-dashoffset', '0');
+    }
+    row.classList.toggle('call-recording-playing', isPlaying);
+    row.classList.toggle('call-recording-completed', completed && !isPlaying);
+    syncCallRecordingPlayButton(controller.playButton, isPlaying);
+  }
+
+  function syncCallRecordingPlayButton(button, isPlaying) {
+    if (!button) return;
+    button.textContent = isPlaying ? '||' : '>';
+    button.classList.toggle('is-playing', Boolean(isPlaying));
+    button.setAttribute('aria-label', t(isPlaying ? 'Pause call recording' : 'Play call recording'));
+    button.setAttribute('title', t(isPlaying ? 'Pause call recording' : 'Play call recording'));
+  }
+
+  function pointToCallRecordingHit(controller, event) {
+    const pathEl = controller?.hit || controller?.fill || controller?.track;
+    const svg = controller?.svg;
+    if (!pathEl || !svg || typeof pathEl.getTotalLength !== 'function' || typeof pathEl.getPointAtLength !== 'function') return null;
+    const svgRect = svg.getBoundingClientRect?.();
+    if (!svgRect || !(svgRect.width > 0) || !(svgRect.height > 0)) return null;
+    const rawViewBox = String(svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+    const vbX = rawViewBox[0] || 0;
+    const vbY = rawViewBox[1] || 0;
+    const vbW = rawViewBox[2] || svgRect.width;
+    const vbH = rawViewBox[3] || svgRect.height;
+    let total = Number(controller.pathLength || 0);
+    if (!(total > 0)) {
+      try {
+        total = Number(pathEl.getTotalLength() || 0);
+      } catch {
+        total = 0;
+      }
+    }
+    if (!(total > 0)) return null;
+    const x = Number(event.clientX || 0);
+    const y = Number(event.clientY || 0);
+    const samples = 96;
+    let best = null;
+    for (let index = 0; index <= samples; index += 1) {
+      const length = total * (index / samples);
+      let point;
+      try {
+        point = pathEl.getPointAtLength(length);
+      } catch {
+        continue;
+      }
+      const px = svgRect.left + ((Number(point.x || 0) - vbX) / vbW) * svgRect.width;
+      const py = svgRect.top + ((Number(point.y || 0) - vbY) / vbH) * svgRect.height;
+      const distance = Math.hypot(px - x, py - y);
+      if (!best || distance < best.distance) best = { distance, length, total };
+    }
+    if (!best) return null;
+    return {
+      ...best,
+      progress: Math.max(0, Math.min(1, best.length / best.total)),
+    };
+  }
+
+  function shouldIgnoreCallRecordingPointer(event) {
+    const target = event?.target;
+    if (!(target instanceof Element)) return false;
+    if (target.closest('.call-recording-progress-hit')) return false;
+    return Boolean(target.closest('button, a, input, textarea, select, [role="button"], .call-message-actions, .msg-reply, .reaction-chip, .msg-delete-btn'));
+  }
+
+  function seekCallRecordingProgress(row, event, hit = null) {
+    const controller = row?.__callRecordingProgress || ensureCallRecordingProgress(row);
+    const audio = controller?.audio;
+    if (!controller || !audio) return false;
+    const resolvedHit = hit || pointToCallRecordingHit(controller, event);
+    if (!resolvedHit) return false;
+    const duration = callRecordingDurationSeconds(row, audio);
+    if (!(duration > 0)) return false;
+    const targetTime = Math.max(0, Math.min(duration, duration * resolvedHit.progress));
+    const wasPaused = Boolean(audio.paused || audio.ended);
+    try {
+      audio.currentTime = targetTime;
+    } catch {}
+    setMediaPlaybackCompleted(row.__messageData || {}, CALL_RECORDING_ROLE, false);
+    updateCallRecordingProgress(row);
+    if (!wasPaused) {
+      Promise.resolve(audio.play?.()).catch(() => {});
+    }
+    if (event) {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      event.stopImmediatePropagation?.();
+    }
+    return true;
+  }
+
+  function resolveNearestCallRecordingHit(event) {
+    if (!messagesEl || shouldIgnoreCallRecordingPointer(event)) return null;
+    const candidates = [];
+    messagesEl.querySelectorAll('.call-message.call-recording-message').forEach((row) => {
+      const controller = row.__callRecordingProgress || ensureCallRecordingProgress(row);
+      if (!controller?.audio || !controller.hit) return;
+      const duration = callRecordingDurationSeconds(row, controller.audio);
+      if (!(duration > 0)) return;
+      const hit = pointToCallRecordingHit(controller, event);
+      if (hit && hit.distance <= 14) candidates.push({ row, hit });
+    });
+    candidates.sort((a, b) => a.hit.distance - b.hit.distance);
+    return candidates[0] || null;
+  }
+
+  function installCallRecordingProgressCapture() {
+    if (callRecordingProgressCaptureInstalled) return;
+    callRecordingProgressCaptureInstalled = true;
+    document.addEventListener('pointerdown', (event) => {
+      if (event.button != null && event.button !== 0) return;
+      const best = resolveNearestCallRecordingHit(event);
+      if (!best) return;
+      best.row.classList.add('call-recording-progress-pressed');
+      const clearPressed = () => best.row.classList.remove('call-recording-progress-pressed');
+      document.addEventListener('pointerup', clearPressed, { once: true, capture: true });
+      document.addEventListener('pointercancel', clearPressed, { once: true, capture: true });
+      seekCallRecordingProgress(best.row, event, best.hit);
+    }, true);
+  }
+
   function renderCallMessageCard(msg) {
     const call = normalizeCallMessageData(msg);
     const status = String(call.status || 'active');
@@ -17740,6 +17972,9 @@
     else if (notes?.transcript_status === 'processing' || notes?.status === 'processing') meta.push(t('Transcript processing'));
     else if (notes?.transcript_status === 'completed' && notes?.transcript_ready) meta.push(t('Transcript ready'));
     else if (notes?.transcript_status === 'error') meta.push(t('Transcription error'));
+    const recording = normalizeCallMixedRecording(call);
+    const recordingUrl = recording?.url || '';
+    const recordingDurationMs = Number(recording?.duration_ms || duration || 0);
     const actions = [];
     if (active) {
       actions.push(`<button type="button" class="call-message-action primary" data-call-card-join="${Number(call.id || 0)}">${esc(t('Join call'))}</button>`);
@@ -17775,8 +18010,13 @@
         actions.push(`<button type="button" class="call-message-action" data-call-card-artifacts="${Number(call.id || 0)}">${esc(t('AI summary'))}</button>`);
       }
     }
+    const playbackHtml = recordingUrl ? `
+      <audio class="call-recording-audio" preload="metadata" src="${esc(recordingUrl)}"></audio>
+      <button type="button" class="call-recording-play" data-call-recording-play="${Number(call.id || 0)}" aria-label="${esc(t('Play call recording'))}" title="${esc(t('Play call recording'))}">&gt;</button>
+    ` : '';
     return `
-      <div class="call-message-card" data-call-card="${Number(call.id || 0)}">
+      <div class="call-message-card call-recording-card${recordingUrl ? ' has-call-recording' : ''}" data-call-card="${Number(call.id || 0)}" data-call-recording-duration-ms="${Number(recordingDurationMs || 0)}">
+        ${playbackHtml}
         <div class="call-message-icon" aria-hidden="true">☎</div>
         <div class="call-message-main">
           <div class="call-message-title">${esc(labels[status] || labels.active)}</div>
@@ -17861,6 +18101,56 @@
     const message = row?.__messageData || {};
     const call = normalizeCallMessageData(message);
     if (!call?.id) return;
+    const recording = normalizeCallMixedRecording(call);
+    const audio = row.querySelector('.call-recording-audio');
+    const playButton = row.querySelector('.call-recording-play');
+    row.classList.toggle('call-recording-message', Boolean(recording && audio));
+    if (recording && audio) {
+      row.dataset.callRecordingDurationMs = String(Number(recording.duration_ms || call.duration_ms || 0) || 0);
+      bindMediaPlaybackState(audio, message, CALL_RECORDING_ROLE);
+      const controller = ensureCallRecordingProgress(row);
+      installCallRecordingProgressCapture();
+      syncCallRecordingPlayButton(playButton, false);
+      ['loadedmetadata', 'durationchange', 'timeupdate', 'seeking', 'seeked', 'play', 'pause', 'ended'].forEach((eventName) => {
+        audio.addEventListener(eventName, () => updateCallRecordingProgress(row));
+      });
+      audio.addEventListener('play', () => {
+        messagesEl?.querySelectorAll?.('.call-recording-audio')?.forEach((otherAudio) => {
+          if (otherAudio === audio || otherAudio.paused) return;
+          try {
+            otherAudio.pause();
+          } catch {}
+        });
+      });
+      playButton?.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (audio.paused || audio.ended) {
+          if (audio.ended) {
+            try { audio.currentTime = 0; } catch {}
+          }
+          setMediaPlaybackCompleted(message, CALL_RECORDING_ROLE, false);
+          Promise.resolve(audio.play?.()).catch(() => {});
+        } else {
+          try { audio.pause?.(); } catch {}
+        }
+        updateCallRecordingProgress(row);
+      });
+      controller?.hit?.addEventListener('pointerdown', (event) => {
+        row.classList.add('call-recording-progress-pressed');
+        const clearPressed = () => row.classList.remove('call-recording-progress-pressed');
+        document.addEventListener('pointerup', clearPressed, { once: true, capture: true });
+        document.addEventListener('pointercancel', clearPressed, { once: true, capture: true });
+        seekCallRecordingProgress(row, event);
+      });
+      requestAnimationFrame(() => refreshCallRecordingProgressShape(row));
+      if (typeof ResizeObserver !== 'undefined' && !row.__callRecordingResizeObserver) {
+        row.__callRecordingResizeObserver = new ResizeObserver(() => refreshCallRecordingProgressShape(row));
+        const card = row.querySelector('.call-recording-card');
+        if (card) row.__callRecordingResizeObserver.observe(card);
+      }
+      updateCallRecordingProgress(row);
+    }
     row.querySelector('[data-call-card-join]')?.addEventListener('click', (event) => {
       event.stopPropagation();
       window.BananzaCallHooks?.joinCallFromMessage?.(call);

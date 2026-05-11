@@ -376,6 +376,12 @@ function createCallFeature({
     WHERE call_id=? AND status NOT IN ('recording','canceled') AND file_path!=''
     ORDER BY scope DESC, started_at ASC, id ASC
   `);
+  const completedMixedRecordingForCallStmt = db.prepare(`
+    SELECT * FROM call_recordings
+    WHERE call_id=? AND scope='mixed' AND status='completed' AND file_path!=''
+    ORDER BY ended_at DESC, id DESC
+    LIMIT 1
+  `);
   const callArtifactSettingsStmt = db.prepare('SELECT * FROM call_artifact_settings ORDER BY artifact_key ASC');
   const callArtifactSettingByKeyStmt = db.prepare('SELECT * FROM call_artifact_settings WHERE artifact_key=?');
   const upsertCallArtifactSettingStmt = db.prepare(`
@@ -507,6 +513,42 @@ function createCallFeature({
     const dir = path.join(root, `call-${Number(callId) || 0}`);
     fs.mkdirSync(dir, { recursive: true });
     return path.join(dir, 'mixed.ogg');
+  }
+
+  function isPathInside(parent, child) {
+    const relative = path.relative(path.resolve(parent), path.resolve(child));
+    return relative === '' || (relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+  }
+
+  function resolveCompletedMixedRecording(callId) {
+    const recording = completedMixedRecordingForCallStmt.get(callId);
+    if (!recording?.file_path) return null;
+    const filePath = path.resolve(recording.file_path);
+    if (!isPathInside(recordingRoot(), filePath)) return null;
+    if (!fs.existsSync(filePath)) return null;
+    return { ...recording, file_path: filePath };
+  }
+
+  function serializeMixedRecording(callId) {
+    const recording = resolveCompletedMixedRecording(callId);
+    if (!recording) return null;
+    let size = Number(recording.size_bytes || 0);
+    if (!(size > 0)) {
+      try {
+        size = fs.statSync(recording.file_path).size;
+      } catch {
+        size = 0;
+      }
+    }
+    return {
+      id: Number(recording.id),
+      call_id: Number(recording.call_id),
+      status: recording.status || 'completed',
+      duration_ms: recording.duration_ms == null ? null : Number(recording.duration_ms),
+      size_bytes: size || null,
+      mime_type: 'audio/ogg',
+      url: `/api/calls/${Number(callId)}/recording/mixed`,
+    };
   }
 
   function fileInfoFromEgress(egressInfo = {}) {
@@ -894,6 +936,7 @@ function createCallFeature({
     const settings = getCallSettings(db);
     const isActive = row.status === 'active';
     const duration = row.duration_ms == null ? callDurationMs(row) : Number(row.duration_ms);
+    const mixedRecording = serializeMixedRecording(row.id);
     return {
       id: Number(row.id),
       chat_id: Number(row.chat_id),
@@ -913,6 +956,7 @@ function createCallFeature({
       ring_expires_at: row.ring_expires_at || null,
       participants,
       ai_notes: serializeAiNotes(aiNotesByCallStmt.get(row.id)),
+      mixed_recording: mixedRecording,
       participant_count: participants.filter((item) => item.state === 'joined').length,
       can_join: isActive,
       can_screen_share: Boolean(isActive && settings.screen_share_enabled),
@@ -971,6 +1015,7 @@ function createCallFeature({
           duration_ms: call.duration_ms,
           ended_reason: call.ended_reason,
           ai_notes: call.ai_notes || null,
+          mixed_recording: call.mixed_recording || null,
           primary_transcript_run: serializeTranscriptRun(primaryRun),
           artifact_batch: serializeArtifactBatch(artifactBatch),
           transcript_runs: transcriptRunsForCallStmt.all(call.id).map(serializeTranscriptRun),
@@ -1996,6 +2041,10 @@ function createCallFeature({
       recording.call_id
     );
     broadcastAiNotesUpdated(recording.call_id);
+    if (recording.scope === 'mixed') {
+      const call = getCall(recording.call_id);
+      if (call) broadcastCallMessageUpdated(call);
+    }
     if (!stillRecording) maybeStartAutoTranscript(recording.call_id);
   }
 
@@ -2220,6 +2269,54 @@ function createCallFeature({
       settings: publicSettings(),
       calls: activeCallsForUserStmt.all(req.user.id).map(serializeCall),
     });
+  });
+
+  app.get('/api/calls/:callId/recording/mixed', auth, (req, res) => {
+    const callId = normalizeId(req.params.callId);
+    const row = callByIdStmt.get(callId);
+    if (!row) return boolError(res, 404, 'Call not found', 'call_not_found');
+    if (!isMember(row.chat_id, req.user.id)) return boolError(res, 403, 'Forbidden', 'forbidden');
+    const recording = resolveCompletedMixedRecording(callId);
+    if (!recording) return boolError(res, 404, 'Mixed recording is not available', 'mixed_recording_missing');
+
+    let stat;
+    try {
+      stat = fs.statSync(recording.file_path);
+    } catch {
+      return boolError(res, 404, 'Mixed recording is not available', 'mixed_recording_missing');
+    }
+    const size = Number(stat.size || 0);
+    if (!(size > 0)) return boolError(res, 404, 'Mixed recording is not available', 'mixed_recording_missing');
+
+    const range = String(req.headers.range || '').trim();
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Content-Type', 'audio/ogg');
+    res.setHeader('Cache-Control', 'private, max-age=0, must-revalidate');
+
+    if (range) {
+      const match = range.match(/^bytes=(\d*)-(\d*)$/);
+      if (!match) {
+        res.setHeader('Content-Range', `bytes */${size}`);
+        return res.status(416).end();
+      }
+      const requestedStart = match[1] ? Number(match[1]) : null;
+      const requestedEnd = match[2] ? Number(match[2]) : null;
+      let start = requestedStart == null ? Math.max(0, size - (requestedEnd || 0)) : requestedStart;
+      let end = requestedStart == null ? size - 1 : (requestedEnd == null ? size - 1 : requestedEnd);
+      start = Math.max(0, Math.min(size - 1, Number(start || 0)));
+      end = Math.max(start, Math.min(size - 1, Number(end || 0)));
+      if (start >= size || end >= size || start > end) {
+        res.setHeader('Content-Range', `bytes */${size}`);
+        return res.status(416).end();
+      }
+      res.status(206);
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
+      res.setHeader('Content-Length', String(end - start + 1));
+      return fs.createReadStream(recording.file_path, { start, end }).pipe(res);
+    }
+
+    res.setHeader('Content-Length', String(size));
+    return fs.createReadStream(recording.file_path).pipe(res);
   });
 
   app.get('/api/chats/:chatId/calls/active', auth, (req, res) => {
