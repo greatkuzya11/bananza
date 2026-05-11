@@ -38,6 +38,7 @@ const DEFAULT_AI_SETTINGS = {
   deepseek_default_summary_model: 'deepseek-chat',
   deepseek_temperature: 0.3,
   deepseek_max_tokens: 1000,
+  deepseek_request_timeout_ms: 600000,
   deepseek_key_encrypted: '',
   deepseek_key_masked: '',
   yandex_enabled: false,
@@ -203,6 +204,12 @@ function normalizeSettings(raw = {}) {
   next.deepseek_default_summary_model = cleanModel(next.deepseek_default_summary_model, DEFAULT_AI_SETTINGS.deepseek_default_summary_model);
   next.deepseek_temperature = floatValue(next.deepseek_temperature, DEFAULT_AI_SETTINGS.deepseek_temperature, 0, 1);
   next.deepseek_max_tokens = intValue(next.deepseek_max_tokens, DEFAULT_AI_SETTINGS.deepseek_max_tokens, 1, 8000);
+  next.deepseek_request_timeout_ms = intValue(
+    next.deepseek_request_timeout_ms,
+    DEFAULT_AI_SETTINGS.deepseek_request_timeout_ms,
+    30000,
+    1800000
+  );
   next.deepseek_key_encrypted = String(next.deepseek_key_encrypted || '');
   next.deepseek_key_masked = String(next.deepseek_key_masked || '');
   next.yandex_enabled = boolValue(next.yandex_enabled, DEFAULT_AI_SETTINGS.yandex_enabled);
@@ -334,6 +341,7 @@ function saveAiSettings(db, incoming = {}, secret) {
     deepseek_default_summary_model: incoming.deepseek_default_summary_model ?? current.deepseek_default_summary_model,
     deepseek_temperature: incoming.deepseek_temperature ?? current.deepseek_temperature,
     deepseek_max_tokens: incoming.deepseek_max_tokens ?? current.deepseek_max_tokens,
+    deepseek_request_timeout_ms: incoming.deepseek_request_timeout_ms ?? current.deepseek_request_timeout_ms,
     yandex_enabled: Object.prototype.hasOwnProperty.call(incoming, 'yandex_enabled') ? incoming.yandex_enabled : current.yandex_enabled,
     yandex_interactive_enabled: Object.prototype.hasOwnProperty.call(incoming, 'yandex_interactive_enabled')
       ? incoming.yandex_interactive_enabled

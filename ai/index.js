@@ -2714,6 +2714,7 @@ function createAiBotFeature({
         user,
         maxOutputTokens: 80,
         temperature: 0.2,
+        timeoutMs: settings.deepseek_request_timeout_ms,
       });
     } else if (bot.provider === 'grok') {
       const apiKey = getGrokApiKey();
@@ -4123,6 +4124,7 @@ function createAiBotFeature({
         user,
         maxOutputTokens: intValue(bot.max_tokens, settings.deepseek_max_tokens, 1, 8000),
         temperature: floatValue(bot.temperature, settings.deepseek_temperature, 0, 1),
+        timeoutMs: settings.deepseek_request_timeout_ms,
       });
     } else if (bot.provider === 'grok') {
       const apiKey = getGrokApiKey();
@@ -4554,6 +4556,7 @@ function createAiBotFeature({
         user,
         maxOutputTokens: intValue(bot.max_tokens, settings.deepseek_max_tokens, 1, 8000),
         temperature: floatValue(bot.temperature, settings.deepseek_temperature, 0, 1),
+        timeoutMs: settings.deepseek_request_timeout_ms,
       });
     }
     if (bot.provider === 'grok') {
@@ -5294,6 +5297,7 @@ function createAiBotFeature({
         user,
         maxOutputTokens,
         temperature: 0.2,
+        timeoutMs: settings.deepseek_request_timeout_ms,
       });
     } else if (bot.provider === 'grok') {
       rawText = await grokAi.generateText({
@@ -5464,6 +5468,7 @@ function createAiBotFeature({
         user,
         maxOutputTokens: intValue(bot.max_tokens, settings.deepseek_max_tokens, 1, 8000),
         temperature: floatValue(bot.temperature, settings.deepseek_temperature, 0, 1),
+        timeoutMs: settings.deepseek_request_timeout_ms,
       });
     } else if (bot.provider === 'grok') {
       rawText = await grokAi.generateText({
@@ -6459,6 +6464,7 @@ function createAiBotFeature({
               user: context.user,
               maxOutputTokens: intValue(bot.max_tokens, settings.deepseek_max_tokens, 1, 8000),
               temperature: floatValue(bot.temperature, settings.deepseek_temperature, 0, 1),
+              timeoutMs: settings.deepseek_request_timeout_ms,
             })
         : isGrok
           ? await grokAi.generateText({
@@ -7520,6 +7526,7 @@ function createAiBotFeature({
         baseUrl,
         model,
         temperature: floatValue(body.deepseek_temperature, settings.deepseek_temperature, 0, 1),
+        timeoutMs: intValue(body.deepseek_request_timeout_ms, settings.deepseek_request_timeout_ms, 30000, 1800000),
       });
       let models = null;
       try {
@@ -7688,6 +7695,7 @@ function createAiBotFeature({
         user: prompt,
         maxOutputTokens: Math.min(intValue(bot.max_tokens, settings.deepseek_max_tokens, 1, 8000), 1000),
         temperature: floatValue(bot.temperature, settings.deepseek_temperature, 0, 1),
+        timeoutMs: settings.deepseek_request_timeout_ms,
       });
       res.json({ ok: true, result: { text, latencyMs: Date.now() - startedAt, model: bot.response_model || settings.deepseek_default_response_model } });
     } catch (error) {

@@ -36,6 +36,7 @@ test('getAiSettings derives provider interactive flags from enabled providers wh
   assert.equal(settings.grok_interactive_enabled, false);
   assert.equal(settings.deepseek_interactive_enabled, true);
   assert.equal(settings.yandex_interactive_enabled, true);
+  assert.equal(settings.deepseek_request_timeout_ms, 600000);
 });
 
 test('saveAiSettings persists explicit provider interactive flags', (t) => {
@@ -49,6 +50,7 @@ test('saveAiSettings persists explicit provider interactive flags', (t) => {
     grok_interactive_enabled: true,
     deepseek_enabled: true,
     deepseek_interactive_enabled: false,
+    deepseek_request_timeout_ms: 900000,
     yandex_enabled: true,
     yandex_interactive_enabled: true,
   }, 'test-secret');
@@ -56,11 +58,28 @@ test('saveAiSettings persists explicit provider interactive flags', (t) => {
   assert.equal(saved.openai_interactive_enabled, false);
   assert.equal(saved.grok_interactive_enabled, true);
   assert.equal(saved.deepseek_interactive_enabled, false);
+  assert.equal(saved.deepseek_request_timeout_ms, 900000);
   assert.equal(saved.yandex_interactive_enabled, true);
 
   const reread = getAiSettings(db);
   assert.equal(reread.openai_interactive_enabled, false);
   assert.equal(reread.grok_interactive_enabled, true);
   assert.equal(reread.deepseek_interactive_enabled, false);
+  assert.equal(reread.deepseek_request_timeout_ms, 900000);
   assert.equal(reread.yandex_interactive_enabled, true);
+});
+
+test('saveAiSettings clamps DeepSeek request timeout between 30 and 1800 seconds', (t) => {
+  const db = createDb();
+  t.after(() => db.close());
+
+  const tooLow = saveAiSettings(db, {
+    deepseek_request_timeout_ms: 1000,
+  }, 'test-secret');
+  assert.equal(tooLow.deepseek_request_timeout_ms, 30000);
+
+  const tooHigh = saveAiSettings(db, {
+    deepseek_request_timeout_ms: 3600000,
+  }, 'test-secret');
+  assert.equal(tooHigh.deepseek_request_timeout_ms, 1800000);
 });

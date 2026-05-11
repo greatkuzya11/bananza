@@ -141,6 +141,7 @@ async function createChatCompletion({
   messages,
   maxOutputTokens = 900,
   temperature = 0.3,
+  timeoutMs,
 }) {
   const isReasoner = /deepseek-reasoner/i.test(String(model || ''));
   const requestMessages = Array.isArray(messages) && messages.length
@@ -161,7 +162,7 @@ async function createChatCompletion({
   };
   if (!isReasoner) body.temperature = Math.max(0, Math.min(1, Number(temperature) || 0.3));
 
-  const payload = await postJson(`${cleanBaseUrl(baseUrl)}/chat/completions`, body, { apiKey });
+  const payload = await postJson(`${cleanBaseUrl(baseUrl)}/chat/completions`, body, { apiKey, timeoutMs });
   return extractChatResult(payload);
 }
 

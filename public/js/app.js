@@ -343,6 +343,7 @@
       deepseek_default_summary_model: 'deepseek-chat',
       deepseek_temperature: 0.3,
       deepseek_max_tokens: 1000,
+      deepseek_request_timeout_ms: 600000,
     },
     bots: [],
     chats: [],
@@ -7863,6 +7864,7 @@
     $('#deepseekAiBaseUrl').value = settings.deepseek_base_url || 'https://api.deepseek.com';
     $('#deepseekAiTemperature').value = settings.deepseek_temperature ?? 0.3;
     $('#deepseekAiMaxTokens').value = settings.deepseek_max_tokens ?? 1000;
+    $('#deepseekAiRequestTimeoutSeconds').value = Math.round(Number(settings.deepseek_request_timeout_ms || 600000) / 1000);
     $('#deepseekAiApiKey').value = '';
     $('#deepseekAiKeyStatus').textContent = settings.has_deepseek_key
       ? `Key saved: ${settings.masked_deepseek_key || '***'}`
@@ -7892,6 +7894,7 @@
       deepseek_default_summary_model: $('#deepseekAiDefaultSummaryModel')?.value.trim(),
       deepseek_temperature: Number($('#deepseekAiTemperature')?.value || 0.3),
       deepseek_max_tokens: Number($('#deepseekAiMaxTokens')?.value || 1000),
+      deepseek_request_timeout_ms: Number($('#deepseekAiRequestTimeoutSeconds')?.value || 600) * 1000,
     };
     const key = $('#deepseekAiApiKey')?.value.trim();
     if (key) body.deepseek_api_key = key;
