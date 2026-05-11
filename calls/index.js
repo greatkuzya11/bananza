@@ -2271,7 +2271,14 @@ function createCallFeature({
     });
   });
 
-  app.get('/api/calls/:callId/recording/mixed', auth, (req, res) => {
+  function authCallRecordingQueryToken(req, _res, next) {
+    if (!req.headers.authorization && req.query?.token) {
+      req.headers.authorization = `Bearer ${String(req.query.token || '')}`;
+    }
+    next();
+  }
+
+  app.get('/api/calls/:callId/recording/mixed', authCallRecordingQueryToken, auth, (req, res) => {
     const callId = normalizeId(req.params.callId);
     const row = callByIdStmt.get(callId);
     if (!row) return boolError(res, 404, 'Call not found', 'call_not_found');

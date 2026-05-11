@@ -17721,6 +17721,7 @@
   }
 
   const CALL_RECORDING_ROLE = 'call-recording-audio';
+  const CALL_RECORDING_PROGRESS_STROKE_WIDTH = 3;
   let callRecordingProgressCaptureInstalled = false;
 
   function normalizeCallMixedRecording(call = {}) {
@@ -17735,6 +17736,19 @@
     };
   }
 
+  function callRecordingPlaybackUrl(url) {
+    const raw = String(url || '').trim();
+    if (!raw || !token) return raw;
+    try {
+      const parsed = new URL(raw, window.location.origin);
+      parsed.searchParams.set('token', token);
+      return parsed.pathname + parsed.search + parsed.hash;
+    } catch {
+      const separator = raw.includes('?') ? '&' : '?';
+      return `${raw}${separator}token=${encodeURIComponent(token)}`;
+    }
+  }
+
   function callRecordingDurationSeconds(row, audio) {
     const mediaDuration = Number(audio?.duration || 0);
     if (Number.isFinite(mediaDuration) && mediaDuration > 0) return mediaDuration;
@@ -17745,30 +17759,69 @@
     return 0;
   }
 
-  function callRecordingPathD(width, height) {
-    const w = Math.max(32, Number(width || 0));
-    const h = Math.max(32, Number(height || 0));
-    const r = Math.min(12, Math.max(8, Math.min(w, h) * 0.12));
-    const inset = 2;
-    const x0 = inset;
-    const y0 = inset;
-    const x1 = Math.max(x0 + 1, w - inset);
-    const y1 = Math.max(y0 + 1, h - inset);
-    return `M ${x0 + r} ${y0} H ${x1 - r} Q ${x1} ${y0} ${x1} ${y0 + r} V ${y1 - r} Q ${x1} ${y1} ${x1 - r} ${y1} H ${x0 + r} Q ${x0} ${y1} ${x0} ${y1 - r} V ${y0 + r} Q ${x0} ${y0} ${x0 + r} ${y0} Z`;
+  function parseCallRecordingRadiusValue(value) {
+    const firstPart = String(value || '0').trim().split(/\s+/)[0] || '0';
+    const parsed = Number.parseFloat(firstPart);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function callRecordingRoundedRectPath(width, height, radii = {}, inset = 0) {
+    const safeWidth = Math.max(1, Number(width) || 0);
+    const safeHeight = Math.max(1, Number(height) || 0);
+    const left = inset;
+    const top = inset;
+    const right = Math.max(left, safeWidth - inset);
+    const bottom = Math.max(top, safeHeight - inset);
+    const maxRadius = Math.max(0, Math.min(right - left, bottom - top) / 2);
+    const topLeft = clamp(Number(radii.topLeft || 0) - inset, 0, maxRadius);
+    const topRight = clamp(Number(radii.topRight || 0) - inset, 0, maxRadius);
+    const bottomRight = clamp(Number(radii.bottomRight || 0) - inset, 0, maxRadius);
+    const bottomLeft = clamp(Number(radii.bottomLeft || 0) - inset, 0, maxRadius);
+    const commands = [`M ${left + topLeft} ${top}`, `H ${right - topRight}`];
+    if (topRight > 0) commands.push(`A ${topRight} ${topRight} 0 0 1 ${right} ${top + topRight}`);
+    else commands.push(`L ${right} ${top}`);
+    commands.push(`V ${bottom - bottomRight}`);
+    if (bottomRight > 0) commands.push(`A ${bottomRight} ${bottomRight} 0 0 1 ${right - bottomRight} ${bottom}`);
+    else commands.push(`L ${right} ${bottom}`);
+    commands.push(`H ${left + bottomLeft}`);
+    if (bottomLeft > 0) commands.push(`A ${bottomLeft} ${bottomLeft} 0 0 1 ${left} ${bottom - bottomLeft}`);
+    else commands.push(`L ${left} ${bottom}`);
+    commands.push(`V ${top + topLeft}`);
+    if (topLeft > 0) commands.push(`A ${topLeft} ${topLeft} 0 0 1 ${left + topLeft} ${top}`);
+    else commands.push(`L ${left} ${top}`);
+    commands.push('Z');
+    return commands.join(' ');
+  }
+
+  function ensureCallRecordingFooterButton(row) {
+    const footer = row?.querySelector?.('.msg-footer');
+    if (!footer) return null;
+    let button = footer.querySelector('.call-recording-play');
+    if (!button) {
+      button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'voice-footer-play call-recording-play';
+      button.setAttribute('aria-label', t('Play call recording'));
+      footer.insertBefore(button, footer.firstChild);
+    }
+    return button;
   }
 
   function ensureCallRecordingProgress(row) {
     const card = row?.querySelector?.('.call-recording-card');
-    if (!row || !card) return null;
+    const bubble = row?.querySelector?.('.msg-bubble');
+    if (!row || !card || !bubble) return null;
     let controller = row.__callRecordingProgress || null;
     if (!controller) {
       controller = row.__callRecordingProgress = {};
     }
     controller.card = card;
+    controller.bubble = bubble;
     controller.audio = row.querySelector('.call-recording-audio');
-    controller.playButton = row.querySelector('.call-recording-play');
+    controller.playButton = row.querySelector('.call-recording-play') || ensureCallRecordingFooterButton(row);
     controller.message = row.__messageData || {};
     controller.call = normalizeCallMessageData(controller.message);
+    row.__callRecordingCall = controller.call;
     controller.recording = normalizeCallMixedRecording(controller.call);
     if (!controller.svg) {
       const shell = document.createElement('div');
@@ -17781,13 +17834,15 @@
           <path class="call-recording-progress-hit"></path>
         </svg>
       `;
-      card.prepend(shell);
+      bubble.insertBefore(shell, bubble.firstChild);
       controller.shell = shell;
       controller.svg = shell.querySelector('.call-recording-progress');
       controller.track = shell.querySelector('.call-recording-progress-track');
       controller.fill = shell.querySelector('.call-recording-progress-fill');
       controller.press = shell.querySelector('.call-recording-progress-press');
       controller.hit = shell.querySelector('.call-recording-progress-hit');
+    } else if (controller.shell?.parentNode !== bubble) {
+      bubble.insertBefore(controller.shell, bubble.firstChild);
     }
     refreshCallRecordingProgressShape(row);
     return controller;
@@ -17795,11 +17850,17 @@
 
   function refreshCallRecordingProgressShape(row) {
     const controller = row?.__callRecordingProgress;
-    if (!controller?.card || !controller.svg) return;
-    const rect = controller.card.getBoundingClientRect?.() || {};
-    const width = Math.max(120, Math.round(Number(rect.width || controller.card.offsetWidth || 320)));
-    const height = Math.max(48, Math.round(Number(rect.height || controller.card.offsetHeight || 76)));
-    const d = callRecordingPathD(width, height);
+    if (!controller?.bubble || !controller.svg) return;
+    const rect = controller.bubble.getBoundingClientRect?.() || {};
+    const width = Math.max(120, Math.round(Number(rect.width || controller.bubble.offsetWidth || 320)));
+    const height = Math.max(48, Math.round(Number(rect.height || controller.bubble.offsetHeight || 76)));
+    const styles = window.getComputedStyle(controller.bubble);
+    const d = callRecordingRoundedRectPath(width, height, {
+      topLeft: parseCallRecordingRadiusValue(styles.borderTopLeftRadius),
+      topRight: parseCallRecordingRadiusValue(styles.borderTopRightRadius),
+      bottomRight: parseCallRecordingRadiusValue(styles.borderBottomRightRadius),
+      bottomLeft: parseCallRecordingRadiusValue(styles.borderBottomLeftRadius),
+    }, CALL_RECORDING_PROGRESS_STROKE_WIDTH / 2 + 0.5);
     controller.svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
     [controller.track, controller.fill, controller.press, controller.hit].forEach((pathEl) => {
       if (!pathEl) return;
@@ -17827,10 +17888,9 @@
       : (duration > 0 ? Math.max(0, Math.min(1, Number(audio.currentTime || 0) / duration)) : 0);
     const length = Number(controller.pathLength || 0);
     if (length > 0) {
-      controller.fill.style.strokeDasharray = `${length}`;
-      controller.fill.style.strokeDashoffset = `${Math.max(0, length * (1 - progress))}`;
-      controller.fill.setAttribute('stroke-dasharray', `${length * progress} ${Math.max(0, length * (1 - progress))}`);
+      controller.fill.setAttribute('stroke-dasharray', `${length * progress} ${Math.max(0, length * (2 - progress))}`);
       controller.fill.setAttribute('stroke-dashoffset', '0');
+      controller.fill.style.opacity = progress > 0 ? '1' : '.02';
     }
     row.classList.toggle('call-recording-playing', isPlaying);
     row.classList.toggle('call-recording-completed', completed && !isPlaying);
@@ -17839,7 +17899,7 @@
 
   function syncCallRecordingPlayButton(button, isPlaying) {
     if (!button) return;
-    button.textContent = isPlaying ? '||' : '>';
+    button.textContent = isPlaying ? '❚❚' : '▶';
     button.classList.toggle('is-playing', Boolean(isPlaying));
     button.setAttribute('aria-label', t(isPlaying ? 'Pause call recording' : 'Play call recording'));
     button.setAttribute('title', t(isPlaying ? 'Pause call recording' : 'Play call recording'));
@@ -18011,8 +18071,7 @@
       }
     }
     const playbackHtml = recordingUrl ? `
-      <audio class="call-recording-audio" preload="metadata" src="${esc(recordingUrl)}"></audio>
-      <button type="button" class="call-recording-play" data-call-recording-play="${Number(call.id || 0)}" aria-label="${esc(t('Play call recording'))}" title="${esc(t('Play call recording'))}">&gt;</button>
+      <audio class="call-recording-audio" preload="metadata" src="${esc(callRecordingPlaybackUrl(recordingUrl))}"></audio>
     ` : '';
     return `
       <div class="call-message-card call-recording-card${recordingUrl ? ' has-call-recording' : ''}" data-call-card="${Number(call.id || 0)}" data-call-recording-duration-ms="${Number(recordingDurationMs || 0)}">
@@ -18103,7 +18162,10 @@
     if (!call?.id) return;
     const recording = normalizeCallMixedRecording(call);
     const audio = row.querySelector('.call-recording-audio');
-    const playButton = row.querySelector('.call-recording-play');
+    if (recording && audio && audio.getAttribute('src') !== callRecordingPlaybackUrl(recording.url)) {
+      audio.setAttribute('src', callRecordingPlaybackUrl(recording.url));
+    }
+    const playButton = recording && audio ? ensureCallRecordingFooterButton(row) : null;
     row.classList.toggle('call-recording-message', Boolean(recording && audio));
     if (recording && audio) {
       row.dataset.callRecordingDurationMs = String(Number(recording.duration_ms || call.duration_ms || 0) || 0);
@@ -18146,8 +18208,8 @@
       requestAnimationFrame(() => refreshCallRecordingProgressShape(row));
       if (typeof ResizeObserver !== 'undefined' && !row.__callRecordingResizeObserver) {
         row.__callRecordingResizeObserver = new ResizeObserver(() => refreshCallRecordingProgressShape(row));
-        const card = row.querySelector('.call-recording-card');
-        if (card) row.__callRecordingResizeObserver.observe(card);
+        const bubble = row.querySelector('.msg-bubble');
+        if (bubble) row.__callRecordingResizeObserver.observe(bubble);
       }
       updateCallRecordingProgress(row);
     }

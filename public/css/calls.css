@@ -1001,6 +1001,19 @@ html[data-visual-mode="rich"] .call-admin-status {
 
 .call-message .msg-bubble {
   max-width: min(430px, 100%);
+  isolation: isolate;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.call-message .msg-bubble > .msg-saved-origin,
+.call-message .msg-bubble > .msg-forwarded,
+.call-message .msg-bubble > .msg-reply,
+.call-message .msg-bubble > .call-message-card,
+.call-message .msg-bubble > .msg-text,
+.call-message .msg-bubble > .link-preview,
+.call-message .msg-bubble > .msg-footer {
+  position: relative;
+  z-index: 1;
 }
 
 .call-message-card {
@@ -1081,9 +1094,8 @@ html[data-visual-mode="rich"] .call-admin-status {
 }
 
 .call-recording-card.has-call-recording {
-  min-height: 74px;
   grid-template-columns: minmax(0, 1fr);
-  padding: 12px 12px 12px 56px;
+  padding-bottom: 2px;
 }
 
 .call-recording-card.has-call-recording .call-message-icon {
@@ -1105,39 +1117,18 @@ html[data-visual-mode="rich"] .call-admin-status {
 }
 
 .call-recording-play {
-  position: absolute;
-  z-index: 3;
-  left: 10px;
-  bottom: 10px;
-  width: 34px;
-  height: 34px;
-  border: 0;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  background: color-mix(in srgb, var(--accent) 22%, rgba(255,255,255,.14));
-  color: #fff;
-  cursor: pointer;
-  font: 800 16px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, #fff 20%, transparent);
-}
-
-.call-recording-play.is-playing {
-  font-size: 13px;
-  letter-spacing: 0;
-}
-
-.call-recording-play:focus-visible {
-  outline: none;
-  box-shadow: var(--call-focus-ring), inset 0 0 0 1px color-mix(in srgb, #fff 24%, transparent);
+  z-index: 2;
 }
 
 .call-recording-progress-shell {
   position: absolute;
-  z-index: 1;
+  z-index: 0;
   inset: 0;
   pointer-events: none;
   border-radius: inherit;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
 }
 
 .call-recording-progress {
@@ -1146,6 +1137,8 @@ html[data-visual-mode="rich"] .call-admin-status {
   display: block;
   overflow: visible;
   pointer-events: none;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .call-recording-progress-track,
@@ -1153,25 +1146,31 @@ html[data-visual-mode="rich"] .call-admin-status {
 .call-recording-progress-press,
 .call-recording-progress-hit {
   fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
 }
 
 .call-recording-progress-track {
-  stroke: color-mix(in srgb, var(--accent) 28%, transparent);
-  stroke-width: 2;
+  stroke: color-mix(in srgb, var(--accent) 24%, transparent);
+  stroke-width: 3;
+  opacity: .42;
 }
 
 .call-recording-progress-fill {
-  stroke: color-mix(in srgb, var(--accent) 78%, #ffffff 10%);
-  stroke-width: 2.6;
-  stroke-linecap: round;
-  transition: stroke-dashoffset .12s linear;
+  stroke: color-mix(in srgb, var(--accent) 78%, #ffffff 18%);
+  stroke-width: 3;
+  opacity: .02;
+  transition: opacity .12s linear;
+  will-change: stroke-dasharray, stroke-dashoffset;
 }
 
 .call-recording-progress-press {
-  stroke: color-mix(in srgb, var(--accent) 34%, #ffffff 14%);
-  stroke-width: 0;
+  stroke: color-mix(in srgb, var(--accent) 62%, #ffffff 38%);
+  stroke-width: 5;
   opacity: 0;
+  pointer-events: none;
+  transition: opacity .08s linear;
 }
 
 .call-recording-progress-hit {
@@ -1183,8 +1182,7 @@ html[data-visual-mode="rich"] .call-admin-status {
 }
 
 .call-recording-progress-pressed .call-recording-progress-press {
-  stroke-width: 8;
-  opacity: .34;
+  opacity: .86;
 }
 
 .call-message-transcribe {
