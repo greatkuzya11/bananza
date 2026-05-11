@@ -188,6 +188,16 @@ function installProgressSvgMocks(dom, { pathLength = 100 } = {}) {
         return pathLength;
       },
     });
+    Object.defineProperty(window.SVGElement.prototype, 'getPointAtLength', {
+      configurable: true,
+      writable: true,
+      value(length) {
+        return {
+          x: (Math.max(0, Math.min(pathLength, Number(length || 0))) / pathLength) * 248,
+          y: 0,
+        };
+      },
+    });
   }
   const originalGetBoundingClientRect = window.Element.prototype.getBoundingClientRect;
   const buildRect = (width, height) => ({
@@ -205,6 +215,9 @@ function installProgressSvgMocks(dom, { pathLength = 100 } = {}) {
   });
   window.Element.prototype.getBoundingClientRect = function patchedGetBoundingClientRect() {
     if (this instanceof window.HTMLElement && this.classList.contains('msg-bubble')) {
+      return buildRect(248, 104);
+    }
+    if (this instanceof window.SVGElement && this.classList.contains('voice-note-progress')) {
       return buildRect(248, 104);
     }
     return originalGetBoundingClientRect.call(this);
@@ -2870,6 +2883,98 @@ test('voice note keeps completed progress state after leaving and reopening the 
 
   assert.equal(BananzaAppBridge.isMediaPlaybackCompleted(row.__messageData, 'voice-note-audio'), true);
   assert.ok(Math.abs(getDasharrayFilledLength(fill) - 100) < 0.1);
+});
+
+test('voice note progress outline seeks without starting paused audio', async (t) => {
+  const chat = createChatFixture(1, 'Chat A', { lastMessageId: 455 });
+  const message = createVoiceNoteMessage(1, 455, { voice_duration_ms: 24_000 });
+  const dom = await openMediaPlaybackDom({
+    activeChat: chat,
+    chats: [chat],
+    chatMessagesByChatId: {
+      1: [message],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+
+  const row = document.querySelector('.msg-row[data-msg-id="455"]');
+  const audio = row.querySelector('audio');
+  const hit = row.querySelector('.voice-note-progress-hit');
+  const fill = row.querySelector('.voice-note-progress-fill');
+  const mediaState = installMockMediaElement(dom, audio, {
+    duration: 24,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+  audio.dispatchEvent(new dom.window.Event('durationchange'));
+  await wait(dom, 40);
+
+  hit.dispatchEvent(new dom.window.MouseEvent('pointerdown', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 124,
+    clientY: 0,
+  }));
+  await wait(dom, 20);
+
+  assert.ok(Math.abs(Number(audio.currentTime || 0) - 12) < 0.2);
+  assert.equal(mediaState.paused, true);
+  assert.ok(Math.abs(getDasharrayFilledLength(fill) - 50) < 1);
+});
+
+test('voice note progress outline clears completed state when seeking', async (t) => {
+  const chat = createChatFixture(1, 'Chat A', { lastMessageId: 466 });
+  const message = createVoiceNoteMessage(1, 466, { voice_duration_ms: 24_000 });
+  const dom = await openMediaPlaybackDom({
+    activeChat: chat,
+    chats: [chat],
+    chatMessagesByChatId: {
+      1: [message],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+
+  const row = document.querySelector('.msg-row[data-msg-id="466"]');
+  const audio = row.querySelector('audio');
+  const hit = row.querySelector('.voice-note-progress-hit');
+  const fill = row.querySelector('.voice-note-progress-fill');
+  installMockMediaElement(dom, audio, {
+    duration: 24,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+  audio.dispatchEvent(new dom.window.Event('durationchange'));
+  await wait(dom, 40);
+
+  audio.currentTime = 24;
+  audio.ended = true;
+  audio.paused = true;
+  audio.dispatchEvent(new dom.window.Event('ended'));
+  await wait(dom, 40);
+  assert.equal(BananzaAppBridge.isMediaPlaybackCompleted(row.__messageData, 'voice-note-audio'), true);
+  assert.ok(Math.abs(getDasharrayFilledLength(fill) - 100) < 0.1);
+
+  hit.dispatchEvent(new dom.window.MouseEvent('pointerdown', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 124,
+    clientY: 0,
+  }));
+  await wait(dom, 20);
+
+  assert.equal(BananzaAppBridge.isMediaPlaybackCompleted(row.__messageData, 'voice-note-audio'), false);
+  assert.ok(Math.abs(Number(audio.currentTime || 0) - 12) < 0.2);
+  assert.ok(Math.abs(getDasharrayFilledLength(fill) - 50) < 1);
 });
 
 test('video note keeps completed progress state after leaving and reopening the chat', async (t) => {

@@ -176,9 +176,11 @@
         svg: null,
         track: null,
         fill: null,
+        hit: null,
         observer: null,
         observedBubble: null,
         cleanupAudio: null,
+        cleanupSeek: null,
         frameId: 0,
         pathLength: 0,
         completed: Boolean(
@@ -223,6 +225,10 @@
       controller.cleanupAudio();
       controller.cleanupAudio = null;
     }
+    if (typeof controller.cleanupSeek === 'function') {
+      controller.cleanupSeek();
+      controller.cleanupSeek = null;
+    }
     if (controller.observer) {
       if (controller.observedBubble) {
         try {
@@ -246,11 +252,16 @@
     if (!controller) return null;
 
     if (controller.shell?.parentNode && controller.bubble !== bubble) {
+      if (typeof controller.cleanupSeek === 'function') {
+        controller.cleanupSeek();
+        controller.cleanupSeek = null;
+      }
       controller.shell.parentNode.removeChild(controller.shell);
       controller.shell = null;
       controller.svg = null;
       controller.track = null;
       controller.fill = null;
+      controller.hit = null;
     }
 
     if (!controller.shell) {
@@ -268,6 +279,7 @@
           </defs>
           <path class="voice-note-progress-track"></path>
           <path class="voice-note-progress-fill" stroke="url(#${escapeHtml(controller.gradientId)})"></path>
+          <path class="voice-note-progress-hit"></path>
         </svg>
       `;
       bubble.insertBefore(shell, bubble.firstChild);
@@ -275,6 +287,7 @@
       controller.svg = shell.querySelector('.voice-note-progress');
       controller.track = shell.querySelector('.voice-note-progress-track');
       controller.fill = shell.querySelector('.voice-note-progress-fill');
+      controller.hit = shell.querySelector('.voice-note-progress-hit');
     } else if (bubble.firstChild !== controller.shell) {
       bubble.insertBefore(controller.shell, bubble.firstChild);
     }
@@ -323,14 +336,28 @@
     controller.svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
     controller.track.setAttribute('d', path);
     controller.fill.setAttribute('d', path);
+    controller.hit?.setAttribute('d', path);
 
     try {
       controller.pathLength = controller.fill.getTotalLength();
       controller.fill.dataset.pathLength = String(controller.pathLength);
+      if (controller.hit) controller.hit.dataset.pathLength = String(controller.pathLength);
     } catch {
       controller.pathLength = 0;
       delete controller.fill.dataset.pathLength;
+      if (controller.hit) delete controller.hit.dataset.pathLength;
     }
+  }
+
+  function getVoicePlaybackDurationSeconds(row, audio) {
+    const message = row?.__voiceMessage || row?.__messageData || {};
+    const declaredDurationMs = Number(message.voice_duration_ms || message.media_note_duration_ms || 0);
+    const metadataDuration = Number(audio?.duration || 0);
+    const declaredDuration = declaredDurationMs > 0 ? declaredDurationMs / 1000 : 0;
+    return Math.max(
+      Number.isFinite(metadataDuration) ? metadataDuration : 0,
+      Number.isFinite(declaredDuration) ? declaredDuration : 0
+    );
   }
 
   function refreshVoiceProgressUi(row) {
@@ -369,13 +396,7 @@
       || message.playback_completed
       || row.__messageData?.voice_playback_completed
     );
-    const declaredDurationMs = Number(message.voice_duration_ms || message.media_note_duration_ms || 0);
-    const metadataDuration = Number(audio.duration || 0);
-    const declaredDuration = declaredDurationMs > 0 ? declaredDurationMs / 1000 : 0;
-    const duration = Math.max(
-      Number.isFinite(metadataDuration) ? metadataDuration : 0,
-      Number.isFinite(declaredDuration) ? declaredDuration : 0
-    );
+    const duration = getVoicePlaybackDurationSeconds(row, audio);
     const isPlaying = Boolean(audio && !audio.paused && !audio.ended);
     let progress = playbackCompleted && !isPlaying
       ? 1
@@ -408,6 +429,81 @@
     controller.frameId = window.requestAnimationFrame(tick);
   }
 
+  function resolveVoiceSeekProgress(controller, event) {
+    const path = controller?.hit || controller?.fill;
+    const svg = controller?.svg;
+    if (!path || !svg || typeof path.getPointAtLength !== 'function') return null;
+    let pathLength = Number(controller.pathLength || path.dataset.pathLength || 0);
+    if (!(pathLength > 0)) {
+      try {
+        pathLength = path.getTotalLength();
+        controller.pathLength = pathLength;
+      } catch {
+        pathLength = 0;
+      }
+    }
+    if (!(pathLength > 0)) return null;
+
+    const rect = svg.getBoundingClientRect();
+    const width = Number(rect.width || 0);
+    const height = Number(rect.height || 0);
+    const viewBox = svg.viewBox?.baseVal;
+    const fallbackViewBox = String(svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+    const viewBoxX = Number.isFinite(viewBox?.x) ? viewBox.x : (fallbackViewBox[0] || 0);
+    const viewBoxY = Number.isFinite(viewBox?.y) ? viewBox.y : (fallbackViewBox[1] || 0);
+    const viewBoxWidth = Number.isFinite(viewBox?.width) && viewBox.width > 0 ? viewBox.width : (fallbackViewBox[2] || 0);
+    const viewBoxHeight = Number.isFinite(viewBox?.height) && viewBox.height > 0 ? viewBox.height : (fallbackViewBox[3] || 0);
+    if (!(width > 0 && height > 0 && viewBoxWidth > 0 && viewBoxHeight > 0)) return null;
+
+    const pointerX = Number(event.clientX || 0);
+    const pointerY = Number(event.clientY || 0);
+    const localX = viewBoxX + ((pointerX - rect.left) / width) * viewBoxWidth;
+    const localY = viewBoxY + ((pointerY - rect.top) / height) * viewBoxHeight;
+
+    let bestLength = 0;
+    let bestDistance = Infinity;
+    const samples = Math.max(48, Math.min(240, Math.ceil(pathLength / 3)));
+    for (let index = 0; index <= samples; index += 1) {
+      const length = (pathLength * index) / samples;
+      let point = null;
+      try {
+        point = path.getPointAtLength(length);
+      } catch {
+        return null;
+      }
+      const dx = Number(point.x || 0) - localX;
+      const dy = Number(point.y || 0) - localY;
+      const distance = (dx * dx) + (dy * dy);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestLength = length;
+      }
+    }
+    return clamp(bestLength / pathLength, 0, 1);
+  }
+
+  function seekVoiceProgress(row, event) {
+    const controller = row?.__voiceProgress;
+    const audio = controller?.audio;
+    if (!row || !controller || !audio) return;
+    const duration = getVoicePlaybackDurationSeconds(row, audio);
+    if (!(duration > 0)) return;
+
+    const progress = resolveVoiceSeekProgress(controller, event);
+    if (progress == null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation?.();
+
+    const targetTime = clamp(progress * duration, 0, Math.max(0, duration - 0.02));
+    setVoicePlaybackCompleted(row, false);
+    try {
+      audio.currentTime = targetTime;
+    } catch {}
+    refreshVoiceProgressUi(row);
+    if (!audio.paused && !audio.ended) startVoiceProgressLoop(row);
+  }
+
   function bindVoiceProgress(row, bubble, audio) {
     if (!row || !bubble) return;
     if (!audio) {
@@ -417,6 +513,13 @@
 
     const controller = ensureVoiceProgressShell(row, bubble);
     if (!controller) return;
+    if (!controller.cleanupSeek && controller.hit) {
+      const onSeekPointer = (event) => seekVoiceProgress(row, event);
+      controller.hit.addEventListener('pointerdown', onSeekPointer);
+      controller.cleanupSeek = () => {
+        controller.hit?.removeEventListener('pointerdown', onSeekPointer);
+      };
+    }
     if (controller.audio === audio) {
       refreshVoiceProgressShape(row);
       refreshVoiceProgressUi(row);
@@ -428,8 +531,19 @@
       controller.cleanupAudio();
       controller.cleanupAudio = null;
     }
+    if (typeof controller.cleanupSeek === 'function') {
+      controller.cleanupSeek();
+      controller.cleanupSeek = null;
+    }
     stopVoiceProgressLoop(row);
     controller.audio = audio;
+    if (controller.hit) {
+      const onSeekPointer = (event) => seekVoiceProgress(row, event);
+      controller.hit.addEventListener('pointerdown', onSeekPointer);
+      controller.cleanupSeek = () => {
+        controller.hit?.removeEventListener('pointerdown', onSeekPointer);
+      };
+    }
 
     const syncUi = () => {
       refreshVoiceProgressShape(row);
@@ -477,6 +591,10 @@
       audio.removeEventListener('play', onPlay);
       audio.removeEventListener('pause', onPause);
       audio.removeEventListener('ended', onEnded);
+      if (typeof controller.cleanupSeek === 'function') {
+        controller.cleanupSeek();
+        controller.cleanupSeek = null;
+      }
       if (controller.audio === audio) controller.audio = null;
     };
 

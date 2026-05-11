@@ -360,12 +360,17 @@ html[data-modal-animation="none"] .send-btn.voice-enabled.is-mic-mode.is-mode-sw
 }
 
 .voice-note-progress-track,
-.voice-note-progress-fill {
+.voice-note-progress-fill,
+.voice-note-progress-hit {
   fill: none;
-  stroke-width: 3;
   stroke-linecap: round;
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
+}
+
+.voice-note-progress-track,
+.voice-note-progress-fill {
+  stroke-width: 3;
 }
 
 .voice-note-progress-track {
@@ -377,6 +382,14 @@ html[data-modal-animation="none"] .send-btn.voice-enabled.is-mic-mode.is-mode-sw
   opacity: .02;
   transition: opacity .12s linear;
   will-change: stroke-dasharray, stroke-dashoffset;
+}
+
+.voice-note-progress-hit {
+  stroke: transparent;
+  stroke-width: 22;
+  pointer-events: stroke;
+  cursor: pointer;
+  touch-action: manipulation;
 }
 
 .voice-note-row.voice-note-compact .msg-audio {
