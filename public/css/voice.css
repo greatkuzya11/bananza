@@ -350,6 +350,9 @@ html[data-modal-animation="none"] .send-btn.voice-enabled.is-mic-mode.is-mode-sw
   z-index: 0;
   pointer-events: none;
   border-radius: inherit;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
 }
 
 .voice-note-progress {
@@ -357,10 +360,13 @@ html[data-modal-animation="none"] .send-btn.voice-enabled.is-mic-mode.is-mode-sw
   width: 100%;
   height: 100%;
   overflow: visible;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .voice-note-progress-track,
 .voice-note-progress-fill,
+.voice-note-progress-press,
 .voice-note-progress-hit {
   fill: none;
   stroke-linecap: round;
@@ -384,12 +390,26 @@ html[data-modal-animation="none"] .send-btn.voice-enabled.is-mic-mode.is-mode-sw
   will-change: stroke-dasharray, stroke-dashoffset;
 }
 
+.voice-note-progress-press {
+  stroke: color-mix(in srgb, var(--accent) 62%, #ffffff 38%);
+  stroke-width: 5;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .08s linear;
+}
+
+.voice-note-row.voice-note-progress-pressed .voice-note-progress-press {
+  opacity: .86;
+}
+
 .voice-note-progress-hit {
   stroke: transparent;
   stroke-width: 22;
   pointer-events: stroke;
   cursor: pointer;
   touch-action: manipulation;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .voice-note-row.voice-note-compact .msg-audio {

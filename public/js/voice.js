@@ -176,6 +176,7 @@
         svg: null,
         track: null,
         fill: null,
+        press: null,
         hit: null,
         observer: null,
         observedBubble: null,
@@ -242,7 +243,7 @@
     controller.audio = null;
     controller.pathLength = 0;
     if (controller.shell?.parentNode) controller.shell.parentNode.removeChild(controller.shell);
-    row.classList.remove('voice-note-playing');
+    row.classList.remove('voice-note-playing', 'voice-note-progress-pressed');
     delete row.__voiceProgress;
   }
 
@@ -261,6 +262,7 @@
       controller.svg = null;
       controller.track = null;
       controller.fill = null;
+      controller.press = null;
       controller.hit = null;
     }
 
@@ -279,6 +281,7 @@
           </defs>
           <path class="voice-note-progress-track"></path>
           <path class="voice-note-progress-fill" stroke="url(#${escapeHtml(controller.gradientId)})"></path>
+          <path class="voice-note-progress-press"></path>
           <path class="voice-note-progress-hit"></path>
         </svg>
       `;
@@ -287,6 +290,7 @@
       controller.svg = shell.querySelector('.voice-note-progress');
       controller.track = shell.querySelector('.voice-note-progress-track');
       controller.fill = shell.querySelector('.voice-note-progress-fill');
+      controller.press = shell.querySelector('.voice-note-progress-press');
       controller.hit = shell.querySelector('.voice-note-progress-hit');
     } else if (bubble.firstChild !== controller.shell) {
       bubble.insertBefore(controller.shell, bubble.firstChild);
@@ -336,6 +340,7 @@
     controller.svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
     controller.track.setAttribute('d', path);
     controller.fill.setAttribute('d', path);
+    controller.press?.setAttribute('d', path);
     controller.hit?.setAttribute('d', path);
 
     try {
@@ -504,6 +509,34 @@
     if (!audio.paused && !audio.ended) startVoiceProgressLoop(row);
   }
 
+  function bindVoiceSeekHit(row, controller) {
+    if (!row || !controller?.hit || controller.cleanupSeek) return;
+    const clearPressed = () => row.classList.remove('voice-note-progress-pressed');
+    const onSeekPointer = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
+      row.classList.add('voice-note-progress-pressed');
+      try {
+        if (Number.isFinite(event.pointerId) && typeof controller.hit.setPointerCapture === 'function') {
+          controller.hit.setPointerCapture(event.pointerId);
+        }
+      } catch {}
+      seekVoiceProgress(row, event);
+    };
+    controller.hit.addEventListener('pointerdown', onSeekPointer);
+    controller.hit.addEventListener('pointerup', clearPressed);
+    controller.hit.addEventListener('pointercancel', clearPressed);
+    controller.hit.addEventListener('lostpointercapture', clearPressed);
+    controller.cleanupSeek = () => {
+      controller.hit?.removeEventListener('pointerdown', onSeekPointer);
+      controller.hit?.removeEventListener('pointerup', clearPressed);
+      controller.hit?.removeEventListener('pointercancel', clearPressed);
+      controller.hit?.removeEventListener('lostpointercapture', clearPressed);
+      clearPressed();
+    };
+  }
+
   function bindVoiceProgress(row, bubble, audio) {
     if (!row || !bubble) return;
     if (!audio) {
@@ -513,13 +546,7 @@
 
     const controller = ensureVoiceProgressShell(row, bubble);
     if (!controller) return;
-    if (!controller.cleanupSeek && controller.hit) {
-      const onSeekPointer = (event) => seekVoiceProgress(row, event);
-      controller.hit.addEventListener('pointerdown', onSeekPointer);
-      controller.cleanupSeek = () => {
-        controller.hit?.removeEventListener('pointerdown', onSeekPointer);
-      };
-    }
+    bindVoiceSeekHit(row, controller);
     if (controller.audio === audio) {
       refreshVoiceProgressShape(row);
       refreshVoiceProgressUi(row);
@@ -537,13 +564,7 @@
     }
     stopVoiceProgressLoop(row);
     controller.audio = audio;
-    if (controller.hit) {
-      const onSeekPointer = (event) => seekVoiceProgress(row, event);
-      controller.hit.addEventListener('pointerdown', onSeekPointer);
-      controller.cleanupSeek = () => {
-        controller.hit?.removeEventListener('pointerdown', onSeekPointer);
-      };
-    }
+    bindVoiceSeekHit(row, controller);
 
     const syncUi = () => {
       refreshVoiceProgressShape(row);
