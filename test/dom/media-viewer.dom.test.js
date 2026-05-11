@@ -2977,6 +2977,75 @@ test('voice note progress outline clears completed state when seeking', async (t
   assert.ok(Math.abs(getDasharrayFilledLength(fill) - 50) < 1);
 });
 
+test('voice note progress outline can seek an upper adjacent message when the lower bubble receives the pointer event', async (t) => {
+  const chat = createChatFixture(1, 'Chat A', { lastMessageId: 478 });
+  const upperMessage = createVoiceNoteMessage(1, 477, { voice_duration_ms: 24_000 });
+  const lowerMessage = createVoiceNoteMessage(1, 478, { voice_duration_ms: 24_000 });
+  const dom = await openMediaPlaybackDom({
+    activeChat: chat,
+    chats: [chat],
+    chatMessagesByChatId: {
+      1: [upperMessage, lowerMessage],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+
+  const upperRow = document.querySelector('.msg-row[data-msg-id="477"]');
+  const lowerRow = document.querySelector('.msg-row[data-msg-id="478"]');
+  const upperAudio = upperRow.querySelector('audio');
+  const lowerAudio = lowerRow.querySelector('audio');
+  installMockMediaElement(dom, upperAudio, {
+    duration: 24,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+  installMockMediaElement(dom, lowerAudio, {
+    duration: 24,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+
+  const upperSvg = upperRow.querySelector('.voice-note-progress');
+  const lowerSvg = lowerRow.querySelector('.voice-note-progress');
+  const rectFor = (top) => ({
+    x: 0,
+    y: top,
+    top,
+    left: 0,
+    right: 248,
+    bottom: top + 104,
+    width: 248,
+    height: 104,
+    toJSON() {
+      return this;
+    },
+  });
+  upperSvg.getBoundingClientRect = () => rectFor(0);
+  lowerSvg.getBoundingClientRect = () => rectFor(24);
+
+  upperAudio.dispatchEvent(new dom.window.Event('durationchange'));
+  lowerAudio.dispatchEvent(new dom.window.Event('durationchange'));
+  await wait(dom, 40);
+
+  lowerRow.querySelector('.msg-bubble').dispatchEvent(new dom.window.MouseEvent('pointerdown', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 124,
+    clientY: 0,
+  }));
+  await wait(dom, 20);
+
+  assert.ok(Math.abs(Number(upperAudio.currentTime || 0) - 12) < 0.2);
+  assert.equal(Number(lowerAudio.currentTime || 0), 0);
+});
+
 test('video note keeps completed progress state after leaving and reopening the chat', async (t) => {
   const chatA = createChatFixture(1, 'Chat A', { lastMessageId: 444 });
   const chatB = createChatFixture(2, 'Chat B', { lastMessageId: 0 });

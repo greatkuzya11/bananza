@@ -40,6 +40,7 @@
 
   const hooks = window.BananzaVoiceHooks = window.BananzaVoiceHooks || {};
   const VOICE_PROGRESS_STROKE_WIDTH = 3;
+  const VOICE_PROGRESS_HIT_RADIUS = 14;
 
   function safeVibrate(pattern) {
     if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return false;
@@ -435,6 +436,11 @@
   }
 
   function resolveVoiceSeekProgress(controller, event) {
+    const hit = resolveVoiceSeekHit(controller, event);
+    return hit ? hit.progress : null;
+  }
+
+  function resolveVoiceSeekHit(controller, event) {
     const path = controller?.hit || controller?.fill;
     const svg = controller?.svg;
     if (!path || !svg || typeof path.getPointAtLength !== 'function') return null;
@@ -466,7 +472,7 @@
     const localY = viewBoxY + ((pointerY - rect.top) / height) * viewBoxHeight;
 
     let bestLength = 0;
-    let bestDistance = Infinity;
+    let bestDistanceSq = Infinity;
     const samples = Math.max(48, Math.min(240, Math.ceil(pathLength / 3)));
     for (let index = 0; index <= samples; index += 1) {
       const length = (pathLength * index) / samples;
@@ -478,13 +484,19 @@
       }
       const dx = Number(point.x || 0) - localX;
       const dy = Number(point.y || 0) - localY;
-      const distance = (dx * dx) + (dy * dy);
-      if (distance < bestDistance) {
-        bestDistance = distance;
+      const distanceSq = (dx * dx) + (dy * dy);
+      if (distanceSq < bestDistanceSq) {
+        bestDistanceSq = distanceSq;
         bestLength = length;
       }
     }
-    return clamp(bestLength / pathLength, 0, 1);
+    const scaleX = width / viewBoxWidth;
+    const scaleY = height / viewBoxHeight;
+    const distancePx = Math.sqrt(bestDistanceSq) * Math.max(scaleX, scaleY);
+    return {
+      progress: clamp(bestLength / pathLength, 0, 1),
+      distancePx,
+    };
   }
 
   function seekVoiceProgress(row, event) {
@@ -507,6 +519,49 @@
     } catch {}
     refreshVoiceProgressUi(row);
     if (!audio.paused && !audio.ended) startVoiceProgressLoop(row);
+  }
+
+  function shouldSkipVoiceContourGlobalSeek(event) {
+    const target = event?.target;
+    if (!(target instanceof Element)) return false;
+    if (target.closest('.voice-note-progress-hit')) return false;
+    return Boolean(target.closest(
+      'button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-file, .link-preview, .msg-group-avatar'
+    ));
+  }
+
+  function handleVoiceContourPointerCapture(event) {
+    if (event.button != null && event.button !== 0) return;
+    if (shouldSkipVoiceContourGlobalSeek(event)) return;
+
+    let best = null;
+    document.querySelectorAll('.voice-note-row').forEach((row) => {
+      const controller = row.__voiceProgress;
+      if (!controller?.audio || !controller.hit || !row.isConnected) return;
+      const duration = getVoicePlaybackDurationSeconds(row, controller.audio);
+      if (!(duration > 0)) return;
+      const hit = resolveVoiceSeekHit(controller, event);
+      if (!hit || hit.distancePx > VOICE_PROGRESS_HIT_RADIUS) return;
+      if (!best || hit.distancePx < best.hit.distancePx) {
+        best = { row, hit };
+      }
+    });
+    if (!best) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation?.();
+    best.row.classList.add('voice-note-progress-pressed');
+    const clearPressed = () => best.row.classList.remove('voice-note-progress-pressed');
+    document.addEventListener('pointerup', clearPressed, { once: true });
+    document.addEventListener('pointercancel', clearPressed, { once: true });
+    seekVoiceProgress(best.row, event);
+  }
+
+  function ensureVoiceContourGlobalSeek() {
+    if (state.playback.voiceContourGlobalSeekBound) return;
+    document.addEventListener('pointerdown', handleVoiceContourPointerCapture, true);
+    state.playback.voiceContourGlobalSeekBound = true;
   }
 
   function bindVoiceSeekHit(row, controller) {
@@ -546,6 +601,7 @@
 
     const controller = ensureVoiceProgressShell(row, bubble);
     if (!controller) return;
+    ensureVoiceContourGlobalSeek();
     bindVoiceSeekHit(row, controller);
     if (controller.audio === audio) {
       refreshVoiceProgressShape(row);
