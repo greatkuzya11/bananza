@@ -189,6 +189,8 @@
   let hasMoreAfter = false;
   let pendingFile = null;
   let pendingFiles = []; // queue for multi-file upload
+  const composerDraftsByChatId = new Map();
+  let composerDraftsLoadedForUserId = 0;
   let pollComposerOptions = ['', ''];
   let pollVotePending = new Set();
   let pollClosePending = new Set();
@@ -3318,6 +3320,7 @@
       });
       closeModal('pollComposerModal');
       msgInput.value = '';
+      clearComposerDraft(currentChatId);
       autoResize();
       syncMentionOpenButton();
       clearReply();
@@ -14312,6 +14315,10 @@
     if (chatListAbortController) chatListAbortController.abort();
     try { if (window.clearAssetCache) window.clearAssetCache().catch(()=>{}); } catch (e) {}
     try { if (window.messageCache && window.messageCache.clearUserCache) window.messageCache.clearUserCache().catch(()=>{}); } catch (e) {}
+    const composerDraftStorageKey = getComposerDraftStorageKey();
+    if (composerDraftStorageKey) localStorage.removeItem(composerDraftStorageKey);
+    composerDraftsByChatId.clear();
+    composerDraftsLoadedForUserId = 0;
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     token = null;
@@ -15881,6 +15888,81 @@
   // ═══════════════════════════════════════════════════════════════════════════
   // OPEN CHAT
   // ═══════════════════════════════════════════════════════════════════════════
+  function normalizeComposerDraftChatId(chatId) {
+    const id = Number(chatId || 0);
+    return Number.isFinite(id) && id > 0 ? id : 0;
+  }
+
+  function getComposerDraftStorageKey(userId = currentUser?.id) {
+    const id = Number(userId || 0);
+    return Number.isFinite(id) && id > 0 ? `bananza:composerDrafts:v1:${id}` : '';
+  }
+
+  function persistComposerDrafts() {
+    const key = getComposerDraftStorageKey();
+    if (!key) return;
+    try {
+      if (!composerDraftsByChatId.size) {
+        localStorage.removeItem(key);
+        return;
+      }
+      const payload = {};
+      composerDraftsByChatId.forEach((text, chatId) => {
+        if (normalizeComposerDraftChatId(chatId) && text) payload[String(chatId)] = String(text).slice(0, MAX_MSG);
+      });
+      if (Object.keys(payload).length) localStorage.setItem(key, JSON.stringify(payload));
+      else localStorage.removeItem(key);
+    } catch (e) {}
+  }
+
+  function hydrateComposerDraftsForCurrentUser({ force = false } = {}) {
+    const userId = Number(currentUser?.id || 0);
+    if (!userId) return;
+    if (!force && composerDraftsLoadedForUserId === userId) return;
+    composerDraftsByChatId.clear();
+    composerDraftsLoadedForUserId = userId;
+    const key = getComposerDraftStorageKey(userId);
+    if (!key) return;
+    try {
+      const raw = JSON.parse(localStorage.getItem(key) || '{}');
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
+      Object.entries(raw).forEach(([chatId, text]) => {
+        const id = normalizeComposerDraftChatId(chatId);
+        if (id && typeof text === 'string' && text) composerDraftsByChatId.set(id, text.slice(0, MAX_MSG));
+      });
+    } catch (e) {
+      localStorage.removeItem(key);
+    }
+  }
+
+  function saveComposerDraft(chatId = currentChatId) {
+    hydrateComposerDraftsForCurrentUser();
+    const id = normalizeComposerDraftChatId(chatId);
+    if (!id || editTo || !msgInput) return;
+    const text = msgInput.value || '';
+    if (text) composerDraftsByChatId.set(id, text);
+    else composerDraftsByChatId.delete(id);
+    persistComposerDrafts();
+  }
+
+  function clearComposerDraft(chatId = currentChatId) {
+    hydrateComposerDraftsForCurrentUser();
+    const id = normalizeComposerDraftChatId(chatId);
+    if (id) composerDraftsByChatId.delete(id);
+    persistComposerDrafts();
+  }
+
+  function restoreComposerDraft(chatId = currentChatId) {
+    hydrateComposerDraftsForCurrentUser();
+    const id = normalizeComposerDraftChatId(chatId);
+    if (!id || !msgInput) return;
+    msgInput.value = composerDraftsByChatId.get(id) || '';
+    autoResize();
+    syncMentionOpenButton();
+    window.BananzaVoiceHooks?.refreshComposerState?.();
+    updateComposerAiOverrideState().catch(() => {});
+  }
+
   async function openChat(chatId, options = {}) {
     const targetChatId = Number(chatId);
     const chat = getChatById(targetChatId);
@@ -15956,7 +16038,8 @@
     const finishVisibleOpen = () => {
       if (!isCurrentOpen()) return;
       clearReply();
-      if (editTo) clearEdit({ clearInput: true });
+      if (editTo) clearEdit({ clearInput: true, draftChatId: previousChatId || targetChatId });
+      restoreComposerDraft(targetChatId);
       syncMentionOpenButton();
       loadContextConvertAvailability(targetChatId).catch(() => {});
       loadChatShotState(targetChatId).catch(() => {});
@@ -16114,6 +16197,8 @@
       flushCurrentChatScrollAnchor(currentChatId, { force: true, allowPendingMedia: true });
     }
     if (previousChatId && !sameChat) {
+      saveComposerDraft(previousChatId);
+      clearPendingFile();
       pauseCurrentChatMediaPlayback();
     }
     hideMentionPicker();
@@ -16126,6 +16211,8 @@
     hideFloatingMessageActions({ immediate: true });
 
     currentChatId = targetChatId;
+    if (editTo) clearEdit({ clearInput: true, draftChatId: previousChatId || targetChatId });
+    restoreComposerDraft(targetChatId);
     displayedMsgIds.clear();
     displayedPinEventIds.clear();
     hasMore = false; // prevent scroll handler triggering loadMore during DOM clear
@@ -18765,6 +18852,7 @@
     }
     animateSendButton();
     msgInput.value = '';
+    clearComposerDraft(currentChatId);
     autoResize();
     syncMentionOpenButton();
     clearPendingFile();
@@ -19256,7 +19344,7 @@
     msgInput.focus();
   }
 
-  function clearEdit({ clearInput = true } = {}) {
+  function clearEdit({ clearInput = true, draftChatId = currentChatId } = {}) {
     editTo = null;
     replyBar.classList.remove('edit-bar');
     replyBar.classList.add('hidden');
@@ -19264,6 +19352,7 @@
     attachBtn.classList.remove('disabled');
     if (clearInput) {
       msgInput.value = '';
+      clearComposerDraft(draftChatId);
       autoResize();
     }
     syncMentionOpenButton();
@@ -22812,6 +22901,7 @@
       }
     });
     msgInput.addEventListener('input', () => {
+      saveComposerDraft(currentChatId);
       autoResize();
       syncMentionOpenButton();
       window.BananzaVoiceHooks?.refreshComposerState?.();
@@ -25003,6 +25093,7 @@
       applyUiLanguage(currentUser.ui_language || 'ru');
       localStorage.setItem('user', JSON.stringify(currentUser));
       await window.messageCache?.init?.(currentUser.id);
+      hydrateComposerDraftsForCurrentUser({ force: true });
     } catch { return; }
 
     // Update UI

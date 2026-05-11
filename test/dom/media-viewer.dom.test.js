@@ -157,9 +157,10 @@ function installAppRuntimeStubs(dom, { fetchHandler = null } = {}) {
 }
 
 async function bootAppDom(options = {}) {
-  const { i18nStub = null, ...runtimeOptions } = options;
+  const { i18nStub = null, beforeLoad = null, ...runtimeOptions } = options;
   const dom = createAppDom();
   installAppRuntimeStubs(dom, runtimeOptions);
+  if (typeof beforeLoad === 'function') beforeLoad(dom);
   dom.visualViewportMock = installVisualViewportMock(dom.window, {
     width: 390,
     height: 844,
@@ -2167,6 +2168,81 @@ test('restore scroll position reopens chat A at the saved anchor after visiting 
   await wait(dom, 80);
 
   assert.equal(layout.scrollTop, layout.rowHeight * 3);
+});
+
+test('composer drafts are scoped to the chat being opened', async (t) => {
+  const chatMessages = {
+    1: createChatMessages(1, 4),
+    2: createChatMessages(2, 4),
+  };
+  const dom = await bootAppDom({
+    fetchHandler: createChatFetchHandler(chatMessages),
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const msgInput = document.getElementById('msgInput');
+  const inputEvent = () => new dom.window.Event('input', { bubbles: true });
+
+  BananzaAppBridge.__testing.setChats([
+    createChatFixture(1, 'Chat A'),
+    createChatFixture(2, 'Chat B'),
+  ]);
+
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 80);
+  msgInput.value = 'Draft for A';
+  msgInput.dispatchEvent(inputEvent());
+
+  await BananzaAppBridge.__testing.openChat(2);
+  await wait(dom, 80);
+  assert.equal(msgInput.value, '');
+
+  msgInput.value = 'Draft for B';
+  msgInput.dispatchEvent(inputEvent());
+
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 80);
+  assert.equal(msgInput.value, 'Draft for A');
+
+  await BananzaAppBridge.__testing.openChat(2);
+  await wait(dom, 80);
+  assert.equal(msgInput.value, 'Draft for B');
+
+  const storedDrafts = JSON.parse(dom.window.localStorage.getItem('bananza:composerDrafts:v1:1') || '{}');
+  assert.deepEqual(storedDrafts, {
+    1: 'Draft for A',
+    2: 'Draft for B',
+  });
+});
+
+test('composer drafts are restored from localStorage after app reload', async (t) => {
+  const chatMessages = {
+    1: createChatMessages(1, 4),
+  };
+  const dom = await bootAppDom({
+    beforeLoad(nextDom) {
+      nextDom.window.localStorage.setItem('bananza:composerDrafts:v1:1', JSON.stringify({
+        1: 'Persisted draft',
+      }));
+    },
+    fetchHandler: createChatFetchHandler(chatMessages),
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const msgInput = document.getElementById('msgInput');
+
+  BananzaAppBridge.__testing.setChats([
+    createChatFixture(1, 'Chat A'),
+  ]);
+
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 80);
+
+  assert.equal(msgInput.value, 'Persisted draft');
 });
 
 test('restore scroll position reopens the same chat at the saved anchor after returning to the chat list', async (t) => {
