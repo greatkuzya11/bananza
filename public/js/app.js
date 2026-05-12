@@ -354,6 +354,25 @@
     },
   };
   let selectedDeepseekBotId = null;
+  let qwenBotState = {
+    settings: {
+      qwen_enabled: false,
+      qwen_base_url: 'http://127.0.0.1:8000/v1',
+      qwen_default_response_model: 'qwen',
+      qwen_default_summary_model: 'qwen',
+      qwen_temperature: 0.3,
+      qwen_max_tokens: 1000,
+      qwen_request_timeout_ms: 600000,
+    },
+    bots: [],
+    chats: [],
+    chatSettings: [],
+    models: {
+      response: ['qwen'],
+      summary: ['qwen'],
+    },
+  };
+  let selectedQwenBotId = null;
   let grokBotState = {
     settings: {
       grok_enabled: false,
@@ -415,6 +434,13 @@
       chatSettings: [],
       models: { response: ['deepseek-chat', 'deepseek-reasoner'] },
     },
+    qwen: {
+      settings: { ...qwenBotState.settings },
+      bots: [],
+      chats: [],
+      chatSettings: [],
+      models: { response: ['qwen'] },
+    },
     grok: {
       settings: { ...grokBotState.settings },
       bots: [],
@@ -427,6 +453,7 @@
     openai: null,
     yandex: null,
     deepseek: null,
+    qwen: null,
     grok: null,
   };
   let activeContextConvertProvider = 'openai';
@@ -678,6 +705,8 @@
   const yandexAiSettingsModal = $('#yandexAiSettingsModal');
   const deepseekAiSettingsModal = $('#deepseekAiSettingsModal');
   const deepseekAiTextBotsModal = $('#deepseekAiTextBotsModal');
+  const qwenAiSettingsModal = $('#qwenAiSettingsModal');
+  const qwenAiTextBotsModal = $('#qwenAiTextBotsModal');
   const grokAiSettingsModal = $('#grokAiSettingsModal');
   const grokAiTextBotsModal = $('#grokAiTextBotsModal');
   const grokAiImageBotsModal = $('#grokAiImageBotsModal');
@@ -3915,6 +3944,7 @@
       ['aiBotEnabled', 'aiBotVisibleToUsers'],
       ['openAiUniversalBotEnabled', 'openAiUniversalBotVisibleToUsers'],
       ['deepseekAiBotEnabled', 'deepseekAiBotVisibleToUsers'],
+      ['qwenAiBotEnabled', 'qwenAiBotVisibleToUsers'],
       ['yandexAiBotEnabled', 'yandexAiBotVisibleToUsers'],
       ['grokAiBotEnabled', 'grokAiBotVisibleToUsers'],
       ['grokAiImageBotEnabled', 'grokAiImageBotVisibleToUsers'],
@@ -8229,6 +8259,491 @@
     }
   }
 
+  function setQwenAiStatus(message, type = '') {
+    setInlineStatus('qwenAiStatus', message, type);
+  }
+
+  function setQwenAiProviderStatus(message, type = '') {
+    setInlineStatus('qwenAiProviderStatus', message, type);
+  }
+
+  function setQwenBotStatus(message, type = '') {
+    setInlineStatus('qwenAiBotEditorStatus', message, type);
+  }
+
+  function setQwenChatStatus(message, type = '') {
+    setInlineStatus('qwenAiBotChatStatus', message, type);
+  }
+
+  function setQwenAiModelStatus(message, type = '') {
+    setInlineStatus('qwenAiModelStatus', message, type);
+  }
+
+  function currentQwenBot() {
+    return qwenBotState.bots.find(bot => Number(bot.id) === Number(selectedQwenBotId)) || null;
+  }
+
+  function getQwenChatSetting(chatId, botId) {
+    return qwenBotState.chatSettings.find(item => Number(item.chat_id) === Number(chatId) && Number(item.bot_id) === Number(botId)) || null;
+  }
+
+  function mergeQwenAiState(data = {}) {
+    const state = data.state || data;
+    if (state.settings) qwenBotState.settings = { ...qwenBotState.settings, ...state.settings };
+    if (state.bots) qwenBotState.bots = state.bots;
+    if (state.chats) qwenBotState.chats = state.chats;
+    if (state.chatSettings) qwenBotState.chatSettings = state.chatSettings;
+    if (state.models) qwenBotState.models = { ...qwenBotState.models, ...state.models };
+    if (selectedQwenBotId && !qwenBotState.bots.some(bot => Number(bot.id) === Number(selectedQwenBotId))) {
+      selectedQwenBotId = null;
+    }
+    mentionTargetsByChat.clear();
+  }
+
+  function renderQwenModelOptions(bot = currentQwenBot()) {
+    const settings = qwenBotState.settings || {};
+    const models = qwenBotState.models || {};
+    const responseModels = models.response || ['qwen'];
+    const summaryModels = models.summary || responseModels;
+    setAiModelSelectOptions('qwenAiDefaultResponseModel', responseModels, settings.qwen_default_response_model || 'qwen');
+    setAiModelSelectOptions('qwenAiDefaultSummaryModel', summaryModels, settings.qwen_default_summary_model || 'qwen');
+    setAiModelSelectOptions('qwenAiBotResponseModel', responseModels, bot?.response_model || settings.qwen_default_response_model || 'qwen');
+    setAiModelSelectOptions('qwenAiBotSummaryModel', summaryModels, bot?.summary_model || settings.qwen_default_summary_model || 'qwen');
+  }
+
+  function renderQwenBotAvatar(bot = currentQwenBot()) {
+    const avatarEl = $('#qwenAiBotAvatar');
+    if (!avatarEl) return;
+    const name = bot?.name || $('#qwenAiBotName')?.value.trim() || 'Qwen AI';
+    const color = bot?.avatar_color || '#65aadd';
+    avatarEl.style.background = color;
+    if (bot?.avatar_url) {
+      avatarEl.innerHTML = `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="">`;
+    } else {
+      avatarEl.textContent = initials(name);
+    }
+
+    const hasSavedBot = Boolean(bot?.id);
+    const input = $('#qwenAiBotAvatarInput');
+    const label = $('#qwenAiBotAvatarLabel');
+    if (input) {
+      input.disabled = !hasSavedBot;
+      input.value = '';
+    }
+    if (label) {
+      label.classList.toggle('ai-bot-avatar-label-disabled', !hasSavedBot);
+      label.title = hasSavedBot ? 'Change avatar' : 'Save the bot first';
+    }
+    $('#removeQwenAiBotAvatar')?.classList.toggle('hidden', !hasSavedBot || !bot?.avatar_url);
+  }
+
+  function fillQwenBotForm(bot = null) {
+    const settings = qwenBotState.settings || {};
+    selectedQwenBotId = bot ? bot.id : null;
+    $('#qwenAiBotName').value = bot?.name || 'Qwen AI';
+    $('#qwenAiBotMention').value = bot?.mention || 'qwen';
+    $('#qwenAiBotEnabled').checked = bot ? !!bot.enabled : true;
+    setBotVisibilityToggle('qwenAiBotVisibleToUsers', !!bot?.visible_to_users);
+    $('#qwenAiBotResponseModel').value = bot?.response_model || settings.qwen_default_response_model || 'qwen';
+    $('#qwenAiBotSummaryModel').value = bot?.summary_model || settings.qwen_default_summary_model || 'qwen';
+    $('#qwenAiBotTemperature').value = bot?.temperature ?? settings.qwen_temperature ?? 0.3;
+    $('#qwenAiBotMaxTokens').value = bot?.max_tokens ?? settings.qwen_max_tokens ?? 1000;
+    $('#qwenAiBotStyle').value = bot?.style || 'Helpful Qwen assistant for chat';
+    $('#qwenAiBotTone').value = bot?.tone || 'warm, concise, attentive';
+    $('#qwenAiBotRules').value = bot?.behavior_rules || '';
+    $('#qwenAiBotSpeech').value = bot?.speech_patterns || '';
+    renderQwenBotAvatar(bot);
+    renderQwenModelOptions(bot);
+    renderQwenBotList();
+    renderQwenChatBotSettings();
+  }
+
+  function qwenBotFormPayload() {
+    return {
+      name: $('#qwenAiBotName')?.value.trim(),
+      mention: $('#qwenAiBotMention')?.value.trim(),
+      enabled: $('#qwenAiBotEnabled')?.checked,
+      visible_to_users: getBotVisibilityToggle('qwenAiBotVisibleToUsers'),
+      response_model: $('#qwenAiBotResponseModel')?.value.trim(),
+      summary_model: $('#qwenAiBotSummaryModel')?.value.trim(),
+      temperature: Number($('#qwenAiBotTemperature')?.value || 0.3),
+      max_tokens: Number($('#qwenAiBotMaxTokens')?.value || 1000),
+      style: $('#qwenAiBotStyle')?.value.trim(),
+      tone: $('#qwenAiBotTone')?.value.trim(),
+      behavior_rules: $('#qwenAiBotRules')?.value.trim(),
+      speech_patterns: $('#qwenAiBotSpeech')?.value.trim(),
+    };
+  }
+
+  function renderQwenBotList() {
+    const list = $('#qwenAiBotList');
+    if (!list) return;
+    if (!qwenBotState.bots.length) {
+      list.innerHTML = '<div class="ai-bot-empty">No Qwen bots yet. Create the first one.</div>';
+      return;
+    }
+    list.innerHTML = qwenBotState.bots.map(bot => `
+      <button type="button" class="ai-bot-list-item${Number(bot.id) === Number(selectedQwenBotId) ? ' active' : ''}" data-bot-id="${bot.id}">
+        <span class="ai-bot-list-main">
+          <span class="ai-bot-list-avatar" style="background:${esc(bot.avatar_color || '#65aadd')}">
+            ${bot.avatar_url ? `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">` : esc(initials(bot.name || '?'))}
+          </span>
+          <span class="ai-bot-list-copy">
+            <strong>${esc(bot.name)}</strong>
+            <small>@${esc(bot.mention)} · ${bot.enabled ? 'enabled' : 'disabled'}</small>
+          </span>
+        </span>
+        <span class="ai-bot-list-model">${bot.response_model ? esc(bot.response_model) : ''}</span>
+      </button>
+    `).join('');
+  }
+
+  function renderQwenChatBotSettings() {
+    const chatSelect = $('#qwenAiBotChatSelect');
+    const botSelect = $('#qwenAiBotChatBotSelect');
+    if (!chatSelect || !botSelect) return;
+    const currentChatValue = chatSelect.value || String(currentChatId || qwenBotState.chats[0]?.id || '');
+    const currentBotValue = botSelect.value || String(selectedQwenBotId || qwenBotState.bots[0]?.id || '');
+
+    chatSelect.innerHTML = qwenBotState.chats.map(chat => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+    botSelect.innerHTML = qwenBotState.bots.map(bot => `<option value="${bot.id}">${esc(bot.name)} @${esc(bot.mention)}</option>`).join('');
+    if (qwenBotState.chats.some(chat => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
+    if (qwenBotState.bots.some(bot => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;
+    if (!botSelect.value && qwenBotState.bots[0]) botSelect.value = String(qwenBotState.bots[0].id);
+
+    const setting = getQwenChatSetting(chatSelect.value, botSelect.value);
+    $('#qwenAiBotChatEnabled').checked = !!setting?.enabled;
+    $('#qwenAiBotChatMode').value = 'simple';
+    $('#qwenAiBotChatHotLimit').value = setting?.hot_context_limit || 50;
+    $('#qwenAiBotChatAutoReact').checked = !!setting?.auto_react_on_mention;
+  }
+
+  function renderQwenAiSettings() {
+    const settings = qwenBotState.settings || {};
+    $('#qwenAiGlobalEnabled').checked = !!settings.qwen_enabled;
+    $('#qwenAiInteractiveEnabled').checked = !!settings.qwen_interactive_enabled;
+    $('#qwenAiBaseUrl').value = settings.qwen_base_url || 'http://127.0.0.1:8000/v1';
+    $('#qwenAiTemperature').value = settings.qwen_temperature ?? 0.3;
+    $('#qwenAiMaxTokens').value = settings.qwen_max_tokens ?? 1000;
+    $('#qwenAiRequestTimeoutSeconds').value = Math.round(Number(settings.qwen_request_timeout_ms || 600000) / 1000);
+    $('#qwenAiApiKey').value = '';
+    $('#qwenAiKeyStatus').textContent = settings.has_qwen_key
+      ? `Key saved: ${settings.masked_qwen_key || '***'}`
+      : 'Key is not saved';
+    renderQwenModelOptions(currentQwenBot());
+    $('#qwenAiDefaultResponseModel').value = settings.qwen_default_response_model || 'qwen';
+    $('#qwenAiDefaultSummaryModel').value = settings.qwen_default_summary_model || 'qwen';
+    const selected = currentQwenBot() || qwenBotState.bots[0] || null;
+    fillQwenBotForm(selected);
+    renderQwenChatBotSettings();
+    const models = qwenBotState.models || {};
+    if (models.error) {
+      setQwenAiModelStatus(`Model list fallback is used: ${formatUiErrorMessage(models.error, 'Could not load Qwen models')}`, 'error');
+    } else if (models.source === 'live') {
+      setQwenAiModelStatus(`Loaded ${models.response?.length || 0} Qwen models for selectors.`, 'success');
+    } else {
+      setQwenAiModelStatus('Saved defaults are shown. Use "Refresh models" or "Test key" to load live Qwen models.');
+    }
+  }
+
+  function qwenAiSettingsPayload() {
+    const body = {
+      qwen_enabled: $('#qwenAiGlobalEnabled')?.checked,
+      qwen_interactive_enabled: $('#qwenAiInteractiveEnabled')?.checked,
+      qwen_base_url: $('#qwenAiBaseUrl')?.value.trim(),
+      qwen_default_response_model: $('#qwenAiDefaultResponseModel')?.value.trim(),
+      qwen_default_summary_model: $('#qwenAiDefaultSummaryModel')?.value.trim(),
+      qwen_temperature: Number($('#qwenAiTemperature')?.value || 0.3),
+      qwen_max_tokens: Number($('#qwenAiMaxTokens')?.value || 1000),
+      qwen_request_timeout_ms: Number($('#qwenAiRequestTimeoutSeconds')?.value || 600) * 1000,
+    };
+    const key = $('#qwenAiApiKey')?.value.trim();
+    if (key) body.qwen_api_key = key;
+    return body;
+  }
+
+  async function persistQwenAiSettings() {
+    const data = await api('/api/admin/qwen-ai-bots/settings', {
+      method: 'PUT',
+      body: qwenAiSettingsPayload(),
+    });
+    mergeQwenAiState(data);
+    return data;
+  }
+
+  async function loadQwenAiState() {
+    const data = await api('/api/admin/qwen-ai-bots');
+    mergeQwenAiState(data);
+    renderQwenAiSettings();
+  }
+
+  async function saveQwenAiSettings() {
+    setQwenAiProviderStatus('Saving...', 'pending');
+    try {
+      await persistQwenAiSettings();
+      renderQwenAiSettings();
+      setQwenAiProviderStatus(`Settings saved\n${providerInteractiveSummary('qwen', qwenBotState.settings)}`, 'success');
+    } catch (e) {
+      setQwenAiProviderStatus(e.message || 'Could not save settings', 'error');
+    }
+  }
+
+  async function testQwenAiConnection() {
+    const keyInput = $('#qwenAiApiKey');
+    const hasKey = Boolean(keyInput?.value.trim() || qwenBotState.settings?.has_qwen_key);
+    if (!hasKey) {
+      setQwenAiProviderStatus('Enter Qwen API key before testing.', 'error');
+      keyInput?.focus();
+      return;
+    }
+    setQwenAiProviderStatus('Checking Qwen connection...', 'pending');
+    try {
+      const data = await api('/api/admin/qwen-ai-bots/test-connection', {
+        method: 'POST',
+        body: qwenAiSettingsPayload(),
+      });
+      await persistQwenAiSettings();
+      if (data.state?.models) mergeQwenAiState({ state: { models: data.state.models } });
+      renderQwenAiSettings();
+      const text = String(data.result?.text || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+      setQwenAiProviderStatus(`Key verified (${data.result?.latencyMs || 0} ms). ${text}`, 'success');
+    } catch (e) {
+      setQwenAiProviderStatus(formatUiErrorMessage(e, 'Could not check Qwen key'), 'error');
+    }
+  }
+
+  async function refreshQwenAiModels() {
+    const keyInput = $('#qwenAiApiKey');
+    const hasKey = Boolean(keyInput?.value.trim() || qwenBotState.settings?.has_qwen_key);
+    if (!hasKey) {
+      setQwenAiProviderStatus('Enter or save Qwen API key before loading models.', 'error');
+      keyInput?.focus();
+      return;
+    }
+    setQwenAiProviderStatus('Loading Qwen models...', 'pending');
+    try {
+      const data = await api('/api/admin/qwen-ai-bots/models/refresh', {
+        method: 'POST',
+        body: qwenAiSettingsPayload(),
+      });
+      mergeQwenAiState(data);
+      renderQwenAiSettings();
+      setQwenAiProviderStatus(`Models refreshed: ${qwenBotState.models?.response?.length || 0}.`, 'success');
+    } catch (e) {
+      setQwenAiProviderStatus(formatUiErrorMessage(e, 'Could not load Qwen models'), 'error');
+    }
+  }
+
+  async function deleteQwenAiKey() {
+    if (!confirm('Delete Qwen API key for AI bots?')) return;
+    try {
+      const data = await api('/api/admin/qwen-ai-bots/key', { method: 'DELETE' });
+      mergeQwenAiState(data);
+      renderQwenAiSettings();
+      setQwenAiProviderStatus('Key deleted', 'success');
+    } catch (e) {
+      setQwenAiProviderStatus(e.message || 'Could not delete key', 'error');
+    }
+  }
+
+  async function saveQwenBot() {
+    const payload = qwenBotFormPayload();
+    if (!payload.name) { setQwenBotStatus('Enter bot name', 'error'); return; }
+    setQwenBotStatus('Saving bot...', 'pending');
+    try {
+      await persistQwenAiSettings();
+      const shouldUpdate = Boolean(selectedQwenBotId && qwenBotState.bots.some(bot => Number(bot.id) === Number(selectedQwenBotId)));
+      const url = shouldUpdate ? `/api/admin/qwen-ai-bots/${selectedQwenBotId}` : '/api/admin/qwen-ai-bots';
+      const method = shouldUpdate ? 'PUT' : 'POST';
+      const data = await api(url, { method, body: payload });
+      mergeQwenAiState(data);
+      selectedQwenBotId = data.bot?.id || selectedQwenBotId;
+      if (data.bot?.user_id) {
+        applyUserUpdate({
+          id: data.bot.user_id,
+          user_id: data.bot.user_id,
+          display_name: data.bot.name,
+          avatar_color: data.bot.avatar_color,
+          avatar_url: data.bot.avatar_url,
+          is_ai_bot: 1,
+        });
+      }
+      renderQwenAiSettings();
+      const status = buildVerifiedBotSaveStatus('Bot saved.', data.bot, payload, formatCapabilityState(data.bot || payload));
+      setQwenBotStatus(status.message, status.type);
+    } catch (e) {
+      setQwenBotStatus(e.message || 'Could not save bot', 'error');
+    }
+  }
+
+  async function uploadQwenBotAvatar(file) {
+    if (!file) return;
+    if (!selectedQwenBotId) {
+      setQwenBotStatus('Save the bot before adding an avatar', 'error');
+      renderQwenBotAvatar(null);
+      return;
+    }
+    const fd = new FormData();
+    fd.append('avatar', file);
+    setQwenBotStatus('Uploading avatar...', 'pending');
+    try {
+      const data = await api(`/api/admin/qwen-ai-bots/${selectedQwenBotId}/avatar`, { method: 'POST', body: fd });
+      mergeQwenAiState(data);
+      selectedQwenBotId = data.bot?.id || selectedQwenBotId;
+      if (data.bot?.user_id) {
+        applyUserUpdate({
+          id: data.bot.user_id,
+          user_id: data.bot.user_id,
+          display_name: data.bot.name,
+          avatar_color: data.bot.avatar_color,
+          avatar_url: data.bot.avatar_url,
+          is_ai_bot: 1,
+        });
+      }
+      renderQwenBotList();
+      renderQwenBotAvatar(currentQwenBot());
+      refreshRenderedAiBotAvatar(data.bot);
+      renderQwenChatBotSettings();
+      setQwenBotStatus('Avatar saved', 'success');
+    } catch (e) {
+      setQwenBotStatus(e.message || 'Could not upload avatar', 'error');
+      renderQwenBotAvatar(currentQwenBot());
+    }
+  }
+
+  async function removeQwenBotAvatar() {
+    if (!selectedQwenBotId) return;
+    try {
+      const data = await api(`/api/admin/qwen-ai-bots/${selectedQwenBotId}/avatar`, { method: 'DELETE' });
+      mergeQwenAiState(data);
+      selectedQwenBotId = data.bot?.id || selectedQwenBotId;
+      if (data.bot?.user_id) {
+        applyUserUpdate({
+          id: data.bot.user_id,
+          user_id: data.bot.user_id,
+          display_name: data.bot.name,
+          avatar_color: data.bot.avatar_color,
+          avatar_url: data.bot.avatar_url,
+          is_ai_bot: 1,
+        });
+      }
+      renderQwenBotList();
+      renderQwenBotAvatar(currentQwenBot());
+      refreshRenderedAiBotAvatar(data.bot);
+      renderQwenChatBotSettings();
+      setQwenBotStatus('Avatar removed', 'success');
+    } catch (e) {
+      setQwenBotStatus(e.message || 'Could not remove avatar', 'error');
+    }
+  }
+
+  async function disableQwenBot() {
+    if (!selectedQwenBotId) return;
+    if (!confirm('Disable this Qwen bot in all chats?')) return;
+    try {
+      const data = await api(`/api/admin/qwen-ai-bots/${selectedQwenBotId}`, { method: 'DELETE' });
+      mergeQwenAiState(data);
+      renderQwenAiSettings();
+      setQwenBotStatus('Bot disabled', 'success');
+    } catch (e) {
+      setQwenBotStatus(e.message || 'Could not disable bot', 'error');
+    }
+  }
+
+  async function testQwenBot() {
+    if (!selectedQwenBotId) { setQwenBotStatus('Save the bot first', 'error'); return; }
+    setQwenBotStatus('Testing model...', 'pending');
+    try {
+      await persistQwenAiSettings();
+      const data = await api(`/api/admin/qwen-ai-bots/${selectedQwenBotId}/test`, { method: 'POST', body: {} });
+      const text = data.result?.text ? data.result.text.slice(0, 500) : '';
+      setQwenBotStatus(`Success (${data.result?.latencyMs || 0} ms): ${text}`, 'success');
+    } catch (e) {
+      setQwenBotStatus(e.message || 'Test failed', 'error');
+    }
+  }
+
+  async function exportQwenBotJson() {
+    if (!selectedQwenBotId) { setQwenBotStatus('Choose a saved bot first', 'error'); return; }
+    setQwenBotStatus('Preparing JSON...', 'pending');
+    try {
+      const headers = {};
+      if (token) headers.Authorization = 'Bearer ' + token;
+      const res = await fetch(`/api/admin/qwen-ai-bots/${selectedQwenBotId}/export`, { headers });
+      if (!res.ok) {
+        let data = {};
+        try { data = await res.json(); } catch {}
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const bot = currentQwenBot();
+      const fallbackName = `bananza-qwen-bot-${bot?.mention || selectedQwenBotId}.json`;
+      const filename = filenameFromContentDisposition(res.headers.get('content-disposition'), fallbackName);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setQwenBotStatus('JSON exported', 'success');
+    } catch (e) {
+      setQwenBotStatus(e.message || 'Could not export JSON', 'error');
+    }
+  }
+
+  async function importQwenBotJsonFile(file) {
+    if (!file) return;
+    setQwenBotStatus('Importing JSON...', 'pending');
+    try {
+      const raw = await file.text();
+      const payload = JSON.parse(raw);
+      const data = await api('/api/admin/qwen-ai-bots/import', { method: 'POST', body: payload });
+      mergeQwenAiState(data);
+      selectedQwenBotId = data.bot?.id || selectedQwenBotId;
+      renderQwenAiSettings();
+      const warnings = Array.isArray(data.warnings) && data.warnings.length ? ` ${data.warnings.join(' ')}` : '';
+      setQwenBotStatus(`Bot imported.${warnings}`, warnings ? 'error' : 'success');
+    } catch (e) {
+      setQwenBotStatus(e.message || 'Could not import JSON', 'error');
+    } finally {
+      const input = $('#qwenAiBotImportFile');
+      if (input) input.value = '';
+    }
+  }
+
+  async function saveQwenChatBotSettings() {
+    const chatId = Number($('#qwenAiBotChatSelect')?.value || 0);
+    const botId = Number($('#qwenAiBotChatBotSelect')?.value || 0);
+    const botExists = qwenBotState.bots.some(bot => Number(bot.id) === botId);
+    if (!chatId || !botId) { setQwenChatStatus('Choose chat and bot', 'error'); return; }
+    if (!botExists) {
+      setQwenChatStatus('Save the bot first', 'error');
+      await loadQwenAiState().catch(() => {});
+      return;
+    }
+    try {
+      await persistQwenAiSettings();
+      const data = await api('/api/admin/qwen-ai-bots/chat-settings', {
+        method: 'PUT',
+        body: {
+          chatId,
+          botId,
+          enabled: $('#qwenAiBotChatEnabled')?.checked,
+          mode: 'simple',
+          hot_context_limit: Number($('#qwenAiBotChatHotLimit')?.value || 50),
+          auto_react_on_mention: $('#qwenAiBotChatAutoReact')?.checked,
+        },
+      });
+      mergeQwenAiState(data);
+      renderQwenChatBotSettings();
+      setQwenChatStatus('Chat settings saved', 'success');
+    } catch (e) {
+      setQwenChatStatus(e.message || 'Could not save chat settings', 'error');
+    }
+  }
+
   function setYandexAiStatus(message, type = '') {
     setInlineStatus('yandexAiStatus', message, type);
   }
@@ -11904,8 +12419,21 @@
     });
   }
 
+  function ensureQwenTextBotsModalContent() {
+    const modalBlock = $('#qwenAiTextBotsBlock');
+    if (!modalBlock) return;
+    const botPanel = $('#qwenAiBotList')?.closest('.ai-bot-panel');
+    const chatPanel = $('#qwenAiBotChatSelect')?.closest('.ai-bot-panel');
+    [botPanel, chatPanel].forEach((panel) => {
+      if (panel && panel.parentElement !== modalBlock) {
+        modalBlock.appendChild(panel);
+      }
+    });
+  }
+
   function registerBuiltinModals() {
     ensureDeepseekTextBotsModalContent();
+    ensureQwenTextBotsModalContent();
     [
       newChatModal,
       adminModal,
@@ -11929,6 +12457,8 @@
       yandexAiSettingsModal,
       deepseekAiSettingsModal,
       deepseekAiTextBotsModal,
+      qwenAiSettingsModal,
+      qwenAiTextBotsModal,
       grokAiSettingsModal,
       grokAiTextBotsModal,
       grokAiImageBotsModal,
@@ -13086,6 +13616,7 @@
   function contextConvertProviderLabel(provider = 'openai') {
     if (provider === 'yandex') return 'Yandex';
     if (provider === 'deepseek') return 'DeepSeek';
+    if (provider === 'qwen') return 'Qwen';
     if (provider === 'grok') return 'Grok';
     return 'OpenAI';
   }
@@ -13093,6 +13624,7 @@
   function providerAccent(provider = 'openai') {
     if (provider === 'yandex') return '#fc9b28';
     if (provider === 'deepseek') return '#2a9d8f';
+    if (provider === 'qwen') return '#8b5cf6';
     if (provider === 'grok') return '#5f8cff';
     return '#10a37f';
   }
@@ -13100,6 +13632,7 @@
   function contextConvertRouteBase(provider = 'openai') {
     if (provider === 'yandex') return '/api/admin/yandex-convert-bots';
     if (provider === 'deepseek') return '/api/admin/deepseek-convert-bots';
+    if (provider === 'qwen') return '/api/admin/qwen-convert-bots';
     if (provider === 'grok') return '/api/admin/grok-convert-bots';
     return '/api/admin/openai-convert-bots';
   }
@@ -13148,6 +13681,7 @@
     if (provider === 'openai' && state.settings) syncSharedOpenAiSettings(state.settings);
     if (provider === 'yandex' && state.settings) yandexBotState.settings = { ...yandexBotState.settings, ...state.settings };
     if (provider === 'deepseek' && state.settings) deepseekBotState.settings = { ...deepseekBotState.settings, ...state.settings };
+    if (provider === 'qwen' && state.settings) qwenBotState.settings = { ...qwenBotState.settings, ...state.settings };
     if (provider === 'grok' && state.settings) grokBotState.settings = { ...grokBotState.settings, ...state.settings };
     const bots = contextConvertAdminStates[provider].bots || [];
     if (selectedContextConvertBotIds[provider] && !bots.some((bot) => Number(bot.id) === Number(selectedContextConvertBotIds[provider]))) {
@@ -22196,6 +22730,9 @@
     const deepseekAiItem = $('#settingsDeepSeekAiPanel');
     if (currentUser.is_admin) deepseekAiItem?.classList.remove('hidden');
     else deepseekAiItem?.classList.add('hidden');
+    const qwenAiItem = $('#settingsQwenAiPanel');
+    if (currentUser.is_admin) qwenAiItem?.classList.remove('hidden');
+    else qwenAiItem?.classList.add('hidden');
     const grokAiItem = $('#settingsGrokAiPanel');
     if (currentUser.is_admin) grokAiItem?.classList.remove('hidden');
     else grokAiItem?.classList.add('hidden');
@@ -22344,6 +22881,30 @@
       setDeepseekBotStatus('');
     }).catch((e) => {
       setDeepseekBotStatus(e.message || 'Could not load DeepSeek text bots', 'error');
+    });
+  }
+
+  function openQwenAiSettingsModal() {
+    if (!currentUser?.is_admin) return;
+    openModal('qwenAiSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
+    setQwenAiStatus('Loading...');
+    loadQwenAiState().then(() => setQwenAiStatus('')).catch((e) => {
+      setQwenAiStatus(e.message || 'Could not load Qwen AI bots', 'error');
+    });
+  }
+
+  function openQwenTextBotsModal() {
+    if (!currentUser?.is_admin) return;
+    ensureQwenTextBotsModalContent();
+    openModal('qwenAiTextBotsModal', { replaceStack: false, opener: $('#qwenAiOpenTextBots') });
+    resetManagedModalScroll('qwenAiTextBotsModal');
+    setQwenBotStatus('Loading...', 'pending');
+    setQwenChatStatus('');
+    loadQwenAiState().then(() => {
+      resetManagedModalScroll('qwenAiTextBotsModal');
+      setQwenBotStatus('');
+    }).catch((e) => {
+      setQwenBotStatus(e.message || 'Could not load Qwen text bots', 'error');
     });
   }
 
@@ -24829,6 +25390,7 @@
     $('#settingsAiBotsPanel')?.addEventListener('click', openAiBotSettingsModal);
     $('#settingsYandexAiPanel')?.addEventListener('click', openYandexAiSettingsModal);
     $('#settingsDeepSeekAiPanel')?.addEventListener('click', openDeepseekAiSettingsModal);
+    $('#settingsQwenAiPanel')?.addEventListener('click', openQwenAiSettingsModal);
     $('#settingsGrokAiPanel')?.addEventListener('click', openGrokAiSettingsModal);
     $('#settingsChangePassword').addEventListener('click', openChangePasswordModal);
     $('#settingsAdminPanel').addEventListener('click', openAdminModal);
@@ -25110,6 +25672,38 @@
     $('#deepseekAiBotChatSelect')?.addEventListener('change', renderDeepseekChatBotSettings);
     $('#deepseekAiBotChatBotSelect')?.addEventListener('change', renderDeepseekChatBotSettings);
     bindAsyncActionButtons('deepseekAiBotChatSave', null, 'Saving...', saveDeepseekChatBotSettings);
+
+    // Qwen AI bot admin settings
+    bindAsyncActionButtons('qwenAiSaveSettings', null, 'Saving...', saveQwenAiSettings);
+    bindAsyncActionButtons('qwenAiTestConnection', null, 'Testing...', testQwenAiConnection);
+    bindAsyncActionButtons('qwenAiRefreshModels', null, 'Refreshing...', refreshQwenAiModels);
+    bindAsyncActionButtons('qwenAiDeleteKey', null, 'Deleting...', deleteQwenAiKey);
+    $('#qwenAiOpenTextBots')?.addEventListener('click', openQwenTextBotsModal);
+    $('#qwenAiOpenConvertBots')?.addEventListener('click', () => openContextConvertBotsModal('qwen'));
+    $('#qwenAiBotCreateNew')?.addEventListener('click', () => {
+      fillQwenBotForm(null);
+      setQwenBotStatus('New Qwen bot: fill fields and save');
+    });
+    bindAsyncActionButtons('qwenAiBotSave', null, 'Saving...', saveQwenBot);
+    bindAsyncActionButtons('qwenAiBotDisable', null, 'Disabling...', disableQwenBot);
+    bindAsyncActionButtons('qwenAiBotTest', null, 'Testing...', testQwenBot);
+    bindAsyncActionButtons('qwenAiBotExportJson', null, 'Preparing...', exportQwenBotJson);
+    $('#qwenAiBotImportJson')?.addEventListener('click', () => $('#qwenAiBotImportFile')?.click());
+    $('#qwenAiBotImportFile')?.addEventListener('change', (event) => importQwenBotJsonFile(event.target.files?.[0]));
+    $('#qwenAiBotAvatarInput')?.addEventListener('change', (event) => uploadQwenBotAvatar(event.target.files?.[0]));
+    bindAsyncActionButtons('removeQwenAiBotAvatar', null, 'Removing...', removeQwenBotAvatar);
+    $('#qwenAiBotName')?.addEventListener('input', () => {
+      if (!currentQwenBot()?.avatar_url) renderQwenBotAvatar(currentQwenBot());
+    });
+    $('#qwenAiBotList')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.ai-bot-list-item');
+      if (!btn) return;
+      const bot = qwenBotState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
+      if (bot) fillQwenBotForm(bot);
+    });
+    $('#qwenAiBotChatSelect')?.addEventListener('change', renderQwenChatBotSettings);
+    $('#qwenAiBotChatBotSelect')?.addEventListener('change', renderQwenChatBotSettings);
+    bindAsyncActionButtons('qwenAiBotChatSave', null, 'Saving...', saveQwenChatBotSettings);
 
     // Grok AI bot admin settings
     bindAsyncActionButtons('grokAiSaveSettings', null, 'Saving...', saveGrokAiSettings);

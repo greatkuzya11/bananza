@@ -41,6 +41,16 @@ const DEFAULT_AI_SETTINGS = {
   deepseek_request_timeout_ms: 600000,
   deepseek_key_encrypted: '',
   deepseek_key_masked: '',
+  qwen_enabled: false,
+  qwen_interactive_enabled: false,
+  qwen_base_url: 'http://127.0.0.1:8000/v1',
+  qwen_default_response_model: 'qwen',
+  qwen_default_summary_model: 'qwen',
+  qwen_temperature: 0.3,
+  qwen_max_tokens: 1000,
+  qwen_request_timeout_ms: 600000,
+  qwen_key_encrypted: '',
+  qwen_key_masked: '',
   yandex_enabled: false,
   yandex_interactive_enabled: false,
   yandex_folder_id: '',
@@ -212,6 +222,26 @@ function normalizeSettings(raw = {}) {
   );
   next.deepseek_key_encrypted = String(next.deepseek_key_encrypted || '');
   next.deepseek_key_masked = String(next.deepseek_key_masked || '');
+  next.qwen_enabled = boolValue(next.qwen_enabled, DEFAULT_AI_SETTINGS.qwen_enabled);
+  next.qwen_interactive_enabled = boolValue(
+    Object.prototype.hasOwnProperty.call(raw, 'qwen_interactive_enabled')
+      ? raw.qwen_interactive_enabled
+      : next.qwen_enabled,
+    next.qwen_enabled
+  );
+  next.qwen_base_url = cleanBaseUrl(next.qwen_base_url, DEFAULT_AI_SETTINGS.qwen_base_url);
+  next.qwen_default_response_model = cleanModel(next.qwen_default_response_model, DEFAULT_AI_SETTINGS.qwen_default_response_model);
+  next.qwen_default_summary_model = cleanModel(next.qwen_default_summary_model, DEFAULT_AI_SETTINGS.qwen_default_summary_model);
+  next.qwen_temperature = floatValue(next.qwen_temperature, DEFAULT_AI_SETTINGS.qwen_temperature, 0, 1);
+  next.qwen_max_tokens = intValue(next.qwen_max_tokens, DEFAULT_AI_SETTINGS.qwen_max_tokens, 1, 8000);
+  next.qwen_request_timeout_ms = intValue(
+    next.qwen_request_timeout_ms,
+    DEFAULT_AI_SETTINGS.qwen_request_timeout_ms,
+    30000,
+    1800000
+  );
+  next.qwen_key_encrypted = String(next.qwen_key_encrypted || '');
+  next.qwen_key_masked = String(next.qwen_key_masked || '');
   next.yandex_enabled = boolValue(next.yandex_enabled, DEFAULT_AI_SETTINGS.yandex_enabled);
   next.yandex_interactive_enabled = boolValue(
     Object.prototype.hasOwnProperty.call(raw, 'yandex_interactive_enabled')
@@ -300,6 +330,16 @@ function getDeepSeekKey(db, secret) {
   }
 }
 
+function getQwenKey(db, secret) {
+  const settings = getAiSettings(db);
+  if (!settings.qwen_key_encrypted) return '';
+  try {
+    return decryptText(settings.qwen_key_encrypted, secret);
+  } catch {
+    return '';
+  }
+}
+
 function saveAiSettings(db, incoming = {}, secret) {
   const current = getAiSettings(db);
   const next = normalizeSettings({
@@ -342,6 +382,16 @@ function saveAiSettings(db, incoming = {}, secret) {
     deepseek_temperature: incoming.deepseek_temperature ?? current.deepseek_temperature,
     deepseek_max_tokens: incoming.deepseek_max_tokens ?? current.deepseek_max_tokens,
     deepseek_request_timeout_ms: incoming.deepseek_request_timeout_ms ?? current.deepseek_request_timeout_ms,
+    qwen_enabled: Object.prototype.hasOwnProperty.call(incoming, 'qwen_enabled') ? incoming.qwen_enabled : current.qwen_enabled,
+    qwen_interactive_enabled: Object.prototype.hasOwnProperty.call(incoming, 'qwen_interactive_enabled')
+      ? incoming.qwen_interactive_enabled
+      : current.qwen_interactive_enabled,
+    qwen_base_url: incoming.qwen_base_url ?? current.qwen_base_url,
+    qwen_default_response_model: incoming.qwen_default_response_model ?? current.qwen_default_response_model,
+    qwen_default_summary_model: incoming.qwen_default_summary_model ?? current.qwen_default_summary_model,
+    qwen_temperature: incoming.qwen_temperature ?? current.qwen_temperature,
+    qwen_max_tokens: incoming.qwen_max_tokens ?? current.qwen_max_tokens,
+    qwen_request_timeout_ms: incoming.qwen_request_timeout_ms ?? current.qwen_request_timeout_ms,
     yandex_enabled: Object.prototype.hasOwnProperty.call(incoming, 'yandex_enabled') ? incoming.yandex_enabled : current.yandex_enabled,
     yandex_interactive_enabled: Object.prototype.hasOwnProperty.call(incoming, 'yandex_interactive_enabled')
       ? incoming.yandex_interactive_enabled
@@ -380,6 +430,14 @@ function saveAiSettings(db, incoming = {}, secret) {
     if (key) {
       next.deepseek_key_encrypted = encryptText(key, secret);
       next.deepseek_key_masked = maskSecret(key);
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(incoming, 'qwen_api_key')) {
+    const key = String(incoming.qwen_api_key || '').trim();
+    if (key) {
+      next.qwen_key_encrypted = encryptText(key, secret);
+      next.qwen_key_masked = maskSecret(key);
     }
   }
 
@@ -427,12 +485,21 @@ function deleteDeepSeekKey(db) {
   return sanitizeSettings(current);
 }
 
+function deleteQwenKey(db) {
+  const current = getAiSettings(db);
+  current.qwen_key_encrypted = '';
+  current.qwen_key_masked = '';
+  writeSettings(db, current);
+  return sanitizeSettings(current);
+}
+
 function sanitizeSettings(settings) {
   const normalized = normalizeSettings(settings);
   const {
     openai_key_encrypted,
     grok_key_encrypted,
     deepseek_key_encrypted,
+    qwen_key_encrypted,
     yandex_key_encrypted,
     ...safe
   } = normalized;
@@ -444,6 +511,8 @@ function sanitizeSettings(settings) {
     masked_grok_key: normalized.grok_key_masked || '',
     has_deepseek_key: Boolean(deepseek_key_encrypted),
     masked_deepseek_key: normalized.deepseek_key_masked || '',
+    has_qwen_key: Boolean(qwen_key_encrypted),
+    masked_qwen_key: normalized.qwen_key_masked || '',
     has_yandex_key: Boolean(yandex_key_encrypted),
     masked_yandex_key: normalized.yandex_key_masked || '',
   };
@@ -455,11 +524,13 @@ module.exports = {
   getOpenAIKey,
   getGrokKey,
   getDeepSeekKey,
+  getQwenKey,
   getYandexKey,
   saveAiSettings,
   deleteOpenAIKey,
   deleteGrokKey,
   deleteDeepSeekKey,
+  deleteQwenKey,
   deleteYandexKey,
   sanitizeSettings,
 };

@@ -325,6 +325,7 @@
         <button id="settingsAiBotsPanel" class="settings-item hidden">🤖 OpenAI AI</button>
         <button id="settingsYandexAiPanel" class="settings-item hidden">🐓 AI-&#1071;&#1085;&#1076;&#1077;&#1082;&#1089;</button>
         <button id="settingsDeepSeekAiPanel" class="settings-item hidden">🐋 DeepSeek AI</button>
+        <button id="settingsQwenAiPanel" class="settings-item hidden">Qwen AI</button>
         <button id="settingsGrokAiPanel" class="settings-item hidden"> &#x1D54F;  Grok AI</button>
       </div>
     </div>
@@ -1259,6 +1260,158 @@
       </div>
       <div class="modal-body">
         <div id="deepseekAiTextBotsBlock" class="ai-bot-settings-block"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Qwen AI Settings Modal -->
+  <div id="qwenAiSettingsModal" class="modal hidden">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3>Qwen AI</h3>
+        <button class="modal-close">&#10005;</button>
+      </div>
+      <div class="modal-body">
+        <div id="qwenAiSettingsBlock" class="ai-bot-settings-block">
+          <div class="ai-bot-panel">
+            <h4>Global Qwen settings</h4>
+            <div class="settings-item settings-toggle-item">
+              <span>Enable Qwen AI bots</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="qwenAiGlobalEnabled">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="settings-item settings-toggle-item">
+              <span>Interactive actions</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="qwenAiInteractiveEnabled">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="settings-hint">Enables polls, poll votes, reactions, and pinning for all Qwen bots.</div>
+            <div class="ai-bot-grid">
+              <label>Base URL<input id="qwenAiBaseUrl" class="modal-input" value="http://127.0.0.1:8000/v1"></label>
+              <label>Response model<select id="qwenAiDefaultResponseModel" class="modal-input"></select></label>
+              <label>Summary model<select id="qwenAiDefaultSummaryModel" class="modal-input"></select></label>
+              <label>Temperature<input id="qwenAiTemperature" class="modal-input" type="number" min="0" max="1" step="0.05" value="0.3"></label>
+              <label>Max tokens<input id="qwenAiMaxTokens" class="modal-input" type="number" min="1" max="8000" step="50" value="1000"></label>
+              <label>Request timeout, seconds<input id="qwenAiRequestTimeoutSeconds" class="modal-input" type="number" min="30" max="1800" step="30" value="600"></label>
+            </div>
+            <label class="ai-bot-field">Qwen API key
+              <input id="qwenAiApiKey" class="modal-input" type="password" autocomplete="off" placeholder="local-qwen">
+            </label>
+            <div id="qwenAiKeyStatus" class="settings-hint"></div>
+            <div id="qwenAiModelStatus" class="settings-hint"></div>
+            <div class="settings-hint">Qwen works as a text-only OpenAI-compatible provider. Use a local key such as local-qwen if your endpoint does not validate Authorization.</div>
+            <div class="ai-bot-actions">
+              <button id="qwenAiSaveSettings" type="button" class="btn-primary">Save settings</button>
+              <button id="qwenAiTestConnection" type="button" class="weather-action-btn">Test key</button>
+              <button id="qwenAiRefreshModels" type="button" class="weather-action-btn">Refresh models</button>
+              <button id="qwenAiDeleteKey" type="button" class="weather-action-btn">Delete key</button>
+            </div>
+            <div id="qwenAiProviderStatus" class="ai-bot-status admin-action-status"></div>
+          </div>
+
+          <div class="ai-bot-panel">
+            <h4>Qwen bots and persona</h4>
+            <div id="qwenAiBotList" class="ai-bot-list"></div>
+            <div class="ai-bot-actions">
+              <button id="qwenAiBotCreateNew" type="button" class="weather-action-btn">New bot</button>
+              <button id="qwenAiBotSave" type="button" class="btn-primary">Save bot</button>
+              <button id="qwenAiBotDisable" type="button" class="weather-action-btn">Disable</button>
+              <button id="qwenAiBotTest" type="button" class="weather-action-btn">Test</button>
+              <button id="qwenAiBotExportJson" type="button" class="weather-action-btn">Export JSON</button>
+              <button id="qwenAiBotImportJson" type="button" class="weather-action-btn">Import JSON</button>
+              <input id="qwenAiBotImportFile" class="hidden" type="file" accept="application/json,.json">
+            </div>
+            <div id="qwenAiBotEditorStatus" class="ai-bot-status admin-action-status"></div>
+            <div class="ai-bot-avatar-row">
+              <div class="avatar-upload-wrap ai-bot-avatar-wrap">
+                <div id="qwenAiBotAvatar" class="avatar-large"></div>
+                <label class="avatar-upload-label" id="qwenAiBotAvatarLabel" title="Change avatar">&#128247;
+                  <input type="file" id="qwenAiBotAvatarInput" accept=".jpg,.jpeg,.png,.webp" class="hidden">
+                </label>
+              </div>
+              <div class="ai-bot-avatar-copy">
+                <strong>Bot avatar</strong>
+                <span>The image is stored separately from JSON persona settings.</span>
+                <button id="removeQwenAiBotAvatar" class="btn-text hidden" type="button">Remove avatar</button>
+              </div>
+            </div>
+            <div class="ai-bot-grid">
+              <label>Name<input id="qwenAiBotName" class="modal-input" value="Qwen AI"></label>
+              <label>Mention<input id="qwenAiBotMention" class="modal-input" value="qwen"></label>
+              <label>Response model<select id="qwenAiBotResponseModel" class="modal-input"></select></label>
+              <label>Summary model<select id="qwenAiBotSummaryModel" class="modal-input"></select></label>
+              <label>Temperature<input id="qwenAiBotTemperature" class="modal-input" type="number" min="0" max="1" step="0.05" value="0.3"></label>
+              <label>Max tokens<input id="qwenAiBotMaxTokens" class="modal-input" type="number" min="1" max="8000" step="50" value="1000"></label>
+              <div class="ai-bot-toggle-label"><span>Enabled</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="qwenAiBotEnabled" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="settings-hint">Use the Qwen "Interactive actions" switch above to enable polls, votes, reactions, and pinning for all Qwen bots.</div>
+            <div class="settings-hint">Use the exact model id exposed by your Qwen server. Hybrid memory for Qwen is disabled.</div>
+            <label class="ai-bot-field">Style<textarea id="qwenAiBotStyle" class="modal-input" rows="2"></textarea></label>
+            <label class="ai-bot-field">Tone<textarea id="qwenAiBotTone" class="modal-input" rows="2"></textarea></label>
+            <label class="ai-bot-field">Behavior rules<textarea id="qwenAiBotRules" class="modal-input" rows="4"></textarea></label>
+            <label class="ai-bot-field">Speech patterns<textarea id="qwenAiBotSpeech" class="modal-input" rows="3"></textarea></label>
+          </div>
+
+          <div class="ai-bot-panel">
+            <h4>Qwen bots in chats</h4>
+            <div class="ai-bot-grid">
+              <label>Chat<select id="qwenAiBotChatSelect" class="modal-input"></select></label>
+              <label>Bot<select id="qwenAiBotChatBotSelect" class="modal-input"></select></label>
+              <label>Mode<select id="qwenAiBotChatMode" class="modal-input">
+                <option value="simple">Simple context</option>
+              </select></label>
+              <label>Context<input id="qwenAiBotChatHotLimit" class="modal-input" type="number" min="20" max="100" value="50"></label>
+              <div class="ai-bot-toggle-label"><span>Enabled in chat</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="qwenAiBotChatEnabled">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Auto react on mention</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="qwenAiBotChatAutoReact">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            <button id="qwenAiBotChatSave" type="button" class="btn-primary">Save for chat</button>
+            <div id="qwenAiBotChatStatus" class="ai-bot-status admin-action-status"></div>
+            <div class="settings-hint">Qwen bots answer only to @mention or reply. Hybrid memory is unavailable, so this always uses simple context.</div>
+          </div>
+
+          <div class="ai-bot-panel">
+            <h4>Bot settings</h4>
+            <div class="settings-hint">Open separate windows for Qwen text bots and context convert bots.</div>
+            <div class="provider-ai-nav-grid">
+              <button id="qwenAiOpenTextBots" type="button" class="weather-action-btn">Open text bots</button>
+              <button id="qwenAiOpenConvertBots" type="button" class="weather-action-btn">Open convert bots</button>
+            </div>
+          </div>
+
+          <div id="qwenAiStatus" class="ai-bot-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Qwen Text Bot Settings Modal -->
+  <div id="qwenAiTextBotsModal" class="modal hidden">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3>Qwen Text Bots</h3>
+        <button class="modal-close">&#10005;</button>
+      </div>
+      <div class="modal-body">
+        <div id="qwenAiTextBotsBlock" class="ai-bot-settings-block"></div>
       </div>
     </div>
   </div>

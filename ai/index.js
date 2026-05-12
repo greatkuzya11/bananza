@@ -9,11 +9,13 @@ const {
   getOpenAIKey,
   getGrokKey,
   getDeepSeekKey,
+  getQwenKey,
   getYandexKey,
   saveAiSettings,
   deleteOpenAIKey,
   deleteGrokKey,
   deleteDeepSeekKey,
+  deleteQwenKey,
   deleteYandexKey,
   sanitizeSettings,
 } = require('./settings');
@@ -31,6 +33,7 @@ const {
 } = require('./openai');
 const grokAi = require('./grok');
 const deepseekAi = require('./deepseek');
+const qwenAi = require('./qwen');
 const yandexAi = require('./yandex');
 const {
   shouldAttemptBotActionPlan,
@@ -67,6 +70,8 @@ const FALLBACK_EMBEDDING_MODELS = ['text-embedding-3-small'];
 const FALLBACK_OPENAI_IMAGE_MODELS = ['gpt-image-2', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini'];
 const FALLBACK_DEEPSEEK_RESPONSE_MODELS = ['deepseek-chat', 'deepseek-reasoner'];
 const FALLBACK_DEEPSEEK_SUMMARY_MODELS = ['deepseek-chat', 'deepseek-reasoner'];
+const FALLBACK_QWEN_RESPONSE_MODELS = ['qwen'];
+const FALLBACK_QWEN_SUMMARY_MODELS = ['qwen'];
 const CALL_ARTIFACT_DEFAULT_CHUNK_CHARS = 14_000;
 const CALL_ARTIFACT_DEEPSEEK_CHUNK_CHARS = 700_000;
 const FALLBACK_YANDEX_RESPONSE_MODELS = [
@@ -315,9 +320,16 @@ function isLikelyDeepSeekTextModel(id) {
   return /deepseek|reason|chat/.test(value);
 }
 
+function isLikelyQwenTextModel(id) {
+  const value = String(id || '').toLowerCase();
+  if (!value || isEmbeddingModel(value)) return false;
+  if (/image|vision|speech|audio|tts|stt|video|moderation|search|rerank|embedding/.test(value)) return false;
+  return /qwen|reason|chat|instruct|coder/.test(value);
+}
+
 function normalizeProvider(value, fallback = 'openai') {
   const provider = String(value || '').trim().toLowerCase();
-  if (provider === 'grok' || provider === 'deepseek' || provider === 'yandex' || provider === 'openai') return provider;
+  if (provider === 'grok' || provider === 'deepseek' || provider === 'qwen' || provider === 'yandex' || provider === 'openai') return provider;
   return fallback;
 }
 
@@ -750,6 +762,29 @@ function createAiBotFeature({
     FROM ai_bots b
     LEFT JOIN users u ON u.id=b.user_id
     WHERE COALESCE(b.provider,'openai')='deepseek'
+      AND COALESCE(b.kind,'text')='convert'
+    ORDER BY b.enabled DESC, b.id ASC
+  `);
+  const allQwenBotsStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE COALESCE(b.provider,'openai')='qwen'
+    ORDER BY b.enabled DESC, b.id ASC
+  `);
+  const allQwenTextBotsStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE COALESCE(b.provider,'openai')='qwen'
+      AND COALESCE(b.kind,'text')='text'
+    ORDER BY b.enabled DESC, b.id ASC
+  `);
+  const allQwenConvertBotsStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE COALESCE(b.provider,'openai')='qwen'
       AND COALESCE(b.kind,'text')='convert'
     ORDER BY b.enabled DESC, b.id ASC
   `);
@@ -1228,6 +1263,8 @@ function createAiBotFeature({
   let modelCatalogFetchedAt = 0;
   let deepseekModelCatalogCache = null;
   let deepseekModelCatalogFetchedAt = 0;
+  let qwenModelCatalogCache = null;
+  let qwenModelCatalogFetchedAt = 0;
   let grokModelCatalogCache = null;
   let grokModelCatalogFetchedAt = 0;
 
@@ -1275,6 +1312,10 @@ function createAiBotFeature({
     return getDeepSeekKey(db, secret);
   }
 
+  function getQwenApiKey() {
+    return getQwenKey(db, secret);
+  }
+
   function getYandexApiKey() {
     return getYandexKey(db, secret);
   }
@@ -1282,6 +1323,11 @@ function createAiBotFeature({
   function deepseekBaseUrl() {
     const settings = getGlobalSettings();
     return settings.deepseek_base_url || deepseekAi.DEFAULT_BASE_URL;
+  }
+
+  function qwenBaseUrl() {
+    const settings = getGlobalSettings();
+    return settings.qwen_base_url || qwenAi.DEFAULT_BASE_URL;
   }
 
   function grokBaseUrl() {
@@ -1529,6 +1575,69 @@ function createAiBotFeature({
       });
       deepseekModelCatalogFetchedAt = now;
       return deepseekModelCatalogCache;
+    }
+  }
+
+  function qwenSavedModelHints() {
+    const settings = getGlobalSettings();
+    const bots = allQwenBotsStmt.all();
+    return {
+      response: uniqueList([
+        settings.qwen_default_response_model,
+        ...bots.map(bot => bot.response_model),
+      ]),
+      summary: uniqueList([
+        settings.qwen_default_summary_model,
+        ...bots.map(bot => bot.summary_model),
+      ]),
+    };
+  }
+
+  function buildQwenModelCatalog({ source = 'fallback', modelIds = [], error = '' } = {}) {
+    const hints = qwenSavedModelHints();
+    const responseModels = uniqueList(modelIds.filter(isLikelyQwenTextModel));
+    return {
+      source,
+      fetched_at: new Date().toISOString(),
+      response: uniqueList([...hints.response, ...responseModels, ...FALLBACK_QWEN_RESPONSE_MODELS]),
+      summary: uniqueList([...hints.summary, ...responseModels, ...FALLBACK_QWEN_SUMMARY_MODELS]),
+      error,
+    };
+  }
+
+  function getQwenModelCatalog() {
+    return buildQwenModelCatalog();
+  }
+
+  async function getLiveQwenModelCatalog({ apiKey, baseUrl }) {
+    const modelIds = await qwenAi.listModelIds({ apiKey, baseUrl });
+    return buildQwenModelCatalog({ source: 'live', modelIds, error: '' });
+  }
+
+  async function getQwenModelCatalogCached({ refresh = false } = {}) {
+    const now = Date.now();
+    if (!refresh && qwenModelCatalogCache && now - qwenModelCatalogFetchedAt < MODEL_CACHE_MS) {
+      return qwenModelCatalogCache;
+    }
+
+    const apiKey = getQwenApiKey();
+    if (!apiKey) {
+      qwenModelCatalogCache = buildQwenModelCatalog({ source: 'fallback', error: 'Qwen API key is not configured' });
+      qwenModelCatalogFetchedAt = now;
+      return qwenModelCatalogCache;
+    }
+
+    try {
+      qwenModelCatalogCache = await getLiveQwenModelCatalog({ apiKey, baseUrl: qwenBaseUrl() });
+      qwenModelCatalogFetchedAt = now;
+      return qwenModelCatalogCache;
+    } catch (error) {
+      qwenModelCatalogCache = buildQwenModelCatalog({
+        source: 'fallback',
+        error: errorText(error, 'Could not load Qwen models'),
+      });
+      qwenModelCatalogFetchedAt = now;
+      return qwenModelCatalogCache;
     }
   }
 
@@ -2112,27 +2221,35 @@ function createAiBotFeature({
       ? settings.yandex_default_response_model
       : (provider === 'grok'
         ? settings.grok_default_response_model
-        : (provider === 'deepseek' ? settings.deepseek_default_response_model : settings.default_response_model));
+        : (provider === 'deepseek'
+          ? settings.deepseek_default_response_model
+          : (provider === 'qwen' ? settings.qwen_default_response_model : settings.default_response_model)));
     const defaultSummaryModel = provider === 'yandex'
       ? settings.yandex_default_summary_model
       : (provider === 'grok'
         ? settings.grok_default_summary_model
-        : (provider === 'deepseek' ? settings.deepseek_default_summary_model : settings.default_summary_model));
+        : (provider === 'deepseek'
+          ? settings.deepseek_default_summary_model
+          : (provider === 'qwen' ? settings.qwen_default_summary_model : settings.default_summary_model)));
     const defaultEmbeddingModel = provider === 'yandex'
       ? settings.yandex_default_embedding_doc_model
       : (provider === 'grok'
         ? settings.grok_default_embedding_model
-        : (provider === 'deepseek' ? '' : settings.default_embedding_model));
+        : ((provider === 'deepseek' || provider === 'qwen') ? '' : settings.default_embedding_model));
     const defaultTemperature = provider === 'yandex'
       ? settings.yandex_temperature
       : (provider === 'grok'
         ? settings.grok_temperature
-        : (provider === 'deepseek' ? settings.deepseek_temperature : null));
+        : (provider === 'deepseek'
+          ? settings.deepseek_temperature
+          : (provider === 'qwen' ? settings.qwen_temperature : null)));
     const defaultMaxTokens = provider === 'yandex'
       ? settings.yandex_max_tokens
       : (provider === 'grok'
         ? settings.grok_max_tokens
-        : (provider === 'deepseek' ? settings.deepseek_max_tokens : null));
+        : (provider === 'deepseek'
+          ? settings.deepseek_max_tokens
+          : (provider === 'qwen' ? settings.qwen_max_tokens : null)));
     const openAiUniversal = provider === 'openai' && kind === 'universal';
     const openAiImageCapable = provider === 'openai' && (kind === 'universal' || isChatShot);
     const grokImageCapable = provider === 'grok' && (kind === 'image' || kind === 'universal' || isChatShot);
@@ -2280,6 +2397,19 @@ function createAiBotFeature({
     };
   }
 
+  function serializeQwenAdminState() {
+    const state = serializeAdminState();
+    const qwenBots = allQwenTextBotsStmt.all().map(sanitizeBot);
+    const qwenBotIds = new Set(qwenBots.map((bot) => Number(bot.id)));
+    return {
+      settings: sanitizeSettings(getGlobalSettings()),
+      bots: qwenBots,
+      chatSettings: serializeChatSettingsForBotIds(qwenBotIds, { forceSimple: true }),
+      chats: state.chats,
+      models: qwenModelCatalogCache || getQwenModelCatalog(),
+    };
+  }
+
   function serializeGrokAdminState() {
     const state = serializeAdminState();
     const textBots = allGrokTextBotsStmt.all().map(sanitizeBot);
@@ -2342,6 +2472,21 @@ function createAiBotFeature({
       chats: state.chats,
       models: {
         response: (deepseekModelCatalogCache || getDeepSeekModelCatalog()).response || FALLBACK_DEEPSEEK_RESPONSE_MODELS,
+      },
+    };
+  }
+
+  function serializeQwenConvertAdminState() {
+    const state = serializeAdminState();
+    const bots = allQwenConvertBotsStmt.all().map(sanitizeBot);
+    const botIds = new Set(bots.map((bot) => Number(bot.id)));
+    return {
+      settings: sanitizeSettings(getGlobalSettings()),
+      bots,
+      chatSettings: serializeChatSettingsForBotIds(botIds, { forceSimple: true }),
+      chats: state.chats,
+      models: {
+        response: (qwenModelCatalogCache || getQwenModelCatalog()).response || FALLBACK_QWEN_RESPONSE_MODELS,
       },
     };
   }
@@ -2665,6 +2810,9 @@ function createAiBotFeature({
     if (bot?.provider === 'deepseek') {
       return cleanText(bot?.response_model || settings.deepseek_default_response_model, 160) || settings.deepseek_default_response_model;
     }
+    if (bot?.provider === 'qwen') {
+      return cleanText(bot?.response_model || settings.qwen_default_response_model, 160) || settings.qwen_default_response_model;
+    }
     if (bot?.provider === 'grok') {
       return cleanText(bot?.response_model || settings.grok_default_response_model, 160) || settings.grok_default_response_model;
     }
@@ -2715,6 +2863,19 @@ function createAiBotFeature({
         maxOutputTokens: 80,
         temperature: 0.2,
         timeoutMs: settings.deepseek_request_timeout_ms,
+      });
+    } else if (bot.provider === 'qwen') {
+      const apiKey = getQwenApiKey();
+      if (!apiKey) throw new Error('Qwen AI is not configured');
+      rawText = await qwenAi.generateText({
+        apiKey,
+        baseUrl: qwenBaseUrl(),
+        model,
+        system,
+        user,
+        maxOutputTokens: 80,
+        temperature: 0.2,
+        timeoutMs: settings.qwen_request_timeout_ms,
       });
     } else if (bot.provider === 'grok') {
       const apiKey = getGrokApiKey();
@@ -2841,6 +3002,7 @@ function createAiBotFeature({
     if (provider === 'openai' && kind === 'chatshot') return 'OpenAI ChatShot';
     if (provider === 'yandex' && kind === 'convert') return 'Yandex Convert';
     if (provider === 'deepseek' && kind === 'convert') return 'DeepSeek Convert';
+    if (provider === 'qwen' && kind === 'convert') return 'Qwen Convert';
     if (provider === 'openai' && kind === 'universal') return 'OpenAI Universal';
     if (provider === 'grok' && kind === 'universal') return 'Grok Universal';
     if (provider === 'grok' && kind === 'image') return 'Grok Images';
@@ -2848,6 +3010,7 @@ function createAiBotFeature({
     if (provider === 'grok' && kind === 'chatshot') return 'Grok ChatShot';
     if (provider === 'yandex') return 'Yandex AI';
     if (provider === 'deepseek') return 'DeepSeek AI';
+    if (provider === 'qwen') return 'Qwen AI';
     if (provider === 'grok') return 'Grok AI';
     return 'Bananza AI';
   }
@@ -2855,6 +3018,7 @@ function createAiBotFeature({
   function providerEnabled(provider, settings = getGlobalSettings()) {
     if (provider === 'yandex') return boolValue(settings?.yandex_enabled, false);
     if (provider === 'deepseek') return boolValue(settings?.deepseek_enabled, false);
+    if (provider === 'qwen') return boolValue(settings?.qwen_enabled, false);
     if (provider === 'grok') return boolValue(settings?.grok_enabled, false);
     return boolValue(settings?.enabled, false);
   }
@@ -2862,6 +3026,7 @@ function createAiBotFeature({
   function providerInteractiveEnabled(provider, settings = getGlobalSettings()) {
     if (provider === 'yandex') return boolValue(settings?.yandex_interactive_enabled, false);
     if (provider === 'deepseek') return boolValue(settings?.deepseek_interactive_enabled, false);
+    if (provider === 'qwen') return boolValue(settings?.qwen_interactive_enabled, false);
     if (provider === 'grok') return boolValue(settings?.grok_interactive_enabled, false);
     return boolValue(settings?.openai_interactive_enabled, false);
   }
@@ -2879,27 +3044,35 @@ function createAiBotFeature({
       ? settings.yandex_default_response_model
       : (provider === 'grok'
         ? settings.grok_default_response_model
-        : (provider === 'deepseek' ? settings.deepseek_default_response_model : settings.default_response_model));
+        : (provider === 'deepseek'
+          ? settings.deepseek_default_response_model
+          : (provider === 'qwen' ? settings.qwen_default_response_model : settings.default_response_model)));
     const summaryFallback = provider === 'yandex'
       ? settings.yandex_default_summary_model
       : (provider === 'grok'
         ? settings.grok_default_summary_model
-        : (provider === 'deepseek' ? settings.deepseek_default_summary_model : settings.default_summary_model));
+        : (provider === 'deepseek'
+          ? settings.deepseek_default_summary_model
+          : (provider === 'qwen' ? settings.qwen_default_summary_model : settings.default_summary_model)));
     const embeddingFallback = provider === 'yandex'
       ? settings.yandex_default_embedding_doc_model
       : (provider === 'grok'
         ? settings.grok_default_embedding_model
-        : (provider === 'deepseek' ? '' : settings.default_embedding_model));
+        : ((provider === 'deepseek' || provider === 'qwen') ? '' : settings.default_embedding_model));
     const temperatureFallback = provider === 'yandex'
       ? settings.yandex_temperature
       : (provider === 'grok'
         ? settings.grok_temperature
-        : (provider === 'deepseek' ? settings.deepseek_temperature : 0.55));
+        : (provider === 'deepseek'
+          ? settings.deepseek_temperature
+          : (provider === 'qwen' ? settings.qwen_temperature : 0.55)));
     const maxTokensFallback = provider === 'yandex'
       ? settings.yandex_max_tokens
       : (provider === 'grok'
         ? settings.grok_max_tokens
-        : (provider === 'deepseek' ? settings.deepseek_max_tokens : 1000));
+        : (provider === 'deepseek'
+          ? settings.deepseek_max_tokens
+          : (provider === 'qwen' ? settings.qwen_max_tokens : 1000)));
     const isOpenAiUniversal = provider === 'openai' && kind === 'universal';
     const isOpenAiChatShot = provider === 'openai' && isChatShot;
     const isGrokUniversal = provider === 'grok' && kind === 'universal';
@@ -4126,6 +4299,19 @@ function createAiBotFeature({
         temperature: floatValue(bot.temperature, settings.deepseek_temperature, 0, 1),
         timeoutMs: settings.deepseek_request_timeout_ms,
       });
+    } else if (bot.provider === 'qwen') {
+      const apiKey = getQwenApiKey();
+      if (!apiKey) throw new Error('Qwen AI is not configured');
+      rawText = await qwenAi.generateText({
+        apiKey,
+        baseUrl: qwenBaseUrl(),
+        model: bot.response_model || settings.qwen_default_response_model,
+        system,
+        user,
+        maxOutputTokens: intValue(bot.max_tokens, settings.qwen_max_tokens, 1, 8000),
+        temperature: floatValue(bot.temperature, settings.qwen_temperature, 0, 1),
+        timeoutMs: settings.qwen_request_timeout_ms,
+      });
     } else if (bot.provider === 'grok') {
       const apiKey = getGrokApiKey();
       if (!apiKey) throw new Error('Grok AI is not configured');
@@ -4522,6 +4708,8 @@ function createAiBotFeature({
       ...allYandexConvertBotsStmt.all(),
       ...allDeepSeekTextBotsStmt.all(),
       ...allDeepSeekConvertBotsStmt.all(),
+      ...allQwenTextBotsStmt.all(),
+      ...allQwenConvertBotsStmt.all(),
       ...allGrokTextBotsStmt.all(),
       ...allGrokUniversalBotsStmt.all(),
       ...allGrokConvertBotsStmt.all(),
@@ -4559,6 +4747,20 @@ function createAiBotFeature({
         timeoutMs: settings.deepseek_request_timeout_ms,
       });
     }
+    if (bot.provider === 'qwen') {
+      const apiKey = getQwenApiKey();
+      if (!apiKey) throw new Error('Qwen AI is not configured');
+      return qwenAi.generateText({
+        apiKey,
+        baseUrl: qwenBaseUrl(),
+        model: bot.response_model || settings.qwen_default_response_model,
+        system,
+        user,
+        maxOutputTokens: intValue(bot.max_tokens, settings.qwen_max_tokens, 1, 8000),
+        temperature: floatValue(bot.temperature, settings.qwen_temperature, 0, 1),
+        timeoutMs: settings.qwen_request_timeout_ms,
+      });
+    }
     if (bot.provider === 'grok') {
       const apiKey = getGrokApiKey();
       if (!apiKey) throw new Error('Grok AI is not configured');
@@ -4585,7 +4787,7 @@ function createAiBotFeature({
   }
 
   function callArtifactChunkLimitForBot(bot) {
-    return bot?.provider === 'deepseek' ? CALL_ARTIFACT_DEEPSEEK_CHUNK_CHARS : CALL_ARTIFACT_DEFAULT_CHUNK_CHARS;
+    return (bot?.provider === 'deepseek' || bot?.provider === 'qwen') ? CALL_ARTIFACT_DEEPSEEK_CHUNK_CHARS : CALL_ARTIFACT_DEFAULT_CHUNK_CHARS;
   }
 
   function splitCallArtifactText(text, maxChars = CALL_ARTIFACT_DEFAULT_CHUNK_CHARS) {
@@ -4749,6 +4951,7 @@ function createAiBotFeature({
   function serializeConvertAdminStateByProvider(provider = 'openai') {
     if (provider === 'yandex') return serializeYandexConvertAdminState();
     if (provider === 'deepseek') return serializeDeepSeekConvertAdminState();
+    if (provider === 'qwen') return serializeQwenConvertAdminState();
     if (provider === 'grok') return serializeGrokConvertAdminState();
     return serializeOpenAiConvertAdminState();
   }
@@ -4821,6 +5024,17 @@ function createAiBotFeature({
         if (responseModel && !catalog.response.includes(responseModel)) {
           warnings.push(`Response model "${responseModel}" is not available; default model was used.`);
           responseModel = settings.deepseek_default_response_model;
+        }
+      } else if (catalog?.error) {
+        warnings.push(`Model availability was not verified: ${catalog.error}`);
+      }
+    } else if (provider === 'qwen') {
+      const catalog = await getQwenModelCatalogCached();
+      responseModel = cleanText(source.response_model || settings.qwen_default_response_model, 160);
+      if (catalog?.source === 'live') {
+        if (responseModel && !catalog.response.includes(responseModel)) {
+          warnings.push(`Response model "${responseModel}" is not available; default model was used.`);
+          responseModel = settings.qwen_default_response_model;
         }
       } else if (catalog?.error) {
         warnings.push(`Model availability was not verified: ${catalog.error}`);
@@ -5244,7 +5458,7 @@ function createAiBotFeature({
   }
 
   function chatConfigForBotMode(bot, chatConfig, mode = 'text') {
-    if (bot.provider === 'deepseek') return { ...chatConfig, mode: 'simple' };
+    if (bot.provider === 'deepseek' || bot.provider === 'qwen') return { ...chatConfig, mode: 'simple' };
     if (mode !== 'text') return { ...chatConfig, mode: 'simple' };
     if (bot.kind === 'image') return { ...chatConfig, mode: 'simple' };
     return chatConfig;
@@ -5298,6 +5512,17 @@ function createAiBotFeature({
         maxOutputTokens,
         temperature: 0.2,
         timeoutMs: settings.deepseek_request_timeout_ms,
+      });
+    } else if (bot.provider === 'qwen') {
+      rawText = await qwenAi.generateText({
+        apiKey: getQwenApiKey(),
+        baseUrl: qwenBaseUrl(),
+        model: bot.response_model || settings.qwen_default_response_model,
+        system: jsonSystem,
+        user,
+        maxOutputTokens,
+        temperature: 0.2,
+        timeoutMs: settings.qwen_request_timeout_ms,
       });
     } else if (bot.provider === 'grok') {
       rawText = await grokAi.generateText({
@@ -5469,6 +5694,17 @@ function createAiBotFeature({
         maxOutputTokens: intValue(bot.max_tokens, settings.deepseek_max_tokens, 1, 8000),
         temperature: floatValue(bot.temperature, settings.deepseek_temperature, 0, 1),
         timeoutMs: settings.deepseek_request_timeout_ms,
+      });
+    } else if (bot.provider === 'qwen') {
+      rawText = await qwenAi.generateText({
+        apiKey: getQwenApiKey(),
+        baseUrl: qwenBaseUrl(),
+        model: bot.response_model || settings.qwen_default_response_model,
+        system: textSystem,
+        user,
+        maxOutputTokens: intValue(bot.max_tokens, settings.qwen_max_tokens, 1, 8000),
+        temperature: floatValue(bot.temperature, settings.qwen_temperature, 0, 1),
+        timeoutMs: settings.qwen_request_timeout_ms,
       });
     } else if (bot.provider === 'grok') {
       rawText = await grokAi.generateText({
@@ -6369,14 +6605,16 @@ function createAiBotFeature({
     try {
       const isYandex = bot.provider === 'yandex';
       const isDeepSeek = bot.provider === 'deepseek';
+      const isQwen = bot.provider === 'qwen';
       const isGrok = bot.provider === 'grok';
       const settings = getGlobalSettings();
       const apiKey = isYandex
         ? getYandexApiKey()
-        : (isDeepSeek ? getDeepSeekApiKey() : (isGrok ? getGrokApiKey() : getApiKey()));
+        : (isDeepSeek ? getDeepSeekApiKey() : (isQwen ? getQwenApiKey() : (isGrok ? getGrokApiKey() : getApiKey())));
       if (!apiKey) return;
       if (isYandex && !settings.yandex_folder_id) return;
       if (isDeepSeek && !settings.deepseek_enabled) return;
+      if (isQwen && !settings.qwen_enabled) return;
 
       broadcastBotTyping(bot, sourceMessage.chat_id, true);
       typingTimer = setInterval(() => {
@@ -6465,6 +6703,17 @@ function createAiBotFeature({
               maxOutputTokens: intValue(bot.max_tokens, settings.deepseek_max_tokens, 1, 8000),
               temperature: floatValue(bot.temperature, settings.deepseek_temperature, 0, 1),
               timeoutMs: settings.deepseek_request_timeout_ms,
+            })
+        : isQwen
+          ? await qwenAi.generateText({
+              apiKey,
+              baseUrl: qwenBaseUrl(),
+              model: bot.response_model || settings.qwen_default_response_model,
+              system: textSystem,
+              user: context.user,
+              maxOutputTokens: intValue(bot.max_tokens, settings.qwen_max_tokens, 1, 8000),
+              temperature: floatValue(bot.temperature, settings.qwen_temperature, 0, 1),
+              timeoutMs: settings.qwen_request_timeout_ms,
             })
         : isGrok
           ? await grokAi.generateText({
@@ -6581,7 +6830,7 @@ function createAiBotFeature({
     }
     if (options.skipBotTrigger || message.ai_generated) return;
     const settings = getGlobalSettings();
-    if (!settings.enabled && !settings.yandex_enabled && !settings.deepseek_enabled && !settings.grok_enabled) return;
+    if (!settings.enabled && !settings.yandex_enabled && !settings.deepseek_enabled && !settings.qwen_enabled && !settings.grok_enabled) return;
     const text = aiMessageMemoryText(message, { includeVoters: true });
     if (!text) return;
     const rows = activeChatBotsStmt.all(message.chat_id);
@@ -6591,10 +6840,11 @@ function createAiBotFeature({
       if (isChatShotBot(bot)) continue;
       if (bot.provider === 'yandex' && !settings.yandex_enabled) continue;
       if (bot.provider === 'deepseek' && !settings.deepseek_enabled) continue;
+      if (bot.provider === 'qwen' && !settings.qwen_enabled) continue;
       if (bot.provider === 'grok' && !settings.grok_enabled) continue;
       if (bot.provider === 'openai' && !settings.enabled) continue;
       const chatConfig = {
-        mode: bot.kind === 'image' || bot.provider === 'deepseek'
+        mode: bot.kind === 'image' || bot.provider === 'deepseek' || bot.provider === 'qwen'
           ? 'simple'
           : (row.mode === 'hybrid' ? 'hybrid' : 'simple'),
         hot_context_limit: intValue(row.hot_context_limit, 50, 20, 100),
@@ -7891,6 +8141,384 @@ function createAiBotFeature({
     const bot = sanitizeBot(createBotTx(input));
     broadcastContextConvertBotUpdatedForBot(bot.id, [bot]);
     res.json({ bot, warnings, state: serializeDeepSeekConvertAdminState() });
+  });
+
+  function qwenBotByRequestId(req, res) {
+    return providerBotByRequestId(req, res, { provider: 'qwen', kind: 'text' });
+  }
+
+  app.get('/api/admin/qwen-ai-bots', auth, adminOnly, (_req, res) => {
+    res.json(serializeQwenAdminState());
+  });
+
+  app.put('/api/admin/qwen-ai-bots/settings', auth, adminOnly, (req, res) => {
+    const before = getGlobalSettings();
+    const settings = saveAiSettings(db, req.body || {}, secret);
+    const after = getGlobalSettings();
+    if (
+      Object.prototype.hasOwnProperty.call(req.body || {}, 'qwen_api_key')
+      || before.qwen_base_url !== after.qwen_base_url
+    ) {
+      qwenModelCatalogCache = null;
+      qwenModelCatalogFetchedAt = 0;
+    }
+    res.json({ settings, state: serializeQwenAdminState() });
+  });
+
+  app.post('/api/admin/qwen-ai-bots/test-connection', auth, adminOnly, async (req, res) => {
+    const settings = getGlobalSettings();
+    const body = req.body || {};
+    const apiKey = cleanText(body.qwen_api_key, 500) || getQwenApiKey();
+    const baseUrl = qwenAi.cleanBaseUrl(body.qwen_base_url || settings.qwen_base_url);
+    const model = cleanText(body.qwen_default_response_model || settings.qwen_default_response_model, 160) || settings.qwen_default_response_model;
+    if (!apiKey) return res.status(400).json({ ok: false, error: 'Enter Qwen API key.' });
+    const startedAt = Date.now();
+
+    try {
+      const result = await qwenAi.testConnection({
+        apiKey,
+        baseUrl,
+        model,
+        temperature: floatValue(body.qwen_temperature, settings.qwen_temperature, 0, 1),
+        timeoutMs: intValue(body.qwen_request_timeout_ms, settings.qwen_request_timeout_ms, 30000, 1800000),
+      });
+      let models = null;
+      try {
+        models = await getLiveQwenModelCatalog({ apiKey, baseUrl });
+      } catch (modelError) {
+        models = buildQwenModelCatalog({
+          source: 'fallback',
+          error: errorText(modelError, 'Could not load Qwen models'),
+        });
+      }
+      qwenModelCatalogCache = models;
+      qwenModelCatalogFetchedAt = Date.now();
+      res.json({
+        ok: true,
+        result: { ...result, latencyMs: Date.now() - startedAt, model },
+        state: { models },
+      });
+    } catch (error) {
+      res.status(400).json({ ok: false, error: errorText(error, 'Qwen connection test failed') });
+    }
+  });
+
+  app.post('/api/admin/qwen-ai-bots/models/refresh', auth, adminOnly, async (req, res) => {
+    const settings = getGlobalSettings();
+    const body = req.body || {};
+    const apiKey = cleanText(body.qwen_api_key, 500) || getQwenApiKey();
+    const baseUrl = qwenAi.cleanBaseUrl(body.qwen_base_url || settings.qwen_base_url);
+    if (!apiKey) return res.status(400).json({ ok: false, error: 'Enter Qwen API key.' });
+    try {
+      const models = await getLiveQwenModelCatalog({ apiKey, baseUrl });
+      qwenModelCatalogCache = models;
+      qwenModelCatalogFetchedAt = Date.now();
+      res.json({ ok: true, state: { models } });
+    } catch (error) {
+      res.status(400).json({ ok: false, error: errorText(error, 'Could not load Qwen models') });
+    }
+  });
+
+  app.delete('/api/admin/qwen-ai-bots/key', auth, adminOnly, (_req, res) => {
+    const settings = deleteQwenKey(db);
+    qwenModelCatalogCache = null;
+    qwenModelCatalogFetchedAt = 0;
+    res.json({ settings, state: serializeQwenAdminState() });
+  });
+
+  app.post('/api/admin/qwen-ai-bots', auth, adminOnly, (req, res) => {
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'qwen', kind: 'text' });
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, state: serializeQwenAdminState() });
+  });
+
+  app.put('/api/admin/qwen-ai-bots/chat-settings', auth, adminOnly, (req, res) => {
+    const chatId = Number(req.body?.chatId);
+    const botId = Number(req.body?.botId);
+    if (!db.prepare('SELECT 1 FROM chats WHERE id=?').get(chatId)) return res.status(404).json({ error: 'Chat not found' });
+    const bot = botByIdStmt.get(botId);
+    if (!bot || normalizeProvider(bot.provider, 'openai') !== 'qwen' || normalizeBotKind(bot.kind, 'qwen', 'text') !== 'text') {
+      return res.status(404).json({ error: 'Qwen bot not found' });
+    }
+    const enabled = boolValue(req.body?.enabled, false);
+    const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
+    const triggerMode = 'mention_reply';
+    const autoReactOnMention = boolValue(req.body?.auto_react_on_mention, false);
+    saveChatBotSettingTx({ chatId, bot, enabled, mode: 'simple', hotContextLimit, triggerMode, autoReactOnMention });
+    res.json({ ok: true, state: serializeQwenAdminState() });
+  });
+
+  app.post('/api/admin/qwen-ai-bots/:id(\\d+)/avatar', auth, adminOnly, botAvatarLimiter, (req, res) => {
+    if (!avatarUpload?.single) return res.status(500).json({ error: 'Avatar upload is not configured' });
+    const bot = qwenBotByRequestId(req, res);
+    if (!bot) return;
+
+    avatarUpload.single('avatar')(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
+      if (!req.file) return res.status(400).json({ error: 'No file' });
+
+      const userId = ensureBackingUser(bot);
+      const old = db.prepare('SELECT avatar_url FROM users WHERE id=?').get(userId);
+      removeAvatarFile(old?.avatar_url);
+
+      const avatarUrl = '/uploads/avatars/' + req.file.filename;
+      db.prepare('UPDATE users SET avatar_url=?, display_name=? WHERE id=?').run(avatarUrl, bot.name, userId);
+      db.prepare('UPDATE ai_bots SET updated_at=datetime(\'now\') WHERE id=?').run(bot.id);
+      const updated = sanitizeBot(botByIdStmt.get(bot.id));
+      if (typeof notifyUserUpdated === 'function') notifyUserUpdated(userId);
+      res.json({ bot: updated, state: serializeQwenAdminState() });
+    });
+  });
+
+  app.delete('/api/admin/qwen-ai-bots/:id(\\d+)/avatar', auth, adminOnly, (req, res) => {
+    const bot = qwenBotByRequestId(req, res);
+    if (!bot) return;
+    const userId = ensureBackingUser(bot);
+    const old = db.prepare('SELECT avatar_url FROM users WHERE id=?').get(userId);
+    removeAvatarFile(old?.avatar_url);
+    db.prepare('UPDATE users SET avatar_url=NULL WHERE id=?').run(userId);
+    db.prepare('UPDATE ai_bots SET updated_at=datetime(\'now\') WHERE id=?').run(bot.id);
+    const updated = sanitizeBot(botByIdStmt.get(bot.id));
+    if (typeof notifyUserUpdated === 'function') notifyUserUpdated(userId);
+    res.json({ bot: updated, state: serializeQwenAdminState() });
+  });
+
+  app.put('/api/admin/qwen-ai-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = qwenBotByRequestId(req, res);
+    if (!current) return;
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'qwen', kind: 'text' }, current);
+    db.prepare(`
+      UPDATE ai_bots
+      SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
+          enabled=?, provider='qwen', kind='text', response_model=?, summary_model=?, embedding_model=?,
+          allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?, visible_to_users=?,
+          temperature=?, max_tokens=?, updated_at=datetime('now')
+      WHERE id=?
+    `).run(
+      input.name,
+      input.mention,
+      input.style,
+      input.tone,
+      input.behavior_rules,
+      input.speech_patterns,
+      input.enabled ? 1 : 0,
+      input.response_model,
+      input.summary_model,
+      input.embedding_model,
+      input.allow_poll_create ? 1 : 0,
+      input.allow_poll_vote ? 1 : 0,
+      input.allow_react ? 1 : 0,
+      input.allow_pin ? 1 : 0,
+      input.visible_to_users ? 1 : 0,
+      input.temperature,
+      input.max_tokens,
+      current.id
+    );
+    if (current.user_id) {
+      db.prepare('UPDATE users SET display_name=? WHERE id=?').run(input.name, current.user_id);
+      if (typeof notifyUserUpdated === 'function') notifyUserUpdated(current.user_id);
+    }
+    const updated = botByIdStmt.get(current.id);
+    syncBotMemberships(updated, updated.enabled !== 0);
+    res.json({ bot: sanitizeBot(updated), state: serializeQwenAdminState() });
+  });
+
+  app.delete('/api/admin/qwen-ai-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = qwenBotByRequestId(req, res);
+    if (!current) return;
+    db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
+    db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
+    syncBotMemberships(current, false);
+    res.json({ ok: true, state: serializeQwenAdminState() });
+  });
+
+  app.post('/api/admin/qwen-ai-bots/:id(\\d+)/test', auth, adminOnly, async (req, res) => {
+    const bot = sanitizeBot(qwenBotByRequestId(req, res));
+    if (!bot) return;
+    const settings = getGlobalSettings();
+    const apiKey = String(req.body?.qwen_api_key || '').trim() || getQwenApiKey();
+    if (!apiKey) return res.status(400).json({ ok: false, error: 'Enter Qwen API key in Qwen settings.' });
+    const prompt = cleanText(req.body?.prompt || `Hello, ${bot.name}. Briefly explain how you will help in this chat.`, 1000);
+    const startedAt = Date.now();
+    try {
+      const text = await qwenAi.generateText({
+        apiKey,
+        baseUrl: qwenBaseUrl(),
+        model: bot.response_model || settings.qwen_default_response_model,
+        system: botSystemPrompt(bot),
+        user: prompt,
+        maxOutputTokens: Math.min(intValue(bot.max_tokens, settings.qwen_max_tokens, 1, 8000), 1000),
+        temperature: floatValue(bot.temperature, settings.qwen_temperature, 0, 1),
+        timeoutMs: settings.qwen_request_timeout_ms,
+      });
+      res.json({ ok: true, result: { text, latencyMs: Date.now() - startedAt, model: bot.response_model || settings.qwen_default_response_model } });
+    } catch (error) {
+      res.status(400).json({ ok: false, error: error.message || 'Qwen bot test failed' });
+    }
+  });
+
+  app.get('/api/admin/qwen-ai-bots/:id(\\d+)/export', auth, adminOnly, (req, res) => {
+    const bot = sanitizeBot(qwenBotByRequestId(req, res));
+    if (!bot) return;
+    const payload = {
+      schema_version: AI_BOT_EXPORT_VERSION,
+      exported_at: new Date().toISOString(),
+      bot: {
+        provider: 'qwen',
+        kind: 'text',
+        name: bot.name,
+        mention: bot.mention,
+        enabled: bot.enabled,
+        visible_to_users: bot.visible_to_users,
+        allow_poll_create: bot.allow_poll_create,
+        allow_poll_vote: bot.allow_poll_vote,
+        allow_react: bot.allow_react,
+        allow_pin: bot.allow_pin,
+        response_model: bot.response_model,
+        summary_model: bot.summary_model,
+        temperature: bot.temperature,
+        max_tokens: bot.max_tokens,
+        style: bot.style,
+        tone: bot.tone,
+        behavior_rules: bot.behavior_rules,
+        speech_patterns: bot.speech_patterns,
+      },
+    };
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = `bananza-qwen-bot-${safeFilenamePart(bot.mention || bot.name)}-${date}.json`;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(JSON.stringify(payload, null, 2));
+  });
+
+  app.post('/api/admin/qwen-ai-bots/import', auth, adminOnly, async (req, res) => {
+    const source = req.body?.bot && typeof req.body.bot === 'object' ? req.body.bot : (req.body || {});
+    const warnings = [];
+    const settings = getGlobalSettings();
+    const requestedMention = normalizeMention(source.mention || source.name || 'bot');
+    const catalog = await getQwenModelCatalogCached();
+
+    let responseModel = cleanText(source.response_model || settings.qwen_default_response_model, 160);
+    let summaryModel = cleanText(source.summary_model || settings.qwen_default_summary_model, 160);
+
+    if (catalog.source === 'live') {
+      if (responseModel && !catalog.response.includes(responseModel)) {
+        warnings.push(`Response model "${responseModel}" is not available; default model was used.`);
+        responseModel = settings.qwen_default_response_model;
+      }
+      if (summaryModel && !catalog.summary.includes(summaryModel)) {
+        warnings.push(`Summary model "${summaryModel}" is not available; default model was used.`);
+        summaryModel = settings.qwen_default_summary_model;
+      }
+    } else if (catalog.error) {
+      warnings.push(`Model availability was not verified: ${catalog.error}`);
+    }
+
+    const input = normalizeBotInput({
+      name: source.name,
+      mention: requestedMention,
+      provider: 'qwen',
+      kind: 'text',
+      enabled: Object.prototype.hasOwnProperty.call(source, 'enabled') ? source.enabled : true,
+      visible_to_users: source.visible_to_users,
+      response_model: responseModel,
+      summary_model: summaryModel,
+      allow_poll_create: source.allow_poll_create,
+      allow_poll_vote: source.allow_poll_vote,
+      allow_react: source.allow_react,
+      allow_pin: source.allow_pin,
+      temperature: source.temperature,
+      max_tokens: source.max_tokens,
+      style: source.style,
+      tone: source.tone,
+      behavior_rules: source.behavior_rules,
+      speech_patterns: source.speech_patterns,
+    });
+    if (input.mention !== requestedMention) {
+      warnings.push(`Mention "@${requestedMention}" is already taken; imported as "@${input.mention}".`);
+    }
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, warnings, state: serializeQwenAdminState() });
+  });
+
+  app.get('/api/admin/qwen-convert-bots', auth, adminOnly, (_req, res) => {
+    res.json(serializeQwenConvertAdminState());
+  });
+
+  app.post('/api/admin/qwen-convert-bots', auth, adminOnly, (req, res) => {
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'qwen', kind: 'convert' });
+    const bot = sanitizeBot(createBotTx(input));
+    broadcastContextConvertBotUpdatedForBot(bot.id, [bot]);
+    res.json({ bot, state: serializeQwenConvertAdminState() });
+  });
+
+  app.put('/api/admin/qwen-convert-bots/chat-settings', auth, adminOnly, (req, res) => {
+    return saveContextConvertChatSetting(req, res, { provider: 'qwen' });
+  });
+
+  app.put('/api/admin/qwen-convert-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = providerBotByRequestId(req, res, { provider: 'qwen', kind: 'convert' });
+    if (!current) return;
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'qwen', kind: 'convert' }, current);
+    updateContextConvertBot('qwen', current, input);
+    const updated = botByIdStmt.get(current.id);
+    broadcastContextConvertBotUpdatedForBot(current.id, [current, updated]);
+    res.json({ bot: sanitizeBot(updated), state: serializeQwenConvertAdminState() });
+  });
+
+  app.delete('/api/admin/qwen-convert-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = providerBotByRequestId(req, res, { provider: 'qwen', kind: 'convert' });
+    if (!current) return;
+    db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
+    db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
+    broadcastContextConvertBotUpdatedForBot(current.id, [current]);
+    res.json({ ok: true, state: serializeQwenConvertAdminState() });
+  });
+
+  app.post('/api/admin/qwen-convert-bots/:id(\\d+)/test', auth, adminOnly, async (req, res) => {
+    const rawBot = providerBotByRequestId(req, res, { provider: 'qwen', kind: 'convert' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
+    const sourceText = cleanText(req.body?.text || req.body?.source_text || req.body?.prompt || 'Please rewrite this text in a clearer way.', 4000);
+    const startedAt = Date.now();
+    try {
+      const text = await runContextTransform(bot, sourceText);
+      res.json({
+        ok: true,
+        result: {
+          text,
+          latencyMs: Date.now() - startedAt,
+          model: bot.response_model || getGlobalSettings().qwen_default_response_model,
+        },
+      });
+    } catch (error) {
+      res.status(error.status || 400).json({ ok: false, error: errorText(error, 'Qwen convert bot test failed') });
+    }
+  });
+
+  app.get('/api/admin/qwen-convert-bots/:id(\\d+)/export', auth, adminOnly, (req, res) => {
+    const rawBot = providerBotByRequestId(req, res, { provider: 'qwen', kind: 'convert' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
+    const payload = buildContextConvertExportPayload(bot);
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = `bananza-qwen-convert-${safeFilenamePart(bot.mention || bot.name)}-${date}.json`;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(JSON.stringify(payload, null, 2));
+  });
+
+  app.post('/api/admin/qwen-convert-bots/import', auth, adminOnly, async (req, res) => {
+    const source = req.body?.bot && typeof req.body.bot === 'object' ? req.body.bot : (req.body || {});
+    const warnings = [];
+    const input = await buildContextConvertImportInput('qwen', source, warnings);
+    const requestedMention = normalizeMention(source.mention || source.name || 'qwen_convert');
+    if (input.mention !== requestedMention) {
+      warnings.push(`Mention "@${requestedMention}" is already taken; imported as "@${input.mention}".`);
+    }
+    const bot = sanitizeBot(createBotTx(input));
+    broadcastContextConvertBotUpdatedForBot(bot.id, [bot]);
+    res.json({ bot, warnings, state: serializeQwenConvertAdminState() });
   });
 
   function yandexBotByRequestId(req, res) {
