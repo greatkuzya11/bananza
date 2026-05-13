@@ -1370,6 +1370,64 @@ test('emoji picker keeps the mobile composer attached when the keyboard is alrea
   assert.ok(focusCalls >= 1);
 });
 
+test('emoji picker stays above the composer when visual viewport is offset by mobile keyboard', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const emojiBtn = document.getElementById('emojiBtn');
+  const emojiPicker = document.getElementById('emojiPicker');
+  const buttonRect = {
+    x: 52,
+    y: 372,
+    top: 372,
+    left: 52,
+    right: 88,
+    bottom: 408,
+    width: 36,
+    height: 36,
+    toJSON() {
+      return this;
+    },
+  };
+
+  emojiBtn.getBoundingClientRect = () => buttonRect;
+  Object.defineProperty(emojiPicker, 'offsetWidth', {
+    configurable: true,
+    get() {
+      return 300;
+    },
+  });
+  Object.defineProperty(emojiPicker, 'offsetHeight', {
+    configurable: true,
+    get() {
+      return 280;
+    },
+  });
+
+  dom.visualViewportMock.setAndDispatch('resize', {
+    height: 420,
+    offsetTop: 180,
+  });
+
+  emojiBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await wait(dom, 40);
+
+  const pickerTop = Number.parseInt(emojiPicker.style.top, 10);
+  const pickerHeight = emojiPicker.offsetHeight;
+  assert.equal(emojiPicker.classList.contains('hidden'), false);
+  assert.ok(Number.isFinite(pickerTop), 'Expected emoji picker to receive a top position');
+  assert.ok(
+    pickerTop + pickerHeight <= buttonRect.top - 8,
+    `Expected picker bottom (${pickerTop + pickerHeight}) to stay above composer button (${buttonRect.top})`
+  );
+  assert.equal(emojiPicker.style.maxHeight, '320px');
+});
+
 test('emoji picker inserts emoji without focusing the composer when the keyboard is closed', async (t) => {
   const dom = await bootAppDom();
   t.after(() => {

@@ -16079,7 +16079,7 @@
           if (message.avatar_url) assetUrls.add(message.avatar_url);
           if (message.file_type === 'image' && message.file_stored) assetUrls.add(getAttachmentPreviewUrl(message));
         }
-        await window.cacheAssets(Array.from(assetUrls).slice(0, 12));
+        await window.cacheAssets(Array.from(assetUrls).slice(0, 24));
       } catch (e) {}
     })();
   }
@@ -21170,25 +21170,42 @@
     const anchor = anchorEl instanceof HTMLElement ? anchorEl : emojiBtn;
     if (!(anchor instanceof HTMLElement)) return;
     const rect = anchor.getBoundingClientRect();
-    const viewport = getFloatingViewportRect();
+    const keyboardAttached = window.innerWidth <= 768 && shouldKeepEmojiPickerKeyboard();
+    const viewport = keyboardAttached
+      ? {
+        left: 0,
+        top: 0,
+        width: window.visualViewport?.width || window.innerWidth,
+        height: window.visualViewport?.height || window.innerHeight,
+        right: window.visualViewport?.width || window.innerWidth,
+        bottom: window.visualViewport?.height || window.innerHeight,
+      }
+      : getFloatingViewportRect();
     const desiredWidth = window.innerWidth <= 768 ? 300 : 340;
     const width = Math.min(desiredWidth, Math.max(180, viewport.width - 16));
     emojiPicker.style.width = `${Math.round(width)}px`;
+    emojiPicker.style.maxHeight = '';
+    const maxPickerHeight = Math.min(
+      320,
+      Math.max(120, (keyboardAttached ? rect.top : viewport.height) - 16),
+      Math.max(120, viewport.height - 16)
+    );
+    emojiPicker.style.maxHeight = `${Math.round(maxPickerHeight)}px`;
     const pickerSize = measureFloatingSurface(
       emojiPicker,
       width,
-      Math.min(320, Math.max(180, viewport.height - 16))
+      maxPickerHeight
     );
     const left = clamp(
       rect.left + viewport.left + ((rect.width - pickerSize.width) / 2),
       viewport.left + 8,
       viewport.right - pickerSize.width - 8
     );
-    const top = clamp(
-      rect.top + viewport.top - pickerSize.height - 8,
-      viewport.top + 8,
-      viewport.bottom - pickerSize.height - 8
-    );
+    let top = rect.top + viewport.top - pickerSize.height - 8;
+    if (keyboardAttached) {
+      top = Math.min(top, rect.top - pickerSize.height - 8);
+    }
+    top = clamp(top, viewport.top + 8, viewport.bottom - pickerSize.height - 8);
     positionFloatingElement(emojiPicker, left, top);
   }
 
@@ -21221,6 +21238,7 @@
           emojiPicker.style.left = '';
           emojiPicker.style.top = '';
           emojiPicker.style.width = '';
+          emojiPicker.style.maxHeight = '';
         }
         syncEmojiPickerButton();
       },

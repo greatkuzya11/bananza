@@ -117,3 +117,56 @@ test('messageCache preserves media playback completion inside chat meta', async 
     'video-note-video:12': 222,
   });
 });
+
+test('messageCache asset prefetch caches upload previews but skips non-image responses', async () => {
+  const dom = createAppDom();
+  const stored = new Map();
+  const fetched = [];
+  const cache = {
+    async match(url) {
+      return stored.get(String(url)) || null;
+    },
+    async put(url, response) {
+      stored.set(String(url), response);
+    },
+  };
+
+  dom.window.caches = {
+    async open(name) {
+      assert.equal(name, 'bananza-assets-v2');
+      return cache;
+    },
+  };
+  dom.window.fetch = async (url) => {
+    fetched.push(String(url));
+    const path = new URL(String(url), dom.window.location.origin).pathname;
+    if (path.endsWith('/image-a/preview')) {
+      return new dom.window.Response('image-a', {
+        status: 200,
+        headers: { 'Content-Type': 'image/jpeg' },
+      });
+    }
+    if (path.endsWith('/voice-a/preview')) {
+      return new dom.window.Response('voice-a', {
+        status: 200,
+        headers: { 'Content-Type': 'audio/ogg' },
+      });
+    }
+    throw new Error(`Unexpected asset fetch: ${url}`);
+  };
+  loadBrowserScript(dom, 'public/js/messageCache.js');
+
+  await dom.window.cacheAssets([
+    '/uploads/image-a/preview',
+    '/uploads/voice-a/preview',
+    'https://example.test/uploads/image-b/preview',
+    '/uploads/file.bin',
+  ]);
+
+  assert.deepEqual(fetched, [
+    `${dom.window.location.origin}/uploads/image-a/preview`,
+    `${dom.window.location.origin}/uploads/voice-a/preview`,
+  ]);
+  assert.ok(await cache.match(`${dom.window.location.origin}/uploads/image-a/preview`));
+  assert.equal(await cache.match(`${dom.window.location.origin}/uploads/voice-a/preview`), null);
+});
