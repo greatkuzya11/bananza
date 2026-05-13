@@ -1,4 +1,4 @@
-# AGENTS.md for public/css
+﻿# AGENTS.md for public/css
 
 ## Purpose
 - Этот файл описывает ответственность CSS-поддерева.
