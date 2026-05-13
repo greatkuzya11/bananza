@@ -927,6 +927,38 @@ test('stale saved active chat folder falls back to all chats after startup folde
   assert.equal(localStorage.getItem('bananza:active-chat-folder:1'), '0');
 });
 
+test('chat list rerender reuses unchanged avatar image nodes', async (t) => {
+  const chat = makeFolderSwipeChat(501, 'Avatar Chat');
+  chat.private_user.avatar_url = '/uploads/avatars/avatar-a.png';
+  const dom = await bootAppDom({
+    fetchHandler: createChatListFetchHandler([chat]),
+  });
+  t.after(() => dom.window.close());
+
+  const { document, BananzaAppBridge } = dom.window;
+  const firstImg = document.querySelector('#chatList .chat-item[data-chat-id="501"] .avatar-img');
+  assert.ok(firstImg);
+
+  BananzaAppBridge.__testing.setChats([chat]);
+  await waitForMs(dom.window, 0);
+  const rerenderedImg = document.querySelector('#chatList .chat-item[data-chat-id="501"] .avatar-img');
+  assert.equal(rerenderedImg, firstImg);
+
+  const updatedChat = {
+    ...chat,
+    private_user: {
+      ...chat.private_user,
+      avatar_url: '/uploads/avatars/avatar-b.png',
+    },
+  };
+  BananzaAppBridge.__testing.setChats([updatedChat]);
+  await waitForMs(dom.window, 0);
+  const updatedImg = document.querySelector('#chatList .chat-item[data-chat-id="501"] .avatar-img');
+  assert.ok(updatedImg);
+  assert.notEqual(updatedImg, firstImg);
+  assert.equal(updatedImg.getAttribute('src'), '/uploads/avatars/avatar-b.png');
+});
+
 test('chat folders testing helpers filter the list and keep folder-local pins separate from All chats', async (t) => {
   const initialChats = [
     {

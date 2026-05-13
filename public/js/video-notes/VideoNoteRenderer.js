@@ -73,6 +73,7 @@
       this.expandedIds = new Set();
       this.boundContainers = new WeakSet();
       this.progressFrames = new WeakMap();
+      this.seekRows = new Set();
       this.contourGlobalSeekBound = false;
       this.suppressNextStageClick = false;
       this.suppressNextStageClickTimer = 0;
@@ -294,8 +295,9 @@
         });
         this.getBridge()?.bindMediaPlayback?.(video, resolvedMessage, 'video-note-video');
       }
-      this.ensureContourGlobalSeek();
       row.classList.add('video-note-row', 'media-message');
+      this.seekRows.add(row);
+      this.ensureContourGlobalSeek();
       this.refreshRow(row);
       const video = row.querySelector('.video-note-video');
       const posterUrl = this.getBridge()?.getAttachmentPosterUrl?.(resolvedMessage) || '';
@@ -470,9 +472,38 @@
       const target = event?.target;
       if (!(target instanceof Element)) return false;
       if (target.closest('.video-note-progress-hit')) return false;
+      if (!target.closest('.msg-row.video-note-row .video-note-stage')) return true;
       return Boolean(target.closest(
         '.video-note-shape-toggle-btn, .video-note-transcript-btn, button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-file, .link-preview, .msg-group-avatar'
       ));
+    }
+
+    isPointerNearProgressRect(row, event) {
+      const rect = row?.querySelector('.video-note-progress')?.getBoundingClientRect?.();
+      if (!rect || !(rect.width > 0) || !(rect.height > 0)) return false;
+      const x = Number(event.clientX || 0);
+      const y = Number(event.clientY || 0);
+      const pad = PROGRESS_HIT_RADIUS_PX + 2;
+      if (x < rect.left - pad || x > rect.right + pad || y < rect.top - pad || y > rect.bottom + pad) return false;
+      const edgeDistance = Math.min(
+        Math.abs(x - rect.left),
+        Math.abs(x - rect.right),
+        Math.abs(y - rect.top),
+        Math.abs(y - rect.bottom)
+      );
+      return edgeDistance <= pad;
+    }
+
+    getSeekCandidateRows() {
+      const rows = [];
+      this.seekRows.forEach((row) => {
+        if (!row?.isConnected) {
+          this.seekRows.delete(row);
+          return;
+        }
+        rows.push(row);
+      });
+      return rows;
     }
 
     clearPressed(row) {
@@ -490,12 +521,27 @@
       if (event.button != null && event.button !== 0) return;
       if (this.shouldSkipContourGlobalSeek(event)) return;
 
+      const directHit = event.target instanceof Element
+        ? event.target.closest('.video-note-progress-hit')
+        : null;
+      if (directHit) {
+        const row = directHit.closest('.msg-row.video-note-row');
+        if (!row || !this.seekProgress(row, event)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        this.suppressUpcomingStageClick();
+        this.markPressed(row);
+        return;
+      }
+
       let best = null;
-      document.querySelectorAll('.msg-row.video-note-row').forEach((row) => {
+      this.getSeekCandidateRows().forEach((row) => {
         const video = row.querySelector('.video-note-video');
         if (!video || !row.isConnected) return;
         const duration = this.getPlaybackDurationSeconds(row, video);
         if (!(duration > 0)) return;
+        if (!this.isPointerNearProgressRect(row, event)) return;
         const hit = this.resolveSeekHit(row, event);
         if (!hit || hit.distancePx > PROGRESS_HIT_RADIUS_PX) return;
         if (!best || hit.distancePx < best.hit.distancePx) {

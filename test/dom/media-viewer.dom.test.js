@@ -3418,6 +3418,64 @@ test('voice note progress outline can seek an upper adjacent message when the lo
   assert.equal(Number(lowerAudio.currentTime || 0), 0);
 });
 
+test('voice note bubble pointerdown away from the outline avoids expensive SVG hit-test', async (t) => {
+  const chat = createChatFixture(1, 'Chat A', { lastMessageId: 480 });
+  const upperMessage = createVoiceNoteMessage(1, 479, { voice_duration_ms: 24_000 });
+  const lowerMessage = createVoiceNoteMessage(1, 480, { voice_duration_ms: 24_000 });
+  const dom = await openMediaPlaybackDom({
+    activeChat: chat,
+    chats: [chat],
+    chatMessagesByChatId: {
+      1: [upperMessage, lowerMessage],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, SVGElement } = dom.window;
+
+  const upperRow = document.querySelector('.msg-row[data-msg-id="479"]');
+  const lowerRow = document.querySelector('.msg-row[data-msg-id="480"]');
+  const upperAudio = upperRow.querySelector('audio');
+  const lowerAudio = lowerRow.querySelector('audio');
+  installMockMediaElement(dom, upperAudio, {
+    duration: 24,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+  installMockMediaElement(dom, lowerAudio, {
+    duration: 24,
+    currentTime: 0,
+    paused: true,
+    ended: false,
+    readyState: 1,
+  });
+  upperAudio.dispatchEvent(new dom.window.Event('durationchange'));
+  lowerAudio.dispatchEvent(new dom.window.Event('durationchange'));
+  await wait(dom, 40);
+
+  const originalGetPointAtLength = SVGElement.prototype.getPointAtLength;
+  let getPointCalls = 0;
+  SVGElement.prototype.getPointAtLength = function countedGetPointAtLength(length) {
+    getPointCalls += 1;
+    return originalGetPointAtLength.call(this, length);
+  };
+
+  lowerRow.querySelector('.msg-bubble').dispatchEvent(new dom.window.MouseEvent('pointerdown', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 124,
+    clientY: 52,
+  }));
+  await wait(dom, 20);
+
+  assert.equal(getPointCalls, 0);
+  assert.equal(Number(upperAudio.currentTime || 0), 0);
+  assert.equal(Number(lowerAudio.currentTime || 0), 0);
+});
+
 test('video note progress outline clears completed state when seeking', async (t) => {
   const chat = createChatFixture(1, 'Chat A', { lastMessageId: 505 });
   const message = createVideoNoteMessage(1, 505, { media_note_duration_ms: 18_000 });

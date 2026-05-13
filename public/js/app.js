@@ -15485,8 +15485,9 @@
     }
   }
 
-  function createChatListItem(chat, { hiddenSearchResult = false, pinnedOverride = null } = {}) {
-    const el = document.createElement('div');
+  function createChatListItem(chat, { hiddenSearchResult = false, pinnedOverride = null, reusableItems = null } = {}) {
+    const listKey = `${hiddenSearchResult ? 'hidden' : 'chat'}:${Number(chat.id || 0)}`;
+    const el = reusableItems?.get(listKey) || document.createElement('div');
     const isActive = Number(chat.id) === Number(currentChatId);
     const pinned = typeof pinnedOverride === 'boolean' ? pinnedOverride : isChatPinned(chat);
     const activeCall = getActiveCallForChatListItem(chat.id);
@@ -15498,6 +15499,7 @@
       + (hasActiveCall ? ' has-active-call' : '');
     el.dataset.chatId = chat.id;
     el.dataset.pinned = pinned ? '1' : '0';
+    el.dataset.listKey = listKey;
 
     const displayName = chat.name;
     const isOnline = chat.type === 'private' && chat.private_user && onlineUsers.has(chat.private_user.id);
@@ -15524,7 +15526,7 @@
       ? `<span class="chat-item-call-chip" aria-label="${esc(callIndicatorLabel)}" title="${esc(callIndicatorLabel)}"><span class="chat-item-call-dot" aria-hidden="true"></span>${esc(callIndicatorLabel)}</span>`
       : '';
 
-    el.innerHTML = `
+    const nextHtml = `
       ${chatItemAvatarHtml(chat)}
         ${isOnline ? '<div class="online-dot"></div>' : ''}
       </div>
@@ -15547,15 +15549,28 @@
         </div>
       </div>
     `;
-    el.addEventListener('click', () => {
+    if (el.__chatListHtml !== nextHtml) {
+      el.innerHTML = nextHtml;
+      el.__chatListHtml = nextHtml;
+    }
+    el.onclick = () => {
       if (Date.now() < suppressNextChatItemTapUntil) return;
       const openAction = hiddenSearchResult ? openHiddenChatFromSearch(chat.id) : openChat(chat.id);
       Promise.resolve(openAction).catch((error) => {
         console.warn('Failed to open chat', error);
         showCenterToast(error?.message || 'Could not open chat');
       });
-    });
+    };
     return el;
+  }
+
+  function collectReusableChatListItems(parent) {
+    const reusable = new Map();
+    parent?.querySelectorAll?.('.chat-item[data-list-key]').forEach((item) => {
+      const key = item.dataset.listKey || '';
+      if (key && !reusable.has(key)) reusable.set(key, item);
+    });
+    return reusable;
   }
 
   function getChatFolderForListRender(folderId = chatFolderStore.activeFolderId) {
@@ -15571,7 +15586,8 @@
     includeSearchExtras = parent === chatList,
   } = {}) {
     if (!(parent instanceof HTMLElement)) return null;
-    parent.innerHTML = '';
+    const reusableItems = collectReusableChatListItems(parent);
+    const fragment = document.createDocumentFragment();
     const normalizedFilter = String(filter || '').trim().toLowerCase();
     const activeFolder = getChatFolderForListRender(folderId);
     const renderFolderId = Number(activeFolder?.id || 0);
@@ -15596,19 +15612,20 @@
       const pinnedGroup = document.createElement('div');
       pinnedGroup.className = 'chat-list-group chat-list-group--pinned';
       pinnedChats.forEach((chat) => {
-        pinnedGroup.appendChild(createChatListItem(chat, { pinnedOverride: true }));
+        pinnedGroup.appendChild(createChatListItem(chat, { pinnedOverride: true, reusableItems }));
       });
-      parent.appendChild(pinnedGroup);
+      fragment.appendChild(pinnedGroup);
     }
 
     regularChats.forEach((chat) => {
-      parent.appendChild(createChatListItem(chat, {
+      fragment.appendChild(createChatListItem(chat, {
         pinnedOverride: activeFolder ? false : null,
+        reusableItems,
       }));
     });
 
     if (!pinnedChats.length && !regularChats.length) {
-      appendChatListEmptyState(activeFolder ? 'В этой папке пока нет чатов' : 'Чаты не найдены', parent);
+      appendChatListEmptyState(activeFolder ? 'В этой папке пока нет чатов' : 'Чаты не найдены', fragment);
     }
 
     // When searching in "All chats", also show users without existing private chats
@@ -15618,9 +15635,9 @@
         ? hiddenChatSearchResults.filter((chat) => !chats.some((visible) => Number(visible.id) === Number(chat.id)))
         : [];
       if (hiddenMatches.length > 0) {
-        appendChatListSeparator('Скрытые чаты', parent);
+        appendChatListSeparator('Скрытые чаты', fragment);
         hiddenMatches.forEach((chat) => {
-          parent.appendChild(createChatListItem(chat, { hiddenSearchResult: true }));
+          fragment.appendChild(createChatListItem(chat, { hiddenSearchResult: true, reusableItems }));
         });
       }
       const privateHumanPeerIds = new Set(
@@ -15636,7 +15653,7 @@
          String(u.ai_bot_model || '').toLowerCase().includes(normalizedFilter))
       );
       if (matchingUsers.length > 0) {
-        appendChatListSeparator('People & bots', parent);
+        appendChatListSeparator('People & bots', fragment);
       }
       for (const u of matchingUsers) {
         const el = document.createElement('div');
@@ -15662,9 +15679,10 @@
             setChatSearchOpen(false, { clear: true, focus: false });
           } catch (e) { alert(e.message); }
         });
-        parent.appendChild(el);
+        fragment.appendChild(el);
       }
     }
+    parent.replaceChildren(fragment);
     return {
       activeFolder,
       folderId: renderFolderId,
@@ -18305,7 +18323,9 @@
 
   const CALL_RECORDING_ROLE = 'call-recording-audio';
   const CALL_RECORDING_PROGRESS_STROKE_WIDTH = 3;
+  const CALL_RECORDING_PROGRESS_HIT_RADIUS = 14;
   let callRecordingProgressCaptureInstalled = false;
+  const callRecordingSeekRows = new Set();
 
   function normalizeCallMixedRecording(call = {}) {
     const recording = call?.mixed_recording || call?.recording || null;
@@ -18535,8 +18555,37 @@
   function shouldIgnoreCallRecordingPointer(event) {
     const target = event?.target;
     if (!(target instanceof Element)) return false;
-    if (target.closest('.call-recording-progress-hit')) return false;
+    if (target.closest('.call-recording-progress-hit')) return true;
+    if (!target.closest('.call-recording-card')) return true;
     return Boolean(target.closest('button, a, input, textarea, select, [role="button"], .call-message-actions, .msg-reply, .reaction-chip, .msg-delete-btn'));
+  }
+
+  function isPointerNearCallRecordingProgressRect(controller, event) {
+    const rect = controller?.svg?.getBoundingClientRect?.();
+    if (!rect || !(rect.width > 0) || !(rect.height > 0)) return false;
+    const x = Number(event.clientX || 0);
+    const y = Number(event.clientY || 0);
+    const pad = CALL_RECORDING_PROGRESS_HIT_RADIUS + 2;
+    if (x < rect.left - pad || x > rect.right + pad || y < rect.top - pad || y > rect.bottom + pad) return false;
+    const edgeDistance = Math.min(
+      Math.abs(x - rect.left),
+      Math.abs(x - rect.right),
+      Math.abs(y - rect.top),
+      Math.abs(y - rect.bottom)
+    );
+    return edgeDistance <= pad;
+  }
+
+  function getCallRecordingSeekRows() {
+    const rows = [];
+    callRecordingSeekRows.forEach((row) => {
+      if (!row?.isConnected) {
+        callRecordingSeekRows.delete(row);
+        return;
+      }
+      rows.push(row);
+    });
+    return rows;
   }
 
   function seekCallRecordingProgress(row, event, hit = null) {
@@ -18568,13 +18617,14 @@
   function resolveNearestCallRecordingHit(event) {
     if (!messagesEl || shouldIgnoreCallRecordingPointer(event)) return null;
     const candidates = [];
-    messagesEl.querySelectorAll('.call-message.call-recording-message').forEach((row) => {
+    getCallRecordingSeekRows().forEach((row) => {
       const controller = row.__callRecordingProgress || ensureCallRecordingProgress(row);
       if (!controller?.audio || !controller.hit) return;
       const duration = callRecordingDurationSeconds(row, controller.audio);
       if (!(duration > 0)) return;
+      if (!isPointerNearCallRecordingProgressRect(controller, event)) return;
       const hit = pointToCallRecordingHit(controller, event);
-      if (hit && hit.distance <= 14) candidates.push({ row, hit });
+      if (hit && hit.distance <= CALL_RECORDING_PROGRESS_HIT_RADIUS) candidates.push({ row, hit });
     });
     candidates.sort((a, b) => a.hit.distance - b.hit.distance);
     return candidates[0] || null;
@@ -18753,7 +18803,9 @@
     }
     const playButton = recording && audio ? ensureCallRecordingFooterButton(row) : null;
     row.classList.toggle('call-recording-message', Boolean(recording && audio));
+    if (!recording || !audio) callRecordingSeekRows.delete(row);
     if (recording && audio) {
+      callRecordingSeekRows.add(row);
       row.dataset.callRecordingDurationMs = String(Number(recording.duration_ms || call.duration_ms || 0) || 0);
       bindMediaPlaybackState(audio, message, CALL_RECORDING_ROLE);
       const controller = ensureCallRecordingProgress(row);

@@ -35,6 +35,7 @@
     playback: {
       activeAudio: null,
       activeButton: null,
+      voiceSeekRows: new Set(),
     },
   };
 
@@ -222,6 +223,7 @@
   function teardownVoiceProgress(row) {
     const controller = row?.__voiceProgress;
     if (!controller) return;
+    state.playback.voiceSeekRows.delete(row);
     stopVoiceProgressLoop(row);
     if (typeof controller.cleanupAudio === 'function') {
       controller.cleanupAudio();
@@ -524,10 +526,39 @@
   function shouldSkipVoiceContourGlobalSeek(event) {
     const target = event?.target;
     if (!(target instanceof Element)) return false;
-    if (target.closest('.voice-note-progress-hit')) return false;
+    if (target.closest('.voice-note-progress-hit')) return true;
+    if (!target.closest('.voice-note-row .msg-bubble')) return true;
     return Boolean(target.closest(
       'button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-file, .link-preview, .msg-group-avatar'
     ));
+  }
+
+  function isPointerNearVoiceProgressRect(controller, event) {
+    const rect = controller?.svg?.getBoundingClientRect?.();
+    if (!rect || !(rect.width > 0) || !(rect.height > 0)) return false;
+    const x = Number(event.clientX || 0);
+    const y = Number(event.clientY || 0);
+    const pad = VOICE_PROGRESS_HIT_RADIUS + 2;
+    if (x < rect.left - pad || x > rect.right + pad || y < rect.top - pad || y > rect.bottom + pad) return false;
+    const edgeDistance = Math.min(
+      Math.abs(x - rect.left),
+      Math.abs(x - rect.right),
+      Math.abs(y - rect.top),
+      Math.abs(y - rect.bottom)
+    );
+    return edgeDistance <= pad;
+  }
+
+  function getVoiceSeekCandidateRows() {
+    const rows = [];
+    state.playback.voiceSeekRows.forEach((row) => {
+      if (!row?.isConnected) {
+        state.playback.voiceSeekRows.delete(row);
+        return;
+      }
+      rows.push(row);
+    });
+    return rows;
   }
 
   function handleVoiceContourPointerCapture(event) {
@@ -535,11 +566,12 @@
     if (shouldSkipVoiceContourGlobalSeek(event)) return;
 
     let best = null;
-    document.querySelectorAll('.voice-note-row').forEach((row) => {
+    getVoiceSeekCandidateRows().forEach((row) => {
       const controller = row.__voiceProgress;
       if (!controller?.audio || !controller.hit || !row.isConnected) return;
       const duration = getVoicePlaybackDurationSeconds(row, controller.audio);
       if (!(duration > 0)) return;
+      if (!isPointerNearVoiceProgressRect(controller, event)) return;
       const hit = resolveVoiceSeekHit(controller, event);
       if (!hit || hit.distancePx > VOICE_PROGRESS_HIT_RADIUS) return;
       if (!best || hit.distancePx < best.hit.distancePx) {
@@ -601,6 +633,7 @@
 
     const controller = ensureVoiceProgressShell(row, bubble);
     if (!controller) return;
+    state.playback.voiceSeekRows.add(row);
     ensureVoiceContourGlobalSeek();
     bindVoiceSeekHit(row, controller);
     if (controller.audio === audio) {
