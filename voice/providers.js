@@ -60,17 +60,9 @@ async function transcribeWithVosk({ filePath, settings }) {
 
   let res;
   try {
-    res = await fetch(`${helperUrl}/transcribe`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        file_path: wavPath,
-        model_name: settings.vosk_model,
-        model_path: settings.vosk_model_path || '',
-        language_hint: settings.openai_language || 'ru',
-      }),
-      signal: AbortSignal.timeout(settings.transcription_timeout_ms),
-    });
+    res = isLocalVoskHelper(helperUrl)
+      ? await requestVoskByPath({ helperUrl, wavPath, settings })
+      : await requestVoskByUpload({ helperUrl, wavPath, settings });
   } catch (error) {
     if (error?.name === 'TimeoutError') {
       throw new Error(`Vosk helper did not respond in time: ${helperUrl}`);
@@ -97,6 +89,58 @@ async function transcribeWithVosk({ filePath, settings }) {
     provider: 'vosk',
     model: data.model || settings.vosk_model,
   };
+}
+
+function isLocalVoskHelper(helperUrl) {
+  try {
+    const { hostname } = new URL(helperUrl);
+    return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
+  } catch {
+    return false;
+  }
+}
+
+function voskPayload(settings) {
+  return {
+    model_name: settings.vosk_model,
+    model_path: settings.vosk_model_path || '',
+    language_hint: settings.openai_language || 'ru',
+  };
+}
+
+async function requestVoskByPath({ helperUrl, wavPath, settings }) {
+  return fetch(`${helperUrl}/transcribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      file_path: wavPath,
+      ...voskPayload(settings),
+    }),
+    signal: AbortSignal.timeout(settings.transcription_timeout_ms),
+  });
+}
+
+async function requestVoskByUpload({ helperUrl, wavPath, settings }) {
+  const fileBuffer = await fs.promises.readFile(wavPath);
+  const uploadTo = (endpoint) => fetch(`${helperUrl}${endpoint}`, {
+    method: 'POST',
+    body: buildVoskUploadForm(fileBuffer, wavPath, settings),
+    signal: AbortSignal.timeout(settings.transcription_timeout_ms),
+  });
+  const res = await uploadTo('/transcribe-file');
+  if (res.status === 404 || res.status === 405) {
+    return uploadTo('/transcribe');
+  }
+  return res;
+}
+
+function buildVoskUploadForm(fileBuffer, wavPath, settings) {
+  const formData = new FormData();
+  formData.append('file', new Blob([fileBuffer], { type: 'audio/wav' }), path.basename(wavPath) || 'audio.wav');
+  for (const [key, value] of Object.entries(voskPayload(settings))) {
+    formData.append(key, String(value || ''));
+  }
+  return formData;
 }
 
 async function prepareVoskWav(filePath) {

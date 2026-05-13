@@ -1,6 +1,8 @@
 import argparse
+import cgi
 import json
 import os
+import tempfile
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -108,6 +110,10 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": "Not found"})
 
     def do_POST(self):
+        if self.path == "/transcribe-file":
+            self.handle_transcribe_file()
+            return
+
         if self.path != "/transcribe":
             self._send_json(404, {"error": "Not found"})
             return
@@ -126,6 +132,48 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, result)
         except Exception as error:
             self._send_json(400, {"error": str(error)})
+
+    def handle_transcribe_file(self):
+        temp_path = ""
+        try:
+            content_type = self.headers.get("Content-Type", "")
+            if not content_type.lower().startswith("multipart/form-data"):
+                self._send_json(400, {"error": "multipart/form-data is required"})
+                return
+
+            form = cgi.FieldStorage(
+                fp=self.rfile,
+                headers=self.headers,
+                environ={
+                    "REQUEST_METHOD": "POST",
+                    "CONTENT_TYPE": content_type,
+                },
+            )
+            file_item = form["file"] if "file" in form else None
+            if file_item is None or not getattr(file_item, "file", None):
+                self._send_json(400, {"error": "Audio file is required"})
+                return
+
+            with tempfile.NamedTemporaryFile(prefix="bananza-vosk-", suffix=".wav", delete=False) as tmp:
+                temp_path = tmp.name
+                while True:
+                    chunk = file_item.file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    tmp.write(chunk)
+
+            model_name = str(form.getfirst("model_name", "") or "").strip()
+            model_path = str(form.getfirst("model_path", "") or "").strip()
+            result = transcribe_wav(temp_path, model_name, model_path)
+            self._send_json(200, result)
+        except Exception as error:
+            self._send_json(400, {"error": str(error)})
+        finally:
+            if temp_path:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
 
     def log_message(self, *_args):
         return

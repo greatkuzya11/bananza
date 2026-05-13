@@ -175,6 +175,55 @@ test('voice providers use fallback to OpenAI when primary provider fails', async
   assert.equal(result.text, 'Fallback transcript');
 });
 
+test('Vosk provider uploads audio bytes for remote helpers', async (t) => {
+  const tempFile = path.join(os.tmpdir(), `bananza-remote-vosk-${Date.now()}.wav`);
+  fs.writeFileSync(tempFile, 'voice');
+  t.after(() => {
+    fs.rmSync(tempFile, { force: true });
+  });
+
+  const originalFetch = global.fetch;
+  global.fetch = async (url, options = {}) => {
+    const href = String(url);
+    assert.equal(href, 'http://vosk.example.test:2700/transcribe-file');
+    assert.equal(options.method, 'POST');
+    assert.ok(options.body instanceof FormData);
+    assert.equal(options.body.get('model_name'), 'vosk-model-small-ru-0.22');
+    assert.equal(options.body.get('model_path'), '');
+    assert.equal(options.body.get('language_hint'), 'ru');
+    assert.ok(options.body.get('file') instanceof Blob);
+    return new Response(JSON.stringify({
+      text: 'Remote transcript',
+      model: 'vosk-model-small-ru-0.22',
+      segments: [{ text: 'Remote transcript', start: 0, end: 1 }],
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  const result = await transcribeAudio({
+    filePath: tempFile,
+    settings: {
+      active_provider: 'vosk',
+      fallback_to_openai: false,
+      vosk_helper_url: 'http://vosk.example.test:2700',
+      vosk_model: 'vosk-model-small-ru-0.22',
+      vosk_model_path: '',
+      openai_language: 'ru',
+      transcription_timeout_ms: 5000,
+    },
+    apiKey: '',
+    grokApiKey: '',
+  });
+
+  assert.equal(result.provider, 'vosk');
+  assert.equal(result.text, 'Remote transcript');
+});
+
 test('testProviderModel returns Grok transcription payload', async (t) => {
   const tempFile = path.join(os.tmpdir(), `bananza-grok-${Date.now()}.wav`);
   fs.writeFileSync(tempFile, 'voice');
