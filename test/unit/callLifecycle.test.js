@@ -130,6 +130,73 @@ function seedCompletedMixedRecording(db, callId, filePath, overrides = {}) {
   ).lastInsertRowid);
 }
 
+test('call transcript segments prefer formatted Vosk result text over raw segment text', () => {
+  const db = createDb();
+  const feature = createFeature(db);
+  try {
+    const segments = feature._private.transcriptSegmentsForResult({
+      provider: 'vosk',
+      text: 'Привет, мир.',
+      segments: [
+        { text: 'привет', start_ms: 0, end_ms: 500 },
+        { text: 'мир', start_ms: 500, end_ms: 900 },
+      ],
+    }, 1000, 4000);
+
+    assert.equal(segments.length, 1);
+    assert.equal(segments[0].text, 'Привет, мир.');
+    assert.equal(segments[0].start_ms, 1000);
+    assert.equal(segments[0].timing_approximate, 1);
+  } finally {
+    feature.stopWorkers();
+    db.close();
+  }
+});
+
+test('call transcript segments keep Vosk provider timing when segment text is already formatted', () => {
+  const db = createDb();
+  const feature = createFeature(db);
+  try {
+    const segments = feature._private.transcriptSegmentsForResult({
+      provider: 'vosk',
+      text: 'Привет, мир.',
+      segments: [
+        { text: 'Привет,', start_ms: 0, end_ms: 500 },
+        { text: 'мир.', start_ms: 500, end_ms: 900 },
+      ],
+    }, 1000, 4000);
+
+    assert.deepEqual(segments.map((segment) => segment.text), ['Привет,', 'мир.']);
+    assert.deepEqual(segments.map((segment) => segment.start_ms), [1000, 1500]);
+    assert.deepEqual(segments.map((segment) => segment.end_ms), [1500, 1900]);
+    assert.deepEqual(segments.map((segment) => segment.timing_approximate), [0, 0]);
+  } finally {
+    feature.stopWorkers();
+    db.close();
+  }
+});
+
+test('call transcript segments keep non-Vosk provider segment text', () => {
+  const db = createDb();
+  const feature = createFeature(db);
+  try {
+    const segments = feature._private.transcriptSegmentsForResult({
+      provider: 'openai',
+      text: 'Привет, мир.',
+      segments: [
+        { text: 'привет', start_ms: 0, end_ms: 500 },
+        { text: 'мир', start_ms: 500, end_ms: 900 },
+      ],
+    }, 1000, 4000);
+
+    assert.deepEqual(segments.map((segment) => segment.text), ['привет', 'мир']);
+    assert.deepEqual(segments.map((segment) => segment.timing_approximate), [0, 0]);
+  } finally {
+    feature.stopWorkers();
+    db.close();
+  }
+});
+
 test('ring timeout marks unanswered private calls as missed and updates call card metadata', () => {
   const db = createDb();
   const feature = createFeature(db);

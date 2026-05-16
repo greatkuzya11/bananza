@@ -1424,6 +1424,55 @@ function createCallFeature({
     });
   }
 
+  function normalizeTranscriptComparisonText(text) {
+    return String(text || '')
+      .normalize('NFKC')
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function shouldUseFormattedVoskText(result, segments) {
+    if (String(result?.provider || '').toLowerCase() !== 'vosk') return false;
+    const finalText = String(result?.text || '').replace(/\s+/g, ' ').trim();
+    if (!finalText || !Array.isArray(segments) || !segments.length) return false;
+    const segmentText = segments
+      .map((segment) => String(segment?.text || '').trim())
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!segmentText || finalText === segmentText) return false;
+    return normalizeTranscriptComparisonText(finalText) === normalizeTranscriptComparisonText(segmentText);
+  }
+
+  function transcriptSegmentsForResult(result, startMs, durationMs) {
+    const text = String(result?.text || '').trim();
+    const segments = Array.isArray(result?.segments) ? result.segments : [];
+    if (shouldUseFormattedVoskText(result, segments)) {
+      return heuristicTranscriptSegments(text, startMs, durationMs)
+        .map((segment) => ({ ...segment, timing_approximate: 1 }));
+    }
+    if (segments.length) {
+      return segments
+        .map((segment) => {
+          const segmentText = String(segment?.text || '').trim();
+          if (!segmentText) return null;
+          return {
+            ...segment,
+            text: segmentText,
+            start_ms: startMs + Math.max(0, Number(segment.start_ms || 0)),
+            end_ms: startMs + Math.max(Number(segment.end_ms || 0), Number(segment.start_ms || 0)),
+            timing_approximate: 0,
+          };
+        })
+        .filter(Boolean);
+    }
+    return heuristicTranscriptSegments(text, startMs, durationMs)
+      .map((segment) => ({ ...segment, timing_approximate: 1 }));
+  }
+
   async function processRecordingTranscript({ recordingId }) {
     const recording = db.prepare('SELECT * FROM call_recordings WHERE id=?').get(recordingId);
     if (!recording || recording.status === 'completed') return;
@@ -1485,42 +1534,22 @@ function createCallFeature({
         if (!text) continue;
         texts.push(text);
         const startMs = baseStartMs + Number(chunk.offsetMs || 0);
-        const segments = Array.isArray(result.segments) ? result.segments : [];
         const chunkDuration = Math.min(
           Math.max(0, Number(getCallSettings(db).call_transcription_chunk_minutes || 12) * 60 * 1000),
           Math.max(0, Number(recording.duration_ms || 0) - Number(chunk.offsetMs || 0))
         );
-        if (segments.length) {
-          segments.forEach((segment) => {
-            const segmentText = String(segment?.text || '').trim();
-            if (!segmentText) return;
-            const segmentStart = startMs + Math.max(0, Number(segment.start_ms || 0));
-            const segmentEnd = startMs + Math.max(Number(segment.end_ms || 0), Number(segment.start_ms || 0));
-            insertTranscriptSegmentStmt.run(
-              recording.call_id,
-              recording.id,
-              recording.user_id,
-              speaker,
-              segmentStart,
-              segmentEnd,
-              segmentText,
-              0
-            );
-          });
-        } else {
-          heuristicTranscriptSegments(text, startMs, chunkDuration).forEach((segment) => {
-            insertTranscriptSegmentStmt.run(
-              recording.call_id,
-              recording.id,
-              recording.user_id,
-              speaker,
-              segment.start_ms,
-              segment.end_ms,
-              segment.text,
-              1
-            );
-          });
-        }
+        transcriptSegmentsForResult({ ...result, provider }, startMs, chunkDuration).forEach((segment) => {
+          insertTranscriptSegmentStmt.run(
+            recording.call_id,
+            recording.id,
+            recording.user_id,
+            speaker,
+            segment.start_ms,
+            segment.end_ms,
+            segment.text,
+            Number(segment.timing_approximate) !== 0 ? 1 : 0
+          );
+        });
       }
       updateRecordingTranscriptStmt.run('completed', texts.join('\n').trim(), provider, model, '', recording.id);
       console.info('[calls] transcript completed:', {
@@ -1656,38 +1685,18 @@ function createCallFeature({
         Math.max(0, Number(chunk.durationMs || 0) || Number(getCallSettings(db).call_transcription_chunk_minutes || 12) * 60 * 1000),
         Math.max(0, Number(recording.duration_ms || 0) - Number(chunk.offsetMs || 0))
       );
-      const resultSegments = Array.isArray(result.segments) ? result.segments : [];
-      if (resultSegments.length) {
-        resultSegments.forEach((segment) => {
-          const segmentText = String(segment?.text || '').trim();
-          if (!segmentText) return;
-          const segmentStart = chunkStartMs + Math.max(0, Number(segment.start_ms || 0));
-          const segmentEnd = chunkStartMs + Math.max(Number(segment.end_ms || 0), Number(segment.start_ms || 0));
-          allSegments.push({
-            recording_id: Number(recording.id),
-            user_id: recording.scope === 'participant' ? speaker.userId : null,
-            speaker_name: recording.scope === 'participant' ? speaker.name : (segment.speaker || 'Speaker'),
-            speaker_label: String(segment.speaker || ''),
-            start_ms: segmentStart,
-            end_ms: segmentEnd,
-            text: segmentText,
-            timing_approximate: 0,
-          });
+      transcriptSegmentsForResult({ ...result, provider: resolvedProvider }, chunkStartMs, chunkDuration).forEach((segment) => {
+        allSegments.push({
+          recording_id: Number(recording.id),
+          user_id: recording.scope === 'participant' ? speaker.userId : null,
+          speaker_name: recording.scope === 'participant' ? speaker.name : (segment.speaker || speaker.name || 'Speaker'),
+          speaker_label: String(segment.speaker || ''),
+          start_ms: segment.start_ms,
+          end_ms: segment.end_ms,
+          text: segment.text,
+          timing_approximate: Number(segment.timing_approximate) !== 0 ? 1 : 0,
         });
-      } else {
-        heuristicTranscriptSegments(text, chunkStartMs, chunkDuration).forEach((segment) => {
-          allSegments.push({
-            recording_id: Number(recording.id),
-            user_id: recording.scope === 'participant' ? speaker.userId : null,
-            speaker_name: speaker.name,
-            speaker_label: '',
-            start_ms: segment.start_ms,
-            end_ms: segment.end_ms,
-            text: segment.text,
-            timing_approximate: 1,
-          });
-        });
-      }
+      });
     }
     return {
       text: texts.join('\n').trim(),
@@ -2978,6 +2987,7 @@ function createCallFeature({
       participantLeft,
       endCall,
       attachCallMetadata,
+      transcriptSegmentsForResult,
     },
   };
 }
