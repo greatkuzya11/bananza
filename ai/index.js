@@ -320,13 +320,6 @@ function isLikelyDeepSeekTextModel(id) {
   return /deepseek|reason|chat/.test(value);
 }
 
-function isLikelyQwenTextModel(id) {
-  const value = String(id || '').toLowerCase();
-  if (!value || isEmbeddingModel(value)) return false;
-  if (/image|vision|speech|audio|tts|stt|video|moderation|search|rerank|embedding/.test(value)) return false;
-  return /qwen|reason|chat|instruct|coder/.test(value);
-}
-
 function normalizeProvider(value, fallback = 'openai') {
   const provider = String(value || '').trim().toLowerCase();
   if (provider === 'grok' || provider === 'deepseek' || provider === 'qwen' || provider === 'yandex' || provider === 'openai') return provider;
@@ -1595,7 +1588,7 @@ function createAiBotFeature({
 
   function buildQwenModelCatalog({ source = 'fallback', modelIds = [], error = '' } = {}) {
     const hints = qwenSavedModelHints();
-    const responseModels = uniqueList(modelIds.filter(isLikelyQwenTextModel));
+    const responseModels = uniqueList(modelIds);
     return {
       source,
       fetched_at: new Date().toISOString(),
