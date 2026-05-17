@@ -39,6 +39,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/video-notes/VideoNoteRecorder.js',
     '/js/video-notes/VideoNoteRenderer.js',
     '/js/video-notes/MediaNoteComposerController.js',
+    '/js/video-notes/VideoNoteAdminSettings.js',
     '/js/video-notes/VideoNoteFeature.js',
     '/js/voice.js',
   ]);

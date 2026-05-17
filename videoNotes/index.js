@@ -5,24 +5,42 @@ const { v4: uuidv4 } = require('uuid');
 
 const { normalizeShapeSnapshot } = require('./meta');
 const {
+  VIDEO_NOTE_SETTINGS_OPTIONS,
+  getAdminVideoNoteSettings,
+  getPublicVideoNoteSettings,
+  getVideoNoteSettings,
+  setVideoNoteSettings,
+} = require('./settings');
+const {
   isSupportedVideoPosterMime,
   saveVideoPosterFromPath,
 } = require('../videoPosters');
 
 const MAX_VIDEO_NOTE_VIDEO_SIZE = 18 * 1024 * 1024;
 const MAX_VIDEO_NOTE_AUDIO_SIZE = 12 * 1024 * 1024;
-const MAX_VIDEO_NOTE_DURATION_MS = 30_000;
 const ALLOWED_VIDEO_MIME = new Set(['video/mp4', 'video/webm', 'video/quicktime']);
 const ALLOWED_AUDIO_MIME = new Set(['audio/wav', 'audio/x-wav', 'audio/wave']);
 const DEFAULT_SHAPE_ID = 'banana-fat';
-const DEFAULT_SHAPE_SNAPSHOT = JSON.stringify({
-  id: DEFAULT_SHAPE_ID,
-  version: '1',
-  label: 'Banana Fat',
-  viewBox: '0 0 320 220',
-  path: 'M23 124C33 73 76 36 138 27C214 17 281 53 301 109C311 137 305 166 285 188C257 214 205 221 144 213C95 207 59 186 35 150C28 140 24 132 23 124Z',
-  clipPadding: 12,
+const DEFAULT_SHAPE_SNAPSHOTS = Object.freeze({
+  'banana-fat': JSON.stringify({
+    id: 'banana-fat',
+    version: '1',
+    label: 'Banana Fat',
+    viewBox: '0 0 320 220',
+    path: 'M23 124C33 73 76 36 138 27C214 17 281 53 301 109C311 137 305 166 285 188C257 214 205 221 144 213C95 207 59 186 35 150C28 140 24 132 23 124Z',
+    clipPadding: 12,
+  }),
+  circle: JSON.stringify({
+    id: 'circle',
+    version: '1',
+    label: 'Circle',
+    viewBox: '0 0 360 360',
+    path: 'M180 56.088A175 123.912 0 1 1 180 303.912A175 123.912 0 1 1 180 56.088Z',
+    clipPadding: 4,
+    previewTransform: 'translate(0 0)',
+  }),
 });
+const KNOWN_SHAPE_IDS = new Set(VIDEO_NOTE_SETTINGS_OPTIONS.shapes.map((shape) => shape.value));
 
 function normalizeMimeType(value) {
   return String(value || '')
@@ -44,15 +62,27 @@ function cleanupUploadedFiles(reqFiles = {}) {
   });
 }
 
+function normalizeShapeId(value, fallback = DEFAULT_SHAPE_ID) {
+  const shapeId = String(value || '').trim();
+  if (KNOWN_SHAPE_IDS.has(shapeId)) return shapeId;
+  return KNOWN_SHAPE_IDS.has(fallback) ? fallback : DEFAULT_SHAPE_ID;
+}
+
+function fallbackShapeSnapshot(shapeId) {
+  return DEFAULT_SHAPE_SNAPSHOTS[shapeId] || DEFAULT_SHAPE_SNAPSHOTS[DEFAULT_SHAPE_ID];
+}
+
 function createVideoNoteFeature({
   app,
   db,
   auth,
+  adminOnly,
   msgLimiter,
   upLimiter,
   uploadsDir,
   hydrateMessageById,
   broadcastToChatAll,
+  clients,
   notifyMessageCreated,
   onMessageCreated,
   voiceFeature,
@@ -109,7 +139,43 @@ function createVideoNoteFeature({
     },
   });
 
+  function broadcastAll(data) {
+    const json = JSON.stringify(data);
+    clients?.forEach?.((connections) => {
+      connections.forEach((ws) => {
+        if (ws.readyState === 1) ws.send(json);
+      });
+    });
+  }
+
+  function serializeAdminResponse() {
+    return {
+      settings: getAdminVideoNoteSettings(db),
+      options: VIDEO_NOTE_SETTINGS_OPTIONS,
+    };
+  }
+
+  app.get('/api/admin/video-note-settings', auth, adminOnly, (_req, res) => {
+    res.json(serializeAdminResponse());
+  });
+
+  app.put('/api/admin/video-note-settings', auth, adminOnly, (req, res) => {
+    const settings = setVideoNoteSettings(db, req.body || {});
+    const publicSettings = getPublicVideoNoteSettings(db);
+    broadcastAll({ type: 'video_note_settings_updated', settings: publicSettings });
+    res.json({
+      settings,
+      options: VIDEO_NOTE_SETTINGS_OPTIONS,
+      publicSettings,
+    });
+  });
+
   app.post('/api/chats/:chatId/video-note', auth, msgLimiter, upLimiter, (req, res) => {
+    const settings = getVideoNoteSettings(db);
+    if (!settings.video_notes_enabled) {
+      return res.status(403).json({ error: 'Video notes are disabled by administrator' });
+    }
+
     upload.fields([
       { name: 'video', maxCount: 1 },
       { name: 'audio', maxCount: 1 },
@@ -125,14 +191,20 @@ function createVideoNoteFeature({
 
       try {
         const chatId = Number(req.params.chatId);
-        const durationMs = Math.max(0, Math.min(MAX_VIDEO_NOTE_DURATION_MS, Math.round(Number(req.body.durationMs || 0))));
+        const durationMs = Math.max(0, Math.min(
+          settings.video_note_max_duration_ms,
+          Math.round(Number(req.body.durationMs || 0))
+        ));
         const sampleRate = Math.max(8_000, Math.round(Number(req.body.sampleRate || 16_000)));
         const replyToId = req.body.replyToId ? Number(req.body.replyToId) : null;
         const clientId = normalizeClientId(req.body.client_id);
         const videoMime = normalizeMimeType(req.body.videoMime || '');
-        const shapeId = String(req.body.shapeId || '').trim() || DEFAULT_SHAPE_ID;
+        const shapeId = normalizeShapeId(
+          req.body.shapeId,
+          settings.video_note_default_shape_id || DEFAULT_SHAPE_ID
+        );
         const shapeSnapshot = normalizeShapeSnapshot(req.body.shapeSnapshot)
-          || (shapeId === DEFAULT_SHAPE_ID ? DEFAULT_SHAPE_SNAPSHOT : null);
+          || fallbackShapeSnapshot(shapeId);
         const videoFile = Array.isArray(req.files?.video) ? req.files.video[0] : null;
         const audioFile = Array.isArray(req.files?.audio) ? req.files.audio[0] : null;
         const posterFile = Array.isArray(req.files?.poster) ? req.files.poster[0] : null;
@@ -167,7 +239,8 @@ function createVideoNoteFeature({
           if (replyMsg) validReplyId = replyMsg.id;
         }
 
-        const transcriptionStatus = 'idle';
+        const shouldAutoTranscribe = settings.video_note_transcription_mode === 'auto';
+        const transcriptionStatus = shouldAutoTranscribe ? 'pending' : 'idle';
 
         const messageId = db.transaction(() => {
           const insertedVideo = insertFileStmt.run(
@@ -200,8 +273,8 @@ function createVideoNoteFeature({
             durationMs,
             sampleRate,
             transcriptionStatus,
-            null,
-            0,
+            shouldAutoTranscribe ? req.user.id : null,
+            shouldAutoTranscribe ? 1 : 0,
             'video_note',
             insertedAudio.lastInsertRowid,
             shapeId,
@@ -230,6 +303,15 @@ function createVideoNoteFeature({
           });
         }
 
+        if (shouldAutoTranscribe && typeof voiceFeature?.scheduleTranscription === 'function') {
+          voiceFeature.scheduleTranscription({
+            messageId,
+            chatId,
+            requestedBy: req.user.id,
+            autoRequested: true,
+          });
+        }
+
         return res.json(message);
       } catch (error) {
         cleanupUploadedFiles(req.files || {});
@@ -240,7 +322,10 @@ function createVideoNoteFeature({
 
   return {
     getDefaultShapeId() {
-      return DEFAULT_SHAPE_ID;
+      return getVideoNoteSettings(db).video_note_default_shape_id || DEFAULT_SHAPE_ID;
+    },
+    getPublicSettings() {
+      return getPublicVideoNoteSettings(db);
     },
   };
 }

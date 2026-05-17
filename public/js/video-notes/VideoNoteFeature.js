@@ -5,6 +5,15 @@
 
   let feature = null;
 
+  function getFeatureSettings() {
+    const features = window.BananzaVoiceHooks?.getFeatures?.() || {};
+    return {
+      defaultShapeId: features.video_note_default_shape_id || 'banana-fat',
+      maxDurationMs: Number(features.video_note_max_duration_ms || 30000),
+    };
+  }
+  ns.getVideoNoteFeatureSettings = getFeatureSettings;
+
   function createFeature() {
     if (feature) return feature;
     const bridge = window.BananzaAppBridge || null;
@@ -15,7 +24,8 @@
     const videoRecorder = new ns.VideoNoteRecorder({
       bridge,
       shapeRegistry,
-      getSelectedShapeId: () => 'banana-fat',
+      getSelectedShapeId: () => getFeatureSettings().defaultShapeId,
+      getMaxDurationMs: () => getFeatureSettings().maxDurationMs,
       onStateChange: () => controller.refreshComposerState(),
     });
     controller.videoRecorder = videoRecorder;

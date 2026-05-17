@@ -8,6 +8,11 @@
       voice_notes_enabled: false,
       auto_transcribe_on_send: false,
       voice_note_ui_mode: 'compact',
+      video_notes_enabled: true,
+      video_note_default_shape_id: 'banana-fat',
+      video_note_transcription_mode: 'manual',
+      video_note_transcription_provider: 'voice',
+      video_note_max_duration_ms: 30000,
     },
     admin: {
       settings: null,
@@ -932,6 +937,11 @@
         voice_notes_enabled: Boolean(data.voice_notes_enabled),
         auto_transcribe_on_send: Boolean(data.auto_transcribe_on_send),
         voice_note_ui_mode: data.voice_note_ui_mode || 'compact',
+        video_notes_enabled: data.video_notes_enabled !== false,
+        video_note_default_shape_id: data.video_note_default_shape_id || 'banana-fat',
+        video_note_transcription_mode: data.video_note_transcription_mode || 'manual',
+        video_note_transcription_provider: data.video_note_transcription_provider || 'voice',
+        video_note_max_duration_ms: Number(data.video_note_max_duration_ms || 30000),
       };
     } catch {}
     syncSendButtonState();
@@ -947,8 +957,12 @@
     const hasChat = Boolean(bridge.getCurrentChatId?.());
     const isEditing = Boolean(bridge.getEditTo?.());
     const keepSendIcon = sendBtn.classList.contains('send-fly');
+    const mediaNotesEnabled = Boolean(
+      state.features.voice_notes_enabled ||
+      state.features.video_notes_enabled
+    );
     const showMicMode = Boolean(
-      state.features.voice_notes_enabled &&
+      mediaNotesEnabled &&
       hasChat &&
       !hasText &&
       !hasPendingFiles &&
@@ -957,7 +971,7 @@
       !keepSendIcon
     );
     const keepMicMode = showMicMode || Boolean(state.recorder.recording);
-    sendBtn.classList.toggle('voice-enabled', Boolean(state.features.voice_notes_enabled));
+    sendBtn.classList.toggle('voice-enabled', mediaNotesEnabled);
     sendBtn.classList.toggle('is-mic-mode', keepMicMode);
     sendBtn.classList.toggle('is-send-mode', !keepMicMode && !state.recorder.recording);
     sendBtn.classList.toggle('is-recording', Boolean(state.recorder.recording));
@@ -1368,12 +1382,26 @@
   function handleWSMessage(msg) {
     if (msg.type === 'voice_settings_updated') {
       state.features = {
+        ...state.features,
         voice_notes_enabled: Boolean(msg.settings?.voice_notes_enabled),
         auto_transcribe_on_send: Boolean(msg.settings?.auto_transcribe_on_send),
         voice_note_ui_mode: msg.settings?.voice_note_ui_mode || 'compact',
       };
       syncSendButtonState();
       refreshVisibleVoiceRows();
+      return;
+    }
+
+    if (msg.type === 'video_note_settings_updated') {
+      state.features = {
+        ...state.features,
+        video_notes_enabled: msg.settings?.video_notes_enabled !== false,
+        video_note_default_shape_id: msg.settings?.video_note_default_shape_id || 'banana-fat',
+        video_note_transcription_mode: msg.settings?.video_note_transcription_mode || 'manual',
+        video_note_transcription_provider: msg.settings?.video_note_transcription_provider || 'voice',
+        video_note_max_duration_ms: Number(msg.settings?.video_note_max_duration_ms || 30000),
+      };
+      syncSendButtonState();
       return;
     }
 
@@ -1830,7 +1858,7 @@
     const { msgInput } = getDom();
     return Boolean(
       bridge &&
-      state.features.voice_notes_enabled &&
+      (state.features.voice_notes_enabled || state.features.video_notes_enabled) &&
       bridge.getCurrentChatId?.() &&
       msgInput &&
       !msgInput.value.trim() &&

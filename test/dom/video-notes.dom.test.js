@@ -15,6 +15,7 @@ const VIDEO_NOTE_SCRIPTS = [
   'public/js/video-notes/VideoNoteRecorder.js',
   'public/js/video-notes/VideoNoteRenderer.js',
   'public/js/video-notes/MediaNoteComposerController.js',
+  'public/js/video-notes/VideoNoteAdminSettings.js',
   'public/js/video-notes/VideoNoteFeature.js',
 ];
 
@@ -43,6 +44,71 @@ test('video note scripts bootstrap namespaces and bridge hooks in index order', 
   assert.equal(dom.window.BananzaMediaNoteHooks.ownsComposer(), true);
   assert.equal(typeof dom.window.BananzaVideoNoteHooks.renderAttachment, 'function');
   assert.ok(voiceRefreshCalls >= 1);
+});
+
+test('video note admin settings adds separate admin entry and loads form values', async () => {
+  const dom = createAppDom();
+  installAppBridge(dom, {
+    async api(url) {
+      assert.equal(url, '/api/admin/video-note-settings');
+      return {
+        settings: {
+          video_notes_enabled: true,
+          video_note_default_shape_id: 'circle',
+          video_note_transcription_mode: 'auto',
+          video_note_transcription_provider: 'openai',
+          video_note_max_duration_ms: 45000,
+        },
+        options: {
+          shapes: [{ value: 'banana-fat', label: 'Banana' }, { value: 'circle', label: 'Circle' }],
+          transcription_modes: [{ value: 'manual', label: 'Manual' }, { value: 'auto', label: 'Automatic' }],
+          providers: [{ value: 'voice', label: 'Use voice provider' }, { value: 'openai', label: 'OpenAI' }],
+        },
+      };
+    },
+  });
+
+  loadBrowserScript(dom, 'public/js/video-notes/VideoNoteAdminSettings.js');
+  dom.window.dispatchEvent(new dom.window.Event('bananza:ready'));
+
+  const button = dom.window.document.getElementById('settingsVideoNotePanel');
+  assert.ok(button);
+  assert.equal(button.classList.contains('hidden'), false);
+  button.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(dom.window.document.getElementById('videoNoteAdminModal').classList.contains('hidden'), false);
+  assert.equal(dom.window.document.getElementById('videoNoteDefaultShape').value, 'circle');
+  assert.equal(dom.window.document.getElementById('videoNoteTranscriptionMode').value, 'auto');
+  assert.equal(dom.window.document.getElementById('videoNoteTranscriptionProvider').value, 'openai');
+  assert.equal(dom.window.document.getElementById('videoNoteMaxDurationMs').value, '45000');
+});
+
+test('video note feature settings reflect public feature flags', () => {
+  const dom = createAppDom();
+  installAppBridge(dom);
+  dom.window.BananzaVoiceHooks = {
+    refreshComposerState() {},
+    canUseGesture() {
+      return true;
+    },
+    isRecording() {
+      return false;
+    },
+    getFeatures() {
+      return {
+        video_note_default_shape_id: 'circle',
+        video_note_max_duration_ms: 60000,
+      };
+    },
+  };
+
+  loadBrowserScripts(dom, VIDEO_NOTE_SCRIPTS);
+  dom.window.dispatchEvent(new dom.window.Event('bananza:ready'));
+
+  const settings = dom.window.BananzaVideoNotes.getVideoNoteFeatureSettings();
+  assert.equal(settings.defaultShapeId, 'circle');
+  assert.equal(settings.maxDurationMs, 60000);
 });
 
 test('video note renderer produces attachment markup with expected controls', () => {

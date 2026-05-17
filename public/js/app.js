@@ -15195,9 +15195,11 @@
         break;
       }
       case 'message_transcription':
-      case 'voice_settings_updated': {
+      case 'voice_settings_updated':
+      case 'video_note_settings_updated': {
         window.BananzaVoiceHooks?.handleWSMessage?.(msg);
         window.BananzaVideoNoteHooks?.handleWSMessage?.(msg);
+        window.BananzaVideoNoteAdminHooks?.handleWSMessage?.(msg);
         break;
       }
       case 'call_invite':
@@ -21182,6 +21184,11 @@
       }
       : getFloatingViewportRect();
     const pickerSize = measureFloatingSurface(emojiPicker, 254, 338);
+    if (keyboardAttached) {
+      emojiPicker.style.maxHeight = `${Math.max(180, Math.round(viewport.height - 100))}px`;
+    } else {
+      emojiPicker.style.maxHeight = '';
+    }
     const left = clamp(
       rect.left + viewport.left + ((rect.width - pickerSize.width) / 2),
       viewport.left + 8,
@@ -21223,6 +21230,7 @@
         if (emojiPicker instanceof HTMLElement) {
           emojiPicker.style.left = '';
           emojiPicker.style.top = '';
+          emojiPicker.style.maxHeight = '';
         }
         syncEmojiPickerButton();
       },
@@ -22795,6 +22803,7 @@
     $('#settingsOpenLastChat').checked = openLastChatOnReload;
     syncLanguageSettingsButton();
     window.BananzaVoiceHooks?.onSettingsOpened?.({ currentUser });
+    window.BananzaVideoNoteAdminHooks?.onSettingsOpened?.({ currentUser });
     window.BananzaCallHooks?.onSettingsOpened?.({ currentUser });
   }
 

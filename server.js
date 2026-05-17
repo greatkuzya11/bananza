@@ -345,6 +345,7 @@ const messageActions = createMessageActionsService({
 let aiBotFeature = null;
 let chatFoldersFeature = null;
 let callFeature = null;
+let videoNoteFeature = null;
 const videoNoteStorage = createVideoNoteStorage({
   db,
   uploadsDir: UPLOADS_DIR,
@@ -380,7 +381,10 @@ const voiceFeature = createVoiceFeature({
   notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),
   onMessageCreated: (message) => handleChatListMessageCreated(message),
   onMessageTextAvailable: (message) => aiBotFeature?.handleMessageCreated(message),
-  getAdditionalPublicFeatures: () => callFeature?.getPublicSettings?.() || {},
+  getAdditionalPublicFeatures: () => ({
+    ...(callFeature?.getPublicSettings?.() || {}),
+    ...(videoNoteFeature?.getPublicSettings?.() || {}),
+  }),
 });
 
 const messageCopyService = createMessageCopyService({
@@ -394,15 +398,17 @@ const messageCopyService = createMessageCopyService({
   saveMessageMentions: (messageId, chatId, text) => saveMessageMentions(messageId, chatId, text),
 });
 
-const videoNoteFeature = createVideoNoteFeature({
+videoNoteFeature = createVideoNoteFeature({
   app,
   db,
   auth,
+  adminOnly,
   msgLimiter,
   upLimiter,
   uploadsDir: UPLOADS_DIR,
   hydrateMessageById: (messageId, viewerUserId) => hydrateMessageById(messageId, viewerUserId),
   broadcastToChatAll,
+  clients,
   notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),
   onMessageCreated: (message) => handleUserMessageCreated(message),
   voiceFeature,

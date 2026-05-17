@@ -782,10 +782,6 @@
         transcription_model: msg.model || '',
         transcription_error: msg.error || '',
       });
-      if (msg.status === 'completed' && msg.text) {
-        this.expandedIds.add(Number(msg.messageId || 0));
-        this.refreshRow(row);
-      }
     }
   }
 

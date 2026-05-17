@@ -114,11 +114,13 @@
       bridge,
       shapeRegistry,
       getSelectedShapeId,
+      getMaxDurationMs,
       onStateChange,
     } = {}) {
       this.bridge = bridge || window.BananzaAppBridge || null;
       this.shapeRegistry = shapeRegistry;
       this.getSelectedShapeId = typeof getSelectedShapeId === 'function' ? getSelectedShapeId : (() => 'banana-fat');
+      this.getMaxDurationMs = typeof getMaxDurationMs === 'function' ? getMaxDurationMs : (() => 30000);
       this.onStateChange = typeof onStateChange === 'function' ? onStateChange : (() => {});
       this.reset();
       window.addEventListener('bananza:languagechange', () => {
@@ -361,6 +363,12 @@
       if (!this.previewTimer) return;
       const elapsed = Date.now() - this.startAt;
       this.previewTimer.textContent = formatDurationMs(elapsed);
+      const maxDurationMs = Math.max(0, Number(this.getMaxDurationMs?.() || 0));
+      if (this.recording && maxDurationMs > 0 && elapsed >= maxDurationMs) {
+        this.stopAndSend().catch((error) => {
+          window.BananzaVoiceHooks?.setRecorderMessage?.(error.message || t('Could not send message'), 'error');
+        });
+      }
     }
 
     async stopAndSend() {
@@ -375,7 +383,11 @@
 
     async finishAndQueue() {
       if (!this.recording || !this.mediaRecorder) return;
-      const elapsed = Math.max(0, Date.now() - this.startAt);
+      const maxDurationMs = Math.max(0, Number(this.getMaxDurationMs?.() || 0));
+      const elapsed = Math.max(0, Math.min(
+        maxDurationMs || Infinity,
+        Date.now() - this.startAt
+      ));
       const mediaRecorder = this.mediaRecorder;
       const videoChunks = this.videoChunks;
 

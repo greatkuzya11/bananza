@@ -65,6 +65,39 @@
       return true;
     }
 
+    getFeatures() {
+      return {
+        ...(window.BananzaVoiceHooks?.getFeatures?.() || {}),
+        ...(this.lastState.features || {}),
+      };
+    }
+
+    isVoiceEnabled() {
+      return Boolean(this.getFeatures().voice_notes_enabled);
+    }
+
+    isVideoEnabled() {
+      return this.getFeatures().video_notes_enabled !== false;
+    }
+
+    resolveAllowedMode(mode = this.mode) {
+      const voiceEnabled = this.isVoiceEnabled();
+      const videoEnabled = this.isVideoEnabled();
+      if (mode === 'video' && videoEnabled) return 'video';
+      if (mode !== 'video' && voiceEnabled) return 'audio';
+      if (videoEnabled) return 'video';
+      if (voiceEnabled) return 'audio';
+      return '';
+    }
+
+    syncAllowedMode() {
+      const allowedMode = this.resolveAllowedMode(this.mode);
+      if (!allowedMode || allowedMode === this.mode) return allowedMode;
+      this.mode = allowedMode;
+      localStorage.setItem(STORAGE_KEY, this.mode);
+      return allowedMode;
+    }
+
     isIosGestureTarget() {
       return Boolean(this.getBridge()?.isIosWebkit?.() && window.innerWidth <= 768);
     }
@@ -141,13 +174,19 @@
     }
 
     toggleMode() {
-      this.setModeInternal(this.mode === 'video' ? 'audio' : 'video', { animate: true });
+      if (this.isVoiceEnabled() && this.isVideoEnabled()) {
+        this.setModeInternal(this.mode === 'video' ? 'audio' : 'video', { animate: true });
+        return;
+      }
+      const allowedMode = this.resolveAllowedMode(this.mode);
+      if (allowedMode) this.setModeInternal(allowedMode, { animate: false });
     }
 
     refreshComposerState(state = null) {
       if (state) this.lastState = { ...this.lastState, ...state };
       const sendBtn = this.getBridge()?.getDom?.()?.sendBtn;
       if (!sendBtn) return;
+      this.syncAllowedMode();
 
       const showMicMode = state?.showMicMode != null
         ? Boolean(state.showMicMode)
@@ -175,7 +214,7 @@
     }
 
     canUseGesture() {
-      return Boolean(this.audioAdapter?.canUseGesture?.());
+      return Boolean(this.resolveAllowedMode(this.mode) && this.audioAdapter?.canUseGesture?.());
     }
 
     getModeSwitchAnimationDurationMs() {
@@ -285,7 +324,8 @@
     }
 
     async startSelectedRecorder(mode = this.gestureMode || this.mode) {
-      const targetMode = mode === 'video' ? 'video' : 'audio';
+      const targetMode = this.resolveAllowedMode(mode);
+      if (!targetMode) throw new Error(this.t(TEXT.startError));
       this.forceIdleUi = false;
       this.activeMode = targetMode;
       this.refreshComposerState();

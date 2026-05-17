@@ -392,19 +392,63 @@ test('voice and video note endpoints work in isolated sandbox with mocked provid
     return message;
   }, { timeoutMs: 15_000 });
 
+  const defaultVideoSettings = await admin.request('/api/admin/video-note-settings');
+  assert.equal(defaultVideoSettings.data.settings.video_notes_enabled, true);
+  assert.equal(defaultVideoSettings.data.settings.video_note_default_shape_id, 'banana-fat');
+
+  const disabledVideoSettings = await admin.request('/api/admin/video-note-settings', {
+    method: 'PUT',
+    json: {
+      video_notes_enabled: false,
+      video_note_default_shape_id: 'banana-fat',
+      video_note_transcription_mode: 'manual',
+      video_note_transcription_provider: 'voice',
+      video_note_max_duration_ms: 30000,
+    },
+  });
+  assert.equal(disabledVideoSettings.data.publicSettings.video_notes_enabled, false);
+
+  const disabledFeatures = await admin.request('/api/features');
+  assert.equal(disabledFeatures.data.video_notes_enabled, false);
+
+  const disabledVideoForm = new FormData();
+  disabledVideoForm.append('video', new Blob(['video-note'], { type: 'video/webm' }), 'disabled-note.webm');
+  disabledVideoForm.append('audio', new Blob(['audio-track'], { type: 'audio/wav' }), 'disabled-note.wav');
+  disabledVideoForm.append('durationMs', '2200');
+  disabledVideoForm.append('sampleRate', '16000');
+  disabledVideoForm.append('videoMime', 'video/webm');
+  const disabledVideo = await admin.request(`/api/chats/${groupChat.id}/video-note`, {
+    method: 'POST',
+    formData: disabledVideoForm,
+    expectedStatus: 403,
+  });
+  assert.match(disabledVideo.data.error, /Video notes are disabled/i);
+
+  const enabledVideoSettings = await admin.request('/api/admin/video-note-settings', {
+    method: 'PUT',
+    json: {
+      video_notes_enabled: true,
+      video_note_default_shape_id: 'circle',
+      video_note_transcription_mode: 'auto',
+      video_note_transcription_provider: 'openai',
+      video_note_max_duration_ms: 45000,
+    },
+  });
+  assert.equal(enabledVideoSettings.data.publicSettings.video_note_default_shape_id, 'circle');
+  assert.equal(enabledVideoSettings.data.publicSettings.video_note_transcription_mode, 'auto');
+
+  const enabledFeatures = await admin.request('/api/features');
+  assert.equal(enabledFeatures.data.video_notes_enabled, true);
+  assert.equal(enabledFeatures.data.video_note_default_shape_id, 'circle');
+  assert.equal(enabledFeatures.data.video_note_max_duration_ms, 45000);
+
   const videoForm = new FormData();
   videoForm.append('video', new Blob(['video-note'], { type: 'video/webm' }), 'note.webm');
   videoForm.append('audio', new Blob(['audio-track'], { type: 'audio/wav' }), 'note.wav');
   videoForm.append('poster', new Blob([POSTER_JPEG_BYTES], { type: 'image/jpeg' }), 'note-poster.jpg');
   videoForm.append('durationMs', '2200');
   videoForm.append('sampleRate', '16000');
-  videoForm.append('shapeId', 'circle');
-  videoForm.append('shapeSnapshot', JSON.stringify({
-    id: 'circle',
-    label: 'Circle',
-    viewBox: '0 0 320 220',
-    path: 'M0 0 L10 10 Z',
-  }));
+  videoForm.append('videoMime', 'video/webm');
   const videoMessage = await admin.request(`/api/chats/${groupChat.id}/video-note`, {
     method: 'POST',
     formData: videoForm,
@@ -412,7 +456,20 @@ test('voice and video note endpoints work in isolated sandbox with mocked provid
 
   assert.equal(videoMessage.data.is_video_note, true);
   assert.equal(videoMessage.data.video_note_shape_id, 'circle');
+  assert.equal(videoMessage.data.transcription_status, 'pending');
   assert.equal(videoMessage.data.file_poster_available, true);
   const videoPoster = await admin.request(`/uploads/${videoMessage.data.file_stored}/poster`);
   assert.equal(videoPoster.headers['content-type'], 'image/jpeg');
+
+  await waitFor(async () => {
+    const response = await admin.request(`/api/chats/${groupChat.id}/messages`, {
+      searchParams: { meta: 1 },
+    });
+    const message = response.data.messages.find((item) => item.id === videoMessage.data.id);
+    assert.ok(message);
+    assert.equal(message.transcription_status, 'completed');
+    assert.equal(message.transcription_provider, 'openai');
+    assert.equal(message.transcription_text, 'Mock OpenAI transcript');
+    return message;
+  }, { timeoutMs: 15_000 });
 });

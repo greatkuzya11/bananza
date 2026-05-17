@@ -16,6 +16,10 @@ const {
   buildDraftSettings,
   VOICE_SETTINGS_OPTIONS,
 } = require('./settings');
+const {
+  getVideoNoteSettings,
+  resolveVideoNoteTranscriptionSettings,
+} = require('../videoNotes/settings');
 const { attachVoiceMetadata } = require('./messageMeta');
 const { AsyncJobQueue } = require('./queue');
 const { transcribeAudio, testProviderModel } = require('./providers');
@@ -188,7 +192,11 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
       return;
     }
 
-    const settings = getVoiceSettings(db);
+    const baseSettings = getVoiceSettings(db);
+    const isVideoNote = String(voiceJob.note_kind || 'voice') === 'video_note';
+    const settings = isVideoNote
+      ? resolveVideoNoteTranscriptionSettings(baseSettings, getVideoNoteSettings(db))
+      : baseSettings;
     const apiKey = getOpenAIKey(db, secret);
     const grokApiKey = getGrokKey(db, secret);
 
@@ -458,21 +466,27 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
   });
 
   app.post('/api/messages/:id/transcribe', auth, async (req, res) => {
-    const settings = getVoiceSettings(db);
-    if (!settings.voice_notes_enabled) {
-      return res.status(403).json({ error: 'Voice transcription is disabled by administrator' });
-    }
-
     const messageId = Number(req.params.id);
     const message = db.prepare(`
       SELECT m.id, m.chat_id, vm.transcription_status, vm.transcription_text,
-        vm.transcription_provider, vm.transcription_model, vm.transcription_error
+        vm.transcription_provider, vm.transcription_model, vm.transcription_error,
+        COALESCE(vm.note_kind, 'voice') as note_kind
       FROM messages m
       JOIN voice_messages vm ON vm.message_id=m.id
       WHERE m.id=? AND m.is_deleted=0
     `).get(messageId);
 
     if (!message) return res.status(404).json({ error: 'Voice message not found' });
+    const settings = getVoiceSettings(db);
+    const videoNoteSettings = getVideoNoteSettings(db);
+    const isVideoNote = String(message.note_kind || 'voice') === 'video_note';
+    if (isVideoNote && !videoNoteSettings.video_notes_enabled) {
+      return res.status(403).json({ error: 'Video note transcription is disabled by administrator' });
+    }
+    if (!isVideoNote && !settings.voice_notes_enabled) {
+      return res.status(403).json({ error: 'Voice transcription is disabled by administrator' });
+    }
+
     if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(message.chat_id, req.user.id)) {
       return res.status(403).json({ error: 'Not a member' });
     }
