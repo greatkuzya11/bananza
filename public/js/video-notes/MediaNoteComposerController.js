@@ -34,7 +34,8 @@
       this.bridge = bridge || window.BananzaAppBridge || null;
       this.audioAdapter = audioAdapter;
       this.videoRecorder = videoRecorder;
-      this.mode = localStorage.getItem(STORAGE_KEY) === 'video' ? 'video' : 'audio';
+      this.mode = 'audio';
+      try { localStorage.removeItem(STORAGE_KEY); } catch {}
       this.holdTimer = null;
       this.pointerId = null;
       this.touchIdentifier = null;
@@ -73,11 +74,15 @@
     }
 
     isVoiceEnabled() {
-      return Boolean(this.getFeatures().voice_notes_enabled);
+      const features = this.getFeatures();
+      if (!features.__loaded) return true;
+      return Boolean(features.voice_notes_enabled);
     }
 
     isVideoEnabled() {
-      return this.getFeatures().video_notes_enabled !== false;
+      const features = this.getFeatures();
+      if (!features.__loaded) return false;
+      return features.video_notes_enabled !== false;
     }
 
     resolveAllowedMode(mode = this.mode) {
@@ -94,7 +99,6 @@
       const allowedMode = this.resolveAllowedMode(this.mode);
       if (!allowedMode || allowedMode === this.mode) return allowedMode;
       this.mode = allowedMode;
-      localStorage.setItem(STORAGE_KEY, this.mode);
       return allowedMode;
     }
 
@@ -168,7 +172,6 @@
         return;
       }
       this.mode = nextMode;
-      localStorage.setItem(STORAGE_KEY, this.mode);
       this.refreshComposerState();
       if (animate) this.playModeSwitchAnimation();
     }

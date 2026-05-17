@@ -477,6 +477,15 @@ html[data-modal-animation="none"] .send-btn.voice-enabled.is-mic-mode.is-mode-sw
   margin-top: 4px;
 }
 
+.voice-note-row.voice-note-compact.voice-note-transcription-pending .msg-content {
+  max-width: 100%;
+}
+
+.voice-note-row.voice-note-compact.voice-note-transcription-pending .msg-bubble {
+  width: max-content;
+  max-width: 100%;
+}
+
 .voice-transcription-status {
   font-size: 13px;
   color: var(--accent);
@@ -493,7 +502,14 @@ html[data-modal-animation="none"] .send-btn.voice-enabled.is-mic-mode.is-mode-sw
 }
 
 .voice-transcription-inline.pending {
+  display: block;
+  max-width: 100%;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: normal;
+  overflow-wrap: normal;
   color: var(--accent);
+  white-space: nowrap;
 }
 
 .voice-transcription-inline.error {

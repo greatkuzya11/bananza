@@ -19426,7 +19426,7 @@
       voice_duration_ms: (isVoice || isVideoNote) ? mediaNote.durationMs : null,
       video_note_shape_id: isVideoNote ? mediaNote.shapeId || 'banana-fat' : null,
       video_note_shape_snapshot: isVideoNote ? mediaNote.shapeSnapshot || null : null,
-      transcription_status: 'idle',
+      transcription_status: isVoice && item.autoTranscribe ? 'pending' : 'idle',
       transcription_text: '',
       transcription_provider: '',
       transcription_model: '',
@@ -19686,7 +19686,7 @@
     };
   }
 
-  async function queueVoiceOutbox({ blob, durationMs, sampleRate, replyTo: suppliedReply } = {}) {
+  async function queueVoiceOutbox({ blob, durationMs, sampleRate, replyTo: suppliedReply, autoTranscribe = false } = {}) {
     if (!currentChatId || !blob) return null;
     const reply = getReplySnapshot(suppliedReply || replyTo);
     const clientId = makeClientId('c');
@@ -19697,6 +19697,7 @@
       userId: currentUser.id,
       status: 'queued',
       kind: 'voice',
+      autoTranscribe: Boolean(autoTranscribe),
       createdAt: new Date().toISOString(),
       text: null,
       replyToId: reply?.id || null,

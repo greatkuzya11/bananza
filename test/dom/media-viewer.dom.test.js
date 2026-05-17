@@ -517,6 +517,7 @@ function installMessagesViewportMock(dom, {
   viewportHeight = 240,
   viewportWidth = 320,
   rowHeight = 60,
+  rowHeightForRow = null,
 } = {}) {
   const { window } = dom;
   const { document } = window;
@@ -526,7 +527,14 @@ function installMessagesViewportMock(dom, {
   let scrollTop = 0;
 
   const getRows = () => [...messagesEl.querySelectorAll('.msg-row[data-msg-id]')];
-  const getContentHeight = () => getRows().length * rowHeight;
+  const getRowHeight = (row) => {
+    if (typeof rowHeightForRow === 'function') {
+      const customHeight = Number(rowHeightForRow(row));
+      if (Number.isFinite(customHeight) && customHeight > 0) return customHeight;
+    }
+    return rowHeight;
+  };
+  const getContentHeight = () => getRows().reduce((sum, row) => sum + getRowHeight(row), 0);
   const getMaxScrollTop = () => Math.max(0, getContentHeight() - viewportHeight);
   const clampScrollTop = (value) => Math.max(0, Math.min(getMaxScrollTop(), Number(value) || 0));
   const isChatSceneHidden = () => Boolean(
@@ -608,10 +616,13 @@ function installMessagesViewportMock(dom, {
     }
     if (this instanceof window.HTMLElement && this.classList.contains('msg-row') && messagesEl.contains(this)) {
       if (isChatSceneHidden()) return buildRect(0, 0, 0);
-      const rowIndex = getRows().indexOf(this);
+      const rows = getRows();
+      const rowIndex = rows.indexOf(this);
       if (rowIndex >= 0) {
-        const top = viewportTop + (rowIndex * rowHeight) - scrollTop;
-        return buildRect(top, rowHeight, viewportWidth);
+        const offsetTop = rows.slice(0, rowIndex).reduce((sum, row) => sum + getRowHeight(row), 0);
+        const height = getRowHeight(this);
+        const top = viewportTop + offsetTop - scrollTop;
+        return buildRect(top, height, viewportWidth);
       }
     }
     return originalGetBoundingClientRect.call(this);
@@ -2930,6 +2941,107 @@ test('video note restores playback position after leaving and reopening the chat
 
   assert.ok(Math.abs(Number(reopenedVideo.currentTime || 0) - 6.75) < 0.2);
   assert.equal(reopenedVideo.paused, true);
+});
+
+test('voice outbox shows transcription pending immediately when auto-transcribe is enabled', async (t) => {
+  const chat = createChatFixture(1, 'Chat A', { lastMessageId: 0 });
+  const dom = await openMediaPlaybackDom({
+    activeChat: chat,
+    chats: [chat],
+    chatMessagesByChatId: { 1: [] },
+    features: { auto_transcribe_on_send: true },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge, Blob } = dom.window;
+  const voiceBlob = new Blob(['voice'], { type: 'audio/wav' });
+
+  await dom.window.messageCache.upsertOutboxItem({
+    clientId: 'c-voice-auto-transcribe',
+    chatId: 1,
+    userId: 1,
+    status: 'queued',
+    kind: 'voice',
+    autoTranscribe: true,
+    createdAt: new Date().toISOString(),
+    text: null,
+    replyToId: null,
+    reply: null,
+    attachments: [{
+      localId: 'voice',
+      file: voiceBlob,
+      name: 'voice-note.wav',
+      size: voiceBlob.size || 0,
+      mime: 'audio/wav',
+      type: 'audio',
+    }],
+    voice: {
+      blob: voiceBlob,
+      name: 'voice-note.wav',
+      durationMs: 1200,
+      sampleRate: 16000,
+      mime: 'audio/wav',
+    },
+  });
+
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 160);
+
+  const row = document.querySelector('.msg-row[data-client-id="c-voice-auto-transcribe"]');
+  assert.ok(row, 'Expected optimistic voice row');
+  assert.equal(row.__messageData.transcription_status, 'pending');
+  assert.ok(row.classList.contains('voice-note-transcription-pending'));
+  assert.equal(row.querySelector('.voice-transcribe-btn'), null);
+  assert.match(row.querySelector('.voice-transcription-inline.pending')?.textContent || '', /Transcription|Расшифров/);
+});
+
+test('voice transcription update keeps bottom scroll after transcript expands bubble', async (t) => {
+  const chat = createChatFixture(1, 'Chat A', { lastMessageId: 608 });
+  const baseMessages = createChatMessages(1, 5, { startId: 600 });
+  const voiceMessage = createVoiceNoteMessage(1, 608, {
+    created_at: '2026-04-29T12:08:00.000Z',
+    transcription_status: 'pending',
+  });
+  const dom = await openMediaPlaybackDom({
+    activeChat: chat,
+    chats: [chat],
+    chatMessagesByChatId: {
+      1: [...baseMessages, voiceMessage],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const layout = installMessagesViewportMock(dom, {
+    viewportHeight: 180,
+    rowHeight: 48,
+    rowHeightForRow(row) {
+      if (row?.dataset?.msgId === '608' && row.querySelector('.voice-transcription-compact-text')) {
+        return 168;
+      }
+      return 48;
+    },
+  });
+
+  layout.setScrollTop(layout.getBottomScrollTop());
+  assert.equal(layout.scrollTop, layout.getBottomScrollTop());
+
+  emitWsMessage(dom, {
+    type: 'message_transcription',
+    chatId: 1,
+    messageId: 608,
+    status: 'completed',
+    text: 'Это длинная расшифровка голосового сообщения, которая делает облачко заметно выше и должна оставить чат в самом низу.',
+    provider: 'test',
+    model: 'mock',
+    error: '',
+  });
+  await wait(dom, 220);
+
+  const row = dom.window.document.querySelector('.msg-row[data-msg-id="608"]');
+  assert.match(row.querySelector('.voice-transcription-compact-text')?.textContent || '', /длинная расшифровка/);
+  assert.equal(layout.scrollTop, layout.getBottomScrollTop());
 });
 
 test('video note banana progress outline seeks without starting paused video', async (t) => {

@@ -4,6 +4,7 @@
   const state = {
     ready: false,
     uiReady: false,
+    featuresLoaded: false,
     features: {
       voice_notes_enabled: false,
       auto_transcribe_on_send: false,
@@ -73,7 +74,7 @@
     cancelExternalRecording: () => cancelActiveRecording(),
     isRecording: () => Boolean(state.recorder.recording),
     isUploading: () => Boolean(state.recorder.uploading),
-    getFeatures: () => ({ ...state.features }),
+    getFeatures: () => ({ ...state.features, __loaded: Boolean(state.featuresLoaded) }),
     setRecorderMessage: (text, kind) => setRecorderMessage(text, kind),
     hideRecorderBar: () => hideRecorderBar(),
     formatDurationMs: (durationMs) => formatDurationMs(durationMs),
@@ -943,6 +944,7 @@
         video_note_transcription_provider: data.video_note_transcription_provider || 'voice',
         video_note_max_duration_ms: Number(data.video_note_max_duration_ms || 30000),
       };
+      state.featuresLoaded = true;
     } catch {}
     syncSendButtonState();
     refreshVisibleVoiceRows();
@@ -1279,6 +1281,7 @@
       state.admin.settings = data.settings;
       state.admin.options = data.options;
       state.features = data.publicSettings || state.features;
+      state.featuresLoaded = true;
       fillAdminForm();
       renderLastTest();
       syncSendButtonState();
@@ -1387,6 +1390,7 @@
         auto_transcribe_on_send: Boolean(msg.settings?.auto_transcribe_on_send),
         voice_note_ui_mode: msg.settings?.voice_note_ui_mode || 'compact',
       };
+      state.featuresLoaded = true;
       syncSendButtonState();
       refreshVisibleVoiceRows();
       return;
@@ -1401,6 +1405,7 @@
         video_note_transcription_provider: msg.settings?.video_note_transcription_provider || 'voice',
         video_note_max_duration_ms: Number(msg.settings?.video_note_max_duration_ms || 30000),
       };
+      state.featuresLoaded = true;
       syncSendButtonState();
       return;
     }
@@ -1667,7 +1672,7 @@
     let audioEl = null;
 
     if (!state.features.voice_notes_enabled) {
-      row.classList.remove('voice-note-row', 'voice-note-compact', 'voice-note-full');
+      row.classList.remove('voice-note-row', 'voice-note-compact', 'voice-note-full', 'voice-note-transcription-pending');
       restoreVoiceAudioMarkup(audioWrap);
       audioEl = audioWrap.querySelector('audio');
       getBridge()?.bindMediaPlayback?.(audioEl, row.__messageData || message, 'voice-note-audio');
@@ -1686,6 +1691,7 @@
     row.classList.add('voice-note-row');
     row.classList.toggle('voice-note-compact', isCompactMode);
     row.classList.toggle('voice-note-full', !isCompactMode);
+    row.classList.toggle('voice-note-transcription-pending', (message.transcription_status || 'idle') === 'pending');
 
     panel = ensureVoicePanel(bubble);
 
@@ -1780,6 +1786,7 @@
     const resolvedChatId = Number(
       msg.chatId || row?.__messageData?.chat_id || row?.__messageData?.chatId || getBridge()?.getCurrentChatId?.() || 0
     );
+    const wasAtBottom = isMessagesNearBottom(messagesEl, 48);
     if (resolvedChatId && window.messageCache?.patchMessage) {
       window.messageCache.patchMessage(resolvedChatId, msg.messageId, {
         transcription_status: msg.status || 'idle',
@@ -1812,6 +1819,28 @@
       row.__messageData.transcription_error = msg.error || '';
     }
     renderVoiceRow(row, row.__voiceMessage);
+    if (wasAtBottom) settleTranscriptionBottomScroll(resolvedChatId);
+  }
+
+  function isMessagesNearBottom(messagesEl, threshold = 48) {
+    if (!messagesEl) return false;
+    return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight <= threshold;
+  }
+
+  function settleTranscriptionBottomScroll(chatId) {
+    const targetChatId = Number(chatId || getBridge()?.getCurrentChatId?.() || 0);
+    const isStillCurrentChat = () => (
+      !targetChatId || Number(getBridge()?.getCurrentChatId?.() || 0) === targetChatId
+    );
+    const scroll = () => {
+      if (!isStillCurrentChat()) return;
+      getBridge()?.scrollToBottom?.(true);
+    };
+    scroll();
+    requestAnimationFrame(() => {
+      scroll();
+      setTimeout(scroll, 80);
+    });
   }
 
   function attachRecorderEvents() {
@@ -2032,6 +2061,7 @@
         durationMs,
         sampleRate: 16000,
         replyTo: getBridge().getReplyTo?.(),
+        autoTranscribe: Boolean(state.features.auto_transcribe_on_send),
       });
       hideRecorderBar();
     } finally {
