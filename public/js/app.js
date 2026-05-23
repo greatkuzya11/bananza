@@ -19091,6 +19091,26 @@
     return `${callArtifactStatusLabel(batch.status || 'queued')} ${ready}/${total}`;
   }
 
+  function pushCallMessageMeta(meta, icon, text, kind = '') {
+    const value = String(text || '').trim();
+    if (!value) return;
+    if (meta.some((item) => item.kind === kind && item.text === value)) return;
+    meta.push({ icon, text: value, kind });
+  }
+
+  function renderCallMessageMeta(meta) {
+    const items = Array.isArray(meta) && meta.length
+      ? meta
+      : [{ icon: '&#128222;', text: t('Video call'), kind: 'default' }];
+    return items
+      .map((item) => {
+        const kind = String(item?.kind || '').replace(/[^a-z0-9_-]/gi, '');
+        const kindClass = kind ? ` call-message-meta-${kind}` : '';
+        return `<span class="call-message-meta-item${kindClass}"><span class="call-message-meta-icon" aria-hidden="true">${item?.icon || '&#8226;'}</span><span class="call-message-meta-text">${esc(item?.text || '')}</span></span>`;
+      })
+      .join('');
+  }
+
   const CALL_RECORDING_ROLE = 'call-recording-audio';
   const CALL_RECORDING_PROGRESS_STROKE_WIDTH = 3;
   const CALL_RECORDING_PROGRESS_HIT_RADIUS = 14;
@@ -19429,12 +19449,12 @@
       failed: t('Call failed'),
     };
     const meta = [];
-    if (call.started_by_name) meta.push(t('Started by {name}', { name: call.started_by_name }));
-    if (duration > 0) meta.push(t('Duration {duration}', { duration: formatDuration(duration / 1000) }));
-    if (notes?.status === 'recording') meta.push(t('AI notes recording'));
-    else if (notes?.transcript_status === 'processing' || notes?.status === 'processing') meta.push(t('Transcript processing'));
-    else if (notes?.transcript_status === 'completed' && notes?.transcript_ready) meta.push(t('Transcript ready'));
-    else if (notes?.transcript_status === 'error') meta.push(t('Transcription error'));
+    pushCallMessageMeta(meta, '&#128100;', call.started_by_name ? t('Started by {name}', { name: call.started_by_name }) : '', 'started');
+    pushCallMessageMeta(meta, '&#9201;', duration > 0 ? t('Duration {duration}', { duration: formatDuration(duration / 1000) }) : '', 'duration');
+    if (notes?.status === 'recording') pushCallMessageMeta(meta, '&#127908;', t('AI notes recording'), 'ai-recording');
+    else if (notes?.transcript_status === 'processing' || notes?.status === 'processing') pushCallMessageMeta(meta, '&#128221;', t('Transcript processing'), 'transcript');
+    else if (notes?.transcript_status === 'completed' && notes?.transcript_ready) pushCallMessageMeta(meta, '&#128221;', t('Transcript ready'), 'transcript');
+    else if (notes?.transcript_status === 'error') pushCallMessageMeta(meta, '&#9888;', t('Transcription error'), 'error');
     const recording = normalizeCallMixedRecording(call);
     const recordingUrl = recording?.url || '';
     const recordingDurationMs = Number(recording?.duration_ms || duration || 0);
@@ -19451,12 +19471,13 @@
       const hasTranscriptionSource = Boolean(recordingUrl || notes || transcriptRun || batch);
       if (hasTranscriptionSource) {
         if (transcriptStatus === 'completed' || notes?.transcript_ready) {
+          pushCallMessageMeta(meta, '&#128221;', t('Transcript ready'), 'transcript');
           actions.push(`<button type="button" class="call-message-action" data-call-card-transcript="${Number(call.id || 0)}">${esc(t('Transcript'))}</button>`);
         } else if (transcriptStatus === 'queued' || transcriptStatus === 'processing') {
-          meta.push(t('Transcript processing'));
+          pushCallMessageMeta(meta, '&#128221;', t('Transcript processing'), 'transcript');
           actions.push(`<button type="button" class="call-message-action" disabled>${esc(t('Transcript processing'))}</button>`);
         } else if (transcriptStatus === 'error') {
-          if (transcriptRun?.error) meta.push(transcriptRun.error);
+          pushCallMessageMeta(meta, '&#9888;', transcriptRun?.error || t('Transcription error'), 'error');
           actions.push(`<button type="button" class="call-message-action" data-call-card-transcribe-retry="${Number(call.id || 0)}">${esc(t('Retry'))}</button>`);
         } else {
           actions.push(`<button type="button" class="call-message-action" data-call-card-transcribe="${Number(call.id || 0)}">${esc(t('Transcribe'))}</button>`);
@@ -19464,7 +19485,7 @@
       }
       if (batch) {
         const progress = callArtifactProgress(batch);
-        if (progress) meta.push(progress);
+        if (progress) pushCallMessageMeta(meta, '&#129504;', progress, 'summary');
       }
       if (hasTranscriptionSource && transcriptStatus === 'completed') {
         if (batchStatus === 'queued' || batchStatus === 'processing') {
@@ -19485,7 +19506,7 @@
         <div class="call-message-icon" aria-hidden="true">☎</div>
         <div class="call-message-main">
           <div class="call-message-title">${esc(labels[status] || labels.active)}</div>
-          <div class="call-message-meta">${esc(meta.join(' / ') || t('Video call'))}</div>
+          <div class="call-message-meta">${renderCallMessageMeta(meta)}</div>
         </div>
         ${actions.length ? `<div class="call-message-actions">${actions.join('')}</div>` : ''}
       </div>
@@ -19536,6 +19557,75 @@
     return labels[status] || status || '';
   }
 
+  function callArtifactStatusKind(status) {
+    const raw = String(status || 'queued').trim().toLowerCase();
+    return ['queued', 'processing', 'completed', 'partial', 'error', 'canceled', 'skipped'].includes(raw)
+      ? raw
+      : 'queued';
+  }
+
+  function callArtifactKey(run = {}) {
+    return String(run.artifact_key || run.key || '').trim();
+  }
+
+  function callArtifactLabel(run = {}) {
+    const key = callArtifactKey(run);
+    if (key) {
+      const translated = t(`callArtifact.${key}`);
+      if (translated && translated !== `callArtifact.${key}`) return translated;
+    }
+    return String(run.label || key || t('Artifact')).trim();
+  }
+
+  function callArtifactTextShouldCollapse(text) {
+    const source = String(text || '').trim();
+    if (!source) return false;
+    return source.split(/\r?\n/).length > 20 || source.length > 1800;
+  }
+
+  function renderCallArtifactTextLine(line, index) {
+    const text = String(line || '').trimEnd();
+    const heading = text.match(/^\s*#{1,6}\s+(.+)$/);
+    if (heading) return `<h4>${esc(heading[1].trim())}</h4>`;
+    const bullet = text.match(/^\s*[-*]\s+(.+)$/);
+    if (bullet) return `<div class="call-artifact-list-line"><span aria-hidden="true">-</span><p>${esc(bullet[1].trim())}</p></div>`;
+    const ordered = text.match(/^\s*(\d+[.)])\s+(.+)$/);
+    if (ordered) return `<div class="call-artifact-list-line"><span>${esc(ordered[1])}</span><p>${esc(ordered[2].trim())}</p></div>`;
+    if (!text.trim()) return index === 0 ? '' : '<div class="call-artifact-spacer" aria-hidden="true"></div>';
+    return `<p>${esc(text.trim())}</p>`;
+  }
+
+  function renderCallArtifactText(text, runId = 0) {
+    const source = String(text || '').trim();
+    if (!source) return '';
+    const collapsed = callArtifactTextShouldCollapse(source);
+    const lines = source.split(/\r?\n/);
+    return `
+      <div class="call-artifact-text${collapsed ? ' is-collapsed' : ''}" data-call-artifact-text="${Number(runId || 0)}">
+        ${lines.map(renderCallArtifactTextLine).join('')}
+      </div>
+      ${collapsed ? `<button type="button" class="call-admin-btn call-artifact-more" data-call-artifact-more="${Number(runId || 0)}">${esc(t('Show more'))}</button>` : ''}
+    `;
+  }
+
+  function renderCallArtifactRun(run) {
+    const status = callArtifactStatusKind(run?.status);
+    const hasBody = Boolean(run?.result_text || run?.file?.url || run?.error);
+    return `
+      <section class="call-artifact-item" data-call-artifact-item="${Number(run?.id || 0)}">
+        <div class="call-artifact-head">
+          <strong class="call-artifact-title">${esc(callArtifactLabel(run))}</strong>
+          <span class="call-artifact-status is-${status}">${esc(callArtifactStatusLabel(status))}</span>
+        </div>
+        ${run?.file?.url ? `<img class="call-artifact-image" src="${esc(run.file.url)}" alt="">` : ''}
+        ${run?.result_text ? renderCallArtifactText(run.result_text, run.id) : ''}
+        ${run?.error ? `<div class="call-artifact-error">${esc(run.error)}</div>` : ''}
+        ${!hasBody ? `<div class="call-artifact-placeholder">${esc(callArtifactStatusLabel(status))}</div>` : ''}
+        ${status === 'error' ? `<div class="call-artifact-actions"><button type="button" class="call-admin-btn" data-call-artifact-retry="${Number(run?.id || 0)}">${esc(t('Retry'))}</button></div>` : ''}
+      </section>
+    `;
+  }
+
   function renderCallArtifactBatchCard(msg) {
     const batch = msg?.call_artifact_batch || {};
     const runs = Array.isArray(batch.runs) ? batch.runs : [];
@@ -19545,7 +19635,7 @@
     const preview = runs
       .filter((run) => run.status === 'completed' && run.result_text)
       .slice(0, 2)
-      .map((run) => `${run.label || run.artifact_key}: ${String(run.result_text || '').slice(0, 140)}`)
+      .map((run) => `${callArtifactLabel(run)}: ${String(run.result_text || '').slice(0, 140)}`)
       .join(' / ');
     return `
       <div class="call-message-card call-artifact-card" data-call-artifact-card="${Number(batch.id || 0)}">
@@ -19685,10 +19775,12 @@
       modal.id = 'callArtifactsModal';
       modal.className = 'modal hidden';
       modal.innerHTML = `
-        <div class="modal-content call-transcript-modal">
-          <button type="button" class="modal-close" id="callArtifactsClose">×</button>
-          <h2>${esc(t('Call AI summary'))}</h2>
-          <div id="callArtifactsBody" class="call-artifacts-body"></div>
+        <div class="modal-content call-artifacts-modal">
+          <div class="modal-header">
+            <h3>${esc(t('Call AI summary'))}</h3>
+            <button type="button" class="modal-close" id="callArtifactsClose" aria-label="${esc(t('Close'))}">&#10005;</button>
+          </div>
+          <div id="callArtifactsBody" class="modal-body call-artifacts-body"></div>
         </div>
       `;
       document.body.appendChild(modal);
@@ -19700,18 +19792,15 @@
     const body = $('#callArtifactsBody');
     const runs = Array.isArray(batch.runs) ? batch.runs : [];
     if (body) {
-      body.innerHTML = runs.map((run) => `
-        <section class="call-artifact-section">
-          <div class="call-artifact-section-head">
-            <strong>${esc(run.label || run.artifact_key || '')}</strong>
-            <span>${esc(callArtifactStatusLabel(run.status))}</span>
-          </div>
-          ${run.file?.url ? `<img class="call-artifact-image" src="${esc(run.file.url)}" alt="">` : ''}
-          ${run.result_text ? `<pre class="call-transcript-text">${esc(run.result_text)}</pre>` : ''}
-          ${run.error ? `<div class="call-admin-status error">${esc(run.error)}</div>` : ''}
-          ${run.status === 'error' ? `<button type="button" class="call-admin-btn" data-call-artifact-retry="${Number(run.id || 0)}">${esc(t('Retry'))}</button>` : ''}
-        </section>
-      `).join('') || `<div class="call-admin-status">${esc(t('No artifacts yet'))}</div>`;
+      body.innerHTML = runs.map(renderCallArtifactRun).join('') || `<div class="call-artifacts-empty">${esc(t('No artifacts yet'))}</div>`;
+      body.querySelectorAll('[data-call-artifact-more]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const id = Number(button.dataset.callArtifactMore || 0);
+          const text = body.querySelector(`[data-call-artifact-text="${id}"]`);
+          text?.classList.remove('is-collapsed');
+          button.remove();
+        });
+      });
       body.querySelectorAll('[data-call-artifact-retry]').forEach((button) => {
         button.addEventListener('click', async () => {
           button.disabled = true;

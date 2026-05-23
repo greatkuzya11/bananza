@@ -674,6 +674,34 @@ function createChatFixture(chatId, name, { lastMessageId = chatId * 100 + 12, ..
   };
 }
 
+function createRuCallArtifactI18nStub() {
+  const map = {
+    'Call AI summary': 'AI-сводка звонка',
+    Ready: 'Готово',
+    Error: 'Ошибка',
+    Retry: 'Повторить',
+    Open: 'Открыть',
+    'Show more': 'Далее',
+    'No artifacts yet': 'Артефакты еще не готовы',
+    Close: 'Закрыть',
+    'callArtifact.summary': 'Саммари',
+    'callArtifact.tasks': 'Задачи',
+    'callArtifact.decisions': 'Решения',
+  };
+  return {
+    t(key, params = {}) {
+      let value = map[key] || key;
+      Object.entries(params || {}).forEach(([name, replacement]) => {
+        value = value.replaceAll(`{${name}}`, String(replacement));
+      });
+      return value;
+    },
+    text(value, params = {}) {
+      return this.t(value, params);
+    },
+  };
+}
+
 function createChatMessages(chatId, count, { startId = chatId * 100 } = {}) {
   return Array.from({ length: count }, (_, index) => {
     const id = startId + index + 1;
@@ -824,6 +852,30 @@ function createCallMessage(chatId, messageId, overrides = {}) {
       ended_reason: 'ended',
       mixed_recording: mixedRecording,
       ...(overrides.call_message || {}),
+    },
+    ...overrides,
+  });
+}
+
+function createCallArtifactMessage(chatId, messageId, overrides = {}) {
+  const batchId = Number(overrides.batch_id || overrides.call_artifact_batch?.id || messageId + 3000);
+  const callId = Number(overrides.call_id || overrides.call_artifact_batch?.call_id || messageId + 1000);
+  return createIncomingMessage(chatId, messageId, {
+    text: '',
+    is_call_artifact_message: true,
+    call_artifact_batch: {
+      id: batchId,
+      call_id: callId,
+      transcript_run_id: batchId + 100,
+      message_id: messageId,
+      requested_by: 1,
+      status: 'completed',
+      error: '',
+      runs: [],
+      created_at: '2026-04-29T21:05:00.000Z',
+      updated_at: '2026-04-29T21:05:00.000Z',
+      completed_at: '2026-04-29T21:06:00.000Z',
+      ...(overrides.call_artifact_batch || {}),
     },
     ...overrides,
   });
@@ -981,11 +1033,13 @@ async function openMediaPlaybackDom({
   chats = null,
   chatMessagesByChatId = null,
   features = {},
+  i18nStub = null,
 } = {}) {
   const allChats = Array.isArray(chats) && chats.length
     ? chats
     : [activeChat, createChatFixture(2, 'Chat B', { lastMessageId: 0 })];
   const dom = await bootAppDom({
+    i18nStub,
     fetchHandler: createMediaPlaybackFetchHandler({
       chatMessagesByChatId: chatMessagesByChatId || { [Number(activeChat.id || 1)]: [] },
       features,
@@ -4026,7 +4080,9 @@ test('voice note progress outline clears completed state when seeking', async (t
 
 test('call recording card renders media controls and seeks without starting paused audio', async (t) => {
   const chat = createChatFixture(1, 'Chat A', { lastMessageId: 467 });
-  const message = createCallMessage(1, 467);
+  const message = createCallMessage(1, 467, {
+    call: { started_by_name: 'Kuzya' },
+  });
   const dom = await openMediaPlaybackDom({
     activeChat: chat,
     chats: [chat],
@@ -4044,7 +4100,13 @@ test('call recording card renders media controls and seeks without starting paus
   const play = row.querySelector('.call-recording-play');
   const hit = row.querySelector('.call-recording-progress-hit');
   const fill = row.querySelector('.call-recording-progress-fill');
-  assert.ok(row.querySelector('.call-recording-card.has-call-recording'));
+  const card = row.querySelector('.call-recording-card.has-call-recording');
+  assert.ok(card);
+  assert.ok(card.querySelector('.call-message-icon'));
+  const meta = card.querySelector('.call-message-meta');
+  const metaItems = meta.querySelectorAll('.call-message-meta-item');
+  assert.ok(metaItems.length >= 2);
+  assert.equal(meta.textContent.includes(' / '), false);
   assert.ok(audio);
   assert.ok(play);
   assert.ok(hit);
@@ -4186,6 +4248,93 @@ test('call recording contour can seek an upper adjacent card when the lower card
 
   assert.ok(Math.abs(Number(upperAudio.currentTime || 0) - 12) < 0.2);
   assert.equal(Number(lowerAudio.currentTime || 0), 0);
+});
+
+test('call AI summary modal uses one scroll body and expands long artifacts', async (t) => {
+  const chat = createChatFixture(1, 'Chat A', { lastMessageId: 471 });
+  const longText = [
+    '## Коротко',
+    'Кузя и Наташа обсудили прошедший день.',
+    '',
+    '## Основные темы',
+    ...Array.from({ length: 24 }, (_, index) => `- Пункт обсуждения ${index + 1}`),
+  ].join('\n');
+  const message = createCallArtifactMessage(1, 471, {
+    call_artifact_batch: {
+      runs: [
+        {
+          id: 9101,
+          artifact_key: 'summary',
+          key: 'summary',
+          label: 'Summary',
+          status: 'completed',
+          result_text: longText,
+        },
+        {
+          id: 9102,
+          artifact_key: 'tasks',
+          key: 'tasks',
+          label: 'Tasks',
+          status: 'completed',
+          result_text: '1. Позвонить завтра\n2. Проверить настройки',
+        },
+        {
+          id: 9103,
+          artifact_key: 'decisions',
+          key: 'decisions',
+          label: 'Decisions',
+          status: 'error',
+          result_text: '',
+          error: 'Model timeout',
+        },
+      ],
+    },
+  });
+  const dom = await openMediaPlaybackDom({
+    activeChat: chat,
+    chats: [chat],
+    chatMessagesByChatId: {
+      1: [message],
+    },
+    i18nStub: createRuCallArtifactI18nStub(),
+  });
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+
+  document.querySelector('[data-call-artifacts-open]').click();
+  await wait(dom, 20);
+
+  const modal = document.getElementById('callArtifactsModal');
+  assert.ok(modal);
+  assert.equal(document.querySelectorAll('#callArtifactsModal').length, 1);
+  const header = modal.querySelector('.modal-header');
+  const close = modal.querySelector('.modal-close');
+  assert.ok(header);
+  assert.equal(close?.parentElement, header);
+  assert.equal(header.lastElementChild, close);
+  assert.equal(header.querySelector('h3')?.textContent.trim(), 'AI-сводка звонка');
+
+  const body = modal.querySelector('.call-artifacts-body.modal-body');
+  assert.ok(body);
+  assert.equal(modal.querySelectorAll('.call-artifacts-body').length, 1);
+  assert.equal(modal.querySelectorAll('.call-transcript-text, .call-artifact-section, pre').length, 0);
+  assert.equal(modal.textContent.includes('Call AI summary'), false);
+  assert.equal(modal.textContent.includes('Ready'), false);
+  assert.ok(modal.textContent.includes('Готово'));
+  assert.ok(modal.textContent.includes('Саммари'));
+
+  const collapsed = modal.querySelector('[data-call-artifact-text="9101"]');
+  const shortText = modal.querySelector('[data-call-artifact-text="9102"]');
+  const more = modal.querySelector('[data-call-artifact-more="9101"]');
+  assert.ok(collapsed?.classList.contains('is-collapsed'));
+  assert.ok(more);
+  assert.equal(modal.querySelector('[data-call-artifact-more="9102"]'), null);
+  assert.ok(shortText);
+  assert.equal(modal.querySelector('[data-call-artifact-retry="9103"]')?.textContent.trim(), 'Повторить');
+
+  more.click();
+  assert.equal(collapsed.classList.contains('is-collapsed'), false);
+  assert.equal(modal.querySelector('[data-call-artifact-more="9101"]'), null);
 });
 
 test('voice note progress outline can seek an upper adjacent message when the lower bubble receives the pointer event', async (t) => {

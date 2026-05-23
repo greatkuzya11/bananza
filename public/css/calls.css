@@ -5,6 +5,7 @@
 .call-surface,
 .call-admin-modal,
 .call-transcript-modal,
+.call-artifacts-modal,
 .call-message-card {
   --call-bg-modal: var(--bg-modal, #1e2c3a);
   --call-bg-panel: var(--bg-input, #242f3d);
@@ -1047,11 +1048,37 @@ html[data-visual-mode="rich"] .call-admin-status {
 
 .call-message-meta {
   margin-top: 2px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
   color: var(--text-secondary);
   font-size: 12px;
+  line-height: 1.35;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.call-message-meta-item {
+  max-width: 100%;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.call-message-meta-icon {
+  flex: 0 0 auto;
+  line-height: 1;
+  opacity: .95;
+}
+
+.call-message-meta-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .call-message-join {
@@ -1094,14 +1121,11 @@ html[data-visual-mode="rich"] .call-admin-status {
 }
 
 .call-recording-card.has-call-recording {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: 40px minmax(0, 1fr);
   padding-bottom: 2px;
 }
 
-.call-recording-card.has-call-recording .call-message-icon {
-  display: none;
-}
-
+.call-recording-card.has-call-recording .call-message-icon,
 .call-recording-card.has-call-recording .call-message-main,
 .call-recording-card.has-call-recording .call-message-actions {
   position: relative;
@@ -1109,7 +1133,7 @@ html[data-visual-mode="rich"] .call-admin-status {
 }
 
 .call-recording-card.has-call-recording .call-message-actions {
-  grid-column: 1 / -1;
+  grid-column: 2 / -1;
 }
 
 .call-recording-audio {
@@ -1212,28 +1236,175 @@ html[data-visual-mode="rich"] .call-admin-status {
   font-weight: 800;
 }
 
+.call-artifacts-modal {
+  width: min(960px, calc(100vw - 32px));
+  max-width: min(960px, calc(100vw - 32px));
+  height: min(82vh, 760px);
+  max-height: calc(100dvh - 32px);
+}
+
+.call-artifacts-modal .modal-header {
+  flex: 0 0 auto;
+}
+
 .call-artifacts-body {
   display: grid;
-  gap: 12px;
-  max-height: min(70vh, 680px);
-  overflow: auto;
+  align-content: start;
+  gap: 0;
+  min-height: 0;
+  overflow-y: auto;
 }
 
-.call-artifact-section {
+.call-artifact-item {
   display: grid;
-  gap: 8px;
-  padding: 12px;
-  border: 1px solid var(--call-border);
-  border-radius: 8px;
-  background: var(--call-bg-panel);
+  gap: 10px;
+  padding: 16px 0;
+  border-top: 1px solid var(--call-border-soft);
 }
 
-.call-artifact-section-head {
+.call-artifact-item:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.call-artifact-head {
   display: flex;
   justify-content: space-between;
   gap: 12px;
   align-items: center;
   color: var(--text-primary);
+}
+
+.call-artifact-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.call-artifact-status {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: 1px solid color-mix(in srgb, var(--call-border) 76%, transparent);
+  border-radius: 999px;
+  padding: 2px 9px;
+  background: color-mix(in srgb, var(--call-bg-panel) 84%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.call-artifact-status.is-completed {
+  border-color: color-mix(in srgb, var(--success) 42%, var(--call-border));
+  background: color-mix(in srgb, var(--success) 13%, var(--call-bg-panel));
+  color: color-mix(in srgb, var(--success) 86%, #ffffff 14%);
+}
+
+.call-artifact-status.is-processing,
+.call-artifact-status.is-queued {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--call-border));
+  background: color-mix(in srgb, var(--accent) 12%, var(--call-bg-panel));
+  color: color-mix(in srgb, var(--accent) 78%, #ffffff 22%);
+}
+
+.call-artifact-status.is-partial {
+  border-color: color-mix(in srgb, #f0b35b 48%, var(--call-border));
+  background: color-mix(in srgb, #f0b35b 14%, var(--call-bg-panel));
+  color: color-mix(in srgb, #f0b35b 84%, #ffffff 16%);
+}
+
+.call-artifact-status.is-error {
+  border-color: color-mix(in srgb, var(--danger) 46%, var(--call-border));
+  background: color-mix(in srgb, var(--danger) 13%, var(--call-bg-panel));
+  color: color-mix(in srgb, var(--danger) 84%, #ffffff 16%);
+}
+
+.call-artifact-text {
+  --call-artifact-text-line-height: 1.55;
+  position: relative;
+  display: block;
+  overflow: visible;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: var(--call-artifact-text-line-height);
+  word-break: break-word;
+}
+
+.call-artifact-text.is-collapsed {
+  max-height: calc(20em * var(--call-artifact-text-line-height));
+  overflow: hidden;
+}
+
+.call-artifact-text.is-collapsed::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3.2em;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--call-bg-modal));
+}
+
+.call-artifact-text h4 {
+  margin: 12px 0 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.call-artifact-text h4:first-child,
+.call-artifact-text p:first-child {
+  margin-top: 0;
+}
+
+.call-artifact-text p {
+  margin: 0 0 7px;
+}
+
+.call-artifact-list-line {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 7px;
+  align-items: start;
+  margin: 0 0 5px;
+}
+
+.call-artifact-list-line > span {
+  color: var(--text-secondary);
+  font-weight: 750;
+}
+
+.call-artifact-list-line p {
+  margin: 0;
+}
+
+.call-artifact-spacer {
+  height: 7px;
+}
+
+.call-artifact-more {
+  justify-self: start;
+}
+
+.call-artifact-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.call-artifact-error,
+.call-artifacts-empty,
+.call-artifact-placeholder {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.call-artifact-error {
+  color: var(--danger);
 }
 
 .call-artifact-image {
@@ -1354,6 +1525,21 @@ html[data-visual-mode="rich"] .call-admin-status {
 }
 
 @media (max-width: 768px) {
+  .call-artifacts-modal {
+    width: calc(100vw - 16px);
+    max-width: calc(100vw - 16px);
+    height: calc(100dvh - 16px);
+    max-height: calc(100dvh - 16px);
+  }
+
+  .call-artifacts-body {
+    padding: 14px;
+  }
+
+  .call-artifact-head {
+    align-items: flex-start;
+  }
+
   .call-prejoin {
     display: grid;
     place-items: center;
