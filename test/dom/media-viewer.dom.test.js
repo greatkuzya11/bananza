@@ -172,6 +172,8 @@ async function bootAppDom(options = {}) {
   });
   loadBrowserScript(dom, 'public/js/ai-image-risk.js');
   if (i18nStub) dom.window.BananzaI18n = i18nStub;
+  loadBrowserScript(dom, 'public/js/qip-infium-original.js');
+  loadBrowserScript(dom, 'public/js/qip-hd.js');
   loadBrowserScript(dom, 'public/js/app.js');
   await ready;
   await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
@@ -1626,6 +1628,98 @@ test('emoji picker stays above the composer when visual viewport is offset by mo
   assert.equal(emojiPicker.style.maxHeight, '320px');
 });
 
+test('emoji picker anchors above the grown composer row', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const emojiBtn = document.getElementById('emojiBtn');
+  const emojiPicker = document.getElementById('emojiPicker');
+  const inputRow = document.querySelector('.input-row');
+  const buttonRect = {
+    x: 52,
+    y: 372,
+    top: 372,
+    left: 52,
+    right: 88,
+    bottom: 408,
+    width: 36,
+    height: 36,
+    toJSON() {
+      return this;
+    },
+  };
+  const rowRect = {
+    x: 16,
+    y: 320,
+    top: 320,
+    left: 16,
+    right: 374,
+    bottom: 408,
+    width: 358,
+    height: 88,
+    toJSON() {
+      return this;
+    },
+  };
+
+  emojiBtn.getBoundingClientRect = () => buttonRect;
+  inputRow.getBoundingClientRect = () => rowRect;
+  Object.defineProperty(emojiPicker, 'offsetWidth', {
+    configurable: true,
+    get() {
+      return 300;
+    },
+  });
+  Object.defineProperty(emojiPicker, 'offsetHeight', {
+    configurable: true,
+    get() {
+      return 280;
+    },
+  });
+
+  emojiBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await wait(dom, 40);
+
+  const pickerTop = Number.parseInt(emojiPicker.style.top, 10);
+  const pickerHeight = emojiPicker.offsetHeight;
+  assert.ok(Number.isFinite(pickerTop), 'Expected emoji picker to receive a top position');
+  assert.ok(
+    pickerTop + pickerHeight <= rowRect.top - 8,
+    `Expected picker bottom (${pickerTop + pickerHeight}) to stay above composer row (${rowRect.top})`
+  );
+});
+
+test('emoji picker closes on outside pointerdown only', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const emojiBtn = document.getElementById('emojiBtn');
+  const emojiPicker = document.getElementById('emojiPicker');
+  const messagesEl = document.getElementById('messages');
+
+  emojiBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await wait(dom, 40);
+  assert.equal(emojiPicker.classList.contains('hidden'), false);
+
+  emojiPicker.dispatchEvent(createPrimaryPointerEvent(dom.window, 'pointerdown', { pointerType: 'mouse' }));
+  await wait(dom, 40);
+  assert.equal(emojiPicker.classList.contains('hidden'), false);
+
+  messagesEl.dispatchEvent(createPrimaryPointerEvent(dom.window, 'pointerdown', { pointerType: 'mouse' }));
+  await wait(dom, 320);
+  assert.equal(emojiPicker.classList.contains('hidden'), true);
+});
+
 test('emoji picker inserts emoji without focusing the composer when the keyboard is closed', async (t) => {
   const dom = await bootAppDom();
   t.after(() => {
@@ -1635,6 +1729,8 @@ test('emoji picker inserts emoji without focusing the composer when the keyboard
   const msgInput = document.getElementById('msgInput');
   const emojiBtn = document.getElementById('emojiBtn');
   const emojiPicker = document.getElementById('emojiPicker');
+  msgInput.value = 'Existing text';
+  msgInput.selectionStart = msgInput.selectionEnd = 0;
 
   let focusCalls = 0;
   msgInput.focus = () => {
@@ -1655,7 +1751,8 @@ test('emoji picker inserts emoji without focusing the composer when the keyboard
     cancelable: true,
   }));
 
-  assert.notEqual(msgInput.value, '');
+  assert.match(msgInput.value, /^Existing text/);
+  assert.notEqual(msgInput.value, 'Existing text');
   assert.equal(focusCalls, 0);
   assert.notEqual(document.activeElement, msgInput);
 });
@@ -1705,6 +1802,59 @@ test('emoji picker shows recent as the second tab and stores picked emoji locall
   assert.equal(emojiPicker.querySelector('.emoji-item')?.textContent, picked.textContent);
 });
 
+test('emoji picker keeps local recent order after syncing a standard emoji', async (t) => {
+  const serverRecent = ['рџЂ', 'рџ”Ґ', 'рџЋ‰'];
+  const dom = await bootAppDom({
+    beforeLoad: (dom) => {
+      dom.window.localStorage.setItem('bananza:recentEmojis:v1:1', JSON.stringify([
+        ':qip-hd-qippda-aa:',
+        ':qip-infium-001:',
+      ]));
+    },
+    fetchHandler: async ({ dom, url, init }) => {
+      if (url.pathname !== '/api/user/recent-emojis') return null;
+      if ((init.method || 'GET').toUpperCase() === 'POST') {
+        const body = JSON.parse(init.body || '{}');
+        return createJsonResponse(dom, { emojis: [body.emoji, ...serverRecent] });
+      }
+      return createJsonResponse(dom, { emojis: serverRecent });
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const emojiBtn = document.getElementById('emojiBtn');
+  const emojiPicker = document.getElementById('emojiPicker');
+
+  emojiBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await new Promise((resolve) => dom.window.setTimeout(resolve, 40));
+
+  const standardItem = emojiPicker.querySelector('.emoji-item:not(.custom-emoji-item)');
+  assert.ok(standardItem, 'Expected a standard emoji item');
+  const pickedEmoji = standardItem.dataset.emoji || standardItem.textContent;
+  standardItem.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await new Promise((resolve) => dom.window.setTimeout(resolve, 40));
+
+  emojiPicker.querySelectorAll('.emoji-tab')[1].dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  const recentValues = Array.from(emojiPicker.querySelectorAll('.emoji-item'))
+    .map((item) => item.dataset.emoji || item.textContent);
+  assert.deepEqual(recentValues.slice(0, 3), [
+    pickedEmoji,
+    ':qip-hd-qippda-aa:',
+    ':qip-infium-001:',
+  ]);
+});
+
 test('emoji picker recent tab is capped at 32 items from the server', async (t) => {
   const serverRecent = [
     '😀','😃','😄','😁','😆','😅','😂','🙂',
@@ -1740,6 +1890,289 @@ test('emoji picker recent tab is capped at 32 items from the server', async (t) 
   const recentItems = Array.from(emojiPicker.querySelectorAll('.emoji-item')).map((item) => item.textContent);
   assert.equal(recentItems.length, 32);
   assert.deepEqual(recentItems, serverRecent.slice(0, 32));
+});
+
+test('emoji picker exposes QIP tabs and inserts GIF previews into the composer', async (t) => {
+  const recentRequests = [];
+  const dom = await bootAppDom({
+    fetchHandler: async ({ dom, url, init }) => {
+      if (url.pathname !== '/api/user/recent-emojis') return null;
+      if ((init.method || 'GET').toUpperCase() === 'POST') {
+        const body = JSON.parse(init.body || '{}');
+        recentRequests.push(body.emoji);
+        return createJsonResponse(dom, { emojis: [body.emoji] });
+      }
+      return createJsonResponse(dom, { emojis: [] });
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const msgInput = document.getElementById('msgInput');
+  const composerRichPreview = document.getElementById('composerRichPreview');
+  const inputRow = document.querySelector('.input-row');
+  const emojiBtn = document.getElementById('emojiBtn');
+  const emojiPicker = document.getElementById('emojiPicker');
+
+  emojiBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await new Promise((resolve) => dom.window.setTimeout(resolve, 40));
+
+  const qipTab = Array.from(emojiPicker.querySelectorAll('.emoji-tab'))
+    .find((tab) => tab.textContent === 'QIP');
+  assert.ok(qipTab, 'Expected the QiP tab to be present');
+  const qipHdTab = Array.from(emojiPicker.querySelectorAll('.emoji-tab'))
+    .find((tab) => tab.textContent === 'QIP HD');
+  assert.ok(qipHdTab, 'Expected the QIP HD tab to be present');
+  qipTab.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+
+  const qipItem = emojiPicker.querySelector('.emoji-item.qip-infium-emoji-item');
+  assert.ok(qipItem, 'Expected QiP image items in the picker');
+  assert.equal(qipItem.dataset.emoji, ':qip-infium-001:');
+  assert.match(qipItem.querySelector('img')?.getAttribute('src') || '', /\/assets\/emoji\/qip-infium-original\/001\.gif$/);
+
+  qipItem.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  assert.notEqual(msgInput.value, ':qip-infium-001:');
+  assert.ok(msgInput.value.length < ':qip-infium-001:'.length);
+  assert.ok(composerRichPreview.querySelector('img.composer-rich-emoji'));
+  assert.match(composerRichPreview.querySelector('img')?.getAttribute('src') || '', /\/assets\/emoji\/qip-infium-original\/001\.gif$/);
+  assert.equal(recentRequests[0], ':qip-infium-001:');
+  let storedRecent = JSON.parse(dom.window.localStorage.getItem('bananza:recentEmojis:v1:1') || '[]');
+  assert.deepEqual(storedRecent, [':qip-infium-001:']);
+  msgInput.dispatchEvent(new dom.window.KeyboardEvent('keydown', {
+    key: 'Backspace',
+    bubbles: true,
+    cancelable: true,
+  }));
+  assert.equal(msgInput.value, '');
+
+  msgInput.value = '';
+  msgInput.selectionStart = msgInput.selectionEnd = 0;
+  msgInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+
+  qipHdTab.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  const qipHdItem = emojiPicker.querySelector('.emoji-item.custom-emoji-item[data-emoji=":qip-hd-qippda-aa:"]');
+  assert.ok(qipHdItem, 'Expected QIP HD image items in the picker');
+  assert.match(qipHdItem.querySelector('img')?.getAttribute('src') || '', /\/assets\/emoji\/qip-hd\/qippda_aa\.gif$/);
+  assert.equal(qipHdItem.querySelector('img')?.getAttribute('width'), '48');
+
+  qipHdItem.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  assert.notEqual(msgInput.value, ':qip-hd-qippda-aa:');
+  assert.ok(msgInput.value.length < ':qip-hd-qippda-aa:'.length);
+  assert.match(composerRichPreview.querySelector('img')?.getAttribute('src') || '', /\/assets\/emoji\/qip-hd\/qippda_aa\.gif$/);
+  assert.equal(composerRichPreview.querySelector('img')?.getAttribute('width'), '24');
+  assert.equal(composerRichPreview.querySelector('img')?.getAttribute('height'), '20');
+  assert.equal(inputRow.classList.contains('is-rich-emoji-multiline'), false);
+  assert.equal(recentRequests[1], ':qip-hd-qippda-aa:');
+  storedRecent = JSON.parse(dom.window.localStorage.getItem('bananza:recentEmojis:v1:1') || '[]');
+  assert.deepEqual(storedRecent.slice(0, 2), [':qip-hd-qippda-aa:', ':qip-infium-001:']);
+  msgInput.dispatchEvent(new dom.window.KeyboardEvent('keydown', {
+    key: 'Backspace',
+    bubbles: true,
+    cancelable: true,
+  }));
+  assert.equal(msgInput.value, '');
+});
+
+test('emoji picker recent tab can display QIP tokens next to Unicode emoji', async (t) => {
+  const dom = await bootAppDom({
+    fetchHandler: async ({ dom, url }) => {
+      if (url.pathname !== '/api/user/recent-emojis') return null;
+      return createJsonResponse(dom, { emojis: [':qip-hd-qippda-aa:', ':qip-infium-001:', '\uD83D\uDE00'] });
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const emojiBtn = document.getElementById('emojiBtn');
+  const emojiPicker = document.getElementById('emojiPicker');
+
+  emojiBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await new Promise((resolve) => dom.window.setTimeout(resolve, 40));
+
+  emojiPicker.querySelectorAll('.emoji-tab')[1].dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+
+  const qipItem = emojiPicker.querySelector('.emoji-item.qip-infium-emoji-item[data-emoji=":qip-infium-001:"]');
+  assert.ok(qipItem, 'Expected a QiP recent item');
+  assert.ok(qipItem.querySelector('img.qip-infium-emoji'));
+  const qipHdItem = emojiPicker.querySelector('.emoji-item.custom-emoji-item[data-emoji=":qip-hd-qippda-aa:"]');
+  assert.ok(qipHdItem, 'Expected a QIP HD recent item');
+  assert.ok(qipHdItem.querySelector('img.qip-hd-emoji'));
+  assert.ok(emojiPicker.querySelector('.emoji-item[data-emoji="\uD83D\uDE00"]'));
+});
+
+test('emoji picker restores QIP recent tokens from local storage after reload', async (t) => {
+  const recentBackfillRequests = [];
+  const dom = await bootAppDom({
+    beforeLoad: (dom) => {
+      dom.window.localStorage.setItem('bananza:recentEmojis:v1:1', JSON.stringify([
+        ':qip-hd-qippda-aa:',
+        ':qip-hd-nope:',
+        'not-an-emoji',
+        ':qip-infium-001:',
+      ]));
+    },
+    fetchHandler: async ({ dom, url, init }) => {
+      if (url.pathname !== '/api/user/recent-emojis') return null;
+      if ((init.method || 'GET').toUpperCase() === 'POST') {
+        const body = JSON.parse(init.body || '{}');
+        recentBackfillRequests.push(body.emoji);
+        return createJsonResponse(dom, { emojis: [body.emoji] });
+      }
+      return createJsonResponse(dom, { emojis: [] });
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const emojiBtn = document.getElementById('emojiBtn');
+  const emojiPicker = document.getElementById('emojiPicker');
+
+  emojiBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await new Promise((resolve) => dom.window.setTimeout(resolve, 40));
+
+  emojiPicker.querySelectorAll('.emoji-tab')[1].dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+
+  const qipHdItem = emojiPicker.querySelector('.emoji-item.custom-emoji-item[data-emoji=":qip-hd-qippda-aa:"]');
+  assert.ok(qipHdItem, 'Expected a local-storage QIP HD recent item');
+  assert.ok(qipHdItem.querySelector('img.qip-hd-emoji'));
+  const qipItem = emojiPicker.querySelector('.emoji-item.qip-infium-emoji-item[data-emoji=":qip-infium-001:"]');
+  assert.ok(qipItem, 'Expected a local-storage QIP recent item');
+  assert.ok(qipItem.querySelector('img.qip-infium-emoji'));
+  assert.deepEqual(
+    JSON.parse(dom.window.localStorage.getItem('bananza:recentEmojis:v1:1') || '[]').slice(0, 2),
+    [':qip-hd-qippda-aa:', ':qip-infium-001:'],
+  );
+  assert.deepEqual(recentBackfillRequests.sort(), [':qip-hd-qippda-aa:', ':qip-infium-001:'].sort());
+});
+
+test('emoji recent sync keeps local QIP tokens when the server rejects backfill', async (t) => {
+  const warnings = [];
+  const postRequests = [];
+  const dom = await bootAppDom({
+    beforeLoad: (dom) => {
+      dom.window.localStorage.setItem('bananza:recentEmojis:v1:1', JSON.stringify([
+        ':qip-hd-qippda-aa:',
+      ]));
+      dom.window.console.warn = (...args) => warnings.push(args.map(String).join(' '));
+    },
+    fetchHandler: async ({ dom, url, init }) => {
+      if (url.pathname !== '/api/user/recent-emojis') return null;
+      if ((init.method || 'GET').toUpperCase() === 'POST') {
+        const body = JSON.parse(init.body || '{}');
+        postRequests.push(body.emoji);
+        return createJsonResponse(dom, { error: 'Invalid emoji' }, { status: 400 });
+      }
+      return createJsonResponse(dom, { emojis: [] });
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const emojiBtn = document.getElementById('emojiBtn');
+  const emojiPicker = document.getElementById('emojiPicker');
+
+  await new Promise((resolve) => dom.window.setTimeout(resolve, 40));
+  assert.deepEqual(postRequests, [':qip-hd-qippda-aa:']);
+  assert.equal(warnings.some((line) => line.includes('[emoji] recent')), false);
+
+  emojiBtn.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await new Promise((resolve) => dom.window.setTimeout(resolve, 40));
+  emojiPicker.querySelectorAll('.emoji-tab')[1].dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+
+  const qipHdItem = emojiPicker.querySelector('.emoji-item.custom-emoji-item[data-emoji=":qip-hd-qippda-aa:"]');
+  assert.ok(qipHdItem, 'Expected the rejected server token to remain in local recents');
+  qipHdItem.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await new Promise((resolve) => dom.window.setTimeout(resolve, 40));
+  assert.deepEqual(postRequests, [':qip-hd-qippda-aa:']);
+  assert.equal(warnings.some((line) => line.includes('[emoji] recent')), false);
+});
+
+test('QIP tokens render as inline images and single-token messages are enlarged', async (t) => {
+  const chatId = 1;
+  const dom = await openSingleChatDom({
+    chat: createChatFixture(chatId, 'QiP Chat', { lastMessageId: 103 }),
+    chatMessagesByChatId: {
+      [chatId]: [
+        createIncomingMessage(chatId, 101, { text: ':qip-infium-001:' }),
+        createIncomingMessage(chatId, 102, {
+          text: 'Hello :qip-infium-002: :qip-hd-qippda-aa: https://example.com @alice',
+          mentions: [{ token: 'alice', username: 'alice', user_id: 33, is_ai_bot: 0 }],
+        }),
+        createIncomingMessage(chatId, 103, { text: ':qip-hd-qippda-aa:' }),
+      ],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+
+  const singleRow = document.querySelector('.msg-row[data-msg-id="101"]');
+  assert.ok(singleRow.classList.contains('emoji-only-message'));
+  const largeQip = singleRow.querySelector('.msg-text img.qip-infium-emoji--large');
+  assert.ok(largeQip, 'Expected a large QiP image for a single-token message');
+  assert.match(largeQip.getAttribute('src'), /\/assets\/emoji\/qip-infium-original\/001\.gif$/);
+  assert.equal(largeQip.getAttribute('width'), '72');
+
+  const mixedRow = document.querySelector('.msg-row[data-msg-id="102"]');
+  assert.equal(mixedRow.classList.contains('emoji-only-message'), false);
+  const inlineQip = mixedRow.querySelector('.msg-text img.custom-emoji-img.qip-infium-emoji:not(.custom-emoji-img--large)');
+  assert.ok(inlineQip, 'Expected an inline QiP image inside mixed text');
+  assert.match(inlineQip.getAttribute('src'), /\/assets\/emoji\/qip-infium-original\/002\.gif$/);
+  assert.equal(inlineQip.getAttribute('width'), '20');
+  const inlineQipHd = mixedRow.querySelector('.msg-text img.custom-emoji-img.qip-hd-emoji');
+  assert.ok(inlineQipHd, 'Expected an inline QIP HD image inside mixed text');
+  assert.match(inlineQipHd.getAttribute('src'), /\/assets\/emoji\/qip-hd\/qippda_aa\.gif$/);
+  assert.equal(inlineQipHd.getAttribute('width'), '24');
+  assert.equal(mixedRow.querySelector('.msg-text a')?.getAttribute('href'), 'https://example.com');
+  assert.equal(mixedRow.querySelector('.msg-text .mention-link')?.dataset.mentionUserId, '33');
+
+  const hdSingleRow = document.querySelector('.msg-row[data-msg-id="103"]');
+  assert.ok(hdSingleRow.classList.contains('emoji-only-message'));
+  const largeQipHd = hdSingleRow.querySelector('.msg-text img.custom-emoji-img--large.qip-hd-emoji');
+  assert.ok(largeQipHd, 'Expected a large QIP HD image for a single-token message');
+  assert.match(largeQipHd.getAttribute('src'), /\/assets\/emoji\/qip-hd\/qippda_aa\.gif$/);
+  assert.equal(largeQipHd.getAttribute('width'), '64');
 });
 
 test('mobile chat list pull refresh label is localized and positioned inside the pull gap', async (t) => {

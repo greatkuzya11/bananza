@@ -3604,6 +3604,63 @@ function isValidReactionEmoji(value) {
   return /^(?:[\u00A9\u00AE]|[\u203C-\u3299]\uFE0F?|[\uD800-\uDBFF][\uDC00-\uDFFF])$/.test(graphemes[0]);
 }
 
+function isValidQipInfiumEmojiToken(value) {
+  const match = String(value || '').trim().match(/^:qip-infium-(\d{3}):$/);
+  if (!match) return false;
+  const id = Number(match[1]);
+  return Number.isInteger(id) && id >= 1 && id <= 281;
+}
+
+let qipHdEmojiTokenSet = null;
+
+function addQipHdEmojiToken(target, token) {
+  const value = typeof token === 'string' ? token.trim() : '';
+  if (/^:qip-hd-[a-z0-9][a-z0-9-]{0,63}:$/.test(value)) target.add(value);
+}
+
+function addQipHdEmojiTokensFromAssetManifest(target) {
+  const manifestPath = path.join(__dirname, 'public', 'assets', 'emoji', 'qip-hd', 'manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  if (!Array.isArray(manifest?.items)) return;
+  manifest.items.forEach((item) => addQipHdEmojiToken(target, item?.token));
+}
+
+function addQipHdEmojiTokensFromBrowserManifest(target) {
+  const scriptPath = path.join(__dirname, 'public', 'js', 'qip-hd.js');
+  const source = fs.readFileSync(scriptPath, 'utf8');
+  const tokenRe = /token:\s*["'](:qip-hd-[a-z0-9][a-z0-9-]{0,63}:)["']/g;
+  let match;
+  while ((match = tokenRe.exec(source))) addQipHdEmojiToken(target, match[1]);
+}
+
+function getQipHdEmojiTokenSet({ forceReload = false } = {}) {
+  if (qipHdEmojiTokenSet && !forceReload) return qipHdEmojiTokenSet;
+  const tokens = new Set();
+  try {
+    addQipHdEmojiTokensFromAssetManifest(tokens);
+  } catch {
+    // QIP HD assets are optional in dev checkouts until the importer is run.
+  }
+  try {
+    addQipHdEmojiTokensFromBrowserManifest(tokens);
+  } catch {
+    // The generated browser manifest is loaded separately when available.
+  }
+  qipHdEmojiTokenSet = tokens;
+  return qipHdEmojiTokenSet;
+}
+
+function isValidQipHdEmojiToken(value) {
+  const token = String(value || '').trim();
+  if (!/^:qip-hd-[a-z0-9][a-z0-9-]{0,63}:$/.test(token)) return false;
+  if (getQipHdEmojiTokenSet().has(token)) return true;
+  return getQipHdEmojiTokenSet({ forceReload: true }).has(token);
+}
+
+function isValidRecentEmoji(value) {
+  return isValidReactionEmoji(value) || isValidQipInfiumEmojiToken(value) || isValidQipHdEmojiToken(value);
+}
+
 function getRecentEmojisForUser(userId) {
   return recentEmojiListStmt.all(userId, RECENT_EMOJI_LIMIT).map((row) => row.emoji);
 }
@@ -3614,7 +3671,7 @@ app.get('/api/user/recent-emojis', auth, (req, res) => {
 
 app.post('/api/user/recent-emojis', auth, (req, res) => {
   const emoji = typeof req.body?.emoji === 'string' ? req.body.emoji.trim() : '';
-  if (!isValidReactionEmoji(emoji)) return res.status(400).json({ error: 'Invalid emoji' });
+  if (!isValidRecentEmoji(emoji)) return res.status(400).json({ error: 'Invalid emoji' });
   upsertRecentEmojiStmt.run(req.user.id, emoji);
   trimRecentEmojiStmt.run(req.user.id, req.user.id, RECENT_EMOJI_LIMIT);
   res.json({ emojis: getRecentEmojisForUser(req.user.id) });

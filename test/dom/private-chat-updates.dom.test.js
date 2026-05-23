@@ -170,6 +170,8 @@ async function bootAppDom(options = {}) {
     dom.window.addEventListener('bananza:ready', resolve, { once: true });
   });
   loadBrowserScript(dom, 'public/js/ai-image-risk.js');
+  loadBrowserScript(dom, 'public/js/qip-infium-original.js');
+  loadBrowserScript(dom, 'public/js/qip-hd.js');
   loadBrowserScript(dom, 'public/js/app.js');
   await ready;
   await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
@@ -856,6 +858,8 @@ test('startup cache does not flash all chats while saved active folder is loadin
   });
   observer.observe(dom.window.document.getElementById('chatList'), { childList: true, subtree: true });
   loadBrowserScript(dom, 'public/js/ai-image-risk.js');
+  loadBrowserScript(dom, 'public/js/qip-infium-original.js');
+  loadBrowserScript(dom, 'public/js/qip-hd.js');
   loadBrowserScript(dom, 'public/js/app.js');
   await waitForCondition(dom.window, () => foldersRequested);
   await waitForMs(dom.window, 0);

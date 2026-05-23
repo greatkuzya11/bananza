@@ -195,6 +195,45 @@ test('recent emojis are stored per user and capped', async () => {
   assert.equal(capped.data.emojis.length, 32);
   assert.equal(new Set(capped.data.emojis).size, 32);
 
+  const qip = await bob.request('/api/user/recent-emojis', {
+    method: 'POST',
+    json: { emoji: ':qip-infium-001:' },
+  });
+  assert.equal(qip.data.emojis[0], ':qip-infium-001:');
+  assert.equal(qip.data.emojis.length, 32);
+
+  const qipHd = await bob.request('/api/user/recent-emojis', {
+    method: 'POST',
+    json: { emoji: ':qip-hd-qippda-aa:' },
+  });
+  assert.equal(qipHd.data.emojis[0], ':qip-hd-qippda-aa:');
+  assert.equal(qipHd.data.emojis.length, 32);
+
+  const invalidQip = await bob.request('/api/user/recent-emojis', {
+    method: 'POST',
+    json: { emoji: ':qip-infium-999:' },
+    expectedStatus: 400,
+  });
+  assert.equal(invalidQip.data.error, 'Invalid emoji');
+  const malformedQip = await bob.request('/api/user/recent-emojis', {
+    method: 'POST',
+    json: { emoji: ':qip-infium-1:' },
+    expectedStatus: 400,
+  });
+  assert.equal(malformedQip.data.error, 'Invalid emoji');
+  const invalidQipHd = await bob.request('/api/user/recent-emojis', {
+    method: 'POST',
+    json: { emoji: ':qip-hd-nope:' },
+    expectedStatus: 400,
+  });
+  assert.equal(invalidQipHd.data.error, 'Invalid emoji');
+  const malformedQipHd = await bob.request('/api/user/recent-emojis', {
+    method: 'POST',
+    json: { emoji: ':qip-hd-:' },
+    expectedStatus: 400,
+  });
+  assert.equal(malformedQipHd.data.error, 'Invalid emoji');
+
   const invalid = await bob.request('/api/user/recent-emojis', {
     method: 'POST',
     json: { emoji: 'not-an-emoji' },

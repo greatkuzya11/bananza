@@ -9,7 +9,9 @@
     "test": "node scripts/run-node-tests.js",
     "test:all": "npm test && npm run test:e2e",
     "test:coverage": "c8 --config .c8rc.json node scripts/run-node-tests.js",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "import:qip-emojis": "node scripts/import-qip-infium-original.js",
+    "import:qip-hd-emojis": "node scripts/import-qip-hd-emojis.js"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",

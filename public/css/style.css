@@ -1703,6 +1703,20 @@ html[data-modal-animation="none"] .chat-folder-list-surface {
   transform: translateY(-2px);
   white-space: nowrap;
 }
+.msg-text .custom-emoji-img,
+.msg-text .qip-infium-emoji {
+  display: inline-block;
+  max-width: none;
+  object-fit: contain;
+  vertical-align: -0.28em;
+}
+.msg-row.emoji-only-message .msg-text .custom-emoji-img,
+.msg-row.emoji-only-message .msg-text .qip-infium-emoji {
+  display: block;
+  margin-bottom: 2px;
+  transform: none;
+  vertical-align: middle;
+}
 
 /* Add spacing for sender when message is emoji-only */
 .msg-row.emoji-only-message .msg-sender {
@@ -3231,6 +3245,34 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
   align-items: flex-end;
 }
 
+.composer-rich-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  min-height: 100%;
+  padding: 10px 16px 10px 14px;
+  color: var(--text-primary);
+  font-size: 15px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  pointer-events: none;
+}
+
+.composer-rich-preview.hidden {
+  display: none;
+}
+
+.composer-rich-preview .composer-rich-emoji {
+  display: inline-block;
+  max-width: none;
+  object-fit: contain;
+  vertical-align: middle;
+}
+
 @media (max-width: 768px) {
   .composer-tool-stack {
     flex-basis: calc(var(--composer-tool-size) + var(--composer-tool-step));
@@ -3424,13 +3466,28 @@ html[data-modal-animation="none"] .composer-context-convert-btn {
 }
 
 #msgInput {
-  flex: 1; width: 100%; padding: 10px 16px 10px 14px; background: var(--bg-input); border: none;
+  position: relative; z-index: 1; flex: 1; width: 100%; padding: 10px 16px 10px 14px; background: var(--bg-input); border: none;
   border-radius: 20px; color: var(--text-primary); outline: none; resize: none;
   max-height: 150px; line-height: 1.35; font-size: 15px; overflow-y: auto;
 }
 #msgInput::-webkit-scrollbar { display: none; }
 #msgInput { scrollbar-width: none; }
 #msgInput::placeholder { color: var(--text-secondary); }
+
+.composer-input-wrap.has-rich-preview #msgInput {
+  color: transparent;
+  caret-color: var(--text-primary);
+  background: transparent;
+}
+
+.composer-input-wrap.has-rich-preview #msgInput::placeholder {
+  color: transparent;
+}
+
+.composer-input-wrap.has-rich-preview #msgInput::selection {
+  color: transparent;
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+}
 
 .mention-open-btn {
   position: absolute;
@@ -3441,7 +3498,7 @@ html[data-modal-animation="none"] .composer-context-convert-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  z-index: 2;
+  z-index: 3;
   border: 0;
   background: transparent;
   color: var(--text-secondary);
@@ -3565,6 +3622,12 @@ html[data-modal-animation="none"] .composer-context-convert-btn {
 .emoji-tab {
   padding: 6px 8px; font-size: 18px; border-radius: 6px; cursor: pointer; flex-shrink: 0;
 }
+.emoji-tab.custom-emoji-tab,
+.emoji-tab.qip-infium-emoji-tab {
+  font-size: 13px;
+  line-height: 22px;
+  white-space: nowrap;
+}
 .emoji-tab.active { background: var(--bg-input); }
 .emoji-grid-swipe {
   height: var(--emoji-picker-grid-height);
@@ -3592,6 +3655,20 @@ html[data-modal-animation="none"] .composer-context-convert-btn {
 .emoji-item {
   font-size: 22px; width: var(--emoji-picker-item-size); height: var(--emoji-picker-item-size); display: flex; align-items: center;
   justify-content: center; border-radius: 6px; cursor: pointer;
+}
+.emoji-item.custom-emoji-item,
+.emoji-item.qip-infium-emoji-item {
+  padding: 0;
+}
+.emoji-item .custom-emoji-img,
+.emoji-item .qip-infium-emoji {
+  display: block;
+  flex: 0 0 auto;
+  width: auto;
+  height: auto;
+  max-width: calc(var(--emoji-picker-item-size) - 8px);
+  max-height: calc(var(--emoji-picker-item-size) - 8px);
+  object-fit: contain;
 }
 .emoji-item:hover { background: var(--bg-input); }
 

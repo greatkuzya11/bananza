@@ -142,7 +142,52 @@
   });
   const aiImageRiskApi = window.BananzaAiImageRisk || null;
   const i18n = window.BananzaI18n || null;
+  const CUSTOM_EMOJI_TOKEN_PATTERN = /^:(?:qip-infium-\d{3}|qip-hd-[a-z0-9][a-z0-9-]{0,63}):$/;
+  const CUSTOM_EMOJI_CATALOGS = Object.freeze([
+    window.BananzaQipInfiumOriginal,
+    window.BananzaQipHdEmojis,
+  ]
+    .map(normalizeCustomEmojiCatalog)
+    .filter((catalog) => catalog.items.length));
+  const CUSTOM_EMOJI_BY_CATEGORY = new Map(CUSTOM_EMOJI_CATALOGS.map((catalog) => [catalog.id, catalog]));
+  const CUSTOM_EMOJI_ITEMS = Object.freeze(CUSTOM_EMOJI_CATALOGS.flatMap((catalog) => catalog.items));
+  const CUSTOM_EMOJI_BY_TOKEN = new Map(CUSTOM_EMOJI_ITEMS.map((item) => [item.token, item]));
+  const COMPOSER_CUSTOM_EMOJI_MARKER_BASE = 0xE000;
+  const COMPOSER_CUSTOM_EMOJI_PAD_CHAR = ' ';
+  const COMPOSER_CUSTOM_EMOJI_MAX_PAD = 32;
+  const QIP_HD_EMOJI_MESSAGE_SCALE = 0.5;
+  const CUSTOM_EMOJI_MARKER_BY_TOKEN = new Map(CUSTOM_EMOJI_ITEMS.map((item, index) => [
+    item.token,
+    String.fromCharCode(COMPOSER_CUSTOM_EMOJI_MARKER_BASE + index),
+  ]));
+  const CUSTOM_EMOJI_TOKEN_BY_MARKER = new Map(Array.from(CUSTOM_EMOJI_MARKER_BY_TOKEN, ([token, marker]) => [marker, token]));
   const grokImageRiskRetryPending = new Set();
+
+  function normalizeCustomEmojiCatalog(catalog) {
+    const raw = catalog && typeof catalog === 'object' ? catalog : {};
+    const id = String(raw.id || '').trim();
+    if (!id) return Object.freeze({ id: '', label: '', items: Object.freeze([]) });
+    const label = String(raw.label || id).trim() || id;
+    const items = (Array.isArray(raw.items) ? raw.items : [])
+      .map((item, index) => {
+        const token = String(item?.token || '').trim();
+        if (!CUSTOM_EMOJI_TOKEN_PATTERN.test(token)) return null;
+        const src = String(item?.src || '').trim();
+        if (!src) return null;
+        return Object.freeze({
+          id: Number(item.id) || index + 1,
+          category: id,
+          categoryLabel: label,
+          token,
+          src,
+          width: Math.max(1, Number(item.width) || 20),
+          height: Math.max(1, Number(item.height) || 20),
+          label: String(item.label || `${label} ${index + 1}`).trim(),
+        });
+      })
+      .filter(Boolean);
+    return Object.freeze({ id, label, items: Object.freeze(items) });
+  }
 
   function t(key, params = {}) {
     return i18n?.t ? i18n.t(key, params) : String(key || '');
@@ -662,6 +707,7 @@
   const loadMoreAfterWrap = $('#loadMoreAfterWrap');
   const typingBar = $('#typingBar');
   const msgInput = $('#msgInput');
+  const composerRichPreview = $('#composerRichPreview');
   const inputArea = chatView?.querySelector('.input-area');
   const inputRow = chatView?.querySelector('.input-row');
   const mentionOpenBtn = $('#mentionOpenBtn');
@@ -2045,6 +2091,299 @@
     return d.innerHTML;
   }
 
+  function getCustomEmoji(token) {
+    return CUSTOM_EMOJI_BY_TOKEN.get(String(token || '').trim()) || null;
+  }
+
+  function isCustomEmojiToken(value) {
+    return Boolean(getCustomEmoji(value));
+  }
+
+  function isSingleCustomEmojiMessage(text) {
+    return isCustomEmojiToken(String(text || '').trim());
+  }
+
+  function getCustomEmojiRenderScale(item, { large = false, picker = false } = {}) {
+    const baseScale = large ? 2.65 : 1;
+    const qipHdScale = item?.category === 'qip-hd' && !picker ? QIP_HD_EMOJI_MESSAGE_SCALE : 1;
+    return baseScale * qipHdScale;
+  }
+
+  function getCustomEmojiRenderedSize(item, options = {}) {
+    const scale = getCustomEmojiRenderScale(item, options);
+    return {
+      width: Math.max(1, Math.round((Number(item?.width) || 20) * scale)),
+      height: Math.max(1, Math.round((Number(item?.height) || 20) * scale)),
+    };
+  }
+
+  function renderCustomEmojiHtml(token, { large = false, className = '', picker = false } = {}) {
+    const item = getCustomEmoji(token);
+    if (!item) return esc(token);
+    const { width, height } = getCustomEmojiRenderedSize(item, { large, picker });
+    const classes = [
+      'custom-emoji-img',
+      `${item.category}-emoji`,
+      item.category === 'qip-infium-original' ? 'qip-infium-emoji' : '',
+      item.category === 'qip-hd' ? 'qip-hd-emoji' : '',
+      large ? 'custom-emoji-img--large qip-infium-emoji--large' : '',
+      className
+    ]
+      .filter(Boolean)
+      .join(' ');
+    return `<img class="${esc(classes)}" src="${esc(item.src)}" width="${width}" height="${height}" alt="${esc(item.label)}" title="${esc(item.label)}" loading="lazy" decoding="async">`;
+  }
+
+  function getComposerCustomEmojiPadLength(item) {
+    const width = getCustomEmojiRenderedSize(item).width;
+    return Math.max(1, Math.min(COMPOSER_CUSTOM_EMOJI_MAX_PAD, Math.round((width - 8) / 4)));
+  }
+
+  function getComposerCustomEmojiCluster(item) {
+    const marker = CUSTOM_EMOJI_MARKER_BY_TOKEN.get(item?.token);
+    if (!marker) return String(item?.token || '');
+    return marker + COMPOSER_CUSTOM_EMOJI_PAD_CHAR.repeat(getComposerCustomEmojiPadLength(item));
+  }
+
+  function getComposerCustomEmojiItemFromMarker(marker) {
+    const token = CUSTOM_EMOJI_TOKEN_BY_MARKER.get(marker);
+    return token ? getCustomEmoji(token) : null;
+  }
+
+  function getComposerCustomEmojiClusterEnd(value, start) {
+    const source = String(value || '');
+    const item = getComposerCustomEmojiItemFromMarker(source[start]);
+    if (!item) return start + 1;
+    const maxEnd = Math.min(source.length, start + 1 + getComposerCustomEmojiPadLength(item));
+    let end = start + 1;
+    while (end < maxEnd && source[end] === COMPOSER_CUSTOM_EMOJI_PAD_CHAR) end += 1;
+    return end;
+  }
+
+  function findComposerCustomEmojiClusterAt(value, offset) {
+    const source = String(value || '');
+    const cursor = Math.max(0, Math.min(source.length, Number(offset) || 0));
+    const backwardLimit = Math.max(0, cursor - COMPOSER_CUSTOM_EMOJI_MAX_PAD - 2);
+    for (let index = cursor; index >= backwardLimit; index -= 1) {
+      const item = getComposerCustomEmojiItemFromMarker(source[index]);
+      if (!item) continue;
+      const end = getComposerCustomEmojiClusterEnd(source, index);
+      if (cursor >= index && cursor <= end) return { start: index, end, item };
+    }
+    return null;
+  }
+
+  function findComposerCustomEmojiClusterBefore(value, offset) {
+    const source = String(value || '');
+    const cursor = Math.max(0, Math.min(source.length, Number(offset) || 0));
+    const inside = findComposerCustomEmojiClusterAt(source, cursor);
+    if (inside && cursor > inside.start) return inside;
+    const backwardLimit = Math.max(0, cursor - COMPOSER_CUSTOM_EMOJI_MAX_PAD - 2);
+    for (let index = cursor - 1; index >= backwardLimit; index -= 1) {
+      const item = getComposerCustomEmojiItemFromMarker(source[index]);
+      if (!item) continue;
+      const end = getComposerCustomEmojiClusterEnd(source, index);
+      if (end === cursor) return { start: index, end, item };
+    }
+    return null;
+  }
+
+  function findComposerCustomEmojiClusterAfter(value, offset) {
+    const source = String(value || '');
+    const cursor = Math.max(0, Math.min(source.length, Number(offset) || 0));
+    const inside = findComposerCustomEmojiClusterAt(source, cursor);
+    if (inside && cursor < inside.end) return inside;
+    const item = getComposerCustomEmojiItemFromMarker(source[cursor]);
+    if (!item) return null;
+    return { start: cursor, end: getComposerCustomEmojiClusterEnd(source, cursor), item };
+  }
+
+  function composerCustomEmojiClusterBoundary(cluster, cursor) {
+    if (!cluster) return cursor;
+    const midpoint = cluster.start + ((cluster.end - cluster.start) / 2);
+    return cursor <= midpoint ? cluster.start : cluster.end;
+  }
+
+  function normalizeComposerTextToInternal(value) {
+    const source = String(value || '');
+    const tokenRe = /^:qip-infium-\d{3}:|^:qip-hd-[a-z0-9][a-z0-9-]{0,63}:/i;
+    let result = '';
+    for (let index = 0; index < source.length;) {
+      const markerItem = getComposerCustomEmojiItemFromMarker(source[index]);
+      if (markerItem) {
+        result += getComposerCustomEmojiCluster(markerItem);
+        index = getComposerCustomEmojiClusterEnd(source, index);
+        continue;
+      }
+      const tokenMatch = source.slice(index).match(tokenRe);
+      if (tokenMatch) {
+        const token = tokenMatch[0];
+        const item = getCustomEmoji(token);
+        if (item) {
+          result += getComposerCustomEmojiCluster(item);
+          index += token.length;
+          continue;
+        }
+      }
+      result += source[index];
+      index += 1;
+    }
+    return result;
+  }
+
+  function serializeComposerTextValue(value, { trim = false } = {}) {
+    const source = String(value || '');
+    let result = '';
+    for (let index = 0; index < source.length;) {
+      const item = getComposerCustomEmojiItemFromMarker(source[index]);
+      if (item) {
+        result += item.token;
+        index = getComposerCustomEmojiClusterEnd(source, index);
+        continue;
+      }
+      result += source[index];
+      index += 1;
+    }
+    return trim ? result.trim() : result;
+  }
+
+  function getComposerTextValue({ trim = false } = {}) {
+    return serializeComposerTextValue(msgInput?.value || '', { trim });
+  }
+
+  function setComposerTextValue(value, { cursor = 'end' } = {}) {
+    if (!msgInput) return;
+    const nextValue = normalizeComposerTextToInternal(value);
+    msgInput.value = nextValue;
+    if (cursor === 'end') {
+      const end = nextValue.length;
+      msgInput.setSelectionRange?.(end, end);
+    }
+  }
+
+  function normalizeComposerInputValue() {
+    if (!msgInput) return false;
+    const value = msgInput.value || '';
+    const start = msgInput.selectionStart ?? value.length;
+    const end = msgInput.selectionEnd ?? start;
+    const nextValue = normalizeComposerTextToInternal(value);
+    const nextStart = normalizeComposerTextToInternal(value.slice(0, start)).length;
+    const nextEnd = normalizeComposerTextToInternal(value.slice(0, end)).length;
+    if (nextValue === value) return false;
+    msgInput.value = nextValue;
+    msgInput.setSelectionRange?.(nextStart, nextEnd);
+    return true;
+  }
+
+  function snapComposerSelectionToCustomEmojiBoundary() {
+    if (!msgInput) return false;
+    const value = msgInput.value || '';
+    const start = msgInput.selectionStart ?? value.length;
+    const end = msgInput.selectionEnd ?? start;
+    if (start !== end) return false;
+    const cluster = findComposerCustomEmojiClusterAt(value, start);
+    if (!cluster || start === cluster.start || start === cluster.end) return false;
+    const nextCursor = composerCustomEmojiClusterBoundary(cluster, start);
+    msgInput.setSelectionRange?.(nextCursor, nextCursor);
+    return true;
+  }
+
+  function insertComposerTextAtSelection(text) {
+    if (!msgInput) return;
+    snapComposerSelectionToCustomEmojiBoundary();
+    const value = msgInput.value || '';
+    const start = Math.max(0, msgInput.selectionStart ?? value.length);
+    const end = Math.max(start, msgInput.selectionEnd ?? start);
+    const insertion = normalizeComposerTextToInternal(text);
+    msgInput.value = value.slice(0, start) + insertion + value.slice(end);
+    const cursor = start + insertion.length;
+    msgInput.setSelectionRange?.(cursor, cursor);
+  }
+
+  function getEmojiPickerInsertionValue(value) {
+    const item = getCustomEmoji(value);
+    return item ? getComposerCustomEmojiCluster(item) : String(value || '');
+  }
+
+  function deleteComposerCustomEmojiCluster(cluster) {
+    if (!msgInput || !cluster) return false;
+    const value = msgInput.value || '';
+    msgInput.value = value.slice(0, cluster.start) + value.slice(cluster.end);
+    msgInput.setSelectionRange?.(cluster.start, cluster.start);
+    msgInput.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  }
+
+  function handleComposerCustomEmojiKeydown(e) {
+    if (!msgInput) return false;
+    const value = msgInput.value || '';
+    const start = msgInput.selectionStart ?? value.length;
+    const end = msgInput.selectionEnd ?? start;
+    if (start !== end) return false;
+
+    if (e.key === 'Backspace') {
+      const cluster = findComposerCustomEmojiClusterBefore(value, start);
+      if (!cluster) return false;
+      e.preventDefault();
+      return deleteComposerCustomEmojiCluster(cluster);
+    }
+
+    if (e.key === 'Delete') {
+      const cluster = findComposerCustomEmojiClusterAfter(value, start);
+      if (!cluster) return false;
+      e.preventDefault();
+      return deleteComposerCustomEmojiCluster(cluster);
+    }
+
+    if (e.key === 'ArrowLeft') {
+      const cluster = findComposerCustomEmojiClusterBefore(value, start);
+      if (!cluster || cluster.end !== start) return false;
+      e.preventDefault();
+      msgInput.setSelectionRange?.(cluster.start, cluster.start);
+      return true;
+    }
+
+    if (e.key === 'ArrowRight') {
+      const cluster = findComposerCustomEmojiClusterAfter(value, start);
+      if (!cluster || cluster.start !== start) return false;
+      e.preventDefault();
+      msgInput.setSelectionRange?.(cluster.end, cluster.end);
+      return true;
+    }
+
+    return false;
+  }
+
+  function handleComposerCustomEmojiBeforeInput(e) {
+    if (!msgInput) return false;
+    if (e.inputType === 'deleteContentBackward') {
+      const value = msgInput.value || '';
+      const start = msgInput.selectionStart ?? value.length;
+      const end = msgInput.selectionEnd ?? start;
+      if (start === end) {
+        const cluster = findComposerCustomEmojiClusterBefore(value, start);
+        if (cluster) {
+          e.preventDefault();
+          return deleteComposerCustomEmojiCluster(cluster);
+        }
+      }
+    }
+    if (e.inputType === 'deleteContentForward') {
+      const value = msgInput.value || '';
+      const start = msgInput.selectionStart ?? value.length;
+      const end = msgInput.selectionEnd ?? start;
+      if (start === end) {
+        const cluster = findComposerCustomEmojiClusterAfter(value, start);
+        if (cluster) {
+          e.preventDefault();
+          return deleteComposerCustomEmojiCluster(cluster);
+        }
+      }
+    }
+    snapComposerSelectionToCustomEmojiBoundary();
+    return false;
+  }
+
   function safeVibrate(pattern) {
     if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return false;
     const activation = navigator.userActivation;
@@ -2075,21 +2414,25 @@
       const token = mentionKey(mention.token || mention.mention || mention.username);
       if (token && !mentionMap.has(token)) mentionMap.set(token, mention);
     });
-    const re = /(https?:\/\/[^\s<>"')\]]+)|@([a-zA-Z0-9_][a-zA-Z0-9_-]{0,31})/gi;
+    const re = /(:qip-infium-\d{3}:|:qip-hd-[a-z0-9][a-z0-9-]{0,63}:)|(https?:\/\/[^\s<>"')\]]+)|@([a-zA-Z0-9_][a-zA-Z0-9_-]{0,31})/gi;
     let html = '';
     let lastIndex = 0;
     let match;
     while ((match = re.exec(source))) {
       html += esc(source.slice(lastIndex, match.index));
       if (match[1]) {
-        const url = match[1];
+        html += isCustomEmojiToken(match[1])
+          ? renderCustomEmojiHtml(match[1])
+          : esc(match[1]);
+      } else if (match[2]) {
+        const url = match[2];
         html += `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>`;
       } else {
         const prev = match.index > 0 ? source[match.index - 1] : '';
-        const token = mentionKey(match[2]);
+        const token = mentionKey(match[3]);
         const mention = !prev || !/[A-Za-z0-9_.-]/.test(prev) ? mentionMap.get(token) : null;
         if (mention) {
-          html += `<button type="button" class="mention-link${mention.is_ai_bot ? ' is-bot' : ''}" data-mention-user-id="${Number(mention.user_id) || 0}" data-mention-token="${esc(mention.token || mention.mention || mention.username || token)}" data-mention-bot="${mention.is_ai_bot ? '1' : '0'}">@${esc(match[2])}</button>`;
+          html += `<button type="button" class="mention-link${mention.is_ai_bot ? ' is-bot' : ''}" data-mention-user-id="${Number(mention.user_id) || 0}" data-mention-token="${esc(mention.token || mention.mention || mention.username || token)}" data-mention-bot="${mention.is_ai_bot ? '1' : '0'}">@${esc(match[3])}</button>`;
         } else {
           html += esc(match[0]);
         }
@@ -2845,6 +3188,7 @@
   function isSingleEmojiMessage(text) {
     const value = String(text || '').trim();
     if (!value) return false;
+    if (isSingleCustomEmojiMessage(value)) return true;
     const graphemes = splitGraphemes(value);
     if (graphemes.length !== 1) return false;
     const pattern = getSingleEmojiPattern();
@@ -3622,7 +3966,7 @@
       return;
     }
     resetPollComposer();
-    if (pollQuestionInput) pollQuestionInput.value = String(msgInput?.value || '').trim();
+    if (pollQuestionInput) pollQuestionInput.value = getComposerTextValue({ trim: true });
     refreshPollComposerPreview();
     syncChatAreaMetrics();
     openModal('pollComposerModal', { opener: pollBtn || attachBtn });
@@ -13188,7 +13532,10 @@
     }
     if (!res.ok) {
       if (res.status === 401) { logout(); return; }
-      throw new Error(tx(data?.error || `HTTP ${res.status}`));
+      const error = new Error(tx(data?.error || `HTTP ${res.status}`));
+      error.status = res.status;
+      error.serverError = data?.error || '';
+      throw error;
     }
     if (!contentType.includes('application/json')) {
       throw new Error(tx(data?.error || 'Unexpected server response'));
@@ -13391,7 +13738,7 @@
   async function updateComposerAiOverrideState() {
     if (!composerAiOverrideEl) return;
     const seq = ++composerAiOverrideSeq;
-    const text = msgInput?.value || '';
+    const text = getComposerTextValue();
     const replySnapshot = getReplySnapshot();
     try {
       const target = await resolveComposerUniversalBotTarget(text, replySnapshot);
@@ -13653,7 +14000,7 @@
   }
 
   function isComposerMeaningfullyEmpty() {
-    return !String(msgInput?.value || '').trim();
+    return !getComposerTextValue({ trim: true });
   }
 
   function getManualMentionRange() {
@@ -13857,6 +14204,7 @@
   function insertMentionTokenIntoComposer(token) {
     const clean = String(token || '').replace(/^@+/, '').trim();
     if (!clean || !msgInput) return;
+    snapComposerSelectionToCustomEmojiBoundary();
     const value = msgInput.value || '';
     const cursor = msgInput.selectionStart ?? value.length;
     const prefix = cursor > 0 && !/\s/.test(value[cursor - 1]) ? ' ' : '';
@@ -13873,6 +14221,7 @@
 
   function insertRawMentionTriggerAtCursor() {
     if (!msgInput) return;
+    snapComposerSelectionToCustomEmojiBoundary();
     const value = msgInput.value || '';
     const start = Math.max(0, msgInput.selectionStart ?? value.length);
     const end = Math.max(start, msgInput.selectionEnd ?? start);
@@ -15154,7 +15503,7 @@
 
   function syncContextConvertComposerButton() {
     if (!composerContextConvertBtn) return;
-    const hasText = Boolean(currentChatId && !editTo && String(msgInput?.value || '').trim());
+    const hasText = Boolean(currentChatId && !editTo && getComposerTextValue({ trim: true }));
     const currentChat = getChatById(currentChatId);
     const availability = getCurrentChatContextConvertState();
     const shouldShow = Boolean((hasText || contextConvertComposerPending) && isContextTransformAvailableForChat(currentChatId));
@@ -15176,7 +15525,7 @@
 
   async function openComposerContextConvertPicker(options = {}) {
     if (contextConvertComposerPending || !currentChatId || editTo) return;
-    const text = String(msgInput?.value || '').trim();
+    const text = getComposerTextValue({ trim: true });
     if (!text) return;
     const keyboardAttached = Boolean(
       Object.prototype.hasOwnProperty.call(options, 'keyboardAttached')
@@ -15204,7 +15553,7 @@
   }
 
   async function transformComposerTextWithContextConvertBot(bot) {
-    const text = String(msgInput?.value || '').trim();
+    const text = getComposerTextValue({ trim: true });
     if (!bot?.id || !text || !currentChatId) return;
     const keepKeyboardOpen = Boolean(contextConvertPickerState.keyboardAttached);
     hideContextConvertPicker();
@@ -15218,7 +15567,7 @@
           text,
         },
       });
-      msgInput.value = data.text || '';
+      setComposerTextValue(data.text || '');
       autoResize();
       if (keepKeyboardOpen) focusComposerKeepKeyboard(true);
       msgInput.dispatchEvent(new Event('input', { bubbles: true }));
@@ -16957,7 +17306,7 @@
     hydrateComposerDraftsForCurrentUser();
     const id = normalizeComposerDraftChatId(chatId);
     if (!id || editTo || !msgInput) return;
-    const text = msgInput.value || '';
+    const text = getComposerTextValue();
     if (text) composerDraftsByChatId.set(id, text);
     else composerDraftsByChatId.delete(id);
     persistComposerDrafts();
@@ -16974,7 +17323,7 @@
     hydrateComposerDraftsForCurrentUser();
     const id = normalizeComposerDraftChatId(chatId);
     if (!id || !msgInput) return;
-    msgInput.value = composerDraftsByChatId.get(id) || '';
+    setComposerTextValue(composerDraftsByChatId.get(id) || '');
     autoResize();
     syncMentionOpenButton();
     window.BananzaVoiceHooks?.refreshComposerState?.();
@@ -18275,7 +18624,10 @@
       // Text
       if (msg.text && !isCallMessage && !isCallTranscriptMessage && !isCallArtifactMessage) {
         const textClasses = isPulsePollMessage ? 'msg-text poll-question-block' : 'msg-text';
-        html += `<div class="${textClasses}">${isEmojiOnly ? esc(msg.text.trim()) : renderMessageText(msg.text, msg.mentions)}</div>`;
+        const textHtml = isEmojiOnly && isSingleCustomEmojiMessage(msg.text)
+          ? renderCustomEmojiHtml(msg.text.trim(), { large: true })
+          : (isEmojiOnly ? esc(msg.text.trim()) : renderMessageText(msg.text, msg.mentions));
+        html += `<div class="${textClasses}">${textHtml}</div>`;
       }
 
       if (msg.ai_notice_type === 'grok_image_risk' && msg.reply_to_id) {
@@ -20202,7 +20554,7 @@
   // ═══════════════════════════════════════════════════════════════════════════
   async function saveEditedMessage() {
     if (!editTo) return;
-    const nextText = msgInput.value.trim();
+    const nextText = getComposerTextValue({ trim: true });
     if (nextText.length > MAX_MSG) { alert('Message too long'); return; }
     if (!nextText && !editTo.allowEmpty) { alert('Text cannot be empty'); return; }
 
@@ -20239,7 +20591,7 @@
       await saveEditedMessage();
       return;
     }
-    const text = msgInput.value.trim();
+    const text = getComposerTextValue({ trim: true });
     const filesToSend = [...pendingFiles];
 
     if (!text && filesToSend.length === 0) return;
@@ -20743,7 +21095,7 @@
     replyBarText.textContent = editTo.is_voice_note ? 'Текст голосового сообщения' : 'Сообщение';
     replyBar.classList.add('edit-bar');
     replyBar.classList.remove('hidden');
-    msgInput.value = text;
+    setComposerTextValue(text);
     autoResize();
     syncMentionOpenButton();
     attachBtn.disabled = true;
@@ -22027,33 +22379,123 @@
   };
   const RECENT_EMOJI_CATEGORY = '🕘';
   const RECENT_EMOJI_LIMIT = 32;
+  const RECENT_EMOJI_STORAGE_PREFIX = 'bananza:recentEmojis:v1';
   let recentEmojis = [];
+  const recentEmojiServerRejected = new Set();
+
+  function normalizeRecentEmojiValue(value) {
+    return serializeComposerTextValue(String(value || ''), { trim: true });
+  }
+
+  function isValidRecentEmojiValue(value) {
+    const emoji = normalizeRecentEmojiValue(value);
+    return Boolean(emoji && (isCustomEmojiToken(emoji) || isSingleEmojiMessage(emoji)));
+  }
 
   function normalizeRecentEmojiList(value) {
     if (!Array.isArray(value)) return [];
     const seen = new Set();
     const list = [];
     value.forEach((item) => {
-      const emoji = String(item || '').trim();
-      if (!emoji || seen.has(emoji)) return;
+      const emoji = normalizeRecentEmojiValue(item);
+      if (!emoji || !isValidRecentEmojiValue(emoji) || seen.has(emoji)) return;
       seen.add(emoji);
       list.push(emoji);
     });
     return list.slice(0, RECENT_EMOJI_LIMIT);
   }
 
+  function mergeRecentEmojiLists(...lists) {
+    return normalizeRecentEmojiList(lists.flatMap((list) => (Array.isArray(list) ? list : [])));
+  }
+
+  function getRecentEmojiStorageKey(userId = currentUser?.id) {
+    const id = Number(userId || 0);
+    return Number.isFinite(id) && id > 0 ? `${RECENT_EMOJI_STORAGE_PREFIX}:${id}` : '';
+  }
+
+  function loadLocalRecentEmojis() {
+    const key = getRecentEmojiStorageKey();
+    if (!key) return [];
+    try {
+      return normalizeRecentEmojiList(JSON.parse(localStorage.getItem(key) || '[]'));
+    } catch (error) {
+      localStorage.removeItem(key);
+      return [];
+    }
+  }
+
+  function persistLocalRecentEmojis(list = recentEmojis) {
+    const key = getRecentEmojiStorageKey();
+    if (!key) return;
+    const normalized = normalizeRecentEmojiList(list);
+    try {
+      if (normalized.length) localStorage.setItem(key, JSON.stringify(normalized));
+      else localStorage.removeItem(key);
+    } catch (error) {
+      // Recent emoji persistence is a convenience cache; API sync still handles the durable copy.
+    }
+  }
+
   function getEmojiPickerCategories() {
     const cats = Object.keys(EMOJIS);
-    if (!cats.length) return [RECENT_EMOJI_CATEGORY];
-    return [cats[0], RECENT_EMOJI_CATEGORY, ...cats.slice(1)];
+    const customCats = CUSTOM_EMOJI_CATALOGS.map((catalog) => catalog.id);
+    if (!cats.length) return [RECENT_EMOJI_CATEGORY, ...customCats];
+    return [cats[0], RECENT_EMOJI_CATEGORY, ...cats.slice(1), ...customCats];
+  }
+
+  function getCustomEmojiCatalog(category) {
+    return CUSTOM_EMOJI_BY_CATEGORY.get(String(category || '')) || null;
+  }
+
+  function isCustomEmojiCategory(category) {
+    return Boolean(getCustomEmojiCatalog(category));
   }
 
   function getEmojiCategoryItems(category) {
-    return category === RECENT_EMOJI_CATEGORY ? recentEmojis : (EMOJIS[category] || []);
+    if (category === RECENT_EMOJI_CATEGORY) return recentEmojis;
+    const customCatalog = getCustomEmojiCatalog(category);
+    if (customCatalog) return customCatalog.items.map((item) => item.token);
+    return EMOJIS[category] || [];
+  }
+
+  function getEmojiCategoryLabel(category) {
+    const customCatalog = getCustomEmojiCatalog(category);
+    return customCatalog ? t(customCatalog.label) : category;
+  }
+
+  function emojiCategoryHasCustomEmojiItems(category) {
+    return getEmojiCategoryItems(category).some((item) => isCustomEmojiToken(item));
+  }
+
+  function renderEmojiGridItemHtml(value) {
+    const item = getCustomEmoji(value);
+    if (item) {
+      const legacyPickerClass = item.category === 'qip-infium-original' ? ' qip-infium-emoji-item' : '';
+      const pickerImageClass = item.category === 'qip-infium-original'
+        ? 'custom-emoji-img--picker qip-infium-emoji--picker'
+        : 'custom-emoji-img--picker';
+      return `<div class="emoji-item custom-emoji-item ${esc(item.category)}-emoji-item${legacyPickerClass}" data-emoji="${esc(item.token)}" title="${esc(item.label)}">${renderCustomEmojiHtml(item.token, { className: pickerImageClass, picker: true })}</div>`;
+    }
+    return `<div class="emoji-item" data-emoji="${esc(value)}">${esc(value)}</div>`;
   }
 
   function renderEmojiGridItemsHtml(category) {
-    return getEmojiCategoryItems(category).map((em) => `<div class="emoji-item">${em}</div>`).join('');
+    return getEmojiCategoryItems(category).map(renderEmojiGridItemHtml).join('');
+  }
+
+  function applyEmojiGridCategoryState(grid, category, { syncPicker = true } = {}) {
+    const hasCustomItems = emojiCategoryHasCustomEmojiItems(category);
+    const hasQipHdItems = category === 'qip-hd' && hasCustomItems;
+    const hasQipOriginalItems = category === 'qip-infium-original' && hasCustomItems;
+    grid?.classList?.toggle('has-custom-emoji-images', hasCustomItems);
+    grid?.classList?.toggle('has-qip-hd-emojis', hasQipHdItems);
+    grid?.classList?.toggle('has-qip-infium-emojis', hasQipOriginalItems);
+    if (syncPicker) {
+      emojiPicker?.classList?.toggle('has-custom-emoji-images', hasCustomItems);
+      emojiPicker?.classList?.toggle('has-qip-hd-emojis', hasQipHdItems);
+      emojiPicker?.classList?.toggle('has-qip-infium-emojis', hasQipOriginalItems);
+    }
   }
 
   function getEmojiPickerLiveGrid() {
@@ -22064,6 +22506,7 @@
   function createEmojiPickerGridElement(category) {
     const grid = document.createElement('div');
     grid.className = 'emoji-grid';
+    applyEmojiGridCategoryState(grid, category, { syncPicker: false });
     grid.innerHTML = renderEmojiGridItemsHtml(category);
     return grid;
   }
@@ -22071,6 +22514,7 @@
   function renderEmojiPickerGrid(category) {
     const grid = getEmojiPickerLiveGrid();
     if (!grid) return;
+    applyEmojiGridCategoryState(grid, category);
     grid.innerHTML = renderEmojiGridItemsHtml(category);
   }
 
@@ -22096,36 +22540,70 @@
   }
 
   function updateRecentEmojiGridIfActive() {
+    if (typeof document === 'undefined' || !emojiPicker?.isConnected) return;
     if (getActiveEmojiPickerCategory() === RECENT_EMOJI_CATEGORY) {
       renderEmojiPickerGrid(RECENT_EMOJI_CATEGORY);
       positionEmojiPicker();
     }
   }
 
-  function applyRecentEmojis(list) {
+  function applyRecentEmojis(list, { persist = true } = {}) {
     recentEmojis = normalizeRecentEmojiList(list);
+    if (persist) persistLocalRecentEmojis(recentEmojis);
     updateRecentEmojiGridIfActive();
   }
 
+  function syncMissingRecentEmojisToServer(list, serverList = []) {
+    const serverSet = new Set(normalizeRecentEmojiList(serverList));
+    const missing = normalizeRecentEmojiList(list)
+      .filter((emoji) => !serverSet.has(emoji) && !recentEmojiServerRejected.has(emoji));
+    if (!missing.length) return;
+    missing.slice().reverse().forEach((emoji) => {
+      syncRecentEmojiToServer(emoji, 'backfill');
+    });
+  }
+
+  function isInvalidRecentEmojiApiError(error) {
+    return error?.status === 400 && String(error?.serverError || error?.message || '') === 'Invalid emoji';
+  }
+
+  function syncRecentEmojiToServer(emoji, reason) {
+    const value = normalizeRecentEmojiValue(emoji);
+    if (!value || recentEmojiServerRejected.has(value)) return Promise.resolve(null);
+    return api('/api/user/recent-emojis', { method: 'POST', body: { emoji: value } })
+      .catch((error) => {
+        if (isInvalidRecentEmojiApiError(error)) {
+          recentEmojiServerRejected.add(value);
+          return null;
+        }
+        console.warn(`[emoji] recent ${reason} failed:`, error);
+        return null;
+      });
+  }
+
   function rememberRecentEmoji(emoji, { sync = true } = {}) {
-    const value = String(emoji || '').trim();
-    if (!value) return;
-    applyRecentEmojis([value, ...recentEmojis.filter((item) => item !== value)]);
+    const value = normalizeRecentEmojiValue(emoji);
+    if (!value || !isValidRecentEmojiValue(value)) return;
+    applyRecentEmojis(mergeRecentEmojiLists([value], recentEmojis));
     if (!sync) return;
-    api('/api/user/recent-emojis', { method: 'POST', body: { emoji: value } })
+    syncRecentEmojiToServer(value, 'save')
       .then((data) => {
-        if (data?.emojis) applyRecentEmojis(data.emojis);
-      })
-      .catch((error) => console.warn('[emoji] recent save failed:', error));
+        if (data?.emojis) applyRecentEmojis(mergeRecentEmojiLists([value], recentEmojis, data.emojis));
+      });
   }
 
   async function loadRecentEmojis() {
+    const localRecent = loadLocalRecentEmojis();
+    if (localRecent.length) applyRecentEmojis(localRecent, { persist: false });
     try {
       const data = await api('/api/user/recent-emojis');
-      applyRecentEmojis(data?.emojis || []);
+      const serverRecent = normalizeRecentEmojiList(data?.emojis || []);
+      const merged = mergeRecentEmojiLists(localRecent, serverRecent);
+      applyRecentEmojis(merged);
+      syncMissingRecentEmojisToServer(merged, serverRecent);
     } catch (error) {
       console.warn('[emoji] recent load failed:', error);
-      applyRecentEmojis([]);
+      applyRecentEmojis(localRecent);
     }
   }
 
@@ -22133,12 +22611,14 @@
     const cats = getEmojiPickerCategories();
     let html = '<div class="emoji-tabs">';
     cats.forEach((cat, i) => {
-      html += `<div class="emoji-tab ${i === 0 ? 'active' : ''}" data-cat="${esc(cat)}">${cat}</div>`;
+      const tabClasses = `emoji-tab${i === 0 ? ' active' : ''}${isCustomEmojiCategory(cat) ? ' custom-emoji-tab' : ''}${cat === 'qip-infium-original' ? ' qip-infium-emoji-tab' : ''}`;
+      html += `<div class="${tabClasses}" data-cat="${esc(cat)}">${esc(getEmojiCategoryLabel(cat))}</div>`;
     });
     html += '</div><div class="emoji-grid-swipe horizontal-swipe-surface"><div class="emoji-grid horizontal-swipe-live">';
     html += renderEmojiGridItemsHtml(cats[0]);
     html += '</div></div>';
     emojiPicker.innerHTML = html;
+    applyEmojiGridCategoryState(getEmojiPickerLiveGrid(), cats[0]);
     syncEmojiPickerButton();
 
     emojiSwipePager?.destroy();
@@ -22199,13 +22679,24 @@
       }
       const item = e.target.closest('.emoji-item');
       if (item) {
-        const pos = msgInput.selectionStart;
-        const before = msgInput.value.substring(0, pos);
-        const after = msgInput.value.substring(pos);
-        msgInput.value = before + item.textContent + after;
-        msgInput.selectionStart = msgInput.selectionEnd = pos + item.textContent.length;
+        const value = item.dataset.emoji || item.textContent || '';
+        if (!value) return;
+        const insertion = getEmojiPickerInsertionValue(value);
+        const inputValue = msgInput.value || '';
+        const inputIsFocused = document.activeElement === msgInput;
+        if (inputIsFocused) snapComposerSelectionToCustomEmojiBoundary();
+        const start = inputIsFocused
+          ? Math.max(0, Math.min(inputValue.length, msgInput.selectionStart ?? inputValue.length))
+          : inputValue.length;
+        const end = inputIsFocused
+          ? Math.max(start, Math.min(inputValue.length, msgInput.selectionEnd ?? start))
+          : start;
+        const before = inputValue.substring(0, start);
+        const after = inputValue.substring(end);
+        msgInput.value = before + insertion + after;
+        msgInput.selectionStart = msgInput.selectionEnd = start + insertion.length;
         msgInput.dispatchEvent(new Event('input', { bubbles: true }));
-        rememberRecentEmoji(item.textContent);
+        rememberRecentEmoji(value);
         if (window.innerWidth > 768 || shouldKeepEmojiPickerKeyboard()) {
           focusComposerKeepKeyboard(true);
         }
@@ -22218,6 +22709,21 @@
     const isOpen = Boolean(emojiPickerOpen && isFloatingSurfaceVisible(emojiPicker));
     emojiBtn.classList.toggle('is-open', isOpen);
     emojiBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+  }
+
+  function getEmojiPickerAnchorClientTop(anchor, anchorRect) {
+    const row = inputRow instanceof HTMLElement ? inputRow : null;
+    if (!row || !(anchor === emojiBtn || row.contains(anchor))) return anchorRect.top;
+    const rowRect = row.getBoundingClientRect?.();
+    if (
+      !rowRect
+      || !Number.isFinite(rowRect.top)
+      || !Number.isFinite(rowRect.bottom)
+      || rowRect.bottom <= rowRect.top
+    ) {
+      return anchorRect.top;
+    }
+    return Math.min(anchorRect.top, rowRect.top);
   }
 
   function positionEmojiPicker(anchorEl = emojiPickerAnchorEl || emojiBtn) {
@@ -22247,9 +22753,10 @@
       viewport.left + 8,
       viewport.right - pickerSize.width - 8
     );
-    let top = rect.top + viewport.top - pickerSize.height - 8;
+    const anchorClientTop = getEmojiPickerAnchorClientTop(anchor, rect);
+    let top = anchorClientTop + viewport.top - pickerSize.height - 8;
     if (keyboardAttached) {
-      top = Math.min(top, rect.top - pickerSize.height - 8);
+      top = Math.min(top, anchorClientTop - pickerSize.height - 8);
     }
     top = clamp(top, viewport.top + 8, viewport.bottom - pickerSize.height - 8);
     positionFloatingElement(emojiPicker, left, top);
@@ -22289,6 +22796,26 @@
         syncEmojiPickerButton();
       },
     });
+  }
+
+  function isEventInsideEmojiPickerSurface(event) {
+    const path = typeof event?.composedPath === 'function' ? event.composedPath() : [];
+    if (path.includes(emojiPicker) || path.includes(emojiBtn)) return true;
+    const target = event?.target;
+    return Boolean(
+      target instanceof Node
+      && (
+        emojiPicker?.contains?.(target)
+        || emojiBtn?.contains?.(target)
+      )
+    );
+  }
+
+  function dismissEmojiPickerOutsideGesture(event) {
+    if (!isFloatingSurfaceVisible(emojiPicker)) return;
+    if (event?.type === 'pointerdown' && typeof event.button === 'number' && event.button !== 0) return;
+    if (isEventInsideEmojiPickerSurface(event)) return;
+    closeEmojiPicker();
   }
 
   function toggleEmojiPicker(anchorEl = emojiBtn, options = {}) {
@@ -22606,9 +23133,10 @@
   function getAdditionalReactionCategories() {
     const quickSet = new Set(QUICK_REACTIONS);
     return getEmojiPickerCategories()
+      .filter((key) => !isCustomEmojiCategory(key))
       .map((key) => ({
         key,
-        emojis: getEmojiCategoryItems(key).filter((emoji) => !quickSet.has(emoji)),
+        emojis: getEmojiCategoryItems(key).filter((emoji) => !quickSet.has(emoji) && !isCustomEmojiToken(emoji)),
       }))
       .filter((category) => category.key === RECENT_EMOJI_CATEGORY || category.emojis.length > 0);
   }
@@ -24735,23 +25263,93 @@
     return msgInputMeasureMirror.scrollHeight;
   }
 
+  function getComposerInputTextMetrics() {
+    if (!msgInput) return { lineHeight: 20, paddingY: 0, borderY: 0, singleLineHeight: 20, twoLineHeight: 40 };
+    const styles = getComputedStyle(msgInput);
+    const fontSize = parseFloat(styles.fontSize) || 15;
+    const lineHeight = parseFloat(styles.lineHeight) || (fontSize * 1.35);
+    const paddingY = (parseFloat(styles.paddingTop) || 0) + (parseFloat(styles.paddingBottom) || 0);
+    const borderY = (parseFloat(styles.borderTopWidth) || 0) + (parseFloat(styles.borderBottomWidth) || 0);
+    return {
+      lineHeight,
+      paddingY,
+      borderY,
+      singleLineHeight: lineHeight + paddingY + borderY,
+      twoLineHeight: (lineHeight * 2) + paddingY + borderY,
+    };
+  }
+
+  function renderComposerRichPreviewContent(value) {
+    const source = String(value || '');
+    const tokenRe = /^:qip-infium-\d{3}:|^:qip-hd-[a-z0-9][a-z0-9-]{0,63}:/i;
+    let html = '';
+    let text = '';
+    let hasEmoji = false;
+    let maxEmojiHeight = 0;
+    for (let index = 0; index < source.length;) {
+      let item = getComposerCustomEmojiItemFromMarker(source[index]);
+      let token = item?.token || '';
+      let nextIndex = item ? getComposerCustomEmojiClusterEnd(source, index) : index + 1;
+      if (!item) {
+        const tokenMatch = source.slice(index).match(tokenRe);
+        if (tokenMatch) {
+          token = tokenMatch[0];
+          item = getCustomEmoji(token);
+          if (item) nextIndex = index + token.length;
+        }
+      }
+      if (!item) {
+        text += source[index];
+        index += 1;
+        continue;
+      }
+      html += esc(text);
+      text = '';
+      html += renderCustomEmojiHtml(token, { className: 'composer-rich-emoji' });
+      hasEmoji = true;
+      maxEmojiHeight = Math.max(maxEmojiHeight, getCustomEmojiRenderedSize(item).height);
+      index = nextIndex;
+    }
+    html += esc(text);
+    return { html, hasEmoji, maxEmojiHeight };
+  }
+
+  function syncComposerRichPreview(metrics = getComposerInputTextMetrics()) {
+    if (!composerRichPreview || !msgInput) return 0;
+    const rendered = renderComposerRichPreviewContent(msgInput.value || '');
+    const wrap = msgInput.closest?.('.composer-input-wrap');
+    composerRichPreview.classList.toggle('hidden', !rendered.hasEmoji);
+    composerRichPreview.innerHTML = rendered.hasEmoji ? rendered.html : '';
+    wrap?.classList?.toggle('has-rich-preview', rendered.hasEmoji);
+    inputRow?.classList?.toggle('has-rich-emoji-preview', rendered.hasEmoji);
+    if (!rendered.hasEmoji) {
+      wrap?.classList?.remove('rich-preview-two-line');
+      inputRow?.classList?.remove('is-rich-emoji-multiline');
+      return 0;
+    }
+
+    const needsTwoLines = rendered.maxEmojiHeight > metrics.lineHeight + 2;
+    wrap?.classList?.toggle('rich-preview-two-line', needsTwoLines);
+    inputRow?.classList?.toggle('is-rich-emoji-multiline', needsTwoLines);
+    if (!needsTwoLines) return metrics.singleLineHeight;
+    return Math.max(metrics.twoLineHeight, rendered.maxEmojiHeight + metrics.paddingY + metrics.borderY + 2);
+  }
+
   function autoResize() {
     const wasMultiline = Boolean(inputRow?.classList.contains('is-multiline'));
+    const previousHeight = parseFloat(msgInput.style.height) || 0;
     const normalInputWidth = getNormalComposerInputWidth();
     const measuredScrollHeight = measureMsgInputScrollHeight(normalInputWidth);
-    const nextHeight = Math.min(measuredScrollHeight, 150);
+    const metrics = getComposerInputTextMetrics();
+    const richPreviewHeight = syncComposerRichPreview(metrics);
+    const nextHeight = Math.min(Math.max(measuredScrollHeight, richPreviewHeight), 150);
     msgInput.style.height = nextHeight + 'px';
     if (inputRow) {
-      const styles = getComputedStyle(msgInput);
-      const fontSize = parseFloat(styles.fontSize) || 15;
-      const lineHeight = parseFloat(styles.lineHeight) || (fontSize * 1.35);
-      const paddingY = (parseFloat(styles.paddingTop) || 0) + (parseFloat(styles.paddingBottom) || 0);
-      const borderY = (parseFloat(styles.borderTopWidth) || 0) + (parseFloat(styles.borderBottomWidth) || 0);
-      const singleLineHeight = lineHeight + paddingY + borderY;
-      const isMultiline = measuredScrollHeight > singleLineHeight + 2;
+      const isMultiline = nextHeight > metrics.singleLineHeight + 2;
       inputRow.classList.toggle('is-multiline', isMultiline);
       const changed = wasMultiline !== isMultiline;
-      if (changed && emojiPickerOpen && isFloatingSurfaceVisible(emojiPicker)) {
+      const heightChanged = Math.abs(nextHeight - previousHeight) > 0.5;
+      if ((changed || heightChanged) && emojiPickerOpen && isFloatingSurfaceVisible(emojiPicker)) {
         requestAnimationFrame(() => positionEmojiPicker(emojiBtn));
       }
     }
@@ -25115,14 +25713,19 @@
         console.warn('[context-convert] composer picker open failed:', error.message);
       });
     });
+    msgInput.addEventListener('beforeinput', (e) => {
+      handleComposerCustomEmojiBeforeInput(e);
+    });
     msgInput.addEventListener('keydown', (e) => {
       if (handleMentionPickerKeydown(e)) return;
+      if (handleComposerCustomEmojiKeydown(e)) return;
       if (e.key === 'Enter') {
         if (sendByEnter && !e.shiftKey && !e.ctrlKey) { e.preventDefault(); sendMessage(); }
         else if (!sendByEnter && e.ctrlKey) { e.preventDefault(); sendMessage(); }
       }
     });
     msgInput.addEventListener('input', () => {
+      normalizeComposerInputValue();
       saveComposerDraft(currentChatId);
       autoResize();
       syncMentionOpenButton();
@@ -25158,8 +25761,12 @@
       composerAiOverrideState.documentFormat = composerAiOverrideDocumentFormatEl.value || 'md';
       renderComposerAiOverride();
     });
-    msgInput.addEventListener('click', updateMentionPicker);
+    msgInput.addEventListener('click', () => {
+      snapComposerSelectionToCustomEmojiBoundary();
+      updateMentionPicker();
+    });
     msgInput.addEventListener('keyup', (e) => {
+      snapComposerSelectionToCustomEmojiBoundary();
       if (!['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(e.key)) updateMentionPicker();
     });
     window.visualViewport?.addEventListener('resize', () => {
@@ -27234,12 +27841,7 @@
       updateScrollBottomButton();
     });
 
-    // Close emoji picker on outside click
-    document.addEventListener('click', (e) => {
-      if (isFloatingSurfaceVisible(emojiPicker) && !emojiPicker.contains(e.target) && !e.target.closest('#emojiBtn')) {
-        closeEmojiPicker();
-      }
-    });
+    document.addEventListener('pointerdown', dismissEmojiPickerOutsideGesture, { passive: true, capture: true });
 
     // Reply bar close
     $('#replyBarClose').addEventListener('click', () => {

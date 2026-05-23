@@ -1,0 +1,952 @@
+{
+  "id": "qip-hd",
+  "label": "QIP HD",
+  "source": "C:\\Users\\kuzya\\Documents\\GitHub\\qip-emoji",
+  "items": [
+    {
+      "id": 1,
+      "token": ":qip-hd-qippda-aa:",
+      "src": "/assets/emoji/qip-hd/qippda_aa.gif",
+      "width": 48,
+      "height": 40,
+      "label": "QIP HD qippda aa",
+      "fileName": "qippda_aa.gif"
+    },
+    {
+      "id": 2,
+      "token": ":qip-hd-qippda-ab:",
+      "src": "/assets/emoji/qip-hd/qippda_ab.gif",
+      "width": 36,
+      "height": 44,
+      "label": "QIP HD qippda ab",
+      "fileName": "qippda_ab.gif"
+    },
+    {
+      "id": 3,
+      "token": ":qip-hd-qippda-ac:",
+      "src": "/assets/emoji/qip-hd/qippda_ac.gif",
+      "width": 36,
+      "height": 44,
+      "label": "QIP HD qippda ac",
+      "fileName": "qippda_ac.gif"
+    },
+    {
+      "id": 4,
+      "token": ":qip-hd-qippda-ad:",
+      "src": "/assets/emoji/qip-hd/qippda_ad.gif",
+      "width": 36,
+      "height": 36,
+      "label": "QIP HD qippda ad",
+      "fileName": "qippda_ad.gif"
+    },
+    {
+      "id": 5,
+      "token": ":qip-hd-qippda-ae:",
+      "src": "/assets/emoji/qip-hd/qippda_ae.gif",
+      "width": 36,
+      "height": 36,
+      "label": "QIP HD qippda ae",
+      "fileName": "qippda_ae.gif"
+    },
+    {
+      "id": 6,
+      "token": ":qip-hd-qippda-af:",
+      "src": "/assets/emoji/qip-hd/qippda_af.gif",
+      "width": 36,
+      "height": 36,
+      "label": "QIP HD qippda af",
+      "fileName": "qippda_af.gif"
+    },
+    {
+      "id": 7,
+      "token": ":qip-hd-qippda-ag:",
+      "src": "/assets/emoji/qip-hd/qippda_ag.gif",
+      "width": 36,
+      "height": 38,
+      "label": "QIP HD qippda ag",
+      "fileName": "qippda_ag.gif"
+    },
+    {
+      "id": 8,
+      "token": ":qip-hd-qippda-ah:",
+      "src": "/assets/emoji/qip-hd/qippda_ah.gif",
+      "width": 45,
+      "height": 44,
+      "label": "QIP HD qippda ah",
+      "fileName": "qippda_ah.gif"
+    },
+    {
+      "id": 9,
+      "token": ":qip-hd-qippda-ai:",
+      "src": "/assets/emoji/qip-hd/qippda_ai.gif",
+      "width": 36,
+      "height": 36,
+      "label": "QIP HD qippda ai",
+      "fileName": "qippda_ai.gif"
+    },
+    {
+      "id": 10,
+      "token": ":qip-hd-qippda-aj:",
+      "src": "/assets/emoji/qip-hd/qippda_aj.gif",
+      "width": 66,
+      "height": 42,
+      "label": "QIP HD qippda aj",
+      "fileName": "qippda_aj.gif"
+    },
+    {
+      "id": 11,
+      "token": ":qip-hd-qippda-ak:",
+      "src": "/assets/emoji/qip-hd/qippda_ak.gif",
+      "width": 58,
+      "height": 42,
+      "label": "QIP HD qippda ak",
+      "fileName": "qippda_ak.gif"
+    },
+    {
+      "id": 12,
+      "token": ":qip-hd-qippda-al:",
+      "src": "/assets/emoji/qip-hd/qippda_al.gif",
+      "width": 41,
+      "height": 49,
+      "label": "QIP HD qippda al",
+      "fileName": "qippda_al.gif"
+    },
+    {
+      "id": 13,
+      "token": ":qip-hd-qippda-am:",
+      "src": "/assets/emoji/qip-hd/qippda_am.gif",
+      "width": 70,
+      "height": 47,
+      "label": "QIP HD qippda am",
+      "fileName": "qippda_am.gif"
+    },
+    {
+      "id": 14,
+      "token": ":qip-hd-qippda-an:",
+      "src": "/assets/emoji/qip-hd/qippda_an.gif",
+      "width": 57,
+      "height": 43,
+      "label": "QIP HD qippda an",
+      "fileName": "qippda_an.gif"
+    },
+    {
+      "id": 15,
+      "token": ":qip-hd-qippda-ao:",
+      "src": "/assets/emoji/qip-hd/qippda_ao.gif",
+      "width": 39,
+      "height": 36,
+      "label": "QIP HD qippda ao",
+      "fileName": "qippda_ao.gif"
+    },
+    {
+      "id": 16,
+      "token": ":qip-hd-qippda-ap:",
+      "src": "/assets/emoji/qip-hd/qippda_ap.gif",
+      "width": 47,
+      "height": 44,
+      "label": "QIP HD qippda ap",
+      "fileName": "qippda_ap.gif"
+    },
+    {
+      "id": 17,
+      "token": ":qip-hd-qippda-aq:",
+      "src": "/assets/emoji/qip-hd/qippda_aq.gif",
+      "width": 78,
+      "height": 65,
+      "label": "QIP HD qippda aq",
+      "fileName": "qippda_aq.gif"
+    },
+    {
+      "id": 18,
+      "token": ":qip-hd-qippda-ar:",
+      "src": "/assets/emoji/qip-hd/qippda_ar.gif",
+      "width": 49,
+      "height": 45,
+      "label": "QIP HD qippda ar",
+      "fileName": "qippda_ar.gif"
+    },
+    {
+      "id": 19,
+      "token": ":qip-hd-qippda-as:",
+      "src": "/assets/emoji/qip-hd/qippda_as.gif",
+      "width": 44,
+      "height": 50,
+      "label": "QIP HD qippda as",
+      "fileName": "qippda_as.gif"
+    },
+    {
+      "id": 20,
+      "token": ":qip-hd-qippda-at:",
+      "src": "/assets/emoji/qip-hd/qippda_at.gif",
+      "width": 39,
+      "height": 39,
+      "label": "QIP HD qippda at",
+      "fileName": "qippda_at.gif"
+    },
+    {
+      "id": 21,
+      "token": ":qip-hd-qippda-au:",
+      "src": "/assets/emoji/qip-hd/qippda_au.gif",
+      "width": 42,
+      "height": 42,
+      "label": "QIP HD qippda au",
+      "fileName": "qippda_au.gif"
+    },
+    {
+      "id": 22,
+      "token": ":qip-hd-qippda-av:",
+      "src": "/assets/emoji/qip-hd/qippda_av.gif",
+      "width": 70,
+      "height": 45,
+      "label": "QIP HD qippda av",
+      "fileName": "qippda_av.gif"
+    },
+    {
+      "id": 23,
+      "token": ":qip-hd-qippda-aw:",
+      "src": "/assets/emoji/qip-hd/qippda_aw.gif",
+      "width": 91,
+      "height": 44,
+      "label": "QIP HD qippda aw",
+      "fileName": "qippda_aw.gif"
+    },
+    {
+      "id": 24,
+      "token": ":qip-hd-qippda-ax:",
+      "src": "/assets/emoji/qip-hd/qippda_ax.gif",
+      "width": 54,
+      "height": 50,
+      "label": "QIP HD qippda ax",
+      "fileName": "qippda_ax.gif"
+    },
+    {
+      "id": 25,
+      "token": ":qip-hd-qippda-ay:",
+      "src": "/assets/emoji/qip-hd/qippda_ay.gif",
+      "width": 48,
+      "height": 42,
+      "label": "QIP HD qippda ay",
+      "fileName": "qippda_ay.gif"
+    },
+    {
+      "id": 26,
+      "token": ":qip-hd-qippda-az:",
+      "src": "/assets/emoji/qip-hd/qippda_az.gif",
+      "width": 101,
+      "height": 55,
+      "label": "QIP HD qippda az",
+      "fileName": "qippda_az.gif"
+    },
+    {
+      "id": 27,
+      "token": ":qip-hd-qippda-ba:",
+      "src": "/assets/emoji/qip-hd/qippda_ba.gif",
+      "width": 40,
+      "height": 40,
+      "label": "QIP HD qippda ba",
+      "fileName": "qippda_ba.gif"
+    },
+    {
+      "id": 28,
+      "token": ":qip-hd-qippda-bb:",
+      "src": "/assets/emoji/qip-hd/qippda_bb.gif",
+      "width": 46,
+      "height": 40,
+      "label": "QIP HD qippda bb",
+      "fileName": "qippda_bb.gif"
+    },
+    {
+      "id": 29,
+      "token": ":qip-hd-qippda-bc:",
+      "src": "/assets/emoji/qip-hd/qippda_bc.gif",
+      "width": 57,
+      "height": 62,
+      "label": "QIP HD qippda bc",
+      "fileName": "qippda_bc.gif"
+    },
+    {
+      "id": 30,
+      "token": ":qip-hd-qippda-bd:",
+      "src": "/assets/emoji/qip-hd/qippda_bd.gif",
+      "width": 71,
+      "height": 50,
+      "label": "QIP HD qippda bd",
+      "fileName": "qippda_bd.gif"
+    },
+    {
+      "id": 31,
+      "token": ":qip-hd-qippda-be:",
+      "src": "/assets/emoji/qip-hd/qippda_be.gif",
+      "width": 36,
+      "height": 44,
+      "label": "QIP HD qippda be",
+      "fileName": "qippda_be.gif"
+    },
+    {
+      "id": 32,
+      "token": ":qip-hd-qippda-bf:",
+      "src": "/assets/emoji/qip-hd/qippda_bf.gif",
+      "width": 73,
+      "height": 46,
+      "label": "QIP HD qippda bf",
+      "fileName": "qippda_bf.gif"
+    },
+    {
+      "id": 33,
+      "token": ":qip-hd-qippda-bg:",
+      "src": "/assets/emoji/qip-hd/qippda_bg.gif",
+      "width": 54,
+      "height": 47,
+      "label": "QIP HD qippda bg",
+      "fileName": "qippda_bg.gif"
+    },
+    {
+      "id": 34,
+      "token": ":qip-hd-qippda-bh:",
+      "src": "/assets/emoji/qip-hd/qippda_bh.gif",
+      "width": 50,
+      "height": 47,
+      "label": "QIP HD qippda bh",
+      "fileName": "qippda_bh.gif"
+    },
+    {
+      "id": 35,
+      "token": ":qip-hd-qippda-bi:",
+      "src": "/assets/emoji/qip-hd/qippda_bi.gif",
+      "width": 78,
+      "height": 52,
+      "label": "QIP HD qippda bi",
+      "fileName": "qippda_bi.gif"
+    },
+    {
+      "id": 36,
+      "token": ":qip-hd-qippda-bj:",
+      "src": "/assets/emoji/qip-hd/qippda_bj.gif",
+      "width": 55,
+      "height": 47,
+      "label": "QIP HD qippda bj",
+      "fileName": "qippda_bj.gif"
+    },
+    {
+      "id": 37,
+      "token": ":qip-hd-qippda-bk:",
+      "src": "/assets/emoji/qip-hd/qippda_bk.gif",
+      "width": 61,
+      "height": 47,
+      "label": "QIP HD qippda bk",
+      "fileName": "qippda_bk.gif"
+    },
+    {
+      "id": 38,
+      "token": ":qip-hd-qippda-bl:",
+      "src": "/assets/emoji/qip-hd/qippda_bl.gif",
+      "width": 36,
+      "height": 44,
+      "label": "QIP HD qippda bl",
+      "fileName": "qippda_bl.gif"
+    },
+    {
+      "id": 39,
+      "token": ":qip-hd-qippda-bm:",
+      "src": "/assets/emoji/qip-hd/qippda_bm.gif",
+      "width": 36,
+      "height": 49,
+      "label": "QIP HD qippda bm",
+      "fileName": "qippda_bm.gif"
+    },
+    {
+      "id": 40,
+      "token": ":qip-hd-qippda-bn:",
+      "src": "/assets/emoji/qip-hd/qippda_bn.gif",
+      "width": 62,
+      "height": 37,
+      "label": "QIP HD qippda bn",
+      "fileName": "qippda_bn.gif"
+    },
+    {
+      "id": 41,
+      "token": ":qip-hd-qippda-bo:",
+      "src": "/assets/emoji/qip-hd/qippda_bo.gif",
+      "width": 70,
+      "height": 45,
+      "label": "QIP HD qippda bo",
+      "fileName": "qippda_bo.gif"
+    },
+    {
+      "id": 42,
+      "token": ":qip-hd-qippda-bp:",
+      "src": "/assets/emoji/qip-hd/qippda_bp.gif",
+      "width": 79,
+      "height": 50,
+      "label": "QIP HD qippda bp",
+      "fileName": "qippda_bp.gif"
+    },
+    {
+      "id": 43,
+      "token": ":qip-hd-qippda-bq:",
+      "src": "/assets/emoji/qip-hd/qippda_bq.gif",
+      "width": 76,
+      "height": 47,
+      "label": "QIP HD qippda bq",
+      "fileName": "qippda_bq.gif"
+    },
+    {
+      "id": 44,
+      "token": ":qip-hd-qippda-br:",
+      "src": "/assets/emoji/qip-hd/qippda_br.gif",
+      "width": 54,
+      "height": 44,
+      "label": "QIP HD qippda br",
+      "fileName": "qippda_br.gif"
+    },
+    {
+      "id": 45,
+      "token": ":qip-hd-qippda-bs:",
+      "src": "/assets/emoji/qip-hd/qippda_bs.gif",
+      "width": 38,
+      "height": 46,
+      "label": "QIP HD qippda bs",
+      "fileName": "qippda_bs.gif"
+    },
+    {
+      "id": 46,
+      "token": ":qip-hd-qippda-bt:",
+      "src": "/assets/emoji/qip-hd/qippda_bt.gif",
+      "width": 50,
+      "height": 44,
+      "label": "QIP HD qippda bt",
+      "fileName": "qippda_bt.gif"
+    },
+    {
+      "id": 47,
+      "token": ":qip-hd-qippda-bu:",
+      "src": "/assets/emoji/qip-hd/qippda_bu.gif",
+      "width": 99,
+      "height": 50,
+      "label": "QIP HD qippda bu",
+      "fileName": "qippda_bu.gif"
+    },
+    {
+      "id": 48,
+      "token": ":qip-hd-qippda-bv:",
+      "src": "/assets/emoji/qip-hd/qippda_bv.gif",
+      "width": 67,
+      "height": 48,
+      "label": "QIP HD qippda bv",
+      "fileName": "qippda_bv.gif"
+    },
+    {
+      "id": 49,
+      "token": ":qip-hd-qippda-bw:",
+      "src": "/assets/emoji/qip-hd/qippda_bw.gif",
+      "width": 51,
+      "height": 44,
+      "label": "QIP HD qippda bw",
+      "fileName": "qippda_bw.gif"
+    },
+    {
+      "id": 50,
+      "token": ":qip-hd-qippda-bx:",
+      "src": "/assets/emoji/qip-hd/qippda_bx.gif",
+      "width": 72,
+      "height": 45,
+      "label": "QIP HD qippda bx",
+      "fileName": "qippda_bx.gif"
+    },
+    {
+      "id": 51,
+      "token": ":qip-hd-qippda-by:",
+      "src": "/assets/emoji/qip-hd/qippda_by.gif",
+      "width": 75,
+      "height": 55,
+      "label": "QIP HD qippda by",
+      "fileName": "qippda_by.gif"
+    },
+    {
+      "id": 52,
+      "token": ":qip-hd-qippda-bz:",
+      "src": "/assets/emoji/qip-hd/qippda_bz.gif",
+      "width": 71,
+      "height": 58,
+      "label": "QIP HD qippda bz",
+      "fileName": "qippda_bz.gif"
+    },
+    {
+      "id": 53,
+      "token": ":qip-hd-qippda-ca:",
+      "src": "/assets/emoji/qip-hd/qippda_ca.gif",
+      "width": 38,
+      "height": 43,
+      "label": "QIP HD qippda ca",
+      "fileName": "qippda_ca.gif"
+    },
+    {
+      "id": 54,
+      "token": ":qip-hd-qippda-cb:",
+      "src": "/assets/emoji/qip-hd/qippda_cb.gif",
+      "width": 68,
+      "height": 45,
+      "label": "QIP HD qippda cb",
+      "fileName": "qippda_cb.gif"
+    },
+    {
+      "id": 55,
+      "token": ":qip-hd-qippda-cc:",
+      "src": "/assets/emoji/qip-hd/qippda_cc.gif",
+      "width": 74,
+      "height": 62,
+      "label": "QIP HD qippda cc",
+      "fileName": "qippda_cc.gif"
+    },
+    {
+      "id": 56,
+      "token": ":qip-hd-qippda-cd:",
+      "src": "/assets/emoji/qip-hd/qippda_cd.gif",
+      "width": 68,
+      "height": 46,
+      "label": "QIP HD qippda cd",
+      "fileName": "qippda_cd.gif"
+    },
+    {
+      "id": 57,
+      "token": ":qip-hd-qippda-ce:",
+      "src": "/assets/emoji/qip-hd/qippda_ce.gif",
+      "width": 36,
+      "height": 44,
+      "label": "QIP HD qippda ce",
+      "fileName": "qippda_ce.gif"
+    },
+    {
+      "id": 58,
+      "token": ":qip-hd-qippda-cf:",
+      "src": "/assets/emoji/qip-hd/qippda_cf.gif",
+      "width": 36,
+      "height": 36,
+      "label": "QIP HD qippda cf",
+      "fileName": "qippda_cf.gif"
+    },
+    {
+      "id": 59,
+      "token": ":qip-hd-qippda-cg:",
+      "src": "/assets/emoji/qip-hd/qippda_cg.gif",
+      "width": 43,
+      "height": 37,
+      "label": "QIP HD qippda cg",
+      "fileName": "qippda_cg.gif"
+    },
+    {
+      "id": 60,
+      "token": ":qip-hd-qippda-ch:",
+      "src": "/assets/emoji/qip-hd/qippda_ch.gif",
+      "width": 78,
+      "height": 60,
+      "label": "QIP HD qippda ch",
+      "fileName": "qippda_ch.gif"
+    },
+    {
+      "id": 61,
+      "token": ":qip-hd-qippda-ci:",
+      "src": "/assets/emoji/qip-hd/qippda_ci.gif",
+      "width": 74,
+      "height": 46,
+      "label": "QIP HD qippda ci",
+      "fileName": "qippda_ci.gif"
+    },
+    {
+      "id": 62,
+      "token": ":qip-hd-qippda-cj:",
+      "src": "/assets/emoji/qip-hd/qippda_cj.gif",
+      "width": 67,
+      "height": 67,
+      "label": "QIP HD qippda cj",
+      "fileName": "qippda_cj.gif"
+    },
+    {
+      "id": 63,
+      "token": ":qip-hd-qippda-ck:",
+      "src": "/assets/emoji/qip-hd/qippda_ck.gif",
+      "width": 79,
+      "height": 51,
+      "label": "QIP HD qippda ck",
+      "fileName": "qippda_ck.gif"
+    },
+    {
+      "id": 64,
+      "token": ":qip-hd-qippda-cl:",
+      "src": "/assets/emoji/qip-hd/qippda_cl.gif",
+      "width": 104,
+      "height": 78,
+      "label": "QIP HD qippda cl",
+      "fileName": "qippda_cl.gif"
+    },
+    {
+      "id": 65,
+      "token": ":qip-hd-qippda-cm:",
+      "src": "/assets/emoji/qip-hd/qippda_cm.gif",
+      "width": 73,
+      "height": 45,
+      "label": "QIP HD qippda cm",
+      "fileName": "qippda_cm.gif"
+    },
+    {
+      "id": 66,
+      "token": ":qip-hd-qippda-cn:",
+      "src": "/assets/emoji/qip-hd/qippda_cn.gif",
+      "width": 71,
+      "height": 46,
+      "label": "QIP HD qippda cn",
+      "fileName": "qippda_cn.gif"
+    },
+    {
+      "id": 67,
+      "token": ":qip-hd-qippda-co:",
+      "src": "/assets/emoji/qip-hd/qippda_co.gif",
+      "width": 80,
+      "height": 47,
+      "label": "QIP HD qippda co",
+      "fileName": "qippda_co.gif"
+    },
+    {
+      "id": 68,
+      "token": ":qip-hd-qippda-cp:",
+      "src": "/assets/emoji/qip-hd/qippda_cp.gif",
+      "width": 72,
+      "height": 51,
+      "label": "QIP HD qippda cp",
+      "fileName": "qippda_cp.gif"
+    },
+    {
+      "id": 69,
+      "token": ":qip-hd-qippda-cq:",
+      "src": "/assets/emoji/qip-hd/qippda_cq.gif",
+      "width": 69,
+      "height": 72,
+      "label": "QIP HD qippda cq",
+      "fileName": "qippda_cq.gif"
+    },
+    {
+      "id": 70,
+      "token": ":qip-hd-qippda-cr:",
+      "src": "/assets/emoji/qip-hd/qippda_cr.gif",
+      "width": 81,
+      "height": 47,
+      "label": "QIP HD qippda cr",
+      "fileName": "qippda_cr.gif"
+    },
+    {
+      "id": 71,
+      "token": ":qip-hd-qippda-cs:",
+      "src": "/assets/emoji/qip-hd/qippda_cs.gif",
+      "width": 70,
+      "height": 42,
+      "label": "QIP HD qippda cs",
+      "fileName": "qippda_cs.gif"
+    },
+    {
+      "id": 72,
+      "token": ":qip-hd-qippda-ct:",
+      "src": "/assets/emoji/qip-hd/qippda_ct.gif",
+      "width": 71,
+      "height": 47,
+      "label": "QIP HD qippda ct",
+      "fileName": "qippda_ct.gif"
+    },
+    {
+      "id": 73,
+      "token": ":qip-hd-qippda-cu:",
+      "src": "/assets/emoji/qip-hd/qippda_cu.gif",
+      "width": 68,
+      "height": 44,
+      "label": "QIP HD qippda cu",
+      "fileName": "qippda_cu.gif"
+    },
+    {
+      "id": 74,
+      "token": ":qip-hd-qippda-cv:",
+      "src": "/assets/emoji/qip-hd/qippda_cv.gif",
+      "width": 53,
+      "height": 47,
+      "label": "QIP HD qippda cv",
+      "fileName": "qippda_cv.gif"
+    },
+    {
+      "id": 75,
+      "token": ":qip-hd-qippda-cw:",
+      "src": "/assets/emoji/qip-hd/qippda_cw.gif",
+      "width": 74,
+      "height": 44,
+      "label": "QIP HD qippda cw",
+      "fileName": "qippda_cw.gif"
+    },
+    {
+      "id": 76,
+      "token": ":qip-hd-qippda-cx:",
+      "src": "/assets/emoji/qip-hd/qippda_cx.gif",
+      "width": 105,
+      "height": 95,
+      "label": "QIP HD qippda cx",
+      "fileName": "qippda_cx.gif"
+    },
+    {
+      "id": 77,
+      "token": ":qip-hd-qippda-cy:",
+      "src": "/assets/emoji/qip-hd/qippda_cy.gif",
+      "width": 68,
+      "height": 45,
+      "label": "QIP HD qippda cy",
+      "fileName": "qippda_cy.gif"
+    },
+    {
+      "id": 78,
+      "token": ":qip-hd-qippda-cz:",
+      "src": "/assets/emoji/qip-hd/qippda_cz.gif",
+      "width": 68,
+      "height": 40,
+      "label": "QIP HD qippda cz",
+      "fileName": "qippda_cz.gif"
+    },
+    {
+      "id": 79,
+      "token": ":qip-hd-qippda-da:",
+      "src": "/assets/emoji/qip-hd/qippda_da.gif",
+      "width": 68,
+      "height": 42,
+      "label": "QIP HD qippda da",
+      "fileName": "qippda_da.gif"
+    },
+    {
+      "id": 80,
+      "token": ":qip-hd-qippda-db:",
+      "src": "/assets/emoji/qip-hd/qippda_db.gif",
+      "width": 67,
+      "height": 45,
+      "label": "QIP HD qippda db",
+      "fileName": "qippda_db.gif"
+    },
+    {
+      "id": 81,
+      "token": ":qip-hd-qippda-dc:",
+      "src": "/assets/emoji/qip-hd/qippda_dc.gif",
+      "width": 51,
+      "height": 70,
+      "label": "QIP HD qippda dc",
+      "fileName": "qippda_dc.gif"
+    },
+    {
+      "id": 82,
+      "token": ":qip-hd-qippda-dd:",
+      "src": "/assets/emoji/qip-hd/qippda_dd.gif",
+      "width": 72,
+      "height": 48,
+      "label": "QIP HD qippda dd",
+      "fileName": "qippda_dd.gif"
+    },
+    {
+      "id": 83,
+      "token": ":qip-hd-qippda-de:",
+      "src": "/assets/emoji/qip-hd/qippda_de.gif",
+      "width": 80,
+      "height": 71,
+      "label": "QIP HD qippda de",
+      "fileName": "qippda_de.gif"
+    },
+    {
+      "id": 84,
+      "token": ":qip-hd-qippda-df:",
+      "src": "/assets/emoji/qip-hd/qippda_df.gif",
+      "width": 72,
+      "height": 44,
+      "label": "QIP HD qippda df",
+      "fileName": "qippda_df.gif"
+    },
+    {
+      "id": 85,
+      "token": ":qip-hd-qippda-dg:",
+      "src": "/assets/emoji/qip-hd/qippda_dg.gif",
+      "width": 64,
+      "height": 54,
+      "label": "QIP HD qippda dg",
+      "fileName": "qippda_dg.gif"
+    },
+    {
+      "id": 86,
+      "token": ":qip-hd-qippda-dh:",
+      "src": "/assets/emoji/qip-hd/qippda_dh.gif",
+      "width": 70,
+      "height": 54,
+      "label": "QIP HD qippda dh",
+      "fileName": "qippda_dh.gif"
+    },
+    {
+      "id": 87,
+      "token": ":qip-hd-qippda-di:",
+      "src": "/assets/emoji/qip-hd/qippda_di.gif",
+      "width": 61,
+      "height": 65,
+      "label": "QIP HD qippda di",
+      "fileName": "qippda_di.gif"
+    },
+    {
+      "id": 88,
+      "token": ":qip-hd-qippda-dj:",
+      "src": "/assets/emoji/qip-hd/qippda_dj.gif",
+      "width": 54,
+      "height": 54,
+      "label": "QIP HD qippda dj",
+      "fileName": "qippda_dj.gif"
+    },
+    {
+      "id": 89,
+      "token": ":qip-hd-qippda-dk:",
+      "src": "/assets/emoji/qip-hd/qippda_dk.gif",
+      "width": 104,
+      "height": 54,
+      "label": "QIP HD qippda dk",
+      "fileName": "qippda_dk.gif"
+    },
+    {
+      "id": 90,
+      "token": ":qip-hd-qippda-dl:",
+      "src": "/assets/emoji/qip-hd/qippda_dl.gif",
+      "width": 93,
+      "height": 52,
+      "label": "QIP HD qippda dl",
+      "fileName": "qippda_dl.gif"
+    },
+    {
+      "id": 91,
+      "token": ":qip-hd-qippda-dm:",
+      "src": "/assets/emoji/qip-hd/qippda_dm.gif",
+      "width": 78,
+      "height": 60,
+      "label": "QIP HD qippda dm",
+      "fileName": "qippda_dm.gif"
+    },
+    {
+      "id": 92,
+      "token": ":qip-hd-qippda-dn:",
+      "src": "/assets/emoji/qip-hd/qippda_dn.gif",
+      "width": 55,
+      "height": 40,
+      "label": "QIP HD qippda dn",
+      "fileName": "qippda_dn.gif"
+    },
+    {
+      "id": 93,
+      "token": ":qip-hd-qippda-do:",
+      "src": "/assets/emoji/qip-hd/qippda_do.gif",
+      "width": 36,
+      "height": 36,
+      "label": "QIP HD qippda do",
+      "fileName": "qippda_do.gif"
+    },
+    {
+      "id": 94,
+      "token": ":qip-hd-qippda-dp:",
+      "src": "/assets/emoji/qip-hd/qippda_dp.gif",
+      "width": 78,
+      "height": 72,
+      "label": "QIP HD qippda dp",
+      "fileName": "qippda_dp.gif"
+    },
+    {
+      "id": 95,
+      "token": ":qip-hd-qippda-dq:",
+      "src": "/assets/emoji/qip-hd/qippda_dq.gif",
+      "width": 72,
+      "height": 52,
+      "label": "QIP HD qippda dq",
+      "fileName": "qippda_dq.gif"
+    },
+    {
+      "id": 96,
+      "token": ":qip-hd-qippda-dr:",
+      "src": "/assets/emoji/qip-hd/qippda_dr.gif",
+      "width": 80,
+      "height": 60,
+      "label": "QIP HD qippda dr",
+      "fileName": "qippda_dr.gif"
+    },
+    {
+      "id": 97,
+      "token": ":qip-hd-qippda-ds:",
+      "src": "/assets/emoji/qip-hd/qippda_ds.gif",
+      "width": 44,
+      "height": 46,
+      "label": "QIP HD qippda ds",
+      "fileName": "qippda_ds.gif"
+    },
+    {
+      "id": 98,
+      "token": ":qip-hd-qippda-dt:",
+      "src": "/assets/emoji/qip-hd/qippda_dt.gif",
+      "width": 80,
+      "height": 52,
+      "label": "QIP HD qippda dt",
+      "fileName": "qippda_dt.gif"
+    },
+    {
+      "id": 99,
+      "token": ":qip-hd-qippda-du:",
+      "src": "/assets/emoji/qip-hd/qippda_du.gif",
+      "width": 99,
+      "height": 39,
+      "label": "QIP HD qippda du",
+      "fileName": "qippda_du.gif"
+    },
+    {
+      "id": 100,
+      "token": ":qip-hd-qippda-dv:",
+      "src": "/assets/emoji/qip-hd/qippda_dv.gif",
+      "width": 112,
+      "height": 50,
+      "label": "QIP HD qippda dv",
+      "fileName": "qippda_dv.gif"
+    },
+    {
+      "id": 101,
+      "token": ":qip-hd-qippda-dw:",
+      "src": "/assets/emoji/qip-hd/qippda_dw.gif",
+      "width": 71,
+      "height": 52,
+      "label": "QIP HD qippda dw",
+      "fileName": "qippda_dw.gif"
+    },
+    {
+      "id": 102,
+      "token": ":qip-hd-qippda-dx:",
+      "src": "/assets/emoji/qip-hd/qippda_dx.gif",
+      "width": 69,
+      "height": 46,
+      "label": "QIP HD qippda dx",
+      "fileName": "qippda_dx.gif"
+    },
+    {
+      "id": 103,
+      "token": ":qip-hd-qippda-dy:",
+      "src": "/assets/emoji/qip-hd/qippda_dy.gif",
+      "width": 36,
+      "height": 36,
+      "label": "QIP HD qippda dy",
+      "fileName": "qippda_dy.gif"
+    },
+    {
+      "id": 104,
+      "token": ":qip-hd-qippda-dz:",
+      "src": "/assets/emoji/qip-hd/qippda_dz.gif",
+      "width": 48,
+      "height": 44,
+      "label": "QIP HD qippda dz",
+      "fileName": "qippda_dz.gif"
+    },
+    {
+      "id": 105,
+      "token": ":qip-hd-qippda-ea:",
+      "src": "/assets/emoji/qip-hd/qippda_ea.gif",
+      "width": 107,
+      "height": 73,
+      "label": "QIP HD qippda ea",
+      "fileName": "qippda_ea.gif"
+    }
+  ]
+}
