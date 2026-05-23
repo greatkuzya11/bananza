@@ -733,6 +733,69 @@ a:hover { text-decoration: underline; }
   width: 0;
   height: 0;
 }
+
+.horizontal-swipe-surface {
+  position: relative;
+  overflow: hidden;
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+}
+.horizontal-swipe-listen-target {
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.horizontal-swipe-surface.is-horizontal-swipe-dragging,
+.horizontal-swipe-surface.is-horizontal-swipe-settling,
+.horizontal-swipe-surface.is-horizontal-swipe-preparing {
+  will-change: transform;
+}
+.horizontal-swipe-surface.is-horizontal-swipe-dragging,
+.horizontal-swipe-surface.is-horizontal-swipe-preparing {
+  transition: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: grabbing;
+}
+.horizontal-swipe-surface.is-horizontal-swipe-settling {
+  pointer-events: none;
+  transition: transform .22s cubic-bezier(.22, .84, .24, 1);
+}
+.horizontal-swipe-surface.is-horizontal-swipe-paging > .horizontal-swipe-live {
+  visibility: hidden;
+}
+.horizontal-swipe-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  overflow: hidden;
+  pointer-events: none;
+  padding: inherit;
+  box-sizing: border-box;
+}
+.horizontal-swipe-track {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  will-change: transform;
+}
+.horizontal-swipe-surface.is-horizontal-swipe-dragging .horizontal-swipe-track,
+.horizontal-swipe-surface.is-horizontal-swipe-preparing .horizontal-swipe-track {
+  transition: none;
+}
+.horizontal-swipe-surface.is-horizontal-swipe-settling .horizontal-swipe-track {
+  transition: transform .22s cubic-bezier(.22, .84, .24, 1);
+}
+.horizontal-swipe-page {
+  flex: 0 0 100%;
+  width: 100%;
+  min-width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--horizontal-swipe-page-background, var(--bg-modal));
+}
 .chat-folder-list-surface.is-folder-switching-out {
   pointer-events: none;
 }
@@ -2759,32 +2822,42 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
 }
 
 .reaction-emoji-popover {
+  --emoji-picker-cols: 6;
+  --emoji-picker-rows: 7;
+  --emoji-picker-item-size: 38px;
+  --emoji-picker-gap: 2px;
+  --emoji-picker-grid-padding: 8px;
+  --emoji-picker-width: 254px;
+  --emoji-picker-grid-height: 294px;
   z-index: 430;
-  width: min(340px, calc(100vw - 16px));
-  max-height: min(330px, calc(100vh - 32px));
-  padding: 8px;
-  border-radius: 18px;
+  width: var(--emoji-picker-width);
+  max-width: calc(100vw - 16px);
+  padding: 0;
+  border-radius: 12px;
   border: 1px solid var(--border-light);
   background: var(--bg-modal);
-  box-shadow: 0 12px 36px rgba(0,0,0,.45);
+  box-shadow: 0 4px 24px rgba(0,0,0,.4);
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  gap: 8px;
 }
 .reaction-emoji-tabs {
   display: flex;
-  gap: 4px;
+  border-bottom: 1px solid var(--border-light);
+  padding: 4px;
   overflow-x: auto;
   overflow-y: hidden;
-  padding-bottom: 2px;
-  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+.reaction-emoji-grid-swipe {
+  height: var(--emoji-picker-grid-height);
+  flex: 0 0 auto;
+  min-height: 0;
 }
 .reaction-emoji-tab {
   flex: 0 0 auto;
-  min-width: 34px;
-  height: 34px;
-  padding: 0 8px;
-  border-radius: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
   font-size: 18px;
 }
 .reaction-emoji-tab.active,
@@ -2793,20 +2866,27 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
 }
 .reaction-emoji-grid {
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
-  gap: 4px;
+  grid-template-columns: repeat(var(--emoji-picker-cols), var(--emoji-picker-item-size));
+  grid-auto-rows: var(--emoji-picker-item-size);
+  height: var(--emoji-picker-grid-height);
+  padding: var(--emoji-picker-grid-padding);
+  gap: var(--emoji-picker-gap);
   overflow-y: auto;
-  padding-right: 2px;
+  overflow-x: hidden;
+  flex: 0 0 auto;
   touch-action: pan-y;
 }
+.reaction-emoji-grid-swipe > .reaction-emoji-grid,
+.horizontal-swipe-page > .reaction-emoji-grid {
+  height: 100%;
+}
 .reaction-emoji-item {
-  width: 100%;
-  min-width: 0;
-  aspect-ratio: 1;
+  width: var(--emoji-picker-item-size);
+  height: var(--emoji-picker-item-size);
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 10px;
+  border-radius: 6px;
   font-size: 22px;
 }
 .reaction-emoji-item:hover {
@@ -3429,6 +3509,10 @@ html[data-modal-animation="none"] .composer-context-convert-btn {
   padding: 6px 8px; font-size: 18px; border-radius: 6px; cursor: pointer; flex-shrink: 0;
 }
 .emoji-tab.active { background: var(--bg-input); }
+.emoji-grid-swipe {
+  height: var(--emoji-picker-grid-height);
+  flex: 0 0 auto;
+}
 .emoji-grid {
   display: grid;
   grid-template-columns: repeat(var(--emoji-picker-cols), var(--emoji-picker-item-size));
@@ -3439,6 +3523,10 @@ html[data-modal-animation="none"] .composer-context-convert-btn {
   scrollbar-width: none;
   -ms-overflow-style: none;
   touch-action: pan-y;
+}
+.emoji-grid-swipe > .emoji-grid,
+.horizontal-swipe-page > .emoji-grid {
+  height: 100%;
 }
 .emoji-grid::-webkit-scrollbar {
   width: 0;
@@ -3734,6 +3822,7 @@ html[data-modal-animation="none"] .search-panel {
   height: min(620px, 80vh);
 }
 #newChatModal .modal-body {
+  --horizontal-swipe-page-background: var(--surface-elevated, var(--bg-modal));
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -3821,6 +3910,25 @@ select.modal-input optgroup {
 
 .tab-pane { display: none; }
 .tab-pane.active { display: block; }
+#newChatModal .modal-body.is-horizontal-swipe-paging > .tab-pane.active {
+  visibility: hidden;
+}
+#newChatModal .horizontal-swipe-page > .tab-pane {
+  background: var(--horizontal-swipe-page-background, var(--bg-modal));
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+}
+#newChatModal .horizontal-swipe-page .user-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+#newChatModal .horizontal-swipe-page .folder-chat-selection-list {
+  max-height: none;
+}
 
 /* ── User list ───────────────────────────────────────────────────────────── */
 .user-list { display: flex; flex-direction: column; gap: 2px; }

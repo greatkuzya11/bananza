@@ -124,6 +124,11 @@
   const CHAT_FOLDER_SWIPE_COMMIT_RATIO = 0.22;
   const CHAT_FOLDER_SWIPE_EDGE_DAMPING = 0.34;
   const CHAT_FOLDER_SWIPE_EDGE_MAX_PX = 52;
+  const HORIZONTAL_PAGER_SWIPE_START_PX = CHAT_FOLDER_SWIPE_START_PX;
+  const HORIZONTAL_PAGER_SWIPE_COMMIT_MIN_PX = CHAT_FOLDER_SWIPE_COMMIT_MIN_PX;
+  const HORIZONTAL_PAGER_SWIPE_COMMIT_RATIO = CHAT_FOLDER_SWIPE_COMMIT_RATIO;
+  const HORIZONTAL_PAGER_SWIPE_EDGE_DAMPING = CHAT_FOLDER_SWIPE_EDGE_DAMPING;
+  const HORIZONTAL_PAGER_SWIPE_EDGE_MAX_PX = CHAT_FOLDER_SWIPE_EDGE_MAX_PX;
   const RESUME_WS_REFRESH_AFTER_MS = 25000;
   const NOTES_CHAT_EMOJI = '📝';
   const CHAT_CONTEXT_LONG_PRESS_MS = 500;
@@ -535,6 +540,9 @@
   let emojiPickerAnchorEl = null;
   let emojiPickerKeyboardStabilizeFrame = 0;
   let emojiPickerKeyboardStabilizeTimer = null;
+  let emojiSwipePager = null;
+  let reactionEmojiSwipePager = null;
+  let newChatTabSwipePager = null;
   let avatarUserMenuState = null;
   let chatMemberLastReads = new Map();
   const modalRegistry = new Map();
@@ -20609,6 +20617,575 @@
     });
   }
 
+  function horizontalPagerCommitDistance(width) {
+    const normalizedWidth = Math.max(1, Math.round(Number(width || 0) || 1));
+    return Math.min(128, Math.max(
+      HORIZONTAL_PAGER_SWIPE_COMMIT_MIN_PX,
+      Math.round(normalizedWidth * HORIZONTAL_PAGER_SWIPE_COMMIT_RATIO)
+    ));
+  }
+
+  function canAnimateHorizontalPager() {
+    return !prefersReducedMotion() && currentModalAnimation !== 'none';
+  }
+
+  function stripCloneIds(root) {
+    if (!(root instanceof Element)) return root;
+    if (root.hasAttribute('id')) root.removeAttribute('id');
+    root.querySelectorAll('[id]').forEach((el) => el.removeAttribute('id'));
+    return root;
+  }
+
+  function syncClonedFormControls(sourceRoot, cloneRoot) {
+    if (!(sourceRoot instanceof Element) || !(cloneRoot instanceof Element)) return cloneRoot;
+    const sourceControls = sourceRoot.querySelectorAll('input, textarea, select');
+    const cloneControls = cloneRoot.querySelectorAll('input, textarea, select');
+    sourceControls.forEach((source, index) => {
+      const clone = cloneControls[index];
+      if (!clone) return;
+      if (source instanceof HTMLInputElement && clone instanceof HTMLInputElement) {
+        clone.checked = source.checked;
+        clone.value = source.value;
+        return;
+      }
+      if (source instanceof HTMLTextAreaElement && clone instanceof HTMLTextAreaElement) {
+        clone.value = source.value;
+        clone.textContent = source.value;
+        return;
+      }
+      if (source instanceof HTMLSelectElement && clone instanceof HTMLSelectElement) {
+        clone.selectedIndex = source.selectedIndex;
+        clone.value = source.value;
+      }
+    });
+    return cloneRoot;
+  }
+
+  function cancelScheduledScrollableItemCenter(strip) {
+    if (!(strip instanceof HTMLElement)) return;
+    if (strip.__scrollableCenterRafPrimary) {
+      cancelAnimationFrame(strip.__scrollableCenterRafPrimary);
+      strip.__scrollableCenterRafPrimary = 0;
+    }
+    if (strip.__scrollableCenterRafSecondary) {
+      cancelAnimationFrame(strip.__scrollableCenterRafSecondary);
+      strip.__scrollableCenterRafSecondary = 0;
+    }
+  }
+
+  function centerScrollableItem(strip, item, { behavior = 'auto' } = {}) {
+    if (!(strip instanceof HTMLElement) || !(item instanceof HTMLElement)) return false;
+    const viewportWidth = Number(strip.clientWidth || 0);
+    if (viewportWidth <= 0) return false;
+    const maxScrollLeft = Math.max(0, Number(strip.scrollWidth || 0) - viewportWidth);
+    const targetLeft = clamp(
+      (Number(item.offsetLeft || 0) + (Number(item.offsetWidth || 0) / 2)) - (viewportWidth / 2),
+      0,
+      maxScrollLeft
+    );
+    const nextBehavior = behavior === 'smooth' && !prefersReducedMotion() && currentModalAnimation !== 'none'
+      ? 'smooth'
+      : 'auto';
+    if (Math.abs(Number(strip.scrollLeft || 0) - targetLeft) < 1) return true;
+    if (typeof strip.scrollTo === 'function') {
+      try {
+        strip.scrollTo({ left: targetLeft, behavior: nextBehavior });
+        if (nextBehavior === 'auto') strip.scrollLeft = targetLeft;
+        return true;
+      } catch {}
+    }
+    strip.scrollLeft = targetLeft;
+    return true;
+  }
+
+  function scheduleScrollableItemCenter(strip, activeSelector, { behavior = 'auto' } = {}) {
+    if (!(strip instanceof HTMLElement)) return false;
+    cancelScheduledScrollableItemCenter(strip);
+    const nextBehavior = behavior === 'smooth' ? 'smooth' : 'auto';
+    strip.__scrollableCenterRafPrimary = requestAnimationFrame(() => {
+      strip.__scrollableCenterRafPrimary = 0;
+      strip.__scrollableCenterRafSecondary = requestAnimationFrame(() => {
+        strip.__scrollableCenterRafSecondary = 0;
+        const item = strip.querySelector(activeSelector);
+        centerScrollableItem(strip, item, { behavior: nextBehavior });
+      });
+    });
+    return true;
+  }
+
+  function createHorizontalSwipePager(options = {}) {
+    const root = options.root;
+    if (!(root instanceof HTMLElement)) return null;
+    const listenTargets = [root, ...(Array.isArray(options.listenTargets) ? options.listenTargets : [])]
+      .filter((target) => target instanceof HTMLElement)
+      .filter((target, index, list) => list.indexOf(target) === index);
+    root.classList.add('horizontal-swipe-surface');
+    listenTargets.forEach((target) => {
+      if (target !== root) target.classList.add('horizontal-swipe-listen-target');
+    });
+
+    const state = {
+      tracking: false,
+      dragging: false,
+      switching: false,
+      pointerId: null,
+      captureTarget: null,
+      inputKind: '',
+      startX: 0,
+      startY: 0,
+      dx: 0,
+      pager: null,
+      suppressClickUntil: 0,
+    };
+
+    const getKeys = () => (options.getKeys?.() || []).map((key) => String(key || '')).filter(Boolean);
+    const getActiveKey = () => String(options.getActiveKey?.() || getKeys()[0] || '');
+    const getWidth = () => Math.max(
+      1,
+      Math.round(
+        Number(options.getWidth?.() || 0)
+        || Number(root.clientWidth || 0)
+        || Number(window.innerWidth || 0)
+        || 1
+      )
+    );
+    const getKeyIndex = (key, keys = getKeys()) => {
+      const index = keys.findIndex((entry) => entry === String(key || ''));
+      return index >= 0 ? index : 0;
+    };
+    const isAvailable = () => (
+      !state.switching
+      && root.isConnected
+      && !root.classList.contains('hidden')
+      && getKeys().length > 1
+      && options.isAvailable?.() !== false
+    );
+    const canAnimate = () => canAnimateHorizontalPager() && options.canAnimate?.() !== false;
+    const containsAllowedTarget = (target) => listenTargets.some((entry) => entry.contains(target));
+    const isAllowedStartTarget = (target) => (
+      target instanceof Element
+      && containsAllowedTarget(target)
+      && options.isAllowedStartTarget?.(target) !== false
+    );
+
+    const capturePointer = (target, pointerId) => {
+      if (!(target instanceof HTMLElement) || pointerId == null) return false;
+      try {
+        target.setPointerCapture?.(pointerId);
+        state.captureTarget = target;
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const clearTracking = (event = null) => {
+      const pointerId = event?.pointerId ?? state.pointerId;
+      if (state.captureTarget instanceof HTMLElement && pointerId != null) {
+        try {
+          if (state.captureTarget.hasPointerCapture?.(pointerId)) {
+            state.captureTarget.releasePointerCapture?.(pointerId);
+          }
+        } catch {}
+      }
+      state.tracking = false;
+      state.dragging = false;
+      state.pointerId = null;
+      state.captureTarget = null;
+      state.inputKind = '';
+      state.startX = 0;
+      state.startY = 0;
+      state.dx = 0;
+    };
+
+    const destroyPager = () => {
+      const pager = state.pager;
+      state.pager = null;
+      if (pager?.stage instanceof HTMLElement) pager.stage.remove();
+      root.classList.remove('is-horizontal-swipe-paging');
+    };
+
+    const resetSurface = () => {
+      destroyPager();
+      root.classList.remove(
+        'is-horizontal-swipe-dragging',
+        'is-horizontal-swipe-settling',
+        'is-horizontal-swipe-preparing',
+        'is-horizontal-swipe-paging'
+      );
+      root.style.transform = '';
+    };
+
+    const getTransformTarget = () => (
+      state.pager?.track instanceof HTMLElement ? state.pager.track : root
+    );
+
+    const setOffset = (offset, mode = 'dragging') => {
+      root.classList.toggle('is-horizontal-swipe-dragging', mode === 'dragging');
+      root.classList.toggle('is-horizontal-swipe-settling', mode === 'settling');
+      root.classList.toggle('is-horizontal-swipe-preparing', mode === 'preparing');
+      root.classList.toggle('is-horizontal-swipe-paging', Boolean(state.pager));
+      const target = getTransformTarget();
+      if (!(target instanceof HTMLElement)) return false;
+      if (target !== root) root.style.transform = '';
+      target.style.transform = `translate3d(${Math.round(Number(offset || 0))}px, 0, 0)`;
+      return true;
+    };
+
+    const settleOffset = async (offset) => {
+      setOffset(offset, 'settling');
+      const target = getTransformTarget();
+      const transitionMs = Math.ceil(getElementTransitionTotalMs(target));
+      await waitForMs(Math.max(transitionMs, 180) + 24);
+      return true;
+    };
+
+    const createPage = (key, role = '') => {
+      const page = document.createElement('div');
+      page.className = `horizontal-swipe-page${options.pageClassName ? ` ${options.pageClassName}` : ''}`;
+      page.dataset.horizontalSwipePage = String(key || '');
+      if (role) page.dataset.horizontalSwipeRole = role;
+      const content = options.renderPage?.(key, role);
+      if (content instanceof Node) page.appendChild(content);
+      return page;
+    };
+
+    const preparePager = (direction, nextKey) => {
+      if (!canAnimate()) {
+        destroyPager();
+        return null;
+      }
+      const keys = getKeys();
+      const swipeDirection = direction < 0 ? -1 : 1;
+      const currentKey = getActiveKey() || keys[0] || '';
+      const targetKey = String(nextKey || '');
+      const width = getWidth();
+      const currentPager = state.pager;
+      if (
+        currentPager
+        && currentPager.direction === swipeDirection
+        && currentPager.currentKey === currentKey
+        && currentPager.nextKey === targetKey
+        && currentPager.width === width
+        && currentPager.track instanceof HTMLElement
+        && currentPager.stage instanceof HTMLElement
+      ) {
+        return currentPager;
+      }
+
+      destroyPager();
+
+      const stage = document.createElement('div');
+      stage.className = `horizontal-swipe-stage${options.stageClassName ? ` ${options.stageClassName}` : ''}`;
+      stage.setAttribute('aria-hidden', 'true');
+
+      const track = document.createElement('div');
+      track.className = 'horizontal-swipe-track';
+
+      const currentPage = createPage(currentKey, 'current');
+      const adjacentPage = createPage(targetKey, 'adjacent');
+      if (swipeDirection > 0) track.append(currentPage, adjacentPage);
+      else track.append(adjacentPage, currentPage);
+      stage.appendChild(track);
+      root.appendChild(stage);
+
+      state.pager = {
+        stage,
+        track,
+        direction: swipeDirection,
+        currentKey,
+        nextKey: targetKey,
+        width,
+        baseOffset: swipeDirection > 0 ? 0 : -width,
+      };
+      setOffset(state.pager.baseOffset, 'preparing');
+      return state.pager;
+    };
+
+    const snapBack = async () => {
+      if (!canAnimate()) {
+        resetSurface();
+        return false;
+      }
+      const targetOffset = state.pager ? state.pager.baseOffset : 0;
+      try {
+        await settleOffset(targetOffset);
+        return true;
+      } finally {
+        resetSurface();
+      }
+    };
+
+    const applyActiveKey = (key, direction, source = 'swipe') => {
+      options.setActiveKey?.(key, { direction, source });
+      options.onSettled?.(key, { direction, source });
+    };
+
+    const transitionToKey = async (key, { direction = 1, source = 'swipe' } = {}) => {
+      const keys = getKeys();
+      const nextKey = String(key || '');
+      if (!keys.includes(nextKey)) {
+        await snapBack();
+        return false;
+      }
+      const currentKey = getActiveKey() || keys[0] || '';
+      if (currentKey === nextKey) {
+        await snapBack();
+        return false;
+      }
+
+      const swipeDirection = direction < 0 ? -1 : 1;
+      if (!canAnimate()) {
+        resetSurface();
+        applyActiveKey(nextKey, swipeDirection, source);
+        return true;
+      }
+
+      let pager = state.pager;
+      if (
+        !pager
+        || pager.direction !== swipeDirection
+        || pager.currentKey !== currentKey
+        || pager.nextKey !== nextKey
+      ) {
+        pager = preparePager(swipeDirection, nextKey);
+        await waitForAnimationFrames(1);
+      }
+      if (!pager) {
+        applyActiveKey(nextKey, swipeDirection, source);
+        return true;
+      }
+
+      const finalOffset = swipeDirection > 0 ? -pager.width : 0;
+      try {
+        await settleOffset(finalOffset);
+        applyActiveKey(nextKey, swipeDirection, source);
+        return true;
+      } finally {
+        resetSurface();
+      }
+    };
+
+    const runTransition = async (task) => {
+      if (state.switching) return false;
+      state.switching = true;
+      try {
+        return await task();
+      } catch (error) {
+        console.warn('[swipe-pager] transition failed:', error);
+        resetSurface();
+        options.onError?.(error);
+        return false;
+      } finally {
+        clearTracking();
+        state.switching = false;
+      }
+    };
+
+    const getAdjacentKey = (direction) => {
+      const keys = getKeys();
+      if (keys.length <= 1) return '';
+      const currentIndex = getKeyIndex(getActiveKey(), keys);
+      const nextIndex = currentIndex + (direction < 0 ? -1 : 1);
+      return nextIndex >= 0 && nextIndex < keys.length ? keys[nextIndex] : '';
+    };
+
+    const dampEdgeOffset = (dx) => clamp(
+      Math.round(dx * HORIZONTAL_PAGER_SWIPE_EDGE_DAMPING),
+      -HORIZONTAL_PAGER_SWIPE_EDGE_MAX_PX,
+      HORIZONTAL_PAGER_SWIPE_EDGE_MAX_PX
+    );
+
+    const suppressFollowupClick = () => {
+      state.suppressClickUntil = Math.max(state.suppressClickUntil, Date.now() + 550);
+    };
+
+    const handlePointerDown = (event) => {
+      if (event.isPrimary === false) return;
+      if (event.pointerType === 'mouse') return;
+      if (!isAvailable() || !isAllowedStartTarget(event.target)) return;
+      state.tracking = true;
+      state.dragging = false;
+      state.pointerId = event.pointerId;
+      state.captureTarget = null;
+      state.inputKind = 'pointer';
+      state.startX = event.clientX;
+      state.startY = event.clientY;
+      state.dx = 0;
+      options.onInteraction?.(event);
+    };
+
+    const handlePointerMove = (event) => {
+      if (!state.tracking || state.switching || event.pointerId !== state.pointerId) return;
+      options.onInteraction?.(event);
+      const dx = event.clientX - state.startX;
+      const dy = event.clientY - state.startY;
+      const absX = Math.abs(dx);
+      const absY = Math.abs(dy);
+
+      if (!state.dragging) {
+        if (absY > HORIZONTAL_PAGER_SWIPE_START_PX && absY >= absX) {
+          clearTracking(event);
+          resetSurface();
+          return;
+        }
+        if (absX <= HORIZONTAL_PAGER_SWIPE_START_PX || absX <= absY + 4) return;
+        state.dragging = true;
+        if (!(state.captureTarget instanceof HTMLElement)) capturePointer(root, event.pointerId);
+        options.onDragStart?.(event);
+        resetSurface();
+      }
+
+      if (!isAvailable()) {
+        clearTracking(event);
+        resetSurface();
+        return;
+      }
+
+      state.dx = dx;
+      const direction = dx < 0 ? 1 : -1;
+      const adjacentKey = getAdjacentKey(direction);
+      if (adjacentKey && canAnimate()) {
+        const pager = preparePager(direction, adjacentKey);
+        if (pager) setOffset(pager.baseOffset + dx, 'dragging');
+      } else {
+        destroyPager();
+        if (canAnimate()) setOffset(adjacentKey ? dx : dampEdgeOffset(dx), 'dragging');
+      }
+      if (event.cancelable) event.preventDefault();
+    };
+
+    const toMouseGestureEvent = (event) => ({
+      pointerId: 'mouse',
+      pointerType: 'mouse',
+      target: event.target,
+      currentTarget: event.currentTarget,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      cancelable: event.cancelable,
+      preventDefault: () => event.preventDefault(),
+      stopPropagation: () => event.stopPropagation(),
+      stopImmediatePropagation: () => event.stopImmediatePropagation?.(),
+    });
+
+    const handleMouseDown = (event) => {
+      if (event.button !== 0) return;
+      if (!isAvailable() || !isAllowedStartTarget(event.target)) return;
+      state.tracking = true;
+      state.dragging = false;
+      state.pointerId = 'mouse';
+      state.captureTarget = null;
+      state.inputKind = 'mouse';
+      state.startX = event.clientX;
+      state.startY = event.clientY;
+      state.dx = 0;
+      options.onInteraction?.(event);
+    };
+
+    const handleMouseMove = (event) => {
+      if (!state.tracking || state.inputKind !== 'mouse') return;
+      if ((event.buttons & 1) !== 1) {
+        finishPointerGesture(toMouseGestureEvent(event));
+        return;
+      }
+      handlePointerMove(toMouseGestureEvent(event));
+    };
+
+    const finishMouseGesture = (event) => {
+      if (!state.tracking || state.inputKind !== 'mouse') return;
+      finishPointerGesture(toMouseGestureEvent(event));
+    };
+
+    const cancelMouseGesture = (event) => {
+      if (!state.tracking || state.inputKind !== 'mouse') return;
+      cancelPointerGesture(event ? toMouseGestureEvent(event) : { pointerId: 'mouse' });
+    };
+
+    const finishPointerGesture = (event) => {
+      if (!state.tracking || (event?.pointerId != null && event.pointerId !== state.pointerId)) return;
+      const wasDragging = state.dragging;
+      const dx = state.dx;
+      clearTracking(event);
+      if (!wasDragging) {
+        resetSurface();
+        return;
+      }
+
+      suppressFollowupClick();
+      if (event?.cancelable) event.preventDefault();
+      event?.stopPropagation?.();
+
+      const direction = dx < 0 ? 1 : -1;
+      const adjacentKey = getAdjacentKey(direction);
+      const shouldSwitch = Boolean(adjacentKey && Math.abs(dx) >= horizontalPagerCommitDistance(getWidth()));
+      runTransition(() => (
+        shouldSwitch
+          ? transitionToKey(adjacentKey, { direction, source: 'swipe' })
+          : snapBack()
+      ));
+    };
+
+    const cancelPointerGesture = (event) => {
+      if (!state.tracking || (event?.pointerId != null && event.pointerId !== state.pointerId)) return;
+      const wasDragging = state.dragging;
+      clearTracking(event);
+      if (!wasDragging) {
+        resetSurface();
+        return;
+      }
+      suppressFollowupClick();
+      runTransition(() => snapBack());
+    };
+
+    const suppressClick = (event) => {
+      if (Date.now() >= state.suppressClickUntil) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
+    };
+
+    listenTargets.forEach((target) => {
+      target.addEventListener('pointerdown', handlePointerDown, { passive: true });
+      target.addEventListener('mousedown', handleMouseDown, { passive: true });
+      target.addEventListener('click', suppressClick, true);
+    });
+    document.addEventListener('pointermove', handlePointerMove, { passive: false });
+    document.addEventListener('pointerup', finishPointerGesture, { passive: false });
+    document.addEventListener('pointercancel', cancelPointerGesture, { passive: true });
+    document.addEventListener('mousemove', handleMouseMove, { passive: false });
+    document.addEventListener('mouseup', finishMouseGesture, { passive: false });
+    window.addEventListener('blur', cancelMouseGesture, { passive: true });
+
+    return {
+      goToKey: (key, { direction = 0, source = 'tab' } = {}) => {
+        const keys = getKeys();
+        const nextKey = String(key || '');
+        if (!keys.includes(nextKey)) return Promise.resolve(false);
+        const currentIndex = getKeyIndex(getActiveKey(), keys);
+        const nextIndex = getKeyIndex(nextKey, keys);
+        const resolvedDirection = direction || (nextIndex >= currentIndex ? 1 : -1);
+        return runTransition(() => transitionToKey(nextKey, { direction: resolvedDirection, source }));
+      },
+      reset: resetSurface,
+      destroy: () => {
+        listenTargets.forEach((target) => {
+          target.removeEventListener('pointerdown', handlePointerDown);
+          target.removeEventListener('mousedown', handleMouseDown);
+          target.removeEventListener('click', suppressClick, true);
+          if (target !== root) target.classList.remove('horizontal-swipe-listen-target');
+        });
+        document.removeEventListener('pointermove', handlePointerMove);
+        document.removeEventListener('pointerup', finishPointerGesture);
+        document.removeEventListener('pointercancel', cancelPointerGesture);
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', finishMouseGesture);
+        window.removeEventListener('blur', cancelMouseGesture);
+        clearTracking();
+        resetSurface();
+      },
+    };
+  }
+
   async function animateSearchResultChatSwitch(targetChatId) {
     if (window.innerWidth > 768) return;
     if (!currentChatId || Number(targetChatId) === Number(currentChatId)) return;
@@ -21053,14 +21630,47 @@
     return category === RECENT_EMOJI_CATEGORY ? recentEmojis : (EMOJIS[category] || []);
   }
 
+  function renderEmojiGridItemsHtml(category) {
+    return getEmojiCategoryItems(category).map((em) => `<div class="emoji-item">${em}</div>`).join('');
+  }
+
+  function getEmojiPickerLiveGrid() {
+    return emojiPicker?.querySelector?.('.emoji-grid-swipe > .emoji-grid.horizontal-swipe-live')
+      || emojiPicker?.querySelector?.('.emoji-grid');
+  }
+
+  function createEmojiPickerGridElement(category) {
+    const grid = document.createElement('div');
+    grid.className = 'emoji-grid';
+    grid.innerHTML = renderEmojiGridItemsHtml(category);
+    return grid;
+  }
+
   function renderEmojiPickerGrid(category) {
-    const grid = emojiPicker?.querySelector?.('.emoji-grid');
+    const grid = getEmojiPickerLiveGrid();
     if (!grid) return;
-    grid.innerHTML = getEmojiCategoryItems(category).map((em) => `<div class="emoji-item">${em}</div>`).join('');
+    grid.innerHTML = renderEmojiGridItemsHtml(category);
   }
 
   function getActiveEmojiPickerCategory() {
     return emojiPicker?.querySelector?.('.emoji-tab.active')?.dataset?.cat || '';
+  }
+
+  function centerEmojiPickerActiveCategory({ behavior = 'auto' } = {}) {
+    const tabs = emojiPicker?.querySelector?.('.emoji-tabs');
+    return scheduleScrollableItemCenter(tabs, '.emoji-tab.active', { behavior });
+  }
+
+  function setEmojiPickerCategory(category, { reposition = true, centerBehavior = 'auto' } = {}) {
+    const cats = getEmojiPickerCategories();
+    const nextCategory = cats.includes(category) ? category : (cats[0] || RECENT_EMOJI_CATEGORY);
+    emojiPicker?.querySelectorAll?.('.emoji-tab').forEach((tab) => {
+      tab.classList.toggle('active', tab.dataset.cat === nextCategory);
+    });
+    renderEmojiPickerGrid(nextCategory);
+    centerEmojiPickerActiveCategory({ behavior: centerBehavior });
+    if (reposition) positionEmojiPicker();
+    return nextCategory;
   }
 
   function updateRecentEmojiGridIfActive() {
@@ -21103,15 +21713,38 @@
     cats.forEach((cat, i) => {
       html += `<div class="emoji-tab ${i === 0 ? 'active' : ''}" data-cat="${esc(cat)}">${cat}</div>`;
     });
-    html += '</div><div class="emoji-grid">';
-    getEmojiCategoryItems(cats[0]).forEach(e => { html += `<div class="emoji-item">${e}</div>`; });
-    html += '</div>';
+    html += '</div><div class="emoji-grid-swipe horizontal-swipe-surface"><div class="emoji-grid horizontal-swipe-live">';
+    html += renderEmojiGridItemsHtml(cats[0]);
+    html += '</div></div>';
     emojiPicker.innerHTML = html;
     syncEmojiPickerButton();
 
+    emojiSwipePager?.destroy();
+    emojiSwipePager = createHorizontalSwipePager({
+      root: emojiPicker.querySelector('.emoji-grid-swipe'),
+      getKeys: () => getEmojiPickerCategories(),
+      getActiveKey: () => getActiveEmojiPickerCategory(),
+      setActiveKey: (category, meta = {}) => {
+        setEmojiPickerCategory(category, {
+          reposition: false,
+          centerBehavior: meta.source === 'swipe' ? 'smooth' : 'auto',
+        });
+      },
+      renderPage: (category) => createEmojiPickerGridElement(category),
+      isAvailable: () => isFloatingSurfaceVisible(emojiPicker),
+      onSettled: (_category, meta = {}) => {
+        centerEmojiPickerActiveCategory({ behavior: meta.source === 'swipe' ? 'smooth' : 'auto' });
+        positionEmojiPicker();
+      },
+    });
+
     const isEmojiPickerScrollSurface = (target) => Boolean(
       target instanceof Element
-      && (target.classList.contains('emoji-grid') || target.classList.contains('emoji-tabs'))
+      && (
+        target.classList.contains('emoji-grid')
+        || target.classList.contains('emoji-grid-swipe')
+        || target.classList.contains('emoji-tabs')
+      )
     );
     const keepEmojiPickerInteractionFromBlurringInput = (e) => {
       if (e.type === 'touchstart' || e.type === 'touchmove') return;
@@ -21139,10 +21772,7 @@
       e.stopPropagation();
       const tab = e.target.closest('.emoji-tab');
       if (tab) {
-        emojiPicker.querySelectorAll('.emoji-tab').forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        renderEmojiPickerGrid(tab.dataset.cat || '');
-        positionEmojiPicker();
+        setEmojiPickerCategory(tab.dataset.cat || '');
         return;
       }
       const item = e.target.closest('.emoji-item');
@@ -21226,6 +21856,7 @@
     return closeFloatingSurface(emojiPicker, {
       immediate,
       onAfterClose: () => {
+        emojiSwipePager?.reset();
         emojiPickerKeyboardAttached = false;
         emojiPickerAnchorEl = null;
         if (emojiPicker instanceof HTMLElement) {
@@ -21566,31 +22197,93 @@
     return categories.some((category) => category.key === value) ? value : categories[0].key;
   }
 
+  function getReactionEmojiCategoryKeys() {
+    return getAdditionalReactionCategories().map((category) => category.key);
+  }
+
+  function renderReactionEmojiGridHtml(categoryKey) {
+    const categories = getAdditionalReactionCategories();
+    const activeCategory = categories.find((category) => category.key === categoryKey) || categories[0];
+    const categoryEmojis = activeCategory?.emojis || [];
+    return categoryEmojis.map((emoji) => `
+      <button type="button" class="reaction-emoji-item" data-emoji="${esc(emoji)}" title="${esc(`React ${emoji}`)}">${esc(emoji)}</button>
+    `).join('');
+  }
+
+  function getReactionEmojiLiveGrid() {
+    return reactionEmojiPopover?.querySelector?.('.reaction-emoji-grid-swipe > .reaction-emoji-grid.horizontal-swipe-live')
+      || reactionEmojiPopover?.querySelector?.('.reaction-emoji-grid');
+  }
+
+  function createReactionEmojiGridElement(categoryKey) {
+    const grid = document.createElement('div');
+    grid.className = 'reaction-emoji-grid';
+    grid.innerHTML = renderReactionEmojiGridHtml(categoryKey);
+    return grid;
+  }
+
+  function centerReactionEmojiActiveCategory({ behavior = 'auto' } = {}) {
+    const tabs = reactionEmojiPopover?.querySelector?.('.reaction-emoji-tabs');
+    return scheduleScrollableItemCenter(tabs, '.reaction-emoji-tab.active', { behavior });
+  }
+
+  function setReactionEmojiPopoverCategory(categoryKey, { reposition = true, centerBehavior = 'auto' } = {}) {
+    const nextCategoryKey = getReactionEmojiCategoryKey(categoryKey);
+    if (!nextCategoryKey) return '';
+    reactionEmojiPopoverCategory = nextCategoryKey;
+    reactionEmojiPopover?.querySelectorAll?.('.reaction-emoji-tab').forEach((tab) => {
+      tab.classList.toggle('active', tab.dataset.category === nextCategoryKey);
+    });
+    const grid = getReactionEmojiLiveGrid();
+    if (grid) grid.innerHTML = renderReactionEmojiGridHtml(nextCategoryKey);
+    centerReactionEmojiActiveCategory({ behavior: centerBehavior });
+    if (reposition) positionReactionEmojiPopover();
+    return nextCategoryKey;
+  }
+
   function renderReactionEmojiPopoverContent() {
     if (!reactionEmojiPopover) return;
     const categories = getAdditionalReactionCategories();
     const categoryKey = getReactionEmojiCategoryKey(reactionEmojiPopoverCategory);
     reactionEmojiPopoverCategory = categoryKey;
-    const activeCategory = categories.find((category) => category.key === categoryKey) || categories[0];
-    const categoryEmojis = activeCategory?.emojis || [];
+    reactionEmojiSwipePager?.destroy();
     reactionEmojiPopover.innerHTML = `
       <div class="reaction-emoji-tabs">
         ${categories.map((category) => `
           <button type="button" class="reaction-emoji-tab${category.key === categoryKey ? ' active' : ''}" data-category="${esc(category.key)}">${esc(category.key)}</button>
         `).join('')}
       </div>
-      <div class="reaction-emoji-grid">
-        ${categoryEmojis.map((emoji) => `
-          <button type="button" class="reaction-emoji-item" data-emoji="${esc(emoji)}" title="${esc(`React ${emoji}`)}">${esc(emoji)}</button>
-        `).join('')}
+      <div class="reaction-emoji-grid-swipe horizontal-swipe-surface">
+        <div class="reaction-emoji-grid horizontal-swipe-live">
+          ${renderReactionEmojiGridHtml(categoryKey)}
+        </div>
       </div>
     `;
     reactionEmojiPopover.querySelector('.reaction-emoji-tabs')?.addEventListener('scroll', () => {
       bumpReactionPickerIdleTimer();
     }, { passive: true });
-    reactionEmojiPopover.querySelector('.reaction-emoji-grid')?.addEventListener('scroll', () => {
+    reactionEmojiPopover.querySelector('.reaction-emoji-grid-swipe > .reaction-emoji-grid')?.addEventListener('scroll', () => {
       bumpReactionPickerIdleTimer();
     }, { passive: true });
+    reactionEmojiSwipePager = createHorizontalSwipePager({
+      root: reactionEmojiPopover.querySelector('.reaction-emoji-grid-swipe'),
+      getKeys: () => getReactionEmojiCategoryKeys(),
+      getActiveKey: () => reactionEmojiPopoverCategory,
+      setActiveKey: (category, meta = {}) => {
+        setReactionEmojiPopoverCategory(category, {
+          reposition: false,
+          centerBehavior: meta.source === 'swipe' ? 'smooth' : 'auto',
+        });
+      },
+      renderPage: (category) => createReactionEmojiGridElement(category),
+      isAvailable: () => isFloatingSurfaceVisible(reactionEmojiPopover),
+      onInteraction: () => bumpReactionPickerIdleTimer(),
+      onSettled: (_category, meta = {}) => {
+        centerReactionEmojiActiveCategory({ behavior: meta.source === 'swipe' ? 'smooth' : 'auto' });
+        positionReactionEmojiPopover();
+        bumpReactionPickerIdleTimer();
+      },
+    });
   }
 
   function getVisibleMessageAreaRect() {
@@ -21782,7 +22475,7 @@
       || reactionPicker?.getBoundingClientRect();
     if (!anchorRect) return;
     const viewport = getVisibleMessageAreaRect();
-    const size = measureFloatingSurface(reactionEmojiPopover, 340, 260);
+    const size = measureFloatingSurface(reactionEmojiPopover, 254, 338);
     let left = anchorRect.left + (anchorRect.width - size.width) / 2;
     left = clamp(left, viewport.left + FLOATING_ACTION_MARGIN, viewport.right - size.width - FLOATING_ACTION_MARGIN);
     let top = anchorRect.top - size.height - FLOATING_ACTION_GAP;
@@ -21831,6 +22524,7 @@
     closeFloatingSurface(reactionEmojiPopover, {
       immediate: Boolean(options.immediate),
       onAfterClose: () => {
+        reactionEmojiSwipePager?.reset();
         clearFloatingMessageActionsStateIfClosed();
       },
     });
@@ -22659,22 +23353,94 @@
     renderNewFolderChatList();
   }
 
-  function setNewChatModalTab(tabName = 'private') {
-    if (!newChatModal) return;
+  const NEW_CHAT_MODAL_TABS = Object.freeze(['private', 'group', 'folder']);
+
+  function normalizeNewChatModalTab(tabName = 'private') {
     const nextTab = String(tabName || 'private');
+    return NEW_CHAT_MODAL_TABS.includes(nextTab) ? nextTab : 'private';
+  }
+
+  function getNewChatModalActiveTab() {
+    const activeTab = newChatModal?.querySelector?.('.modal-tab.active')?.dataset?.tab;
+    return normalizeNewChatModalTab(activeTab);
+  }
+
+  function getNewChatTabPane(tabName = 'private') {
+    const nextTab = normalizeNewChatModalTab(tabName);
+    return newChatModal?.querySelector?.(`#${nextTab}Tab`) || null;
+  }
+
+  function prepareNewChatTabContent(tabName = 'private') {
+    const nextTab = normalizeNewChatModalTab(tabName);
+    if (nextTab === 'folder') {
+      renderNewFolderChatList(newFolderChatSearchInput?.value || '');
+    }
+    return nextTab;
+  }
+
+  function createNewChatTabPreview(tabName = 'private') {
+    const nextTab = prepareNewChatTabContent(tabName);
+    const pane = getNewChatTabPane(nextTab);
+    if (!(pane instanceof HTMLElement)) return document.createElement('div');
+    const clone = pane.cloneNode(true);
+    syncClonedFormControls(pane, clone);
+    stripCloneIds(clone);
+    clone.classList.add('active');
+    clone.classList.remove('horizontal-swipe-live');
+    clone.setAttribute('aria-hidden', 'true');
+    return clone;
+  }
+
+  function applyNewChatModalTab(tabName = 'private') {
+    if (!newChatModal) return;
+    const nextTab = prepareNewChatTabContent(tabName);
     newChatModal.querySelectorAll('.modal-tab').forEach((tab) => {
       tab.classList.toggle('active', tab.dataset.tab === nextTab);
     });
     newChatModal.querySelectorAll('.tab-pane').forEach((pane) => {
-      pane.classList.toggle('active', pane.id === `${nextTab}Tab`);
+      const isActive = pane.id === `${nextTab}Tab`;
+      pane.classList.toggle('active', isActive);
+      pane.classList.toggle('horizontal-swipe-live', isActive);
     });
-    if (nextTab === 'folder') {
-      renderNewFolderChatList(newFolderChatSearchInput?.value || '');
+    return nextTab;
+  }
+
+  function setNewChatModalTab(tabName = 'private', { animate = false, direction = 0, source = 'tab' } = {}) {
+    const nextTab = normalizeNewChatModalTab(tabName);
+    if (animate && newChatTabSwipePager && getNewChatModalActiveTab() !== nextTab) {
+      return newChatTabSwipePager.goToKey(nextTab, { direction, source });
     }
+    return applyNewChatModalTab(nextTab);
+  }
+
+  function initNewChatTabSwipePager() {
+    const body = newChatModal?.querySelector?.('.modal-body');
+    const tabs = newChatModal?.querySelector?.('.modal-tabs');
+    if (!(body instanceof HTMLElement)) return null;
+    newChatTabSwipePager?.destroy();
+    newChatTabSwipePager = createHorizontalSwipePager({
+      root: body,
+      listenTargets: [tabs],
+      getKeys: () => NEW_CHAT_MODAL_TABS,
+      getActiveKey: () => getNewChatModalActiveTab(),
+      setActiveKey: (tabName) => {
+        applyNewChatModalTab(tabName);
+      },
+      renderPage: (tabName) => createNewChatTabPreview(tabName),
+      isAvailable: () => isFloatingSurfaceVisible(newChatModal),
+      isAllowedStartTarget: (target) => {
+        if (!(target instanceof Element)) return false;
+        if (target.closest('.modal-tabs .modal-tab')) return true;
+        return !target.closest('button, a, input, textarea, select, label, [contenteditable="true"]');
+      },
+    });
+    applyNewChatModalTab(getNewChatModalActiveTab());
+    return newChatTabSwipePager;
   }
 
   async function openNewChatModal() {
     openModal('newChatModal', { replaceStack: true });
+    newChatTabSwipePager?.reset();
     setNewChatModalTab('private');
     $('#groupName').value = '';
     resetNewFolderForm();
@@ -24375,7 +25141,7 @@
 
     // Reaction picker + extra emoji popover
     const isReactionScrollSurface = (target) => Boolean(target?.closest?.(
-      '.reaction-picker-strip, .reaction-emoji-tabs, .reaction-emoji-grid'
+      '.reaction-picker-strip, .reaction-emoji-tabs, .reaction-emoji-grid, .reaction-emoji-grid-swipe'
     ));
     const keepReactionInteractionFromBlurringInput = (e) => {
       if (e.type === 'touchstart' || e.type === 'touchmove' || isReactionScrollSurface(e.target)) {
@@ -24458,9 +25224,7 @@
       e.stopPropagation();
       const tab = e.target.closest('.reaction-emoji-tab');
       if (tab) {
-        reactionEmojiPopoverCategory = tab.dataset.category || reactionEmojiPopoverCategory;
-        renderReactionEmojiPopoverContent();
-        positionReactionEmojiPopover();
+        setReactionEmojiPopoverCategory(tab.dataset.category || reactionEmojiPopoverCategory);
         bumpReactionPickerIdleTimer();
         return;
       }
@@ -25377,9 +26141,18 @@
     });
 
     // Modal tabs
+    initNewChatTabSwipePager();
     newChatModal.querySelectorAll('.modal-tab').forEach(tab => {
       tab.addEventListener('click', () => {
-        setNewChatModalTab(tab.dataset.tab);
+        const nextTab = normalizeNewChatModalTab(tab.dataset.tab);
+        const tabs = NEW_CHAT_MODAL_TABS;
+        const currentIndex = tabs.indexOf(getNewChatModalActiveTab());
+        const nextIndex = tabs.indexOf(nextTab);
+        setNewChatModalTab(nextTab, {
+          animate: true,
+          direction: nextIndex >= currentIndex ? 1 : -1,
+          source: 'tab',
+        });
       });
     });
     newFolderChatSearchInput?.addEventListener('input', () => {
