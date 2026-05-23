@@ -6054,6 +6054,11 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
     background-image: var(--bg-panel-gradient);
     border-bottom: 1px solid var(--border-light);
   }
+  html.is-mobile-chat-keyboard-layout,
+  html.is-mobile-chat-keyboard-layout body,
+  html.is-mobile-chat-keyboard-layout #app {
+    overscroll-behavior: none;
+  }
   html.is-mobile-chat-keyboard-layout #chatView {
     padding-top: var(--mobile-chat-header-height);
     padding-bottom: var(--mobile-chat-input-area-height);
@@ -6086,6 +6091,13 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
     transform: translateZ(0);
     backface-visibility: hidden;
     -webkit-backface-visibility: hidden;
+    overscroll-behavior: contain;
+  }
+  html.is-mobile-chat-keyboard-layout .emoji-picker,
+  html.is-mobile-chat-keyboard-layout .emoji-grid,
+  html.is-mobile-chat-keyboard-layout .reaction-emoji-grid,
+  html.is-mobile-chat-keyboard-layout .mention-picker-list {
+    overscroll-behavior: contain;
   }
   html.is-mobile-chat-keyboard-layout #chatView .pinned-bar {
     position: relative;

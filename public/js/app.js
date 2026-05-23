@@ -593,6 +593,10 @@
   let mobileViewportElementResizeObserver = null;
   let mobileVisualViewportBaselineHeight = 0;
   let mobileVisualViewportBaselineWidth = 0;
+  let mobileKeyboardDockTop = 0;
+  let mobileKeyboardDockHeight = 0;
+  let mobileKeyboardDockWidth = 0;
+  let mobileKeyboardDockActive = false;
   let iosComposerFocused = false;
   let iosComposerBlurTimer = null;
   let iosBackNavigationToken = 0;
@@ -1028,6 +1032,47 @@
     return Boolean(isIosMobileViewportTarget() && isMobileChatKeyboardLayoutActive());
   }
 
+  function getLockedMobileKeyboardViewportMetrics(viewport, keyboardLayoutActive) {
+    if (!keyboardLayoutActive) {
+      mobileKeyboardDockActive = false;
+      mobileKeyboardDockTop = 0;
+      mobileKeyboardDockHeight = 0;
+      mobileKeyboardDockWidth = 0;
+      return viewport;
+    }
+
+    const height = Math.max(0, Number(viewport?.height) || 0);
+    const width = Math.max(0, Number(viewport?.width) || 0);
+    const top = Math.max(0, Number(viewport?.top) || 0);
+    const shouldResetDock = !mobileKeyboardDockActive
+      || Math.abs(height - mobileKeyboardDockHeight) > 48
+      || Math.abs(width - mobileKeyboardDockWidth) > 48;
+
+    if (shouldResetDock) {
+      mobileKeyboardDockTop = top;
+      mobileKeyboardDockHeight = height;
+      mobileKeyboardDockWidth = width;
+      mobileKeyboardDockActive = true;
+    }
+
+    return {
+      ...viewport,
+      top: mobileKeyboardDockTop,
+      bottom: mobileKeyboardDockTop + height,
+    };
+  }
+
+  function restoreMobileKeyboardDocumentScroll() {
+    if (!isMobileChatKeyboardLayoutActive()) return false;
+    if (!window.scrollX && !window.scrollY) return false;
+    try {
+      window.scrollTo(0, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function syncMobileViewportLayoutState() {
     const root = document?.documentElement;
     if (!root) return;
@@ -1037,11 +1082,11 @@
       root.classList.remove('is-ios-keyboard-open', 'is-ios-chat-keyboard-layout');
       return;
     }
-    const viewport = getMobileVisualViewportMetrics();
-    const headerHeight = Math.max(0, Math.round(chatHeader?.getBoundingClientRect?.().height || 0));
-    const inputHeight = Math.max(0, Math.round(inputArea?.getBoundingClientRect?.().height || 0));
     const keyboardOpen = isMobileKeyboardOpen();
     const keyboardLayoutActive = isMobileChatKeyboardLayoutActive();
+    const viewport = getLockedMobileKeyboardViewportMetrics(getMobileVisualViewportMetrics(), keyboardLayoutActive);
+    const headerHeight = Math.max(0, Math.round(chatHeader?.getBoundingClientRect?.().height || 0));
+    const inputHeight = Math.max(0, Math.round(inputArea?.getBoundingClientRect?.().height || 0));
 
     root.classList.toggle('is-mobile-keyboard-open', keyboardOpen);
     root.classList.toggle('is-mobile-chat-keyboard-layout', keyboardLayoutActive);
@@ -1056,6 +1101,7 @@
     root.style.setProperty('--ios-visual-viewport-height', `${Math.round(viewport.height)}px`);
     root.style.setProperty('--ios-chat-header-height', `${headerHeight}px`);
     root.style.setProperty('--ios-chat-input-area-height', `${inputHeight}px`);
+    restoreMobileKeyboardDocumentScroll();
   }
 
   function syncIosViewportLayoutState() {
@@ -1139,29 +1185,64 @@
     return textarea instanceof HTMLTextAreaElement ? textarea : null;
   }
 
-  function canTextareaConsumeComposerDrag(target, dy) {
-    const textarea = getComposerGuardTextarea(target);
-    if (!textarea) return false;
-    const maxScrollTop = Math.max(0, Number(textarea.scrollHeight || 0) - Number(textarea.clientHeight || 0));
+  function getMobileKeyboardDockScrollSurface(target) {
+    if (!(target instanceof Element)) return null;
+    return getComposerGuardTextarea(target)
+      || target.closest?.('.emoji-grid, .reaction-emoji-grid, .mention-picker-list');
+  }
+
+  function canScrollSurfaceConsumeComposerDrag(surface, dy) {
+    if (!(surface instanceof Element)) return false;
+    const maxScrollTop = Math.max(0, Number(surface.scrollHeight || 0) - Number(surface.clientHeight || 0));
     if (maxScrollTop <= 1) return false;
-    const scrollTop = Math.max(0, Number(textarea.scrollTop || 0));
+    const scrollTop = Math.max(0, Number(surface.scrollTop || 0));
     if (dy < 0) return scrollTop < maxScrollTop - 1;
     if (dy > 0) return scrollTop > 1;
     return true;
   }
 
+  function isMobileKeyboardDockGestureSurface(target) {
+    if (!(target instanceof Element)) return false;
+    if (inputArea?.contains?.(target)) return true;
+    const floatingSurface = target.closest?.(
+      '.emoji-picker, #mentionPicker, #contextConvertPicker, #attachMenu, #reactionPicker, #reactionEmojiPopover'
+    );
+    return Boolean(floatingSurface && isFloatingSurfaceVisible(floatingSurface));
+  }
+
   function shouldBlockMobileComposerDrag(event, clientX, clientY) {
     const state = mobileComposerGestureGuard;
     const target = state.target;
-    if (!inputArea || !target || !inputArea.contains(target)) return false;
+    if (!target || !isMobileKeyboardDockGestureSurface(target)) return false;
     if (!isMobileComposerSessionActive()) return false;
     const dx = clientX - state.startX;
     const dy = clientY - state.startY;
     const absX = Math.abs(dx);
     const absY = Math.abs(dy);
     if (absY < 4 || absY <= absX) return false;
-    if (canTextareaConsumeComposerDrag(target, dy)) return false;
+    if (canScrollSurfaceConsumeComposerDrag(getMobileKeyboardDockScrollSurface(target), dy)) return false;
     if (!event?.cancelable) return false;
+    return true;
+  }
+
+  function startMobileComposerDockGesture({
+    source,
+    pointerId = null,
+    touchId = null,
+    clientX = 0,
+    clientY = 0,
+    target = null,
+  } = {}) {
+    if (!isMobileKeyboardDockGestureSurface(target)) return false;
+    if (!isMobileComposerSessionActive()) return false;
+    mobileComposerGestureGuard = {
+      source,
+      pointerId,
+      touchId,
+      startX: Number(clientX || 0),
+      startY: Number(clientY || 0),
+      target: target instanceof Element ? target : null,
+    };
     return true;
   }
 
@@ -1172,14 +1253,13 @@
     inputArea.addEventListener('pointerdown', (event) => {
       if (!isTouchLikePointerEvent(event)) return;
       if (typeof event.button === 'number' && event.button !== 0) return;
-      mobileComposerGestureGuard = {
+      startMobileComposerDockGesture({
         source: 'pointer',
         pointerId: Number.isFinite(Number(event.pointerId)) ? Number(event.pointerId) : null,
-        touchId: null,
-        startX: Number(event.clientX || 0),
-        startY: Number(event.clientY || 0),
-        target: event.target instanceof Element ? event.target : null,
-      };
+        clientX: event.clientX,
+        clientY: event.clientY,
+        target: event.target,
+      });
     }, { passive: true });
 
     inputArea.addEventListener('pointermove', (event) => {
@@ -1199,14 +1279,13 @@
       if (mobileComposerGestureGuard.source === 'pointer') return;
       const touch = event.changedTouches?.[0] || event.touches?.[0] || null;
       if (!touch) return;
-      mobileComposerGestureGuard = {
+      startMobileComposerDockGesture({
         source: 'touch',
-        pointerId: null,
         touchId: Number.isFinite(Number(touch.identifier)) ? Number(touch.identifier) : null,
-        startX: Number(touch.clientX || 0),
-        startY: Number(touch.clientY || 0),
-        target: event.target instanceof Element ? event.target : null,
-      };
+        clientX: touch.clientX,
+        clientY: touch.clientY,
+        target: event.target,
+      });
     }, { passive: true });
 
     inputArea.addEventListener('touchmove', (event) => {
@@ -1223,6 +1302,63 @@
 
     ['touchend', 'touchcancel'].forEach((type) => {
       inputArea.addEventListener(type, () => resetMobileComposerGestureGuard('touch'), { passive: true });
+    });
+
+    document.addEventListener('pointerdown', (event) => {
+      if (inputArea.contains(event.target)) return;
+      if (!isTouchLikePointerEvent(event)) return;
+      if (typeof event.button === 'number' && event.button !== 0) return;
+      startMobileComposerDockGesture({
+        source: 'dock-pointer',
+        pointerId: Number.isFinite(Number(event.pointerId)) ? Number(event.pointerId) : null,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        target: event.target,
+      });
+    }, { passive: true, capture: true });
+
+    document.addEventListener('pointermove', (event) => {
+      if (mobileComposerGestureGuard.source !== 'dock-pointer') return;
+      if (!isTouchLikePointerEvent(event)) return;
+      if (mobileComposerGestureGuard.pointerId != null && Number(event.pointerId) !== mobileComposerGestureGuard.pointerId) return;
+      if (!shouldBlockMobileComposerDrag(event, Number(event.clientX || 0), Number(event.clientY || 0))) return;
+      event.preventDefault();
+      restoreMobileKeyboardDocumentScroll();
+      queueMobileViewportLayoutSync();
+    }, { passive: false, capture: true });
+
+    ['pointerup', 'pointercancel'].forEach((type) => {
+      document.addEventListener(type, () => resetMobileComposerGestureGuard('dock-pointer'), { passive: true, capture: true });
+    });
+
+    document.addEventListener('touchstart', (event) => {
+      if (inputArea.contains(event.target) || mobileComposerGestureGuard.source === 'pointer') return;
+      const touch = event.changedTouches?.[0] || event.touches?.[0] || null;
+      if (!touch) return;
+      startMobileComposerDockGesture({
+        source: 'dock-touch',
+        touchId: Number.isFinite(Number(touch.identifier)) ? Number(touch.identifier) : null,
+        clientX: touch.clientX,
+        clientY: touch.clientY,
+        target: event.target,
+      });
+    }, { passive: true, capture: true });
+
+    document.addEventListener('touchmove', (event) => {
+      if (mobileComposerGestureGuard.source !== 'dock-touch') return;
+      const touches = Array.from(event.touches || []);
+      const touch = mobileComposerGestureGuard.touchId == null
+        ? touches[0]
+        : touches.find((item) => Number(item.identifier) === mobileComposerGestureGuard.touchId);
+      if (!touch) return;
+      if (!shouldBlockMobileComposerDrag(event, Number(touch.clientX || 0), Number(touch.clientY || 0))) return;
+      event.preventDefault();
+      restoreMobileKeyboardDocumentScroll();
+      queueMobileViewportLayoutSync();
+    }, { passive: false, capture: true });
+
+    ['touchend', 'touchcancel'].forEach((type) => {
+      document.addEventListener(type, () => resetMobileComposerGestureGuard('dock-touch'), { passive: true, capture: true });
     });
   }
 
@@ -4294,9 +4430,14 @@
     syncMobileAppHeightToViewport({ force: true });
     window.visualViewport.addEventListener('resize', syncMobileAppHeightToViewport);
     window.visualViewport.addEventListener('scroll', syncMobileAppHeightToViewport);
+    window.addEventListener('scroll', () => {
+      if (!restoreMobileKeyboardDocumentScroll()) return;
+      queueMobileViewportLayoutSync();
+    }, { passive: true });
     window.addEventListener('orientationchange', () => {
       mobileVisualViewportBaselineHeight = 0;
       mobileVisualViewportBaselineWidth = 0;
+      mobileKeyboardDockActive = false;
       syncMobileAppHeightToViewport({ force: true });
     });
     if ('ResizeObserver' in window && !mobileViewportElementResizeObserver) {

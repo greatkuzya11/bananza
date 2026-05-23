@@ -17,7 +17,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
   const scripts = [...document.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
 
   assert.deepEqual(styles, [
-    '/css/style.css?v=20260523-swipe-pagers',
+    '/css/style.css?v=20260523-keyboard-dock',
     '/css/calls.css?v=20260509-call-modal-surface',
     '/css/voice.css',
     '/css/video-notes.css',
@@ -28,7 +28,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
     '/js/i18n.js?v=20260509-call-modal-surface',
-    '/js/app.js?v=20260523-swipe-pagers',
+    '/js/app.js?v=20260523-keyboard-dock',
     '/js/calls/CallStore.js?v=20260509-call-modal-surface',
     '/js/calls/CallMedia.js?v=20260509-call-modal-surface',
     '/js/calls/CallNotifications.js?v=20260509-call-modal-surface',

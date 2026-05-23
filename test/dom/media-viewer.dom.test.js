@@ -1392,6 +1392,62 @@ test('mobile composer vertical drag is swallowed while the keyboard is open', as
   assert.equal(app.style.height, '420px');
 });
 
+test('mobile keyboard dock ignores visual viewport scroll while composer is focused', async (t) => {
+  const dom = await openSingleChatDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+  await openMobileKeyboard(dom, msgInput);
+
+  assert.equal(BananzaAppBridge.__testing.getMobileKeyboardDockSnapshot().mobileViewportTop, '0px');
+
+  dom.visualViewportMock.setAndDispatch('scroll', { offsetTop: 80 });
+  await wait(dom, 80);
+
+  const snapshot = BananzaAppBridge.__testing.getMobileKeyboardDockSnapshot();
+  assert.equal(snapshot.keyboardOpen, true);
+  assert.equal(snapshot.chatKeyboardLayout, true);
+  assert.equal(snapshot.mobileViewportTop, '0px');
+  assert.equal(app.style.height, '420px');
+});
+
+test('mobile emoji picker drag cannot pan the keyboard dock', async (t) => {
+  const dom = await openSingleChatDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const emojiBtn = document.getElementById('emojiBtn');
+  const emojiPicker = document.getElementById('emojiPicker');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+  await openMobileKeyboard(dom, msgInput);
+  dispatchTouchTap(dom.window, emojiBtn);
+  await wait(dom, 80);
+
+  assert.equal(emojiPicker.classList.contains('hidden'), false);
+
+  emojiPicker.dispatchEvent(createTouchEvent(dom.window, 'touchstart', {
+    touches: [createTouchPoint({ identifier: 53, clientX: 90, clientY: 260 })],
+  }));
+  const move = createTouchEvent(dom.window, 'touchmove', {
+    touches: [createTouchPoint({ identifier: 53, clientX: 90, clientY: 180 })],
+  });
+  emojiPicker.dispatchEvent(move);
+
+  assert.equal(move.defaultPrevented, true);
+  assert.equal(app.style.height, '420px');
+});
+
 test('mobile composer allows textarea internal scroll instead of swallowing it', async (t) => {
   const dom = await openSingleChatDom();
   t.after(() => {
