@@ -600,6 +600,39 @@ test('chat list keeps unread badges rendered for both active and inactive chats'
   assert.doesNotMatch(chatUnreadBadgeClassName(document, 42), /\bunread-badge--active-chat\b/);
 });
 
+test('chat list renders QIP custom emojis in last message previews', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  BananzaAppBridge.__testing.setChats([
+    {
+      ...makeFolderSwipeChat(45, 'QIP preview'),
+      last_user: 'Admin 11',
+      last_text: ':qip-infium-047:',
+    },
+    {
+      ...makeFolderSwipeChat(46, 'QIP HD preview'),
+      last_user: 'Admin 11',
+      last_text: ':qip-hd-qippda-aa:',
+    },
+  ], { currentChatId: 45 });
+
+  const qipPreview = document.querySelector('.chat-item[data-chat-id="45"] .chat-item-last span');
+  const qipImg = qipPreview?.querySelector('img.qip-infium-emoji.chat-preview-emoji');
+  assert.ok(qipImg);
+  assert.match(qipImg.getAttribute('src') || '', /\/assets\/emoji\/qip-infium-original\/047\.gif$/);
+  assert.equal(qipPreview.textContent.includes(':qip-infium-047:'), false);
+
+  const qipHdPreview = document.querySelector('.chat-item[data-chat-id="46"] .chat-item-last span');
+  const qipHdImg = qipHdPreview?.querySelector('img.qip-hd-emoji.chat-preview-emoji');
+  assert.ok(qipHdImg);
+  assert.match(qipHdImg.getAttribute('src') || '', /\/assets\/emoji\/qip-hd\/qippda_aa\.gif$/);
+  assert.equal(qipHdPreview.textContent.includes(':qip-hd-qippda-aa:'), false);
+});
+
 test('chat list shows time only for today and short date for older last messages', async (t) => {
   const dom = await bootAppDom();
   t.after(() => {

@@ -11357,6 +11357,29 @@
     return '';
   }
 
+  function renderCustomEmojiPreviewHtml(text, { className = 'chat-preview-emoji' } = {}) {
+    const source = String(text || '');
+    const tokenRe = /:qip-infium-\d{3}:|:qip-hd-[a-z0-9][a-z0-9-]{0,63}:/gi;
+    let html = '';
+    let lastIndex = 0;
+    let match;
+    while ((match = tokenRe.exec(source))) {
+      html += esc(source.slice(lastIndex, match.index));
+      const token = match[0];
+      html += isCustomEmojiToken(token)
+        ? renderCustomEmojiHtml(token, { className })
+        : esc(token);
+      lastIndex = match.index + token.length;
+    }
+    html += esc(source.slice(lastIndex));
+    return html;
+  }
+
+  function renderChatLastPreviewHtml(chat, { emptyText = '' } = {}) {
+    const preview = getChatLastPreviewText(chat);
+    return preview ? renderCustomEmojiPreviewHtml(preview) : esc(emptyText);
+  }
+
   function getChatSearchHaystack(chat) {
     return [
       chat?.name || '',
@@ -11961,7 +11984,7 @@
         </div>
         <div class="user-list-copy">
           <div class="name">${esc(chat.name || 'Chat')}</div>
-          <div class="user-list-meta">${esc(getChatLastPreviewText(chat)).substring(0, 80)}</div>
+          <div class="user-list-meta">${renderChatLastPreviewHtml(chat)}</div>
         </div>
       </div>
     `;
@@ -13348,7 +13371,6 @@
 
     forwardChatList.innerHTML = filtered.map((chat) => {
       const isOnline = chat.type === 'private' && chat.private_user && onlineUsers.has(chat.private_user.id);
-      const lastMsg = getChatLastPreviewText(chat);
       const lastTime = chat.last_time ? formatChatListTimestamp(chat.last_time) : '';
       return `
         <button type="button" class="chat-item forward-chat-item${chat.id === currentChatId ? ' is-current' : ''}" data-chat-id="${chat.id}">
@@ -13360,7 +13382,7 @@
               <span class="chat-item-name">${esc(chat.name)}</span>
               <span class="chat-item-time">${lastTime}</span>
             </div>
-            <div class="chat-item-last"><span>${esc(lastMsg).substring(0, 60) || 'Без сообщений'}</span></div>
+            <div class="chat-item-last"><span>${renderChatLastPreviewHtml(chat, { emptyText: 'Без сообщений' })}</span></div>
           </div>
         </button>
       `;
@@ -16269,7 +16291,6 @@
 
     const displayName = chat.name;
     const isOnline = chat.type === 'private' && chat.private_user && onlineUsers.has(chat.private_user.id);
-    const lastMsg = getChatLastPreviewText(chat);
     const lastTime = chat.last_time ? formatChatListTimestamp(chat.last_time) : '';
     const unread = chat.unread_count > 0
       ? `<span class="unread-badge${isActive ? ' unread-badge--active-chat' : ''}" data-unread-count="${chat.unread_count}">${chat.unread_count > 99 ? '99+' : chat.unread_count}</span>`
@@ -16310,7 +16331,7 @@
         </div>
         <div class="chat-item-last">
           ${callIndicator}
-          <span>${esc(lastMsg).substring(0, 60)}</span>
+          <span>${renderChatLastPreviewHtml(chat)}</span>
           ${unread}
         </div>
       </div>
