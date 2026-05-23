@@ -20740,10 +20740,19 @@
 
     const getKeys = () => (options.getKeys?.() || []).map((key) => String(key || '')).filter(Boolean);
     const getActiveKey = () => String(options.getActiveKey?.() || getKeys()[0] || '');
+    const getRootContentWidth = () => {
+      const rootWidth = Number(root.clientWidth || 0);
+      if (rootWidth <= 0) return 0;
+      const style = window.getComputedStyle?.(root);
+      const paddingLeft = Number.parseFloat(style?.paddingLeft || '0') || 0;
+      const paddingRight = Number.parseFloat(style?.paddingRight || '0') || 0;
+      return Math.max(1, Math.round(rootWidth - paddingLeft - paddingRight));
+    };
     const getWidth = () => Math.max(
       1,
       Math.round(
         Number(options.getWidth?.() || 0)
+        || getRootContentWidth()
         || Number(root.clientWidth || 0)
         || Number(window.innerWidth || 0)
         || 1
@@ -20752,6 +20761,11 @@
     const getKeyIndex = (key, keys = getKeys()) => {
       const index = keys.findIndex((entry) => entry === String(key || ''));
       return index >= 0 ? index : 0;
+    };
+    const getCommitDistance = () => {
+      const width = getWidth();
+      const customDistance = Number(options.getCommitDistance?.(width) || 0);
+      return customDistance > 0 ? customDistance : horizontalPagerCommitDistance(width);
     };
     const isAvailable = () => (
       !state.switching
@@ -21117,7 +21131,7 @@
 
       const direction = dx < 0 ? 1 : -1;
       const adjacentKey = getAdjacentKey(direction);
-      const shouldSwitch = Boolean(adjacentKey && Math.abs(dx) >= horizontalPagerCommitDistance(getWidth()));
+      const shouldSwitch = Boolean(adjacentKey && Math.abs(dx) >= getCommitDistance());
       runTransition(() => (
         shouldSwitch
           ? transitionToKey(adjacentKey, { direction, source: 'swipe' })
@@ -23428,6 +23442,10 @@
       },
       renderPage: (tabName) => createNewChatTabPreview(tabName),
       isAvailable: () => isFloatingSurfaceVisible(newChatModal),
+      getCommitDistance: (width) => Math.max(32, Math.min(
+        48,
+        Math.round(Math.max(1, Number(width || 0)) * 0.12)
+      )),
       isAllowedStartTarget: (target) => {
         if (!(target instanceof Element)) return false;
         if (target.closest('.modal-tabs .modal-tab')) return true;

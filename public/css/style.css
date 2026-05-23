@@ -3827,6 +3827,13 @@ html[data-modal-animation="none"] .search-panel {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+  touch-action: pan-y;
+}
+#newChatModal .modal-tabs,
+#newChatModal .modal-tab,
+#newChatModal .tab-pane,
+#newChatModal .user-list {
+  touch-action: pan-y;
 }
 #newChatModal .tab-pane.active {
   display: flex;
