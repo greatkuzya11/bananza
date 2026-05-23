@@ -153,6 +153,7 @@ test('CallFeature hides the header button until calls and LiveKit are enabled', 
   const { document, BananzaCallHooks } = dom.window;
   const btn = document.getElementById('callStartBtn');
   assert.ok(btn);
+  assert.equal(btn.parentElement?.id, 'chatHeaderActions');
   assert.equal(btn.classList.contains('hidden'), true);
 
   state.features = { ...state.features, calls_enabled: true, livekit_ready: true };

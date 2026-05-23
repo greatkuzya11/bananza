@@ -29,6 +29,12 @@ async function expectMobileScene(page, scene) {
     });
 }
 
+async function openSearchPanelFromHeader(page) {
+  await page.locator('#chatInfoBtn').click();
+  await expect(page.locator('#chatHeaderActions')).toHaveClass(/is-open/);
+  await page.locator('#searchBtn').click();
+}
+
 test('UI flow covers register, private chat creation, sending, search and poll composer', async ({ page }, testInfo) => {
   await installMediaMocks(page);
 
@@ -39,7 +45,7 @@ test('UI flow covers register, private chat creation, sending, search and poll c
   await openPrivateChat(page, bobUser.displayName);
   await sendComposerMessage(page, 'Playwright hello');
 
-  await page.locator('#searchBtn').click();
+  await openSearchPanelFromHeader(page);
   await page.locator('#searchInput').fill('Playwright hello');
   await expect(page.locator('#searchResults')).toContainText('Playwright hello');
 
@@ -55,7 +61,7 @@ test('UI flow covers register, private chat creation, sending, search and poll c
     await expectMobileScene(page, 'chat');
 
     for (let index = 0; index < 2; index += 1) {
-      await page.locator('#searchBtn').click();
+      await openSearchPanelFromHeader(page);
       await expect(page.locator('#searchPanel')).toHaveAttribute('aria-hidden', 'false');
       await expectMobileScene(page, 'chat');
       await page.locator('#searchClose').click();

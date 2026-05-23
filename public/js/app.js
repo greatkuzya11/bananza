@@ -571,6 +571,7 @@
   let searchPanelPendingAction = null;
   let searchPanelReturnFocusEl = null;
   let searchPanelFollowupClickSuppressUntil = 0;
+  let chatHeaderActionsOpen = false;
   let chatOpenSeq = 0;
   let chatMessageAbortController = null;
   let chatOpenInProgress = false;
@@ -633,7 +634,11 @@
   const chatTitle = $('#chatTitle');
   const chatHeaderAvatar = $('#chatHeaderAvatar');
   const chatStatus = $('#chatStatus');
+  const chatHeaderActions = $('#chatHeaderActions');
+  const searchBtn = $('#searchBtn');
   const chatShotBtn = $('#chatShotBtn');
+  const chatSettingsActionBtn = $('#chatSettingsActionBtn');
+  const chatInfoBtn = $('#chatInfoBtn');
   const pinnedBar = $('#pinnedBar');
   const messagesEl = $('#messages');
   const loadMoreWrap = $('#loadMoreWrap');
@@ -1110,7 +1115,7 @@
     return Boolean(
       target instanceof Element
       && target.closest(
-        '#menuBtn, #settingsBtn, #searchBtn, #chatShotBtn, #chatInfoBtn, #backBtn, #emojiBtn, #attachBtn, #mentionOpenBtn, #composerContextConvertBtn, #msgInput'
+        '#menuBtn, #settingsBtn, #searchBtn, #chatShotBtn, #chatSettingsActionBtn, #callStartBtn, #chatInfoBtn, #backBtn, #emojiBtn, #attachBtn, #mentionOpenBtn, #composerContextConvertBtn, #msgInput'
       )
     );
   }
@@ -1262,6 +1267,47 @@
     });
   }
 
+  function getChatSettingsActionOpener() {
+    return chatSettingsActionBtn || chatInfoBtn || $('#chatSettingsActionBtn') || $('#chatInfoBtn');
+  }
+
+  function syncChatHeaderActionsAccessibility() {
+    if (!chatHeaderActions) return;
+    const isOpen = Boolean(chatHeaderActionsOpen);
+    chatHeaderActions.classList.toggle('is-open', isOpen);
+    chatHeaderActions.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+    if (chatInfoBtn) {
+      chatInfoBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      chatInfoBtn.classList.toggle('is-active', isOpen);
+    }
+    chatHeaderActions.querySelectorAll('button').forEach((button) => {
+      if (isOpen && !button.classList.contains('hidden') && !button.hidden) {
+        button.removeAttribute('tabindex');
+      } else {
+        button.tabIndex = -1;
+      }
+    });
+  }
+
+  function setChatHeaderActionsOpen(open) {
+    const nextOpen = Boolean(open);
+    if (chatHeaderActionsOpen === nextOpen) {
+      syncChatHeaderActionsAccessibility();
+      return chatHeaderActionsOpen;
+    }
+    chatHeaderActionsOpen = nextOpen;
+    syncChatHeaderActionsAccessibility();
+    return chatHeaderActionsOpen;
+  }
+
+  function toggleChatHeaderActions() {
+    return setChatHeaderActionsOpen(!chatHeaderActionsOpen);
+  }
+
+  function closeChatHeaderActions() {
+    return setChatHeaderActionsOpen(false);
+  }
+
   function isMobileComposerDismissMessageTarget(target) {
     if (!(target instanceof Element)) return false;
     const row = target.closest('.msg-row');
@@ -1338,6 +1384,8 @@
     openManagedModal: (id, options) => openModal(id, options),
     closeManagedModal: (id, options) => closeModal(id, options),
     closeTopManagedModal: (options) => closeTopModal(options),
+    closeChatHeaderActions: () => closeChatHeaderActions(),
+    syncChatHeaderActions: () => syncChatHeaderActionsAccessibility(),
     getToken: () => token || localStorage.getItem('token'),
     getCurrentUser: () => currentUser,
     getCurrentChatId: () => currentChatId,
@@ -1458,7 +1506,9 @@
       transform: ivCurrentImg()?.style?.transform || '',
     }),
     openSettingsModal: (opener = $('#settingsBtn')) => openSettingsModal(opener),
-    openChatInfoModal: (opener = $('#chatInfoBtn')) => openChatInfoModal(opener),
+    openChatInfoModal: (opener = getChatSettingsActionOpener()) => openChatInfoModal(opener),
+    closeChatHeaderActions: () => closeChatHeaderActions(),
+    getChatHeaderActionsOpen: () => chatHeaderActionsOpen,
     openChat: (chatId, options = {}) => openChat(chatId, options),
     revealSidebarFromChat: (options = {}) => revealSidebarFromChat(options),
     flushCurrentChatScrollAnchor: (chatId, options = {}) => flushCurrentChatScrollAnchor(chatId, options),
@@ -5023,6 +5073,7 @@
 
   function renderCurrentChatHeader(chat = chats.find(c => c.id === currentChatId)) {
     if (!chat) {
+      closeChatHeaderActions();
       chatTitle.textContent = 'Chat';
       chatHeaderAvatar.style.display = 'none';
       syncChatShotButton();
@@ -14472,6 +14523,7 @@
     chatShotBtn.classList.toggle('hidden', !shouldShow);
     chatShotBtn.classList.toggle('is-pending', generating);
     chatShotBtn.disabled = generating || !shouldShow;
+    syncChatHeaderActionsAccessibility();
     if (chatId && !state && !chatShotStateRequests.has(chatId) && !chatShotStateFailuresByChat.has(chatId)) {
       loadChatShotState(chatId).catch(() => {});
     }
@@ -16582,6 +16634,7 @@
     }
     const previousChatId = Number(currentChatId || 0);
     const sameChat = previousChatId === targetChatId;
+    if (!sameChat) closeChatHeaderActions();
     const explicitAnchorId = Number(options?.anchorMessageId || 0);
     const suppressHistoryPush = Boolean(options?.suppressHistoryPush);
     const { seq, controller } = beginChatOpenTransition(targetChatId);
@@ -21263,7 +21316,7 @@
     searchDebounce = null;
     searchRequestSeq += 1;
     searchPanelPendingAction = null;
-    searchPanelReturnFocusEl = getMobileComposerSafeReturnFocusEl($('#searchBtn'));
+    searchPanelReturnFocusEl = getMobileComposerSafeReturnFocusEl(chatInfoBtn || searchBtn);
     searchAllChats = false;
     renderSearchScopeToggle();
     if (searchInput) searchInput.value = '';
@@ -21311,7 +21364,7 @@
       }
       const shouldRestoreFocus = !searchPanelPendingAction;
       if (shouldRestoreFocus) {
-        focusElementIfPossible(searchPanelReturnFocusEl || $('#searchBtn'));
+        focusElementIfPossible(searchPanelReturnFocusEl || chatInfoBtn || searchBtn);
       }
       searchPanelReturnFocusEl = null;
       flushSearchPanelPendingAction();
@@ -23853,7 +23906,7 @@
   }
 
   // Chat info modal
-  async function openChatInfoModal(opener = $('#chatInfoBtn')) {
+  async function openChatInfoModal(opener = getChatSettingsActionOpener()) {
     if (!currentChatId) return;
     openModal('chatInfoModal', { replaceStack: true, opener });
 
@@ -26042,7 +26095,7 @@
         searchPanelSkipNextPopstate = false;
         const shouldRestoreFocus = !searchPanelPendingAction;
         if (shouldRestoreFocus) {
-          focusElementIfPossible(searchPanelReturnFocusEl || $('#searchBtn'));
+          focusElementIfPossible(searchPanelReturnFocusEl || chatInfoBtn || searchBtn);
         }
         searchPanelReturnFocusEl = null;
         flushSearchPanelPendingAction();
@@ -26744,13 +26797,19 @@
     // Menu button
     bindTouchSafeButtonActivation($('#menuBtn'), () => openMenuDrawer($('#menuBtn')));
 
-    // Chat info button
-    bindTouchSafeButtonActivation($('#chatInfoBtn'), () => {
-      animateChatHeaderActionButton('#chatInfoBtn');
-      openChatInfoModal($('#chatInfoBtn'));
+    // Chat header actions
+    bindTouchSafeButtonActivation(chatInfoBtn, () => {
+      animateChatHeaderActionButton(chatInfoBtn);
+      toggleChatHeaderActions();
+    });
+    bindTouchSafeButtonActivation(chatSettingsActionBtn, () => {
+      closeChatHeaderActions();
+      animateChatHeaderActionButton(chatSettingsActionBtn);
+      openChatInfoModal(chatSettingsActionBtn);
     });
     bindTouchSafeButtonActivation(chatShotBtn, () => {
-      animateChatHeaderActionButton('#chatShotBtn');
+      closeChatHeaderActions();
+      animateChatHeaderActionButton(chatShotBtn);
       runChatShotGeneration();
     });
 
@@ -26833,8 +26892,9 @@
     });
 
     // Search
-    bindTouchSafeButtonActivation($('#searchBtn'), ({ isTouchLike }) => {
-      animateChatHeaderActionButton('#searchBtn');
+    bindTouchSafeButtonActivation(searchBtn, ({ isTouchLike }) => {
+      closeChatHeaderActions();
+      animateChatHeaderActionButton(searchBtn);
       openSearchPanel({ focusInput: true, suppressFollowupClick: isTouchLike });
     });
     $('#searchClose').addEventListener('click', () => closeSearchPanel());
@@ -26901,6 +26961,12 @@
           closeSearchPanel();
           return;
         }
+        if (chatHeaderActionsOpen) {
+          e.preventDefault();
+          closeChatHeaderActions();
+          focusElementIfPossible(chatInfoBtn);
+          return;
+        }
         if (isChatSearchOpen()) {
           e.preventDefault();
           setChatSearchOpen(false, { clear: true, focus: true });
@@ -26919,6 +26985,7 @@
     if (!checkAuth()) return;
     chatFolderStore.hydrateActiveFolderId();
     setChatSearchOpen(false, { clear: true, focus: false, render: false });
+    syncChatHeaderActionsAccessibility();
     hydrateChatListCache();
 
     setupMobileViewportHeightSync();

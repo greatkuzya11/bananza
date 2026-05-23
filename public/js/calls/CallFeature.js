@@ -230,8 +230,11 @@
   function ensureUi() {
     if (state.uiReady) return;
 
+    const chatHeaderActions = document.getElementById('chatHeaderActions');
+    const chatSettingsActionBtn = document.getElementById('chatSettingsActionBtn');
     const chatInfoBtn = document.getElementById('chatInfoBtn');
-    if (chatInfoBtn && !document.getElementById('callStartBtn')) {
+    const callButtonAnchor = chatSettingsActionBtn || chatInfoBtn;
+    if (callButtonAnchor && !document.getElementById('callStartBtn')) {
       const btn = document.createElement('button');
       btn.id = 'callStartBtn';
       btn.className = 'icon-btn chat-header-action-btn call-header-btn hidden';
@@ -239,9 +242,14 @@
       btn.title = t('Start video call');
       btn.setAttribute('aria-label', t('Start video call'));
       btn.textContent = VIDEO_ICON;
-      chatInfoBtn.insertAdjacentElement('beforebegin', btn);
-      btn.addEventListener('click', () => startCall().catch((error) => setPrejoinStatus(error.message || t('Could not start call'), 'error')));
+      if (chatHeaderActions && chatSettingsActionBtn) chatSettingsActionBtn.insertAdjacentElement('beforebegin', btn);
+      else callButtonAnchor.insertAdjacentElement('beforebegin', btn);
+      btn.addEventListener('click', () => {
+        bridge()?.closeChatHeaderActions?.();
+        startCall().catch((error) => setPrejoinStatus(error.message || t('Could not start call'), 'error'));
+      });
       applyLocalized(btn);
+      bridge()?.syncChatHeaderActions?.();
     }
 
     const pinnedBar = document.getElementById('pinnedBar');
@@ -616,6 +624,7 @@
     if (!btn) return;
     const call = state.activeCalls.get(currentChatId());
     btn.classList.toggle('hidden', !isCallableChat() || Boolean(call));
+    bridge()?.syncChatHeaderActions?.();
   }
 
   function renderBanner() {

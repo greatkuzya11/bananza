@@ -1634,6 +1634,8 @@ test('search button opens on touchend, survives the synthetic click and focuses 
   const { document, BananzaAppBridge } = dom.window;
   const app = document.getElementById('app');
   const msgInput = document.getElementById('msgInput');
+  const chatInfoBtn = document.getElementById('chatInfoBtn');
+  const chatHeaderActions = document.getElementById('chatHeaderActions');
   const searchBtn = document.getElementById('searchBtn');
   const searchPanel = document.getElementById('searchPanel');
   const searchInput = document.getElementById('searchInput');
@@ -1643,17 +1645,55 @@ test('search button opens on touchend, survives the synthetic click and focuses 
   await openMobileKeyboard(dom, msgInput);
   assert.equal(app.style.height, '420px');
 
+  chatInfoBtn.click();
+  assert.equal(chatHeaderActions.classList.contains('is-open'), true);
+
   const { touchStart } = dispatchTouchTap(dom.window, searchBtn, { emitClick: true });
   await wait(dom, 80);
 
   assert.equal(touchStart.defaultPrevented, true);
   assert.equal(searchPanel.getAttribute('aria-hidden'), 'false');
+  assert.equal(chatHeaderActions.classList.contains('is-open'), false);
   assert.equal(document.activeElement, searchInput);
   assert.equal(app.style.height, '420px');
   assertMobileScene(dom, 'chat');
 });
 
-test('chat info button opens on pointerup without a synthetic click and dismisses the mobile keyboard', async (t) => {
+test('chat header actions start collapsed and the gear toggles them with spin feedback', async (t) => {
+  const dom = await openSingleChatDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const chatHeaderActions = document.getElementById('chatHeaderActions');
+  const chatInfoBtn = document.getElementById('chatInfoBtn');
+  const searchBtn = document.getElementById('searchBtn');
+  const chatSettingsActionBtn = document.getElementById('chatSettingsActionBtn');
+
+  assert.ok(chatHeaderActions);
+  assert.equal(chatHeaderActions.classList.contains('is-open'), false);
+  assert.equal(chatHeaderActions.getAttribute('aria-hidden'), 'true');
+  assert.equal(chatInfoBtn.getAttribute('aria-expanded'), 'false');
+  assert.equal(searchBtn.tabIndex, -1);
+  assert.equal(chatSettingsActionBtn.tabIndex, -1);
+
+  chatInfoBtn.click();
+  assert.equal(chatHeaderActions.classList.contains('is-open'), true);
+  assert.equal(chatHeaderActions.getAttribute('aria-hidden'), 'false');
+  assert.equal(chatInfoBtn.getAttribute('aria-expanded'), 'true');
+  assert.equal(chatInfoBtn.classList.contains('is-spinning'), true);
+  assert.notEqual(searchBtn.tabIndex, -1);
+  assert.notEqual(chatSettingsActionBtn.tabIndex, -1);
+
+  chatInfoBtn.click();
+  assert.equal(chatHeaderActions.classList.contains('is-open'), false);
+  assert.equal(chatHeaderActions.getAttribute('aria-hidden'), 'true');
+  assert.equal(chatInfoBtn.getAttribute('aria-expanded'), 'false');
+  assert.equal(searchBtn.tabIndex, -1);
+  assert.equal(chatSettingsActionBtn.tabIndex, -1);
+});
+
+test('chat settings action opens on pointerup without a synthetic click and dismisses the mobile keyboard', async (t) => {
   const dom = await openSingleChatDom();
   t.after(() => {
     dom.window.close();
@@ -1662,6 +1702,8 @@ test('chat info button opens on pointerup without a synthetic click and dismisse
   const app = document.getElementById('app');
   const msgInput = document.getElementById('msgInput');
   const chatInfoBtn = document.getElementById('chatInfoBtn');
+  const chatHeaderActions = document.getElementById('chatHeaderActions');
+  const chatSettingsActionBtn = document.getElementById('chatSettingsActionBtn');
   const chatInfoModal = document.getElementById('chatInfoModal');
 
   BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
@@ -1669,12 +1711,16 @@ test('chat info button opens on pointerup without a synthetic click and dismisse
   await openMobileKeyboard(dom, msgInput);
   assert.equal(app.style.height, '420px');
 
-  const { pointerDown } = dispatchPointerTap(dom.window, chatInfoBtn);
+  chatInfoBtn.click();
+  assert.equal(chatHeaderActions.classList.contains('is-open'), true);
+
+  const { pointerDown } = dispatchPointerTap(dom.window, chatSettingsActionBtn);
   dom.visualViewportMock.set({ height: 844 });
   await waitForViewportRecovery(dom, 320);
 
   assert.equal(pointerDown.defaultPrevented, true);
   assert.equal(chatInfoModal.classList.contains('hidden'), false);
+  assert.equal(chatHeaderActions.classList.contains('is-open'), false);
   assert.equal(app.style.height, '844px');
   assert.notEqual(document.activeElement, msgInput);
 });
@@ -1851,7 +1897,7 @@ test('mention picker lets the search button act immediately on one touch gesture
   assert.equal(app.style.height, '420px');
 });
 
-test('mention picker lets chat info and back act immediately on one tap', async (t) => {
+test('mention picker lets chat settings action and back act immediately on one tap', async (t) => {
   const mentionTargetsByChatId = {
     1: [
       { user_id: 2, username: 'bob', token: 'bob', display_name: 'Bob', avatar_color: '#7bc862' },
@@ -1867,10 +1913,13 @@ test('mention picker lets chat info and back act immediately on one tap', async 
     const msgInput = document.getElementById('msgInput');
     const mentionOpenBtn = document.getElementById('mentionOpenBtn');
     const chatInfoBtn = document.getElementById('chatInfoBtn');
+    const chatSettingsActionBtn = document.getElementById('chatSettingsActionBtn');
     const chatInfoModal = document.getElementById('chatInfoModal');
 
     BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
     await wait(dom, 40);
+    chatInfoBtn.click();
+    await wait(dom, 20);
     await openMobileKeyboard(dom, msgInput);
     mentionOpenBtn.dispatchEvent(new dom.window.MouseEvent('click', {
       bubbles: true,
@@ -1878,7 +1927,7 @@ test('mention picker lets chat info and back act immediately on one tap', async 
     }));
     await wait(dom, 80);
 
-    dispatchPointerTap(dom.window, chatInfoBtn);
+    dispatchPointerTap(dom.window, chatSettingsActionBtn);
     dom.visualViewportMock.set({ height: 844 });
     await waitForViewportRecovery(dom, 320);
 

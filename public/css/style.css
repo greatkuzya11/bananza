@@ -1165,6 +1165,59 @@ html[data-modal-animation="none"] .chat-folder-list-surface {
 .chat-header-action-btn.is-spinning {
   animation: chatHeaderActionSpin .38s cubic-bezier(.2, .8, .2, 1);
 }
+.chat-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  max-width: 0;
+  margin-left: -10px;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  visibility: hidden;
+  transition:
+    max-width .24s cubic-bezier(.2, .8, .2, 1),
+    margin-left .24s cubic-bezier(.2, .8, .2, 1),
+    opacity .16s ease,
+    visibility 0s linear .24s;
+}
+.chat-header-actions.is-open {
+  max-width: 220px;
+  margin-left: 0;
+  opacity: 1;
+  pointer-events: auto;
+  visibility: visible;
+  transition:
+    max-width .28s cubic-bezier(.2, .8, .2, 1),
+    margin-left .28s cubic-bezier(.2, .8, .2, 1),
+    opacity .18s ease,
+    visibility 0s;
+}
+.chat-header-actions .chat-header-action-btn {
+  opacity: 0;
+  transform: translateX(18px) scale(.94);
+  transition:
+    transform .2s cubic-bezier(.2, .8, .2, 1),
+    color .16s ease,
+    opacity .16s ease;
+  transition-delay: 0s;
+}
+.chat-header-actions.is-open .chat-header-action-btn {
+  opacity: 1;
+  transform: translateX(0) scale(1);
+  transition-delay: var(--chat-header-action-delay, 0s);
+}
+.chat-header-actions.is-open .chat-header-action-btn:hover,
+.chat-header-actions.is-open .chat-header-action-btn:focus,
+.chat-header-actions.is-open .chat-header-action-btn:focus-visible,
+.chat-header-actions.is-open .chat-header-action-btn:active {
+  transform: scale(1.06);
+}
+#searchBtn { --chat-header-action-delay: 90ms; }
+#chatShotBtn { --chat-header-action-delay: 60ms; }
+#callStartBtn { --chat-header-action-delay: 30ms; }
+#chatSettingsActionBtn { --chat-header-action-delay: 0ms; }
 .chat-shot-btn.is-pending {
   color: var(--accent);
   animation: contextConvertFabPulse 1s ease-in-out infinite;
@@ -4514,6 +4567,11 @@ html[data-visual-mode="rich"] .poll-card {
   .chat-back-btn.is-spinning .chat-back-btn-icon,
   .chat-header-action-btn.is-spinning {
     animation: none;
+  }
+  .chat-header-actions,
+  .chat-header-actions .chat-header-action-btn {
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
   }
   .modal,
   .modal .modal-content,

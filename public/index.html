@@ -106,9 +106,12 @@
             <div id="chatTitle" class="chat-title"></div>
             <div id="chatStatus" class="chat-status"></div>
           </div>
-          <button id="searchBtn" class="icon-btn chat-header-action-btn" title="Search messages" aria-label="Search messages" type="button">🔍</button>
-          <button id="chatShotBtn" class="icon-btn chat-header-action-btn chat-shot-btn hidden" title="ChatShot" aria-label="ChatShot" type="button">&#128247;</button>
-          <button id="chatInfoBtn" class="icon-btn chat-header-action-btn" title="Chat settings" aria-label="Chat settings" type="button">⚙️</button>
+          <div id="chatHeaderActions" class="chat-header-actions" aria-hidden="true">
+            <button id="searchBtn" class="icon-btn chat-header-action-btn" title="Search messages" aria-label="Search messages" type="button">🔍</button>
+            <button id="chatShotBtn" class="icon-btn chat-header-action-btn chat-shot-btn hidden" title="ChatShot" aria-label="ChatShot" type="button">&#128247;</button>
+            <button id="chatSettingsActionBtn" class="icon-btn chat-header-action-btn" title="Chat settings" aria-label="Chat settings" type="button">&#128736;&#65039;</button>
+          </div>
+          <button id="chatInfoBtn" class="icon-btn chat-header-action-btn" title="Chat actions" aria-label="Chat actions" aria-controls="chatHeaderActions" aria-expanded="false" type="button">⚙️</button>
         </div>
 
         <div id="pinnedBar" class="pinned-bar hidden" aria-live="polite"></div>
