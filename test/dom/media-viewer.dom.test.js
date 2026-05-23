@@ -328,6 +328,13 @@ async function openMobileKeyboard(dom, input, { height = 420 } = {}) {
   await wait(dom, 30);
 }
 
+function setWindowInnerHeight(dom, height) {
+  Object.defineProperty(dom.window, 'innerHeight', {
+    configurable: true,
+    value: height,
+  });
+}
+
 function emitWsMessage(dom, payload) {
   const sockets = Array.isArray(dom.window.__testWebSockets) ? dom.window.__testWebSockets : [];
   const socket = sockets[sockets.length - 1];
@@ -1331,6 +1338,95 @@ test('uploading media recovers stale mobile viewport height without a final resi
 
   assert.equal(app.style.height, '844px');
   assert.equal(pendingFile.classList.contains('hidden'), false);
+});
+
+test('Android-style resized viewport keeps the mobile composer docked to the keyboard', async (t) => {
+  const dom = await openSingleChatDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+
+  msgInput.focus();
+  setWindowInnerHeight(dom, 420);
+  dom.visualViewportMock.setAndDispatch('resize', { height: 420 });
+  await wait(dom, 80);
+
+  const snapshot = BananzaAppBridge.__testing.getMobileKeyboardDockSnapshot();
+  assert.equal(snapshot.keyboardOpen, true);
+  assert.equal(snapshot.chatKeyboardLayout, true);
+  assert.equal(snapshot.appHeight, '420px');
+  assert.equal(snapshot.mobileViewportHeight, '420px');
+  assert.equal(app.style.height, '420px');
+});
+
+test('mobile composer vertical drag is swallowed while the keyboard is open', async (t) => {
+  const dom = await openSingleChatDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const inputArea = document.querySelector('.input-area');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+  await openMobileKeyboard(dom, msgInput);
+  assert.equal(app.style.height, '420px');
+
+  inputArea.dispatchEvent(createTouchEvent(dom.window, 'touchstart', {
+    touches: [createTouchPoint({ identifier: 51, clientX: 180, clientY: 380 })],
+  }));
+  const move = createTouchEvent(dom.window, 'touchmove', {
+    touches: [createTouchPoint({ identifier: 51, clientX: 180, clientY: 300 })],
+  });
+  inputArea.dispatchEvent(move);
+
+  assert.equal(move.defaultPrevented, true);
+  assert.equal(app.style.height, '420px');
+});
+
+test('mobile composer allows textarea internal scroll instead of swallowing it', async (t) => {
+  const dom = await openSingleChatDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const msgInput = document.getElementById('msgInput');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+  await openMobileKeyboard(dom, msgInput);
+
+  Object.defineProperty(msgInput, 'clientHeight', {
+    configurable: true,
+    value: 40,
+  });
+  Object.defineProperty(msgInput, 'scrollHeight', {
+    configurable: true,
+    value: 160,
+  });
+  Object.defineProperty(msgInput, 'scrollTop', {
+    configurable: true,
+    writable: true,
+    value: 20,
+  });
+
+  msgInput.dispatchEvent(createTouchEvent(dom.window, 'touchstart', {
+    touches: [createTouchPoint({ identifier: 52, clientX: 180, clientY: 380 })],
+  }));
+  const move = createTouchEvent(dom.window, 'touchmove', {
+    touches: [createTouchPoint({ identifier: 52, clientX: 180, clientY: 300 })],
+  });
+  msgInput.dispatchEvent(move);
+
+  assert.equal(move.defaultPrevented, false);
 });
 
 test('emoji picker keeps the mobile composer attached when the keyboard is already open', async (t) => {

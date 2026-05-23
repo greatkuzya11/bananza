@@ -9,10 +9,14 @@
   --chat-area-top: 0px;
   --chat-area-width: 100vw;
   --chat-area-height: 100vh;
-  --ios-visual-viewport-top: 0px;
-  --ios-visual-viewport-height: 100vh;
-  --ios-chat-header-height: 0px;
-  --ios-chat-input-area-height: 0px;
+  --mobile-visual-viewport-top: 0px;
+  --mobile-visual-viewport-height: 100vh;
+  --mobile-chat-header-height: 0px;
+  --mobile-chat-input-area-height: 0px;
+  --ios-visual-viewport-top: var(--mobile-visual-viewport-top);
+  --ios-visual-viewport-height: var(--mobile-visual-viewport-height);
+  --ios-chat-header-height: var(--mobile-chat-header-height);
+  --ios-chat-input-area-height: var(--mobile-chat-input-area-height);
   --bg-dark: #0e1621;
   --bg-sidebar: #17212b;
   --bg-input: #242f3d;
@@ -6050,18 +6054,18 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
     background-image: var(--bg-panel-gradient);
     border-bottom: 1px solid var(--border-light);
   }
-  html.is-ios-webkit.is-ios-chat-keyboard-layout #chatView {
-    padding-top: var(--ios-chat-header-height);
-    padding-bottom: var(--ios-chat-input-area-height);
+  html.is-mobile-chat-keyboard-layout #chatView {
+    padding-top: var(--mobile-chat-header-height);
+    padding-bottom: var(--mobile-chat-input-area-height);
     overflow: visible;
   }
-  html.is-ios-webkit.is-ios-chat-keyboard-layout #chatArea {
+  html.is-mobile-chat-keyboard-layout #chatArea {
     contain: none;
     overflow: visible;
   }
-  html.is-ios-webkit.is-ios-chat-keyboard-layout #chatView .chat-header {
+  html.is-mobile-chat-keyboard-layout #chatView .chat-header {
     position: fixed;
-    top: var(--ios-visual-viewport-top);
+    top: var(--mobile-visual-viewport-top);
     left: var(--chat-area-left);
     width: var(--chat-area-width);
     max-width: var(--chat-area-width);
@@ -6071,9 +6075,9 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
     backface-visibility: hidden;
     -webkit-backface-visibility: hidden;
   }
-  html.is-ios-webkit.is-ios-chat-keyboard-layout #chatView .input-area {
+  html.is-mobile-chat-keyboard-layout #chatView .input-area {
     position: fixed;
-    top: calc(var(--ios-visual-viewport-top) + var(--ios-visual-viewport-height) - var(--ios-chat-input-area-height));
+    top: calc(var(--mobile-visual-viewport-top) + var(--mobile-visual-viewport-height) - var(--mobile-chat-input-area-height));
     left: var(--chat-area-left);
     width: var(--chat-area-width);
     max-width: var(--chat-area-width);
@@ -6083,7 +6087,7 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
     backface-visibility: hidden;
     -webkit-backface-visibility: hidden;
   }
-  html.is-ios-webkit.is-ios-chat-keyboard-layout #chatView .pinned-bar {
+  html.is-mobile-chat-keyboard-layout #chatView .pinned-bar {
     position: relative;
     z-index: 16;
   }
