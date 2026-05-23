@@ -1392,6 +1392,40 @@ test('mobile composer vertical drag is swallowed while the keyboard is open', as
   assert.equal(app.style.height, '420px');
 });
 
+test('mobile composer toolbar button drags are swallowed while the keyboard is open', async (t) => {
+  const dom = await openSingleChatDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const attachBtn = document.getElementById('attachBtn');
+  const emojiBtn = document.getElementById('emojiBtn');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+  await openMobileKeyboard(dom, msgInput);
+
+  for (const [index, button] of [attachBtn, emojiBtn].entries()) {
+    const identifier = 61 + index;
+    button.dispatchEvent(createTouchEvent(dom.window, 'touchstart', {
+      touches: [createTouchPoint({ identifier, clientX: 36 + (index * 42), clientY: 382 })],
+    }));
+    const move = createTouchEvent(dom.window, 'touchmove', {
+      touches: [createTouchPoint({ identifier, clientX: 36 + (index * 42), clientY: 300 })],
+    });
+    button.dispatchEvent(move);
+
+    assert.equal(move.defaultPrevented, true);
+    assert.equal(app.style.height, '420px');
+    button.dispatchEvent(createTouchEvent(dom.window, 'touchend', {
+      touches: [],
+      changedTouches: [createTouchPoint({ identifier, clientX: 36 + (index * 42), clientY: 300 })],
+    }));
+  }
+});
+
 test('mobile keyboard dock ignores visual viewport scroll while composer is focused', async (t) => {
   const dom = await openSingleChatDom();
   t.after(() => {
@@ -1482,7 +1516,8 @@ test('mobile composer allows textarea internal scroll instead of swallowing it',
   });
   msgInput.dispatchEvent(move);
 
-  assert.equal(move.defaultPrevented, false);
+  assert.equal(move.defaultPrevented, true);
+  assert.equal(msgInput.scrollTop, 100);
 });
 
 test('emoji picker keeps the mobile composer attached when the keyboard is already open', async (t) => {

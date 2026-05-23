@@ -6046,6 +6046,16 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
 
   .mobile-only { display: flex !important; }
 
+  .input-area,
+  .input-area .input-row,
+  .input-area .composer-tool-stack,
+  .input-area .composer-tool-stack .icon-btn,
+  .input-area .composer-input-wrap,
+  .input-area #msgInput,
+  .input-area .mention-open-btn {
+    touch-action: none;
+  }
+
   .chat-header {
     padding: 8px 6px;
     min-height: 52px;
@@ -6098,6 +6108,7 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
   html.is-mobile-chat-keyboard-layout .reaction-emoji-grid,
   html.is-mobile-chat-keyboard-layout .mention-picker-list {
     overscroll-behavior: contain;
+    touch-action: none;
   }
   html.is-mobile-chat-keyboard-layout #chatView .pinned-bar {
     position: relative;

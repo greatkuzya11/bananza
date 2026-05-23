@@ -612,6 +612,9 @@
     touchId: null,
     startX: 0,
     startY: 0,
+    lastX: 0,
+    lastY: 0,
+    moved: false,
     target: null,
   };
   let mobileComposerDismissClickSuppressUntil = 0;
@@ -1175,6 +1178,9 @@
       touchId: null,
       startX: 0,
       startY: 0,
+      lastX: 0,
+      lastY: 0,
+      moved: false,
       target: null,
     };
   }
@@ -1191,13 +1197,23 @@
       || target.closest?.('.emoji-grid, .reaction-emoji-grid, .mention-picker-list');
   }
 
-  function canScrollSurfaceConsumeComposerDrag(surface, dy) {
+  function scrollMobileKeyboardDockSurface(surface, clientY, dy) {
     if (!(surface instanceof Element)) return false;
     const maxScrollTop = Math.max(0, Number(surface.scrollHeight || 0) - Number(surface.clientHeight || 0));
     if (maxScrollTop <= 1) return false;
     const scrollTop = Math.max(0, Number(surface.scrollTop || 0));
-    if (dy < 0) return scrollTop < maxScrollTop - 1;
-    if (dy > 0) return scrollTop > 1;
+    if (dy < 0 && scrollTop >= maxScrollTop - 1) return false;
+    if (dy > 0 && scrollTop <= 1) return false;
+
+    const state = mobileComposerGestureGuard;
+    const previousY = Number.isFinite(Number(state.lastY)) && state.lastY
+      ? Number(state.lastY)
+      : Number(state.startY || clientY || 0);
+    const deltaY = Number(clientY || 0) - previousY;
+    if (!deltaY) return true;
+    const nextScrollTop = Math.max(0, Math.min(maxScrollTop, scrollTop - deltaY));
+    surface.scrollTop = nextScrollTop;
+    state.lastY = Number(clientY || 0);
     return true;
   }
 
@@ -1210,7 +1226,8 @@
     return Boolean(floatingSurface && isFloatingSurfaceVisible(floatingSurface));
   }
 
-  function shouldBlockMobileComposerDrag(event, clientX, clientY) {
+  function handleMobileComposerDockMove(event, clientX, clientY) {
+    if (event?.__bananzaMobileComposerDockHandled) return true;
     const state = mobileComposerGestureGuard;
     const target = state.target;
     if (!target || !isMobileKeyboardDockGestureSurface(target)) return false;
@@ -1220,8 +1237,16 @@
     const absX = Math.abs(dx);
     const absY = Math.abs(dy);
     if (absY < 4 || absY <= absX) return false;
-    if (canScrollSurfaceConsumeComposerDrag(getMobileKeyboardDockScrollSurface(target), dy)) return false;
     if (!event?.cancelable) return false;
+
+    const scrollSurface = getMobileKeyboardDockScrollSurface(target);
+    const consumedByScrollSurface = scrollMobileKeyboardDockSurface(scrollSurface, clientY, dy);
+    state.moved = true;
+    event.preventDefault();
+    event.stopPropagation?.();
+    event.__bananzaMobileComposerDockHandled = true;
+    if (!consumedByScrollSurface) restoreMobileKeyboardDocumentScroll();
+    queueMobileViewportLayoutSync();
     return true;
   }
 
@@ -1241,9 +1266,24 @@
       touchId,
       startX: Number(clientX || 0),
       startY: Number(clientY || 0),
+      lastX: Number(clientX || 0),
+      lastY: Number(clientY || 0),
+      moved: false,
       target: target instanceof Element ? target : null,
     };
     return true;
+  }
+
+  function finishMobileComposerDockGesture(event, source = '') {
+    const state = mobileComposerGestureGuard;
+    if (source && state.source && state.source !== source) return;
+    const shouldConsumeEnd = Boolean(state.moved && state.target && isMobileKeyboardDockGestureSurface(state.target));
+    resetMobileComposerGestureGuard(source);
+    if (!shouldConsumeEnd || !event?.cancelable) return;
+    event.preventDefault();
+    event.stopImmediatePropagation?.();
+    event.stopPropagation?.();
+    suppressMobileComposerDismissClick();
   }
 
   function setupMobileComposerGestureGuard() {
@@ -1266,13 +1306,11 @@
       if (mobileComposerGestureGuard.source !== 'pointer') return;
       if (!isTouchLikePointerEvent(event)) return;
       if (mobileComposerGestureGuard.pointerId != null && Number(event.pointerId) !== mobileComposerGestureGuard.pointerId) return;
-      if (!shouldBlockMobileComposerDrag(event, Number(event.clientX || 0), Number(event.clientY || 0))) return;
-      event.preventDefault();
-      queueMobileViewportLayoutSync();
+      handleMobileComposerDockMove(event, Number(event.clientX || 0), Number(event.clientY || 0));
     }, { passive: false });
 
     ['pointerup', 'pointercancel'].forEach((type) => {
-      inputArea.addEventListener(type, () => resetMobileComposerGestureGuard('pointer'), { passive: true });
+      inputArea.addEventListener(type, (event) => finishMobileComposerDockGesture(event, 'pointer'), { passive: false });
     });
 
     inputArea.addEventListener('touchstart', (event) => {
@@ -1295,13 +1333,11 @@
         ? touches[0]
         : touches.find((item) => Number(item.identifier) === mobileComposerGestureGuard.touchId);
       if (!touch) return;
-      if (!shouldBlockMobileComposerDrag(event, Number(touch.clientX || 0), Number(touch.clientY || 0))) return;
-      event.preventDefault();
-      queueMobileViewportLayoutSync();
+      handleMobileComposerDockMove(event, Number(touch.clientX || 0), Number(touch.clientY || 0));
     }, { passive: false });
 
     ['touchend', 'touchcancel'].forEach((type) => {
-      inputArea.addEventListener(type, () => resetMobileComposerGestureGuard('touch'), { passive: true });
+      inputArea.addEventListener(type, (event) => finishMobileComposerDockGesture(event, 'touch'), { passive: false });
     });
 
     document.addEventListener('pointerdown', (event) => {
@@ -1318,17 +1354,18 @@
     }, { passive: true, capture: true });
 
     document.addEventListener('pointermove', (event) => {
-      if (mobileComposerGestureGuard.source !== 'dock-pointer') return;
+      if (mobileComposerGestureGuard.source !== 'dock-pointer' && mobileComposerGestureGuard.source !== 'pointer') return;
       if (!isTouchLikePointerEvent(event)) return;
       if (mobileComposerGestureGuard.pointerId != null && Number(event.pointerId) !== mobileComposerGestureGuard.pointerId) return;
-      if (!shouldBlockMobileComposerDrag(event, Number(event.clientX || 0), Number(event.clientY || 0))) return;
-      event.preventDefault();
-      restoreMobileKeyboardDocumentScroll();
-      queueMobileViewportLayoutSync();
+      handleMobileComposerDockMove(event, Number(event.clientX || 0), Number(event.clientY || 0));
     }, { passive: false, capture: true });
 
     ['pointerup', 'pointercancel'].forEach((type) => {
-      document.addEventListener(type, () => resetMobileComposerGestureGuard('dock-pointer'), { passive: true, capture: true });
+      document.addEventListener(type, (event) => {
+        const source = mobileComposerGestureGuard.source;
+        if (source !== 'dock-pointer' && source !== 'pointer') return;
+        finishMobileComposerDockGesture(event, source);
+      }, { passive: false, capture: true });
     });
 
     document.addEventListener('touchstart', (event) => {
@@ -1345,20 +1382,21 @@
     }, { passive: true, capture: true });
 
     document.addEventListener('touchmove', (event) => {
-      if (mobileComposerGestureGuard.source !== 'dock-touch') return;
+      if (mobileComposerGestureGuard.source !== 'dock-touch' && mobileComposerGestureGuard.source !== 'touch') return;
       const touches = Array.from(event.touches || []);
       const touch = mobileComposerGestureGuard.touchId == null
         ? touches[0]
         : touches.find((item) => Number(item.identifier) === mobileComposerGestureGuard.touchId);
       if (!touch) return;
-      if (!shouldBlockMobileComposerDrag(event, Number(touch.clientX || 0), Number(touch.clientY || 0))) return;
-      event.preventDefault();
-      restoreMobileKeyboardDocumentScroll();
-      queueMobileViewportLayoutSync();
+      handleMobileComposerDockMove(event, Number(touch.clientX || 0), Number(touch.clientY || 0));
     }, { passive: false, capture: true });
 
     ['touchend', 'touchcancel'].forEach((type) => {
-      document.addEventListener(type, () => resetMobileComposerGestureGuard('dock-touch'), { passive: true, capture: true });
+      document.addEventListener(type, (event) => {
+        const source = mobileComposerGestureGuard.source;
+        if (source !== 'dock-touch' && source !== 'touch') return;
+        finishMobileComposerDockGesture(event, source);
+      }, { passive: false, capture: true });
     });
   }
 
