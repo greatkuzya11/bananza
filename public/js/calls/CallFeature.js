@@ -1599,6 +1599,90 @@
     return local ? 'local' : String(participant?.identity || participant?.sid || participant?.name || 'remote');
   }
 
+  function safeVideoDimension(value) {
+    const number = Math.round(Number(value || 0));
+    return Number.isFinite(number) && number > 0 ? number : 0;
+  }
+
+  function getVideoDimensions(video, track) {
+    const videoWidth = safeVideoDimension(video?.videoWidth);
+    const videoHeight = safeVideoDimension(video?.videoHeight);
+    if (videoWidth && videoHeight) return { width: videoWidth, height: videoHeight };
+
+    const trackWidth = safeVideoDimension(track?.dimensions?.width);
+    const trackHeight = safeVideoDimension(track?.dimensions?.height);
+    if (trackWidth && trackHeight) return { width: trackWidth, height: trackHeight };
+
+    let settings = null;
+    try {
+      settings = track?.mediaStreamTrack?.getSettings?.() || null;
+    } catch {
+      settings = null;
+    }
+    const settingsWidth = safeVideoDimension(settings?.width);
+    const settingsHeight = safeVideoDimension(settings?.height);
+    if (settingsWidth && settingsHeight) return { width: settingsWidth, height: settingsHeight };
+
+    return null;
+  }
+
+  function callVideoOrientation(dimensions) {
+    const width = safeVideoDimension(dimensions?.width);
+    const height = safeVideoDimension(dimensions?.height);
+    if (!width || !height) return '';
+    if (height > width * 1.08) return 'portrait';
+    if (width > height * 1.08) return 'landscape';
+    return 'square';
+  }
+
+  function updateCallGridLayout(grid = document.getElementById('callGrid')) {
+    if (!grid) return;
+    const tiles = Array.from(grid.children).filter((tile) => tile?.classList?.contains('call-tile'));
+    const visibleTiles = tiles.filter((tile) => !tile.classList.contains('is-video-collapsed'));
+    const count = visibleTiles.length;
+    const orientations = visibleTiles.map((tile) => (
+      tile.dataset.videoOrientation
+      || (tile.classList.contains('is-video-portrait') ? 'portrait' : '')
+      || (tile.classList.contains('is-video-square') ? 'square' : '')
+      || 'landscape'
+    ));
+    const portraitCount = orientations.filter((item) => item === 'portrait').length;
+    const landscapeCount = orientations.filter((item) => item === 'landscape').length;
+    let layout = 'dense';
+    if (count <= 1) layout = 'single';
+    else if (count === 2 && portraitCount === 2) layout = 'portrait-pair';
+    else if (count === 2 && landscapeCount === 2) layout = 'landscape-pair';
+    else if (portraitCount && landscapeCount) layout = 'mixed';
+    grid.dataset.callTileCount = String(count);
+    grid.dataset.callLayout = layout;
+  }
+
+  function applyCallTileVideoGeometry(tile, video, track) {
+    if (!tile || !video) return;
+    const dimensions = getVideoDimensions(video, track);
+    const orientation = callVideoOrientation(dimensions);
+    if (!dimensions || !orientation) {
+      updateCallGridLayout(tile.closest('#callGrid'));
+      return;
+    }
+    tile.dataset.videoOrientation = orientation;
+    tile.classList.toggle('is-video-portrait', orientation === 'portrait');
+    tile.classList.toggle('is-video-landscape', orientation === 'landscape');
+    tile.classList.toggle('is-video-square', orientation === 'square');
+    tile.style.setProperty('--call-tile-aspect', `${dimensions.width} / ${dimensions.height}`);
+    updateCallGridLayout(tile.closest('#callGrid'));
+  }
+
+  function bindCallTileVideoGeometry(tile, video, track) {
+    if (!tile || !video) return;
+    const refresh = () => applyCallTileVideoGeometry(tile, video, track);
+    refresh();
+    ['loadedmetadata', 'loadeddata', 'resize'].forEach((eventName) => {
+      video.addEventListener(eventName, refresh);
+    });
+    window.requestAnimationFrame?.(refresh);
+  }
+
   function renderVideoFitButton(tile, key, isFill) {
     const button = document.createElement('button');
     button.type = 'button';
@@ -1711,6 +1795,8 @@
     const current = Array.from(grid.children).find((item) => item.dataset.callTileKey === key);
     if (!current) return;
     current.replaceWith(renderCallTile(participant, local));
+    updateCallGridLayout(grid);
+    applyVideoFocusClasses();
   }
 
   function renderCallTile(participant, local) {
@@ -1739,6 +1825,7 @@
         video.removeAttribute('controls');
         video.preload = 'auto';
         tile.appendChild(video);
+        bindCallTileVideoGeometry(tile, video, track);
         video.play?.().catch(() => {});
         renderVideoFitButton(tile, tileKey, isFill);
       } catch {
@@ -1801,12 +1888,14 @@
       empty.className = 'call-tile';
       empty.innerHTML = `${bananaTilePlaceholder(t('Waiting'))}<div class="call-tile-name">${escapeHtml(t('Waiting'))}</div>`;
       grid.appendChild(empty);
+      updateCallGridLayout(grid);
       renderParticipantsPanel();
       return;
     }
     participants.forEach(({ participant, local }) => {
       grid.appendChild(renderCallTile(participant, local));
     });
+    updateCallGridLayout(grid);
     applyVideoFocusClasses();
     renderParticipantsPanel();
   }
