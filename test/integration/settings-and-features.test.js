@@ -1,8 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { before, after } = require('node:test');
 const Database = require('better-sqlite3');
+const tar = require('tar');
 
 const { createSandbox } = require('../support/runtimeSandbox');
 const { createBasicChatScenario, sleep } = require('../support/scenario');
@@ -106,6 +109,95 @@ test('weather, notification and sound settings use deterministic mocked integrat
   });
   assert.equal(pushTest.data.ok, true);
   assert.equal(pushTest.data.sent, 1);
+});
+
+test('admin backup export downloads a complete archive and stays admin-only', async () => {
+  const { admin, bob } = scenario;
+  const uploaded = await admin.uploadTextFile('backup-note.txt', 'Backup export payload');
+
+  const forbidden = await bob.request('/api/admin/backup/export', {
+    expectedStatus: 403,
+  });
+  assert.equal(forbidden.data.error, 'Admin only');
+
+  const forbiddenStream = await bob.request('/api/admin/backup/export', {
+    searchParams: { mode: 'stream' },
+    expectedStatus: 403,
+  });
+  assert.equal(forbiddenStream.data.error, 'Admin only');
+
+  async function assertBackupDownload({ mode, expectedArchiveMode }) {
+    const suffix = mode ? `?mode=${mode}` : '';
+    const response = await fetch(`${sandbox.baseUrl}/api/admin/backup/export${suffix}`, {
+      headers: {
+        Authorization: `Bearer ${admin.token}`,
+      },
+    });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-disposition') || '', /bananza-backup-.*\.tar\.gz/);
+    assert.match(response.headers.get('content-type') || '', /application\/gzip|application\/x-gzip|application\/octet-stream/);
+
+    const archivePath = path.join(sandbox.rootDir, `downloaded-backup-${expectedArchiveMode}.tar.gz`);
+    fs.writeFileSync(archivePath, Buffer.from(await response.arrayBuffer()));
+
+    const extractDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bananza-backup-test-'));
+    try {
+      await tar.extract({ file: archivePath, cwd: extractDir });
+
+      const manifestPath = path.join(extractDir, 'backup-manifest.json');
+      const dbPath = path.join(extractDir, 'bananza.db');
+      assert.ok(fs.existsSync(manifestPath));
+      assert.ok(fs.existsSync(dbPath));
+      assert.ok(fs.existsSync(path.join(extractDir, 'uploads')));
+      assert.ok(fs.existsSync(path.join(extractDir, 'uploads', uploaded.stored_name)));
+      assert.ok(fs.existsSync(path.join(extractDir, '.secret')));
+      assert.ok(fs.existsSync(path.join(extractDir, '.vapid.json')));
+      assert.equal(fs.existsSync(path.join(extractDir, '.env')), false);
+      assert.equal(fs.existsSync(path.join(extractDir, 'node_modules')), false);
+      assert.equal(fs.existsSync(path.join(extractDir, '.git')), false);
+      assert.equal(fs.existsSync(path.join(extractDir, 'bananza.db-wal')), false);
+      assert.equal(fs.existsSync(path.join(extractDir, 'bananza.db-shm')), false);
+
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      assert.equal(manifest.archive.mode, expectedArchiveMode);
+      assert.equal(manifest.included.database, 'bananza.db');
+      assert.equal(manifest.included.uploads, 'uploads/');
+      assert.ok(manifest.included.secrets.includes('.secret'));
+      assert.ok(manifest.included.secrets.includes('.vapid.json'));
+      assert.ok(manifest.excluded.includes('.env'));
+      assert.ok(manifest.excluded.includes('bananza.db-wal'));
+      assert.ok(manifest.uploads.files >= 1);
+
+      const backupDb = new Database(dbPath, { readonly: true });
+      try {
+        assert.equal(backupDb.pragma('integrity_check', { simple: true }), 'ok');
+        const userCount = backupDb.prepare('SELECT COUNT(*) AS count FROM users').get().count;
+        const fileRow = backupDb.prepare('SELECT stored_name FROM files WHERE id = ?').get(uploaded.id);
+        assert.ok(userCount >= 2);
+        assert.equal(fileRow.stored_name, uploaded.stored_name);
+      } finally {
+        backupDb.close();
+      }
+
+      const form = new FormData();
+      form.append(
+        'backup',
+        new Blob([fs.readFileSync(archivePath)], { type: 'application/gzip' }),
+        'backup.tar.gz'
+      );
+      const preview = await admin.request('/api/admin/backup/restore/preview', {
+        method: 'POST',
+        formData: form,
+      });
+      assert.equal(preview.data.includes.database, true);
+      assert.equal(preview.data.manifest.archive.mode, expectedArchiveMode);
+    } finally {
+      fs.rmSync(extractDir, { recursive: true, force: true });
+    }
+  }
+
+  await assertBackupDownload({ mode: '', expectedArchiveMode: 'file' });
+  await assertBackupDownload({ mode: 'stream', expectedArchiveMode: 'stream' });
 });
 
 test('chat folder strip visibility is stored on the user account and exposed via auth/me', async () => {

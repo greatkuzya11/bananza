@@ -25039,12 +25039,185 @@
     `).join('');
   }
 
+  function setBackupExportStatus(message, type = '') {
+    setInlineStatus('backupExportStatus', message, type);
+  }
+
+  let backupRestoreId = '';
+
+  function setBackupRestoreStatus(message, type = '') {
+    setInlineStatus('backupRestoreStatus', message, type);
+  }
+
+  function syncBackupRestoreFileName() {
+    const input = $('#backupRestoreFile');
+    const nameEl = $('#backupRestoreFileName');
+    if (!nameEl) return;
+    const file = input?.files?.[0] || null;
+    nameEl.textContent = file?.name || tx('No backup archive selected');
+    nameEl.title = file?.name || '';
+    nameEl.classList.toggle('is-selected', Boolean(file));
+  }
+
+  function resetBackupRestoreState({ clearFile = false } = {}) {
+    backupRestoreId = '';
+    const previewEl = $('#backupRestorePreview');
+    if (previewEl) {
+      previewEl.classList.add('hidden');
+      previewEl.innerHTML = '';
+    }
+    if (clearFile && $('#backupRestoreFile')) $('#backupRestoreFile').value = '';
+    if ($('#backupRestoreConfirm')) $('#backupRestoreConfirm').value = '';
+    if ($('#backupRestorePassword')) $('#backupRestorePassword').value = '';
+    if ($('#backupRestorePasswordConfirm')) $('#backupRestorePasswordConfirm').value = '';
+    if ($('#backupRestoreUsername') && currentUser?.username) {
+      $('#backupRestoreUsername').value = currentUser.username;
+    }
+    syncBackupRestoreFileName();
+    setBackupRestoreStatus('');
+  }
+
+  function renderBackupRestorePreview(data = {}) {
+    const previewEl = $('#backupRestorePreview');
+    if (!previewEl) return;
+    const manifest = data.manifest || {};
+    const database = data.database || {};
+    const uploads = data.uploads || {};
+    const includes = data.includes || {};
+    const createdAt = manifest.created_at ? new Date(manifest.created_at).toLocaleString() : '-';
+    const appName = manifest.app?.name || 'bananza';
+    const appVersion = manifest.app?.version || '-';
+    const secrets = [
+      includes.secret ? '.secret' : null,
+      includes.vapid ? '.vapid.json' : null,
+    ].filter(Boolean).join(', ') || tx('missing');
+    const warnings = Array.isArray(data.warnings) ? data.warnings.filter(Boolean) : [];
+    previewEl.innerHTML = `
+      <div><strong>${esc(tx('Archive looks valid'))}</strong></div>
+      <div>${esc(tx('Created'))}: ${esc(createdAt)}</div>
+      <div>${esc(tx('App'))}: ${esc(appName)} ${esc(appVersion)}</div>
+      <div>${esc(tx('Database'))}: ${esc(tx('Users'))} ${Number(database.users || 0)}, ${esc(tx('Admins'))} ${Number(database.admins || 0)}, ${esc(tx('Chats'))} ${Number(database.chats || 0)}, ${esc(tx('Messages'))} ${Number(database.messages || 0)}, ${esc(tx('Files'))} ${Number(database.files || 0)}</div>
+      <div>${esc(tx('Uploads'))}: ${Number(uploads.files || 0)} ${esc(tx('Files'))}, ${esc(formatSize(Number(uploads.bytes || 0)))}</div>
+      <div>${esc(tx('Secrets'))}: ${esc(secrets)}</div>
+      ${warnings.length ? `<div>${esc(warnings.map(tx).join(' '))}</div>` : ''}
+      <div>${esc(tx('Backup archive is ready. Enter recovery admin credentials and RESTORE to continue.'))}</div>
+    `;
+    previewEl.classList.remove('hidden');
+  }
+
+  function openBackupExportModal() {
+    openModal('backupExportModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
+    setBackupExportStatus('');
+    if ($('#backupExportStreamMode')) $('#backupExportStreamMode').checked = false;
+    resetBackupRestoreState({ clearFile: true });
+  }
+
+  async function downloadBackupExport() {
+    setBackupExportStatus('Preparing backup...', 'pending');
+    try {
+      const headers = {};
+      if (token) headers.Authorization = 'Bearer ' + token;
+      const streamMode = Boolean($('#backupExportStreamMode')?.checked);
+      const exportUrl = streamMode ? '/api/admin/backup/export?mode=stream' : '/api/admin/backup/export';
+      const res = await fetch(exportUrl, { headers });
+      if (!res.ok) {
+        let data = {};
+        try { data = await res.json(); } catch {}
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const fallbackName = `bananza-backup-${new Date().toISOString().slice(0, 10)}.tar.gz`;
+      const filename = filenameFromContentDisposition(res.headers.get('content-disposition'), fallbackName);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setBackupExportStatus('Backup download started', 'success');
+    } catch (error) {
+      setBackupExportStatus(error.message || 'Could not download backup', 'error');
+    }
+  }
+
+  async function previewBackupRestore() {
+    const file = $('#backupRestoreFile')?.files?.[0];
+    if (!file) {
+      setBackupRestoreStatus('Choose a backup archive first', 'error');
+      return;
+    }
+    resetBackupRestoreState({ clearFile: false });
+    setBackupRestoreStatus('Validating backup...', 'pending');
+    try {
+      const formData = new FormData();
+      formData.append('backup', file, file.name || 'bananza-backup.tar.gz');
+      const data = await api('/api/admin/backup/restore/preview', {
+        method: 'POST',
+        body: formData,
+      });
+      backupRestoreId = data.restore_id || '';
+      renderBackupRestorePreview(data);
+      setBackupRestoreStatus('Backup archive is ready. Enter recovery admin credentials and RESTORE to continue.', 'success');
+    } catch (error) {
+      setBackupRestoreStatus(error.message || 'Could not validate backup archive', 'error');
+    }
+  }
+
+  async function applyBackupRestore() {
+    if (!backupRestoreId) {
+      setBackupRestoreStatus('Validate archive before applying restore', 'error');
+      return;
+    }
+    const username = ($('#backupRestoreUsername')?.value || '').trim();
+    const password = $('#backupRestorePassword')?.value || '';
+    const confirmPassword = $('#backupRestorePasswordConfirm')?.value || '';
+    const confirm = ($('#backupRestoreConfirm')?.value || '').trim();
+    if (password !== confirmPassword) {
+      setBackupRestoreStatus('Passwords do not match', 'error');
+      return;
+    }
+    setBackupRestoreStatus('Applying restore...', 'pending');
+    try {
+      await api('/api/admin/backup/restore/apply', {
+        method: 'POST',
+        body: {
+          restore_id: backupRestoreId,
+          confirm,
+          recovery_admin: {
+            username,
+            password,
+          },
+        },
+      });
+      setBackupRestoreStatus('Restore staged. You will be signed out while the server restarts.', 'success');
+      clearTimeout(wsReconnectTimer);
+      wsReconnectTimer = null;
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      token = null;
+      if (ws) {
+        try { ws.onclose = null; ws.close(1012, 'Backup restore'); } catch (e) {}
+        ws = null;
+      }
+      setTimeout(() => {
+        location.href = '/login.html';
+      }, 900);
+    } catch (error) {
+      setBackupRestoreStatus(error.message || 'Could not apply backup restore', 'error');
+    }
+  }
+
   // Settings modal
   function openSettingsModal(opener = $('#settingsBtn')) {
     openModal('settingsModal', { replaceStack: true, opener });
     const adminItem = $('#settingsAdminPanel');
     if (currentUser.is_admin) adminItem.classList.remove('hidden');
     else adminItem.classList.add('hidden');
+    const backupItem = $('#settingsBackupPanel');
+    if (currentUser.is_admin) backupItem?.classList.remove('hidden');
+    else backupItem?.classList.add('hidden');
     const aiBotsItem = $('#settingsAiBotsPanel');
     if (currentUser.is_admin) aiBotsItem?.classList.remove('hidden');
     else aiBotsItem?.classList.add('hidden');
@@ -27826,6 +27999,13 @@
     $('#settingsGrokAiPanel')?.addEventListener('click', openGrokAiSettingsModal);
     $('#settingsChangePassword').addEventListener('click', openChangePasswordModal);
     $('#settingsAdminPanel').addEventListener('click', openAdminModal);
+    $('#settingsBackupPanel')?.addEventListener('click', openBackupExportModal);
+    bindAsyncActionButtons('backupExportDownloadBtn', null, 'Preparing backup...', downloadBackupExport);
+    bindAsyncActionButtons('backupRestorePreviewBtn', null, 'Validating backup...', previewBackupRestore);
+    bindAsyncActionButtons('backupRestoreApplyBtn', null, 'Applying restore...', applyBackupRestore);
+    $('#backupRestoreFilePickBtn')?.addEventListener('click', () => $('#backupRestoreFile')?.click());
+    $('#backupRestoreFile')?.addEventListener('change', () => resetBackupRestoreState({ clearFile: false }));
+    syncBackupRestoreFileName();
 
     // Send by Enter toggle
     $('#settingsSendEnter').addEventListener('change', (e) => {

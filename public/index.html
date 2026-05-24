@@ -284,6 +284,43 @@
     </div>
   </div>
 
+  <div id="backupExportModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Backup / Export / Restore</h3>
+        <button class="modal-close">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="settings-hint">This archive contains chat history, uploaded files, and server secrets. Store it somewhere private.</div>
+        <div class="settings-hint">.env is not included. Keep deployment environment variables separately.</div>
+        <div class="settings-item settings-toggle-item">
+          <span data-i18n="Stream archive directly">Stream archive directly</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="backupExportStreamMode">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="settings-hint" data-i18n="Use this when server disk space is low. The database is still copied temporarily, but uploads are not copied and the final archive is not created on disk.">Use this when server disk space is low. The database is still copied temporarily, but uploads are not copied and the final archive is not created on disk.</div>
+        <button id="backupExportDownloadBtn" class="btn-primary" type="button">Download backup</button>
+        <div id="backupExportStatus" class="theme-settings-status"></div>
+        <hr class="settings-divider">
+        <div class="settings-hint">Restore replaces the current database, uploads, and server secrets. Everyone will be signed out.</div>
+        <div class="settings-hint">A recovery admin will be created or reset before restore, so you can log in after restart.</div>
+        <input id="backupRestoreFile" class="backup-file-input" type="file" accept=".tar.gz,application/gzip,application/x-gzip" tabindex="-1" aria-label="Backup archive file" data-i18n-aria-label="Backup archive file">
+        <button id="backupRestoreFilePickBtn" class="settings-item backup-file-pick-btn" type="button" aria-controls="backupRestoreFile">Choose backup archive</button>
+        <div id="backupRestoreFileName" class="settings-hint backup-file-name">No backup archive selected</div>
+        <button id="backupRestorePreviewBtn" class="settings-item" type="button">Validate archive</button>
+        <div id="backupRestorePreview" class="settings-hint hidden"></div>
+        <input id="backupRestoreUsername" class="modal-input" type="text" autocomplete="username" placeholder="Recovery admin username">
+        <input id="backupRestorePassword" class="modal-input" type="password" autocomplete="new-password" placeholder="Recovery admin password">
+        <input id="backupRestorePasswordConfirm" class="modal-input" type="password" autocomplete="new-password" placeholder="Confirm recovery password">
+        <input id="backupRestoreConfirm" class="modal-input" type="text" autocomplete="off" placeholder="Type RESTORE to confirm">
+        <button id="backupRestoreApplyBtn" class="settings-item chat-danger-action" type="button">Apply restore</button>
+        <div id="backupRestoreStatus" class="theme-settings-status"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Settings Modal -->
   <div id="settingsModal" class="modal hidden">
     <div class="modal-content">
@@ -326,6 +363,7 @@
         <button id="settingsLanguagePanel" class="settings-item">🌐 Язык интерфейса: русский</button>
         <button id="settingsChangePassword" class="settings-item">🔑 Change Password</button>
         <button id="settingsAdminPanel" class="settings-item hidden">🛡 Admin Panel</button>
+        <button id="settingsBackupPanel" class="settings-item hidden">🧰 Backup / Export / Restore</button>
         <button id="settingsAiBotsPanel" class="settings-item hidden">🤖 OpenAI AI</button>
         <button id="settingsYandexAiPanel" class="settings-item hidden">🐓 AI-&#1071;&#1085;&#1076;&#1077;&#1082;&#1089;</button>
         <button id="settingsDeepSeekAiPanel" class="settings-item hidden">🐋 DeepSeek AI</button>

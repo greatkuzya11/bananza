@@ -4508,6 +4508,29 @@ html[data-visual-mode="rich"] .poll-card {
 .settings-hint { font-size: 12px; color: var(--text-secondary); padding: 0 16px 12px; }
 .settings-hint.is-success { color: var(--success); }
 .settings-hint.is-error { color: var(--danger); }
+.backup-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.backup-file-pick-btn {
+  justify-content: flex-start;
+  border: 1px solid var(--border-light);
+}
+.backup-file-name {
+  min-height: 28px;
+  overflow-wrap: anywhere;
+}
+.backup-file-name.is-selected {
+  color: var(--text-primary);
+}
+.settings-divider {
+  border: 0;
+  border-top: 1px solid var(--border-light);
+  margin: 14px 0 16px;
+}
 .settings-section-title {
   padding: 8px 4px 8px; color: var(--accent); font-size: 12px; font-weight: 700;
   text-transform: uppercase; letter-spacing: .6px;

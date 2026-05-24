@@ -7,6 +7,7 @@ const { repoRoot, runtimeRoot } = require('./paths');
 const ROOT_FILES = [
   'package.json',
   'package-lock.json',
+  'backup.js',
   'server.js',
   'db.js',
   'chatFolders.js',

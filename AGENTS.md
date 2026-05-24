@@ -41,6 +41,15 @@
 - Если фича хранит новое состояние, сначала обнови schema в `db.js` или подпапочном `schema.js`, затем обнови hydration/broadcast/client rendering.
 - Во фронтенде не вводи bundler-only решения: проект ожидает plain static JS, globals и script load order.
 
+## Backup / Restore contract
+- Любая новая фича, которая добавляет runtime-состояние, должна быть явно учтена в backup/export/restore. Это касается SQLite-таблиц, файлов в `uploads/` или других runtime-папках, серверных секретов, зашифрованных ключей, локальных настроек, очередей, медиа, индексов, кэшей, моделей и внешних helper-конфигов.
+- Если данные фичи лежат в SQLite, они автоматически попадут в `bananza.db`, но агент все равно обязан проверить restore-сценарий: миграции должны проходить после восстановления, recovery-admin не должен ломать данные, а backup-БД должна открываться и проходить `PRAGMA integrity_check`.
+- Если фича хранит файлы вне SQLite, агент обязан решить одно из двух: включить эти файлы в архив или явно добавить их в `backup-manifest.json` как excluded/manual external dependency. Нельзя молча добавлять новую runtime-папку, которую backup игнорирует.
+- Если фича хранит секреты или encrypted settings, агент обязан проверить связку с `.secret`: backup должен включать нужный секретный материал или manifest должен объяснять, что его надо хранить отдельно. Зашифрованные ключи после restore должны расшифровываться.
+- `.env` по умолчанию не архивируется. Если новая фича зависит от env-переменных, добавь их в `.env.example` и явно упомяни в manifest/документации, что это ручная external runtime config.
+- Restore не должен заменять открытую SQLite-БД на горячую. Для runtime DB/files используй существующий pending-restore flow: staged workspace, rollback, `restore-pending/`, применение на старте до `require('./db')`.
+- При добавлении persisted-фичи обнови тесты backup/restore: archive contents/exclusions, manifest, preview/apply, rollback/pending restore, валидность SQLite и наличие/расшифровку секретов без вывода самих значений.
+
 ## Gotchas
 - Не создавай `AGENTS.md` в runtime/vendor директориях: `.git/`, `node_modules/`, `uploads/`, `voice/models/`, `voice/test-assets/` и аналогичных.
 - В проекте много stateful связей между сервером и клиентом; изменения message payload часто требуют синхронных правок в server hydration, WS dispatch и UI rendering.
@@ -57,4 +66,5 @@
   - не затронуты ли SQL/schema assumptions;
   - не сломан ли script/style load order в `public/index.html`;
   - если менялся payload сообщения, сервер и клиент используют одну и ту же форму данных;
+  - если добавлялось новое persisted/runtime-состояние, обновлены `backup.js`, `backup-manifest.json`/restore-preview поведение и backup/restore тесты;
   - если добавлена новая подсистема, у нее есть понятная точка входа и при необходимости локальный `AGENTS.md`.

@@ -12,6 +12,31 @@ const { v4: uuidv4 } = require('uuid');
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 
+const {
+  deleteVideoPoster,
+  getVideoPosterPath,
+  hasVideoPoster,
+  isSupportedVideoPosterMime,
+  saveVideoPosterFromBuffer,
+  saveVideoPosterFromPath,
+} = require('./videoPosters');
+const {
+  GENERAL_UPLOAD_LIMIT_BYTES,
+  GENERAL_UPLOAD_LIMIT_LABEL,
+  classifyUpload,
+  isPreviewableFileType,
+  normalizeMimeType,
+} = require('./uploadUtils');
+const { createBackupFeature, applyPendingRestoreOnStartup } = require('./backup');
+
+const ROOT_DIR = __dirname;
+const UPLOADS_DIR = path.join(ROOT_DIR, 'uploads');
+
+applyPendingRestoreOnStartup({
+  rootDir: ROOT_DIR,
+  uploadsDir: UPLOADS_DIR,
+});
+
 const db = require('./db');
 const { setupWebSocket, broadcastToChatAll, sendToUser, clients } = require('./websocket');
 const { extractUrls, fetchPreview } = require('./linkPreview');
@@ -28,21 +53,6 @@ const { createPollService, POLL_CLOSE_PRESETS, toDbDate } = require('./polls');
 const { createMessageActionsService } = require('./messageActions');
 const { createVideoNoteFeature } = require('./videoNotes');
 const { createVideoNoteStorage } = require('./videoNotes/storage');
-const {
-  deleteVideoPoster,
-  getVideoPosterPath,
-  hasVideoPoster,
-  isSupportedVideoPosterMime,
-  saveVideoPosterFromBuffer,
-  saveVideoPosterFromPath,
-} = require('./videoPosters');
-const {
-  GENERAL_UPLOAD_LIMIT_BYTES,
-  GENERAL_UPLOAD_LIMIT_LABEL,
-  classifyUpload,
-  isPreviewableFileType,
-  normalizeMimeType,
-} = require('./uploadUtils');
 
 // JWT Secret
 const SECRET_PATH = path.join(__dirname, '.secret');
@@ -80,7 +90,6 @@ app.get('/vendor/livekit-client.umd.js', (_req, res) => {
 });
 
 // Uploads
-const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 const AVATARS_DIR = path.join(UPLOADS_DIR, 'avatars');
 if (!fs.existsSync(AVATARS_DIR)) fs.mkdirSync(AVATARS_DIR, { recursive: true });
@@ -349,6 +358,17 @@ let videoNoteFeature = null;
 const videoNoteStorage = createVideoNoteStorage({
   db,
   uploadsDir: UPLOADS_DIR,
+});
+
+createBackupFeature({
+  app,
+  db,
+  auth,
+  adminOnly,
+  uploadsDir: UPLOADS_DIR,
+  rootDir: ROOT_DIR,
+  server,
+  clients,
 });
 
 callFeature = createCallFeature({
