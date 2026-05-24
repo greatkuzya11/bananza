@@ -64,6 +64,7 @@ test('public/index.html exposes core shell nodes used by runtime modules', () =>
     'msgInput',
     'composerRichPreview',
     'settingsModal',
+    'settingsMicrophoneMode',
     'pollComposerModal',
     'chatInfoModal',
     'chatFolderPicker',
@@ -79,6 +80,23 @@ test('public/index.html exposes core shell nodes used by runtime modules', () =>
   assert.equal(document.getElementById('chatBotInfoSection'), null);
   assert.equal(document.getElementById('activeChatFolderVisibilityToggle'), null);
   assert.equal(document.getElementById('refreshChatsBtn'), null);
+});
+
+test('settings modal places microphone mode immediately after Send by Enter', () => {
+  const dom = new JSDOM(indexHtml);
+  const document = dom.window.document;
+  const sendToggle = document.getElementById('settingsSendEnter')?.closest('.settings-item');
+  const sendHint = sendToggle?.nextElementSibling;
+  const microphoneRow = sendHint?.nextElementSibling;
+  const microphoneHint = microphoneRow?.nextElementSibling;
+  const toggle = document.getElementById('settingsMicrophoneMode');
+
+  assert.ok(sendToggle, 'Expected Send by Enter setting row');
+  assert.equal(sendHint?.classList.contains('settings-hint'), true);
+  assert.equal(microphoneRow?.classList.contains('settings-toggle-item'), true);
+  assert.equal(microphoneRow?.querySelector('input[type="checkbox"]'), toggle);
+  assert.equal(toggle.checked, true);
+  assert.equal(microphoneHint?.classList.contains('settings-hint'), true);
 });
 
 test('settings modal menu entries keep emoji prefixes', () => {

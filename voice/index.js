@@ -369,6 +369,50 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
     }
   });
 
+  app.post('/api/voice/dictation', auth, msgLimiter, upLimiter, (req, res) => {
+    const settings = getVoiceSettings(db);
+    if (!settings.voice_notes_enabled) {
+      res.status(403).json({ error: 'Voice notes are disabled by administrator' });
+      return;
+    }
+
+    voiceUpload.single('file')(req, res, async (err) => {
+      if (err) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          res.status(400).json({ error: 'Voice note is too large' });
+          return;
+        }
+        res.status(400).json({ error: err.message || 'Voice upload failed' });
+        return;
+      }
+
+      const filePath = req.file?.path || '';
+      try {
+        if (!req.file) {
+          res.status(400).json({ error: 'Voice file is required' });
+          return;
+        }
+
+        const result = await transcribeAudio({
+          filePath,
+          settings,
+          apiKey: getOpenAIKey(db, secret),
+          grokApiKey: getGrokKey(db, secret),
+        });
+        res.json({
+          ok: true,
+          text: result.text,
+          provider: result.provider,
+          model: result.model,
+        });
+      } catch (error) {
+        res.status(500).json({ error: error.message || 'Dictation transcription failed' });
+      } finally {
+        if (filePath) fs.unlink(filePath, () => {});
+      }
+    });
+  });
+
   app.post('/api/chats/:chatId/voice-message', auth, msgLimiter, upLimiter, (req, res) => {
     const settings = getVoiceSettings(db);
     if (!settings.voice_notes_enabled) {

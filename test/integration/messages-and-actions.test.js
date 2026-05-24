@@ -360,6 +360,15 @@ test('link previews, reactions, pins, polls, notes and forwarding work through p
 test('voice and video note endpoints work in isolated sandbox with mocked providers', async () => {
   const { admin, groupChat } = scenario;
 
+  const disabledDictationForm = new FormData();
+  disabledDictationForm.append('file', new Blob(['wave'], { type: 'audio/wav' }), 'dictation-disabled.wav');
+  const disabledDictation = await admin.request('/api/voice/dictation', {
+    method: 'POST',
+    formData: disabledDictationForm,
+    expectedStatus: 403,
+  });
+  assert.match(disabledDictation.data.error, /Voice notes are disabled/i);
+
   const voiceSettings = await admin.request('/api/admin/voice-settings', {
     method: 'PUT',
     json: {
@@ -370,6 +379,24 @@ test('voice and video note endpoints work in isolated sandbox with mocked provid
     },
   });
   assert.equal(voiceSettings.data.publicSettings.voice_notes_enabled, true);
+
+  const beforeDictation = await admin.request(`/api/chats/${groupChat.id}/messages`, {
+    searchParams: { meta: 1 },
+  });
+  const dictationForm = new FormData();
+  dictationForm.append('file', new Blob(['wave'], { type: 'audio/wav' }), 'dictation.wav');
+  const dictation = await admin.request('/api/voice/dictation', {
+    method: 'POST',
+    formData: dictationForm,
+  });
+  assert.equal(dictation.data.ok, true);
+  assert.equal(dictation.data.text, 'Mock OpenAI transcript');
+  assert.equal(dictation.data.provider, 'openai');
+
+  const afterDictation = await admin.request(`/api/chats/${groupChat.id}/messages`, {
+    searchParams: { meta: 1 },
+  });
+  assert.equal(afterDictation.data.messages.length, beforeDictation.data.messages.length);
 
   const voiceForm = new FormData();
   voiceForm.append('file', new Blob(['wave'], { type: 'audio/wav' }), 'voice.wav');

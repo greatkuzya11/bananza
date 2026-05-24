@@ -3102,6 +3102,63 @@ test('composer drafts are restored from localStorage after app reload', async (t
   assert.equal(msgInput.value, 'Persisted draft');
 });
 
+test('microphone mode setting persists through Settings and bridge', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge, localStorage } = dom.window;
+  const toggle = document.getElementById('settingsMicrophoneMode');
+
+  assert.equal(BananzaAppBridge.getMicrophoneMode(), 'voice_message');
+  BananzaAppBridge.__testing.openSettingsModal();
+  assert.equal(toggle.checked, true);
+
+  toggle.checked = false;
+  toggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+
+  assert.equal(localStorage.getItem('microphoneMode'), 'dictation');
+  assert.equal(BananzaAppBridge.getMicrophoneMode(), 'dictation');
+
+  toggle.checked = true;
+  BananzaAppBridge.__testing.openSettingsModal();
+  assert.equal(toggle.checked, false);
+});
+
+test('insertDictatedText inserts at cursor and saves composer draft', async (t) => {
+  const dom = await bootAppDom({
+    fetchHandler: createChatFetchHandler({ 1: [] }),
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge, localStorage } = dom.window;
+  const msgInput = document.getElementById('msgInput');
+  let inputEvents = 0;
+
+  BananzaAppBridge.__testing.setChats([
+    createChatFixture(1, 'Chat A'),
+  ]);
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 80);
+
+  msgInput.addEventListener('input', () => {
+    inputEvents += 1;
+  });
+  msgInput.value = 'Hello !';
+  msgInput.setSelectionRange(6, 6);
+
+  const nextValue = BananzaAppBridge.insertDictatedText('dictated');
+
+  assert.equal(nextValue, 'Hello dictated!');
+  assert.equal(msgInput.value, 'Hello dictated!');
+  assert.equal(inputEvents, 1);
+  assert.equal(
+    JSON.parse(localStorage.getItem('bananza:composerDrafts:v1:1') || '{}')['1'],
+    'Hello dictated!'
+  );
+});
+
 test('restore scroll position reopens the same chat at the saved anchor after returning to the chat list', async (t) => {
   const chatMessages = {
     1: createChatMessages(1, 12),

@@ -105,6 +105,15 @@
     return getBridge()?.getCurrentUser?.() || null;
   }
 
+  function currentMicrophoneMode() {
+    const mode = String(getBridge()?.getMicrophoneMode?.() || 'voice_message');
+    return mode === 'dictation' ? 'dictation' : 'voice_message';
+  }
+
+  function isDictationMode() {
+    return currentMicrophoneMode() === 'dictation';
+  }
+
   function isAdmin() {
     return Boolean(currentUser()?.is_admin);
   }
@@ -959,6 +968,7 @@
     const hasChat = Boolean(bridge.getCurrentChatId?.());
     const isEditing = Boolean(bridge.getEditTo?.());
     const keepSendIcon = sendBtn.classList.contains('send-fly');
+    const dictationMode = isDictationMode();
     const mediaNotesEnabled = Boolean(
       state.features.voice_notes_enabled ||
       state.features.video_notes_enabled
@@ -981,17 +991,18 @@
     sendBtn.title = state.recorder.recording
       ? t('Recording in progress')
       : state.recorder.uploading
-        ? t('Sending voice message')
+        ? t(dictationMode ? 'Transcribing...' : 'Sending voice message')
         : isEditing
           ? t('Save')
           : showMicMode
-            ? t('Hold to record voice message')
+            ? t(dictationMode ? 'Hold to dictate into message' : 'Hold to record voice message')
             : t('Send');
     window.BananzaMediaNoteHooks?.refreshComposerState?.({
       showMicMode: keepMicMode,
       isEditing,
       isRecording: Boolean(state.recorder.recording),
       isUploading: Boolean(state.recorder.uploading),
+      microphoneMode: currentMicrophoneMode(),
       features: { ...state.features },
     });
   }
@@ -2035,9 +2046,27 @@
     return;
   }
 
+  async function transcribeDictation(wavBlob, { durationMs, sampleRate } = {}) {
+    if (!wavBlob) throw new Error(t('Could not transcribe dictation'));
+    const formData = new FormData();
+    formData.append('file', wavBlob, `dictation-${Date.now()}.wav`);
+    formData.append('durationMs', String(Math.max(0, Math.round(Number(durationMs || 0)))));
+    formData.append('sampleRate', String(Math.max(8000, Math.round(Number(sampleRate || 16000)))));
+
+    const response = await getBridge().api('/api/voice/dictation', {
+      method: 'POST',
+      body: formData,
+    });
+    const text = String(response?.text || '').trim();
+    if (!text) throw new Error(t('Could not transcribe dictation'));
+    getBridge()?.insertDictatedText?.(text);
+    return response;
+  }
+
   async function stopRecordingAndSend() {
     if (!state.recorder.recording) return;
     const durationMs = Date.now() - state.recorder.startAt;
+    const sampleRate = state.recorder.sampleRate || 16000;
 
     cleanupRecorderGraph();
     getBridge()?.playSound?.('voice_stop');
@@ -2050,20 +2079,27 @@
     }
 
     const safeDurationMs = durationMs;
-    const wavBlob = encodeVoiceBlob(state.recorder.chunks, state.recorder.sampleRate, 16000);
+    const wavBlob = encodeVoiceBlob(state.recorder.chunks, sampleRate, 16000);
+    const dictationMode = isDictationMode();
     state.recorder.uploading = true;
     syncSendButtonState();
-    setRecorderMessage('Sending voice message', 'pending');
+    setRecorderMessage(dictationMode ? 'Transcribing...' : 'Sending voice message', 'pending');
 
     try {
-      await getBridge().queueVoiceMessage?.({
-        blob: wavBlob,
-        durationMs,
-        sampleRate: 16000,
-        replyTo: getBridge().getReplyTo?.(),
-        autoTranscribe: Boolean(state.features.auto_transcribe_on_send),
-      });
+      if (dictationMode) {
+        await transcribeDictation(wavBlob, { durationMs: safeDurationMs, sampleRate: 16000 });
+      } else {
+        await getBridge().queueVoiceMessage?.({
+          blob: wavBlob,
+          durationMs,
+          sampleRate: 16000,
+          replyTo: getBridge().getReplyTo?.(),
+          autoTranscribe: Boolean(state.features.auto_transcribe_on_send),
+        });
+      }
       hideRecorderBar();
+    } catch (error) {
+      throw new Error(error.message || t(dictationMode ? 'Could not transcribe dictation' : 'Could not send voice message'));
     } finally {
       state.recorder.uploading = false;
       state.recorder.chunks = [];

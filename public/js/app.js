@@ -273,6 +273,9 @@
   let compactViewMap = JSON.parse(localStorage.getItem('compactViewMap') || '{}');
   let compactView = false;
   let sendByEnter = localStorage.getItem('sendByEnter') !== '0';
+  const MICROPHONE_MODE_STORAGE_KEY = 'microphoneMode';
+  const MICROPHONE_MODE_VALUES = new Set(['voice_message', 'dictation']);
+  let microphoneMode = normalizeMicrophoneMode(localStorage.getItem(MICROPHONE_MODE_STORAGE_KEY));
   let scrollRestoreMode = localStorage.getItem('scrollRestoreMode') || 'bottom'; // 'bottom' | 'restore'
   let openLastChatOnReload = localStorage.getItem('openLastChatOnReload') !== '0';
   let scrollPositions = {}; // chatId -> { messageId, offsetTop, atBottom, savedAt }
@@ -1820,6 +1823,8 @@
     getPendingFiles: () => [...pendingFiles],
     getReplyTo: () => replyTo ? { ...replyTo } : null,
     getEditTo: () => editTo ? { ...editTo } : null,
+    getMicrophoneMode: () => getMicrophoneMode(),
+    insertDictatedText: (text) => insertDictatedText(text),
     queueVoiceMessage: (payload) => queueVoiceOutbox(payload),
     queueVideoNote: (payload) => queueVideoNoteOutbox(payload),
     updateReplyPreview: (messageId, text) => {
@@ -1936,6 +1941,7 @@
       if (toggle) toggle.checked = scrollRestoreMode === 'restore';
       return scrollRestoreMode;
     },
+    setMicrophoneMode: (mode = 'voice_message') => setMicrophoneMode(mode),
     setReply: (...args) => setReply(...args),
     setEditFromRow: (row) => setEditFromRow(row),
     setMobileBaseScene: (scene, options = {}) => syncMobileBaseSceneState({
@@ -2332,6 +2338,33 @@
     msgInput.value = value.slice(0, start) + insertion + value.slice(end);
     const cursor = start + insertion.length;
     msgInput.setSelectionRange?.(cursor, cursor);
+  }
+
+  function normalizeMicrophoneMode(value) {
+    const next = String(value || '').trim();
+    return MICROPHONE_MODE_VALUES.has(next) ? next : 'voice_message';
+  }
+
+  function getMicrophoneMode() {
+    return normalizeMicrophoneMode(microphoneMode);
+  }
+
+  function setMicrophoneMode(value, { persist = true } = {}) {
+    microphoneMode = normalizeMicrophoneMode(value);
+    if (persist) localStorage.setItem(MICROPHONE_MODE_STORAGE_KEY, microphoneMode);
+    const toggle = $('#settingsMicrophoneMode');
+    if (toggle) toggle.checked = microphoneMode === 'voice_message';
+    window.BananzaVoiceHooks?.refreshComposerState?.();
+    return microphoneMode;
+  }
+
+  function insertDictatedText(text) {
+    const insertion = String(text || '').trim();
+    if (!msgInput || !insertion) return getComposerTextValue();
+    insertComposerTextAtSelection(insertion);
+    msgInput.dispatchEvent(new Event('input', { bubbles: true }));
+    msgInput.focus?.();
+    return getComposerTextValue();
   }
 
   function getEmojiPickerInsertionValue(value) {
@@ -25234,6 +25267,7 @@
     if (currentUser.is_admin) grokAiItem?.classList.remove('hidden');
     else grokAiItem?.classList.add('hidden');
     $('#settingsSendEnter').checked = sendByEnter;
+    $('#settingsMicrophoneMode').checked = getMicrophoneMode() === 'voice_message';
     $('#settingsScrollRestore').checked = scrollRestoreMode === 'restore';
     $('#settingsOpenLastChat').checked = openLastChatOnReload;
     syncLanguageSettingsButton();
@@ -28011,6 +28045,10 @@
     $('#settingsSendEnter').addEventListener('change', (e) => {
       sendByEnter = e.target.checked;
       localStorage.setItem('sendByEnter', sendByEnter ? '1' : '0');
+    });
+
+    $('#settingsMicrophoneMode')?.addEventListener('change', (e) => {
+      setMicrophoneMode(e.target.checked ? 'voice_message' : 'dictation');
     });
 
     // Scroll restore toggle

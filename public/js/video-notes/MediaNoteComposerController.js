@@ -23,6 +23,7 @@
     recordingVideo: 'Recording video',
     holdVideo: 'Hold to record video',
     holdAudio: 'Hold to record audio',
+    holdDictation: 'Hold to dictate into message',
     videoNote: 'Video note',
     voiceNote: 'Voice message',
     startError: 'Could not start recording',
@@ -83,6 +84,10 @@
       const features = this.getFeatures();
       if (!features.__loaded) return false;
       return features.video_notes_enabled !== false;
+    }
+
+    isDictationMode() {
+      return String(this.getBridge()?.getMicrophoneMode?.() || '') === 'dictation';
     }
 
     resolveAllowedMode(mode = this.mode) {
@@ -209,11 +214,13 @@
       sendBtn.classList.toggle('is-hold-armed', showMicMode && this.holdArmed && !isRecording);
 
       if (!showMicMode) return;
+      const audioHoldTitle = this.isDictationMode() ? TEXT.holdDictation : TEXT.holdAudio;
+      const audioIdleTitle = this.isDictationMode() ? TEXT.holdDictation : TEXT.voiceNote;
       if (isRecording && this.activeMode === 'video') sendBtn.title = this.t(TEXT.recordingVideo);
-      else if (isRecording) sendBtn.title = this.t(TEXT.holdAudio);
-      else if (startPending) sendBtn.title = this.t(this.activeMode === 'video' ? TEXT.holdVideo : TEXT.holdAudio);
-      else if (isRecording || this.holdArmed) sendBtn.title = this.t(this.mode === 'video' ? TEXT.holdVideo : TEXT.holdAudio);
-      else sendBtn.title = this.t(this.mode === 'video' ? TEXT.videoNote : TEXT.voiceNote);
+      else if (isRecording) sendBtn.title = this.t(audioHoldTitle);
+      else if (startPending) sendBtn.title = this.t(this.activeMode === 'video' ? TEXT.holdVideo : audioHoldTitle);
+      else if (isRecording || this.holdArmed) sendBtn.title = this.t(this.mode === 'video' ? TEXT.holdVideo : audioHoldTitle);
+      else sendBtn.title = this.t(this.mode === 'video' ? TEXT.videoNote : audioIdleTitle);
     }
 
     canUseGesture() {
