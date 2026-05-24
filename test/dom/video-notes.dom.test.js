@@ -74,6 +74,7 @@ test('video note admin settings adds separate admin entry and loads form values'
   const button = dom.window.document.getElementById('settingsVideoNotePanel');
   assert.ok(button);
   assert.equal(button.classList.contains('hidden'), false);
+  assert.equal(button.textContent.startsWith(`${String.fromCodePoint(0x1F3AC)} `), true);
   button.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
 

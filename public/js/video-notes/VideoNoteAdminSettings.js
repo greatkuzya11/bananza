@@ -2,6 +2,7 @@
   'use strict';
 
   const ns = window.BananzaVideoNotes = window.BananzaVideoNotes || {};
+  const VIDEO_NOTE_SETTINGS_ICON = String.fromCodePoint(0x1F3AC);
 
   const state = {
     uiReady: false,
@@ -27,6 +28,10 @@
     return getBridge()?.t?.(key, params)
       || window.BananzaI18n?.t?.(key, params)
       || String(key || '');
+  }
+
+  function videoNoteSettingsLabel() {
+    return `${VIDEO_NOTE_SETTINGS_ICON} ${t('Video notes')}`;
   }
 
   function tx(text, params = {}) {
@@ -62,7 +67,7 @@
       const btn = document.createElement('button');
       btn.id = 'settingsVideoNotePanel';
       btn.className = 'settings-item hidden';
-      btn.textContent = t('Video notes');
+      btn.textContent = videoNoteSettingsLabel();
       settingsAdminPanel.insertAdjacentElement('afterend', btn);
       btn.addEventListener('click', openVideoNoteAdminModal);
     }
@@ -137,7 +142,7 @@
     ensureVideoNoteAdminUi();
     const btn = document.getElementById('settingsVideoNotePanel');
     if (!btn) return;
-    btn.textContent = t('Video notes');
+    btn.textContent = videoNoteSettingsLabel();
     btn.classList.toggle('hidden', !isAdmin());
   }
 
@@ -249,7 +254,7 @@
     getBridge()?.onLanguageChange?.(() => {
       if (!state.uiReady) return;
       const btn = document.getElementById('settingsVideoNotePanel');
-      if (btn) btn.textContent = t('Video notes');
+      if (btn) btn.textContent = videoNoteSettingsLabel();
       if (state.admin.settings) {
         state.uiReady = false;
         document.getElementById('videoNoteAdminModal')?.remove();

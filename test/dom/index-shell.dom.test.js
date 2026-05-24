@@ -81,6 +81,18 @@ test('public/index.html exposes core shell nodes used by runtime modules', () =>
   assert.equal(document.getElementById('refreshChatsBtn'), null);
 });
 
+test('settings modal menu entries keep emoji prefixes', () => {
+  const dom = new JSDOM(indexHtml);
+  const document = dom.window.document;
+  const menuButtons = [...document.querySelectorAll('#settingsModal .modal-body > button.settings-item[id^="settings"]')];
+  const emojiPrefixPattern = /^[\p{Emoji_Presentation}\p{Extended_Pictographic}]/u;
+  const missingEmoji = menuButtons
+    .map((button) => ({ id: button.id, text: button.textContent.trim() }))
+    .filter((item) => !emojiPrefixPattern.test(item.text));
+
+  assert.deepEqual(missingEmoji, []);
+});
+
 test('public/index.html keeps universal file pickers and mobile media shortcuts', () => {
   const dom = new JSDOM(indexHtml);
   const document = dom.window.document;
