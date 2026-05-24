@@ -12,7 +12,7 @@ test('normalizeBotKind keeps convert for every provider and preserves provider-s
   assert.equal(__private.normalizeBotKind('universal', 'openai'), 'universal');
   assert.equal(__private.normalizeBotKind('universal', 'grok'), 'universal');
   assert.equal(__private.normalizeBotKind('image', 'grok'), 'image');
-  assert.equal(__private.normalizeBotKind('image', 'openai'), 'text');
+  assert.equal(__private.normalizeBotKind('image', 'openai'), 'image');
   assert.equal(__private.normalizeBotKind('chatshot', 'openai'), 'chatshot');
   assert.equal(__private.normalizeBotKind('chatshot', 'grok'), 'chatshot');
   assert.equal(__private.normalizeBotKind('chatshot', 'deepseek'), 'text');

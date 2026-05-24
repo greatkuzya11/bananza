@@ -27,6 +27,8 @@ const {
   extractResponseText,
   generateText,
   generateJson,
+  generateImage: generateOpenAiImage,
+  editImage: editOpenAiImage,
   downloadContainerFile,
   collectContainerFileCitations,
   collectImageGenerationCalls,
@@ -331,7 +333,7 @@ function normalizeBotKind(value, provider = 'openai', fallback = 'text') {
   if (kind === 'convert') return 'convert';
   if ((provider === 'openai' || provider === 'grok') && kind === 'chatshot') return 'chatshot';
   if ((provider === 'openai' || provider === 'grok') && kind === 'universal') return 'universal';
-  if (provider === 'grok' && kind === 'image') return 'image';
+  if ((provider === 'openai' || provider === 'grok') && kind === 'image') return 'image';
   return 'text';
 }
 
@@ -696,6 +698,14 @@ function createAiBotFeature({
       AND COALESCE(b.kind,'text')='universal'
     ORDER BY b.enabled DESC, b.id ASC
   `);
+  const allOpenAiImageBotsStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url
+    FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE COALESCE(b.provider,'openai')='openai'
+      AND COALESCE(b.kind,'text')='image'
+    ORDER BY b.enabled DESC, b.id ASC
+  `);
   const allOpenAiConvertBotsStmt = db.prepare(`
     SELECT b.*, u.avatar_color, u.avatar_url
     FROM ai_bots b
@@ -1036,6 +1046,7 @@ function createAiBotFeature({
     JOIN ai_bots b ON b.id=cb.bot_id
     WHERE cb.chat_id=? AND cb.enabled=1 AND cb.mode='hybrid' AND b.enabled=1
       AND COALESCE(b.provider,'openai')='openai'
+      AND COALESCE(b.kind,'text')!='image'
     LIMIT 1
   `);
   const hybridChatIdsStmt = db.prepare(`
@@ -1044,6 +1055,7 @@ function createAiBotFeature({
     JOIN ai_bots b ON b.id=cb.bot_id
     WHERE cb.enabled=1 AND cb.mode='hybrid' AND b.enabled=1
       AND COALESCE(b.provider,'openai')='openai'
+      AND COALESCE(b.kind,'text')!='image'
   `);
   const yandexHybridEnabledStmt = db.prepare(`
     SELECT 1
@@ -1083,6 +1095,7 @@ function createAiBotFeature({
     JOIN ai_bots b ON b.id=cb.bot_id
     WHERE cb.chat_id=? AND cb.enabled=1 AND cb.mode='hybrid' AND b.enabled=1
       AND COALESCE(b.provider,'openai')='openai'
+      AND COALESCE(b.kind,'text')!='image'
     ORDER BY b.id ASC
     LIMIT 1
   `);
@@ -2244,11 +2257,12 @@ function createAiBotFeature({
           ? settings.deepseek_max_tokens
           : (provider === 'qwen' ? settings.qwen_max_tokens : null)));
     const openAiUniversal = provider === 'openai' && kind === 'universal';
-    const openAiImageCapable = provider === 'openai' && (kind === 'universal' || isChatShot);
+    const openAiImageBot = provider === 'openai' && kind === 'image';
+    const openAiImageCapable = provider === 'openai' && (kind === 'universal' || kind === 'image' || isChatShot);
     const grokImageCapable = provider === 'grok' && (kind === 'image' || kind === 'universal' || isChatShot);
     const defaultAllowText = kind !== 'image' && !isConvertBot && !isChatShot;
     const defaultAllowImageGenerate = kind === 'image' || kind === 'universal' || isChatShot;
-    const defaultAllowImageEdit = kind === 'universal';
+    const defaultAllowImageEdit = kind === 'universal' || openAiImageBot;
     const defaultAllowDocument = openAiUniversal;
     return {
       id: row.id,
@@ -2526,6 +2540,28 @@ function createAiBotFeature({
       chats: state.chats,
       models: {
         response: openAiConvertModelOptions(),
+        image: (modelCatalogCache?.image && modelCatalogCache.image.length)
+          ? modelCatalogCache.image
+          : uniqueList([settings.openai_default_image_model, ...FALLBACK_OPENAI_IMAGE_MODELS]),
+        image_size: ['auto', '1024x1024', '1024x1536', '1536x1024'],
+        image_quality: ['auto', 'low', 'medium', 'high'],
+        image_background: ['auto', 'transparent', 'opaque'],
+        image_output_format: ['png', 'webp', 'jpeg'],
+      },
+    };
+  }
+
+  function serializeOpenAiImageAdminState() {
+    const state = serializeAdminState();
+    const bots = allOpenAiImageBotsStmt.all().map(sanitizeBot);
+    const botIds = new Set(bots.map((bot) => Number(bot.id)));
+    const settings = sanitizeSettings(getGlobalSettings());
+    return {
+      settings,
+      bots,
+      chatSettings: serializeChatSettingsForBotIds(botIds, { forceSimple: true }),
+      chats: state.chats,
+      models: {
         image: (modelCatalogCache?.image && modelCatalogCache.image.length)
           ? modelCatalogCache.image
           : uniqueList([settings.openai_default_image_model, ...FALLBACK_OPENAI_IMAGE_MODELS]),
@@ -2993,6 +3029,7 @@ function createAiBotFeature({
   function defaultBotName(provider, kind = 'text') {
     if (provider === 'openai' && kind === 'convert') return 'OpenAI Convert';
     if (provider === 'openai' && kind === 'chatshot') return 'OpenAI ChatShot';
+    if (provider === 'openai' && kind === 'image') return 'OpenAI Images';
     if (provider === 'yandex' && kind === 'convert') return 'Yandex Convert';
     if (provider === 'deepseek' && kind === 'convert') return 'DeepSeek Convert';
     if (provider === 'qwen' && kind === 'convert') return 'Qwen Convert';
@@ -3067,11 +3104,12 @@ function createAiBotFeature({
           ? settings.deepseek_max_tokens
           : (provider === 'qwen' ? settings.qwen_max_tokens : 1000)));
     const isOpenAiUniversal = provider === 'openai' && kind === 'universal';
+    const isOpenAiImageBot = provider === 'openai' && kind === 'image';
     const isOpenAiChatShot = provider === 'openai' && isChatShot;
     const isGrokUniversal = provider === 'grok' && kind === 'universal';
     const isGrokImageBot = provider === 'grok' && kind === 'image';
     const isGrokChatShot = provider === 'grok' && isChatShot;
-    const isImageCapable = isOpenAiUniversal || isOpenAiChatShot || isGrokUniversal || isGrokImageBot || isGrokChatShot;
+    const isImageCapable = isOpenAiUniversal || isOpenAiImageBot || isOpenAiChatShot || isGrokUniversal || isGrokImageBot || isGrokChatShot;
     return {
       name,
       mention,
@@ -3094,7 +3132,7 @@ function createAiBotFeature({
         ? ''
         : cleanText(input.summary_model ?? current.summary_model ?? summaryFallback, 160),
       embedding_model: isConvertBot || isChatShot ? '' : embeddingFallback,
-      image_model: (isOpenAiUniversal || isOpenAiChatShot)
+      image_model: (isOpenAiUniversal || isOpenAiImageBot || isOpenAiChatShot)
         ? cleanText(input.image_model ?? current.image_model ?? settings.openai_default_image_model, 160)
         : (provider === 'grok' && isImageCapable
           ? cleanText(input.image_model ?? current.image_model ?? settings.grok_default_image_model, 160)
@@ -3102,14 +3140,14 @@ function createAiBotFeature({
       image_aspect_ratio: provider === 'grok' && isImageCapable
         ? cleanGrokAspectRatio(input.image_aspect_ratio ?? current.image_aspect_ratio, settings.grok_default_image_aspect_ratio)
         : '',
-      image_resolution: (isOpenAiUniversal || isOpenAiChatShot)
+      image_resolution: (isOpenAiUniversal || isOpenAiImageBot || isOpenAiChatShot)
         ? cleanOpenAiImageSize(input.image_resolution ?? current.image_resolution, settings.openai_default_image_size)
         : (provider === 'grok' && isImageCapable
           ? cleanGrokResolution(input.image_resolution ?? current.image_resolution, settings.grok_default_image_resolution)
           : ''),
       allow_text: isChatShot ? false : boolValue(input.allow_text, current.allow_text == null ? (kind !== 'image' && !isConvertBot) : current.allow_text !== 0),
       allow_image_generate: isChatShot ? true : boolValue(input.allow_image_generate, current.allow_image_generate == null ? isImageCapable : current.allow_image_generate !== 0),
-      allow_image_edit: isChatShot ? false : boolValue(input.allow_image_edit, current.allow_image_edit == null ? (isOpenAiUniversal || isGrokUniversal) : current.allow_image_edit !== 0),
+      allow_image_edit: isChatShot ? false : boolValue(input.allow_image_edit, current.allow_image_edit == null ? (isOpenAiUniversal || isOpenAiImageBot || isGrokUniversal) : current.allow_image_edit !== 0),
       allow_document: isOpenAiUniversal
         ? boolValue(input.allow_document, current.allow_document == null ? true : current.allow_document !== 0)
         : false,
@@ -3124,13 +3162,13 @@ function createAiBotFeature({
         input.visible_to_users,
         current.visible_to_users == null ? false : current.visible_to_users !== 0
       ),
-      image_quality: (isOpenAiUniversal || isOpenAiChatShot)
+      image_quality: (isOpenAiUniversal || isOpenAiImageBot || isOpenAiChatShot)
         ? cleanOpenAiImageQuality(input.image_quality ?? current.image_quality, settings.openai_default_image_quality)
         : '',
-      image_background: (isOpenAiUniversal || isOpenAiChatShot)
+      image_background: (isOpenAiUniversal || isOpenAiImageBot || isOpenAiChatShot)
         ? cleanOpenAiImageBackground(input.image_background ?? current.image_background, settings.openai_default_image_background)
         : '',
-      image_output_format: (isOpenAiUniversal || isOpenAiChatShot)
+      image_output_format: (isOpenAiUniversal || isOpenAiImageBot || isOpenAiChatShot)
         ? cleanOpenAiImageOutputFormat(input.image_output_format ?? current.image_output_format, settings.openai_default_image_output_format)
         : '',
       document_default_format: isOpenAiUniversal
@@ -4695,6 +4733,7 @@ function createAiBotFeature({
     return [
       ...allOpenAiTextBotsStmt.all(),
       ...allOpenAiUniversalBotsStmt.all(),
+      ...allOpenAiImageBotsStmt.all(),
       ...allOpenAiConvertBotsStmt.all(),
       ...allOpenAiChatShotBotsStmt.all(),
       ...allYandexTextBotsStmt.all(),
@@ -4893,6 +4932,29 @@ function createAiBotFeature({
       const fileRow = insertFileStmt.run(image.originalName || `${artifactKey}${ext}`, storedName, image.mimeType, image.buffer.length, 'image', bot.user_id);
       return { fileId: Number(fileRow.lastInsertRowid), prompt: safePrompt };
     }
+    if (bot.provider === 'openai' && bot.kind === 'image') {
+      if (!bot.user_id) throw new Error('Image bot has no backing user');
+      const apiKey = getApiKey();
+      if (!apiKey) throw new Error('OpenAI AI is not configured');
+      const outputFormat = cleanOpenAiImageOutputFormat(bot.image_output_format, settings.openai_default_image_output_format);
+      const imageResult = await generateOpenAiImage({
+        apiKey,
+        model: bot.image_model || settings.openai_default_image_model,
+        prompt: cleanText(prompt, 8000),
+        n: 1,
+        size: cleanOpenAiImageSize(bot.image_resolution, settings.openai_default_image_size),
+        quality: cleanOpenAiImageQuality(bot.image_quality, settings.openai_default_image_quality),
+        background: cleanOpenAiImageBackground(bot.image_background, settings.openai_default_image_background),
+        outputFormat,
+        responseFormat: 'b64_json',
+      });
+      const { buffer, mimeType } = await loadOpenAiImageBytes(imageResult, outputFormat);
+      const ext = imageExtensionForMime(mimeType);
+      const storedName = `call-${artifactKey}-${crypto.randomUUID()}${ext}`;
+      await fs.promises.writeFile(path.join(uploadsDir, storedName), buffer);
+      const fileRow = insertFileStmt.run(`${artifactKey}${ext}`, storedName, mimeType, buffer.length, 'image', bot.user_id);
+      return { fileId: Number(fileRow.lastInsertRowid), prompt };
+    }
     if (bot.provider === 'grok' && (bot.kind === 'image' || bot.kind === 'universal')) {
       if (!bot.user_id) throw new Error('Image bot has no backing user');
       const apiKey = getGrokApiKey();
@@ -4994,6 +5056,28 @@ function createAiBotFeature({
         chatshot_context_limit: bot.chatshot_context_limit,
         temperature: bot.temperature,
         max_tokens: bot.max_tokens,
+      },
+    };
+  }
+
+  function buildOpenAiImageExportPayload(bot) {
+    return {
+      schema_version: AI_BOT_EXPORT_VERSION,
+      exported_at: new Date().toISOString(),
+      bot: {
+        provider: 'openai',
+        kind: 'image',
+        name: bot.name,
+        mention: bot.mention,
+        enabled: bot.enabled,
+        visible_to_users: bot.visible_to_users,
+        image_model: bot.image_model,
+        image_resolution: bot.image_resolution,
+        image_quality: bot.image_quality,
+        image_background: bot.image_background,
+        image_output_format: bot.image_output_format,
+        allow_image_generate: bot.allow_image_generate,
+        allow_image_edit: bot.allow_image_edit,
       },
     };
   }
@@ -5126,6 +5210,37 @@ function createAiBotFeature({
     });
   }
 
+  async function buildOpenAiImageImportInput(source = {}, warnings = []) {
+    const settings = getGlobalSettings();
+    const requestedMention = normalizeMention(source.mention || source.name || 'openai_image');
+    let imageModel = cleanText(source.image_model || settings.openai_default_image_model, 160);
+    const catalog = await getModelCatalog();
+    if (catalog?.source === 'openai') {
+      if (imageModel && !catalog.image.includes(imageModel)) {
+        warnings.push(`Image model "${imageModel}" is not available; default model was used.`);
+        imageModel = settings.openai_default_image_model;
+      }
+    } else if (catalog?.error) {
+      warnings.push(`Model availability was not verified: ${catalog.error}`);
+    }
+
+    return normalizeBotInput({
+      ...(source || {}),
+      provider: 'openai',
+      kind: 'image',
+      mention: requestedMention,
+      image_model: imageModel,
+      enabled: Object.prototype.hasOwnProperty.call(source, 'enabled') ? source.enabled : true,
+      visible_to_users: source.visible_to_users,
+      allow_image_generate: Object.prototype.hasOwnProperty.call(source, 'allow_image_generate')
+        ? source.allow_image_generate
+        : true,
+      allow_image_edit: Object.prototype.hasOwnProperty.call(source, 'allow_image_edit')
+        ? source.allow_image_edit
+        : true,
+    });
+  }
+
   function updateContextConvertBot(provider, current, input) {
     db.prepare(`
       UPDATE ai_bots
@@ -5182,6 +5297,40 @@ function createAiBotFeature({
     );
     if (current.user_id) {
       db.prepare('UPDATE users SET display_name=?, avatar_color=? WHERE id=?').run(CHATSHOT_PUBLIC_NAME, '#f4c542', current.user_id);
+      if (typeof notifyUserUpdated === 'function') notifyUserUpdated(current.user_id);
+    }
+  }
+
+  function updateOpenAiImageBot(current, input) {
+    db.prepare(`
+      UPDATE ai_bots
+      SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns='',
+          enabled=?, provider='openai', kind='image', response_model='', summary_model='', embedding_model='',
+          image_model=?, image_aspect_ratio='', image_resolution=?,
+          allow_text=0, allow_image_generate=?, allow_image_edit=?, allow_document=0,
+          allow_poll_create=0, allow_poll_vote=0, allow_react=0, allow_pin=0, visible_to_users=?,
+          image_quality=?, image_background=?, image_output_format=?, document_default_format='',
+          transform_prompt='', temperature=NULL, max_tokens=NULL, updated_at=datetime('now')
+      WHERE id=?
+    `).run(
+      input.name,
+      input.mention,
+      input.style || '',
+      input.tone || '',
+      input.behavior_rules || '',
+      input.enabled ? 1 : 0,
+      input.image_model || '',
+      input.image_resolution || '',
+      input.allow_image_generate ? 1 : 0,
+      input.allow_image_edit ? 1 : 0,
+      input.visible_to_users ? 1 : 0,
+      input.image_quality || '',
+      input.image_background || '',
+      input.image_output_format || '',
+      current.id
+    );
+    if (current.user_id) {
+      db.prepare('UPDATE users SET display_name=? WHERE id=?').run(input.name, current.user_id);
       if (typeof notifyUserUpdated === 'function') notifyUserUpdated(current.user_id);
     }
   }
@@ -5309,11 +5458,11 @@ function createAiBotFeature({
     return null;
   }
 
-  async function loadGrokImageBytes(imageResult) {
+  async function loadGeneratedImageBytes(imageResult, { fallbackMimeType = 'image/png', providerLabel = 'Image' } = {}) {
     if (imageResult?.b64Json) {
       return {
         buffer: Buffer.from(imageResult.b64Json, 'base64'),
-        mimeType: 'image/png',
+        mimeType: fallbackMimeType || 'image/png',
       };
     }
     if (imageResult?.url) {
@@ -5325,7 +5474,21 @@ function createAiBotFeature({
       const mimeType = String(response.headers.get('content-type') || 'image/png').split(';')[0].trim() || 'image/png';
       return { buffer, mimeType };
     }
-    throw new Error('Grok image generation returned no downloadable image');
+    throw new Error(`${providerLabel} image generation returned no downloadable image`);
+  }
+
+  async function loadGrokImageBytes(imageResult) {
+    return loadGeneratedImageBytes(imageResult, {
+      fallbackMimeType: 'image/png',
+      providerLabel: 'Grok',
+    });
+  }
+
+  async function loadOpenAiImageBytes(imageResult, outputFormat = 'png') {
+    return loadGeneratedImageBytes(imageResult, {
+      fallbackMimeType: mimeTypeForOpenAiImageOutput(outputFormat),
+      providerLabel: 'OpenAI',
+    });
   }
 
   async function createBotFileMessage(bot, sourceMessage, { buffer, mimeType, fileType, originalName, text = null }) {
@@ -5387,6 +5550,74 @@ function createAiBotFeature({
       fileType: 'image',
       originalName,
     });
+  }
+
+  function validateOpenAiEditImageInput(imageInput) {
+    if (!imageInput) return 'Attach or reply to a JPG, PNG, or WEBP image first so I can edit it.';
+    const mime = String(imageInput.mimeType || '').toLowerCase();
+    if (!['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(mime)) {
+      return 'OpenAI image edit supports JPG, PNG, and WEBP source images.';
+    }
+    if (Number(imageInput.buffer?.length || 0) > 50 * 1024 * 1024) {
+      return 'The source image is too large for OpenAI image edit. Please use a file under 50 MiB.';
+    }
+    return '';
+  }
+
+  async function createOpenAiImageMessage(bot, sourceMessage) {
+    const settings = getGlobalSettings();
+    const apiKey = getApiKey();
+    if (!apiKey || !settings.enabled) return null;
+    if (!uploadsDir) throw new Error('Uploads directory is not configured');
+
+    const prompt = cleanText(extractBotPromptText(bot, sourceMessage), 8000);
+    if (!prompt) {
+      return { message: publishBotTextMessage(bot, sourceMessage, 'Describe what to create or change first.'), alreadyPublished: true };
+    }
+
+    const imageInput = await resolveSourceImageInput(sourceMessage);
+    const outputFormat = cleanOpenAiImageOutputFormat(bot.image_output_format, settings.openai_default_image_output_format);
+    const imageOptions = {
+      apiKey,
+      model: bot.image_model || settings.openai_default_image_model,
+      prompt,
+      n: 1,
+      size: cleanOpenAiImageSize(bot.image_resolution, settings.openai_default_image_size),
+      quality: cleanOpenAiImageQuality(bot.image_quality, settings.openai_default_image_quality),
+      background: cleanOpenAiImageBackground(bot.image_background, settings.openai_default_image_background),
+      outputFormat,
+      responseFormat: 'b64_json',
+    };
+
+    let imageResult = null;
+    if (imageInput && bot.allow_image_edit) {
+      const validationError = validateOpenAiEditImageInput(imageInput);
+      if (validationError) {
+        return { message: publishBotTextMessage(bot, sourceMessage, validationError), alreadyPublished: true };
+      }
+      imageResult = await editOpenAiImage({
+        ...imageOptions,
+        imageBuffer: imageInput.buffer,
+        imageName: imageInput.originalName || `source${imageExtensionForMime(imageInput.mimeType)}`,
+        mimeType: imageInput.mimeType,
+      });
+    } else if (bot.allow_image_generate) {
+      imageResult = await generateOpenAiImage(imageOptions);
+    } else if (imageInput) {
+      return { message: publishBotTextMessage(bot, sourceMessage, 'Image generation and editing are disabled for this bot.'), alreadyPublished: true };
+    } else {
+      return { message: publishBotTextMessage(bot, sourceMessage, 'Attach or reply to an image first: this bot is configured only for image edits.'), alreadyPublished: true };
+    }
+
+    const { buffer, mimeType } = await loadOpenAiImageBytes(imageResult, outputFormat);
+    const ext = imageExtensionForMime(mimeType);
+    const message = await createBotFileMessage(bot, sourceMessage, {
+      buffer,
+      mimeType,
+      fileType: 'image',
+      originalName: `openai-${safeFilenamePart(bot.mention || bot.name, 'image')}-${Date.now()}${ext}`,
+    });
+    return { message, alreadyPublished: false };
   }
 
   function buildBotFailureText(error) {
@@ -6615,10 +6846,17 @@ function createAiBotFeature({
       }, 2200);
 
       if (bot.kind === 'image') {
-        if (!isGrok) return;
-        const message = await createGrokImageMessage(bot, sourceMessage);
-        if (!message) return;
-        finalizePublishedBotMessage(message);
+        if (isGrok) {
+          const message = await createGrokImageMessage(bot, sourceMessage);
+          if (!message) return;
+          finalizePublishedBotMessage(message);
+          return;
+        }
+        if (bot.provider === 'openai') {
+          const imageResult = await createOpenAiImageMessage(bot, sourceMessage);
+          if (!imageResult?.message) return;
+          if (!imageResult.alreadyPublished) finalizePublishedBotMessage(imageResult.message);
+        }
         return;
       }
 
@@ -7430,6 +7668,149 @@ function createAiBotFeature({
     const bot = sanitizeBot(createBotTx(input));
     broadcastChatShotBotUpdatedForBot(bot.id, [bot]);
     res.json({ bot, warnings, state: serializeOpenAiChatShotAdminState() });
+  });
+
+  app.get('/api/admin/openai-image-bots', auth, adminOnly, (_req, res) => {
+    res.json(serializeOpenAiImageAdminState());
+  });
+
+  app.post('/api/admin/openai-image-bots', auth, adminOnly, (req, res) => {
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'openai', kind: 'image' });
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, state: serializeOpenAiImageAdminState() });
+  });
+
+  app.put('/api/admin/openai-image-bots/chat-settings', auth, adminOnly, (req, res) => {
+    const chatId = Number(req.body?.chatId);
+    const botId = Number(req.body?.botId);
+    if (!db.prepare('SELECT 1 FROM chats WHERE id=?').get(chatId)) return res.status(404).json({ error: 'Chat not found' });
+    const bot = providerBotByRequestId({ params: { id: botId } }, res, { provider: 'openai', kind: 'image' });
+    if (!bot) return;
+    const enabled = boolValue(req.body?.enabled, false);
+    saveChatBotSettingTx({
+      chatId,
+      bot,
+      enabled,
+      mode: 'simple',
+      hotContextLimit: 50,
+      triggerMode: 'mention_reply',
+      autoReactOnMention: false,
+    });
+    res.json({ ok: true, state: serializeOpenAiImageAdminState() });
+  });
+
+  app.post('/api/admin/openai-image-bots/:id(\\d+)/avatar', auth, adminOnly, botAvatarLimiter, (req, res) => {
+    if (!avatarUpload?.single) return res.status(500).json({ error: 'Avatar upload is not configured' });
+    const bot = providerBotByRequestId(req, res, { provider: 'openai', kind: 'image' });
+    if (!bot) return;
+
+    avatarUpload.single('avatar')(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
+      if (!req.file) return res.status(400).json({ error: 'No file' });
+
+      const userId = ensureBackingUser(bot);
+      const old = db.prepare('SELECT avatar_url FROM users WHERE id=?').get(userId);
+      removeAvatarFile(old?.avatar_url);
+
+      const avatarUrl = '/uploads/avatars/' + req.file.filename;
+      db.prepare('UPDATE users SET avatar_url=?, display_name=? WHERE id=?').run(avatarUrl, bot.name, userId);
+      db.prepare('UPDATE ai_bots SET updated_at=datetime(\'now\') WHERE id=?').run(bot.id);
+      const updated = sanitizeBot(botByIdStmt.get(bot.id));
+      if (typeof notifyUserUpdated === 'function') notifyUserUpdated(userId);
+      res.json({ bot: updated, state: serializeOpenAiImageAdminState() });
+    });
+  });
+
+  app.delete('/api/admin/openai-image-bots/:id(\\d+)/avatar', auth, adminOnly, (req, res) => {
+    const bot = providerBotByRequestId(req, res, { provider: 'openai', kind: 'image' });
+    if (!bot) return;
+    const userId = ensureBackingUser(bot);
+    const old = db.prepare('SELECT avatar_url FROM users WHERE id=?').get(userId);
+    removeAvatarFile(old?.avatar_url);
+    db.prepare('UPDATE users SET avatar_url=NULL WHERE id=?').run(userId);
+    db.prepare('UPDATE ai_bots SET updated_at=datetime(\'now\') WHERE id=?').run(bot.id);
+    const updated = sanitizeBot(botByIdStmt.get(bot.id));
+    if (typeof notifyUserUpdated === 'function') notifyUserUpdated(userId);
+    res.json({ bot: updated, state: serializeOpenAiImageAdminState() });
+  });
+
+  app.put('/api/admin/openai-image-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = providerBotByRequestId(req, res, { provider: 'openai', kind: 'image' });
+    if (!current) return;
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'openai', kind: 'image' }, current);
+    updateOpenAiImageBot(current, input);
+    const updated = botByIdStmt.get(current.id);
+    syncBotMemberships(updated, updated.enabled !== 0);
+    res.json({ bot: sanitizeBot(updated), state: serializeOpenAiImageAdminState() });
+  });
+
+  app.delete('/api/admin/openai-image-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = providerBotByRequestId(req, res, { provider: 'openai', kind: 'image' });
+    if (!current) return;
+    db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
+    db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
+    syncBotMemberships(current, false);
+    res.json({ ok: true, state: serializeOpenAiImageAdminState() });
+  });
+
+  app.post('/api/admin/openai-image-bots/:id(\\d+)/test', auth, adminOnly, async (req, res) => {
+    const rawBot = providerBotByRequestId(req, res, { provider: 'openai', kind: 'image' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
+    const settings = getGlobalSettings();
+    const apiKey = String(req.body?.openai_api_key || '').trim() || getApiKey();
+    if (!apiKey) return res.status(400).json({ ok: false, error: 'Enter OpenAI API key in settings.' });
+    if (!bot.allow_image_generate) return res.status(400).json({ ok: false, error: 'Enable image generation to run this test without a source image.' });
+    const prompt = cleanText(req.body?.prompt || `Generate a friendly test image for ${bot.name}.`, 1200);
+    const outputFormat = cleanOpenAiImageOutputFormat(bot.image_output_format, settings.openai_default_image_output_format);
+    const startedAt = Date.now();
+    try {
+      const result = await generateOpenAiImage({
+        apiKey,
+        model: bot.image_model || settings.openai_default_image_model,
+        prompt,
+        n: 1,
+        size: cleanOpenAiImageSize(bot.image_resolution, settings.openai_default_image_size),
+        quality: cleanOpenAiImageQuality(bot.image_quality, settings.openai_default_image_quality),
+        background: cleanOpenAiImageBackground(bot.image_background, settings.openai_default_image_background),
+        outputFormat,
+        responseFormat: 'b64_json',
+      });
+      res.json({
+        ok: true,
+        result: {
+          text: result.revisedPrompt ? `Image generated. Revised prompt: ${truncate(result.revisedPrompt, 240)}` : 'Image generated successfully.',
+          latencyMs: Date.now() - startedAt,
+          model: result.model || bot.image_model || settings.openai_default_image_model,
+        },
+      });
+    } catch (error) {
+      res.status(400).json({ ok: false, error: errorText(error, 'OpenAI image bot test failed') });
+    }
+  });
+
+  app.get('/api/admin/openai-image-bots/:id(\\d+)/export', auth, adminOnly, (req, res) => {
+    const rawBot = providerBotByRequestId(req, res, { provider: 'openai', kind: 'image' });
+    if (!rawBot) return;
+    const bot = sanitizeBot(rawBot);
+    const payload = buildOpenAiImageExportPayload(bot);
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = `bananza-openai-image-${safeFilenamePart(bot.mention || bot.name)}-${date}.json`;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(JSON.stringify(payload, null, 2));
+  });
+
+  app.post('/api/admin/openai-image-bots/import', auth, adminOnly, async (req, res) => {
+    const source = req.body?.bot && typeof req.body.bot === 'object' ? req.body.bot : (req.body || {});
+    const warnings = [];
+    const input = await buildOpenAiImageImportInput(source, warnings);
+    const requestedMention = normalizeMention(source.mention || source.name || 'openai_image');
+    if (input.mention !== requestedMention) {
+      warnings.push(`Mention "@${requestedMention}" is already taken; imported as "@${input.mention}".`);
+    }
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, warnings, state: serializeOpenAiImageAdminState() });
   });
 
   app.get('/api/admin/openai-universal-bots', auth, adminOnly, (_req, res) => {

@@ -359,6 +359,20 @@
     chatSettings: [],
   };
   let selectedOpenAiUniversalBotId = null;
+  let openAiImageState = {
+    settings: { ...aiBotState.settings },
+    bots: [],
+    chats: [],
+    chatSettings: [],
+    models: {
+      image: ['gpt-image-2', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini'],
+      image_size: ['auto', '1024x1024', '1024x1536', '1536x1024'],
+      image_quality: ['auto', 'low', 'medium', 'high'],
+      image_background: ['auto', 'transparent', 'opaque'],
+      image_output_format: ['png', 'webp', 'jpeg'],
+    },
+  };
+  let selectedOpenAiImageBotId = null;
   let yandexBotState = {
     settings: {
       yandex_enabled: false,
@@ -775,6 +789,7 @@
   const aiBotSettingsModal = $('#aiBotSettingsModal');
   const openAiTextBotsModal = $('#openAiTextBotsModal');
   const openAiUniversalBotsModal = $('#openAiUniversalBotsModal');
+  const openAiImageBotsModal = $('#openAiImageBotsModal');
   const contextConvertBotsModal = $('#contextConvertBotsModal');
   const chatShotBotsModal = $('#chatShotBotsModal');
   const yandexAiSettingsModal = $('#yandexAiSettingsModal');
@@ -4710,6 +4725,7 @@
     const configs = [
       ['aiBotEnabled', 'aiBotVisibleToUsers'],
       ['openAiUniversalBotEnabled', 'openAiUniversalBotVisibleToUsers'],
+      ['openAiImageBotEnabled', 'openAiImageBotVisibleToUsers'],
       ['deepseekAiBotEnabled', 'deepseekAiBotVisibleToUsers'],
       ['qwenAiBotEnabled', 'qwenAiBotVisibleToUsers'],
       ['yandexAiBotEnabled', 'yandexAiBotVisibleToUsers'],
@@ -7538,6 +7554,7 @@
   function syncSharedOpenAiSettings(settings = {}) {
     aiBotState.settings = { ...aiBotState.settings, ...settings };
     openAiUniversalState.settings = { ...openAiUniversalState.settings, ...settings };
+    openAiImageState.settings = { ...openAiImageState.settings, ...settings };
   }
 
   function syncSharedGrokSettings(settings = {}) {
@@ -7565,6 +7582,7 @@
     const botEmbedding = $('#aiBotEmbeddingModel');
     if (botEmbedding) botEmbedding.value = settings.default_embedding_model || 'text-embedding-3-small';
     renderOpenAiUniversalModelOptions(currentOpenAiUniversalBot());
+    renderOpenAiImageModelOptions(currentOpenAiImageBot());
   }
 
   async function loadAiModelOptions(refresh = false) {
@@ -7628,6 +7646,7 @@
         chatSettings: data.state.chatSettings || aiBotState.chatSettings,
       };
       if (data.state.chats) openAiUniversalState.chats = data.state.chats;
+      if (data.state.chats) openAiImageState.chats = data.state.chats;
     } else if (data.settings) {
       syncSharedOpenAiSettings(data.settings);
       aiBotState = { ...aiBotState, settings: aiBotState.settings };
@@ -8083,6 +8102,7 @@
     mergeAiBotState({ state: data });
     renderAiBotSettings();
     renderOpenAiUniversalSettings();
+    renderOpenAiImageSettings();
     loadAiModelOptions(false).catch((e) => {
       setAiModelStatus(e.message || 'Не удалось загрузить список моделей', 'error');
     });
@@ -8095,6 +8115,7 @@
       await loadAiModelOptions(true).catch(() => {});
       renderAiBotSettings();
       renderOpenAiUniversalSettings();
+      renderOpenAiImageSettings();
       setAiBotSettingsStatus(`Настройки сохранены\n${providerInteractiveSummary('openai', aiBotState.settings)}`, 'success');
     } catch (e) {
       setAiBotSettingsStatus(e.message || 'Не удалось сохранить настройки', 'error');
@@ -8109,6 +8130,7 @@
       await loadAiModelOptions(true).catch(() => {});
       renderAiBotSettings();
       renderOpenAiUniversalSettings();
+      renderOpenAiImageSettings();
       setAiBotSettingsStatus('Ключ удалён', 'success');
     } catch (e) {
       setAiBotSettingsStatus(e.message || 'Не удалось удалить ключ', 'error');
@@ -8502,6 +8524,339 @@
       setOpenAiUniversalChatStatus('Chat settings saved', 'success');
     } catch (e) {
       setOpenAiUniversalChatStatus(e.message || 'Could not save chat settings', 'error');
+    }
+  }
+
+  function setOpenAiImageModalStatus(message, type = '') {
+    setOpenAiStatus('openAiImageStatus', message, type);
+  }
+
+  function setOpenAiImageStatus(message, type = '') {
+    setOpenAiStatus(['openAiImageBotEditorStatus', 'openAiImageBotEditorStatusBottom'], message, type);
+  }
+
+  function setOpenAiImageChatStatus(message, type = '') {
+    setOpenAiStatus('openAiImageBotChatStatus', message, type);
+  }
+
+  function mergeOpenAiImageState(data = {}) {
+    const state = data.state || data;
+    if (state.settings) syncSharedOpenAiSettings(state.settings);
+    if (state.bots) openAiImageState.bots = state.bots;
+    if (state.chats) openAiImageState.chats = state.chats;
+    if (state.chatSettings) openAiImageState.chatSettings = state.chatSettings;
+    if (state.models) {
+      openAiImageState.models = { ...openAiImageState.models, ...state.models };
+      if (Array.isArray(state.models.image) && state.models.image.length) {
+        aiModelCatalog.image = state.models.image;
+      }
+    }
+    openAiImageState.settings = aiBotState.settings;
+    if (selectedOpenAiImageBotId && !openAiImageState.bots.some(bot => Number(bot.id) === Number(selectedOpenAiImageBotId))) {
+      selectedOpenAiImageBotId = null;
+    }
+    mentionTargetsByChat.clear();
+    updateComposerAiOverrideState().catch(() => {});
+  }
+
+  function currentOpenAiImageBot() {
+    return openAiImageState.bots.find(bot => Number(bot.id) === Number(selectedOpenAiImageBotId)) || null;
+  }
+
+  function getOpenAiImageChatSetting(chatId, botId) {
+    return openAiImageState.chatSettings.find(item => Number(item.chat_id) === Number(chatId) && Number(item.bot_id) === Number(botId)) || null;
+  }
+
+  function renderOpenAiImageModelOptions(bot = currentOpenAiImageBot()) {
+    const settings = openAiImageState.settings || aiBotState.settings || {};
+    const models = openAiImageState.models || {};
+    const imageModels = models.image || aiModelCatalog.image || ['gpt-image-2'];
+    setAiModelSelectOptions('openAiImageBotModel', imageModels, bot?.image_model || settings.openai_default_image_model || 'gpt-image-2');
+    setStaticSelectOptions('openAiImageBotImageSize', models.image_size || OPENAI_IMAGE_SIZE_OPTIONS, bot?.image_resolution || settings.openai_default_image_size || '1024x1024');
+    setStaticSelectOptions('openAiImageBotImageQuality', models.image_quality || OPENAI_IMAGE_QUALITY_OPTIONS, bot?.image_quality || settings.openai_default_image_quality || 'auto');
+    setStaticSelectOptions('openAiImageBotImageBackground', models.image_background || OPENAI_IMAGE_BACKGROUND_OPTIONS, bot?.image_background || settings.openai_default_image_background || 'auto');
+    setStaticSelectOptions('openAiImageBotImageOutputFormat', models.image_output_format || OPENAI_IMAGE_OUTPUT_OPTIONS, bot?.image_output_format || settings.openai_default_image_output_format || 'png');
+  }
+
+  function renderOpenAiImageBotAvatar(bot = currentOpenAiImageBot()) {
+    const avatarEl = $('#openAiImageBotAvatar');
+    if (!avatarEl) return;
+    const name = bot?.name || $('#openAiImageBotName')?.value.trim() || 'OpenAI Images';
+    const color = bot?.avatar_color || '#65aadd';
+    avatarEl.style.background = color;
+    if (bot?.avatar_url) {
+      avatarEl.innerHTML = `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="">`;
+    } else {
+      avatarEl.textContent = initials(name);
+    }
+
+    const hasSavedBot = Boolean(bot?.id);
+    const input = $('#openAiImageBotAvatarInput');
+    const label = $('#openAiImageBotAvatarLabel');
+    if (input) {
+      input.disabled = !hasSavedBot;
+      input.value = '';
+    }
+    if (label) {
+      label.classList.toggle('ai-bot-avatar-label-disabled', !hasSavedBot);
+      label.title = hasSavedBot ? 'Change avatar' : 'Save the bot first';
+    }
+    $('#removeOpenAiImageBotAvatar')?.classList.toggle('hidden', !hasSavedBot || !bot?.avatar_url);
+  }
+
+  function renderOpenAiImageBotList() {
+    const list = $('#openAiImageBotList');
+    if (!list) return;
+    if (!openAiImageState.bots.length) {
+      list.innerHTML = '<div class="ai-bot-empty">No OpenAI image bots yet. Create the first one.</div>';
+      return;
+    }
+    list.innerHTML = openAiImageState.bots.map(bot => `
+      <button type="button" class="ai-bot-list-item${Number(bot.id) === Number(selectedOpenAiImageBotId) ? ' active' : ''}" data-bot-id="${bot.id}">
+        <span class="ai-bot-list-main">
+          <span class="ai-bot-list-avatar" style="background:${esc(bot.avatar_color || '#65aadd')}">
+            ${bot.avatar_url ? `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">` : esc(initials(bot.name || '?'))}
+          </span>
+          <span class="ai-bot-list-copy">
+            <strong>${esc(bot.name)}</strong>
+            <small>@${esc(bot.mention)} В· ${bot.enabled ? 'enabled' : 'disabled'}</small>
+          </span>
+        </span>
+        <span class="ai-bot-list-model">${bot.image_model ? esc(bot.image_model) : ''}</span>
+      </button>
+    `).join('');
+  }
+
+  function fillOpenAiImageBotForm(bot = null) {
+    selectedOpenAiImageBotId = bot ? bot.id : null;
+    $('#openAiImageBotName').value = bot?.name || 'OpenAI Images';
+    $('#openAiImageBotMention').value = bot?.mention || 'openai_image';
+    $('#openAiImageBotEnabled').checked = bot ? !!bot.enabled : true;
+    setBotVisibilityToggle('openAiImageBotVisibleToUsers', !!bot?.visible_to_users);
+    $('#openAiImageBotAllowImageGenerate').checked = bot?.allow_image_generate ?? true;
+    $('#openAiImageBotAllowImageEdit').checked = bot?.allow_image_edit ?? true;
+    renderOpenAiImageModelOptions(bot);
+    renderOpenAiImageBotAvatar(bot);
+    renderOpenAiImageBotList();
+    renderOpenAiImageChatBotSettings();
+  }
+
+  function openAiImageBotFormPayload() {
+    return {
+      kind: 'image',
+      name: $('#openAiImageBotName')?.value.trim(),
+      mention: $('#openAiImageBotMention')?.value.trim(),
+      enabled: $('#openAiImageBotEnabled')?.checked,
+      visible_to_users: getBotVisibilityToggle('openAiImageBotVisibleToUsers'),
+      image_model: $('#openAiImageBotModel')?.value.trim(),
+      image_resolution: $('#openAiImageBotImageSize')?.value.trim(),
+      image_quality: $('#openAiImageBotImageQuality')?.value.trim(),
+      image_background: $('#openAiImageBotImageBackground')?.value.trim(),
+      image_output_format: $('#openAiImageBotImageOutputFormat')?.value.trim(),
+      allow_image_generate: $('#openAiImageBotAllowImageGenerate')?.checked,
+      allow_image_edit: $('#openAiImageBotAllowImageEdit')?.checked,
+    };
+  }
+
+  function renderOpenAiImageChatBotSettings() {
+    const chatSelect = $('#openAiImageBotChatSelect');
+    const botSelect = $('#openAiImageBotChatBotSelect');
+    if (!chatSelect || !botSelect) return;
+    const currentChatValue = chatSelect.value || String(currentChatId || openAiImageState.chats[0]?.id || '');
+    const currentBotValue = botSelect.value || String(selectedOpenAiImageBotId || openAiImageState.bots[0]?.id || '');
+    chatSelect.innerHTML = openAiImageState.chats.map(chat => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+    botSelect.innerHTML = openAiImageState.bots.map(bot => `<option value="${bot.id}">${esc(bot.name)} @${esc(bot.mention)}</option>`).join('');
+    if (openAiImageState.chats.some(chat => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
+    if (openAiImageState.bots.some(bot => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;
+    if (!botSelect.value && openAiImageState.bots[0]) botSelect.value = String(openAiImageState.bots[0].id);
+    const setting = getOpenAiImageChatSetting(chatSelect.value, botSelect.value);
+    $('#openAiImageBotChatEnabled').checked = !!setting?.enabled;
+  }
+
+  function renderOpenAiImageSettings() {
+    const selected = currentOpenAiImageBot() || openAiImageState.bots[0] || null;
+    fillOpenAiImageBotForm(selected);
+    renderOpenAiImageChatBotSettings();
+  }
+
+  async function loadOpenAiImageState() {
+    const data = await api('/api/admin/openai-image-bots');
+    mergeOpenAiImageState({ state: data });
+    renderOpenAiImageSettings();
+    return data;
+  }
+
+  function syncOpenAiImageBotUser(bot) {
+    if (!bot?.user_id) return;
+    applyUserUpdate({
+      id: bot.user_id,
+      user_id: bot.user_id,
+      display_name: bot.name,
+      avatar_color: bot.avatar_color,
+      avatar_url: bot.avatar_url,
+      is_ai_bot: 1,
+    });
+  }
+
+  async function saveOpenAiImageBot() {
+    const payload = openAiImageBotFormPayload();
+    if (!payload.name) { setOpenAiImageStatus('Enter image bot name', 'error'); return; }
+    setOpenAiImageStatus('Saving OpenAI image bot...', 'pending');
+    try {
+      const shouldUpdate = Boolean(selectedOpenAiImageBotId && openAiImageState.bots.some(bot => Number(bot.id) === Number(selectedOpenAiImageBotId)));
+      const url = shouldUpdate ? `/api/admin/openai-image-bots/${selectedOpenAiImageBotId}` : '/api/admin/openai-image-bots';
+      const method = shouldUpdate ? 'PUT' : 'POST';
+      const data = await api(url, { method, body: payload });
+      mergeOpenAiImageState(data);
+      selectedOpenAiImageBotId = data.bot?.id || selectedOpenAiImageBotId;
+      syncOpenAiImageBotUser(data.bot);
+      renderOpenAiImageSettings();
+      const status = buildVerifiedBotSaveStatus('Image bot saved.', data.bot, payload);
+      setOpenAiImageStatus(status.message, status.type);
+    } catch (e) {
+      setOpenAiImageStatus(e.message || 'Could not save OpenAI image bot', 'error');
+    }
+  }
+
+  async function uploadOpenAiImageBotAvatar(file) {
+    if (!file) return;
+    if (!selectedOpenAiImageBotId) {
+      setOpenAiImageStatus('Save the bot before adding an avatar', 'error');
+      renderOpenAiImageBotAvatar(null);
+      return;
+    }
+    const fd = new FormData();
+    fd.append('avatar', file);
+    setOpenAiImageStatus('Uploading avatar...', 'pending');
+    try {
+      const data = await api(`/api/admin/openai-image-bots/${selectedOpenAiImageBotId}/avatar`, { method: 'POST', body: fd });
+      mergeOpenAiImageState(data);
+      selectedOpenAiImageBotId = data.bot?.id || selectedOpenAiImageBotId;
+      syncOpenAiImageBotUser(data.bot);
+      renderOpenAiImageSettings();
+      refreshRenderedAiBotAvatar(data.bot);
+      setOpenAiImageStatus('Avatar saved', 'success');
+    } catch (e) {
+      setOpenAiImageStatus(e.message || 'Could not upload avatar', 'error');
+    }
+  }
+
+  async function removeOpenAiImageBotAvatar() {
+    if (!selectedOpenAiImageBotId) return;
+    try {
+      const data = await api(`/api/admin/openai-image-bots/${selectedOpenAiImageBotId}/avatar`, { method: 'DELETE' });
+      mergeOpenAiImageState(data);
+      selectedOpenAiImageBotId = data.bot?.id || selectedOpenAiImageBotId;
+      syncOpenAiImageBotUser(data.bot);
+      renderOpenAiImageSettings();
+      refreshRenderedAiBotAvatar(data.bot);
+      setOpenAiImageStatus('Avatar removed', 'success');
+    } catch (e) {
+      setOpenAiImageStatus(e.message || 'Could not remove avatar', 'error');
+    }
+  }
+
+  async function disableOpenAiImageBot() {
+    if (!selectedOpenAiImageBotId) return;
+    if (!confirm('Disable this OpenAI image bot in all chats?')) return;
+    try {
+      const data = await api(`/api/admin/openai-image-bots/${selectedOpenAiImageBotId}`, { method: 'DELETE' });
+      mergeOpenAiImageState(data);
+      renderOpenAiImageSettings();
+      setOpenAiImageStatus('Image bot disabled', 'success');
+    } catch (e) {
+      setOpenAiImageStatus(e.message || 'Could not disable image bot', 'error');
+    }
+  }
+
+  async function testOpenAiImageBot() {
+    if (!selectedOpenAiImageBotId) { setOpenAiImageStatus('Save the bot first', 'error'); return; }
+    setOpenAiImageStatus('Testing image bot...', 'pending');
+    try {
+      const data = await api(`/api/admin/openai-image-bots/${selectedOpenAiImageBotId}/test`, { method: 'POST', body: {} });
+      const text = data.result?.text ? data.result.text.slice(0, 500) : '';
+      setOpenAiImageStatus(`Success (${data.result?.latencyMs || 0} ms): ${text}`, 'success');
+    } catch (e) {
+      setOpenAiImageStatus(e.message || 'Image bot test failed', 'error');
+    }
+  }
+
+  async function exportOpenAiImageBotJson() {
+    if (!selectedOpenAiImageBotId) { setOpenAiImageStatus('Choose a saved bot first', 'error'); return; }
+    setOpenAiImageStatus('Preparing JSON...', 'pending');
+    try {
+      const headers = {};
+      if (token) headers.Authorization = 'Bearer ' + token;
+      const res = await fetch(`/api/admin/openai-image-bots/${selectedOpenAiImageBotId}/export`, { headers });
+      if (!res.ok) {
+        let data = {};
+        try { data = await res.json(); } catch {}
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const bot = currentOpenAiImageBot();
+      const fallbackName = `bananza-openai-image-${bot?.mention || selectedOpenAiImageBotId}.json`;
+      const filename = filenameFromContentDisposition(res.headers.get('content-disposition'), fallbackName);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setOpenAiImageStatus('JSON exported', 'success');
+    } catch (e) {
+      setOpenAiImageStatus(e.message || 'Could not export JSON', 'error');
+    }
+  }
+
+  async function importOpenAiImageBotJsonFile(file) {
+    if (!file) return;
+    setOpenAiImageStatus('Importing JSON...', 'pending');
+    try {
+      const raw = await file.text();
+      const payload = JSON.parse(raw);
+      const data = await api('/api/admin/openai-image-bots/import', { method: 'POST', body: payload });
+      mergeOpenAiImageState(data);
+      selectedOpenAiImageBotId = data.bot?.id || selectedOpenAiImageBotId;
+      renderOpenAiImageSettings();
+      const warnings = Array.isArray(data.warnings) && data.warnings.length ? ` ${data.warnings.join(' ')}` : '';
+      setOpenAiImageStatus(`Image bot imported.${warnings}`, warnings ? 'error' : 'success');
+    } catch (e) {
+      setOpenAiImageStatus(e.message || 'Could not import JSON', 'error');
+    } finally {
+      const input = $('#openAiImageBotImportFile');
+      if (input) input.value = '';
+    }
+  }
+
+  async function saveOpenAiImageChatBotSettings() {
+    const chatId = Number($('#openAiImageBotChatSelect')?.value || 0);
+    const botId = Number($('#openAiImageBotChatBotSelect')?.value || 0);
+    const botExists = openAiImageState.bots.some(bot => Number(bot.id) === Number(botId));
+    if (!chatId || !botId) { setOpenAiImageChatStatus('Choose chat and image bot', 'error'); return; }
+    if (!botExists) {
+      setOpenAiImageChatStatus('Save the image bot first', 'error');
+      await loadOpenAiImageState().catch(() => {});
+      return;
+    }
+    try {
+      const data = await api('/api/admin/openai-image-bots/chat-settings', {
+        method: 'PUT',
+        body: {
+          chatId,
+          botId,
+          enabled: $('#openAiImageBotChatEnabled')?.checked,
+          mode: 'simple',
+          hot_context_limit: 50,
+        },
+      });
+      mergeOpenAiImageState(data);
+      renderOpenAiImageChatBotSettings();
+      setOpenAiImageChatStatus('Image bot chat settings saved', 'success');
+    } catch (e) {
+      setOpenAiImageChatStatus(e.message || 'Could not save image bot chat settings', 'error');
     }
   }
 
@@ -13252,6 +13607,7 @@
       aiBotSettingsModal,
       openAiTextBotsModal,
       openAiUniversalBotsModal,
+      openAiImageBotsModal,
       contextConvertBotsModal,
       chatShotBotsModal,
       yandexAiSettingsModal,
@@ -24783,7 +25139,7 @@
     openModal('aiBotSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
     resetManagedModalScroll('aiBotSettingsModal');
     setAiBotModalStatus('Загружаю...', 'pending');
-    Promise.all([loadAiBotState(), loadOpenAiUniversalState()]).then(() => {
+    Promise.all([loadAiBotState(), loadOpenAiUniversalState(), loadOpenAiImageState()]).then(() => {
       resetManagedModalScroll('aiBotSettingsModal');
       setAiBotModalStatus('');
     }).catch((e) => {
@@ -24817,6 +25173,26 @@
       setOpenAiUniversalModalStatus('');
     }).catch((e) => {
       setOpenAiUniversalModalStatus(e.message || 'Could not load OpenAI universal bots', 'error');
+    });
+  }
+
+  function openOpenAiImageBotsModal() {
+    if (!currentUser?.is_admin) return;
+    openModal('openAiImageBotsModal', { replaceStack: false, opener: $('#openAiOpenImageBots') });
+    resetManagedModalScroll('openAiImageBotsModal');
+    setOpenAiImageModalStatus('Loading...', 'pending');
+    const hasState = openAiImageState.chats.length || openAiImageState.bots.length;
+    if (hasState) {
+      renderOpenAiImageSettings();
+      resetManagedModalScroll('openAiImageBotsModal');
+      setOpenAiImageModalStatus('Refreshing...', 'pending');
+    }
+    loadOpenAiImageState().then(() => {
+      renderOpenAiImageSettings();
+      resetManagedModalScroll('openAiImageBotsModal');
+      setOpenAiImageModalStatus('');
+    }).catch((e) => {
+      setOpenAiImageModalStatus(e.message || 'Could not load OpenAI image bots', 'error');
     });
   }
 
@@ -27614,6 +27990,7 @@
     bindAsyncActionButtons('aiBotsDeleteKey', null, 'Deleting...', deleteAiBotKey);
     $('#openAiOpenTextBots')?.addEventListener('click', openOpenAiTextBotsModal);
     $('#openAiOpenUniversalBots')?.addEventListener('click', openOpenAiUniversalBotsModal);
+    $('#openAiOpenImageBots')?.addEventListener('click', openOpenAiImageBotsModal);
     $('#openAiOpenConvertBots')?.addEventListener('click', () => openContextConvertBotsModal('openai'));
     $('#openAiOpenChatShotBots')?.addEventListener('click', () => openChatShotBotsModal('openai'));
     $('#aiBotCreateNew')?.addEventListener('click', () => {
@@ -27664,6 +28041,30 @@
     $('#openAiUniversalBotChatSelect')?.addEventListener('change', renderOpenAiUniversalChatBotSettings);
     $('#openAiUniversalBotChatBotSelect')?.addEventListener('change', renderOpenAiUniversalChatBotSettings);
     bindAsyncActionButtons('openAiUniversalBotChatSave', null, 'Saving...', saveOpenAiUniversalChatBotSettings);
+    $('#openAiImageBotCreateNew')?.addEventListener('click', () => {
+      fillOpenAiImageBotForm(null);
+      setOpenAiImageStatus('New OpenAI image bot: fill fields and save');
+    });
+    bindAsyncActionButtons(['openAiImageBotSave', 'openAiImageBotSaveBottom'], null, 'Saving...', saveOpenAiImageBot);
+    bindAsyncActionButtons('openAiImageBotDisable', null, 'Disabling...', disableOpenAiImageBot);
+    bindAsyncActionButtons('openAiImageBotTest', null, 'Testing...', testOpenAiImageBot);
+    bindAsyncActionButtons('openAiImageBotExportJson', null, 'Preparing...', exportOpenAiImageBotJson);
+    $('#openAiImageBotImportJson')?.addEventListener('click', () => $('#openAiImageBotImportFile')?.click());
+    $('#openAiImageBotImportFile')?.addEventListener('change', (event) => importOpenAiImageBotJsonFile(event.target.files?.[0]));
+    $('#openAiImageBotAvatarInput')?.addEventListener('change', (event) => uploadOpenAiImageBotAvatar(event.target.files?.[0]));
+    bindAsyncActionButtons('removeOpenAiImageBotAvatar', null, 'Removing...', removeOpenAiImageBotAvatar);
+    $('#openAiImageBotName')?.addEventListener('input', () => {
+      if (!currentOpenAiImageBot()?.avatar_url) renderOpenAiImageBotAvatar(currentOpenAiImageBot());
+    });
+    $('#openAiImageBotList')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.ai-bot-list-item');
+      if (!btn) return;
+      const bot = openAiImageState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
+      if (bot) fillOpenAiImageBotForm(bot);
+    });
+    $('#openAiImageBotChatSelect')?.addEventListener('change', renderOpenAiImageChatBotSettings);
+    $('#openAiImageBotChatBotSelect')?.addEventListener('change', renderOpenAiImageChatBotSettings);
+    bindAsyncActionButtons('openAiImageBotChatSave', null, 'Saving...', saveOpenAiImageChatBotSettings);
 
     // Yandex AI bot admin settings
     bindAsyncActionButtons('yandexAiSaveSettings', null, 'Saving...', saveYandexAiSettings);

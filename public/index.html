@@ -719,10 +719,11 @@
 
           <div class="ai-bot-panel">
             <h4>Bot settings</h4>
-            <div class="settings-hint">Open separate windows for OpenAI text bots, universal bots, and context convert bots.</div>
+            <div class="settings-hint">Open separate windows for OpenAI text bots, universal bots, image bots, and context convert bots.</div>
             <div class="provider-ai-nav-grid">
               <button id="openAiOpenTextBots" type="button" class="weather-action-btn">Open text bots</button>
               <button id="openAiOpenUniversalBots" type="button" class="weather-action-btn">Open universal bots</button>
+              <button id="openAiOpenImageBots" type="button" class="weather-action-btn">Open image bots</button>
               <button id="openAiOpenConvertBots" type="button" class="weather-action-btn">Open convert bots</button>
               <button id="openAiOpenChatShotBots" type="button" class="weather-action-btn">Open ChatShot bots</button>
             </div>
@@ -961,6 +962,93 @@
           </div>
 
           <div id="openAiUniversalStatus" class="ai-bot-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- OpenAI Image Bot Settings Modal -->
+  <div id="openAiImageBotsModal" class="modal hidden">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3>OpenAI Image Bots</h3>
+        <button class="modal-close">&#10005;</button>
+      </div>
+      <div class="modal-body">
+        <div id="openAiImageBotsBlock" class="ai-bot-settings-block">
+          <div class="ai-bot-panel">
+            <h4>Image bots</h4>
+            <div id="openAiImageBotList" class="ai-bot-list"></div>
+            <div class="ai-bot-actions">
+              <button id="openAiImageBotCreateNew" type="button" class="weather-action-btn">New image bot</button>
+              <button id="openAiImageBotSave" type="button" class="btn-primary">Save image bot</button>
+              <button id="openAiImageBotDisable" type="button" class="weather-action-btn">Disable</button>
+              <button id="openAiImageBotTest" type="button" class="weather-action-btn">Test</button>
+              <button id="openAiImageBotExportJson" type="button" class="weather-action-btn">Export JSON</button>
+              <button id="openAiImageBotImportJson" type="button" class="weather-action-btn">Import JSON</button>
+              <input id="openAiImageBotImportFile" class="hidden" type="file" accept="application/json,.json">
+            </div>
+            <div id="openAiImageBotEditorStatus" class="ai-bot-status admin-action-status"></div>
+            <div class="ai-bot-avatar-row">
+              <div class="avatar-upload-wrap ai-bot-avatar-wrap">
+                <div id="openAiImageBotAvatar" class="avatar-large"></div>
+                <label class="avatar-upload-label" id="openAiImageBotAvatarLabel" title="Change avatar">&#128247;
+                  <input type="file" id="openAiImageBotAvatarInput" accept=".jpg,.jpeg,.png,.webp" class="hidden">
+                </label>
+              </div>
+              <div class="ai-bot-avatar-copy">
+                <strong>Image bot avatar</strong>
+                <span>The image is stored separately from JSON settings.</span>
+                <button id="removeOpenAiImageBotAvatar" class="btn-text hidden" type="button">Remove avatar</button>
+              </div>
+            </div>
+            <div class="ai-bot-grid">
+              <label>Name<input id="openAiImageBotName" class="modal-input" value="OpenAI Images"></label>
+              <label>Mention<input id="openAiImageBotMention" class="modal-input" value="openai_image"></label>
+              <label>Image model<select id="openAiImageBotModel" class="modal-input"></select></label>
+              <label>Image size<select id="openAiImageBotImageSize" class="modal-input"></select></label>
+              <label>Image quality<select id="openAiImageBotImageQuality" class="modal-input"></select></label>
+              <label>Image background<select id="openAiImageBotImageBackground" class="modal-input"></select></label>
+              <label>Image output<select id="openAiImageBotImageOutputFormat" class="modal-input"></select></label>
+              <div class="ai-bot-toggle-label"><span>Enabled</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="openAiImageBotEnabled" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Generate images</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="openAiImageBotAllowImageGenerate" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-bot-toggle-label"><span>Edit attached/replied images</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="openAiImageBotAllowImageEdit" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="settings-hint">OpenAI image bots use simple mode and answer with one generated or edited image saved to local uploads.</div>
+            <div class="ai-bot-actions">
+              <button id="openAiImageBotSaveBottom" type="button" class="btn-primary">Save image bot</button>
+            </div>
+            <div id="openAiImageBotEditorStatusBottom" class="ai-bot-status admin-action-status"></div>
+            <div class="ai-bot-grid">
+              <label>Chat<select id="openAiImageBotChatSelect" class="modal-input"></select></label>
+              <label>Bot<select id="openAiImageBotChatBotSelect" class="modal-input"></select></label>
+              <div class="ai-bot-toggle-label"><span>Enabled in chat</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="openAiImageBotChatEnabled">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            <button id="openAiImageBotChatSave" type="button" class="btn-primary">Save for chat</button>
+            <div id="openAiImageBotChatStatus" class="ai-bot-status admin-action-status"></div>
+          </div>
+
+          <div id="openAiImageStatus" class="ai-bot-status"></div>
         </div>
       </div>
     </div>

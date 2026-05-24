@@ -38,6 +38,29 @@ function isUnsupportedParameterError(error, parameter) {
   return text.includes('unsupported parameter') && text.includes(needle);
 }
 
+function isGptImageModel(model) {
+  const value = String(model || '').trim().toLowerCase();
+  return value.startsWith('gpt-image') || value.startsWith('chatgpt-image');
+}
+
+function normalizeImageResponseResult(response, fallbackModel = '') {
+  const image = Array.isArray(response?.data) ? response.data[0] : null;
+  if (!image) {
+    return {
+      model: response?.model || fallbackModel || '',
+      revisedPrompt: response?.revised_prompt || '',
+      b64Json: '',
+      url: '',
+    };
+  }
+  return {
+    model: response?.model || fallbackModel || '',
+    revisedPrompt: image.revised_prompt || response?.revised_prompt || '',
+    b64Json: image.b64_json || '',
+    url: image.url || '',
+  };
+}
+
 function extractResponseText(response) {
   if (!response) return '';
   if (typeof response.output_text === 'string') return response.output_text.trim();
@@ -177,6 +200,82 @@ async function generateJson({ apiKey, model, system, user, fallback = {}, maxOut
   return safeJsonParse(text, fallback);
 }
 
+async function generateImage({
+  apiKey,
+  model,
+  prompt,
+  n = 1,
+  size = '1024x1024',
+  quality = 'auto',
+  background = 'auto',
+  outputFormat = 'png',
+  responseFormat = 'b64_json',
+}) {
+  const client = createClient(apiKey);
+  const promptText = String(prompt || '').trim();
+  if (!promptText) throw new Error('Image prompt is empty');
+  const selectedModel = String(model || 'gpt-image-2').trim();
+  const payload = {
+    model: selectedModel,
+    prompt: promptText,
+    n: Math.max(1, Math.min(10, Math.round(Number(n) || 1))),
+  };
+  if (size) payload.size = String(size).trim();
+  if (quality) payload.quality = String(quality).trim();
+  if (background) payload.background = String(background).trim();
+  if (outputFormat) payload.output_format = String(outputFormat).trim();
+  if (!isGptImageModel(selectedModel) && responseFormat) {
+    payload.response_format = String(responseFormat).trim();
+  }
+  const response = await client.images.generate(payload);
+  const result = normalizeImageResponseResult(response, selectedModel);
+  if (!result.b64Json && !result.url) throw new Error('OpenAI image generation returned no image');
+  return result;
+}
+
+async function editImage({
+  apiKey,
+  model,
+  prompt,
+  imageBuffer,
+  imageName = 'source.png',
+  mimeType = 'image/png',
+  n = 1,
+  size = '1024x1024',
+  quality = 'auto',
+  background = 'auto',
+  outputFormat = 'png',
+  responseFormat = 'b64_json',
+}) {
+  const client = createClient(apiKey);
+  const promptText = String(prompt || '').trim();
+  if (!promptText) throw new Error('Image edit prompt is empty');
+  if (!imageBuffer?.length) throw new Error('Image edit source is empty');
+  const selectedModel = String(model || 'gpt-image-2').trim();
+  const image = await OpenAI.toFile(
+    imageBuffer,
+    String(imageName || 'source.png').trim() || 'source.png',
+    { type: String(mimeType || 'image/png').trim() || 'image/png' }
+  );
+  const payload = {
+    model: selectedModel,
+    image,
+    prompt: promptText,
+    n: Math.max(1, Math.min(10, Math.round(Number(n) || 1))),
+  };
+  if (size) payload.size = String(size).trim();
+  if (quality) payload.quality = String(quality).trim();
+  if (background) payload.background = String(background).trim();
+  if (outputFormat) payload.output_format = String(outputFormat).trim();
+  if (!isGptImageModel(selectedModel) && responseFormat) {
+    payload.response_format = String(responseFormat).trim();
+  }
+  const response = await client.images.edit(payload);
+  const result = normalizeImageResponseResult(response, selectedModel);
+  if (!result.b64Json && !result.url) throw new Error('OpenAI image edit returned no image');
+  return result;
+}
+
 async function downloadContainerFile({ apiKey, containerId, fileId }) {
   const client = createClient(apiKey);
   const response = await client.containers.files.content.retrieve(fileId, { container_id: containerId });
@@ -196,5 +295,8 @@ module.exports = {
   collectImageGenerationCalls,
   generateText,
   generateJson,
+  generateImage,
+  editImage,
+  normalizeImageResponseResult,
   downloadContainerFile,
 };
