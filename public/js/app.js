@@ -1497,7 +1497,7 @@
     return Boolean(
       target instanceof Element
       && target.closest(
-        '#menuBtn, #settingsBtn, #searchBtn, #chatShotBtn, #chatSettingsActionBtn, #callStartBtn, #chatInfoBtn, #backBtn, #emojiBtn, #attachBtn, #mentionOpenBtn, #composerContextConvertBtn, #msgInput'
+        '#menuBtn, #settingsBtn, #searchBtn, #chatShotBtn, #chatSettingsActionBtn, #callStartBtn, #callVoiceStartBtn, #chatInfoBtn, #backBtn, #emojiBtn, #attachBtn, #mentionOpenBtn, #composerContextConvertBtn, #msgInput'
       )
     );
   }
@@ -1653,9 +1653,28 @@
     return chatSettingsActionBtn || chatInfoBtn || $('#chatSettingsActionBtn') || $('#chatInfoBtn');
   }
 
+  function moveFocusOutOfChatHeaderActions() {
+    if (!chatHeaderActions) return;
+    const active = document.activeElement;
+    if (!(active instanceof Element) || !chatHeaderActions.contains(active)) return;
+    const fallback = chatInfoBtn || $('#chatInfoBtn');
+    if (fallback && typeof fallback.focus === 'function' && !fallback.disabled && !fallback.hidden) {
+      try {
+        fallback.focus({ preventScroll: true });
+      } catch {
+        fallback.focus();
+      }
+    }
+    if (document.activeElement === active && typeof active.blur === 'function') {
+      active.blur();
+    }
+  }
+
   function syncChatHeaderActionsAccessibility() {
     if (!chatHeaderActions) return;
     const isOpen = Boolean(chatHeaderActionsOpen);
+    if (!isOpen) moveFocusOutOfChatHeaderActions();
+    chatHeaderActions.inert = !isOpen;
     chatHeaderActions.classList.toggle('is-open', isOpen);
     chatHeaderActions.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
     if (chatInfoBtn) {
@@ -16308,9 +16327,14 @@
     const chatShotIndicator = Number(chat.chatshot_enabled || 0) !== 0
       ? `<span class="chat-item-state-indicator chat-item-tool-indicator chat-item-chatshot-indicator" role="img" aria-label="${esc(t('ChatShot enabled'))}" title="${esc(t('ChatShot enabled'))}">&#128248;</span>`
       : '';
-    const callIndicatorLabel = t('Call in progress');
+    const activeCallMediaKind = String(activeCall?.media_kind || activeCall?.mediaKind || '').toLowerCase();
+    const activeCallRoomMode = String(activeCall?.room_mode || activeCall?.roomMode || '').toLowerCase();
+    const callIndicatorLabel = activeCallMediaKind === 'voice'
+      ? (activeCallRoomMode === 'room' ? t('Voice room active') : t('Voice call active'))
+      : t('Call in progress');
+    const callIndicatorIcon = activeCallMediaKind === 'voice' ? '&#9742;&#65039;' : '';
     const callIndicator = hasActiveCall
-      ? `<span class="chat-item-call-chip" aria-label="${esc(callIndicatorLabel)}" title="${esc(callIndicatorLabel)}"><span class="chat-item-call-dot" aria-hidden="true"></span>${esc(callIndicatorLabel)}</span>`
+      ? `<span class="chat-item-call-chip" aria-label="${esc(callIndicatorLabel)}" title="${esc(callIndicatorLabel)}"><span class="chat-item-call-dot" aria-hidden="true"></span>${callIndicatorIcon ? `<span class="chat-item-call-icon" aria-hidden="true">${callIndicatorIcon}</span>` : ''}<span class="chat-item-call-label">${esc(callIndicatorLabel)}</span></span>`
       : '';
 
     const nextHtml = `
@@ -17732,7 +17756,7 @@
         } else {
           chatStatus.classList.remove('online','offline');
           if (onlineCount === total && total > 0) {
-            chatStatus.innerHTML = `<span class="admin-user-status online"><span class="status-dot"></span>Все в сборе</span>`;
+            chatStatus.innerHTML = `<span class="admin-user-status online"><span class="status-dot"></span><span class="admin-user-status-label">Все в сборе</span></span>`;
             chatStatus.style.color = '';
           } else {
             chatStatus.textContent = `${onlineCount}/${total} online`;
@@ -19084,10 +19108,39 @@
     }
   }
 
+  function resolveCallMessageMediaKind(msg, ...sources) {
+    const fields = sources.map((source) => String(source?.media_kind || source?.mediaKind || '').toLowerCase());
+    if (fields.includes('voice')) return 'voice';
+    const texts = [
+      msg?.text,
+      ...sources.flatMap((source) => [source?.text, source?.title, source?.label]),
+    ].map((value) => String(value || '').toLowerCase());
+    if (sources.some((source) => String(source?.room_mode || source?.roomMode || '').toLowerCase() === 'room')) return 'voice';
+    if (texts.some((value) => /\bvoice\s+(call|room)\b/.test(value))) return 'voice';
+    return 'video';
+  }
+
+  function resolveCallMessageRoomMode(msg, ...sources) {
+    if (sources.some((source) => String(source?.room_mode || source?.roomMode || '').toLowerCase() === 'room')) return 'room';
+    if (String(msg?.text || '').toLowerCase().includes('voice room')) return 'room';
+    return 'ringing';
+  }
+
   function normalizeCallMessageData(msg) {
-    const rawCall = { ...(msg?.call_message || {}), ...(msg?.call || {}) };
+    const callMessage = msg?.call_message || {};
+    const call = msg?.call || {};
+    const rawCall = { ...callMessage, ...call };
     const id = Number(rawCall.id || rawCall.call_id || msg?.call_id || 0) || 0;
-    return { ...rawCall, id };
+    const mediaKind = resolveCallMessageMediaKind(msg, callMessage, call, rawCall);
+    const roomMode = resolveCallMessageRoomMode(msg, callMessage, call, rawCall);
+    return {
+      ...rawCall,
+      id,
+      media_kind: mediaKind,
+      mediaKind,
+      room_mode: roomMode,
+      roomMode,
+    };
   }
 
   function latestCallTranscriptRun(call) {
@@ -19462,14 +19515,20 @@
     const active = status === 'active' && call.can_join !== false;
     const duration = Number(call.duration_ms || 0);
     const notes = call.ai_notes || null;
+    const mediaKind = String(call.media_kind || call.mediaKind || '').toLowerCase() === 'voice' ? 'voice' : 'video';
+    const roomMode = String(call.room_mode || call.roomMode || '').toLowerCase() === 'room' ? 'room' : 'ringing';
+    const voice = mediaKind === 'voice';
+    const voiceRoom = voice && roomMode === 'room';
+    const typeLabel = voiceRoom ? t('Voice room') : (voice ? t('Audio call') : t('Video call'));
     const labels = {
-      active: t('Call started'),
-      ended: t('Call ended'),
-      missed: t('Call missed'),
-      declined: t('Call declined'),
-      failed: t('Call failed'),
+      active: voiceRoom ? t('Voice room active') : (voice ? t('Audio call started') : t('Video call started')),
+      ended: voiceRoom ? t('Voice room ended') : (voice ? t('Audio call ended') : t('Video call ended')),
+      missed: voice ? t('Audio call missed') : t('Video call missed'),
+      declined: voice ? t('Audio call declined') : t('Video call declined'),
+      failed: voice ? t('Audio call failed') : t('Video call failed'),
     };
     const meta = [];
+    pushCallMessageMeta(meta, voice ? '&#9742;&#65039;' : '&#128249;', typeLabel, 'kind');
     pushCallMessageMeta(meta, '&#128100;', call.started_by_name ? t('Started by {name}', { name: call.started_by_name }) : '', 'started');
     pushCallMessageMeta(meta, '&#9201;', duration > 0 ? t('Duration {duration}', { duration: formatDuration(duration / 1000) }) : '', 'duration');
     if (notes?.status === 'recording') pushCallMessageMeta(meta, '&#127908;', t('AI notes recording'), 'ai-recording');
@@ -19481,7 +19540,9 @@
     const recordingDurationMs = Number(recording?.duration_ms || duration || 0);
     const actions = [];
     if (active) {
-      actions.push(`<button type="button" class="call-message-action primary" data-call-card-join="${Number(call.id || 0)}">${esc(t('Join call'))}</button>`);
+      const alreadyInside = Boolean(window.BananzaCallHooks?.isCurrentCall?.(call.id));
+      const joinLabel = alreadyInside ? t('Open') : (voiceRoom ? t('Join voice room') : t('Join call'));
+      actions.push(`<button type="button" class="call-message-action primary" data-call-card-join="${Number(call.id || 0)}">${esc(joinLabel)}</button>`);
     }
     if (!active && Number(call.id || 0)) {
       const transcriptRun = latestCallTranscriptRun(call);
@@ -19521,10 +19582,12 @@
     const playbackHtml = recordingUrl ? `
       <audio class="call-recording-audio" preload="metadata" src="${esc(callRecordingPlaybackUrl(recordingUrl))}"></audio>
     ` : '';
+    const iconClass = voice ? 'call-message-icon-voice' : 'call-message-icon-video';
+    const cardIcon = voice ? '&#9742;&#65039;' : '&#128249;';
     return `
-      <div class="call-message-card call-recording-card${recordingUrl ? ' has-call-recording' : ''}" data-call-card="${Number(call.id || 0)}" data-call-recording-duration-ms="${Number(recordingDurationMs || 0)}">
+      <div class="call-message-card call-recording-card${recordingUrl ? ' has-call-recording' : ''}${voice ? ' is-voice-call-card' : ' is-video-call-card'}" data-call-card="${Number(call.id || 0)}" data-call-recording-duration-ms="${Number(recordingDurationMs || 0)}">
         ${playbackHtml}
-        <div class="call-message-icon" aria-hidden="true">☎</div>
+        <div class="call-message-icon ${iconClass}" aria-hidden="true">${cardIcon}</div>
         <div class="call-message-main">
           <div class="call-message-title">${esc(labels[status] || labels.active)}</div>
           <div class="call-message-meta">${renderCallMessageMeta(meta)}</div>
@@ -19734,7 +19797,19 @@
     }
     row.querySelector('[data-call-card-join]')?.addEventListener('click', (event) => {
       event.stopPropagation();
-      window.BananzaCallHooks?.joinCallFromMessage?.(call);
+      const button = event.currentTarget;
+      if (button) button.disabled = true;
+      Promise.resolve(window.BananzaCallHooks?.joinCallFromMessage?.(call))
+        .then(() => {
+          if (button && window.BananzaCallHooks?.isCurrentCall?.(call.id)) button.textContent = t('Open');
+        })
+        .catch((error) => {
+          console.warn('[calls] join from message failed:', error?.message || error);
+          showCenterToast(t('Could not join call'));
+        })
+        .finally(() => {
+          if (button) button.disabled = false;
+        });
     });
     row.querySelector('[data-call-card-transcript]')?.addEventListener('click', (event) => {
       event.stopPropagation();

@@ -19,7 +19,25 @@
 }
 
 .call-header-btn {
+  width: 34px;
+  height: 36px;
+  min-width: 34px;
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.chat-header .call-header-btn {
+  width: 34px;
+  height: 36px;
+  min-width: 34px;
+}
+
+.call-voice-header-btn {
+  color: inherit;
 }
 
 .call-header-btn.hidden,
@@ -29,6 +47,7 @@
 .call-surface.hidden,
 .call-admin-status.hidden,
 .call-control-btn.hidden,
+.call-device-list label.hidden,
 .call-prejoin-avatar.hidden,
 .call-prejoin video.hidden,
 .call-participants-panel.hidden {
@@ -228,6 +247,15 @@
   box-shadow: 0 24px 80px rgba(0, 0, 0, .42);
 }
 
+.call-prejoin.is-voice-call .call-prejoin-card {
+  width: min(460px, 100%);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.call-prejoin.is-voice-call .call-prejoin-preview {
+  display: none;
+}
+
 .call-prejoin-preview {
   position: relative;
   min-height: 360px;
@@ -398,6 +426,44 @@ html[data-visual-mode="rich"] .call-admin-status {
 
 .call-surface.is-behind-prejoin {
   pointer-events: none;
+}
+
+.call-surface.is-voice-call:not(.is-minimized) {
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.call-surface.is-voice-call:not(.is-minimized) .call-surface-card {
+  width: min(460px, calc(100vw - 32px));
+  height: auto;
+  max-height: calc(100dvh - 40px);
+  grid-template-rows: auto minmax(0, auto) auto;
+  border-radius: 14px;
+}
+
+.call-surface.is-voice-call:not(.is-minimized) .call-room-layout {
+  grid-template-columns: minmax(0, 1fr);
+  overflow: visible;
+  background: var(--call-bg-modal);
+}
+
+.call-surface.is-voice-call:not(.is-minimized) .call-grid {
+  min-height: 0;
+  max-height: min(42dvh, 360px);
+  overflow-y: auto;
+  background: var(--call-bg-modal);
+}
+
+.call-surface.is-voice-call:not(.is-minimized) .call-grid.is-voice-room-grid {
+  grid-template-columns: 1fr;
+}
+
+.call-surface.is-voice-call:not(.is-minimized) .call-participants-panel {
+  width: auto;
+  max-height: 260px;
+  border-left: 0;
+  border-top: 1px solid var(--call-border);
 }
 
 .call-surface.is-minimized {
@@ -797,6 +863,94 @@ html[data-visual-mode="rich"] .call-admin-status {
   max-width: calc(100% - 20px);
 }
 
+.call-grid.is-voice-room-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  grid-auto-rows: minmax(82px, auto);
+  align-content: start;
+  padding: 12px;
+}
+
+.call-voice-tile {
+  min-width: 0;
+  min-height: 82px;
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--call-border-soft);
+  border-radius: 8px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--call-bg-panel) 88%, transparent);
+  color: var(--text-primary);
+}
+
+.call-voice-tile.is-speaking {
+  border-color: color-mix(in srgb, var(--success, #57d68d) 58%, var(--call-border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--success, #57d68d) 16%, transparent);
+}
+
+.call-voice-avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: var(--accent);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.call-voice-avatar .avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.call-voice-main {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.call-voice-main strong,
+.call-voice-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.call-voice-main small,
+.call-voice-empty {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.call-voice-state {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  opacity: .55;
+}
+
+.call-voice-tile.is-connected .call-voice-state {
+  background: var(--success, #57d68d);
+  opacity: 1;
+}
+
+.call-voice-tile.is-muted .call-voice-state {
+  background: var(--danger);
+}
+
+.call-voice-empty {
+  padding: 20px;
+  border: 1px dashed var(--call-border-soft);
+  border-radius: 8px;
+  text-align: center;
+}
+
 .call-controls {
   justify-content: center;
   align-content: center;
@@ -1080,6 +1234,16 @@ html[data-visual-mode="rich"] .call-admin-status {
   background: color-mix(in srgb, var(--accent) 16%, var(--call-bg-panel));
   color: var(--accent);
   font-weight: 800;
+}
+
+.call-message-icon-voice {
+  background: color-mix(in srgb, var(--success, #57d68d) 15%, var(--call-bg-panel));
+  color: color-mix(in srgb, var(--success, #57d68d) 86%, var(--accent));
+}
+
+.call-message-icon-video {
+  background: color-mix(in srgb, var(--accent) 16%, var(--call-bg-panel));
+  color: var(--accent);
 }
 
 .call-message-main {
@@ -1603,6 +1767,10 @@ html[data-visual-mode="rich"] .call-admin-status {
     -webkit-overflow-scrolling: touch;
   }
 
+  .call-prejoin.is-voice-call .call-prejoin-card {
+    grid-template-rows: minmax(0, auto);
+  }
+
   .call-prejoin-preview {
     min-height: 150px;
     height: auto;
@@ -1640,6 +1808,12 @@ html[data-visual-mode="rich"] .call-admin-status {
     padding: env(safe-area-inset-top) 0 0;
   }
 
+  .call-surface.is-voice-call:not(.is-minimized) {
+    align-items: center;
+    justify-content: center;
+    padding: max(10px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom));
+  }
+
   .call-surface-card {
     width: 100%;
     height: calc(100dvh - env(safe-area-inset-top));
@@ -1648,6 +1822,14 @@ html[data-visual-mode="rich"] .call-admin-status {
     border-left: 0;
     border-right: 0;
     border-bottom: 0;
+  }
+
+  .call-surface.is-voice-call:not(.is-minimized) .call-surface-card {
+    width: min(100%, 430px);
+    height: auto;
+    max-height: calc(100dvh - max(20px, env(safe-area-inset-top) + env(safe-area-inset-bottom)));
+    border: 1px solid var(--call-border-soft);
+    border-radius: 16px;
   }
 
   .call-surface-head {
@@ -1678,6 +1860,10 @@ html[data-visual-mode="rich"] .call-admin-status {
   }
 
   .call-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .call-grid.is-voice-room-grid {
     grid-template-columns: 1fr;
   }
 

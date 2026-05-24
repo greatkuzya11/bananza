@@ -4107,6 +4107,7 @@ test('call recording card renders media controls and seeks without starting paus
   const metaItems = meta.querySelectorAll('.call-message-meta-item');
   assert.ok(metaItems.length >= 2);
   assert.equal(meta.textContent.includes(' / '), false);
+  assert.match(card.textContent, /Video call|Видеозвонок/);
   assert.ok(audio);
   assert.ok(play);
   assert.ok(hit);
@@ -4132,6 +4133,40 @@ test('call recording card renders media controls and seeks without starting paus
   assert.ok(Math.abs(Number(audio.currentTime || 0) - 12) < 0.2);
   assert.equal(mediaState.paused, true);
   assert.ok(Math.abs(getDasharrayFilledLength(fill) - 50) < 1);
+});
+
+test('voice call card keeps voice label even when call payload falls back to defaults', async (t) => {
+  const chat = createChatFixture(1, 'Chat A', { lastMessageId: 469 });
+  const message = createCallMessage(1, 469, {
+    text: 'Voice call',
+    call: {
+      started_by_name: 'Kuzya',
+      media_kind: '',
+      mediaKind: '',
+    },
+    call_message: {
+      media_kind: '',
+      mediaKind: '',
+    },
+  });
+  const dom = await openMediaPlaybackDom({
+    activeChat: chat,
+    chats: [chat],
+    chatMessagesByChatId: {
+      1: [message],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+
+  const card = document.querySelector('.msg-row[data-msg-id="469"] .call-recording-card');
+  assert.ok(card);
+  assert.ok(card.classList.contains('is-voice-call-card'));
+  assert.equal(card.querySelector('.call-message-icon-voice')?.textContent.trim(), String.fromCodePoint(0x260E, 0xFE0F));
+  assert.match(card.textContent, /Audio call|Аудиозвонок/);
+  assert.doesNotMatch(card.textContent, /Video call|Видеозвонок/);
 });
 
 test('call recording contour seek clears completed state and updates fill', async (t) => {

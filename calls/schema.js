@@ -30,6 +30,8 @@ function createCallSessionsTable(db) {
       duration_ms INTEGER DEFAULT NULL,
       message_id INTEGER DEFAULT NULL REFERENCES messages(id) ON DELETE SET NULL,
       ring_expires_at TEXT DEFAULT NULL,
+      media_kind TEXT NOT NULL DEFAULT 'video' CHECK(media_kind IN ('video','voice')),
+      room_mode TEXT NOT NULL DEFAULT 'ringing' CHECK(room_mode IN ('ringing','room')),
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -61,6 +63,8 @@ function migrateCallSessionsStatus(db) {
         started_at,
         ended_at,
         ring_expires_at,
+        media_kind,
+        room_mode,
         created_at,
         updated_at
       )
@@ -77,6 +81,8 @@ function migrateCallSessionsStatus(db) {
         started_at,
         ended_at,
         ring_expires_at,
+        'video',
+        'ringing',
         created_at,
         updated_at
       FROM call_sessions_legacy_status;
@@ -102,6 +108,8 @@ function initCallSchema(db) {
   addColumnIfMissing(db, 'call_sessions', 'ended_reason', 'ended_reason TEXT DEFAULT NULL');
   addColumnIfMissing(db, 'call_sessions', 'duration_ms', 'duration_ms INTEGER DEFAULT NULL');
   addColumnIfMissing(db, 'call_sessions', 'message_id', 'message_id INTEGER DEFAULT NULL REFERENCES messages(id) ON DELETE SET NULL');
+  addColumnIfMissing(db, 'call_sessions', 'media_kind', "media_kind TEXT NOT NULL DEFAULT 'video' CHECK(media_kind IN ('video','voice'))");
+  addColumnIfMissing(db, 'call_sessions', 'room_mode', "room_mode TEXT NOT NULL DEFAULT 'ringing' CHECK(room_mode IN ('ringing','room'))");
 
   db.exec(`
 
@@ -125,6 +133,8 @@ function initCallSchema(db) {
       ended_at TEXT DEFAULT NULL,
       ended_reason TEXT DEFAULT NULL,
       duration_ms INTEGER DEFAULT NULL,
+      media_kind TEXT NOT NULL DEFAULT 'video' CHECK(media_kind IN ('video','voice')),
+      room_mode TEXT NOT NULL DEFAULT 'ringing' CHECK(room_mode IN ('ringing','room')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -296,6 +306,9 @@ function initCallSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_call_artifact_runs_batch
       ON call_artifact_runs(batch_id, artifact_key);
   `);
+
+  addColumnIfMissing(db, 'call_messages', 'media_kind', "media_kind TEXT NOT NULL DEFAULT 'video' CHECK(media_kind IN ('video','voice'))");
+  addColumnIfMissing(db, 'call_messages', 'room_mode', "room_mode TEXT NOT NULL DEFAULT 'ringing' CHECK(room_mode IN ('ringing','room'))");
 
   addColumnIfMissing(db, 'call_recordings', 'scope', "scope TEXT NOT NULL DEFAULT 'participant'");
   db.exec(`

@@ -27,6 +27,25 @@ function installCallBridge(dom, state) {
       if (url === '/api/features') return state.features;
       if (url === '/api/calls/active') return { settings: state.features, calls: state.activeCalls || [] };
       if (url === `/api/chats/${state.chat.id}/calls/active`) return { call: state.chatCall || null };
+      if (url === `/api/chats/${state.chat.id}/calls` && opts.method === 'POST') {
+        state.startedCallPayload = opts.body || {};
+        const mediaKind = state.startedCallPayload.media_kind || 'video';
+        const roomMode = mediaKind === 'voice' && state.chat.type === 'group' ? 'room' : 'ringing';
+        state.chatCall = state.createdCall || {
+          id: 120,
+          chat_id: state.chat.id,
+          chat_name: state.chat.name,
+          media_kind: mediaKind,
+          room_mode: roomMode,
+          participant_count: 0,
+          started_by: state.user.id,
+          status: 'active',
+          participants: [
+            { user_id: state.user.id, display_name: state.user.display_name, username: 'alice', state: 'invited' },
+          ],
+        };
+        return { call: state.chatCall };
+      }
       if (url === `/api/calls/${state.chatCall?.id}/token`) {
         return { call: state.chatCall, livekit: { url: 'ws://livekit.test', token: 'test-token' } };
       }
@@ -39,6 +58,10 @@ function installCallBridge(dom, state) {
               : participant
           )),
         };
+        if (state.joinedResponseDropsCallKind) {
+          const { media_kind, mediaKind, room_mode, roomMode, ...rest } = state.chatCall;
+          return { call: rest };
+        }
         return { call: state.chatCall };
       }
       if (url === '/api/admin/call-settings' && !opts.method) return state.adminCallSettings;
@@ -247,18 +270,25 @@ test('CallFeature hides the header button until calls and LiveKit are enabled', 
 
   const { document, BananzaCallHooks } = dom.window;
   const btn = document.getElementById('callStartBtn');
+  const voiceBtn = document.getElementById('callVoiceStartBtn');
   assert.ok(btn);
+  assert.ok(voiceBtn);
+  assert.equal(btn.textContent, String.fromCodePoint(0x1F4F9));
+  assert.equal(voiceBtn.textContent, String.fromCodePoint(0x260E, 0xFE0F));
   assert.equal(btn.parentElement?.id, 'chatHeaderActions');
   assert.equal(btn.classList.contains('hidden'), true);
+  assert.equal(voiceBtn.classList.contains('hidden'), true);
 
   state.features = { ...state.features, calls_enabled: true, livekit_ready: true };
   BananzaCallHooks.handleWSMessage({ type: 'call_settings_updated', settings: state.features });
   BananzaCallHooks.onChatChanged();
   await waitForCondition(dom.window, () => !btn.classList.contains('hidden'));
+  assert.equal(voiceBtn.classList.contains('hidden'), false);
 
   state.features = { ...state.features, livekit_ready: false };
   BananzaCallHooks.handleWSMessage({ type: 'call_settings_updated', settings: state.features });
   assert.equal(btn.classList.contains('hidden'), true);
+  assert.equal(voiceBtn.classList.contains('hidden'), true);
 });
 
 test('CallFeature shows and declines incoming call overlay', async (t) => {
@@ -382,6 +412,103 @@ test('CallFeature joins and leaves a mocked LiveKit room', async (t) => {
   dom.window.document.getElementById('callLeaveBtn').click();
   await waitForCondition(dom.window, () => disconnected);
   assert.ok(state.requests.some((request) => request.url === '/api/calls/92/leave'));
+});
+
+test('CallFeature starts and joins a voice room without camera UI or publishing', async (t) => {
+  const state = defaultState({
+    user: { id: 1, display_name: 'Alice', is_admin: 1 },
+    chat: {
+      id: 51,
+      type: 'group',
+      name: 'Team room',
+      is_notes: 0,
+    },
+    features: {
+      calls_enabled: true,
+      livekit_ready: true,
+      allow_private_calls: true,
+      allow_group_calls: true,
+      ring_timeout_ms: 60000,
+      screen_share_enabled: true,
+      ringtone_enabled: true,
+      call_messages_enabled: true,
+      max_call_participants: 20,
+    },
+    joinedResponseDropsCallKind: true,
+  });
+  const dom = await bootCallFeature(state);
+  t.after(() => dom.window.close());
+
+  Object.defineProperty(dom.window.navigator, 'mediaDevices', {
+    configurable: true,
+    value: {
+      enumerateDevices: async () => [],
+      getUserMedia: async (constraints) => {
+        state.previewConstraints = constraints;
+        return { getTracks: () => [{ stop() {} }] };
+      },
+    },
+  });
+
+  let connected = false;
+  let cameraCalls = 0;
+  let micCalls = 0;
+  dom.window.LivekitClient = {
+    Room: class {
+      constructor() {
+        const audioPublications = new Map();
+        this.localParticipant = {
+          identity: 'user:1',
+          name: 'Alice',
+          audioTrackPublications: audioPublications,
+          videoTrackPublications: new Map(),
+          trackPublications: audioPublications,
+          setCameraEnabled: async () => {
+            cameraCalls += 1;
+          },
+          setMicrophoneEnabled: async (enabled) => {
+            micCalls += 1;
+            if (enabled) {
+              audioPublications.set('microphone', {
+                kind: 'audio',
+                source: 'microphone',
+                isMuted: false,
+                track: { kind: 'audio', source: 'microphone', mediaStreamTrack: { kind: 'audio', enabled: true, readyState: 'live' } },
+              });
+            } else {
+              audioPublications.clear();
+            }
+          },
+        };
+        this.remoteParticipants = new Map();
+      }
+
+      on() {}
+
+      async connect() {
+        connected = true;
+      }
+
+      disconnect() {}
+    },
+    RoomEvent: {},
+    Track: { Source: { Camera: 'camera', Microphone: 'microphone' } },
+  };
+
+  dom.window.document.getElementById('callVoiceStartBtn').click();
+  await waitForCondition(dom.window, () => state.startedCallPayload?.media_kind === 'voice');
+  await waitForCondition(dom.window, () => connected);
+  assert.equal(dom.window.document.getElementById('callPrejoin').classList.contains('hidden'), true);
+  assert.equal(state.previewConstraints, undefined);
+  assert.equal(dom.window.document.getElementById('callSurface').classList.contains('is-voice-call'), true);
+  assert.equal(dom.window.document.getElementById('callCameraBtn').classList.contains('hidden'), true);
+  assert.equal(dom.window.document.getElementById('callScreenBtn').classList.contains('hidden'), true);
+  assert.ok(dom.window.document.querySelector('.call-voice-tile'));
+  assert.equal(dom.window.document.querySelector('.call-tile'), null);
+
+  await waitForMs(dom.window, 3800);
+  assert.equal(micCalls >= 1, true);
+  assert.equal(cameraCalls, 0);
 });
 
 test('CallFeature adapts active call tiles to portrait pair geometry', async (t) => {

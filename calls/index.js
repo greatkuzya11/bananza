@@ -58,6 +58,20 @@ function normalizeId(value) {
   return Number.isInteger(id) && id > 0 ? id : 0;
 }
 
+function normalizeCallMediaKind(value) {
+  return String(value || '').trim().toLowerCase() === 'voice' ? 'voice' : 'video';
+}
+
+function normalizeCallRoomMode(value) {
+  return String(value || '').trim().toLowerCase() === 'room' ? 'room' : 'ringing';
+}
+
+function callMessageText(mediaKind, roomMode) {
+  if (mediaKind === 'voice' && roomMode === 'room') return 'Voice room';
+  if (mediaKind === 'voice') return 'Voice call';
+  return 'Video call';
+}
+
 function createCallFeature({
   app,
   db,
@@ -173,10 +187,12 @@ function createCallFeature({
       call_id,
       status,
       started_by,
+      media_kind,
+      room_mode,
       started_at,
       updated_at
     )
-    VALUES(?, ?, 'active', ?, datetime('now'), datetime('now'))
+    VALUES(?, ?, 'active', ?, ?, ?, datetime('now'), datetime('now'))
   `);
   const updateCallMessageStmt = db.prepare(`
     UPDATE call_messages
@@ -944,6 +960,10 @@ function createCallFeature({
       chat_name: row.chat_name || '',
       chat_type: row.chat_type || '',
       livekit_room_name: row.livekit_room_name,
+      media_kind: normalizeCallMediaKind(row.media_kind),
+      mediaKind: normalizeCallMediaKind(row.media_kind),
+      room_mode: normalizeCallRoomMode(row.room_mode),
+      roomMode: normalizeCallRoomMode(row.room_mode),
       status: row.status,
       message_id: row.message_id ? Number(row.message_id) : null,
       started_by: Number(row.started_by),
@@ -959,7 +979,7 @@ function createCallFeature({
       mixed_recording: mixedRecording,
       participant_count: participants.filter((item) => item.state === 'joined').length,
       can_join: isActive,
-      can_screen_share: Boolean(isActive && settings.screen_share_enabled),
+      can_screen_share: Boolean(isActive && normalizeCallMediaKind(row.media_kind) !== 'voice' && settings.screen_share_enabled),
     };
   }
 
@@ -1012,6 +1032,8 @@ function createCallFeature({
         message.call_message = {
           call_id: call.id,
           status: call.status,
+          media_kind: call.media_kind,
+          room_mode: call.room_mode,
           duration_ms: call.duration_ms,
           ended_reason: call.ended_reason,
           ai_notes: call.ai_notes || null,
@@ -1116,13 +1138,18 @@ function createCallFeature({
         updated_at=datetime('now')
       WHERE id=? AND status='active'
     `).run(status, endedBy || null, endedAt, reason || status, durationMs, callId);
+    const isRoomMode = normalizeCallRoomMode(row.room_mode) === 'room';
     db.prepare(`
       UPDATE call_participants
-      SET state=CASE WHEN state='joined' THEN 'left' WHEN state='invited' THEN 'missed' ELSE state END,
+      SET state=CASE
+          WHEN state='joined' THEN 'left'
+          WHEN state='invited' AND ?=0 THEN 'missed'
+          ELSE state
+        END,
         left_at=CASE WHEN state='joined' AND left_at IS NULL THEN datetime('now') ELSE left_at END,
         updated_at=datetime('now')
       WHERE call_id=?
-    `).run(callId);
+    `).run(isRoomMode ? 1 : 0, callId);
     if (aiNotesByCallStmt.get(callId)?.status === 'recording') {
       updateAiNotesStatusStmt.run('completed', 'idle', endedAt, '', callId);
       stopActiveRecordingsForCall(callId);
@@ -2104,8 +2131,11 @@ function createCallFeature({
   async function createTokenForCall(call, user) {
     const config = livekitConfig();
     const settings = getCallSettings(db);
-    const canPublishSources = [TrackSource.CAMERA, TrackSource.MICROPHONE];
-    if (settings.screen_share_enabled) {
+    const mediaKind = normalizeCallMediaKind(call?.media_kind || call?.mediaKind);
+    const canPublishSources = mediaKind === 'voice'
+      ? [TrackSource.MICROPHONE]
+      : [TrackSource.CAMERA, TrackSource.MICROPHONE];
+    if (mediaKind !== 'voice' && settings.screen_share_enabled) {
       canPublishSources.push(TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO);
     }
     const token = new AccessToken(config.apiKey, config.apiSecret, {
@@ -2153,11 +2183,11 @@ function createCallFeature({
     return null;
   }
 
-  const createCallTx = db.transaction(({ chat, members, user, roomName, ringExpiresAt, settings }) => {
+  const createCallTx = db.transaction(({ chat, members, user, roomName, ringExpiresAt, settings, mediaKind, roomMode }) => {
     const inserted = db.prepare(`
-      INSERT INTO call_sessions(chat_id, livekit_room_name, status, started_by, ring_expires_at)
-      VALUES(?, ?, 'active', ?, ?)
-    `).run(chat.id, roomName, user.id, ringExpiresAt);
+      INSERT INTO call_sessions(chat_id, livekit_room_name, status, started_by, ring_expires_at, media_kind, room_mode)
+      VALUES(?, ?, 'active', ?, ?, ?, ?)
+    `).run(chat.id, roomName, user.id, ringExpiresAt, mediaKind, roomMode);
     const callId = Number(inserted.lastInsertRowid);
     const finalRoomName = `bananza-call-${callId}`;
     db.prepare('UPDATE call_sessions SET livekit_room_name=?, updated_at=datetime(\'now\') WHERE id=?')
@@ -2174,9 +2204,9 @@ function createCallFeature({
       });
     let messageId = null;
     if (settings.call_messages_enabled) {
-      const message = insertMessageStmt.run(chat.id, user.id, 'Video call');
+      const message = insertMessageStmt.run(chat.id, user.id, callMessageText(mediaKind, roomMode));
       messageId = Number(message.lastInsertRowid);
-      insertCallMessageStmt.run(messageId, callId, user.id);
+      insertCallMessageStmt.run(messageId, callId, user.id, mediaKind, roomMode);
       db.prepare('UPDATE call_sessions SET message_id=?, updated_at=datetime(\'now\') WHERE id=?')
         .run(messageId, callId);
     }
@@ -2198,6 +2228,7 @@ function createCallFeature({
     `);
 
     activeCallsStmt.all().forEach((row) => {
+      if (normalizeCallRoomMode(row.room_mode) === 'room') return;
       const expiresAt = parseTimeMs(row.ring_expires_at);
       if (!expiresAt || expiresAt > now) return;
       markMissed.run(row.id);
@@ -2355,7 +2386,9 @@ function createCallFeature({
     if (existing) return boolError(res, 409, 'Call already active', 'call_already_active');
 
     const settings = getCallSettings(db);
-    const ringExpiresAt = new Date(Date.now() + settings.ring_timeout_ms).toISOString();
+    const mediaKind = normalizeCallMediaKind(req.body?.media_kind || req.body?.mediaKind);
+    const roomMode = mediaKind === 'voice' && chat.type === 'group' ? 'room' : 'ringing';
+    const ringExpiresAt = roomMode === 'room' ? null : new Date(Date.now() + settings.ring_timeout_ms).toISOString();
     let callId;
     let messageId;
     try {
@@ -2366,6 +2399,8 @@ function createCallFeature({
         roomName: `bananza-call-pending-${randomUUID()}`,
         ringExpiresAt,
         settings,
+        mediaKind,
+        roomMode,
       });
       callId = created.callId;
       messageId = created.messageId;
@@ -2380,12 +2415,14 @@ function createCallFeature({
     if (messageId) broadcastCallMessageCreated(messageId);
     broadcastCall(chatId, { type: 'call_updated', call });
     const actorName = req.user.display_name || req.user.username || 'User';
-    call.participants
-      .filter((participant) => participant.state === 'invited')
-      .forEach((participant) => {
-        sendToUser(participant.user_id, { type: 'call_invite', call, actor: { id: req.user.id, name: actorName } });
-        notifyCallInvite?.(participant.user_id, { call, chat, actorName });
-      });
+    if (roomMode !== 'room') {
+      call.participants
+        .filter((participant) => participant.state === 'invited')
+        .forEach((participant) => {
+          sendToUser(participant.user_id, { type: 'call_invite', call, actor: { id: req.user.id, name: actorName } });
+          notifyCallInvite?.(participant.user_id, { call, chat, actorName });
+        });
+    }
     res.status(201).json({ call });
   });
 
