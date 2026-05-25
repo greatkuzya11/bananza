@@ -380,6 +380,40 @@ test('voice and video note endpoints work in isolated sandbox with mocked provid
   });
   assert.equal(voiceSettings.data.publicSettings.voice_notes_enabled, true);
 
+  await admin.request('/api/admin/ai-bots/settings', {
+    method: 'PUT',
+    json: {
+      enabled: true,
+      openai_api_key: 'sk-ai-test',
+      default_response_model: 'gpt-4o-mini',
+    },
+  });
+  const convertBot = await admin.request('/api/admin/openai-convert-bots', {
+    method: 'POST',
+    json: {
+      name: 'Voice transcript polish',
+      enabled: true,
+      available_in_all_chats: true,
+      response_model: 'gpt-4o-mini',
+      temperature: 0.3,
+      max_tokens: 1000,
+      transform_prompt: 'Fix grammar and return only the cleaned transcript.',
+    },
+  });
+  const contextVoiceSettings = await admin.request('/api/admin/voice-settings', {
+    method: 'PUT',
+    json: {
+      voice_notes_enabled: true,
+      auto_transcribe_on_send: true,
+      active_provider: 'openai',
+      context_bot_enabled: true,
+      context_bot_id: convertBot.data.bot.id,
+    },
+  });
+  assert.equal(contextVoiceSettings.data.settings.context_bot_enabled, true);
+  assert.equal(contextVoiceSettings.data.settings.context_bot_id, convertBot.data.bot.id);
+  assert.ok(contextVoiceSettings.data.contextConvertBots.some((bot) => bot.id === convertBot.data.bot.id));
+
   const beforeDictation = await admin.request(`/api/chats/${groupChat.id}/messages`, {
     searchParams: { meta: 1 },
   });
@@ -390,7 +424,7 @@ test('voice and video note endpoints work in isolated sandbox with mocked provid
     formData: dictationForm,
   });
   assert.equal(dictation.data.ok, true);
-  assert.equal(dictation.data.text, 'Mock OpenAI transcript');
+  assert.equal(dictation.data.text, 'Mock OpenAI response');
   assert.equal(dictation.data.provider, 'openai');
 
   const afterDictation = await admin.request(`/api/chats/${groupChat.id}/messages`, {
@@ -415,9 +449,21 @@ test('voice and video note endpoints work in isolated sandbox with mocked provid
     const message = response.data.messages.find((item) => item.id === voiceMessage.data.id);
     assert.ok(message);
     assert.equal(message.transcription_status, 'completed');
-    assert.equal(message.transcription_text, 'Mock OpenAI transcript');
+    assert.equal(message.transcription_text, 'Mock OpenAI response');
     return message;
   }, { timeoutMs: 15_000 });
+
+  await admin.request(`/api/admin/openai-convert-bots/${convertBot.data.bot.id}`, {
+    method: 'DELETE',
+  });
+  const fallbackDictationForm = new FormData();
+  fallbackDictationForm.append('file', new Blob(['wave'], { type: 'audio/wav' }), 'dictation-fallback.wav');
+  const fallbackDictation = await admin.request('/api/voice/dictation', {
+    method: 'POST',
+    formData: fallbackDictationForm,
+  });
+  assert.equal(fallbackDictation.data.ok, true);
+  assert.equal(fallbackDictation.data.text, 'Mock OpenAI transcript');
 
   const defaultVideoSettings = await admin.request('/api/admin/video-note-settings');
   assert.equal(defaultVideoSettings.data.settings.video_notes_enabled, true);

@@ -52,11 +52,15 @@ test('voice settings encrypt keys and expose admin/public views safely', () => {
     voice_notes_enabled: true,
     auto_transcribe_on_send: true,
     active_provider: 'grok',
+    context_bot_enabled: true,
+    context_bot_id: '42',
     openai_api_key: 'sk-openai-secret',
     grok_api_key: 'grok-secret-key',
   }, secret);
 
   assert.equal(saved.voice_notes_enabled, true);
+  assert.equal(saved.context_bot_enabled, true);
+  assert.equal(saved.context_bot_id, 42);
   assert.equal(saved.has_openai_key, true);
   assert.equal(saved.has_grok_key, true);
   assert.equal(getOpenAIKey(db, secret), 'sk-openai-secret');
@@ -70,6 +74,9 @@ test('voice settings encrypt keys and expose admin/public views safely', () => {
 
   const draft = buildDraftSettings(db, { queue_concurrency: 10 }, secret);
   assert.equal(draft.queue_concurrency, 4);
+  const draftWithoutBot = buildDraftSettings(db, { context_bot_enabled: 'false', context_bot_id: 'bad' }, secret);
+  assert.equal(draftWithoutBot.context_bot_enabled, false);
+  assert.equal(draftWithoutBot.context_bot_id, null);
 
   db.close();
 });

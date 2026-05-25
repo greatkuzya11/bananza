@@ -4395,6 +4395,53 @@ function createAiBotFeature({
       .map(serializeContextConvertBot);
   }
 
+  function serializeVoiceContextConvertBot(bot) {
+    return {
+      id: Number(bot?.id || 0),
+      name: bot?.name || '',
+      provider: bot?.provider || 'openai',
+      response_model: bot?.response_model || '',
+      enabled: Boolean(bot?.enabled),
+      provider_enabled: providerEnabled(bot?.provider),
+    };
+  }
+
+  function listVoiceContextConvertBots() {
+    return [
+      ...allOpenAiConvertBotsStmt.all(),
+      ...allYandexConvertBotsStmt.all(),
+      ...allDeepSeekConvertBotsStmt.all(),
+      ...allQwenConvertBotsStmt.all(),
+      ...allGrokConvertBotsStmt.all(),
+    ]
+      .map(sanitizeBot)
+      .filter((bot) => bot && isContextTransformBot(bot))
+      .map(serializeVoiceContextConvertBot);
+  }
+
+  async function transformTextWithContextBot({ botId, text }) {
+    const bot = sanitizeBot(botByIdStmt.get(Number(botId || 0)));
+    if (!bot || !isContextTransformBot(bot)) {
+      const error = new Error('Context convert bot not found');
+      error.status = 404;
+      throw error;
+    }
+    if (!bot.enabled) {
+      const error = new Error('Context convert bot is disabled');
+      error.status = 400;
+      throw error;
+    }
+    if (!providerEnabled(bot.provider)) {
+      const error = new Error('Provider is disabled');
+      error.status = 400;
+      throw error;
+    }
+    return {
+      bot,
+      text: await runContextTransform(bot, text),
+    };
+  }
+
   async function transformText({ chatId, botId, text }) {
     if (!isContextTransformEnabledForChat(chatId)) {
       const error = new Error('Context transform is disabled in this chat');
@@ -10103,6 +10150,8 @@ function createAiBotFeature({
     handleMessageDeleted,
     enqueueMemoryForMessage,
     transformText,
+    transformTextWithContextBot,
+    listVoiceContextConvertBots,
     getChatShotState,
     generateChatShotForChat,
     listCallArtifactBots,

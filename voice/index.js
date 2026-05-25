@@ -35,7 +35,7 @@ function normalizeClientId(value) {
   return id;
 }
 
-function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, uploadsDir, broadcastToChatAll, clients, secret, notifyMessageCreated, onMessageCreated, onMessageTextAvailable, getAdditionalPublicFeatures }) {
+function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, uploadsDir, broadcastToChatAll, clients, secret, notifyMessageCreated, onMessageCreated, onMessageTextAvailable, getAiBotFeature, getAdditionalPublicFeatures }) {
   const replyFallbackLabelSql = `
     CASE
       WHEN rvm.message_id IS NOT NULL THEN
@@ -170,6 +170,48 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
     });
   }
 
+  function getVoiceContextConvertBots() {
+    try {
+      const feature = typeof getAiBotFeature === 'function' ? getAiBotFeature() : null;
+      return feature?.listVoiceContextConvertBots?.() || [];
+    } catch (error) {
+      console.warn('[voice] context bot list failed:', error.message);
+      return [];
+    }
+  }
+
+  function getSelectableVoiceContextConvertBot(botId) {
+    const id = Number(botId || 0);
+    if (!id) return null;
+    return getVoiceContextConvertBots()
+      .find((bot) => Number(bot.id || 0) === id && bot.enabled !== false && bot.provider_enabled !== false) || null;
+  }
+
+  function validateVoiceContextBotSettings(settings) {
+    if (!settings.context_bot_enabled) return;
+    if (!getSelectableVoiceContextConvertBot(settings.context_bot_id)) {
+      const error = new Error('Select an enabled context convert bot');
+      error.status = 400;
+      throw error;
+    }
+  }
+
+  async function applyVoiceContextBotToText(text, settings) {
+    const rawText = String(text || '').trim();
+    if (!rawText || !settings?.context_bot_enabled) return rawText;
+    const botId = Number(settings.context_bot_id || 0);
+    if (!botId) return rawText;
+    try {
+      const feature = typeof getAiBotFeature === 'function' ? getAiBotFeature() : null;
+      const result = await feature?.transformTextWithContextBot?.({ botId, text: rawText });
+      const transformedText = String(result?.text || '').trim();
+      return transformedText || rawText;
+    } catch (error) {
+      console.warn('[voice] context bot transform failed:', error.message);
+      return rawText;
+    }
+  }
+
   async function processQueuedTranscription(messageId) {
     const voiceJob = getVoiceJobStmt.get(messageId);
     const transcriptionStoredName = voiceJob?.transcription_stored_name || voiceJob?.stored_name || '';
@@ -207,9 +249,10 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
         apiKey,
         grokApiKey,
       });
+      const finalText = await applyVoiceContextBotToText(result.text, settings);
       updateVoiceStatusStmt.run(
         'completed',
-        result.text,
+        finalText,
         result.provider,
         result.model,
         null,
@@ -264,6 +307,7 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
     return {
       settings: getAdminVoiceSettings(db),
       options: VOICE_SETTINGS_OPTIONS,
+      contextConvertBots: getVoiceContextConvertBots(),
     };
   }
 
@@ -279,11 +323,18 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
   });
 
   app.put('/api/admin/voice-settings', auth, adminOnly, (req, res) => {
+    const draftSettings = buildDraftSettings(db, req.body || {}, secret);
+    try {
+      validateVoiceContextBotSettings(draftSettings);
+    } catch (error) {
+      return res.status(error.status || 400).json({ error: error.message || 'Invalid voice settings' });
+    }
     const settings = setVoiceSettings(db, req.body || {}, secret);
     broadcastAll({ type: 'voice_settings_updated', settings: getPublicVoiceSettings(db) });
     res.json({
       settings,
       options: VOICE_SETTINGS_OPTIONS,
+      contextConvertBots: getVoiceContextConvertBots(),
       publicSettings: getPublicVoiceSettings(db),
     });
   });
@@ -399,9 +450,10 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
           apiKey: getOpenAIKey(db, secret),
           grokApiKey: getGrokKey(db, secret),
         });
+        const finalText = await applyVoiceContextBotToText(result.text, settings);
         res.json({
           ok: true,
-          text: result.text,
+          text: finalText,
           provider: result.provider,
           model: result.model,
         });

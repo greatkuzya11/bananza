@@ -34,6 +34,8 @@ const DEFAULT_VOICE_SETTINGS = {
   voice_note_ui_mode: 'compact',
   active_provider: 'vosk',
   fallback_to_openai: false,
+  context_bot_enabled: false,
+  context_bot_id: null,
   min_record_ms: 500,
   max_record_ms: 120000,
   transcription_timeout_ms: 60000,
@@ -82,11 +84,20 @@ function normalizeBoolean(value, fallback) {
   return fallback;
 }
 
+function normalizeNullableId(value) {
+  if (value == null || value === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) return null;
+  return Math.round(parsed);
+}
+
 function normalizeSettings(raw = {}) {
   const next = { ...DEFAULT_VOICE_SETTINGS, ...pickKnownSettings(raw) };
   next.voice_notes_enabled = normalizeBoolean(next.voice_notes_enabled, DEFAULT_VOICE_SETTINGS.voice_notes_enabled);
   next.auto_transcribe_on_send = normalizeBoolean(next.auto_transcribe_on_send, DEFAULT_VOICE_SETTINGS.auto_transcribe_on_send);
   next.fallback_to_openai = normalizeBoolean(next.fallback_to_openai, DEFAULT_VOICE_SETTINGS.fallback_to_openai);
+  next.context_bot_enabled = normalizeBoolean(next.context_bot_enabled, DEFAULT_VOICE_SETTINGS.context_bot_enabled);
+  next.context_bot_id = normalizeNullableId(next.context_bot_id);
   next.voice_note_ui_mode = String(next.voice_note_ui_mode || DEFAULT_VOICE_SETTINGS.voice_note_ui_mode).trim();
   if (!['compact', 'full'].includes(next.voice_note_ui_mode)) {
     next.voice_note_ui_mode = DEFAULT_VOICE_SETTINGS.voice_note_ui_mode;

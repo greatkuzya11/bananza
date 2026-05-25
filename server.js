@@ -401,6 +401,7 @@ const voiceFeature = createVoiceFeature({
   notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),
   onMessageCreated: (message) => handleChatListMessageCreated(message),
   onMessageTextAvailable: (message) => aiBotFeature?.handleMessageCreated(message),
+  getAiBotFeature: () => aiBotFeature,
   getAdditionalPublicFeatures: () => ({
     ...(callFeature?.getPublicSettings?.() || {}),
     ...(videoNoteFeature?.getPublicSettings?.() || {}),

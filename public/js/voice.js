@@ -18,6 +18,7 @@
     admin: {
       settings: null,
       options: null,
+      contextConvertBots: [],
       loading: false,
     },
     recorder: {
@@ -782,6 +783,18 @@
                   <span class="toggle-slider"></span>
                 </label>
               </div>
+              <div class="settings-item settings-toggle-item">
+                <span>${t('Use context bot')}</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="voiceContextBotToggle">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="field-group">
+                <label>${t('Context convert bot')}</label>
+                <select id="voiceContextBotSelect" class="modal-input"></select>
+                <div id="voiceContextBotHint" class="voice-form-hint">${t('Selected bot will rewrite the raw transcript before it appears in dictation, voice messages, or video note transcription.')}</div>
+              </div>
 
               <div class="field-group">
                 <label>${t('Voice message interface')}</label>
@@ -921,6 +934,7 @@
     document.getElementById('voiceVoskModel')?.addEventListener('change', syncProviderPanels);
     document.getElementById('voiceOpenAIModel')?.addEventListener('change', syncProviderPanels);
     document.getElementById('voiceGrokModel')?.addEventListener('change', syncProviderPanels);
+    document.getElementById('voiceContextBotToggle')?.addEventListener('change', syncVoiceContextBotSelect);
     document.getElementById('voiceReplaceKeyBtn')?.addEventListener('click', () => {
       const input = document.getElementById('voiceOpenAIKey');
       if (!input) return;
@@ -1153,6 +1167,7 @@
       const data = await getBridge().api('/api/admin/voice-settings');
       state.admin.settings = data.settings;
       state.admin.options = data.options;
+      state.admin.contextConvertBots = data.contextConvertBots || [];
       fillAdminForm();
       renderLastTest();
       setAdminStatus('', '');
@@ -1180,6 +1195,64 @@
     select.value = selectedValue || (normalizedItems[0] ? normalizedItems[0].value : '');
   }
 
+  function voiceContextProviderLabel(provider = 'openai') {
+    const value = String(provider || 'openai').toLowerCase();
+    if (value === 'deepseek') return 'DeepSeek';
+    if (value === 'qwen') return 'Qwen';
+    if (value === 'yandex') return 'Yandex';
+    if (value === 'grok') return 'Grok';
+    return 'OpenAI';
+  }
+
+  function canSelectVoiceContextBot(bot) {
+    return Boolean(bot && bot.enabled !== false && bot.provider_enabled !== false);
+  }
+
+  function voiceContextBotLabel(bot) {
+    const model = bot?.response_model ? ` / ${bot.response_model}` : '';
+    return `${bot?.name || t('Unnamed bot')} (${voiceContextProviderLabel(bot?.provider)}${model})`;
+  }
+
+  function fillVoiceContextBotSelect(selectedValue) {
+    const select = document.getElementById('voiceContextBotSelect');
+    if (!select) return;
+    const selectedId = Number(selectedValue || 0);
+    const bots = Array.isArray(state.admin.contextConvertBots) ? state.admin.contextConvertBots : [];
+    const selectableBots = bots.filter(canSelectVoiceContextBot);
+    const selectedUnavailable = selectedId
+      ? bots.find((bot) => Number(bot.id || 0) === selectedId && !canSelectVoiceContextBot(bot))
+      : null;
+    const options = [];
+    if (selectedUnavailable) {
+      options.push(`<option value="${Number(selectedUnavailable.id)}" disabled>${escapeHtml(`${voiceContextBotLabel(selectedUnavailable)} - ${t('Unavailable')}`)}</option>`);
+    }
+    options.push(...selectableBots.map((bot) => (
+      `<option value="${Number(bot.id || 0)}">${escapeHtml(voiceContextBotLabel(bot))}</option>`
+    )));
+    if (!options.length) {
+      select.innerHTML = `<option value="">${escapeHtml(t('No context convert bots available'))}</option>`;
+      select.value = '';
+      return;
+    }
+    select.innerHTML = options.join('');
+    select.value = selectedId ? String(selectedId) : String(selectableBots[0]?.id || '');
+  }
+
+  function syncVoiceContextBotSelect() {
+    const toggle = document.getElementById('voiceContextBotToggle');
+    const select = document.getElementById('voiceContextBotSelect');
+    const hint = document.getElementById('voiceContextBotHint');
+    if (!select) return;
+    const hasSelectableBots = (Array.isArray(state.admin.contextConvertBots) ? state.admin.contextConvertBots : [])
+      .some(canSelectVoiceContextBot);
+    select.disabled = !toggle?.checked || !hasSelectableBots;
+    if (hint) {
+      hint.textContent = hasSelectableBots
+        ? t('Selected bot will rewrite the raw transcript before it appears in dictation, voice messages, or video note transcription.')
+        : t('No context convert bots available');
+    }
+  }
+
   function fillAdminForm() {
     const settings = state.admin.settings;
     const options = state.admin.options;
@@ -1188,6 +1261,8 @@
     document.getElementById('voiceEnabledToggle').checked = Boolean(settings.voice_notes_enabled);
     document.getElementById('voiceAutoTranscribeToggle').checked = Boolean(settings.auto_transcribe_on_send);
     document.getElementById('voiceFallbackToggle').checked = Boolean(settings.fallback_to_openai);
+    document.getElementById('voiceContextBotToggle').checked = Boolean(settings.context_bot_enabled);
+    fillVoiceContextBotSelect(settings.context_bot_id);
     fillSelect('voiceNoteUiMode', options.ui_modes || [
       { value: 'compact', label: t('Compact') },
       { value: 'full', label: t('Full') },
@@ -1223,6 +1298,7 @@
       : t('Key not saved');
     document.getElementById('voiceDeleteGrokKeyBtn').classList.toggle('hidden', !settings.has_grok_key);
     syncProviderPanels();
+    syncVoiceContextBotSelect();
   }
 
   function syncProviderPanels() {
@@ -1265,6 +1341,8 @@
       voice_notes_enabled: document.getElementById('voiceEnabledToggle')?.checked || false,
       auto_transcribe_on_send: document.getElementById('voiceAutoTranscribeToggle')?.checked || false,
       fallback_to_openai: document.getElementById('voiceFallbackToggle')?.checked || false,
+      context_bot_enabled: document.getElementById('voiceContextBotToggle')?.checked || false,
+      context_bot_id: Number(document.getElementById('voiceContextBotSelect')?.value || 0) || null,
       voice_note_ui_mode: document.getElementById('voiceNoteUiMode')?.value || 'compact',
       active_provider: document.getElementById('voiceActiveProvider')?.value || 'vosk',
       min_record_ms: Number(document.getElementById('voiceMinRecordMs')?.value || 500),
@@ -1291,6 +1369,7 @@
       });
       state.admin.settings = data.settings;
       state.admin.options = data.options;
+      state.admin.contextConvertBots = data.contextConvertBots || state.admin.contextConvertBots;
       state.features = data.publicSettings || state.features;
       state.featuresLoaded = true;
       fillAdminForm();
