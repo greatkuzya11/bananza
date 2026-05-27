@@ -8,6 +8,7 @@ const path = require('node:path');
 const { initCallSchema } = require('../../calls/schema');
 const { createCallFeature } = require('../../calls');
 const { setCallSettings } = require('../../calls/settings');
+const { setVoiceSettings } = require('../../voice/settings');
 
 function createDb() {
   const db = new Database(':memory:');
@@ -130,6 +131,26 @@ function seedCompletedMixedRecording(db, callId, filePath, overrides = {}) {
   ).lastInsertRowid);
 }
 
+function insertTranscriptRun(db, callId, { provider = 'voice', strategy = 'hybrid', requestedBy = 1 } = {}) {
+  return Number(db.prepare(`
+    INSERT INTO call_transcript_runs(call_id, requested_by, provider, strategy, status)
+    VALUES(?, ?, ?, ?, 'queued')
+  `).run(callId, requestedBy, provider, strategy).lastInsertRowid);
+}
+
+function mockGrokTranscriptionFetch(text = 'raw call transcript') {
+  return async (input) => {
+    const url = new URL(String(input || ''));
+    if (url.hostname === 'api.x.ai' && url.pathname.endsWith('/stt')) {
+      return new Response(JSON.stringify({ text, model: 'speech-to-text' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    throw new Error(`Unexpected fetch: ${url.href}`);
+  };
+}
+
 test('call transcript segments prefer formatted Vosk result text over raw segment text', () => {
   const db = createDb();
   const feature = createFeature(db);
@@ -194,6 +215,164 @@ test('call transcript segments keep non-Vosk provider segment text', () => {
   } finally {
     feature.stopWorkers();
     db.close();
+  }
+});
+
+test('call transcript run inherits voice context bot when provider preset is voice', async () => {
+  const db = createDb();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bananza-call-context-'));
+  const originalFetch = global.fetch;
+  global.fetch = mockGrokTranscriptionFetch('raw call transcript');
+  const transformCalls = [];
+  const feature = createFeature(db, {
+    getAiBotFeature: () => ({
+      transformTextWithContextBot: async ({ botId, text }) => {
+        transformCalls.push({ botId, text });
+        return { text: 'polished call transcript' };
+      },
+    }),
+  });
+  try {
+    seedUsersAndChat(db, 'private');
+    setVoiceSettings(db, {
+      active_provider: 'grok',
+      context_bot_enabled: true,
+      context_bot_id: 42,
+      grok_api_key: 'grok-secret',
+    }, '');
+    setCallSettings(db, {
+      call_transcription_provider: 'voice',
+      call_transcription_strategy: 'hybrid',
+      call_transcription_max_chunk_mb: 100,
+    });
+    const { callId } = seedCall(db);
+    const filePath = path.join(root, 'mixed.ogg');
+    fs.writeFileSync(filePath, Buffer.from('audio'));
+    seedCompletedMixedRecording(db, callId, filePath, { duration_ms: 12000, size_bytes: 5 });
+    const runId = insertTranscriptRun(db, callId, { provider: 'voice', strategy: 'hybrid' });
+
+    await feature._private.processTranscriptRun({ runId });
+
+    const run = db.prepare('SELECT * FROM call_transcript_runs WHERE id=?').get(runId);
+    const segments = db.prepare('SELECT * FROM call_transcript_run_segments WHERE run_id=?').all(runId);
+    assert.equal(run.status, 'completed');
+    assert.deepEqual(transformCalls, [{ botId: 42, text: 'raw call transcript' }]);
+    assert.match(run.transcript_text, /polished call transcript/);
+    assert.doesNotMatch(run.transcript_text, /raw call transcript/);
+    assert.equal(segments.some((segment) => segment.text.includes('polished call transcript')), true);
+    assert.equal(segments.every((segment) => Number(segment.timing_approximate) !== 0), true);
+  } finally {
+    global.fetch = originalFetch;
+    feature.stopWorkers();
+    db.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('call transcript run does not use voice context bot for explicit providers', async () => {
+  const db = createDb();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bananza-call-context-'));
+  const originalFetch = global.fetch;
+  global.fetch = mockGrokTranscriptionFetch('explicit provider transcript');
+  const transformCalls = [];
+  const feature = createFeature(db, {
+    getAiBotFeature: () => ({
+      transformTextWithContextBot: async ({ botId, text }) => {
+        transformCalls.push({ botId, text });
+        return { text: 'should not appear' };
+      },
+    }),
+  });
+  try {
+    seedUsersAndChat(db, 'private');
+    setVoiceSettings(db, {
+      active_provider: 'grok',
+      context_bot_enabled: true,
+      context_bot_id: 42,
+      grok_api_key: 'grok-secret',
+    }, '');
+    setCallSettings(db, {
+      call_transcription_provider: 'grok',
+      call_transcription_strategy: 'hybrid',
+      call_transcription_max_chunk_mb: 100,
+    });
+    const { callId } = seedCall(db);
+    const filePath = path.join(root, 'mixed.ogg');
+    fs.writeFileSync(filePath, Buffer.from('audio'));
+    seedCompletedMixedRecording(db, callId, filePath, { duration_ms: 12000, size_bytes: 5 });
+    const runId = insertTranscriptRun(db, callId, { provider: 'grok', strategy: 'hybrid' });
+
+    await feature._private.processTranscriptRun({ runId });
+
+    const run = db.prepare('SELECT * FROM call_transcript_runs WHERE id=?').get(runId);
+    assert.equal(run.status, 'completed');
+    assert.deepEqual(transformCalls, []);
+    assert.match(run.transcript_text, /explicit provider transcript/);
+    assert.doesNotMatch(run.transcript_text, /should not appear/);
+  } finally {
+    global.fetch = originalFetch;
+    feature.stopWorkers();
+    db.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('call transcript run falls back to raw text when voice context bot fails or returns empty text', async (t) => {
+  const cases = [
+    {
+      name: 'throws',
+      transformTextWithContextBot: async () => {
+        throw new Error('context bot failed');
+      },
+    },
+    {
+      name: 'empty',
+      transformTextWithContextBot: async () => ({ text: '' }),
+    },
+  ];
+
+  for (const item of cases) {
+    await t.test(item.name, async () => {
+      const db = createDb();
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bananza-call-context-'));
+      const originalFetch = global.fetch;
+      global.fetch = mockGrokTranscriptionFetch(`raw fallback transcript ${item.name}`);
+      const feature = createFeature(db, {
+        getAiBotFeature: () => ({
+          transformTextWithContextBot: item.transformTextWithContextBot,
+        }),
+      });
+      try {
+        seedUsersAndChat(db, 'private');
+        setVoiceSettings(db, {
+          active_provider: 'grok',
+          context_bot_enabled: true,
+          context_bot_id: 42,
+          grok_api_key: 'grok-secret',
+        }, '');
+        setCallSettings(db, {
+          call_transcription_provider: 'voice',
+          call_transcription_strategy: 'hybrid',
+          call_transcription_max_chunk_mb: 100,
+        });
+        const { callId } = seedCall(db);
+        const filePath = path.join(root, 'mixed.ogg');
+        fs.writeFileSync(filePath, Buffer.from('audio'));
+        seedCompletedMixedRecording(db, callId, filePath, { duration_ms: 12000, size_bytes: 5 });
+        const runId = insertTranscriptRun(db, callId, { provider: 'voice', strategy: 'hybrid' });
+
+        await feature._private.processTranscriptRun({ runId });
+
+        const run = db.prepare('SELECT * FROM call_transcript_runs WHERE id=?').get(runId);
+        assert.equal(run.status, 'completed');
+        assert.match(run.transcript_text, new RegExp(`raw fallback transcript ${item.name}`));
+      } finally {
+        global.fetch = originalFetch;
+        feature.stopWorkers();
+        db.close();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
   }
 });
 

@@ -1500,6 +1500,27 @@ function createCallFeature({
       .map((segment) => ({ ...segment, timing_approximate: 1 }));
   }
 
+  async function applyInheritedVoiceContextBotToText(text, voiceSettings, { inheritVoiceContext = false } = {}) {
+    const rawText = String(text || '').trim();
+    if (!inheritVoiceContext || !rawText || !voiceSettings?.context_bot_enabled) {
+      return { text: rawText, transformed: false };
+    }
+    const botId = Number(voiceSettings.context_bot_id || 0);
+    if (!botId) return { text: rawText, transformed: false };
+    try {
+      const aiFeature = typeof getAiBotFeature === 'function' ? getAiBotFeature() : null;
+      const result = await aiFeature?.transformTextWithContextBot?.({ botId, text: rawText });
+      const transformedText = String(result?.text || '').trim();
+      if (!transformedText || transformedText === rawText) {
+        return { text: rawText, transformed: false };
+      }
+      return { text: transformedText, transformed: true };
+    } catch (error) {
+      console.warn('[calls] context bot transform failed:', error.message);
+      return { text: rawText, transformed: false };
+    }
+  }
+
   async function processRecordingTranscript({ recordingId }) {
     const recording = db.prepare('SELECT * FROM call_recordings WHERE id=?').get(recordingId);
     if (!recording || recording.status === 'completed') return;
@@ -1517,9 +1538,10 @@ function createCallFeature({
     updateRecordingEndedStmt.run('processing', recording.ended_at || new Date().toISOString(), recording.duration_ms || null, recording.size_bytes || null, '', '', recording.id);
     const callSettings = getCallSettings(db);
     const voiceSettings = getVoiceSettings(db);
+    const inheritVoiceContext = callSettings.call_transcription_provider === 'voice';
     const settings = {
       ...voiceSettings,
-      active_provider: callSettings.call_transcription_provider === 'voice'
+      active_provider: inheritVoiceContext
         ? voiceSettings.active_provider
         : callSettings.call_transcription_provider,
     };
@@ -1555,7 +1577,8 @@ function createCallFeature({
           apiKey: getVoiceOpenAIKey(db, secret),
           grokApiKey: getVoiceGrokKey(db, secret),
         });
-        const text = String(result.text || '').trim();
+        const contextResult = await applyInheritedVoiceContextBotToText(result.text, voiceSettings, { inheritVoiceContext });
+        const text = contextResult.text;
         provider = result.provider || provider;
         model = result.model || model;
         if (!text) continue;
@@ -1565,7 +1588,10 @@ function createCallFeature({
           Math.max(0, Number(getCallSettings(db).call_transcription_chunk_minutes || 12) * 60 * 1000),
           Math.max(0, Number(recording.duration_ms || 0) - Number(chunk.offsetMs || 0))
         );
-        transcriptSegmentsForResult({ ...result, provider }, startMs, chunkDuration).forEach((segment) => {
+        const segmentResult = contextResult.transformed
+          ? { ...result, text, segments: [] }
+          : { ...result, text };
+        transcriptSegmentsForResult({ ...segmentResult, provider }, startMs, chunkDuration).forEach((segment) => {
           insertTranscriptSegmentStmt.run(
             recording.call_id,
             recording.id,
@@ -1646,7 +1672,9 @@ function createCallFeature({
   async function transcribeRecordingToSegments({ recording, provider, diarize = false }) {
     const filepath = path.resolve(recording.file_path || '');
     if (!filepath || !fs.existsSync(filepath)) throw new Error(`Recording file not found: ${recording.file_path || recording.id}`);
-    const settings = settingsForProvider(provider, { diarize });
+    const requestedProvider = String(provider || 'voice').trim();
+    const inheritVoiceContext = requestedProvider === 'voice' && !diarize;
+    const settings = settingsForProvider(requestedProvider, { diarize });
     const callRow = callByIdStmt.get(recording.call_id);
     const callStart = parseTimeMs(callRow?.started_at);
     const recordingStart = parseTimeMs(recording.started_at) || callStart;
@@ -1703,7 +1731,8 @@ function createCallFeature({
         }
         throw error;
       }
-      const text = String(result.text || '').trim();
+      const contextResult = await applyInheritedVoiceContextBotToText(result.text, settings, { inheritVoiceContext });
+      const text = contextResult.text;
       if (text) texts.push(text);
       resolvedProvider = result.provider || resolvedProvider;
       model = result.model || model;
@@ -1712,7 +1741,10 @@ function createCallFeature({
         Math.max(0, Number(chunk.durationMs || 0) || Number(getCallSettings(db).call_transcription_chunk_minutes || 12) * 60 * 1000),
         Math.max(0, Number(recording.duration_ms || 0) - Number(chunk.offsetMs || 0))
       );
-      transcriptSegmentsForResult({ ...result, provider: resolvedProvider }, chunkStartMs, chunkDuration).forEach((segment) => {
+      const segmentResult = contextResult.transformed
+        ? { ...result, text, segments: [] }
+        : { ...result, text };
+      transcriptSegmentsForResult({ ...segmentResult, provider: resolvedProvider }, chunkStartMs, chunkDuration).forEach((segment) => {
         allSegments.push({
           recording_id: Number(recording.id),
           user_id: recording.scope === 'participant' ? speaker.userId : null,
@@ -3025,6 +3057,8 @@ function createCallFeature({
       endCall,
       attachCallMetadata,
       transcriptSegmentsForResult,
+      applyInheritedVoiceContextBotToText,
+      processTranscriptRun,
     },
   };
 }

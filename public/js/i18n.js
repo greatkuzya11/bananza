@@ -329,7 +329,7 @@
     'Fallback to OpenAI': 'Fallback на OpenAI',
     'Use context bot': 'Использовать контекстного бота',
     'Context convert bot': 'Бот преобразования контекста',
-    'Selected bot will rewrite the raw transcript before it appears in dictation, voice messages, or video note transcription.': 'Выбранный бот перепишет сырой текст расшифровки перед вставкой в диктовку, голосовое сообщение или расшифровку видео-заметки.',
+    'Selected bot will rewrite the raw transcript before it appears in dictation, voice messages, video note transcription, or call transcription that uses voice-message settings.': 'Выбранный бот перепишет сырой текст расшифровки перед вставкой в диктовку, голосовое сообщение, расшифровку видео-заметки или расшифровку звонка с настройками голосовых сообщений.',
     'No context convert bots available': 'Нет доступных ботов преобразования контекста',
     'Unnamed bot': 'Безымянный бот',
     'Unavailable': 'Недоступно',

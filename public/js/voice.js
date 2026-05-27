@@ -793,7 +793,7 @@
               <div class="field-group">
                 <label>${t('Context convert bot')}</label>
                 <select id="voiceContextBotSelect" class="modal-input"></select>
-                <div id="voiceContextBotHint" class="voice-form-hint">${t('Selected bot will rewrite the raw transcript before it appears in dictation, voice messages, or video note transcription.')}</div>
+                <div id="voiceContextBotHint" class="voice-form-hint">${t('Selected bot will rewrite the raw transcript before it appears in dictation, voice messages, video note transcription, or call transcription that uses voice-message settings.')}</div>
               </div>
 
               <div class="field-group">
@@ -1248,7 +1248,7 @@
     select.disabled = !toggle?.checked || !hasSelectableBots;
     if (hint) {
       hint.textContent = hasSelectableBots
-        ? t('Selected bot will rewrite the raw transcript before it appears in dictation, voice messages, or video note transcription.')
+        ? t('Selected bot will rewrite the raw transcript before it appears in dictation, voice messages, video note transcription, or call transcription that uses voice-message settings.')
         : t('No context convert bots available');
     }
   }
