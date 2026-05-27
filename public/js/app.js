@@ -21586,7 +21586,12 @@
         <button class="pending-file-remove" title="Remove all">✕</button>
       `;
     }
-    pendingFileEl.querySelector('.pending-file-remove').addEventListener('click', clearPendingFile);
+    bindTouchSafeButtonActivation(pendingFileEl.querySelector('.pending-file-remove'), ({ event, startKeyboardOpen }) => {
+      event?.stopPropagation?.();
+      const keepComposerFocus = Boolean(startKeyboardOpen || isMobileComposerKeyboardOpen());
+      clearPendingFile();
+      if (keepComposerFocus) focusComposerKeepKeyboard(true);
+    });
   }
 
   function clearPendingFile() {
@@ -23874,6 +23879,13 @@
     reactionPicker.querySelector('.reaction-picker-strip')?.addEventListener('scroll', () => {
       bumpReactionPickerIdleTimer();
     }, { passive: true });
+    const moreBtn = reactionPicker.querySelector('.reaction-more-button');
+    bindTouchSafeButtonActivation(moreBtn, ({ event, startKeyboardOpen }) => {
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+      const keepComposerFocus = Boolean(reactionPickerKeepKeyboard || startKeyboardOpen || isMobileComposerKeyboardOpen());
+      handleReactionMoreButton(moreBtn, { keepComposerFocus });
+    });
   }
 
   function getAdditionalReactionCategories() {
@@ -23932,6 +23944,7 @@
     });
     const grid = getReactionEmojiLiveGrid();
     if (grid) grid.innerHTML = renderReactionEmojiGridHtml(nextCategoryKey);
+    bindReactionEmojiPopoverControls();
     centerReactionEmojiActiveCategory({ behavior: centerBehavior });
     if (reposition) positionReactionEmojiPopover();
     return nextCategoryKey;
@@ -23979,6 +23992,37 @@
         positionReactionEmojiPopover();
         bumpReactionPickerIdleTimer();
       },
+    });
+    bindReactionEmojiPopoverControls();
+  }
+
+  function bindReactionEmojiPopoverControls() {
+    if (!reactionEmojiPopover) return;
+    reactionEmojiPopover.querySelectorAll('.reaction-emoji-tab').forEach((tab) => {
+      if (tab.dataset.reactionEmojiTouchBound === '1') return;
+      tab.dataset.reactionEmojiTouchBound = '1';
+      bindTouchSafeButtonActivation(tab, ({ event, startKeyboardOpen }) => {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        const keepComposerFocus = Boolean(reactionPickerKeepKeyboard || startKeyboardOpen || isMobileComposerKeyboardOpen());
+        if (keepComposerFocus) reactionPickerKeepKeyboard = true;
+        setReactionEmojiPopoverCategory(tab.dataset.category || reactionEmojiPopoverCategory);
+        bindReactionEmojiPopoverControls();
+        bumpReactionPickerIdleTimer();
+        if (keepComposerFocus) focusComposerKeepKeyboard(true);
+      });
+    });
+    reactionEmojiPopover.querySelectorAll('.reaction-emoji-item').forEach((item) => {
+      if (item.dataset.reactionEmojiTouchBound === '1') return;
+      item.dataset.reactionEmojiTouchBound = '1';
+      bindTouchSafeButtonActivation(item, ({ event, startKeyboardOpen }) => {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        if (!reactionPickerMsgId) return;
+        const keepComposerFocus = Boolean(reactionPickerKeepKeyboard || startKeyboardOpen || isMobileComposerKeyboardOpen());
+        if (keepComposerFocus) reactionPickerKeepKeyboard = true;
+        toggleReaction(reactionPickerMsgId, item.dataset.emoji, { keepComposerFocus });
+      });
     });
   }
 
@@ -24226,27 +24270,34 @@
     });
   }
 
-  function showReactionEmojiPopover() {
+  function showReactionEmojiPopover({ keepComposerFocus = false } = {}) {
     const msgId = reactionPickerMsgId || Number(floatingMessageActionsState?.msgId || activeMessageActionsRow?.dataset?.msgId || 0);
     if (!msgId) return;
     reactionPickerMsgId = msgId;
     if (!getAdditionalReactionCategories().length) return;
+    const shouldKeepComposerFocus = Boolean(keepComposerFocus);
+    if (shouldKeepComposerFocus) reactionPickerKeepKeyboard = true;
     if (isFloatingSurfaceVisible(reactionEmojiPopover)) {
       hideReactionEmojiPopover();
+      if (shouldKeepComposerFocus) focusComposerKeepKeyboard(true);
       return;
     }
     renderReactionEmojiPopoverContent();
     openFloatingSurface(reactionEmojiPopover);
     positionReactionEmojiPopover();
     bumpReactionPickerIdleTimer();
+    if (shouldKeepComposerFocus) focusComposerKeepKeyboard(true);
   }
 
-  function handleReactionMoreButton(btn) {
+  function handleReactionMoreButton(btn, { keepComposerFocus = false } = {}) {
     if (!btn) return;
-    btn.blur?.();
-    showReactionEmojiPopover();
+    const shouldKeepComposerFocus = Boolean(keepComposerFocus || reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen());
+    if (shouldKeepComposerFocus) reactionPickerKeepKeyboard = true;
+    else btn.blur?.();
+    showReactionEmojiPopover({ keepComposerFocus: shouldKeepComposerFocus });
     reactionMorePointerHandledUntil = Date.now() + 450;
     bumpReactionPickerIdleTimer();
+    if (shouldKeepComposerFocus) focusComposerKeepKeyboard(true);
   }
 
   function hideReactionUi(options = {}) {
@@ -27132,7 +27183,7 @@
       e.preventDefault();
       e.stopPropagation();
       markReactionInteraction(e);
-      handleReactionMoreButton(moreBtn);
+      handleReactionMoreButton(moreBtn, { keepComposerFocus: reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen() });
     });
     reactionPicker.addEventListener('touchstart', (e) => {
       markReactionInteraction(e);
@@ -27154,7 +27205,7 @@
       const keepComposerFocus = reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen();
       if (action === 'open-emoji-popover') {
         e.preventDefault();
-        if (Date.now() >= reactionMorePointerHandledUntil) handleReactionMoreButton(btn);
+        if (Date.now() >= reactionMorePointerHandledUntil) handleReactionMoreButton(btn, { keepComposerFocus });
         return;
       }
       if (action === 'context-convert') {
@@ -28813,9 +28864,12 @@
     document.addEventListener('pointerdown', dismissEmojiPickerOutsideGesture, { passive: true, capture: true });
 
     // Reply bar close
-    $('#replyBarClose').addEventListener('click', () => {
+    bindTouchSafeButtonActivation($('#replyBarClose'), ({ event, startKeyboardOpen }) => {
+      event?.stopPropagation?.();
+      const keepComposerFocus = Boolean(startKeyboardOpen || isMobileComposerKeyboardOpen());
       if (editTo) clearEdit({ clearInput: true });
       else clearReply();
+      if (keepComposerFocus) focusComposerKeepKeyboard(true);
     });
 
     // Search

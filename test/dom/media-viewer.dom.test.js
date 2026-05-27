@@ -3802,6 +3802,198 @@ test('mobile long-press reaction picker keeps the keyboard attached', async (t) 
   assert.equal(document.activeElement, msgInput);
 });
 
+test('mobile pending attachment removal keeps the keyboard attached', async (t) => {
+  const dom = await openSingleChatDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const fileInputGallery = document.getElementById('fileInputGallery');
+  const pendingFile = document.getElementById('pendingFile');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+  await openMobileKeyboard(dom, msgInput);
+
+  Object.defineProperty(fileInputGallery, 'files', {
+    configurable: true,
+    value: [new dom.window.File(['image'], 'photo.jpg', { type: 'image/jpeg' })],
+  });
+  fileInputGallery.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  await wait(dom, 100);
+
+  const removeBtn = pendingFile.querySelector('.pending-file-remove');
+  assert.ok(removeBtn, 'Expected pending attachment remove button');
+  assert.equal(pendingFile.classList.contains('hidden'), false);
+
+  const { touchStart, touchEnd } = dispatchTouchTap(dom.window, removeBtn);
+  await wait(dom, 100);
+
+  assert.equal(touchStart.defaultPrevented, true);
+  assert.equal(touchEnd.defaultPrevented, true);
+  assert.equal(BananzaAppBridge.getPendingFiles().length, 0);
+  assert.equal(pendingFile.classList.contains('hidden'), true);
+  assert.equal(document.activeElement, msgInput);
+  assert.equal(app.style.height, '420px');
+});
+
+test('mobile reply close keeps the keyboard attached', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const replyBar = document.getElementById('replyBar');
+  const replyBarClose = document.getElementById('replyBarClose');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+  BananzaAppBridge.__testing.setReply(91, 'Bob', 'Quoted text');
+  await openMobileKeyboard(dom, msgInput);
+
+  const { touchStart, touchEnd } = dispatchTouchTap(dom.window, replyBarClose);
+  await wait(dom, 100);
+
+  assert.equal(touchStart.defaultPrevented, true);
+  assert.equal(touchEnd.defaultPrevented, true);
+  assert.equal(BananzaAppBridge.getReplyTo(), null);
+  assert.equal(replyBar.classList.contains('hidden'), true);
+  assert.equal(document.activeElement, msgInput);
+  assert.equal(app.style.height, '420px');
+});
+
+test('mobile edit close keeps the keyboard attached', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const attachBtn = document.getElementById('attachBtn');
+  const replyBar = document.getElementById('replyBar');
+  const replyBarClose = document.getElementById('replyBarClose');
+  const row = appendMessageRow(dom, { id: 251, userId: 1, text: 'Editable close target' });
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+  BananzaAppBridge.__testing.setEditFromRow(row);
+  await openMobileKeyboard(dom, msgInput);
+
+  const { touchStart, touchEnd } = dispatchTouchTap(dom.window, replyBarClose);
+  await wait(dom, 100);
+
+  assert.equal(touchStart.defaultPrevented, true);
+  assert.equal(touchEnd.defaultPrevented, true);
+  assert.equal(BananzaAppBridge.getEditTo(), null);
+  assert.equal(replyBar.classList.contains('hidden'), true);
+  assert.equal(attachBtn.disabled, false);
+  assert.equal(msgInput.value, '');
+  assert.equal(document.activeElement, msgInput);
+  assert.equal(app.style.height, '420px');
+});
+
+test('mobile reaction more popover and tabs keep the keyboard attached', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const reactionPicker = document.getElementById('reactionPicker');
+  const reactionEmojiPopover = document.getElementById('reactionEmojiPopover');
+  const row = appendMessageRow(dom, { id: 261, userId: 2, text: 'Open more reactions' });
+  const bubble = row.querySelector('.msg-bubble');
+  const touch = createTouchPoint({ identifier: 75, clientX: 180, clientY: 360 });
+
+  await openMobileKeyboard(dom, msgInput);
+  bubble.dispatchEvent(createTouchEvent(dom.window, 'touchstart', {
+    touches: [touch],
+    changedTouches: [touch],
+  }));
+  await wait(dom, 560);
+
+  const moreBtn = reactionPicker.querySelector('.reaction-more-button');
+  assert.ok(moreBtn, 'Expected reaction more button');
+
+  const { touchStart, touchEnd } = dispatchTouchTap(dom.window, moreBtn);
+  await wait(dom, 100);
+
+  assert.equal(touchStart.defaultPrevented, true);
+  assert.equal(touchEnd.defaultPrevented, true);
+  assert.equal(reactionPicker.classList.contains('hidden'), false);
+  assert.equal(reactionEmojiPopover.classList.contains('hidden'), false);
+  assert.equal(document.activeElement, msgInput);
+  assert.equal(app.style.height, '420px');
+
+  const tabs = Array.from(reactionEmojiPopover.querySelectorAll('.reaction-emoji-tab'));
+  assert.ok(tabs.length > 1, 'Expected multiple reaction emoji tabs');
+  const targetTab = tabs[1];
+  dispatchTouchTap(dom.window, targetTab);
+  await wait(dom, 100);
+
+  assert.equal(targetTab.classList.contains('active'), true);
+  assert.equal(reactionEmojiPopover.classList.contains('hidden'), false);
+  assert.equal(document.activeElement, msgInput);
+  assert.equal(app.style.height, '420px');
+});
+
+test('mobile reaction emoji item keeps the keyboard attached after applying a reaction', async (t) => {
+  const reactionRequests = [];
+  const dom = await bootAppDom({
+    fetchHandler: async ({ dom, url, init }) => {
+      const match = url.pathname.match(/^\/api\/messages\/(\d+)\/reactions$/);
+      if (!match || String(init?.method || '').toUpperCase() !== 'POST') return null;
+      const body = JSON.parse(init.body || '{}');
+      reactionRequests.push({ messageId: Number(match[1]), emoji: body.emoji });
+      return createJsonResponse(dom, {
+        reactions: [{ emoji: body.emoji, user_id: 1 }],
+      });
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const reactionPicker = document.getElementById('reactionPicker');
+  const reactionEmojiPopover = document.getElementById('reactionEmojiPopover');
+  const row = appendMessageRow(dom, { id: 262, userId: 2, text: 'Pick more reaction' });
+  const bubble = row.querySelector('.msg-bubble');
+  const touch = createTouchPoint({ identifier: 76, clientX: 180, clientY: 360 });
+
+  await openMobileKeyboard(dom, msgInput);
+  bubble.dispatchEvent(createTouchEvent(dom.window, 'touchstart', {
+    touches: [touch],
+    changedTouches: [touch],
+  }));
+  await wait(dom, 560);
+  dispatchTouchTap(dom.window, reactionPicker.querySelector('.reaction-more-button'));
+  await wait(dom, 100);
+
+  const item = reactionEmojiPopover.querySelector('.reaction-emoji-item');
+  assert.ok(item, 'Expected an additional reaction emoji item');
+
+  const { touchStart, touchEnd } = dispatchTouchTap(dom.window, item);
+  await wait(dom, 360);
+
+  assert.equal(touchStart.defaultPrevented, true);
+  assert.equal(touchEnd.defaultPrevented, true);
+  assert.equal(reactionRequests.length, 1);
+  assert.equal(reactionRequests[0].messageId, 262);
+  assert.equal(reactionRequests[0].emoji, item.dataset.emoji);
+  assert.equal(reactionPicker.classList.contains('hidden'), true);
+  assert.equal(reactionEmojiPopover.classList.contains('hidden'), true);
+  assert.equal(document.activeElement, msgInput);
+  assert.equal(app.style.height, '420px');
+});
+
 test('reply and edit flows still focus the composer when text entry is requested', async (t) => {
   const dom = await bootAppDom();
   t.after(() => {
