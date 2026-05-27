@@ -467,6 +467,35 @@ function dispatchTouchTap(window, target, { emitClick = false } = {}) {
   return { touchStart, touchEnd };
 }
 
+function dispatchTouchDrag(window, target, {
+  identifier = 1,
+  startX = 320,
+  startY = 420,
+  moveX = 240,
+  moveY = startY,
+  endX = moveX,
+  endY = moveY,
+} = {}) {
+  const startTouch = createTouchPoint({ identifier, clientX: startX, clientY: startY });
+  const moveTouch = createTouchPoint({ identifier, clientX: moveX, clientY: moveY });
+  const endTouch = createTouchPoint({ identifier, clientX: endX, clientY: endY });
+  target.dispatchEvent(createTouchEvent(window, 'touchstart', {
+    touches: [startTouch],
+    changedTouches: [startTouch],
+  }));
+  const moveEvent = createTouchEvent(window, 'touchmove', {
+    touches: [moveTouch],
+    changedTouches: [moveTouch],
+  });
+  target.dispatchEvent(moveEvent);
+  const endEvent = createTouchEvent(window, 'touchend', {
+    touches: [],
+    changedTouches: [endTouch],
+  });
+  target.dispatchEvent(endEvent);
+  return { moveEvent, endEvent };
+}
+
 function appendMessageRow(dom, {
   id = 101,
   userId = 2,
@@ -3518,7 +3547,7 @@ test('fullscreen gallery video slides keep the server poster', async (t) => {
   assert.match(viewerVideo.getAttribute('poster') || '', /\/uploads\/clip-gallery\.mp4\/poster$/);
 });
 
-test('the first ordinary message tap only dismisses the mobile keyboard', async (t) => {
+test('ordinary message taps keep the mobile keyboard and open actions', async (t) => {
   const dom = await bootAppDom();
   t.after(() => {
     dom.window.close();
@@ -3529,25 +3558,42 @@ test('the first ordinary message tap only dismisses the mobile keyboard', async 
   const row = appendMessageRow(dom, { id: 201, userId: 2, text: 'Tap me once' });
   const bubble = row.querySelector('.msg-bubble');
 
-  msgInput.focus();
-  dom.visualViewportMock.setAndDispatch('resize', { height: 420 });
-  await wait(dom, 30);
+  await openMobileKeyboard(dom, msgInput);
   assert.equal(app.style.height, '420px');
 
-  bubble.dispatchEvent(createPrimaryPointerEvent(dom.window, 'pointerdown'));
-  dom.visualViewportMock.set({ height: 844 });
-  bubble.dispatchEvent(new dom.window.MouseEvent('click', {
-    bubbles: true,
-    cancelable: true,
-  }));
-  await waitForViewportRecovery(dom, 320);
+  const { pointerDown } = dispatchPointerTap(dom.window, bubble);
+  await wait(dom, 80);
 
-  assert.equal(row.classList.contains('actions-open'), false);
-  assert.equal(app.style.height, '844px');
-  assert.notEqual(document.activeElement, msgInput);
+  assert.equal(pointerDown.defaultPrevented, false);
+  assert.equal(row.classList.contains('actions-open'), true);
+  assert.equal(app.style.height, '420px');
+  assert.equal(document.activeElement, msgInput);
 });
 
-test('a background tap dismisses the mobile keyboard and redocks the composer', async (t) => {
+test('touch message taps clear long-press state while keeping the keyboard', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const reactionPicker = document.getElementById('reactionPicker');
+  const row = appendMessageRow(dom, { id: 203, userId: 2, text: 'Touch tap me' });
+  const bubble = row.querySelector('.msg-bubble');
+
+  await openMobileKeyboard(dom, msgInput);
+  const { touchEnd } = dispatchTouchTap(dom.window, bubble);
+  await wait(dom, 620);
+
+  assert.equal(touchEnd.defaultPrevented, true);
+  assert.equal(row.classList.contains('actions-open'), true);
+  assert.equal(reactionPicker.classList.contains('hidden'), true);
+  assert.equal(document.activeElement, msgInput);
+  assert.equal(app.style.height, '420px');
+});
+
+test('background taps keep the mobile keyboard and only clear floating message actions', async (t) => {
   const dom = await bootAppDom();
   t.after(() => {
     dom.window.close();
@@ -3556,22 +3602,204 @@ test('a background tap dismisses the mobile keyboard and redocks the composer', 
   const app = document.getElementById('app');
   const msgInput = document.getElementById('msgInput');
   const messagesEl = document.getElementById('messages');
+  const row = appendMessageRow(dom, { id: 202, userId: 2, text: 'Actions first' });
+  const bubble = row.querySelector('.msg-bubble');
 
-  msgInput.focus();
-  dom.visualViewportMock.setAndDispatch('resize', { height: 420 });
-  await wait(dom, 30);
+  await openMobileKeyboard(dom, msgInput);
   assert.equal(app.style.height, '420px');
 
-  messagesEl.dispatchEvent(createPrimaryPointerEvent(dom.window, 'pointerdown'));
-  dom.visualViewportMock.set({ height: 844 });
-  messagesEl.dispatchEvent(new dom.window.MouseEvent('click', {
-    bubbles: true,
-    cancelable: true,
-  }));
-  await waitForViewportRecovery(dom, 320);
+  dispatchPointerTap(dom.window, bubble);
+  await wait(dom, 80);
+  assert.equal(row.classList.contains('actions-open'), true);
 
-  assert.equal(app.style.height, '844px');
-  assert.notEqual(document.activeElement, msgInput);
+  const { pointerUp } = dispatchPointerTap(dom.window, messagesEl);
+  await wait(dom, 80);
+
+  assert.equal(pointerUp.defaultPrevented, true);
+  assert.equal(row.classList.contains('actions-open'), false);
+  assert.equal(app.style.height, '420px');
+  assert.equal(document.activeElement, msgInput);
+});
+
+test('mobile message swipe reply and edit keep the keyboard attached', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const replyBar = document.getElementById('replyBar');
+  const replyRow = appendMessageRow(dom, { id: 211, userId: 2, text: 'Reply by swipe' });
+  const editRow = appendMessageRow(dom, { id: 212, userId: 1, text: 'Edit by swipe' });
+
+  await openMobileKeyboard(dom, msgInput);
+  assert.equal(app.style.height, '420px');
+
+  dispatchTouchDrag(dom.window, replyRow.querySelector('.msg-bubble'), {
+    identifier: 71,
+    startX: 320,
+    startY: 360,
+    moveX: 250,
+    endX: 250,
+  });
+  await wait(dom, 80);
+
+  assert.equal(replyBar.classList.contains('hidden'), false);
+  assert.equal(document.activeElement, msgInput);
+  assert.equal(app.style.height, '420px');
+
+  dispatchTouchDrag(dom.window, editRow.querySelector('.msg-bubble'), {
+    identifier: 72,
+    startX: 90,
+    startY: 360,
+    moveX: 160,
+    endX: 160,
+  });
+  await wait(dom, 80);
+
+  assert.equal(msgInput.value, 'Edit by swipe');
+  assert.equal(document.activeElement, msgInput);
+  assert.equal(app.style.height, '420px');
+});
+
+test('vertical message drags do not trigger mobile reply or edit gestures', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const msgInput = document.getElementById('msgInput');
+  const replyBar = document.getElementById('replyBar');
+  const row = appendMessageRow(dom, { id: 221, userId: 1, text: 'Vertical scroll candidate' });
+
+  await openMobileKeyboard(dom, msgInput);
+  const { moveEvent } = dispatchTouchDrag(dom.window, row.querySelector('.msg-bubble'), {
+    identifier: 73,
+    startX: 180,
+    startY: 380,
+    moveX: 182,
+    moveY: 310,
+    endX: 182,
+    endY: 310,
+  });
+  await wait(dom, 80);
+
+  assert.equal(moveEvent.defaultPrevented, false);
+  assert.equal(replyBar.classList.contains('hidden'), true);
+  assert.equal(msgInput.value, '');
+});
+
+test('mobile message action buttons keep the keyboard for reply edit and react', async (t) => {
+  const dom = await openSingleChatDom({
+    chatMessagesByChatId: {
+      1: [createIncomingMessage(1, 231, { user_id: 1, display_name: 'Alice', text: 'Action editable' })],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const replyBar = document.getElementById('replyBar');
+  const reactionPicker = document.getElementById('reactionPicker');
+  const row = document.querySelector('.msg-row[data-msg-id="231"]');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+  await openMobileKeyboard(dom, msgInput);
+
+  dispatchPointerTap(dom.window, row.querySelector('.msg-reply-btn'));
+  await wait(dom, 80);
+
+  assert.equal(replyBar.classList.contains('hidden'), false);
+  assert.equal(document.activeElement, msgInput);
+  assert.equal(app.style.height, '420px');
+
+  dispatchPointerTap(dom.window, row.querySelector('.msg-edit-btn'));
+  await wait(dom, 80);
+
+  assert.equal(msgInput.value, 'Action editable');
+  assert.equal(document.activeElement, msgInput);
+  assert.equal(app.style.height, '420px');
+
+  dispatchPointerTap(dom.window, row.querySelector('.msg-react-btn'));
+  await wait(dom, 80);
+
+  assert.equal(reactionPicker.classList.contains('hidden'), false);
+  assert.equal(document.activeElement, msgInput);
+  assert.equal(app.style.height, '420px');
+});
+
+test('mobile message context convert action keeps the keyboard attached', async (t) => {
+  const dom = await openSingleChatDom({
+    chat: createChatFixture(1, 'Chat A', { context_transform_enabled: 1 }),
+    chatMessagesByChatId: {
+      1: [createIncomingMessage(1, 232, { user_id: 1, display_name: 'Alice', text: 'Transform this' })],
+    },
+    contextConvertAvailabilityByChatId: {
+      1: {
+        enabled: true,
+        bots: [{ id: 7, name: 'Banana Convert', provider: 'openai' }],
+      },
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const row = document.querySelector('.msg-row[data-msg-id="232"]');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 140);
+  await openMobileKeyboard(dom, msgInput);
+
+  const contextConvertBtn = row.querySelector('.msg-context-convert-btn');
+  assert.ok(contextConvertBtn, 'Expected a message context convert action');
+
+  dispatchPointerTap(dom.window, contextConvertBtn);
+  await wait(dom, 100);
+
+  assert.equal(document.getElementById('contextConvertPicker').classList.contains('hidden'), false);
+  assert.equal(document.activeElement, msgInput);
+  assert.equal(app.style.height, '420px');
+});
+
+test('mobile long-press reaction picker keeps the keyboard attached', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+  const reactionPicker = document.getElementById('reactionPicker');
+  const row = appendMessageRow(dom, { id: 241, userId: 2, text: 'Long press me' });
+  const bubble = row.querySelector('.msg-bubble');
+  const touch = createTouchPoint({ identifier: 74, clientX: 180, clientY: 360 });
+
+  await openMobileKeyboard(dom, msgInput);
+  bubble.dispatchEvent(createTouchEvent(dom.window, 'touchstart', {
+    touches: [touch],
+    changedTouches: [touch],
+  }));
+  await wait(dom, 560);
+
+  assert.equal(reactionPicker.classList.contains('hidden'), false);
+  assert.equal(document.activeElement, msgInput);
+  assert.equal(app.style.height, '420px');
+
+  bubble.dispatchEvent(createTouchEvent(dom.window, 'touchend', {
+    touches: [],
+    changedTouches: [touch],
+  }));
+  await wait(dom, 80);
+
+  assert.equal(row.classList.contains('actions-open'), false);
+  assert.equal(document.activeElement, msgInput);
 });
 
 test('reply and edit flows still focus the composer when text entry is requested', async (t) => {

@@ -679,6 +679,16 @@
     moved: false,
     target: null,
   };
+  let mobileMessageInteractionGuard = {
+    source: '',
+    pointerId: null,
+    touchId: null,
+    startX: 0,
+    startY: 0,
+    moved: false,
+    target: null,
+    keyboardOpenAtStart: false,
+  };
   let mobileComposerDismissClickSuppressUntil = 0;
   let scrollBottomFollowupClickSuppressUntil = 0;
 
@@ -1742,6 +1752,152 @@
     if (target.closest('.msg-row')) return false;
     if (target.closest('button, a, input, textarea, select, label, audio, video')) return false;
     return true;
+  }
+
+  function resetMobileMessageInteractionGuard(source = '') {
+    if (source && mobileMessageInteractionGuard.source && mobileMessageInteractionGuard.source !== source) return;
+    mobileMessageInteractionGuard = {
+      source: '',
+      pointerId: null,
+      touchId: null,
+      startX: 0,
+      startY: 0,
+      moved: false,
+      target: null,
+      keyboardOpenAtStart: false,
+    };
+  }
+
+  function isMobileMessageKeyboardPreserveTarget(target) {
+    return isMobileComposerDismissMessageTarget(target) || isMobileComposerDismissBackgroundTarget(target);
+  }
+
+  function shouldKeepComposerForMobileMessageInteraction() {
+    if (window.innerWidth > 768) return false;
+    return Boolean(mobileMessageInteractionGuard.keyboardOpenAtStart || isMobileComposerKeyboardOpen());
+  }
+
+  function startMobileMessageInteractionGuard({
+    source,
+    pointerId = null,
+    touchId = null,
+    clientX = 0,
+    clientY = 0,
+    target = null,
+  } = {}) {
+    if (!isMobileComposerSessionActive()) return false;
+    if (!isMobileMessageKeyboardPreserveTarget(target)) return false;
+    mobileMessageInteractionGuard = {
+      source,
+      pointerId,
+      touchId,
+      startX: Number(clientX || 0),
+      startY: Number(clientY || 0),
+      moved: false,
+      target: target instanceof Element ? target : null,
+      keyboardOpenAtStart: isMobileComposerKeyboardOpen(),
+    };
+    return mobileMessageInteractionGuard.keyboardOpenAtStart;
+  }
+
+  function updateMobileMessageInteractionGuard(clientX, clientY) {
+    const state = mobileMessageInteractionGuard;
+    if (!state.source) return;
+    const dx = Number(clientX || 0) - state.startX;
+    const dy = Number(clientY || 0) - state.startY;
+    if (Math.hypot(dx, dy) > 10) state.moved = true;
+  }
+
+  function finishMobileMessageInteractionGuard(event, source = '') {
+    const state = mobileMessageInteractionGuard;
+    if (!state.source || (source && state.source !== source)) return;
+    const { target, moved, keyboardOpenAtStart } = state;
+    resetMobileMessageInteractionGuard(source);
+    if (!keyboardOpenAtStart || moved || !target || !isMobileMessageKeyboardPreserveTarget(target)) return;
+    if (Date.now() < suppressNextMessageActionTapUntil || isFloatingSurfaceVisible(reactionPicker)) {
+      focusComposerKeepKeyboard(true);
+      return;
+    }
+
+    if (event?.cancelable) event.preventDefault();
+    suppressMobileComposerDismissClick();
+
+    const row = isMobileComposerDismissMessageTarget(target) ? target.closest('.msg-row') : null;
+    if (row) showMessageActions(row, { toggle: true, keepComposerFocus: true });
+    else hideFloatingMessageActions({ keepComposerState: true });
+    focusComposerKeepKeyboard(true);
+  }
+
+  function setupMobileMessageInteractionGuard() {
+    if (!(messagesEl instanceof HTMLElement) || messagesEl.__mobileMessageInteractionGuardBound) return;
+    messagesEl.__mobileMessageInteractionGuardBound = true;
+
+    messagesEl.addEventListener('pointerdown', (event) => {
+      if (!isTouchLikePointerEvent(event)) return;
+      if (typeof event.button === 'number' && event.button !== 0) return;
+      startMobileMessageInteractionGuard({
+        source: 'pointer',
+        pointerId: Number.isFinite(Number(event.pointerId)) ? Number(event.pointerId) : null,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        target: event.target,
+      });
+    }, { passive: true, capture: true });
+
+    messagesEl.addEventListener('pointermove', (event) => {
+      if (mobileMessageInteractionGuard.source !== 'pointer') return;
+      if (!isTouchLikePointerEvent(event)) return;
+      if (mobileMessageInteractionGuard.pointerId != null && Number(event.pointerId) !== mobileMessageInteractionGuard.pointerId) return;
+      updateMobileMessageInteractionGuard(event.clientX, event.clientY);
+    }, { passive: true, capture: true });
+
+    ['pointerup', 'pointercancel'].forEach((type) => {
+      messagesEl.addEventListener(type, (event) => {
+        if (mobileMessageInteractionGuard.source !== 'pointer') return;
+        if (mobileMessageInteractionGuard.pointerId != null && Number(event.pointerId) !== mobileMessageInteractionGuard.pointerId) return;
+        if (type === 'pointercancel') resetMobileMessageInteractionGuard('pointer');
+        else finishMobileMessageInteractionGuard(event, 'pointer');
+      }, { passive: false, capture: true });
+    });
+
+    messagesEl.addEventListener('touchstart', (event) => {
+      if (mobileMessageInteractionGuard.source === 'pointer') return;
+      const touch = event.changedTouches?.[0] || event.touches?.[0] || null;
+      if (!touch) return;
+      startMobileMessageInteractionGuard({
+        source: 'touch',
+        touchId: Number.isFinite(Number(touch.identifier)) ? Number(touch.identifier) : null,
+        clientX: touch.clientX,
+        clientY: touch.clientY,
+        target: event.target,
+      });
+    }, { passive: true, capture: true });
+
+    messagesEl.addEventListener('touchmove', (event) => {
+      if (mobileMessageInteractionGuard.source !== 'touch') return;
+      const touches = Array.from(event.touches || []);
+      const touch = mobileMessageInteractionGuard.touchId == null
+        ? touches[0]
+        : touches.find((item) => Number(item.identifier) === mobileMessageInteractionGuard.touchId);
+      if (!touch) return;
+      updateMobileMessageInteractionGuard(touch.clientX, touch.clientY);
+    }, { passive: true, capture: true });
+
+    ['touchend', 'touchcancel'].forEach((type) => {
+      messagesEl.addEventListener(type, (event) => {
+        if (mobileMessageInteractionGuard.source !== 'touch') return;
+        if (type === 'touchcancel') {
+          resetMobileMessageInteractionGuard('touch');
+          return;
+        }
+        if (mobileMessageInteractionGuard.touchId != null && (event.changedTouches?.length || 0) > 0) {
+          const matchesTouch = Array.from(event.changedTouches || [])
+            .some((touch) => Number(touch.identifier) === mobileMessageInteractionGuard.touchId);
+          if (!matchesTouch) return;
+        }
+        finishMobileMessageInteractionGuard(event, 'touch');
+      }, { passive: false, capture: true });
+    });
   }
 
   function shouldKeepEmojiPickerKeyboard() {
@@ -12288,6 +12444,7 @@
     hideChatContextMenu({ immediate: true });
     hideFloatingMessageActions({ immediate: true });
     hideReactionUi({ immediate: true, keepComposerState: reactionPickerKeepKeyboard });
+    const keyboardAttached = isMobileComposerKeyboardOpen();
     mediaContextMenuState = {
       messageId,
       row,
@@ -12296,6 +12453,7 @@
       pointerY: typeof y === 'number' && Number.isFinite(y) ? y : null,
       source,
       mode: source === 'long-press' && window.innerWidth <= 768 ? 'sheet' : 'popup',
+      keyboardAttached,
     };
     renderMediaContextMenu(context);
     mediaContextMenu.classList.toggle('is-sheet', mediaContextMenuState.mode === 'sheet');
@@ -12304,13 +12462,14 @@
     openFloatingSurface(mediaContextMenu);
     requestAnimationFrame(() => {
       positionMediaContextMenu();
-      mediaContextMenu.querySelector('.media-context-menu-button:not(:disabled)')?.focus({ preventScroll: true });
+      if (!keyboardAttached) mediaContextMenu.querySelector('.media-context-menu-button:not(:disabled)')?.focus({ preventScroll: true });
+      else focusComposerKeepKeyboard(true);
     });
   }
 
   async function handleMediaContextMenuAction(action, context) {
     if (!context || !action) return;
-    const keepComposerFocus = reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen();
+    const keepComposerFocus = Boolean(reactionPickerKeepKeyboard || mediaContextMenuState?.keyboardAttached || isMobileComposerKeyboardOpen());
     if (action === 'react') {
       hideMediaContextMenu();
       showReactionPicker(context.row, null, {
@@ -15869,10 +16028,11 @@
   function bindContextConvertMessageButton(button, row) {
     if (!button || !row || button.dataset.contextConvertBound === '1') return button;
     button.dataset.contextConvertBound = '1';
-    button.addEventListener('click', (e) => {
-      e.stopPropagation();
+    bindTouchSafeButtonActivation(button, ({ event, startKeyboardOpen }) => {
+      event?.stopPropagation?.();
+      const keepComposerFocus = Boolean(reactionPickerKeepKeyboard || startKeyboardOpen || isMobileComposerKeyboardOpen());
       openMessageContextConvertPicker(row, button, {
-        keepComposerFocus: reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen(),
+        keepComposerFocus,
       }).catch((error) => {
         console.warn('[context-convert] picker open failed:', error.message);
       });
@@ -19138,8 +19298,8 @@
 
     const replyBtn = row.querySelector('.msg-reply-btn');
     if (replyBtn) {
-      replyBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
+      bindTouchSafeButtonActivation(replyBtn, ({ event }) => {
+        event?.stopPropagation?.();
         setReplyFromRow(row);
       });
     }
@@ -19155,14 +19315,23 @@
 
     const editBtn = row.querySelector('.msg-edit-btn');
     if (editBtn) {
-      editBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
+      bindTouchSafeButtonActivation(editBtn, ({ event }) => {
+        event?.stopPropagation?.();
         setEditFromRow(row);
       });
     }
 
     const contextConvertBtn = row.querySelector('.msg-context-convert-btn');
     if (contextConvertBtn) bindContextConvertMessageButton(contextConvertBtn, row);
+
+    const reactBtn = row.querySelector('.msg-react-btn');
+    if (reactBtn) {
+      bindTouchSafeButtonActivation(reactBtn, ({ event, startKeyboardOpen }) => {
+        event?.stopPropagation?.();
+        const keepComposerFocus = Boolean(reactionPickerKeepKeyboard || startKeyboardOpen || isMobileComposerKeyboardOpen());
+        showReactionPicker(row, reactBtn, { source: 'actions', keepComposerFocus });
+      });
+    }
 
     const forwardBtn = row.querySelector('.msg-forward-btn');
     if (forwardBtn) {
@@ -21736,6 +21905,7 @@
         startedOnMedia,
         inputType,
         pointerId,
+        keyboardOpenAtStart: shouldKeepComposerForMobileMessageInteraction(),
       };
     };
     const updateSwipe = ({ clientX, clientY, event = null }) => {
@@ -21762,6 +21932,7 @@
         hideFloatingMessageActions({ immediate: true });
         ensureIndicator(swipe.row, kind);
         swipe.row.classList.add(`swipe-${kind}-active`);
+        if (swipe.keyboardOpenAtStart) focusComposerKeepKeyboard(true);
       }
 
       if (event?.cancelable) event.preventDefault();
@@ -21772,7 +21943,7 @@
     };
     const finishSwipe = (shouldApply) => {
       if (!swipe) return;
-      const { row, content, kind, locked, startedOnMedia } = swipe;
+      const { row, content, kind, locked, startedOnMedia, keyboardOpenAtStart } = swipe;
       row.classList.remove('swipe-reply-active', 'swipe-reply-ready', 'swipe-edit-active', 'swipe-edit-ready');
       if (content) content.style.transform = '';
       const indicator = row.querySelector('.swipe-message-indicator');
@@ -21783,6 +21954,7 @@
         if (kind === 'reply') setReplyFromRow(row);
         else if (kind === 'edit') setEditFromRow(row);
       }
+      if (keyboardOpenAtStart && locked) focusComposerKeepKeyboard(true);
       swipe = null;
     };
 
@@ -24111,27 +24283,30 @@
     hideActiveMessageActions();
   }
 
-  function showMessageActions(row, { toggle = false, preserveReactionUi = false } = {}) {
+  function showMessageActions(row, { toggle = false, preserveReactionUi = false, keepComposerFocus = false } = {}) {
     if (!row || row.dataset.outbox === '1') return false;
     row.classList.remove('actions-hover-suppressed');
     const msg = row.__messageData || {};
     if (msg.is_deleted || !getMessageActionsElement(row)) return false;
+    const shouldKeepComposerFocus = Boolean(keepComposerFocus);
     const sameRow = activeMessageActionsRow
       && String(activeMessageActionsRow.dataset.msgId || '') === String(row.dataset.msgId || '');
     if (sameRow && toggle) {
       const closingRow = activeMessageActionsRow;
-      hideFloatingMessageActions({ keepComposerState: reactionPickerKeepKeyboard });
+      hideFloatingMessageActions({ keepComposerState: reactionPickerKeepKeyboard || shouldKeepComposerFocus });
+      if (shouldKeepComposerFocus) focusComposerKeepKeyboard(true);
       closingRow?.classList.add('actions-hover-suppressed');
       closingRow?.addEventListener('pointerleave', () => {
         closingRow.classList.remove('actions-hover-suppressed');
       }, { once: true });
       return true;
     }
-    if (!preserveReactionUi) hideReactionUi({ immediate: true, keepComposerState: reactionPickerKeepKeyboard });
+    if (!preserveReactionUi) hideReactionUi({ immediate: true, keepComposerState: reactionPickerKeepKeyboard || shouldKeepComposerFocus });
     hideActiveMessageActions();
     activeMessageActionsRow = row;
     updateFloatingMessageActionsState(row);
     positionMessageActionSurfaces({ includeActions: true, includePicker: isFloatingSurfaceVisible(reactionPicker) });
+    if (shouldKeepComposerFocus) focusComposerKeepKeyboard(true);
     return true;
   }
 
@@ -26416,6 +26591,7 @@
     setupPasswordPreviewToggles();
     setupMessageSwipeGestures();
     setupMobileComposerGestureGuard();
+    setupMobileMessageInteractionGuard();
     wireAiBotToggleLabels();
     ensureSearchPanelReady();
     document.addEventListener('click', (e) => {
@@ -26429,15 +26605,6 @@
       e.preventDefault();
       e.stopImmediatePropagation();
     }, true);
-    const dismissMobileComposerMessageTap = (e) => {
-      if (!isMobileComposerSessionActive()) return;
-      if (e.type === 'pointerdown' && typeof e.button === 'number' && e.button !== 0) return;
-      if (!isMobileComposerDismissMessageTarget(e.target) && !isMobileComposerDismissBackgroundTarget(e.target)) return;
-      dismissMobileComposer({ consumeTap: true, forceRecovery: true, reason: 'message-or-background-tap' });
-      e.preventDefault();
-      e.stopImmediatePropagation?.();
-      e.stopPropagation();
-    };
     const dismissMentionPickerOutsideGesture = (e) => {
       const picker = $('#mentionPicker');
       if (!picker || picker.classList.contains('hidden')) return;
@@ -26460,8 +26627,6 @@
     document.addEventListener('touchstart', dismissMentionPickerOutsideGesture, { passive: false, capture: true });
     document.addEventListener('pointerdown', dismissContextConvertPickerOutsideGesture, { passive: false, capture: true });
     document.addEventListener('touchstart', dismissContextConvertPickerOutsideGesture, { passive: false, capture: true });
-    messagesEl.addEventListener('pointerdown', dismissMobileComposerMessageTap, { passive: false, capture: true });
-    messagesEl.addEventListener('touchstart', dismissMobileComposerMessageTap, { passive: false, capture: true });
 
     // Send message
     sendBtn.addEventListener('click', (e) => {
@@ -27103,7 +27268,7 @@
       const row = getMessageActionTapRow(e);
       if (row) {
         e.stopPropagation();
-        showMessageActions(row, { toggle: true });
+        showMessageActions(row, { toggle: true, keepComposerFocus: isMobileComposerKeyboardOpen() });
       }
     });
 
