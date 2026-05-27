@@ -459,6 +459,103 @@ a:hover { text-decoration: underline; }
   isolation: isolate;
 }
 
+html.is-screen-rotation-web-locked,
+html.is-screen-rotation-web-locked body {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+html.is-screen-rotation-web-locked body {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: var(--screen-rotation-lock-width, 100vh);
+  height: var(--screen-rotation-lock-height, 100vw);
+  max-width: var(--screen-rotation-lock-width, 100vh);
+  max-height: var(--screen-rotation-lock-height, 100vw);
+  transform: rotate(90deg) translateY(-100%);
+  transform-origin: top left;
+  background-color: var(--bg-dark);
+  background-image: var(--bg-app-gradient);
+}
+
+html.is-screen-rotation-web-locked #app {
+  width: var(--screen-rotation-lock-width, 100vh) !important;
+  height: var(--screen-rotation-lock-height, 100vw) !important;
+  max-width: var(--screen-rotation-lock-width, 100vh);
+  max-height: var(--screen-rotation-lock-height, 100vw);
+}
+
+html.is-screen-rotation-web-locked .resize-handle {
+  display: none;
+}
+
+html.is-screen-rotation-web-locked #sidebar.mobile-scene-hidden,
+html.is-screen-rotation-web-locked #chatArea.mobile-scene-hidden {
+  display: none !important;
+}
+
+html.is-screen-rotation-web-locked #sidebar {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  z-index: 20;
+  transition: transform .25s ease;
+}
+
+html.is-screen-rotation-web-locked[data-visual-mode="rich"] #sidebar {
+  border-right: none;
+}
+
+html.is-screen-rotation-web-locked #sidebar.sidebar-no-transition {
+  transition: none !important;
+}
+
+html.is-screen-rotation-web-locked #sidebar.sidebar-hidden {
+  transform: translate3d(-100%,0,0);
+}
+
+html.is-screen-rotation-web-locked .mobile-only {
+  display: flex !important;
+}
+
+html.is-screen-rotation-web-locked .input-area,
+html.is-screen-rotation-web-locked .input-area .input-row,
+html.is-screen-rotation-web-locked .input-area .composer-tool-stack,
+html.is-screen-rotation-web-locked .input-area .composer-tool-stack .icon-btn,
+html.is-screen-rotation-web-locked .input-area .composer-input-wrap,
+html.is-screen-rotation-web-locked .input-area #msgInput,
+html.is-screen-rotation-web-locked .input-area .mention-open-btn {
+  touch-action: none;
+}
+
+html.is-screen-rotation-web-locked .chat-header {
+  padding: 8px 6px;
+  min-height: 52px;
+  position: sticky;
+  top: 0;
+  z-index: 15;
+  background-color: var(--bg-sidebar);
+  background-image: var(--bg-panel-gradient);
+  border-bottom: 1px solid var(--border-light);
+}
+
+html.is-screen-rotation-web-locked .chat-header .icon-btn {
+  width: 40px;
+  height: 40px;
+  font-size: 20px;
+}
+
+html.is-screen-rotation-web-locked .chat-header-avatar {
+  width: 40px;
+  height: 40px;
+  font-size: 16px;
+}
+
 /* ── Sidebar ─────────────────────────────────────────────────────────────── */
 #sidebar {
   position: relative;

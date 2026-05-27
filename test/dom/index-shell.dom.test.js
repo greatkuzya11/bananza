@@ -17,7 +17,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
   const scripts = [...document.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
 
   assert.deepEqual(styles, [
-    '/css/style.css?v=20260523-keyboard-pan-lock',
+    '/css/style.css?v=20260527-screen-orientation-lock',
     '/css/calls.css?v=20260509-call-modal-surface',
     '/css/voice.css',
     '/css/video-notes.css',
@@ -182,4 +182,11 @@ test('style.css keeps New Chat modal folder tab height aligned with the other ta
 test('style.css opts mobile composer controls out of native browser panning', () => {
   assert.match(styleCss, /@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*\.input-area #msgInput,\s*\.input-area \.mention-open-btn\s*\{[^}]*touch-action\s*:\s*none\s*;/s);
   assert.match(styleCss, /html\.is-mobile-chat-keyboard-layout \.emoji-picker,[\s\S]*\.mention-picker-list\s*\{[^}]*touch-action\s*:\s*none\s*;/s);
+});
+
+test('style.css provides a forced portrait fallback for mobile landscape', () => {
+  assert.match(styleCss, /html\.is-screen-rotation-web-locked body\s*\{[^}]*transform\s*:\s*rotate\(90deg\) translateY\(-100%\)/s);
+  assert.match(styleCss, /html\.is-screen-rotation-web-locked #app\s*\{[^}]*--screen-rotation-lock-width/s);
+  assert.match(styleCss, /html\.is-screen-rotation-web-locked #sidebar\s*\{[^}]*position\s*:\s*fixed/s);
+  assert.match(styleCss, /html\.is-screen-rotation-web-locked \.mobile-only\s*\{[^}]*display\s*:\s*flex !important/s);
 });

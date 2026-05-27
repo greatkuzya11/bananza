@@ -247,3 +247,36 @@ test('screen rotation lock falls back from portrait-primary to portrait', async 
   assert.deepEqual(orientationMock.calls, ['portrait-primary', 'portrait']);
   assert.equal(dom.window.localStorage.getItem('screenRotationAllowed'), '0');
 });
+
+test('screen rotation setting applies web portrait fallback in mobile landscape', async () => {
+  let orientationMock;
+  const dom = await bootAppDom({
+    beforeLoad(nextDom) {
+      orientationMock = installScreenOrientationMock(nextDom);
+    },
+  });
+  const { window } = dom;
+
+  Object.defineProperty(window, 'innerWidth', {
+    configurable: true,
+    value: 844,
+  });
+  Object.defineProperty(window, 'innerHeight', {
+    configurable: true,
+    value: 390,
+  });
+
+  orientationMock.reset();
+  await window.BananzaAppBridge.__testing.setScreenRotationAllowed(false, { showStatus: false });
+
+  assert.equal(window.document.documentElement.classList.contains('is-screen-rotation-web-locked'), true);
+  assert.equal(window.document.documentElement.style.getPropertyValue('--screen-rotation-lock-width'), '390px');
+  assert.equal(window.document.documentElement.style.getPropertyValue('--screen-rotation-lock-height'), '844px');
+  assert.equal(window.BananzaAppBridge.isMobileLayout(), true);
+
+  await window.BananzaAppBridge.__testing.setScreenRotationAllowed(true, { showStatus: false });
+
+  assert.equal(window.document.documentElement.classList.contains('is-screen-rotation-web-locked'), false);
+  assert.equal(window.document.documentElement.style.getPropertyValue('--screen-rotation-lock-width'), '');
+  assert.equal(window.document.documentElement.style.getPropertyValue('--screen-rotation-lock-height'), '');
+});

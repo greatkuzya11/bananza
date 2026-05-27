@@ -1000,8 +1000,38 @@
     document.documentElement.classList.add('is-ios-webkit');
   }
 
+  function getRawViewportSize() {
+    const docEl = document?.documentElement;
+    return {
+      width: Math.max(0, window.innerWidth || window.visualViewport?.width || docEl?.clientWidth || 0),
+      height: Math.max(0, window.innerHeight || window.visualViewport?.height || docEl?.clientHeight || 0),
+    };
+  }
+
+  function isScreenRotationWebFallbackActive() {
+    return Boolean(document?.documentElement?.classList?.contains('is-screen-rotation-web-locked'));
+  }
+
+  function getEffectiveViewportSize() {
+    const size = getRawViewportSize();
+    if (!isScreenRotationWebFallbackActive()) return size;
+    return {
+      width: Math.min(size.width, size.height),
+      height: Math.max(size.width, size.height),
+    };
+  }
+
+  function getEffectiveViewportWidth() {
+    return getEffectiveViewportSize().width;
+  }
+
+  function getEffectiveViewportHeight() {
+    return getEffectiveViewportSize().height;
+  }
+
   function getMobileAppViewportHeight() {
     const vv = window.visualViewport;
+    if (isScreenRotationWebFallbackActive()) return getEffectiveViewportHeight();
     const viewportHeight = Math.max(0, vv?.height || window.innerHeight || 0);
     if (!isIosViewportFixTarget || !vv) return viewportHeight;
     return Math.max(0, viewportHeight + Math.max(0, vv.offsetTop || 0));
@@ -1013,11 +1043,11 @@
   }
 
   function isIosMobileViewportTarget() {
-    return Boolean(isIosViewportFixTarget && window.innerWidth <= 768);
+    return Boolean(isIosViewportFixTarget && isMobileViewportTarget());
   }
 
   function isMobileViewportTarget() {
-    return Boolean(window.innerWidth <= 768);
+    return Boolean(getEffectiveViewportWidth() <= 768);
   }
 
   function isIosWebkitMotionAllowed() {
@@ -1039,6 +1069,15 @@
   function getMobileVisualViewportMetrics() {
     const vv = window.visualViewport;
     const docEl = document?.documentElement;
+    if (isScreenRotationWebFallbackActive()) {
+      const size = getEffectiveViewportSize();
+      return {
+        top: 0,
+        height: size.height,
+        width: size.width,
+        bottom: size.height,
+      };
+    }
     const top = Math.max(0, vv?.offsetTop || 0);
     const height = Math.max(0, vv?.height || window.innerHeight || 0);
     const width = Math.max(0, vv?.width || window.innerWidth || docEl?.clientWidth || 0);
@@ -1057,9 +1096,13 @@
   function getMobileViewportBaselineHeight() {
     const vv = window.visualViewport;
     const docEl = document?.documentElement;
-    const viewportWidth = Math.max(0, vv?.width || window.innerWidth || docEl?.clientWidth || 0);
+    const effectiveSize = getEffectiveViewportSize();
+    const viewportWidth = isScreenRotationWebFallbackActive()
+      ? effectiveSize.width
+      : Math.max(0, vv?.width || window.innerWidth || docEl?.clientWidth || 0);
     const currentHeight = Math.max(
       0,
+      isScreenRotationWebFallbackActive() ? effectiveSize.height : 0,
       (vv?.height || 0) + Math.max(0, vv?.offsetTop || 0),
       window.innerHeight || 0,
       docEl?.clientHeight || 0
@@ -1203,7 +1246,7 @@
   }
 
   function isMobileComposerKeyboardOpen() {
-    if (window.innerWidth > 768) return false;
+    if (!isMobileViewportTarget()) return false;
     return isMobileKeyboardOpen();
   }
 
@@ -1219,7 +1262,7 @@
   }
 
   function restoreComposerFocusAfterMentionPicker(keyboardAttached = mentionPickerState.keyboardAttached) {
-    if (window.innerWidth > 768 || keyboardAttached) {
+    if (!isMobileViewportTarget() || keyboardAttached) {
       focusComposerKeepKeyboard(true);
       return true;
     }
@@ -1227,7 +1270,7 @@
   }
 
   function dismissMentionPickerAfterKeyboardClose() {
-    if (window.innerWidth > 768) return false;
+    if (!isMobileViewportTarget()) return false;
     if (!mentionPickerState.active || !mentionPickerState.keyboardAttached) return false;
     if (isMobileComposerKeyboardOpen()) return false;
     hideMentionPicker();
@@ -1241,7 +1284,7 @@
   }
 
   function isMobileComposerSessionActive() {
-    if (window.innerWidth > 768) return false;
+    if (!isMobileViewportTarget()) return false;
     return Boolean(document.activeElement === msgInput || iosComposerFocused || isMobileComposerKeyboardOpen());
   }
 
@@ -1480,7 +1523,7 @@
   }
 
   function preserveMobileComposerOnPointerDown(e, { requireOpenKeyboard = true } = {}) {
-    if (window.innerWidth > 768) return false;
+    if (!isMobileLayoutViewport()) return false;
     if (requireOpenKeyboard && !isMobileComposerKeyboardOpen()) return false;
     if (typeof e.button === 'number' && e.button !== 0) return false;
     e.preventDefault();
@@ -1488,7 +1531,7 @@
   }
 
   function dismissMobileComposer({ consumeTap = false, forceRecovery = true, reason = '', recoveryDelayMs = 240 } = {}) {
-    if (window.innerWidth > 768) return false;
+    if (!isMobileLayoutViewport()) return false;
     const hadComposerSession = isMobileComposerSessionActive();
     if (consumeTap) suppressMobileComposerDismissClick();
     if (document.activeElement === msgInput) {
@@ -1516,7 +1559,7 @@
 
   function getMobileComposerSafeReturnFocusEl(fallback = null) {
     const active = rememberActiveElement();
-    if (window.innerWidth <= 768 && active === msgInput) {
+    if (isMobileLayoutViewport() && active === msgInput) {
       return fallback instanceof HTMLElement ? fallback : null;
     }
     return active instanceof HTMLElement ? active : (fallback instanceof HTMLElement ? fallback : null);
@@ -1584,13 +1627,13 @@
         event,
         source,
         startKeyboardOpen,
-        keepKeyboardOpen: window.innerWidth > 768 || startKeyboardOpen || isMobileComposerKeyboardOpen(),
+        keepKeyboardOpen: !isMobileLayoutViewport() || startKeyboardOpen || isMobileComposerKeyboardOpen(),
         isTouchLike: source === 'pointer' || source === 'touch',
       };
     };
 
     const maybePreserveComposerOnGestureStart = (event, keyboardOpenAtStart) => {
-      if (window.innerWidth > 768 || !keyboardOpenAtStart || !event?.cancelable) return false;
+      if (!isMobileLayoutViewport() || !keyboardOpenAtStart || !event?.cancelable) return false;
       event.preventDefault();
       return true;
     };
@@ -1663,7 +1706,7 @@
     button.addEventListener('mousedown', (event) => {
       if (typeof event.button === 'number' && event.button !== 0) return;
       button.__mouseDownKeyboardWasOpen = isMobileComposerKeyboardOpen();
-      if (window.innerWidth <= 768 && button.__mouseDownKeyboardWasOpen && event.cancelable) {
+      if (isMobileLayoutViewport() && button.__mouseDownKeyboardWasOpen && event.cancelable) {
         event.preventDefault();
       }
     });
@@ -1778,7 +1821,7 @@
   }
 
   function shouldKeepComposerForMobileMessageInteraction() {
-    if (window.innerWidth > 768) return false;
+    if (!isMobileLayoutViewport()) return false;
     return Boolean(mobileMessageInteractionGuard.keyboardOpenAtStart || isMobileComposerKeyboardOpen());
   }
 
@@ -1921,7 +1964,7 @@
   }
 
   function stabilizeEmojiPickerKeyboardOnOpen(keepKeyboardOpen = emojiPickerKeyboardAttached) {
-    if (window.innerWidth > 768 || !keepKeyboardOpen) return false;
+    if (!isMobileLayoutViewport() || !keepKeyboardOpen) return false;
     clearEmojiPickerKeyboardOpenStabilizer();
     const apply = () => {
       if (!emojiPickerOpen || !shouldKeepEmojiPickerKeyboard()) return false;
@@ -2013,7 +2056,7 @@
       settingsModal,
       chatView,
     }),
-    isMobileLayout: () => window.innerWidth <= 768,
+    isMobileLayout: () => isMobileLayoutViewport(),
   });
   Object.assign(appBridge.__testing = appBridge.__testing || {}, {
     getChats: () => chats.map((chat) => normalizeChatListEntry(chat)),
@@ -2161,7 +2204,7 @@
   // UTILS
   // ═══════════════════════════════════════════════════════════════════════════
   function isMobileLayoutViewport() {
-    return window.innerWidth <= 768;
+    return getEffectiveViewportWidth() <= 768;
   }
 
   function normalizeMobileBaseScene(scene) {
@@ -2527,6 +2570,63 @@
     return screenRotationAllowed !== false;
   }
 
+  function isLikelyMobileScreenRotationDevice() {
+    const size = getRawViewportSize();
+    const minSide = Math.min(size.width, size.height);
+    const maxSide = Math.max(size.width, size.height);
+    const ua = String(navigator.userAgent || '');
+    return Boolean(
+      hasAndroidNativeBridge()
+      || Number(navigator.maxTouchPoints || 0) > 0
+      || window.matchMedia?.('(any-pointer: coarse)')?.matches
+      || /Android|iPhone|iPad|iPod|Mobile/i.test(ua)
+      || (minSide > 0 && minSide <= 768 && maxSide <= 1200)
+    );
+  }
+
+  function isScreenRotationLandscapeViewport() {
+    const size = getRawViewportSize();
+    return Boolean(size.width > size.height + 24);
+  }
+
+  function isScreenRotationWebFallbackAvailable() {
+    return Boolean(!getScreenRotationAllowed() && isLikelyMobileScreenRotationDevice());
+  }
+
+  function syncScreenRotationWebFallback() {
+    const root = document.documentElement;
+    const size = getRawViewportSize();
+    const shouldLock = Boolean(
+      isScreenRotationWebFallbackAvailable()
+      && size.width > 0
+      && size.height > 0
+      && isScreenRotationLandscapeViewport()
+    );
+    const wasLocked = root.classList.contains('is-screen-rotation-web-locked');
+    root.classList.toggle('is-screen-rotation-web-locked', shouldLock);
+    if (shouldLock) {
+      root.style.setProperty('--screen-rotation-lock-width', `${Math.round(Math.min(size.width, size.height))}px`);
+      root.style.setProperty('--screen-rotation-lock-height', `${Math.round(Math.max(size.width, size.height))}px`);
+    } else {
+      root.style.removeProperty('--screen-rotation-lock-width');
+      root.style.removeProperty('--screen-rotation-lock-height');
+    }
+    if (wasLocked !== shouldLock) {
+      mobileVisualViewportBaselineHeight = 0;
+      mobileVisualViewportBaselineWidth = 0;
+      mobileKeyboardDockActive = false;
+      if (shouldLock) setupMobileViewportHeightSync();
+      syncMobileBaseSceneState({
+        scene: getResolvedMobileBaseScene(),
+        hideInactive: true,
+        syncChatMetrics: true,
+        repaint: true,
+      });
+      scheduleMobileViewportRecovery(90);
+    }
+    return shouldLock;
+  }
+
   function syncScreenRotationToggle() {
     const toggle = $('#settingsScreenRotationAllowed');
     if (toggle) toggle.checked = getScreenRotationAllowed();
@@ -2622,6 +2722,7 @@
     syncScreenRotationToggle();
     const revision = screenRotationPreferenceRevision;
     if (getScreenRotationAllowed()) {
+      syncScreenRotationWebFallback();
       clearScreenRotationActivationRetry();
       unlockScreenRotation();
       if (showStatus) {
@@ -2631,12 +2732,19 @@
       return { allowed: true, locked: false };
     }
 
+    const webFallbackAvailable = isScreenRotationWebFallbackAvailable();
+    const webFallbackActive = syncScreenRotationWebFallback();
     if (!isScreenOrientationLockSupported()) {
       clearScreenRotationActivationRetry();
       if (showStatus) {
-        setScreenRotationStatus('Screen rotation lock is not supported by this browser', 'error');
+        if (webFallbackAvailable) {
+          setScreenRotationStatus('Portrait lock is active', 'success');
+          clearScreenRotationStatusSoon();
+        } else {
+          setScreenRotationStatus('Screen rotation lock is not supported by this browser', 'error');
+        }
       }
-      return { allowed: false, locked: false, supported: false };
+      return { allowed: false, locked: webFallbackActive, supported: false, webFallback: webFallbackAvailable };
     }
 
     try {
@@ -2656,7 +2764,13 @@
         unlockScreenRotation();
         return { allowed: getScreenRotationAllowed(), locked: false, stale: true };
       }
-      if (isScreenRotationActivationError(error)) {
+      if (webFallbackAvailable) {
+        clearScreenRotationActivationRetry();
+        if (showStatus) {
+          setScreenRotationStatus('Portrait lock is active', 'success');
+          clearScreenRotationStatusSoon();
+        }
+      } else if (isScreenRotationActivationError(error)) {
         armScreenRotationActivationRetry();
         if (showStatus) {
           setScreenRotationStatus('Tap once in the app to finish locking the screen', 'pending');
@@ -2664,7 +2778,7 @@
       } else if (showStatus) {
         setScreenRotationStatus('Could not lock screen rotation', 'error');
       }
-      return { allowed: false, locked: false, supported: true, error };
+      return { allowed: false, locked: webFallbackActive, supported: true, webFallback: webFallbackAvailable, error };
     }
   }
 
@@ -5140,7 +5254,7 @@
   function syncMobileAppHeightToViewport(options = {}) {
     const force = Boolean(options && typeof options === 'object' && options.force);
     const app = document.getElementById('app');
-    if (!app || !window.visualViewport || window.innerWidth > 768) return;
+    if (!app || !window.visualViewport || !isMobileLayoutViewport()) return;
     const newViewportHeight = Math.max(0, window.visualViewport?.height || 0);
     const mentionPickerDismissed = dismissMentionPickerAfterKeyboardClose();
     getMobileViewportBaselineHeight();
@@ -5169,7 +5283,7 @@
   }
 
   function scheduleMobileViewportRecovery(retryDelayMs = 140) {
-    if (!window.visualViewport || window.innerWidth > 768) return false;
+    if (!window.visualViewport || !isMobileLayoutViewport()) return false;
     if (mobileViewportRecoveryFrame) cancelAnimationFrame(mobileViewportRecoveryFrame);
     clearTimeout(mobileViewportRecoveryTimer);
 
@@ -5244,7 +5358,7 @@
   }
 
   function isMobileViewportLayoutLocked() {
-    if (window.innerWidth > 768) return false;
+    if (!isMobileLayoutViewport()) return false;
     if (mobileRouteTransitionActive) return true;
     if (modalStack.some((entry) => entry?.el && !entry.el.classList.contains('hidden'))) return true;
     if (searchPanel && searchPanel.getAttribute('aria-hidden') === 'false') return true;
@@ -12615,7 +12729,7 @@
       pointerX: typeof x === 'number' && Number.isFinite(x) ? x : null,
       pointerY: typeof y === 'number' && Number.isFinite(y) ? y : null,
       source,
-      mode: source === 'long-press' && window.innerWidth <= 768 ? 'sheet' : 'popup',
+      mode: source === 'long-press' && isMobileLayoutViewport() ? 'sheet' : 'popup',
       keyboardAttached,
     };
     renderMediaContextMenu(context);
@@ -13462,7 +13576,7 @@
   }
 
   function revealChatListAfterActiveChatClose() {
-    if (window.innerWidth > 768 || !sidebar) return;
+    if (!isMobileLayoutViewport() || !sidebar) return;
     resetBackButtonNavigationState();
     revealSidebarFromChat();
   }
@@ -14129,7 +14243,7 @@
         forwardChatSearch.focus();
       }
     };
-    if (window.innerWidth > 768 || prefersReducedMotion() || currentModalAnimation === 'none') {
+    if (!isMobileLayoutViewport() || prefersReducedMotion() || currentModalAnimation === 'none') {
       requestAnimationFrame(focus);
       return;
     }
@@ -14859,7 +14973,7 @@
 
   async function openMentionPickerFromButton(options = {}) {
     const keyboardAttached = Boolean(
-      window.innerWidth > 768
+      !isMobileLayoutViewport()
       || (Object.prototype.hasOwnProperty.call(options, 'keyboardAttached')
         ? options.keyboardAttached
         : isMobileComposerKeyboardOpen())
@@ -14929,7 +15043,7 @@
         return !query || haystack.includes(query);
       });
       const visibleTargets = query ? filtered.slice(0, 8) : filtered;
-      renderMentionPicker(visibleTargets, { source: 'trigger', keyboardAttached: window.innerWidth > 768 || isMobileComposerKeyboardOpen() });
+      renderMentionPicker(visibleTargets, { source: 'trigger', keyboardAttached: !isMobileLayoutViewport() || isMobileComposerKeyboardOpen() });
     } catch {
       hideMentionPicker();
     }
@@ -16283,7 +16397,7 @@
     const keyboardAttached = Boolean(
       Object.prototype.hasOwnProperty.call(options, 'keyboardAttached')
         ? options.keyboardAttached
-        : (window.innerWidth > 768 || isMobileComposerKeyboardOpen())
+        : (!isMobileLayoutViewport() || isMobileComposerKeyboardOpen())
     );
     hideMentionPicker();
     const availability = await loadContextConvertAvailability(currentChatId).catch(() => ({ enabled: false, bots: [] }));
@@ -18169,7 +18283,7 @@
       loadContextConvertAvailability(targetChatId).catch(() => {});
       loadChatShotState(targetChatId).catch(() => {});
       syncChatShotButton();
-      if (window.innerWidth > 768) msgInput.focus();
+      if (!isMobileLayoutViewport()) msgInput.focus();
       refreshPollComposerActionState();
       window.BananzaVoiceHooks?.refreshComposerState?.();
       updateScrollBottomButton();
@@ -20974,7 +21088,7 @@
   }
 
   function shouldPreserveKeyboardForScrollBottomGesture(e) {
-    if (!scrollBottomBtn || window.innerWidth > 768) return false;
+    if (!scrollBottomBtn || !isMobileLayoutViewport()) return false;
     if (!isMobileComposerKeyboardOpen()) return false;
     if (e?.type === 'pointerdown' || e?.type === 'pointerup') {
       if (typeof e.button === 'number' && e.button !== 0) return false;
@@ -22875,7 +22989,7 @@
   }
 
   async function animateSearchResultChatSwitch(targetChatId) {
-    if (window.innerWidth > 768) return;
+    if (!isMobileLayoutViewport()) return;
     if (!currentChatId || Number(targetChatId) === Number(currentChatId)) return;
     if (prefersReducedMotion()) {
       revealSidebarFromChat({ forceAnimation: true });
@@ -22946,7 +23060,7 @@
     searchPanel.classList.remove('is-open', 'is-closing');
     forceIosAnimationMount(searchPanel, searchPanelSheet);
     updateSearchTriggerState(true);
-    if (focusInput && window.innerWidth <= 768) focusSearchInput();
+    if (focusInput && isMobileLayoutViewport()) focusSearchInput();
     if (!searchPanelHistoryPushed) {
       history.pushState({ ...(history.state || {}), searchPanel: true }, '');
       searchPanelHistoryPushed = true;
@@ -23125,7 +23239,7 @@
     }
 
     function applySidebarWidth() {
-      if (window.innerWidth <= 768) {
+      if (isMobileLayoutViewport()) {
         sidebar.style.width = '';
         return;
       }
@@ -23135,7 +23249,7 @@
     }
 
     function persistSidebarWidth(width = sidebar.offsetWidth) {
-      if (window.innerWidth <= 768) return;
+      if (isMobileLayoutViewport()) return;
       localStorage.setItem(SIDEBAR_WIDTH_KEY, String(clampSidebarWidth(width)));
     }
 
@@ -23611,7 +23725,7 @@
         msgInput.selectionStart = msgInput.selectionEnd = start + insertion.length;
         msgInput.dispatchEvent(new Event('input', { bubbles: true }));
         rememberRecentEmoji(value);
-        if (window.innerWidth > 768 || shouldKeepEmojiPickerKeyboard()) {
+        if (!isMobileLayoutViewport() || shouldKeepEmojiPickerKeyboard()) {
           focusComposerKeepKeyboard(true);
         }
       }
@@ -23645,7 +23759,7 @@
     const anchor = anchorEl instanceof HTMLElement ? anchorEl : emojiBtn;
     if (!(anchor instanceof HTMLElement)) return;
     const rect = anchor.getBoundingClientRect();
-    const keyboardAttached = window.innerWidth <= 768 && shouldKeepEmojiPickerKeyboard();
+    const keyboardAttached = isMobileLayoutViewport() && shouldKeepEmojiPickerKeyboard();
     const viewport = keyboardAttached
       ? {
         left: 0,
@@ -23680,7 +23794,7 @@
     if (!(emojiPicker instanceof HTMLElement)) return false;
     const keyboardAttached = typeof keepKeyboardOpen === 'boolean'
       ? keepKeyboardOpen
-      : (window.innerWidth > 768 || isMobileComposerKeyboardOpen());
+      : (!isMobileLayoutViewport() || isMobileComposerKeyboardOpen());
     emojiPickerAnchorEl = anchorEl instanceof HTMLElement ? anchorEl : emojiBtn;
     emojiPickerKeyboardAttached = keyboardAttached;
     emojiPickerOpen = true;
@@ -25130,7 +25244,7 @@
     ivScale = 1; ivPanX = 0; ivPanY = 0;
     setGalleryStripPosition(false);
     updateGalleryArrows();
-    if (window.innerWidth <= 768) {
+    if (isMobileLayoutViewport()) {
       history.pushState({ view: 'mediaviewer' }, '');
       ivHistoryPushed = true;
     }
@@ -26851,7 +26965,7 @@
       sendBtn.blur();
       sendMessage();
       // Keep keyboard open on mobile
-      if (window.innerWidth <= 768) msgInput.focus();
+      if (isMobileLayoutViewport()) msgInput.focus();
     });
     bindTouchSafeButtonActivation(mentionOpenBtn, ({ startKeyboardOpen }) => {
       openMentionPickerFromButton({ keyboardAttached: startKeyboardOpen }).catch((error) => {
@@ -26967,7 +27081,7 @@
     renderComposerAiOverride();
     const attachMenu = $('#attachMenu');
     const attachMenuOverlay = $('#attachMenuOverlay');
-    const isMobileAttachMenu = () => window.innerWidth <= 768;
+    const isMobileAttachMenu = () => isMobileLayoutViewport();
     const positionAttachMenu = () => {
       if (!attachMenu || attachMenu.classList.contains('hidden')) return;
       const rect = attachBtn.getBoundingClientRect();
@@ -27986,7 +28100,7 @@
       setChatListPullLabel('Pull to refresh');
 
       const isSidebarListPullAvailable = () => (
-        window.innerWidth <= 768
+        isMobileLayoutViewport()
         && !sidebar.classList.contains('sidebar-hidden')
         && !state.refreshing
         && !chatListAbortController
@@ -28265,7 +28379,7 @@
         scheduleMobileViewportRecovery(280);
         return;
       }
-      if (window.innerWidth <= 768) {
+      if (isMobileLayoutViewport()) {
         const resolvedScene = getResolvedMobileBaseScene();
         if (resolvedScene === 'chat') {
           revealSidebarFromChat({ forceAnimation: true });
@@ -29142,6 +29256,9 @@
     setupMobileViewportHeightSync();
     applyScreenRotationPreference({ showStatus: false, reason: 'init' }).catch(() => {});
     window.addEventListener('resize', syncMobileFontSizeViewportState, { passive: true });
+    window.addEventListener('resize', () => {
+      applyScreenRotationPreference({ showStatus: false, reason: 'resize' }).catch(() => {});
+    }, { passive: true });
     window.addEventListener('orientationchange', syncMobileFontSizeViewportState);
     window.addEventListener('orientationchange', () => {
       applyScreenRotationPreference({ showStatus: false, reason: 'orientationchange' }).catch(() => {});
@@ -29149,7 +29266,7 @@
     window.visualViewport?.addEventListener('resize', syncMobileFontSizeViewportState);
 
     // Mobile navigation: set initial history state for chat list
-    if (window.innerWidth <= 768) {
+    if (isMobileLayoutViewport()) {
       history.replaceState({ view: 'chatlist' }, '');
     }
 
