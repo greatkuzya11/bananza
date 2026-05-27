@@ -64,12 +64,28 @@ test('i18n translates static index and login shell text and attributes', () => {
   assert.equal(document.getElementById('chatSearch').getAttribute('placeholder'), 'Искать чаты...');
   assert.equal(document.getElementById('msgInput').getAttribute('placeholder'), '\u0421\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435...');
   assert.equal(document.getElementById('settingsBtn').getAttribute('aria-label'), 'Настройки');
+  assert.equal(
+    document.getElementById('settingsScreenRotationAllowed')?.closest('.settings-item')?.querySelector('span')?.textContent,
+    '📱 Разрешить поворот экрана',
+  );
+  assert.equal(
+    document.getElementById('settingsScreenRotationAllowed')?.closest('.settings-item')?.nextElementSibling?.textContent,
+    'Если выключено, BananZa попробует удерживать мобильный интерфейс в портретном режиме в поддерживаемых браузерах.',
+  );
 
   i18n.setLanguage('en');
   assert.equal(document.querySelector('#emptyState h3').textContent, 'Welcome to BananZa');
   assert.equal(document.getElementById('chatSearch').getAttribute('placeholder'), 'Search chats...');
   assert.equal(document.getElementById('msgInput').getAttribute('placeholder'), 'Message...');
   assert.equal(document.getElementById('settingsBtn').getAttribute('aria-label'), 'Settings');
+  assert.equal(
+    document.getElementById('settingsScreenRotationAllowed')?.closest('.settings-item')?.querySelector('span')?.textContent,
+    '📱 Allow screen rotation',
+  );
+  assert.equal(
+    document.getElementById('settingsScreenRotationAllowed')?.closest('.settings-item')?.nextElementSibling?.textContent,
+    'When off, BananZa tries to keep the mobile UI in portrait mode on supported browsers.',
+  );
 
   const loginHtml = fs.readFileSync(path.join(repoRoot, 'public', 'login.html'), 'utf8');
   const loginDom = new JSDOM(loginHtml, {

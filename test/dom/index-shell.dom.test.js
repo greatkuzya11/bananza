@@ -27,10 +27,10 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/sounds.js',
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
-    '/js/i18n.js?v=20260509-call-modal-surface',
+    '/js/i18n.js?v=20260527-screen-orientation-lock',
     '/js/qip-infium-original.js?v=20260523-qip-infium-original',
     '/js/qip-hd.js?v=20260523-qip-hd',
-    '/js/app.js?v=20260523-keyboard-pan-lock',
+    '/js/app.js?v=20260527-screen-orientation-lock',
     '/js/calls/CallStore.js?v=20260509-call-modal-surface',
     '/js/calls/CallMedia.js?v=20260509-call-modal-surface',
     '/js/calls/CallNotifications.js?v=20260509-call-modal-surface',
@@ -65,6 +65,8 @@ test('public/index.html exposes core shell nodes used by runtime modules', () =>
     'composerRichPreview',
     'settingsModal',
     'settingsMicrophoneMode',
+    'settingsScreenRotationAllowed',
+    'settingsScreenRotationStatus',
     'pollComposerModal',
     'chatInfoModal',
     'chatFolderPicker',
@@ -97,6 +99,27 @@ test('settings modal places microphone mode immediately after Send by Enter', ()
   assert.equal(microphoneRow?.querySelector('input[type="checkbox"]'), toggle);
   assert.equal(toggle.checked, true);
   assert.equal(microphoneHint?.classList.contains('settings-hint'), true);
+});
+
+test('settings modal exposes personal screen rotation toggle after startup view', () => {
+  const dom = new JSDOM(indexHtml);
+  const document = dom.window.document;
+  const startupToggle = document.getElementById('settingsOpenLastChat')?.closest('.settings-item');
+  const startupHint = startupToggle?.nextElementSibling;
+  const rotationRow = startupHint?.nextElementSibling;
+  const rotationHint = rotationRow?.nextElementSibling;
+  const rotationStatus = rotationHint?.nextElementSibling;
+  const toggle = document.getElementById('settingsScreenRotationAllowed');
+
+  assert.ok(startupToggle, 'Expected Open last chat setting row');
+  assert.equal(startupHint?.classList.contains('settings-hint'), true);
+  assert.equal(rotationRow?.classList.contains('settings-toggle-item'), true);
+  assert.equal(rotationRow?.querySelector('input[type="checkbox"]'), toggle);
+  assert.equal(toggle.checked, true);
+  assert.equal(rotationHint?.classList.contains('settings-hint'), true);
+  assert.match(rotationRow?.textContent || '', /Allow screen rotation/);
+  assert.match(rotationHint?.textContent || '', /portrait mode/);
+  assert.equal(rotationStatus?.id, 'settingsScreenRotationStatus');
 });
 
 test('settings modal menu entries keep emoji prefixes', () => {

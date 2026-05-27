@@ -278,6 +278,11 @@
   let microphoneMode = normalizeMicrophoneMode(localStorage.getItem(MICROPHONE_MODE_STORAGE_KEY));
   let scrollRestoreMode = localStorage.getItem('scrollRestoreMode') || 'bottom'; // 'bottom' | 'restore'
   let openLastChatOnReload = localStorage.getItem('openLastChatOnReload') !== '0';
+  const SCREEN_ROTATION_ALLOWED_STORAGE_KEY = 'screenRotationAllowed';
+  let screenRotationAllowed = localStorage.getItem(SCREEN_ROTATION_ALLOWED_STORAGE_KEY) !== '0';
+  let screenRotationActivationRetryBound = false;
+  let screenRotationStatusTimer = null;
+  let screenRotationPreferenceRevision = 0;
   let scrollPositions = {}; // chatId -> { messageId, offsetTop, atBottom, savedAt }
   let scrollPositionsUserKey = '';
   let suppressScrollAnchorSave = false;
@@ -1980,6 +1985,7 @@
     getReplyTo: () => replyTo ? { ...replyTo } : null,
     getEditTo: () => editTo ? { ...editTo } : null,
     getMicrophoneMode: () => getMicrophoneMode(),
+    getScreenRotationAllowed: () => getScreenRotationAllowed(),
     insertDictatedText: (text) => insertDictatedText(text),
     queueVoiceMessage: (payload) => queueVoiceOutbox(payload),
     queueVideoNote: (payload) => queueVideoNoteOutbox(payload),
@@ -2098,6 +2104,9 @@
       return scrollRestoreMode;
     },
     setMicrophoneMode: (mode = 'voice_message') => setMicrophoneMode(mode),
+    getScreenRotationAllowed: () => getScreenRotationAllowed(),
+    setScreenRotationAllowed: (allowed, options = {}) => setScreenRotationAllowed(allowed, options),
+    applyScreenRotationPreference: (options = {}) => applyScreenRotationPreference(options),
     setReply: (...args) => setReply(...args),
     setEditFromRow: (row) => setEditFromRow(row),
     setMobileBaseScene: (scene, options = {}) => syncMobileBaseSceneState({
@@ -2512,6 +2521,159 @@
     if (toggle) toggle.checked = microphoneMode === 'voice_message';
     window.BananzaVoiceHooks?.refreshComposerState?.();
     return microphoneMode;
+  }
+
+  function getScreenRotationAllowed() {
+    return screenRotationAllowed !== false;
+  }
+
+  function syncScreenRotationToggle() {
+    const toggle = $('#settingsScreenRotationAllowed');
+    if (toggle) toggle.checked = getScreenRotationAllowed();
+  }
+
+  function getScreenOrientation() {
+    return window.screen?.orientation || null;
+  }
+
+  function isScreenOrientationLockSupported() {
+    const orientation = getScreenOrientation();
+    return Boolean(orientation && typeof orientation.lock === 'function');
+  }
+
+  function setScreenRotationStatus(message = '', type = '') {
+    if (screenRotationStatusTimer) {
+      clearTimeout(screenRotationStatusTimer);
+      screenRotationStatusTimer = null;
+    }
+    setInlineStatus('settingsScreenRotationStatus', message, type);
+  }
+
+  function clearScreenRotationStatusSoon(delayMs = 2200) {
+    if (screenRotationStatusTimer) clearTimeout(screenRotationStatusTimer);
+    screenRotationStatusTimer = setTimeout(() => {
+      screenRotationStatusTimer = null;
+      setInlineStatus('settingsScreenRotationStatus', '', '');
+    }, delayMs);
+  }
+
+  function isScreenRotationActivationError(error) {
+    const name = String(error?.name || '');
+    const message = String(error?.message || '');
+    return name === 'SecurityError'
+      || name === 'NotAllowedError'
+      || name === 'InvalidStateError'
+      || /activation|gesture|permission|fullscreen/i.test(message);
+  }
+
+  function clearScreenRotationActivationRetry() {
+    if (!screenRotationActivationRetryBound) return;
+    screenRotationActivationRetryBound = false;
+    document.removeEventListener('pointerdown', handleScreenRotationActivationRetry, true);
+    document.removeEventListener('touchend', handleScreenRotationActivationRetry, true);
+    document.removeEventListener('keydown', handleScreenRotationActivationRetry, true);
+  }
+
+  function handleScreenRotationActivationRetry() {
+    clearScreenRotationActivationRetry();
+    if (getScreenRotationAllowed()) return;
+    applyScreenRotationPreference({ showStatus: true, reason: 'user-activation' }).catch(() => {});
+  }
+
+  function armScreenRotationActivationRetry() {
+    if (screenRotationActivationRetryBound || getScreenRotationAllowed()) return;
+    screenRotationActivationRetryBound = true;
+    document.addEventListener('pointerdown', handleScreenRotationActivationRetry, { capture: true, once: true, passive: true });
+    document.addEventListener('touchend', handleScreenRotationActivationRetry, { capture: true, once: true, passive: true });
+    document.addEventListener('keydown', handleScreenRotationActivationRetry, { capture: true, once: true });
+  }
+
+  async function lockScreenToPortrait() {
+    const orientation = getScreenOrientation();
+    if (!orientation || typeof orientation.lock !== 'function') {
+      throw new Error('Screen orientation lock is not supported');
+    }
+    try {
+      await orientation.lock('portrait-primary');
+      return 'portrait-primary';
+    } catch {
+      try {
+        await orientation.lock('portrait');
+        return 'portrait';
+      } catch (fallbackError) {
+        throw fallbackError;
+      }
+    }
+  }
+
+  function unlockScreenRotation() {
+    const orientation = getScreenOrientation();
+    if (!orientation || typeof orientation.unlock !== 'function') return false;
+    try {
+      orientation.unlock();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function applyScreenRotationPreference({ showStatus = false, reason = '' } = {}) {
+    void reason;
+    syncScreenRotationToggle();
+    const revision = screenRotationPreferenceRevision;
+    if (getScreenRotationAllowed()) {
+      clearScreenRotationActivationRetry();
+      unlockScreenRotation();
+      if (showStatus) {
+        setScreenRotationStatus('Screen rotation allowed', 'success');
+        clearScreenRotationStatusSoon();
+      }
+      return { allowed: true, locked: false };
+    }
+
+    if (!isScreenOrientationLockSupported()) {
+      clearScreenRotationActivationRetry();
+      if (showStatus) {
+        setScreenRotationStatus('Screen rotation lock is not supported by this browser', 'error');
+      }
+      return { allowed: false, locked: false, supported: false };
+    }
+
+    try {
+      const lockType = await lockScreenToPortrait();
+      if (revision !== screenRotationPreferenceRevision || getScreenRotationAllowed()) {
+        unlockScreenRotation();
+        return { allowed: getScreenRotationAllowed(), locked: false, stale: true };
+      }
+      clearScreenRotationActivationRetry();
+      if (showStatus) {
+        setScreenRotationStatus('Portrait lock is active', 'success');
+        clearScreenRotationStatusSoon();
+      }
+      return { allowed: false, locked: true, lockType };
+    } catch (error) {
+      if (revision !== screenRotationPreferenceRevision || getScreenRotationAllowed()) {
+        unlockScreenRotation();
+        return { allowed: getScreenRotationAllowed(), locked: false, stale: true };
+      }
+      if (isScreenRotationActivationError(error)) {
+        armScreenRotationActivationRetry();
+        if (showStatus) {
+          setScreenRotationStatus('Tap once in the app to finish locking the screen', 'pending');
+        }
+      } else if (showStatus) {
+        setScreenRotationStatus('Could not lock screen rotation', 'error');
+      }
+      return { allowed: false, locked: false, supported: true, error };
+    }
+  }
+
+  function setScreenRotationAllowed(value, { persist = true, showStatus = true } = {}) {
+    screenRotationAllowed = Boolean(value);
+    screenRotationPreferenceRevision += 1;
+    if (persist) localStorage.setItem(SCREEN_ROTATION_ALLOWED_STORAGE_KEY, screenRotationAllowed ? '1' : '0');
+    syncScreenRotationToggle();
+    return applyScreenRotationPreference({ showStatus, reason: 'setting-change' });
   }
 
   function insertDictatedText(text) {
@@ -11842,6 +12004,7 @@
   }
 
   function handleAppResume(reason) {
+    applyScreenRotationPreference({ showStatus: false, reason }).catch(() => {});
     if (!token || !currentUser) return;
     syncMobileBaseSceneState({
       scene: getResolvedMobileBaseScene(),
@@ -25496,6 +25659,9 @@
     $('#settingsMicrophoneMode').checked = getMicrophoneMode() === 'voice_message';
     $('#settingsScrollRestore').checked = scrollRestoreMode === 'restore';
     $('#settingsOpenLastChat').checked = openLastChatOnReload;
+    const screenRotationToggle = $('#settingsScreenRotationAllowed');
+    if (screenRotationToggle) screenRotationToggle.checked = getScreenRotationAllowed();
+    applyScreenRotationPreference({ showStatus: !getScreenRotationAllowed(), reason: 'settings-open' }).catch(() => {});
     syncLanguageSettingsButton();
     window.BananzaVoiceHooks?.onSettingsOpened?.({ currentUser });
     window.BananzaVideoNoteAdminHooks?.onSettingsOpened?.({ currentUser });
@@ -28279,6 +28445,10 @@
       localStorage.setItem('openLastChatOnReload', openLastChatOnReload ? '1' : '0');
     });
 
+    $('#settingsScreenRotationAllowed')?.addEventListener('change', (e) => {
+      setScreenRotationAllowed(e.target.checked, { showStatus: true }).catch(() => {});
+    });
+
     // UI theme picker
     $('#settingsThemePicker')?.addEventListener('click', (e) => {
       const card = e.target.closest('.theme-card');
@@ -28970,8 +29140,12 @@
     hydrateChatListCache();
 
     setupMobileViewportHeightSync();
+    applyScreenRotationPreference({ showStatus: false, reason: 'init' }).catch(() => {});
     window.addEventListener('resize', syncMobileFontSizeViewportState, { passive: true });
     window.addEventListener('orientationchange', syncMobileFontSizeViewportState);
+    window.addEventListener('orientationchange', () => {
+      applyScreenRotationPreference({ showStatus: false, reason: 'orientationchange' }).catch(() => {});
+    });
     window.visualViewport?.addEventListener('resize', syncMobileFontSizeViewportState);
 
     // Mobile navigation: set initial history state for chat list
