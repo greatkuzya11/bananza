@@ -280,9 +280,7 @@
   let openLastChatOnReload = localStorage.getItem('openLastChatOnReload') !== '0';
   const SCREEN_ROTATION_ALLOWED_STORAGE_KEY = 'screenRotationAllowed';
   let screenRotationAllowed = localStorage.getItem(SCREEN_ROTATION_ALLOWED_STORAGE_KEY) !== '0';
-  let screenRotationActivationRetryBound = false;
   let screenRotationStatusTimer = null;
-  let screenRotationPreferenceRevision = 0;
   let scrollPositions = {}; // chatId -> { messageId, offsetTop, atBottom, savedAt }
   let scrollPositionsUserKey = '';
   let suppressScrollAnchorSave = false;
@@ -1000,38 +998,8 @@
     document.documentElement.classList.add('is-ios-webkit');
   }
 
-  function getRawViewportSize() {
-    const docEl = document?.documentElement;
-    return {
-      width: Math.max(0, window.innerWidth || window.visualViewport?.width || docEl?.clientWidth || 0),
-      height: Math.max(0, window.innerHeight || window.visualViewport?.height || docEl?.clientHeight || 0),
-    };
-  }
-
-  function isScreenRotationWebFallbackActive() {
-    return Boolean(document?.documentElement?.classList?.contains('is-screen-rotation-web-locked'));
-  }
-
-  function getEffectiveViewportSize() {
-    const size = getRawViewportSize();
-    if (!isScreenRotationWebFallbackActive()) return size;
-    return {
-      width: Math.min(size.width, size.height),
-      height: Math.max(size.width, size.height),
-    };
-  }
-
-  function getEffectiveViewportWidth() {
-    return getEffectiveViewportSize().width;
-  }
-
-  function getEffectiveViewportHeight() {
-    return getEffectiveViewportSize().height;
-  }
-
   function getMobileAppViewportHeight() {
     const vv = window.visualViewport;
-    if (isScreenRotationWebFallbackActive()) return getEffectiveViewportHeight();
     const viewportHeight = Math.max(0, vv?.height || window.innerHeight || 0);
     if (!isIosViewportFixTarget || !vv) return viewportHeight;
     return Math.max(0, viewportHeight + Math.max(0, vv.offsetTop || 0));
@@ -1047,7 +1015,7 @@
   }
 
   function isMobileViewportTarget() {
-    return Boolean(getEffectiveViewportWidth() <= 768);
+    return Boolean(window.innerWidth <= 768);
   }
 
   function isIosWebkitMotionAllowed() {
@@ -1069,15 +1037,6 @@
   function getMobileVisualViewportMetrics() {
     const vv = window.visualViewport;
     const docEl = document?.documentElement;
-    if (isScreenRotationWebFallbackActive()) {
-      const size = getEffectiveViewportSize();
-      return {
-        top: 0,
-        height: size.height,
-        width: size.width,
-        bottom: size.height,
-      };
-    }
     const top = Math.max(0, vv?.offsetTop || 0);
     const height = Math.max(0, vv?.height || window.innerHeight || 0);
     const width = Math.max(0, vv?.width || window.innerWidth || docEl?.clientWidth || 0);
@@ -1096,13 +1055,9 @@
   function getMobileViewportBaselineHeight() {
     const vv = window.visualViewport;
     const docEl = document?.documentElement;
-    const effectiveSize = getEffectiveViewportSize();
-    const viewportWidth = isScreenRotationWebFallbackActive()
-      ? effectiveSize.width
-      : Math.max(0, vv?.width || window.innerWidth || docEl?.clientWidth || 0);
+    const viewportWidth = Math.max(0, vv?.width || window.innerWidth || docEl?.clientWidth || 0);
     const currentHeight = Math.max(
       0,
-      isScreenRotationWebFallbackActive() ? effectiveSize.height : 0,
       (vv?.height || 0) + Math.max(0, vv?.offsetTop || 0),
       window.innerHeight || 0,
       docEl?.clientHeight || 0
@@ -2204,7 +2159,7 @@
   // UTILS
   // ═══════════════════════════════════════════════════════════════════════════
   function isMobileLayoutViewport() {
-    return getEffectiveViewportWidth() <= 768;
+    return window.innerWidth <= 768;
   }
 
   function normalizeMobileBaseScene(scene) {
@@ -2570,75 +2525,9 @@
     return screenRotationAllowed !== false;
   }
 
-  function isLikelyMobileScreenRotationDevice() {
-    const size = getRawViewportSize();
-    const minSide = Math.min(size.width, size.height);
-    const maxSide = Math.max(size.width, size.height);
-    const ua = String(navigator.userAgent || '');
-    return Boolean(
-      hasAndroidNativeBridge()
-      || Number(navigator.maxTouchPoints || 0) > 0
-      || window.matchMedia?.('(any-pointer: coarse)')?.matches
-      || /Android|iPhone|iPad|iPod|Mobile/i.test(ua)
-      || (minSide > 0 && minSide <= 768 && maxSide <= 1200)
-    );
-  }
-
-  function isScreenRotationLandscapeViewport() {
-    const size = getRawViewportSize();
-    return Boolean(size.width > size.height + 24);
-  }
-
-  function isScreenRotationWebFallbackAvailable() {
-    return Boolean(!getScreenRotationAllowed() && isLikelyMobileScreenRotationDevice());
-  }
-
-  function syncScreenRotationWebFallback() {
-    const root = document.documentElement;
-    const size = getRawViewportSize();
-    const shouldLock = Boolean(
-      isScreenRotationWebFallbackAvailable()
-      && size.width > 0
-      && size.height > 0
-      && isScreenRotationLandscapeViewport()
-    );
-    const wasLocked = root.classList.contains('is-screen-rotation-web-locked');
-    root.classList.toggle('is-screen-rotation-web-locked', shouldLock);
-    if (shouldLock) {
-      root.style.setProperty('--screen-rotation-lock-width', `${Math.round(Math.min(size.width, size.height))}px`);
-      root.style.setProperty('--screen-rotation-lock-height', `${Math.round(Math.max(size.width, size.height))}px`);
-    } else {
-      root.style.removeProperty('--screen-rotation-lock-width');
-      root.style.removeProperty('--screen-rotation-lock-height');
-    }
-    if (wasLocked !== shouldLock) {
-      mobileVisualViewportBaselineHeight = 0;
-      mobileVisualViewportBaselineWidth = 0;
-      mobileKeyboardDockActive = false;
-      if (shouldLock) setupMobileViewportHeightSync();
-      syncMobileBaseSceneState({
-        scene: getResolvedMobileBaseScene(),
-        hideInactive: true,
-        syncChatMetrics: true,
-        repaint: true,
-      });
-      scheduleMobileViewportRecovery(90);
-    }
-    return shouldLock;
-  }
-
   function syncScreenRotationToggle() {
     const toggle = $('#settingsScreenRotationAllowed');
     if (toggle) toggle.checked = getScreenRotationAllowed();
-  }
-
-  function getScreenOrientation() {
-    return window.screen?.orientation || null;
-  }
-
-  function isScreenOrientationLockSupported() {
-    const orientation = getScreenOrientation();
-    return Boolean(orientation && typeof orientation.lock === 'function');
   }
 
   function setScreenRotationStatus(message = '', type = '') {
@@ -2657,134 +2546,27 @@
     }, delayMs);
   }
 
-  function isScreenRotationActivationError(error) {
-    const name = String(error?.name || '');
-    const message = String(error?.message || '');
-    return name === 'SecurityError'
-      || name === 'NotAllowedError'
-      || name === 'InvalidStateError'
-      || /activation|gesture|permission|fullscreen/i.test(message);
-  }
-
-  function clearScreenRotationActivationRetry() {
-    if (!screenRotationActivationRetryBound) return;
-    screenRotationActivationRetryBound = false;
-    document.removeEventListener('pointerdown', handleScreenRotationActivationRetry, true);
-    document.removeEventListener('touchend', handleScreenRotationActivationRetry, true);
-    document.removeEventListener('keydown', handleScreenRotationActivationRetry, true);
-  }
-
-  function handleScreenRotationActivationRetry() {
-    clearScreenRotationActivationRetry();
-    if (getScreenRotationAllowed()) return;
-    applyScreenRotationPreference({ showStatus: true, reason: 'user-activation' }).catch(() => {});
-  }
-
-  function armScreenRotationActivationRetry() {
-    if (screenRotationActivationRetryBound || getScreenRotationAllowed()) return;
-    screenRotationActivationRetryBound = true;
-    document.addEventListener('pointerdown', handleScreenRotationActivationRetry, { capture: true, once: true, passive: true });
-    document.addEventListener('touchend', handleScreenRotationActivationRetry, { capture: true, once: true, passive: true });
-    document.addEventListener('keydown', handleScreenRotationActivationRetry, { capture: true, once: true });
-  }
-
-  async function lockScreenToPortrait() {
-    const orientation = getScreenOrientation();
-    if (!orientation || typeof orientation.lock !== 'function') {
-      throw new Error('Screen orientation lock is not supported');
-    }
-    try {
-      await orientation.lock('portrait-primary');
-      return 'portrait-primary';
-    } catch {
-      try {
-        await orientation.lock('portrait');
-        return 'portrait';
-      } catch (fallbackError) {
-        throw fallbackError;
-      }
-    }
-  }
-
-  function unlockScreenRotation() {
-    const orientation = getScreenOrientation();
-    if (!orientation || typeof orientation.unlock !== 'function') return false;
-    try {
-      orientation.unlock();
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
   async function applyScreenRotationPreference({ showStatus = false, reason = '' } = {}) {
-    void reason;
     syncScreenRotationToggle();
-    const revision = screenRotationPreferenceRevision;
-    if (getScreenRotationAllowed()) {
-      syncScreenRotationWebFallback();
-      clearScreenRotationActivationRetry();
-      unlockScreenRotation();
-      if (showStatus) {
+    const allowed = getScreenRotationAllowed();
+    const nativeBridgeAvailable = hasAndroidNativeBridge();
+    notifyAndroidScreenRotationPreference(reason || 'sync');
+    if (showStatus) {
+      if (allowed) {
         setScreenRotationStatus('Screen rotation allowed', 'success');
         clearScreenRotationStatusSoon();
-      }
-      return { allowed: true, locked: false };
-    }
-
-    const webFallbackAvailable = isScreenRotationWebFallbackAvailable();
-    const webFallbackActive = syncScreenRotationWebFallback();
-    if (!isScreenOrientationLockSupported()) {
-      clearScreenRotationActivationRetry();
-      if (showStatus) {
-        if (webFallbackAvailable) {
-          setScreenRotationStatus('Portrait lock is active', 'success');
-          clearScreenRotationStatusSoon();
-        } else {
-          setScreenRotationStatus('Screen rotation lock is not supported by this browser', 'error');
-        }
-      }
-      return { allowed: false, locked: webFallbackActive, supported: false, webFallback: webFallbackAvailable };
-    }
-
-    try {
-      const lockType = await lockScreenToPortrait();
-      if (revision !== screenRotationPreferenceRevision || getScreenRotationAllowed()) {
-        unlockScreenRotation();
-        return { allowed: getScreenRotationAllowed(), locked: false, stale: true };
-      }
-      clearScreenRotationActivationRetry();
-      if (showStatus) {
+      } else if (nativeBridgeAvailable) {
         setScreenRotationStatus('Portrait lock is active', 'success');
         clearScreenRotationStatusSoon();
+      } else {
+        setScreenRotationStatus('Saved. Install the updated Android app to lock screen rotation.', 'pending');
       }
-      return { allowed: false, locked: true, lockType };
-    } catch (error) {
-      if (revision !== screenRotationPreferenceRevision || getScreenRotationAllowed()) {
-        unlockScreenRotation();
-        return { allowed: getScreenRotationAllowed(), locked: false, stale: true };
-      }
-      if (webFallbackAvailable) {
-        clearScreenRotationActivationRetry();
-        if (showStatus) {
-          setScreenRotationStatus('Portrait lock is active', 'success');
-          clearScreenRotationStatusSoon();
-        }
-      } else if (isScreenRotationActivationError(error)) {
-        armScreenRotationActivationRetry();
-        if (showStatus) {
-          setScreenRotationStatus('Tap once in the app to finish locking the screen', 'pending');
-        }
-      } else if (showStatus) {
-        setScreenRotationStatus('Could not lock screen rotation', 'error');
-      }
-      return { allowed: false, locked: webFallbackActive, supported: true, webFallback: webFallbackAvailable, error };
     }
+    return { allowed, locked: !allowed && nativeBridgeAvailable, nativeBridge: nativeBridgeAvailable };
   }
 
   function setScreenRotationAllowed(value, { persist = true, showStatus = true } = {}) {
     screenRotationAllowed = Boolean(value);
-    screenRotationPreferenceRevision += 1;
     if (persist) localStorage.setItem(SCREEN_ROTATION_ALLOWED_STORAGE_KEY, screenRotationAllowed ? '1' : '0');
     syncScreenRotationToggle();
     return applyScreenRotationPreference({ showStatus, reason: 'setting-change' });
@@ -3490,6 +3272,19 @@
 
   function hasAndroidNativeBridge() {
     return Boolean(window.BananzaAndroid && typeof window.BananzaAndroid.postMessage === 'function');
+  }
+
+  function notifyAndroidScreenRotationPreference(reason = 'sync') {
+    if (!hasAndroidNativeBridge()) return;
+    try {
+      window.BananzaAndroid.postMessage(JSON.stringify({
+        type: 'screen_rotation_preference',
+        payload: {
+          allowed: getScreenRotationAllowed(),
+          reason,
+        },
+      }));
+    } catch (e) {}
   }
 
   function setMobileFontAdjustPercent(percent = 100) {

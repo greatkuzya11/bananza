@@ -70,7 +70,7 @@ test('i18n translates static index and login shell text and attributes', () => {
   );
   assert.equal(
     document.getElementById('settingsScreenRotationAllowed')?.closest('.settings-item')?.nextElementSibling?.textContent,
-    'Если выключено, BananZa попробует удерживать мобильный интерфейс в портретном режиме в поддерживаемых браузерах.',
+    'Если выключено, обновленное Android-приложение удерживает BananZa в портретном режиме. В браузерах настройка только сохраняется.',
   );
 
   i18n.setLanguage('en');
@@ -84,7 +84,7 @@ test('i18n translates static index and login shell text and attributes', () => {
   );
   assert.equal(
     document.getElementById('settingsScreenRotationAllowed')?.closest('.settings-item')?.nextElementSibling?.textContent,
-    'When off, BananZa tries to keep the mobile UI in portrait mode on supported browsers.',
+    'When off, the updated Android app keeps BananZa in portrait mode. Browsers only save the preference.',
   );
 
   const loginHtml = fs.readFileSync(path.join(repoRoot, 'public', 'login.html'), 'utf8');

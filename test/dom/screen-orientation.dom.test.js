@@ -140,35 +140,17 @@ function installAppRuntimeStubs(dom) {
   };
 }
 
-function installScreenOrientationMock(dom, { lockImpl = null, unlockImpl = null } = {}) {
-  const calls = [];
-  let unlocks = 0;
-  const orientation = {
-    lock(type) {
-      calls.push(type);
-      if (typeof lockImpl === 'function') return lockImpl(type);
-      return Promise.resolve();
-    },
-    unlock() {
-      unlocks += 1;
-      if (typeof unlockImpl === 'function') return unlockImpl();
-      return undefined;
+function installAndroidBridgeMock(dom) {
+  const messages = [];
+  dom.window.BananzaAndroid = {
+    postMessage(payload) {
+      messages.push(JSON.parse(payload));
     },
   };
-
-  Object.defineProperty(dom.window.screen, 'orientation', {
-    configurable: true,
-    value: orientation,
-  });
-
   return {
-    calls,
-    get unlocks() {
-      return unlocks;
-    },
+    messages,
     reset() {
-      calls.length = 0;
-      unlocks = 0;
+      messages.length = 0;
     },
   };
 }
@@ -195,18 +177,18 @@ async function bootAppDom({ beforeLoad = null } = {}) {
   return dom;
 }
 
-test('screen rotation setting defaults to allowed and toggles lock/unlock locally', async () => {
-  let orientationMock;
+test('screen rotation setting defaults to allowed and sends Android bridge preference', async () => {
+  let androidBridge;
   const dom = await bootAppDom({
     beforeLoad(nextDom) {
-      orientationMock = installScreenOrientationMock(nextDom);
+      androidBridge = installAndroidBridgeMock(nextDom);
     },
   });
   const { window } = dom;
   const testing = window.BananzaAppBridge.__testing;
   const toggle = window.document.getElementById('settingsScreenRotationAllowed');
 
-  orientationMock.reset();
+  androidBridge.reset();
   assert.equal(testing.getScreenRotationAllowed(), true);
   assert.equal(toggle.checked, true);
   assert.equal(window.localStorage.getItem('screenRotationAllowed'), null);
@@ -215,46 +197,24 @@ test('screen rotation setting defaults to allowed and toggles lock/unlock locall
   assert.equal(testing.getScreenRotationAllowed(), false);
   assert.equal(toggle.checked, false);
   assert.equal(window.localStorage.getItem('screenRotationAllowed'), '0');
-  assert.deepEqual(orientationMock.calls, ['portrait-primary']);
+  assert.deepEqual(androidBridge.messages, [{
+    type: 'screen_rotation_preference',
+    payload: { allowed: false, reason: 'setting-change' },
+  }]);
 
+  androidBridge.reset();
   await testing.setScreenRotationAllowed(true, { showStatus: false });
   assert.equal(testing.getScreenRotationAllowed(), true);
   assert.equal(toggle.checked, true);
   assert.equal(window.localStorage.getItem('screenRotationAllowed'), '1');
-  assert.equal(orientationMock.unlocks, 1);
+  assert.deepEqual(androidBridge.messages, [{
+    type: 'screen_rotation_preference',
+    payload: { allowed: true, reason: 'setting-change' },
+  }]);
 });
 
-test('screen rotation lock falls back from portrait-primary to portrait', async () => {
-  let orientationMock;
-  const dom = await bootAppDom({
-    beforeLoad(nextDom) {
-      orientationMock = installScreenOrientationMock(nextDom, {
-        lockImpl(type) {
-          if (type === 'portrait-primary') {
-            const error = new Error('primary orientation unavailable');
-            error.name = 'NotSupportedError';
-            return Promise.reject(error);
-          }
-          return Promise.resolve();
-        },
-      });
-    },
-  });
-
-  orientationMock.reset();
-  await dom.window.BananzaAppBridge.__testing.setScreenRotationAllowed(false, { showStatus: false });
-
-  assert.deepEqual(orientationMock.calls, ['portrait-primary', 'portrait']);
-  assert.equal(dom.window.localStorage.getItem('screenRotationAllowed'), '0');
-});
-
-test('screen rotation setting applies web portrait fallback in mobile landscape', async () => {
-  let orientationMock;
-  const dom = await bootAppDom({
-    beforeLoad(nextDom) {
-      orientationMock = installScreenOrientationMock(nextDom);
-    },
-  });
+test('screen rotation setting does not apply a web portrait fallback in mobile landscape', async () => {
+  const dom = await bootAppDom();
   const { window } = dom;
 
   Object.defineProperty(window, 'innerWidth', {
@@ -266,13 +226,12 @@ test('screen rotation setting applies web portrait fallback in mobile landscape'
     value: 390,
   });
 
-  orientationMock.reset();
   await window.BananzaAppBridge.__testing.setScreenRotationAllowed(false, { showStatus: false });
 
-  assert.equal(window.document.documentElement.classList.contains('is-screen-rotation-web-locked'), true);
-  assert.equal(window.document.documentElement.style.getPropertyValue('--screen-rotation-lock-width'), '390px');
-  assert.equal(window.document.documentElement.style.getPropertyValue('--screen-rotation-lock-height'), '844px');
-  assert.equal(window.BananzaAppBridge.isMobileLayout(), true);
+  assert.equal(window.document.documentElement.classList.contains('is-screen-rotation-web-locked'), false);
+  assert.equal(window.document.documentElement.style.getPropertyValue('--screen-rotation-lock-width'), '');
+  assert.equal(window.document.documentElement.style.getPropertyValue('--screen-rotation-lock-height'), '');
+  assert.equal(window.BananzaAppBridge.isMobileLayout(), false);
 
   await window.BananzaAppBridge.__testing.setScreenRotationAllowed(true, { showStatus: false });
 

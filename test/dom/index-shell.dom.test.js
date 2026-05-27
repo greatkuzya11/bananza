@@ -17,7 +17,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
   const scripts = [...document.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
 
   assert.deepEqual(styles, [
-    '/css/style.css?v=20260527-screen-orientation-lock',
+    '/css/style.css?v=20260527-native-screen-orientation',
     '/css/calls.css?v=20260509-call-modal-surface',
     '/css/voice.css',
     '/css/video-notes.css',
@@ -27,10 +27,10 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/sounds.js',
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
-    '/js/i18n.js?v=20260527-screen-orientation-lock',
+    '/js/i18n.js?v=20260527-native-screen-orientation',
     '/js/qip-infium-original.js?v=20260523-qip-infium-original',
     '/js/qip-hd.js?v=20260523-qip-hd',
-    '/js/app.js?v=20260527-screen-orientation-lock',
+    '/js/app.js?v=20260527-native-screen-orientation',
     '/js/calls/CallStore.js?v=20260509-call-modal-surface',
     '/js/calls/CallMedia.js?v=20260509-call-modal-surface',
     '/js/calls/CallNotifications.js?v=20260509-call-modal-surface',
@@ -118,7 +118,7 @@ test('settings modal exposes personal screen rotation toggle after startup view'
   assert.equal(toggle.checked, true);
   assert.equal(rotationHint?.classList.contains('settings-hint'), true);
   assert.match(rotationRow?.textContent || '', /Allow screen rotation/);
-  assert.match(rotationHint?.textContent || '', /portrait mode/);
+  assert.match(rotationHint?.textContent || '', /updated Android app/);
   assert.equal(rotationStatus?.id, 'settingsScreenRotationStatus');
 });
 
@@ -184,9 +184,8 @@ test('style.css opts mobile composer controls out of native browser panning', ()
   assert.match(styleCss, /html\.is-mobile-chat-keyboard-layout \.emoji-picker,[\s\S]*\.mention-picker-list\s*\{[^}]*touch-action\s*:\s*none\s*;/s);
 });
 
-test('style.css provides a forced portrait fallback for mobile landscape', () => {
-  assert.match(styleCss, /html\.is-screen-rotation-web-locked body\s*\{[^}]*transform\s*:\s*rotate\(90deg\) translateY\(-100%\)/s);
-  assert.match(styleCss, /html\.is-screen-rotation-web-locked #app\s*\{[^}]*--screen-rotation-lock-width/s);
-  assert.match(styleCss, /html\.is-screen-rotation-web-locked #sidebar\s*\{[^}]*position\s*:\s*fixed/s);
-  assert.match(styleCss, /html\.is-screen-rotation-web-locked \.mobile-only\s*\{[^}]*display\s*:\s*flex !important/s);
+test('style.css does not include the old forced portrait web fallback', () => {
+  assert.doesNotMatch(styleCss, /is-screen-rotation-web-locked/);
+  assert.doesNotMatch(styleCss, /--screen-rotation-lock-width/);
+  assert.doesNotMatch(styleCss, /rotate\(90deg\) translateY\(-100%\)/);
 });
