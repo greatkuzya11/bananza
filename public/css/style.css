@@ -5305,6 +5305,37 @@ html[data-visual-mode="rich"] .poll-card {
 .ai-bot-field .modal-input {
   margin-bottom: 0;
 }
+.ai-initiative-wide-hint {
+  grid-column: 1 / -1;
+  padding: 0;
+  line-height: 1.45;
+}
+.ai-initiative-wide-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ai-initiative-news-test-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.ai-initiative-news-test-item {
+  padding: 8px 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: rgba(255,255,255,.04);
+}
+.ai-initiative-news-test-item strong,
+.ai-initiative-news-test-item small {
+  display: block;
+}
+.ai-initiative-news-test-item small {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
 .ai-bot-avatar-row {
   display: flex;
   align-items: center;
@@ -5559,6 +5590,36 @@ html[data-visual-mode="rich"] .poll-card {
 }
 .chat-preferences-status.is-success { color: var(--success); }
 .chat-preferences-status.is-error { color: var(--danger); }
+
+.ai-initiative-reminders-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ai-initiative-reminder-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: rgba(255,255,255,.04);
+}
+.ai-initiative-reminder-row > div {
+  min-width: 0;
+}
+.ai-initiative-reminder-row strong,
+.ai-initiative-reminder-row small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-initiative-reminder-row small {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
 
 :is(.theme-settings-status, .weather-settings-status, .notification-settings-status, .sound-settings-status, .ai-bot-status, .chat-preferences-status, .admin-action-status).is-pending {
   color: var(--accent);

@@ -31,6 +31,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/qip-infium-original.js?v=20260523-qip-infium-original',
     '/js/qip-hd.js?v=20260523-qip-hd',
     '/js/app.js?v=20260527-native-screen-orientation',
+    '/js/ai-initiative.js?v=20260527-ai-initiative',
     '/js/calls/CallStore.js?v=20260509-call-modal-surface',
     '/js/calls/CallMedia.js?v=20260509-call-modal-surface',
     '/js/calls/CallNotifications.js?v=20260509-call-modal-surface',

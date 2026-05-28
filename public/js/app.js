@@ -1960,8 +1960,10 @@
     closeAllModals: () => closeAllModals(),
     registerManagedModal: (id, options) => registerModal(id, options),
     openManagedModal: (id, options) => openModal(id, options),
+    openModal: (id, options) => openModal(id, options),
     closeManagedModal: (id, options) => closeModal(id, options),
     closeTopManagedModal: (options) => closeTopModal(options),
+    showToast: (message) => showCenterToast(message),
     closeChatHeaderActions: () => closeChatHeaderActions(),
     syncChatHeaderActions: () => syncChatHeaderActionsAccessibility(),
     getToken: () => token || localStorage.getItem('token'),
@@ -25564,6 +25566,9 @@
     const grokAiItem = $('#settingsGrokAiPanel');
     if (currentUser.is_admin) grokAiItem?.classList.remove('hidden');
     else grokAiItem?.classList.add('hidden');
+    const aiInitiativesItem = $('#settingsAiInitiativesPanel');
+    if (currentUser.is_admin) aiInitiativesItem?.classList.remove('hidden');
+    else aiInitiativesItem?.classList.add('hidden');
     $('#settingsSendEnter').checked = sendByEnter;
     $('#settingsMicrophoneMode').checked = getMicrophoneMode() === 'voice_message';
     $('#settingsScrollRestore').checked = scrollRestoreMode === 'restore';
@@ -25877,6 +25882,7 @@
       setChatShotChatStatus(error.message || 'Could not load ChatShot', 'error');
     });
     renderChatDangerControls(chat);
+    window.dispatchEvent(new CustomEvent('bananza:chatinfoopen', { detail: { chatId: currentChatId } }));
     const contextTransformToggle = $('#chatContextTransformToggle');
     if (contextTransformToggle) {
       contextTransformToggle.onchange = () => {

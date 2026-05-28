@@ -667,6 +667,7 @@ function createAiBotFeature({
   fetchPreview,
   notifyMessageCreated,
   onMessagePublished,
+  saveMessageMentions,
   messageActions,
 }) {
   const botByIdStmt = db.prepare(`
@@ -1263,6 +1264,7 @@ function createAiBotFeature({
   const removeBotMemberStmt = db.prepare('DELETE FROM chat_members WHERE chat_id=? AND user_id=?');
   const removeBotFromAllChatsStmt = db.prepare('DELETE FROM chat_members WHERE user_id=?');
   const enabledBotChatsStmt = db.prepare('SELECT chat_id FROM ai_chat_bots WHERE bot_id=? AND enabled=1');
+  const syntheticMentionUserStmt = db.prepare('SELECT id, username, display_name FROM users WHERE id=? AND COALESCE(is_ai_bot,0)=0');
   const passThroughLimiter = (_req, _res, next) => next();
   const botAvatarLimiter = upLimiter || passThroughLimiter;
   let modelCatalogCache = null;
@@ -7158,6 +7160,173 @@ function createAiBotFeature({
     db.prepare('UPDATE grok_memory_facts SET is_active=0, updated_at=datetime(\'now\') WHERE source_message_id=?').run(messageId);
   }
 
+  function resolveChatBotRuntime(chatId, botId) {
+    const resolvedChatId = positiveId(chatId);
+    const resolvedBotId = positiveId(botId);
+    if (!resolvedChatId || !resolvedBotId) return null;
+    const row = activeChatBotsStmt.all(resolvedChatId)
+      .find((item) => Number(item.id || 0) === resolvedBotId);
+    if (!row) return null;
+    const bot = sanitizeBot(row);
+    if (isContextTransformBot(bot) || isChatShotBot(bot) || bot.kind === 'image') return null;
+    const settings = getGlobalSettings();
+    if (!providerEnabled(bot.provider, settings)) return null;
+    if (!bot.user_id || bot.enabled === false) return null;
+    return {
+      bot,
+      chatConfig: {
+        mode: bot.kind === 'image' || bot.provider === 'deepseek' || bot.provider === 'qwen'
+          ? 'simple'
+          : (row.mode === 'hybrid' ? 'hybrid' : 'simple'),
+        hot_context_limit: intValue(row.hot_context_limit, 50, 20, 100),
+        trigger_mode: row.trigger_mode || 'mention_reply',
+        auto_react_on_mention: boolValue(row.auto_react_on_mention, false),
+      },
+    };
+  }
+
+  async function generateJsonForBot({ chatId, botId, system, user, fallback = {}, maxOutputTokens = 900 } = {}) {
+    const runtime = resolveChatBotRuntime(chatId, botId);
+    if (!runtime) return fallback;
+    return generateBotJsonPayload(runtime.bot, { system, user, fallback, maxOutputTokens });
+  }
+
+  function mentionPrefixForUser(userId) {
+    const row = syntheticMentionUserStmt.get(positiveId(userId));
+    if (!row) return '';
+    const token = normalizeMention(row.username || row.display_name || '', '');
+    return token ? `@${token}` : '';
+  }
+
+  async function runSyntheticBotTurn({
+    chatId,
+    botId,
+    instruction,
+    purpose = 'initiative',
+    replyToId = null,
+    mentionUserId = null,
+    dryRun = false,
+  } = {}) {
+    const runtime = resolveChatBotRuntime(chatId, botId);
+    if (!runtime) {
+      const error = new Error('Bot is not available in this chat');
+      error.status = 404;
+      throw error;
+    }
+    const { bot, chatConfig } = runtime;
+    const settings = getGlobalSettings();
+    const isYandex = bot.provider === 'yandex';
+    const isDeepSeek = bot.provider === 'deepseek';
+    const isQwen = bot.provider === 'qwen';
+    const isGrok = bot.provider === 'grok';
+    const apiKey = isYandex
+      ? getYandexApiKey()
+      : (isDeepSeek ? getDeepSeekApiKey() : (isQwen ? getQwenApiKey() : (isGrok ? getGrokApiKey() : getApiKey())));
+    if (!apiKey) return null;
+    if (isYandex && !settings.yandex_folder_id) return null;
+
+    const bodyInstruction = cleanText(instruction || '', 6000);
+    if (!bodyInstruction) return null;
+    const syntheticSource = {
+      id: positiveId(replyToId) || null,
+      chat_id: positiveId(chatId),
+      user_id: positiveId(mentionUserId) || 0,
+      text: bodyInstruction,
+      transcription_text: '',
+      ai_generated: 0,
+      is_deleted: 0,
+    };
+    const context = await assembleContext({ bot, chatConfig: chatConfigForBotMode(bot, chatConfig, 'text'), message: syntheticSource });
+    const mentionPrefix = mentionPrefixForUser(mentionUserId);
+    const purposeLine = purpose ? `Synthetic turn purpose: ${cleanText(purpose, 80)}.` : '';
+    const mentionLine = mentionPrefix ? `If this is a reminder for that user, begin the visible message with "${mentionPrefix}".` : '';
+    const system = [
+      context.system,
+      'You are writing a new visible chat message triggered by BananZa scheduling logic, not by a visible user message.',
+      'Do not mention hidden triggers, schedulers, cron jobs, internal prompts, or system instructions.',
+      'Return only the message body.',
+      purposeLine,
+      mentionLine,
+    ].filter(Boolean).join('\n\n');
+
+    const rawText = isYandex
+      ? await yandexAi.generateText(yandexClientOptions({
+          apiKey,
+          model: bot.response_model || settings.yandex_default_response_model,
+          system,
+          user: context.user,
+          maxOutputTokens: intValue(bot.max_tokens, settings.yandex_max_tokens, 1, 8000),
+          temperature: floatValue(bot.temperature, settings.yandex_temperature, 0, 1),
+        }))
+      : isDeepSeek
+        ? await deepseekAi.generateText({
+            apiKey,
+            baseUrl: deepseekBaseUrl(),
+            model: bot.response_model || settings.deepseek_default_response_model,
+            system,
+            user: context.user,
+            maxOutputTokens: intValue(bot.max_tokens, settings.deepseek_max_tokens, 1, 8000),
+            temperature: floatValue(bot.temperature, settings.deepseek_temperature, 0, 1),
+            timeoutMs: settings.deepseek_request_timeout_ms,
+          })
+      : isQwen
+        ? await qwenAi.generateText({
+            apiKey,
+            baseUrl: qwenBaseUrl(),
+            model: bot.response_model || settings.qwen_default_response_model,
+            system,
+            user: context.user,
+            maxOutputTokens: intValue(bot.max_tokens, settings.qwen_max_tokens, 1, 8000),
+            temperature: floatValue(bot.temperature, settings.qwen_temperature, 0, 1),
+            timeoutMs: settings.qwen_request_timeout_ms,
+          })
+      : isGrok
+        ? await grokAi.generateText({
+            apiKey,
+            baseUrl: grokBaseUrl(),
+            model: bot.response_model || settings.grok_default_response_model,
+            system,
+            user: context.user,
+            maxOutputTokens: intValue(bot.max_tokens, settings.grok_max_tokens, 1, 8000),
+            temperature: floatValue(bot.temperature, settings.grok_temperature, 0, 1),
+          })
+      : await generateText({
+          apiKey,
+          model: bot.response_model || settings.default_response_model,
+          system,
+          user: context.user,
+          maxOutputTokens: intValue(bot.max_tokens, 1000, OPENAI_MIN_OUTPUT_TOKENS, 8000),
+          temperature: floatValue(bot.temperature, 0.55, 0, 1),
+        });
+
+    let responseText = cleanText(stripBotSpeakerLabel(rawText, bot), 5000);
+    if (mentionPrefix && responseText && !new RegExp(`(^|\\s)${escapeRegExp(mentionPrefix)}(?=$|\\s|[,.:;!?])`, 'i').test(responseText)) {
+      responseText = `${mentionPrefix} ${responseText}`;
+    }
+    if (!responseText) return null;
+    if (dryRun) return { text: responseText, bot, chatConfig };
+
+    const result = insertBotMessageStmt.run(
+      positiveId(chatId),
+      bot.user_id,
+      responseText,
+      null,
+      positiveId(replyToId) || null,
+      1,
+      bot.id
+    );
+    if (typeof saveMessageMentions === 'function') {
+      try { saveMessageMentions(result.lastInsertRowid, positiveId(chatId), responseText); } catch {}
+    }
+    const message = hydrateMessageById(result.lastInsertRowid);
+    if (!message) return null;
+    finalizePublishedBotMessage(message, {
+      schedulePreview: true,
+      enqueueMemoryMessage: true,
+    });
+    return { message, text: responseText, bot, chatConfig };
+  }
+
   function providerBotByRequestId(req, res, { provider = 'openai', kind = null } = {}) {
     const bot = botByIdStmt.get(Number(req.params.id));
     if (!bot) {
@@ -10159,6 +10328,9 @@ function createAiBotFeature({
     listSelectableBotUsersForViewer,
     getSelectableBotByUserId,
     getActiveChatBotsForViewer,
+    resolveChatBotRuntime,
+    generateJsonForBot,
+    runSyntheticBotTurn,
     attachBotToChatWithDefaults(chatId, bot, options = {}) {
       return attachBotToChatWithDefaultsTx({
         chatId,

@@ -6,6 +6,68 @@ function addColumnIfMissing(db, table, column, ddl) {
   }
 }
 
+function ensureInitiativeRulesPromptModeSupportsNews(db) {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='ai_bot_initiative_rules'").get();
+  if (!row?.sql || row.sql.includes('news_hook')) return;
+
+  const foreignKeys = db.pragma('foreign_keys', { simple: true });
+  db.pragma('foreign_keys = OFF');
+  try {
+    db.exec(`
+      CREATE TABLE ai_bot_initiative_rules_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        bot_id INTEGER NOT NULL REFERENCES ai_bots(id) ON DELETE CASCADE,
+        enabled INTEGER DEFAULT 0,
+        schedule_type TEXT DEFAULT 'fixed' CHECK(schedule_type IN ('fixed','random_window')),
+        fixed_time TEXT DEFAULT '09:00',
+        window_start TEXT DEFAULT '09:00',
+        window_end TEXT DEFAULT '18:00',
+        timezone TEXT DEFAULT 'UTC',
+        idle_threshold_minutes INTEGER DEFAULT 1440,
+        min_gap_minutes INTEGER DEFAULT 1440,
+        same_context_limit_enabled INTEGER DEFAULT 1,
+        same_context_max_runs INTEGER DEFAULT 1,
+        same_context_run_count INTEGER DEFAULT 0,
+        prompt_mode TEXT DEFAULT 'context_question' CHECK(prompt_mode IN ('context_question','news_hook','date_holiday','idle_ping','custom')),
+        custom_prompt TEXT DEFAULT '',
+        holiday_country TEXT DEFAULT '',
+        news_source_id INTEGER DEFAULT NULL REFERENCES ai_news_sources(id) ON DELETE SET NULL,
+        news_max_age_hours INTEGER DEFAULT 24,
+        news_item_count INTEGER DEFAULT 1,
+        news_use_chat_context INTEGER DEFAULT 1,
+        news_prompt TEXT DEFAULT '',
+        next_run_at TEXT DEFAULT NULL,
+        last_run_at TEXT DEFAULT NULL,
+        last_message_id INTEGER DEFAULT NULL REFERENCES messages(id) ON DELETE SET NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
+
+      INSERT INTO ai_bot_initiative_rules_new(
+        id, chat_id, bot_id, enabled, schedule_type, fixed_time, window_start, window_end, timezone,
+        idle_threshold_minutes, min_gap_minutes, same_context_limit_enabled, same_context_max_runs,
+        same_context_run_count, prompt_mode, custom_prompt, holiday_country, news_source_id,
+        news_max_age_hours, news_item_count, news_use_chat_context, news_prompt, next_run_at, last_run_at,
+        last_message_id, created_at, updated_at
+      )
+      SELECT
+        id, chat_id, bot_id, enabled, schedule_type, fixed_time, window_start, window_end, timezone,
+        idle_threshold_minutes, min_gap_minutes, same_context_limit_enabled, same_context_max_runs,
+        same_context_run_count,
+        CASE WHEN prompt_mode='date_holiday' THEN 'news_hook' ELSE COALESCE(prompt_mode, 'context_question') END,
+        custom_prompt, holiday_country, news_source_id, news_max_age_hours, news_item_count,
+        news_use_chat_context, news_prompt, next_run_at, last_run_at, last_message_id, created_at, updated_at
+      FROM ai_bot_initiative_rules;
+
+      DROP TABLE ai_bot_initiative_rules;
+      ALTER TABLE ai_bot_initiative_rules_new RENAME TO ai_bot_initiative_rules;
+    `);
+  } finally {
+    db.pragma(`foreign_keys = ${foreignKeys ? 'ON' : 'OFF'}`);
+  }
+}
+
 function initAiSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS ai_bot_settings (
@@ -158,6 +220,95 @@ function initAiSchema(db) {
       created_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS ai_bot_initiative_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      bot_id INTEGER NOT NULL REFERENCES ai_bots(id) ON DELETE CASCADE,
+      enabled INTEGER DEFAULT 0,
+      schedule_type TEXT DEFAULT 'fixed' CHECK(schedule_type IN ('fixed','random_window')),
+      fixed_time TEXT DEFAULT '09:00',
+      window_start TEXT DEFAULT '09:00',
+      window_end TEXT DEFAULT '18:00',
+      timezone TEXT DEFAULT 'UTC',
+      idle_threshold_minutes INTEGER DEFAULT 1440,
+      min_gap_minutes INTEGER DEFAULT 1440,
+      same_context_limit_enabled INTEGER DEFAULT 1,
+      same_context_max_runs INTEGER DEFAULT 1,
+      same_context_run_count INTEGER DEFAULT 0,
+      prompt_mode TEXT DEFAULT 'context_question' CHECK(prompt_mode IN ('context_question','news_hook','date_holiday','idle_ping','custom')),
+      custom_prompt TEXT DEFAULT '',
+      holiday_country TEXT DEFAULT '',
+      news_source_id INTEGER DEFAULT NULL REFERENCES ai_news_sources(id) ON DELETE SET NULL,
+      news_max_age_hours INTEGER DEFAULT 24,
+      news_item_count INTEGER DEFAULT 1,
+      news_use_chat_context INTEGER DEFAULT 1,
+      news_prompt TEXT DEFAULT '',
+      next_run_at TEXT DEFAULT NULL,
+      last_run_at TEXT DEFAULT NULL,
+      last_message_id INTEGER DEFAULT NULL REFERENCES messages(id) ON DELETE SET NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS ai_bot_reminders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      requester_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      bot_id INTEGER NOT NULL REFERENCES ai_bots(id) ON DELETE CASCADE,
+      source_message_id INTEGER DEFAULT NULL REFERENCES messages(id) ON DELETE SET NULL,
+      due_at TEXT NOT NULL,
+      requester_timezone TEXT DEFAULT 'UTC',
+      reminder_text TEXT NOT NULL,
+      status TEXT DEFAULT 'pending' CHECK(status IN ('pending','processing','sent','canceled','error')),
+      attempts INTEGER DEFAULT 0,
+      sent_message_id INTEGER DEFAULT NULL REFERENCES messages(id) ON DELETE SET NULL,
+      error TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS ai_holiday_cache (
+      source TEXT NOT NULL,
+      country_code TEXT NOT NULL,
+      year INTEGER NOT NULL,
+      payload_json TEXT NOT NULL,
+      updated_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (source, country_code, year)
+    );
+
+    CREATE TABLE IF NOT EXISTS ai_news_sources (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      type TEXT DEFAULT 'rss' CHECK(type IN ('rss')),
+      url TEXT NOT NULL,
+      enabled INTEGER DEFAULT 1,
+      cache_ttl_minutes INTEGER DEFAULT 30,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS ai_news_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_id INTEGER NOT NULL REFERENCES ai_news_sources(id) ON DELETE CASCADE,
+      guid TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT DEFAULT '',
+      url TEXT DEFAULT '',
+      published_at TEXT DEFAULT NULL,
+      fetched_at TEXT DEFAULT (datetime('now')),
+      raw_json TEXT DEFAULT '{}',
+      UNIQUE(source_id, guid)
+    );
+
+    CREATE TABLE IF NOT EXISTS ai_news_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      rule_id INTEGER NOT NULL REFERENCES ai_bot_initiative_rules(id) ON DELETE CASCADE,
+      source_id INTEGER NOT NULL REFERENCES ai_news_sources(id) ON DELETE CASCADE,
+      item_guid TEXT NOT NULL,
+      sent_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(rule_id, source_id, item_guid)
+    );
+
     CREATE TABLE IF NOT EXISTS yandex_memory_chunks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
@@ -276,6 +427,13 @@ function initAiSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_ai_bots_enabled ON ai_bots(enabled);
     CREATE INDEX IF NOT EXISTS idx_bot_chat_add_audit_actor_created ON bot_chat_add_audit(actor_user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_bot_chat_add_audit_chat_created ON bot_chat_add_audit(chat_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ai_initiative_rules_due ON ai_bot_initiative_rules(enabled, next_run_at);
+    CREATE INDEX IF NOT EXISTS idx_ai_initiative_rules_chat ON ai_bot_initiative_rules(chat_id, bot_id);
+    CREATE INDEX IF NOT EXISTS idx_ai_reminders_due ON ai_bot_reminders(status, due_at);
+    CREATE INDEX IF NOT EXISTS idx_ai_reminders_user_chat ON ai_bot_reminders(requester_user_id, chat_id, status);
+    CREATE INDEX IF NOT EXISTS idx_ai_news_sources_enabled ON ai_news_sources(enabled, type);
+    CREATE INDEX IF NOT EXISTS idx_ai_news_items_source_published ON ai_news_items(source_id, published_at);
+    CREATE INDEX IF NOT EXISTS idx_ai_news_history_rule ON ai_news_history(rule_id, sent_at);
     CREATE INDEX IF NOT EXISTS idx_message_embeddings_chat ON message_embeddings(chat_id, is_stale);
     CREATE INDEX IF NOT EXISTS idx_memory_chunks_chat ON memory_chunks(chat_id, source_to_message_id);
     CREATE INDEX IF NOT EXISTS idx_memory_facts_chat ON memory_facts(chat_id, is_active, type);
@@ -323,6 +481,16 @@ function initAiSchema(db) {
   addColumnIfMissing(db, 'chats', 'chatshot_banana_filter_enabled', 'chatshot_banana_filter_enabled INTEGER DEFAULT 1');
   addColumnIfMissing(db, 'ai_chat_bots', 'auto_react_on_mention', 'auto_react_on_mention INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'users', 'is_ai_bot', 'is_ai_bot INTEGER DEFAULT 0');
+  addColumnIfMissing(db, 'users', 'timezone', "timezone TEXT DEFAULT NULL");
+  addColumnIfMissing(db, 'ai_bot_initiative_rules', 'same_context_limit_enabled', 'same_context_limit_enabled INTEGER DEFAULT 1');
+  addColumnIfMissing(db, 'ai_bot_initiative_rules', 'same_context_max_runs', 'same_context_max_runs INTEGER DEFAULT 1');
+  addColumnIfMissing(db, 'ai_bot_initiative_rules', 'same_context_run_count', 'same_context_run_count INTEGER DEFAULT 0');
+  addColumnIfMissing(db, 'ai_bot_initiative_rules', 'news_source_id', 'news_source_id INTEGER DEFAULT NULL REFERENCES ai_news_sources(id) ON DELETE SET NULL');
+  addColumnIfMissing(db, 'ai_bot_initiative_rules', 'news_max_age_hours', 'news_max_age_hours INTEGER DEFAULT 24');
+  addColumnIfMissing(db, 'ai_bot_initiative_rules', 'news_item_count', 'news_item_count INTEGER DEFAULT 1');
+  addColumnIfMissing(db, 'ai_bot_initiative_rules', 'news_use_chat_context', 'news_use_chat_context INTEGER DEFAULT 1');
+  addColumnIfMissing(db, 'ai_bot_initiative_rules', 'news_prompt', "news_prompt TEXT DEFAULT ''");
+  ensureInitiativeRulesPromptModeSupportsNews(db);
   addColumnIfMissing(db, 'messages', 'ai_generated', 'ai_generated INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'messages', 'ai_bot_id', 'ai_bot_id INTEGER DEFAULT NULL');
   addColumnIfMissing(db, 'messages', 'ai_notice_type', 'ai_notice_type TEXT DEFAULT NULL');
@@ -330,6 +498,19 @@ function initAiSchema(db) {
   addColumnIfMissing(db, 'messages', 'ai_document_format_hint', "ai_document_format_hint TEXT DEFAULT NULL");
 
   db.exec('CREATE INDEX IF NOT EXISTS idx_ai_bots_provider ON ai_bots(provider, enabled)');
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_ai_initiative_rules_due ON ai_bot_initiative_rules(enabled, next_run_at);
+    CREATE INDEX IF NOT EXISTS idx_ai_initiative_rules_chat ON ai_bot_initiative_rules(chat_id, bot_id);
+    CREATE INDEX IF NOT EXISTS idx_ai_news_sources_enabled ON ai_news_sources(enabled, type);
+    CREATE INDEX IF NOT EXISTS idx_ai_news_items_source_published ON ai_news_items(source_id, published_at);
+    CREATE INDEX IF NOT EXISTS idx_ai_news_history_rule ON ai_news_history(rule_id, sent_at);
+  `);
+  db.prepare(`
+    INSERT INTO ai_news_sources(name, type, url, enabled, cache_ttl_minutes)
+    SELECT 'Lenta.ru top7', 'rss', 'https://lenta.ru/rss/top7', 1, 30
+    WHERE NOT EXISTS (SELECT 1 FROM ai_news_sources)
+  `).run();
+  db.prepare("UPDATE ai_bot_initiative_rules SET prompt_mode='news_hook' WHERE prompt_mode='date_holiday'").run();
   db.prepare("UPDATE chats SET chatshot_enabled=0 WHERE chatshot_enabled IS NULL").run();
   db.prepare("UPDATE chats SET chatshot_style='comic' WHERE chatshot_style IS NULL OR chatshot_style NOT IN ('comic','illustration','photo')").run();
   db.prepare("UPDATE chats SET chatshot_banana_filter_enabled=1 WHERE chatshot_banana_filter_enabled IS NULL").run();

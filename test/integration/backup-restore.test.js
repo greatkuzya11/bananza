@@ -111,8 +111,10 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
       assert.equal(recovery.is_blocked, 0);
       assert.equal(await bcrypt.compare('restore-password', recovery.password), true);
       const fileRow = restoredDb.prepare('SELECT stored_name FROM files WHERE id=?').get(uploaded.id);
+      const newsSource = restoredDb.prepare('SELECT name, url FROM ai_news_sources WHERE url=?').get('https://lenta.ru/rss/top7');
       assert.ok(fileRow);
       assert.equal(fs.existsSync(path.join(sandbox.appDir, 'uploads', fileRow.stored_name)), true);
+      assert.equal(newsSource.name, 'Lenta.ru top7');
     } finally {
       restoredDb.close();
     }

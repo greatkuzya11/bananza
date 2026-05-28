@@ -47,6 +47,7 @@ const { createMessageCopyService } = require('./messageCopy');
 const { createPushFeature } = require('./push');
 const { createSoundSettingsFeature } = require('./soundSettings');
 const { createAiBotFeature } = require('./ai');
+const { createAiInitiativeFeature } = require('./ai/initiative');
 const { createChatFoldersFeature } = require('./chatFolders');
 const { createCallFeature } = require('./calls');
 const { createPollService, POLL_CLOSE_PRESETS, toDbDate } = require('./polls');
@@ -352,6 +353,7 @@ const messageActions = createMessageActionsService({
 });
 
 let aiBotFeature = null;
+let aiInitiativeFeature = null;
 let chatFoldersFeature = null;
 let callFeature = null;
 let videoNoteFeature = null;
@@ -482,7 +484,18 @@ aiBotFeature = createAiBotFeature({
   fetchPreview,
   notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),
   onMessagePublished: (message) => handleChatListMessageCreated(message),
+  saveMessageMentions: (messageId, chatId, text) => saveMessageMentions(messageId, chatId, text),
   messageActions,
+});
+
+aiInitiativeFeature = createAiInitiativeFeature({
+  app,
+  db,
+  auth,
+  adminOnly,
+  aiBotFeature,
+  hydrateMessageById: (messageId) => hydrateMessageById(messageId),
+  onMessageCreated: (message) => handleChatListMessageCreated(message),
 });
 
 chatFoldersFeature = createChatFoldersFeature({
@@ -1326,8 +1339,17 @@ function handleChatListMessageCreated(message) {
   revealHiddenChatForMembers(chatId, { reason: 'new_message', messageId });
 }
 
-function handleUserMessageCreated(message, options = {}) {
+async function handleUserMessageCreated(message, options = {}) {
   handleChatListMessageCreated(message);
+  if (!options.skipBotTrigger && aiInitiativeFeature?.handleMessageCreated) {
+    const handled = await aiInitiativeFeature.handleMessageCreated(message).catch((error) => {
+      console.warn('[ai-initiative] message hook failed:', error.message);
+      return false;
+    });
+    if (handled) {
+      return aiBotFeature?.handleMessageCreated(message, { ...options, skipBotTrigger: true });
+    }
+  }
   return aiBotFeature?.handleMessageCreated(message, options);
 }
 
@@ -2445,7 +2467,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
         poll: rawPoll,
       });
       try { db.prepare("UPDATE users SET last_activity = datetime('now') WHERE id = ?").run(req.user.id); } catch (e) {}
-      aiBotFeature.handleMessageCreated(result.message, { skipBotTrigger: true }).catch((error) => {
+      handleUserMessageCreated(result.message, { skipBotTrigger: true }).catch((error) => {
         console.warn('[ai-bot] message hook failed:', error.message);
       });
       return res.json(result.message);
@@ -2531,7 +2553,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   handleChatListMessageCreated(hydratedMsg);
   broadcastToChatAll(chatId, { type: 'message', message: hydratedMsg });
   pushFeature.notifyMessageCreated(hydratedMsg);
-  aiBotFeature.handleMessageCreated(hydratedMsg, { skipBotTrigger: Boolean(hydratedMsg.poll) }).catch((error) => {
+  handleUserMessageCreated(hydratedMsg, { skipBotTrigger: Boolean(hydratedMsg.poll) }).catch((error) => {
     console.warn('[ai-bot] message hook failed:', error.message);
   });
 
@@ -2618,7 +2640,7 @@ app.post('/api/messages/:id/grok-image-risk-retry', auth, msgLimiter, (req, res)
   handleChatListMessageCreated(hydratedMsg);
   broadcastToChatAll(notice.chat_id, { type: 'message', message: hydratedMsg });
   pushFeature.notifyMessageCreated(hydratedMsg);
-  aiBotFeature.handleMessageCreated(hydratedMsg).catch((error) => {
+  handleUserMessageCreated(hydratedMsg).catch((error) => {
     console.warn('[ai-bot] message hook failed:', error.message);
   });
 

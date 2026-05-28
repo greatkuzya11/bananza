@@ -173,8 +173,10 @@ test('admin backup export downloads a complete archive and stays admin-only', as
         assert.equal(backupDb.pragma('integrity_check', { simple: true }), 'ok');
         const userCount = backupDb.prepare('SELECT COUNT(*) AS count FROM users').get().count;
         const fileRow = backupDb.prepare('SELECT stored_name FROM files WHERE id = ?').get(uploaded.id);
+        const newsSource = backupDb.prepare('SELECT name, url FROM ai_news_sources WHERE url = ?').get('https://lenta.ru/rss/top7');
         assert.ok(userCount >= 2);
         assert.equal(fileRow.stored_name, uploaded.stored_name);
+        assert.equal(newsSource.name, 'Lenta.ru top7');
       } finally {
         backupDb.close();
       }

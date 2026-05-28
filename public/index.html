@@ -386,6 +386,7 @@
         <button id="settingsDeepSeekAiPanel" class="settings-item hidden">🐋 DeepSeek AI</button>
         <button id="settingsQwenAiPanel" class="settings-item hidden">&#129504; Qwen AI</button>
         <button id="settingsGrokAiPanel" class="settings-item hidden">&#10006;&#65039; Grok AI</button>
+        <button id="settingsAiInitiativesPanel" class="settings-item hidden">💬 Bot initiatives</button>
       </div>
     </div>
   </div>
@@ -785,6 +786,130 @@
           </div>
 
           <div id="aiBotsStatus" class="ai-bot-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI Bot Initiative Settings Modal -->
+  <div id="aiInitiativeModal" class="modal hidden">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3>Bot initiatives</h3>
+        <button class="modal-close">x</button>
+      </div>
+      <div class="modal-body">
+        <div class="ai-bot-settings-block">
+          <div class="ai-bot-panel">
+            <h4>Initiative rules</h4>
+            <div id="aiInitiativeRuleList" class="ai-bot-list"></div>
+            <div class="ai-bot-actions">
+              <button id="aiInitiativeNewRule" type="button" class="weather-action-btn">New rule</button>
+              <button id="aiInitiativeSaveRule" type="button" class="btn-primary">Save rule</button>
+              <button id="aiInitiativeDeleteRule" type="button" class="weather-action-btn">Delete rule</button>
+              <button id="aiInitiativeTestRule" type="button" class="weather-action-btn">Test rule</button>
+            </div>
+            <div id="aiInitiativeStatus" class="ai-bot-status admin-action-status"></div>
+          </div>
+          <div class="ai-bot-panel">
+            <h4>Rule settings</h4>
+            <div class="ai-bot-grid">
+              <label>Chat<select id="aiInitiativeChatSelect" class="modal-input"></select></label>
+              <label>Bot<select id="aiInitiativeBotSelect" class="modal-input"></select></label>
+              <label>Schedule<select id="aiInitiativeScheduleType" class="modal-input">
+                <option value="fixed">Fixed time</option>
+                <option value="random_window">Random daily window</option>
+              </select></label>
+              <label id="aiInitiativeFixedTimeField">Fixed time<input id="aiInitiativeFixedTime" class="modal-input" type="time" value="09:00"></label>
+              <label id="aiInitiativeWindowStartField">Window start<input id="aiInitiativeWindowStart" class="modal-input" type="time" value="09:00"></label>
+              <label id="aiInitiativeWindowEndField">Window end<input id="aiInitiativeWindowEnd" class="modal-input" type="time" value="18:00"></label>
+              <label>Timezone
+                <input id="aiInitiativeTimezoneSearch" class="modal-input" type="search" placeholder="Search timezone or UTC offset">
+                <select id="aiInitiativeTimezone" class="modal-input"></select>
+              </label>
+              <label>Idle minutes<input id="aiInitiativeIdleMinutes" class="modal-input" type="number" min="1" max="43200" value="1440"></label>
+              <label>Minimum gap<input id="aiInitiativeGapMinutes" class="modal-input" type="number" min="1" max="43200" value="1440"></label>
+              <div class="ai-bot-toggle-label"><span>Limit repeats for same context</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="aiInitiativeSameContextLimitEnabled" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <label>Max messages for same context<input id="aiInitiativeSameContextMaxRuns" class="modal-input" type="number" min="1" max="20" value="1"></label>
+              <label>Prompt mode<select id="aiInitiativePromptMode" class="modal-input">
+                <option value="context_question">Context question</option>
+                <option value="news_hook">News hook</option>
+                <option value="idle_ping">Idle ping</option>
+                <option value="custom">Custom prompt</option>
+              </select></label>
+              <label id="aiInitiativeNewsSourceField">News source<select id="aiInitiativeNewsSource" class="modal-input"></select></label>
+              <label id="aiInitiativeNewsMaxAgeField">Max news age hours<input id="aiInitiativeNewsMaxAge" class="modal-input" type="number" min="1" max="336" value="24"></label>
+              <label id="aiInitiativeNewsItemCountField">News items count<input id="aiInitiativeNewsItemCount" class="modal-input" type="number" min="1" max="10" value="1"></label>
+              <div id="aiInitiativeNewsContextField" class="ai-bot-toggle-label"><span>Tie news to chat context</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="aiInitiativeNewsUseContext" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="ai-initiative-wide-actions">
+                <button id="aiInitiativeManageNewsSources" type="button" class="weather-action-btn">News sources</button>
+              </div>
+              <div class="settings-hint ai-initiative-wide-hint">Timezone is selected from IANA zones and shows the current UTC offset. Default is your browser timezone.</div>
+              <div class="settings-hint ai-initiative-wide-hint">When enabled, this rule can send only this many initiative messages after the same latest human message. New human activity resets the counter.</div>
+              <div id="aiInitiativeNewsSourceHint" class="settings-hint ai-initiative-wide-hint"></div>
+              <div class="ai-bot-toggle-label"><span>Enabled</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="aiInitiativeEnabled">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            <label id="aiInitiativeNewsPromptField" class="ai-bot-field">News prompt<textarea id="aiInitiativeNewsPrompt" class="modal-input" rows="4"></textarea></label>
+            <label class="ai-bot-field">Custom prompt<textarea id="aiInitiativeCustomPrompt" class="modal-input" rows="4"></textarea></label>
+            <div id="aiInitiativePromptPreview" class="settings-hint ai-initiative-wide-hint"></div>
+            <div id="aiInitiativeTestResult" class="settings-hint"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI Bot Initiative News Sources Modal -->
+  <div id="aiInitiativeNewsSourcesModal" class="modal hidden">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3>News sources</h3>
+        <button class="modal-close">x</button>
+      </div>
+      <div class="modal-body">
+        <div class="ai-bot-settings-block">
+          <div class="ai-bot-panel">
+            <h4>RSS sources</h4>
+            <div id="aiInitiativeNewsSourceList" class="ai-bot-list"></div>
+            <div class="ai-bot-actions">
+              <button id="aiInitiativeNewNewsSource" type="button" class="weather-action-btn">New source</button>
+              <button id="aiInitiativeSaveNewsSource" type="button" class="btn-primary">Save source</button>
+              <button id="aiInitiativeDeleteNewsSource" type="button" class="weather-action-btn">Delete source</button>
+              <button id="aiInitiativeTestNewsSource" type="button" class="weather-action-btn">Test source</button>
+            </div>
+            <div id="aiInitiativeNewsSourceStatus" class="ai-bot-status admin-action-status"></div>
+          </div>
+          <div class="ai-bot-panel">
+            <h4>Source settings</h4>
+            <div class="ai-bot-grid">
+              <label>Source name<input id="aiInitiativeNewsSourceName" class="modal-input" maxlength="120" value="Lenta.ru top7"></label>
+              <label>RSS URL<input id="aiInitiativeNewsSourceUrl" class="modal-input" type="url" value="https://lenta.ru/rss/top7"></label>
+              <label>Cache TTL minutes<input id="aiInitiativeNewsSourceTtl" class="modal-input" type="number" min="1" max="1440" value="30"></label>
+              <div class="ai-bot-toggle-label"><span>Enabled</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="aiInitiativeNewsSourceEnabled" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="settings-hint ai-initiative-wide-hint">RSS source is fetched on the server and cached. If no recent item is available, the bot does not invent news.</div>
+            </div>
+            <div id="aiInitiativeNewsSourceTestResult" class="settings-hint ai-initiative-news-test-result"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -2317,6 +2442,11 @@
           <div class="settings-hint">When enabled and the chat has at least two messages, a camera button appears near search and posts a generated chat snapshot as chatShot.</div>
           <div id="chatShotChatStatus" class="chat-preferences-status"></div>
         </div>
+        <div id="chatRemindersSection" class="chat-preferences-block">
+          <h4>Reminders</h4>
+          <div id="chatRemindersList" class="ai-initiative-reminders-list"></div>
+          <div id="chatRemindersStatus" class="chat-preferences-status"></div>
+        </div>
         <div id="chatDangerSection" class="chat-preferences-block chat-danger-section hidden">
           <h4>Управление чатом</h4>
           <button id="clearChatHistoryBtn" type="button" class="settings-item chat-danger-action hidden">Очистить историю</button>
@@ -2483,6 +2613,7 @@
   <script src="/js/qip-infium-original.js?v=20260523-qip-infium-original"></script>
   <script src="/js/qip-hd.js?v=20260523-qip-hd"></script>
   <script src="/js/app.js?v=20260527-native-screen-orientation"></script>
+  <script src="/js/ai-initiative.js?v=20260527-ai-initiative"></script>
   <script src="/js/calls/CallStore.js?v=20260509-call-modal-surface"></script>
   <script src="/js/calls/CallMedia.js?v=20260509-call-modal-surface"></script>
   <script src="/js/calls/CallNotifications.js?v=20260509-call-modal-surface"></script>
