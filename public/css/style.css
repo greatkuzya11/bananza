@@ -4264,6 +4264,23 @@ select.modal-input optgroup {
   overflow-y: auto;
   border-radius: 10px;
 }
+.folder-chat-selection-list .user-list-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.folder-chat-selection-list .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-chat-selection-list .user-list-meta {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
 
 .btn-primary {
   width: 100%; padding: 10px; background: var(--accent); color: #fff;

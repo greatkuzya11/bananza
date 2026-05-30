@@ -180,6 +180,13 @@ test('style.css keeps New Chat modal folder tab height aligned with the other ta
   assert.match(styleCss, /#newChatModal\s+\.folder-chat-selection-list\s*\{[^}]*max-height\s*:\s*none\s*;/s);
 });
 
+test('style.css clamps New Chat folder selection rows to compact previews', () => {
+  assert.match(styleCss, /\.folder-chat-selection-list\s+\.user-list-copy\s*\{[^}]*min-width\s*:\s*0[^}]*overflow\s*:\s*hidden/s);
+  assert.match(styleCss, /\.folder-chat-selection-list\s+\.name\s*\{[^}]*overflow\s*:\s*hidden[^}]*text-overflow\s*:\s*ellipsis[^}]*white-space\s*:\s*nowrap/s);
+  assert.match(styleCss, /\.folder-chat-selection-list\s+\.user-list-meta\s*\{[^}]*display\s*:\s*-webkit-box[^}]*-webkit-line-clamp\s*:\s*2[^}]*-webkit-box-orient\s*:\s*vertical[^}]*overflow\s*:\s*hidden/s);
+  assert.match(styleCss, /\.folder-chat-selection-list\s+\.user-list-meta\s*\{[^}]*overflow-wrap\s*:\s*anywhere/s);
+});
+
 test('style.css opts mobile composer controls out of native browser panning', () => {
   assert.match(styleCss, /@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*\.input-area #msgInput,\s*\.input-area \.mention-open-btn\s*\{[^}]*touch-action\s*:\s*none\s*;/s);
   assert.match(styleCss, /html\.is-mobile-chat-keyboard-layout \.emoji-picker,[\s\S]*\.mention-picker-list\s*\{[^}]*touch-action\s*:\s*none\s*;/s);
