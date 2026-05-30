@@ -39,6 +39,10 @@
   --bg-panel-gradient: var(--bg-sidebar);
   --scroll-fab-bg: rgba(43,82,120,.96);
   --scroll-fab-bg-hover: rgba(58,104,149,.98);
+  --scroll-date-bg: color-mix(in srgb, var(--bg-input) 42%, transparent);
+  --scroll-date-border: color-mix(in srgb, var(--accent) 30%, transparent);
+  --scroll-date-text: color-mix(in srgb, var(--text-primary) 88%, var(--accent) 12%);
+  --scroll-date-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 12%, rgba(0,0,0,.16));
   --weather-widget-bg: rgba(94,181,247,.14);
   --weather-widget-bg-hover: rgba(94,181,247,.22);
   --accent-soft-bg: rgba(94,181,247,.14);
@@ -1530,6 +1534,86 @@ html[data-modal-animation="none"] .chat-folder-list-surface {
   background-color: var(--bg-dark);
   background-image: var(--bg-app-gradient);
   overflow-anchor: none;
+}
+
+.scroll-date-indicator {
+  --scroll-date-duration-base: .28s;
+  --scroll-date-close-duration-base: .38s;
+  --scroll-date-duration: calc(var(--scroll-date-duration-base) * var(--modal-animation-speed-factor));
+  --scroll-date-close-duration: calc(var(--scroll-date-close-duration-base) * var(--modal-animation-speed-factor));
+  --scroll-date-ease: cubic-bezier(.16, 1, .3, 1);
+  --scroll-date-hidden-transform: translate3d(-50%, -10px, 0) scale(.96);
+  --scroll-date-visible-transform: translate3d(-50%, 0, 0) scale(1);
+  position: absolute;
+  left: 50%;
+  top: 64px;
+  z-index: 30;
+  min-height: 28px;
+  max-width: min(360px, calc(100% - 32px));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 13px;
+  border: 1px solid var(--scroll-date-border);
+  border-radius: 14px;
+  background: rgba(36,47,61,.42);
+  background: var(--scroll-date-bg);
+  color: var(--scroll-date-text);
+  box-shadow: var(--scroll-date-shadow);
+  backdrop-filter: blur(14px) saturate(1.15);
+  -webkit-backdrop-filter: blur(14px) saturate(1.15);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.25;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  user-select: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: var(--scroll-date-hidden-transform);
+  transition:
+    opacity var(--scroll-date-close-duration) ease,
+    visibility 0s linear var(--scroll-date-close-duration),
+    transform var(--scroll-date-close-duration) var(--scroll-date-ease);
+}
+
+.scroll-date-indicator.is-visible {
+  opacity: 1;
+  visibility: visible;
+  transform: var(--scroll-date-visible-transform);
+  transition:
+    opacity var(--scroll-date-duration) ease,
+    visibility 0s linear 0s,
+    transform var(--scroll-date-duration) var(--scroll-date-ease);
+}
+
+html[data-modal-animation="lift"] .scroll-date-indicator {
+  --scroll-date-hidden-transform: translate3d(-50%, -14px, 0) scale(.98);
+}
+
+html[data-modal-animation="zoom"] .scroll-date-indicator {
+  --scroll-date-hidden-transform: translate3d(-50%, -2px, 0) scale(.88);
+}
+
+html[data-modal-animation="slide"] .scroll-date-indicator {
+  --scroll-date-hidden-transform: translate3d(-50%, -18px, 0);
+}
+
+html[data-modal-animation="fade"] .scroll-date-indicator {
+  --scroll-date-hidden-transform: translate3d(-50%, 0, 0);
+}
+
+html[data-modal-animation="none"] .scroll-date-indicator {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scroll-date-indicator {
+    transition: none;
+  }
 }
 
 .load-more { text-align: center; padding: 12px; }

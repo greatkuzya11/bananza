@@ -115,6 +115,7 @@
   const PAGINATION_FETCH_MAX_PAGES = 6;
   const PAGINATION_TOP_THRESHOLD = 120;
   const PAGINATION_BOTTOM_THRESHOLD = 120;
+  const SCROLL_DATE_HIDE_DELAY_MS = 900;
   const CHAT_LIST_PULL_TRIGGER_PX = 10;
   const CHAT_LIST_PULL_THRESHOLD = 64;
   const CHAT_LIST_PULL_MAX_OFFSET = 96;
@@ -694,6 +695,11 @@
   };
   let mobileComposerDismissClickSuppressUntil = 0;
   let scrollBottomFollowupClickSuppressUntil = 0;
+  let scrollDateIndicatorEl = null;
+  let scrollDateUpdateFrame = 0;
+  let scrollDateHideTimer = null;
+  let scrollDatePendingOptions = null;
+  let scrollDateLastText = '';
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DOM
@@ -17616,6 +17622,117 @@
     return Array.from(messagesEl.querySelectorAll('.msg-row[data-msg-id]'));
   }
 
+  function ensureScrollDateIndicator() {
+    if (!chatView) return null;
+    if (scrollDateIndicatorEl && scrollDateIndicatorEl.isConnected) return scrollDateIndicatorEl;
+    scrollDateIndicatorEl = document.getElementById('scrollDateIndicator') || document.createElement('div');
+    scrollDateIndicatorEl.id = 'scrollDateIndicator';
+    scrollDateIndicatorEl.className = 'scroll-date-indicator';
+    scrollDateIndicatorEl.setAttribute('aria-hidden', 'true');
+    if (!scrollDateIndicatorEl.parentElement) chatView.appendChild(scrollDateIndicatorEl);
+    return scrollDateIndicatorEl;
+  }
+
+  function hideScrollDateIndicator({ immediate = false } = {}) {
+    clearTimeout(scrollDateHideTimer);
+    scrollDateHideTimer = null;
+    if (scrollDateUpdateFrame) {
+      cancelAnimationFrame(scrollDateUpdateFrame);
+      scrollDateUpdateFrame = 0;
+    }
+    scrollDatePendingOptions = null;
+    if (!scrollDateIndicatorEl) return;
+    scrollDateIndicatorEl.classList.remove('is-visible');
+    scrollDateIndicatorEl.setAttribute('aria-hidden', 'true');
+    if (immediate) {
+      scrollDateLastText = '';
+      scrollDateIndicatorEl.textContent = '';
+      scrollDateIndicatorEl.style.top = '';
+      scrollDateIndicatorEl.style.maxWidth = '';
+    }
+  }
+
+  function pickScrollDateMessageRow() {
+    if (!messagesEl) return null;
+    const rows = getRenderedMessageRows();
+    if (!rows.length) return null;
+    const containerRect = messagesEl.getBoundingClientRect();
+    if (!containerRect.height || containerRect.bottom <= containerRect.top) return null;
+    const topProbe = containerRect.top + 8;
+    const visibleBottom = containerRect.bottom - 6;
+    return rows.find((row) => {
+      const rect = row.getBoundingClientRect();
+      return rect.bottom >= topProbe && rect.top <= visibleBottom;
+    }) || null;
+  }
+
+  function getScrollDateTextForRow(row) {
+    if (!row) return '';
+    const createdAt = row.__messageData?.created_at || row.__messageData?.createdAt || '';
+    if (createdAt) return formatDate(createdAt);
+    return String(row.dataset.date || '').trim();
+  }
+
+  function positionScrollDateIndicator(el) {
+    if (!el || !chatView || !messagesEl) return;
+    const chatRect = chatView.getBoundingClientRect();
+    const messagesRect = messagesEl.getBoundingClientRect();
+    const top = Math.max(8, Math.round((messagesRect.top || 0) - (chatRect.top || 0) + 8));
+    const maxWidth = Math.max(120, Math.min(360, Math.round((messagesRect.width || chatRect.width || 0) - 24)));
+    el.style.top = `${top}px`;
+    el.style.maxWidth = `${maxWidth}px`;
+  }
+
+  function updateScrollDateIndicator(options = {}) {
+    const show = Boolean(options.show);
+    if (!currentChatId) {
+      hideScrollDateIndicator({ immediate: true });
+      return;
+    }
+    const row = pickScrollDateMessageRow();
+    const text = getScrollDateTextForRow(row);
+    if (!row || !text) {
+      hideScrollDateIndicator({ immediate: true });
+      return;
+    }
+    const el = ensureScrollDateIndicator();
+    if (!el) return;
+    positionScrollDateIndicator(el);
+    if (text !== scrollDateLastText) {
+      scrollDateLastText = text;
+      el.textContent = text;
+    }
+    if (show || el.classList.contains('is-visible')) {
+      el.classList.add('is-visible');
+      el.setAttribute('aria-hidden', 'false');
+      clearTimeout(scrollDateHideTimer);
+      scrollDateHideTimer = setTimeout(() => {
+        scrollDateHideTimer = null;
+        hideScrollDateIndicator();
+      }, SCROLL_DATE_HIDE_DELAY_MS);
+    }
+  }
+
+  function scheduleScrollDateIndicatorUpdate(options = {}) {
+    if (options.show) {
+      clearTimeout(scrollDateHideTimer);
+      scrollDateHideTimer = null;
+    }
+    scrollDatePendingOptions = { ...(scrollDatePendingOptions || {}), ...options };
+    if (scrollDateUpdateFrame) return;
+    scrollDateUpdateFrame = requestAnimationFrame(() => {
+      const pendingOptions = scrollDatePendingOptions || {};
+      scrollDatePendingOptions = null;
+      scrollDateUpdateFrame = 0;
+      updateScrollDateIndicator(pendingOptions);
+    });
+  }
+
+  function refreshScrollDateIndicator() {
+    if (!scrollDateIndicatorEl?.classList.contains('is-visible')) return;
+    scheduleScrollDateIndicatorUpdate({ show: true });
+  }
+
   function isDeletedMessageRow(row) {
     return Boolean(row?.__messageData?.is_deleted);
   }
@@ -18785,6 +18902,7 @@
   // ═══════════════════════════════════════════════════════════════════════════
   function clearRenderedMessages({ resetDisplayed = true } = {}) {
     setLoadMoreAfterLoading(false);
+    hideScrollDateIndicator({ immediate: true });
     messagesEl.replaceChildren(...buildMessagesRootChildren());
     if (resetDisplayed) {
       displayedMsgIds.clear();
@@ -18947,6 +19065,7 @@
     const fragment = buildMessagesFragment(Array.isArray(msgs) ? msgs : [], pinEvents, options);
     messagesEl.replaceChildren(...buildMessagesRootChildren(fragment));
     updateScrollBottomButton();
+    refreshScrollDateIndicator();
   }
 
   function primeAppendedMessageSideEffects(messages = []) {
@@ -18978,6 +19097,7 @@
       primeAppendedMessageSideEffects(messages);
       cleanupDuplicateDateSeparators();
       updateScrollBottomButton();
+      refreshScrollDateIndicator();
     }
   }
 
@@ -19107,6 +19227,7 @@
     if (existingFirst) messagesEl.insertBefore(fragment, existingFirst);
     else insertAtMessagesEnd(fragment);
     updateScrollBottomButton();
+    refreshScrollDateIndicator();
   }
 
   function appendMessage(msg, options = {}) {
@@ -19162,6 +19283,7 @@
     } catch (e) {}
     if (!loadingMoreAfter) updateHasMoreAfterFromChat(currentChatId);
     updateScrollBottomButton();
+    refreshScrollDateIndicator();
   }
 
   function bindPollControls(row) {
@@ -20628,6 +20750,7 @@
       if (createdAt) row.dataset.date = formatDate(createdAt);
     });
     cleanupDuplicateDateSeparators();
+    refreshScrollDateIndicator();
   }
 
   async function catchUpCurrentChat(chatId, { fromPush = false } = {}) {
@@ -29008,6 +29131,7 @@
       else positionContextConvertPicker();
       cancelPendingMediaBottomScrollIfNeeded();
       if (!suppressScrollAnchorSave && !loadingMore && !loadingMoreAfter) scheduleScrollAnchorSave();
+      scheduleScrollDateIndicatorUpdate({ show: true });
       maybeLoadMoreAtTop();
       maybeLoadMoreAtBottom();
       if (!suppressScrollAnchorSave && isNearBottom(8)) markCurrentChatReadIfAtBottom();

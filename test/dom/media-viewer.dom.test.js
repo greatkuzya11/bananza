@@ -3024,6 +3024,59 @@ test('scroll-to-bottom stays keyboard-neutral when the mobile keyboard is alread
   assert.equal(app.style.height, '420px');
 });
 
+test('floating scroll date follows the first visible message while scrolling', async (t) => {
+  const firstDate = '2026-04-28T12:00:00.000Z';
+  const secondDate = '2026-04-29T12:00:00.000Z';
+  const messages = createChatMessages(1, 8).map((message, index) => ({
+    ...message,
+    created_at: index < 4
+      ? firstDate.replace('12:00', `12:0${index}`)
+      : secondDate.replace('12:00', `12:0${index - 4}`),
+  }));
+  const dom = await bootAppDom({
+    fetchHandler: createChatFetchHandler({ 1: messages }),
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const messagesEl = document.getElementById('messages');
+  const layout = installMessagesViewportMock(dom, {
+    viewportHeight: 180,
+    rowHeight: 50,
+  });
+  const expectedDate = (iso) => new Date(iso).toLocaleDateString([], {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+
+  BananzaAppBridge.__testing.setChats([
+    createChatFixture(1, 'Chat A', { lastMessageId: messages[messages.length - 1].id }),
+  ]);
+
+  await BananzaAppBridge.__testing.openChat(1);
+  await wait(dom, 80);
+
+  const separatorCount = messagesEl.querySelectorAll('.date-separator').length;
+  layout.setScrollTop(0);
+  messagesEl.dispatchEvent(new dom.window.Event('scroll'));
+  await wait(dom, 40);
+
+  const indicator = document.getElementById('scrollDateIndicator');
+  assert.equal(indicator?.textContent, expectedDate(firstDate));
+  assert.equal(indicator?.classList.contains('is-visible'), true);
+
+  layout.setScrollTop(layout.rowHeight * 4);
+  messagesEl.dispatchEvent(new dom.window.Event('scroll'));
+  await wait(dom, 40);
+
+  assert.equal(indicator.textContent, expectedDate(secondDate));
+  assert.equal(indicator.classList.contains('is-visible'), true);
+  assert.equal(layout.scrollTop, layout.rowHeight * 4);
+  assert.equal(messagesEl.querySelectorAll('.date-separator').length, separatorCount);
+});
+
 test('restore scroll position reopens chat A at the saved anchor after visiting chat B', async (t) => {
   const chatMessages = {
     1: createChatMessages(1, 12),
