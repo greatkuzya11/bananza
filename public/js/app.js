@@ -1604,6 +1604,15 @@
     );
   }
 
+  function isFollowupClickSuppressPassThroughTarget(target) {
+    return Boolean(
+      target instanceof Element
+      && target.closest(
+        '.msg-actions button, #reactionPicker button[data-reaction-action], #reactionEmojiPopover button'
+      )
+    );
+  }
+
   function consumeOutsidePickerDismissGesture(event, suppressFollowupClick) {
     suppressFollowupClick();
     event.preventDefault();
@@ -14698,6 +14707,10 @@
     contextConvertPickerClickSuppressUntil = Math.max(contextConvertPickerClickSuppressUntil, Date.now() + ms);
   }
 
+  function clearContextConvertPickerFollowupClickSuppress() {
+    contextConvertPickerClickSuppressUntil = 0;
+  }
+
   function ensureMentionPickerBackdrop() {
     let backdrop = $('#mentionPickerBackdrop');
     if (backdrop) return backdrop;
@@ -16379,6 +16392,7 @@
     } catch (error) {
       alert(error.message || 'Could not transform text');
     } finally {
+      clearContextConvertPickerFollowupClickSuppress();
       contextConvertComposerPending = false;
       syncContextConvertComposerButton();
     }
@@ -16430,6 +16444,7 @@
     } catch (error) {
       showCenterToast(error.message || 'Could not transform message');
     } finally {
+      clearContextConvertPickerFollowupClickSuppress();
       contextConvertPendingMessageIds.delete(id);
       syncContextConvertPendingMessageState(id);
     }
@@ -24085,6 +24100,7 @@
   let activeMessageActionsEl = null;
   let floatingMessageActionsState = null;
   let reactionPickerIdleTimer = null;
+  let reactionUiGeneration = 0;
   let reactionEmojiPopoverCategory = Object.keys(EMOJIS)[0] || '';
   let suppressNextMessageActionTapUntil = 0;
   let reactionMorePointerHandledUntil = 0;
@@ -24286,12 +24302,13 @@
     return true;
   }
 
-  function renderQuickReactionButtonsHtml({ buttonClass = '', moreAction = 'open-emoji-popover' } = {}) {
+  function renderQuickReactionButtonsHtml({ buttonClass = '', moreAction = 'open-emoji-popover', messageId = 0 } = {}) {
+    const messageAttr = Number(messageId || 0) > 0 ? ` data-message-id="${Number(messageId)}"` : '';
     const buttons = QUICK_REACTIONS.map((emoji) =>
-      `<button type="button" class="${buttonClass}" data-reaction-action="toggle" data-emoji="${esc(emoji)}" title="${esc(`React ${emoji}`)}">${esc(emoji)}</button>`
+      `<button type="button" class="${buttonClass}" data-reaction-action="toggle"${messageAttr} data-emoji="${esc(emoji)}" title="${esc(`React ${emoji}`)}">${esc(emoji)}</button>`
     );
     buttons.push(
-      `<button type="button" class="${buttonClass} reaction-more-button" data-reaction-action="${esc(moreAction)}" title="More reactions">⋯</button>`
+      `<button type="button" class="${buttonClass} reaction-more-button" data-reaction-action="${esc(moreAction)}"${messageAttr} title="More reactions">⋯</button>`
     );
     return buttons.join('');
   }
@@ -24303,9 +24320,9 @@
     const canRestoreOriginal = canRestoreContextOriginalMessage(row?.__messageData);
     reactionPicker.innerHTML = `
       <div class="reaction-picker-strip">
-        ${renderQuickReactionButtonsHtml({ buttonClass: 'reaction-picker-button', moreAction: 'open-emoji-popover' })}
-        ${canConvert ? `<button type="button" class="reaction-picker-button msg-context-convert-btn${contextConvertPendingMessageIds.has(Number(reactionPickerMsgId || 0)) ? ' is-pending' : ''}" data-reaction-action="context-convert" title="Transform with AI">🍌</button>` : ''}
-        ${canRestoreOriginal ? `<button type="button" class="reaction-picker-button msg-restore-original-btn${contextOriginalRestorePendingMessageIds.has(Number(reactionPickerMsgId || 0)) ? ' is-pending' : ''}" data-reaction-action="restore-original" title="${esc(t('Restore original'))}" aria-label="${esc(t('Restore original'))}"${contextOriginalRestorePendingMessageIds.has(Number(reactionPickerMsgId || 0)) ? ' disabled' : ''}>&#8634;</button>` : ''}
+        ${renderQuickReactionButtonsHtml({ buttonClass: 'reaction-picker-button', moreAction: 'open-emoji-popover', messageId: reactionPickerMsgId })}
+        ${canConvert ? `<button type="button" class="reaction-picker-button msg-context-convert-btn${contextConvertPendingMessageIds.has(Number(reactionPickerMsgId || 0)) ? ' is-pending' : ''}" data-reaction-action="context-convert" data-message-id="${Number(reactionPickerMsgId || 0)}" title="Transform with AI">🍌</button>` : ''}
+        ${canRestoreOriginal ? `<button type="button" class="reaction-picker-button msg-restore-original-btn${contextOriginalRestorePendingMessageIds.has(Number(reactionPickerMsgId || 0)) ? ' is-pending' : ''}" data-reaction-action="restore-original" data-message-id="${Number(reactionPickerMsgId || 0)}" title="${esc(t('Restore original'))}" aria-label="${esc(t('Restore original'))}"${contextOriginalRestorePendingMessageIds.has(Number(reactionPickerMsgId || 0)) ? ' disabled' : ''}>&#8634;</button>` : ''}
       </div>
     `;
     reactionPicker.querySelector('.reaction-picker-strip')?.addEventListener('scroll', () => {
@@ -24734,13 +24751,16 @@
 
   function hideReactionUi(options = {}) {
     const keepComposerState = Boolean(options.keepComposerState);
+    const closeGeneration = reactionUiGeneration;
     clearReactionPickerIdleTimer();
     hideReactionEmojiPopover({ immediate: options.immediate });
     closeFloatingSurface(reactionPicker, {
       immediate: Boolean(options.immediate),
       onAfterClose: () => {
-        reactionPickerMsgId = null;
-        if (!keepComposerState) reactionPickerKeepKeyboard = false;
+        if (closeGeneration === reactionUiGeneration) {
+          reactionPickerMsgId = null;
+          if (!keepComposerState) reactionPickerKeepKeyboard = false;
+        }
         if (keepComposerState) focusComposerKeepKeyboard(true);
         clearFloatingMessageActionsStateIfClosed();
       },
@@ -24820,6 +24840,7 @@
     }
 
     hideReactionUi({ keepComposerState: keepComposerFocus, immediate: true });
+    reactionUiGeneration += 1;
     reactionPickerKeepKeyboard = keepComposerFocus;
     reactionPickerMsgId = msgId;
     updateFloatingMessageActionsState(row);
@@ -27109,6 +27130,7 @@
     wireAiBotToggleLabels();
     ensureSearchPanelReady();
     document.addEventListener('click', (e) => {
+      if (isFollowupClickSuppressPassThroughTarget(e.target)) return;
       if (
         Date.now() >= mentionPickerClickSuppressUntil
         && Date.now() >= contextConvertPickerClickSuppressUntil
@@ -27664,7 +27686,14 @@
     reactionPicker.addEventListener('click', (e) => {
       e.stopPropagation();
       const btn = e.target.closest('button[data-reaction-action]');
-      if (!btn || !reactionPickerMsgId) return;
+      const activeReactionMsgId = Number(
+        btn?.dataset?.messageId
+        || reactionPickerMsgId
+        || floatingMessageActionsState?.msgId
+        || activeMessageActionsRow?.dataset?.msgId
+        || 0
+      );
+      if (!btn || !activeReactionMsgId) return;
       const action = btn.dataset.reactionAction || 'toggle';
       const keepComposerFocus = reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen();
       if (action === 'open-emoji-popover') {
@@ -27674,7 +27703,7 @@
       }
       if (action === 'context-convert') {
         e.preventDefault();
-        const row = messagesEl.querySelector(`[data-msg-id="${reactionPickerMsgId}"]`);
+        const row = messagesEl.querySelector(`[data-msg-id="${activeReactionMsgId}"]`);
         if (row) {
           openMessageContextConvertPicker(row, btn, { keepComposerFocus }).catch((error) => {
             console.warn('[context-convert] picker open failed:', error.message);
@@ -27684,13 +27713,13 @@
       }
       if (action === 'restore-original') {
         e.preventDefault();
-        restoreContextOriginalMessage(reactionPickerMsgId, { keepComposerFocus }).catch((error) => {
+        restoreContextOriginalMessage(activeReactionMsgId, { keepComposerFocus }).catch((error) => {
           console.warn('[context-convert] restore failed:', error.message);
         });
         return;
       }
       if (!btn.dataset.emoji) return;
-      toggleReaction(reactionPickerMsgId, btn.dataset.emoji, { keepComposerFocus });
+      toggleReaction(activeReactionMsgId, btn.dataset.emoji, { keepComposerFocus });
     });
 
     reactionEmojiPopover?.addEventListener('pointerdown', (e) => {
@@ -27735,6 +27764,29 @@
         }
       }
     });
+
+    document.addEventListener('click', (e) => {
+      const restoreBtn = e.target.closest('.msg-restore-original-btn');
+      if (!restoreBtn || restoreBtn.disabled) return;
+      const row = restoreBtn.closest('.msg-row')
+        || (activeMessageActionsEl?.contains(restoreBtn) ? activeMessageActionsRow : null);
+      const messageId = Number(
+        restoreBtn.dataset.messageId
+        || row?.__messageData?.id
+        || row?.dataset?.msgId
+        || reactionPickerMsgId
+        || floatingMessageActionsState?.msgId
+        || activeMessageActionsRow?.dataset?.msgId
+        || 0
+      );
+      if (!messageId) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const keepComposerFocus = reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen();
+      restoreContextOriginalMessage(messageId, { keepComposerFocus }).catch((error) => {
+        console.warn('[context-convert] restore failed:', error.message);
+      });
+    }, true);
 
     // Reaction badge click + react button (delegation)
     messagesEl.addEventListener('pointerdown', (e) => {
