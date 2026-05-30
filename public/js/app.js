@@ -22605,6 +22605,13 @@
       const customDistance = Number(options.getCommitDistance?.(width) || 0);
       return customDistance > 0 ? customDistance : horizontalPagerCommitDistance(width);
     };
+    const getPageGap = (width = getWidth()) => Math.max(
+      0,
+      Math.round(
+        Number(options.getPageGap?.(width) ?? options.pageGap ?? 0) || 0
+      )
+    );
+    const getPageStep = (width = getWidth()) => width + getPageGap(width);
     const isAvailable = () => (
       !state.switching
       && root.isConnected
@@ -22712,6 +22719,8 @@
       const currentKey = getActiveKey() || keys[0] || '';
       const targetKey = String(nextKey || '');
       const width = getWidth();
+      const pageGap = getPageGap(width);
+      const pageStep = width + pageGap;
       const currentPager = state.pager;
       if (
         currentPager
@@ -22719,6 +22728,7 @@
         && currentPager.currentKey === currentKey
         && currentPager.nextKey === targetKey
         && currentPager.width === width
+        && currentPager.pageGap === pageGap
         && currentPager.track instanceof HTMLElement
         && currentPager.stage instanceof HTMLElement
       ) {
@@ -22733,6 +22743,7 @@
 
       const track = document.createElement('div');
       track.className = 'horizontal-swipe-track';
+      if (pageGap > 0) track.style.columnGap = `${pageGap}px`;
 
       const currentPage = createPage(currentKey, 'current');
       const adjacentPage = createPage(targetKey, 'adjacent');
@@ -22748,7 +22759,9 @@
         currentKey,
         nextKey: targetKey,
         width,
-        baseOffset: swipeDirection > 0 ? 0 : -width,
+        pageGap,
+        pageStep,
+        baseOffset: swipeDirection > 0 ? 0 : -pageStep,
       };
       setOffset(state.pager.baseOffset, 'preparing');
       return state.pager;
@@ -22808,7 +22821,7 @@
         return true;
       }
 
-      const finalOffset = swipeDirection > 0 ? -pager.width : 0;
+      const finalOffset = swipeDirection > 0 ? -(pager.pageStep || getPageStep(pager.width)) : 0;
       try {
         await settleOffset(finalOffset);
         applyActiveKey(nextKey, swipeDirection, source);
@@ -25505,6 +25518,7 @@
         applyNewChatModalTab(tabName);
       },
       renderPage: (tabName) => createNewChatTabPreview(tabName),
+      pageGap: 16,
       isAvailable: () => isFloatingSurfaceVisible(newChatModal),
       getCommitDistance: (width) => Math.max(32, Math.min(
         48,
