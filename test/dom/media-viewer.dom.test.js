@@ -2816,6 +2816,47 @@ test('mention picker outside message taps only close the picker without side eff
   assert.equal(app.style.height, '420px');
 });
 
+test('avatar mention menu suppresses the follow-up click on links underneath', async (t) => {
+  const dom = await openSingleChatDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const messagesEl = document.getElementById('messages');
+  const msgInput = document.getElementById('msgInput');
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-group-avatar';
+  avatar.dataset.userId = '2';
+  avatar.dataset.displayName = 'Bob';
+  avatar.dataset.mentionToken = 'bob';
+  avatar.dataset.isAiBot = '0';
+  messagesEl.appendChild(avatar);
+  const row = appendMessageRow(dom, { id: 403, text: '<a href="https://example.com" id="ghostClickLink">example.com</a>' });
+  const link = row.querySelector('#ghostClickLink');
+  let linkClicked = false;
+  link.addEventListener('click', () => {
+    linkClicked = true;
+  });
+
+  avatar.dispatchEvent(createPrimaryPointerEvent(dom.window, 'pointerdown'));
+  const menu = document.getElementById('avatarUserMenu');
+  assert.ok(menu);
+  assert.equal(menu.classList.contains('hidden'), false);
+
+  const mentionButton = menu.querySelector('[data-avatar-action="mention"]');
+  mentionButton.dispatchEvent(createPrimaryPointerEvent(dom.window, 'pointerdown'));
+  assert.equal(msgInput.value, '@bob ');
+
+  const followupClick = new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  });
+  link.dispatchEvent(followupClick);
+
+  assert.equal(followupClick.defaultPrevented, true);
+  assert.equal(linkClicked, false);
+});
+
 test('emoji picker closes when navigating back out of the mobile chat view', async (t) => {
   const dom = await openSingleChatDom();
   t.after(() => {

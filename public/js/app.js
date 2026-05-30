@@ -611,6 +611,7 @@
   let reactionEmojiSwipePager = null;
   let newChatTabSwipePager = null;
   let avatarUserMenuState = null;
+  let avatarUserMenuClickSuppressUntil = 0;
   let chatMemberLastReads = new Map();
   const modalRegistry = new Map();
   let modalStack = [];
@@ -1622,6 +1623,10 @@
 
   function suppressSearchPanelFollowupClick(ms = 550) {
     searchPanelFollowupClickSuppressUntil = Math.max(searchPanelFollowupClickSuppressUntil, Date.now() + ms);
+  }
+
+  function suppressAvatarUserMenuFollowupClick(ms = 550) {
+    avatarUserMenuClickSuppressUntil = Math.max(avatarUserMenuClickSuppressUntil, Date.now() + ms);
   }
 
   // Touch-first browsers can drop the synthesized click after we prevent textarea blur.
@@ -15099,6 +15104,7 @@
       e.preventDefault();
       e.stopPropagation();
       const target = avatarUserMenuState.target;
+      suppressAvatarUserMenuFollowupClick();
       hideAvatarUserMenu();
       if (action === 'mention') {
         insertMentionTokenIntoComposer(target.token);
@@ -15108,6 +15114,10 @@
         });
       }
     }, { passive: false });
+    menu.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
     document.body.appendChild(menu);
     return menu;
   }
@@ -27134,6 +27144,7 @@
       if (
         Date.now() >= mentionPickerClickSuppressUntil
         && Date.now() >= contextConvertPickerClickSuppressUntil
+        && Date.now() >= avatarUserMenuClickSuppressUntil
         && Date.now() >= searchPanelFollowupClickSuppressUntil
         && Date.now() >= mobileComposerDismissClickSuppressUntil
         && Date.now() >= mediaViewerFollowupClickSuppressUntil
