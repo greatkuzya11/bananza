@@ -662,6 +662,10 @@
   let mobileKeyboardDockTop = 0;
   let mobileKeyboardDockHeight = 0;
   let mobileKeyboardDockWidth = 0;
+  let mobileKeyboardDockBottom = 0;
+  let mobileKeyboardDockInputHeight = 0;
+  let mobileKeyboardDockRecentInputDelta = 0;
+  let mobileKeyboardDockRecentInputDeltaAt = 0;
   let mobileKeyboardDockActive = false;
   let iosComposerFocused = false;
   let iosComposerBlurTimer = null;
@@ -1004,11 +1008,17 @@
     document.documentElement.classList.add('is-ios-webkit');
   }
 
-  function getMobileAppViewportHeight() {
+  function getMobileAppViewportHeight(viewport = null) {
     const vv = window.visualViewport;
-    const viewportHeight = Math.max(0, vv?.height || window.innerHeight || 0);
+    const viewportHeight = Math.max(0, Number(viewport?.height) || vv?.height || window.innerHeight || 0);
     if (!isIosViewportFixTarget || !vv) return viewportHeight;
-    return Math.max(0, viewportHeight + Math.max(0, vv.offsetTop || 0));
+    const viewportTop = Math.max(
+      0,
+      viewport && Object.prototype.hasOwnProperty.call(viewport, 'top')
+        ? (Number(viewport.top) || 0)
+        : (vv.offsetTop || 0)
+    );
+    return Math.max(0, viewportHeight + viewportTop);
   }
 
   function getMobileAppViewportTopInset() {
@@ -1118,33 +1128,78 @@
     return Boolean(isIosMobileViewportTarget() && isMobileChatKeyboardLayoutActive());
   }
 
-  function getLockedMobileKeyboardViewportMetrics(viewport, keyboardLayoutActive) {
+  function resetMobileKeyboardDock() {
+    mobileKeyboardDockActive = false;
+    mobileKeyboardDockTop = 0;
+    mobileKeyboardDockHeight = 0;
+    mobileKeyboardDockWidth = 0;
+    mobileKeyboardDockBottom = 0;
+    mobileKeyboardDockInputHeight = 0;
+    mobileKeyboardDockRecentInputDelta = 0;
+    mobileKeyboardDockRecentInputDeltaAt = 0;
+  }
+
+  function getLockedMobileKeyboardViewportMetrics(viewport, keyboardLayoutActive, inputHeight = 0) {
     if (!keyboardLayoutActive) {
-      mobileKeyboardDockActive = false;
-      mobileKeyboardDockTop = 0;
-      mobileKeyboardDockHeight = 0;
-      mobileKeyboardDockWidth = 0;
+      resetMobileKeyboardDock();
       return viewport;
     }
 
     const height = Math.max(0, Number(viewport?.height) || 0);
     const width = Math.max(0, Number(viewport?.width) || 0);
     const top = Math.max(0, Number(viewport?.top) || 0);
+    const bottom = top + height;
+    const nextInputHeight = Math.max(0, Number(inputHeight) || 0);
+    const bottomDelta = bottom - mobileKeyboardDockBottom;
+    const inputDelta = nextInputHeight - mobileKeyboardDockInputHeight;
+    const recentDeltaAge = Date.now() - mobileKeyboardDockRecentInputDeltaAt;
+    const recentInputDelta = recentDeltaAge >= 0 && recentDeltaAge < 700
+      ? mobileKeyboardDockRecentInputDelta
+      : 0;
+    const relevantInputGrowth = Math.max(inputDelta, recentInputDelta, 0);
+    const relevantInputShrink = Math.max(0 - inputDelta, 0 - recentInputDelta, 0);
+    const inputDrivenBottomShrink = mobileKeyboardDockActive
+      && bottomDelta < -1
+      && relevantInputGrowth > 1
+      && Math.abs(bottomDelta) <= relevantInputGrowth + 24;
+    const inputDrivenBottomGrowth = mobileKeyboardDockActive
+      && bottomDelta > 1
+      && relevantInputShrink > 1
+      && bottomDelta <= relevantInputShrink + 24;
     const shouldResetDock = !mobileKeyboardDockActive
-      || Math.abs(height - mobileKeyboardDockHeight) > 48
-      || Math.abs(width - mobileKeyboardDockWidth) > 48;
+      || Math.abs(width - mobileKeyboardDockWidth) > 48
+      || (
+        Math.abs(bottomDelta) > 48
+        && !inputDrivenBottomShrink
+        && !inputDrivenBottomGrowth
+      );
+    const shouldAcceptSmallBottomChange = mobileKeyboardDockActive
+      && Math.abs(bottomDelta) > 1
+      && Math.abs(bottomDelta) <= 48
+      && !inputDrivenBottomShrink
+      && !inputDrivenBottomGrowth;
 
     if (shouldResetDock) {
       mobileKeyboardDockTop = top;
       mobileKeyboardDockHeight = height;
       mobileKeyboardDockWidth = width;
+      mobileKeyboardDockBottom = bottom;
       mobileKeyboardDockActive = true;
+    } else if (shouldAcceptSmallBottomChange) {
+      mobileKeyboardDockTop = top;
+      mobileKeyboardDockHeight = height;
+      mobileKeyboardDockBottom = bottom;
     }
+    mobileKeyboardDockInputHeight = nextInputHeight;
+
+    const lockedHeight = Math.max(0, mobileKeyboardDockBottom - mobileKeyboardDockTop);
+    mobileKeyboardDockHeight = lockedHeight;
 
     return {
       ...viewport,
       top: mobileKeyboardDockTop,
-      bottom: mobileKeyboardDockTop + height,
+      height: lockedHeight,
+      bottom: mobileKeyboardDockBottom,
     };
   }
 
@@ -1168,11 +1223,11 @@
       root.classList.remove('is-ios-keyboard-open', 'is-ios-chat-keyboard-layout');
       return;
     }
-    const keyboardOpen = isMobileKeyboardOpen();
-    const keyboardLayoutActive = isMobileChatKeyboardLayoutActive();
-    const viewport = getLockedMobileKeyboardViewportMetrics(getMobileVisualViewportMetrics(), keyboardLayoutActive);
     const headerHeight = Math.max(0, Math.round(chatHeader?.getBoundingClientRect?.().height || 0));
     const inputHeight = Math.max(0, Math.round(inputArea?.getBoundingClientRect?.().height || 0));
+    const keyboardOpen = isMobileKeyboardOpen();
+    const keyboardLayoutActive = isMobileChatKeyboardLayoutActive();
+    const viewport = getLockedMobileKeyboardViewportMetrics(getMobileVisualViewportMetrics(), keyboardLayoutActive, inputHeight);
 
     root.classList.toggle('is-mobile-keyboard-open', keyboardOpen);
     root.classList.toggle('is-mobile-chat-keyboard-layout', keyboardLayoutActive);
@@ -2150,6 +2205,10 @@
       mobileViewportHeight: document.documentElement.style.getPropertyValue('--mobile-visual-viewport-height'),
       mobileInputHeight: document.documentElement.style.getPropertyValue('--mobile-chat-input-area-height'),
       appHeight: document.getElementById('app')?.style?.height || '',
+      dockActive: mobileKeyboardDockActive,
+      dockBottom: mobileKeyboardDockBottom,
+      dockInputHeight: mobileKeyboardDockInputHeight,
+      dockRecentInputDelta: mobileKeyboardDockRecentInputDelta,
     }),
   });
 
@@ -5097,7 +5156,11 @@
     const newViewportHeight = Math.max(0, window.visualViewport?.height || 0);
     const mentionPickerDismissed = dismissMentionPickerAfterKeyboardClose();
     getMobileViewportBaselineHeight();
-    const newAppHeight = getMobileAppViewportHeight();
+    const rawViewport = getMobileVisualViewportMetrics();
+    const inputHeight = Math.max(0, Math.round(inputArea?.getBoundingClientRect?.().height || 0));
+    const keyboardLayoutActive = isMobileChatKeyboardLayoutActive();
+    const viewport = getLockedMobileKeyboardViewportMetrics(rawViewport, keyboardLayoutActive, inputHeight);
+    const newAppHeight = getMobileAppViewportHeight(keyboardLayoutActive ? viewport : rawViewport);
     if (!shouldBypassLockedMobileViewportSync(newViewportHeight, { force, mentionPickerDismissed })) {
       mobileViewportPrevHeight = newViewportHeight;
       queueMobileViewportLayoutSync();
@@ -5158,7 +5221,7 @@
     window.addEventListener('orientationchange', () => {
       mobileVisualViewportBaselineHeight = 0;
       mobileVisualViewportBaselineWidth = 0;
-      mobileKeyboardDockActive = false;
+      resetMobileKeyboardDock();
       syncMobileAppHeightToViewport({ force: true });
     });
     if ('ResizeObserver' in window && !mobileViewportElementResizeObserver) {
@@ -26483,17 +26546,23 @@
     }).length || 1;
   }
 
-  function getNormalComposerInputWidth() {
+  function getComposerInputWidthForMode(multiline = Boolean(inputRow?.classList.contains('is-multiline'))) {
     if (!inputRow || !msgInput) return msgInput?.clientWidth || 1;
     const rowStyles = getComputedStyle(inputRow);
     const toolSize = parseFloat(rowStyles.getPropertyValue('--composer-tool-size')) || 36;
     const toolGap = parseFloat(rowStyles.getPropertyValue('--composer-tool-gap')) || 4;
     const rowGap = parseFloat(rowStyles.columnGap || rowStyles.gap) || 4;
     const toolCount = getVisibleComposerToolCount();
-    const normalToolWidth = (toolCount * toolSize) + (Math.max(0, toolCount - 1) * toolGap);
+    const toolWidth = multiline
+      ? toolSize
+      : (toolCount * toolSize) + (Math.max(0, toolCount - 1) * toolGap);
     const sendWidth = sendBtn?.getBoundingClientRect?.().width || 44;
     const rowWidth = inputRow.getBoundingClientRect().width || msgInput.clientWidth || 1;
-    return Math.max(1, rowWidth - normalToolWidth - sendWidth - (rowGap * 2));
+    return Math.max(1, rowWidth - toolWidth - sendWidth - (rowGap * 2));
+  }
+
+  function getNormalComposerInputWidth() {
+    return getComposerInputWidthForMode(false);
   }
 
   function measureMsgInputScrollHeight(width) {
@@ -26604,19 +26673,36 @@
   function autoResize() {
     const wasMultiline = Boolean(inputRow?.classList.contains('is-multiline'));
     const previousHeight = parseFloat(msgInput.style.height) || 0;
-    const normalInputWidth = getNormalComposerInputWidth();
-    const measuredScrollHeight = measureMsgInputScrollHeight(normalInputWidth);
+    const previousInputAreaHeight = Math.max(0, inputArea?.getBoundingClientRect?.().height || 0);
     const metrics = getComposerInputTextMetrics();
     const richPreviewHeight = syncComposerRichPreview(metrics);
-    const nextHeight = Math.min(Math.max(measuredScrollHeight, richPreviewHeight), 150);
+    const normalInputWidth = getNormalComposerInputWidth();
+    const normalScrollHeight = measureMsgInputScrollHeight(normalInputWidth);
+    const normalHeight = Math.min(Math.max(normalScrollHeight, richPreviewHeight), 150);
+    const isMultiline = normalHeight > metrics.singleLineHeight + 2;
+    inputRow?.classList.toggle('is-multiline', isMultiline);
+    const finalInputWidth = getComposerInputWidthForMode(isMultiline);
+    const finalScrollHeight = measureMsgInputScrollHeight(finalInputWidth);
+    const nextHeight = Math.min(Math.max(finalScrollHeight, richPreviewHeight), 150);
     msgInput.style.height = nextHeight + 'px';
     if (inputRow) {
-      const isMultiline = nextHeight > metrics.singleLineHeight + 2;
-      inputRow.classList.toggle('is-multiline', isMultiline);
       const changed = wasMultiline !== isMultiline;
       const heightChanged = Math.abs(nextHeight - previousHeight) > 0.5;
+      const nextInputAreaHeight = Math.max(0, inputArea?.getBoundingClientRect?.().height || 0);
+      const inputAreaDelta = nextInputAreaHeight - previousInputAreaHeight;
+      const inputHeightDelta = previousHeight > 0 ? nextHeight - previousHeight : 0;
+      const effectiveInputDelta = Math.abs(inputAreaDelta) >= Math.abs(inputHeightDelta)
+        ? inputAreaDelta
+        : inputHeightDelta;
+      if ((previousInputAreaHeight > 0 || previousHeight > 0) && Math.abs(effectiveInputDelta) > 0.5) {
+        mobileKeyboardDockRecentInputDelta = effectiveInputDelta;
+        mobileKeyboardDockRecentInputDeltaAt = Date.now();
+      }
       if ((changed || heightChanged) && emojiPickerOpen && isFloatingSurfaceVisible(emojiPicker)) {
         requestAnimationFrame(() => positionEmojiPicker(emojiBtn));
+      }
+      if ((changed || heightChanged) && isMobileLayoutViewport()) {
+        scheduleMobileViewportRecovery(90);
       }
     }
     queueIosViewportLayoutSync();
@@ -27005,6 +27091,7 @@
       clearTimeout(iosComposerBlurTimer);
       iosComposerBlurTimer = setTimeout(() => {
         iosComposerFocused = false;
+        resetMobileKeyboardDock();
         queueIosViewportLayoutSync();
       }, 180);
       requestAnimationFrame(() => queueIosViewportLayoutSync());
