@@ -2093,6 +2093,11 @@
     closeChatHeaderActions: () => closeChatHeaderActions(),
     getChatHeaderActionsOpen: () => chatHeaderActionsOpen,
     openChat: (chatId, options = {}) => openChat(chatId, options),
+    renderOutboxItem: (item) => renderOutboxItem(item),
+    completeOutboxSend: (item, serverMsg) => completeOutboxSend(item, serverMsg),
+    appendMessage: (msg, options = {}) => appendMessage(msg, options),
+    applyMessageUpdate: (msg, options = {}) => applyMessageUpdate(msg, options),
+    handleWSMessage: (msg) => handleWSMessage(msg),
     revealSidebarFromChat: (options = {}) => revealSidebarFromChat(options),
     flushCurrentChatScrollAnchor: (chatId, options = {}) => flushCurrentChatScrollAnchor(chatId, options),
     readScrollAnchors: () => JSON.parse(JSON.stringify(scrollPositions || {})),
@@ -4303,17 +4308,48 @@
     return [id];
   }
 
+  function resetReusableMessageRow(row) {
+    if (!row) return;
+    row.querySelectorAll('audio, video').forEach((media) => {
+      try { media.pause?.(); } catch (e) {}
+    });
+    Array.from(row.attributes).forEach((attr) => {
+      if (attr.name === 'class') return;
+      row.removeAttribute(attr.name);
+    });
+    row.className = '';
+    delete row.__messageData;
+    delete row.__replyPayload;
+    delete row.__voiceBootstrap;
+    delete row.__voiceMessage;
+    delete row.__outboxItem;
+    delete row.__callRecordingProgress;
+    delete row.__callRecordingCall;
+    delete row.__autoScrollMediaToBottomOnLoad;
+  }
+
+  function withStableOutboxMedia(row, nextMsg) {
+    const previous = row?.__messageData || {};
+    const prepared = { ...(nextMsg || {}) };
+    if (previous.client_file_url && !prepared.client_file_url) {
+      prepared.client_file_url = previous.client_file_url;
+    }
+    if (previous.client_poster_url && !prepared.client_poster_url) {
+      prepared.client_poster_url = previous.client_poster_url;
+    }
+    return prepared;
+  }
+
   function replaceRenderedMessage(nextMsg, options = {}) {
     if (!nextMsg?.id) return false;
     const row = messagesEl.querySelector(`[data-msg-id="${nextMsg.id}"]`);
     if (!row) return false;
     const preserveAnchor = options.preserveAnchor?.messageId ? { ...options.preserveAnchor } : null;
     const restoreAttempts = Number(options.restoreAttempts || 2);
-    const prepared = { ...nextMsg };
+    const prepared = withStableOutboxMedia(row, nextMsg);
     if (row.querySelector('.msg-status.read')) prepared.is_read = true;
     const showName = Boolean(row.querySelector('.msg-sender'));
-    const replacement = createMessageEl(prepared, showName);
-    row.replaceWith(replacement);
+    createMessageEl(prepared, showName, { ...options, reuseRow: row, entering: false });
     rememberDisplayedMessage(prepared.id);
     if (preserveAnchor) {
       requestAnimationFrame(() => restoreScrollAnchor(preserveAnchor, restoreAttempts));
@@ -16410,21 +16446,12 @@
             playAppSound(isVisibleCurrentChat ? 'incoming' : 'notification');
           }
         }
-        // If this message echoes a client_id, remove optimistic placeholder first
+        // If this message echoes a client_id, promote the optimistic row in place.
         try {
           if (msg.message && msg.message.client_id) {
             await window.messageCache?.deleteOutboxItem?.(msg.message.chat_id, msg.message.client_id);
-            revokeOutboxObjectUrls(msg.message.client_id);
             outboxSending.delete(msg.message.client_id);
-            const optimisticEl = messagesEl.querySelector(`.msg-row[data-outbox="1"][data-client-id="${msg.message.client_id}"]`);
-            if (optimisticEl) {
-              const wasNearBottom = isNearBottom();
-              const anchor = !wasNearBottom && !isNearBottom(8) ? captureScrollAnchor() : null;
-              optimisticEl.remove();
-              forgetDisplayedMessage(optimisticEl.dataset.msgId);
-              cleanupEmptyMessageGroups();
-              if (anchor) requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
-            }
+            if (isVisibleCurrentChat) promoteOutboxRow(msg.message.client_id, msg.message, { mediaAutoScrollToBottom: true });
           }
         } catch (e) {}
         // Update chat list regardless
@@ -18944,7 +18971,7 @@
       messages.forEach((message) => appendMessage(message, options));
       return;
     }
-    const fragment = buildMessagesFragment(messages, events, options);
+    const fragment = buildMessagesFragment(messages, events, { ...options, entering: options.entering !== false });
     if (fragment.childNodes.length) {
       insertAtMessagesEnd(fragment);
       markPendingMediaBottomScrollForMessages(messages, Boolean(options.mediaAutoScrollToBottom));
@@ -19116,7 +19143,8 @@
     }
 
     const showName = useGroup && !sameGroup;
-    const el = createMessageEl(msg, showName, options);
+    const renderOptions = { ...options, entering: options.entering !== false };
+    const el = createMessageEl(msg, showName, renderOptions);
 
     if (useGroup) {
       groupBody.appendChild(el);
@@ -19202,8 +19230,15 @@
     const isCallMessage = Boolean(!msg.is_deleted && (msg.call || msg.call_message || msg.is_call_message));
     const isCallTranscriptMessage = Boolean(!msg.is_deleted && (msg.call_transcript_run || msg.is_call_transcript_message));
     const isCallArtifactMessage = Boolean(!msg.is_deleted && (msg.call_artifact_batch || msg.is_call_artifact_message));
-    const row = document.createElement('div');
+    const row = options.reuseRow && options.reuseRow.nodeType === 1
+      ? options.reuseRow
+      : document.createElement('div');
+    if (options.reuseRow === row) resetReusableMessageRow(row);
     row.className = `msg-row ${isOwn ? 'own' : 'other'}${isEmojiOnly ? ' emoji-only-message' : ''}${isMediaMessage ? ' media-message' : ''}${isPollMessage ? ' poll-message' : ''}${isCallMessage ? ' call-message' : ''}${isCallTranscriptMessage ? ' call-transcript-message' : ''}${isCallArtifactMessage ? ' call-artifact-message' : ''}`;
+    if (options.entering) {
+      row.classList.add('entering');
+      row.addEventListener('animationend', () => row.classList.remove('entering'), { once: true });
+    }
     if (contextConvertPendingMessageIds.has(Number(msg.id || 0))) row.classList.add('context-convert-pending');
     row.dataset.msgId = msg.id;
     if (msg.client_id) row.dataset.clientId = msg.client_id;
@@ -20937,6 +20972,50 @@
     return messagesEl.querySelector(`.msg-row[data-outbox="1"][data-client-id="${clientId}"], .msg-row[data-outbox="1"][data-msg-id="${clientId}"]`);
   }
 
+  function removeDuplicatePromotedRows(row, messageId) {
+    const key = String(messageId || '').trim();
+    if (!key) return;
+    messagesEl.querySelectorAll('.msg-row[data-msg-id]').forEach((candidate) => {
+      if (String(candidate.dataset.msgId || '') !== key) return;
+      if (candidate === row) return;
+      forgetDisplayedMessage(candidate.dataset.msgId);
+      candidate.remove();
+    });
+    cleanupEmptyMessageGroups();
+  }
+
+  function promoteOutboxRow(clientId, serverMsg, options = {}) {
+    if (!clientId || !serverMsg?.id) return null;
+    const row = findOutboxRow(clientId);
+    if (!row) return null;
+    const wasNearBottom = isNearBottom();
+    const anchor = !wasNearBottom && !isNearBottom(8) ? captureScrollAnchor() : null;
+    const previousId = row.dataset.msgId || row.dataset.clientId || clientId;
+    const showName = Boolean(row.querySelector('.msg-sender'));
+    const prepared = withStableOutboxMedia(row, {
+      ...serverMsg,
+      client_id: serverMsg.client_id || clientId,
+      client_status: null,
+      is_outbox: false,
+    });
+
+    forgetDisplayedMessage(previousId);
+    createMessageEl(prepared, showName, {
+      ...options,
+      reuseRow: row,
+      entering: false,
+    });
+    delete row.__outboxItem;
+    row.classList.remove('client-failed', 'client-sending');
+    delete row.dataset.clientStatus;
+    removeDuplicatePromotedRows(row, prepared.id);
+    rememberDisplayedMessage(prepared.id);
+    scheduleRetryLayout();
+    updateScrollBottomButton();
+    if (anchor) requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
+    return row;
+  }
+
   function cleanupEmptyMessageGroups() {
     messagesEl.querySelectorAll('.msg-group').forEach((group) => {
       if (!group.querySelector('.msg-row')) group.remove();
@@ -21182,26 +21261,14 @@
   async function completeOutboxSend(item, serverMsg) {
     if (!serverMsg) return;
     await window.messageCache?.deleteOutboxItem?.(item.chatId, item.clientId);
-    revokeOutboxObjectUrls(item.clientId);
     outboxSending.delete(item.clientId);
     applyOwnReadStateToMessage(serverMsg, item.chatId);
     try { window.messageCache?.upsertMessage?.(serverMsg).catch(()=>{}); } catch (e) {}
     updateChatListLastMessage(serverMsg);
 
-    const row = findOutboxRow(item.clientId);
+    const row = promoteOutboxRow(item.clientId, serverMsg, { mediaAutoScrollToBottom: true });
     const alreadyDisplayed = isMessageDisplayed(serverMsg.id);
-    if (row) {
-      forgetDisplayedMessage(row.dataset.msgId);
-      if (alreadyDisplayed) {
-        row.remove();
-        cleanupEmptyMessageGroups();
-      } else {
-        const showName = Boolean(row.querySelector('.msg-sender'));
-        const replacement = createMessageEl(serverMsg, showName);
-        row.replaceWith(replacement);
-        rememberDisplayedMessage(serverMsg.id);
-      }
-    } else if (Number(serverMsg.chat_id) === Number(currentChatId) && !alreadyDisplayed) {
+    if (!row && Number(serverMsg.chat_id) === Number(currentChatId) && !alreadyDisplayed) {
       appendMessage(serverMsg, { mediaAutoScrollToBottom: true });
     }
     updateScrollBottomButton();
@@ -23754,6 +23821,7 @@
       window.messageCache.patchMessage(rowChatId, msgId, { reactions: Array.isArray(reactions) ? reactions : [] }).catch(() => {});
     }
     if (!row) return;
+    if (row.__messageData) row.__messageData = { ...row.__messageData, reactions: Array.isArray(reactions) ? reactions : [] };
     const footer = row.querySelector('.msg-footer');
     if (!footer) return;
     let bar = footer.querySelector('.msg-reactions');

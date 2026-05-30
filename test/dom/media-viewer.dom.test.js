@@ -4196,6 +4196,140 @@ test('voice outbox shows transcription pending immediately when auto-transcribe 
   assert.match(row.querySelector('.voice-transcription-inline.pending')?.textContent || '', /Transcription|Расшифров/);
 });
 
+test('outbox websocket echo promotes the optimistic message row in place', async (t) => {
+  const chat = createChatFixture(1, 'Chat A', { lastMessageId: 0 });
+  const dom = await openMediaPlaybackDom({
+    activeChat: chat,
+    chats: [chat],
+    chatMessagesByChatId: { 1: [] },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  const item = {
+    clientId: 'c-stable-promote',
+    chatId: 1,
+    userId: 1,
+    status: 'sending',
+    kind: 'message',
+    createdAt: '2026-04-29T22:00:00.000Z',
+    text: 'Stable send',
+    replyToId: null,
+    reply: null,
+    attachments: [],
+  };
+
+  const row = BananzaAppBridge.__testing.renderOutboxItem(item);
+  assert.ok(row, 'Expected optimistic row');
+  row.classList.remove('entering');
+
+  const serverMessage = createIncomingMessage(1, 901, {
+    user_id: 1,
+    username: 'alice',
+    display_name: 'Alice',
+    avatar_color: '#5eb5f7',
+    text: 'Stable send',
+    client_id: item.clientId,
+    is_read: false,
+  });
+  emitWsMessage(dom, { type: 'message', message: serverMessage });
+  await wait(dom, 30);
+
+  const promoted = document.querySelector('.msg-row[data-msg-id="901"]');
+  assert.equal(promoted, row);
+  assert.equal(row.dataset.outbox, undefined);
+  assert.equal(row.dataset.clientId, item.clientId);
+  assert.equal(row.classList.contains('client-sending'), false);
+  assert.equal(row.classList.contains('entering'), false);
+  assert.equal(document.querySelectorAll('.msg-row[data-msg-id="901"]').length, 1);
+  assert.equal(row.querySelector('.msg-text')?.textContent, 'Stable send');
+  assert.ok(row.querySelector('.msg-actions'), 'Expected confirmed message actions');
+
+  await BananzaAppBridge.__testing.completeOutboxSend(item, serverMessage);
+  await wait(dom, 30);
+
+  assert.equal(document.querySelector('.msg-row[data-msg-id="901"]'), row);
+  assert.equal(document.querySelectorAll('.msg-row[data-msg-id="901"]').length, 1);
+});
+
+test('message update rerenders without replacing the message row or re-entering', async (t) => {
+  const chat = createChatFixture(1, 'Chat A', { lastMessageId: 902 });
+  const message = createIncomingMessage(1, 902, {
+    user_id: 1,
+    username: 'alice',
+    display_name: 'Alice',
+    avatar_color: '#5eb5f7',
+    text: 'Before edit',
+  });
+  const dom = await openMediaPlaybackDom({
+    activeChat: chat,
+    chats: [chat],
+    chatMessagesByChatId: { 1: [] },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  BananzaAppBridge.__testing.appendMessage(message);
+  await wait(dom, 20);
+  const row = document.querySelector('.msg-row[data-msg-id="902"]');
+  assert.ok(row, 'Expected rendered message row');
+  row.classList.remove('entering');
+
+  BananzaAppBridge.__testing.applyMessageUpdate({
+    ...message,
+    text: 'After edit',
+    edited_at: '2026-04-29T22:01:00.000Z',
+  });
+  await wait(dom, 20);
+
+  assert.equal(document.querySelector('.msg-row[data-msg-id="902"]'), row);
+  assert.equal(row.classList.contains('entering'), false);
+  assert.equal(row.querySelector('.msg-text')?.textContent, 'After edit');
+  assert.ok(row.querySelector('.msg-edited'), 'Expected edited marker after update');
+});
+
+test('reaction updates keep the existing message row', async (t) => {
+  const chat = createChatFixture(1, 'Chat A', { lastMessageId: 903 });
+  const message = createIncomingMessage(1, 903, {
+    text: 'React in place',
+  });
+  const dom = await openMediaPlaybackDom({
+    activeChat: chat,
+    chats: [chat],
+    chatMessagesByChatId: { 1: [] },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  BananzaAppBridge.__testing.appendMessage(message);
+  await wait(dom, 20);
+  const row = document.querySelector('.msg-row[data-msg-id="903"]');
+  assert.ok(row, 'Expected rendered message row');
+  row.classList.remove('entering');
+
+  emitWsMessage(dom, {
+    type: 'reaction',
+    chatId: 1,
+    messageId: 903,
+    reactions: [{ user_id: 1, emoji: '\uD83D\uDC4D' }],
+    action: 'added',
+    actorId: 1,
+    targetUserId: 2,
+  });
+  await wait(dom, 20);
+
+  assert.equal(document.querySelector('.msg-row[data-msg-id="903"]'), row);
+  assert.equal(row.classList.contains('entering'), false);
+  assert.equal(row.querySelectorAll('.reaction-badge').length, 1);
+  assert.equal(row.__messageData.reactions.length, 1);
+});
+
 test('voice transcription update keeps bottom scroll after transcript expands bubble', async (t) => {
   const chat = createChatFixture(1, 'Chat A', { lastMessageId: 608 });
   const baseMessages = createChatMessages(1, 5, { startId: 600 });

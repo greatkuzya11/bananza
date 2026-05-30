@@ -6466,7 +6466,8 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
    Animations
    ═══════════════════════════════════════════════════════════════════════════ */
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-.msg-row { animation: fadeIn .2s ease; }
+.msg-row.entering { animation: fadeIn .2s ease; }
+.msg-row.no-enter-animation { animation: none !important; }
 
 /* ── Mobile attach menu ──────────────────────────────────────────────────── */
 .attach-menu-overlay {
