@@ -1005,6 +1005,23 @@ function createComposerInteractionFetchHandler({
     if (transformMatch && String(init?.method || '').toUpperCase() === 'POST') {
       return createJsonResponse(dom, { text: 'Converted text' });
     }
+    const restoreMatch = url.pathname.match(/^\/api\/messages\/(\d+)\/context-convert\/restore-original$/);
+    if (restoreMatch && String(init?.method || '').toUpperCase() === 'POST') {
+      const messageId = Number(restoreMatch[1]);
+      const message = Object.values(chatMessagesByChatId)
+        .flat()
+        .find((item) => Number(item?.id || 0) === messageId) || {};
+      return createJsonResponse(dom, {
+        ok: true,
+        message: {
+          ...message,
+          id: messageId,
+          text: 'Restored original',
+          context_transform_original_available: 0,
+          edited_at: '2026-04-29T22:15:00.000Z',
+        },
+      });
+    }
     return null;
   };
 }
@@ -3819,6 +3836,50 @@ test('mobile message context convert action keeps the keyboard attached', async 
   assert.equal(document.getElementById('contextConvertPicker').classList.contains('hidden'), false);
   assert.equal(document.activeElement, msgInput);
   assert.equal(app.style.height, '420px');
+});
+
+test('context transform restore original action updates the message and disappears', async (t) => {
+  const dom = await openSingleChatDom({
+    chatMessagesByChatId: {
+      1: [
+        createIncomingMessage(1, 233, {
+          text: 'Transformed text',
+          context_transform_original_available: 1,
+        }),
+        createIncomingMessage(1, 234, {
+          text: 'Plain text',
+          context_transform_original_available: 0,
+        }),
+      ],
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const transformedRow = document.querySelector('.msg-row[data-msg-id="233"]');
+  const plainRow = document.querySelector('.msg-row[data-msg-id="234"]');
+
+  const restoreBtn = transformedRow.querySelector('.msg-restore-original-btn');
+  assert.ok(restoreBtn, 'Expected restore-original action for transformed message');
+  assert.equal(plainRow.querySelector('.msg-restore-original-btn'), null);
+  assert.match(restoreBtn.getAttribute('title') || '', /Restore original|Вернуть оригинал/);
+
+  transformedRow.querySelector('.msg-bubble').dispatchEvent(new dom.window.MouseEvent('contextmenu', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 120,
+    clientY: 300,
+  }));
+  await wait(dom, 40);
+  assert.ok(document.querySelector('#reactionPicker .msg-restore-original-btn'), 'Expected restore action in long-press/right-click strip');
+
+  dispatchPointerTap(dom.window, restoreBtn);
+  await wait(dom, 120);
+
+  const updatedRow = document.querySelector('.msg-row[data-msg-id="233"]');
+  assert.equal(updatedRow.querySelector('.msg-text')?.textContent, 'Restored original');
+  assert.equal(updatedRow.querySelector('.msg-restore-original-btn'), null);
 });
 
 test('mobile long-press reaction picker keeps the keyboard attached', async (t) => {

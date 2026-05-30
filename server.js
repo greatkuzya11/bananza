@@ -647,6 +647,37 @@ const editableMessageForUpdateStmt = db.prepare(`
   LEFT JOIN call_messages cm ON cm.message_id=m.id
   WHERE m.id=? AND m.is_deleted=0
 `);
+const messageContextTransformOriginalAvailableStmt = db.prepare(`
+  SELECT 1
+  FROM message_context_transform_originals
+  WHERE message_id=? AND restored_at IS NULL
+`);
+const messageContextTransformOriginalForRestoreStmt = db.prepare(`
+  SELECT original_text
+  FROM message_context_transform_originals
+  WHERE message_id=? AND restored_at IS NULL
+`);
+const upsertMessageContextTransformOriginalStmt = db.prepare(`
+  INSERT INTO message_context_transform_originals(
+    message_id,
+    original_text,
+    created_by,
+    last_transform_at,
+    transform_count,
+    restored_at,
+    restored_by
+  ) VALUES(?,?,?,datetime('now'),1,NULL,NULL)
+  ON CONFLICT(message_id) DO UPDATE SET
+    last_transform_at=datetime('now'),
+    transform_count=COALESCE(transform_count, 0) + 1,
+    restored_at=NULL,
+    restored_by=NULL
+`);
+const markMessageContextTransformOriginalRestoredStmt = db.prepare(`
+  UPDATE message_context_transform_originals
+  SET restored_at=datetime('now'), restored_by=?
+  WHERE message_id=?
+`);
 const messagePinExistsStmt = db.prepare('SELECT 1 FROM message_pins WHERE message_id=?');
 const deleteLinkPreviewsByMessageStmt = db.prepare('DELETE FROM link_previews WHERE message_id=?');
 const insertLinkPreviewStmt = db.prepare('INSERT INTO link_previews(message_id,url,title,description,image,hostname) VALUES(?,?,?,?,?,?)');
@@ -891,6 +922,28 @@ function attachMessageMentions(row) {
   return row;
 }
 
+function attachContextTransformOriginalAvailability(row) {
+  if (!row?.id) return row;
+  row.context_transform_original_available = messageContextTransformOriginalAvailableStmt.get(row.id) ? 1 : 0;
+  return row;
+}
+
+function getEditableMessageCurrentText(messageRow) {
+  if (!messageRow) return '';
+  return String(
+    messageRow.voice_message_id
+      ? (messageRow.transcription_text || '')
+      : (messageRow.text || '')
+  ).trim();
+}
+
+function rememberContextTransformOriginal(messageRow, actorUserId, sourceText) {
+  const messageId = Number(messageRow?.id || 0);
+  const cleanSource = String(sourceText || '').trim();
+  if (!messageId || !cleanSource) return;
+  upsertMessageContextTransformOriginalStmt.run(messageId, cleanSource, actorUserId || null);
+}
+
 function decorateMessageFilePayload(row) {
   if (!row) return row;
   row.file_poster_available = Boolean(
@@ -918,7 +971,7 @@ function hydrateMessageById(messageId, viewerUserId = null) {
   const withVoice = voiceFeature.attachVoiceMetadata([row])[0];
   const withPoll = pollFeature.attachPollMetadata([withVoice], viewerUserId, { ensureClosed: false, broadcastOnClose: false })[0];
   const withCall = callFeature?.attachCallMetadata?.([withPoll])?.[0] || withPoll;
-  return decorateMessageFilePayload(withCall);
+  return attachContextTransformOriginalAvailability(decorateMessageFilePayload(withCall));
 }
 
 function isChatMember(chatId, userId) {
@@ -956,7 +1009,7 @@ function scheduleEditedMessagePreview(messageRow, text) {
   }).catch(() => {});
 }
 
-function applyEditableMessageText(messageRow, { actorUserId, viewerUserId = null, text } = {}) {
+function applyEditableMessageText(messageRow, { actorUserId, viewerUserId = null, text, beforeHydrate = null } = {}) {
   const messageId = Number(messageRow?.id || 0);
   if (!messageId) {
     const error = new Error('Message not found');
@@ -994,6 +1047,9 @@ function applyEditableMessageText(messageRow, { actorUserId, viewerUserId = null
 
   deleteLinkPreviewsByMessageStmt.run(messageId);
   saveMessageMentions(messageId, messageRow.chat_id, clean);
+  if (typeof beforeHydrate === 'function') {
+    beforeHydrate({ messageId, cleanText: clean });
+  }
 
   const updated = hydrateMessageById(messageId, viewerUserId);
   if (!updated) {
@@ -2390,7 +2446,8 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
     { ensureClosed: true, broadcastOnClose: true }
   );
   const result = (callFeature?.attachCallMetadata?.(decoratedMessages) || decoratedMessages)
-    .map(decorateMessageFilePayload);
+    .map(decorateMessageFilePayload)
+    .map(attachContextTransformOriginalAvailability);
   const pinEvents = getPinEventsForWindow(chatId, result, {
     openEnded: !before && !after && !anchor,
   });
@@ -2546,7 +2603,8 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
     voiceFeature.attachVoiceMetadata([msg]),
     req.user.id,
     { ensureClosed: false, broadcastOnClose: false }
-  ).map(decorateMessageFilePayload)[0];
+  ).map(decorateMessageFilePayload)
+    .map(attachContextTransformOriginalAvailability)[0];
   // Echo client_id back to clients so optimistic messages can be matched
   if (clientId) hydratedMsg.client_id = clientId;
 
@@ -2981,9 +3039,7 @@ app.post('/api/messages/:id/context-convert', auth, msgLimiter, async (req, res)
     return res.status(400).json({ error: 'AI messages cannot be transformed' });
   }
 
-  const sourceText = m.voice_message_id
-    ? String(m.transcription_text || '').trim()
-    : String(m.text || '').trim();
+  const sourceText = getEditableMessageCurrentText(m);
   if (!sourceText) {
     return res.status(400).json({ error: 'Message has no editable text to transform' });
   }
@@ -2994,10 +3050,14 @@ app.post('/api/messages/:id/context-convert', auth, msgLimiter, async (req, res)
       botId: req.body?.botId,
       text: sourceText,
     });
+    const transformedText = String(result?.text || '').trim();
+    if (transformedText && transformedText !== sourceText) {
+      rememberContextTransformOriginal(m, req.user.id, sourceText);
+    }
     const updated = applyEditableMessageText(m, {
       actorUserId: req.user.id,
       viewerUserId: req.user.id,
-      text: result.text,
+      text: transformedText || result.text,
     });
     res.json({
       ok: true,
@@ -3012,6 +3072,41 @@ app.post('/api/messages/:id/context-convert', auth, msgLimiter, async (req, res)
     });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message || 'Context transform failed' });
+  }
+});
+
+app.post('/api/messages/:id/context-convert/restore-original', auth, msgLimiter, (req, res) => {
+  const mid = +req.params.id;
+  const m = editableMessageForUpdateStmt.get(mid);
+  if (!m) return res.status(404).json({ error: 'Not found' });
+  if (!req.user.is_admin && m.user_id !== req.user.id)
+    return res.status(403).json({ error: 'Not allowed' });
+  if (!req.user.is_admin && !db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(m.chat_id, req.user.id))
+    return res.status(403).json({ error: 'Not a member' });
+  if (m.poll_message_id) return res.status(400).json({ error: 'Poll messages cannot be restored' });
+  if (m.call_message_id) return res.status(400).json({ error: 'Call messages cannot be restored' });
+  if (m.ai_generated || Number(m.is_ai_author || 0) === 1) {
+    return res.status(400).json({ error: 'AI messages cannot be restored' });
+  }
+
+  const original = messageContextTransformOriginalForRestoreStmt.get(mid);
+  const originalText = String(original?.original_text || '').trim();
+  if (!originalText) {
+    return res.status(400).json({ error: 'Message has no context transform original' });
+  }
+
+  try {
+    const updated = applyEditableMessageText(m, {
+      actorUserId: req.user.id,
+      viewerUserId: req.user.id,
+      text: originalText,
+      beforeHydrate: ({ messageId }) => {
+        markMessageContextTransformOriginalRestoredStmt.run(req.user.id, messageId);
+      },
+    });
+    res.json({ ok: true, message: updated });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message || 'Could not restore original message' });
   }
 });
 

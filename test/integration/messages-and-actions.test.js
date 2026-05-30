@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('path');
+const Database = require('better-sqlite3');
 const { before, after } = require('node:test');
 
 const { createSandbox } = require('../support/runtimeSandbox');
@@ -22,6 +24,48 @@ function makePosterForm(filename = 'poster.jpg') {
   const form = new FormData();
   form.append('poster', new Blob([POSTER_JPEG_BYTES], { type: 'image/jpeg' }), filename);
   return form;
+}
+
+async function enableContextTransformForChat(admin, chatId) {
+  await admin.request('/api/admin/ai-bots/settings', {
+    method: 'PUT',
+    json: {
+      enabled: true,
+      openai_api_key: 'sk-ai-test',
+      default_response_model: 'gpt-4o-mini',
+    },
+  });
+  await admin.request('/api/admin/deepseek-ai-bots/settings', {
+    method: 'PUT',
+    json: {
+      deepseek_enabled: true,
+      deepseek_api_key: 'sk-deepseek-test',
+      deepseek_default_response_model: 'deepseek-chat',
+    },
+  });
+  await admin.request(`/api/chats/${chatId}/context-transform-settings`, {
+    method: 'PUT',
+    json: { context_transform_enabled: true },
+  });
+}
+
+async function createContextConvertBot(admin, provider = 'openai') {
+  const route = provider === 'deepseek'
+    ? '/api/admin/deepseek-convert-bots'
+    : '/api/admin/openai-convert-bots';
+  const response = await admin.request(route, {
+    method: 'POST',
+    json: {
+      name: `${provider} restore ${Date.now().toString(36)}`.slice(0, 30),
+      enabled: true,
+      available_in_all_chats: true,
+      response_model: provider === 'deepseek' ? 'deepseek-chat' : 'gpt-4o-mini',
+      temperature: 0.3,
+      max_tokens: 1000,
+      transform_prompt: 'Rewrite the source text and return only the rewritten text.',
+    },
+  });
+  return response.data.bot;
 }
 
 test('message creation, file upload, edit, search, read and delete work end-to-end', async () => {
@@ -65,6 +109,128 @@ test('message creation, file upload, edit, search, read and delete work end-to-e
     method: 'DELETE',
   });
   assert.equal(deleted.data.ok, true);
+});
+
+test('context transform preserves the first sent text and restores it on demand', async () => {
+  const { admin, bob, groupChat } = scenario;
+  await enableContextTransformForChat(admin, groupChat.id);
+  const openAiBot = await createContextConvertBot(admin, 'openai');
+  const deepSeekBot = await createContextConvertBot(admin, 'deepseek');
+  const originalText = `Restore original ${Date.now()}`;
+
+  const created = await admin.request(`/api/chats/${groupChat.id}/messages`, {
+    method: 'POST',
+    json: { text: originalText },
+  });
+  assert.equal(created.data.context_transform_original_available, 0);
+  assert.equal(Object.prototype.hasOwnProperty.call(created.data, 'original_text'), false);
+
+  const firstTransform = await admin.request(`/api/messages/${created.data.id}/context-convert`, {
+    method: 'POST',
+    json: { botId: openAiBot.id },
+  });
+  assert.equal(firstTransform.data.message.text, 'Mock OpenAI response');
+  assert.equal(firstTransform.data.message.context_transform_original_available, 1);
+  assert.equal(Object.prototype.hasOwnProperty.call(firstTransform.data.message, 'original_text'), false);
+
+  const secondTransform = await admin.request(`/api/messages/${created.data.id}/context-convert`, {
+    method: 'POST',
+    json: { botId: deepSeekBot.id },
+  });
+  assert.equal(secondTransform.data.message.text, 'Mock DeepSeek response');
+  assert.equal(secondTransform.data.message.context_transform_original_available, 1);
+
+  const denied = await bob.request(`/api/messages/${created.data.id}/context-convert/restore-original`, {
+    method: 'POST',
+    expectedStatus: 403,
+  });
+  assert.match(denied.data.error, /Not allowed/i);
+
+  const restored = await admin.request(`/api/messages/${created.data.id}/context-convert/restore-original`, {
+    method: 'POST',
+  });
+  assert.equal(restored.data.message.text, originalText);
+  assert.equal(restored.data.message.context_transform_original_available, 0);
+  assert.equal(Object.prototype.hasOwnProperty.call(restored.data.message, 'original_text'), false);
+
+  const listed = await admin.request(`/api/chats/${groupChat.id}/messages`, {
+    searchParams: { anchor: created.data.id, meta: 1 },
+  });
+  const listedMessage = listed.data.messages.find((message) => message.id === created.data.id);
+  assert.ok(listedMessage);
+  assert.equal(listedMessage.text, originalText);
+  assert.equal(listedMessage.context_transform_original_available, 0);
+  assert.equal(Object.prototype.hasOwnProperty.call(listedMessage, 'original_text'), false);
+
+  const inspectionDb = new Database(path.join(sandbox.appDir, 'bananza.db'), { readonly: true });
+  try {
+    const row = inspectionDb.prepare(`
+      SELECT original_text, transform_count, restored_by
+      FROM message_context_transform_originals
+      WHERE message_id=?
+    `).get(created.data.id);
+    assert.equal(row.original_text, originalText);
+    assert.equal(row.transform_count, 2);
+    assert.equal(row.restored_by, admin.user.id);
+  } finally {
+    inspectionDb.close();
+  }
+});
+
+test('context transform original restore works for voice transcription text', async () => {
+  const { admin, groupChat } = scenario;
+  await enableContextTransformForChat(admin, groupChat.id);
+  const openAiBot = await createContextConvertBot(admin, 'openai');
+  const originalText = `Voice restore original ${Date.now()}`;
+
+  try {
+    await admin.request('/api/admin/voice-settings', {
+      method: 'PUT',
+      json: {
+        voice_notes_enabled: true,
+        auto_transcribe_on_send: false,
+        active_provider: 'openai',
+        openai_api_key: 'sk-test-openai',
+      },
+    });
+
+    const voiceForm = new FormData();
+    voiceForm.append('file', new Blob(['wave'], { type: 'audio/wav' }), 'restore-voice.wav');
+    voiceForm.append('durationMs', '900');
+    voiceForm.append('sampleRate', '16000');
+    const voiceMessage = await admin.request(`/api/chats/${groupChat.id}/voice-message`, {
+      method: 'POST',
+      formData: voiceForm,
+    });
+    assert.equal(voiceMessage.data.is_voice_note, true);
+
+    const manualTranscript = await admin.request(`/api/messages/${voiceMessage.data.id}`, {
+      method: 'PATCH',
+      json: { text: originalText },
+    });
+    assert.equal(manualTranscript.data.transcription_text, originalText);
+
+    const transformed = await admin.request(`/api/messages/${voiceMessage.data.id}/context-convert`, {
+      method: 'POST',
+      json: { botId: openAiBot.id },
+    });
+    assert.equal(transformed.data.message.transcription_text, 'Mock OpenAI response');
+    assert.equal(transformed.data.message.context_transform_original_available, 1);
+
+    const restored = await admin.request(`/api/messages/${voiceMessage.data.id}/context-convert/restore-original`, {
+      method: 'POST',
+    });
+    assert.equal(restored.data.message.transcription_text, originalText);
+    assert.equal(restored.data.message.context_transform_original_available, 0);
+  } finally {
+    await admin.request('/api/admin/voice-settings', {
+      method: 'PUT',
+      json: {
+        voice_notes_enabled: false,
+        auto_transcribe_on_send: false,
+      },
+    });
+  }
 });
 
 test('universal uploads keep trusted media previewable and unsafe files download-only', async () => {

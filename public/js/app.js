@@ -532,6 +532,7 @@
   let contextConvertAvailabilityRequests = new Map();
   let contextConvertComposerPending = false;
   let contextConvertPendingMessageIds = new Set();
+  let contextOriginalRestorePendingMessageIds = new Set();
   let contextConvertPickerState = {
     active: false,
     selected: 0,
@@ -1151,6 +1152,8 @@
     const bottom = top + height;
     const nextInputHeight = Math.max(0, Number(inputHeight) || 0);
     const bottomDelta = bottom - mobileKeyboardDockBottom;
+    const topDelta = top - mobileKeyboardDockTop;
+    const heightDelta = height - mobileKeyboardDockHeight;
     const inputDelta = nextInputHeight - mobileKeyboardDockInputHeight;
     const recentDeltaAge = Date.now() - mobileKeyboardDockRecentInputDeltaAt;
     const recentInputDelta = recentDeltaAge >= 0 && recentDeltaAge < 700
@@ -1166,18 +1169,25 @@
       && bottomDelta > 1
       && relevantInputShrink > 1
       && bottomDelta <= relevantInputShrink + 24;
+    const scrollOnlyViewportShift = mobileKeyboardDockActive
+      && Math.abs(width - mobileKeyboardDockWidth) <= 48
+      && Math.abs(heightDelta) <= 1
+      && Math.abs(topDelta) > 1
+      && Math.abs(bottomDelta - topDelta) <= 1;
     const shouldResetDock = !mobileKeyboardDockActive
       || Math.abs(width - mobileKeyboardDockWidth) > 48
       || (
         Math.abs(bottomDelta) > 48
         && !inputDrivenBottomShrink
         && !inputDrivenBottomGrowth
+        && !scrollOnlyViewportShift
       );
     const shouldAcceptSmallBottomChange = mobileKeyboardDockActive
       && Math.abs(bottomDelta) > 1
       && Math.abs(bottomDelta) <= 48
       && !inputDrivenBottomShrink
-      && !inputDrivenBottomGrowth;
+      && !inputDrivenBottomGrowth
+      && !scrollOnlyViewportShift;
 
     if (shouldResetDock) {
       mobileKeyboardDockTop = top;
@@ -16204,6 +16214,19 @@
     return Boolean(String(text || '').trim());
   }
 
+  function canRestoreContextOriginalMessage(msg) {
+    if (!currentUser || !msg || msg.is_deleted) return false;
+    if (!msg.context_transform_original_available) return false;
+    if (isClientSideMessage(msg)) return false;
+    if (isPollMessage(msg)) return false;
+    if (msg.call || msg.call_message || msg.is_call_message) return false;
+    if (msg.call_transcript_run || msg.is_call_transcript_message) return false;
+    if (msg.call_artifact_batch || msg.is_call_artifact_message) return false;
+    if (msg.ai_generated || msg.ai_bot_id || msg.is_ai_bot) return false;
+    if (!currentUser.is_admin && msg.user_id !== currentUser.id) return false;
+    return Boolean(msg.is_voice_note || msg.file_id || msg.text || msg.transcription_text);
+  }
+
   function bindContextConvertMessageButton(button, row) {
     if (!button || !row || button.dataset.contextConvertBound === '1') return button;
     button.dataset.contextConvertBound = '1';
@@ -16227,6 +16250,19 @@
     button.title = 'Transform with AI';
     button.textContent = '🍌';
     return bindContextConvertMessageButton(button, row);
+  }
+
+  function bindContextOriginalRestoreButton(button, row) {
+    if (!button || !row || button.dataset.contextOriginalRestoreBound === '1') return button;
+    button.dataset.contextOriginalRestoreBound = '1';
+    bindTouchSafeButtonActivation(button, ({ event, startKeyboardOpen }) => {
+      event?.stopPropagation?.();
+      const keepComposerFocus = Boolean(reactionPickerKeepKeyboard || startKeyboardOpen || isMobileComposerKeyboardOpen());
+      restoreContextOriginalMessage(Number(row?.__messageData?.id || row?.dataset?.msgId || 0), { keepComposerFocus }).catch((error) => {
+        console.warn('[context-convert] restore failed:', error.message);
+      });
+    });
+    return button;
   }
 
   function syncVisibleContextConvertMessageButtons() {
@@ -16360,6 +16396,20 @@
     }
   }
 
+  function syncContextOriginalRestorePendingMessageState(messageId) {
+    const id = Number(messageId || 0);
+    if (!id) return;
+    const pending = contextOriginalRestorePendingMessageIds.has(id);
+    const row = messagesEl.querySelector(`[data-msg-id="${id}"]`);
+    row?.querySelectorAll('.msg-restore-original-btn').forEach((btn) => {
+      btn.classList.toggle('is-pending', pending);
+      btn.disabled = pending;
+    });
+    if (Number(reactionPickerMsgId || 0) === id && isFloatingSurfaceVisible(reactionPicker)) {
+      renderReactionPickerContent();
+    }
+  }
+
   async function transformMessageWithContextConvertBot(messageId, bot) {
     const id = Number(messageId || 0);
     if (!id || !bot?.id || contextConvertPendingMessageIds.has(id)) return;
@@ -16382,6 +16432,33 @@
     } finally {
       contextConvertPendingMessageIds.delete(id);
       syncContextConvertPendingMessageState(id);
+    }
+  }
+
+  async function restoreContextOriginalMessage(messageId, options = {}) {
+    const id = Number(messageId || 0);
+    if (!id || contextOriginalRestorePendingMessageIds.has(id)) return;
+    const keepComposerFocus = Boolean(options.keepComposerFocus);
+    hideFloatingMessageActions({ keepComposerState: keepComposerFocus, immediate: true });
+    if (keepComposerFocus) focusComposerKeepKeyboard(true);
+    contextOriginalRestorePendingMessageIds.add(id);
+    syncContextOriginalRestorePendingMessageState(id);
+    try {
+      const preserveAnchor = captureScrollAnchor();
+      const data = await api(`/api/messages/${id}/context-convert/restore-original`, {
+        method: 'POST',
+      });
+      applyMessageUpdate(data.message, { preserveAnchor });
+      if (preserveAnchor?.messageId) {
+        requestAnimationFrame(() => restoreScrollAnchor(preserveAnchor, 2));
+      }
+      loadChats().catch(() => {});
+    } catch (error) {
+      showCenterToast(error.message || t('Could not restore original message'));
+    } finally {
+      contextOriginalRestorePendingMessageIds.delete(id);
+      syncContextOriginalRestorePendingMessageState(id);
+      if (keepComposerFocus) focusComposerKeepKeyboard(true);
     }
   }
 
@@ -19563,6 +19640,7 @@
       html += '<button class="msg-reply-btn" title="Reply">↩</button>';
       if (canEditMessage(msg)) html += '<button class="msg-edit-btn" title="Edit">✏️</button>';
       if (canContextConvertMessage(msg)) html += `<button class="msg-context-convert-btn${contextConvertPendingMessageIds.has(Number(msg.id || 0)) ? ' is-pending' : ''}" title="Transform with AI">🍌</button>`;
+      if (canRestoreContextOriginalMessage(msg)) html += `<button class="msg-restore-original-btn${contextOriginalRestorePendingMessageIds.has(Number(msg.id || 0)) ? ' is-pending' : ''}" title="${esc(t('Restore original'))}" aria-label="${esc(t('Restore original'))}">&#8634;</button>`;
       if (canSaveMessageToNotes(msg)) html += '<button class="msg-save-note-btn" title="Сохранить в заметки">📝</button>';
       if (canForwardMessage(msg)) html += '<button class="msg-forward-btn" title="Forward">📤</button>';
       html += '<button class="msg-react-btn" title="React">🙂</button>';
@@ -19617,6 +19695,9 @@
 
     const contextConvertBtn = row.querySelector('.msg-context-convert-btn');
     if (contextConvertBtn) bindContextConvertMessageButton(contextConvertBtn, row);
+
+    const restoreOriginalBtn = row.querySelector('.msg-restore-original-btn');
+    if (restoreOriginalBtn) bindContextOriginalRestoreButton(restoreOriginalBtn, row);
 
     const reactBtn = row.querySelector('.msg-react-btn');
     if (reactBtn) {
@@ -21828,6 +21909,7 @@
       el.querySelector('.msg-react-btn')?.remove();
       el.querySelector('.msg-edit-btn')?.remove();
       el.querySelector('.msg-context-convert-btn')?.remove();
+      el.querySelector('.msg-restore-original-btn')?.remove();
       el.querySelector('.msg-save-note-btn')?.remove();
       el.querySelector('.msg-forward-btn')?.remove();
       el.querySelector('.msg-actions')?.remove();
@@ -21869,6 +21951,13 @@
     try { if (window.messageCache) window.messageCache.upsertMessage(msg).catch(()=>{}); } catch (e) {}
     if (msg.chat_id !== currentChatId) return;
     replaceRenderedMessage(msg, options);
+    if (Number(reactionPickerMsgId || 0) === Number(msg.id || 0) && isFloatingSurfaceVisible(reactionPicker)) {
+      renderReactionPickerContent();
+      positionMessageActionSurfaces({
+        includeActions: Boolean(activeMessageActionsRow),
+        includePicker: true,
+      });
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -24211,10 +24300,12 @@
     if (!reactionPicker) return;
     const row = reactionPickerMsgId ? messagesEl.querySelector(`[data-msg-id="${reactionPickerMsgId}"]`) : null;
     const canConvert = canContextConvertMessage(row?.__messageData, row);
+    const canRestoreOriginal = canRestoreContextOriginalMessage(row?.__messageData);
     reactionPicker.innerHTML = `
       <div class="reaction-picker-strip">
         ${renderQuickReactionButtonsHtml({ buttonClass: 'reaction-picker-button', moreAction: 'open-emoji-popover' })}
         ${canConvert ? `<button type="button" class="reaction-picker-button msg-context-convert-btn${contextConvertPendingMessageIds.has(Number(reactionPickerMsgId || 0)) ? ' is-pending' : ''}" data-reaction-action="context-convert" title="Transform with AI">🍌</button>` : ''}
+        ${canRestoreOriginal ? `<button type="button" class="reaction-picker-button msg-restore-original-btn${contextOriginalRestorePendingMessageIds.has(Number(reactionPickerMsgId || 0)) ? ' is-pending' : ''}" data-reaction-action="restore-original" title="${esc(t('Restore original'))}" aria-label="${esc(t('Restore original'))}"${contextOriginalRestorePendingMessageIds.has(Number(reactionPickerMsgId || 0)) ? ' disabled' : ''}>&#8634;</button>` : ''}
       </div>
     `;
     reactionPicker.querySelector('.reaction-picker-strip')?.addEventListener('scroll', () => {
@@ -27589,6 +27680,13 @@
             console.warn('[context-convert] picker open failed:', error.message);
           });
         }
+        return;
+      }
+      if (action === 'restore-original') {
+        e.preventDefault();
+        restoreContextOriginalMessage(reactionPickerMsgId, { keepComposerFocus }).catch((error) => {
+          console.warn('[context-convert] restore failed:', error.message);
+        });
         return;
       }
       if (!btn.dataset.emoji) return;

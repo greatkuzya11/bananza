@@ -88,6 +88,17 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS message_context_transform_originals (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    original_text TEXT NOT NULL,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    last_transform_at TEXT DEFAULT (datetime('now')),
+    transform_count INTEGER DEFAULT 1,
+    restored_at TEXT DEFAULT NULL,
+    restored_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+  );
+
   CREATE TABLE IF NOT EXISTS files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     original_name TEXT NOT NULL,
@@ -210,6 +221,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_message_pins_message ON message_pins(message_id);
   CREATE INDEX IF NOT EXISTS idx_message_pin_events_chat ON message_pin_events(chat_id, id);
   CREATE INDEX IF NOT EXISTS idx_message_pin_events_message ON message_pin_events(message_id, id);
+  CREATE INDEX IF NOT EXISTS idx_message_context_transform_originals_active ON message_context_transform_originals(message_id, restored_at);
   CREATE INDEX IF NOT EXISTS idx_user_recent_emojis_user_time ON user_recent_emojis(user_id, last_used_at DESC);
 `);
 
