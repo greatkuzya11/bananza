@@ -827,7 +827,7 @@
                 <input id="aiInitiativeTimezoneSearch" class="modal-input" type="search" placeholder="Search timezone or UTC offset">
                 <select id="aiInitiativeTimezone" class="modal-input"></select>
               </label>
-              <label>Idle minutes<input id="aiInitiativeIdleMinutes" class="modal-input" type="number" min="1" max="43200" value="1440"></label>
+              <label>Idle minutes<input id="aiInitiativeIdleMinutes" class="modal-input" type="number" min="0" max="43200" value="1440"></label>
               <label>Minimum gap<input id="aiInitiativeGapMinutes" class="modal-input" type="number" min="1" max="43200" value="1440"></label>
               <div class="ai-bot-toggle-label"><span>Limit repeats for same context</span>
                 <label class="toggle-switch">
@@ -855,6 +855,7 @@
                 <button id="aiInitiativeManageNewsSources" type="button" class="weather-action-btn">News sources</button>
               </div>
               <div class="settings-hint ai-initiative-wide-hint">Timezone is selected from IANA zones and shows the current UTC offset. Default is your browser timezone.</div>
+              <div class="settings-hint ai-initiative-wide-hint">Set idle minutes to 0 to run regardless of recent chat activity.</div>
               <div class="settings-hint ai-initiative-wide-hint">When enabled, this rule can send only this many initiative messages after the same latest human message. New human activity resets the counter.</div>
               <div id="aiInitiativeNewsSourceHint" class="settings-hint ai-initiative-wide-hint"></div>
               <div class="ai-bot-toggle-label"><span>Enabled</span>

@@ -83,6 +83,8 @@ test('AI initiative modal renders admin state and saves a rule', async () => {
   assert.equal(dom.window.document.getElementById('aiInitiativeWindowEndField').classList.contains('hidden'), false);
   dom.window.document.getElementById('aiInitiativeScheduleType').value = 'fixed';
   dom.window.document.getElementById('aiInitiativeScheduleType').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.equal(dom.window.document.getElementById('aiInitiativeIdleMinutes').min, '0');
+  dom.window.document.getElementById('aiInitiativeIdleMinutes').value = '0';
   const timezoneSearch = dom.window.document.getElementById('aiInitiativeTimezoneSearch');
   timezoneSearch.value = 'Kaliningrad';
   timezoneSearch.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
@@ -107,6 +109,7 @@ test('AI initiative modal renders admin state and saves a rule', async () => {
   assert.equal(saveCall.options.body.chat_id, 1);
   assert.equal(saveCall.options.body.bot_id, 2);
   assert.equal(saveCall.options.body.enabled, true);
+  assert.equal(saveCall.options.body.idle_threshold_minutes, 0);
   assert.equal(saveCall.options.body.same_context_limit_enabled, true);
   assert.equal(saveCall.options.body.same_context_max_runs, 3);
   assert.equal(saveCall.options.body.prompt_mode, 'news_hook');

@@ -235,6 +235,14 @@ test('initiative next run supports fixed local time and random window', () => {
     timezone: 'Europe/Kaliningrad',
   }, DateTime.fromISO('2026-05-27T06:00:00Z'), () => 0);
   assert.equal(random, '2026-05-27T08:00:00Z');
+
+  const randomAfterWindowAttempt = __private.computeNextRunAfterDueAttempt({
+    schedule_type: 'random_window',
+    window_start: '08:00',
+    window_end: '11:00',
+    timezone: 'Europe/Kaliningrad',
+  }, DateTime.fromISO('2026-05-27T07:30:00Z'), () => 0);
+  assert.equal(randomAfterWindowAttempt, '2026-05-28T06:00:00Z');
 });
 
 test('initiative normalizes bad timezone to UTC', () => {
@@ -250,14 +258,23 @@ test('initiative skips stale proactive windows instead of catching up', () => {
   assert.equal(__private.isMissedRuleRun({ next_run_at: '2026-05-27T12:10:00Z' }, now, 5), false);
 });
 
+test('initiative min gap tolerates scheduler second-level jitter', () => {
+  const now = DateTime.fromISO('2026-05-28T07:00:00Z');
+  const lastRunAt = DateTime.fromISO('2026-05-27T07:00:30Z');
+
+  assert.equal(__private.minGapElapsed(now, lastRunAt, 1440), true);
+});
+
 test('initiative normalizes same-context repeat limit settings', () => {
   const rule = __private.normalizeRuleInput({
     chat_id: 1,
     bot_id: 2,
+    idle_threshold_minutes: 0,
     same_context_limit_enabled: false,
     same_context_max_runs: 99,
   }, {}, DateTime.fromISO('2026-05-27T12:00:00Z'));
 
+  assert.equal(rule.idle_threshold_minutes, 0);
   assert.equal(rule.same_context_limit_enabled, false);
   assert.equal(rule.same_context_max_runs, 20);
   assert.equal(rule.same_context_run_count, 0);
@@ -271,6 +288,15 @@ test('initiative parses and normalizes RSS news items', () => {
   assert.equal(items[0].title, 'First & fresh');
   assert.equal(items[0].summary, 'Short summary');
   assert.equal(items[0].url, 'https://example.com/news-1');
+  assert.equal(items[0].published_at, '2026-05-27T09:50:00Z');
+});
+
+test('initiative fallback RSS parser works without optional XML dependency', () => {
+  const items = __private.parseNewsFeedXmlFallback(rssXml, 'https://example.com/rss');
+
+  assert.equal(items.length, 2);
+  assert.equal(items[0].title, 'First & fresh');
+  assert.equal(items[0].summary, 'Short summary');
   assert.equal(items[0].published_at, '2026-05-27T09:50:00Z');
 });
 
@@ -398,4 +424,83 @@ test('initiative news hook skips disabled news sources without hallucinating', a
 
   assert.equal(calls.length, 0);
   assert.equal(db.prepare('SELECT COUNT(*) as count FROM ai_news_history').get().count, 0);
+});
+
+test('initiative idle threshold 0 ignores recent chat activity', async (t) => {
+  const db = createInitiativeDb();
+  t.after(() => db.close());
+  db.prepare('UPDATE messages SET created_at=? WHERE id=1').run('2026-05-27 09:59:30');
+  db.prepare(`
+    INSERT INTO ai_bot_initiative_rules(
+      id, chat_id, bot_id, enabled, next_run_at, prompt_mode,
+      idle_threshold_minutes, min_gap_minutes
+    )
+    VALUES(1,1,1,1,?,?,?,?)
+  `).run(
+    '2026-05-27T10:00:00Z',
+    'context_question',
+    0,
+    1
+  );
+
+  const calls = [];
+  const feature = createAiInitiativeFeature({
+    app: fakeApp(),
+    db,
+    auth: (_req, _res, next) => next?.(),
+    adminOnly: (_req, _res, next) => next?.(),
+    startScheduler: false,
+    nowProvider: () => DateTime.fromISO('2026-05-27T10:00:00Z'),
+    aiBotFeature: {
+      resolveChatBotRuntime() { return true; },
+      async runSyntheticBotTurn(payload) {
+        calls.push(payload);
+        return { message: { id: 101, chat_id: payload.chatId, ai_generated: 1, ai_bot_id: payload.botId }, text: 'preview' };
+      },
+    },
+  });
+
+  await feature.runSchedulerTick();
+
+  assert.equal(calls.length, 1);
+});
+
+test('initiative idle threshold 0 can run without previous human messages', async (t) => {
+  const db = createInitiativeDb();
+  t.after(() => db.close());
+  db.prepare('DELETE FROM messages').run();
+  db.prepare(`
+    INSERT INTO ai_bot_initiative_rules(
+      id, chat_id, bot_id, enabled, next_run_at, prompt_mode,
+      idle_threshold_minutes, min_gap_minutes
+    )
+    VALUES(1,1,1,1,?,?,?,?)
+  `).run(
+    '2026-05-27T10:00:00Z',
+    'idle_ping',
+    0,
+    1
+  );
+
+  const calls = [];
+  const feature = createAiInitiativeFeature({
+    app: fakeApp(),
+    db,
+    auth: (_req, _res, next) => next?.(),
+    adminOnly: (_req, _res, next) => next?.(),
+    startScheduler: false,
+    nowProvider: () => DateTime.fromISO('2026-05-27T10:00:00Z'),
+    aiBotFeature: {
+      resolveChatBotRuntime() { return true; },
+      async runSyntheticBotTurn(payload) {
+        calls.push(payload);
+        return { message: { id: 102, chat_id: payload.chatId, ai_generated: 1, ai_bot_id: payload.botId }, text: 'preview' };
+      },
+    },
+  });
+
+  await feature.runSchedulerTick();
+
+  assert.equal(calls.length, 1);
+  assert.equal(db.prepare('SELECT last_message_id FROM ai_bot_initiative_rules WHERE id=1').get().last_message_id, null);
 });

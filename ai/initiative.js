@@ -1,5 +1,11 @@
 const { DateTime } = require('luxon');
-const { XMLParser } = require('fast-xml-parser');
+
+let XMLParser = null;
+try {
+  ({ XMLParser } = require('fast-xml-parser'));
+} catch {
+  XMLParser = null;
+}
 
 const DEFAULT_TIMEZONE = 'UTC';
 const DEFAULT_FIXED_TIME = '09:00';
@@ -110,6 +116,13 @@ function minutesBetween(a, b) {
   return Math.floor(Math.abs(a.diff(b, 'minutes').minutes));
 }
 
+function minGapElapsed(now, lastRunAt, minGapMinutes) {
+  if (!now?.isValid || !lastRunAt?.isValid) return true;
+  const minGap = intValue(minGapMinutes, DEFAULT_GAP_MINUTES, 1, 60 * 24 * 30);
+  const elapsed = Math.abs(now.diff(lastRunAt, 'minutes').minutes);
+  return Math.ceil(elapsed) >= minGap;
+}
+
 function normalizeRuleInput(input = {}, current = {}, now = DateTime.utc()) {
   const timezone = cleanTimezone(input.timezone ?? current.timezone ?? DEFAULT_TIMEZONE);
   const rawScheduleType = input.schedule_type ?? current.schedule_type ?? '';
@@ -127,7 +140,7 @@ function normalizeRuleInput(input = {}, current = {}, now = DateTime.utc()) {
     window_start: normalizeTime(input.window_start ?? current.window_start, DEFAULT_WINDOW_START),
     window_end: normalizeTime(input.window_end ?? current.window_end, DEFAULT_WINDOW_END),
     timezone,
-    idle_threshold_minutes: intValue(input.idle_threshold_minutes ?? current.idle_threshold_minutes, DEFAULT_IDLE_MINUTES, 1, 60 * 24 * 30),
+    idle_threshold_minutes: intValue(input.idle_threshold_minutes ?? current.idle_threshold_minutes, DEFAULT_IDLE_MINUTES, 0, 60 * 24 * 30),
     min_gap_minutes: intValue(input.min_gap_minutes ?? current.min_gap_minutes, DEFAULT_GAP_MINUTES, 1, 60 * 24 * 30),
     same_context_limit_enabled: boolValue(input.same_context_limit_enabled ?? current.same_context_limit_enabled, true),
     same_context_max_runs: intValue(input.same_context_max_runs ?? current.same_context_max_runs, 1, 1, 20),
@@ -152,25 +165,46 @@ function scheduleLocalDate(rule, fromUtc = DateTime.utc()) {
   return fromUtc.setZone(zone).startOf('day');
 }
 
-function computeNextRunAt(rule, fromUtc = DateTime.utc(), rng = Math.random) {
+function randomWindowDates(rule, dayLocal) {
+  const start = timeParts(rule.window_start || DEFAULT_WINDOW_START);
+  const end = timeParts(rule.window_end || DEFAULT_WINDOW_END);
+  const day = dayLocal.startOf('day');
+  let startDt = day.set(start);
+  let endDt = day.set(end);
+  if (endDt <= startDt) endDt = endDt.plus({ days: 1 });
+  return { startDt, endDt };
+}
+
+function randomWindowAround(rule, baseLocal) {
+  const todayWindow = randomWindowDates(rule, baseLocal);
+  const todayStart = timeParts(rule.window_start || DEFAULT_WINDOW_START);
+  const todayEnd = timeParts(rule.window_end || DEFAULT_WINDOW_END);
+  const day = baseLocal.startOf('day');
+  const isOvernight = day.set(todayEnd) <= day.set(todayStart);
+  if (isOvernight && baseLocal < todayWindow.startDt) {
+    const previousWindow = randomWindowDates(rule, day.minus({ days: 1 }));
+    if (baseLocal < previousWindow.endDt) return previousWindow;
+  }
+  return todayWindow;
+}
+
+function nextRandomWindowAfter(rule, windowDates) {
+  return randomWindowDates(rule, windowDates.startDt.plus({ days: 1 }));
+}
+
+function computeNextRunAt(rule, fromUtc = DateTime.utc(), rng = Math.random, options = {}) {
   const zone = cleanTimezone(rule.timezone);
   let base = fromUtc.setZone(zone);
   if (!base.isValid) base = fromUtc.setZone(DEFAULT_TIMEZONE);
 
   if (String(rule.schedule_type || 'fixed') === 'random_window') {
-    const start = timeParts(rule.window_start || DEFAULT_WINDOW_START);
-    const end = timeParts(rule.window_end || DEFAULT_WINDOW_END);
-    let day = base.startOf('day');
-    let startDt = day.set(start);
-    let endDt = day.set(end);
-    if (endDt <= startDt) endDt = endDt.plus({ days: 1 });
-    if (base >= endDt) {
-      day = day.plus({ days: 1 });
-      startDt = day.set(start);
-      endDt = day.set(end);
-      if (endDt <= startDt) endDt = endDt.plus({ days: 1 });
+    let { startDt, endDt } = randomWindowAround(rule, base);
+    if (options.afterCurrentWindow && base >= startDt) {
+      ({ startDt, endDt } = nextRandomWindowAfter(rule, { startDt, endDt }));
+    } else if (base >= endDt) {
+      ({ startDt, endDt } = nextRandomWindowAfter(rule, { startDt, endDt }));
     }
-    const earliest = base < startDt ? startDt : base.plus({ minutes: 1 });
+    const earliest = base < startDt || options.afterCurrentWindow ? startDt : base.plus({ minutes: 1 });
     const spanMs = Math.max(60_000, endDt.toMillis() - earliest.toMillis());
     return isoUtc(earliest.plus({ milliseconds: Math.floor(rng() * spanMs) }));
   }
@@ -179,6 +213,10 @@ function computeNextRunAt(rule, fromUtc = DateTime.utc(), rng = Math.random) {
   let candidate = base.startOf('day').set(fixed);
   if (candidate <= base) candidate = candidate.plus({ days: 1 });
   return isoUtc(candidate);
+}
+
+function computeNextRunAfterDueAttempt(rule, fromUtc = DateTime.utc(), rng = Math.random) {
+  return computeNextRunAt(rule, fromUtc, rng, { afterCurrentWindow: true });
 }
 
 function isMissedRuleRun(rule, nowUtc = DateTime.utc(), graceMinutes = 5) {
@@ -394,7 +432,46 @@ function normalizeNewsItem(item = {}, feedUrl = '') {
   };
 }
 
+function decodeXmlText(value) {
+  return String(value || '')
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+}
+
+function firstXmlTag(block, tagName) {
+  const escaped = String(tagName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = String(block || '').match(new RegExp(`<${escaped}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${escaped}>`, 'i'));
+  return decodeXmlText(match?.[1] || '');
+}
+
+function firstXmlLink(block) {
+  const href = String(block || '').match(/<link\b[^>]*\shref=["']([^"']+)["'][^>]*>/i);
+  if (href?.[1]) return decodeXmlText(href[1]);
+  return firstXmlTag(block, 'link');
+}
+
+function parseNewsFeedXmlFallback(xml, feedUrl = '') {
+  const text = String(xml || '');
+  const blocks = [];
+  for (const match of text.matchAll(/<item\b[^>]*>([\s\S]*?)<\/item>/gi)) blocks.push(match[1]);
+  for (const match of text.matchAll(/<entry\b[^>]*>([\s\S]*?)<\/entry>/gi)) blocks.push(match[1]);
+  return blocks
+    .map((block) => normalizeNewsItem({
+      title: firstXmlTag(block, 'title'),
+      description: firstXmlTag(block, 'description') || firstXmlTag(block, 'summary') || firstXmlTag(block, 'content') || firstXmlTag(block, 'content:encoded'),
+      link: firstXmlLink(block),
+      pubDate: firstXmlTag(block, 'pubDate') || firstXmlTag(block, 'published') || firstXmlTag(block, 'updated') || firstXmlTag(block, 'dc:date'),
+      guid: firstXmlTag(block, 'guid') || firstXmlTag(block, 'id'),
+    }, feedUrl))
+    .filter(Boolean);
+}
+
 function parseNewsFeedXml(xml, feedUrl = '') {
+  if (!XMLParser) return parseNewsFeedXmlFallback(xml, feedUrl);
   const parser = new XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: '@_',
@@ -423,7 +500,7 @@ function serializeRule(row = {}) {
     window_start: row.window_start || DEFAULT_WINDOW_START,
     window_end: row.window_end || DEFAULT_WINDOW_END,
     timezone: row.timezone || DEFAULT_TIMEZONE,
-    idle_threshold_minutes: Number(row.idle_threshold_minutes || DEFAULT_IDLE_MINUTES),
+    idle_threshold_minutes: row.idle_threshold_minutes == null ? DEFAULT_IDLE_MINUTES : Number(row.idle_threshold_minutes),
     min_gap_minutes: Number(row.min_gap_minutes || DEFAULT_GAP_MINUTES),
     same_context_limit_enabled: row.same_context_limit_enabled !== 0,
     same_context_max_runs: Number(row.same_context_max_runs || 1),
@@ -1094,8 +1171,9 @@ function createAiInitiativeFeature({
   function shouldRunRule(rule) {
     const chatId = Number(rule.chat_id || 0);
     const latestHuman = latestHumanMessageStmt.get(chatId);
-    if (!latestHuman) return { ok: false, reason: 'no_human_messages' };
-    const latestHumanId = Number(latestHuman.id || 0);
+    const idleThreshold = intValue(rule.idle_threshold_minutes, DEFAULT_IDLE_MINUTES, 0, 60 * 24 * 30);
+    if (!latestHuman && idleThreshold > 0) return { ok: false, reason: 'no_human_messages' };
+    const latestHumanId = Number(latestHuman?.id || 0);
     const sameContext = Number(rule.last_message_id || 0) && latestHumanId <= Number(rule.last_message_id || 0);
     if (sameContext && boolValue(rule.same_context_limit_enabled, true)) {
       const maxRuns = intValue(rule.same_context_max_runs, 1, 1, 20);
@@ -1103,12 +1181,12 @@ function createAiInitiativeFeature({
       if (currentRuns >= maxRuns) return { ok: false, reason: 'same_context_limit' };
     }
     const now = currentUtc();
-    const lastHumanAt = dbDateToUtc(latestHuman.created_at);
-    if (minutesBetween(now, lastHumanAt) < Number(rule.idle_threshold_minutes || DEFAULT_IDLE_MINUTES)) {
+    const lastHumanAt = dbDateToUtc(latestHuman?.created_at);
+    if (idleThreshold > 0 && minutesBetween(now, lastHumanAt) < idleThreshold) {
       return { ok: false, reason: 'not_idle' };
     }
     const lastRunAt = dbDateToUtc(rule.last_run_at);
-    if (lastRunAt && minutesBetween(now, lastRunAt) < Number(rule.min_gap_minutes || DEFAULT_GAP_MINUTES)) {
+    if (lastRunAt && !minGapElapsed(now, lastRunAt, rule.min_gap_minutes)) {
       return { ok: false, reason: 'min_gap' };
     }
     if (!aiBotFeature?.resolveChatBotRuntime?.(chatId, rule.bot_id)) return { ok: false, reason: 'bot_unavailable' };
@@ -1156,7 +1234,7 @@ function createAiInitiativeFeature({
 
   async function processDueRule(rule) {
     const now = currentUtc();
-    const nextRunAt = computeNextRunAt(rule, now.plus({ minutes: 1 }));
+    const nextRunAt = computeNextRunAfterDueAttempt(rule, now);
     if (isMissedRuleRun(rule, now)) {
       updateRuleNextStmt.run(nextRunAt, rule.id);
       return;
@@ -1358,12 +1436,15 @@ module.exports = {
     cleanTimezone,
     normalizeTime,
     computeNextRunAt,
+    computeNextRunAfterDueAttempt,
     isMissedRuleRun,
     normalizeRuleInput,
     normalizeNewsSourceInput,
     parseNewsFeedXml,
+    parseNewsFeedXmlFallback,
     normalizeNewsItem,
     stripHtml,
+    minGapElapsed,
     parseDateTimeRule,
     extractReminderText,
     reminderClarificationText,

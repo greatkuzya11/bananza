@@ -215,9 +215,8 @@
     const name = cleanLabel(chat.name);
     const genericPrivate = chat.type === 'private' && /^(private|личный)$/i.test(name);
     const title = name && !genericPrivate ? `${name} - ` : '';
-    const members = Array.isArray(chat.members) ? chat.members.map(memberLabel).filter(Boolean) : [];
-    const separator = chat.type === 'private' ? ' <-> ' : ', ';
-    const participants = members.length ? `: ${members.join(separator)}` : '';
+    const members = chat.type === 'private' && Array.isArray(chat.members) ? chat.members.map(memberLabel).filter(Boolean) : [];
+    const participants = members.length ? `: ${members.join(' <-> ')}` : '';
     return `${title}${chatTypeLabel(chat)} #${id}${participants}`;
   }
 
@@ -326,7 +325,7 @@
       aiInitiativeFixedTime: rule?.fixed_time || '09:00',
       aiInitiativeWindowStart: rule?.window_start || '09:00',
       aiInitiativeWindowEnd: rule?.window_end || '18:00',
-      aiInitiativeIdleMinutes: rule?.idle_threshold_minutes || 1440,
+      aiInitiativeIdleMinutes: rule?.idle_threshold_minutes ?? 1440,
       aiInitiativeGapMinutes: rule?.min_gap_minutes || 1440,
       aiInitiativeSameContextMaxRuns: rule?.same_context_max_runs || 1,
       aiInitiativePromptMode: promptMode,
