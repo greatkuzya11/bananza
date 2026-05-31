@@ -10,6 +10,24 @@ const appShellScriptPaths = Object.freeze([
   'public/js/app/context.js',
   'public/js/app/bridge.js',
 ]);
+const appCoreHelperScriptPaths = Object.freeze([
+  'public/js/app/config.js',
+  'public/js/app/i18n-helpers.js',
+  'public/js/app/formatters.js',
+  'public/js/app/attachments.js',
+  'public/js/app/custom-emoji.js',
+]);
+const appDomMobileShellScriptPaths = Object.freeze([
+  'public/js/app/dom.js',
+  'public/js/app/android-bridge.js',
+  'public/js/app/mobile-viewport.js',
+  'public/js/app/chat-header-actions.js',
+]);
+const appRuntimeScriptPaths = Object.freeze([
+  ...appShellScriptPaths,
+  ...appCoreHelperScriptPaths,
+  ...appDomMobileShellScriptPaths,
+]);
 
 class FakeAudioNode {
   connect() {
@@ -297,8 +315,20 @@ function loadAppShellScripts(dom) {
   loadBrowserScripts(dom, appShellScriptPaths);
 }
 
+function loadAppCoreHelperScripts(dom) {
+  loadBrowserScripts(dom, appCoreHelperScriptPaths);
+}
+
+function loadAppDomMobileShellScripts(dom) {
+  loadBrowserScripts(dom, appDomMobileShellScriptPaths);
+}
+
+function loadAppRuntimeScripts(dom) {
+  loadBrowserScripts(dom, appRuntimeScriptPaths);
+}
+
 function loadAppScript(dom) {
-  loadAppShellScripts(dom);
+  loadAppRuntimeScripts(dom);
   loadBrowserScript(dom, 'public/js/app.js');
 }
 
@@ -376,11 +406,17 @@ function installAppBridge(dom, overrides = {}) {
 }
 
 module.exports = {
+  appCoreHelperScriptPaths,
+  appDomMobileShellScriptPaths,
+  appRuntimeScriptPaths,
   appShellScriptPaths,
   createAppDom,
   installAppBridge,
   installVisualViewportMock,
   loadAppScript,
+  loadAppCoreHelperScripts,
+  loadAppDomMobileShellScripts,
+  loadAppRuntimeScripts,
   loadAppShellScripts,
   loadBrowserScript,
   loadBrowserScripts,

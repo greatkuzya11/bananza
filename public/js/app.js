@@ -2,205 +2,151 @@
   'use strict';
 
   const appRuntime = window.BananzaApp || null;
+  const appConfig = window.BananzaApp?.config || {};
+  const i18nHelpers = window.BananzaApp?.i18nHelpers || {};
+  const formatters = window.BananzaApp?.formatters || {};
+  const attachmentHelpers = window.BananzaApp?.attachments || {};
+  const customEmoji = window.BananzaApp?.customEmoji || {};
+
+  function requireCoreExport(source, name) {
+    if (source && Object.prototype.hasOwnProperty.call(source, name)) return source[name];
+    throw new Error(`BananzaApp core helper "${name}" is not available`);
+  }
+
+  function requireCoreFunction(source, name) {
+    const value = requireCoreExport(source, name);
+    if (typeof value !== 'function') {
+      throw new Error(`BananzaApp core helper "${name}" must be a function`);
+    }
+    return value;
+  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // CONFIG
   // ═══════════════════════════════════════════════════════════════════════════
-  const WS_URL = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
-  const PAGE_SIZE = 50;
-  const MESSAGE_CACHE_LIMIT = 800;
-  const MESSAGE_BACKGROUND_SYNC_CONCURRENCY = 2;
-  const MESSAGE_BACKGROUND_SYNC_MAX_CHATS = 6;
-  const MESSAGE_BACKGROUND_SYNC_MAX_PAGES = 3;
-  const MENTION_PICKER_TAP_DEAD_ZONE = 10;
-  const MAX_MSG = 5000;
-  const MAX_ATTACHMENTS = 10;
-  const MAX_FILE_SIZE = 1024 * 1024 * 1024;
-  const MAX_FILE_SIZE_LABEL = '1 GB';
-  const VIDEO_POSTER_MIME = 'image/jpeg';
-  const VIDEO_POSTER_MAX_DIMENSION = 960;
-  const VIDEO_POSTER_QUALITY = 0.82;
-  const VIDEO_POSTER_CAPTURE_TIMEOUT_MS = 8000;
-  const VIDEO_POSTER_CAPTURE_SEEKS = Object.freeze([0, 0.05, 0.12, 0.25]);
-  const POLL_MIN_OPTIONS = 2;
-  const POLL_MAX_OPTIONS = 10;
-  const POLL_CLOSE_PRESET_MS = Object.freeze({
-    '1h': 60 * 60 * 1000,
-    '4h': 4 * 60 * 60 * 1000,
-    '24h': 24 * 60 * 60 * 1000,
-    '3d': 3 * 24 * 60 * 60 * 1000,
-    '7d': 7 * 24 * 60 * 60 * 1000,
-  });
-  const IMAGE_MIME_TYPES = new Set([
-    'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/svg+xml', 'image/avif', 'image/bmp',
-  ]);
-  const AUDIO_MIME_TYPES = new Set([
-    'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/wave', 'audio/ogg',
-    'audio/webm', 'audio/mp4', 'audio/x-m4a', 'audio/aac', 'audio/flac', 'audio/x-flac',
-  ]);
-  const VIDEO_MIME_TYPES = new Set([
-    'video/mp4', 'video/webm', 'video/quicktime', 'video/ogg', 'video/x-m4v',
-  ]);
-  const IMAGE_EXTENSIONS = new Set([
-    '.jpg', '.jpeg', '.png', '.webp', '.gif', '.svg', '.avif', '.bmp',
-  ]);
-  const AUDIO_EXTENSIONS = new Set([
-    '.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac', '.weba',
-  ]);
-  const VIDEO_EXTENSIONS = new Set([
-    '.mp4', '.webm', '.mov', '.ogv', '.m4v',
-  ]);
-  const UI_THEMES = [
-    { id: 'bananza', name: 'BananZa', note: 'Classic blue', colors: ['#17212b', '#5eb5f7'], own: '#2b5278', other: '#182533' },
-    { id: 'banan-hero', name: 'Banan Hero', note: 'Grass + signal', colors: ['#15171a', '#ffd33f'], own: '#496436', other: '#202228' },
-    { id: 'midnight-ocean', name: 'Midnight Ocean', note: 'Navy + teal', colors: ['#071823', '#2dd4bf'], own: '#14506a', other: '#102434' },
-    { id: 'nord-aurora', name: 'Nord Aurora', note: 'Graphite + aurora', colors: ['#2e3440', '#88c0d0'], own: '#3b5f75', other: '#293340' },
-    { id: 'rose-pine', name: 'Rose Pine', note: 'Plum + rose', colors: ['#191724', '#eb6f92'], own: '#3a2a4a', other: '#221f33' },
-    { id: 'dracula-neon', name: 'Dracula Neon', note: 'Violet + pink', colors: ['#282a36', '#ff79c6'], own: '#4b3a69', other: '#242636' },
-    { id: 'tokyo-night', name: 'Tokyo Night', note: 'Ink + electric blue', colors: ['#1a1b26', '#7aa2f7'], own: '#2b4d7d', other: '#202437' },
-  ];
-  const UI_THEME_IDS = new Set(UI_THEMES.map(t => t.id));
-  const UI_VISUAL_MODES = [
-    { id: 'classic', name: 'Off', note: 'Classic flat theme surfaces.' },
-    { id: 'rich', name: 'On', note: 'Layered gradients, glass cards and theme-colored glow.' },
-  ];
-  const UI_VISUAL_MODE_IDS = new Set(UI_VISUAL_MODES.map(mode => mode.id));
-  const POLL_STYLES = [
-    { id: 'pulse', name: 'Pulse', note: 'Hero gradients and bold result cards', accent: ['var(--accent)', 'var(--link)'] },
-    { id: 'stack', name: 'Stack', note: 'Compact rows with dense readable stats', accent: ['var(--border-light)', 'var(--accent)'] },
-    { id: 'orbit', name: 'Orbit', note: 'Mini chart with colorful legend blocks', accent: ['var(--link)', 'var(--success)'] },
-  ];
-  const POLL_STYLE_IDS = new Set(POLL_STYLES.map((style) => style.id));
-  const MODAL_ANIMATION_STYLES = [
-    { id: 'soft', name: 'Soft', note: 'Stronger lift with a smooth modal feel.' },
-    { id: 'lift', name: 'Lift', note: 'More vertical travel and a clearer close motion.' },
-    { id: 'zoom', name: 'Zoom', note: 'Content pops from scale with a dense backdrop.' },
-    { id: 'slide', name: 'Slide', note: 'More obvious upward slide, closer to a sheet feel.' },
-    { id: 'fade', name: 'Fade', note: 'Pure fade, but slower and more noticeable than before.' },
-    { id: 'none', name: 'None', note: 'Instant open/close with no animation.' },
-  ];
-  const MODAL_ANIMATION_STYLE_IDS = new Set(MODAL_ANIMATION_STYLES.map(style => style.id));
-  const MODAL_ANIMATION_SPEED_DEFAULT = 8;
-  const MODAL_ANIMATION_SPEED_FACTORS = Object.freeze({
-    1: 4.5,
-    2: 4.0,
-    3: 3.5,
-    4: 3.0,
-    5: 2.3,
-    6: 1.8,
-    7: 1.5,
-    8: 1.0,
-    9: 0.8,
-    10: 0.5,
-  });
-  const MOBILE_FONT_SIZE_DEFAULT = 5;
-  const MOBILE_FONT_SIZE_MIN = 1;
-  const MOBILE_FONT_SIZE_MAX = 10;
-  const MOBILE_FONT_SIZE_PERCENTS = Object.freeze({
-    1: 84,
-    2: 88,
-    3: 92,
-    4: 96,
-    5: 100,
-    6: 104,
-    7: 108,
-    8: 112,
-    9: 116,
-    10: 120,
-  });
-  const MODAL_TRANSITION_BUFFER_MS = 80;
-  const CHAT_LIST_CACHE_VERSION = 3;
-  const CHAT_LIST_CACHE_SYNC_DEBOUNCE_MS = 250;
-  const CHAT_LIST_REQUEST_TIMEOUT_MS = 9000;
-  const RECOVERY_SYNC_MIN_INTERVAL_MS = 1200;
-  const RECOVERY_CATCHUP_MAX_PAGES = 5;
-  const PAGINATION_FETCH_MAX_PAGES = 6;
-  const PAGINATION_TOP_THRESHOLD = 120;
-  const PAGINATION_BOTTOM_THRESHOLD = 120;
-  const SCROLL_DATE_HIDE_DELAY_MS = 900;
-  const CHAT_LIST_PULL_TRIGGER_PX = 10;
-  const CHAT_LIST_PULL_THRESHOLD = 64;
-  const CHAT_LIST_PULL_MAX_OFFSET = 96;
-  const CHAT_LIST_PULL_REFRESH_OFFSET = 56;
-  const CHAT_FOLDER_SWIPE_START_PX = 10;
-  const CHAT_FOLDER_SWIPE_COMMIT_MIN_PX = 64;
-  const CHAT_FOLDER_SWIPE_COMMIT_RATIO = 0.22;
-  const CHAT_FOLDER_SWIPE_EDGE_DAMPING = 0.34;
-  const CHAT_FOLDER_SWIPE_EDGE_MAX_PX = 52;
-  const HORIZONTAL_PAGER_SWIPE_START_PX = CHAT_FOLDER_SWIPE_START_PX;
-  const HORIZONTAL_PAGER_SWIPE_COMMIT_MIN_PX = CHAT_FOLDER_SWIPE_COMMIT_MIN_PX;
-  const HORIZONTAL_PAGER_SWIPE_COMMIT_RATIO = CHAT_FOLDER_SWIPE_COMMIT_RATIO;
-  const HORIZONTAL_PAGER_SWIPE_EDGE_DAMPING = CHAT_FOLDER_SWIPE_EDGE_DAMPING;
-  const HORIZONTAL_PAGER_SWIPE_EDGE_MAX_PX = CHAT_FOLDER_SWIPE_EDGE_MAX_PX;
-  const RESUME_WS_REFRESH_AFTER_MS = 25000;
-  const NOTES_CHAT_EMOJI = '📝';
-  const CHAT_CONTEXT_LONG_PRESS_MS = 500;
-  const MEDIA_CONTEXT_LONG_PRESS_MS = 500;
-  const MEDIA_CONTEXT_TARGET_SELECTOR = '.msg-image, .msg-video video, .msg-audio audio, .msg-file, .video-note-stage';
-  const ALL_CHATS_FOLDER_ID = 0;
-  const CHAT_FOLDER_ICON_EMOJI = Object.freeze({
-    all: '\uD83D\uDCAC',
-    custom: '\uD83D\uDCC1',
-    bot_auto: '\uD83E\uDD16',
-  });
+  const WS_URL = requireCoreExport(appConfig, 'WS_URL');
+  const PAGE_SIZE = requireCoreExport(appConfig, 'PAGE_SIZE');
+  const MESSAGE_CACHE_LIMIT = requireCoreExport(appConfig, 'MESSAGE_CACHE_LIMIT');
+  const MESSAGE_BACKGROUND_SYNC_CONCURRENCY = requireCoreExport(appConfig, 'MESSAGE_BACKGROUND_SYNC_CONCURRENCY');
+  const MESSAGE_BACKGROUND_SYNC_MAX_CHATS = requireCoreExport(appConfig, 'MESSAGE_BACKGROUND_SYNC_MAX_CHATS');
+  const MESSAGE_BACKGROUND_SYNC_MAX_PAGES = requireCoreExport(appConfig, 'MESSAGE_BACKGROUND_SYNC_MAX_PAGES');
+  const MENTION_PICKER_TAP_DEAD_ZONE = requireCoreExport(appConfig, 'MENTION_PICKER_TAP_DEAD_ZONE');
+  const MAX_MSG = requireCoreExport(appConfig, 'MAX_MSG');
+  const MAX_ATTACHMENTS = requireCoreExport(appConfig, 'MAX_ATTACHMENTS');
+  const MAX_FILE_SIZE = requireCoreExport(appConfig, 'MAX_FILE_SIZE');
+  const MAX_FILE_SIZE_LABEL = requireCoreExport(appConfig, 'MAX_FILE_SIZE_LABEL');
+  const VIDEO_POSTER_MIME = requireCoreExport(appConfig, 'VIDEO_POSTER_MIME');
+  const VIDEO_POSTER_MAX_DIMENSION = requireCoreExport(appConfig, 'VIDEO_POSTER_MAX_DIMENSION');
+  const VIDEO_POSTER_QUALITY = requireCoreExport(appConfig, 'VIDEO_POSTER_QUALITY');
+  const VIDEO_POSTER_CAPTURE_TIMEOUT_MS = requireCoreExport(appConfig, 'VIDEO_POSTER_CAPTURE_TIMEOUT_MS');
+  const VIDEO_POSTER_CAPTURE_SEEKS = requireCoreExport(appConfig, 'VIDEO_POSTER_CAPTURE_SEEKS');
+  const POLL_MIN_OPTIONS = requireCoreExport(appConfig, 'POLL_MIN_OPTIONS');
+  const POLL_MAX_OPTIONS = requireCoreExport(appConfig, 'POLL_MAX_OPTIONS');
+  const POLL_CLOSE_PRESET_MS = requireCoreExport(appConfig, 'POLL_CLOSE_PRESET_MS');
+  const IMAGE_MIME_TYPES = requireCoreExport(appConfig, 'IMAGE_MIME_TYPES');
+  const AUDIO_MIME_TYPES = requireCoreExport(appConfig, 'AUDIO_MIME_TYPES');
+  const VIDEO_MIME_TYPES = requireCoreExport(appConfig, 'VIDEO_MIME_TYPES');
+  const IMAGE_EXTENSIONS = requireCoreExport(appConfig, 'IMAGE_EXTENSIONS');
+  const AUDIO_EXTENSIONS = requireCoreExport(appConfig, 'AUDIO_EXTENSIONS');
+  const VIDEO_EXTENSIONS = requireCoreExport(appConfig, 'VIDEO_EXTENSIONS');
+  const UI_THEMES = requireCoreExport(appConfig, 'UI_THEMES');
+  const UI_THEME_IDS = requireCoreExport(appConfig, 'UI_THEME_IDS');
+  const UI_VISUAL_MODES = requireCoreExport(appConfig, 'UI_VISUAL_MODES');
+  const UI_VISUAL_MODE_IDS = requireCoreExport(appConfig, 'UI_VISUAL_MODE_IDS');
+  const POLL_STYLES = requireCoreExport(appConfig, 'POLL_STYLES');
+  const POLL_STYLE_IDS = requireCoreExport(appConfig, 'POLL_STYLE_IDS');
+  const MODAL_ANIMATION_STYLES = requireCoreExport(appConfig, 'MODAL_ANIMATION_STYLES');
+  const MODAL_ANIMATION_STYLE_IDS = requireCoreExport(appConfig, 'MODAL_ANIMATION_STYLE_IDS');
+  const MODAL_ANIMATION_SPEED_DEFAULT = requireCoreExport(appConfig, 'MODAL_ANIMATION_SPEED_DEFAULT');
+  const MODAL_ANIMATION_SPEED_FACTORS = requireCoreExport(appConfig, 'MODAL_ANIMATION_SPEED_FACTORS');
+  const MOBILE_FONT_SIZE_DEFAULT = requireCoreExport(appConfig, 'MOBILE_FONT_SIZE_DEFAULT');
+  const MOBILE_FONT_SIZE_MIN = requireCoreExport(appConfig, 'MOBILE_FONT_SIZE_MIN');
+  const MOBILE_FONT_SIZE_MAX = requireCoreExport(appConfig, 'MOBILE_FONT_SIZE_MAX');
+  const MOBILE_FONT_SIZE_PERCENTS = requireCoreExport(appConfig, 'MOBILE_FONT_SIZE_PERCENTS');
+  const MODAL_TRANSITION_BUFFER_MS = requireCoreExport(appConfig, 'MODAL_TRANSITION_BUFFER_MS');
+  const CHAT_LIST_CACHE_VERSION = requireCoreExport(appConfig, 'CHAT_LIST_CACHE_VERSION');
+  const CHAT_LIST_CACHE_SYNC_DEBOUNCE_MS = requireCoreExport(appConfig, 'CHAT_LIST_CACHE_SYNC_DEBOUNCE_MS');
+  const CHAT_LIST_REQUEST_TIMEOUT_MS = requireCoreExport(appConfig, 'CHAT_LIST_REQUEST_TIMEOUT_MS');
+  const RECOVERY_SYNC_MIN_INTERVAL_MS = requireCoreExport(appConfig, 'RECOVERY_SYNC_MIN_INTERVAL_MS');
+  const RECOVERY_CATCHUP_MAX_PAGES = requireCoreExport(appConfig, 'RECOVERY_CATCHUP_MAX_PAGES');
+  const PAGINATION_FETCH_MAX_PAGES = requireCoreExport(appConfig, 'PAGINATION_FETCH_MAX_PAGES');
+  const PAGINATION_TOP_THRESHOLD = requireCoreExport(appConfig, 'PAGINATION_TOP_THRESHOLD');
+  const PAGINATION_BOTTOM_THRESHOLD = requireCoreExport(appConfig, 'PAGINATION_BOTTOM_THRESHOLD');
+  const SCROLL_DATE_HIDE_DELAY_MS = requireCoreExport(appConfig, 'SCROLL_DATE_HIDE_DELAY_MS');
+  const CHAT_LIST_PULL_TRIGGER_PX = requireCoreExport(appConfig, 'CHAT_LIST_PULL_TRIGGER_PX');
+  const CHAT_LIST_PULL_THRESHOLD = requireCoreExport(appConfig, 'CHAT_LIST_PULL_THRESHOLD');
+  const CHAT_LIST_PULL_MAX_OFFSET = requireCoreExport(appConfig, 'CHAT_LIST_PULL_MAX_OFFSET');
+  const CHAT_LIST_PULL_REFRESH_OFFSET = requireCoreExport(appConfig, 'CHAT_LIST_PULL_REFRESH_OFFSET');
+  const CHAT_FOLDER_SWIPE_START_PX = requireCoreExport(appConfig, 'CHAT_FOLDER_SWIPE_START_PX');
+  const CHAT_FOLDER_SWIPE_COMMIT_MIN_PX = requireCoreExport(appConfig, 'CHAT_FOLDER_SWIPE_COMMIT_MIN_PX');
+  const CHAT_FOLDER_SWIPE_COMMIT_RATIO = requireCoreExport(appConfig, 'CHAT_FOLDER_SWIPE_COMMIT_RATIO');
+  const CHAT_FOLDER_SWIPE_EDGE_DAMPING = requireCoreExport(appConfig, 'CHAT_FOLDER_SWIPE_EDGE_DAMPING');
+  const CHAT_FOLDER_SWIPE_EDGE_MAX_PX = requireCoreExport(appConfig, 'CHAT_FOLDER_SWIPE_EDGE_MAX_PX');
+  const HORIZONTAL_PAGER_SWIPE_START_PX = requireCoreExport(appConfig, 'HORIZONTAL_PAGER_SWIPE_START_PX');
+  const HORIZONTAL_PAGER_SWIPE_COMMIT_MIN_PX = requireCoreExport(appConfig, 'HORIZONTAL_PAGER_SWIPE_COMMIT_MIN_PX');
+  const HORIZONTAL_PAGER_SWIPE_COMMIT_RATIO = requireCoreExport(appConfig, 'HORIZONTAL_PAGER_SWIPE_COMMIT_RATIO');
+  const HORIZONTAL_PAGER_SWIPE_EDGE_DAMPING = requireCoreExport(appConfig, 'HORIZONTAL_PAGER_SWIPE_EDGE_DAMPING');
+  const HORIZONTAL_PAGER_SWIPE_EDGE_MAX_PX = requireCoreExport(appConfig, 'HORIZONTAL_PAGER_SWIPE_EDGE_MAX_PX');
+  const RESUME_WS_REFRESH_AFTER_MS = requireCoreExport(appConfig, 'RESUME_WS_REFRESH_AFTER_MS');
+  const NOTES_CHAT_EMOJI = requireCoreExport(appConfig, 'NOTES_CHAT_EMOJI');
+  const CHAT_CONTEXT_LONG_PRESS_MS = requireCoreExport(appConfig, 'CHAT_CONTEXT_LONG_PRESS_MS');
+  const MEDIA_CONTEXT_LONG_PRESS_MS = requireCoreExport(appConfig, 'MEDIA_CONTEXT_LONG_PRESS_MS');
+  const MEDIA_CONTEXT_TARGET_SELECTOR = requireCoreExport(appConfig, 'MEDIA_CONTEXT_TARGET_SELECTOR');
+  const ALL_CHATS_FOLDER_ID = requireCoreExport(appConfig, 'ALL_CHATS_FOLDER_ID');
+  const CHAT_FOLDER_ICON_EMOJI = requireCoreExport(appConfig, 'CHAT_FOLDER_ICON_EMOJI');
   const aiImageRiskApi = window.BananzaAiImageRisk || null;
   const i18n = window.BananzaI18n || null;
-  const CUSTOM_EMOJI_TOKEN_PATTERN = /^:(?:qip-infium-\d{3}|qip-hd-[a-z0-9][a-z0-9-]{0,63}):$/;
-  const CUSTOM_EMOJI_CATALOGS = Object.freeze([
-    window.BananzaQipInfiumOriginal,
-    window.BananzaQipHdEmojis,
-  ]
-    .map(normalizeCustomEmojiCatalog)
-    .filter((catalog) => catalog.items.length));
-  const CUSTOM_EMOJI_BY_CATEGORY = new Map(CUSTOM_EMOJI_CATALOGS.map((catalog) => [catalog.id, catalog]));
-  const CUSTOM_EMOJI_ITEMS = Object.freeze(CUSTOM_EMOJI_CATALOGS.flatMap((catalog) => catalog.items));
-  const CUSTOM_EMOJI_BY_TOKEN = new Map(CUSTOM_EMOJI_ITEMS.map((item) => [item.token, item]));
-  const COMPOSER_CUSTOM_EMOJI_MARKER_BASE = 0xE000;
-  const COMPOSER_CUSTOM_EMOJI_PAD_CHAR = ' ';
-  const COMPOSER_CUSTOM_EMOJI_MAX_PAD = 32;
-  const QIP_HD_EMOJI_MESSAGE_SCALE = 0.5;
-  const CUSTOM_EMOJI_MARKER_BY_TOKEN = new Map(CUSTOM_EMOJI_ITEMS.map((item, index) => [
-    item.token,
-    String.fromCharCode(COMPOSER_CUSTOM_EMOJI_MARKER_BASE + index),
-  ]));
-  const CUSTOM_EMOJI_TOKEN_BY_MARKER = new Map(Array.from(CUSTOM_EMOJI_MARKER_BY_TOKEN, ([token, marker]) => [marker, token]));
+  const t = typeof i18nHelpers.t === 'function'
+    ? (key, params = {}) => i18nHelpers.t(key, params)
+    : (key, params = {}) => (i18n?.t ? i18n.t(key, params) : String(key || ''));
+  const tx = typeof i18nHelpers.tx === 'function'
+    ? (text, params = {}) => i18nHelpers.tx(text, params)
+    : (text, params = {}) => {
+      if (i18n?.text) return i18n.text(text, params);
+      if (i18n?.t) return i18n.t(text, params);
+      return String(text == null ? '' : text);
+    };
+  const esc = requireCoreFunction(formatters, 'esc');
+  const formatTime = requireCoreFunction(formatters, 'formatTime');
+  const formatChatListTimestamp = requireCoreFunction(formatters, 'formatChatListTimestamp');
+  const formatDate = requireCoreFunction(formatters, 'formatDate');
+  const formatSize = requireCoreFunction(formatters, 'formatSize');
+  const fileExtension = requireCoreFunction(formatters, 'fileExtension');
+  const normalizeMimeType = requireCoreFunction(formatters, 'normalizeMimeType');
+  const formatRelativeDuration = requireCoreFunction(formatters, 'formatRelativeDuration');
+  const formatPollDeadline = requireCoreFunction(formatters, 'formatPollDeadline');
+  const initials = requireCoreFunction(formatters, 'initials');
+  const getStoredAttachmentUrl = requireCoreFunction(attachmentHelpers, 'getStoredAttachmentUrl');
+  const getStoredAttachmentPosterUrl = requireCoreFunction(attachmentHelpers, 'getStoredAttachmentPosterUrl');
+  const resolveAttachmentUrl = requireCoreFunction(attachmentHelpers, 'resolveAttachmentUrl');
+  const getAttachmentPreviewUrl = requireCoreFunction(attachmentHelpers, 'getAttachmentPreviewUrl');
+  const getAttachmentDownloadUrl = requireCoreFunction(attachmentHelpers, 'getAttachmentDownloadUrl');
+  const getAttachmentPosterUrl = requireCoreFunction(attachmentHelpers, 'getAttachmentPosterUrl');
+  const isVideoAttachmentMessage = requireCoreFunction(attachmentHelpers, 'isVideoAttachmentMessage');
+  const createTimeoutError = requireCoreFunction(attachmentHelpers, 'createTimeoutError');
+  const waitForMediaEvent = requireCoreFunction(attachmentHelpers, 'waitForMediaEvent');
+  const waitForVideoFrame = requireCoreFunction(attachmentHelpers, 'waitForVideoFrame');
+  const seekVideoFrame = requireCoreFunction(attachmentHelpers, 'seekVideoFrame');
+  const drawVideoPosterBlob = requireCoreFunction(attachmentHelpers, 'drawVideoPosterBlob');
+  const createAttachmentPosterBlob = requireCoreFunction(attachmentHelpers, 'createAttachmentPosterBlob');
+  const CUSTOM_EMOJI_CATALOGS = requireCoreExport(customEmoji, 'CUSTOM_EMOJI_CATALOGS');
+  const CUSTOM_EMOJI_BY_CATEGORY = requireCoreExport(customEmoji, 'CUSTOM_EMOJI_BY_CATEGORY');
+  const getCustomEmoji = requireCoreFunction(customEmoji, 'getCustomEmoji');
+  const getCustomEmojiCatalog = requireCoreFunction(customEmoji, 'getCustomEmojiCatalog');
+  const isCustomEmojiToken = requireCoreFunction(customEmoji, 'isCustomEmojiToken');
+  const isSingleCustomEmojiMessage = requireCoreFunction(customEmoji, 'isSingleCustomEmojiMessage');
+  const getCustomEmojiRenderedSize = requireCoreFunction(customEmoji, 'getCustomEmojiRenderedSize');
+  const renderCustomEmojiHtml = requireCoreFunction(customEmoji, 'renderCustomEmojiHtml');
+  const getComposerCustomEmojiCluster = requireCoreFunction(customEmoji, 'getComposerCustomEmojiCluster');
+  const getComposerCustomEmojiItemFromMarker = requireCoreFunction(customEmoji, 'getComposerCustomEmojiItemFromMarker');
+  const getComposerCustomEmojiClusterEnd = requireCoreFunction(customEmoji, 'getComposerCustomEmojiClusterEnd');
+  const findComposerCustomEmojiClusterAt = requireCoreFunction(customEmoji, 'findComposerCustomEmojiClusterAt');
+  const findComposerCustomEmojiClusterBefore = requireCoreFunction(customEmoji, 'findComposerCustomEmojiClusterBefore');
+  const findComposerCustomEmojiClusterAfter = requireCoreFunction(customEmoji, 'findComposerCustomEmojiClusterAfter');
+  const composerCustomEmojiClusterBoundary = requireCoreFunction(customEmoji, 'composerCustomEmojiClusterBoundary');
+  const normalizeComposerTextToInternal = requireCoreFunction(customEmoji, 'normalizeComposerTextToInternal');
+  const serializeComposerTextValue = requireCoreFunction(customEmoji, 'serializeComposerTextValue');
   const grokImageRiskRetryPending = new Set();
-
-  function normalizeCustomEmojiCatalog(catalog) {
-    const raw = catalog && typeof catalog === 'object' ? catalog : {};
-    const id = String(raw.id || '').trim();
-    if (!id) return Object.freeze({ id: '', label: '', items: Object.freeze([]) });
-    const label = String(raw.label || id).trim() || id;
-    const items = (Array.isArray(raw.items) ? raw.items : [])
-      .map((item, index) => {
-        const token = String(item?.token || '').trim();
-        if (!CUSTOM_EMOJI_TOKEN_PATTERN.test(token)) return null;
-        const src = String(item?.src || '').trim();
-        if (!src) return null;
-        return Object.freeze({
-          id: Number(item.id) || index + 1,
-          category: id,
-          categoryLabel: label,
-          token,
-          src,
-          width: Math.max(1, Number(item.width) || 20),
-          height: Math.max(1, Number(item.height) || 20),
-          label: String(item.label || `${label} ${index + 1}`).trim(),
-        });
-      })
-      .filter(Boolean);
-    return Object.freeze({ id, label, items: Object.freeze(items) });
-  }
-
-  function t(key, params = {}) {
-    return i18n?.t ? i18n.t(key, params) : String(key || '');
-  }
-
-  function tx(text, params = {}) {
-    if (i18n?.text) return i18n.text(text, params);
-    if (i18n?.t) return i18n.t(text, params);
-    return String(text == null ? '' : text);
-  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STATE
@@ -712,146 +658,220 @@
   // ═══════════════════════════════════════════════════════════════════════════
   // DOM
   // ═══════════════════════════════════════════════════════════════════════════
-  const $ = (s) => document.querySelector(s);
-  const $$ = (s) => document.querySelectorAll(s);
+  const appDomApi = window.BananzaApp?.dom || {};
+  const $ = typeof appDomApi.$ === 'function'
+    ? (selector, root = document) => appDomApi.$(selector, root)
+    : (selector, root = document) => root?.querySelector?.(selector) || null;
+  const $$ = typeof appDomApi.$$ === 'function'
+    ? (selector, root = document) => appDomApi.$$(selector, root)
+    : (selector, root = document) => Array.from(root?.querySelectorAll?.(selector) || []);
 
-  const sidebar = $('#sidebar');
-  const chatList = $('#chatList');
-  const chatListStatus = $('#chatListStatus');
-  const chatListPullIndicator = $('#chatListPullIndicator');
-  const chatListPullIcon = $('#chatListPullIcon');
-  const chatListPullLabel = $('#chatListPullLabel');
-  const sidebarSearch = $('#sidebarSearch');
-  const chatSearch = $('#chatSearch');
-  const chatSearchToggle = $('#chatSearchToggle');
-  const chatSearchClear = $('#chatSearchClear');
-  const chatFoldersBtn = $('#chatFoldersBtn');
-  const chatFolderContent = $('#chatFolderContent');
-  const chatFolderListSurface = $('#chatFolderListSurface');
-  const activeChatFolderBar = $('#activeChatFolderBar');
-  const activeChatFolderStrip = $('#activeChatFolderStrip');
-  const activeChatFolderName = $('#activeChatFolderName');
-  const chatArea = $('#chatArea');
-  const emptyState = $('#emptyState');
-  const chatView = $('#chatView');
-  const chatHeader = chatView?.querySelector('.chat-header');
-  const backBtn = $('#backBtn');
-  const chatTitle = $('#chatTitle');
-  const chatHeaderAvatar = $('#chatHeaderAvatar');
-  const chatStatus = $('#chatStatus');
-  const chatHeaderActions = $('#chatHeaderActions');
-  const searchBtn = $('#searchBtn');
-  const chatShotBtn = $('#chatShotBtn');
-  const chatSettingsActionBtn = $('#chatSettingsActionBtn');
-  const chatInfoBtn = $('#chatInfoBtn');
-  const pinnedBar = $('#pinnedBar');
-  const messagesEl = $('#messages');
-  const loadMoreWrap = $('#loadMoreWrap');
-  const loadMoreBtn = $('#loadMoreBtn');
-  const loadMoreAfterWrap = $('#loadMoreAfterWrap');
-  const typingBar = $('#typingBar');
-  const msgInput = $('#msgInput');
-  const composerRichPreview = $('#composerRichPreview');
-  const inputArea = chatView?.querySelector('.input-area');
-  const inputRow = chatView?.querySelector('.input-row');
-  const mentionOpenBtn = $('#mentionOpenBtn');
-  const sendBtn = $('#sendBtn');
-  const scrollBottomBtn = $('#scrollBottomBtn');
-  const composerContextConvertBtn = $('#composerContextConvertBtn');
-  const attachBtn = $('#attachBtn');
-  const pollBtn = $('#pollBtn');
-  const emojiBtn = $('#emojiBtn');
-  const fileInput = $('#fileInput');
-  const pendingFileEl = $('#pendingFile');
-  const composerAiOverrideEl = $('#composerAiOverride');
-  const composerAiOverrideLabel = $('#composerAiOverrideLabel');
-  const composerAiOverrideHint = $('#composerAiOverrideHint');
-  const composerAiOverrideModeEl = $('#composerAiOverrideMode');
-  const composerAiOverrideDocumentWrap = $('#composerAiOverrideDocumentWrap');
-  const composerAiOverrideDocumentFormatEl = $('#composerAiOverrideDocumentFormat');
-  const emojiPicker = $('#emojiPicker');
-  const imageViewer = $('#imageViewer');
-  const ivStrip = $('#ivStrip');
-  const reactionPicker = $('#reactionPicker');
-  const reactionEmojiPopover = $('#reactionEmojiPopover');
-  const chatContextMenuBackdrop = $('#chatContextMenuBackdrop');
-  const chatContextMenu = $('#chatContextMenu');
-  const chatFolderPickerBackdrop = $('#chatFolderPickerBackdrop');
-  const chatFolderPicker = $('#chatFolderPicker');
-  const chatFolderContextMenuBackdrop = $('#chatFolderContextMenuBackdrop');
-  const chatFolderContextMenu = $('#chatFolderContextMenu');
-  const mediaContextMenuBackdrop = $('#mediaContextMenuBackdrop');
-  const mediaContextMenu = $('#mediaContextMenu');
+  function createFallbackDomRefs() {
+    const aliases = {
+      composerAiOverrideDocumentFormatEl: 'composerAiOverrideDocumentFormat',
+      composerAiOverrideDocumentWrap: 'composerAiOverrideDocumentWrap',
+      composerAiOverrideEl: 'composerAiOverride',
+      composerAiOverrideHint: 'composerAiOverrideHint',
+      composerAiOverrideLabel: 'composerAiOverrideLabel',
+      composerAiOverrideModeEl: 'composerAiOverrideMode',
+      messagesEl: 'messages',
+      pendingFileEl: 'pendingFile',
+    };
+    return new Proxy({ $, $$ }, {
+      get(target, key) {
+        if (Object.prototype.hasOwnProperty.call(target, key)) return target[key];
+        if (key === 'chatHeader') return $('#chatView')?.querySelector('.chat-header') || null;
+        if (key === 'inputArea') return $('#chatView')?.querySelector('.input-area') || null;
+        if (key === 'inputRow') return $('#chatView')?.querySelector('.input-row') || null;
+        if (typeof key !== 'string') return null;
+        return document.getElementById(aliases[key] || key) || null;
+      },
+    });
+  }
+
+  const appDom = window.BananzaApp?.dom?.createDomRefs?.() || createFallbackDomRefs();
+  appDom.$ = $;
+  appDom.$$ = $$;
+
+  const {
+    sidebar,
+    chatList,
+    chatListStatus,
+    chatListPullIndicator,
+    chatListPullIcon,
+    chatListPullLabel,
+    sidebarSearch,
+    chatSearch,
+    chatSearchToggle,
+    chatSearchClear,
+    chatFoldersBtn,
+    chatFolderContent,
+    chatFolderListSurface,
+    activeChatFolderBar,
+    activeChatFolderStrip,
+    activeChatFolderName,
+    chatArea,
+    emptyState,
+    chatView,
+    chatHeader,
+    backBtn,
+    chatTitle,
+    chatHeaderAvatar,
+    chatStatus,
+    chatHeaderActions,
+    searchBtn,
+    chatShotBtn,
+    chatSettingsActionBtn,
+    chatInfoBtn,
+    pinnedBar,
+    messagesEl,
+    loadMoreWrap,
+    loadMoreBtn,
+    loadMoreAfterWrap,
+    typingBar,
+    msgInput,
+    composerRichPreview,
+    inputArea,
+    inputRow,
+    mentionOpenBtn,
+    sendBtn,
+    scrollBottomBtn,
+    composerContextConvertBtn,
+    attachBtn,
+    pollBtn,
+    emojiBtn,
+    fileInput,
+    pendingFileEl,
+    composerAiOverrideEl,
+    composerAiOverrideLabel,
+    composerAiOverrideHint,
+    composerAiOverrideModeEl,
+    composerAiOverrideDocumentWrap,
+    composerAiOverrideDocumentFormatEl,
+    emojiPicker,
+    imageViewer,
+    ivStrip,
+    reactionPicker,
+    reactionEmojiPopover,
+    chatContextMenuBackdrop,
+    chatContextMenu,
+    chatFolderPickerBackdrop,
+    chatFolderPicker,
+    chatFolderContextMenuBackdrop,
+    chatFolderContextMenu,
+    mediaContextMenuBackdrop,
+    mediaContextMenu,
+    replyBar,
+    replyBarName,
+    replyBarText,
+    searchPanel,
+    searchPanelSheet,
+    searchInput,
+    searchResults,
+    searchAllChatsToggle,
+    dragOverlay,
+    newChatModal,
+    newFolderNameInput,
+    newFolderChatSearchInput,
+    newFolderChatList,
+    createFolderBtn,
+    adminModal,
+    chatInfoModal,
+    menuDrawer,
+    currentUserInfo,
+    weatherWidget,
+    settingsModal,
+    languageSettingsModal,
+    themeSettingsModal,
+    visualModeSettingsModal,
+    pollStyleSettingsModal,
+    animationSettingsModal,
+    mobileFontSettingsModal,
+    weatherSettingsModal,
+    notificationSettingsModal,
+    soundSettingsModal,
+    aiBotSettingsModal,
+    openAiTextBotsModal,
+    openAiUniversalBotsModal,
+    openAiImageBotsModal,
+    contextConvertBotsModal,
+    chatShotBotsModal,
+    yandexAiSettingsModal,
+    deepseekAiSettingsModal,
+    deepseekAiTextBotsModal,
+    qwenAiSettingsModal,
+    qwenAiTextBotsModal,
+    grokAiSettingsModal,
+    grokAiTextBotsModal,
+    grokAiImageBotsModal,
+    grokAiUniversalBotsModal,
+    changePasswordModal,
+    forwardMessageModal,
+    forwardChatSearch,
+    forwardChatList,
+    forwardMessageStatus,
+    grokImageRiskConfirmModal,
+    grokImageRiskTerms,
+    grokImageRiskCancel,
+    grokImageRiskConfirm,
+    pollComposerModal,
+    pollQuestionInput,
+    pollOptionsList,
+    pollComposerPreview,
+    pollComposerStatus,
+    pollVotersModal,
+    pollVotersMeta,
+    pollVotersTitle,
+    pollVotersStatus,
+    pollVotersList,
+    chatFolderManageModal,
+    chatFolderManageSaveBtn,
+  } = appDom;
   const OPENAI_IMAGE_SIZE_OPTIONS = ['auto', '1024x1024', '1024x1536', '1536x1024'];
   const OPENAI_IMAGE_QUALITY_OPTIONS = ['auto', 'low', 'medium', 'high'];
   const OPENAI_IMAGE_BACKGROUND_OPTIONS = ['auto', 'transparent', 'opaque'];
   const OPENAI_IMAGE_OUTPUT_OPTIONS = ['png', 'webp', 'jpeg'];
   const DOCUMENT_FORMAT_OPTIONS = ['md', 'txt'];
-  const replyBar = $('#replyBar');
-  const replyBarName = $('#replyBarName');
-  const replyBarText = $('#replyBarText');
-  const searchPanel = $('#searchPanel');
-  const searchPanelSheet = $('#searchPanelSheet');
-  const searchInput = $('#searchInput');
-  const searchResults = $('#searchResults');
-  const searchAllChatsToggle = $('#searchAllChatsToggle');
-  const dragOverlay = $('#dragOverlay');
-  const newChatModal = $('#newChatModal');
-  const newFolderNameInput = $('#newFolderName');
-  const newFolderChatSearchInput = $('#newFolderChatSearch');
-  const newFolderChatList = $('#newFolderChatList');
-  const createFolderBtn = $('#createFolderBtn');
-  const adminModal = $('#adminModal');
-  const chatInfoModal = $('#chatInfoModal');
-  const menuDrawer = $('#menuDrawer');
-  const currentUserInfo = $('#currentUserInfo');
-  const weatherWidget = $('#weatherWidget');
-  const settingsModal = $('#settingsModal');
-  const languageSettingsModal = $('#languageSettingsModal');
-  const themeSettingsModal = $('#themeSettingsModal');
-  const visualModeSettingsModal = $('#visualModeSettingsModal');
-  const pollStyleSettingsModal = $('#pollStyleSettingsModal');
-  const animationSettingsModal = $('#animationSettingsModal');
-  const mobileFontSettingsModal = $('#mobileFontSettingsModal');
-  const weatherSettingsModal = $('#weatherSettingsModal');
-  const notificationSettingsModal = $('#notificationSettingsModal');
-  const soundSettingsModal = $('#soundSettingsModal');
-  const aiBotSettingsModal = $('#aiBotSettingsModal');
-  const openAiTextBotsModal = $('#openAiTextBotsModal');
-  const openAiUniversalBotsModal = $('#openAiUniversalBotsModal');
-  const openAiImageBotsModal = $('#openAiImageBotsModal');
-  const contextConvertBotsModal = $('#contextConvertBotsModal');
-  const chatShotBotsModal = $('#chatShotBotsModal');
-  const yandexAiSettingsModal = $('#yandexAiSettingsModal');
-  const deepseekAiSettingsModal = $('#deepseekAiSettingsModal');
-  const deepseekAiTextBotsModal = $('#deepseekAiTextBotsModal');
-  const qwenAiSettingsModal = $('#qwenAiSettingsModal');
-  const qwenAiTextBotsModal = $('#qwenAiTextBotsModal');
-  const grokAiSettingsModal = $('#grokAiSettingsModal');
-  const grokAiTextBotsModal = $('#grokAiTextBotsModal');
-  const grokAiImageBotsModal = $('#grokAiImageBotsModal');
-  const grokAiUniversalBotsModal = $('#grokAiUniversalBotsModal');
-  const changePasswordModal = $('#changePasswordModal');
-  const forwardMessageModal = $('#forwardMessageModal');
-  const forwardChatSearch = $('#forwardChatSearch');
-  const forwardChatList = $('#forwardChatList');
-  const forwardMessageStatus = $('#forwardMessageStatus');
-  const grokImageRiskConfirmModal = $('#grokImageRiskConfirmModal');
-  const grokImageRiskTerms = $('#grokImageRiskTerms');
-  const grokImageRiskCancel = $('#grokImageRiskCancel');
-  const grokImageRiskConfirm = $('#grokImageRiskConfirm');
-  const pollComposerModal = $('#pollComposerModal');
-  const pollQuestionInput = $('#pollQuestionInput');
-  const pollOptionsList = $('#pollOptionsList');
-  const pollComposerPreview = $('#pollComposerPreview');
-  const pollComposerStatus = $('#pollComposerStatus');
-  const pollVotersModal = $('#pollVotersModal');
-  const pollVotersMeta = $('#pollVotersMeta');
-  const pollVotersTitle = $('#pollVotersTitle');
-  const pollVotersStatus = $('#pollVotersStatus');
-  const pollVotersList = $('#pollVotersList');
-  const chatFolderManageModal = $('#chatFolderManageModal');
-  const chatFolderManageSaveBtn = $('#chatFolderManageSaveBtn');
+
+  const mobileViewportShell = window.BananzaApp?.mobileViewport?.createMobileViewportShell?.({
+    document,
+    window,
+    dom: appDom,
+    state: {
+      getCurrentModalAnimation: () => currentModalAnimation,
+      getIosComposerFocused: () => iosComposerFocused,
+      getMobileViewportPrevHeight: () => mobileViewportPrevHeight,
+      getMobileVisualViewportBaselineHeight: () => mobileVisualViewportBaselineHeight,
+      getMobileVisualViewportBaselineWidth: () => mobileVisualViewportBaselineWidth,
+      setMobileVisualViewportBaselineHeight: (value) => {
+        mobileVisualViewportBaselineHeight = Math.max(0, Number(value) || 0);
+      },
+      setMobileVisualViewportBaselineWidth: (value) => {
+        mobileVisualViewportBaselineWidth = Math.max(0, Number(value) || 0);
+      },
+    },
+    actions: {
+      isMobileComposerKeyboardOpen: () => isMobileComposerKeyboardOpen(),
+      isMobileViewportLayoutLocked: () => isMobileViewportLayoutLocked(),
+      prefersReducedMotion: () => prefersReducedMotion(),
+    },
+  }) || {};
+  const androidBridge = window.BananzaApp?.androidBridge || {
+    hasAndroidNativeBridge: () => false,
+    notifyAndroidScreenRotationPreference: () => false,
+    notifyAndroidMobileFontSize: () => false,
+  };
+  const chatHeaderActionsShell = window.BananzaApp?.chatHeaderActions?.createChatHeaderActions?.({
+    document,
+    dom: appDom,
+    state: {
+      getChatHeaderActionsOpen: () => chatHeaderActionsOpen,
+      setChatHeaderActionsOpen: (open) => {
+        chatHeaderActionsOpen = Boolean(open);
+        return chatHeaderActionsOpen;
+      },
+    },
+  }) || null;
 
   const appContext = appRuntime?.createContext ? appRuntime.createContext({
     config: {
@@ -865,21 +885,25 @@
       getCurrentChatId: () => currentChatId,
       getChats: () => chats,
     },
-    dom: {
-      chatList,
-      messagesEl,
-      msgInput,
-      sendBtn,
-      settingsModal,
-    },
+    dom: appDom,
     services: {
       api: (url, opts) => api(url, opts),
+      androidBridge,
+      chatHeaderActions: chatHeaderActionsShell,
+      mobileViewport: mobileViewportShell,
       t,
       tx,
     },
     t,
     tx,
   }) : null;
+  if (appContext) {
+    appContext.dom = appDom;
+    appContext.services = appContext.services || {};
+    appContext.services.mobileViewport = mobileViewportShell;
+    appContext.services.androidBridge = androidBridge;
+    appContext.services.chatHeaderActions = chatHeaderActionsShell;
+  }
 
   function chatFolderIconEmoji(kind = 'custom') {
     if (kind === 'all') return CHAT_FOLDER_ICON_EMOJI.all;
@@ -1030,134 +1054,96 @@
   }
 
   const chatFolderStore = new ChatFolderStore();
-  const isIosViewportFixTarget = (() => {
-    const ua = navigator.userAgent || '';
-    const platform = navigator.platform || '';
-    const maxTouchPoints = Number(navigator.maxTouchPoints || 0);
-    return /iP(hone|ad|od)/.test(ua) || (platform === 'MacIntel' && maxTouchPoints > 1);
-  })();
+  const isIosViewportFixTarget = Boolean(mobileViewportShell.isIosViewportFixTarget?.());
   if (isIosViewportFixTarget) {
     document.documentElement.classList.add('is-ios-webkit');
   }
 
   function getMobileAppViewportHeight(viewport = null) {
-    const vv = window.visualViewport;
-    const viewportHeight = Math.max(0, Number(viewport?.height) || vv?.height || window.innerHeight || 0);
-    if (!isIosViewportFixTarget || !vv) return viewportHeight;
-    const viewportTop = Math.max(
-      0,
-      viewport && Object.prototype.hasOwnProperty.call(viewport, 'top')
-        ? (Number(viewport.top) || 0)
-        : (vv.offsetTop || 0)
-    );
-    return Math.max(0, viewportHeight + viewportTop);
+    if (typeof mobileViewportShell.getMobileAppViewportHeight === 'function') {
+      return mobileViewportShell.getMobileAppViewportHeight(viewport);
+    }
+    return Math.max(0, Number(viewport?.height) || window.visualViewport?.height || window.innerHeight || 0);
   }
 
   function getMobileAppViewportTopInset() {
-    if (!isIosViewportFixTarget) return 0;
-    return Math.max(0, window.visualViewport?.offsetTop || 0);
+    return typeof mobileViewportShell.getMobileAppViewportTopInset === 'function'
+      ? mobileViewportShell.getMobileAppViewportTopInset()
+      : 0;
   }
 
   function isIosMobileViewportTarget() {
-    return Boolean(isIosViewportFixTarget && isMobileViewportTarget());
+    return typeof mobileViewportShell.isIosMobileViewportTarget === 'function'
+      ? mobileViewportShell.isIosMobileViewportTarget()
+      : Boolean(isIosViewportFixTarget && isMobileViewportTarget());
   }
 
   function isMobileViewportTarget() {
-    return Boolean(window.innerWidth <= 768);
+    return typeof mobileViewportShell.isMobileViewportTarget === 'function'
+      ? mobileViewportShell.isMobileViewportTarget()
+      : Boolean(window.innerWidth <= 768);
   }
 
   function isIosWebkitMotionAllowed() {
-    return Boolean(
-      isIosViewportFixTarget
-      && currentModalAnimation !== 'none'
-      && !prefersReducedMotion()
-    );
+    return typeof mobileViewportShell.isIosWebkitMotionAllowed === 'function'
+      ? mobileViewportShell.isIosWebkitMotionAllowed()
+      : false;
   }
 
   function forceIosAnimationMount(...elements) {
-    if (!isIosWebkitMotionAllowed()) return;
-    elements.forEach((el) => {
-      if (!(el instanceof HTMLElement)) return;
-      void el.offsetWidth;
-    });
+    return mobileViewportShell.forceIosAnimationMount?.(...elements);
   }
 
   function getMobileVisualViewportMetrics() {
-    const vv = window.visualViewport;
-    const docEl = document?.documentElement;
-    const top = Math.max(0, vv?.offsetTop || 0);
-    const height = Math.max(0, vv?.height || window.innerHeight || 0);
-    const width = Math.max(0, vv?.width || window.innerWidth || docEl?.clientWidth || 0);
-    return {
-      top,
-      height,
-      width,
-      bottom: top + height,
-    };
+    if (typeof mobileViewportShell.getMobileVisualViewportMetrics === 'function') {
+      return mobileViewportShell.getMobileVisualViewportMetrics();
+    }
+    const height = Math.max(0, window.visualViewport?.height || window.innerHeight || 0);
+    const top = Math.max(0, window.visualViewport?.offsetTop || 0);
+    const width = Math.max(0, window.visualViewport?.width || window.innerWidth || 0);
+    return { top, height, width, bottom: top + height };
   }
 
   function getIosVisualViewportMetrics() {
-    return getMobileVisualViewportMetrics();
+    return typeof mobileViewportShell.getIosVisualViewportMetrics === 'function'
+      ? mobileViewportShell.getIosVisualViewportMetrics()
+      : getMobileVisualViewportMetrics();
   }
 
   function getMobileViewportBaselineHeight() {
-    const vv = window.visualViewport;
-    const docEl = document?.documentElement;
-    const viewportWidth = Math.max(0, vv?.width || window.innerWidth || docEl?.clientWidth || 0);
-    const currentHeight = Math.max(
-      0,
-      (vv?.height || 0) + Math.max(0, vv?.offsetTop || 0),
-      window.innerHeight || 0,
-      docEl?.clientHeight || 0
-    );
-    const widthChanged = mobileVisualViewportBaselineWidth > 0
-      && viewportWidth > 0
-      && Math.abs(viewportWidth - mobileVisualViewportBaselineWidth) > 48;
-    if (!mobileVisualViewportBaselineHeight || widthChanged) {
-      mobileVisualViewportBaselineHeight = currentHeight;
-      mobileVisualViewportBaselineWidth = viewportWidth;
-    } else if (currentHeight > mobileVisualViewportBaselineHeight) {
-      mobileVisualViewportBaselineHeight = currentHeight;
-      mobileVisualViewportBaselineWidth = viewportWidth;
-    }
-    return Math.max(mobileVisualViewportBaselineHeight, currentHeight);
+    return typeof mobileViewportShell.getMobileViewportBaselineHeight === 'function'
+      ? mobileViewportShell.getMobileViewportBaselineHeight()
+      : Math.max(0, window.visualViewport?.height || window.innerHeight || 0);
   }
 
   function getIosViewportBaselineHeight() {
-    return getMobileViewportBaselineHeight();
+    return typeof mobileViewportShell.getIosViewportBaselineHeight === 'function'
+      ? mobileViewportShell.getIosViewportBaselineHeight()
+      : getMobileViewportBaselineHeight();
   }
 
   function isMobileKeyboardOpen() {
-    if (!isMobileViewportTarget()) return false;
-    if (!window.visualViewport) return document.activeElement === msgInput;
-    const vv = window.visualViewport;
-    const viewportTop = Math.max(0, vv.offsetTop || 0);
-    const viewportHeight = Math.max(0, vv.height || 0);
-    const visibleBottom = viewportTop + viewportHeight;
-    const baselineHeight = getMobileViewportBaselineHeight();
-    const layoutHeight = Math.max(window.innerHeight || 0, document?.documentElement?.clientHeight || 0, baselineHeight);
-    const keyboardOverlap = Math.max(
-      0,
-      layoutHeight - visibleBottom,
-      baselineHeight - visibleBottom,
-      baselineHeight - viewportHeight
-    );
-    return keyboardOverlap > 80;
+    return typeof mobileViewportShell.isMobileKeyboardOpen === 'function'
+      ? mobileViewportShell.isMobileKeyboardOpen()
+      : false;
   }
 
   function isIosKeyboardOpen() {
-    return Boolean(isIosMobileViewportTarget() && isMobileKeyboardOpen());
+    return typeof mobileViewportShell.isIosKeyboardOpen === 'function'
+      ? mobileViewportShell.isIosKeyboardOpen()
+      : Boolean(isIosMobileViewportTarget() && isMobileKeyboardOpen());
   }
 
   function isMobileChatKeyboardLayoutActive() {
-    if (!isMobileViewportTarget() || !window.visualViewport) return false;
-    if (chatView?.classList.contains('hidden')) return false;
-    if (document.activeElement !== msgInput && !iosComposerFocused) return false;
-    return isMobileKeyboardOpen();
+    return typeof mobileViewportShell.isMobileChatKeyboardLayoutActive === 'function'
+      ? mobileViewportShell.isMobileChatKeyboardLayoutActive()
+      : false;
   }
 
   function isIosChatKeyboardLayoutActive() {
-    return Boolean(isIosMobileViewportTarget() && isMobileChatKeyboardLayoutActive());
+    return typeof mobileViewportShell.isIosChatKeyboardLayoutActive === 'function'
+      ? mobileViewportShell.isIosChatKeyboardLayoutActive()
+      : Boolean(isIosMobileViewportTarget() && isMobileChatKeyboardLayoutActive());
   }
 
   function resetMobileKeyboardDock() {
@@ -1245,14 +1231,7 @@
   }
 
   function restoreMobileKeyboardDocumentScroll() {
-    if (!isMobileChatKeyboardLayoutActive()) return false;
-    if (!window.scrollX && !window.scrollY) return false;
-    try {
-      window.scrollTo(0, 0);
-      return true;
-    } catch {
-      return false;
-    }
+    return Boolean(mobileViewportShell.restoreMobileKeyboardDocumentScroll?.());
   }
 
   function syncMobileViewportLayoutState() {
@@ -1796,63 +1775,35 @@
   }
 
   function getChatSettingsActionOpener() {
-    return chatSettingsActionBtn || chatInfoBtn || $('#chatSettingsActionBtn') || $('#chatInfoBtn');
+    return chatHeaderActionsShell?.getChatSettingsActionOpener?.()
+      || chatSettingsActionBtn
+      || chatInfoBtn
+      || $('#chatSettingsActionBtn')
+      || $('#chatInfoBtn');
   }
 
   function moveFocusOutOfChatHeaderActions() {
-    if (!chatHeaderActions) return;
-    const active = document.activeElement;
-    if (!(active instanceof Element) || !chatHeaderActions.contains(active)) return;
-    const fallback = chatInfoBtn || $('#chatInfoBtn');
-    if (fallback && typeof fallback.focus === 'function' && !fallback.disabled && !fallback.hidden) {
-      try {
-        fallback.focus({ preventScroll: true });
-      } catch {
-        fallback.focus();
-      }
-    }
-    if (document.activeElement === active && typeof active.blur === 'function') {
-      active.blur();
-    }
+    return chatHeaderActionsShell?.moveFocusOutOfChatHeaderActions?.();
   }
 
   function syncChatHeaderActionsAccessibility() {
-    if (!chatHeaderActions) return;
-    const isOpen = Boolean(chatHeaderActionsOpen);
-    if (!isOpen) moveFocusOutOfChatHeaderActions();
-    chatHeaderActions.inert = !isOpen;
-    chatHeaderActions.classList.toggle('is-open', isOpen);
-    chatHeaderActions.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
-    if (chatInfoBtn) {
-      chatInfoBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-      chatInfoBtn.classList.toggle('is-active', isOpen);
-    }
-    chatHeaderActions.querySelectorAll('button').forEach((button) => {
-      if (isOpen && !button.classList.contains('hidden') && !button.hidden) {
-        button.removeAttribute('tabindex');
-      } else {
-        button.tabIndex = -1;
-      }
-    });
+    return chatHeaderActionsShell?.syncChatHeaderActionsAccessibility?.();
   }
 
   function setChatHeaderActionsOpen(open) {
-    const nextOpen = Boolean(open);
-    if (chatHeaderActionsOpen === nextOpen) {
-      syncChatHeaderActionsAccessibility();
-      return chatHeaderActionsOpen;
+    if (chatHeaderActionsShell?.setChatHeaderActionsOpen) {
+      return chatHeaderActionsShell.setChatHeaderActionsOpen(open);
     }
-    chatHeaderActionsOpen = nextOpen;
-    syncChatHeaderActionsAccessibility();
+    chatHeaderActionsOpen = Boolean(open);
     return chatHeaderActionsOpen;
   }
 
   function toggleChatHeaderActions() {
-    return setChatHeaderActionsOpen(!chatHeaderActionsOpen);
+    return chatHeaderActionsShell?.toggleChatHeaderActions?.() ?? setChatHeaderActionsOpen(!chatHeaderActionsOpen);
   }
 
   function closeChatHeaderActions() {
-    return setChatHeaderActionsOpen(false);
+    return chatHeaderActionsShell?.closeChatHeaderActions?.() ?? setChatHeaderActionsOpen(false);
   }
 
   function isMobileComposerDismissMessageTarget(target) {
@@ -2056,14 +2007,10 @@
   }
 
   function shouldBypassLockedMobileViewportSync(newViewportHeight, { force = false, mentionPickerDismissed = false } = {}) {
-    if (force || mentionPickerDismissed || isIosViewportFixTarget) return true;
-    if (!isMobileViewportLayoutLocked()) return true;
-    const nextHeight = Math.max(0, Number(newViewportHeight) || 0);
-    const prevHeight = Math.max(0, Number(mobileViewportPrevHeight) || 0);
-    const delta = nextHeight - prevHeight;
-    if (Math.abs(delta) < 48) return false;
-    if (delta > 0) return true;
-    return Boolean(document.activeElement === msgInput || iosComposerFocused || isMobileComposerKeyboardOpen());
+    if (typeof mobileViewportShell.shouldBypassLockedMobileViewportSync === 'function') {
+      return mobileViewportShell.shouldBypassLockedMobileViewportSync(newViewportHeight, { force, mentionPickerDismissed });
+    }
+    return true;
   }
 
   const appBridge = appRuntime?.createBridge
@@ -2415,168 +2362,6 @@
     root.dataset.mobileScene = scene;
     if (options.repaint) scheduleActiveMobileSceneRepaint(scene);
     return scene;
-  }
-
-  function esc(s) {
-    const d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
-  }
-
-  function getCustomEmoji(token) {
-    return CUSTOM_EMOJI_BY_TOKEN.get(String(token || '').trim()) || null;
-  }
-
-  function isCustomEmojiToken(value) {
-    return Boolean(getCustomEmoji(value));
-  }
-
-  function isSingleCustomEmojiMessage(text) {
-    return isCustomEmojiToken(String(text || '').trim());
-  }
-
-  function getCustomEmojiRenderScale(item, { large = false, picker = false } = {}) {
-    const baseScale = large ? 2.65 : 1;
-    const qipHdScale = item?.category === 'qip-hd' && !picker ? QIP_HD_EMOJI_MESSAGE_SCALE : 1;
-    return baseScale * qipHdScale;
-  }
-
-  function getCustomEmojiRenderedSize(item, options = {}) {
-    const scale = getCustomEmojiRenderScale(item, options);
-    return {
-      width: Math.max(1, Math.round((Number(item?.width) || 20) * scale)),
-      height: Math.max(1, Math.round((Number(item?.height) || 20) * scale)),
-    };
-  }
-
-  function renderCustomEmojiHtml(token, { large = false, className = '', picker = false } = {}) {
-    const item = getCustomEmoji(token);
-    if (!item) return esc(token);
-    const { width, height } = getCustomEmojiRenderedSize(item, { large, picker });
-    const classes = [
-      'custom-emoji-img',
-      `${item.category}-emoji`,
-      item.category === 'qip-infium-original' ? 'qip-infium-emoji' : '',
-      item.category === 'qip-hd' ? 'qip-hd-emoji' : '',
-      large ? 'custom-emoji-img--large qip-infium-emoji--large' : '',
-      className
-    ]
-      .filter(Boolean)
-      .join(' ');
-    return `<img class="${esc(classes)}" src="${esc(item.src)}" width="${width}" height="${height}" alt="${esc(item.label)}" title="${esc(item.label)}" loading="lazy" decoding="async">`;
-  }
-
-  function getComposerCustomEmojiPadLength(item) {
-    const width = getCustomEmojiRenderedSize(item).width;
-    return Math.max(1, Math.min(COMPOSER_CUSTOM_EMOJI_MAX_PAD, Math.round((width - 8) / 4)));
-  }
-
-  function getComposerCustomEmojiCluster(item) {
-    const marker = CUSTOM_EMOJI_MARKER_BY_TOKEN.get(item?.token);
-    if (!marker) return String(item?.token || '');
-    return marker + COMPOSER_CUSTOM_EMOJI_PAD_CHAR.repeat(getComposerCustomEmojiPadLength(item));
-  }
-
-  function getComposerCustomEmojiItemFromMarker(marker) {
-    const token = CUSTOM_EMOJI_TOKEN_BY_MARKER.get(marker);
-    return token ? getCustomEmoji(token) : null;
-  }
-
-  function getComposerCustomEmojiClusterEnd(value, start) {
-    const source = String(value || '');
-    const item = getComposerCustomEmojiItemFromMarker(source[start]);
-    if (!item) return start + 1;
-    const maxEnd = Math.min(source.length, start + 1 + getComposerCustomEmojiPadLength(item));
-    let end = start + 1;
-    while (end < maxEnd && source[end] === COMPOSER_CUSTOM_EMOJI_PAD_CHAR) end += 1;
-    return end;
-  }
-
-  function findComposerCustomEmojiClusterAt(value, offset) {
-    const source = String(value || '');
-    const cursor = Math.max(0, Math.min(source.length, Number(offset) || 0));
-    const backwardLimit = Math.max(0, cursor - COMPOSER_CUSTOM_EMOJI_MAX_PAD - 2);
-    for (let index = cursor; index >= backwardLimit; index -= 1) {
-      const item = getComposerCustomEmojiItemFromMarker(source[index]);
-      if (!item) continue;
-      const end = getComposerCustomEmojiClusterEnd(source, index);
-      if (cursor >= index && cursor <= end) return { start: index, end, item };
-    }
-    return null;
-  }
-
-  function findComposerCustomEmojiClusterBefore(value, offset) {
-    const source = String(value || '');
-    const cursor = Math.max(0, Math.min(source.length, Number(offset) || 0));
-    const inside = findComposerCustomEmojiClusterAt(source, cursor);
-    if (inside && cursor > inside.start) return inside;
-    const backwardLimit = Math.max(0, cursor - COMPOSER_CUSTOM_EMOJI_MAX_PAD - 2);
-    for (let index = cursor - 1; index >= backwardLimit; index -= 1) {
-      const item = getComposerCustomEmojiItemFromMarker(source[index]);
-      if (!item) continue;
-      const end = getComposerCustomEmojiClusterEnd(source, index);
-      if (end === cursor) return { start: index, end, item };
-    }
-    return null;
-  }
-
-  function findComposerCustomEmojiClusterAfter(value, offset) {
-    const source = String(value || '');
-    const cursor = Math.max(0, Math.min(source.length, Number(offset) || 0));
-    const inside = findComposerCustomEmojiClusterAt(source, cursor);
-    if (inside && cursor < inside.end) return inside;
-    const item = getComposerCustomEmojiItemFromMarker(source[cursor]);
-    if (!item) return null;
-    return { start: cursor, end: getComposerCustomEmojiClusterEnd(source, cursor), item };
-  }
-
-  function composerCustomEmojiClusterBoundary(cluster, cursor) {
-    if (!cluster) return cursor;
-    const midpoint = cluster.start + ((cluster.end - cluster.start) / 2);
-    return cursor <= midpoint ? cluster.start : cluster.end;
-  }
-
-  function normalizeComposerTextToInternal(value) {
-    const source = String(value || '');
-    const tokenRe = /^:qip-infium-\d{3}:|^:qip-hd-[a-z0-9][a-z0-9-]{0,63}:/i;
-    let result = '';
-    for (let index = 0; index < source.length;) {
-      const markerItem = getComposerCustomEmojiItemFromMarker(source[index]);
-      if (markerItem) {
-        result += getComposerCustomEmojiCluster(markerItem);
-        index = getComposerCustomEmojiClusterEnd(source, index);
-        continue;
-      }
-      const tokenMatch = source.slice(index).match(tokenRe);
-      if (tokenMatch) {
-        const token = tokenMatch[0];
-        const item = getCustomEmoji(token);
-        if (item) {
-          result += getComposerCustomEmojiCluster(item);
-          index += token.length;
-          continue;
-        }
-      }
-      result += source[index];
-      index += 1;
-    }
-    return result;
-  }
-
-  function serializeComposerTextValue(value, { trim = false } = {}) {
-    const source = String(value || '');
-    let result = '';
-    for (let index = 0; index < source.length;) {
-      const item = getComposerCustomEmojiItemFromMarker(source[index]);
-      if (item) {
-        result += item.token;
-        index = getComposerCustomEmojiClusterEnd(source, index);
-        continue;
-      }
-      result += source[index];
-      index += 1;
-    }
-    return trim ? result.trim() : result;
   }
 
   function getComposerTextValue({ trim = false } = {}) {
@@ -3400,20 +3185,11 @@
   }
 
   function hasAndroidNativeBridge() {
-    return Boolean(window.BananzaAndroid && typeof window.BananzaAndroid.postMessage === 'function');
+    return Boolean(androidBridge.hasAndroidNativeBridge?.());
   }
 
   function notifyAndroidScreenRotationPreference(reason = 'sync') {
-    if (!hasAndroidNativeBridge()) return;
-    try {
-      window.BananzaAndroid.postMessage(JSON.stringify({
-        type: 'screen_rotation_preference',
-        payload: {
-          allowed: getScreenRotationAllowed(),
-          reason,
-        },
-      }));
-    } catch (e) {}
+    return androidBridge.notifyAndroidScreenRotationPreference?.(getScreenRotationAllowed(), reason);
   }
 
   function setMobileFontAdjustPercent(percent = 100) {
@@ -3423,17 +3199,9 @@
   }
 
   function notifyAndroidMobileFontSize(size = currentMobileFontSize) {
-    if (!hasAndroidNativeBridge()) return;
-    try {
-      const effectiveSize = isMobileLayoutViewport() ? normalizeMobileFontSize(size) : MOBILE_FONT_SIZE_DEFAULT;
-      window.BananzaAndroid.postMessage(JSON.stringify({
-        type: 'mobile_font_size',
-        payload: {
-          size: effectiveSize,
-          mobileLayout: isMobileLayoutViewport(),
-        },
-      }));
-    } catch (e) {}
+    const mobileLayout = isMobileLayoutViewport();
+    const effectiveSize = mobileLayout ? normalizeMobileFontSize(size) : MOBILE_FONT_SIZE_DEFAULT;
+    return androidBridge.notifyAndroidMobileFontSize?.(effectiveSize, mobileLayout);
   }
 
   function syncMobileFontSettingsButton() {
@@ -3619,120 +3387,6 @@
     return /^(?:[\u00A9\u00AE]|[\u203C-\u3299]\uFE0F?|[\uD800-\uDBFF][\uDC00-\uDFFF])$/.test(graphemes[0]);
   }
 
-  function formatTime(iso) {
-    if (!iso) return '';
-    try {
-      const s = String(iso);
-      const needsZ = !(/[zZ]$/.test(s) || /[+\-]\d{2}:?\d{2}$/.test(s));
-      const d = new Date(needsZ ? s + 'Z' : s);
-      if (isNaN(d.getTime())) return 'Invalid Date';
-      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    } catch {
-      return 'Invalid Date';
-    }
-  }
-
-  function formatChatListTimestamp(iso) {
-    if (!iso) return '';
-    try {
-      const s = String(iso);
-      const needsZ = !(/[zZ]$/.test(s) || /[+\-]\d{2}:?\d{2}$/.test(s));
-      const d = new Date(needsZ ? s + 'Z' : s);
-      if (isNaN(d.getTime())) return 'Invalid Date';
-      const today = new Date();
-      if (d.toDateString() === today.toDateString()) return formatTime(iso);
-      return d.toLocaleDateString([], { day: 'numeric', month: 'short' });
-    } catch {
-      return 'Invalid Date';
-    }
-  }
-
-  function formatDate(iso) {
-    if (!iso) return '';
-    try {
-      const s = String(iso);
-      const needsZ = !(/[zZ]$/.test(s) || /[+\-]\d{2}:?\d{2}$/.test(s));
-      const d = new Date(needsZ ? s + 'Z' : s);
-      if (isNaN(d.getTime())) return 'Invalid Date';
-      const today = new Date();
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      if (d.toDateString() === today.toDateString()) return t('Today');
-      if (d.toDateString() === yesterday.toDateString()) return t('Yesterday');
-      return d.toLocaleDateString([], { day: 'numeric', month: 'long', year: 'numeric' });
-    } catch {
-      return 'Invalid Date';
-    }
-  }
-
-  function formatSize(bytes) {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-  }
-
-  function fileExtension(name) {
-    const m = String(name || '').toLowerCase().match(/\.[^.]+$/);
-    return m ? m[0] : '';
-  }
-
-  function normalizeMimeType(value) {
-    return String(value || '').split(';')[0].trim().toLowerCase();
-  }
-
-  function getStoredAttachmentUrl(storedName, { preview = false } = {}) {
-    const name = String(storedName || '').trim();
-    if (!name) return '';
-    const encoded = encodeURIComponent(name);
-    return preview ? `/uploads/${encoded}/preview` : `/uploads/${encoded}`;
-  }
-
-  function getStoredAttachmentPosterUrl(storedName) {
-    const name = String(storedName || '').trim();
-    return name ? `/uploads/${encodeURIComponent(name)}/poster` : '';
-  }
-
-  function resolveAttachmentUrl(source, { preview = false } = {}) {
-    if (!source) return '';
-    if (typeof source === 'string') {
-      return getStoredAttachmentUrl(source, { preview });
-    }
-    const localUrl = String(source.client_file_url || source.clientFileUrl || '').trim();
-    if (localUrl) return localUrl;
-    return getStoredAttachmentUrl(source.file_stored || source.stored_name || source.storedName || '', { preview });
-  }
-
-  function getAttachmentPreviewUrl(source) {
-    return resolveAttachmentUrl(source, { preview: true });
-  }
-
-  function getAttachmentDownloadUrl(source) {
-    return resolveAttachmentUrl(source, { preview: false });
-  }
-
-  function getAttachmentPosterUrl(source) {
-    if (!source) return '';
-    if (typeof source === 'string') {
-      return getStoredAttachmentPosterUrl(source);
-    }
-    const localPosterUrl = String(source.client_poster_url || source.clientPosterUrl || '').trim();
-    if (localPosterUrl) return localPosterUrl;
-    const hasPoster = Boolean(
-      source.file_poster_available
-      || source.filePosterAvailable
-      || source.poster_available
-      || source.posterAvailable
-    );
-    if (!hasPoster) return '';
-    const storedName = source.file_stored || source.stored_name || source.storedName || '';
-    return getStoredAttachmentPosterUrl(storedName);
-  }
-
-  function isVideoAttachmentMessage(source) {
-    return String(source?.file_type || source?.fileType || '').trim().toLowerCase() === 'video';
-  }
-
   function applyPosterToVideoElement(videoEl, posterUrl) {
     if (!(videoEl instanceof HTMLVideoElement) || !posterUrl) return;
     if (videoEl.getAttribute('poster') === posterUrl) return;
@@ -3751,166 +3405,6 @@
       source.clientPosterUrl = clientPosterUrl;
     }
     return source;
-  }
-
-  function createTimeoutError(message = 'Timed out') {
-    const error = new Error(message);
-    error.name = 'TimeoutError';
-    return error;
-  }
-
-  function waitForMediaEvent(target, eventNames = [], {
-    ready = null,
-    timeoutMs = VIDEO_POSTER_CAPTURE_TIMEOUT_MS,
-  } = {}) {
-    return new Promise((resolve, reject) => {
-      if (typeof ready === 'function' && ready()) {
-        resolve();
-        return;
-      }
-
-      const names = [...new Set((Array.isArray(eventNames) ? eventNames : [eventNames]).filter(Boolean))];
-      const cleanup = () => {
-        clearTimeout(timerId);
-        names.forEach((name) => target.removeEventListener(name, onReady));
-        target.removeEventListener('error', onError);
-      };
-      const finish = (callback) => {
-        cleanup();
-        callback();
-      };
-      const onReady = () => {
-        if (typeof ready === 'function' && !ready()) return;
-        finish(resolve);
-      };
-      const onError = () => {
-        finish(() => reject(target.error || new Error('Media load failed')));
-      };
-      const timerId = setTimeout(() => {
-        finish(() => reject(createTimeoutError('Media load timed out')));
-      }, timeoutMs);
-
-      names.forEach((name) => target.addEventListener(name, onReady));
-      target.addEventListener('error', onError);
-    });
-  }
-
-  async function waitForVideoFrame(video) {
-    if (video.readyState >= 2 && video.videoWidth && video.videoHeight) return;
-    await waitForMediaEvent(video, ['loadeddata', 'canplay', 'seeked'], {
-      ready: () => video.readyState >= 2 && video.videoWidth && video.videoHeight,
-    });
-  }
-
-  async function seekVideoFrame(video, time) {
-    const duration = Number(video.duration || 0);
-    const safeTime = duration > 0
-      ? Math.min(Math.max(0, Number(time || 0)), Math.max(0, duration - 0.05))
-      : Math.max(0, Number(time || 0));
-    const epsilon = safeTime > 0 ? 0.02 : 0.001;
-    if (Math.abs(Number(video.currentTime || 0) - safeTime) <= epsilon) {
-      await waitForVideoFrame(video);
-      return;
-    }
-
-    await new Promise((resolve, reject) => {
-      const onSeeked = () => cleanup(resolve);
-      const onError = () => cleanup(() => reject(video.error || new Error('Video seek failed')));
-      const cleanup = (callback) => {
-        clearTimeout(timerId);
-        video.removeEventListener('seeked', onSeeked);
-        video.removeEventListener('error', onError);
-        callback();
-      };
-      const timerId = setTimeout(() => cleanup(resolve), 650);
-      video.addEventListener('seeked', onSeeked, { once: true });
-      video.addEventListener('error', onError, { once: true });
-      try {
-        video.currentTime = safeTime;
-      } catch (error) {
-        cleanup(() => reject(error));
-      }
-    });
-    await waitForVideoFrame(video);
-  }
-
-  async function drawVideoPosterBlob(video) {
-    const width = Number(video.videoWidth || 0);
-    const height = Number(video.videoHeight || 0);
-    if (!width || !height) return null;
-
-    const scale = Math.min(1, VIDEO_POSTER_MAX_DIMENSION / Math.max(width, height));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(width * scale));
-    canvas.height = Math.max(1, Math.round(height * scale));
-    const ctx = canvas.getContext('2d', { alpha: false });
-    if (!ctx) return null;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-    if (typeof canvas.toBlob === 'function') {
-      return new Promise((resolve) => {
-        canvas.toBlob((blob) => resolve(blob && blob.size ? blob : null), VIDEO_POSTER_MIME, VIDEO_POSTER_QUALITY);
-      });
-    }
-
-    const dataUrl = canvas.toDataURL(VIDEO_POSTER_MIME, VIDEO_POSTER_QUALITY);
-    if (!dataUrl) return null;
-    const response = await fetch(dataUrl);
-    const blob = await response.blob();
-    return blob && blob.size ? blob : null;
-  }
-
-  async function createAttachmentPosterBlob(source) {
-    const sourceUrl = source instanceof Blob
-      ? URL.createObjectURL(source)
-      : String(source || '').trim();
-    if (!sourceUrl) return null;
-
-    const shouldRevokeUrl = source instanceof Blob;
-    const video = document.createElement('video');
-    video.muted = true;
-    video.preload = 'auto';
-    video.playsInline = true;
-    video.setAttribute('muted', '');
-    video.setAttribute('playsinline', '');
-
-    try {
-      video.src = sourceUrl;
-      video.load?.();
-      await waitForMediaEvent(video, ['loadedmetadata', 'loadeddata', 'canplay'], {
-        ready: () => video.readyState >= 1 && video.videoWidth && video.videoHeight,
-      });
-
-      const duration = Number(video.duration || 0);
-      const seekTargets = [...new Set(VIDEO_POSTER_CAPTURE_SEEKS
-        .map((time) => {
-          if (duration > 0) return Math.min(Math.max(0, Number(time || 0)), Math.max(0, duration - 0.05));
-          return Math.max(0, Number(time || 0));
-        })
-        .filter((time) => Number.isFinite(time) && time >= 0))];
-
-      if (!seekTargets.length) seekTargets.push(0);
-      for (const seekTarget of seekTargets) {
-        try {
-          await seekVideoFrame(video, seekTarget);
-          const posterBlob = await drawVideoPosterBlob(video);
-          if (posterBlob) return posterBlob;
-        } catch (error) {}
-      }
-    } catch (error) {
-      return null;
-    } finally {
-      try {
-        video.pause?.();
-        video.removeAttribute('src');
-        video.load?.();
-      } catch (error) {}
-      if (shouldRevokeUrl) {
-        try { URL.revokeObjectURL(sourceUrl); } catch (error) {}
-      }
-    }
-
-    return null;
   }
 
   function getAttachmentPosterBackfillKey(source) {
@@ -4187,31 +3681,6 @@
     activePulseVoterPopover = next;
     refreshPulseInlineVoterSlots(resolvedMessageId, resolvedOptionId);
     mountPulseVoterPopover(next);
-  }
-
-  function formatRelativeDuration(targetIso) {
-    if (!targetIso) return '';
-    const normalized = String(targetIso).includes('T') ? String(targetIso) : String(targetIso).replace(' ', 'T');
-    const time = new Date(/[zZ]$|[+\-]\d{2}:?\d{2}$/.test(normalized) ? normalized : `${normalized}Z`).getTime();
-    if (!Number.isFinite(time)) return '';
-    const diff = time - Date.now();
-    if (diff <= 0) return 'soon';
-    const minutes = Math.round(diff / 60000);
-    if (minutes < 60) return `${minutes}m`;
-    const hours = Math.round(diff / 3600000);
-    if (hours < 24) return `${hours}h`;
-    const days = Math.round(diff / 86400000);
-    return `${days}d`;
-  }
-
-  function formatPollDeadline(poll) {
-    if (!poll) return '';
-    if (poll.is_closed) {
-      return poll.closed_at ? `Closed ${formatTime(poll.closed_at)}` : 'Closed';
-    }
-    if (!poll.closes_at) return 'Open-ended';
-    const relative = formatRelativeDuration(poll.closes_at);
-    return relative ? `Ends in ${relative}` : `Ends ${formatTime(poll.closes_at)}`;
   }
 
   function getPollCompactFooterMeta(poll) {
@@ -5057,12 +4526,6 @@
     if (style === 'stack') return renderStackPollCard(state);
     if (style === 'orbit') return renderOrbitPollCard(state);
     return renderPulsePollCard(state);
-  }
-
-  function initials(name) {
-    const text = String(name || '').trim();
-    if (!text) return '?';
-    return text.split(/\s+/).map(w => w[0]).join('').toUpperCase().substring(0, 2) || '?';
   }
 
   function avatarHtml(name, color, avatarUrl, size) {
@@ -23780,10 +23243,6 @@
     const customCats = CUSTOM_EMOJI_CATALOGS.map((catalog) => catalog.id);
     if (!cats.length) return [RECENT_EMOJI_CATEGORY, ...customCats];
     return [cats[0], RECENT_EMOJI_CATEGORY, ...cats.slice(1), ...customCats];
-  }
-
-  function getCustomEmojiCatalog(category) {
-    return CUSTOM_EMOJI_BY_CATEGORY.get(String(category || '')) || null;
   }
 
   function isCustomEmojiCategory(category) {
