@@ -5,6 +5,12 @@ const { JSDOM } = require('jsdom');
 const { indexedDB, IDBKeyRange } = require('fake-indexeddb');
 const { repoRoot } = require('./paths');
 
+const appShellScriptPaths = Object.freeze([
+  'public/js/app/namespace.js',
+  'public/js/app/context.js',
+  'public/js/app/bridge.js',
+]);
+
 class FakeAudioNode {
   connect() {
     return this;
@@ -287,6 +293,15 @@ function loadBrowserScripts(dom, relativePaths) {
   relativePaths.forEach((relativePath) => loadBrowserScript(dom, relativePath));
 }
 
+function loadAppShellScripts(dom) {
+  loadBrowserScripts(dom, appShellScriptPaths);
+}
+
+function loadAppScript(dom) {
+  loadAppShellScripts(dom);
+  loadBrowserScript(dom, 'public/js/app.js');
+}
+
 function installAppBridge(dom, overrides = {}) {
   const { window } = dom;
   const document = window.document;
@@ -361,9 +376,12 @@ function installAppBridge(dom, overrides = {}) {
 }
 
 module.exports = {
+  appShellScriptPaths,
   createAppDom,
   installAppBridge,
   installVisualViewportMock,
+  loadAppScript,
+  loadAppShellScripts,
   loadBrowserScript,
   loadBrowserScripts,
   setDocumentHidden,

@@ -363,6 +363,12 @@ function createCallFeature({
     WHERE call_id=?
     ORDER BY id DESC
   `);
+  const inFlightTranscriptRunForCallStmt = db.prepare(`
+    SELECT * FROM call_transcript_runs
+    WHERE call_id=? AND status IN ('queued','processing')
+    ORDER BY id DESC
+    LIMIT 1
+  `);
   const primaryTranscriptRunForCallStmt = db.prepare(`
     SELECT * FROM call_transcript_runs
     WHERE call_id=?
@@ -850,7 +856,10 @@ function createCallFeature({
     if (strategy === 'per_user' && !hasParticipant) {
       return { ok: false, status: 409, message: 'No participant recordings are available', code: 'no_participant_recordings' };
     }
-    if (['mixed', 'hybrid', 'openai_diarization'].includes(strategy) && !hasMixed && !hasParticipant) {
+    if (['mixed', 'openai_diarization'].includes(strategy) && !hasMixed) {
+      return { ok: false, status: 409, message: 'Mixed recording is not available', code: 'mixed_recording_missing' };
+    }
+    if (strategy === 'hybrid' && !hasMixed && !hasParticipant) {
       return { ok: false, status: 409, message: 'Mixed recording is not available', code: 'mixed_recording_missing' };
     }
     if (strategy === 'openai_diarization' && !getVoiceOpenAIKey(db, secret)) {
@@ -1638,11 +1647,8 @@ function createCallFeature({
 
   function settingsForProvider(provider, options = {}) {
     const voiceSettings = getVoiceSettings(db);
-    const callSettings = getCallSettings(db);
     const requested = String(provider || 'voice').trim();
-    const activeProvider = requested === 'voice'
-      ? (callSettings.call_transcription_provider === 'voice' ? voiceSettings.active_provider : callSettings.call_transcription_provider)
-      : requested;
+    const activeProvider = requested === 'voice' ? voiceSettings.active_provider : requested;
     const resolvedProvider = ['vosk', 'openai', 'grok'].includes(activeProvider) ? activeProvider : voiceSettings.active_provider;
     const minTimeout = options.diarize
       ? CALL_DIARIZATION_TIMEOUT_MS
@@ -1877,11 +1883,11 @@ function createCallFeature({
     const mixedRecording = recordings.find((recording) => recording.scope === 'mixed') || null;
     try {
       let strategy = String(run.strategy || 'per_user');
-      if ((strategy === 'mixed' || strategy === 'hybrid' || strategy === 'openai_diarization') && !mixedRecording) {
+      if (strategy === 'hybrid' && !mixedRecording) {
         strategy = 'per_user';
       }
       if (strategy === 'per_user' && !participantRecordings.length) throw new Error('No participant recordings are available');
-      if ((strategy === 'mixed' || strategy === 'hybrid' || strategy === 'openai_diarization') && !mixedRecording) {
+      if ((strategy === 'mixed' || strategy === 'openai_diarization') && !mixedRecording) {
         throw new Error('Mixed recording is not available');
       }
 
@@ -2586,19 +2592,31 @@ function createCallFeature({
     res.json({ call: broadcastAiNotesUpdated(callId) || getCall(callId) });
   });
 
-  function createOrReusePrimaryTranscriptRun(callId, requestedBy, { retry = false } = {}) {
+  function transcriptRunMatchesConfig(run, provider, strategy) {
+    return String(run?.provider || 'voice') === String(provider || 'voice')
+      && String(run?.strategy || 'per_user') === String(strategy || 'per_user');
+  }
+
+  function createOrReusePrimaryTranscriptRun(callId, requestedBy, { retry = false, enqueue = true } = {}) {
     const { provider, strategy } = selectedTranscriptConfig();
     const validation = validateTranscriptRunInput(callId, provider, strategy);
     if (!validation.ok) return { error: validation };
+    const inFlight = inFlightTranscriptRunForCallStmt.get(callId);
+    if (inFlight) {
+      return { run: serializeTranscriptRun(inFlight), rawRun: inFlight, created: false };
+    }
     const existing = primaryTranscriptRunForCallStmt.get(callId);
-    if (existing && !retry) {
+    const existingMatches = transcriptRunMatchesConfig(existing, provider, strategy);
+    if (existing && !retry && existingMatches) {
       return { run: serializeTranscriptRun(existing), rawRun: existing, created: false };
     }
-    if (existing && retry) {
+    if (existing && retry && existing.status === 'error' && existingMatches) {
       deleteRunSegmentsStmt.run(existing.id);
       resetTranscriptRunStmt.run(provider, strategy, existing.id);
-      enqueueTranscriptRun(existing.id);
-      broadcastTranscriptRunMessage(existing.id);
+      if (enqueue) {
+        enqueueTranscriptRun(existing.id);
+        broadcastTranscriptRunMessage(existing.id);
+      }
       return {
         run: serializeTranscriptRun(transcriptRunByIdStmt.get(existing.id)),
         rawRun: transcriptRunByIdStmt.get(existing.id),
@@ -2608,8 +2626,10 @@ function createCallFeature({
     }
     const inserted = insertTranscriptRunStmt.run(callId, null, requestedBy || null, provider, strategy);
     const runId = Number(inserted.lastInsertRowid);
-    enqueueTranscriptRun(runId);
-    broadcastTranscriptRunMessage(runId);
+    if (enqueue) {
+      enqueueTranscriptRun(runId);
+      broadcastTranscriptRunMessage(runId);
+    }
     return { run: serializeTranscriptRun(transcriptRunByIdStmt.get(runId)), rawRun: transcriptRunByIdStmt.get(runId), created: true };
   }
 
@@ -3059,6 +3079,7 @@ function createCallFeature({
       transcriptSegmentsForResult,
       applyInheritedVoiceContextBotToText,
       processTranscriptRun,
+      createOrReusePrimaryTranscriptRun,
     },
   };
 }

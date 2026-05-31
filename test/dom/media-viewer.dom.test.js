@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   createAppDom,
   installVisualViewportMock,
+  loadAppScript,
   loadBrowserScript,
   loadBrowserScripts,
   setDocumentHidden,
@@ -174,7 +175,7 @@ async function bootAppDom(options = {}) {
   if (i18nStub) dom.window.BananzaI18n = i18nStub;
   loadBrowserScript(dom, 'public/js/qip-infium-original.js');
   loadBrowserScript(dom, 'public/js/qip-hd.js');
-  loadBrowserScript(dom, 'public/js/app.js');
+  loadAppScript(dom);
   await ready;
   await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
   return dom;
@@ -1032,6 +1033,7 @@ function createMediaPlaybackFetchHandler({
   contextConvertAvailabilityByChatId = {},
   chatShotStateByChatId = {},
   features = {},
+  callTranscribeRequests = null,
 } = {}) {
   const composerHandler = createComposerInteractionFetchHandler({
     chatMessagesByChatId,
@@ -1047,6 +1049,14 @@ function createMediaPlaybackFetchHandler({
         voice_note_ui_mode: 'compact',
         ...features,
       });
+    }
+    const callTranscribeRetryMatch = url.pathname.match(/^\/api\/calls\/(\d+)\/transcribe\/retry$/);
+    if (callTranscribeRetryMatch && String(init?.method || '').toUpperCase() === 'POST') {
+      callTranscribeRequests?.push({
+        callId: Number(callTranscribeRetryMatch[1]),
+        method: String(init?.method || 'GET').toUpperCase(),
+      });
+      return createJsonResponse(dom, { run: { id: 1, status: 'queued' }, call: { id: Number(callTranscribeRetryMatch[1]) }, message: null });
     }
     return composerHandler({ dom, window, url, input, init });
   };
@@ -1080,6 +1090,7 @@ async function openMediaPlaybackDom({
   chatMessagesByChatId = null,
   features = {},
   i18nStub = null,
+  callTranscribeRequests = null,
 } = {}) {
   const allChats = Array.isArray(chats) && chats.length
     ? chats
@@ -1089,6 +1100,7 @@ async function openMediaPlaybackDom({
     fetchHandler: createMediaPlaybackFetchHandler({
       chatMessagesByChatId: chatMessagesByChatId || { [Number(activeChat.id || 1)]: [] },
       features,
+      callTranscribeRequests,
     }),
   });
   installProgressSvgMocks(dom);
@@ -4899,6 +4911,81 @@ test('call recording card renders media controls and seeks without starting paus
   assert.ok(Math.abs(Number(audio.currentTime || 0) - 12) < 0.2);
   assert.equal(mediaState.paused, true);
   assert.ok(Math.abs(getDasharrayFilledLength(fill) - 50) < 1);
+});
+
+test('completed call transcript offers re-transcribe action', async (t) => {
+  const chat = createChatFixture(1, 'Chat A', { lastMessageId: 470 });
+  const callId = 1470;
+  const transcriptRun = {
+    id: 71,
+    call_id: callId,
+    provider: 'voice',
+    resolved_provider: 'vosk',
+    strategy: 'hybrid',
+    strategy_label: 'Hybrid',
+    status: 'completed',
+    transcript_ready: true,
+    transcript_text: 'ready transcript',
+  };
+  const message = createCallMessage(1, 470, {
+    call_id: callId,
+    call: {
+      id: callId,
+      call_id: callId,
+      status: 'ended',
+      duration_ms: 24_000,
+      can_join: false,
+      mixed_recording: {
+        id: callId + 2000,
+        call_id: callId,
+        status: 'completed',
+        duration_ms: 24_000,
+        size_bytes: 4096,
+        mime_type: 'audio/ogg',
+        url: `/api/calls/${callId}/recording/mixed`,
+      },
+      primary_transcript_run: transcriptRun,
+      transcript_runs: [transcriptRun],
+    },
+    call_message: {
+      call_id: callId,
+      status: 'ended',
+      duration_ms: 24_000,
+      can_join: false,
+      mixed_recording: {
+        id: callId + 2000,
+        call_id: callId,
+        status: 'completed',
+        duration_ms: 24_000,
+        size_bytes: 4096,
+        mime_type: 'audio/ogg',
+        url: `/api/calls/${callId}/recording/mixed`,
+      },
+      primary_transcript_run: transcriptRun,
+      transcript_runs: [transcriptRun],
+    },
+  });
+  const callTranscribeRequests = [];
+  const dom = await openMediaPlaybackDom({
+    activeChat: chat,
+    chats: [chat],
+    chatMessagesByChatId: {
+      1: [message],
+    },
+    callTranscribeRequests,
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+
+  const button = document.querySelector(`[data-call-card-retranscribe="${callId}"]`);
+  assert.ok(button);
+  assert.match(button.textContent, /Re-transcribe|Расшифровать заново/);
+  button.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  await wait(dom, 20);
+
+  assert.deepEqual(callTranscribeRequests, [{ callId, method: 'POST' }]);
 });
 
 test('voice call card keeps voice label even when call payload falls back to defaults', async (t) => {

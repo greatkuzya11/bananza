@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   createAppDom,
   installVisualViewportMock,
+  loadAppScript,
   loadBrowserScript,
 } = require('../support/domHarness');
 
@@ -171,7 +172,7 @@ async function bootAppDom({ beforeLoad = null } = {}) {
   loadBrowserScript(dom, 'public/js/ai-image-risk.js');
   loadBrowserScript(dom, 'public/js/qip-infium-original.js');
   loadBrowserScript(dom, 'public/js/qip-hd.js');
-  loadBrowserScript(dom, 'public/js/app.js');
+  loadAppScript(dom);
   await ready;
   await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
   return dom;

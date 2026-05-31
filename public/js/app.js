@@ -1,6 +1,8 @@
 (function () {
   'use strict';
 
+  const appRuntime = window.BananzaApp || null;
+
   // ═══════════════════════════════════════════════════════════════════════════
   // CONFIG
   // ═══════════════════════════════════════════════════════════════════════════
@@ -850,6 +852,34 @@
   const pollVotersList = $('#pollVotersList');
   const chatFolderManageModal = $('#chatFolderManageModal');
   const chatFolderManageSaveBtn = $('#chatFolderManageSaveBtn');
+
+  const appContext = appRuntime?.createContext ? appRuntime.createContext({
+    config: {
+      PAGE_SIZE,
+      MESSAGE_CACHE_LIMIT,
+      MAX_MSG,
+      MAX_ATTACHMENTS,
+    },
+    state: {
+      getCurrentUser: () => currentUser,
+      getCurrentChatId: () => currentChatId,
+      getChats: () => chats,
+    },
+    dom: {
+      chatList,
+      messagesEl,
+      msgInput,
+      sendBtn,
+      settingsModal,
+    },
+    services: {
+      api: (url, opts) => api(url, opts),
+      t,
+      tx,
+    },
+    t,
+    tx,
+  }) : null;
 
   function chatFolderIconEmoji(kind = 'custom') {
     if (kind === 'all') return CHAT_FOLDER_ICON_EMOJI.all;
@@ -2036,7 +2066,10 @@
     return Boolean(document.activeElement === msgInput || iosComposerFocused || isMobileComposerKeyboardOpen());
   }
 
-  const appBridge = window.BananzaAppBridge = window.BananzaAppBridge || {};
+  const appBridge = appRuntime?.createBridge
+    ? appRuntime.createBridge(appContext)
+    : (window.BananzaAppBridge = window.BananzaAppBridge || {});
+  if (appContext) appContext.bridge = appBridge;
   Object.assign(appBridge, {
     api: (url, opts) => api(url, opts),
     animateSendButton: () => animateSendButton(),
@@ -20513,6 +20546,9 @@
         if (transcriptStatus === 'completed' || notes?.transcript_ready) {
           pushCallMessageMeta(meta, '&#128221;', t('Transcript ready'), 'transcript');
           actions.push(`<button type="button" class="call-message-action" data-call-card-transcript="${Number(call.id || 0)}">${esc(t('Transcript'))}</button>`);
+          if (transcriptStatus === 'completed') {
+            actions.push(`<button type="button" class="call-message-action" data-call-card-retranscribe="${Number(call.id || 0)}">${esc(t('Re-transcribe'))}</button>`);
+          }
         } else if (transcriptStatus === 'queued' || transcriptStatus === 'processing') {
           pushCallMessageMeta(meta, '&#128221;', t('Transcript processing'), 'transcript');
           actions.push(`<button type="button" class="call-message-action" disabled>${esc(t('Transcript processing'))}</button>`);
@@ -20788,6 +20824,18 @@
       }
     });
     row.querySelector('[data-call-card-transcribe-retry]')?.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      const button = event.currentTarget;
+      button.disabled = true;
+      try {
+        await api(`/api/calls/${Number(call.id || 0)}/transcribe/retry`, { method: 'POST', body: {} });
+      } catch (error) {
+        showCenterToast(error.message || t('Could not start transcription'));
+      } finally {
+        button.disabled = false;
+      }
+    });
+    row.querySelector('[data-call-card-retranscribe]')?.addEventListener('click', async (event) => {
       event.stopPropagation();
       const button = event.currentTarget;
       button.disabled = true;
