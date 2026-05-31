@@ -74,6 +74,31 @@ const appComposerScriptPaths = Object.freeze([
   'public/js/app/composer/typing-dragdrop.js',
   'public/js/app/composer/poll-composer.js',
 ]);
+const appInteractionScriptPaths = Object.freeze([
+  'public/js/app/interactions/search.js',
+  'public/js/app/interactions/reactions.js',
+  'public/js/app/interactions/floating-actions.js',
+  'public/js/app/interactions/media-viewer.js',
+  'public/js/app/interactions/context-menus.js',
+  'public/js/app/interactions/forwarding.js',
+]);
+const appAdminScriptPaths = Object.freeze([
+  'public/js/app/admin/bot-audit.js',
+  'public/js/app/admin/backup.js',
+  'public/js/app/admin/users.js',
+]);
+const appAiAdminScriptPaths = Object.freeze([
+  'public/js/app/ai-admin/shared.js',
+  'public/js/app/ai-admin/openai.js',
+  'public/js/app/ai-admin/yandex.js',
+  'public/js/app/ai-admin/deepseek.js',
+  'public/js/app/ai-admin/qwen.js',
+  'public/js/app/ai-admin/grok.js',
+  'public/js/app/ai-admin/context-convert.js',
+  'public/js/app/ai-admin/chatshot.js',
+  'public/js/app/ai-admin/grok-image-risk.js',
+  'public/js/app/ai-admin/modals.js',
+]);
 const appRuntimeScriptPaths = Object.freeze([
   ...appShellScriptPaths,
   ...appCoreHelperScriptPaths,
@@ -85,6 +110,10 @@ const appRuntimeScriptPaths = Object.freeze([
   ...appOpenChatScriptPaths,
   ...appMessageScriptPaths,
   ...appComposerScriptPaths,
+  ...appInteractionScriptPaths,
+  ...appAdminScriptPaths,
+  ...appAiAdminScriptPaths,
+  'public/js/app/runtime.js',
 ]);
 
 class FakeAudioNode {
@@ -412,6 +441,18 @@ function loadAppComposerScripts(dom) {
   loadBrowserScripts(dom, appComposerScriptPaths);
 }
 
+function loadAppInteractionScripts(dom) {
+  loadBrowserScripts(dom, appInteractionScriptPaths);
+}
+
+function loadAppAdminScripts(dom) {
+  loadBrowserScripts(dom, appAdminScriptPaths);
+}
+
+function loadAppAiAdminScripts(dom) {
+  loadBrowserScripts(dom, appAiAdminScriptPaths);
+}
+
 function loadAppRuntimeScripts(dom) {
   loadBrowserScripts(dom, appRuntimeScriptPaths);
 }
@@ -495,11 +536,14 @@ function installAppBridge(dom, overrides = {}) {
 }
 
 module.exports = {
+  appAdminScriptPaths,
+  appAiAdminScriptPaths,
   appChatListScriptPaths,
   appComposerScriptPaths,
   appCoreHelperScriptPaths,
   appDomMobileShellScriptPaths,
   appFolderScriptPaths,
+  appInteractionScriptPaths,
   appMessageScriptPaths,
   appOpenChatScriptPaths,
   appModalManagerScriptPaths,
@@ -515,6 +559,9 @@ module.exports = {
   loadAppComposerScripts,
   loadAppDomMobileShellScripts,
   loadAppFolderScripts,
+  loadAppInteractionScripts,
+  loadAppAdminScripts,
+  loadAppAiAdminScripts,
   loadAppMessageScripts,
   loadAppModalManagerScripts,
   loadAppOpenChatScripts,
