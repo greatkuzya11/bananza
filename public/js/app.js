@@ -162,11 +162,6 @@
   let chatMembersCache = new Map();
   let chatPinsByChat = new Map();
   let activePinIndexByChat = new Map();
-  let pendingFile = null;
-  let pendingFiles = []; // queue for multi-file upload
-  const composerDraftsByChatId = new Map();
-  let composerDraftsLoadedForUserId = 0;
-  let pollComposerOptions = ['', ''];
   let messageStateController = null;
   let messageAttachmentRenderer = null;
   let messagePollRenderer = null;
@@ -174,11 +169,7 @@
   let messageRenderer = null;
   let messageOutbox = null;
   let messageUpdates = null;
-  let typingSendTimeout = null;
-  let typingDisplayTimeouts = {};
-  let replyTo = null; // { id, display_name, text }
   let grokImageRiskConfirmResolver = null;
-  let editTo = null; // { id, text, is_voice_note, allowEmpty }
   let allUsers = [];
   let compactViewMap = JSON.parse(localStorage.getItem('compactViewMap') || '{}');
   let compactView = false;
@@ -469,16 +460,6 @@
   let mediaContextLongPressTarget = null;
   let suppressNextChatItemTapUntil = 0;
   let suppressChatContextDismissUntil = 0;
-  let mentionTargetsByChat = new Map();
-  let mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [], source: null, keyboardAttached: false };
-  let mentionPickerPointerState = null;
-  let mentionPickerClickSuppressUntil = 0;
-  let emojiPickerOpen = false;
-  let emojiPickerKeyboardAttached = false;
-  let emojiPickerAnchorEl = null;
-  let emojiPickerKeyboardStabilizeFrame = 0;
-  let emojiPickerKeyboardStabilizeTimer = null;
-  let emojiSwipePager = null;
   let reactionEmojiSwipePager = null;
   let newChatTabSwipePager = null;
   let avatarUserMenuState = null;
@@ -545,6 +526,41 @@
   };
   let mobileComposerDismissClickSuppressUntil = 0;
   let scrollBottomFollowupClickSuppressUntil = 0;
+
+  const composerFactories = window.BananzaApp?.composer || {};
+  const composerStateFactory = composerFactories.state?.createComposerState;
+  const composerTextFactory = composerFactories.text?.createComposerTextController;
+  const composerReplyEditFactory = composerFactories.replyEdit?.createReplyEditController;
+  const composerFilesFactory = composerFactories.files?.createComposerFilesController;
+  const composerSendFactory = composerFactories.send?.createComposerSendController;
+  const composerEmojiPickerFactory = composerFactories.emojiPicker?.createEmojiPickerController;
+  const composerMentionsFactory = composerFactories.mentions?.createMentionPickerController;
+  const composerTypingDragDropFactory = composerFactories.typingDragDrop?.createTypingDragDropController;
+  const pollComposerFactory = composerFactories.pollComposer?.createPollComposerController;
+  if (typeof composerStateFactory !== 'function'
+    || typeof composerTextFactory !== 'function'
+    || typeof composerReplyEditFactory !== 'function'
+    || typeof composerFilesFactory !== 'function'
+    || typeof composerSendFactory !== 'function'
+    || typeof composerEmojiPickerFactory !== 'function'
+    || typeof composerMentionsFactory !== 'function'
+    || typeof composerTypingDragDropFactory !== 'function'
+    || typeof pollComposerFactory !== 'function') {
+    throw new Error('BananzaApp composer modules are required before app.js');
+  }
+  const composerStateController = composerStateFactory({
+    storage: localStorage,
+    maxDraftLength: MAX_MSG,
+    getCurrentUser: () => currentUser,
+  });
+  let composerTextController = null;
+  let composerReplyEditController = null;
+  let composerFilesController = null;
+  let composerSendController = null;
+  let composerEmojiPickerController = null;
+  let composerMentionsController = null;
+  let composerTypingDragDropController = null;
+  let pollComposerController = null;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DOM
@@ -1372,7 +1388,7 @@
       getCompactViewMap: () => compactViewMap,
       setCompactView: (value) => { compactView = Boolean(value); },
       getScrollRestoreMode: () => scrollRestoreMode,
-      hasEdit: () => Boolean(editTo),
+      hasEdit: () => Boolean(composerStateController.editTo),
     },
     actions: {
       appendTimelineItems: (messages, pinEvents, options = {}) => appendTimelineItems(messages, pinEvents, options),
@@ -1651,7 +1667,7 @@
     esc,
     state: {
       getCurrentChatId: () => currentChatId,
-      getEditMessageId: () => editTo?.id || 0,
+      getEditMessageId: () => composerStateController.editTo?.id || 0,
     },
     actions: {
       loadChats: () => loadChats(),
@@ -1671,12 +1687,7 @@
       },
       clearEdit: (options = {}) => clearEdit(options),
       getReplyPreviewText: (msg) => getReplyPreviewText(msg),
-      updateReplyBarFromMessage: (msg, text) => {
-        if (replyTo?.id === msg.id && !editTo) {
-          replyTo.text = text;
-          replyBarText.textContent = text || '📎 Attachment';
-        }
-      },
+      updateReplyBarFromMessage: (msg, text) => composerReplyEditController?.updateReplyPreview?.(msg.id, text),
       applyOwnReadStateToMessage: (msg, chatId) => applyOwnReadStateToMessage(msg, chatId),
       refreshReactionPickerForMessage: (msg) => {
         if (Number(reactionPickerMsgId || 0) === Number(msg.id || 0) && isFloatingSurfaceVisible(reactionPicker)) {
@@ -1699,6 +1710,246 @@
     updates: messageUpdates,
   };
   if (appContext) appContext.services.messages = messageServices;
+
+  const refreshVoiceComposerState = () => window.BananzaVoiceHooks?.refreshComposerState?.();
+  const sendComposerWsPayload = (payload) => {
+    const openState = window.WebSocket?.OPEN ?? 1;
+    if (!ws || ws.readyState !== openState) return false;
+    ws.send(JSON.stringify(payload));
+    return true;
+  };
+
+  composerTextController = composerTextFactory({
+    window,
+    document,
+    dom: appDom,
+    state: composerStateController,
+    customEmoji: window.BananzaApp?.customEmoji,
+    formatters: window.BananzaApp?.formatters,
+    esc,
+    actions: {
+      noteMobileKeyboardInputDelta: (delta) => {
+        mobileKeyboardDockRecentInputDelta = delta;
+        mobileKeyboardDockRecentInputDeltaAt = Date.now();
+      },
+      isFloatingSurfaceVisible: (el) => isFloatingSurfaceVisible(el),
+      positionEmojiPicker: (anchor) => positionEmojiPicker(anchor),
+      isMobileLayoutViewport: () => isMobileLayoutViewport(),
+      scheduleMobileViewportRecovery: (delay) => scheduleMobileViewportRecovery(delay),
+      queueIosViewportLayoutSync: () => queueIosViewportLayoutSync(),
+      refreshVoiceComposerState,
+    },
+  });
+
+  composerReplyEditController = composerReplyEditFactory({
+    window,
+    document,
+    dom: appDom,
+    state: composerStateController,
+    text: composerTextController,
+    getCurrentUser: () => currentUser,
+    getCurrentChatId: () => currentChatId,
+    actions: {
+      alert: (message) => alert(message),
+      isClientSideMessage: (msg) => isClientSideMessage(msg),
+      isPollMessage: (msg) => isPollMessage(msg),
+      isCurrentNotesChat: () => isCurrentNotesChat(),
+      getMediaNoteFallbackLabel: (msg) => getMediaNoteFallbackLabel(msg),
+      hideFloatingMessageActions: (options = {}) => hideFloatingMessageActions(options),
+      copyTextToClipboard: (textValue) => copyTextToClipboard(textValue),
+      showCenterToast: (message) => showCenterToast(message),
+      syncMentionOpenButton: () => syncMentionOpenButton(),
+      refreshPollComposerActionState: () => refreshPollComposerActionState(),
+      refreshVoiceComposerState,
+      queueIosViewportLayoutSync: () => queueIosViewportLayoutSync(),
+      updateComposerAiOverrideState: () => updateComposerAiOverrideState().catch(() => {}),
+      clearComposerDraft: (chatId) => clearComposerDraft(chatId),
+      shouldKeepComposerForMobileMessageInteraction: () => shouldKeepComposerForMobileMessageInteraction(),
+      suppressNextMessageActionTap: () => suppressNextMessageActionTap(),
+      focusComposerKeepKeyboard: (force) => focusComposerKeepKeyboard(force),
+      safeVibrate: (pattern) => safeVibrate(pattern),
+    },
+  });
+
+  composerFilesController = composerFilesFactory({
+    window,
+    document,
+    dom: appDom,
+    state: composerStateController,
+    config: { MAX_ATTACHMENTS, MAX_FILE_SIZE, MAX_FILE_SIZE_LABEL },
+    formatters: window.BananzaApp?.formatters,
+    esc,
+    formatSize,
+    actions: {
+      alert: (message) => alert(message),
+      localAttachmentFromFile: (file) => localAttachmentFromFile(file),
+      updateComposerAiOverrideState: () => updateComposerAiOverrideState().catch(() => {}),
+      refreshPollComposerActionState: () => refreshPollComposerActionState(),
+      refreshVoiceComposerState,
+      scheduleMobileViewportRecovery: () => scheduleMobileViewportRecovery(),
+      isMobileComposerKeyboardOpen: () => isMobileComposerKeyboardOpen(),
+      focusComposerKeepKeyboard: (force) => focusComposerKeepKeyboard(force),
+      bindTouchSafeButtonActivation: (button, handler) => bindTouchSafeButtonActivation(button, handler),
+      isMobileLayoutViewport: () => isMobileLayoutViewport(),
+      isFloatingSurfaceVisible: (el) => isFloatingSurfaceVisible(el),
+      openFloatingSurface: (el) => openFloatingSurface(el),
+      closeFloatingSurface: (el, options = {}) => closeFloatingSurface(el, options),
+    },
+  });
+
+  composerSendController = composerSendFactory({
+    window,
+    dom: appDom,
+    state: composerStateController,
+    text: composerTextController,
+    replyEdit: composerReplyEditController,
+    files: composerFilesController,
+    services: { messages: messageServices },
+    api: (url, opts) => api(url, opts),
+    config: { MAX_MSG },
+    getCurrentChatId: () => currentChatId,
+    actions: {
+      alert: (message) => alert(message),
+      captureScrollAnchor: () => captureScrollAnchor(),
+      applyMessageUpdate: (message, options = {}) => applyMessageUpdate(message, options),
+      restoreScrollAnchor: (anchor, attempts) => restoreScrollAnchor(anchor, attempts),
+      saveCurrentScrollAnchor: (chatId, options = {}) => saveCurrentScrollAnchor(chatId, options),
+      loadChats: () => loadChats(),
+      clearComposerDraft: (chatId) => clearComposerDraft(chatId),
+      syncMentionOpenButton: () => syncMentionOpenButton(),
+      refreshVoiceComposerState,
+      scheduleMobileViewportRecovery: () => scheduleMobileViewportRecovery(),
+      resolveComposerAiOverridePayload: () => getComposerAiOverridePayload(),
+      analyzeOutgoingGrokImageRisk: (messageText, replySnapshot, composerAiOverride) =>
+        analyzeOutgoingGrokImageRisk(messageText, replySnapshot, composerAiOverride),
+      openGrokImageRiskConfirm: (matches) => openGrokImageRiskConfirm(matches),
+      playAppSound: (type, options = {}) => playAppSound(type, options),
+      scrollToBottom: (...args) => scrollToBottom(...args),
+    },
+  });
+
+  composerEmojiPickerController = composerEmojiPickerFactory({
+    window,
+    document,
+    dom: appDom,
+    state: composerStateController,
+    text: composerTextController,
+    storage: localStorage,
+    customEmoji: window.BananzaApp?.customEmoji,
+    formatters: window.BananzaApp?.formatters,
+    esc,
+    t: (key, params) => t(key, params),
+    api: (url, opts) => api(url, opts),
+    getCurrentUser: () => currentUser,
+    actions: {
+      isSingleEmojiMessage: (value) => isSingleEmojiMessage(value),
+      scheduleScrollableItemCenter: (...args) => scheduleScrollableItemCenter(...args),
+      createHorizontalSwipePager: (options) => createHorizontalSwipePager(options),
+      isMobileComposerKeyboardOpen: () => isMobileComposerKeyboardOpen(),
+      isMobileLayoutViewport: () => isMobileLayoutViewport(),
+      focusComposerKeepKeyboard: (force) => focusComposerKeepKeyboard(force),
+      forceMobileViewportLayoutSync: () => forceMobileViewportLayoutSync(),
+      syncChatAreaMetrics: () => syncChatAreaMetrics(),
+      queueIosViewportLayoutSync: () => queueIosViewportLayoutSync(),
+      isFloatingSurfaceVisible: (el) => isFloatingSurfaceVisible(el),
+      preventMobileComposerBlur: (event) => preventMobileComposerBlur(event),
+      getFloatingViewportRect: () => getFloatingViewportRect(),
+      measureFloatingSurface: (el, fallbackWidth, fallbackHeight) => measureFloatingSurface(el, fallbackWidth, fallbackHeight),
+      clamp: (value, min, max) => clamp(value, min, max),
+      positionFloatingElement: (el, left, top) => positionFloatingElement(el, left, top),
+      openFloatingSurface: (el) => openFloatingSurface(el),
+      closeFloatingSurface: (el, options = {}) => closeFloatingSurface(el, options),
+    },
+  });
+
+  composerMentionsController = composerMentionsFactory({
+    window,
+    document,
+    dom: appDom,
+    state: composerStateController,
+    text: composerTextController,
+    api: (url, opts) => api(url, opts),
+    esc,
+    getCurrentChatId: () => currentChatId,
+    getCurrentUser: () => currentUser,
+    config: { MENTION_PICKER_TAP_DEAD_ZONE },
+    actions: {
+      updateComposerAiOverrideState: () => updateComposerAiOverrideState().catch(() => {}),
+      syncContextConvertComposerButton: () => syncContextConvertComposerButton(),
+      closeFloatingSurface: (el, options = {}) => closeFloatingSurface(el, options),
+      openFloatingSurface: (el) => openFloatingSurface(el),
+      isMobileLayoutViewport: () => isMobileLayoutViewport(),
+      isMobileComposerKeyboardOpen: () => isMobileComposerKeyboardOpen(),
+      restoreComposerFocusAfterMentionPicker: (keyboardAttached) => restoreComposerFocusAfterMentionPicker(keyboardAttached),
+      refreshVoiceComposerState,
+      focusComposerKeepKeyboard: (force) => focusComposerKeepKeyboard(force),
+      openPrivateChatWithUser: (userId) => openPrivateChatWithUser(userId),
+      consumeOutsidePickerDismissGesture: (event, suppressFollowupClick) =>
+        consumeOutsidePickerDismissGesture(event, suppressFollowupClick),
+      isPickerDismissPassThroughTarget: (target) => isPickerDismissPassThroughTarget(target),
+    },
+  });
+
+  composerTypingDragDropController = composerTypingDragDropFactory({
+    dom: appDom,
+    state: composerStateController,
+    files: composerFilesController,
+    getCurrentChatId: () => currentChatId,
+    actions: {
+      sendWs: (payload) => sendComposerWsPayload(payload),
+    },
+  });
+
+  pollComposerController = pollComposerFactory({
+    window,
+    document,
+    dom: appDom,
+    state: composerStateController,
+    text: composerTextController,
+    replyEdit: composerReplyEditController,
+    api: (url, opts) => api(url, opts),
+    config: { POLL_MIN_OPTIONS, POLL_MAX_OPTIONS, POLL_CLOSE_PRESET_MS },
+    esc,
+    getCurrentChatId: () => currentChatId,
+    getCurrentUser: () => currentUser,
+    actions: {
+      alert: (message) => alert(message),
+      normalizePollStyle: (style) => normalizePollStyle(style),
+      getPollComposerStyle: () => pollComposerStyle,
+      setPollComposerStyle: (value) => { pollComposerStyle = value; },
+      pollStyleMeta: (style) => pollStyleMeta(style),
+      isPulsePoll: (...args) => isPulsePoll(...args),
+      renderPollCard: (...args) => renderPollCard(...args),
+      syncPollComposerStyleUi: () => syncPollComposerStyleUi(),
+      isCurrentNotesChat: () => isCurrentNotesChat(),
+      syncChatAreaMetrics: () => syncChatAreaMetrics(),
+      openModal: (id, options = {}) => openModal(id, options),
+      closeModal: (id, options = {}) => closeModal(id, options),
+      clearComposerDraft: (chatId) => clearComposerDraft(chatId),
+      syncMentionOpenButton: () => syncMentionOpenButton(),
+      refreshVoiceComposerState,
+      updateChatListLastMessage: (message) => updateChatListLastMessage(message),
+      cacheMessage: (message) => window.messageCache?.upsertMessage?.(message).catch(() => {}),
+      isMessageDisplayed: (id) => isMessageDisplayed(id),
+      appendMessage: (...args) => appendMessage(...args),
+      scrollToBottom: (...args) => scrollToBottom(...args),
+      playAppSound: (type, options = {}) => playAppSound(type, options),
+      openPollStyleSettingsModal: () => openPollStyleSettingsModal(),
+    },
+  });
+
+  const composerServices = {
+    state: composerStateController,
+    text: composerTextController,
+    replyEdit: composerReplyEditController,
+    files: composerFilesController,
+    send: composerSendController,
+    emojiPicker: composerEmojiPickerController,
+    mentions: composerMentionsController,
+    typingDragDrop: composerTypingDragDropController,
+    pollComposer: pollComposerController,
+  };
+  if (appContext) appContext.services.composer = composerServices;
   const isIosViewportFixTarget = Boolean(mobileViewportShell.isIosViewportFixTarget?.());
   if (isIosViewportFixTarget) {
     document.documentElement.classList.add('is-ios-webkit');
@@ -1942,7 +2193,7 @@
     });
   }
 
-  function restoreComposerFocusAfterMentionPicker(keyboardAttached = mentionPickerState.keyboardAttached) {
+  function restoreComposerFocusAfterMentionPicker(keyboardAttached = composerStateController.mentionPickerState.keyboardAttached) {
     if (!isMobileViewportTarget() || keyboardAttached) {
       focusComposerKeepKeyboard(true);
       return true;
@@ -1952,10 +2203,7 @@
 
   function dismissMentionPickerAfterKeyboardClose() {
     if (!isMobileViewportTarget()) return false;
-    if (!mentionPickerState.active || !mentionPickerState.keyboardAttached) return false;
-    if (isMobileComposerKeyboardOpen()) return false;
-    hideMentionPicker();
-    return true;
+    return Boolean(composerMentionsController?.dismissMentionPickerAfterKeyboardClose?.());
   }
 
   function preventMobileComposerBlur(e) {
@@ -2614,42 +2862,11 @@
     });
   }
 
-  function shouldKeepEmojiPickerKeyboard() {
-    return Boolean(emojiPickerKeyboardAttached || isMobileComposerKeyboardOpen());
-  }
+  function shouldKeepEmojiPickerKeyboard(...args) { return composerEmojiPickerController?.shouldKeepEmojiPickerKeyboard?.(...args) || false; }
 
-  function clearEmojiPickerKeyboardOpenStabilizer() {
-    if (emojiPickerKeyboardStabilizeFrame) {
-      cancelAnimationFrame(emojiPickerKeyboardStabilizeFrame);
-      emojiPickerKeyboardStabilizeFrame = 0;
-    }
-    if (emojiPickerKeyboardStabilizeTimer) {
-      clearTimeout(emojiPickerKeyboardStabilizeTimer);
-      emojiPickerKeyboardStabilizeTimer = null;
-    }
-  }
+  function clearEmojiPickerKeyboardOpenStabilizer(...args) { return composerEmojiPickerController?.clearEmojiPickerKeyboardOpenStabilizer?.(...args); }
 
-  function stabilizeEmojiPickerKeyboardOnOpen(keepKeyboardOpen = emojiPickerKeyboardAttached) {
-    if (!isMobileLayoutViewport() || !keepKeyboardOpen) return false;
-    clearEmojiPickerKeyboardOpenStabilizer();
-    const apply = () => {
-      if (!emojiPickerOpen || !shouldKeepEmojiPickerKeyboard()) return false;
-      focusComposerKeepKeyboard(true);
-      forceMobileViewportLayoutSync();
-      syncChatAreaMetrics();
-      queueIosViewportLayoutSync();
-      return true;
-    };
-    emojiPickerKeyboardStabilizeFrame = requestAnimationFrame(() => {
-      emojiPickerKeyboardStabilizeFrame = 0;
-      apply();
-    });
-    emojiPickerKeyboardStabilizeTimer = setTimeout(() => {
-      emojiPickerKeyboardStabilizeTimer = null;
-      apply();
-    }, 150);
-    return true;
-  }
+  function stabilizeEmojiPickerKeyboardOnOpen(...args) { return composerEmojiPickerController?.stabilizeEmojiPickerKeyboardOnOpen?.(...args) || false; }
 
   function shouldBypassLockedMobileViewportSync(newViewportHeight, { force = false, mentionPickerDismissed = false } = {}) {
     if (typeof mobileViewportShell.shouldBypassLockedMobileViewportSync === 'function') {
@@ -2691,9 +2908,9 @@
     refreshCallIndicators: () => {
       if (chatList) renderChatList(chatSearch?.value || '');
     },
-    getPendingFiles: () => [...pendingFiles],
-    getReplyTo: () => replyTo ? { ...replyTo } : null,
-    getEditTo: () => editTo ? { ...editTo } : null,
+    getPendingFiles: () => composerStateController.getPendingFiles(),
+    getReplyTo: () => composerStateController.getReplyTo(),
+    getEditTo: () => composerStateController.getEditTo(),
     getMicrophoneMode: () => getMicrophoneMode(),
     getScreenRotationAllowed: () => getScreenRotationAllowed(),
     openSettingsModal: (opener = $('#settingsBtn')) => openSettingsModal(opener),
@@ -2709,12 +2926,7 @@
     insertDictatedText: (text) => insertDictatedText(text),
     queueVoiceMessage: (payload) => queueVoiceOutbox(payload),
     queueVideoNote: (payload) => queueVideoNoteOutbox(payload),
-    updateReplyPreview: (messageId, text) => {
-      if (replyTo?.id === messageId && !editTo) {
-        replyTo.text = text || '📎 Attachment';
-        replyBarText.textContent = replyTo.text;
-      }
-    },
+    updateReplyPreview: (messageId, text) => composerReplyEditController?.updateReplyPreview?.(messageId, text),
     scrollToBottom: (instant = false) => scrollToBottom(instant),
     playSound: (type, options) => playAppSound(type, options),
     bindMediaPlayback: (mediaEl, message, role) => bindMediaPlaybackState(mediaEl, message, role),
@@ -3010,58 +3222,15 @@
     return scene;
   }
 
-  function getComposerTextValue({ trim = false } = {}) {
-    return serializeComposerTextValue(msgInput?.value || '', { trim });
-  }
+  function getComposerTextValue(...args) { return composerTextController?.getComposerTextValue?.(...args) || ''; }
 
-  function setComposerTextValue(value, { cursor = 'end' } = {}) {
-    if (!msgInput) return;
-    const nextValue = normalizeComposerTextToInternal(value);
-    msgInput.value = nextValue;
-    if (cursor === 'end') {
-      const end = nextValue.length;
-      msgInput.setSelectionRange?.(end, end);
-    }
-  }
+  function setComposerTextValue(...args) { return composerTextController?.setComposerTextValue?.(...args); }
 
-  function normalizeComposerInputValue() {
-    if (!msgInput) return false;
-    const value = msgInput.value || '';
-    const start = msgInput.selectionStart ?? value.length;
-    const end = msgInput.selectionEnd ?? start;
-    const nextValue = normalizeComposerTextToInternal(value);
-    const nextStart = normalizeComposerTextToInternal(value.slice(0, start)).length;
-    const nextEnd = normalizeComposerTextToInternal(value.slice(0, end)).length;
-    if (nextValue === value) return false;
-    msgInput.value = nextValue;
-    msgInput.setSelectionRange?.(nextStart, nextEnd);
-    return true;
-  }
+  function normalizeComposerInputValue(...args) { return composerTextController?.normalizeComposerInputValue?.(...args) || false; }
 
-  function snapComposerSelectionToCustomEmojiBoundary() {
-    if (!msgInput) return false;
-    const value = msgInput.value || '';
-    const start = msgInput.selectionStart ?? value.length;
-    const end = msgInput.selectionEnd ?? start;
-    if (start !== end) return false;
-    const cluster = findComposerCustomEmojiClusterAt(value, start);
-    if (!cluster || start === cluster.start || start === cluster.end) return false;
-    const nextCursor = composerCustomEmojiClusterBoundary(cluster, start);
-    msgInput.setSelectionRange?.(nextCursor, nextCursor);
-    return true;
-  }
+  function snapComposerSelectionToCustomEmojiBoundary(...args) { return composerTextController?.snapComposerSelectionToCustomEmojiBoundary?.(...args) || false; }
 
-  function insertComposerTextAtSelection(text) {
-    if (!msgInput) return;
-    snapComposerSelectionToCustomEmojiBoundary();
-    const value = msgInput.value || '';
-    const start = Math.max(0, msgInput.selectionStart ?? value.length);
-    const end = Math.max(start, msgInput.selectionEnd ?? start);
-    const insertion = normalizeComposerTextToInternal(text);
-    msgInput.value = value.slice(0, start) + insertion + value.slice(end);
-    const cursor = start + insertion.length;
-    msgInput.setSelectionRange?.(cursor, cursor);
-  }
+  function insertComposerTextAtSelection(...args) { return composerTextController?.insertComposerTextAtSelection?.(...args); }
 
   function normalizeMicrophoneMode(value) { return uiSettings.normalizeMicrophoneMode(value); }
   function getMicrophoneMode() { return uiSettings.getMicrophoneMode(); }
@@ -3072,98 +3241,15 @@
   function clearScreenRotationStatusSoon(delayMs = 2200) { return uiSettings.clearScreenRotationStatusSoon(delayMs); }
   function applyScreenRotationPreference(options = {}) { return uiSettings.applyScreenRotationPreference(options); }
   function setScreenRotationAllowed(value, options = {}) { return uiSettings.setScreenRotationAllowed(value, options); }
-  function insertDictatedText(text) {
-    const insertion = String(text || '').trim();
-    if (!msgInput || !insertion) return getComposerTextValue();
-    insertComposerTextAtSelection(insertion);
-    msgInput.dispatchEvent(new Event('input', { bubbles: true }));
-    msgInput.focus?.();
-    return getComposerTextValue();
-  }
+  function insertDictatedText(...args) { return composerTextController?.insertDictatedText?.(...args) || getComposerTextValue(); }
 
-  function getEmojiPickerInsertionValue(value) {
-    const item = getCustomEmoji(value);
-    return item ? getComposerCustomEmojiCluster(item) : String(value || '');
-  }
+  function getEmojiPickerInsertionValue(...args) { return composerTextController?.getEmojiPickerInsertionValue?.(...args) || ''; }
 
-  function deleteComposerCustomEmojiCluster(cluster) {
-    if (!msgInput || !cluster) return false;
-    const value = msgInput.value || '';
-    msgInput.value = value.slice(0, cluster.start) + value.slice(cluster.end);
-    msgInput.setSelectionRange?.(cluster.start, cluster.start);
-    msgInput.dispatchEvent(new Event('input', { bubbles: true }));
-    return true;
-  }
+  function deleteComposerCustomEmojiCluster(...args) { return composerTextController?.deleteComposerCustomEmojiCluster?.(...args) || false; }
 
-  function handleComposerCustomEmojiKeydown(e) {
-    if (!msgInput) return false;
-    const value = msgInput.value || '';
-    const start = msgInput.selectionStart ?? value.length;
-    const end = msgInput.selectionEnd ?? start;
-    if (start !== end) return false;
+  function handleComposerCustomEmojiKeydown(...args) { return composerTextController?.handleComposerCustomEmojiKeydown?.(...args) || false; }
 
-    if (e.key === 'Backspace') {
-      const cluster = findComposerCustomEmojiClusterBefore(value, start);
-      if (!cluster) return false;
-      e.preventDefault();
-      return deleteComposerCustomEmojiCluster(cluster);
-    }
-
-    if (e.key === 'Delete') {
-      const cluster = findComposerCustomEmojiClusterAfter(value, start);
-      if (!cluster) return false;
-      e.preventDefault();
-      return deleteComposerCustomEmojiCluster(cluster);
-    }
-
-    if (e.key === 'ArrowLeft') {
-      const cluster = findComposerCustomEmojiClusterBefore(value, start);
-      if (!cluster || cluster.end !== start) return false;
-      e.preventDefault();
-      msgInput.setSelectionRange?.(cluster.start, cluster.start);
-      return true;
-    }
-
-    if (e.key === 'ArrowRight') {
-      const cluster = findComposerCustomEmojiClusterAfter(value, start);
-      if (!cluster || cluster.start !== start) return false;
-      e.preventDefault();
-      msgInput.setSelectionRange?.(cluster.end, cluster.end);
-      return true;
-    }
-
-    return false;
-  }
-
-  function handleComposerCustomEmojiBeforeInput(e) {
-    if (!msgInput) return false;
-    if (e.inputType === 'deleteContentBackward') {
-      const value = msgInput.value || '';
-      const start = msgInput.selectionStart ?? value.length;
-      const end = msgInput.selectionEnd ?? start;
-      if (start === end) {
-        const cluster = findComposerCustomEmojiClusterBefore(value, start);
-        if (cluster) {
-          e.preventDefault();
-          return deleteComposerCustomEmojiCluster(cluster);
-        }
-      }
-    }
-    if (e.inputType === 'deleteContentForward') {
-      const value = msgInput.value || '';
-      const start = msgInput.selectionStart ?? value.length;
-      const end = msgInput.selectionEnd ?? start;
-      if (start === end) {
-        const cluster = findComposerCustomEmojiClusterAfter(value, start);
-        if (cluster) {
-          e.preventDefault();
-          return deleteComposerCustomEmojiCluster(cluster);
-        }
-      }
-    }
-    snapComposerSelectionToCustomEmojiBoundary();
-    return false;
-  }
+  function handleComposerCustomEmojiBeforeInput(...args) { return composerTextController?.handleComposerCustomEmojiBeforeInput?.(...args) || false; }
 
   function safeVibrate(pattern) {
     if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return false;
@@ -3183,9 +3269,7 @@
     );
   }
 
-  function mentionKey(value) {
-    return String(value || '').replace(/^@+/, '').toLowerCase();
-  }
+  function mentionKey(...args) { return composerMentionsController?.mentionKey?.(...args) || ''; }
 
   function renderMessageText(text, mentions = []) {
     const source = String(text || '');
@@ -3444,163 +3528,21 @@
     return messagePollRenderer?.canClosePollMessage?.(...args);
   }
 
-  function setPollComposerStatus(message, type = '') {
-    if (!pollComposerStatus) return;
-    pollComposerStatus.textContent = message || '';
-    pollComposerStatus.classList.toggle('is-error', type === 'error');
-    pollComposerStatus.classList.toggle('is-success', type === 'success');
-  }
+  function setPollComposerStatus(...args) { return pollComposerController?.setPollComposerStatus?.(...args); }
 
-  function readPollComposerForm() {
-    const optionInputs = Array.from(pollOptionsList?.querySelectorAll('input[data-poll-option-index]') || []);
-    const options = optionInputs.map((input) => input.value.trim()).filter(Boolean);
-    return {
-      question: String(pollQuestionInput?.value || '').trim(),
-      options,
-      style: normalizePollStyle(pollComposerStyle),
-      allows_multiple: !!$('#pollAllowMultiple')?.checked,
-      show_voters: !!$('#pollShowVoters')?.checked,
-      close_preset: String($('#pollClosePreset')?.value || '').trim() || null,
-    };
-  }
+  function readPollComposerForm(...args) { return pollComposerController?.readPollComposerForm?.(...args) || { question: '', options: [] }; }
 
-  function renderPollComposerOptionInputs() {
-    if (!pollOptionsList) return;
-    pollComposerOptions = pollComposerOptions.slice(0, POLL_MAX_OPTIONS);
-    while (pollComposerOptions.length < POLL_MIN_OPTIONS) pollComposerOptions.push('');
-    pollOptionsList.innerHTML = pollComposerOptions.map((value, index) => `
-      <div class="poll-option-editor" data-poll-option-row="${index}">
-        <span class="poll-option-index">${index + 1}</span>
-        <input
-          type="text"
-          class="modal-input"
-          maxlength="160"
-          data-poll-option-index="${index}"
-          placeholder="Option ${index + 1}"
-          value="${esc(value)}"
-        >
-        <button
-          type="button"
-          class="poll-option-remove"
-          data-poll-option-remove="${index}"
-          ${pollComposerOptions.length <= POLL_MIN_OPTIONS ? 'disabled' : ''}
-          title="Remove option"
-        >✕</button>
-      </div>
-    `).join('');
-  }
+  function renderPollComposerOptionInputs(...args) { return pollComposerController?.renderPollComposerOptionInputs?.(...args); }
 
-  function refreshPollComposerActionState() {
-    const enabled = Boolean(currentChatId && !isCurrentNotesChat() && !editTo && pendingFiles.length === 0);
-    if (pollBtn) {
-      pollBtn.disabled = !enabled;
-      pollBtn.classList.toggle('disabled', !enabled);
-    }
-    const mobilePollBtn = $('#attachMenuPoll');
-    if (mobilePollBtn) {
-      mobilePollBtn.disabled = !enabled;
-      mobilePollBtn.classList.toggle('disabled', !enabled);
-    }
-  }
+  function refreshPollComposerActionState(...args) { return pollComposerController?.refreshPollComposerActionState?.(...args); }
 
-  function buildPollComposerPreviewMessage() {
-    const form = readPollComposerForm();
-    const fallbackOptions = ['Friday night', 'Saturday brunch', 'Sunday reset', 'Next week'];
-    const optionTexts = [...form.options];
-    while (optionTexts.length < 3) optionTexts.push(fallbackOptions[optionTexts.length] || `Option ${optionTexts.length + 1}`);
-    const previewTexts = optionTexts.slice(0, Math.min(Math.max(optionTexts.length, 3), 5));
-    const previewVotes = previewTexts.map((_, index) => Math.max(2, previewTexts.length * 4 - index * 2));
-    const myOptionIds = form.allows_multiple
-      ? previewTexts.slice(0, Math.min(2, previewTexts.length)).map((_, index) => index + 1)
-      : [1];
-    const totalVotes = previewVotes.reduce((sum, count) => sum + count, 0);
-    const closesAt = form.close_preset && POLL_CLOSE_PRESET_MS[form.close_preset]
-      ? new Date(Date.now() + POLL_CLOSE_PRESET_MS[form.close_preset]).toISOString()
-      : null;
-    return {
-      id: -1,
-      chat_id: currentChatId || 0,
-      user_id: currentUser?.id || 0,
-      text: form.question || 'Where should we go this weekend?',
-      poll: {
-        created_by: currentUser?.id || 0,
-        closed_by: null,
-        style: form.style,
-        allows_multiple: form.allows_multiple,
-        show_voters: form.show_voters,
-        closes_at: closesAt,
-        closed_at: null,
-        created_at: new Date().toISOString(),
-        is_closed: false,
-        total_votes: totalVotes,
-        total_voters: form.allows_multiple ? Math.max(6, Math.round(totalVotes * 0.72)) : totalVotes,
-        my_option_ids: myOptionIds,
-        options: previewTexts.map((text, index) => ({
-          id: index + 1,
-          text,
-          position: index,
-          vote_count: previewVotes[index] || 0,
-          voted_by_me: myOptionIds.includes(index + 1),
-        })),
-      },
-    };
-  }
+  function buildPollComposerPreviewMessage(...args) { return pollComposerController?.buildPollComposerPreviewMessage?.(...args) || null; }
 
-  function refreshPollComposerPreview() {
-    if (!pollComposerPreview) return;
-    const previewMessage = buildPollComposerPreviewMessage();
-    const styleMeta = pollStyleMeta(previewMessage.poll?.style);
-    const questionClass = isPulsePoll(previewMessage.poll)
-      ? 'poll-composer-preview-question poll-question-block'
-      : 'poll-composer-preview-question';
-    pollComposerPreview.innerHTML = `
-      <div class="poll-composer-preview-shell">
-        <div class="poll-composer-preview-meta">
-          <span class="poll-composer-preview-style">${esc(styleMeta.name)} style</span>
-          <span class="poll-composer-preview-note">${esc(styleMeta.note)}</span>
-        </div>
-        <div class="poll-composer-preview-message">
-          <div class="${questionClass}">${esc(previewMessage.text || '')}</div>
-          ${renderPollCard(previewMessage, { preview: true })}
-        </div>
-      </div>
-    `;
-  }
+  function refreshPollComposerPreview(...args) { return pollComposerController?.refreshPollComposerPreview?.(...args); }
 
-  function resetPollComposer() {
-    pollComposerOptions = ['', ''];
-    pollComposerStyle = 'pulse';
-    if (pollQuestionInput) pollQuestionInput.value = '';
-    if ($('#pollAllowMultiple')) $('#pollAllowMultiple').checked = false;
-    if ($('#pollShowVoters')) $('#pollShowVoters').checked = false;
-    if ($('#pollClosePreset')) $('#pollClosePreset').value = '';
-    renderPollComposerOptionInputs();
-    syncPollComposerStyleUi();
-    setPollComposerStatus('');
-    refreshPollComposerPreview();
-  }
+  function resetPollComposer(...args) { return pollComposerController?.resetPollComposer?.(...args); }
 
-  function openPollComposer() {
-    if (!currentChatId) return;
-    if (isCurrentNotesChat()) {
-      alert('Polls are not available in notes chat.');
-      return;
-    }
-    if (editTo) {
-      alert('Finish editing before creating a poll.');
-      return;
-    }
-    if (pendingFiles.length > 0) {
-      alert('Remove pending attachments before creating a poll.');
-      return;
-    }
-    resetPollComposer();
-    if (pollQuestionInput) pollQuestionInput.value = getComposerTextValue({ trim: true });
-    refreshPollComposerPreview();
-    syncChatAreaMetrics();
-    openModal('pollComposerModal', { opener: pollBtn || attachBtn });
-    requestAnimationFrame(() => pollQuestionInput?.focus());
-  }
+  function openPollComposer(...args) { return pollComposerController?.openPollComposer?.(...args); }
 
   function buildOptimisticPollState(...args) {
     return messagePollRenderer?.buildOptimisticPollState?.(...args);
@@ -3630,59 +3572,7 @@
     return messagePollRenderer?.applyPollUpdate?.(...args);
   }
 
-  async function submitPollComposer() {
-    if (!currentChatId) return;
-    const payload = readPollComposerForm();
-    if (!payload.question) {
-      setPollComposerStatus('Question is required', 'error');
-      return;
-    }
-    if (payload.options.length < POLL_MIN_OPTIONS || payload.options.length > POLL_MAX_OPTIONS) {
-      setPollComposerStatus(`Use ${POLL_MIN_OPTIONS}-${POLL_MAX_OPTIONS} filled options`, 'error');
-      return;
-    }
-    const uniqueOptions = payload.options.map((option) => option.toLowerCase());
-    if (new Set(uniqueOptions).size !== uniqueOptions.length) {
-      setPollComposerStatus('Options must be unique', 'error');
-      return;
-    }
-
-    setPollComposerStatus('Sending...');
-    try {
-      const message = await api(`/api/chats/${currentChatId}/messages`, {
-        method: 'POST',
-        body: {
-          text: payload.question,
-          replyToId: replyTo?.id || null,
-          poll: {
-            style: payload.style,
-            options: payload.options,
-            allows_multiple: payload.allows_multiple,
-            show_voters: payload.show_voters,
-            close_preset: payload.close_preset,
-          },
-        },
-      });
-      closeModal('pollComposerModal');
-      msgInput.value = '';
-      clearComposerDraft(currentChatId);
-      autoResize();
-      syncMentionOpenButton();
-      clearReply();
-      window.BananzaVoiceHooks?.refreshComposerState?.();
-      if (message?.chat_id) {
-        updateChatListLastMessage(message);
-        try { window.messageCache?.upsertMessage?.(message).catch(() => {}); } catch (e) {}
-        if (Number(message.chat_id) === Number(currentChatId) && !isMessageDisplayed(message.id)) {
-          appendMessage(message);
-          scrollToBottom(false, true);
-        }
-      }
-      playAppSound('send');
-    } catch (error) {
-      setPollComposerStatus(error.message || 'Could not send poll', 'error');
-    }
-  }
+  async function submitPollComposer(...args) { return pollComposerController?.submitPollComposer?.(...args); }
 
   function togglePollVote(...args) {
     return messagePollRenderer?.togglePollVote?.(...args);
@@ -4810,7 +4700,7 @@
     const userId = Number(user.id || user.user_id || 0);
     if (!userId) return false;
     let patched = false;
-    mentionTargetsByChat.forEach((targets, chatId) => {
+    composerStateController.mentionTargetsByChat.forEach((targets, chatId) => {
       let changed = false;
       const nextTargets = targets.map((target) => {
         if (Number(target.user_id) !== userId) return target;
@@ -4825,7 +4715,7 @@
       });
       if (changed) {
         patched = true;
-        mentionTargetsByChat.set(chatId, nextTargets);
+        composerStateController.mentionTargetsByChat.set(chatId, nextTargets);
       }
     });
     return patched;
@@ -4854,11 +4744,7 @@
   }
 
   function refreshMentionPickerForUserUpdate() {
-    if (mentionPickerState.active && mentionTargetsByChat.has(Number(currentChatId))) {
-      const targets = mentionTargetsByChat.get(Number(currentChatId)) || [];
-      if (targets.length) renderMentionPicker(targets);
-      else hideMentionPicker();
-    }
+    return composerMentionsController?.refreshMentionPickerForUserUpdate?.();
   }
 
   function applyUserUpdate(nextUser = {}) {
@@ -5857,7 +5743,7 @@
     if (selectedAiBotId && !aiBotState.bots.some(bot => Number(bot.id) === Number(selectedAiBotId))) {
       selectedAiBotId = null;
     }
-    mentionTargetsByChat.clear();
+    composerStateController.mentionTargetsByChat.clear();
     updateComposerAiOverrideState().catch(() => {});
   }
 
@@ -5887,7 +5773,7 @@
     if (selectedOpenAiUniversalBotId && !openAiUniversalState.bots.some(bot => Number(bot.id) === Number(selectedOpenAiUniversalBotId))) {
       selectedOpenAiUniversalBotId = null;
     }
-    mentionTargetsByChat.clear();
+    composerStateController.mentionTargetsByChat.clear();
     updateComposerAiOverrideState().catch(() => {});
   }
 
@@ -6758,7 +6644,7 @@
     if (selectedOpenAiImageBotId && !openAiImageState.bots.some(bot => Number(bot.id) === Number(selectedOpenAiImageBotId))) {
       selectedOpenAiImageBotId = null;
     }
-    mentionTargetsByChat.clear();
+    composerStateController.mentionTargetsByChat.clear();
     updateComposerAiOverrideState().catch(() => {});
   }
 
@@ -7105,7 +6991,7 @@
     if (selectedDeepseekBotId && !deepseekBotState.bots.some(bot => Number(bot.id) === Number(selectedDeepseekBotId))) {
       selectedDeepseekBotId = null;
     }
-    mentionTargetsByChat.clear();
+    composerStateController.mentionTargetsByChat.clear();
   }
 
   function renderDeepseekModelOptions(bot = currentDeepseekBot()) {
@@ -7632,7 +7518,7 @@
     if (selectedQwenBotId && !qwenBotState.bots.some(bot => Number(bot.id) === Number(selectedQwenBotId))) {
       selectedQwenBotId = null;
     }
-    mentionTargetsByChat.clear();
+    composerStateController.mentionTargetsByChat.clear();
   }
 
   function renderQwenModelOptions(bot = currentQwenBot()) {
@@ -8149,7 +8035,7 @@
     if (selectedYandexBotId && !yandexBotState.bots.some(bot => Number(bot.id) === Number(selectedYandexBotId))) {
       selectedYandexBotId = null;
     }
-    mentionTargetsByChat.clear();
+    composerStateController.mentionTargetsByChat.clear();
   }
 
   function renderYandexModelOptions(bot = currentYandexBot()) {
@@ -8751,7 +8637,7 @@
     if (selectedGrokImageBotId && !grokBotState.imageBots.some(bot => Number(bot.id) === Number(selectedGrokImageBotId))) {
       selectedGrokImageBotId = null;
     }
-    mentionTargetsByChat.clear();
+    composerStateController.mentionTargetsByChat.clear();
     updateComposerAiOverrideState().catch(() => {});
   }
 
@@ -8769,7 +8655,7 @@
     if (selectedGrokUniversalBotId && !grokUniversalState.bots.some(bot => Number(bot.id) === Number(selectedGrokUniversalBotId))) {
       selectedGrokUniversalBotId = null;
     }
-    mentionTargetsByChat.clear();
+    composerStateController.mentionTargetsByChat.clear();
     updateComposerAiOverrideState().catch(() => {});
   }
 
@@ -10732,7 +10618,7 @@
     clearActivePulseVoterPopover({ skipRefresh: true });
     hideAvatarUserMenu();
     clearReply();
-    if (editTo) clearEdit({ clearInput: true });
+    if (composerStateController.editTo) clearEdit({ clearInput: true });
     currentChatId = null;
     updateComposerAiOverrideState().catch(() => {});
     messageStateController?.clearDisplayedMessages?.();
@@ -10765,7 +10651,7 @@
     if (Number(currentChatId || 0) === id) {
       hideFloatingMessageActions({ immediate: true });
       clearReply();
-      if (editTo) clearEdit({ clearInput: true });
+      if (composerStateController.editTo) clearEdit({ clearInput: true });
       replaceRenderedMessages([]);
       setHasMoreBefore(false);
       setHasMoreAfter(false);
@@ -11310,31 +11196,7 @@
     return data;
   }
 
-  function normalizeMentionTarget(raw) {
-    if (!raw) return null;
-    const token = String(raw.token || raw.mention || raw.username || '').replace(/^@+/, '').trim();
-    if (!token) return null;
-    return {
-      ...raw,
-      token,
-      mention: token,
-      user_id: Number(raw.user_id) || 0,
-      is_ai_bot: Boolean(raw.is_ai_bot),
-      bot_id: Number(raw.bot_id) || 0,
-      bot_provider: String(raw.bot_provider || '').trim(),
-      bot_kind: String(raw.bot_kind || '').trim(),
-      allow_text: Boolean(raw.allow_text),
-      allow_image_generate: Boolean(raw.allow_image_generate),
-      allow_image_edit: Boolean(raw.allow_image_edit),
-      allow_document: Boolean(raw.allow_document),
-      allow_poll_create: Boolean(raw.allow_poll_create),
-      allow_poll_vote: Boolean(raw.allow_poll_vote),
-      allow_react: Boolean(raw.allow_react),
-      allow_pin: Boolean(raw.allow_pin),
-      image_risk_filter_enabled: raw.image_risk_filter_enabled !== false,
-      document_default_format: String(raw.document_default_format || '').trim().toLowerCase() === 'txt' ? 'txt' : 'md',
-    };
-  }
+  function normalizeMentionTarget(...args) { return composerMentionsController?.normalizeMentionTarget?.(...args) || null; }
 
   function escapeRegExpText(value) {
     return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -11667,21 +11529,9 @@
     });
   }
 
-  async function loadMentionTargets(chatId = currentChatId, { force = false } = {}) {
-    const id = Number(chatId);
-    if (!id) return [];
-    if (!force && mentionTargetsByChat.has(id)) return mentionTargetsByChat.get(id);
-    if (force) mentionTargetsByChat.delete(id);
-    const data = await api(`/api/chats/${id}/mention-targets`);
-    const targets = (data.targets || []).map(normalizeMentionTarget).filter(Boolean);
-    mentionTargetsByChat.set(id, targets);
-    if (id === Number(currentChatId || 0)) updateComposerAiOverrideState().catch(() => {});
-    return targets;
-  }
+  async function loadMentionTargets(...args) { return composerMentionsController?.loadMentionTargets?.(...args) || []; }
 
-  function suppressMentionPickerFollowupClick(ms = 550) {
-    mentionPickerClickSuppressUntil = Math.max(mentionPickerClickSuppressUntil, Date.now() + ms);
-  }
+  function suppressMentionPickerFollowupClick(...args) { return composerMentionsController?.suppressMentionPickerFollowupClick?.(...args); }
 
   function suppressContextConvertPickerFollowupClick(ms = 550) {
     contextConvertPickerClickSuppressUntil = Math.max(contextConvertPickerClickSuppressUntil, Date.now() + ms);
@@ -11691,324 +11541,33 @@
     contextConvertPickerClickSuppressUntil = 0;
   }
 
-  function ensureMentionPickerBackdrop() {
-    let backdrop = $('#mentionPickerBackdrop');
-    if (backdrop) return backdrop;
-    backdrop = document.createElement('div');
-    backdrop.id = 'mentionPickerBackdrop';
-    backdrop.className = 'mention-picker-backdrop hidden';
-    document.body.appendChild(backdrop);
-    const blockAndClose = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      suppressMentionPickerFollowupClick();
-      hideMentionPicker();
-    };
-    backdrop.addEventListener('pointerdown', blockAndClose, { passive: false });
-    backdrop.addEventListener('click', blockAndClose, { passive: false });
-    backdrop.addEventListener('contextmenu', blockAndClose, { passive: false });
-    return backdrop;
-  }
+  function ensureMentionPickerBackdrop(...args) { return composerMentionsController?.ensureMentionPickerBackdrop?.(...args); }
 
-  function ensureMentionPicker() {
-    let picker = $('#mentionPicker');
-    ensureMentionPickerBackdrop();
-    if (picker) return picker;
-    picker = document.createElement('div');
-    picker.id = 'mentionPicker';
-    picker.className = 'mention-picker hidden';
-    document.body.appendChild(picker);
-    picker.addEventListener('pointerdown', (e) => {
-      if (typeof e.button === 'number' && e.button !== 0) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const item = e.target.closest('.mention-picker-item');
-      if (!item) return;
-      mentionPickerPointerState = {
-        pointerId: e.pointerId,
-        startX: e.clientX,
-        startY: e.clientY,
-        startIndex: Number(item.dataset.index),
-        moved: false,
-      };
-    }, { passive: false });
-    picker.addEventListener('pointermove', (e) => {
-      e.stopPropagation();
-      if (!mentionPickerPointerState || e.pointerId !== mentionPickerPointerState.pointerId || mentionPickerPointerState.moved) return;
-      const dx = e.clientX - mentionPickerPointerState.startX;
-      const dy = e.clientY - mentionPickerPointerState.startY;
-      if ((dx * dx) + (dy * dy) > (MENTION_PICKER_TAP_DEAD_ZONE * MENTION_PICKER_TAP_DEAD_ZONE)) {
-        mentionPickerPointerState.moved = true;
-      }
-    }, { passive: false });
-    picker.addEventListener('scroll', () => {
-      if (mentionPickerPointerState) mentionPickerPointerState.moved = true;
-    }, { passive: true, capture: true });
-    picker.addEventListener('pointercancel', () => {
-      mentionPickerPointerState = null;
-    }, { passive: true });
-    picker.addEventListener('pointerup', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      suppressMentionPickerFollowupClick();
-      const pointerState = mentionPickerPointerState;
-      mentionPickerPointerState = null;
-      if (!pointerState || e.pointerId !== pointerState.pointerId || pointerState.moved) return;
-      const item = e.target.closest('.mention-picker-item');
-      if (!item) return;
-      const index = Number(item.dataset.index);
-      if (!Number.isInteger(index) || index !== pointerState.startIndex) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const target = mentionPickerState.targets[index];
-      if (target) insertMentionTarget(target);
-    }, { passive: false });
-    picker.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-    });
-    return picker;
-  }
+  function ensureMentionPicker(...args) { return composerMentionsController?.ensureMentionPicker?.(...args); }
 
-  function isComposerMeaningfullyEmpty() {
-    return !getComposerTextValue({ trim: true });
-  }
+  function isComposerMeaningfullyEmpty(...args) { return composerMentionsController?.isComposerMeaningfullyEmpty?.(...args) || false; }
 
-  function getManualMentionRange() {
-    const value = String(msgInput?.value || '');
-    if (!value.trim()) return { start: 0, end: value.length };
-    const start = msgInput?.selectionStart ?? value.length;
-    const end = msgInput?.selectionEnd ?? start;
-    return { start, end };
-  }
+  function getManualMentionRange(...args) { return composerMentionsController?.getManualMentionRange?.(...args) || { start: 0, end: 0 }; }
 
-  function syncMentionOpenButton() {
-    if (!mentionOpenBtn) return;
-    const visible = Boolean(currentChatId);
-    mentionOpenBtn.classList.toggle('hidden', !visible);
-    mentionOpenBtn.classList.toggle('is-open', mentionPickerState.active);
-    mentionOpenBtn.disabled = !visible;
-    mentionOpenBtn.setAttribute('aria-hidden', visible ? 'false' : 'true');
-    mentionOpenBtn.setAttribute('aria-expanded', mentionPickerState.active ? 'true' : 'false');
-    syncContextConvertComposerButton();
-  }
+  function syncMentionOpenButton(...args) { return composerMentionsController?.syncMentionOpenButton?.(...args); }
 
-  function hideMentionPicker(options = {}) {
-    const immediate = Boolean(options.immediate);
-    mentionPickerState = { active: false, start: 0, end: 0, selected: 0, targets: [], source: null, keyboardAttached: false };
-    mentionPickerPointerState = null;
-    closeFloatingSurface($('#mentionPickerBackdrop'), { immediate });
-    closeFloatingSurface($('#mentionPicker'), { immediate });
-    syncMentionOpenButton();
-  }
+  function hideMentionPicker(...args) { return composerMentionsController?.hideMentionPicker?.(...args); }
 
-  function findMentionTrigger() {
-    if (!currentChatId || !msgInput) return null;
-    const value = msgInput.value || '';
-    const cursor = msgInput.selectionStart ?? value.length;
-    const left = value.slice(0, cursor);
-    const match = left.match(/(^|\s)@([a-zA-Z0-9_-]{0,32})$/);
-    if (!match) return null;
-    const atIndex = cursor - match[2].length - 1;
-    const prev = atIndex > 0 ? value[atIndex - 1] : '';
-    if (prev && !/\s/.test(prev)) return null;
-    return { start: atIndex, end: cursor, query: match[2].toLowerCase() };
-  }
+  function findMentionTrigger(...args) { return composerMentionsController?.findMentionTrigger?.(...args) || null; }
 
-  function positionMentionPicker() {
-    const picker = $('#mentionPicker');
-    if (!picker || picker.classList.contains('hidden')) return;
-    const rect = msgInput.getBoundingClientRect();
-    const vv = window.visualViewport;
-    const viewportLeft = vv ? vv.offsetLeft : 0;
-    const viewportTop = vv ? vv.offsetTop : 0;
-    const viewportWidth = vv ? vv.width : window.innerWidth;
-    const viewportHeight = vv ? vv.height : window.innerHeight;
-    const width = Math.min(Math.max(rect.width, 240), viewportWidth - 16);
-    picker.style.width = `${width}px`;
-    const height = picker.offsetHeight || 180;
-    const left = Math.max(viewportLeft + 8, Math.min(rect.left + viewportLeft, viewportLeft + viewportWidth - width - 8));
-    const top = Math.max(viewportTop + 8, Math.min(rect.top + viewportTop - height - 8, viewportTop + viewportHeight - height - 8));
-    picker.style.left = `${left}px`;
-    picker.style.top = `${top}px`;
-  }
+  function positionMentionPicker(...args) { return composerMentionsController?.positionMentionPicker?.(...args); }
 
-  function renderMentionPicker(targets, options = {}) {
-    const picker = ensureMentionPicker();
-    const previousScrollTop = picker.querySelector('.mention-picker-list')?.scrollTop || 0;
-    const {
-      source = mentionPickerState.source || 'trigger',
-      preserveSelection = true,
-      keyboardAttached = mentionPickerState.keyboardAttached,
-    } = options;
-    if (!targets.length) {
-      hideMentionPicker();
-      return;
-    }
-    mentionPickerState.targets = targets;
-    mentionPickerState.source = source;
-    mentionPickerState.keyboardAttached = Boolean(keyboardAttached);
-    mentionPickerState.selected = preserveSelection
-      ? Math.min(mentionPickerState.selected, targets.length - 1)
-      : 0;
-    picker.innerHTML = `
-      <div class="mention-picker-list">
-        ${targets.map((target, index) => `
-          <button type="button" class="mention-picker-item${index === mentionPickerState.selected ? ' active' : ''}" data-index="${index}">
-            <span class="mention-picker-avatar" style="background:${esc(target.avatar_color || '#65aadd')}">${target.avatar_url ? `<img src="${esc(target.avatar_url)}" alt="">` : esc((target.display_name || target.token || '?').trim()[0] || '?')}</span>
-            <span class="mention-picker-copy">
-              <strong>${esc(target.display_name || target.token)}</strong>
-              <small>@${esc(target.token)}${target.is_ai_bot ? ' &middot; AI' : ''}</small>
-            </span>
-          </button>
-        `).join('')}
-      </div>
-    `;
-    mentionPickerState.active = true;
-    openFloatingSurface(picker);
-    syncMentionOpenButton();
-    positionMentionPicker();
-    const list = picker.querySelector('.mention-picker-list');
-    if (list) {
-      list.scrollTop = previousScrollTop;
-      list.querySelector('.mention-picker-item.active')?.scrollIntoView({ block: 'nearest' });
-    }
-    requestAnimationFrame(() => positionMentionPicker());
-  }
+  function renderMentionPicker(...args) { return composerMentionsController?.renderMentionPicker?.(...args); }
 
-  async function openMentionPickerFromButton(options = {}) {
-    const keyboardAttached = Boolean(
-      !isMobileLayoutViewport()
-      || (Object.prototype.hasOwnProperty.call(options, 'keyboardAttached')
-        ? options.keyboardAttached
-        : isMobileComposerKeyboardOpen())
-    );
-    const chatId = Number(currentChatId || 0);
-    if (mentionPickerState.active && mentionPickerState.source === 'button') {
-      hideMentionPicker();
-      restoreComposerFocusAfterMentionPicker(keyboardAttached);
-      return;
-    }
-    if (!chatId || !msgInput) {
-      syncMentionOpenButton();
-      return;
-    }
-    if (!isComposerMeaningfullyEmpty()) {
-      insertRawMentionTriggerAtCursor();
-      return;
-    }
-    try {
-      const targets = await loadMentionTargets(chatId);
-      if (chatId !== Number(currentChatId || 0) || !isComposerMeaningfullyEmpty()) return;
-      const range = getManualMentionRange();
-      mentionPickerState.start = range.start;
-      mentionPickerState.end = range.end;
-      renderMentionPicker(targets, { source: 'button', preserveSelection: false, keyboardAttached });
-      restoreComposerFocusAfterMentionPicker(keyboardAttached);
-    } catch {
-      hideMentionPicker();
-    }
-  }
+  async function openMentionPickerFromButton(...args) { return composerMentionsController?.openMentionPickerFromButton?.(...args); }
 
-  async function updateMentionPicker() {
-    const trigger = findMentionTrigger();
-    if (!trigger) {
-      if (mentionPickerState.active && mentionPickerState.source === 'button' && isComposerMeaningfullyEmpty()) {
-        const chatId = Number(currentChatId || 0);
-        try {
-          const targets = await loadMentionTargets(chatId);
-          if (chatId !== Number(currentChatId || 0) || !mentionPickerState.active || mentionPickerState.source !== 'button' || !isComposerMeaningfullyEmpty()) return;
-          const range = getManualMentionRange();
-          mentionPickerState.start = range.start;
-          mentionPickerState.end = range.end;
-          renderMentionPicker(targets, { source: 'button', keyboardAttached: mentionPickerState.keyboardAttached });
-        } catch {
-          hideMentionPicker();
-        }
-      } else {
-        hideMentionPicker();
-      }
-      return;
-    }
-    mentionPickerState.start = trigger.start;
-    mentionPickerState.end = trigger.end;
-    const chatId = currentChatId;
-    try {
-      const targets = await loadMentionTargets(chatId);
-      const latest = findMentionTrigger();
-      if (chatId !== currentChatId || !latest || latest.start !== trigger.start || latest.end !== trigger.end || latest.query !== trigger.query) return;
-      const query = trigger.query;
-      const filtered = targets.filter((target) => {
-        const haystack = [
-          target.token,
-          target.username,
-          target.display_name,
-          target.is_ai_bot ? 'ai bot' : '',
-        ].join(' ').toLowerCase();
-        return !query || haystack.includes(query);
-      });
-      const visibleTargets = query ? filtered.slice(0, 8) : filtered;
-      renderMentionPicker(visibleTargets, { source: 'trigger', keyboardAttached: !isMobileLayoutViewport() || isMobileComposerKeyboardOpen() });
-    } catch {
-      hideMentionPicker();
-    }
-  }
+  async function updateMentionPicker(...args) { return composerMentionsController?.updateMentionPicker?.(...args); }
 
-  function insertMentionTarget(target) {
-    if (!target || !msgInput) return;
-    const keyboardAttached = Boolean(mentionPickerState.keyboardAttached);
-    const tokenValue = `@${String(target.token || target.mention || '').replace(/^@+/, '')} `;
-    const value = msgInput.value || '';
-    const start = mentionPickerState.start ?? (msgInput.selectionStart || 0);
-    const end = mentionPickerState.end ?? (msgInput.selectionEnd || start);
-    msgInput.value = value.slice(0, start) + tokenValue + value.slice(end);
-    const cursor = start + tokenValue.length;
-    msgInput.setSelectionRange(cursor, cursor);
-    hideMentionPicker();
-    autoResize();
-    syncMentionOpenButton();
-    window.BananzaVoiceHooks?.refreshComposerState?.();
-    restoreComposerFocusAfterMentionPicker(keyboardAttached);
-    msgInput.dispatchEvent(new Event('input', { bubbles: true }));
-  }
+  function insertMentionTarget(...args) { return composerMentionsController?.insertMentionTarget?.(...args); }
 
-  function insertMentionTokenIntoComposer(token) {
-    const clean = String(token || '').replace(/^@+/, '').trim();
-    if (!clean || !msgInput) return;
-    snapComposerSelectionToCustomEmojiBoundary();
-    const value = msgInput.value || '';
-    const cursor = msgInput.selectionStart ?? value.length;
-    const prefix = cursor > 0 && !/\s/.test(value[cursor - 1]) ? ' ' : '';
-    const insertion = `${prefix}@${clean} `;
-    msgInput.value = value.slice(0, cursor) + insertion + value.slice(cursor);
-    const nextCursor = cursor + insertion.length;
-    msgInput.setSelectionRange(nextCursor, nextCursor);
-    autoResize();
-    syncMentionOpenButton();
-    window.BananzaVoiceHooks?.refreshComposerState?.();
-    focusComposerKeepKeyboard(true);
-    msgInput.dispatchEvent(new Event('input', { bubbles: true }));
-  }
+  function insertMentionTokenIntoComposer(...args) { return composerMentionsController?.insertMentionTokenIntoComposer?.(...args); }
 
-  function insertRawMentionTriggerAtCursor() {
-    if (!msgInput) return;
-    snapComposerSelectionToCustomEmojiBoundary();
-    const value = msgInput.value || '';
-    const start = Math.max(0, msgInput.selectionStart ?? value.length);
-    const end = Math.max(start, msgInput.selectionEnd ?? start);
-    msgInput.value = value.slice(0, start) + '@' + value.slice(end);
-    const nextCursor = start + 1;
-    msgInput.setSelectionRange(nextCursor, nextCursor);
-    autoResize();
-    syncMentionOpenButton();
-    window.BananzaVoiceHooks?.refreshComposerState?.();
-    try {
-      msgInput.focus({ preventScroll: true });
-    } catch {
-      msgInput.focus();
-    }
-    msgInput.dispatchEvent(new Event('input', { bubbles: true }));
-  }
+  function insertRawMentionTriggerAtCursor(...args) { return composerMentionsController?.insertRawMentionTriggerAtCursor?.(...args); }
 
   async function openPrivateChatWithUser(userId) {
     const id = Number(userId);
@@ -12018,49 +11577,9 @@
     if (chat?.id) openChat(chat.id);
   }
 
-  function handleMentionPickerKeydown(e) {
-    if (!mentionPickerState.active) return false;
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      mentionPickerState.selected = (mentionPickerState.selected + 1) % mentionPickerState.targets.length;
-      renderMentionPicker(mentionPickerState.targets);
-      return true;
-    }
-    if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      mentionPickerState.selected = (mentionPickerState.selected - 1 + mentionPickerState.targets.length) % mentionPickerState.targets.length;
-      renderMentionPicker(mentionPickerState.targets);
-      return true;
-    }
-    if (e.key === 'Enter' || e.key === 'Tab') {
-      e.preventDefault();
-      insertMentionTarget(mentionPickerState.targets[mentionPickerState.selected]);
-      return true;
-    }
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      hideMentionPicker();
-      return true;
-    }
-    return false;
-  }
+  function handleMentionPickerKeydown(...args) { return composerMentionsController?.handleMentionPickerKeydown?.(...args) || false; }
 
-  async function handleMentionClick(e, btn) {
-    e.preventDefault();
-    e.stopPropagation();
-    const tokenValue = btn.dataset.mentionToken || '';
-    if (btn.dataset.mentionBot === '1') {
-      insertMentionTokenIntoComposer(tokenValue);
-      return;
-    }
-    const userId = Number(btn.dataset.mentionUserId);
-    if (!userId || userId === currentUser?.id) return;
-    try {
-      await openPrivateChatWithUser(userId);
-    } catch (error) {
-      console.warn('[mentions] private chat failed:', error.message);
-    }
-  }
+  async function handleMentionClick(...args) { return composerMentionsController?.handleMentionClick?.(...args); }
 
   function isGroupLikeCurrentChat() {
     const chat = getChatById(currentChatId);
@@ -13306,7 +12825,7 @@
 
   function syncContextConvertComposerButton() {
     if (!composerContextConvertBtn) return;
-    const hasText = Boolean(currentChatId && !editTo && getComposerTextValue({ trim: true }));
+    const hasText = Boolean(currentChatId && !composerStateController.editTo && getComposerTextValue({ trim: true }));
     const currentChat = getChatById(currentChatId);
     const availability = getCurrentChatContextConvertState();
     const shouldShow = Boolean((hasText || contextConvertComposerPending) && isContextTransformAvailableForChat(currentChatId));
@@ -13327,7 +12846,7 @@
   }
 
   async function openComposerContextConvertPicker(options = {}) {
-    if (contextConvertComposerPending || !currentChatId || editTo) return;
+    if (contextConvertComposerPending || !currentChatId || composerStateController.editTo) return;
     const text = getComposerTextValue({ trim: true });
     if (!text) return;
     const keyboardAttached = Boolean(
@@ -13508,10 +13027,7 @@
     chatListDataController.abortChatListRequest();
     try { if (window.clearAssetCache) window.clearAssetCache().catch(()=>{}); } catch (e) {}
     try { if (window.messageCache && window.messageCache.clearUserCache) window.messageCache.clearUserCache().catch(()=>{}); } catch (e) {}
-    const composerDraftStorageKey = getComposerDraftStorageKey();
-    if (composerDraftStorageKey) localStorage.removeItem(composerDraftStorageKey);
-    composerDraftsByChatId.clear();
-    composerDraftsLoadedForUserId = 0;
+    composerStateController.resetComposerDraftsForCurrentUser({ removeStorage: true });
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     token = null;
@@ -13843,10 +13359,7 @@
     }
   }
 
-  function sendTyping() {
-    if (!ws || ws.readyState !== 1 || !currentChatId) return;
-    ws.send(JSON.stringify({ type: 'typing', chatId: currentChatId }));
-  }
+  function sendTyping(...args) { return composerTypingDragDropController?.sendTyping?.(...args); }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // CHAT LIST
@@ -14364,75 +13877,24 @@
   // ═══════════════════════════════════════════════════════════════════════════
   // OPEN CHAT
   // ═══════════════════════════════════════════════════════════════════════════
-  function normalizeComposerDraftChatId(chatId) {
-    const id = Number(chatId || 0);
-    return Number.isFinite(id) && id > 0 ? id : 0;
-  }
+  function normalizeComposerDraftChatId(...args) { return composerStateController.normalizeComposerDraftChatId(...args); }
 
-  function getComposerDraftStorageKey(userId = currentUser?.id) {
-    const id = Number(userId || 0);
-    return Number.isFinite(id) && id > 0 ? `bananza:composerDrafts:v1:${id}` : '';
-  }
+  function getComposerDraftStorageKey(...args) { return composerStateController.getComposerDraftStorageKey(...args); }
 
-  function persistComposerDrafts() {
-    const key = getComposerDraftStorageKey();
-    if (!key) return;
-    try {
-      if (!composerDraftsByChatId.size) {
-        localStorage.removeItem(key);
-        return;
-      }
-      const payload = {};
-      composerDraftsByChatId.forEach((text, chatId) => {
-        if (normalizeComposerDraftChatId(chatId) && text) payload[String(chatId)] = String(text).slice(0, MAX_MSG);
-      });
-      if (Object.keys(payload).length) localStorage.setItem(key, JSON.stringify(payload));
-      else localStorage.removeItem(key);
-    } catch (e) {}
-  }
+  function persistComposerDrafts(...args) { return composerStateController.persistComposerDrafts(...args); }
 
-  function hydrateComposerDraftsForCurrentUser({ force = false } = {}) {
-    const userId = Number(currentUser?.id || 0);
-    if (!userId) return;
-    if (!force && composerDraftsLoadedForUserId === userId) return;
-    composerDraftsByChatId.clear();
-    composerDraftsLoadedForUserId = userId;
-    const key = getComposerDraftStorageKey(userId);
-    if (!key) return;
-    try {
-      const raw = JSON.parse(localStorage.getItem(key) || '{}');
-      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
-      Object.entries(raw).forEach(([chatId, text]) => {
-        const id = normalizeComposerDraftChatId(chatId);
-        if (id && typeof text === 'string' && text) composerDraftsByChatId.set(id, text.slice(0, MAX_MSG));
-      });
-    } catch (e) {
-      localStorage.removeItem(key);
-    }
-  }
+  function hydrateComposerDraftsForCurrentUser(...args) { return composerStateController.hydrateComposerDraftsForCurrentUser(...args); }
 
   function saveComposerDraft(chatId = currentChatId) {
-    hydrateComposerDraftsForCurrentUser();
-    const id = normalizeComposerDraftChatId(chatId);
-    if (!id || editTo || !msgInput) return;
-    const text = getComposerTextValue();
-    if (text) composerDraftsByChatId.set(id, text);
-    else composerDraftsByChatId.delete(id);
-    persistComposerDrafts();
+    if (!normalizeComposerDraftChatId(chatId) || composerStateController.editTo || !msgInput) return;
+    composerStateController.saveComposerDraftValue(chatId, getComposerTextValue());
   }
 
-  function clearComposerDraft(chatId = currentChatId) {
-    hydrateComposerDraftsForCurrentUser();
-    const id = normalizeComposerDraftChatId(chatId);
-    if (id) composerDraftsByChatId.delete(id);
-    persistComposerDrafts();
-  }
+  function clearComposerDraft(chatId = currentChatId) { return composerStateController.clearComposerDraft(chatId); }
 
   function restoreComposerDraft(chatId = currentChatId) {
-    hydrateComposerDraftsForCurrentUser();
-    const id = normalizeComposerDraftChatId(chatId);
-    if (!id || !msgInput) return;
-    setComposerTextValue(composerDraftsByChatId.get(id) || '');
+    if (!normalizeComposerDraftChatId(chatId) || !msgInput) return;
+    setComposerTextValue(composerStateController.getComposerDraft(chatId) || '');
     autoResize();
     syncMentionOpenButton();
     window.BananzaVoiceHooks?.refreshComposerState?.();
@@ -14989,20 +14451,7 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  function getReplySnapshot(source = replyTo) {
-    if (!source?.id) return null;
-    return {
-      id: source.id,
-      display_name: source.display_name || source.displayName || '',
-      text: source.text || '',
-      is_voice_note: Boolean(source.is_voice_note),
-      is_video_note: Boolean(source.is_video_note),
-      ai_bot_id: Number(source.ai_bot_id) || 0,
-      ai_bot_mention: source.ai_bot_mention || '',
-      ai_bot_provider: source.ai_bot_provider || '',
-      ai_bot_kind: source.ai_bot_kind || '',
-    };
-  }
+  function getReplySnapshot(...args) { return composerReplyEditController?.getReplySnapshot?.(...args) || null; }
 
   function outboxUrlKey(...args) {
     return messageOutbox?.outboxUrlKey?.(...args);
@@ -15106,102 +14555,10 @@
 
   // SEND MESSAGE
   // ═══════════════════════════════════════════════════════════════════════════
-  async function saveEditedMessage() {
-    if (!editTo) return;
-    const nextText = getComposerTextValue({ trim: true });
-    if (nextText.length > MAX_MSG) { alert('Message too long'); return; }
-    if (!nextText && !editTo.allowEmpty) { alert('Text cannot be empty'); return; }
+  async function saveEditedMessage(...args) { return composerSendController?.saveEditedMessage?.(...args); }
 
-    if (nextText === editTo.text.trim()) {
-      clearEdit({ clearInput: true });
-      return;
-    }
+  async function sendMessage(...args) { return composerSendController?.sendMessage?.(...args); }
 
-    try {
-      const updated = await api(`/api/messages/${editTo.id}`, {
-        method: 'PATCH',
-        body: { text: nextText }
-      });
-      const preserveAnchor = captureScrollAnchor();
-      applyMessageUpdate(updated, { preserveAnchor });
-      clearEdit({ clearInput: true });
-      if (preserveAnchor?.messageId) {
-        requestAnimationFrame(() => {
-          restoreScrollAnchor(preserveAnchor, 2);
-          saveCurrentScrollAnchor(currentChatId, { force: true });
-        });
-      } else {
-        saveCurrentScrollAnchor(currentChatId, { force: true });
-      }
-      loadChats().catch(() => {});
-    } catch (e) {
-      alert(e.message);
-    }
-  }
-
-  async function sendMessage() {
-    if (!currentChatId) return;
-    if (editTo) {
-      await saveEditedMessage();
-      return;
-    }
-    const text = getComposerTextValue({ trim: true });
-    const filesToSend = [...pendingFiles];
-
-    if (!text && filesToSend.length === 0) return;
-    if (text.length > MAX_MSG) { alert('Message too long'); return; }
-    const replySnapshot = getReplySnapshot();
-    const composerAiOverride = getComposerAiOverridePayload();
-    let aiImageRiskAccepted = false;
-    if (text) {
-      try {
-        const risk = await analyzeOutgoingGrokImageRisk(text, replySnapshot, composerAiOverride);
-        if (risk.risky) {
-          const confirmed = await openGrokImageRiskConfirm(risk.matches);
-          if (!confirmed) return;
-          aiImageRiskAccepted = true;
-        }
-      } catch (e) {
-        console.warn('[grok-image-risk] precheck failed:', e?.message || e);
-      }
-    }
-    animateSendButton();
-    msgInput.value = '';
-    clearComposerDraft(currentChatId);
-    autoResize();
-    syncMentionOpenButton();
-    clearPendingFile();
-    clearReply();
-    window.BananzaVoiceHooks?.refreshComposerState?.();
-    scheduleMobileViewportRecovery();
-
-    const items = [];
-    const firstAttachment = filesToSend[0] || null;
-    items.push(createMessageOutboxItem({
-      text: text || null,
-      attachment: firstAttachment,
-      reply: replySnapshot,
-      createdAt: new Date().toISOString(),
-      aiImageRiskAccepted,
-      aiResponseModeHint: composerAiOverride.ai_response_mode_hint || null,
-      aiDocumentFormatHint: composerAiOverride.ai_document_format_hint || null,
-    }));
-    for (let i = 1; i < filesToSend.length; i++) {
-      items.push(createMessageOutboxItem({
-        text: null,
-        attachment: filesToSend[i],
-        reply: null,
-        createdAt: new Date(Date.now() + i).toISOString(),
-      }));
-    }
-
-    for (const item of items) await queueOutboxItem(item, { attempt: false });
-    playAppSound('send');
-    scrollToBottom();
-    for (const item of items) await trySendOutboxItem(item);
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
   // DELETE MESSAGE
   // ═══════════════════════════════════════════════════════════════════════════
   function deleteMessage(...args) {
@@ -15223,479 +14580,50 @@
   // ═══════════════════════════════════════════════════════════════════════════
   // FILE UPLOAD
   // ═══════════════════════════════════════════════════════════════════════════
-  async function uploadFiles(fileList) {
-    if (editTo) {
-      alert('Finish editing before attaching files.');
-      return;
-    }
-    const files = Array.from(fileList).slice(0, MAX_ATTACHMENTS);
-    if (files.length === 0) return;
-    for (const f of files) {
-      if (f.size > MAX_FILE_SIZE) { alert(`File too large: ${f.name} (max ${MAX_FILE_SIZE_LABEL})`); return; }
-    }
+  async function uploadFiles(...args) { return composerFilesController?.uploadFiles?.(...args); }
 
-    pendingFiles = (await Promise.all(files.map((file) => localAttachmentFromFile(file)))).filter(Boolean);
-    pendingFile = pendingFiles[0] || null;
-    renderPendingFiles();
-    msgInput.focus();
-    updateComposerAiOverrideState().catch(() => {});
-    refreshPollComposerActionState();
-    window.BananzaVoiceHooks?.refreshComposerState?.();
-    scheduleMobileViewportRecovery();
-  }
+  function renderPendingFiles(...args) { return composerFilesController?.renderPendingFiles?.(...args); }
 
-  function renderPendingFiles() {
-    if (pendingFiles.length === 0) { clearPendingFile(); return; }
-    pendingFileEl.classList.remove('hidden');
-    const icon = (t) => t === 'image' ? '🖼' : t === 'audio' ? '🎵' : t === 'video' ? '🎬' : '📄';
-    if (pendingFiles.length === 1) {
-      const d = pendingFiles[0];
-      pendingFileEl.innerHTML = `
-        <span>${icon(d.type)}</span>
-        <span class="pending-file-name">${esc(d.name)} (${formatSize(d.size)})</span>
-        <button class="pending-file-remove" title="Remove">✕</button>
-      `;
-    } else {
-      pendingFileEl.innerHTML = `
-        <span>📎</span>
-        <span class="pending-file-name">${pendingFiles.length} files (${formatSize(pendingFiles.reduce((s, f) => s + f.size, 0))})</span>
-        <button class="pending-file-remove" title="Remove all">✕</button>
-      `;
-    }
-    bindTouchSafeButtonActivation(pendingFileEl.querySelector('.pending-file-remove'), ({ event, startKeyboardOpen }) => {
-      event?.stopPropagation?.();
-      const keepComposerFocus = Boolean(startKeyboardOpen || isMobileComposerKeyboardOpen());
-      clearPendingFile();
-      if (keepComposerFocus) focusComposerKeepKeyboard(true);
-    });
-  }
+  function clearPendingFile(...args) { return composerFilesController?.clearPendingFile?.(...args); }
 
-  function clearPendingFile() {
-    pendingFile = null;
-    pendingFiles = [];
-    pendingFileEl.classList.add('hidden');
-    pendingFileEl.innerHTML = '';
-    fileInput.value = '';
-    refreshPollComposerActionState();
-    window.BananzaVoiceHooks?.refreshComposerState?.();
-    scheduleMobileViewportRecovery();
-  }
+  function hideAttachMenu(...args) { return composerFilesController?.hideAttachMenu?.(...args); }
 
-  // ═══════════════════════════════════════════════════════════════════════════
   // REPLY
   // ═══════════════════════════════════════════════════════════════════════════
-  function getReplyPreviewText(msg) {
-    if (msg?.text) return msg.text.substring(0, 100);
-    if (msg?.is_voice_note) {
-      const transcript = (msg.transcription_text || '').trim();
-      return transcript ? transcript.substring(0, 100) : 'Голосовое сообщение';
-    }
-    if (msg?.file_name) return msg.file_name.substring(0, 100);
-    return 'Attachment';
-  }
+  function getReplyPreviewText(...args) { return composerReplyEditController?.getReplyPreviewText?.(...args) || 'Attachment'; }
 
-  function getReplyQuoteText(msg) {
-    const serverText = (msg?.reply_text || '').trim();
-    if (serverText) return serverText.substring(0, 100);
+  function getReplyQuoteText(...args) { return composerReplyEditController?.getReplyQuoteText?.(...args) || 'Attachment'; }
 
-    const sourceRow = msg?.reply_to_id
-      ? messagesEl.querySelector(`[data-msg-id="${msg.reply_to_id}"]`)
-      : null;
-    const sourceText = (sourceRow?.__replyPayload?.text || '').trim();
-    if (sourceText && sourceText !== 'Attachment') return sourceText.substring(0, 100);
+  function canEditMessage(...args) { return Boolean(composerReplyEditController?.canEditMessage?.(...args)); }
 
-    const isVoiceReply = Boolean(
-      msg?.reply_is_voice_note ||
-      sourceRow?.__voiceMessage?.is_voice_note ||
-      sourceRow?.__voiceBootstrap?.is_voice_note
-    );
-    return isVoiceReply ? 'Голосовое сообщение' : 'Attachment';
-  }
+  function canForwardMessage(...args) { return Boolean(composerReplyEditController?.canForwardMessage?.(...args)); }
 
-  function getReplyPreviewText(msg) {
-    if (msg?.text) return msg.text.substring(0, 100);
-    if (msg?.is_voice_note) {
-      const transcript = (msg.transcription_text || '').trim();
-      return transcript ? transcript.substring(0, 100) : getMediaNoteFallbackLabel(msg);
-    }
-    if (msg?.file_name) return msg.file_name.substring(0, 100);
-    return 'Attachment';
-  }
+  function canSaveMessageToNotes(...args) { return Boolean(composerReplyEditController?.canSaveMessageToNotes?.(...args)); }
 
-  function getReplyQuoteText(msg) {
-    const serverText = (msg?.reply_text || '').trim();
-    if (serverText) return serverText.substring(0, 100);
+  function getEditableText(...args) { return composerReplyEditController?.getEditableText?.(...args) || ''; }
 
-    const sourceRow = msg?.reply_to_id
-      ? messagesEl.querySelector(`[data-msg-id="${msg.reply_to_id}"]`)
-      : null;
-    const sourceText = (sourceRow?.__replyPayload?.text || '').trim();
-    if (sourceText && sourceText !== 'Attachment') return sourceText.substring(0, 100);
+  function getSelectedMessageFragment(...args) { return composerReplyEditController?.getSelectedMessageFragment?.(...args) || ''; }
 
-    const isVoiceReply = Boolean(
-      msg?.reply_is_voice_note ||
-      sourceRow?.__voiceMessage?.is_voice_note ||
-      sourceRow?.__voiceBootstrap?.is_voice_note
-    );
-    if (!isVoiceReply) return 'Attachment';
-    return getMediaNoteFallbackLabel({
-      is_voice_note: true,
-      is_video_note: Boolean(sourceRow?.__messageData?.is_video_note || msg?.reply_note_kind === 'video_note'),
-    });
-  }
+  function isSelectableMessageTextTarget(...args) { return Boolean(composerReplyEditController?.isSelectableMessageTextTarget?.(...args)); }
 
-  function canEditMessage(msg) {
-    if (!currentUser || !msg || msg.is_deleted) return false;
-    if (isClientSideMessage(msg)) return false;
-    if (isPollMessage(msg)) return false;
-    if (msg.call || msg.call_message || msg.is_call_message) return false;
-    if (msg.call_transcript_run || msg.is_call_transcript_message) return false;
-    if (msg.call_artifact_batch || msg.is_call_artifact_message) return false;
-    if (!currentUser.is_admin && msg.user_id !== currentUser.id) return false;
-    return Boolean(msg.is_voice_note || msg.file_id || msg.text);
-  }
+  function getMessageCopyTextData(...args) { return composerReplyEditController?.getMessageCopyTextData?.(...args) || { text: '', hasMeaningfulContent: false }; }
 
-  function canForwardMessage(msg) {
-    if (!currentUser || !msg || msg.is_deleted) return false;
-    if (isClientSideMessage(msg)) return false;
-    if (isPollMessage(msg)) return false;
-    if (msg.call || msg.call_message || msg.is_call_message) return false;
-    if (msg.call_transcript_run || msg.is_call_transcript_message) return false;
-    if (msg.call_artifact_batch || msg.is_call_artifact_message) return false;
-    return Boolean(msg.is_voice_note || msg.file_id || msg.text);
-  }
+  function getMessageCopyText(...args) { return composerReplyEditController?.getMessageCopyText?.(...args) || ''; }
 
-  function canSaveMessageToNotes(msg) {
-    if (!canForwardMessage(msg)) return false;
-    if (isCurrentNotesChat()) return false;
-    return true;
-  }
+  async function copyMessageFromRow(...args) { return composerReplyEditController?.copyMessageFromRow?.(...args); }
 
-  function getEditableText(row) {
-    const msg = row?.__messageData || {};
-    if (msg.is_voice_note || row?.__voiceMessage?.is_voice_note) {
-      return (row?.__voiceMessage?.transcription_text || msg.transcription_text || '').trim();
-    }
-    return msg.text || '';
-  }
+  function setReplyFromRow(...args) { return composerReplyEditController?.setReplyFromRow?.(...args); }
 
-  function getSelectedMessageFragment(row) {
-    const selection = window.getSelection?.();
-    if (!selection || selection.isCollapsed || !selection.rangeCount) return '';
-    const text = selection.toString();
-    const bubble = row?.querySelector('.msg-bubble');
-    if (!bubble || !text.trim()) return '';
-    const anchorNode = selection.anchorNode;
-    const focusNode = selection.focusNode;
-    if (!anchorNode || !focusNode) return '';
-    return bubble.contains(anchorNode) && bubble.contains(focusNode) ? text.trim() : '';
-  }
+  function setReply(...args) { return composerReplyEditController?.setReply?.(...args); }
 
-  function isSelectableMessageTextTarget(target) {
-    return Boolean(target?.closest?.(
-      '.msg-text, .msg-forwarded, .msg-reply-text, .msg-file-name, .msg-file-size, .link-preview'
-    ));
-  }
+  function clearReply(...args) { return composerReplyEditController?.clearReply?.(...args); }
 
-  function getMessageCopyTextData(row) {
-    const msg = row?.__messageData || {};
-    const parts = [];
-    let hasMeaningfulContent = false;
-    if (msg.forwarded_from_display_name) {
-      parts.push(`Forwarded from ${msg.forwarded_from_display_name}`);
-      hasMeaningfulContent = true;
-    }
-    if (msg.reply_to_id && msg.reply_display_name) {
-      const replyText = getReplyQuoteText(msg).trim();
-      const replyName = String(msg.reply_display_name || '').trim();
-      if (replyName || replyText) {
-        parts.push([replyName, replyText].filter(Boolean).join(': '));
-        hasMeaningfulContent = true;
-      }
-    }
-    if (msg.file_id && msg.file_name) {
-      parts.push(msg.file_name);
-      hasMeaningfulContent = true;
-    }
-    const mainText = getEditableText(row).trim();
-    if (mainText) {
-      parts.push(mainText);
-      hasMeaningfulContent = true;
-    }
-    return {
-      text: parts.filter(Boolean).join('\n').trim(),
-      hasMeaningfulContent,
-    };
-  }
+  function setEditFromRow(...args) { return composerReplyEditController?.setEditFromRow?.(...args); }
 
-  function getMessageCopyText(row) {
-    const copyData = getMessageCopyTextData(row);
-    if (copyData.text) return copyData.text;
-    const copyMsg = row?.__messageData || {};
-    if (copyMsg.file_id) return 'Attachment';
-    return '';
-    const msg = row?.__messageData || {};
-    const parts = [];
-    if (msg.forwarded_from_display_name) {
-      parts.push(`Переслано от ${msg.forwarded_from_display_name}`);
-    }
-    if (msg.reply_to_id && msg.reply_display_name) {
-      const replyText = getReplyQuoteText(msg).trim();
-      const replyName = String(msg.reply_display_name || '').trim();
-      if (replyName || replyText) parts.push([replyName, replyText].filter(Boolean).join(': '));
-    }
-    if (msg.file_id && msg.file_name) parts.push(msg.file_name);
-    const mainText = getEditableText(row).trim();
-    if (mainText) parts.push(mainText);
-    if (!parts.length && msg.file_id) parts.push('Вложение');
-    return parts.filter(Boolean).join('\n').trim();
-  }
+  function clearEdit(...args) { return composerReplyEditController?.clearEdit?.(...args); }
 
-  async function copyMessageFromRow(row) {
-    if (!row) return;
-    const selectedText = getSelectedMessageFragment(row);
-    const text = selectedText || getMessageCopyText(row);
-    if (!text) return;
-    hideFloatingMessageActions();
-    const copied = await copyTextToClipboard(text);
-    showCenterToast(copied
-      ? (selectedText ? 'Фрагмент скопирован' : 'Сообщение скопировано')
-      : 'Не удалось скопировать');
-  }
+  function setupMessageSwipeGestures(...args) { return composerReplyEditController?.setupMessageSwipeGestures?.(...args); }
 
-  function setReplyFromRow(row) {
-    if (row?.dataset.outbox === '1') return;
-    const payload = row?.__replyPayload;
-    if (!payload || row.querySelector('.msg-deleted')) return;
-    hideFloatingMessageActions();
-    setReply(payload.id, payload.display_name, payload.text, payload);
-  }
-
-  function setReply(id, name, text, meta = null) {
-    if (editTo) clearEdit({ clearInput: true });
-    replyTo = {
-      id,
-      display_name: name,
-      text,
-      is_voice_note: Boolean(meta?.is_voice_note),
-      is_video_note: Boolean(meta?.is_video_note),
-      ai_bot_id: Number(meta?.ai_bot_id) || 0,
-      ai_bot_mention: meta?.ai_bot_mention || '',
-      ai_bot_provider: meta?.ai_bot_provider || '',
-      ai_bot_kind: meta?.ai_bot_kind || '',
-    };
-    replyBarName.textContent = name;
-    replyBarText.textContent = text || '📎 Attachment';
-    replyBar.classList.remove('edit-bar');
-    replyBar.classList.remove('hidden');
-    msgInput.focus();
-  }
-
-  function clearReply() {
-    replyTo = null;
-    if (!editTo) replyBar.classList.add('hidden');
-    queueIosViewportLayoutSync();
-    updateComposerAiOverrideState().catch(() => {});
-  }
-
-  function setEditFromRow(row) {
-    const msg = row?.__messageData;
-    if (!canEditMessage(msg)) return;
-    if (pendingFiles.length > 0) {
-      alert('Finish or remove pending attachments before editing a message.');
-      return;
-    }
-
-    const text = getEditableText(row);
-    hideFloatingMessageActions();
-    replyTo = null;
-    editTo = {
-      id: msg.id,
-      text,
-      is_voice_note: Boolean(msg.is_voice_note || row.__voiceMessage?.is_voice_note),
-      allowEmpty: Boolean(msg.file_id && !(msg.is_voice_note || row.__voiceMessage?.is_voice_note)),
-    };
-    replyBarName.textContent = 'Редактирование';
-    replyBarText.textContent = editTo.is_voice_note ? 'Текст голосового сообщения' : 'Сообщение';
-    replyBar.classList.add('edit-bar');
-    replyBar.classList.remove('hidden');
-    setComposerTextValue(text);
-    autoResize();
-    syncMentionOpenButton();
-    attachBtn.disabled = true;
-    attachBtn.classList.add('disabled');
-    refreshPollComposerActionState();
-    window.BananzaVoiceHooks?.refreshComposerState?.();
-    msgInput.focus();
-  }
-
-  function clearEdit({ clearInput = true, draftChatId = currentChatId } = {}) {
-    editTo = null;
-    replyBar.classList.remove('edit-bar');
-    replyBar.classList.add('hidden');
-    attachBtn.disabled = false;
-    attachBtn.classList.remove('disabled');
-    if (clearInput) {
-      msgInput.value = '';
-      clearComposerDraft(draftChatId);
-      autoResize();
-    }
-    syncMentionOpenButton();
-    refreshPollComposerActionState();
-    window.BananzaVoiceHooks?.refreshComposerState?.();
-  }
-
-  function setupMessageSwipeGestures() {
-    const threshold = 42;
-    const maxOffset = 68;
-    const lockStartPx = 8;
-    const verticalCancelPx = 22;
-    const mediaClickSuppressMs = 700;
-    let swipe = null;
-
-    const isInteractiveTarget = (target) => Boolean(target.closest(
-      'button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-file, .link-preview, .msg-group-avatar'
-    ));
-    const suppressMediaClickAfterSwipe = (row) => {
-      if (!row?.querySelector?.('.msg-image')) return;
-      row.__suppressMediaClickUntil = Date.now() + mediaClickSuppressMs;
-    };
-    const isSwipeGestureActive = (inputType) => Boolean(swipe && swipe.inputType === inputType);
-    const canReplyFromRow = (row) => Boolean(
-      row?.__replyPayload && row.dataset.outbox !== '1' && !row.querySelector('.msg-deleted')
-    );
-    const ensureIndicator = (row, kind) => {
-      let indicator = row.querySelector('.swipe-message-indicator');
-      if (!indicator) {
-        indicator = document.createElement('div');
-        row.appendChild(indicator);
-      }
-      indicator.className = `swipe-message-indicator swipe-${kind}-indicator`;
-      indicator.textContent = kind === 'reply' ? '\u21A9' : '\u270E';
-      return indicator;
-    };
-    const beginSwipe = ({ row, startX, startY, startedOnMedia = false, inputType = 'touch', pointerId = null }) => {
-      swipe = {
-        row,
-        content: row.querySelector('.msg-content'),
-        startX,
-        startY,
-        dx: 0,
-        kind: null,
-        locked: false,
-        startedOnMedia,
-        inputType,
-        pointerId,
-        keyboardOpenAtStart: shouldKeepComposerForMobileMessageInteraction(),
-      };
-    };
-    const updateSwipe = ({ clientX, clientY, event = null }) => {
-      if (!swipe) return;
-      const rawDx = clientX - swipe.startX;
-      const dy = clientY - swipe.startY;
-      const absX = Math.abs(rawDx);
-      const absY = Math.abs(dy);
-
-      if (!swipe.locked) {
-        if (absY > verticalCancelPx && absY > absX * 1.35) {
-          finishSwipe(false);
-          return;
-        }
-        if (absX < lockStartPx || absX < absY * 0.75) return;
-        const kind = rawDx < 0 ? 'reply' : 'edit';
-        if ((kind === 'reply' && !canReplyFromRow(swipe.row)) || (kind === 'edit' && !canEditMessage(swipe.row.__messageData))) {
-          finishSwipe(false);
-          return;
-        }
-        swipe.kind = kind;
-        swipe.locked = true;
-        suppressNextMessageActionTap();
-        hideFloatingMessageActions({ immediate: true });
-        ensureIndicator(swipe.row, kind);
-        swipe.row.classList.add(`swipe-${kind}-active`);
-        if (swipe.keyboardOpenAtStart) focusComposerKeepKeyboard(true);
-      }
-
-      if (event?.cancelable) event.preventDefault();
-      swipe.dx = Math.min(absX, maxOffset);
-      const offset = swipe.kind === 'reply' ? -swipe.dx : swipe.dx;
-      if (swipe.content) swipe.content.style.transform = `translateX(${offset}px)`;
-      swipe.row.classList.toggle(`swipe-${swipe.kind}-ready`, absX >= threshold);
-    };
-    const finishSwipe = (shouldApply) => {
-      if (!swipe) return;
-      const { row, content, kind, locked, startedOnMedia, keyboardOpenAtStart } = swipe;
-      row.classList.remove('swipe-reply-active', 'swipe-reply-ready', 'swipe-edit-active', 'swipe-edit-ready');
-      if (content) content.style.transform = '';
-      const indicator = row.querySelector('.swipe-message-indicator');
-      setTimeout(() => indicator?.remove(), 180);
-      if (locked && startedOnMedia) suppressMediaClickAfterSwipe(row);
-      if (shouldApply && kind) {
-        safeVibrate(18);
-        if (kind === 'reply') setReplyFromRow(row);
-        else if (kind === 'edit') setEditFromRow(row);
-      }
-      if (keyboardOpenAtStart && locked) focusComposerKeepKeyboard(true);
-      swipe = null;
-    };
-
-    messagesEl.addEventListener('touchstart', (e) => {
-      if (e.touches.length !== 1 || isInteractiveTarget(e.target)) return;
-      const row = e.target.closest('.msg-row');
-      if (!row || row.dataset.outbox === '1' || row.querySelector('.msg-deleted')) return;
-      const touch = e.touches[0];
-      beginSwipe({
-        row,
-        startX: touch.clientX,
-        startY: touch.clientY,
-        startedOnMedia: Boolean(e.target.closest('.msg-image')),
-        inputType: 'touch',
-      });
-    }, { passive: true });
-
-    messagesEl.addEventListener('touchmove', (e) => {
-      if (!isSwipeGestureActive('touch') || e.touches.length !== 1) return;
-      const touch = e.touches[0];
-      updateSwipe({ clientX: touch.clientX, clientY: touch.clientY, event: e });
-    }, { passive: false });
-
-    messagesEl.addEventListener('touchend', () => {
-      if (!isSwipeGestureActive('touch')) return;
-      finishSwipe(Boolean(swipe?.locked && swipe.dx >= threshold));
-    }, { passive: true });
-    messagesEl.addEventListener('touchcancel', () => {
-      if (!isSwipeGestureActive('touch')) return;
-      finishSwipe(false);
-    }, { passive: true });
-
-    messagesEl.addEventListener('pointerdown', (e) => {
-      if (e.pointerType === 'touch' || !e.isPrimary || e.button !== 0 || isInteractiveTarget(e.target)) return;
-      const row = e.target.closest('.msg-row');
-      if (!row || row.dataset.outbox === '1' || row.querySelector('.msg-deleted')) return;
-      beginSwipe({
-        row,
-        startX: e.clientX,
-        startY: e.clientY,
-        startedOnMedia: Boolean(e.target.closest('.msg-image')),
-        inputType: 'pointer',
-        pointerId: e.pointerId,
-      });
-    });
-    document.addEventListener('pointermove', (e) => {
-      if (!isSwipeGestureActive('pointer') || e.pointerId !== swipe?.pointerId) return;
-      updateSwipe({ clientX: e.clientX, clientY: e.clientY, event: e });
-    });
-    document.addEventListener('pointerup', (e) => {
-      if (!isSwipeGestureActive('pointer') || e.pointerId !== swipe?.pointerId) return;
-      finishSwipe(Boolean(swipe?.locked && swipe.dx >= threshold));
-    });
-    document.addEventListener('pointercancel', (e) => {
-      if (!isSwipeGestureActive('pointer') || e.pointerId !== swipe?.pointerId) return;
-      finishSwipe(false);
-    });
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
   // SEARCH
   // ═══════════════════════════════════════════════════════════════════════════
   let searchDebounce = null;
@@ -16718,552 +15646,74 @@
   // ═══════════════════════════════════════════════════════════════════════════
   // DRAG & DROP
   // ═══════════════════════════════════════════════════════════════════════════
-  let dragCounter = 0;
+  function handleDragEnter(...args) { return composerTypingDragDropController?.handleDragEnter?.(...args); }
 
-  function handleDragEnter(e) {
-    e.preventDefault();
-    dragCounter++;
-    if (currentChatId) dragOverlay.classList.remove('hidden');
-  }
+  function handleDragOver(...args) { return composerTypingDragDropController?.handleDragOver?.(...args); }
 
-  function handleDragOver(e) {
-    e.preventDefault();
-  }
+  function handleDragLeave(...args) { return composerTypingDragDropController?.handleDragLeave?.(...args); }
 
-  function handleDragLeave(e) {
-    e.preventDefault();
-    dragCounter--;
-    if (dragCounter <= 0) { dragOverlay.classList.add('hidden'); dragCounter = 0; }
-  }
+  function handleDrop(...args) { return composerTypingDragDropController?.handleDrop?.(...args); }
 
-  function handleDrop(e) {
-    e.preventDefault();
-    dragCounter = 0;
-    dragOverlay.classList.add('hidden');
-    if (!currentChatId) return;
-    const files = e.dataTransfer.files;
-    if (files.length > 0) uploadFiles(files);
-  }
+  function renderTypingBar(...args) { return composerTypingDragDropController?.renderTypingBar?.(...args); }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // TYPING INDICATOR
-  // ═══════════════════════════════════════════════════════════════════════════
-  function renderTypingBar() {
-    const entries = Object.entries(typingDisplayTimeouts).map(([name, item]) => ({
-      name,
-      activity: item?.activity || 'typing',
-    }));
-    if (entries.length === 0) {
-      typingBar.classList.add('hidden');
-      typingBar.replaceChildren();
-      return;
-    }
+  function showTyping(...args) { return composerTypingDragDropController?.showTyping?.(...args); }
 
-    const label = document.createElement('span');
-    label.className = 'typing-bar-label';
-    const chatShotEntry = entries.find((entry) => entry.activity === 'chatshot_generating');
-    const names = entries.map((entry) => entry.name);
-    label.textContent = chatShotEntry
-      ? 'chatShot генерируется'
-      : (names.length === 1 ? `${names[0]} печатает` : `${names.join(', ')} печатают`);
+  function hideTyping(...args) { return composerTypingDragDropController?.hideTyping?.(...args); }
 
-    const dots = document.createElement('span');
-    dots.className = 'typing-bar-dots';
-    dots.setAttribute('aria-hidden', 'true');
-
-    for (let i = 0; i < 3; i += 1) {
-      const dot = document.createElement('span');
-      dot.className = 'typing-bar-dot';
-      dot.textContent = '.';
-      dots.appendChild(dot);
-    }
-
-    typingBar.classList.remove('hidden');
-    typingBar.replaceChildren(label, dots);
-  }
-
-  function showTyping(username, options = {}) {
-    const name = username || 'Someone';
-    clearTimeout(typingDisplayTimeouts[name]?.timer || typingDisplayTimeouts[name]);
-    typingDisplayTimeouts[name] = {
-      activity: options.activity || 'typing',
-      timer: setTimeout(() => {
-        delete typingDisplayTimeouts[name];
-        renderTypingBar();
-      }, 3000),
-    };
-    renderTypingBar();
-  }
-
-  function hideTyping(username) {
-    const name = username || 'Someone';
-    clearTimeout(typingDisplayTimeouts[name]?.timer || typingDisplayTimeouts[name]);
-    delete typingDisplayTimeouts[name];
-    renderTypingBar();
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
   // EMOJI PICKER
   // ═══════════════════════════════════════════════════════════════════════════
-  const EMOJIS = {
-    '\uD83D\uDE00': ['\uD83D\uDE00','\uD83D\uDE03','\uD83D\uDE04','\uD83D\uDE01','\uD83D\uDE06','\uD83D\uDE05','\uD83E\uDD23','\uD83D\uDE02','\uD83D\uDE42','\uD83D\uDE09','\uD83D\uDE0A','\uD83D\uDE07','\uD83E\uDD70','\uD83D\uDE0D','\uD83E\uDD29','\uD83D\uDE18','\uD83D\uDE0B','\uD83D\uDE1B','\uD83D\uDE1C','\uD83E\uDD2A','\uD83D\uDE1D','\uD83E\uDD11','\uD83E\uDD17','\uD83E\uDD2D','\uD83E\uDD2B','\uD83E\uDD14','\uD83E\uDD10','\uD83E\uDD28','\uD83D\uDE10','\uD83D\uDE11','\uD83D\uDE36','\uD83D\uDE0F','\uD83D\uDE12','\uD83D\uDE44','\uD83D\uDE2C','\uD83D\uDE2E\u200D\uD83D\uDCA8','\uD83E\uDD25','\uD83D\uDE0C','\uD83D\uDE14','\uD83D\uDE2A','\uD83E\uDD24','\uD83D\uDE34','\uD83D\uDE37','\uD83E\uDD12','\uD83E\uDD15','\uD83E\uDD22','\uD83E\uDD2E','\uD83E\uDD75','\uD83E\uDD76','\uD83E\uDD74','\uD83D\uDE35','\uD83E\uDD2F','\uD83E\uDD20','\uD83E\uDD73','\uD83E\uDD78','\uD83D\uDE0E','\uD83E\uDD13','\uD83E\uDDD0','\uD83D\uDE15','\uD83D\uDE1F','\uD83D\uDE41','\u2639\uFE0F','\uD83D\uDE2E','\uD83D\uDE2F','\uD83D\uDE32','\uD83D\uDE33','\uD83E\uDD7A','\uD83D\uDE26','\uD83D\uDE27','\uD83D\uDE28','\uD83D\uDE30','\uD83D\uDE25','\uD83D\uDE22','\uD83D\uDE2D','\uD83D\uDE31','\uD83D\uDE16','\uD83D\uDE23','\uD83D\uDE1E','\uD83D\uDE13','\uD83D\uDE29','\uD83D\uDE2B','\uD83E\uDD71','\uD83D\uDE24','\uD83D\uDE21','\uD83D\uDE20','\uD83E\uDD2C','\uD83D\uDE08','\uD83D\uDC7F','\uD83D\uDC80','\u2620\uFE0F','\uD83D\uDCA9','\uD83E\uDD21','\uD83D\uDC79','\uD83D\uDC7A','\uD83D\uDC7B','\uD83D\uDC7D','\uD83D\uDC7E','\uD83E\uDD16'],
-    '\uD83D\uDC4B': ['\uD83D\uDC4B','\uD83E\uDD1A','\uD83D\uDD90\uFE0F','\u270B','\uD83D\uDD96','\uD83E\uDEF1','\uD83E\uDEF2','\uD83E\uDEF3','\uD83E\uDEF4','\uD83D\uDC4C','\uD83E\uDD0C','\uD83E\uDD0F','\u270C\uFE0F','\uD83E\uDD1E','\uD83E\uDEF0','\uD83E\uDD1F','\uD83E\uDD18','\uD83E\uDD19','\uD83D\uDC48','\uD83D\uDC49','\uD83D\uDC46','\uD83D\uDD95','\uD83D\uDC47','\u261D\uFE0F','\uD83E\uDEF5','\uD83D\uDC4D','\uD83D\uDC4E','\u270A','\uD83D\uDC4A','\uD83E\uDD1B','\uD83E\uDD1C','\uD83D\uDC4F','\uD83D\uDE4C','\uD83E\uDEF6','\uD83D\uDC50','\uD83E\uDD32','\uD83E\uDD1D','\uD83D\uDE4F','\uD83D\uDCAA','\uD83E\uDDBE','\uD83D\uDDA4','👶','🧒','👦','👧','🧑','👨','👩','🧔','👱','👴','👵','🙍','🙎','🙅','🙆','💁','🙋','🧏','🙇','🤦','🤷','👮','🕵️','💂','🥷','👷','🧑‍⚕️','🧑‍🎓','🧑‍🏫','🧑‍⚖️','🧑‍🌾','🧑‍🍳','🧑‍🔧','🧑‍💻','🧑‍🎤','🧑‍🎨','🧑‍🚀','🧑‍🚒','👰','🤵','🧙','🧚','🧛','🧜','🧝','🧞','🧟','💆','💇','🚶','🏃','💃','🕺','🧍','🧎','🧘','🛀','🛌','👭','👫','👬','💏','💑','👪'],
-    '\u2764\uFE0F': ['\u2764\uFE0F','\uD83E\uDDE1','\uD83D\uDC9B','\uD83D\uDC9A','\uD83D\uDC99','\uD83D\uDC9C','\uD83D\uDDA4','\uD83E\uDD0D','\uD83E\uDD0E','\uD83D\uDC94','\u2763\uFE0F','\uD83D\uDC95','\uD83D\uDC9E','\uD83D\uDC93','\uD83D\uDC97','\uD83D\uDC96','\uD83D\uDC98','\uD83D\uDC9D','\uD83D\uDC9F','\u2764\uFE0F\u200D\uD83D\uDD25','\u2764\uFE0F\u200D\uD83E\uDE79','\u2665\uFE0F'],
-    '🎉': ['🎉','🎊','🎈','🎁','🎀','🎗️','🎟️','🎫','🏆','🥇','🥈','🥉','⚽','🏀','🏈','⚾','🥎','🎾','🏐','🏉','🥏','🎱','🪀','🏓','🏸','🥅','🏒','🏑','🥍','🏏','⛳','🪁','🏹','🎣','🤿','🥊','🥋','🎽','🛹','🛼','🛷','⛸️','🥌','🎿','⛷️','🏂','🪂','🏋️','🤼','🤸','⛹️','🤺','🤾','🏌️','🏇','🧘','🏄','🏊','🤽','🚣','🧗','🚴','🚵','🎮','🕹️','🎲','♟️','🎯','🎳','🎰','🧩','🎭','🎨','🧵','🪡','🎤','🎧','🎼','🎹','🥁','🪘','🎷','🎺','🪗','🎸','🪕','🎻','🎬','🎪'],
-    '\uD83C\uDF55': ['\uD83C\uDF55','\uD83C\uDF54','\uD83C\uDF5F','\uD83C\uDF2D','\uD83C\uDF7F','\uD83E\uDDC0','\uD83E\uDD5A','\uD83C\uDF73','\uD83E\uDD5E','\uD83E\uDDC7','\uD83E\uDD53','\uD83C\uDF57','\uD83C\uDF56','\uD83C\uDF2E','\uD83C\uDF2F','\uD83C\uDF5D','\uD83C\uDF5C','\uD83C\uDF63','\uD83C\uDF71','\uD83E\uDD5F','\uD83C\uDF66','\uD83C\uDF69','\uD83C\uDF6A','\uD83C\uDF82','\uD83C\uDF70','\uD83E\uDDC1','\uD83C\uDF6B','\uD83C\uDF6C','\uD83C\uDF6D','\u2615','\uD83C\uDF75','\uD83E\uDDC3','\uD83E\uDDCB','\uD83C\uDF7A','\uD83C\uDF7B','\uD83E\uDD42','\uD83C\uDF77','\uD83C\uDF78','\uD83C\uDF79','\uD83E\uDD64','\uD83C\uDF4C'],
-    '\uD83C\uDF3F': ['\uD83C\uDF38','\uD83C\uDF3A','\uD83C\uDF3B','\uD83C\uDF39','\uD83C\uDF37','\uD83C\uDF3C','\uD83C\uDF3F','\u2618\uFE0F','\uD83C\uDF40','\uD83C\uDF41','\uD83C\uDF42','\uD83C\uDF32','\uD83C\uDF33','\uD83C\uDF34','\uD83C\uDF35','\uD83D\uDC36','\uD83D\uDC31','\uD83D\uDC2D','\uD83D\uDC39','\uD83D\uDC30','\uD83E\uDD8A','\uD83D\uDC3B','\uD83D\uDC3C','\uD83D\uDC28','\uD83D\uDC2F','\uD83E\uDD81','\uD83D\uDC2E','\uD83D\uDC37','\uD83D\uDC38','\uD83D\uDC35','\uD83D\uDC14','\uD83D\uDC27','\uD83D\uDC26','\uD83E\uDD84','\uD83D\uDC1D','\uD83D\uDC1B','\uD83E\uDD8B','\uD83D\uDC0C','\uD83D\uDC1E','🦁','🐵','🐒','🦍','🦧','🐺','🐴','🫎','🫏','🦓','🦌','🐮','🐂','🐃','🐄','🐷','🐖','🐗','🐏','🐑','🐐','🐪','🐫','🦙','🦒','🐘','🦣','🦏','🦛','🐁','🐀','🐿️','🦫','🦔','🦇','🐻‍❄️','🐨','🐼','🦥','🦦','🦨','🦘','🦡','🐾','🦃','🐓','🦆','🦅','🦉','🦤','🪶','🦩','🦚','🦜','🐦‍⬛','🪿','🐦‍🔥','🐸','🐊','🐢','🦎','🐍','🐲','🐉','🦕','🦖','🐳','🐋','🐬','🦭','🐟','🐠','🐡','🦈','🐙','🐚','🪸','🪼','🦀','🦞','🦐','🦑','🦪','🪲','🪳','🦟','🪰','🪱','🦠','🌍','🌎','🌏','🌕','🌙','⭐','🌟','💫','✨','⚡','🔥','💯','🌪️','🌈','☀️','⛅','☁️','🌧️','⛈️','🌨️','❄️','☃️','💧','🌊'],
-    '🚗': ['🚗','🚕','🚙','🚌','🚎','🏎️','🚓','🚑','🚒','🚐','🛻','🚚','🚛','🚜','🦯','🦽','🦼','🛴','🚲','🛵','🏍️','🛺','🚨','🚔','🚍','🚘','🚖','🚡','🚠','🚟','🚃','🚋','🚞','🚝','🚄','🚅','🚈','🚂','🚆','🚇','🚊','🚉','✈️','🛫','🛬','🛩️','💺','🚁','🚟','🚀','🛸','⛵','🚤','🛥️','🛳️','⛴️','🚢','⚓','🛟','🪝','⛽','🚧','🚦','🚥','🗺️','🗿','🗽','🗼','🏰','🏯','🏟️','🎡','🎢','🎠','⛲','⛱️','🏖️','🏝️','🏜️','🌋','⛰️','🏔️','🗻','🏕️','⛺','🛖','🏠','🏡','🏘️','🏚️','🏗️','🏭','🏢','🏬','🏣','🏤','🏥','🏦','🏨','🏪','🏫','🏩','💒','🏛️','⛪','🕌','🕍','🛕','🕋'],
-    '💡': ['💡','🔦','🏮','🪔','📱','📲','☎️','📞','📟','📠','🔋','🪫','🔌','💻','🖥️','🖨️','⌨️','🖱️','🖲️','💽','💾','💿','📀','🧮','🎥','🎞️','📽️','📺','📷','📸','📹','📼','🔍','🔎','🕯️','📔','📕','📖','📗','📘','📙','📚','📓','📒','📃','📜','📄','📰','🗞️','📑','🔖','🏷️','💰','🪙','💴','💵','💶','💷','💸','💳','🧾','💎','⚖️','🪜','🧰','🪛','🔧','🔨','⚒️','🛠️','⛏️','🪚','🔩','⚙️','🪤','🧱','⛓️','🧲','🔫','💣','🧨','🪓','🔪','🗡️','⚔️','🛡️','🚬','⚰️','🪦','⚱️','🏺','🔮','📿','🧿','🪬','💈','⚗️','🔭','🔬','🕳️','🩹','🩺','💊','💉','🩸','🧬','🦠','🧫','🧪','🌡️','🧹','🧺','🧻','🚽','🚿','🛁','🛋️','🪑','🛏️','🪞','🪟','🧴','🧷','🧸','🖼️','🛍️','🛒','🎁','🎈','🎏','🎀','🪄','🪅','🎊','🎉'],
-    '🔣': ['💯','🔢','#️⃣','*️⃣','0️⃣','1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟','‼️','⁉️','❓','❔','❕','❗','〰️','➰','➿','❤️‍🔥','💔','❤️‍🩹','✅','☑️','✔️','❌','❎','➕','➖','➗','✖️','🟰','♾️','™️','©️','®️','〽️','⚠️','🚸','🔱','⚜️','🔰','♻️','✅','🈯','💹','❇️','✳️','❎','🌐','💠','Ⓜ️','🌀','💤','🏧','🚾','♿','🅿️','🛗','🈳','🈂️','🛂','🛃','🛄','🛅','🚹','🚺','🚼','⚧️','🚻','🚮','🎦','📶','🈁','🔣','ℹ️','🔤','🔡','🔠','🆖','🆗','🆙','🆒','🆕','🆓','0️⃣','1️⃣','2️⃣','🟥','🟧','🟨','🟩','🟦','🟪','⬛','⬜','🟫','🔴','🟠','🟡','🟢','🔵','🟣','⚫','⚪','🟤','🔺','🔻','🔸','🔹','🔶','🔷','🔳','🔲'],
-    '🏳️': ['🏳️','🏴','🏁','🚩','🏳️‍🌈','🏳️‍⚧️','🏴‍☠️','🇺🇳','🇷🇺','🇺🇸','🇬🇧','🇩🇪','🇫🇷','🇪🇸','🇮🇹','🇵🇹','🇳🇱','🇧🇪','🇨🇭','🇦🇹','🇵🇱','🇨🇿','🇸🇰','🇺🇦','🇧🇾','🇰🇿','🇬🇪','🇦🇲','🇦🇿','🇹🇷','🇬🇷','🇧🇬','🇷🇴','🇭🇺','🇫🇮','🇸🇪','🇳🇴','🇩🇰','🇮🇸','🇮🇪','🇨🇦','🇲🇽','🇧🇷','🇦🇷','🇨🇱','🇨🇴','🇵🇪','🇯🇵','🇰🇷','🇨🇳','🇮🇳','🇮🇩','🇹🇭','🇻🇳','🇵🇭','🇸🇬','🇦🇺','🇳🇿','🇿🇦','🇪🇬','🇮🇱','🇦🇪','🇸🇦'],
-  };
-  const RECENT_EMOJI_CATEGORY = '🕘';
-  const RECENT_EMOJI_LIMIT = 32;
-  const RECENT_EMOJI_STORAGE_PREFIX = 'bananza:recentEmojis:v1';
-  let recentEmojis = [];
-  const recentEmojiServerRejected = new Set();
+  function normalizeRecentEmojiValue(...args) { return composerEmojiPickerController?.normalizeRecentEmojiValue?.(...args) || ''; }
 
-  function normalizeRecentEmojiValue(value) {
-    return serializeComposerTextValue(String(value || ''), { trim: true });
-  }
+  function isValidRecentEmojiValue(...args) { return Boolean(composerEmojiPickerController?.isValidRecentEmojiValue?.(...args)); }
 
-  function isValidRecentEmojiValue(value) {
-    const emoji = normalizeRecentEmojiValue(value);
-    return Boolean(emoji && (isCustomEmojiToken(emoji) || isSingleEmojiMessage(emoji)));
-  }
+  function normalizeRecentEmojiList(...args) { return composerEmojiPickerController?.normalizeRecentEmojiList?.(...args) || []; }
 
-  function normalizeRecentEmojiList(value) {
-    if (!Array.isArray(value)) return [];
-    const seen = new Set();
-    const list = [];
-    value.forEach((item) => {
-      const emoji = normalizeRecentEmojiValue(item);
-      if (!emoji || !isValidRecentEmojiValue(emoji) || seen.has(emoji)) return;
-      seen.add(emoji);
-      list.push(emoji);
-    });
-    return list.slice(0, RECENT_EMOJI_LIMIT);
-  }
+  function mergeRecentEmojiLists(...args) { return composerEmojiPickerController?.mergeRecentEmojiLists?.(...args) || []; }
 
-  function mergeRecentEmojiLists(...lists) {
-    return normalizeRecentEmojiList(lists.flatMap((list) => (Array.isArray(list) ? list : [])));
-  }
+  function getRecentEmojiStorageKey(...args) { return composerEmojiPickerController?.getRecentEmojiStorageKey?.(...args) || ''; }
 
-  function getRecentEmojiStorageKey(userId = currentUser?.id) {
-    const id = Number(userId || 0);
-    return Number.isFinite(id) && id > 0 ? `${RECENT_EMOJI_STORAGE_PREFIX}:${id}` : '';
-  }
+  function getRecentEmojiCategory(...args) { return composerEmojiPickerController?.getRecentEmojiCategory?.(...args) || ''; }
 
-  function loadLocalRecentEmojis() {
-    const key = getRecentEmojiStorageKey();
-    if (!key) return [];
-    try {
-      return normalizeRecentEmojiList(JSON.parse(localStorage.getItem(key) || '[]'));
-    } catch (error) {
-      localStorage.removeItem(key);
-      return [];
-    }
-  }
+  function loadLocalRecentEmojis(...args) { return composerEmojiPickerController?.loadLocalRecentEmojis?.(...args) || []; }
 
-  function persistLocalRecentEmojis(list = recentEmojis) {
-    const key = getRecentEmojiStorageKey();
-    if (!key) return;
-    const normalized = normalizeRecentEmojiList(list);
-    try {
-      if (normalized.length) localStorage.setItem(key, JSON.stringify(normalized));
-      else localStorage.removeItem(key);
-    } catch (error) {
-      // Recent emoji persistence is a convenience cache; API sync still handles the durable copy.
-    }
-  }
+  function persistLocalRecentEmojis(...args) { return composerEmojiPickerController?.persistLocalRecentEmojis?.(...args); }
 
-  function getEmojiPickerCategories() {
-    const cats = Object.keys(EMOJIS);
-    const customCats = CUSTOM_EMOJI_CATALOGS.map((catalog) => catalog.id);
-    if (!cats.length) return [RECENT_EMOJI_CATEGORY, ...customCats];
-    return [cats[0], RECENT_EMOJI_CATEGORY, ...cats.slice(1), ...customCats];
-  }
+  async function loadRecentEmojis(...args) { return composerEmojiPickerController?.loadRecentEmojis?.(...args); }
 
-  function isCustomEmojiCategory(category) {
-    return Boolean(getCustomEmojiCatalog(category));
-  }
+  function rememberRecentEmoji(...args) { return composerEmojiPickerController?.rememberRecentEmoji?.(...args); }
 
-  function getEmojiCategoryItems(category) {
-    if (category === RECENT_EMOJI_CATEGORY) return recentEmojis;
-    const customCatalog = getCustomEmojiCatalog(category);
-    if (customCatalog) return customCatalog.items.map((item) => item.token);
-    return EMOJIS[category] || [];
-  }
+  function syncRecentEmojiToServer(...args) { return composerEmojiPickerController?.syncRecentEmojiToServer?.(...args) || Promise.resolve(null); }
 
-  function getEmojiCategoryLabel(category) {
-    const customCatalog = getCustomEmojiCatalog(category);
-    return customCatalog ? t(customCatalog.label) : category;
-  }
+  function getEmojiPickerCategories(...args) { return composerEmojiPickerController?.getEmojiPickerCategories?.(...args) || []; }
 
-  function emojiCategoryHasCustomEmojiItems(category) {
-    return getEmojiCategoryItems(category).some((item) => isCustomEmojiToken(item));
-  }
+  function isCustomEmojiCategory(...args) { return Boolean(composerEmojiPickerController?.isCustomEmojiCategory?.(...args)); }
 
-  function renderEmojiGridItemHtml(value) {
-    const item = getCustomEmoji(value);
-    if (item) {
-      const legacyPickerClass = item.category === 'qip-infium-original' ? ' qip-infium-emoji-item' : '';
-      const pickerImageClass = item.category === 'qip-infium-original'
-        ? 'custom-emoji-img--picker qip-infium-emoji--picker'
-        : 'custom-emoji-img--picker';
-      return `<div class="emoji-item custom-emoji-item ${esc(item.category)}-emoji-item${legacyPickerClass}" data-emoji="${esc(item.token)}" title="${esc(item.label)}">${renderCustomEmojiHtml(item.token, { className: pickerImageClass, picker: true })}</div>`;
-    }
-    return `<div class="emoji-item" data-emoji="${esc(value)}">${esc(value)}</div>`;
-  }
+  function getEmojiCategoryItems(...args) { return composerEmojiPickerController?.getEmojiCategoryItems?.(...args) || []; }
 
-  function renderEmojiGridItemsHtml(category) {
-    return getEmojiCategoryItems(category).map(renderEmojiGridItemHtml).join('');
-  }
+  function getEmojiCategoryLabel(...args) { return composerEmojiPickerController?.getEmojiCategoryLabel?.(...args) || ''; }
 
-  function applyEmojiGridCategoryState(grid, category, { syncPicker = true } = {}) {
-    const hasCustomItems = emojiCategoryHasCustomEmojiItems(category);
-    const hasQipHdItems = category === 'qip-hd' && hasCustomItems;
-    const hasQipOriginalItems = category === 'qip-infium-original' && hasCustomItems;
-    grid?.classList?.toggle('has-custom-emoji-images', hasCustomItems);
-    grid?.classList?.toggle('has-qip-hd-emojis', hasQipHdItems);
-    grid?.classList?.toggle('has-qip-infium-emojis', hasQipOriginalItems);
-    if (syncPicker) {
-      emojiPicker?.classList?.toggle('has-custom-emoji-images', hasCustomItems);
-      emojiPicker?.classList?.toggle('has-qip-hd-emojis', hasQipHdItems);
-      emojiPicker?.classList?.toggle('has-qip-infium-emojis', hasQipOriginalItems);
-    }
-  }
+  function renderEmojiGridItemHtml(...args) { return composerEmojiPickerController?.renderEmojiGridItemHtml?.(...args) || ''; }
 
-  function getEmojiPickerLiveGrid() {
-    return emojiPicker?.querySelector?.('.emoji-grid-swipe > .emoji-grid.horizontal-swipe-live')
-      || emojiPicker?.querySelector?.('.emoji-grid');
-  }
+  function renderEmojiGridItemsHtml(...args) { return composerEmojiPickerController?.renderEmojiGridItemsHtml?.(...args) || ''; }
 
-  function createEmojiPickerGridElement(category) {
-    const grid = document.createElement('div');
-    grid.className = 'emoji-grid';
-    applyEmojiGridCategoryState(grid, category, { syncPicker: false });
-    grid.innerHTML = renderEmojiGridItemsHtml(category);
-    return grid;
-  }
+  function renderEmojiPickerGrid(...args) { return composerEmojiPickerController?.renderEmojiPickerGrid?.(...args); }
 
-  function renderEmojiPickerGrid(category) {
-    const grid = getEmojiPickerLiveGrid();
-    if (!grid) return;
-    applyEmojiGridCategoryState(grid, category);
-    grid.innerHTML = renderEmojiGridItemsHtml(category);
-  }
+  function setEmojiPickerCategory(...args) { return composerEmojiPickerController?.setEmojiPickerCategory?.(...args); }
 
-  function getActiveEmojiPickerCategory() {
-    return emojiPicker?.querySelector?.('.emoji-tab.active')?.dataset?.cat || '';
-  }
+  function initEmojiPicker(...args) { return composerEmojiPickerController?.initEmojiPicker?.(...args); }
 
-  function centerEmojiPickerActiveCategory({ behavior = 'auto' } = {}) {
-    const tabs = emojiPicker?.querySelector?.('.emoji-tabs');
-    return scheduleScrollableItemCenter(tabs, '.emoji-tab.active', { behavior });
-  }
+  function syncEmojiPickerButton(...args) { return composerEmojiPickerController?.syncEmojiPickerButton?.(...args); }
 
-  function setEmojiPickerCategory(category, { reposition = true, centerBehavior = 'auto' } = {}) {
-    const cats = getEmojiPickerCategories();
-    const nextCategory = cats.includes(category) ? category : (cats[0] || RECENT_EMOJI_CATEGORY);
-    emojiPicker?.querySelectorAll?.('.emoji-tab').forEach((tab) => {
-      tab.classList.toggle('active', tab.dataset.cat === nextCategory);
-    });
-    renderEmojiPickerGrid(nextCategory);
-    centerEmojiPickerActiveCategory({ behavior: centerBehavior });
-    if (reposition) positionEmojiPicker();
-    return nextCategory;
-  }
+  function positionEmojiPicker(...args) { return composerEmojiPickerController?.positionEmojiPicker?.(...args); }
 
-  function updateRecentEmojiGridIfActive() {
-    if (typeof document === 'undefined' || !emojiPicker?.isConnected) return;
-    if (getActiveEmojiPickerCategory() === RECENT_EMOJI_CATEGORY) {
-      renderEmojiPickerGrid(RECENT_EMOJI_CATEGORY);
-      positionEmojiPicker();
-    }
-  }
+  function openEmojiPicker(...args) { return composerEmojiPickerController?.openEmojiPicker?.(...args) || false; }
 
-  function applyRecentEmojis(list, { persist = true } = {}) {
-    recentEmojis = normalizeRecentEmojiList(list);
-    if (persist) persistLocalRecentEmojis(recentEmojis);
-    updateRecentEmojiGridIfActive();
-  }
+  function closeEmojiPicker(...args) { return composerEmojiPickerController?.closeEmojiPicker?.(...args); }
 
-  function syncMissingRecentEmojisToServer(list, serverList = []) {
-    const serverSet = new Set(normalizeRecentEmojiList(serverList));
-    const missing = normalizeRecentEmojiList(list)
-      .filter((emoji) => !serverSet.has(emoji) && !recentEmojiServerRejected.has(emoji));
-    if (!missing.length) return;
-    missing.slice().reverse().forEach((emoji) => {
-      syncRecentEmojiToServer(emoji, 'backfill');
-    });
-  }
+  function dismissEmojiPickerOutsideGesture(...args) { return composerEmojiPickerController?.dismissEmojiPickerOutsideGesture?.(...args); }
 
-  function isInvalidRecentEmojiApiError(error) {
-    return error?.status === 400 && String(error?.serverError || error?.message || '') === 'Invalid emoji';
-  }
+  function toggleEmojiPicker(...args) { return composerEmojiPickerController?.toggleEmojiPicker?.(...args) || false; }
 
-  function syncRecentEmojiToServer(emoji, reason) {
-    const value = normalizeRecentEmojiValue(emoji);
-    if (!value || recentEmojiServerRejected.has(value)) return Promise.resolve(null);
-    return api('/api/user/recent-emojis', { method: 'POST', body: { emoji: value } })
-      .catch((error) => {
-        if (isInvalidRecentEmojiApiError(error)) {
-          recentEmojiServerRejected.add(value);
-          return null;
-        }
-        console.warn(`[emoji] recent ${reason} failed:`, error);
-        return null;
-      });
-  }
-
-  function rememberRecentEmoji(emoji, { sync = true } = {}) {
-    const value = normalizeRecentEmojiValue(emoji);
-    if (!value || !isValidRecentEmojiValue(value)) return;
-    applyRecentEmojis(mergeRecentEmojiLists([value], recentEmojis));
-    if (!sync) return;
-    syncRecentEmojiToServer(value, 'save')
-      .then((data) => {
-        if (data?.emojis) applyRecentEmojis(mergeRecentEmojiLists([value], recentEmojis, data.emojis));
-      });
-  }
-
-  async function loadRecentEmojis() {
-    const localRecent = loadLocalRecentEmojis();
-    if (localRecent.length) applyRecentEmojis(localRecent, { persist: false });
-    try {
-      const data = await api('/api/user/recent-emojis');
-      const serverRecent = normalizeRecentEmojiList(data?.emojis || []);
-      const merged = mergeRecentEmojiLists(localRecent, serverRecent);
-      applyRecentEmojis(merged);
-      syncMissingRecentEmojisToServer(merged, serverRecent);
-    } catch (error) {
-      console.warn('[emoji] recent load failed:', error);
-      applyRecentEmojis(localRecent);
-    }
-  }
-
-  function initEmojiPicker() {
-    const cats = getEmojiPickerCategories();
-    let html = '<div class="emoji-tabs">';
-    cats.forEach((cat, i) => {
-      const tabClasses = `emoji-tab${i === 0 ? ' active' : ''}${isCustomEmojiCategory(cat) ? ' custom-emoji-tab' : ''}${cat === 'qip-infium-original' ? ' qip-infium-emoji-tab' : ''}`;
-      html += `<div class="${tabClasses}" data-cat="${esc(cat)}">${esc(getEmojiCategoryLabel(cat))}</div>`;
-    });
-    html += '</div><div class="emoji-grid-swipe horizontal-swipe-surface"><div class="emoji-grid horizontal-swipe-live">';
-    html += renderEmojiGridItemsHtml(cats[0]);
-    html += '</div></div>';
-    emojiPicker.innerHTML = html;
-    applyEmojiGridCategoryState(getEmojiPickerLiveGrid(), cats[0]);
-    syncEmojiPickerButton();
-
-    emojiSwipePager?.destroy();
-    emojiSwipePager = createHorizontalSwipePager({
-      root: emojiPicker.querySelector('.emoji-grid-swipe'),
-      getKeys: () => getEmojiPickerCategories(),
-      getActiveKey: () => getActiveEmojiPickerCategory(),
-      setActiveKey: (category, meta = {}) => {
-        setEmojiPickerCategory(category, {
-          reposition: false,
-          centerBehavior: meta.source === 'swipe' ? 'smooth' : 'auto',
-        });
-      },
-      renderPage: (category) => createEmojiPickerGridElement(category),
-      isAvailable: () => isFloatingSurfaceVisible(emojiPicker),
-      onSettled: (_category, meta = {}) => {
-        centerEmojiPickerActiveCategory({ behavior: meta.source === 'swipe' ? 'smooth' : 'auto' });
-        positionEmojiPicker();
-      },
-    });
-
-    const isEmojiPickerScrollSurface = (target) => Boolean(
-      target instanceof Element
-      && (
-        target.classList.contains('emoji-grid')
-        || target.classList.contains('emoji-grid-swipe')
-        || target.classList.contains('emoji-tabs')
-      )
-    );
-    const keepEmojiPickerInteractionFromBlurringInput = (e) => {
-      if (e.type === 'touchstart' || e.type === 'touchmove') return;
-      if (isEmojiPickerScrollSurface(e.target)) return;
-      if (shouldKeepEmojiPickerKeyboard()) preventMobileComposerBlur(e);
-    };
-
-    emojiPicker.addEventListener('pointerdown', (e) => {
-      keepEmojiPickerInteractionFromBlurringInput(e);
-      e.stopPropagation();
-    });
-    emojiPicker.addEventListener('touchstart', (e) => {
-      e.stopPropagation();
-    }, { passive: true });
-    emojiPicker.addEventListener('touchmove', (e) => {
-      e.stopPropagation();
-    }, { passive: true });
-    emojiPicker.addEventListener('mousedown', (e) => {
-      keepEmojiPickerInteractionFromBlurringInput(e);
-      if (!isEmojiPickerScrollSurface(e.target)) e.preventDefault();
-      e.stopPropagation();
-    });
-
-    emojiPicker.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const tab = e.target.closest('.emoji-tab');
-      if (tab) {
-        setEmojiPickerCategory(tab.dataset.cat || '');
-        return;
-      }
-      const item = e.target.closest('.emoji-item');
-      if (item) {
-        const value = item.dataset.emoji || item.textContent || '';
-        if (!value) return;
-        const insertion = getEmojiPickerInsertionValue(value);
-        const inputValue = msgInput.value || '';
-        const inputIsFocused = document.activeElement === msgInput;
-        if (inputIsFocused) snapComposerSelectionToCustomEmojiBoundary();
-        const start = inputIsFocused
-          ? Math.max(0, Math.min(inputValue.length, msgInput.selectionStart ?? inputValue.length))
-          : inputValue.length;
-        const end = inputIsFocused
-          ? Math.max(start, Math.min(inputValue.length, msgInput.selectionEnd ?? start))
-          : start;
-        const before = inputValue.substring(0, start);
-        const after = inputValue.substring(end);
-        msgInput.value = before + insertion + after;
-        msgInput.selectionStart = msgInput.selectionEnd = start + insertion.length;
-        msgInput.dispatchEvent(new Event('input', { bubbles: true }));
-        rememberRecentEmoji(value);
-        if (!isMobileLayoutViewport() || shouldKeepEmojiPickerKeyboard()) {
-          focusComposerKeepKeyboard(true);
-        }
-      }
-    });
-  }
-
-  function syncEmojiPickerButton() {
-    if (!emojiBtn) return;
-    const isOpen = Boolean(emojiPickerOpen && isFloatingSurfaceVisible(emojiPicker));
-    emojiBtn.classList.toggle('is-open', isOpen);
-    emojiBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-  }
-
-  function getEmojiPickerAnchorClientTop(anchor, anchorRect) {
-    const row = inputRow instanceof HTMLElement ? inputRow : null;
-    if (!row || !(anchor === emojiBtn || row.contains(anchor))) return anchorRect.top;
-    const rowRect = row.getBoundingClientRect?.();
-    if (
-      !rowRect
-      || !Number.isFinite(rowRect.top)
-      || !Number.isFinite(rowRect.bottom)
-      || rowRect.bottom <= rowRect.top
-    ) {
-      return anchorRect.top;
-    }
-    return Math.min(anchorRect.top, rowRect.top);
-  }
-
-  function positionEmojiPicker(anchorEl = emojiPickerAnchorEl || emojiBtn) {
-    if (!(emojiPicker instanceof HTMLElement) || !isFloatingSurfaceVisible(emojiPicker)) return;
-    const anchor = anchorEl instanceof HTMLElement ? anchorEl : emojiBtn;
-    if (!(anchor instanceof HTMLElement)) return;
-    const rect = anchor.getBoundingClientRect();
-    const keyboardAttached = isMobileLayoutViewport() && shouldKeepEmojiPickerKeyboard();
-    const viewport = keyboardAttached
-      ? {
-        left: 0,
-        top: 0,
-        width: window.visualViewport?.width || window.innerWidth,
-        height: window.visualViewport?.height || window.innerHeight,
-        right: window.visualViewport?.width || window.innerWidth,
-        bottom: window.visualViewport?.height || window.innerHeight,
-      }
-      : getFloatingViewportRect();
-    const pickerSize = measureFloatingSurface(emojiPicker, 254, 338);
-    if (keyboardAttached) {
-      emojiPicker.style.maxHeight = `${Math.max(180, Math.round(viewport.height - 100))}px`;
-    } else {
-      emojiPicker.style.maxHeight = '';
-    }
-    const left = clamp(
-      rect.left + viewport.left + ((rect.width - pickerSize.width) / 2),
-      viewport.left + 8,
-      viewport.right - pickerSize.width - 8
-    );
-    const anchorClientTop = getEmojiPickerAnchorClientTop(anchor, rect);
-    let top = anchorClientTop + viewport.top - pickerSize.height - 8;
-    if (keyboardAttached) {
-      top = Math.min(top, anchorClientTop - pickerSize.height - 8);
-    }
-    top = clamp(top, viewport.top + 8, viewport.bottom - pickerSize.height - 8);
-    positionFloatingElement(emojiPicker, left, top);
-  }
-
-  function openEmojiPicker(anchorEl = emojiBtn, { keepKeyboardOpen } = {}) {
-    if (!(emojiPicker instanceof HTMLElement)) return false;
-    const keyboardAttached = typeof keepKeyboardOpen === 'boolean'
-      ? keepKeyboardOpen
-      : (!isMobileLayoutViewport() || isMobileComposerKeyboardOpen());
-    emojiPickerAnchorEl = anchorEl instanceof HTMLElement ? anchorEl : emojiBtn;
-    emojiPickerKeyboardAttached = keyboardAttached;
-    emojiPickerOpen = true;
-    openFloatingSurface(emojiPicker);
-    syncEmojiPickerButton();
-    positionEmojiPicker(emojiPickerAnchorEl);
-    requestAnimationFrame(() => positionEmojiPicker(emojiPickerAnchorEl));
-    stabilizeEmojiPickerKeyboardOnOpen(keyboardAttached);
-    return true;
-  }
-
-  function closeEmojiPicker({ immediate = false } = {}) {
-    emojiPickerOpen = false;
-    clearEmojiPickerKeyboardOpenStabilizer();
-    syncEmojiPickerButton();
-    return closeFloatingSurface(emojiPicker, {
-      immediate,
-      onAfterClose: () => {
-        emojiSwipePager?.reset();
-        emojiPickerKeyboardAttached = false;
-        emojiPickerAnchorEl = null;
-        if (emojiPicker instanceof HTMLElement) {
-          emojiPicker.style.left = '';
-          emojiPicker.style.top = '';
-          emojiPicker.style.maxHeight = '';
-        }
-        syncEmojiPickerButton();
-      },
-    });
-  }
-
-  function isEventInsideEmojiPickerSurface(event) {
-    const path = typeof event?.composedPath === 'function' ? event.composedPath() : [];
-    if (path.includes(emojiPicker) || path.includes(emojiBtn)) return true;
-    const target = event?.target;
-    return Boolean(
-      target instanceof Node
-      && (
-        emojiPicker?.contains?.(target)
-        || emojiBtn?.contains?.(target)
-      )
-    );
-  }
-
-  function dismissEmojiPickerOutsideGesture(event) {
-    if (!isFloatingSurfaceVisible(emojiPicker)) return;
-    if (event?.type === 'pointerdown' && typeof event.button === 'number' && event.button !== 0) return;
-    if (isEventInsideEmojiPickerSurface(event)) return;
-    closeEmojiPicker();
-  }
-
-  function toggleEmojiPicker(anchorEl = emojiBtn, options = {}) {
-    if (isFloatingSurfaceVisible(emojiPicker)) {
-      closeEmojiPicker();
-      return false;
-    }
-    openEmojiPicker(anchorEl, options);
-    return true;
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
   // MEDIA VIEWER
   // ═══════════════════════════════════════════════════════════════════════════
   const GALLERY_PREFETCH_COUNT = 3;
@@ -17340,7 +15790,7 @@
   let floatingMessageActionsState = null;
   let reactionPickerIdleTimer = null;
   let reactionUiGeneration = 0;
-  let reactionEmojiPopoverCategory = Object.keys(EMOJIS)[0] || '';
+  let reactionEmojiPopoverCategory = getEmojiPickerCategories()[0] || '';
   let suppressNextMessageActionTapUntil = 0;
   let reactionMorePointerHandledUntil = 0;
 
@@ -17584,7 +16034,7 @@
         key,
         emojis: getEmojiCategoryItems(key).filter((emoji) => !quickSet.has(emoji) && !isCustomEmojiToken(emoji)),
       }))
-      .filter((category) => category.key === RECENT_EMOJI_CATEGORY || category.emojis.length > 0);
+      .filter((category) => category.key === getRecentEmojiCategory() || category.emojis.length > 0);
   }
 
   function getReactionEmojiCategoryKey(value) {
@@ -19776,189 +18226,23 @@
   // ═══════════════════════════════════════════════════════════════════════════
   // AUTO RESIZE TEXTAREA
   // ═══════════════════════════════════════════════════════════════════════════
-  let msgInputMeasureMirror = null;
+  function getVisibleComposerToolCount(...args) { return composerTextController?.getVisibleComposerToolCount?.(...args) || 0; }
 
-  function getVisibleComposerToolCount() {
-    return [attachBtn, pollBtn, emojiBtn].filter((button) => {
-      if (!(button instanceof HTMLElement)) return false;
-      const styles = getComputedStyle(button);
-      return styles.display !== 'none' && styles.visibility !== 'hidden';
-    }).length || 1;
-  }
+  function getComposerInputWidthForMode(...args) { return composerTextController?.getComposerInputWidthForMode?.(...args) || 1; }
 
-  function getComposerInputWidthForMode(multiline = Boolean(inputRow?.classList.contains('is-multiline'))) {
-    if (!inputRow || !msgInput) return msgInput?.clientWidth || 1;
-    const rowStyles = getComputedStyle(inputRow);
-    const toolSize = parseFloat(rowStyles.getPropertyValue('--composer-tool-size')) || 36;
-    const toolGap = parseFloat(rowStyles.getPropertyValue('--composer-tool-gap')) || 4;
-    const rowGap = parseFloat(rowStyles.columnGap || rowStyles.gap) || 4;
-    const toolCount = getVisibleComposerToolCount();
-    const toolWidth = multiline
-      ? toolSize
-      : (toolCount * toolSize) + (Math.max(0, toolCount - 1) * toolGap);
-    const sendWidth = sendBtn?.getBoundingClientRect?.().width || 44;
-    const rowWidth = inputRow.getBoundingClientRect().width || msgInput.clientWidth || 1;
-    return Math.max(1, rowWidth - toolWidth - sendWidth - (rowGap * 2));
-  }
+  function getNormalComposerInputWidth(...args) { return composerTextController?.getNormalComposerInputWidth?.(...args) || 1; }
 
-  function getNormalComposerInputWidth() {
-    return getComposerInputWidthForMode(false);
-  }
+  function measureMsgInputScrollHeight(...args) { return composerTextController?.measureMsgInputScrollHeight?.(...args) || 0; }
 
-  function measureMsgInputScrollHeight(width) {
-    if (!msgInputMeasureMirror) {
-      msgInputMeasureMirror = document.createElement('textarea');
-      msgInputMeasureMirror.setAttribute('aria-hidden', 'true');
-      msgInputMeasureMirror.tabIndex = -1;
-      msgInputMeasureMirror.rows = 1;
-      Object.assign(msgInputMeasureMirror.style, {
-        position: 'fixed',
-        left: '-9999px',
-        top: '0',
-        visibility: 'hidden',
-        pointerEvents: 'none',
-        overflow: 'hidden',
-        resize: 'none',
-      });
-      document.body.appendChild(msgInputMeasureMirror);
-    }
+  function getComposerInputTextMetrics(...args) { return composerTextController?.getComposerInputTextMetrics?.(...args) || { lineHeight: 20, paddingY: 0, borderY: 0, singleLineHeight: 20, twoLineHeight: 40 }; }
 
-    const sourceStyles = getComputedStyle(msgInput);
-    [
-      'boxSizing', 'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'letterSpacing',
-      'lineHeight', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
-      'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
-      'whiteSpace', 'wordBreak', 'overflowWrap', 'textTransform', 'textIndent'
-    ].forEach((property) => {
-      msgInputMeasureMirror.style[property] = sourceStyles[property];
-    });
-    msgInputMeasureMirror.style.width = `${Math.max(1, Math.round(width))}px`;
-    msgInputMeasureMirror.value = msgInput.value || '';
-    msgInputMeasureMirror.style.height = 'auto';
-    return msgInputMeasureMirror.scrollHeight;
-  }
+  function renderComposerRichPreviewContent(...args) { return composerTextController?.renderComposerRichPreviewContent?.(...args) || { html: '', hasEmoji: false, maxEmojiHeight: 0 }; }
 
-  function getComposerInputTextMetrics() {
-    if (!msgInput) return { lineHeight: 20, paddingY: 0, borderY: 0, singleLineHeight: 20, twoLineHeight: 40 };
-    const styles = getComputedStyle(msgInput);
-    const fontSize = parseFloat(styles.fontSize) || 15;
-    const lineHeight = parseFloat(styles.lineHeight) || (fontSize * 1.35);
-    const paddingY = (parseFloat(styles.paddingTop) || 0) + (parseFloat(styles.paddingBottom) || 0);
-    const borderY = (parseFloat(styles.borderTopWidth) || 0) + (parseFloat(styles.borderBottomWidth) || 0);
-    return {
-      lineHeight,
-      paddingY,
-      borderY,
-      singleLineHeight: lineHeight + paddingY + borderY,
-      twoLineHeight: (lineHeight * 2) + paddingY + borderY,
-    };
-  }
+  function syncComposerRichPreview(...args) { return composerTextController?.syncComposerRichPreview?.(...args) || 0; }
 
-  function renderComposerRichPreviewContent(value) {
-    const source = String(value || '');
-    const tokenRe = /^:qip-infium-\d{3}:|^:qip-hd-[a-z0-9][a-z0-9-]{0,63}:/i;
-    let html = '';
-    let text = '';
-    let hasEmoji = false;
-    let maxEmojiHeight = 0;
-    for (let index = 0; index < source.length;) {
-      let item = getComposerCustomEmojiItemFromMarker(source[index]);
-      let token = item?.token || '';
-      let nextIndex = item ? getComposerCustomEmojiClusterEnd(source, index) : index + 1;
-      if (!item) {
-        const tokenMatch = source.slice(index).match(tokenRe);
-        if (tokenMatch) {
-          token = tokenMatch[0];
-          item = getCustomEmoji(token);
-          if (item) nextIndex = index + token.length;
-        }
-      }
-      if (!item) {
-        text += source[index];
-        index += 1;
-        continue;
-      }
-      html += esc(text);
-      text = '';
-      html += renderCustomEmojiHtml(token, { className: 'composer-rich-emoji' });
-      hasEmoji = true;
-      maxEmojiHeight = Math.max(maxEmojiHeight, getCustomEmojiRenderedSize(item).height);
-      index = nextIndex;
-    }
-    html += esc(text);
-    return { html, hasEmoji, maxEmojiHeight };
-  }
+  function autoResize(...args) { return composerTextController?.autoResize?.(...args); }
 
-  function syncComposerRichPreview(metrics = getComposerInputTextMetrics()) {
-    if (!composerRichPreview || !msgInput) return 0;
-    const rendered = renderComposerRichPreviewContent(msgInput.value || '');
-    const wrap = msgInput.closest?.('.composer-input-wrap');
-    composerRichPreview.classList.toggle('hidden', !rendered.hasEmoji);
-    composerRichPreview.innerHTML = rendered.hasEmoji ? rendered.html : '';
-    wrap?.classList?.toggle('has-rich-preview', rendered.hasEmoji);
-    inputRow?.classList?.toggle('has-rich-emoji-preview', rendered.hasEmoji);
-    if (!rendered.hasEmoji) {
-      wrap?.classList?.remove('rich-preview-two-line');
-      inputRow?.classList?.remove('is-rich-emoji-multiline');
-      return 0;
-    }
-
-    const needsTwoLines = rendered.maxEmojiHeight > metrics.lineHeight + 2;
-    wrap?.classList?.toggle('rich-preview-two-line', needsTwoLines);
-    inputRow?.classList?.toggle('is-rich-emoji-multiline', needsTwoLines);
-    if (!needsTwoLines) return metrics.singleLineHeight;
-    return Math.max(metrics.twoLineHeight, rendered.maxEmojiHeight + metrics.paddingY + metrics.borderY + 2);
-  }
-
-  function autoResize() {
-    const wasMultiline = Boolean(inputRow?.classList.contains('is-multiline'));
-    const previousHeight = parseFloat(msgInput.style.height) || 0;
-    const previousInputAreaHeight = Math.max(0, inputArea?.getBoundingClientRect?.().height || 0);
-    const metrics = getComposerInputTextMetrics();
-    const richPreviewHeight = syncComposerRichPreview(metrics);
-    const normalInputWidth = getNormalComposerInputWidth();
-    const normalScrollHeight = measureMsgInputScrollHeight(normalInputWidth);
-    const normalHeight = Math.min(Math.max(normalScrollHeight, richPreviewHeight), 150);
-    const isMultiline = normalHeight > metrics.singleLineHeight + 2;
-    inputRow?.classList.toggle('is-multiline', isMultiline);
-    const finalInputWidth = getComposerInputWidthForMode(isMultiline);
-    const finalScrollHeight = measureMsgInputScrollHeight(finalInputWidth);
-    const nextHeight = Math.min(Math.max(finalScrollHeight, richPreviewHeight), 150);
-    msgInput.style.height = nextHeight + 'px';
-    if (inputRow) {
-      const changed = wasMultiline !== isMultiline;
-      const heightChanged = Math.abs(nextHeight - previousHeight) > 0.5;
-      const nextInputAreaHeight = Math.max(0, inputArea?.getBoundingClientRect?.().height || 0);
-      const inputAreaDelta = nextInputAreaHeight - previousInputAreaHeight;
-      const inputHeightDelta = previousHeight > 0 ? nextHeight - previousHeight : 0;
-      const effectiveInputDelta = Math.abs(inputAreaDelta) >= Math.abs(inputHeightDelta)
-        ? inputAreaDelta
-        : inputHeightDelta;
-      if ((previousInputAreaHeight > 0 || previousHeight > 0) && Math.abs(effectiveInputDelta) > 0.5) {
-        mobileKeyboardDockRecentInputDelta = effectiveInputDelta;
-        mobileKeyboardDockRecentInputDeltaAt = Date.now();
-      }
-      if ((changed || heightChanged) && emojiPickerOpen && isFloatingSurfaceVisible(emojiPicker)) {
-        requestAnimationFrame(() => positionEmojiPicker(emojiBtn));
-      }
-      if ((changed || heightChanged) && isMobileLayoutViewport()) {
-        scheduleMobileViewportRecovery(90);
-      }
-    }
-    queueIosViewportLayoutSync();
-  }
-
-  function animateSendButton() {
-    if (!sendBtn) return;
-    sendBtn.classList.remove('send-fly');
-    void sendBtn.offsetWidth;
-    sendBtn.classList.add('send-fly');
-    clearTimeout(sendBtn.__sendFlyTimer);
-    sendBtn.__sendFlyTimer = setTimeout(() => {
-      sendBtn.classList.remove('send-fly');
-      window.BananzaVoiceHooks?.refreshComposerState?.();
-    }, 320);
-  }
+  function animateSendButton(...args) { return composerTextController?.animateSendButton?.(...args); }
 
   function animateBackButton() {
     if (!backBtn) return;
@@ -20246,7 +18530,7 @@
     document.addEventListener('click', (e) => {
       if (isFollowupClickSuppressPassThroughTarget(e.target)) return;
       if (
-        Date.now() >= mentionPickerClickSuppressUntil
+        Date.now() >= composerStateController.mentionPickerClickSuppressUntil
         && Date.now() >= contextConvertPickerClickSuppressUntil
         && Date.now() >= avatarUserMenuClickSuppressUntil
         && Date.now() >= searchPanelFollowupClickSuppressUntil
@@ -20256,15 +18540,7 @@
       e.preventDefault();
       e.stopImmediatePropagation();
     }, true);
-    const dismissMentionPickerOutsideGesture = (e) => {
-      const picker = $('#mentionPicker');
-      if (!picker || picker.classList.contains('hidden')) return;
-      const target = e.target;
-      if (picker.contains(target) || target === msgInput || target?.closest?.('#mentionOpenBtn')) return;
-      hideMentionPicker({ immediate: true });
-      if (isPickerDismissPassThroughTarget(target)) return;
-      consumeOutsidePickerDismissGesture(e, suppressMentionPickerFollowupClick);
-    };
+    const dismissMentionPickerOutsideGesture = (e) => composerMentionsController?.dismissMentionPickerOutsideGesture?.(e);
     const dismissContextConvertPickerOutsideGesture = (e) => {
       const picker = $('#contextConvertPicker');
       if (!picker || picker.classList.contains('hidden')) return;
@@ -20317,9 +18593,9 @@
       updateComposerAiOverrideState().catch(() => {});
       updateMentionPicker();
       // Typing indicator
-      if (!typingSendTimeout) {
+      if (!composerStateController.typingSendTimeout) {
         sendTyping();
-        typingSendTimeout = setTimeout(() => { typingSendTimeout = null; }, 2000);
+        composerStateController.typingSendTimeout = setTimeout(() => { composerStateController.typingSendTimeout = null; }, 2000);
       }
     });
     msgInput.addEventListener('focus', () => {
@@ -20394,113 +18670,11 @@
       clearActivePulseVoterPopover();
     });
 
-    // File attach
-    const fileInputGallery = $('#fileInputGallery');
-    const fileInputCamera = $('#fileInputCamera');
-    const fileInputDocs = $('#fileInputDocs');
+    // File attach and poll composer
     syncMentionOpenButton();
     renderComposerAiOverride();
-    const attachMenu = $('#attachMenu');
-    const attachMenuOverlay = $('#attachMenuOverlay');
-    const isMobileAttachMenu = () => isMobileLayoutViewport();
-    const positionAttachMenu = () => {
-      if (!attachMenu || attachMenu.classList.contains('hidden')) return;
-      const rect = attachBtn.getBoundingClientRect();
-      const vv = window.visualViewport;
-      const viewportLeft = vv ? vv.offsetLeft : 0;
-      const viewportTop = vv ? vv.offsetTop : 0;
-      const viewportWidth = vv ? vv.width : window.innerWidth;
-      const viewportHeight = vv ? vv.height : window.innerHeight;
-      const mw = attachMenu.offsetWidth || 160;
-      const mh = attachMenu.offsetHeight || 145;
-      let left = rect.left + viewportLeft;
-      left = Math.max(viewportLeft + 8, Math.min(left, viewportLeft + viewportWidth - mw - 8));
-      const preferredTop = rect.top + viewportTop - mh - 8;
-      const fallbackTop = rect.bottom + viewportTop + 8;
-      const maxTop = Math.max(viewportTop + 8, viewportTop + viewportHeight - mh - 8);
-      let top = preferredTop;
-      if (top < viewportTop + 8) top = Math.min(fallbackTop, maxTop);
-      top = Math.max(viewportTop + 8, Math.min(top, maxTop));
-      attachMenu.style.left = left + 'px';
-      attachMenu.style.top = top + 'px';
-    };
-    const closeAttachMenu = (options = {}) => closeFloatingSurface(attachMenu, options);
-    const openAttachMenu = ({ keepKeyboardOpen } = {}) => {
-      openFloatingSurface(attachMenu);
-      positionAttachMenu();
-      requestAnimationFrame(positionAttachMenu);
-      if (keepKeyboardOpen) focusComposerKeepKeyboard(true);
-    };
-    bindTouchSafeButtonActivation(attachBtn, ({ keepKeyboardOpen }) => {
-      if (editTo) return;
-      if (isMobileAttachMenu()) {
-        if (isFloatingSurfaceVisible(attachMenu)) {
-          closeAttachMenu();
-          return;
-        }
-        openAttachMenu({ keepKeyboardOpen });
-      } else {
-        fileInput.click();
-      }
-    });
-    window.visualViewport?.addEventListener('resize', () => {
-      if (isMobileAttachMenu() && !attachMenu.classList.contains('hidden')) {
-        positionAttachMenu();
-      }
-    });
-    // Close on outside click (no overlay needed)
-    document.addEventListener('click', (e) => {
-      if (isFloatingSurfaceVisible(attachMenu) && !attachMenu.contains(e.target) && !e.target.closest('#attachBtn')) {
-        closeAttachMenu();
-      }
-    });
-    attachMenuOverlay.addEventListener('click', closeAttachMenu);
-    $('#attachMenuCancel') && $('#attachMenuCancel').addEventListener('click', closeAttachMenu);
-    $('#attachMenuGallery').addEventListener('click', () => { closeAttachMenu(); fileInputGallery.click(); });
-    $('#attachMenuCamera').addEventListener('click', () => { closeAttachMenu(); fileInputCamera.click(); });
-    $('#attachMenuFile').addEventListener('click', () => { closeAttachMenu(); fileInputDocs.click(); });
-    $('#attachMenuPoll')?.addEventListener('click', () => { closeAttachMenu(); openPollComposer(); });
-
-    fileInput.addEventListener('change', () => { if (fileInput.files.length > 0) uploadFiles(fileInput.files); });
-    fileInputGallery.addEventListener('change', () => { if (fileInputGallery.files.length > 0) { uploadFiles(fileInputGallery.files); fileInputGallery.value = ''; } });
-    fileInputCamera.addEventListener('change', () => { if (fileInputCamera.files.length > 0) { uploadFiles(fileInputCamera.files); fileInputCamera.value = ''; } });
-    fileInputDocs.addEventListener('change', () => { if (fileInputDocs.files.length > 0) { uploadFiles(fileInputDocs.files); fileInputDocs.value = ''; } });
-    pollBtn?.addEventListener('click', openPollComposer);
-    $('#pollAddOptionBtn')?.addEventListener('click', () => {
-      if (pollComposerOptions.length >= POLL_MAX_OPTIONS) return;
-      pollComposerOptions.push('');
-      renderPollComposerOptionInputs();
-      refreshPollComposerPreview();
-      const nextInput = pollOptionsList?.querySelector(`input[data-poll-option-index="${pollComposerOptions.length - 1}"]`);
-      nextInput?.focus();
-    });
-    pollOptionsList?.addEventListener('input', (e) => {
-      const input = e.target.closest('input[data-poll-option-index]');
-      if (!input) return;
-      const index = Number(input.dataset.pollOptionIndex || -1);
-      if (index < 0) return;
-      pollComposerOptions[index] = input.value;
-      setPollComposerStatus('');
-      refreshPollComposerPreview();
-    });
-    pollOptionsList?.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-poll-option-remove]');
-      if (!btn) return;
-      const index = Number(btn.dataset.pollOptionRemove || -1);
-      if (index < 0 || pollComposerOptions.length <= POLL_MIN_OPTIONS) return;
-      pollComposerOptions.splice(index, 1);
-      renderPollComposerOptionInputs();
-      refreshPollComposerPreview();
-    });
-    pollQuestionInput?.addEventListener('input', () => {
-      setPollComposerStatus('');
-      refreshPollComposerPreview();
-    });
-    $('#pollAllowMultiple')?.addEventListener('change', refreshPollComposerPreview);
-    $('#pollShowVoters')?.addEventListener('change', refreshPollComposerPreview);
-    $('#pollClosePreset')?.addEventListener('change', refreshPollComposerPreview);
-    $('#pollComposerStyleBtn')?.addEventListener('click', openPollStyleSettingsModal);
-    $('#pollSubmitBtn')?.addEventListener('click', submitPollComposer);
+    composerFilesController?.bindAttachMenuEvents?.({ openPollComposer: () => openPollComposer() });
+    pollComposerController?.bindPollComposerEvents?.();
 
     // Emoji
     bindTouchSafeButtonActivation(emojiBtn, ({ keepKeyboardOpen }) => {
@@ -22213,7 +20387,7 @@
     bindTouchSafeButtonActivation($('#replyBarClose'), ({ event, startKeyboardOpen }) => {
       event?.stopPropagation?.();
       const keepComposerFocus = Boolean(startKeyboardOpen || isMobileComposerKeyboardOpen());
-      if (editTo) clearEdit({ clearInput: true });
+      if (composerStateController.editTo) clearEdit({ clearInput: true });
       else clearReply();
       if (keepComposerFocus) focusComposerKeepKeyboard(true);
     });
@@ -22245,10 +20419,7 @@
     });
 
     // Drag & drop
-    chatView.addEventListener('dragenter', handleDragEnter);
-    chatView.addEventListener('dragover', handleDragOver);
-    chatView.addEventListener('dragleave', handleDragLeave);
-    chatView.addEventListener('drop', handleDrop);
+    composerTypingDragDropController?.bindDragDropEvents?.(chatView);
 
     // Escape key
     document.addEventListener('keydown', (e) => {

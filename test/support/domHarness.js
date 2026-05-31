@@ -63,6 +63,17 @@ const appMessageScriptPaths = Object.freeze([
   'public/js/app/messages/updates.js',
   'public/js/app/messages/render.js',
 ]);
+const appComposerScriptPaths = Object.freeze([
+  'public/js/app/composer/state.js',
+  'public/js/app/composer/text.js',
+  'public/js/app/composer/reply-edit.js',
+  'public/js/app/composer/files.js',
+  'public/js/app/composer/send.js',
+  'public/js/app/composer/emoji-picker.js',
+  'public/js/app/composer/mentions.js',
+  'public/js/app/composer/typing-dragdrop.js',
+  'public/js/app/composer/poll-composer.js',
+]);
 const appRuntimeScriptPaths = Object.freeze([
   ...appShellScriptPaths,
   ...appCoreHelperScriptPaths,
@@ -73,6 +84,7 @@ const appRuntimeScriptPaths = Object.freeze([
   ...appChatListScriptPaths,
   ...appOpenChatScriptPaths,
   ...appMessageScriptPaths,
+  ...appComposerScriptPaths,
 ]);
 
 class FakeAudioNode {
@@ -312,6 +324,9 @@ function installCommonStubs(window) {
     unobserve() {}
     disconnect() {}
   };
+  if (typeof window.HTMLElement.prototype.scrollIntoView !== 'function') {
+    window.HTMLElement.prototype.scrollIntoView = function scrollIntoView() {};
+  }
   window.IntersectionObserver = class {
     observe() {}
     unobserve() {}
@@ -391,6 +406,10 @@ function loadAppOpenChatScripts(dom) {
 
 function loadAppMessageScripts(dom) {
   loadBrowserScripts(dom, appMessageScriptPaths);
+}
+
+function loadAppComposerScripts(dom) {
+  loadBrowserScripts(dom, appComposerScriptPaths);
 }
 
 function loadAppRuntimeScripts(dom) {
@@ -477,6 +496,7 @@ function installAppBridge(dom, overrides = {}) {
 
 module.exports = {
   appChatListScriptPaths,
+  appComposerScriptPaths,
   appCoreHelperScriptPaths,
   appDomMobileShellScriptPaths,
   appFolderScriptPaths,
@@ -492,6 +512,7 @@ module.exports = {
   loadAppScript,
   loadAppCoreHelperScripts,
   loadAppChatListScripts,
+  loadAppComposerScripts,
   loadAppDomMobileShellScripts,
   loadAppFolderScripts,
   loadAppMessageScripts,
