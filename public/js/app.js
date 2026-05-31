@@ -224,12 +224,13 @@
   let sendByEnter = localStorage.getItem('sendByEnter') !== '0';
   const MICROPHONE_MODE_STORAGE_KEY = 'microphoneMode';
   const MICROPHONE_MODE_VALUES = new Set(['voice_message', 'dictation']);
-  let microphoneMode = normalizeMicrophoneMode(localStorage.getItem(MICROPHONE_MODE_STORAGE_KEY));
+  let microphoneMode = MICROPHONE_MODE_VALUES.has(localStorage.getItem(MICROPHONE_MODE_STORAGE_KEY))
+    ? localStorage.getItem(MICROPHONE_MODE_STORAGE_KEY)
+    : 'voice_message';
   let scrollRestoreMode = localStorage.getItem('scrollRestoreMode') || 'bottom'; // 'bottom' | 'restore'
   let openLastChatOnReload = localStorage.getItem('openLastChatOnReload') !== '0';
   const SCREEN_ROTATION_ALLOWED_STORAGE_KEY = 'screenRotationAllowed';
   let screenRotationAllowed = localStorage.getItem(SCREEN_ROTATION_ALLOWED_STORAGE_KEY) !== '0';
-  let screenRotationStatusTimer = null;
   let scrollPositions = {}; // chatId -> { messageId, offsetTop, atBottom, savedAt }
   let scrollPositionsUserKey = '';
   let suppressScrollAnchorSave = false;
@@ -248,36 +249,6 @@
   let chatFolderStripPreviewFolderId = null;
   let chatFolderBarForceVisible = false;
   let chatFolderStripVisibilitySaveInFlight = false;
-  let weatherSettings = { enabled: false, refresh_minutes: 30, location: null };
-  let weatherSettingsLoaded = false;
-  let selectedWeatherLocation = null;
-  let weatherSearchResults = [];
-  let weatherTimer = null;
-  let weatherSearchTimer = null;
-  let notificationSettings = {
-    push_enabled: false,
-    notify_messages: true,
-    notify_chat_invites: true,
-    notify_reactions: true,
-    notify_pins: true,
-    notify_mentions: true,
-  };
-  let notificationSettingsLoaded = false;
-  let pushDeviceSubscribed = false;
-  let soundSettings = {
-    sounds_enabled: true,
-    volume: 55,
-    play_send: true,
-    play_incoming: true,
-    play_notifications: true,
-    play_reactions: true,
-    play_pins: true,
-    play_invites: true,
-    play_voice: true,
-    play_mentions: true,
-  };
-  let soundSettingsLoaded = false;
-  let soundSettingsSaveTimer = null;
   let aiBotState = {
     settings: {
       enabled: false,
@@ -561,21 +532,6 @@
   let avatarUserMenuState = null;
   let avatarUserMenuClickSuppressUntil = 0;
   let chatMemberLastReads = new Map();
-  const modalRegistry = new Map();
-  let modalStack = [];
-  let modalHistoryDepth = 0;
-  let modalSkipPopstateCount = 0;
-  let pendingModalHistoryRewind = 0;
-  let modalHistorySyncTimer = null;
-  let modalHistorySyncDueAt = 0;
-  let modalAnimationSaveTimer = null;
-  let modalAnimationSaveInFlight = false;
-  let modalAnimationSaveQueued = false;
-  let modalAnimationStatusTimer = null;
-  let mobileFontSizeSaveTimer = null;
-  let mobileFontSizeSaveInFlight = false;
-  let mobileFontSizeSaveQueued = false;
-  let mobileFontSizeStatusTimer = null;
   let chatAreaResizeObserver = null;
   let searchAllChats = false;
   let searchRequestSeq = 0;
@@ -904,6 +860,165 @@
     appContext.services.androidBridge = androidBridge;
     appContext.services.chatHeaderActions = chatHeaderActionsShell;
   }
+
+  const modalManagerFactory = window.BananzaApp?.modalManager?.createModalManager;
+  if (typeof modalManagerFactory !== 'function') {
+    throw new Error('BananzaApp modal manager module is required before app.js');
+  }
+  const modalManager = modalManagerFactory({
+    document,
+    window,
+    dom: appDom,
+    config: { MODAL_TRANSITION_BUFFER_MS },
+    state: {
+      getCurrentModalAnimation: () => currentModalAnimation,
+      getCurrentModalAnimationSpeed: () => currentModalAnimationSpeed,
+    },
+    actions: {
+      closeMediaViewer: () => closeMediaViewer(),
+      closeMobileComposerTransientUi: (options) => closeMobileComposerTransientUi(options),
+      dismissMobileComposer: (options) => dismissMobileComposer(options),
+      forceIosAnimationMount: (...elements) => forceIosAnimationMount(...elements),
+      getMobileComposerSafeReturnFocusEl: () => getMobileComposerSafeReturnFocusEl(),
+      prefersReducedMotion: () => prefersReducedMotion(),
+      scheduleMobileViewportRecovery: (retryDelayMs) => scheduleMobileViewportRecovery(retryDelayMs),
+    },
+    getCurrentModalAnimation: () => currentModalAnimation,
+    getCurrentModalAnimationSpeed: () => currentModalAnimationSpeed,
+    getModalAnimationSpeedFactor: (speed) => getModalAnimationSpeedFactor(speed),
+  });
+  if (appContext) appContext.services.modals = modalManager;
+
+  const uiSettingsFactory = window.BananzaApp?.settings?.ui?.createUiSettings;
+  const weatherSettingsFactory = window.BananzaApp?.settings?.weather?.createWeatherSettings;
+  const notificationSettingsFactory = window.BananzaApp?.settings?.notifications?.createNotificationSettings;
+  const soundSettingsFactory = window.BananzaApp?.settings?.sound?.createSoundSettings;
+  const settingsModalFactory = window.BananzaApp?.settings?.modal?.createSettingsModal;
+  if (typeof uiSettingsFactory !== 'function'
+    || typeof weatherSettingsFactory !== 'function'
+    || typeof notificationSettingsFactory !== 'function'
+    || typeof soundSettingsFactory !== 'function'
+    || typeof settingsModalFactory !== 'function') {
+    throw new Error('BananzaApp settings modules are required before app.js');
+  }
+
+  function setCurrentUserFromSettings(nextUser = null, { persist = true } = {}) {
+    currentUser = nextUser;
+    if (currentUser && persist) persistCurrentUser();
+    return currentUser;
+  }
+
+  const uiSettings = uiSettingsFactory({
+    document,
+    window,
+    dom: appDom,
+    config: appConfig,
+    api: (url, opts) => api(url, opts),
+    modals: modalManager,
+    androidBridge,
+    mobileViewport: mobileViewportShell,
+    i18nHelpers,
+    esc,
+    getCurrentUser: () => currentUser,
+    setCurrentUser: setCurrentUserFromSettings,
+    state: {
+      getCurrentUiTheme: () => currentUiTheme,
+      setCurrentUiTheme: (value) => { currentUiTheme = value; },
+      getCurrentVisualMode: () => currentVisualMode,
+      setCurrentVisualMode: (value) => { currentVisualMode = value; },
+      getPollComposerStyle: () => pollComposerStyle,
+      setPollComposerStyle: (value) => { pollComposerStyle = value; },
+      getCurrentModalAnimation: () => currentModalAnimation,
+      setCurrentModalAnimation: (value) => { currentModalAnimation = value; },
+      getCurrentModalAnimationSpeed: () => currentModalAnimationSpeed,
+      setCurrentModalAnimationSpeed: (value) => { currentModalAnimationSpeed = value; },
+      getCurrentMobileFontSize: () => currentMobileFontSize,
+      setCurrentMobileFontSize: (value) => { currentMobileFontSize = value; },
+      getCurrentUiLanguage: () => currentUiLanguage,
+      setCurrentUiLanguage: (value) => { currentUiLanguage = value; },
+      getMicrophoneMode: () => microphoneMode,
+      setMicrophoneMode: (value) => { microphoneMode = value; },
+      getScreenRotationAllowed: () => screenRotationAllowed,
+      setScreenRotationAllowed: (value) => { screenRotationAllowed = Boolean(value); },
+      getSendByEnter: () => sendByEnter,
+      setSendByEnter: (value) => { sendByEnter = Boolean(value); },
+      getScrollRestoreMode: () => scrollRestoreMode,
+      setScrollRestoreMode: (value) => { scrollRestoreMode = value === 'restore' ? 'restore' : 'bottom'; },
+      getOpenLastChatOnReload: () => openLastChatOnReload,
+      setOpenLastChatOnReload: (value) => { openLastChatOnReload = Boolean(value); },
+    },
+    actions: {
+      setInlineStatus: (...args) => setInlineStatus(...args),
+      isMobileLayoutViewport: () => isMobileLayoutViewport(),
+      refreshPollComposerPreview: () => refreshPollComposerPreview(),
+      refreshVoiceComposerState: () => window.BananzaVoiceHooks?.refreshComposerState?.(),
+      refreshLocalizedUiRuntime: () => {
+        if (chatList) renderChatList(chatSearch?.value || '');
+        if (currentChatId) {
+          renderCurrentChatHeader(getChatById(currentChatId));
+          updateChatStatus();
+          renderPinnedBar(currentChatId);
+          refreshDateSeparators();
+        }
+        if (isFloatingSurfaceVisible(chatContextMenu) && chatContextMenuState?.chatId) renderChatContextMenu(getChatById(chatContextMenuState.chatId));
+        if (isFloatingSurfaceVisible(chatFolderPicker)) renderChatFolderPicker();
+        if (isFloatingSurfaceVisible(chatFolderContextMenu) && chatFolderContextMenuState?.folderId) refreshChatFolderContextMenu(chatFolderContextMenuState.folderId);
+        if (isFloatingSurfaceVisible(mediaContextMenu) && mediaContextMenuState?.context) {
+          renderMediaContextMenu(mediaContextMenuState.context);
+          positionMediaContextMenu();
+        }
+      },
+    },
+  });
+  const weatherSettingsController = weatherSettingsFactory({
+    document,
+    window,
+    dom: appDom,
+    api: (url, opts) => api(url, opts),
+    esc,
+    actions: {
+      setInlineStatus: (...args) => setInlineStatus(...args),
+    },
+  });
+  const notificationSettingsController = notificationSettingsFactory({
+    document,
+    window,
+    api: (url, opts) => api(url, opts),
+    state: {
+      getCurrentChatId: () => currentChatId,
+    },
+    actions: {
+      setInlineStatus: (...args) => setInlineStatus(...args),
+    },
+  });
+  const soundSettingsController = soundSettingsFactory({
+    document,
+    window,
+    api: (url, opts) => api(url, opts),
+    actions: {
+      setInlineStatus: (...args) => setInlineStatus(...args),
+      getChatById: (chatId) => getChatById(chatId),
+    },
+  });
+  const settingsModalController = settingsModalFactory({
+    document,
+    window,
+    dom: appDom,
+    modals: modalManager,
+    ui: uiSettings,
+    weather: weatherSettingsController,
+    notifications: notificationSettingsController,
+    sound: soundSettingsController,
+    getCurrentUser: () => currentUser,
+  });
+  const settingsControllers = {
+    ui: uiSettings,
+    weather: weatherSettingsController,
+    notifications: notificationSettingsController,
+    sound: soundSettingsController,
+    modal: settingsModalController,
+  };
+  if (appContext) appContext.services.settings = settingsControllers;
 
   function chatFolderIconEmoji(kind = 'custom') {
     if (kind === 'all') return CHAT_FOLDER_ICON_EMOJI.all;
@@ -2022,7 +2137,7 @@
     animateSendButton: () => animateSendButton(),
     autoResize: () => autoResize(),
     clearReply: () => clearReply(),
-    closeAllModals: () => closeAllModals(),
+    closeAllModals: (options) => closeAllModals(options),
     registerManagedModal: (id, options) => registerModal(id, options),
     openManagedModal: (id, options) => openModal(id, options),
     openModal: (id, options) => openModal(id, options),
@@ -2051,6 +2166,16 @@
     getEditTo: () => editTo ? { ...editTo } : null,
     getMicrophoneMode: () => getMicrophoneMode(),
     getScreenRotationAllowed: () => getScreenRotationAllowed(),
+    openSettingsModal: (opener = $('#settingsBtn')) => openSettingsModal(opener),
+    openLanguageSettingsModal: () => openLanguageSettingsModal(),
+    openThemeSettingsModal: () => openThemeSettingsModal(),
+    openVisualModeSettingsModal: () => openVisualModeSettingsModal(),
+    openPollStyleSettingsModal: () => openPollStyleSettingsModal(),
+    openAnimationSettingsModal: () => openAnimationSettingsModal(),
+    openMobileFontSettingsModal: () => openMobileFontSettingsModal(),
+    openWeatherSettingsModal: () => openWeatherSettingsModal(),
+    openNotificationSettingsModal: () => openNotificationSettingsModal(),
+    openSoundSettingsModal: () => openSoundSettingsModal(),
     insertDictatedText: (text) => insertDictatedText(text),
     queueVoiceMessage: (payload) => queueVoiceOutbox(payload),
     queueVideoNote: (payload) => queueVideoNoteOutbox(payload),
@@ -2167,11 +2292,7 @@
     flushCurrentChatScrollAnchor: (chatId, options = {}) => flushCurrentChatScrollAnchor(chatId, options),
     readScrollAnchors: () => JSON.parse(JSON.stringify(scrollPositions || {})),
     setScrollRestoreMode: (mode = 'bottom') => {
-      scrollRestoreMode = mode === 'restore' ? 'restore' : 'bottom';
-      localStorage.setItem('scrollRestoreMode', scrollRestoreMode);
-      const toggle = $('#settingsScrollRestore');
-      if (toggle) toggle.checked = scrollRestoreMode === 'restore';
-      return scrollRestoreMode;
+      return uiSettings.setScrollRestoreMode(mode);
     },
     setMicrophoneMode: (mode = 'voice_message') => setMicrophoneMode(mode),
     getScreenRotationAllowed: () => getScreenRotationAllowed(),
@@ -2216,20 +2337,7 @@
     }),
   });
 
-  // Weather widget interactivity: click or keyboard activates a forced refresh
-  if (weatherWidget) {
-    weatherWidget.addEventListener('click', (e) => {
-      if (!weatherSettings.enabled || !weatherSettings.location) return;
-      // fire-and-forget; UI shows loading state inside loadCurrentWeather
-      loadCurrentWeather(true).catch(() => {});
-    });
-    weatherWidget.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        weatherWidget.click();
-      }
-    });
-  }
+  weatherSettingsController.bindWidget();
 
   // ═══════════════════════════════════════════════════════════════════════════
   // UTILS
@@ -2417,75 +2525,15 @@
     msgInput.setSelectionRange?.(cursor, cursor);
   }
 
-  function normalizeMicrophoneMode(value) {
-    const next = String(value || '').trim();
-    return MICROPHONE_MODE_VALUES.has(next) ? next : 'voice_message';
-  }
-
-  function getMicrophoneMode() {
-    return normalizeMicrophoneMode(microphoneMode);
-  }
-
-  function setMicrophoneMode(value, { persist = true } = {}) {
-    microphoneMode = normalizeMicrophoneMode(value);
-    if (persist) localStorage.setItem(MICROPHONE_MODE_STORAGE_KEY, microphoneMode);
-    const toggle = $('#settingsMicrophoneMode');
-    if (toggle) toggle.checked = microphoneMode === 'voice_message';
-    window.BananzaVoiceHooks?.refreshComposerState?.();
-    return microphoneMode;
-  }
-
-  function getScreenRotationAllowed() {
-    return screenRotationAllowed !== false;
-  }
-
-  function syncScreenRotationToggle() {
-    const toggle = $('#settingsScreenRotationAllowed');
-    if (toggle) toggle.checked = getScreenRotationAllowed();
-  }
-
-  function setScreenRotationStatus(message = '', type = '') {
-    if (screenRotationStatusTimer) {
-      clearTimeout(screenRotationStatusTimer);
-      screenRotationStatusTimer = null;
-    }
-    setInlineStatus('settingsScreenRotationStatus', message, type);
-  }
-
-  function clearScreenRotationStatusSoon(delayMs = 2200) {
-    if (screenRotationStatusTimer) clearTimeout(screenRotationStatusTimer);
-    screenRotationStatusTimer = setTimeout(() => {
-      screenRotationStatusTimer = null;
-      setInlineStatus('settingsScreenRotationStatus', '', '');
-    }, delayMs);
-  }
-
-  async function applyScreenRotationPreference({ showStatus = false, reason = '' } = {}) {
-    syncScreenRotationToggle();
-    const allowed = getScreenRotationAllowed();
-    const nativeBridgeAvailable = hasAndroidNativeBridge();
-    notifyAndroidScreenRotationPreference(reason || 'sync');
-    if (showStatus) {
-      if (allowed) {
-        setScreenRotationStatus('Screen rotation allowed', 'success');
-        clearScreenRotationStatusSoon();
-      } else if (nativeBridgeAvailable) {
-        setScreenRotationStatus('Portrait lock is active', 'success');
-        clearScreenRotationStatusSoon();
-      } else {
-        setScreenRotationStatus('Saved. Install the updated Android app to lock screen rotation.', 'pending');
-      }
-    }
-    return { allowed, locked: !allowed && nativeBridgeAvailable, nativeBridge: nativeBridgeAvailable };
-  }
-
-  function setScreenRotationAllowed(value, { persist = true, showStatus = true } = {}) {
-    screenRotationAllowed = Boolean(value);
-    if (persist) localStorage.setItem(SCREEN_ROTATION_ALLOWED_STORAGE_KEY, screenRotationAllowed ? '1' : '0');
-    syncScreenRotationToggle();
-    return applyScreenRotationPreference({ showStatus, reason: 'setting-change' });
-  }
-
+  function normalizeMicrophoneMode(value) { return uiSettings.normalizeMicrophoneMode(value); }
+  function getMicrophoneMode() { return uiSettings.getMicrophoneMode(); }
+  function setMicrophoneMode(value, options = {}) { return uiSettings.setMicrophoneMode(value, options); }
+  function getScreenRotationAllowed() { return uiSettings.getScreenRotationAllowed(); }
+  function syncScreenRotationToggle() { return uiSettings.syncScreenRotationToggle(); }
+  function setScreenRotationStatus(message = '', type = '') { return uiSettings.setScreenRotationStatus(message, type); }
+  function clearScreenRotationStatusSoon(delayMs = 2200) { return uiSettings.clearScreenRotationStatusSoon(delayMs); }
+  function applyScreenRotationPreference(options = {}) { return uiSettings.applyScreenRotationPreference(options); }
+  function setScreenRotationAllowed(value, options = {}) { return uiSettings.setScreenRotationAllowed(value, options); }
   function insertDictatedText(text) {
     const insertion = String(text || '').trim();
     if (!msgInput || !insertion) return getComposerTextValue();
@@ -2638,719 +2686,70 @@
     return html;
   }
 
-  function normalizeUiTheme(theme) {
-    return UI_THEME_IDS.has(theme) ? theme : 'bananza';
-  }
-
-  function normalizePollStyle(style) {
-    return POLL_STYLE_IDS.has(style) ? style : 'pulse';
-  }
-
-  function pollStyleMeta(style) {
-    return POLL_STYLES.find((item) => item.id === normalizePollStyle(style)) || POLL_STYLES[0];
-  }
-
-  function setPollStyleStatus(message, type = '') {
-    const el = $('#settingsPollStyleStatus');
-    if (!el) return;
-    el.textContent = tx(message || '');
-    el.classList.toggle('is-error', type === 'error');
-    el.classList.toggle('is-success', type === 'success');
-  }
-
-  function renderPollStyleCardPreview(styleId) {
-    if (styleId === 'stack') {
-      return `
-        <span class="poll-style-card-preview poll-style-card-preview--stack" aria-hidden="true">
-          <i></i>
-          <i></i>
-          <i></i>
-        </span>
-      `;
-    }
-    if (styleId === 'orbit') {
-      return `
-        <span class="poll-style-card-preview poll-style-card-preview--orbit" aria-hidden="true">
-          <span class="poll-style-card-ring"></span>
-          <span class="poll-style-card-legend">
-            <i></i>
-            <i></i>
-            <i></i>
-          </span>
-        </span>
-      `;
-    }
-    return `
-      <span class="poll-style-card-preview poll-style-card-preview--pulse" aria-hidden="true">
-        <i></i>
-        <i></i>
-        <i></i>
-      </span>
-    `;
-  }
-
-  function renderPollStylePicker() {
-    const picker = $('#settingsPollStylePicker');
-    if (!picker) return;
-    picker.innerHTML = POLL_STYLES.map((style) => `
-      <button type="button" class="poll-style-card${style.id === pollComposerStyle ? ' active' : ''}" data-poll-style-option="${style.id}">
-        ${renderPollStyleCardPreview(style.id)}
-        <span class="poll-style-card-copy">
-          <strong>${esc(style.name)}</strong>
-          <small>${esc(style.note)}</small>
-        </span>
-      </button>
-    `).join('');
-  }
-
-  function setPollStyleSurface(modalEl, style) {
-    if (!modalEl) return;
-    modalEl.dataset.pollStyle = normalizePollStyle(style);
-  }
-
-  function syncPollComposerStyleUi() {
-    const style = normalizePollStyle(pollComposerStyle);
-    const meta = pollStyleMeta(style);
-    setPollStyleSurface(pollComposerModal, style);
-    setPollStyleSurface(pollStyleSettingsModal, style);
-    const nameEl = $('#pollComposerStyleName');
-    const noteEl = $('#pollComposerStyleNote');
-    const btnEl = $('#pollComposerStyleBtn');
-    if (nameEl) nameEl.textContent = meta.name;
-    if (noteEl) noteEl.textContent = meta.note;
-    if (btnEl) btnEl.textContent = `Poll Style: ${meta.name}`;
-    renderPollStylePicker();
-  }
-
-  function selectPollStyle(style) {
-    const nextStyle = normalizePollStyle(style);
-    if (nextStyle === pollComposerStyle) return;
-    pollComposerStyle = nextStyle;
-    syncPollComposerStyleUi();
-    refreshPollComposerPreview();
-    setPollStyleStatus('Applies to this poll only', 'success');
-  }
-
-  function setThemeStatus(message, type = '') {
-    const el = $('#settingsThemeStatus');
-    if (!el) return;
-    el.textContent = tx(message || '');
-    el.classList.toggle('is-error', type === 'error');
-    el.classList.toggle('is-success', type === 'success');
-  }
-
-  function normalizeVisualMode(mode) {
-    return UI_VISUAL_MODE_IDS.has(mode) ? mode : 'classic';
-  }
-
-  function visualModeMeta(mode) {
-    const id = normalizeVisualMode(mode);
-    return UI_VISUAL_MODES.find(item => item.id === id) || UI_VISUAL_MODES[0];
-  }
-
-  function visualModeStateLabel(mode) {
-    return normalizeVisualMode(mode) === 'rich' ? 'On' : 'Off';
-  }
-
-  function setVisualModeStatus(message, type = '') {
-    const el = $('#settingsVisualModeStatus');
-    if (!el) return;
-    el.textContent = tx(message || '');
-    el.classList.toggle('is-error', type === 'error');
-    el.classList.toggle('is-success', type === 'success');
-  }
-
-  function renderVisualModePicker() {
-    const picker = $('#settingsVisualModePicker');
-    if (!picker) return;
-    picker.innerHTML = UI_VISUAL_MODES.map(mode => `
-      <button type="button" class="visual-mode-card${mode.id === currentVisualMode ? ' active' : ''}" data-visual-mode-option="${mode.id}">
-        <span class="visual-mode-card-preview visual-mode-card-preview--${mode.id}" aria-hidden="true">
-          <i></i><i></i><i></i>
-        </span>
-        <span class="visual-mode-card-copy">
-          <strong>${esc(mode.name)}</strong>
-          <small>${esc(mode.note)}</small>
-        </span>
-      </button>
-    `).join('');
-  }
-
-  function renderThemePicker() {
-    const picker = $('#settingsThemePicker');
-    if (!picker) return;
-    const mode = visualModeMeta(currentVisualMode);
-    picker.innerHTML = UI_THEMES.map(theme => `
-      <button type="button" class="theme-card${theme.id === currentUiTheme ? ' active' : ''}" data-theme="${theme.id}">
-        <span class="theme-card-swatches">
-          <span style="background:${theme.colors[0]}"></span>
-          <span style="background:${theme.colors[1]}"></span>
-        </span>
-        <span class="theme-card-copy">
-          <strong>${esc(theme.name)}</strong>
-          <small>${esc(theme.note)} · Rich Banan UX ${visualModeStateLabel(mode.id)}</small>
-        </span>
-        <span class="theme-card-preview theme-card-preview--${mode.id}" aria-hidden="true">
-          <i style="background:${theme.other}"></i>
-          <i style="background:${theme.own}"></i>
-        </span>
-      </button>
-    `).join('');
-  }
-
-  function applyVisualMode(mode, persist = true) {
-    const nextMode = normalizeVisualMode(mode);
-    currentVisualMode = nextMode;
-    document.documentElement.dataset.visualMode = nextMode;
-    if (currentUser) {
-      currentUser.ui_visual_mode = nextMode;
-      if (persist) localStorage.setItem('user', JSON.stringify(currentUser));
-    }
-    const panelBtn = $('#settingsVisualModePanel');
-    if (panelBtn) panelBtn.textContent = `\uD83C\uDF4C ${t('Rich Banan UX')}: ${t(visualModeStateLabel(nextMode))}`;
-    renderVisualModePicker();
-    renderThemePicker();
-  }
-
-  function applyUiTheme(theme, persist = true) {
-    const nextTheme = normalizeUiTheme(theme);
-    currentUiTheme = nextTheme;
-    document.documentElement.dataset.uiTheme = nextTheme;
-    if (currentUser) {
-      currentUser.ui_theme = nextTheme;
-      if (persist) localStorage.setItem('user', JSON.stringify(currentUser));
-    }
-    renderThemePicker();
-  }
-
-  function normalizeUiLanguage(language) {
-    return i18n?.normalizeLanguage?.(language) || (String(language || '').toLowerCase() === 'en' ? 'en' : 'ru');
-  }
-
-  function languageDisplayName(language = currentUiLanguage) {
-    return normalizeUiLanguage(language) === 'en' ? t('English') : t('Russian');
-  }
-
-  function setLanguageStatus(message, type = '') {
-    const el = $('#settingsLanguageStatus');
-    if (!el) return;
-    el.textContent = tx(message || '');
-    el.classList.toggle('is-error', type === 'error');
-    el.classList.toggle('is-success', type === 'success');
-  }
-
-  function syncLanguageSettingsButton() {
-    const panelBtn = $('#settingsLanguagePanel');
-    if (!panelBtn) return;
-    panelBtn.textContent = `\uD83C\uDF10 ${t('Interface language')}: ${languageDisplayName(currentUiLanguage)}`;
-  }
-
-  function renderLanguagePicker() {
-    const picker = $('#settingsLanguagePicker');
-    if (!picker) return;
-    picker.querySelectorAll('[data-language-option]').forEach((button) => {
-      const lang = normalizeUiLanguage(button.dataset.languageOption);
-      button.classList.toggle('active', lang === currentUiLanguage);
-    });
-  }
-
-  function applyUiLanguage(language, persist = true) {
-    const nextLanguage = normalizeUiLanguage(language);
-    currentUiLanguage = nextLanguage;
-    i18n?.setLanguage?.(nextLanguage, { persist });
-    document.documentElement.lang = nextLanguage;
-    if (currentUser) {
-      currentUser.ui_language = nextLanguage;
-      if (persist) localStorage.setItem('user', JSON.stringify(currentUser));
-    }
-    syncLanguageSettingsButton();
-    renderLanguagePicker();
-    refreshLocalizedUi();
-  }
-
-  async function selectUiLanguage(language) {
-    const nextLanguage = normalizeUiLanguage(language);
-    if (nextLanguage === currentUiLanguage) return;
-    const previousLanguage = currentUiLanguage;
-    applyUiLanguage(nextLanguage);
-    setLanguageStatus('Saving...');
-    try {
-      const res = await api('/api/user/language', { method: 'PATCH', body: { language: nextLanguage } });
-      currentUser = { ...currentUser, ...res.user };
-      applyUiLanguage(currentUser.ui_language);
-      setLanguageStatus('Saved', 'success');
-      setTimeout(() => {
-        if ($('#settingsLanguageStatus')?.textContent === tx('Saved')) setLanguageStatus('');
-      }, 1200);
-    } catch (error) {
-      applyUiLanguage(previousLanguage);
-      setLanguageStatus(error.message || 'Language save failed', 'error');
-    }
-  }
-
-  function refreshLocalizedUi() {
-    syncLanguageSettingsButton();
-    syncModalAnimationSettingsButton();
-    syncMobileFontSettingsButton();
-    applyVisualMode(currentVisualMode, false);
-    renderThemePicker();
-    renderVisualModePicker();
-    renderPollStylePicker();
-    renderModalAnimationOptions();
-    renderLanguagePicker();
-    i18n?.applyStaticDom?.(document);
-    if (chatList) renderChatList(chatSearch?.value || '');
-    if (currentChatId) {
-      renderCurrentChatHeader(getChatById(currentChatId));
-      updateChatStatus();
-      renderPinnedBar(currentChatId);
-      refreshDateSeparators();
-    }
-    if (isFloatingSurfaceVisible(chatContextMenu) && chatContextMenuState?.chatId) renderChatContextMenu(getChatById(chatContextMenuState.chatId));
-    if (isFloatingSurfaceVisible(chatFolderPicker)) renderChatFolderPicker();
-    if (isFloatingSurfaceVisible(chatFolderContextMenu) && chatFolderContextMenuState?.folderId) refreshChatFolderContextMenu(chatFolderContextMenuState.folderId);
-    if (isFloatingSurfaceVisible(mediaContextMenu) && mediaContextMenuState?.context) {
-      renderMediaContextMenu(mediaContextMenuState.context);
-      positionMediaContextMenu();
-    }
-  }
-
-  async function selectVisualMode(mode) {
-    const nextMode = normalizeVisualMode(mode);
-    if (nextMode === currentVisualMode) return;
-    const prevMode = currentVisualMode;
-    applyVisualMode(nextMode);
-    setVisualModeStatus('Saving...');
-    try {
-      const res = await api('/api/user/visual-mode', { method: 'PATCH', body: { mode: nextMode } });
-      currentUser = { ...currentUser, ...res.user };
-      applyVisualMode(currentUser.ui_visual_mode);
-      setVisualModeStatus('Saved', 'success');
-      setTimeout(() => {
-        if ($('#settingsVisualModeStatus')?.textContent === tx('Saved')) setVisualModeStatus('');
-      }, 1200);
-    } catch (e) {
-      applyVisualMode(prevMode);
-      setVisualModeStatus(e.message || 'Visual mode save failed', 'error');
-    }
-  }
-
-  async function selectUiTheme(theme) {
-    const nextTheme = normalizeUiTheme(theme);
-    if (nextTheme === currentUiTheme) return;
-    const prevTheme = currentUiTheme;
-    applyUiTheme(nextTheme);
-    setThemeStatus('Saving...');
-    try {
-      const res = await api('/api/user/theme', { method: 'PATCH', body: { theme: nextTheme } });
-      currentUser = { ...currentUser, ...res.user };
-      applyUiTheme(currentUser.ui_theme);
-      setThemeStatus('Saved', 'success');
-      setTimeout(() => {
-        if ($('#settingsThemeStatus')?.textContent === tx('Saved')) setThemeStatus('');
-      }, 1200);
-    } catch (e) {
-      applyUiTheme(prevTheme);
-      setThemeStatus(e.message || 'Theme save failed', 'error');
-    }
-  }
-
-  function normalizeModalAnimationStyle(style) {
-    return MODAL_ANIMATION_STYLE_IDS.has(style) ? style : 'soft';
-  }
-
-  function modalAnimationMeta(style = currentModalAnimation) {
-    const id = normalizeModalAnimationStyle(style);
-    return MODAL_ANIMATION_STYLES.find((item) => item.id === id) || MODAL_ANIMATION_STYLES[0];
-  }
-
-  function syncModalAnimationSettingsButton() {
-    const panelBtn = $('#settingsAnimationPanel');
-    if (!panelBtn) return;
-    const meta = modalAnimationMeta(currentModalAnimation);
-    panelBtn.textContent = `✨ ${t('Animation')}: ${t(meta.name)}, ${normalizeModalAnimationSpeed(currentModalAnimationSpeed)}/10`;
-  }
-
-  function normalizeModalAnimationSpeed(speed) {
-    const next = Math.round(Number(speed));
-    if (!Number.isFinite(next)) return MODAL_ANIMATION_SPEED_DEFAULT;
-    return Math.min(10, Math.max(1, next));
-  }
-
-  function getModalAnimationSpeedFactor(speed = currentModalAnimationSpeed) {
-    return MODAL_ANIMATION_SPEED_FACTORS[normalizeModalAnimationSpeed(speed)] || 1;
-  }
-
-  function setModalAnimationStatus(message, type = '') {
-    const el = $('#settingsAnimationStatus');
-    if (!el) return;
-    el.textContent = tx(message || '');
-    el.classList.toggle('is-error', type === 'error');
-    el.classList.toggle('is-success', type === 'success');
-  }
-
-  function clearModalAnimationStatusTimer() {
-    clearTimeout(modalAnimationStatusTimer);
-    modalAnimationStatusTimer = null;
-  }
-
-  function scheduleModalAnimationStatusClear() {
-    clearModalAnimationStatusTimer();
-    modalAnimationStatusTimer = setTimeout(() => {
-      if ($('#settingsAnimationStatus')?.textContent === tx('Saved')) setModalAnimationStatus('');
-    }, 1200);
-  }
-
-  function getPersistedModalAnimationPreferences() {
-    return {
-      style: normalizeModalAnimationStyle(currentUser?.ui_modal_animation),
-      speed: normalizeModalAnimationSpeed(currentUser?.ui_modal_animation_speed),
-    };
-  }
-
-  function getCurrentModalAnimationPreferences() {
-    return {
-      style: normalizeModalAnimationStyle(currentModalAnimation),
-      speed: normalizeModalAnimationSpeed(currentModalAnimationSpeed),
-    };
-  }
-
-  function modalAnimationPreferencesEqual(a = {}, b = {}) {
-    return normalizeModalAnimationStyle(a.style) === normalizeModalAnimationStyle(b.style)
-      && normalizeModalAnimationSpeed(a.speed) === normalizeModalAnimationSpeed(b.speed);
-  }
-
-  function renderModalAnimationOptions() {
-    const wrap = $('#settingsAnimationOptions');
-    if (!wrap) return;
-    wrap.innerHTML = MODAL_ANIMATION_STYLES.map((style) => `
-      <button
-        type="button"
-        class="animation-style-card${style.id === currentModalAnimation ? ' active' : ''}"
-        data-modal-animation-style="${style.id}"
-        aria-pressed="${style.id === currentModalAnimation ? 'true' : 'false'}"
-        ${style.id === currentModalAnimation ? 'aria-current="true"' : ''}
-      >
-        <strong>${esc(style.name)}</strong>
-        <small>${esc(style.note)}</small>
-        ${style.id === currentModalAnimation ? '<span class="animation-selected-mark">Selected</span>' : ''}
-      </button>
-    `).join('');
-  }
-
-  function renderModalAnimationSpeedControl() {
-    const input = $('#settingsAnimationSpeed');
-    const value = $('#settingsAnimationSpeedValue');
-    const control = document.querySelector('.animation-speed-control');
-    if (input) input.value = String(normalizeModalAnimationSpeed(currentModalAnimationSpeed));
-    if (value) value.textContent = `${normalizeModalAnimationSpeed(currentModalAnimationSpeed)}/10`;
-    control?.classList.toggle('is-inactive', currentModalAnimation === 'none');
-  }
-
-  function applyModalAnimation(style, persist = true) {
-    const nextStyle = normalizeModalAnimationStyle(style);
-    currentModalAnimation = nextStyle;
-    document.documentElement.dataset.modalAnimation = nextStyle;
-    if (currentUser && persist) {
-      currentUser.ui_modal_animation = nextStyle;
-      persistCurrentUser();
-    }
-    syncModalAnimationSettingsButton();
-    renderModalAnimationOptions();
-    renderModalAnimationSpeedControl();
-  }
-
-  function applyModalAnimationSpeed(speed, persist = true) {
-    const nextSpeed = normalizeModalAnimationSpeed(speed);
-    currentModalAnimationSpeed = nextSpeed;
-    document.documentElement.style.setProperty('--modal-animation-speed-factor', String(getModalAnimationSpeedFactor(nextSpeed)));
-    if (currentUser && persist) {
-      currentUser.ui_modal_animation_speed = nextSpeed;
-      persistCurrentUser();
-    }
-    syncModalAnimationSettingsButton();
-    renderModalAnimationSpeedControl();
-  }
-
-  async function flushModalAnimationSave() {
-    clearTimeout(modalAnimationSaveTimer);
-    modalAnimationSaveTimer = null;
-    if (modalAnimationSaveInFlight || !currentUser) return;
-    const nextPrefs = getCurrentModalAnimationPreferences();
-    const prevPrefs = getPersistedModalAnimationPreferences();
-    if (modalAnimationPreferencesEqual(nextPrefs, prevPrefs)) {
-      modalAnimationSaveQueued = false;
-      setModalAnimationStatus('');
-      return;
-    }
-
-    modalAnimationSaveInFlight = true;
-    modalAnimationSaveQueued = false;
-    clearModalAnimationStatusTimer();
-    setModalAnimationStatus('Saving...');
-    let didSave = false;
-    const requestPrefs = { ...nextPrefs };
-
-    try {
-      const res = await api('/api/user/modal-animation', { method: 'PATCH', body: requestPrefs });
-      currentUser = { ...currentUser, ...res.user };
-      persistCurrentUser();
-      didSave = true;
-
-      const localChangedSinceRequest = !modalAnimationPreferencesEqual(getCurrentModalAnimationPreferences(), requestPrefs);
-      if (!localChangedSinceRequest) {
-        applyModalAnimation(currentUser.ui_modal_animation, false);
-        applyModalAnimationSpeed(currentUser.ui_modal_animation_speed, false);
-      }
-
-      const pendingLocalChanges = !modalAnimationPreferencesEqual(getCurrentModalAnimationPreferences(), getPersistedModalAnimationPreferences());
-      if (!pendingLocalChanges && !modalAnimationSaveTimer) {
-        setModalAnimationStatus('Saved', 'success');
-        scheduleModalAnimationStatusClear();
-      } else {
-        setModalAnimationStatus('Saving...');
-      }
-    } catch (e) {
-      const localChangedSinceRequest = !modalAnimationPreferencesEqual(getCurrentModalAnimationPreferences(), requestPrefs);
-      if (!localChangedSinceRequest) {
-        applyModalAnimation(prevPrefs.style, false);
-        applyModalAnimationSpeed(prevPrefs.speed, false);
-      }
-      setModalAnimationStatus(e.message || 'Animation save failed', 'error');
-    } finally {
-      modalAnimationSaveInFlight = false;
-      const pendingLocalChanges = !modalAnimationPreferencesEqual(getCurrentModalAnimationPreferences(), getPersistedModalAnimationPreferences());
-      if (didSave && !modalAnimationSaveTimer && pendingLocalChanges) {
-        modalAnimationSaveQueued = false;
-        flushModalAnimationSave().catch(() => {});
-      } else if (!pendingLocalChanges && !modalAnimationSaveTimer) {
-        modalAnimationSaveQueued = false;
-      }
-    }
-  }
-
-  function scheduleModalAnimationSave({ debounce = 0 } = {}) {
-    clearModalAnimationStatusTimer();
-    const nextPrefs = getCurrentModalAnimationPreferences();
-    const prevPrefs = getPersistedModalAnimationPreferences();
-    if (modalAnimationPreferencesEqual(nextPrefs, prevPrefs)) {
-      clearTimeout(modalAnimationSaveTimer);
-      modalAnimationSaveTimer = null;
-      modalAnimationSaveQueued = false;
-      if (!modalAnimationSaveInFlight) setModalAnimationStatus('');
-      return;
-    }
-
-    setModalAnimationStatus('Saving...');
-    clearTimeout(modalAnimationSaveTimer);
-
-    if (debounce > 0) {
-      modalAnimationSaveQueued = true;
-      modalAnimationSaveTimer = setTimeout(() => {
-        modalAnimationSaveTimer = null;
-        if (modalAnimationSaveInFlight) return;
-        flushModalAnimationSave().catch(() => {});
-      }, debounce);
-      return;
-    }
-
-    if (modalAnimationSaveInFlight) {
-      modalAnimationSaveQueued = true;
-      return;
-    }
-
-    flushModalAnimationSave().catch(() => {});
-  }
-
-  function selectModalAnimation(style) {
-    const nextStyle = normalizeModalAnimationStyle(style);
-    if (nextStyle === currentModalAnimation) return;
-    applyModalAnimation(nextStyle, false);
-    scheduleModalAnimationSave();
-  }
-
-  function updateModalAnimationSpeed(speed, { immediate = false } = {}) {
-    applyModalAnimationSpeed(speed, false);
-    scheduleModalAnimationSave({ debounce: immediate ? 0 : 350 });
-  }
-
-  function normalizeMobileFontSize(size) {
-    const next = Math.round(Number(size));
-    if (!Number.isFinite(next)) return MOBILE_FONT_SIZE_DEFAULT;
-    return Math.min(MOBILE_FONT_SIZE_MAX, Math.max(MOBILE_FONT_SIZE_MIN, next));
-  }
-
-  function getMobileFontAdjustPercent(size = currentMobileFontSize) {
-    return MOBILE_FONT_SIZE_PERCENTS[normalizeMobileFontSize(size)] || MOBILE_FONT_SIZE_PERCENTS[MOBILE_FONT_SIZE_DEFAULT];
-  }
-
-  function hasAndroidNativeBridge() {
-    return Boolean(androidBridge.hasAndroidNativeBridge?.());
-  }
-
-  function notifyAndroidScreenRotationPreference(reason = 'sync') {
-    return androidBridge.notifyAndroidScreenRotationPreference?.(getScreenRotationAllowed(), reason);
-  }
-
-  function setMobileFontAdjustPercent(percent = 100) {
-    const value = `${Math.round(Number(percent) || 100)}%`;
-    document.documentElement.style.setProperty('-webkit-text-size-adjust', value, 'important');
-    document.documentElement.style.setProperty('text-size-adjust', value, 'important');
-  }
-
-  function notifyAndroidMobileFontSize(size = currentMobileFontSize) {
-    const mobileLayout = isMobileLayoutViewport();
-    const effectiveSize = mobileLayout ? normalizeMobileFontSize(size) : MOBILE_FONT_SIZE_DEFAULT;
-    return androidBridge.notifyAndroidMobileFontSize?.(effectiveSize, mobileLayout);
-  }
-
-  function syncMobileFontSettingsButton() {
-    const panelBtn = $('#settingsMobileFontPanel');
-    if (!panelBtn) return;
-    panelBtn.textContent = `\uD83D\uDD20 ${t('Font Size (mobile)')}: ${normalizeMobileFontSize(currentMobileFontSize)}/10`;
-  }
-
-  function setMobileFontSizeStatus(message, type = '') {
-    const el = $('#settingsMobileFontStatus');
-    if (!el) return;
-    el.textContent = tx(message || '');
-    el.classList.toggle('is-error', type === 'error');
-    el.classList.toggle('is-success', type === 'success');
-  }
-
-  function clearMobileFontSizeStatusTimer() {
-    clearTimeout(mobileFontSizeStatusTimer);
-    mobileFontSizeStatusTimer = null;
-  }
-
-  function scheduleMobileFontSizeStatusClear() {
-    clearMobileFontSizeStatusTimer();
-    mobileFontSizeStatusTimer = setTimeout(() => {
-      if ($('#settingsMobileFontStatus')?.textContent === tx('Saved')) setMobileFontSizeStatus('');
-    }, 1200);
-  }
-
-  function getPersistedMobileFontSize() {
-    return normalizeMobileFontSize(currentUser?.ui_mobile_font_size);
-  }
-
-  function renderMobileFontSizeControl() {
-    const input = $('#settingsMobileFontSize');
-    const value = $('#settingsMobileFontSizeValue');
-    if (input) input.value = String(normalizeMobileFontSize(currentMobileFontSize));
-    if (value) value.textContent = `${normalizeMobileFontSize(currentMobileFontSize)}/10`;
-  }
-
-  function applyMobileFontSize(size, persist = true) {
-    const nextSize = normalizeMobileFontSize(size);
-    currentMobileFontSize = nextSize;
-    setMobileFontAdjustPercent(hasAndroidNativeBridge() ? 100 : (isMobileLayoutViewport() ? getMobileFontAdjustPercent(nextSize) : 100));
-    if (currentUser && persist) {
-      currentUser.ui_mobile_font_size = nextSize;
-      persistCurrentUser();
-    }
-    syncMobileFontSettingsButton();
-    renderMobileFontSizeControl();
-    notifyAndroidMobileFontSize(nextSize);
-  }
-
-  function syncMobileFontSizeViewportState() {
-    applyMobileFontSize(currentMobileFontSize, false);
-  }
-
-  async function flushMobileFontSizeSave() {
-    clearTimeout(mobileFontSizeSaveTimer);
-    mobileFontSizeSaveTimer = null;
-    if (mobileFontSizeSaveInFlight || !currentUser) return;
-    const nextSize = normalizeMobileFontSize(currentMobileFontSize);
-    const prevSize = getPersistedMobileFontSize();
-    if (nextSize === prevSize) {
-      mobileFontSizeSaveQueued = false;
-      setMobileFontSizeStatus('');
-      return;
-    }
-
-    mobileFontSizeSaveInFlight = true;
-    mobileFontSizeSaveQueued = false;
-    clearMobileFontSizeStatusTimer();
-    setMobileFontSizeStatus('Saving...');
-    let didSave = false;
-    const requestSize = nextSize;
-
-    try {
-      const res = await api('/api/user/mobile-font-size', { method: 'PATCH', body: { size: requestSize } });
-      currentUser = { ...currentUser, ...res.user };
-      persistCurrentUser();
-      didSave = true;
-
-      const localChangedSinceRequest = normalizeMobileFontSize(currentMobileFontSize) !== requestSize;
-      if (!localChangedSinceRequest) {
-        applyMobileFontSize(currentUser.ui_mobile_font_size, false);
-      }
-
-      const pendingLocalChanges = normalizeMobileFontSize(currentMobileFontSize) !== getPersistedMobileFontSize();
-      if (!pendingLocalChanges && !mobileFontSizeSaveTimer) {
-        setMobileFontSizeStatus('Saved', 'success');
-        scheduleMobileFontSizeStatusClear();
-      } else {
-        setMobileFontSizeStatus('Saving...');
-      }
-    } catch (e) {
-      const localChangedSinceRequest = normalizeMobileFontSize(currentMobileFontSize) !== requestSize;
-      if (!localChangedSinceRequest) {
-        applyMobileFontSize(prevSize, false);
-      }
-      setMobileFontSizeStatus(e.message || 'Font size save failed', 'error');
-    } finally {
-      mobileFontSizeSaveInFlight = false;
-      const pendingLocalChanges = normalizeMobileFontSize(currentMobileFontSize) !== getPersistedMobileFontSize();
-      if (didSave && !mobileFontSizeSaveTimer && pendingLocalChanges) {
-        mobileFontSizeSaveQueued = false;
-        flushMobileFontSizeSave().catch(() => {});
-      } else if (!pendingLocalChanges && !mobileFontSizeSaveTimer) {
-        mobileFontSizeSaveQueued = false;
-      }
-    }
-  }
-
-  function scheduleMobileFontSizeSave({ debounce = 0 } = {}) {
-    clearMobileFontSizeStatusTimer();
-    const nextSize = normalizeMobileFontSize(currentMobileFontSize);
-    const prevSize = getPersistedMobileFontSize();
-    if (nextSize === prevSize) {
-      clearTimeout(mobileFontSizeSaveTimer);
-      mobileFontSizeSaveTimer = null;
-      mobileFontSizeSaveQueued = false;
-      if (!mobileFontSizeSaveInFlight) setMobileFontSizeStatus('');
-      return;
-    }
-
-    setMobileFontSizeStatus('Saving...');
-    clearTimeout(mobileFontSizeSaveTimer);
-
-    if (debounce > 0) {
-      mobileFontSizeSaveQueued = true;
-      mobileFontSizeSaveTimer = setTimeout(() => {
-        mobileFontSizeSaveTimer = null;
-        if (mobileFontSizeSaveInFlight) return;
-        flushMobileFontSizeSave().catch(() => {});
-      }, debounce);
-      return;
-    }
-
-    if (mobileFontSizeSaveInFlight) {
-      mobileFontSizeSaveQueued = true;
-      return;
-    }
-
-    flushMobileFontSizeSave().catch(() => {});
-  }
-
-  function updateMobileFontSize(size, { immediate = false } = {}) {
-    applyMobileFontSize(size, false);
-    scheduleMobileFontSizeSave({ debounce: immediate ? 0 : 350 });
-  }
-
+  function normalizeUiTheme(theme) { return uiSettings.normalizeUiTheme(theme); }
+  function renderThemePicker() { return uiSettings.renderThemePicker(); }
+  function applyUiTheme(theme, persist = true) { return uiSettings.applyUiTheme(theme, persist); }
+  function selectUiTheme(theme) { return uiSettings.selectUiTheme(theme); }
+  function setThemeStatus(message, type = '') { return uiSettings.setThemeStatus(message, type); }
+  function normalizeUiLanguage(language) { return uiSettings.normalizeUiLanguage(language); }
+  function languageDisplayName(language = currentUiLanguage) { return uiSettings.languageDisplayName(language); }
+  function renderLanguagePicker() { return uiSettings.renderLanguagePicker(); }
+  function applyUiLanguage(language, persist = true) { return uiSettings.applyUiLanguage(language, persist); }
+  function selectUiLanguage(language) { return uiSettings.selectUiLanguage(language); }
+  function refreshLocalizedUi() { return uiSettings.refreshLocalizedUi(); }
+  function syncLanguageSettingsButton() { return uiSettings.syncLanguageSettingsButton(); }
+  function setLanguageStatus(message, type = '') { return uiSettings.setLanguageStatus(message, type); }
+  function normalizeVisualMode(mode) { return uiSettings.normalizeVisualMode(mode); }
+  function visualModeMeta(mode) { return uiSettings.visualModeMeta(mode); }
+  function visualModeStateLabel(mode) { return uiSettings.visualModeStateLabel(mode); }
+  function renderVisualModePicker() { return uiSettings.renderVisualModePicker(); }
+  function applyVisualMode(mode, persist = true) { return uiSettings.applyVisualMode(mode, persist); }
+  function selectVisualMode(mode) { return uiSettings.selectVisualMode(mode); }
+  function setVisualModeStatus(message, type = '') { return uiSettings.setVisualModeStatus(message, type); }
+  function normalizePollStyle(style) { return uiSettings.normalizePollStyle(style); }
+  function pollStyleMeta(style) { return uiSettings.pollStyleMeta(style); }
+  function renderPollStyleCardPreview(styleId) { return uiSettings.renderPollStyleCardPreview(styleId); }
+  function renderPollStylePicker() { return uiSettings.renderPollStylePicker(); }
+  function setPollStyleSurface(modalEl, style) { return uiSettings.setPollStyleSurface(modalEl, style); }
+  function syncPollComposerStyleUi() { return uiSettings.syncPollComposerStyleUi(); }
+  function selectPollStyle(style) { return uiSettings.selectPollStyle(style); }
+  function setPollStyleStatus(message, type = '') { return uiSettings.setPollStyleStatus(message, type); }
+  function normalizeModalAnimationStyle(style) { return uiSettings.normalizeModalAnimationStyle(style); }
+  function modalAnimationMeta(style = currentModalAnimation) { return uiSettings.modalAnimationMeta(style); }
+  function syncModalAnimationSettingsButton() { return uiSettings.syncModalAnimationSettingsButton(); }
+  function normalizeModalAnimationSpeed(speed) { return uiSettings.normalizeModalAnimationSpeed(speed); }
+  function getModalAnimationSpeedFactor(speed = currentModalAnimationSpeed) { return uiSettings.getModalAnimationSpeedFactor(speed); }
+  function setModalAnimationStatus(message, type = '') { return uiSettings.setModalAnimationStatus(message, type); }
+  function clearModalAnimationStatusTimer() { return uiSettings.clearModalAnimationStatusTimer(); }
+  function scheduleModalAnimationStatusClear() { return uiSettings.scheduleModalAnimationStatusClear(); }
+  function getPersistedModalAnimationPreferences() { return uiSettings.getPersistedModalAnimationPreferences(); }
+  function getCurrentModalAnimationPreferences() { return uiSettings.getCurrentModalAnimationPreferences(); }
+  function modalAnimationPreferencesEqual(a = {}, b = {}) { return uiSettings.modalAnimationPreferencesEqual(a, b); }
+  function renderModalAnimationOptions() { return uiSettings.renderModalAnimationOptions(); }
+  function renderModalAnimationSpeedControl() { return uiSettings.renderModalAnimationSpeedControl(); }
+  function applyModalAnimation(style, persist = true) { return uiSettings.applyModalAnimation(style, persist); }
+  function applyModalAnimationSpeed(speed, persist = true) { return uiSettings.applyModalAnimationSpeed(speed, persist); }
+  function flushModalAnimationSave() { return uiSettings.flushModalAnimationSave(); }
+  function scheduleModalAnimationSave(options = {}) { return uiSettings.scheduleModalAnimationSave(options); }
+  function selectModalAnimation(style) { return uiSettings.selectModalAnimation(style); }
+  function updateModalAnimationSpeed(speed, options = {}) { return uiSettings.updateModalAnimationSpeed(speed, options); }
+  function normalizeMobileFontSize(size) { return uiSettings.normalizeMobileFontSize(size); }
+  function getMobileFontAdjustPercent(size = currentMobileFontSize) { return uiSettings.getMobileFontAdjustPercent(size); }
+  function hasAndroidNativeBridge() { return uiSettings.hasAndroidNativeBridge(); }
+  function notifyAndroidScreenRotationPreference(reason = 'sync') { return uiSettings.notifyAndroidScreenRotationPreference(reason); }
+  function setMobileFontAdjustPercent(percent = 100) { return uiSettings.setMobileFontAdjustPercent(percent); }
+  function notifyAndroidMobileFontSize(size = currentMobileFontSize) { return uiSettings.notifyAndroidMobileFontSize(size); }
+  function syncMobileFontSettingsButton() { return uiSettings.syncMobileFontSettingsButton(); }
+  function setMobileFontSizeStatus(message, type = '') { return uiSettings.setMobileFontSizeStatus(message, type); }
+  function clearMobileFontSizeStatusTimer() { return uiSettings.clearMobileFontSizeStatusTimer(); }
+  function scheduleMobileFontSizeStatusClear() { return uiSettings.scheduleMobileFontSizeStatusClear(); }
+  function getPersistedMobileFontSize() { return uiSettings.getPersistedMobileFontSize(); }
+  function renderMobileFontSizeControl() { return uiSettings.renderMobileFontSizeControl(); }
+  function applyMobileFontSize(size, persist = true) { return uiSettings.applyMobileFontSize(size, persist); }
+  function syncMobileFontSizeViewportState() { return uiSettings.syncMobileFontSizeViewportState(); }
+  function flushMobileFontSizeSave() { return uiSettings.flushMobileFontSizeSave(); }
+  function scheduleMobileFontSizeSave(options = {}) { return uiSettings.scheduleMobileFontSizeSave(options); }
+  function updateMobileFontSize(size, options = {}) { return uiSettings.updateMobileFontSize(size, options); }
   let singleEmojiPattern = null;
   function getSingleEmojiPattern() {
     if (singleEmojiPattern !== null) return singleEmojiPattern;
@@ -4782,7 +4181,7 @@
   function isMobileViewportLayoutLocked() {
     if (!isMobileLayoutViewport()) return false;
     if (mobileRouteTransitionActive) return true;
-    if (modalStack.some((entry) => entry?.el && !entry.el.classList.contains('hidden'))) return true;
+    if (hasOpenModal()) return true;
     if (searchPanel && searchPanel.getAttribute('aria-hidden') === 'false') return true;
     if (isFloatingSurfaceVisible(chatContextMenuBackdrop)
       || isFloatingSurfaceVisible(chatContextMenu)
@@ -6057,500 +5456,39 @@
     return user;
   }
 
-  function weatherLocationLabel(location) {
-    if (!location) return '';
-    return [location.name, location.admin1, location.country].filter(Boolean).join(', ');
-  }
-
-  function weatherIcon(code, isDay) {
-    if (code === 0) return isDay ? '\u2600\uFE0F' : '🌙';
-    if (code === 1 || code === 2) return isDay ? '🌤️' : '\u2601\uFE0F';
-    if (code === 3) return '\u2601\uFE0F';
-    if (code === 45 || code === 48) return '🌫️';
-    if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return '🌧️';
-    if ((code >= 71 && code <= 77) || code === 85 || code === 86) return '❄️';
-    if (code >= 95) return '⛈️';
-    return '🌡️';
-  }
-
-  function formatWeatherValue(value, fallback, precision = 0) {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return fallback;
-    const rounded = precision ? (Math.round(n * 10) / 10).toFixed(1) : String(Math.round(n));
-    return rounded.replace(/\.0$/, '').replace('.', ',');
-  }
-
-  function renderWeatherWidget(data) {
-    if (!weatherWidget) return;
-    if (!weatherSettings.enabled || !weatherSettings.location) {
-      weatherWidget.classList.add('hidden');
-      return;
-    }
-    const temp = `${formatWeatherValue(data?.temperature, '--')}°`;
-    const wind = `${formatWeatherValue(data?.wind_speed, '--', 1)} м/с`;
-    const icon = data ? weatherIcon(Number(data.weather_code), data.is_day) : '⛅';
-    weatherWidget.classList.remove('hidden', 'is-loading', 'is-error');
-    // Make widget accessible / interactive when visible
-    weatherWidget.setAttribute('role', 'button');
-    weatherWidget.tabIndex = 0;
-    weatherWidget.classList.toggle('interactive', !weatherWidget.classList.contains('hidden'));
-    if (!data) weatherWidget.classList.add('is-error');
-    weatherWidget.title = data
-      ? `Weather: ${weatherLocationLabel(weatherSettings.location)}`
-      : 'Weather unavailable';
-    weatherWidget.innerHTML = `<span class="weather-widget-icon">${icon}</span><span>${temp}</span><span>${wind}</span>`;
-  }
-
-  function setWeatherStatus(message, type = '') {
-    setInlineStatus('settingsWeatherStatus', message, type);
-  }
-
-  function renderWeatherSettingsForm(draft = {}) {
-    const enabledInput = $('#settingsWeatherEnabled');
-    const controls = $('#settingsWeatherControls');
-    const refreshInput = $('#settingsWeatherRefresh');
-    const selectedEl = $('#settingsWeatherSelected');
-    if (!enabledInput || !controls || !refreshInput || !selectedEl) return;
-    const enabled = draft.enabled ?? weatherSettings.enabled;
-    enabledInput.checked = !!enabled;
-    controls.classList.toggle('hidden', !enabledInput.checked);
-    refreshInput.value = draft.refresh_minutes ?? weatherSettings.refresh_minutes ?? 30;
-    selectedWeatherLocation = selectedWeatherLocation || weatherSettings.location;
-    const label = weatherLocationLabel(selectedWeatherLocation);
-    selectedEl.textContent = label ? `Selected: ${label}` : 'No city selected';
-  }
-
-  function renderWeatherSearchResults(results) {
-    const wrap = $('#settingsWeatherResults');
-    if (!wrap) return;
-    weatherSearchResults = results || [];
-    if (!weatherSearchResults.length) {
-      wrap.classList.add('hidden');
-      wrap.innerHTML = '';
-      return;
-    }
-    wrap.innerHTML = weatherSearchResults.map((item, index) => {
-      const title = esc(weatherLocationLabel(item));
-      const details = [item.country_code, item.population ? `pop. ${item.population}` : '']
-        .filter(Boolean).join(' · ');
-      return `<button type="button" class="weather-result-item" data-index="${index}">
-        <span>${title}</span>
-        ${details ? `<small>${esc(details)}</small>` : ''}
-      </button>`;
-    }).join('');
-    wrap.classList.remove('hidden');
-  }
-
-  function scheduleWeatherRefresh() {
-    clearTimeout(weatherTimer);
-    if (!weatherSettings.enabled || !weatherSettings.location) return;
-    const minutes = Math.min(180, Math.max(10, Number(weatherSettings.refresh_minutes) || 30));
-    weatherTimer = setTimeout(() => {
-      loadCurrentWeather(false);
-    }, minutes * 60 * 1000);
-  }
-
-  async function loadWeatherSettings() {
-    try {
-      const data = await api('/api/weather/settings');
-      weatherSettings = data.settings || weatherSettings;
-      selectedWeatherLocation = weatherSettings.location;
-      weatherSettingsLoaded = true;
-      renderWeatherSettingsForm();
-    } catch {
-      weatherSettingsLoaded = false;
-    }
-  }
-
-  async function loadCurrentWeather(force = false) {
-    clearTimeout(weatherTimer);
-    if (!weatherSettings.enabled || !weatherSettings.location) {
-      renderWeatherWidget(null);
-      return;
-    }
-    weatherWidget?.classList.add('is-loading');
-    try {
-      const data = await api(`/api/weather/current${force ? '?force=1' : ''}`);
-      if (!data || !data.enabled) {
-        weatherSettings = data?.settings || weatherSettings;
-        weatherSettingsLoaded = true;
-        renderWeatherWidget(null);
-        return;
-      }
-      weatherSettings = data.settings || weatherSettings;
-      selectedWeatherLocation = weatherSettings.location;
-      weatherSettingsLoaded = true;
-      renderWeatherWidget(data);
-      renderWeatherSettingsForm();
-      setWeatherStatus(force ? `Updated ${new Date(data.fetched_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '', 'success');
-    } catch (e) {
-      renderWeatherWidget(null);
-      if (force) setWeatherStatus(e.message || 'Weather update failed', 'error');
-    } finally {
-      weatherWidget?.classList.remove('is-loading');
-      scheduleWeatherRefresh();
-    }
-  }
-
-  async function searchWeatherLocations() {
-    const input = $('#settingsWeatherSearch');
-    if (!input) return;
-    const q = input.value.trim();
-    if (q.length < 2) {
-      renderWeatherSearchResults([]);
-      setWeatherStatus('Type at least 2 characters');
-      return;
-    }
-    setWeatherStatus('Searching...');
-    try {
-      const data = await api(`/api/weather/search?q=${encodeURIComponent(q)}`);
-      renderWeatherSearchResults(data.results || []);
-      setWeatherStatus(data.results?.length ? '' : 'No cities found');
-    } catch (e) {
-      renderWeatherSearchResults([]);
-      setWeatherStatus(e.message || 'Weather search failed', 'error');
-    }
-  }
-
-  async function saveWeatherSettings() {
-    const enabled = !!$('#settingsWeatherEnabled')?.checked;
-    const refreshInput = $('#settingsWeatherRefresh');
-    const refreshMinutes = Math.min(180, Math.max(10, Number(refreshInput?.value) || 30));
-    const location = selectedWeatherLocation || weatherSettings.location;
-    if (enabled && !location) {
-      setWeatherStatus('Choose a city first', 'error');
-      return;
-    }
-    setWeatherStatus('Saving...');
-    try {
-      const data = await api('/api/weather/settings', {
-        method: 'PUT',
-        body: { enabled, location, refresh_minutes: refreshMinutes },
-      });
-      weatherSettings = data.settings || weatherSettings;
-      selectedWeatherLocation = weatherSettings.location;
-      weatherSettingsLoaded = true;
-      renderWeatherSettingsForm();
-      setWeatherStatus('Saved', 'success');
-      if (weatherSettings.enabled) await loadCurrentWeather(true);
-      else {
-        clearTimeout(weatherTimer);
-        renderWeatherWidget(null);
-      }
-    } catch (e) {
-      setWeatherStatus(e.message || 'Weather settings save failed', 'error');
-    }
-  }
-
-  function isLocalhost() {
-    return ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
-  }
-
-  function isPushSupported() {
-    return Boolean(
-      'serviceWorker' in navigator &&
-      'PushManager' in window &&
-      'Notification' in window &&
-      (location.protocol === 'https:' || isLocalhost())
-    );
-  }
-
-  function setNotificationStatus(message, type = '') {
-    setInlineStatus('settingsNotificationsStatus', message, type);
-  }
-
-  function notificationPermissionLabel() {
-    if (!('Notification' in window)) return 'не поддерживается';
-    if (Notification.permission === 'granted') return 'разрешены';
-    if (Notification.permission === 'denied') return 'запрещены в браузере';
-    return 'ещё не запрашивались';
-  }
-
-  function renderNotificationSettingsForm() {
-    const supportEl = $('#settingsNotificationsSupport');
-    const enabledInput = $('#settingsNotificationsEnabled');
-    const messagesInput = $('#settingsNotifyMessages');
-    const invitesInput = $('#settingsNotifyChatInvites');
-    const callsInput = $('#settingsNotifyCalls');
-    const reactionsInput = $('#settingsNotifyReactions');
-    const pinsInput = $('#settingsNotifyPins');
-    const mentionsInput = $('#settingsNotifyMentions');
-    const enableBtn = $('#settingsPushEnable');
-    const disableBtn = $('#settingsPushDisable');
-    const testBtn = $('#settingsPushTest');
-    if (!supportEl || !enabledInput || !messagesInput || !invitesInput || !reactionsInput) return;
-
-    const supported = isPushSupported();
-    supportEl.classList.toggle('is-ready', supported && Notification.permission === 'granted' && pushDeviceSubscribed);
-    supportEl.classList.toggle('is-error', !supported || Notification.permission === 'denied');
-    supportEl.textContent = supported
-      ? `Статус: ${notificationPermissionLabel()}. Это устройство ${pushDeviceSubscribed ? 'подписано' : 'не подписано'}.`
-      : 'Web Push недоступен: нужен HTTPS и браузер с Service Worker/Push API.';
-
-    enabledInput.checked = !!notificationSettings.push_enabled;
-    messagesInput.checked = !!notificationSettings.notify_messages;
-    invitesInput.checked = !!notificationSettings.notify_chat_invites;
-    if (callsInput) callsInput.checked = notificationSettings.notify_calls !== false;
-    reactionsInput.checked = !!notificationSettings.notify_reactions;
-    if (pinsInput) pinsInput.checked = notificationSettings.notify_pins !== false;
-    if (mentionsInput) mentionsInput.checked = notificationSettings.notify_mentions !== false;
-
-    if (enableBtn) enableBtn.disabled = !supported || Notification.permission === 'denied';
-    if (disableBtn) disableBtn.disabled = !supported || !pushDeviceSubscribed;
-    if (testBtn) testBtn.disabled = !supported || !pushDeviceSubscribed;
-  }
-
-  function urlBase64ToUint8Array(base64String) {
-    const padding = '='.repeat((4 - base64String.length % 4) % 4);
-    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-    const rawData = atob(base64);
-    const outputArray = new Uint8Array(rawData.length);
-    for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
-    return outputArray;
-  }
-
-  async function ensurePushRegistration() {
-    if (!isPushSupported()) throw new Error('Web Push недоступен в этом браузере или без HTTPS');
-    return navigator.serviceWorker.register('/sw.js');
-  }
-
-  async function refreshPushDeviceState() {
-    if (!isPushSupported()) {
-      pushDeviceSubscribed = false;
-      renderNotificationSettingsForm();
-      return false;
-    }
-    try {
-      const registration = await navigator.serviceWorker.getRegistration('/sw.js');
-      const subscription = await registration?.pushManager.getSubscription();
-      pushDeviceSubscribed = !!subscription;
-    } catch {
-      pushDeviceSubscribed = false;
-    }
-    renderNotificationSettingsForm();
-    return pushDeviceSubscribed;
-  }
-
-  async function loadNotificationSettings() {
-    try {
-      const data = await api('/api/notification-settings');
-      notificationSettings = data.settings || notificationSettings;
-      notificationSettingsLoaded = true;
-    } catch {
-      notificationSettingsLoaded = false;
-    }
-    await refreshPushDeviceState();
-  }
-
-  async function saveNotificationSettings(patch = {}) {
-    const next = {
-      ...notificationSettings,
-      ...patch,
-      notify_messages: $('#settingsNotifyMessages')?.checked ?? notificationSettings.notify_messages,
-      notify_chat_invites: $('#settingsNotifyChatInvites')?.checked ?? notificationSettings.notify_chat_invites,
-      notify_calls: $('#settingsNotifyCalls')?.checked ?? notificationSettings.notify_calls,
-      notify_reactions: $('#settingsNotifyReactions')?.checked ?? notificationSettings.notify_reactions,
-      notify_pins: $('#settingsNotifyPins')?.checked ?? notificationSettings.notify_pins,
-      notify_mentions: $('#settingsNotifyMentions')?.checked ?? notificationSettings.notify_mentions,
-    };
-    if (Object.prototype.hasOwnProperty.call(patch, 'push_enabled')) {
-      next.push_enabled = !!patch.push_enabled;
-    } else {
-      next.push_enabled = $('#settingsNotificationsEnabled')?.checked ?? notificationSettings.push_enabled;
-    }
-    setNotificationStatus('Сохраняю...');
-    try {
-      const data = await api('/api/notification-settings', { method: 'PUT', body: next });
-      notificationSettings = data.settings || next;
-      notificationSettingsLoaded = true;
-      renderNotificationSettingsForm();
-      setNotificationStatus('Сохранено', 'success');
-    } catch (e) {
-      setNotificationStatus(e.message || 'Не удалось сохранить уведомления', 'error');
-      renderNotificationSettingsForm();
-    }
-  }
-
-  async function enablePushNotifications() {
-    if (!isPushSupported()) {
-      setNotificationStatus('Web Push недоступен: нужен HTTPS и поддержка браузера', 'error');
-      renderNotificationSettingsForm();
-      return;
-    }
-    try {
-      setNotificationStatus('Запрашиваю разрешение...');
-      const permission = await Notification.requestPermission();
-      if (permission !== 'granted') {
-        setNotificationStatus('Уведомления запрещены в браузере', 'error');
-        renderNotificationSettingsForm();
-        return;
-      }
-
-      const registration = await ensurePushRegistration();
-      const keyData = await api('/api/push/vapid-public-key');
-      let subscription = await registration.pushManager.getSubscription();
-      if (!subscription) {
-        subscription = await registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(keyData.publicKey),
-        });
-      }
-      const data = await api('/api/push/subscribe', {
-        method: 'POST',
-        body: { subscription: subscription.toJSON() },
-      });
-      notificationSettings = data.settings || { ...notificationSettings, push_enabled: true };
-      pushDeviceSubscribed = true;
-      renderNotificationSettingsForm();
-      setNotificationStatus('Уведомления включены на этом устройстве', 'success');
-    } catch (e) {
-      setNotificationStatus(e.message || 'Не удалось включить уведомления', 'error');
-      await refreshPushDeviceState();
-    }
-  }
-
-  async function disablePushOnThisDevice() {
-    if (!isPushSupported()) return;
-    try {
-      setNotificationStatus('Отключаю устройство...');
-      const registration = await navigator.serviceWorker.getRegistration('/sw.js');
-      const subscription = await registration?.pushManager.getSubscription();
-      if (subscription) {
-        await api('/api/push/subscribe', {
-          method: 'DELETE',
-          body: { endpoint: subscription.endpoint },
-        });
-        await subscription.unsubscribe();
-      }
-      pushDeviceSubscribed = false;
-      renderNotificationSettingsForm();
-      setNotificationStatus('Это устройство отключено', 'success');
-    } catch (e) {
-      setNotificationStatus(e.message || 'Не удалось отключить устройство', 'error');
-      await refreshPushDeviceState();
-    }
-  }
-
-  async function testPushNotification() {
-    try {
-      setNotificationStatus('Отправляю тест...');
-      const data = await api('/api/push/test', {
-        method: 'POST',
-        body: { chatId: currentChatId || null },
-      });
-      setNotificationStatus(data.sent > 0 ? 'Тестовое уведомление отправлено' : 'Тест не отправлен', data.sent > 0 ? 'success' : 'error');
-    } catch (e) {
-      setNotificationStatus(e.message || 'Не удалось отправить тест', 'error');
-    }
-  }
-
-  function applySoundSettings(next = {}) {
-    soundSettings = {
-      ...soundSettings,
-      ...next,
-      volume: Math.min(100, Math.max(0, Math.round(Number(next.volume ?? soundSettings.volume) || 0))),
-    };
-    window.BananzaSounds?.configure?.(soundSettings);
-    renderSoundSettingsForm();
-  }
-
-  function setSoundStatus(message, type = '') {
-    setInlineStatus('settingsSoundsStatus', message, type);
-  }
-
-  function renderSoundSettingsForm() {
-    const fields = {
-      settingsSoundsEnabled: soundSettings.sounds_enabled,
-      settingsSoundSend: soundSettings.play_send,
-      settingsSoundIncoming: soundSettings.play_incoming,
-      settingsSoundNotifications: soundSettings.play_notifications,
-      settingsSoundReactions: soundSettings.play_reactions,
-      settingsSoundPins: soundSettings.play_pins,
-      settingsSoundInvites: soundSettings.play_invites,
-      settingsSoundVoice: soundSettings.play_voice,
-      settingsSoundMentions: soundSettings.play_mentions,
-    };
-    Object.entries(fields).forEach(([id, checked]) => {
-      const input = document.getElementById(id);
-      if (input) input.checked = !!checked;
-    });
-    const volumeInput = $('#settingsSoundsVolume');
-    const volumeLabel = $('#settingsSoundsVolumeValue');
-    if (volumeInput) volumeInput.value = soundSettings.volume;
-    if (volumeLabel) volumeLabel.textContent = `${soundSettings.volume}%`;
-  }
-
-  function getSoundSettingsFromForm() {
-    return {
-      sounds_enabled: $('#settingsSoundsEnabled')?.checked ?? soundSettings.sounds_enabled,
-      volume: Number($('#settingsSoundsVolume')?.value ?? soundSettings.volume),
-      play_send: $('#settingsSoundSend')?.checked ?? soundSettings.play_send,
-      play_incoming: $('#settingsSoundIncoming')?.checked ?? soundSettings.play_incoming,
-      play_notifications: $('#settingsSoundNotifications')?.checked ?? soundSettings.play_notifications,
-      play_reactions: $('#settingsSoundReactions')?.checked ?? soundSettings.play_reactions,
-      play_pins: $('#settingsSoundPins')?.checked ?? soundSettings.play_pins,
-      play_invites: $('#settingsSoundInvites')?.checked ?? soundSettings.play_invites,
-      play_voice: $('#settingsSoundVoice')?.checked ?? soundSettings.play_voice,
-      play_mentions: $('#settingsSoundMentions')?.checked ?? soundSettings.play_mentions,
-    };
-  }
-
-  async function loadSoundSettings() {
-    try {
-      const data = await api('/api/sound-settings');
-      applySoundSettings(data.settings || soundSettings);
-      soundSettingsLoaded = true;
-    } catch {
-      soundSettingsLoaded = false;
-      window.BananzaSounds?.configure?.(soundSettings);
-    }
-  }
-
-  async function saveSoundSettings(patch = {}, { silent = false } = {}) {
-    clearTimeout(soundSettingsSaveTimer);
-    const next = { ...getSoundSettingsFromForm(), ...patch };
-    applySoundSettings(next);
-    if (!silent) setSoundStatus('Сохраняю...');
-    try {
-      const data = await api('/api/sound-settings', { method: 'PUT', body: next });
-      applySoundSettings(data.settings || next);
-      soundSettingsLoaded = true;
-      if (!silent) setSoundStatus('Сохранено', 'success');
-    } catch (e) {
-      setSoundStatus(e.message || 'Не удалось сохранить звуки', 'error');
-      renderSoundSettingsForm();
-    }
-  }
-
-  function scheduleSoundSettingsSave(patch = {}) {
-    clearTimeout(soundSettingsSaveTimer);
-    applySoundSettings({ ...getSoundSettingsFromForm(), ...patch });
-    soundSettingsSaveTimer = setTimeout(() => {
-      saveSoundSettings({}, { silent: true }).catch(() => {});
-    }, 350);
-  }
-
-  function playAppSound(type, options = {}) {
-    if (document.hidden && !options.allowHidden) return false;
-    return window.BananzaSounds?.play?.(type, options) || false;
-  }
-
-  function previewSound(type) {
-    window.BananzaSounds?.configure?.(getSoundSettingsFromForm());
-    window.BananzaSounds?.preview?.(type);
-  }
-
-  function previewAllSounds() {
-    const sequence = ['send', 'incoming', 'notification', 'pin', 'mention', 'reaction', 'invite', 'voice_start', 'voice_stop'];
-    sequence.forEach((type, index) => {
-      if (index === 0) {
-        previewSound(type);
-        return;
-      }
-      setTimeout(() => previewSound(type), index * 360);
-    });
-  }
-
+  function weatherLocationLabel(location) { return weatherSettingsController.weatherLocationLabel(location); }
+  function weatherIcon(code, isDay) { return weatherSettingsController.weatherIcon(code, isDay); }
+  function formatWeatherValue(value, fallback, precision = 0) { return weatherSettingsController.formatWeatherValue(value, fallback, precision); }
+  function renderWeatherWidget(data) { return weatherSettingsController.renderWeatherWidget(data); }
+  function setWeatherStatus(message, type = '') { return weatherSettingsController.setWeatherStatus(message, type); }
+  function renderWeatherSettingsForm(draft = {}) { return weatherSettingsController.renderWeatherSettingsForm(draft); }
+  function renderWeatherSearchResults(results) { return weatherSettingsController.renderWeatherSearchResults(results); }
+  function scheduleWeatherRefresh() { return weatherSettingsController.scheduleWeatherRefresh(); }
+  function loadWeatherSettings() { return weatherSettingsController.loadWeatherSettings(); }
+  function loadCurrentWeather(force = false) { return weatherSettingsController.loadCurrentWeather(force); }
+  function searchWeatherLocations() { return weatherSettingsController.searchWeatherLocations(); }
+  function saveWeatherSettings() { return weatherSettingsController.saveWeatherSettings(); }
+  function isLocalhost() { return ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname); }
+  function isPushSupported() { return notificationSettingsController.isPushSupported(); }
+  function setNotificationStatus(message, type = '') { return notificationSettingsController.setNotificationStatus(message, type); }
+  function notificationPermissionLabel() { return notificationSettingsController.notificationPermissionLabel(); }
+  function renderNotificationSettingsForm() { return notificationSettingsController.renderNotificationSettingsForm(); }
+  function loadNotificationSettings() { return notificationSettingsController.loadNotificationSettings(); }
+  function saveNotificationSettings(patch = {}) { return notificationSettingsController.saveNotificationSettings(patch); }
+  function enablePushNotifications() { return notificationSettingsController.enablePushNotifications(); }
+  function disablePushOnThisDevice() { return notificationSettingsController.disablePushOnThisDevice(); }
+  function testPushNotification() { return notificationSettingsController.testPushNotification(); }
+  function refreshPushDeviceState() { return notificationSettingsController.refreshPushDeviceState(); }
+  function applySoundSettings(next = {}) { return soundSettingsController.applySoundSettings(next); }
+  function setSoundStatus(message, type = '') { return soundSettingsController.setSoundStatus(message, type); }
+  function renderSoundSettingsForm() { return soundSettingsController.renderSoundSettingsForm(); }
+  function getSoundSettingsFromForm() { return soundSettingsController.getSoundSettingsFromForm(); }
+  function loadSoundSettings() { return soundSettingsController.loadSoundSettings(); }
+  function saveSoundSettings(patch = {}, options = {}) { return soundSettingsController.saveSoundSettings(patch, options); }
+  function scheduleSoundSettingsSave(patch = {}) { return soundSettingsController.scheduleSoundSettingsSave(patch); }
+  function playAppSound(type, options = {}) { return soundSettingsController.playAppSound(type, options); }
+  function previewSound(type) { return soundSettingsController.previewSound(type); }
+  function previewAllSounds() { return soundSettingsController.previewAllSounds(); }
   function localChatPreferenceEnabled(value) {
     return value !== false && value !== 0;
   }
@@ -6688,20 +5626,20 @@
   }
 
   function isChatIncomingSoundEnabled(chatId) {
-    const chat = getChatById(chatId);
-    return Boolean(soundSettings.sounds_enabled && (!chat || localChatPreferenceEnabled(chat.sounds_enabled)));
+    return soundSettingsController.isChatIncomingSoundEnabled(chatId);
   }
 
   function isPinNotificationEnabled(chatId) {
-    return Boolean(notificationSettings.notify_pins !== false && isChatNotificationEnabled(chatId));
+    const settings = notificationSettingsController.getSettings();
+    return Boolean(settings.notify_pins !== false && isChatNotificationEnabled(chatId));
   }
 
   function isPinSoundEnabled(chatId) {
-    return Boolean(soundSettings.play_pins !== false && isChatIncomingSoundEnabled(chatId));
+    return soundSettingsController.isPinSoundEnabled(chatId);
   }
 
   function isMentionSoundEnabled() {
-    return Boolean(soundSettings.sounds_enabled && soundSettings.play_mentions !== false);
+    return soundSettingsController.isMentionSoundEnabled();
   }
 
   function isMessageMentioningCurrentUser(message) {
@@ -6724,8 +5662,8 @@
     if (!notifyToggle || !soundToggle) return;
     notifyToggle.checked = localChatPreferenceEnabled(chat?.notify_enabled);
     soundToggle.checked = localChatPreferenceEnabled(chat?.sounds_enabled);
-    $('#chatNotifyHint')?.classList.toggle('hidden', !!notificationSettings.push_enabled);
-    $('#chatSoundHint')?.classList.toggle('hidden', !!soundSettings.sounds_enabled);
+    $('#chatNotifyHint')?.classList.toggle('hidden', !!notificationSettingsController.getSettings().push_enabled);
+    $('#chatSoundHint')?.classList.toggle('hidden', !!soundSettingsController.getSettings().sounds_enabled);
   }
 
   async function loadChatPreferences(chatId) {
@@ -7095,9 +6033,9 @@
     if (
       'Notification' in window &&
       Notification.permission === 'granted' &&
-      notificationSettings.push_enabled &&
+      notificationSettingsController.getSettings().push_enabled &&
       isPinNotificationEnabled(chatId) &&
-      !pushDeviceSubscribed
+      !notificationSettingsController.isPushDeviceSubscribed()
     ) {
       const content = buildPinBrowserNotification(pin, chatId);
       new Notification(content.title, {
@@ -13227,13 +12165,8 @@
     return ok;
   }
 
-  function modalIdOf(modalOrId) {
-    if (typeof modalOrId === 'string') return modalOrId;
-    return modalOrId?.id || '';
-  }
-
   function modalEntryOf(modalOrId) {
-    return modalRegistry.get(modalIdOf(modalOrId)) || null;
+    return modalManager.getEntry(modalOrId);
   }
 
   function rememberActiveElement() {
@@ -13269,56 +12202,6 @@
     }
   }
 
-  function getModalFocusableTarget(entry) {
-    return entry?.el?.querySelector?.(
-      '[autofocus], button:not([disabled]), input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
-    ) || null;
-  }
-
-  function setModalInertState(entry, disabled) {
-    if (!entry?.el) return;
-    if (disabled) {
-      blurFocusedElementWithin(entry.el);
-      entry.el.setAttribute('inert', '');
-      entry.el.setAttribute('aria-hidden', 'true');
-      entry.el.removeAttribute('aria-modal');
-    } else {
-      entry.el.removeAttribute('inert');
-      entry.el.setAttribute('aria-hidden', 'false');
-      entry.el.setAttribute('aria-modal', 'true');
-    }
-  }
-
-  function updateModalStackState() {
-    let activeTopIndex = -1;
-    for (let index = modalStack.length - 1; index >= 0; index -= 1) {
-      if (!modalStack[index]?.isClosing) {
-        activeTopIndex = index;
-        break;
-      }
-    }
-    modalStack.forEach((entry, index) => {
-      const isTop = index === activeTopIndex;
-      entry.el.style.setProperty('--modal-layer-z', String(150 + index * 4));
-      entry.el.classList.toggle('is-underlay', !entry.isClosing && !isTop);
-      if (isTop && !entry.isClosing) setModalInertState(entry, false);
-      else setModalInertState(entry, true);
-    });
-  }
-
-  function pushModalHistoryState(modalId) {
-    history.pushState({ ...(history.state || {}), modalId, modalDepth: modalHistoryDepth + 1 }, '');
-    modalHistoryDepth += 1;
-  }
-
-  function rewindModalHistory(steps = 1) {
-    const depth = Math.min(Number(steps) || 0, modalHistoryDepth);
-    if (!depth) return;
-    modalSkipPopstateCount += depth;
-    modalHistoryDepth -= depth;
-    history.go(-depth);
-  }
-
   function parseTransitionTimeMs(value) {
     const text = String(value || '').trim();
     if (!text) return 0;
@@ -13342,116 +12225,8 @@
     return max;
   }
 
-  function getModalTransitionFallbackMs(entryOrEl) {
-    const entry = entryOrEl?.el ? entryOrEl : modalEntryOf(entryOrEl);
-    const modalEl = entry?.el || entryOrEl;
-    if (!(modalEl instanceof HTMLElement)) return MODAL_TRANSITION_BUFFER_MS;
-    const contentEl = modalEl.querySelector('.modal-content');
-    const maxDuration = Math.max(
-      getElementTransitionTotalMs(modalEl),
-      getElementTransitionTotalMs(contentEl)
-    );
-    return Math.max(MODAL_TRANSITION_BUFFER_MS, Math.ceil(maxDuration + MODAL_TRANSITION_BUFFER_MS));
-  }
-
-  function getModalEntriesTransitionFallbackMs(entries = []) {
-    return entries.reduce((max, entry) => Math.max(max, getModalTransitionFallbackMs(entry)), MODAL_TRANSITION_BUFFER_MS);
-  }
-
-  function flushPendingModalHistoryRewind() {
-    clearTimeout(modalHistorySyncTimer);
-    modalHistorySyncTimer = null;
-    modalHistorySyncDueAt = 0;
-    if (!pendingModalHistoryRewind) return;
-    const steps = pendingModalHistoryRewind;
-    pendingModalHistoryRewind = 0;
-    rewindModalHistory(steps);
-  }
-
-  function scheduleModalHistoryRewind(steps = 1, delayMs = MODAL_TRANSITION_BUFFER_MS) {
-    const count = Math.max(0, Number(steps) || 0);
-    if (!count) return;
-    pendingModalHistoryRewind += count;
-    const nextDueAt = Date.now() + Math.max(MODAL_TRANSITION_BUFFER_MS, Number(delayMs) || 0);
-    modalHistorySyncDueAt = Math.max(modalHistorySyncDueAt, nextDueAt);
-    clearTimeout(modalHistorySyncTimer);
-    modalHistorySyncTimer = setTimeout(() => {
-      flushPendingModalHistoryRewind();
-    }, Math.max(0, modalHistorySyncDueAt - Date.now()));
-  }
-
-  function finalizeModalClose(entry) {
-    if (!entry?.el) return false;
-    clearTimeout(entry.closeTimer);
-    entry.closeTimer = null;
-    entry.isClosing = false;
-    entry.el.classList.add('hidden');
-    entry.el.classList.remove('is-open', 'is-underlay', 'is-closing');
-    entry.el.style.removeProperty('--modal-layer-z');
-    entry.el.removeAttribute('inert');
-    entry.el.setAttribute('aria-hidden', 'true');
-    entry.el.removeAttribute('aria-modal');
-    modalStack = modalStack.filter((item) => item !== entry);
-    updateModalStackState();
-    try {
-      entry.onAfterClose?.();
-    } catch (e) {}
-    if (!focusElementIfPossible(entry.returnFocusEl)) {
-      focusElementIfPossible(getModalFocusableTarget(getTopModal()));
-    }
-    scheduleMobileViewportRecovery();
-    return true;
-  }
-
-  function beginModalClose(entry, { immediate = false } = {}) {
-    if (!entry?.el || entry.isClosing) return false;
-    entry.isClosing = true;
-    if (entry.openFrame) {
-      cancelAnimationFrame(entry.openFrame);
-      entry.openFrame = null;
-    }
-    entry.el.classList.remove('is-open', 'is-underlay');
-    entry.el.classList.add('is-closing');
-    setModalInertState(entry, true);
-    updateModalStackState();
-    if (immediate || prefersReducedMotion() || currentModalAnimation === 'none') {
-      return finalizeModalClose(entry);
-    }
-
-    const transitionTarget = entry.el.querySelector('.modal-content') || entry.el;
-    const onTransitionEnd = (event) => {
-      if (event.target !== transitionTarget || !['opacity', 'transform'].includes(event.propertyName)) return;
-      transitionTarget.removeEventListener('transitionend', onTransitionEnd);
-      finalizeModalClose(entry);
-    };
-    transitionTarget.addEventListener('transitionend', onTransitionEnd);
-    clearTimeout(entry.closeTimer);
-    const closeFallbackMs = getModalTransitionFallbackMs(entry);
-    entry.closeTimer = setTimeout(() => {
-      transitionTarget.removeEventListener('transitionend', onTransitionEnd);
-      finalizeModalClose(entry);
-    }, closeFallbackMs);
-    return true;
-  }
-
   function registerModal(modalOrId, options = {}) {
-    const el = typeof modalOrId === 'string' ? document.getElementById(modalOrId) : modalOrId;
-    if (!el?.id) return null;
-    const current = modalRegistry.get(el.id) || {};
-    const entry = {
-      id: el.id,
-      el,
-      closeOnBackdrop: options.closeOnBackdrop !== false,
-      onAfterClose: options.onAfterClose || current.onAfterClose || null,
-      isClosing: false,
-      closeTimer: null,
-      openFrame: null,
-      returnFocusEl: null,
-    };
-    modalRegistry.set(el.id, entry);
-    el.dataset.managedModal = '1';
-    if (!el.hasAttribute('role')) el.setAttribute('role', 'dialog');
-    return entry;
+    return modalManager.register(modalOrId, options);
   }
 
   function handleGrokImageRiskModalClosed() {
@@ -13492,7 +12267,7 @@
   function registerBuiltinModals() {
     ensureDeepseekTextBotsModalContent();
     ensureQwenTextBotsModalContent();
-    [
+    modalManager.registerBuiltins([
       newChatModal,
       adminModal,
       chatInfoModal,
@@ -13523,107 +12298,36 @@
       grokAiImageBotsModal,
       grokAiUniversalBotsModal,
       changePasswordModal,
-      grokImageRiskConfirmModal,
-      chatFolderManageModal,
-    ].forEach((modal) => registerModal(modal));
-    registerModal(grokImageRiskConfirmModal, { onAfterClose: handleGrokImageRiskModalClosed });
-    registerModal(chatFolderManageModal, { onAfterClose: resetChatFolderManageModal });
-    registerModal(forwardMessageModal, { onAfterClose: resetForwardMessageModal });
-    registerModal(pollComposerModal, { onAfterClose: resetPollComposer });
-    registerModal(pollVotersModal, { onAfterClose: resetPollVotersModal });
+      { modal: grokImageRiskConfirmModal, onAfterClose: handleGrokImageRiskModalClosed },
+      { modal: chatFolderManageModal, onAfterClose: resetChatFolderManageModal },
+      { modal: forwardMessageModal, onAfterClose: resetForwardMessageModal },
+      { modal: pollComposerModal, onAfterClose: resetPollComposer },
+      { modal: pollVotersModal, onAfterClose: resetPollVotersModal },
+    ]);
   }
 
   function getTopModal() {
-    return modalStack[modalStack.length - 1] || null;
+    return modalManager.getTop();
   }
 
   function hasOpenModal() {
-    return modalStack.length > 0;
+    return modalManager.hasOpen();
   }
 
-  function openModal(modalOrId, { replaceStack = false, opener = null } = {}) {
-    const entry = registerModal(modalOrId);
-    if (!entry?.el) return null;
-    closeMobileComposerTransientUi({ immediate: true });
-    dismissMobileComposer({ forceRecovery: true, reason: `modal:${entry.id}` });
-    flushPendingModalHistoryRewind();
-    const reuseHistoryEntry = replaceStack && modalHistoryDepth === 1;
-    if (replaceStack && modalStack.length) {
-      closeAllModals({ immediate: true, includeMedia: false, syncHistory: !reuseHistoryEntry });
-    }
-    const existingIndex = modalStack.indexOf(entry);
-    if (existingIndex !== -1) {
-      if (existingIndex !== modalStack.length - 1) {
-        const removable = modalStack.slice(existingIndex + 1).reverse();
-        removable.forEach((item) => beginModalClose(item, { immediate: true }));
-      }
-      entry.returnFocusEl = opener instanceof HTMLElement ? opener : entry.returnFocusEl;
-      updateModalStackState();
-      return entry;
-    }
-
-    entry.returnFocusEl = opener instanceof HTMLElement ? opener : getMobileComposerSafeReturnFocusEl();
-    entry.isClosing = false;
-    clearTimeout(entry.closeTimer);
-    if (entry.openFrame) cancelAnimationFrame(entry.openFrame);
-    entry.el.classList.remove('hidden', 'is-closing', 'is-underlay');
-    entry.el.classList.remove('is-open');
-    forceIosAnimationMount(entry.el, entry.el.querySelector('.modal-content'));
-    modalStack.push(entry);
-    updateModalStackState();
-    if (reuseHistoryEntry) {
-      history.replaceState({ ...(history.state || {}), modalId: entry.id, modalDepth: 1 }, '');
-      modalHistoryDepth = 1;
-    } else {
-      pushModalHistoryState(entry.id);
-    }
-    entry.openFrame = requestAnimationFrame(() => {
-      entry.openFrame = requestAnimationFrame(() => {
-        entry.el.classList.add('is-open');
-        entry.openFrame = null;
-      });
-    });
-    return entry;
+  function openModal(modalOrId, options = {}) {
+    return modalManager.open(modalOrId, options);
   }
 
-  function closeModal(modalOrId, { immediate = false, fromHistory = false } = {}) {
-    const entry = modalEntryOf(modalOrId);
-    if (!entry) return false;
-    const index = modalStack.indexOf(entry);
-    if (index === -1) {
-      entry.onAfterClose?.();
-      return false;
-    }
-    const toClose = modalStack.slice(index).reverse();
-    toClose.forEach((item) => beginModalClose(item, { immediate }));
-    if (!fromHistory) {
-      if (immediate || prefersReducedMotion() || currentModalAnimation === 'none') rewindModalHistory(toClose.length);
-      else scheduleModalHistoryRewind(toClose.length, getModalEntriesTransitionFallbackMs(toClose));
-    } else {
-      modalHistoryDepth = Math.max(0, modalHistoryDepth - toClose.length);
-    }
-    return true;
+  function closeModal(modalOrId, options = {}) {
+    return modalManager.close(modalOrId, options);
   }
 
   function closeTopModal(options = {}) {
-    const top = getTopModal();
-    if (!top) return false;
-    return closeModal(top.id, options);
+    return modalManager.closeTop(options);
   }
 
-  function closeAllModals({ immediate = false, includeMedia = true, syncHistory = true } = {}) {
-    if (modalStack.length) {
-      const toClose = [...modalStack].reverse();
-      toClose.forEach((entry) => beginModalClose(entry, { immediate }));
-      if (syncHistory) {
-        if (immediate || prefersReducedMotion() || currentModalAnimation === 'none') rewindModalHistory(modalHistoryDepth);
-        else scheduleModalHistoryRewind(modalHistoryDepth, getModalEntriesTransitionFallbackMs(toClose));
-      }
-      modalHistoryDepth = 0;
-    }
-    if (includeMedia) closeMediaViewer();
-    scheduleMobileViewportRecovery();
-    return true;
+  function closeAllModals(options = {}) {
+    return modalManager.closeAll(options);
   }
 
   function closeForwardMessageModal(options = {}) {
@@ -13700,7 +12404,11 @@
       finish();
     };
     contentEl.addEventListener('transitionend', onTransitionEnd);
-    timer = setTimeout(finish, getModalTransitionFallbackMs(entry));
+    const fallbackMs = Math.max(
+      MODAL_TRANSITION_BUFFER_MS,
+      Math.ceil(Math.max(getElementTransitionTotalMs(entry.el), getElementTransitionTotalMs(contentEl)) + MODAL_TRANSITION_BUFFER_MS)
+    );
+    timer = setTimeout(finish, fallbackMs);
   }
 
   function openForwardMessageModal(message) {
@@ -16036,7 +14744,7 @@
     clearTimeout(chatListCacheSyncTimer);
     clearTimeout(messageBackgroundSyncTimer);
     clearTimeout(wsReconnectTimer);
-    clearTimeout(mobileFontSizeSaveTimer);
+    uiSettings.clearMobileFontSizeSaveTimer();
     clearMobileFontSizeStatusTimer();
     if (chatListAbortController) chatListAbortController.abort();
     try { if (window.clearAssetCache) window.clearAssetCache().catch(()=>{}); } catch (e) {}
@@ -16204,10 +14912,10 @@
           msg.message.user_id !== currentUser.id &&
           'Notification' in window &&
           Notification.permission === 'granted' &&
-          notificationSettings.push_enabled &&
-          ((isMentionForMe && notificationSettings.notify_mentions !== false) ||
-            (notificationSettings.notify_messages && isChatNotificationEnabled(msg.message.chat_id))) &&
-          !pushDeviceSubscribed
+          notificationSettingsController.getSettings().push_enabled &&
+          ((isMentionForMe && notificationSettingsController.getSettings().notify_mentions !== false) ||
+            (notificationSettingsController.getSettings().notify_messages && isChatNotificationEnabled(msg.message.chat_id))) &&
+          !notificationSettingsController.isPushDeviceSubscribed()
         ) {
           const title = isMentionForMe ? `${msg.message.display_name} \u0443\u043f\u043e\u043c\u044f\u043d\u0443\u043b(\u0430) \u0432\u0430\u0441` : msg.message.display_name;
           const body = msg.message.text || (msg.message.is_voice_note ? msg.message.transcription_text : '') || '📎 File';
@@ -25525,110 +24233,16 @@
   }
 
   // Settings modal
-  function openSettingsModal(opener = $('#settingsBtn')) {
-    openModal('settingsModal', { replaceStack: true, opener });
-    const adminItem = $('#settingsAdminPanel');
-    if (currentUser.is_admin) adminItem.classList.remove('hidden');
-    else adminItem.classList.add('hidden');
-    const backupItem = $('#settingsBackupPanel');
-    if (currentUser.is_admin) backupItem?.classList.remove('hidden');
-    else backupItem?.classList.add('hidden');
-    const aiBotsItem = $('#settingsAiBotsPanel');
-    if (currentUser.is_admin) aiBotsItem?.classList.remove('hidden');
-    else aiBotsItem?.classList.add('hidden');
-    const yandexAiItem = $('#settingsYandexAiPanel');
-    if (currentUser.is_admin) yandexAiItem?.classList.remove('hidden');
-    else yandexAiItem?.classList.add('hidden');
-    const deepseekAiItem = $('#settingsDeepSeekAiPanel');
-    if (currentUser.is_admin) deepseekAiItem?.classList.remove('hidden');
-    else deepseekAiItem?.classList.add('hidden');
-    const qwenAiItem = $('#settingsQwenAiPanel');
-    if (currentUser.is_admin) qwenAiItem?.classList.remove('hidden');
-    else qwenAiItem?.classList.add('hidden');
-    const grokAiItem = $('#settingsGrokAiPanel');
-    if (currentUser.is_admin) grokAiItem?.classList.remove('hidden');
-    else grokAiItem?.classList.add('hidden');
-    const aiInitiativesItem = $('#settingsAiInitiativesPanel');
-    if (currentUser.is_admin) aiInitiativesItem?.classList.remove('hidden');
-    else aiInitiativesItem?.classList.add('hidden');
-    $('#settingsSendEnter').checked = sendByEnter;
-    $('#settingsMicrophoneMode').checked = getMicrophoneMode() === 'voice_message';
-    $('#settingsScrollRestore').checked = scrollRestoreMode === 'restore';
-    $('#settingsOpenLastChat').checked = openLastChatOnReload;
-    const screenRotationToggle = $('#settingsScreenRotationAllowed');
-    if (screenRotationToggle) screenRotationToggle.checked = getScreenRotationAllowed();
-    applyScreenRotationPreference({ showStatus: !getScreenRotationAllowed(), reason: 'settings-open' }).catch(() => {});
-    syncLanguageSettingsButton();
-    window.BananzaVoiceHooks?.onSettingsOpened?.({ currentUser });
-    window.BananzaVideoNoteAdminHooks?.onSettingsOpened?.({ currentUser });
-    window.BananzaCallHooks?.onSettingsOpened?.({ currentUser });
-  }
-
-  function openLanguageSettingsModal() {
-    openModal('languageSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
-    renderLanguagePicker();
-    setLanguageStatus('');
-  }
-
-  function openThemeSettingsModal() {
-    openModal('themeSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
-    renderThemePicker();
-    setThemeStatus('');
-  }
-
-  function openVisualModeSettingsModal() {
-    openModal('visualModeSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
-    renderVisualModePicker();
-    setVisualModeStatus('');
-  }
-
-  function openPollStyleSettingsModal() {
-    syncPollComposerStyleUi();
-    openModal('pollStyleSettingsModal', {
-      replaceStack: false,
-      opener: $('#pollComposerStyleBtn'),
-    });
-    renderPollStylePicker();
-    setPollStyleStatus('Applies to this poll only');
-  }
-
-  function openAnimationSettingsModal() {
-    openModal('animationSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
-    renderModalAnimationOptions();
-    renderModalAnimationSpeedControl();
-    setModalAnimationStatus('');
-  }
-
-  function openMobileFontSettingsModal() {
-    openModal('mobileFontSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
-    renderMobileFontSizeControl();
-    setMobileFontSizeStatus('');
-  }
-
-  function openWeatherSettingsModal() {
-    openModal('weatherSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
-    renderWeatherSettingsForm();
-    if (!weatherSettingsLoaded) loadWeatherSettings().then(renderWeatherSettingsForm);
-  }
-
-  function openNotificationSettingsModal() {
-    openModal('notificationSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
-    renderNotificationSettingsForm();
-    setNotificationStatus('');
-    if (!notificationSettingsLoaded) {
-      loadNotificationSettings().catch(() => {});
-    } else {
-      refreshPushDeviceState().catch(() => {});
-    }
-  }
-
-  function openSoundSettingsModal() {
-    openModal('soundSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
-    renderSoundSettingsForm();
-    setSoundStatus('');
-    if (!soundSettingsLoaded) loadSoundSettings().catch(() => {});
-  }
-
+  function openSettingsModal(opener = $('#settingsBtn')) { return settingsModalController.openSettingsModal(opener); }
+  function openLanguageSettingsModal() { return settingsModalController.openLanguageSettingsModal(); }
+  function openThemeSettingsModal() { return settingsModalController.openThemeSettingsModal(); }
+  function openVisualModeSettingsModal() { return settingsModalController.openVisualModeSettingsModal(); }
+  function openPollStyleSettingsModal() { return settingsModalController.openPollStyleSettingsModal(); }
+  function openAnimationSettingsModal() { return settingsModalController.openAnimationSettingsModal(); }
+  function openMobileFontSettingsModal() { return settingsModalController.openMobileFontSettingsModal(); }
+  function openWeatherSettingsModal() { return settingsModalController.openWeatherSettingsModal(); }
+  function openNotificationSettingsModal() { return settingsModalController.openNotificationSettingsModal(); }
+  function openSoundSettingsModal() { return settingsModalController.openSoundSettingsModal(); }
   function openAiBotSettingsModal() {
     if (!currentUser?.is_admin) return;
     openModal('aiBotSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
@@ -25749,12 +24363,7 @@
   }
 
   function resetManagedModalScroll(modalId) {
-    const modal = typeof modalId === 'string' ? document.getElementById(modalId) : modalId;
-    const body = modal?.querySelector('.modal-body');
-    if (!body) return;
-    requestAnimationFrame(() => {
-      body.scrollTop = 0;
-    });
+    return settingsModalController.resetManagedModalScroll(modalId);
   }
 
   function openGrokAiSettingsModal() {
@@ -28160,10 +26769,7 @@
         resetBackButtonNavigationState();
         return;
       }
-      if (modalSkipPopstateCount > 0) {
-        modalSkipPopstateCount -= 1;
-        return;
-      }
+      if (modalManager.handlePopState(null, { skipOnly: true })) return;
       if (searchPanelSkipNextPopstate) {
         searchPanelSkipNextPopstate = false;
         const shouldRestoreFocus = !searchPanelPendingAction;
@@ -28200,10 +26806,7 @@
         hideMediaContextMenu();
         return;
       }
-      if (hasOpenModal()) {
-        closeTopModal({ fromHistory: true });
-        return;
-      }
+      if (modalManager.handlePopState()) return;
       if (isSearchPanelOpen()) {
         closeSearchPanel({ fromHistory: true });
         return;
@@ -28356,18 +26959,13 @@
       forwardMessageToChat(+btn.dataset.chatId);
     });
 
-    // Settings button
-    bindTouchSafeButtonActivation($('#settingsBtn'), () => openSettingsModal($('#settingsBtn')));
+    // Settings controllers
+    settingsModalController.bindEvents({ bindTouchSafeButtonActivation });
+    weatherSettingsController.bindEvents({ bindAsyncActionButtons, withActionButtons });
+    notificationSettingsController.bindEvents({ bindAsyncActionButtons });
+    soundSettingsController.bindEvents();
 
-    // Settings sub-buttons
-    $('#settingsThemePanel').addEventListener('click', openThemeSettingsModal);
-    $('#settingsVisualModePanel')?.addEventListener('click', openVisualModeSettingsModal);
-    $('#settingsAnimationPanel')?.addEventListener('click', openAnimationSettingsModal);
-    $('#settingsMobileFontPanel')?.addEventListener('click', openMobileFontSettingsModal);
-    $('#settingsWeatherPanel').addEventListener('click', openWeatherSettingsModal);
-    $('#settingsNotificationsPanel')?.addEventListener('click', openNotificationSettingsModal);
-    $('#settingsSoundsPanel')?.addEventListener('click', openSoundSettingsModal);
-    $('#settingsLanguagePanel')?.addEventListener('click', openLanguageSettingsModal);
+    // Settings feature/admin buttons
     $('#settingsAiBotsPanel')?.addEventListener('click', openAiBotSettingsModal);
     $('#settingsYandexAiPanel')?.addEventListener('click', openYandexAiSettingsModal);
     $('#settingsDeepSeekAiPanel')?.addEventListener('click', openDeepseekAiSettingsModal);
@@ -28382,156 +26980,6 @@
     $('#backupRestoreFilePickBtn')?.addEventListener('click', () => $('#backupRestoreFile')?.click());
     $('#backupRestoreFile')?.addEventListener('change', () => resetBackupRestoreState({ clearFile: false }));
     syncBackupRestoreFileName();
-
-    // Send by Enter toggle
-    $('#settingsSendEnter').addEventListener('change', (e) => {
-      sendByEnter = e.target.checked;
-      localStorage.setItem('sendByEnter', sendByEnter ? '1' : '0');
-    });
-
-    $('#settingsMicrophoneMode')?.addEventListener('change', (e) => {
-      setMicrophoneMode(e.target.checked ? 'voice_message' : 'dictation');
-    });
-
-    // Scroll restore toggle
-    $('#settingsScrollRestore').addEventListener('change', (e) => {
-      scrollRestoreMode = e.target.checked ? 'restore' : 'bottom';
-      localStorage.setItem('scrollRestoreMode', scrollRestoreMode);
-    });
-
-    // Startup view toggle
-    $('#settingsOpenLastChat').addEventListener('change', (e) => {
-      openLastChatOnReload = e.target.checked;
-      localStorage.setItem('openLastChatOnReload', openLastChatOnReload ? '1' : '0');
-    });
-
-    $('#settingsScreenRotationAllowed')?.addEventListener('change', (e) => {
-      setScreenRotationAllowed(e.target.checked, { showStatus: true }).catch(() => {});
-    });
-
-    // UI theme picker
-    $('#settingsThemePicker')?.addEventListener('click', (e) => {
-      const card = e.target.closest('.theme-card');
-      if (!card) return;
-      selectUiTheme(card.dataset.theme);
-    });
-    $('#settingsVisualModePicker')?.addEventListener('click', (e) => {
-      const card = e.target.closest('[data-visual-mode-option]');
-      if (!card) return;
-      selectVisualMode(card.dataset.visualModeOption);
-    });
-    $('#settingsPollStylePicker')?.addEventListener('click', (e) => {
-      const card = e.target.closest('[data-poll-style-option]');
-      if (!card) return;
-      selectPollStyle(card.dataset.pollStyleOption);
-    });
-    $('#settingsLanguagePicker')?.addEventListener('click', (e) => {
-      const card = e.target.closest('[data-language-option]');
-      if (!card) return;
-      selectUiLanguage(card.dataset.languageOption);
-    });
-    $('#settingsAnimationOptions')?.addEventListener('click', (e) => {
-      const card = e.target.closest('[data-modal-animation-style]');
-      if (!card) return;
-      selectModalAnimation(card.dataset.modalAnimationStyle);
-    });
-    $('#settingsAnimationSpeed')?.addEventListener('input', (e) => {
-      updateModalAnimationSpeed(e.target.value, { immediate: false });
-    });
-    $('#settingsAnimationSpeed')?.addEventListener('change', (e) => {
-      updateModalAnimationSpeed(e.target.value, { immediate: true });
-    });
-    $('#settingsAnimationSpeed')?.addEventListener('blur', (e) => {
-      updateModalAnimationSpeed(e.target.value, { immediate: true });
-    });
-    $('#settingsMobileFontSize')?.addEventListener('input', (e) => {
-      updateMobileFontSize(e.target.value, { immediate: false });
-    });
-    $('#settingsMobileFontSize')?.addEventListener('change', (e) => {
-      updateMobileFontSize(e.target.value, { immediate: true });
-    });
-    $('#settingsMobileFontSize')?.addEventListener('blur', (e) => {
-      updateMobileFontSize(e.target.value, { immediate: true });
-    });
-
-    // Weather settings
-    $('#settingsWeatherEnabled')?.addEventListener('change', async (e) => {
-      $('#settingsWeatherControls')?.classList.toggle('hidden', !e.target.checked);
-      if (!e.target.checked) await saveWeatherSettings();
-    });
-    bindAsyncActionButtons('settingsWeatherSearchBtn', null, 'Searching...', searchWeatherLocations);
-    $('#settingsWeatherSearch')?.addEventListener('input', () => {
-      clearTimeout(weatherSearchTimer);
-      if ($('#settingsWeatherSearch').value.trim().length < 2) {
-        renderWeatherSearchResults([]);
-        return;
-      }
-      weatherSearchTimer = setTimeout(searchWeatherLocations, 350);
-    });
-    $('#settingsWeatherSearch')?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        withActionButtons('settingsWeatherSearchBtn', 'Searching...', searchWeatherLocations).catch(() => {});
-      }
-    });
-    $('#settingsWeatherResults')?.addEventListener('click', (e) => {
-      const btn = e.target.closest('.weather-result-item');
-      if (!btn) return;
-      selectedWeatherLocation = weatherSearchResults[+btn.dataset.index] || null;
-      renderWeatherSettingsForm({
-        enabled: $('#settingsWeatherEnabled')?.checked,
-        refresh_minutes: $('#settingsWeatherRefresh')?.value,
-      });
-      renderWeatherSearchResults([]);
-      setWeatherStatus(selectedWeatherLocation ? 'City selected, save settings' : '', selectedWeatherLocation ? 'success' : '');
-    });
-    bindAsyncActionButtons('settingsWeatherSave', null, 'Saving...', saveWeatherSettings);
-    bindAsyncActionButtons('settingsWeatherRefreshNow', null, 'Refreshing...', saveWeatherSettings);
-
-    // Notification settings
-    bindAsyncActionButtons('settingsPushEnable', null, 'Enabling...', enablePushNotifications);
-    bindAsyncActionButtons('settingsPushDisable', null, 'Disabling...', disablePushOnThisDevice);
-    bindAsyncActionButtons('settingsPushTest', null, 'Testing...', testPushNotification);
-    $('#settingsNotificationsEnabled')?.addEventListener('change', async (e) => {
-      await saveNotificationSettings({ push_enabled: e.target.checked });
-      if (e.target.checked && !pushDeviceSubscribed) {
-        if (!isPushSupported()) {
-          setNotificationStatus('Настройки сохранены, но на этом устройстве Web Push недоступен.', 'success');
-        } else if (Notification.permission === 'denied') {
-          setNotificationStatus('Настройки сохранены, но браузер запретил уведомления. Разрешите их в настройках сайта.', 'success');
-        } else {
-          setNotificationStatus('Настройки сохранены. Чтобы получать push на этом устройстве, нажмите «Включить на этом устройстве».', 'success');
-        }
-      }
-    });
-    ['settingsNotifyMessages', 'settingsNotifyChatInvites', 'settingsNotifyCalls', 'settingsNotifyReactions', 'settingsNotifyPins', 'settingsNotifyMentions'].forEach((id) => {
-      document.getElementById(id)?.addEventListener('change', () => saveNotificationSettings());
-    });
-
-    // Sound settings
-    [
-      'settingsSoundsEnabled',
-      'settingsSoundSend',
-      'settingsSoundIncoming',
-      'settingsSoundNotifications',
-      'settingsSoundReactions',
-      'settingsSoundPins',
-      'settingsSoundInvites',
-      'settingsSoundVoice',
-      'settingsSoundMentions',
-    ].forEach((id) => {
-      document.getElementById(id)?.addEventListener('change', () => saveSoundSettings());
-    });
-    $('#settingsSoundsVolume')?.addEventListener('input', () => scheduleSoundSettingsSave());
-    $('#settingsSoundsVolume')?.addEventListener('change', () => saveSoundSettings());
-    $('#settingsSoundsBlock')?.addEventListener('click', (event) => {
-      const previewBtn = event.target.closest('[data-sound-preview]');
-      if (!previewBtn) return;
-      event.preventDefault();
-      event.stopPropagation();
-      previewSound(previewBtn.dataset.soundPreview);
-    });
-    $('#settingsSoundPreviewAll')?.addEventListener('click', previewAllSounds);
 
     grokImageRiskCancel?.addEventListener('click', () => {
       closeModal('grokImageRiskConfirmModal');
