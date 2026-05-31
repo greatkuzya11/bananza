@@ -1512,6 +1512,23 @@ html[data-visual-mode="rich"] .call-admin-status {
   color: color-mix(in srgb, var(--success) 86%, #ffffff 14%);
 }
 
+.call-artifact-status.is-icon-only {
+  justify-content: center;
+  width: 24px;
+  min-width: 24px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.call-artifact-status.is-icon-only span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transform: translateY(-.5px);
+}
+
 .call-artifact-status.is-processing,
 .call-artifact-status.is-queued {
   border-color: color-mix(in srgb, var(--accent) 38%, var(--call-border));
@@ -1597,6 +1614,27 @@ html[data-visual-mode="rich"] .call-admin-status {
 
 .call-artifact-more {
   justify-self: start;
+  gap: 6px;
+  min-height: 24px;
+  padding: 2px 9px;
+  border-color: color-mix(in srgb, var(--success) 42%, var(--call-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--success) 13%, var(--call-bg-panel));
+  color: color-mix(in srgb, var(--success) 86%, #ffffff 14%);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.call-artifact-more:hover,
+.call-artifact-more:focus-visible {
+  border-color: color-mix(in srgb, var(--success) 58%, var(--call-border));
+  background: color-mix(in srgb, var(--success) 18%, var(--call-bg-panel));
+  color: color-mix(in srgb, var(--success) 92%, #ffffff 8%);
+}
+
+.call-artifact-more-icon {
+  font-size: 13px;
+  line-height: 1;
 }
 
 .call-artifact-actions {
@@ -1616,9 +1654,25 @@ html[data-visual-mode="rich"] .call-admin-status {
   color: var(--danger);
 }
 
-.call-artifact-image {
+.call-artifact-image-button {
+  justify-self: start;
   display: block;
-  width: min(100%, 520px);
+  max-width: min(100%, 520px);
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.call-artifact-image-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.call-artifact-image-button .call-artifact-image {
+  display: block;
+  width: 100%;
   max-height: 420px;
   object-fit: contain;
   border-radius: 8px;
@@ -1697,40 +1751,65 @@ html[data-visual-mode="rich"] .call-admin-status {
 }
 
 .call-transcript-modal {
-  width: min(760px, calc(100vw - 20px));
+  width: min(960px, calc(100vw - 32px));
+  max-width: min(960px, calc(100vw - 32px));
+  height: min(82vh, 760px);
+  max-height: calc(100dvh - 32px);
+}
+
+.call-transcript-modal .modal-header {
+  flex: 0 0 auto;
+}
+
+.call-transcript-body {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .call-transcript-toolbar {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 8px;
   align-items: center;
-  margin-bottom: 10px;
+  flex-wrap: wrap;
 }
 
-.call-transcript-toolbar .call-admin-btn {
-  min-width: 112px;
-  background: color-mix(in srgb, var(--call-bg-panel) 88%, var(--accent) 12%);
+.call-transcript-action {
+  gap: 6px;
+  min-height: 24px;
+  padding: 2px 9px;
+  border-color: color-mix(in srgb, var(--success) 42%, var(--call-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--success) 13%, var(--call-bg-panel));
+  color: color-mix(in srgb, var(--success) 86%, #ffffff 14%);
+  font-size: 12px;
+  font-weight: 750;
 }
 
-.call-transcript-toolbar .call-admin-btn:hover,
-.call-transcript-toolbar .call-admin-btn:focus-visible {
-  background: color-mix(in srgb, var(--call-bg-hover) 80%, var(--accent) 20%);
+.call-transcript-action:hover,
+.call-transcript-action:focus-visible {
+  border-color: color-mix(in srgb, var(--success) 58%, var(--call-border));
+  background: color-mix(in srgb, var(--success) 18%, var(--call-bg-panel));
+  color: color-mix(in srgb, var(--success) 92%, #ffffff 8%);
 }
 
 .call-transcript-text {
-  min-height: 320px;
-  max-height: min(64vh, 620px);
+  min-height: 0;
   margin: 0;
-  padding: 12px;
-  overflow: auto;
-  border: 1px solid var(--call-border);
-  border-radius: 8px;
-  background: var(--call-bg-muted);
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--text-primary);
   white-space: pre-wrap;
   word-break: break-word;
-  font: 13px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 @media (max-width: 768px) {
@@ -1742,6 +1821,17 @@ html[data-visual-mode="rich"] .call-admin-status {
   }
 
   .call-artifacts-body {
+    padding: 14px;
+  }
+
+  .call-transcript-modal {
+    width: calc(100vw - 16px);
+    max-width: calc(100vw - 16px);
+    height: calc(100dvh - 16px);
+    max-height: calc(100dvh - 16px);
+  }
+
+  .call-transcript-body {
     padding: 14px;
   }
 
@@ -1915,16 +2005,6 @@ html[data-visual-mode="rich"] .call-admin-status {
 
   .call-grid.is-video-focus-mode .call-tile.is-video-secondary:nth-child(4) {
     left: calc(26px + min(76vw, 264px));
-  }
-
-  .call-transcript-toolbar {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .call-transcript-toolbar .call-admin-btn {
-    width: 100%;
-    min-width: 0;
   }
 
   .call-artifact-row {

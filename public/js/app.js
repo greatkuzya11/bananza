@@ -12599,7 +12599,7 @@
         action: 'react',
         icon: '&#128578;',
         label: t('React'),
-        hidden: false,
+        hidden: context.canReact === false,
       },
     ];
     mediaContextMenu.innerHTML = `
@@ -12626,6 +12626,46 @@
     mediaContextMenu.setAttribute('aria-hidden', 'false');
     mediaContextMenu.setAttribute('role', 'menu');
     mediaContextMenu.dataset.messageId = String(context.msg?.id || '');
+  }
+
+  function showMediaContextMenuForContext(context, { row = null, target = null, x = null, y = null, source = 'contextmenu' } = {}) {
+    if (!context || !mediaContextMenu || !mediaContextMenuBackdrop) return;
+    const messageId = Number(context.msg?.id || row?.dataset?.msgId || 0);
+    const contextKey = String(context.mediaContextKey || `${messageId}:${context.absoluteUrl || ''}`);
+    if (isFloatingSurfaceVisible(mediaContextMenu) && mediaContextMenuState?.contextKey === contextKey) {
+      return;
+    }
+    hideMediaContextMenu({ immediate: true });
+    hideChatContextMenu({ immediate: true });
+    hideFloatingMessageActions({ immediate: true });
+    hideReactionUi({ immediate: true, keepComposerState: reactionPickerKeepKeyboard });
+    const keyboardAttached = isMobileComposerKeyboardOpen();
+    const resolvedContext = {
+      ...context,
+      row: row || context.row || null,
+      mediaTarget: target || context.mediaTarget || null,
+    };
+    mediaContextMenuState = {
+      messageId,
+      contextKey,
+      row: row || context.row || null,
+      context: resolvedContext,
+      pointerX: typeof x === 'number' && Number.isFinite(x) ? x : null,
+      pointerY: typeof y === 'number' && Number.isFinite(y) ? y : null,
+      source,
+      mode: source === 'long-press' && isMobileLayoutViewport() ? 'sheet' : 'popup',
+      keyboardAttached,
+    };
+    renderMediaContextMenu(resolvedContext);
+    mediaContextMenu.classList.toggle('is-sheet', mediaContextMenuState.mode === 'sheet');
+    positionMediaContextMenu();
+    openFloatingSurface(mediaContextMenuBackdrop);
+    openFloatingSurface(mediaContextMenu);
+    requestAnimationFrame(() => {
+      positionMediaContextMenu();
+      if (!keyboardAttached) mediaContextMenu.querySelector('.media-context-menu-button:not(:disabled)')?.focus({ preventScroll: true });
+      else focusComposerKeepKeyboard(true);
+    });
   }
 
   function positionMediaContextMenu() {
@@ -12671,36 +12711,8 @@
 
   function showMediaContextMenuForRow(row, target, { x = null, y = null, source = 'contextmenu' } = {}) {
     const context = getMessageMediaContext(row, target);
-    if (!context || !mediaContextMenu || !mediaContextMenuBackdrop) return;
-    const messageId = Number(context.msg?.id || row?.dataset?.msgId || 0);
-    if (isFloatingSurfaceVisible(mediaContextMenu) && Number(mediaContextMenuState?.messageId || 0) === messageId) {
-      return;
-    }
-    hideMediaContextMenu({ immediate: true });
-    hideChatContextMenu({ immediate: true });
-    hideFloatingMessageActions({ immediate: true });
-    hideReactionUi({ immediate: true, keepComposerState: reactionPickerKeepKeyboard });
-    const keyboardAttached = isMobileComposerKeyboardOpen();
-    mediaContextMenuState = {
-      messageId,
-      row,
-      context,
-      pointerX: typeof x === 'number' && Number.isFinite(x) ? x : null,
-      pointerY: typeof y === 'number' && Number.isFinite(y) ? y : null,
-      source,
-      mode: source === 'long-press' && isMobileLayoutViewport() ? 'sheet' : 'popup',
-      keyboardAttached,
-    };
-    renderMediaContextMenu(context);
-    mediaContextMenu.classList.toggle('is-sheet', mediaContextMenuState.mode === 'sheet');
-    positionMediaContextMenu();
-    openFloatingSurface(mediaContextMenuBackdrop);
-    openFloatingSurface(mediaContextMenu);
-    requestAnimationFrame(() => {
-      positionMediaContextMenu();
-      if (!keyboardAttached) mediaContextMenu.querySelector('.media-context-menu-button:not(:disabled)')?.focus({ preventScroll: true });
-      else focusComposerKeepKeyboard(true);
-    });
+    if (!context) return;
+    showMediaContextMenuForContext(context, { row, target, x, y, source });
   }
 
   async function handleMediaContextMenuAction(action, context) {
@@ -20546,9 +20558,6 @@
         if (transcriptStatus === 'completed' || notes?.transcript_ready) {
           pushCallMessageMeta(meta, '&#128221;', t('Transcript ready'), 'transcript');
           actions.push(`<button type="button" class="call-message-action" data-call-card-transcript="${Number(call.id || 0)}">${esc(t('Transcript'))}</button>`);
-          if (transcriptStatus === 'completed') {
-            actions.push(`<button type="button" class="call-message-action" data-call-card-retranscribe="${Number(call.id || 0)}">${esc(t('Re-transcribe'))}</button>`);
-          }
         } else if (transcriptStatus === 'queued' || transcriptStatus === 'processing') {
           pushCallMessageMeta(meta, '&#128221;', t('Transcript processing'), 'transcript');
           actions.push(`<button type="button" class="call-message-action" disabled>${esc(t('Transcript processing'))}</button>`);
@@ -20655,6 +20664,15 @@
     return String(run.label || key || t('Artifact')).trim();
   }
 
+  function renderCallArtifactStatus(status) {
+    const kind = callArtifactStatusKind(status);
+    const label = callArtifactStatusLabel(kind);
+    if (kind === 'completed') {
+      return `<span class="call-artifact-status is-completed is-icon-only" aria-label="${esc(label)}" title="${esc(label)}"><span aria-hidden="true">&#10003;</span></span>`;
+    }
+    return `<span class="call-artifact-status is-${kind}">${esc(label)}</span>`;
+  }
+
   function callArtifactTextShouldCollapse(text) {
     const source = String(text || '').trim();
     if (!source) return false;
@@ -20682,7 +20700,64 @@
       <div class="call-artifact-text${collapsed ? ' is-collapsed' : ''}" data-call-artifact-text="${Number(runId || 0)}">
         ${lines.map(renderCallArtifactTextLine).join('')}
       </div>
-      ${collapsed ? `<button type="button" class="call-admin-btn call-artifact-more" data-call-artifact-more="${Number(runId || 0)}">${esc(t('Show more'))}</button>` : ''}
+      ${collapsed ? `<button type="button" class="call-admin-btn call-artifact-more" data-call-artifact-more="${Number(runId || 0)}"><span>${esc(t('Show more'))}</span><span class="call-artifact-more-icon" aria-hidden="true">&#8594;</span></button>` : ''}
+    `;
+  }
+
+  function callArtifactImageUrl(run = {}) {
+    return String(run?.file?.url || '').trim();
+  }
+
+  function callArtifactImageMime(run = {}) {
+    return normalizeMimeType(run?.file?.mime_type || run?.file?.mime || 'image/png') || 'image/png';
+  }
+
+  function callArtifactImageFilename(run = {}) {
+    const file = run?.file || {};
+    let name = String(file.original_name || file.originalName || file.name || file.stored_name || file.storedName || '').trim();
+    if (!name) name = String(callArtifactLabel(run) || 'callshot').trim() || 'callshot';
+    if (!fileExtension(name)) {
+      const mime = callArtifactImageMime(run);
+      name += mime === 'image/jpeg' ? '.jpg' : (mime === 'image/webp' ? '.webp' : '.png');
+    }
+    return name;
+  }
+
+  function callArtifactImageContext(run = {}, mediaTarget = null) {
+    const previewUrl = callArtifactImageUrl(run);
+    const absoluteUrl = getAbsoluteMessageMediaUrl(previewUrl);
+    if (!absoluteUrl) return null;
+    return {
+      row: null,
+      msg: { id: 0 },
+      mediaTarget,
+      mediaKind: 'image',
+      mediaKindLabel: 'Image',
+      previewUrl,
+      downloadUrl: previewUrl,
+      absoluteUrl,
+      filename: callArtifactImageFilename(run),
+      mime: callArtifactImageMime(run),
+      copyText: '',
+      canCopyText: false,
+      canReply: false,
+      canForward: false,
+      canSaveNote: false,
+      canEdit: false,
+      canReact: false,
+      pinState: { show: false, isPinned: false, disabled: true },
+      mediaContextKey: `call-artifact:${Number(run?.id || 0)}:${absoluteUrl}`,
+    };
+  }
+
+  function renderCallArtifactImage(run = {}) {
+    const src = callArtifactImageUrl(run);
+    if (!src) return '';
+    const label = callArtifactLabel(run);
+    return `
+      <button type="button" class="call-artifact-image-button" data-call-artifact-image="${Number(run?.id || 0)}" aria-label="${esc(t('Open'))} ${esc(label)}">
+        <img class="call-artifact-image" src="${esc(src)}" alt="${esc(label)}">
+      </button>
     `;
   }
 
@@ -20693,9 +20768,9 @@
       <section class="call-artifact-item" data-call-artifact-item="${Number(run?.id || 0)}">
         <div class="call-artifact-head">
           <strong class="call-artifact-title">${esc(callArtifactLabel(run))}</strong>
-          <span class="call-artifact-status is-${status}">${esc(callArtifactStatusLabel(status))}</span>
+          ${renderCallArtifactStatus(status)}
         </div>
-        ${run?.file?.url ? `<img class="call-artifact-image" src="${esc(run.file.url)}" alt="">` : ''}
+        ${run?.file?.url ? renderCallArtifactImage(run) : ''}
         ${run?.result_text ? renderCallArtifactText(run.result_text, run.id) : ''}
         ${run?.error ? `<div class="call-artifact-error">${esc(run.error)}</div>` : ''}
         ${!hasBody ? `<div class="call-artifact-placeholder">${esc(callArtifactStatusLabel(status))}</div>` : ''}
@@ -20835,18 +20910,6 @@
         button.disabled = false;
       }
     });
-    row.querySelector('[data-call-card-retranscribe]')?.addEventListener('click', async (event) => {
-      event.stopPropagation();
-      const button = event.currentTarget;
-      button.disabled = true;
-      try {
-        await api(`/api/calls/${Number(call.id || 0)}/transcribe/retry`, { method: 'POST', body: {} });
-      } catch (error) {
-        showCenterToast(error.message || t('Could not start transcription'));
-      } finally {
-        button.disabled = false;
-      }
-    });
     row.querySelector('[data-call-card-artifacts]')?.addEventListener('click', async (event) => {
       event.stopPropagation();
       const button = event.currentTarget;
@@ -20894,6 +20957,7 @@
     const body = $('#callArtifactsBody');
     const runs = Array.isArray(batch.runs) ? batch.runs : [];
     if (body) {
+      const runsById = new Map(runs.map((run) => [Number(run?.id || 0), run]));
       body.innerHTML = runs.map(renderCallArtifactRun).join('') || `<div class="call-artifacts-empty">${esc(t('No artifacts yet'))}</div>`;
       body.querySelectorAll('[data-call-artifact-more]').forEach((button) => {
         button.addEventListener('click', () => {
@@ -20914,6 +20978,27 @@
           } finally {
             button.disabled = false;
           }
+        });
+      });
+      body.querySelectorAll('[data-call-artifact-image]').forEach((button) => {
+        const run = runsById.get(Number(button.dataset.callArtifactImage || 0));
+        const src = callArtifactImageUrl(run);
+        button.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (src) openMediaViewer(src, 'image');
+        });
+        button.addEventListener('contextmenu', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const context = callArtifactImageContext(run, button);
+          if (!context) return;
+          showMediaContextMenuForContext(context, {
+            target: button,
+            x: event.clientX,
+            y: event.clientY,
+            source: 'contextmenu',
+          });
         });
       });
     }

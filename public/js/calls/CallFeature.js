@@ -532,10 +532,10 @@
           <h3>${escapeHtml(t('Call transcript'))}</h3>
           <button type="button" class="modal-close" id="callTranscriptClose" aria-label="${escapeHtml(t('Close'))}">x</button>
         </div>
-        <div class="modal-body">
+        <div class="modal-body call-transcript-body">
           <div class="call-transcript-toolbar">
-            <button type="button" id="callTranscriptCopy" class="call-admin-btn">${escapeHtml(t('Copy'))}</button>
-            <button type="button" id="callTranscriptDownload" class="call-admin-btn">${escapeHtml(t('Download'))}</button>
+            <button type="button" id="callTranscriptCopy" class="call-admin-btn call-transcript-action">${escapeHtml(t('Copy'))}</button>
+            <button type="button" id="callTranscriptRetranscribe" class="call-admin-btn call-transcript-action hidden">${escapeHtml(t('Re-transcribe'))}</button>
           </div>
           <div id="callTranscriptStatus" class="call-admin-status hidden"></div>
           <pre id="callTranscriptText" class="call-transcript-text"></pre>
@@ -545,7 +545,7 @@
     document.body.appendChild(modal);
     document.getElementById('callTranscriptClose')?.addEventListener('click', () => bridge()?.closeManagedModal?.('callTranscriptModal'));
     document.getElementById('callTranscriptCopy')?.addEventListener('click', copyTranscriptText);
-    document.getElementById('callTranscriptDownload')?.addEventListener('click', downloadTranscriptText);
+    document.getElementById('callTranscriptRetranscribe')?.addEventListener('click', retranscribeCurrentTranscript);
     bridge()?.registerManagedModal?.('callTranscriptModal');
     applyLocalized(modal);
   }
@@ -1654,10 +1654,19 @@
     el.textContent = message || '';
   }
 
+  function syncTranscriptActions() {
+    const retranscribe = document.getElementById('callTranscriptRetranscribe');
+    if (!retranscribe) return;
+    const canRetranscribe = Boolean(currentUser()?.is_admin && Number(state.transcriptModal.callId || 0));
+    retranscribe.classList.toggle('hidden', !canRetranscribe);
+    retranscribe.disabled = !canRetranscribe || retranscribe.dataset.pending === '1';
+  }
+
   async function openTranscript(callId, runId = 0) {
     ensureUi();
     state.transcriptModal = { callId: Number(callId || 0), runId: Number(runId || 0), text: '', segments: [] };
     document.getElementById('callTranscriptText').textContent = '';
+    syncTranscriptActions();
     transcriptStatus(t('Loading...'));
     bridge()?.openManagedModal?.('callTranscriptModal', { replaceStack: false });
     try {
@@ -1671,9 +1680,11 @@
         segments: Array.isArray(data.segments) ? data.segments : [],
       };
       document.getElementById('callTranscriptText').textContent = state.transcriptModal.text || t('Transcript is empty');
+      syncTranscriptActions();
       const approximate = runId ? data.run?.timing_approximate : data.ai_notes?.timing_approximate;
       transcriptStatus(approximate ? t('Timing is approximate') : '', approximate ? '' : 'success');
     } catch (error) {
+      syncTranscriptActions();
       transcriptStatus(error.message || t('Could not load transcript'), 'error');
     }
   }
@@ -1685,33 +1696,21 @@
     transcriptStatus(t('Copied'), 'success');
   }
 
-  function downloadTranscriptText() {
-    const text = state.transcriptModal.text || document.getElementById('callTranscriptText')?.textContent || '';
-    if (!text) return;
-    const filename = state.transcriptModal.runId
-      ? `bananza-call-${state.transcriptModal.callId || 'transcript'}-run-${state.transcriptModal.runId}.txt`
-      : `bananza-call-${state.transcriptModal.callId || 'transcript'}.txt`;
+  async function retranscribeCurrentTranscript() {
+    const button = document.getElementById('callTranscriptRetranscribe');
+    const callId = Number(state.transcriptModal.callId || 0);
+    if (!button || !currentUser()?.is_admin || !callId) return;
+    button.dataset.pending = '1';
+    syncTranscriptActions();
+    transcriptStatus(t('Transcription...'));
     try {
-      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.rel = 'noopener';
-      a.style.display = 'none';
-      document.body.appendChild(a);
-      a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-      a.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 4000);
-      transcriptStatus(t('Download started'), 'success');
-    } catch {
-      const fallback = window.open('', '_blank', 'noopener,noreferrer');
-      if (fallback) {
-        fallback.document.title = filename;
-        fallback.document.body.style.whiteSpace = 'pre-wrap';
-        fallback.document.body.style.font = '14px/1.5 monospace';
-        fallback.document.body.textContent = text;
-      }
+      await api(`/api/calls/${callId}/transcribe/retry`, { method: 'POST', body: {} });
+      transcriptStatus(t('Transcript queued'), 'success');
+    } catch (error) {
+      transcriptStatus(error.message || t('Could not start transcription'), 'error');
+    } finally {
+      delete button.dataset.pending;
+      syncTranscriptActions();
     }
   }
 

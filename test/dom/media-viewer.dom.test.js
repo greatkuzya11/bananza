@@ -20,6 +20,13 @@ const VIDEO_NOTE_SCRIPTS = [
   'public/js/video-notes/VideoNoteFeature.js',
 ];
 
+const CALL_SCRIPTS = [
+  'public/js/calls/CallStore.js',
+  'public/js/calls/CallMedia.js',
+  'public/js/calls/CallNotifications.js',
+  'public/js/calls/CallFeature.js',
+];
+
 function createJsonResponse(dom, data, init = {}) {
   return new dom.window.Response(JSON.stringify(data), {
     status: 200,
@@ -28,7 +35,7 @@ function createJsonResponse(dom, data, init = {}) {
   });
 }
 
-function installAppRuntimeStubs(dom, { fetchHandler = null } = {}) {
+function installAppRuntimeStubs(dom, { fetchHandler = null, currentUserOverrides = {} } = {}) {
   const { window } = dom;
 
   Object.defineProperty(window, 'innerWidth', {
@@ -101,6 +108,7 @@ function installAppRuntimeStubs(dom, { fetchHandler = null } = {}) {
     ui_modal_animation_speed: 8,
     ui_mobile_font_size: 5,
     ui_show_chat_folder_strip_in_all_chats: false,
+    ...currentUserOverrides,
   };
 
   window.localStorage.setItem('token', 'test-token');
@@ -887,6 +895,38 @@ function createCallMessage(chatId, messageId, overrides = {}) {
   });
 }
 
+function findCallPayloadById(chatMessagesByChatId, callId) {
+  const targetId = Number(callId || 0);
+  if (!targetId) return null;
+  return Object.values(chatMessagesByChatId || {})
+    .flat()
+    .flatMap((message) => [message?.call, message?.call_message])
+    .find((call) => Number(call?.id || call?.call_id || 0) === targetId) || null;
+}
+
+function findCallTranscriptRunPayload(chatMessagesByChatId, runId) {
+  const targetId = Number(runId || 0);
+  if (!targetId) return null;
+  for (const message of Object.values(chatMessagesByChatId || {}).flat()) {
+    const calls = [message?.call, message?.call_message];
+    for (const call of calls) {
+      if (!call) continue;
+      const runs = [
+        call.primary_transcript_run,
+        ...(Array.isArray(call.transcript_runs) ? call.transcript_runs : []),
+      ].filter(Boolean);
+      const run = runs.find((item) => Number(item?.id || 0) === targetId);
+      if (run) return { call, run };
+    }
+  }
+  return null;
+}
+
+function loadCallFeatureScripts(dom) {
+  loadBrowserScripts(dom, CALL_SCRIPTS);
+  dom.window.dispatchEvent(new dom.window.Event('bananza:ready'));
+}
+
 function createCallArtifactMessage(chatId, messageId, overrides = {}) {
   const batchId = Number(overrides.batch_id || overrides.call_artifact_batch?.id || messageId + 3000);
   const callId = Number(overrides.call_id || overrides.call_artifact_batch?.call_id || messageId + 1000);
@@ -1050,6 +1090,32 @@ function createMediaPlaybackFetchHandler({
         ...features,
       });
     }
+    const transcriptRunMatch = url.pathname.match(/^\/api\/calls\/transcript-runs\/(\d+)$/);
+    if (transcriptRunMatch) {
+      const payload = findCallTranscriptRunPayload(chatMessagesByChatId, Number(transcriptRunMatch[1]));
+      if (payload) {
+        return createJsonResponse(dom, {
+          call: payload.call,
+          run: payload.run,
+          transcript_text: payload.run.transcript_text || '',
+          segments: Array.isArray(payload.run.segments) ? payload.run.segments : [],
+        });
+      }
+    }
+    const callTranscriptMatch = url.pathname.match(/^\/api\/calls\/(\d+)\/transcript$/);
+    if (callTranscriptMatch) {
+      const call = findCallPayloadById(chatMessagesByChatId, Number(callTranscriptMatch[1]));
+      if (call) {
+        const run = call.primary_transcript_run || (Array.isArray(call.transcript_runs) ? call.transcript_runs[0] : null);
+        return createJsonResponse(dom, {
+          call,
+          run,
+          ai_notes: call.ai_notes || null,
+          transcript_text: run?.transcript_text || call.ai_notes?.transcript_text || '',
+          segments: Array.isArray(run?.segments) ? run.segments : [],
+        });
+      }
+    }
     const callTranscribeRetryMatch = url.pathname.match(/^\/api\/calls\/(\d+)\/transcribe\/retry$/);
     if (callTranscribeRetryMatch && String(init?.method || '').toUpperCase() === 'POST') {
       callTranscribeRequests?.push({
@@ -1091,12 +1157,14 @@ async function openMediaPlaybackDom({
   features = {},
   i18nStub = null,
   callTranscribeRequests = null,
+  currentUserOverrides = {},
 } = {}) {
   const allChats = Array.isArray(chats) && chats.length
     ? chats
     : [activeChat, createChatFixture(2, 'Chat B', { lastMessageId: 0 })];
   const dom = await bootAppDom({
     i18nStub,
+    currentUserOverrides,
     fetchHandler: createMediaPlaybackFetchHandler({
       chatMessagesByChatId: chatMessagesByChatId || { [Number(activeChat.id || 1)]: [] },
       features,
@@ -4913,7 +4981,7 @@ test('call recording card renders media controls and seeks without starting paus
   assert.ok(Math.abs(getDasharrayFilledLength(fill) - 50) < 1);
 });
 
-test('completed call transcript offers re-transcribe action', async (t) => {
+test('completed call transcript moves re-transcribe into admin transcript modal', async (t) => {
   const chat = createChatFixture(1, 'Chat A', { lastMessageId: 470 });
   const callId = 1470;
   const transcriptRun = {
@@ -4978,14 +5046,98 @@ test('completed call transcript offers re-transcribe action', async (t) => {
     dom.window.close();
   });
   const { document } = dom.window;
+  loadCallFeatureScripts(dom);
+  await wait(dom, 80);
 
-  const button = document.querySelector(`[data-call-card-retranscribe="${callId}"]`);
-  assert.ok(button);
-  assert.match(button.textContent, /Re-transcribe|Расшифровать заново/);
-  button.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
-  await wait(dom, 20);
+  assert.equal(document.querySelector(`[data-call-card-retranscribe="${callId}"]`), null);
+  const transcriptButton = document.querySelector(`[data-call-card-transcript="${callId}"]`);
+  assert.ok(transcriptButton);
+  transcriptButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  await wait(dom, 80);
+
+  const modal = document.getElementById('callTranscriptModal');
+  assert.ok(modal);
+  assert.equal(modal.classList.contains('hidden'), false);
+  assert.equal(modal.querySelectorAll('.call-transcript-body.modal-body').length, 1);
+  assert.equal(document.getElementById('callTranscriptDownload'), null);
+  assert.equal(modal.textContent.includes('Download'), false);
+  assert.equal(document.getElementById('callTranscriptText')?.textContent, 'ready transcript');
+  assert.ok(document.getElementById('callTranscriptCopy'));
+
+  const retranscribe = document.getElementById('callTranscriptRetranscribe');
+  assert.ok(retranscribe);
+  assert.equal(retranscribe.classList.contains('hidden'), false);
+  assert.match(retranscribe.textContent, /Re-transcribe|Расшифровать заново/);
+  retranscribe.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  await wait(dom, 40);
 
   assert.deepEqual(callTranscribeRequests, [{ callId, method: 'POST' }]);
+});
+
+test('completed call transcript hides re-transcribe for non-admin users', async (t) => {
+  const chat = createChatFixture(1, 'Chat A', { lastMessageId: 471 });
+  const callId = 1471;
+  const transcriptRun = {
+    id: 72,
+    call_id: callId,
+    provider: 'voice',
+    resolved_provider: 'vosk',
+    strategy: 'hybrid',
+    strategy_label: 'Hybrid',
+    status: 'completed',
+    transcript_ready: true,
+    transcript_text: 'member transcript',
+  };
+  const message = createCallMessage(1, 471, {
+    call_id: callId,
+    call: {
+      id: callId,
+      call_id: callId,
+      status: 'ended',
+      duration_ms: 24_000,
+      can_join: false,
+      primary_transcript_run: transcriptRun,
+      transcript_runs: [transcriptRun],
+    },
+    call_message: {
+      call_id: callId,
+      status: 'ended',
+      duration_ms: 24_000,
+      can_join: false,
+      primary_transcript_run: transcriptRun,
+      transcript_runs: [transcriptRun],
+    },
+  });
+  const callTranscribeRequests = [];
+  const dom = await openMediaPlaybackDom({
+    activeChat: chat,
+    chats: [chat],
+    chatMessagesByChatId: {
+      1: [message],
+    },
+    callTranscribeRequests,
+    currentUserOverrides: { is_admin: 0 },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  loadCallFeatureScripts(dom);
+  await wait(dom, 80);
+
+  assert.equal(document.querySelector(`[data-call-card-retranscribe="${callId}"]`), null);
+  document.querySelector(`[data-call-card-transcript="${callId}"]`)?.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await wait(dom, 80);
+
+  const modal = document.getElementById('callTranscriptModal');
+  assert.ok(modal);
+  assert.equal(document.getElementById('callTranscriptText')?.textContent, 'member transcript');
+  assert.equal(document.getElementById('callTranscriptDownload'), null);
+  assert.equal(document.getElementById('callTranscriptRetranscribe')?.classList.contains('hidden'), true);
+  assert.deepEqual(callTranscribeRequests, []);
 });
 
 test('voice call card keeps voice label even when call payload falls back to defaults', async (t) => {
@@ -5175,6 +5327,23 @@ test('call AI summary modal uses one scroll body and expands long artifacts', as
           result_text: '',
           error: 'Model timeout',
         },
+        {
+          id: 9104,
+          artifact_key: 'callshot',
+          key: 'callshot',
+          label: 'CallShot',
+          status: 'completed',
+          result_text: '',
+          file: {
+            id: 91040,
+            original_name: 'callshot.png',
+            stored_name: 'callshot.png',
+            mime_type: 'image/png',
+            size: 1234,
+            type: 'image',
+            url: '/uploads/callshot.png',
+          },
+        },
       ],
     },
   });
@@ -5208,14 +5377,20 @@ test('call AI summary modal uses one scroll body and expands long artifacts', as
   assert.equal(modal.querySelectorAll('.call-transcript-text, .call-artifact-section, pre').length, 0);
   assert.equal(modal.textContent.includes('Call AI summary'), false);
   assert.equal(modal.textContent.includes('Ready'), false);
-  assert.ok(modal.textContent.includes('Готово'));
+  assert.equal(modal.textContent.includes('Готово'), false);
   assert.ok(modal.textContent.includes('Саммари'));
+  const completedStatuses = modal.querySelectorAll('.call-artifact-status.is-completed.is-icon-only');
+  assert.equal(completedStatuses.length, 3);
+  assert.equal(completedStatuses[0].textContent.trim(), '\u2713');
+  assert.equal(completedStatuses[0].getAttribute('aria-label'), 'Готово');
+  assert.equal(completedStatuses[0].getAttribute('title'), 'Готово');
 
   const collapsed = modal.querySelector('[data-call-artifact-text="9101"]');
   const shortText = modal.querySelector('[data-call-artifact-text="9102"]');
   const more = modal.querySelector('[data-call-artifact-more="9101"]');
   assert.ok(collapsed?.classList.contains('is-collapsed'));
   assert.ok(more);
+  assert.match(more.textContent, /\u2192/);
   assert.equal(modal.querySelector('[data-call-artifact-more="9102"]'), null);
   assert.ok(shortText);
   assert.equal(modal.querySelector('[data-call-artifact-retry="9103"]')?.textContent.trim(), 'Повторить');
@@ -5223,6 +5398,53 @@ test('call AI summary modal uses one scroll body and expands long artifacts', as
   more.click();
   assert.equal(collapsed.classList.contains('is-collapsed'), false);
   assert.equal(modal.querySelector('[data-call-artifact-more="9101"]'), null);
+
+  const callshotButton = modal.querySelector('[data-call-artifact-image="9104"]');
+  assert.ok(callshotButton);
+  callshotButton.click();
+  await wait(dom, 20);
+  const imageViewer = document.getElementById('imageViewer');
+  assert.equal(imageViewer.classList.contains('hidden'), false);
+  assert.ok(imageViewer.querySelector('.iv-slide img')?.getAttribute('src')?.endsWith('/uploads/callshot.png'));
+
+  dom.window.BananzaAppBridge.__testing.closeMediaViewer();
+  await wait(dom, 20);
+  Object.defineProperty(dom.window, 'isSecureContext', {
+    configurable: true,
+    value: true,
+  });
+  dom.window.navigator.clipboard = {
+    write() {
+      return Promise.resolve();
+    },
+  };
+  dom.window.ClipboardItem = class ClipboardItem {
+    static supports(type) {
+      return type === 'image/png';
+    }
+
+    constructor(items) {
+      this.items = items;
+    }
+  };
+  dom.window.navigator.canShare = () => true;
+  dom.window.navigator.share = () => Promise.resolve();
+  callshotButton.dispatchEvent(new dom.window.MouseEvent('contextmenu', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 160,
+    clientY: 320,
+  }));
+  await wait(dom, 20);
+  const mediaContextMenu = document.getElementById('mediaContextMenu');
+  assert.equal(mediaContextMenu.classList.contains('hidden'), false);
+  assert.equal(mediaContextMenu.getAttribute('aria-hidden'), 'false');
+  assert.ok(mediaContextMenu.textContent.includes('callshot.png'));
+  ['Copy image', 'Copy link', 'Save', 'Share'].forEach((label) => {
+    assert.ok(mediaContextMenu.textContent.includes(label), `Expected media menu action: ${label}`);
+  });
+  assert.equal(mediaContextMenu.textContent.includes('React'), false);
+  assert.equal(mediaContextMenu.textContent.includes('Forward'), false);
 });
 
 test('voice note progress outline can seek an upper adjacent message when the lower bubble receives the pointer event', async (t) => {
