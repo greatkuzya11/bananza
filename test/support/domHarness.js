@@ -40,6 +40,13 @@ const appFolderScriptPaths = Object.freeze([
   'public/js/app/folders/manage-modal.js',
   'public/js/app/folders/new-folder-tab.js',
 ]);
+const appChatListScriptPaths = Object.freeze([
+  'public/js/app/chat-list/store.js',
+  'public/js/app/chat-list/render.js',
+  'public/js/app/chat-list/data.js',
+  'public/js/app/chat-list/presence.js',
+  'public/js/app/chat-list/recovery.js',
+]);
 const appRuntimeScriptPaths = Object.freeze([
   ...appShellScriptPaths,
   ...appCoreHelperScriptPaths,
@@ -47,6 +54,7 @@ const appRuntimeScriptPaths = Object.freeze([
   ...appModalManagerScriptPaths,
   ...appSettingsScriptPaths,
   ...appFolderScriptPaths,
+  ...appChatListScriptPaths,
 ]);
 
 class FakeAudioNode {
@@ -355,6 +363,10 @@ function loadAppFolderScripts(dom) {
   loadBrowserScripts(dom, appFolderScriptPaths);
 }
 
+function loadAppChatListScripts(dom) {
+  loadBrowserScripts(dom, appChatListScriptPaths);
+}
+
 function loadAppRuntimeScripts(dom) {
   loadBrowserScripts(dom, appRuntimeScriptPaths);
 }
@@ -438,6 +450,7 @@ function installAppBridge(dom, overrides = {}) {
 }
 
 module.exports = {
+  appChatListScriptPaths,
   appCoreHelperScriptPaths,
   appDomMobileShellScriptPaths,
   appFolderScriptPaths,
@@ -450,6 +463,7 @@ module.exports = {
   installVisualViewportMock,
   loadAppScript,
   loadAppCoreHelperScripts,
+  loadAppChatListScripts,
   loadAppDomMobileShellScripts,
   loadAppFolderScripts,
   loadAppModalManagerScripts,

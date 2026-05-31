@@ -154,25 +154,10 @@
   let currentUser = null;
   let token = null;
   let chats = [];
-  let chatListLoadedOnce = false;
-  let initialChatLoadFinished = false;
-  let chatListRequestSeq = 0;
-  let chatListAbortController = null;
-  let chatListCacheSyncTimer = null;
-  let hiddenChatSearchTimer = null;
-  let hiddenChatSearchSeq = 0;
-  let hiddenChatSearchQuery = '';
-  let hiddenChatSearchResults = [];
   let currentChatId = null;
   let ws = null;
   let wsRetry = 1000;
   let wsReconnectTimer = null;
-  let lastHiddenAt = document.hidden ? Date.now() : 0;
-  let recoverySyncTimer = null;
-  let recoverySyncPromise = null;
-  let recoverySyncRequested = false;
-  let recoverySyncLastStartedAt = 0;
-  let pendingRecoveryChatIds = new Set();
   let onlineUsers = new Set();
   let chatMembersCache = new Map();
   let chatPinsByChat = new Map();
@@ -534,7 +519,6 @@
   let chatOpenSeq = 0;
   let chatMessageAbortController = null;
   let chatOpenInProgress = false;
-  let deferredRecoveryReason = '';
   let scrollRestoreTimers = new Set();
   let mobileRouteTransitionActive = false;
   let mobileRouteTransitionTimer = null;
@@ -1128,6 +1112,185 @@
     newFolderTab: newFolderTabController,
   };
   if (appContext) appContext.services.folders = folderControllers;
+
+  const chatListStoreFactory = window.BananzaApp?.chatList?.store?.createChatListStore;
+  const chatListRendererFactory = window.BananzaApp?.chatList?.render?.createChatListRenderer;
+  const chatListDataFactory = window.BananzaApp?.chatList?.data?.createChatListDataController;
+  const presenceControllerFactory = window.BananzaApp?.chatList?.presence?.createPresenceController;
+  const chatListRecoveryFactory = window.BananzaApp?.chatList?.recovery?.createChatListRecovery;
+  if (typeof chatListStoreFactory !== 'function'
+    || typeof chatListRendererFactory !== 'function'
+    || typeof chatListDataFactory !== 'function'
+    || typeof presenceControllerFactory !== 'function'
+    || typeof chatListRecoveryFactory !== 'function') {
+    throw new Error('BananzaApp chat list modules are required before app.js');
+  }
+
+  const chatListStore = chatListStoreFactory({
+    chats,
+    allUsers,
+    onlineUsers,
+    compareChatsForList: (a, b) => compareChatsForList(a, b),
+  });
+  chats = chatListStore.getMutableChats();
+  allUsers = chatListStore.getMutableAllUsers();
+  onlineUsers = chatListStore.getMutableOnlineUsers();
+
+  const chatListRenderer = chatListRendererFactory({
+    document,
+    window,
+    dom: appDom,
+    store: chatListStore,
+    folders: folderControllers,
+    formatters,
+    customEmoji,
+    config: appConfig,
+    t,
+    tx,
+    state: {
+      getChatSearchValue: () => chatSearch?.value || '',
+      getCurrentChatId: () => currentChatId,
+      shouldSuppressChatItemTap: () => Date.now() < suppressNextChatItemTapUntil,
+    },
+    actions: {
+      alert: (message) => alert(message),
+      compareChatsForFolder: (folderId, a, b) => compareChatsForFolder(folderId, a, b),
+      getCurrentChatId: () => currentChatId,
+      hideChatContextMenu: (options = {}) => hideChatContextMenu(options),
+      isAiBotDirectoryUser: (user) => isAiBotDirectoryUser(user),
+      isChatListWaitingForActiveFolder: (folderId) => isChatListWaitingForActiveFolder(folderId),
+      isChatPinned: (chat) => isChatPinned(chat),
+      isChatPinnedInFolder: (folderId, chat) => isChatPinnedInFolder(folderId, chat),
+      isNotesChat: (chat) => isNotesChat(chat),
+      normalizeChatFolderId: (folderId) => normalizeChatFolderId(folderId),
+      openChat: (chatId) => openChat(chatId),
+      openHiddenChatFromSearch: (chatId) => openHiddenChatFromSearch(chatId),
+      openPrivateChatFromDirectory: (userId) => openPrivateChatFromDirectory(userId),
+      renderChatFolderPicker: () => renderChatFolderPicker(),
+      scheduleChatListCacheSync: () => scheduleChatListCacheSync(),
+      scheduleHiddenChatSearch: (query) => scheduleHiddenChatSearch(query),
+      showToast: (message) => showCenterToast(message),
+      userSecondaryLineText: (user) => userSecondaryLineText(user),
+    },
+  });
+
+  const chatListDataController = chatListDataFactory({
+    document,
+    window,
+    dom: appDom,
+    api: (url, opts) => api(url, opts),
+    store: chatListStore,
+    renderer: chatListRenderer,
+    folders: folderControllers,
+    cache: {
+      storage: localStorage,
+      cacheAssets: (urls) => window.cacheAssets?.(urls),
+    },
+    config: appConfig,
+    tx,
+    state: {
+      getCurrentUser: () => currentUser,
+      getCurrentChatId: () => currentChatId,
+      getChatSearchValue: () => chatSearch?.value || '',
+    },
+    actions: {
+      applyChatBackground: (chat) => applyChatBackground(chat),
+      clearCachedChat: (chatId, options = {}) => clearCachedChat(chatId, options),
+      clearChatLocalState: (chatId) => {
+        chatPinsByChat.delete(Number(chatId || 0));
+        chatMemberLastReads.delete(Number(chatId || 0));
+      },
+      closeChatViewForChat: (chatId) => closeChatViewForChat(chatId),
+      compareChatsForList: (a, b) => compareChatsForList(a, b),
+      getCurrentChatShotState: () => getCurrentChatShotState(),
+      getMediaNoteFallbackLabel: (msg) => getMediaNoteFallbackLabel(msg),
+      invalidateChatShotState: (chatId) => invalidateChatShotState(chatId),
+      invalidateContextConvertAvailability: (chatId) => invalidateContextConvertAvailability(chatId),
+      isAbortError: (error) => isAbortError(error),
+      loadChatFolders: (options = {}) => loadChatFolders(options),
+      normalizeChatFolderId: (folderId) => normalizeChatFolderId(folderId),
+      openChat: (chatId) => openChat(chatId),
+      refreshChatInfoPresentation: (chat) => refreshChatInfoPresentation(chat),
+      refreshVisiblePinButtons: (chatId) => refreshVisiblePinButtons(chatId),
+      renderChatContextTransformForm: (chat) => renderChatContextTransformForm(chat),
+      renderChatDangerControls: (chat) => renderChatDangerControls(chat),
+      renderChatPinSettingsForm: (chat) => renderChatPinSettingsForm(chat),
+      renderChatPreferencesForm: (chat) => renderChatPreferencesForm(chat),
+      renderChatShotForm: (state) => renderChatShotForm(state),
+      renderCurrentChatHeader: (chat) => renderCurrentChatHeader(chat),
+      renderPinnedBar: (chatId) => renderPinnedBar(chatId),
+      scheduleMessageBackgroundSync: () => scheduleMessageBackgroundSync(),
+      setChatSearchOpen: (open, options = {}) => setChatSearchOpen(open, options),
+      showToast: (message) => showCenterToast(message),
+      updateChatStatus: () => updateChatStatus(),
+    },
+  });
+
+  const presenceController = presenceControllerFactory({
+    document,
+    window,
+    store: chatListStore,
+    renderer: chatListRenderer,
+    formatters,
+    state: {
+      getCurrentUser: () => currentUser,
+      getCurrentChatId: () => currentChatId,
+      getChatSearchValue: () => chatSearch?.value || '',
+    },
+    actions: {
+      applyCurrentUserUpdate: (user) => applyCurrentUserUpdateFromPresence(user),
+      isChatInfoVisible: () => !chatInfoModal?.classList.contains('hidden'),
+      patchAiBotUser: (user) => patchAiBotUserForPresence(user),
+      patchChatMembersCache: (user) => patchChatMembersCacheForPresence(user),
+      patchMentionTargets: (user) => patchMentionTargetsForPresence(user),
+      refreshAdminUserStatuses: () => refreshAdminUserStatuses(),
+      refreshChatInfoPresentation: (chat) => refreshChatInfoPresentation(chat),
+      refreshChatInfoStatus: () => refreshChatInfoStatus(),
+      refreshChatMemberStatuses: () => refreshChatMemberStatuses(),
+      refreshMentionPickerForUserUpdate: () => refreshMentionPickerForUserUpdate(),
+      refreshRenderedUserMessages: (user) => refreshRenderedUserMessages(user),
+      renderCurrentChatHeader: (chat) => renderCurrentChatHeader(chat),
+      setAvatarElementVisual: (el, options = {}) => setAvatarElementVisual(el, options),
+      updateCachedMessagesByUser: (user) => window.messageCache?.updateMessagesByUser?.(user).catch(() => {}),
+      updateChatStatus: () => updateChatStatus(),
+    },
+  });
+
+  const chatListRecoveryController = chatListRecoveryFactory({
+    document,
+    window,
+    store: chatListStore,
+    config: appConfig,
+    state: {
+      getCurrentChatId: () => currentChatId,
+      getCurrentUser: () => currentUser,
+      getToken: () => token,
+      hasAuth: () => Boolean(token && currentUser),
+    },
+    actions: {
+      applyScreenRotationPreference: (options = {}) => applyScreenRotationPreference(options).catch(() => {}),
+      connectWS: (options = {}) => connectWS(options),
+      flushCurrentChatScrollAnchor: (chatId, options = {}) => flushCurrentChatScrollAnchor(chatId, options),
+      getResolvedMobileBaseScene: () => getResolvedMobileBaseScene(),
+      isMobileRouteTransitionActive: () => mobileRouteTransitionActive,
+      isUiTransitionBusy: () => isUiTransitionBusy(),
+      isWebSocketOpenOrConnecting: () => Boolean(ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)),
+      loadChats: (options = {}) => loadChats(options),
+      openChat: (chatId, options = {}) => openChat(chatId, options),
+      scheduleMobileViewportRecovery: () => scheduleMobileViewportRecovery(),
+      syncCurrentChatMessages: (chatId, options = {}) => catchUpCurrentChat(chatId, options),
+      syncMobileBaseSceneState: (options = {}) => syncMobileBaseSceneState(options),
+    },
+  });
+
+  const chatListControllers = {
+    store: chatListStore,
+    renderer: chatListRenderer,
+    data: chatListDataController,
+    presence: presenceController,
+    recovery: chatListRecoveryController,
+  };
+  if (appContext) appContext.services.chatList = chatListControllers;
   const isIosViewportFixTarget = Boolean(mobileViewportShell.isIosViewportFixTarget?.());
   if (isIosViewportFixTarget) {
     document.documentElement.classList.add('is-ios-webkit');
@@ -2165,10 +2328,11 @@
     isMobileLayout: () => isMobileLayoutViewport(),
   });
   Object.assign(appBridge.__testing = appBridge.__testing || {}, {
-    getChats: () => chats.map((chat) => normalizeChatListEntry(chat)),
+    getChats: () => chatListStore.getChats().map((chat) => normalizeChatListEntry(chat)),
+    getOnlineUsers: () => Array.from(chatListStore.getOnlineUsers()),
     getChatFolders: () => chatFolderStore.getFolders(),
     setChats: (nextChats = [], options = {}) => {
-      chats = (Array.isArray(nextChats) ? nextChats : []).map((chat) => normalizeChatListEntry(chat));
+      chatListStore.setChats(nextChats);
       if (Object.prototype.hasOwnProperty.call(options, 'currentChatId')) {
         const nextCurrentChatId = Number(options.currentChatId || 0);
         currentChatId = nextCurrentChatId > 0 ? nextCurrentChatId : null;
@@ -2176,8 +2340,9 @@
       renderChatList(chatSearch.value);
       renderCurrentChatHeader(getChatById(currentChatId));
       refreshChatInfoPresentation(getChatById(currentChatId));
-      return chats.map((chat) => normalizeChatListEntry(chat));
+      return chatListStore.getChats().map((chat) => normalizeChatListEntry(chat));
     },
+    setOnlineUsers: (userIds = []) => Array.from(presenceController.setOnlineUsers(userIds)),
     setCurrentChatId: (chatId) => {
       const nextCurrentChatId = Number(chatId || 0);
       currentChatId = nextCurrentChatId > 0 ? nextCurrentChatId : null;
@@ -4167,11 +4332,7 @@
   }
 
   function flushDeferredRecoverySync(reason = 'transition-complete') {
-    if (!token || !currentUser || document.hidden || isUiTransitionBusy()) return;
-    if (!recoverySyncRequested && pendingRecoveryChatIds.size === 0) return;
-    const nextReason = deferredRecoveryReason || reason;
-    deferredRecoveryReason = '';
-    scheduleRecoverySync(nextReason, { immediate: true });
+    return chatListRecoveryController.flushDeferredRecoverySync(reason);
   }
 
   function cancelPendingScrollRestores() {
@@ -4241,80 +4402,39 @@
   }
 
   function chatListCacheKey() {
-    const userId = Number(currentUser?.id || 0);
-    return userId > 0 ? `bananza:chat-list:${userId}` : '';
+    return chatListDataController.chatListCacheKey();
   }
 
   function normalizeCachedChats(rawChats) {
-    return sortChatsInPlace((Array.isArray(rawChats) ? rawChats : [])
-      .filter((chat) => Number(chat?.id || 0) > 0)
-      .map((chat) => normalizeChatListEntry(chat)));
+    return chatListDataController.normalizeCachedChats(rawChats);
   }
 
   function readChatListCache() {
-    const key = chatListCacheKey();
-    if (!key) return [];
-    try {
-      const raw = JSON.parse(localStorage.getItem(key) || 'null');
-      if (Array.isArray(raw)) return normalizeCachedChats(raw);
-      if (!raw || Number(raw.version) !== CHAT_LIST_CACHE_VERSION) return [];
-      return normalizeCachedChats(raw.chats);
-    } catch {
-      return [];
-    }
+    return chatListDataController.readChatListCache();
   }
 
   function collectChatAvatarUrls(sourceChats = chats) {
-    const urls = new Set();
-    for (const chat of Array.isArray(sourceChats) ? sourceChats : []) {
-      const chatAvatar = String(chat?.avatar_url || '').trim();
-      const privateAvatar = String(chat?.private_user?.avatar_url || '').trim();
-      if (chatAvatar) urls.add(chatAvatar);
-      if (privateAvatar) urls.add(privateAvatar);
-    }
-    return Array.from(urls);
+    return chatListDataController.collectChatAvatarUrls(sourceChats);
   }
 
   function warmChatListAvatarAssets(sourceChats = chats) {
-    const avatarUrls = collectChatAvatarUrls(sourceChats).slice(0, 32);
-    if (!avatarUrls.length || !window.cacheAssets) return;
-    window.cacheAssets(avatarUrls).catch(() => {});
+    return chatListDataController.warmChatListAvatarAssets(sourceChats);
   }
 
   function persistChatListCache() {
-    const key = chatListCacheKey();
-    if (!key) return;
-    try {
-      localStorage.setItem(key, JSON.stringify({
-        version: CHAT_LIST_CACHE_VERSION,
-        savedAt: Date.now(),
-        chats: normalizeCachedChats(chats),
-      }));
-    } catch (e) {}
-    warmChatListAvatarAssets();
+    return chatListDataController.persistChatListCache();
   }
 
   function scheduleChatListCacheSync() {
-    clearTimeout(chatListCacheSyncTimer);
-    chatListCacheSyncTimer = setTimeout(() => {
-      chatListCacheSyncTimer = null;
-      persistChatListCache();
-    }, CHAT_LIST_CACHE_SYNC_DEBOUNCE_MS);
+    return chatListDataController.scheduleChatListCacheSync();
   }
 
   function setChatListStatus(message = '', type = '') {
-    if (!chatListStatus) return;
-    chatListStatus.textContent = tx(message);
-    chatListStatus.classList.toggle('hidden', !message);
-    chatListStatus.classList.toggle('is-loading', type === 'loading');
-    chatListStatus.classList.toggle('is-info', type === 'info');
-    chatListStatus.classList.toggle('is-error', type === 'error');
+    return chatListDataController.setChatListStatus(message, type);
   }
 
   function isChatListWaitingForActiveFolder(folderId = chatFolderStore.activeFolderId) {
-    return normalizeChatFolderId(folderId) !== ALL_CHATS_FOLDER_ID
-      && !chatFolderStore.loadedOnce
-      && !chatFolderStore.loadFailed;
+    return chatListDataController.isChatListWaitingForActiveFolder(folderId);
   }
 
   function isChatSearchOpen() {
@@ -4333,11 +4453,7 @@
 
     if (clear) {
       chatSearch.value = '';
-      clearTimeout(hiddenChatSearchTimer);
-      hiddenChatSearchTimer = null;
-      hiddenChatSearchSeq += 1;
-      hiddenChatSearchQuery = '';
-      hiddenChatSearchResults = [];
+      chatListStore.resetHiddenChatSearch();
     }
 
     sidebarSearch.classList.toggle('is-collapsed', !shouldOpen);
@@ -4363,18 +4479,7 @@
   }
 
   function hydrateChatListCache() {
-    const cachedChats = readChatListCache();
-    if (!cachedChats.length) return false;
-    chats = cachedChats;
-    if (isChatListWaitingForActiveFolder()) {
-      setChatListStatus('Loading chats...', 'loading');
-    } else {
-      chatListLoadedOnce = true;
-      renderChatList(chatSearch?.value || '');
-      setChatListStatus('Showing saved chats while refreshing...', 'info');
-    }
-    warmChatListAvatarAssets(cachedChats);
-    return true;
+    return chatListDataController.hydrateChatListCache();
   }
 
   function setChatFolderManageStatus(message, type = '') { return folderManageModalController.setChatFolderManageStatus(message, type); }
@@ -4882,34 +4987,11 @@
   }
 
   function updateUserListItemElement(item, user) {
-    if (!item || !user) return;
-    const avatarEl = item.querySelector('.avatar, .chat-item-avatar');
-    if (avatarEl) {
-      setAvatarElementVisual(avatarEl, {
-        name: user.display_name || '',
-        color: user.avatar_color || '#65aadd',
-        avatarUrl: user.avatar_url || '',
-      });
-    }
-    const nameEl = item.querySelector('.name');
-    if (nameEl && user.display_name) nameEl.textContent = user.display_name;
+    return presenceController.updateUserListItemElement(item, user);
   }
 
   function updateAdminUserRowElement(row, user) {
-    if (!row || !user) return;
-    const avatarEl = row.querySelector('.avatar');
-    if (avatarEl) {
-      setAvatarElementVisual(avatarEl, {
-        name: user.display_name || '',
-        color: user.avatar_color || '#65aadd',
-        avatarUrl: user.avatar_url || '',
-      });
-    }
-    const nameEl = row.querySelector('.name');
-    if (nameEl) {
-      const username = user.username || nameEl.querySelector('span')?.textContent?.replace(/^@/, '') || '';
-      nameEl.innerHTML = `${esc(user.display_name || '')}${username ? ` <span style="color:var(--text-secondary)">@${esc(username)}</span>` : ''}`;
-    }
+    return presenceController.updateAdminUserRowElement(row, user);
   }
 
   function refreshRenderedUserMessages(user) {
@@ -4956,126 +5038,48 @@
   }
 
   function applyChatUpdate(nextChat = {}) {
-    const chatId = Number(nextChat.id || 0);
-    if (!chatId) return null;
-    const idx = chats.findIndex((chat) => Number(chat.id) === chatId);
-    if (idx < 0) return null;
-    const current = chats[idx] || {};
-    const previousContextTransform = !!current.context_transform_enabled;
-    const previousChatShotEnabled = !!current.chatshot_enabled;
-    const previousChatShotBotId = Number(current.chatshot_bot_id || 0);
-    const previousChatShotStyle = String(current.chatshot_style || '');
-    const previousChatShotBananaFilterEnabled = current.chatshot_banana_filter_enabled !== 0;
-    chats[idx] = normalizeChatListEntry({
-      ...current,
-      ...nextChat,
-      background_url: Object.prototype.hasOwnProperty.call(nextChat, 'background_url')
-        ? (nextChat.background_url || null)
-        : (current.background_url || null),
-      background_style: nextChat.background_style || current.background_style || 'cover',
-    });
-    if ((current.type === 'private' || nextChat.type === 'private') && current.private_user && !nextChat.private_user) {
-      chats[idx].private_user = { ...current.private_user };
-      if (Number(current.private_user.is_ai_bot) === 0) {
-        chats[idx].name = current.name;
-      }
-    }
-    sortChatsInPlace(chats);
-    const updated = getChatById(chatId);
-    if (previousContextTransform !== !!updated?.context_transform_enabled) {
-      invalidateContextConvertAvailability(chatId);
-    }
-    if (
-      previousChatShotEnabled !== !!updated?.chatshot_enabled
-      || previousChatShotBotId !== Number(updated?.chatshot_bot_id || 0)
-      || previousChatShotStyle !== String(updated?.chatshot_style || '')
-      || previousChatShotBananaFilterEnabled !== (updated?.chatshot_banana_filter_enabled !== 0)
-    ) {
-      invalidateChatShotState(chatId);
-    }
-    renderChatList(chatSearch.value);
-    if (currentChatId === chatId) {
-      renderCurrentChatHeader(updated);
-      applyChatBackground(updated);
-      updateChatStatus();
-      renderPinnedBar(chatId);
-      refreshVisiblePinButtons(chatId);
-      renderChatDangerControls(updated);
-    }
-    refreshChatInfoPresentation(updated);
-    renderChatPinSettingsForm(updated);
-    renderChatContextTransformForm(updated);
-    renderChatShotForm(getCurrentChatShotState());
-    return updated;
+    return chatListDataController.applyChatUpdate(nextChat);
   }
 
-  function applyUserUpdate(nextUser = {}) {
-    const userId = Number(nextUser.id || nextUser.user_id || 0);
-    if (!userId) return null;
-    const user = {
-      ...nextUser,
-      id: userId,
-      user_id: userId,
-      avatar_url: nextUser.avatar_url || null,
+  function applyCurrentUserUpdateFromPresence(user = {}) {
+    const userId = Number(user.id || user.user_id || 0);
+    if (!userId || !currentUser || Number(currentUser.id) !== userId) return null;
+    currentUser = {
+      ...currentUser,
+      ...user,
+      avatar_url: user.avatar_url,
     };
-
-    if (currentUser && Number(currentUser.id) === userId) {
-      currentUser = {
-        ...currentUser,
-        ...user,
-        avatar_url: user.avatar_url,
-      };
-      currentUser.ui_show_chat_folder_strip_in_all_chats = Boolean(currentUser.ui_show_chat_folder_strip_in_all_chats);
-      if (user.ui_theme) applyUiTheme(user.ui_theme, false);
-      if (Object.prototype.hasOwnProperty.call(user, 'ui_visual_mode')) {
-        applyVisualMode(user.ui_visual_mode, false);
-      }
-      if (Object.prototype.hasOwnProperty.call(user, 'ui_modal_animation')) {
-        applyModalAnimation(user.ui_modal_animation, false);
-      }
-      if (Object.prototype.hasOwnProperty.call(user, 'ui_modal_animation_speed')) {
-        applyModalAnimationSpeed(user.ui_modal_animation_speed, false);
-      }
-      if (Object.prototype.hasOwnProperty.call(user, 'ui_mobile_font_size')) {
-        applyMobileFontSize(user.ui_mobile_font_size, false);
-      }
-      if (Object.prototype.hasOwnProperty.call(user, 'ui_language')) {
-        applyUiLanguage(user.ui_language, false);
-      }
-      if (Object.prototype.hasOwnProperty.call(user, 'ui_show_chat_folder_strip_in_all_chats')) {
-        renderActiveChatFolderBar({ centerBehavior: 'auto' });
-        if (isFloatingSurfaceVisible(chatFolderPicker)) syncChatFolderPickerAllChatsToggleState();
-      }
-      persistCurrentUser();
-      updateCurrentUserFooter();
-      if (!menuDrawer.classList.contains('hidden')) renderProfileEditor({ preserveStatus: true });
+    currentUser.ui_show_chat_folder_strip_in_all_chats = Boolean(currentUser.ui_show_chat_folder_strip_in_all_chats);
+    if (user.ui_theme) applyUiTheme(user.ui_theme, false);
+    if (Object.prototype.hasOwnProperty.call(user, 'ui_visual_mode')) {
+      applyVisualMode(user.ui_visual_mode, false);
     }
+    if (Object.prototype.hasOwnProperty.call(user, 'ui_modal_animation')) {
+      applyModalAnimation(user.ui_modal_animation, false);
+    }
+    if (Object.prototype.hasOwnProperty.call(user, 'ui_modal_animation_speed')) {
+      applyModalAnimationSpeed(user.ui_modal_animation_speed, false);
+    }
+    if (Object.prototype.hasOwnProperty.call(user, 'ui_mobile_font_size')) {
+      applyMobileFontSize(user.ui_mobile_font_size, false);
+    }
+    if (Object.prototype.hasOwnProperty.call(user, 'ui_language')) {
+      applyUiLanguage(user.ui_language, false);
+    }
+    if (Object.prototype.hasOwnProperty.call(user, 'ui_show_chat_folder_strip_in_all_chats')) {
+      renderActiveChatFolderBar({ centerBehavior: 'auto' });
+      if (isFloatingSurfaceVisible(chatFolderPicker)) syncChatFolderPickerAllChatsToggleState();
+    }
+    persistCurrentUser();
+    updateCurrentUserFooter();
+    if (!menuDrawer.classList.contains('hidden')) renderProfileEditor({ preserveStatus: true });
+    return currentUser;
+  }
 
-    let shouldRenderChats = false;
-    let aiBotChanged = false;
-
-    allUsers = allUsers.map((entry) => {
-      if (Number(entry.id) !== userId) return entry;
-      shouldRenderChats = true;
-      return { ...entry, ...user, avatar_url: user.avatar_url };
-    });
-
-    chats = chats.map((chat) => {
-      if (chat.type === 'private' && chat.private_user && Number(chat.private_user.id) === userId) {
-        shouldRenderChats = true;
-        return {
-          ...chat,
-          name: user.display_name || chat.name,
-          private_user: {
-            ...chat.private_user,
-            ...user,
-            avatar_url: user.avatar_url,
-          },
-        };
-      }
-      return chat;
-    });
-
+  function patchChatMembersCacheForPresence(user = {}) {
+    const userId = Number(user.id || user.user_id || 0);
+    if (!userId) return false;
+    let patched = false;
     chatMembersCache.forEach((members, chatId) => {
       let changed = false;
       const nextMembers = members.map((member) => {
@@ -5087,9 +5091,18 @@
           avatar_url: user.avatar_url,
         };
       });
-      if (changed) chatMembersCache.set(chatId, nextMembers);
+      if (changed) {
+        patched = true;
+        chatMembersCache.set(chatId, nextMembers);
+      }
     });
+    return patched;
+  }
 
+  function patchMentionTargetsForPresence(user = {}) {
+    const userId = Number(user.id || user.user_id || 0);
+    if (!userId) return false;
+    let patched = false;
     mentionTargetsByChat.forEach((targets, chatId) => {
       let changed = false;
       const nextTargets = targets.map((target) => {
@@ -5103,9 +5116,18 @@
           username: user.username || target.username,
         };
       });
-      if (changed) mentionTargetsByChat.set(chatId, nextTargets);
+      if (changed) {
+        patched = true;
+        mentionTargetsByChat.set(chatId, nextTargets);
+      }
     });
+    return patched;
+  }
 
+  function patchAiBotUserForPresence(user = {}) {
+    const userId = Number(user.id || user.user_id || 0);
+    if (!userId) return false;
+    let aiBotChanged = false;
     aiBotState.bots = aiBotState.bots.map((bot) => {
       if (Number(bot.user_id) !== userId) return bot;
       aiBotChanged = true;
@@ -5121,33 +5143,19 @@
       renderAiBotList();
       renderAiBotAvatar(currentAiBot());
     }
+    return aiBotChanged;
+  }
 
-    refreshRenderedUserMessages(user);
-    document.querySelectorAll(`.user-list-item[data-uid="${userId}"]`).forEach((item) => updateUserListItemElement(item, user));
-    document.querySelectorAll(`.admin-user-row[data-uid="${userId}"]`).forEach((row) => updateAdminUserRowElement(row, user));
-    if (!chatInfoModal.classList.contains('hidden')) {
-      refreshChatMemberStatuses();
-      refreshChatInfoStatus();
-    }
-
-    if (shouldRenderChats) renderChatList(chatSearch.value);
-    if (currentChatId) {
-      const currentChat = chats.find((chat) => Number(chat.id) === Number(currentChatId));
-      if (currentChat) {
-        renderCurrentChatHeader(currentChat);
-        refreshChatInfoPresentation(currentChat);
-        updateChatStatus();
-      }
-    }
-
+  function refreshMentionPickerForUserUpdate() {
     if (mentionPickerState.active && mentionTargetsByChat.has(Number(currentChatId))) {
       const targets = mentionTargetsByChat.get(Number(currentChatId)) || [];
       if (targets.length) renderMentionPicker(targets);
       else hideMentionPicker();
     }
+  }
 
-    try { window.messageCache?.updateMessagesByUser?.(user).catch(() => {}); } catch (e) {}
-    return user;
+  function applyUserUpdate(nextUser = {}) {
+    return presenceController.applyUserUpdate(nextUser);
   }
 
   function weatherLocationLabel(location) { return weatherSettingsController.weatherLocationLabel(location); }
@@ -5184,12 +5192,11 @@
   function previewSound(type) { return soundSettingsController.previewSound(type); }
   function previewAllSounds() { return soundSettingsController.previewAllSounds(); }
   function localChatPreferenceEnabled(value) {
-    return value !== false && value !== 0;
+    return window.BananzaApp.chatList.store.localChatPreferenceEnabled(value);
   }
 
   function getChatById(chatId) {
-    const id = Number(chatId);
-    return chats.find(c => Number(c.id) === id) || null;
+    return chatListStore.getChatById(chatId);
   }
 
   function getChatPinOrder(chat) {
@@ -5227,21 +5234,7 @@
   }
 
   function normalizeChatListEntry(chat = {}) {
-    const next = {
-      ...chat,
-      id: Number(chat?.id || 0),
-      private_user: chat?.private_user ? { ...chat.private_user } : null,
-    };
-    const pinOrder = getChatPinOrder(next);
-    next.chat_list_pin_order = pinOrder;
-    next.is_pinned = pinOrder != null;
-    if (Object.prototype.hasOwnProperty.call(next, 'notify_enabled')) {
-      next.notify_enabled = localChatPreferenceEnabled(next.notify_enabled);
-    }
-    if (Object.prototype.hasOwnProperty.call(next, 'sounds_enabled')) {
-      next.sounds_enabled = localChatPreferenceEnabled(next.sounds_enabled);
-    }
-    return next;
+    return window.BananzaApp.chatList.store.normalizeChatListEntry(chat);
   }
 
   function compareChatActivity(a, b) {
@@ -10084,114 +10077,27 @@
   }
 
   function scheduleRecoverySync(reason = 'event', { chatId = null, immediate = false } = {}) {
-    if (!token || !currentUser) return;
-    const id = Number(chatId || 0);
-    if (Number.isInteger(id) && id > 0) pendingRecoveryChatIds.add(id);
-    if (!initialChatLoadFinished && !currentChatId) return;
-    if (document.hidden) {
-      recoverySyncRequested = true;
-      return;
-    }
-    if (isUiTransitionBusy()) {
-      recoverySyncRequested = true;
-      deferredRecoveryReason = reason || deferredRecoveryReason;
-      return;
-    }
-
-    recoverySyncRequested = true;
-    const elapsed = Date.now() - recoverySyncLastStartedAt;
-    const delay = immediate ? 0 : Math.max(0, RECOVERY_SYNC_MIN_INTERVAL_MS - elapsed);
-    clearTimeout(recoverySyncTimer);
-    recoverySyncTimer = setTimeout(() => {
-      recoverySyncTimer = null;
-      runRecoverySync(reason).catch(() => {});
-    }, delay);
+    return chatListRecoveryController.scheduleRecoverySync(reason, { chatId, immediate });
   }
 
   async function runRecoverySync(reason = 'event') {
-    if (!token || !currentUser) return;
-    if (isUiTransitionBusy()) {
-      recoverySyncRequested = true;
-      deferredRecoveryReason = reason || deferredRecoveryReason;
-      return;
-    }
-    if (recoverySyncPromise) {
-      recoverySyncRequested = true;
-      return recoverySyncPromise;
-    }
-
-    recoverySyncRequested = false;
-    recoverySyncLastStartedAt = Date.now();
-    const requestedChatIds = [...pendingRecoveryChatIds];
-    pendingRecoveryChatIds.clear();
-
-    recoverySyncPromise = (async () => {
-      await loadChats({ silent: true }).catch(() => chats);
-
-      const activeChatId = Number(currentChatId || 0);
-      if (activeChatId) {
-        await catchUpCurrentChat(activeChatId, {
-          fromPush: requestedChatIds.includes(activeChatId) || reason === 'push',
-        });
-      }
-    })();
-
-    try {
-      return await recoverySyncPromise;
-    } finally {
-      recoverySyncPromise = null;
-      if (recoverySyncRequested || pendingRecoveryChatIds.size > 0) {
-        scheduleRecoverySync('queued');
-      }
-    }
+    return chatListRecoveryController.runRecoverySync(reason);
   }
 
   function refreshWebSocketAfterResume() {
-    if (!token) return;
-    const hiddenFor = lastHiddenAt ? Date.now() - lastHiddenAt : 0;
-    const shouldRefreshOpenSocket = ws
-      && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)
-      && hiddenFor >= RESUME_WS_REFRESH_AFTER_MS;
-    connectWS({ force: shouldRefreshOpenSocket });
+    return chatListRecoveryController.refreshWebSocketAfterResume();
   }
 
   function handleAppResume(reason) {
-    applyScreenRotationPreference({ showStatus: false, reason }).catch(() => {});
-    if (!token || !currentUser) return;
-    syncMobileBaseSceneState({
-      scene: getResolvedMobileBaseScene(),
-      hideInactive: !mobileRouteTransitionActive,
-      syncChatMetrics: getResolvedMobileBaseScene() === 'chat',
-      repaint: true,
-    });
-    scheduleMobileViewportRecovery();
-    refreshWebSocketAfterResume();
-    scheduleRecoverySync(reason, { immediate: true });
+    return chatListRecoveryController.handleAppResume(reason);
   }
 
   function setupLifecycleRecovery() {
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) {
-        flushCurrentChatScrollAnchor(currentChatId, { force: true, allowPendingMedia: true });
-        lastHiddenAt = Date.now();
-        return;
-      }
-      handleAppResume('visible');
-    });
-    window.addEventListener('focus', () => handleAppResume('focus'));
-    window.addEventListener('pageshow', () => handleAppResume('pageshow'));
-    window.addEventListener('online', () => handleAppResume('online'));
-    window.addEventListener('pagehide', () => {
-      flushCurrentChatScrollAnchor(currentChatId, { force: true, allowPendingMedia: true });
-      lastHiddenAt = Date.now();
-    });
+    return chatListRecoveryController.setupLifecycleRecovery();
   }
 
   async function openChatFromPush(chatId) {
-    const id = Number(chatId);
-    if (!Number.isInteger(id) || id <= 0) return;
-    if (!chats.find(c => c.id === id)) await loadChats();
-    if (chats.find(c => c.id === id)) await openChat(id);
+    return chatListRecoveryController.openChatFromPush(chatId);
   }
 
   function handleServiceWorkerMessage(event) {
@@ -10208,115 +10114,45 @@
   }
 
   function chatItemAvatarHtml(chat) {
-    if (isNotesChat(chat)) {
-      return `<div class="chat-item-avatar notes-chat-avatar" style="background:#5eb5f7">${esc(chat.avatar_emoji || NOTES_CHAT_EMOJI)}`;
-    }
-    if (chat.type === 'private' && chat.private_user) {
-      const u = chat.private_user;
-      if (u.avatar_url) {
-        return `<div class="chat-item-avatar" style="background:${u.avatar_color}"><img class="avatar-img" src="${esc(u.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">`;
-      }
-      return `<div class="chat-item-avatar" style="background:${u.avatar_color}">${initials(u.display_name || chat.name)}`;
-    }
-    if (chat.avatar_url) {
-      return `<div class="chat-item-avatar" style="background:#5eb5f7"><img class="avatar-img" src="${esc(chat.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">`;
-    }
-    const icon = chat.type === 'general' ? '🌐' : '👥';
-    return `<div class="chat-item-avatar" style="background:#5eb5f7">${icon}`;
+    return chatListRenderer.chatItemAvatarHtml(chat);
   }
 
   function getChatLastPreviewText(chat) {
-    if (chat.last_text) {
-      return (chat.last_user ? chat.last_user + ': ' : '') + chat.last_text;
-    }
-    if (chat.last_file_id) {
-      return (chat.last_user ? chat.last_user + ': ' : '') + '📎 File';
-    }
-    return '';
+    return window.BananzaApp.chatList.store.getChatLastPreviewText(chat);
   }
 
   function renderCustomEmojiPreviewHtml(text, { className = 'chat-preview-emoji' } = {}) {
-    const source = String(text || '');
-    const tokenRe = /:qip-infium-\d{3}:|:qip-hd-[a-z0-9][a-z0-9-]{0,63}:/gi;
-    let html = '';
-    let lastIndex = 0;
-    let match;
-    while ((match = tokenRe.exec(source))) {
-      html += esc(source.slice(lastIndex, match.index));
-      const token = match[0];
-      html += isCustomEmojiToken(token)
-        ? renderCustomEmojiHtml(token, { className })
-        : esc(token);
-      lastIndex = match.index + token.length;
-    }
-    html += esc(source.slice(lastIndex));
-    return html;
+    return chatListRenderer.renderCustomEmojiPreviewHtml(text, { className });
   }
 
   function renderChatLastPreviewHtml(chat, { emptyText = '' } = {}) {
-    const preview = getChatLastPreviewText(chat);
-    return preview ? renderCustomEmojiPreviewHtml(preview) : esc(emptyText);
+    return chatListRenderer.renderChatLastPreviewHtml(chat, { emptyText });
   }
 
   function getChatSearchHaystack(chat) {
-    return [
-      chat?.name || '',
-      chat?.private_user?.display_name || '',
-      chat?.private_user?.username || '',
-      chat?.private_user?.ai_bot_mention || '',
-      chat?.private_user?.ai_bot_model || '',
-    ].join(' ').toLowerCase();
+    return window.BananzaApp.chatList.store.getChatSearchHaystack(chat);
   }
 
   async function loadHiddenChatSearch(query) {
-    const normalized = String(query || '').trim().toLowerCase();
-    const requestId = ++hiddenChatSearchSeq;
-    if (normalized.length < 2) {
-      hiddenChatSearchQuery = '';
-      hiddenChatSearchResults = [];
-      renderChatList(chatSearch.value);
-      return;
-    }
-    try {
-      const data = await api(`/api/chats/hidden?q=${encodeURIComponent(normalized)}`);
-      if (requestId !== hiddenChatSearchSeq) return;
-      hiddenChatSearchQuery = normalized;
-      hiddenChatSearchResults = normalizeCachedChats(data.chats || data || []);
-      renderChatList(chatSearch.value);
-    } catch (e) {
-      if (requestId !== hiddenChatSearchSeq) return;
-      hiddenChatSearchQuery = normalized;
-      hiddenChatSearchResults = [];
-    }
+    return chatListDataController.searchHiddenChats(query);
   }
 
   function scheduleHiddenChatSearch(query) {
-    const normalized = String(query || '').trim().toLowerCase();
-    clearTimeout(hiddenChatSearchTimer);
-    if (normalized.length < 2) {
-      hiddenChatSearchSeq += 1;
-      hiddenChatSearchQuery = '';
-      hiddenChatSearchResults = [];
-      return;
-    }
-    if (hiddenChatSearchQuery === normalized) return;
-    hiddenChatSearchTimer = setTimeout(() => {
-      hiddenChatSearchTimer = null;
-      loadHiddenChatSearch(normalized);
-    }, 180);
+    return chatListDataController.scheduleHiddenChatSearch(query);
   }
 
   async function openHiddenChatFromSearch(chatId) {
-    const id = Number(chatId || 0);
+    return chatListDataController.openHiddenChatFromSearch(chatId);
+  }
+
+  async function openPrivateChatFromDirectory(userId) {
+    const id = Number(userId || 0);
     if (!id) return;
-    try {
-      await api(`/api/chats/${id}/unhide`, { method: 'POST' });
-      await loadChats({ silent: true });
-      await openChat(id);
-      setChatSearchOpen(false, { clear: true, focus: false });
-    } catch (e) {
-      showCenterToast(e.message || 'Не удалось открыть скрытый чат');
-    }
+    const chat = await api('/api/chats/private', { method: 'POST', body: { targetUserId: id } });
+    await loadChats();
+    await openChat(chat.id);
+    setChatSearchOpen(false, { clear: true, focus: false });
+    return chat;
   }
 
   function setForwardMessageStatus(message = '', type = '') {
@@ -11209,14 +11045,7 @@
   }
 
   async function removeChatLocally(chatId, { clearCache = false } = {}) {
-    const id = Number(chatId || 0);
-    if (!id) return;
-    chats = chats.filter((chat) => Number(chat.id || 0) !== id);
-    chatPinsByChat.delete(id);
-    chatMemberLastReads.delete(id);
-    closeChatViewForChat(id);
-    renderChatList(chatSearch.value);
-    if (clearCache) await clearCachedChat(id, { includeOutbox: true });
+    return chatListDataController.removeChatLocally(chatId, { clearCache });
   }
 
   async function clearLocalChatHistory(chatId, { clearCache = true } = {}) {
@@ -13963,12 +13792,12 @@
   }
 
   function logout() {
-    clearTimeout(chatListCacheSyncTimer);
+    chatListDataController.clearCacheSyncTimer();
     clearTimeout(messageBackgroundSyncTimer);
     clearTimeout(wsReconnectTimer);
     uiSettings.clearMobileFontSizeSaveTimer();
     clearMobileFontSizeStatusTimer();
-    if (chatListAbortController) chatListAbortController.abort();
+    chatListDataController.abortChatListRequest();
     try { if (window.clearAssetCache) window.clearAssetCache().catch(()=>{}); } catch (e) {}
     try { if (window.messageCache && window.messageCache.clearUserCache) window.messageCache.clearUserCache().catch(()=>{}); } catch (e) {}
     const composerDraftStorageKey = getComposerDraftStorageKey();
@@ -14015,7 +13844,7 @@
     socket.onopen = () => {
       if (ws !== socket) return;
       wsRetry = 1000;
-      if (initialChatLoadFinished) scheduleRecoverySync('ws-open');
+      if (chatListStore.isInitialChatLoadFinished()) scheduleRecoverySync('ws-open');
     };
 
     socket.onclose = (e) => {
@@ -14073,12 +13902,7 @@
         } catch (e) {}
         // Track unread for non-current chats
         if (!isVisibleCurrentChat && msg.message.user_id !== currentUser.id) {
-          const chat = chats.find(c => c.id === msg.message.chat_id);
-          if (chat) {
-            chat.unread_count = (chat.unread_count || 0) + 1;
-            if (!chat.first_unread_id) chat.first_unread_id = msg.message.id;
-            renderChatList(chatSearch.value);
-          }
+          chatListDataController.incrementUnread(msg.message.chat_id, msg.message.id);
         }
         // Only render if we're in the relevant chat
         if (isVisibleCurrentChat && !isMessageDisplayed(msg.message.id)) {
@@ -14097,22 +13921,12 @@
           } else if (shouldPreserveIncomingScroll) {
             messagesEl.scrollTop = scrollTopBefore;
             if (!isOwnIncomingMessage) {
-              const chat = chats.find(c => c.id === currentChatId);
-              if (chat) {
-                chat.unread_count = (chat.unread_count || 0) + 1;
-                if (!chat.first_unread_id) chat.first_unread_id = msg.message.id;
-                renderChatList(chatSearch.value);
-              }
+              chatListDataController.incrementUnread(currentChatId, msg.message.id);
             }
             saveCurrentScrollAnchor(currentChatId, { force: true });
             updateScrollBottomButton();
           } else if (!isOwnIncomingMessage && (!wasNearBottom || document.hidden)) {
-            const chat = chats.find(c => c.id === currentChatId);
-            if (chat) {
-              chat.unread_count = (chat.unread_count || 0) + 1;
-              if (!chat.first_unread_id) chat.first_unread_id = msg.message.id;
-              renderChatList(chatSearch.value);
-            }
+            chatListDataController.incrementUnread(currentChatId, msg.message.id);
           }
         }
         if (
@@ -14184,8 +13998,7 @@
         break;
       }
       case 'online': {
-        onlineUsers = new Set(msg.userIds);
-        updateOnlineDisplay();
+        presenceController.setOnlineUsers(msg.userIds);
         break;
       }
       case 'typing': {
@@ -14203,7 +14016,7 @@
         break;
       }
       case 'chat_list_updated': {
-        if (chatListAbortController) break;
+        if (chatListDataController.hasActiveChatListRequest()) break;
         loadChats({ silent: true }).catch(() => {});
         break;
       }
@@ -14331,62 +14144,7 @@
   // CHAT LIST
   // ═══════════════════════════════════════════════════════════════════════════
   async function loadChats({ silent = false } = {}) {
-    const requestId = ++chatListRequestSeq;
-    if (chatListAbortController) chatListAbortController.abort();
-    const controller = new AbortController();
-    chatListAbortController = controller;
-    const timeoutId = setTimeout(() => {
-      try { controller.abort(); } catch (e) {}
-    }, CHAT_LIST_REQUEST_TIMEOUT_MS);
-    if (!silent) {
-      const hasSidebarContent = chats.length > 0 || chatList.childElementCount > 0;
-      if (!chatListLoadedOnce && !hasSidebarContent) setChatListStatus('Loading chats...', 'loading');
-      else setChatListStatus('Refreshing chats...', 'loading');
-    }
-    try {
-      const nextChats = await api('/api/chats', { signal: controller.signal });
-      if (requestId !== chatListRequestSeq) return chats;
-      chats = normalizeCachedChats(nextChats);
-      chatListLoadedOnce = true;
-      await loadChatFolders({ silent: true, renderAfterLoad: false }).catch(() => {});
-      renderChatList(chatSearch.value);
-      const currentChat = getChatById(currentChatId);
-      if (currentChat) {
-        renderCurrentChatHeader(currentChat);
-        applyChatBackground(currentChat);
-        updateChatStatus();
-        refreshChatInfoPresentation(currentChat);
-        renderChatPreferencesForm(currentChat);
-        renderChatPinSettingsForm(currentChat);
-        renderChatDangerControls(currentChat);
-      }
-      setChatListStatus('', '');
-      scheduleMessageBackgroundSync();
-      return chats;
-    } catch (e) {
-      if (requestId !== chatListRequestSeq) return chats;
-      const isAbort = e?.name === 'AbortError';
-      if (chats.length > 0) {
-        setChatListStatus(
-          isAbort
-            ? 'Chat refresh took too long. Showing saved chats.'
-            : 'Could not refresh chats. Showing saved chats.',
-          'info'
-        );
-      } else {
-        setChatListStatus(
-          isAbort
-            ? 'Chat list took too long to load. Tap refresh to try again.'
-            : 'Could not load chats. Tap refresh to try again.',
-          'error'
-        );
-      }
-      console.warn('Failed to load chats', e);
-      return chats;
-    } finally {
-      clearTimeout(timeoutId);
-      if (chatListAbortController === controller) chatListAbortController = null;
-    }
+    return chatListDataController.loadChats({ silent });
   }
 
   function scheduleMessageBackgroundSync(delayMs = 450) {
@@ -14398,7 +14156,7 @@
   }
 
   function shouldBackgroundSyncMessages() {
-    return Boolean(token && currentUser && initialChatLoadFinished && !document.hidden && !isUiTransitionBusy());
+    return Boolean(token && currentUser && chatListStore.isInitialChatLoadFinished() && !document.hidden && !isUiTransitionBusy());
   }
 
   function selectBackgroundMessageSyncChats() {
@@ -14521,280 +14279,47 @@
   }
 
   async function loadAllUsers() {
-    try {
-      allUsers = await api('/api/users');
-      if (chatSearch.value) renderChatList(chatSearch.value);
-    } catch {}
+    return chatListDataController.loadAllUsers();
   }
 
   function appendChatListSeparator(label, parent = chatList) {
-    const sep = document.createElement('div');
-    sep.className = 'chat-list-separator';
-    sep.textContent = label;
-    parent.appendChild(sep);
-    return sep;
+    return chatListRenderer.appendChatListSeparator(label, parent);
   }
 
   function appendChatListEmptyState(message, parent = chatList) {
-    const empty = document.createElement('div');
-    empty.className = 'chat-folder-picker-empty';
-    empty.textContent = message;
-    parent.appendChild(empty);
-    return empty;
+    return chatListRenderer.appendChatListEmptyState(message, parent);
   }
 
   function getActiveCallForChatListItem(chatId) {
-    try {
-      return window.BananzaCallHooks?.getActiveCallForChat?.(chatId) || null;
-    } catch {
-      return null;
-    }
+    return chatListRenderer.getActiveCallForChatListItem(chatId);
   }
 
-  function createChatListItem(chat, { hiddenSearchResult = false, pinnedOverride = null, reusableItems = null } = {}) {
-    const listKey = `${hiddenSearchResult ? 'hidden' : 'chat'}:${Number(chat.id || 0)}`;
-    const el = reusableItems?.get(listKey) || document.createElement('div');
-    const isActive = Number(chat.id) === Number(currentChatId);
-    const pinned = typeof pinnedOverride === 'boolean' ? pinnedOverride : isChatPinned(chat);
-    const activeCall = getActiveCallForChatListItem(chat.id);
-    const hasActiveCall = Boolean(activeCall);
-    el.className = 'chat-item'
-      + (isActive ? ' active' : '')
-      + (pinned ? ' is-pinned' : '')
-      + (hiddenSearchResult ? ' is-hidden-search-result' : '')
-      + (hasActiveCall ? ' has-active-call' : '');
-    el.dataset.chatId = chat.id;
-    el.dataset.pinned = pinned ? '1' : '0';
-    el.dataset.listKey = listKey;
-
-    const displayName = chat.name;
-    const isOnline = chat.type === 'private' && chat.private_user && onlineUsers.has(chat.private_user.id);
-    const lastTime = chat.last_time ? formatChatListTimestamp(chat.last_time) : '';
-    const unread = chat.unread_count > 0
-      ? `<span class="unread-badge${isActive ? ' unread-badge--active-chat' : ''}" data-unread-count="${chat.unread_count}">${chat.unread_count > 99 ? '99+' : chat.unread_count}</span>`
-      : '';
-    const pinIndicator = pinned ? `<span class="chat-item-state-indicator chat-item-pin-indicator" aria-hidden="true" title="${esc(t('Pinned'))}">&#128204;</span>` : '';
-    const notifyDisabledIndicator = pinned && !localChatPreferenceEnabled(chat.notify_enabled)
-      ? '<span class="chat-item-state-indicator chat-item-muted-indicator" aria-hidden="true" title="Notifications off">&#128277;</span>'
-      : '';
-    const soundDisabledIndicator = pinned && !localChatPreferenceEnabled(chat.sounds_enabled)
-      ? '<span class="chat-item-state-indicator chat-item-muted-indicator" aria-hidden="true" title="Sound off">&#128263;</span>'
-      : '';
-    const contextConvertIndicator = Number(chat.context_transform_enabled || 0) !== 0
-      ? `<span class="chat-item-state-indicator chat-item-tool-indicator chat-item-context-convert-indicator" role="img" aria-label="${esc(t('Context convert enabled'))}" title="${esc(t('Context convert enabled'))}">&#127820;</span>`
-      : '';
-    const chatShotIndicator = Number(chat.chatshot_enabled || 0) !== 0
-      ? `<span class="chat-item-state-indicator chat-item-tool-indicator chat-item-chatshot-indicator" role="img" aria-label="${esc(t('ChatShot enabled'))}" title="${esc(t('ChatShot enabled'))}">&#128248;</span>`
-      : '';
-    const activeCallMediaKind = String(activeCall?.media_kind || activeCall?.mediaKind || '').toLowerCase();
-    const activeCallRoomMode = String(activeCall?.room_mode || activeCall?.roomMode || '').toLowerCase();
-    const callIndicatorLabel = activeCallMediaKind === 'voice'
-      ? (activeCallRoomMode === 'room' ? t('Voice room active') : t('Voice call active'))
-      : t('Call in progress');
-    const callIndicatorIcon = activeCallMediaKind === 'voice' ? '&#9742;&#65039;' : '';
-    const callIndicator = hasActiveCall
-      ? `<span class="chat-item-call-chip" aria-label="${esc(callIndicatorLabel)}" title="${esc(callIndicatorLabel)}"><span class="chat-item-call-dot" aria-hidden="true"></span>${callIndicatorIcon ? `<span class="chat-item-call-icon" aria-hidden="true">${callIndicatorIcon}</span>` : ''}<span class="chat-item-call-label">${esc(callIndicatorLabel)}</span></span>`
-      : '';
-
-    const nextHtml = `
-      ${chatItemAvatarHtml(chat)}
-        ${isOnline ? '<div class="online-dot"></div>' : ''}
-      </div>
-      <div class="chat-item-body">
-        <div class="chat-item-top">
-          <span class="chat-item-name">${esc(displayName)}</span>
-          <span class="chat-item-meta">
-            ${pinIndicator}
-            ${notifyDisabledIndicator}
-            ${soundDisabledIndicator}
-            ${contextConvertIndicator}
-            ${chatShotIndicator}
-            <span class="chat-item-time">${lastTime}</span>
-          </span>
-        </div>
-        <div class="chat-item-last">
-          ${callIndicator}
-          <span>${renderChatLastPreviewHtml(chat)}</span>
-          ${unread}
-        </div>
-      </div>
-    `;
-    if (el.__chatListHtml !== nextHtml) {
-      el.innerHTML = nextHtml;
-      el.__chatListHtml = nextHtml;
-    }
-    el.onclick = () => {
-      if (Date.now() < suppressNextChatItemTapUntil) return;
-      const openAction = hiddenSearchResult ? openHiddenChatFromSearch(chat.id) : openChat(chat.id);
-      Promise.resolve(openAction).catch((error) => {
-        console.warn('Failed to open chat', error);
-        showCenterToast(error?.message || 'Could not open chat');
-      });
-    };
-    return el;
+  function createChatListItem(chat, options = {}) {
+    return chatListRenderer.createChatListItem(chat, options);
   }
 
   function collectReusableChatListItems(parent) {
-    const reusable = new Map();
-    parent?.querySelectorAll?.('.chat-item[data-list-key]').forEach((item) => {
-      const key = item.dataset.listKey || '';
-      if (key && !reusable.has(key)) reusable.set(key, item);
-    });
-    return reusable;
+    return chatListRenderer.collectReusableChatListItems(parent);
   }
 
   function getChatFolderForListRender(folderId = chatFolderStore.activeFolderId) {
-    const normalizedFolderId = normalizeChatFolderId(folderId);
-    return normalizedFolderId === ALL_CHATS_FOLDER_ID
-      ? null
-      : chatFolderStore.getFolderById(normalizedFolderId);
+    return chatListRenderer.getChatFolderForListRender(folderId);
   }
 
-  function renderChatListInto(parent = chatList, {
-    filter = '',
-    folderId = chatFolderStore.activeFolderId,
-    includeSearchExtras = parent === chatList,
-  } = {}) {
-    if (!(parent instanceof HTMLElement)) return null;
-    const reusableItems = collectReusableChatListItems(parent);
-    const fragment = document.createDocumentFragment();
-    const normalizedFilter = String(filter || '').trim().toLowerCase();
-    const activeFolder = getChatFolderForListRender(folderId);
-    const renderFolderId = Number(activeFolder?.id || 0);
-    const sourceChats = activeFolder
-      ? chats.filter((chat) => activeFolder.chat_ids.includes(Number(chat.id || 0)))
-      : chats;
-    const filteredChats = normalizedFilter
-      ? sourceChats.filter((chat) => getChatSearchHaystack(chat).includes(normalizedFilter))
-      : sourceChats;
-    const pinnedChats = activeFolder
-      ? filteredChats.filter((chat) => isChatPinnedInFolder(renderFolderId, chat))
-      : filteredChats.filter((chat) => isChatPinned(chat));
-    const regularChats = activeFolder
-      ? filteredChats.filter((chat) => !isChatPinnedInFolder(renderFolderId, chat))
-      : filteredChats.filter((chat) => !isChatPinned(chat));
-    if (activeFolder) {
-      pinnedChats.sort((a, b) => compareChatsForFolder(renderFolderId, a, b));
-      regularChats.sort((a, b) => compareChatsForFolder(renderFolderId, a, b));
-    }
-
-    if (pinnedChats.length) {
-      const pinnedGroup = document.createElement('div');
-      pinnedGroup.className = 'chat-list-group chat-list-group--pinned';
-      pinnedChats.forEach((chat) => {
-        pinnedGroup.appendChild(createChatListItem(chat, { pinnedOverride: true, reusableItems }));
-      });
-      fragment.appendChild(pinnedGroup);
-    }
-
-    regularChats.forEach((chat) => {
-      fragment.appendChild(createChatListItem(chat, {
-        pinnedOverride: activeFolder ? false : null,
-        reusableItems,
-      }));
-    });
-
-    if (!pinnedChats.length && !regularChats.length) {
-      appendChatListEmptyState(activeFolder ? 'В этой папке пока нет чатов' : 'Чаты не найдены', fragment);
-    }
-
-    // When searching in "All chats", also show users without existing private chats
-    if (includeSearchExtras && normalizedFilter && !activeFolder) {
-      scheduleHiddenChatSearch(normalizedFilter);
-      const hiddenMatches = hiddenChatSearchQuery === normalizedFilter
-        ? hiddenChatSearchResults.filter((chat) => !chats.some((visible) => Number(visible.id) === Number(chat.id)))
-        : [];
-      if (hiddenMatches.length > 0) {
-        appendChatListSeparator('Скрытые чаты', fragment);
-        hiddenMatches.forEach((chat) => {
-          fragment.appendChild(createChatListItem(chat, { hiddenSearchResult: true, reusableItems }));
-        });
-      }
-      const privateHumanPeerIds = new Set(
-        [...chats, ...hiddenMatches]
-          .filter(c => c.type === 'private' && c.private_user && Number(c.private_user.is_ai_bot) === 0)
-          .map(c => c.private_user.id)
-      );
-      const matchingUsers = allUsers.filter(u =>
-        (Number(u?.is_ai_bot) !== 0 || !privateHumanPeerIds.has(u.id)) &&
-        (u.display_name.toLowerCase().includes(normalizedFilter) ||
-         u.username.toLowerCase().includes(normalizedFilter) ||
-         String(u.ai_bot_mention || '').toLowerCase().includes(normalizedFilter) ||
-         String(u.ai_bot_model || '').toLowerCase().includes(normalizedFilter))
-      );
-      if (matchingUsers.length > 0) {
-        appendChatListSeparator('People & bots', fragment);
-      }
-      for (const u of matchingUsers) {
-        const el = document.createElement('div');
-        el.className = 'chat-item';
-        const isOnline = !isAiBotDirectoryUser(u) && onlineUsers.has(u.id);
-        el.innerHTML = `
-          <div class="chat-item-avatar" style="background:${u.avatar_color || '#5eb5f7'}">
-            ${u.avatar_url ? `<img class="avatar-img" src="${esc(u.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">` : initials(u.display_name)}
-            ${isOnline ? '<div class="online-dot"></div>' : ''}
-          </div>
-          <div class="chat-item-body">
-            <div class="chat-item-top">
-              <span class="chat-item-name">${esc(u.display_name)}</span>
-            </div>
-            <div class="chat-item-last"><span>${esc(userSecondaryLineText(u))}</span></div>
-          </div>
-        `;
-        el.addEventListener('click', async () => {
-          try {
-            const chat = await api('/api/chats/private', { method: 'POST', body: { targetUserId: u.id } });
-            await loadChats();
-            openChat(chat.id);
-            setChatSearchOpen(false, { clear: true, focus: false });
-          } catch (e) { alert(e.message); }
-        });
-        fragment.appendChild(el);
-      }
-    }
-    parent.replaceChildren(fragment);
-    return {
-      activeFolder,
-      folderId: renderFolderId,
-      pinnedChats,
-      regularChats,
-    };
+  function renderChatListInto(parent = chatList, options = {}) {
+    return chatListRenderer.renderChatListInto(parent, options);
   }
 
   function renderChatList(filter = '') {
-    if (isChatListWaitingForActiveFolder()) {
-      renderChatFolderPicker();
-      return;
-    }
-    hideChatContextMenu({ immediate: true });
-    renderChatListInto(chatList, {
-      filter,
-      folderId: chatFolderStore.activeFolderId,
-      includeSearchExtras: true,
-    });
-    renderChatFolderPicker();
-    scheduleChatListCacheSync();
+    return chatListRenderer.renderChatList(filter);
   }
 
   function updateChatListLastMessage(msg) {
-    const chat = chats.find(c => c.id === msg.chat_id);
-    if (chat) {
-      chat.last_text = msg.text || (msg.is_voice_note ? msg.transcription_text || getMediaNoteFallbackLabel(msg) || null : null);
-      chat.last_time = msg.created_at;
-      chat.last_user = msg.display_name;
-      chat.last_file_id = msg.file_id;
-      chat.last_message_id = Math.max(Number(chat.last_message_id || 0), Number(msg.id || 0));
-      sortChatsInPlace(chats);
-      renderChatList(chatSearch.value);
-    }
+    return chatListDataController.updateChatListLastMessage(msg);
   }
 
   function updateOnlineDisplay() {
-    renderChatList(chatSearch.value);
-    if (currentChatId) updateChatStatus();
-    refreshAdminUserStatuses();
-    try { refreshChatMemberStatuses(); } catch (e) {}
-    try { refreshChatInfoStatus(); } catch (e) {}
+    return presenceController.updateOnlineDisplay();
   }
 
   function updateScrollBottomButton() {
@@ -18452,13 +17977,12 @@
     const id = Number(chatId || 0);
     if (!id || Number(currentChatId || 0) !== id) return false;
     if (isUiTransitionBusy()) {
-      recoverySyncRequested = true;
-      deferredRecoveryReason = fromPush ? 'push' : 'catch-up';
+      chatListRecoveryController.markRequested(fromPush ? 'push' : 'catch-up');
       return false;
     }
 
     if (loadingMore || loadingMoreAfter) {
-      recoverySyncRequested = true;
+      chatListRecoveryController.markRequested(fromPush ? 'push' : 'catch-up');
       return false;
     }
 
@@ -25668,7 +25192,7 @@
         isMobileLayoutViewport()
         && !sidebar.classList.contains('sidebar-hidden')
         && !state.refreshing
-        && !chatListAbortController
+        && !chatListDataController.hasActiveChatListRequest()
       );
 
       const positionChatListPullIndicator = () => {
@@ -26667,7 +26191,7 @@
     initEmojiPicker();
     connectWS();
     await loadChats();
-    initialChatLoadFinished = true;
+    chatListStore.setInitialChatLoadFinished(true);
     setupLifecycleRecovery();
     loadAllUsers().catch(() => {});
 
