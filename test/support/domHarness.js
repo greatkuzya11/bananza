@@ -33,12 +33,20 @@ const appSettingsScriptPaths = Object.freeze([
   'public/js/app/settings/sound-settings.js',
   'public/js/app/settings/settings-modal.js',
 ]);
+const appFolderScriptPaths = Object.freeze([
+  'public/js/app/folders/store.js',
+  'public/js/app/folders/ui.js',
+  'public/js/app/folders/actions.js',
+  'public/js/app/folders/manage-modal.js',
+  'public/js/app/folders/new-folder-tab.js',
+]);
 const appRuntimeScriptPaths = Object.freeze([
   ...appShellScriptPaths,
   ...appCoreHelperScriptPaths,
   ...appDomMobileShellScriptPaths,
   ...appModalManagerScriptPaths,
   ...appSettingsScriptPaths,
+  ...appFolderScriptPaths,
 ]);
 
 class FakeAudioNode {
@@ -343,6 +351,10 @@ function loadAppSettingsScripts(dom) {
   loadBrowserScripts(dom, appSettingsScriptPaths);
 }
 
+function loadAppFolderScripts(dom) {
+  loadBrowserScripts(dom, appFolderScriptPaths);
+}
+
 function loadAppRuntimeScripts(dom) {
   loadBrowserScripts(dom, appRuntimeScriptPaths);
 }
@@ -428,6 +440,7 @@ function installAppBridge(dom, overrides = {}) {
 module.exports = {
   appCoreHelperScriptPaths,
   appDomMobileShellScriptPaths,
+  appFolderScriptPaths,
   appModalManagerScriptPaths,
   appSettingsScriptPaths,
   appRuntimeScriptPaths,
@@ -438,6 +451,7 @@ module.exports = {
   loadAppScript,
   loadAppCoreHelperScripts,
   loadAppDomMobileShellScripts,
+  loadAppFolderScripts,
   loadAppModalManagerScripts,
   loadAppSettingsScripts,
   loadAppRuntimeScripts,
