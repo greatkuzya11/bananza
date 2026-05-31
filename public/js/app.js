@@ -167,26 +167,15 @@
   const composerDraftsByChatId = new Map();
   let composerDraftsLoadedForUserId = 0;
   let pollComposerOptions = ['', ''];
-  let pollVotePending = new Set();
-  let pollClosePending = new Set();
-  let pollVotersState = null;
-  const PULSE_INLINE_VOTER_LIMIT = 5;
-  const PULSE_VOTER_POPOVER_AUTOHIDE_MS = 5000;
-  const PULSE_PREVIEW_AVATAR_COLORS = Object.freeze(['#6f7f95', '#758cab', '#6a879b', '#8276a8', '#748b85']);
-  let pulseInlineVotersCache = new Map();
-  let pulseInlineVotersPending = new Map();
-  let pulseInlineVotersRevision = new Map();
-  let expandedPulseVoterOptions = new Set();
-  let activePulseVoterPopover = null;
-  let outboxObjectUrls = new Map();
-  let outboxSending = new Set();
-  let pendingVideoPosterBackfills = new Map();
-  let failedVideoPosterBackfills = new Set();
-  let retryLayoutTimer = null;
+  let messageStateController = null;
+  let messageAttachmentRenderer = null;
+  let messagePollRenderer = null;
+  let messageCallCardRenderer = null;
+  let messageRenderer = null;
+  let messageOutbox = null;
+  let messageUpdates = null;
   let typingSendTimeout = null;
   let typingDisplayTimeouts = {};
-  let displayedMsgIds = new Set();
-  let displayedPinEventIds = new Set();
   let replyTo = null; // { id, display_name, text }
   let grokImageRiskConfirmResolver = null;
   let editTo = null; // { id, text, is_voice_note, allowEmpty }
@@ -1339,7 +1328,7 @@
     },
     actions: {
       getHasMoreAfter: () => Boolean(openChatController?.hasMoreAfter?.()),
-      hasPendingMediaBottomScroll: () => pendingMediaBottomScrollRows.size > 0,
+      hasPendingMediaBottomScroll: () => Boolean(messageStateController?.hasPendingMediaBottomScroll?.()),
       isCurrentChatActivelyVisible: (chatId) => isCurrentChatActivelyVisible(chatId),
       markCurrentChatReadIfAtBottom: (force) => markCurrentChatReadIfAtBottom(force),
       maybeLoadMoreAtBottom: () => maybeLoadMoreAtBottom(),
@@ -1390,8 +1379,8 @@
       applyChatBackground: (chat) => applyChatBackground(chat),
       cleanupDuplicateDateSeparators: () => cleanupDuplicateDateSeparators(),
       clearDisplayedTimelineState: () => {
-        displayedMsgIds.clear();
-        displayedPinEventIds.clear();
+        messageStateController?.clearDisplayedMessages?.();
+        messageStateController?.clearDisplayedPinEvents?.();
       },
       clearEdit: (options = {}) => clearEdit(options),
       clearPendingFile: () => clearPendingFile(),
@@ -1447,6 +1436,269 @@
     controller: openChatController,
   };
   if (appContext) appContext.services.openChat = openChatControllers;
+
+  const messageStateFactory = window.BananzaApp?.messages?.state?.createMessageState;
+  const messageAttachmentFactory = window.BananzaApp?.messages?.attachments?.createMessageAttachmentRenderer;
+  const messagePollFactory = window.BananzaApp?.messages?.polls?.createPollMessageRenderer;
+  const messageCallCardFactory = window.BananzaApp?.messages?.callCards?.createCallCardRenderer;
+  const messageOutboxFactory = window.BananzaApp?.messages?.outbox?.createMessageOutbox;
+  const messageUpdatesFactory = window.BananzaApp?.messages?.updates?.createMessageUpdates;
+  const messageRendererFactory = window.BananzaApp?.messages?.render?.createMessageRenderer;
+  if (typeof messageStateFactory !== 'function'
+    || typeof messageAttachmentFactory !== 'function'
+    || typeof messagePollFactory !== 'function'
+    || typeof messageCallCardFactory !== 'function'
+    || typeof messageOutboxFactory !== 'function'
+    || typeof messageUpdatesFactory !== 'function'
+    || typeof messageRendererFactory !== 'function') {
+    throw new Error('BananzaApp message modules are required before app.js');
+  }
+
+  messageStateController = messageStateFactory({
+    messageIdKey: (id) => messageIdKey(id),
+  });
+  messageAttachmentRenderer = messageAttachmentFactory({
+    window,
+    document,
+    api: (url, opts) => api(url, opts),
+    attachments: attachmentHelpers,
+    formatters,
+    esc,
+    formatSize,
+    state: messageStateController,
+    actions: {
+      isClientSideMessage: (msg) => isClientSideMessage(msg),
+      applyMessageUpdate: (msg, options = {}) => applyMessageUpdate(msg, options),
+    },
+  });
+  messageCallCardRenderer = messageCallCardFactory({
+    window,
+    document,
+    dom: { messagesEl },
+    api: (url, opts) => api(url, opts),
+    formatters,
+    t,
+    esc,
+    formatDuration: (seconds) => messageAttachmentRenderer.formatDuration(seconds),
+    normalizeMimeType,
+    fileExtension,
+    clamp,
+    getToken: () => token,
+    $,
+    actions: {
+      showCenterToast: (message) => showCenterToast(message),
+      openModal: (id, options = {}) => openModal(id, options),
+      closeModal: (id, options = {}) => closeModal(id, options),
+      openMediaViewer: (src, type = 'image') => openMediaViewer(src, type),
+      showMediaContextMenuForContext: (context, options = {}) => showMediaContextMenuForContext(context, options),
+      getAbsoluteMessageMediaUrl: (url) => getAbsoluteMessageMediaUrl(url),
+      bindMediaPlaybackState: (mediaEl, message, role) => bindMediaPlaybackState(mediaEl, message, role),
+      isMediaPlaybackCompleted: (message, role) => isMediaPlaybackCompleted(message, role),
+      setMediaPlaybackCompleted: (message, role, completed) => setMediaPlaybackCompleted(message, role, completed),
+    },
+  });
+  messagePollRenderer = messagePollFactory({
+    window,
+    document,
+    dom: {
+      messagesEl,
+      pollVotersModal,
+      pollVotersMeta,
+      pollVotersTitle,
+      pollVotersStatus,
+      pollVotersList,
+    },
+    api: (url, opts) => api(url, opts),
+    formatters,
+    ui: uiSettings,
+    t,
+    esc,
+    initials,
+    formatTime,
+    formatDate,
+    formatRelativeDuration,
+    formatPollDeadline,
+    normalizePollStyle: (style) => normalizePollStyle(style),
+    setPollStyleSurface: (modalEl, style) => setPollStyleSurface(modalEl, style),
+    state: {
+      getCurrentUser: () => currentUser,
+      getCurrentChatId: () => currentChatId,
+      getChatById: (chatId) => getChatById(chatId),
+    },
+    actions: {
+      replaceRenderedMessage: (msg, options = {}) => messageRenderer?.replaceRenderedMessage?.(msg, options),
+      syncChatAreaMetrics: () => syncChatAreaMetrics(),
+      showCenterToast: (message) => showCenterToast(message),
+      openModal: (id, options = {}) => openModal(id, options),
+      openFloatingSurface: (el) => openFloatingSurface(el),
+      closeFloatingSurface: (el, options = {}) => closeFloatingSurface(el, options),
+      avatarHtml: (name, color, avatarUrl, size) => avatarHtml(name, color, avatarUrl, size),
+    },
+  });
+  messageRenderer = messageRendererFactory({
+    window,
+    document,
+    dom: { messagesEl },
+    formatters,
+    attachmentHelpers,
+    attachmentRenderer: messageAttachmentRenderer,
+    pollRenderer: messagePollRenderer,
+    callCardRenderer: messageCallCardRenderer,
+    messageState: messageStateController,
+    t,
+    esc,
+    formatDate,
+    formatTime,
+    state: {
+      getCurrentUser: () => currentUser,
+      getCurrentChatId: () => currentChatId,
+      isCompactView: () => compactView,
+      contextConvertPendingMessageIds,
+      contextOriginalRestorePendingMessageIds,
+      grokImageRiskRetryPending,
+      getReactionPickerKeepKeyboard: () => reactionPickerKeepKeyboard,
+    },
+    actions: {
+      setLoadMoreAfterLoading: (value) => setLoadMoreAfterLoading(value),
+      hideScrollDateIndicator: (options = {}) => hideScrollDateIndicator(options),
+      buildMessagesRootChildren: (fragment = null) => buildMessagesRootChildren(fragment),
+      normalizePinEvents: (events = []) => normalizePinEvents(events),
+      normalizePinEvent: (event) => normalizePinEvent(event),
+      jumpToPinnedMessage: (pin) => jumpToPinnedMessage(pin),
+      filterNewMessages: (messages = []) => filterNewMessages(messages),
+      insertAtMessagesEnd: (node) => insertAtMessagesEnd(node),
+      getMessagesLastContentChild: () => getMessagesLastContentChild(),
+      updateScrollBottomButton: () => updateScrollBottomButton(),
+      refreshScrollDateIndicator: () => refreshScrollDateIndicator(),
+      updateHasMoreAfterFromChat: (chatId) => updateHasMoreAfterFromChat(chatId),
+      isLoadingMoreAfter: () => openChatController?.isLoadingMoreAfter?.(),
+      setAvatarElementVisual: (el, options = {}) => setAvatarElementVisual(el, options),
+      applyOwnReadStateToMessage: (msg, chatId) => applyOwnReadStateToMessage(msg, chatId),
+      isClientSideMessage: (msg) => isClientSideMessage(msg),
+      isSingleEmojiMessage: (text) => isSingleEmojiMessage(text),
+      isSingleCustomEmojiMessage: (text) => isSingleCustomEmojiMessage(text),
+      renderCustomEmojiHtml: (text, options = {}) => renderCustomEmojiHtml(text, options),
+      canContextConvertMessage: (msg) => canContextConvertMessage(msg),
+      canRestoreContextOriginalMessage: (msg) => canRestoreContextOriginalMessage(msg),
+      canSaveMessageToNotes: (msg) => canSaveMessageToNotes(msg),
+      canForwardMessage: (msg) => canForwardMessage(msg),
+      canEditMessage: (msg) => canEditMessage(msg),
+      getReplyPreviewText: (msg) => getReplyPreviewText(msg),
+      getReplyQuoteText: (msg) => getReplyQuoteText(msg),
+      renderMessageText: (text, mentions) => renderMessageText(text, mentions),
+      renderReactions: (reactions) => renderReactions(reactions),
+      renderPinActionButton: (msg) => renderPinActionButton(msg),
+      deleteMessage: (id) => deleteMessage(id),
+      bindTouchSafeButtonActivation: (button, handler) => bindTouchSafeButtonActivation(button, handler),
+      setReplyFromRow: (row) => setReplyFromRow(row),
+      copyMessageFromRow: (row) => copyMessageFromRow(row),
+      setEditFromRow: (row) => setEditFromRow(row),
+      bindContextConvertMessageButton: (button, row) => bindContextConvertMessageButton(button, row),
+      bindContextOriginalRestoreButton: (button, row) => bindContextOriginalRestoreButton(button, row),
+      showReactionPicker: (row, anchor, options = {}) => showReactionPicker(row, anchor, options),
+      openForwardMessageModal: (msg) => openForwardMessageModal(msg),
+      saveMessageToNotes: (msg, button) => saveMessageToNotes(msg, button),
+      togglePinFromRow: (row) => togglePinFromRow(row),
+      retrySend: (row) => messageOutbox?.retrySend?.(row),
+      scheduleRetryLayout: () => messageOutbox?.scheduleRetryLayout?.(),
+      retryGrokImageRiskPrompt: (row, button) => retryGrokImageRiskPrompt(row, button),
+      handleMentionClick: (event, button) => handleMentionClick(event, button),
+      scrollToMessage: (id) => scrollToMessage(id),
+      jumpToSavedOriginal: (msg) => jumpToSavedOriginal(msg),
+      isMobileComposerKeyboardOpen: () => isMobileComposerKeyboardOpen(),
+      openImageViewer: (src) => openImageViewer(src),
+      openMediaViewer: (src, type = 'image') => openMediaViewer(src, type),
+      bindMediaPlaybackState: (mediaEl, message, role) => bindMediaPlaybackState(mediaEl, message, role),
+      isNearBottom: (threshold) => isNearBottom(threshold),
+      captureScrollAnchor: () => captureScrollAnchor(),
+      restoreScrollAnchor: (anchor, attempts) => restoreScrollAnchor(anchor, attempts),
+      saveCurrentScrollAnchor: (chatId, options = {}) => saveCurrentScrollAnchor(chatId, options),
+      scrollToBottom: (instant = false, markRead = false, options = {}) => scrollToBottom(instant, markRead, options),
+    },
+  });
+  messageOutbox = messageOutboxFactory({
+    window,
+    document,
+    dom: { messagesEl },
+    api: (url, opts) => api(url, opts),
+    renderer: messageRenderer,
+    messageState: messageStateController,
+    state: {
+      getCurrentUser: () => currentUser,
+      getCurrentChatId: () => currentChatId,
+    },
+    actions: {
+      updateScrollBottomButton: () => updateScrollBottomButton(),
+      isNearBottom: (threshold) => isNearBottom(threshold),
+      captureScrollAnchor: () => captureScrollAnchor(),
+      restoreScrollAnchor: (anchor, attempts) => restoreScrollAnchor(anchor, attempts),
+      applyOwnReadStateToMessage: (msg, chatId) => applyOwnReadStateToMessage(msg, chatId),
+      updateChatListLastMessage: (msg) => updateChatListLastMessage(msg),
+      scrollToBottom: (instant = false, markRead = false, options = {}) => scrollToBottom(instant, markRead, options),
+      getReplySnapshot: (source) => getReplySnapshot(source),
+      clearReply: () => clearReply(),
+      playAppSound: (type, options = {}) => playAppSound(type, options),
+      makeClientId: (prefix) => makeClientId(prefix),
+    },
+  });
+  messageUpdates = messageUpdatesFactory({
+    window,
+    document,
+    dom: { messagesEl },
+    api: (url, opts) => api(url, opts),
+    renderer: messageRenderer,
+    messageCache: window.messageCache,
+    esc,
+    state: {
+      getCurrentChatId: () => currentChatId,
+      getEditMessageId: () => editTo?.id || 0,
+    },
+    actions: {
+      loadChats: () => loadChats(),
+      ensureScrollAnchorsLoaded: () => ensureScrollAnchorsLoaded(),
+      getScrollAnchor: (chatId) => scrollController.getScrollAnchor(chatId),
+      deleteScrollAnchor: (chatId) => scrollController.deleteScrollAnchor(chatId),
+      captureScrollAnchor: () => captureScrollAnchor(),
+      restoreScrollAnchor: (anchor, attempts) => restoreScrollAnchor(anchor, attempts),
+      saveCurrentScrollAnchor: (chatId, options = {}) => saveCurrentScrollAnchor(chatId, options),
+      hideDeletedMessageSurfaces: (msgId) => {
+        if (
+          String(activeMessageActionsRow?.dataset?.msgId || '') === String(msgId)
+          || String(reactionPickerMsgId || '') === String(msgId)
+        ) {
+          hideFloatingMessageActions({ immediate: true });
+        }
+      },
+      clearEdit: (options = {}) => clearEdit(options),
+      getReplyPreviewText: (msg) => getReplyPreviewText(msg),
+      updateReplyBarFromMessage: (msg, text) => {
+        if (replyTo?.id === msg.id && !editTo) {
+          replyTo.text = text;
+          replyBarText.textContent = text || '📎 Attachment';
+        }
+      },
+      applyOwnReadStateToMessage: (msg, chatId) => applyOwnReadStateToMessage(msg, chatId),
+      refreshReactionPickerForMessage: (msg) => {
+        if (Number(reactionPickerMsgId || 0) === Number(msg.id || 0) && isFloatingSurfaceVisible(reactionPicker)) {
+          renderReactionPickerContent();
+          positionMessageActionSurfaces({
+            includeActions: Boolean(activeMessageActionsRow),
+            includePicker: true,
+          });
+        }
+      },
+    },
+  });
+  const messageServices = {
+    state: messageStateController,
+    attachments: messageAttachmentRenderer,
+    polls: messagePollRenderer,
+    callCards: messageCallCardRenderer,
+    render: messageRenderer,
+    outbox: messageOutbox,
+    updates: messageUpdates,
+  };
+  if (appContext) appContext.services.messages = messageServices;
   const isIosViewportFixTarget = Boolean(mobileViewportShell.isIosViewportFixTarget?.());
   if (isIosViewportFixTarget) {
     document.documentElement.classList.add('is-ios-webkit');
@@ -3072,83 +3324,16 @@
     return /^(?:[\u00A9\u00AE]|[\u203C-\u3299]\uFE0F?|[\uD800-\uDBFF][\uDC00-\uDFFF])$/.test(graphemes[0]);
   }
 
-  function applyPosterToVideoElement(videoEl, posterUrl) {
-    if (!(videoEl instanceof HTMLVideoElement) || !posterUrl) return;
-    if (videoEl.getAttribute('poster') === posterUrl) return;
-    videoEl.setAttribute('poster', posterUrl);
-    try { videoEl.poster = posterUrl; } catch (e) {}
+  function applyPosterToVideoElement(...args) {
+    return messageAttachmentRenderer?.applyPosterToVideoElement?.(...args);
   }
 
-  function markAttachmentPosterAvailable(source, { clientPosterUrl = '' } = {}) {
-    if (!source || typeof source !== 'object') return source;
-    source.file_poster_available = true;
-    source.filePosterAvailable = true;
-    source.poster_available = true;
-    source.posterAvailable = true;
-    if (clientPosterUrl) {
-      source.client_poster_url = clientPosterUrl;
-      source.clientPosterUrl = clientPosterUrl;
-    }
-    return source;
+  function markAttachmentPosterAvailable(...args) {
+    return messageAttachmentRenderer?.markAttachmentPosterAvailable?.(...args);
   }
 
-  function getAttachmentPosterBackfillKey(source) {
-    if (!source || typeof source !== 'object') return '';
-    const messageId = Number(source.id || 0);
-    if (messageId > 0) return `message:${messageId}`;
-    const storedName = String(source.file_stored || source.stored_name || source.storedName || '').trim();
-    return storedName ? `file:${storedName}` : '';
-  }
-
-  async function ensureAttachmentPoster(source, { videoEl = null, onReady = null } = {}) {
-    const existingPosterUrl = getAttachmentPosterUrl(source);
-    if (existingPosterUrl) {
-      applyPosterToVideoElement(videoEl, existingPosterUrl);
-      if (typeof onReady === 'function') onReady(existingPosterUrl);
-      return existingPosterUrl;
-    }
-    if (!source || typeof source !== 'object' || !isVideoAttachmentMessage(source) || isClientSideMessage(source)) return '';
-
-    const backfillKey = getAttachmentPosterBackfillKey(source);
-    if (!backfillKey || failedVideoPosterBackfills.has(backfillKey)) return '';
-
-    let task = pendingVideoPosterBackfills.get(backfillKey);
-    if (!task) {
-      task = (async () => {
-        const previewUrl = getAttachmentPreviewUrl(source);
-        const posterBlob = await createAttachmentPosterBlob(previewUrl);
-        if (!posterBlob) return '';
-
-        const formData = new FormData();
-        formData.append('poster', posterBlob, 'video-poster.jpg');
-        const response = await api(`/api/messages/${Number(source.id || 0)}/poster`, {
-          method: 'POST',
-          body: formData,
-        });
-        const updatedMessage = response?.message || null;
-        if (updatedMessage && typeof source === 'object') {
-          Object.assign(source, updatedMessage);
-          applyMessageUpdate(updatedMessage);
-          return getAttachmentPosterUrl(updatedMessage);
-        }
-        markAttachmentPosterAvailable(source);
-        return getStoredAttachmentPosterUrl(source.file_stored || source.stored_name || source.storedName || '');
-      })().catch((error) => {
-        failedVideoPosterBackfills.add(backfillKey);
-        return '';
-      }).finally(() => {
-        pendingVideoPosterBackfills.delete(backfillKey);
-      });
-      pendingVideoPosterBackfills.set(backfillKey, task);
-    }
-
-    const posterUrl = await task;
-    if (!posterUrl) return '';
-    failedVideoPosterBackfills.delete(backfillKey);
-    markAttachmentPosterAvailable(source);
-    applyPosterToVideoElement(videoEl, posterUrl);
-    if (typeof onReady === 'function') onReady(posterUrl);
-    return posterUrl;
+  function ensureAttachmentPoster(...args) {
+    return messageAttachmentRenderer?.ensureAttachmentPoster?.(...args);
   }
 
   async function localAttachmentFromFile(file) {
@@ -3187,209 +3372,76 @@
     return Boolean(msg?.is_outbox || msg?.client_status || (typeof msg?.id === 'string' && msg.id.startsWith('c-')));
   }
 
-  function normalizePoll(raw) {
-    if (!raw || typeof raw !== 'object') return null;
-    const myOptionIds = [...new Set((Array.isArray(raw.my_option_ids) ? raw.my_option_ids : raw.myOptionIds || [])
-      .map((value) => Number(value || 0))
-      .filter((value) => Number.isInteger(value) && value > 0))];
-    return {
-      created_by: Number(raw.created_by || raw.createdBy || 0),
-      closed_by: raw.closed_by == null && raw.closedBy == null ? null : Number(raw.closed_by || raw.closedBy || 0),
-      style: normalizePollStyle(raw.style),
-      allows_multiple: Boolean(raw.allows_multiple ?? raw.allowsMultiple),
-      show_voters: Boolean(raw.show_voters ?? raw.showVoters),
-      closes_at: raw.closes_at || raw.closesAt || null,
-      closed_at: raw.closed_at || raw.closedAt || null,
-      created_at: raw.created_at || raw.createdAt || null,
-      is_closed: Boolean(raw.is_closed ?? raw.isClosed ?? raw.closed_at ?? raw.closedAt),
-      total_votes: Number(raw.total_votes || raw.totalVotes || 0),
-      total_voters: Number(raw.total_voters || raw.totalVoters || 0),
-      my_option_ids: myOptionIds,
-      options: (Array.isArray(raw.options) ? raw.options : []).map((option, index) => ({
-        id: Number(option.id || 0),
-        text: String(option.text || '').trim(),
-        position: Number(option.position ?? index),
-        vote_count: Number(option.vote_count || option.voteCount || 0),
-        voted_by_me: Boolean(option.voted_by_me ?? option.votedByMe ?? myOptionIds.includes(Number(option.id || 0))),
-      })).filter((option) => option.id > 0),
-    };
+  function normalizePoll(...args) {
+    return messagePollRenderer?.normalizePoll?.(...args);
   }
 
-  function isPollMessage(msg) {
-    return Boolean(normalizePoll(msg?.poll));
+  function isPollMessage(...args) {
+    return messagePollRenderer?.isPollMessage?.(...args);
   }
 
-  function isPulsePoll(pollOrMessage) {
-    const poll = pollOrMessage?.poll ? normalizePoll(pollOrMessage.poll) : normalizePoll(pollOrMessage);
-    return normalizePollStyle(poll?.style) === 'pulse';
+  function isPulsePoll(...args) {
+    return messagePollRenderer?.isPulsePoll?.(...args);
   }
 
-  function pulseInlineVotersCacheKey(messageId, optionId) {
-    return `${Number(messageId || 0)}:${Number(optionId || 0)}`;
+  function pulseInlineVotersCacheKey(...args) {
+    return messagePollRenderer?.pulseInlineVotersCacheKey?.(...args);
   }
 
-  function getPulseInlineVotersRevision(messageId) {
-    return Number(pulseInlineVotersRevision.get(Number(messageId || 0)) || 0);
+  function getPulseInlineVotersRevision(...args) {
+    return messagePollRenderer?.getPulseInlineVotersRevision?.(...args);
   }
 
-  function invalidatePulseInlineVotersForMessage(messageId) {
-    const resolvedMessageId = Number(messageId || 0);
-    if (!resolvedMessageId) return;
-    const prefix = `${resolvedMessageId}:`;
-    pulseInlineVotersRevision.set(resolvedMessageId, getPulseInlineVotersRevision(resolvedMessageId) + 1);
-    [...pulseInlineVotersCache.keys()].forEach((key) => {
-      if (key.startsWith(prefix)) pulseInlineVotersCache.delete(key);
-    });
+  function invalidatePulseInlineVotersForMessage(...args) {
+    return messagePollRenderer?.invalidatePulseInlineVotersForMessage?.(...args);
   }
 
-  function getPulseVoterDisplayName(voter) {
-    const displayName = String(voter?.display_name || '').trim();
-    if (displayName) return displayName;
-    const username = String(voter?.username || '').trim();
-    if (username) return `@${username}`;
-    return 'User';
+  function getPulseVoterDisplayName(...args) {
+    return messagePollRenderer?.getPulseVoterDisplayName?.(...args);
   }
 
-  function isPulseVoterOptionExpanded(messageId, optionId) {
-    return expandedPulseVoterOptions.has(pulseInlineVotersCacheKey(messageId, optionId));
+  function isPulseVoterOptionExpanded(...args) {
+    return messagePollRenderer?.isPulseVoterOptionExpanded?.(...args);
   }
 
-  function getPulseVoterPopoverElement(popover = activePulseVoterPopover) {
-    if (!messagesEl || !popover) return null;
-    const key = pulseInlineVotersCacheKey(popover.messageId, popover.optionId);
-    const slot = messagesEl.querySelector(`[data-poll-inline-voters="${key}"]`);
-    if (!(slot instanceof Element)) return null;
-    return slot.querySelector(`[data-poll-voter-popover][data-poll-voter-id="${Number(popover.voterId || 0)}"]`);
+  function getPulseVoterPopoverElement(...args) {
+    return messagePollRenderer?.getPulseVoterPopoverElement?.(...args);
   }
 
-  function schedulePulseVoterPopoverAutoHide(popover = activePulseVoterPopover) {
-    if (!popover) return;
-    clearTimeout(popover.autoHideTimer);
-    popover.autoHideTimer = setTimeout(() => {
-      if (activePulseVoterPopover !== popover) return;
-      clearActivePulseVoterPopover();
-    }, PULSE_VOTER_POPOVER_AUTOHIDE_MS);
+  function schedulePulseVoterPopoverAutoHide(...args) {
+    return messagePollRenderer?.schedulePulseVoterPopoverAutoHide?.(...args);
   }
 
-  function mountPulseVoterPopover(popover = activePulseVoterPopover) {
-    if (!popover || activePulseVoterPopover !== popover) return;
-    const el = getPulseVoterPopoverElement(popover);
-    if (!(el instanceof HTMLElement)) return;
-    schedulePulseVoterPopoverAutoHide(popover);
-    openFloatingSurface(el);
+  function mountPulseVoterPopover(...args) {
+    return messagePollRenderer?.mountPulseVoterPopover?.(...args);
   }
 
-  function clearActivePulseVoterPopover({ skipRefresh = false, immediate = false } = {}) {
-    const current = activePulseVoterPopover;
-    if (!current) return;
-    clearTimeout(current.autoHideTimer);
-    current.autoHideTimer = null;
-    const finalize = () => {
-      clearTimeout(current.autoHideTimer);
-      current.autoHideTimer = null;
-      if (activePulseVoterPopover === current) activePulseVoterPopover = null;
-      if (!skipRefresh) refreshPulseInlineVoterSlots(current.messageId, current.optionId);
-    };
-    const el = getPulseVoterPopoverElement(current);
-    if (!(el instanceof HTMLElement) || skipRefresh) {
-      finalize();
-      return;
-    }
-    closeFloatingSurface(el, { immediate, onAfterClose: finalize });
+  function clearActivePulseVoterPopover(...args) {
+    return messagePollRenderer?.clearActivePulseVoterPopover?.(...args);
   }
 
-  function clearActivePulseVoterPopoverForMessage(messageId, { skipRefresh = false } = {}) {
-    if (!activePulseVoterPopover || Number(activePulseVoterPopover.messageId) !== Number(messageId || 0)) return;
-    clearActivePulseVoterPopover({ skipRefresh });
+  function clearActivePulseVoterPopoverForMessage(...args) {
+    return messagePollRenderer?.clearActivePulseVoterPopoverForMessage?.(...args);
   }
 
-  function bindPulseInlineVoterControls(scope, messageId) {
-    const resolvedMessageId = Number(messageId || 0);
-    if (!(scope instanceof Element) || !resolvedMessageId) return;
-    scope.querySelectorAll('[data-poll-voter-avatar]').forEach((btn) => {
-      if (btn.dataset.boundPulseVoterAvatar === '1') return;
-      btn.dataset.boundPulseVoterAvatar = '1';
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        togglePulseVoterPopover(
-          resolvedMessageId,
-          Number(btn.dataset.pollOptionId || 0),
-          Number(btn.dataset.pollVoterId || btn.dataset.pollVoterAvatar || 0)
-        );
-      });
-    });
-    scope.querySelectorAll('[data-poll-voter-more]').forEach((btn) => {
-      if (btn.dataset.boundPulseVoterMore === '1') return;
-      btn.dataset.boundPulseVoterMore = '1';
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        togglePulseVoterOptionExpanded(resolvedMessageId, Number(btn.dataset.pollOptionId || 0));
-      });
-    });
+  function bindPulseInlineVoterControls(...args) {
+    return messagePollRenderer?.bindPulseInlineVoterControls?.(...args);
   }
 
-  function togglePulseVoterOptionExpanded(messageId, optionId) {
-    const resolvedMessageId = Number(messageId || 0);
-    const resolvedOptionId = Number(optionId || 0);
-    if (!resolvedMessageId || !resolvedOptionId) return;
-    const key = pulseInlineVotersCacheKey(resolvedMessageId, resolvedOptionId);
-    const next = new Set(expandedPulseVoterOptions);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    expandedPulseVoterOptions = next;
-    clearActivePulseVoterPopover({ skipRefresh: true });
-    refreshPulseInlineVoterSlots(resolvedMessageId, resolvedOptionId);
+  function togglePulseVoterOptionExpanded(...args) {
+    return messagePollRenderer?.togglePulseVoterOptionExpanded?.(...args);
   }
 
-  function togglePulseVoterPopover(messageId, optionId, voterId) {
-    const resolvedMessageId = Number(messageId || 0);
-    const resolvedOptionId = Number(optionId || 0);
-    const resolvedVoterId = Number(voterId || 0);
-    if (!resolvedMessageId || !resolvedOptionId || !resolvedVoterId) return;
-    const previous = activePulseVoterPopover;
-    const isSame =
-      previous &&
-      Number(previous.messageId) === resolvedMessageId &&
-      Number(previous.optionId) === resolvedOptionId &&
-      Number(previous.voterId) === resolvedVoterId;
-    if (isSame) {
-      clearActivePulseVoterPopover();
-      return;
-    }
-    if (previous) {
-      const sameSlot =
-        Number(previous.messageId) === resolvedMessageId &&
-        Number(previous.optionId) === resolvedOptionId;
-      clearActivePulseVoterPopover({ skipRefresh: sameSlot, immediate: true });
-    }
-    const next = { messageId: resolvedMessageId, optionId: resolvedOptionId, voterId: resolvedVoterId, autoHideTimer: null };
-    activePulseVoterPopover = next;
-    refreshPulseInlineVoterSlots(resolvedMessageId, resolvedOptionId);
-    mountPulseVoterPopover(next);
+  function togglePulseVoterPopover(...args) {
+    return messagePollRenderer?.togglePulseVoterPopover?.(...args);
   }
 
-  function getPollCompactFooterMeta(poll) {
-    if (!poll) return null;
-    if (poll.is_closed) {
-      return { label: 'Closed', tone: 'closed' };
-    }
-    if (!poll.closes_at) return null;
-    const relative = formatRelativeDuration(poll.closes_at);
-    return {
-      label: relative ? `Ends in ${relative}` : `Ends ${formatTime(poll.closes_at)}`,
-      tone: 'deadline',
-    };
+  function getPollCompactFooterMeta(...args) {
+    return messagePollRenderer?.getPollCompactFooterMeta?.(...args);
   }
 
-  function canClosePollMessage(msg) {
-    const poll = normalizePoll(msg?.poll);
-    if (!currentUser || !poll || poll.is_closed) return false;
-    const chat = getChatById(msg?.chat_id || msg?.chatId || currentChatId);
-    return Boolean(
-      currentUser.is_admin ||
-      Number(poll.created_by || 0) === Number(currentUser.id || 0) ||
-      Number(chat?.created_by || 0) === Number(currentUser.id || 0)
-    );
+  function canClosePollMessage(...args) {
+    return messagePollRenderer?.canClosePollMessage?.(...args);
   }
 
   function setPollComposerStatus(message, type = '') {
@@ -3550,125 +3602,32 @@
     requestAnimationFrame(() => pollQuestionInput?.focus());
   }
 
-  function buildOptimisticPollState(poll, nextOptionIds) {
-    const previousSet = new Set((poll?.my_option_ids || []).map((id) => Number(id)));
-    const nextSet = new Set((Array.isArray(nextOptionIds) ? nextOptionIds : []).map((id) => Number(id)));
-    const wasVoter = previousSet.size > 0;
-    const willVoter = nextSet.size > 0;
-    return {
-      ...poll,
-      total_votes: Math.max(0, Number(poll.total_votes || 0) - previousSet.size + nextSet.size),
-      total_voters: Math.max(0, Number(poll.total_voters || 0) - (wasVoter ? 1 : 0) + (willVoter ? 1 : 0)),
-      my_option_ids: [...nextSet],
-      options: (poll.options || []).map((option) => ({
-        ...option,
-        vote_count: Math.max(
-          0,
-          Number(option.vote_count || 0) - (previousSet.has(Number(option.id)) ? 1 : 0) + (nextSet.has(Number(option.id)) ? 1 : 0)
-        ),
-        voted_by_me: nextSet.has(Number(option.id)),
-      })),
-    };
+  function buildOptimisticPollState(...args) {
+    return messagePollRenderer?.buildOptimisticPollState?.(...args);
   }
 
-  function nextPollVoteSelection(poll, optionId) {
-    const selected = new Set((poll?.my_option_ids || []).map((id) => Number(id)));
-    const id = Number(optionId || 0);
-    if (!id) return [];
-    if (poll?.allows_multiple) {
-      if (selected.has(id)) selected.delete(id);
-      else selected.add(id);
-      return [...selected];
-    }
-    if (selected.has(id)) return [];
-    return [id];
+  function nextPollVoteSelection(...args) {
+    return messagePollRenderer?.nextPollVoteSelection?.(...args);
   }
 
-  function resetReusableMessageRow(row) {
-    if (!row) return;
-    row.querySelectorAll('audio, video').forEach((media) => {
-      try { media.pause?.(); } catch (e) {}
-    });
-    Array.from(row.attributes).forEach((attr) => {
-      if (attr.name === 'class') return;
-      row.removeAttribute(attr.name);
-    });
-    row.className = '';
-    delete row.__messageData;
-    delete row.__replyPayload;
-    delete row.__voiceBootstrap;
-    delete row.__voiceMessage;
-    delete row.__outboxItem;
-    delete row.__callRecordingProgress;
-    delete row.__callRecordingCall;
-    delete row.__autoScrollMediaToBottomOnLoad;
+  function resetReusableMessageRow(...args) {
+    return messageRenderer?.resetReusableMessageRow?.(...args);
   }
 
-  function withStableOutboxMedia(row, nextMsg) {
-    const previous = row?.__messageData || {};
-    const prepared = { ...(nextMsg || {}) };
-    if (previous.client_file_url && !prepared.client_file_url) {
-      prepared.client_file_url = previous.client_file_url;
-    }
-    if (previous.client_poster_url && !prepared.client_poster_url) {
-      prepared.client_poster_url = previous.client_poster_url;
-    }
-    return prepared;
+  function withStableOutboxMedia(...args) {
+    return messageRenderer?.withStableOutboxMedia?.(...args);
   }
 
-  function replaceRenderedMessage(nextMsg, options = {}) {
-    if (!nextMsg?.id) return false;
-    const row = messagesEl.querySelector(`[data-msg-id="${nextMsg.id}"]`);
-    if (!row) return false;
-    const preserveAnchor = options.preserveAnchor?.messageId ? { ...options.preserveAnchor } : null;
-    const restoreAttempts = Number(options.restoreAttempts || 2);
-    const prepared = withStableOutboxMedia(row, nextMsg);
-    if (row.querySelector('.msg-status.read')) prepared.is_read = true;
-    const showName = Boolean(row.querySelector('.msg-sender'));
-    createMessageEl(prepared, showName, { ...options, reuseRow: row, entering: false });
-    rememberDisplayedMessage(prepared.id);
-    if (preserveAnchor) {
-      requestAnimationFrame(() => restoreScrollAnchor(preserveAnchor, restoreAttempts));
-    }
-    updateScrollBottomButton();
-    return true;
+  function replaceRenderedMessage(...args) {
+    return messageRenderer?.replaceRenderedMessage?.(...args);
   }
 
-  function replaceRenderedPollCard(row, nextMsg) {
-    if (!row || !nextMsg?.poll) return false;
-    const currentCard = row.querySelector('.poll-card');
-    if (!currentCard) return false;
-    const wrapper = document.createElement('div');
-    wrapper.innerHTML = renderPollCard(nextMsg, { liveUpdate: true }).trim();
-    const nextCard = wrapper.firstElementChild;
-    if (!nextCard) return false;
-    currentCard.replaceWith(nextCard);
-    row.__messageData = { ...nextMsg };
-    row.classList.toggle('poll-message', Boolean(!nextMsg.is_deleted && nextMsg.poll));
-    bindPollControls(row);
-    hydratePulseInlineVoters(row);
-    return true;
+  function replaceRenderedPollCard(...args) {
+    return messagePollRenderer?.replaceRenderedPollCard?.(...args);
   }
 
-  function applyPollUpdate(chatId, messageId, poll) {
-    const normalizedPoll = normalizePoll(poll);
-    if (!normalizedPoll) return;
-    const id = Number(messageId || 0);
-    if (!id) return;
-    clearActivePulseVoterPopoverForMessage(id, { skipRefresh: true });
-    if (isPulsePoll(normalizedPoll) && normalizedPoll.show_voters) {
-      invalidatePulseInlineVotersForMessage(id);
-    }
-    const resolvedChatId = Number(chatId || currentChatId || 0);
-    if (resolvedChatId && window.messageCache?.patchMessage) {
-      window.messageCache.patchMessage(resolvedChatId, id, { poll: normalizedPoll }).catch(() => {});
-    }
-    const row = messagesEl.querySelector(`[data-msg-id="${id}"]`);
-    if (!row || Number(currentChatId || 0) !== resolvedChatId) return;
-    const nextMsg = { ...(row.__messageData || {}), poll: normalizedPoll };
-    if (!replaceRenderedPollCard(row, nextMsg)) {
-      replaceRenderedMessage(nextMsg);
-    }
+  function applyPollUpdate(...args) {
+    return messagePollRenderer?.applyPollUpdate?.(...args);
   }
 
   async function submitPollComposer() {
@@ -3725,492 +3684,92 @@
     }
   }
 
-  async function togglePollVote(messageId, optionId) {
-    const row = messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
-    const msg = row?.__messageData || {};
-    const poll = normalizePoll(msg.poll);
-    if (!poll || poll.is_closed || pollVotePending.has(Number(messageId))) return;
-    const nextSelection = nextPollVoteSelection(poll, optionId);
-    const optimisticPoll = buildOptimisticPollState(poll, nextSelection);
-    pollVotePending.add(Number(messageId));
-    applyPollUpdate(msg.chat_id, messageId, optimisticPoll);
-    try {
-      const data = await api(`/api/messages/${messageId}/poll-vote`, {
-        method: 'POST',
-        body: { optionIds: nextSelection },
-      });
-      pollVotePending.delete(Number(messageId));
-      if (data?.poll) applyPollUpdate(msg.chat_id, messageId, data.poll);
-    } catch (error) {
-      pollVotePending.delete(Number(messageId));
-      if (error?.poll) applyPollUpdate(msg.chat_id, messageId, error.poll);
-      else applyPollUpdate(msg.chat_id, messageId, poll);
-      showCenterToast(error.message || 'Could not update vote');
-    }
+  function togglePollVote(...args) {
+    return messagePollRenderer?.togglePollVote?.(...args);
   }
 
-  async function closePollMessage(messageId) {
-    const row = messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
-    const msg = row?.__messageData || {};
-    if (!canClosePollMessage(msg) || pollClosePending.has(Number(messageId))) return;
-    pollClosePending.add(Number(messageId));
-    applyPollUpdate(msg.chat_id, messageId, { ...normalizePoll(msg.poll), is_closed: false });
-    try {
-      const data = await api(`/api/messages/${messageId}/poll-close`, { method: 'POST' });
-      pollClosePending.delete(Number(messageId));
-      if (data?.poll) applyPollUpdate(msg.chat_id, messageId, data.poll);
-    } catch (error) {
-      pollClosePending.delete(Number(messageId));
-      applyPollUpdate(msg.chat_id, messageId, msg.poll);
-      showCenterToast(error.message || 'Could not close poll');
-    }
+  function closePollMessage(...args) {
+    return messagePollRenderer?.closePollMessage?.(...args);
   }
 
-  function pollAccentVar(index = 0) {
-    return `var(--poll-accent-${(Number(index || 0) % 6) + 1})`;
+  function pollAccentVar(...args) {
+    return messagePollRenderer?.pollAccentVar?.(...args);
   }
 
-  function buildPollRenderState(message, { preview = false, liveUpdate = false } = {}) {
-    const poll = normalizePoll(message?.poll);
-    if (!poll) return null;
-    const messageId = preview ? 0 : Number(message?.id || 0);
-    const totalVotes = Math.max(0, Number(poll.total_votes || 0));
-    const interactionLocked = preview || pollVotePending.has(messageId) || pollClosePending.has(messageId);
-    return {
-      preview,
-      liveUpdate,
-      messageId,
-      poll,
-      totalVotes,
-      canClose: !preview && canClosePollMessage(message),
-      interactionLocked,
-      options: (poll.options || []).map((option, index) => {
-        const voteCount = Math.max(0, Number(option.vote_count || 0));
-        return {
-          ...option,
-          index,
-          accentVar: pollAccentVar(index),
-          selected: !!option.voted_by_me,
-          voteCount,
-          percentage: totalVotes > 0 ? Math.round((voteCount / totalVotes) * 100) : 0,
-          voteLabel: voteCount === 1 ? '1 vote' : `${voteCount} votes`,
-          voterLabel: voteCount === 1 ? '1 voter' : `${voteCount} voters`,
-          mark: poll.allows_multiple ? '✓' : '●',
-        };
-      }),
-    };
+  function buildPollRenderState(...args) {
+    return messagePollRenderer?.buildPollRenderState?.(...args);
   }
 
-  function buildPollOrbitGradient(options = [], totalVotes = 0) {
-    if (!totalVotes) return 'conic-gradient(rgba(255,255,255,.08) 0deg 360deg)';
-    let current = 0;
-    const segments = [];
-    options.forEach((option) => {
-      const share = Number(option.voteCount || 0) / totalVotes;
-      if (share <= 0) return;
-      const next = current + share * 360;
-      segments.push(`${option.accentVar} ${current.toFixed(2)}deg ${next.toFixed(2)}deg`);
-      current = next;
-    });
-    if (current < 360) segments.push(`rgba(255,255,255,.08) ${current.toFixed(2)}deg 360deg`);
-    return `conic-gradient(${segments.join(', ')})`;
+  function buildPollOrbitGradient(...args) {
+    return messagePollRenderer?.buildPollOrbitGradient?.(...args);
   }
 
-  function renderPollCloseButton(state, extraClass = '') {
-    if (!state.canClose) return '';
-    return `<button type="button" class="poll-close-btn${extraClass ? ` ${extraClass}` : ''}" data-poll-close="${state.messageId}" ${state.poll.is_closed || state.interactionLocked ? 'disabled' : ''}>Close</button>`;
+  function renderPollCloseButton(...args) {
+    return messagePollRenderer?.renderPollCloseButton?.(...args);
   }
 
-  function renderPollCompactFooter(state, extraClass = '') {
-    const meta = getPollCompactFooterMeta(state?.poll);
-    const closeButton = renderPollCloseButton(state);
-    if (!meta && !closeButton) return '';
-    return `
-      <div class="poll-card-footer poll-card-footer--minimal${extraClass ? ` ${extraClass}` : ''}">
-        ${meta ? `<span class="poll-card-footer-meta is-${meta.tone}">${esc(meta.label)}</span>` : ''}
-        ${closeButton}
-      </div>
-    `;
+  function renderPollCompactFooter(...args) {
+    return messagePollRenderer?.renderPollCompactFooter?.(...args);
   }
 
-  function renderPollVotersButton(state, option, label = 'View voters') {
-    if (!state.poll.show_voters) return '<span></span>';
-    return `<button
-      type="button"
-      class="poll-option-voters"
-      data-poll-voters="${state.messageId}"
-      data-poll-option-id="${Number(option.id)}"
-      ${state.preview || option.voteCount === 0 ? 'disabled' : ''}
-    >${label}</button>`;
+  function renderPollVotersButton(...args) {
+    return messagePollRenderer?.renderPollVotersButton?.(...args);
   }
 
-  function renderPulseInlineVoterAvatar(voter, { placeholder = false, messageId = 0, optionId = 0 } = {}) {
-    const background = esc(voter?.avatar_color || '#6f7f95');
-    const name = getPulseVoterDisplayName(voter);
-    const title = placeholder ? '' : esc(name);
-    const avatarHtml = !placeholder && voter?.avatar_url
-      ? `<span class="poll-pulse-voter-avatar" style="--poll-inline-avatar-bg:${background};" title="${title}">
-          <img class="avatar-img" src="${esc(voter.avatar_url)}" alt="${title}" loading="lazy" onerror="this.remove()">
-        </span>`
-      : `<span class="poll-pulse-voter-avatar${placeholder ? ' poll-pulse-voter-avatar--placeholder' : ''}" style="--poll-inline-avatar-bg:${background};"${title ? ` title="${title}"` : ''}>${placeholder ? '' : esc(initials(voter?.display_name || voter?.username || 'V'))}</span>`;
-    if (placeholder) {
-      return `<span class="poll-pulse-voter-entry">${avatarHtml}</span>`;
-    }
-    const voterId = Number(voter?.id || 0);
-    const popoverOpen = Boolean(
-      activePulseVoterPopover &&
-      Number(activePulseVoterPopover.messageId) === Number(messageId) &&
-      Number(activePulseVoterPopover.optionId) === Number(optionId) &&
-      Number(activePulseVoterPopover.voterId) === voterId
-    );
-    return `
-      <span class="poll-pulse-voter-entry">
-        <button
-          type="button"
-          class="poll-pulse-voter-avatar-btn"
-          data-poll-voter-avatar="${voterId}"
-          data-poll-option-id="${Number(optionId)}"
-          data-poll-voter-id="${voterId}"
-          aria-label="${title}"
-          title="${title}"
-        >
-          ${avatarHtml}
-        </button>
-        ${popoverOpen ? `<span class="poll-pulse-voter-popover hidden" data-poll-voter-popover data-poll-option-id="${Number(optionId)}" data-poll-voter-id="${voterId}">${esc(name)}</span>` : ''}
-      </span>
-    `;
+  function renderPulseInlineVoterAvatar(...args) {
+    return messagePollRenderer?.renderPulseInlineVoterAvatar?.(...args);
   }
 
-  function renderPulseInlineVoterStack(voters = [], totalCount = 0, { preview = false, messageId = 0, optionId = 0 } = {}) {
-    const resolvedTotal = Math.max(0, Number(totalCount || voters.length || 0));
-    if (resolvedTotal <= 0) return '';
-    const overflow = Math.max(0, resolvedTotal - PULSE_INLINE_VOTER_LIMIT);
-    const canExpand = overflow > 0;
-    const expanded = !preview && canExpand && isPulseVoterOptionExpanded(messageId, optionId);
-    const visible = preview || !expanded
-      ? (Array.isArray(voters) ? voters : []).slice(0, PULSE_INLINE_VOTER_LIMIT)
-      : (Array.isArray(voters) ? voters : []);
-    const label = resolvedTotal === 1 ? '1 voter' : `${resolvedTotal} voters`;
-    const toggleHtml = canExpand
-      ? (
-        preview
-          ? `<span class="poll-pulse-voter-more is-static" aria-hidden="true">+${overflow}</span>`
-          : `<button
-              type="button"
-              class="poll-pulse-voter-more${expanded ? ' is-expanded' : ''}"
-              data-poll-voter-more="${pulseInlineVotersCacheKey(messageId, optionId)}"
-              data-poll-option-id="${Number(optionId)}"
-              aria-expanded="${expanded ? 'true' : 'false'}"
-              aria-label="${expanded ? `Collapse ${overflow} extra voters` : `Show ${overflow} more voters`}"
-            >${expanded ? `&minus;${overflow}` : `+${overflow}`}</button>`
-      )
-      : '';
-    return `
-      <span class="poll-pulse-voter-stack${expanded ? ' is-expanded' : ''}" aria-label="${esc(label)}">
-        ${visible.map((voter) => renderPulseInlineVoterAvatar(voter, { placeholder: preview || !!voter?.placeholder, messageId, optionId })).join('')}
-        ${toggleHtml}
-      </span>
-    `;
+  function renderPulseInlineVoterStack(...args) {
+    return messagePollRenderer?.renderPulseInlineVoterStack?.(...args);
   }
 
-  function buildPulsePreviewVoters(totalCount = 0) {
-    const resolvedTotal = Math.max(0, Number(totalCount || 0));
-    return Array.from({ length: Math.min(resolvedTotal, PULSE_INLINE_VOTER_LIMIT) }, (_, index) => ({
-      placeholder: true,
-      avatar_color: PULSE_PREVIEW_AVATAR_COLORS[index % PULSE_PREVIEW_AVATAR_COLORS.length],
-    }));
+  function buildPulsePreviewVoters(...args) {
+    return messagePollRenderer?.buildPulsePreviewVoters?.(...args);
   }
 
-  function renderPulseInlineVoterSummaryContent({ messageId = 0, poll = null, option = null, preview = false } = {}) {
-    const voteCount = Math.max(0, Number((option?.voteCount ?? option?.vote_count) || 0));
-    const fallbackLabel = esc(option?.voterLabel || (voteCount === 1 ? '1 voter' : `${voteCount} voters`));
-    if (!poll || !option) return `<span class="poll-pulse-voter-count">${fallbackLabel}</span>`;
-    if (!poll.show_voters) {
-      return `<span class="poll-pulse-voter-count">${fallbackLabel}</span>`;
-    }
-    if (preview) {
-      const previewVoters = buildPulsePreviewVoters(voteCount);
-      return previewVoters.length
-        ? renderPulseInlineVoterStack(previewVoters, voteCount, { preview: true, messageId, optionId: option.id })
-        : `<span class="poll-pulse-voter-count">${fallbackLabel}</span>`;
-    }
-    const cachedVoters = pulseInlineVotersCache.get(pulseInlineVotersCacheKey(messageId, option.id));
-    if (Array.isArray(cachedVoters) && cachedVoters.length) {
-      return renderPulseInlineVoterStack(cachedVoters, voteCount, { messageId, optionId: option.id });
-    }
-    return `<span class="poll-pulse-voter-count">${fallbackLabel}</span>`;
+  function renderPulseInlineVoterSummaryContent(...args) {
+    return messagePollRenderer?.renderPulseInlineVoterSummaryContent?.(...args);
   }
 
-  function renderPulseInlineVoterSummary(state, option) {
-    const messageId = state.preview ? 0 : state.messageId;
-    const key = state.preview ? '' : pulseInlineVotersCacheKey(messageId, option.id);
-    return `<span class="poll-pulse-voter-summary"${key ? ` data-poll-inline-voters="${key}" data-poll-option-id="${Number(option.id)}"` : ''}>
-      ${renderPulseInlineVoterSummaryContent({ messageId, poll: state.poll, option, preview: state.preview })}
-    </span>`;
+  function renderPulseInlineVoterSummary(...args) {
+    return messagePollRenderer?.renderPulseInlineVoterSummary?.(...args);
   }
 
-  function refreshPulseInlineVoterSlots(messageId, optionId = null) {
-    if (!messagesEl) return;
-    const resolvedMessageId = Number(messageId || 0);
-    if (!resolvedMessageId) return;
-    const selector = optionId
-      ? `[data-poll-inline-voters="${pulseInlineVotersCacheKey(resolvedMessageId, optionId)}"]`
-      : `[data-poll-inline-voters^="${resolvedMessageId}:"]`;
-    messagesEl.querySelectorAll(selector).forEach((slot) => {
-      const row = slot.closest('.msg-row');
-      const poll = normalizePoll(row?.__messageData?.poll);
-      const resolvedOptionId = Number(optionId || slot.dataset.pollOptionId || 0);
-      const option = (poll?.options || []).find((item) => Number(item.id) === resolvedOptionId);
-      if (!poll || !isPulsePoll(poll) || !option) return;
-      slot.innerHTML = renderPulseInlineVoterSummaryContent({
-        messageId: resolvedMessageId,
-        poll,
-        option,
-        preview: false,
-      });
-      bindPulseInlineVoterControls(slot, resolvedMessageId);
-      if (
-        activePulseVoterPopover &&
-        Number(activePulseVoterPopover.messageId) === resolvedMessageId &&
-        Number(activePulseVoterPopover.optionId) === resolvedOptionId
-      ) {
-        mountPulseVoterPopover(activePulseVoterPopover);
-      }
-    });
+  function refreshPulseInlineVoterSlots(...args) {
+    return messagePollRenderer?.refreshPulseInlineVoterSlots?.(...args);
   }
 
-  function ensurePulseInlineVoters(messageId, optionId) {
-    const resolvedMessageId = Number(messageId || 0);
-    const resolvedOptionId = Number(optionId || 0);
-    if (!resolvedMessageId || !resolvedOptionId) return Promise.resolve([]);
-    const cacheKey = pulseInlineVotersCacheKey(resolvedMessageId, resolvedOptionId);
-    if (pulseInlineVotersCache.has(cacheKey)) {
-      refreshPulseInlineVoterSlots(resolvedMessageId, resolvedOptionId);
-      return Promise.resolve(pulseInlineVotersCache.get(cacheKey) || []);
-    }
-    const revision = getPulseInlineVotersRevision(resolvedMessageId);
-    const pendingKey = `${cacheKey}:${revision}`;
-    if (pulseInlineVotersPending.has(pendingKey)) {
-      return pulseInlineVotersPending.get(pendingKey);
-    }
-    const request = api(`/api/messages/${resolvedMessageId}/poll-voters?optionId=${resolvedOptionId}`)
-      .then((data) => {
-        const voters = Array.isArray(data?.voters) ? data.voters : [];
-        if (getPulseInlineVotersRevision(resolvedMessageId) !== revision) return voters;
-        pulseInlineVotersCache.set(cacheKey, voters);
-        refreshPulseInlineVoterSlots(resolvedMessageId, resolvedOptionId);
-        return voters;
-      })
-      .catch(() => [])
-      .finally(() => {
-        pulseInlineVotersPending.delete(pendingKey);
-      });
-    pulseInlineVotersPending.set(pendingKey, request);
-    return request;
+  function ensurePulseInlineVoters(...args) {
+    return messagePollRenderer?.ensurePulseInlineVoters?.(...args);
   }
 
-  function hydratePulseInlineVoters(row) {
-    const messageId = Number(row?.dataset?.msgId || row?.__messageData?.id || 0);
-    const poll = normalizePoll(row?.__messageData?.poll);
-    if (!row || !messageId || !poll || !isPulsePoll(poll) || !poll.show_voters) return;
-    if (!row.isConnected) {
-      if (!row.__pulseInlineHydrateScheduled) {
-        row.__pulseInlineHydrateScheduled = true;
-        requestAnimationFrame(() => {
-          row.__pulseInlineHydrateScheduled = false;
-          hydratePulseInlineVoters(row);
-        });
-      }
-      return;
-    }
-    (poll.options || []).forEach((option) => {
-      if (Math.max(0, Number(option.vote_count || 0)) <= 0) return;
-      ensurePulseInlineVoters(messageId, Number(option.id)).catch(() => {});
-    });
+  function hydratePulseInlineVoters(...args) {
+    return messagePollRenderer?.hydratePulseInlineVoters?.(...args);
   }
 
-  function renderPulsePollCard(state) {
-    const optionsHtml = state.options.map((option) => `
-      <div class="poll-pulse-option${option.selected ? ' selected' : ''}" style="--poll-option-accent:${option.accentVar};">
-        <span class="poll-pulse-option-glow"></span>
-        <div
-          class="poll-pulse-option-main"
-          data-poll-vote="${state.messageId}"
-          data-poll-option-id="${Number(option.id)}"
-          role="button"
-          tabindex="${state.poll.is_closed || state.interactionLocked ? '-1' : '0'}"
-          aria-disabled="${state.poll.is_closed || state.interactionLocked ? 'true' : 'false'}"
-        >
-          <span class="poll-pulse-option-text">${esc(option.text)}</span>
-          <span class="poll-pulse-progress" aria-hidden="true">
-            <span class="poll-pulse-progress-track">
-              <span class="poll-pulse-progress-fill" style="width:${option.percentage}%"></span>
-              <span class="poll-pulse-progress-percent">${option.percentage}%</span>
-            </span>
-          </span>
-          ${renderPulseInlineVoterSummary(state, option)}
-        </div>
-      </div>
-    `).join('');
-
-    return `
-      <div class="poll-card poll-card--pulse${state.preview ? ' is-preview' : ''}${state.liveUpdate ? ' is-live-update' : ''}">
-        <div class="poll-pulse-options">${optionsHtml}</div>
-        ${renderPollCompactFooter(state)}
-      </div>
-    `;
+  function renderPulsePollCard(...args) {
+    return messagePollRenderer?.renderPulsePollCard?.(...args);
   }
 
-  function renderStackPollCard(state) {
-    const optionsHtml = state.options.map((option) => `
-      <div class="poll-stack-option${option.selected ? ' selected' : ''}" style="--poll-option-accent:${option.accentVar};">
-        <button
-          type="button"
-          class="poll-stack-option-main"
-          data-poll-vote="${state.messageId}"
-          data-poll-option-id="${Number(option.id)}"
-          ${state.poll.is_closed || state.interactionLocked ? 'disabled' : ''}
-        >
-          <span class="poll-stack-option-top">
-            <span class="poll-stack-option-left">
-              <span class="poll-stack-option-dot"></span>
-              <span class="poll-stack-option-text">${esc(option.text)}</span>
-            </span>
-            <span class="poll-stack-option-right">
-              <span class="poll-stack-option-percent">${option.percentage}%</span>
-              <span class="poll-stack-option-check${state.poll.allows_multiple ? ' multi' : ''}">${option.selected ? option.mark : ''}</span>
-            </span>
-          </span>
-          <span class="poll-stack-option-bar"><i style="width:${option.percentage}%"></i></span>
-        </button>
-        <div class="poll-stack-option-footer">
-          <span class="poll-stat-chip">${option.voteLabel}</span>
-          ${renderPollVotersButton(state, option)}
-        </div>
-      </div>
-    `).join('');
-
-    return `
-      <div class="poll-card poll-card--stack${state.preview ? ' is-preview' : ''}${state.liveUpdate ? ' is-live-update' : ''}">
-        <div class="poll-stack-options">${optionsHtml}</div>
-        ${renderPollCompactFooter(state)}
-      </div>
-    `;
+  function renderStackPollCard(...args) {
+    return messagePollRenderer?.renderStackPollCard?.(...args);
   }
 
-  function renderOrbitPollCard(state) {
-    const orbitGradient = buildPollOrbitGradient(state.options, state.totalVotes);
-    const optionsHtml = state.options.map((option) => `
-      <div class="poll-orbit-option${option.selected ? ' selected' : ''}" style="--poll-option-accent:${option.accentVar};">
-        <button
-          type="button"
-          class="poll-orbit-option-main"
-          data-poll-vote="${state.messageId}"
-          data-poll-option-id="${Number(option.id)}"
-          ${state.poll.is_closed || state.interactionLocked ? 'disabled' : ''}
-        >
-          <span class="poll-orbit-option-swatch">${option.index + 1}</span>
-          <span class="poll-orbit-option-copy">
-            <strong>${esc(option.text)}</strong>
-            <small>${option.voteLabel}</small>
-          </span>
-          <span class="poll-orbit-option-side">
-            <em>${option.percentage}%</em>
-            <span class="poll-orbit-option-check${state.poll.allows_multiple ? ' multi' : ''}" aria-hidden="true"></span>
-          </span>
-        </button>
-        <span class="poll-orbit-option-bar"><i style="width:${option.percentage}%"></i></span>
-        ${state.poll.show_voters ? `<div class="poll-orbit-option-footer">${renderPollVotersButton(state, option, 'Voters')}</div>` : ''}
-      </div>
-    `).join('');
-
-    return `
-      <div class="poll-card poll-card--orbit${state.preview ? ' is-preview' : ''}${state.liveUpdate ? ' is-live-update' : ''}">
-        <div class="poll-orbit-hero poll-orbit-hero--solo">
-          <div class="poll-orbit-chart" style="--poll-orbit-chart:${orbitGradient};">
-            <div class="poll-orbit-chart-center">
-              <strong>${state.totalVotes || 0}</strong>
-              <small>${state.totalVotes === 1 ? 'vote' : 'votes'}</small>
-            </div>
-          </div>
-        </div>
-        <div class="poll-orbit-options">${optionsHtml}</div>
-        ${renderPollCompactFooter(state)}
-      </div>
-    `;
+  function renderOrbitPollCard(...args) {
+    return messagePollRenderer?.renderOrbitPollCard?.(...args);
   }
 
-  function resetPollVotersModal() {
-    pollVotersState = null;
-    setPollStyleSurface(pollVotersModal, 'pulse');
-    if (pollVotersTitle) pollVotersTitle.textContent = 'Voters';
-    if (pollVotersMeta) {
-      pollVotersMeta.innerHTML = '';
-      pollVotersMeta.classList.add('hidden');
-    }
-    if (pollVotersStatus) {
-      pollVotersStatus.textContent = '';
-      pollVotersStatus.classList.remove('is-error', 'is-success');
-    }
-    if (pollVotersList) pollVotersList.innerHTML = '';
+  function resetPollVotersModal(...args) {
+    return messagePollRenderer?.resetPollVotersModal?.(...args);
   }
 
-  async function openPollVotersModal(messageId, optionId) {
-    const row = messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
-    const msg = row?.__messageData || {};
-    const poll = normalizePoll(msg.poll);
-    const option = (poll?.options || []).find((item) => Number(item.id) === Number(optionId));
-    const optionIndex = Math.max(0, (poll?.options || []).findIndex((item) => Number(item.id) === Number(optionId)));
-    if (!poll || !poll.show_voters || !option) return;
-    setPollStyleSurface(pollVotersModal, poll.style);
-    pollVotersState = { messageId: Number(messageId), optionId: Number(optionId) };
-    if (pollVotersTitle) pollVotersTitle.textContent = `Voters: ${option.text}`;
-    if (pollVotersMeta) {
-      pollVotersMeta.innerHTML = `
-        <span class="poll-voters-chip" style="--poll-option-accent:${pollAccentVar(optionIndex)};">${Math.max(0, Number(option.vote_count || 0))} votes</span>
-        <span class="poll-voters-chip">${poll.allows_multiple ? 'Multiple choice' : 'Single choice'}</span>
-        <span class="poll-voters-chip">${esc(formatPollDeadline(poll))}</span>
-      `;
-      pollVotersMeta.classList.remove('hidden');
-    }
-    if (pollVotersStatus) {
-      pollVotersStatus.textContent = 'Loading...';
-      pollVotersStatus.classList.remove('is-error', 'is-success');
-    }
-    if (pollVotersList) pollVotersList.innerHTML = '';
-    syncChatAreaMetrics();
-    openModal('pollVotersModal');
-    try {
-      const data = await api(`/api/messages/${messageId}/poll-voters?optionId=${optionId}`);
-      if (!pollVotersState || pollVotersState.messageId !== Number(messageId) || pollVotersState.optionId !== Number(optionId)) return;
-      const voters = Array.isArray(data?.voters) ? data.voters : [];
-      if (pollVotersStatus) pollVotersStatus.textContent = voters.length ? '' : 'No voters yet';
-      if (pollVotersList) {
-        pollVotersList.innerHTML = voters.map((voter) => `
-          <div class="poll-voter-item">
-            ${avatarHtml(voter.display_name, voter.avatar_color, voter.avatar_url, 32)}
-            <div class="poll-voter-meta">
-              <span class="poll-voter-name">${esc(voter.display_name || voter.username || 'User')}</span>
-              <span class="poll-voter-time">${esc(voter.voted_at ? `${formatDate(voter.voted_at)} ${formatTime(voter.voted_at)}` : '')}</span>
-            </div>
-          </div>
-        `).join('') || '<div class="settings-hint">No voters yet</div>';
-      }
-    } catch (error) {
-      if (pollVotersStatus) {
-        pollVotersStatus.textContent = error.message || 'Could not load voters';
-        pollVotersStatus.classList.add('is-error');
-      }
-    }
+  function openPollVotersModal(...args) {
+    return messagePollRenderer?.openPollVotersModal?.(...args);
   }
 
-  function renderPollCard(message, options = {}) {
-    const state = buildPollRenderState(message, options);
-    if (!state) return '';
-    const style = normalizePollStyle(state.poll?.style);
-    if (style === 'stack') return renderStackPollCard(state);
-    if (style === 'orbit') return renderOrbitPollCard(state);
-    return renderPulsePollCard(state);
+  function renderPollCard(...args) {
+    return messagePollRenderer?.renderPollCard?.(...args);
   }
 
   function avatarHtml(name, color, avatarUrl, size) {
@@ -11176,7 +10735,8 @@
     if (editTo) clearEdit({ clearInput: true });
     currentChatId = null;
     updateComposerAiOverrideState().catch(() => {});
-    displayedMsgIds.clear();
+    messageStateController?.clearDisplayedMessages?.();
+    messageStateController?.clearDisplayedPinEvents?.();
     chatPinsByChat.delete(id);
     readReceiptController.clearChatMemberLastReads(id);
     replaceRenderedMessages([]);
@@ -14036,7 +13596,7 @@
         try {
           if (msg.message && msg.message.client_id) {
             await window.messageCache?.deleteOutboxItem?.(msg.message.chat_id, msg.message.client_id);
-            outboxSending.delete(msg.message.client_id);
+            messageStateController?.setOutboxSending?.(msg.message.client_id, false);
             if (isVisibleCurrentChat) promoteOutboxRow(msg.message.client_id, msg.message, { mediaAutoScrollToBottom: true });
           }
         } catch (e) {}
@@ -14481,18 +14041,15 @@
   }
 
   function rememberDisplayedMessage(id) {
-    const key = messageIdKey(id);
-    if (key) displayedMsgIds.add(key);
+    return messageStateController?.rememberDisplayedMessage?.(id);
   }
 
   function forgetDisplayedMessage(id) {
-    const key = messageIdKey(id);
-    if (key) displayedMsgIds.delete(key);
+    return messageStateController?.forgetDisplayedMessage?.(id);
   }
 
   function isMessageDisplayed(id) {
-    const key = messageIdKey(id);
-    return key ? displayedMsgIds.has(key) : false;
+    return Boolean(messageStateController?.isMessageDisplayed?.(id));
   }
 
   function getMessageIdNumber(msg) {
@@ -15051,933 +14608,133 @@
   // ═══════════════════════════════════════════════════════════════════════════
   // MESSAGES
   // ═══════════════════════════════════════════════════════════════════════════
-  function clearRenderedMessages({ resetDisplayed = true } = {}) {
-    setLoadMoreAfterLoading(false);
-    hideScrollDateIndicator({ immediate: true });
-    messagesEl.replaceChildren(...buildMessagesRootChildren());
-    if (resetDisplayed) {
-      displayedMsgIds.clear();
-      displayedPinEventIds.clear();
-    }
+  function clearRenderedMessages(...args) {
+    return messageRenderer?.clearRenderedMessages?.(...args);
   }
 
-  function getRenderedMessageIdList() {
-    return Array.from(messagesEl.querySelectorAll('.msg-row[data-msg-id]'))
-      .filter((row) => row.dataset.outbox !== '1')
-      .map((row) => Number(row.dataset.msgId || 0));
+  function getRenderedMessageIdList(...args) {
+    return messageRenderer?.getRenderedMessageIdList?.(...args);
   }
 
-  function renderedMessageIdsMatch(msgs = []) {
-    const domIds = getRenderedMessageIdList();
-    const nextIds = (Array.isArray(msgs) ? msgs : []).map((msg) => Number(msg?.id || 0));
-    return domIds.length > 0
-      && domIds.length === nextIds.length
-      && domIds.every((id, index) => id === nextIds[index]);
+  function renderedMessageIdsMatch(...args) {
+    return messageRenderer?.renderedMessageIdsMatch?.(...args);
   }
 
-  function pinEventIdKey(id) {
-    const key = String(id ?? '').trim();
-    return key || '';
+  function pinEventIdKey(...args) {
+    return messageRenderer?.pinEventIdKey?.(...args);
   }
 
-  function rememberPinEvent(id) {
-    const key = pinEventIdKey(id);
-    if (key) displayedPinEventIds.add(key);
+  function rememberPinEvent(...args) {
+    return messageRenderer?.rememberPinEvent?.(...args);
   }
 
-  function isPinEventDisplayed(id) {
-    const key = pinEventIdKey(id);
-    return key ? displayedPinEventIds.has(key) : false;
+  function isPinEventDisplayed(...args) {
+    return messageRenderer?.isPinEventDisplayed?.(...args);
   }
 
-  function filterNewPinEvents(events = []) {
-    const seen = new Set();
-    return normalizePinEvents(events).filter((event) => {
-      const key = pinEventIdKey(event.id);
-      if (!key || seen.has(key) || isPinEventDisplayed(key)) return false;
-      seen.add(key);
-      return true;
-    });
+  function filterNewPinEvents(...args) {
+    return messageRenderer?.filterNewPinEvents?.(...args);
   }
 
-  function timelineTimestamp(item) {
-    const value = item?.created_at || item?.createdAt || '';
-    const time = value ? Date.parse(/[zZ]$|[+\-]\d{2}:?\d{2}$/.test(value) ? value : `${value}Z`) : NaN;
-    return Number.isFinite(time) ? time : 0;
+  function timelineTimestamp(...args) {
+    return messageRenderer?.timelineTimestamp?.(...args);
   }
 
-  function buildTimelineItems(msgs = [], pinEvents = []) {
-    return [
-      ...(Array.isArray(msgs) ? msgs : []).map((message) => ({ kind: 'message', message, created_at: message?.created_at })),
-      ...normalizePinEvents(pinEvents).map((event) => ({ kind: 'pin-event', event, created_at: event.created_at })),
-    ].sort((a, b) => {
-      const byTime = timelineTimestamp(a) - timelineTimestamp(b);
-      if (byTime) return byTime;
-      if (a.kind !== b.kind) return a.kind === 'message' ? -1 : 1;
-      const aId = Number(a.message?.id || a.event?.id || 0);
-      const bId = Number(b.message?.id || b.event?.id || 0);
-      return aId - bId;
-    });
+  function buildTimelineItems(...args) {
+    return messageRenderer?.buildTimelineItems?.(...args);
   }
 
-  function renderPinSystemEvent(event) {
-    const item = normalizePinEvent(event);
-    if (!item || item.action !== 'pinned') return null;
-    const row = document.createElement('div');
-    row.className = 'pin-system-row';
-    row.dataset.pinEventId = String(item.id);
-    row.dataset.pinMessageId = String(item.message_id);
-    row.dataset.chatId = String(item.chat_id);
-    row.tabIndex = 0;
-    row.setAttribute('role', 'button');
-    row.title = t('Jump to pinned message');
-    const actor = String(item.actor_name || t('Someone')).trim() || t('Someone');
-    const preview = String(item.message_preview || t('Pinned message')).trim() || t('Pinned message');
-    row.innerHTML = `
-      <span class="pin-system-icon" aria-hidden="true">&#128204;</span>
-      <span class="pin-system-copy">${esc(t('{name} pinned: {preview}', { name: actor, preview }))}</span>
-    `;
-    const jump = () => jumpToPinnedMessage({ chat_id: item.chat_id, message_id: item.message_id });
-    row.addEventListener('click', (e) => {
-      e.stopPropagation();
-      jump();
-    });
-    row.addEventListener('keydown', (e) => {
-      if (e.key !== 'Enter' && e.key !== ' ') return;
-      e.preventDefault();
-      jump();
-    });
-    return row;
+  function renderPinSystemEvent(...args) {
+    return messageRenderer?.renderPinSystemEvent?.(...args);
   }
 
-  function buildMessagesFragment(msgs = [], pinEvents = [], options = {}) {
-    const fragment = document.createDocumentFragment();
-    let lastDate = null;
-    let currentGroupBody = null;
-    const items = buildTimelineItems(msgs, pinEvents);
-
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      const createdAt = item.created_at;
-      const msgDate = formatDate(createdAt);
-      if (msgDate !== lastDate) {
-        lastDate = msgDate;
-        currentGroupBody = null;
-        const sep = document.createElement('div');
-        sep.className = 'date-separator';
-        sep.dataset.dateIso = createdAt || '';
-        sep.innerHTML = `<span>${msgDate}</span>`;
-        fragment.appendChild(sep);
-      }
-
-      if (item.kind === 'pin-event') {
-        if (isPinEventDisplayed(item.event?.id)) continue;
-        const systemRow = renderPinSystemEvent(item.event);
-        if (!systemRow) continue;
-        currentGroupBody = null;
-        fragment.appendChild(systemRow);
-        rememberPinEvent(item.event.id);
-        continue;
-      }
-
-      const msg = item.message;
-      if (isMessageDisplayed(msg?.id)) continue;
-      const prevMessageItem = [...items.slice(0, i)].reverse().find((entry) => entry.kind === 'message');
-      const prevMsg = prevMessageItem?.message || null;
-      const sameUser = prevMsg && prevMsg.user_id === msg.user_id && formatDate(prevMsg.created_at) === msgDate;
-      const isOwn = msg.user_id === currentUser.id;
-      const useGroup = !isOwn || compactView;
-      const startsGroup = useGroup && (!sameUser || !currentGroupBody);
-
-      if (startsGroup) {
-        const { group, body } = createMessageGroup(msg, isOwn);
-        currentGroupBody = body;
-        fragment.appendChild(group);
-      }
-
-      const showName = useGroup && startsGroup;
-      const el = createMessageEl(msg, showName, options);
-      if (useGroup) {
-        currentGroupBody.appendChild(el);
-      } else {
-        currentGroupBody = null;
-        fragment.appendChild(el);
-      }
-      rememberDisplayedMessage(msg.id);
-    }
-
-    return fragment;
+  function buildMessagesFragment(...args) {
+    return messageRenderer?.buildMessagesFragment?.(...args);
   }
 
-  function replaceRenderedMessages(msgs = [], pinEvents = [], options = {}) {
-    displayedMsgIds.clear();
-    displayedPinEventIds.clear();
-    pendingMediaBottomScrollRows.clear();
-    const fragment = buildMessagesFragment(Array.isArray(msgs) ? msgs : [], pinEvents, options);
-    messagesEl.replaceChildren(...buildMessagesRootChildren(fragment));
-    updateScrollBottomButton();
-    refreshScrollDateIndicator();
+  function replaceRenderedMessages(...args) {
+    return messageRenderer?.replaceRenderedMessages?.(...args);
   }
 
-  function primeAppendedMessageSideEffects(messages = []) {
-    const list = Array.isArray(messages) ? messages : [];
-    list.forEach((msg) => {
-      try {
-        if (window.messageCache) window.messageCache.upsertMessage(msg).catch(()=>{});
-      } catch (e) {}
-      try {
-        if (msg?.file_type === 'image' && msg.file_stored && window.cacheAssets) {
-          window.cacheAssets([getAttachmentPreviewUrl(msg)]).catch(()=>{});
-        }
-      } catch (e) {}
-    });
-    if (!openChatController.isLoadingMoreAfter() && list.length) updateHasMoreAfterFromChat(currentChatId);
+  function primeAppendedMessageSideEffects(...args) {
+    return messageRenderer?.primeAppendedMessageSideEffects?.(...args);
   }
 
-  function appendTimelineItems(msgs = [], pinEvents = [], options = {}) {
-    const messages = filterNewMessages(msgs);
-    const events = filterNewPinEvents(pinEvents);
-    if (!events.length) {
-      messages.forEach((message) => appendMessage(message, options));
-      return;
-    }
-    const fragment = buildMessagesFragment(messages, events, { ...options, entering: options.entering !== false });
-    if (fragment.childNodes.length) {
-      insertAtMessagesEnd(fragment);
-      markPendingMediaBottomScrollForMessages(messages, Boolean(options.mediaAutoScrollToBottom));
-      primeAppendedMessageSideEffects(messages);
-      cleanupDuplicateDateSeparators();
-      updateScrollBottomButton();
-      refreshScrollDateIndicator();
-    }
+  function appendTimelineItems(...args) {
+    return messageRenderer?.appendTimelineItems?.(...args);
   }
 
-  function appendPinEventIfVisible(event) {
-    const item = normalizePinEvent(event);
-    if (!item || item.action !== 'pinned' || Number(item.chat_id || 0) !== Number(currentChatId || 0)) return false;
-    const wasNearBottom = isNearBottom(120);
-    const anchor = wasNearBottom ? null : captureScrollAnchor();
-    appendTimelineItems([], [item]);
-    if (wasNearBottom) {
-      scrollToBottom(false, true);
-    } else if (anchor?.messageId) {
-      requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
-      saveCurrentScrollAnchor(currentChatId, { force: true });
-    }
-    return true;
+  function appendPinEventIfVisible(...args) {
+    return messageRenderer?.appendPinEventIfVisible?.(...args);
   }
 
-  function isCurrentMessageRow(row) {
-    if (!row?.isConnected) return false;
-    const rowChatId = Number(row.__messageData?.chat_id || row.__messageData?.chatId || currentChatId || 0);
-    return !rowChatId || rowChatId === Number(currentChatId || 0);
+  function isCurrentMessageRow(...args) {
+    return messageRenderer?.isCurrentMessageRow?.(...args);
   }
 
-  function messageHasDeferredMediaLayout(msg) {
-    if (!msg || Boolean(msg.is_video_note)) return false;
-    return msg.file_type === 'image' || msg.file_type === 'video';
+  function messageHasDeferredMediaLayout(...args) {
+    return messageRenderer?.messageHasDeferredMediaLayout?.(...args);
   }
 
-  function clearPendingMediaBottomScroll(row) {
-    if (!row) return;
-    row.__autoScrollMediaToBottomOnLoad = false;
-    pendingMediaBottomScrollRows.delete(row);
+  function clearPendingMediaBottomScroll(...args) {
+    return messageRenderer?.clearPendingMediaBottomScroll?.(...args);
   }
 
-  function noteMessageScrollUserIntent() {
-    mediaBottomAutoScrollUserIntentAt = Date.now();
+  function noteMessageScrollUserIntent(...args) {
+    return messageRenderer?.noteMessageScrollUserIntent?.(...args);
   }
 
-  function scheduleMediaBottomScrollAnchorSave(chatId = currentChatId) {
-    const targetChatId = Number(chatId || currentChatId || 0);
-    if (!targetChatId) return;
-    requestAnimationFrame(() => {
-      if (pendingMediaBottomScrollRows.size) return;
-      saveCurrentScrollAnchor(targetChatId, { force: true, allowPendingMedia: true });
-    });
+  function scheduleMediaBottomScrollAnchorSave(...args) {
+    return messageRenderer?.scheduleMediaBottomScrollAnchorSave?.(...args);
   }
 
-  function settleDeferredMediaBottomScroll(chatId = currentChatId) {
-    const targetChatId = Number(chatId || currentChatId || 0);
-    if (!targetChatId) return;
-    const guardOptions = { chatId: targetChatId };
-    scrollToBottom(true, true, guardOptions);
-    requestAnimationFrame(() => {
-      scrollToBottom(true, true, guardOptions);
-      setTimeout(() => {
-        if (Number(currentChatId || 0) !== targetChatId) return;
-        scrollToBottom(true, true, guardOptions);
-        if (!pendingMediaBottomScrollRows.size) {
-          saveCurrentScrollAnchor(targetChatId, { force: true, allowPendingMedia: true });
-        }
-      }, 80);
-    });
+  function settleDeferredMediaBottomScroll(...args) {
+    return messageRenderer?.settleDeferredMediaBottomScroll?.(...args);
   }
 
-  function markPendingMediaBottomScroll(row, msg, enabled = false) {
-    clearPendingMediaBottomScroll(row);
-    if (!enabled || !messageHasDeferredMediaLayout(msg)) return;
-    row.__autoScrollMediaToBottomOnLoad = true;
-    pendingMediaBottomScrollRows.add(row);
+  function markPendingMediaBottomScroll(...args) {
+    return messageRenderer?.markPendingMediaBottomScroll?.(...args);
   }
 
-  function markPendingMediaBottomScrollForMessages(messages = [], enabled = false) {
-    if (!enabled) return;
-    const list = Array.isArray(messages) ? messages : [];
-    list.forEach((msg) => {
-      if (!messageHasDeferredMediaLayout(msg)) return;
-      const row = messagesEl.querySelector(`.msg-row[data-msg-id="${Number(msg.id || 0)}"]`);
-      if (row) markPendingMediaBottomScroll(row, msg, true);
-    });
+  function markPendingMediaBottomScrollForMessages(...args) {
+    return messageRenderer?.markPendingMediaBottomScrollForMessages?.(...args);
   }
 
-  function cancelPendingMediaBottomScrollIfNeeded() {
-    if (!pendingMediaBottomScrollRows.size || isNearBottom(8)) return;
-    if (Date.now() - mediaBottomAutoScrollUserIntentAt > 450) return;
-    for (const row of [...pendingMediaBottomScrollRows]) {
-      clearPendingMediaBottomScroll(row);
-    }
-    scheduleMediaBottomScrollAnchorSave();
+  function cancelPendingMediaBottomScrollIfNeeded(...args) {
+    return messageRenderer?.cancelPendingMediaBottomScrollIfNeeded?.(...args);
   }
 
-  function createMessageGroup(msg, isOwn) {
-    const group = document.createElement('div');
-    group.className = 'msg-group';
-    group.dataset.userId = msg.user_id;
-    const isChatShotMessage = String(msg.ai_bot_kind || '').toLowerCase() === 'chatshot';
-    const avatarColor = isOwn ? (currentUser.avatar_color || '#65aadd') : (msg.avatar_color || '#65aadd');
-    const avatarUrl = isChatShotMessage ? '' : (isOwn ? currentUser.avatar_url : msg.avatar_url);
-    const name = isChatShotMessage ? 'chatShot' : (isOwn ? currentUser.display_name : msg.display_name);
-    const isAiBot = !isOwn && (Number(msg.is_ai_bot) !== 0 || Number(msg.ai_bot_id) > 0 || Number(msg.ai_generated) > 0);
-    const mentionToken = isAiBot ? (msg.ai_bot_mention || msg.username) : (isOwn ? currentUser.username : msg.username);
-    const avatar = document.createElement('div');
-    avatar.className = 'msg-group-avatar';
-    avatar.setAttribute('role', 'button');
-    avatar.tabIndex = 0;
-    avatar.title = name || '';
-    avatar.dataset.userId = String(Number(msg.user_id) || 0);
-    avatar.dataset.displayName = name || '';
-    avatar.dataset.mentionToken = mentionToken || '';
-    avatar.dataset.isAiBot = isAiBot ? '1' : '0';
-    setAvatarElementVisual(avatar, {
-      name: name || '',
-      color: avatarColor,
-      avatarUrl: avatarUrl || '',
-      fallbackText: isChatShotMessage ? '🍌' : '',
-    });
-    group.appendChild(avatar);
-    const body = document.createElement('div');
-    body.className = 'msg-group-body';
-    group.appendChild(body);
-    return { group, body };
+  function createMessageGroup(...args) {
+    return messageRenderer?.createMessageGroup?.(...args);
   }
 
-  function renderMessages(msgs, pinEvents = []) {
-    const existingFirst = messagesEl.querySelector('.date-separator, .pin-system-row, .msg-row, .msg-group');
-    const fragment = buildMessagesFragment(msgs, pinEvents);
-    if (existingFirst) messagesEl.insertBefore(fragment, existingFirst);
-    else insertAtMessagesEnd(fragment);
-    updateScrollBottomButton();
-    refreshScrollDateIndicator();
+  function renderMessages(...args) {
+    return messageRenderer?.renderMessages?.(...args);
   }
 
-  function appendMessage(msg, options = {}) {
-    const msgDate = formatDate(msg.created_at);
-    const isOwn = msg.user_id === currentUser.id;
-    const useGroup = !isOwn || compactView;
-    let lastChild = getMessagesLastContentChild();
-
-    // Date separator: compare against last separator in DOM
-    const seps = messagesEl.querySelectorAll('.date-separator');
-    const lastSepDate = seps.length ? seps[seps.length - 1].textContent.trim() : null;
-    if (lastSepDate !== msgDate) {
-      const sep = document.createElement('div');
-      sep.className = 'date-separator';
-      sep.dataset.dateIso = msg.created_at || '';
-      sep.innerHTML = `<span>${msgDate}</span>`;
-      insertAtMessagesEnd(sep);
-      lastChild = null;
-    }
-
-    // Check if we can append to existing group
-    let sameGroup = false;
-    let groupBody = null;
-    if (useGroup && lastChild && lastChild.classList.contains('msg-group') && +lastChild.dataset.userId === msg.user_id) {
-      sameGroup = true;
-      groupBody = lastChild.querySelector('.msg-group-body');
-    }
-
-    if (useGroup && (!sameGroup || !groupBody)) {
-      const { group, body } = createMessageGroup(msg, isOwn);
-      groupBody = body;
-      sameGroup = false;
-      insertAtMessagesEnd(group);
-    }
-
-    const showName = useGroup && !sameGroup;
-    const renderOptions = { ...options, entering: options.entering !== false };
-    const el = createMessageEl(msg, showName, renderOptions);
-
-    if (useGroup) {
-      groupBody.appendChild(el);
-    } else {
-      insertAtMessagesEnd(el);
-    }
-    rememberDisplayedMessage(msg.id);
-    try {
-      if (window.messageCache) window.messageCache.upsertMessage(msg).catch(()=>{});
-    } catch (e) {}
-    try {
-      if (msg.file_type === 'image' && msg.file_stored && window.cacheAssets) {
-        window.cacheAssets([getAttachmentPreviewUrl(msg)]).catch(()=>{});
-      }
-    } catch (e) {}
-    if (!openChatController.isLoadingMoreAfter()) updateHasMoreAfterFromChat(currentChatId);
-    updateScrollBottomButton();
-    refreshScrollDateIndicator();
+  function appendMessage(...args) {
+    return messageRenderer?.appendMessage?.(...args);
   }
 
-  function bindPollControls(row) {
-    const messageId = Number(row?.dataset?.msgId || row?.__messageData?.id || 0);
-    if (!row || !messageId) return;
-    row.querySelectorAll('[data-poll-vote]').forEach((control) => {
-      const activateVote = (e) => {
-        if (control.matches(':disabled') || control.getAttribute('aria-disabled') === 'true') return;
-        e.stopPropagation();
-        togglePollVote(messageId, Number(control.dataset.pollOptionId || 0));
-      };
-      control.addEventListener('click', activateVote);
-      if (!(control instanceof HTMLButtonElement)) {
-        control.addEventListener('keydown', (e) => {
-          if (e.key !== 'Enter' && e.key !== ' ') return;
-          e.preventDefault();
-          activateVote(e);
-        });
-      }
-    });
-
-    row.querySelectorAll('[data-poll-voters]').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        openPollVotersModal(messageId, Number(btn.dataset.pollOptionId || 0));
-      });
-    });
-
-    bindPulseInlineVoterControls(row, messageId);
-
-    const pollCloseBtn = row.querySelector('[data-poll-close]');
-    if (pollCloseBtn) {
-      pollCloseBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        closePollMessage(messageId);
-      });
-    }
+  function bindPollControls(...args) {
+    return messagePollRenderer?.bindPollControls?.(...args);
   }
 
-  function createMessageEl(msg, showName = true, options = {}) {
-    if (String(msg?.ai_bot_kind || '').toLowerCase() === 'chatshot') {
-      msg = { ...msg, display_name: 'chatShot', avatar_url: '', avatar_color: msg.avatar_color || '#f4c542' };
-    }
-    applyOwnReadStateToMessage(msg, msg?.chat_id || msg?.chatId || currentChatId);
-    const isOwn = msg.user_id === currentUser.id;
-    const isClientMessage = isClientSideMessage(msg);
-    const normalizedPoll = normalizePoll(msg?.poll);
-    const isPulsePollMessage = Boolean(!msg.is_deleted && normalizedPoll && isPulsePoll(normalizedPoll));
-    const isMediaMessage = Boolean(
-      !msg.is_deleted &&
-      msg.file_id &&
-      ['image', 'audio', 'video', 'document'].includes(msg.file_type)
-    );
-    const isEmojiOnly = Boolean(
-      !msg.is_deleted &&
-      !msg.poll &&
-      !msg.is_voice_note &&
-      !msg.file_id &&
-      !msg.forwarded_from_display_name &&
-      !msg.reply_to_id &&
-      msg.text &&
-      !(msg.previews && msg.previews.length) &&
-      isSingleEmojiMessage(msg.text)
-    );
-    const isPollMessage = Boolean(!msg.is_deleted && msg.poll);
-    const isCallMessage = Boolean(!msg.is_deleted && (msg.call || msg.call_message || msg.is_call_message));
-    const isCallTranscriptMessage = Boolean(!msg.is_deleted && (msg.call_transcript_run || msg.is_call_transcript_message));
-    const isCallArtifactMessage = Boolean(!msg.is_deleted && (msg.call_artifact_batch || msg.is_call_artifact_message));
-    const row = options.reuseRow && options.reuseRow.nodeType === 1
-      ? options.reuseRow
-      : document.createElement('div');
-    if (options.reuseRow === row) resetReusableMessageRow(row);
-    row.className = `msg-row ${isOwn ? 'own' : 'other'}${isEmojiOnly ? ' emoji-only-message' : ''}${isMediaMessage ? ' media-message' : ''}${isPollMessage ? ' poll-message' : ''}${isCallMessage ? ' call-message' : ''}${isCallTranscriptMessage ? ' call-transcript-message' : ''}${isCallArtifactMessage ? ' call-artifact-message' : ''}`;
-    if (options.entering) {
-      row.classList.add('entering');
-      row.addEventListener('animationend', () => row.classList.remove('entering'), { once: true });
-    }
-    if (contextConvertPendingMessageIds.has(Number(msg.id || 0))) row.classList.add('context-convert-pending');
-    row.dataset.msgId = msg.id;
-    if (msg.client_id) row.dataset.clientId = msg.client_id;
-    if (isClientMessage) row.dataset.outbox = '1';
-    row.dataset.date = formatDate(msg.created_at);
-    row.dataset.userId = msg.user_id;
-    row.__messageData = { ...msg };
-    markPendingMediaBottomScroll(row, msg, Boolean(options.mediaAutoScrollToBottom));
-    row.__replyPayload = {
-      id: msg.id,
-      display_name: isOwn ? currentUser.display_name : msg.display_name,
-      text: getReplyPreviewText(msg),
-      is_voice_note: Boolean(msg.is_voice_note),
-      is_video_note: Boolean(msg.is_video_note),
-      ai_bot_id: Number(msg.ai_bot_id) || 0,
-      ai_bot_mention: msg.ai_bot_mention || '',
-      ai_bot_provider: msg.ai_bot_provider || '',
-      ai_bot_kind: msg.ai_bot_kind || '',
-      ai_bot_image_risk_filter_enabled: msg.ai_bot_image_risk_filter_enabled ?? true,
-    };
-    row.__voiceBootstrap = {
-      id: msg.id,
-      is_voice_note: !!msg.is_voice_note,
-      voice_duration_ms: msg.voice_duration_ms || null,
-      transcription_status: msg.transcription_status || 'idle',
-      transcription_text: msg.transcription_text || '',
-      transcription_provider: msg.transcription_provider || '',
-      transcription_model: msg.transcription_model || '',
-      transcription_error: msg.transcription_error || '',
-    };
-
-    let html = '';
-
-    html += '<div class="msg-content">';
-
-    // Sender name (first in group)
-    if (showName && (!isOwn || compactView)) {
-      const nameColor = isOwn ? (currentUser.avatar_color || '#65aadd') : (msg.avatar_color || '#65aadd');
-      const nameText = isOwn ? currentUser.display_name : msg.display_name;
-      html += `<div class="msg-sender" style="color:${nameColor}">${esc(nameText)}</div>`;
-    }
-
-    html += '<div class="msg-bubble">';
-
-    if (msg.is_deleted) {
-      html += `<span class="msg-deleted">Message deleted</span>`;
-    } else {
-      if (msg.saved_from_message_id) {
-        const savedName = (msg.saved_from_display_name || '').trim() || 'Unknown';
-        html += `<button type="button" class="msg-saved-origin" data-origin-id="${Number(msg.saved_from_message_id) || 0}">
-          <span>Сохранено от ${esc(savedName)}</span>
-          <strong>К оригиналу</strong>
-        </button>`;
-      }
-
-      if (msg.forwarded_from_display_name) {
-        html += `<div class="msg-forwarded">Переслано от ${esc(msg.forwarded_from_display_name)}</div>`;
-      }
-
-      // Reply reference
-      if (msg.reply_to_id && msg.reply_display_name) {
-        const replyText = getReplyQuoteText(msg);
-        html += `<div class="msg-reply" data-reply-id="${msg.reply_to_id}">
-          <div class="msg-reply-name">${esc(msg.reply_display_name)}</div>
-          <div class="msg-reply-text">${esc(replyText)}</div>
-        </div>`;
-      }
-
-      // File attachment
-      if (msg.file_id && (msg.file_stored || msg.client_file_url)) {
-        html += renderFileAttachment(msg);
-      }
-
-      if (isCallMessage) {
-        html += renderCallMessageCard(msg);
-      }
-
-      if (isCallTranscriptMessage) {
-        html += renderCallTranscriptRunCard(msg);
-      }
-
-      if (isCallArtifactMessage) {
-        html += renderCallArtifactBatchCard(msg);
-      }
-
-      // Text
-      if (msg.text && !isCallMessage && !isCallTranscriptMessage && !isCallArtifactMessage) {
-        const textClasses = isPulsePollMessage ? 'msg-text poll-question-block' : 'msg-text';
-        const textHtml = isEmojiOnly && isSingleCustomEmojiMessage(msg.text)
-          ? renderCustomEmojiHtml(msg.text.trim(), { large: true })
-          : (isEmojiOnly ? esc(msg.text.trim()) : renderMessageText(msg.text, msg.mentions));
-        html += `<div class="${textClasses}">${textHtml}</div>`;
-      }
-
-      if (msg.ai_notice_type === 'grok_image_risk' && msg.reply_to_id) {
-        const pending = grokImageRiskRetryPending.has(Number(msg.id || 0));
-        html += `<div class="grok-risk-notice-actions">
-          <button type="button" class="grok-risk-retry-btn weather-action-btn${pending ? ' is-pending' : ''}" data-grok-risk-retry="${Number(msg.id) || 0}"${pending ? ' disabled' : ''}>${esc(t('Send again'))}</button>
-        </div>`;
-      }
-
-      if (msg.poll) {
-        html += renderPollCard(msg);
-      }
-
-      // Link previews
-      if (msg.previews && msg.previews.length > 0) {
-        for (const p of msg.previews) {
-          html += renderLinkPreview(p);
-        }
-      }
-
-      // Delete button (inside bubble)
-        if (!isClientMessage && !isCallMessage && !isCallTranscriptMessage && !isCallArtifactMessage && (isOwn || currentUser.is_admin)) {
-          html += `<button class="msg-delete-btn" data-id="${msg.id}" title="Delete">🗑</button>`;
-        }
-    }
-
-    // Client-side status overrides server read icons when present
-    let statusIcon = '';
-    if (isOwn && !msg.is_deleted) {
-      if (msg.client_status) {
-        const isFailedStatus = String(msg.client_status || '').toLowerCase() === 'failed';
-        statusIcon = `<span class="msg-status ${isFailedStatus ? 'failed' : 'sending'}">${isFailedStatus ? '!' : '\u23f3'}</span>`;
-      }
-      else statusIcon = `<span class="msg-status${msg.is_read ? ' read' : ''}">${msg.is_read ? '✓✓' : '✓'}</span>`;
-    }
-    const editedIcon = !msg.is_deleted && msg.edited_at ? '<span class="msg-edited" title="Edited">✎</span>' : '';
-    const reactionsHtml = (!msg.is_deleted && msg.reactions && msg.reactions.length > 0)
-      ? `<div class="msg-reactions">${renderReactions(msg.reactions)}</div>` : '<div></div>';
-    html += `<div class="msg-footer">${reactionsHtml}<span class="msg-time">${statusIcon}${editedIcon}${formatTime(msg.created_at)}</span></div>`;
-
-    // Message action icons are shown on hover/focus and can be pinned by tapping the message.
-    if (!msg.is_deleted && !isClientMessage) {
-      html += '<div class="msg-actions">';
-      html += '<button class="msg-copy-btn" title="Копировать">⧉</button>';
-      html += '<button class="msg-reply-btn" title="Reply">↩</button>';
-      if (canEditMessage(msg)) html += '<button class="msg-edit-btn" title="Edit">✏️</button>';
-      if (canContextConvertMessage(msg)) html += `<button class="msg-context-convert-btn${contextConvertPendingMessageIds.has(Number(msg.id || 0)) ? ' is-pending' : ''}" title="Transform with AI">🍌</button>`;
-      if (canRestoreContextOriginalMessage(msg)) html += `<button class="msg-restore-original-btn${contextOriginalRestorePendingMessageIds.has(Number(msg.id || 0)) ? ' is-pending' : ''}" title="${esc(t('Restore original'))}" aria-label="${esc(t('Restore original'))}">&#8634;</button>`;
-      if (canSaveMessageToNotes(msg)) html += '<button class="msg-save-note-btn" title="Сохранить в заметки">📝</button>';
-      if (canForwardMessage(msg)) html += '<button class="msg-forward-btn" title="Forward">📤</button>';
-      html += '<button class="msg-react-btn" title="React">🙂</button>';
-      html += '</div>';
-    }
-    html += '</div>'; // msg-bubble
-    html += '</div>'; // msg-content
-
-    row.innerHTML = html;
-    // Persist client_status on row for CSS/logic; apply class for failed state so retry button can be overlayed
-    if (msg.client_status) row.dataset.clientStatus = msg.client_status;
-    if (msg.client_status && String(msg.client_status || '').toLowerCase() === 'failed') row.classList.add('client-failed');
-    if (msg.client_status && String(msg.client_status || '').toLowerCase() !== 'failed') row.classList.add('client-sending');
-    const actionsEl = row.querySelector('.msg-actions');
-    if (actionsEl && !row.querySelector('.msg-pin-btn')) {
-      const pinWrap = document.createElement('span');
-      pinWrap.innerHTML = renderPinActionButton(msg);
-      const pinButton = pinWrap.firstElementChild;
-      if (pinButton) actionsEl.insertBefore(pinButton, actionsEl.querySelector('.msg-react-btn'));
-    }
-
-    // Event listeners
-    const deleteBtn = row.querySelector('.msg-delete-btn');
-    if (deleteBtn) {
-      deleteBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteMessage(msg.id); });
-    }
-
-    const replyBtn = row.querySelector('.msg-reply-btn');
-    if (replyBtn) {
-      bindTouchSafeButtonActivation(replyBtn, ({ event }) => {
-        event?.stopPropagation?.();
-        setReplyFromRow(row);
-      });
-    }
-
-    const copyBtn = row.querySelector('.msg-copy-btn');
-    if (copyBtn) {
-      copyBtn.addEventListener('mousedown', (e) => e.preventDefault());
-      copyBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        await copyMessageFromRow(row);
-      });
-    }
-
-    const editBtn = row.querySelector('.msg-edit-btn');
-    if (editBtn) {
-      bindTouchSafeButtonActivation(editBtn, ({ event }) => {
-        event?.stopPropagation?.();
-        setEditFromRow(row);
-      });
-    }
-
-    const contextConvertBtn = row.querySelector('.msg-context-convert-btn');
-    if (contextConvertBtn) bindContextConvertMessageButton(contextConvertBtn, row);
-
-    const restoreOriginalBtn = row.querySelector('.msg-restore-original-btn');
-    if (restoreOriginalBtn) bindContextOriginalRestoreButton(restoreOriginalBtn, row);
-
-    const reactBtn = row.querySelector('.msg-react-btn');
-    if (reactBtn) {
-      bindTouchSafeButtonActivation(reactBtn, ({ event, startKeyboardOpen }) => {
-        event?.stopPropagation?.();
-        const keepComposerFocus = Boolean(reactionPickerKeepKeyboard || startKeyboardOpen || isMobileComposerKeyboardOpen());
-        showReactionPicker(row, reactBtn, { source: 'actions', keepComposerFocus });
-      });
-    }
-
-    const forwardBtn = row.querySelector('.msg-forward-btn');
-    if (forwardBtn) {
-      forwardBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        openForwardMessageModal(row.__messageData);
-      });
-    }
-
-    const saveNoteBtn = row.querySelector('.msg-save-note-btn');
-    if (saveNoteBtn) {
-      saveNoteBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        saveMessageToNotes(row.__messageData, saveNoteBtn);
-      });
-    }
-
-    bindPollControls(row);
-    bindCallMessageControls(row);
-    bindCallTranscriptMessageControls(row);
-    bindCallArtifactMessageControls(row);
-    hydratePulseInlineVoters(row);
-
-    const pinBtn = row.querySelector('.msg-pin-btn');
-    if (pinBtn) {
-      pinBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        togglePinFromRow(row);
-      });
-    }
-
-    const retryBtn = row.querySelector('.msg-retry-btn');
-    if (retryBtn) {
-      retryBtn.addEventListener('click', (e) => { e.stopPropagation(); retrySend(row); });
-    }
-
-    const grokRiskRetryBtn = row.querySelector('.grok-risk-retry-btn');
-    if (grokRiskRetryBtn) {
-      grokRiskRetryBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        retryGrokImageRiskPrompt(row, grokRiskRetryBtn);
-      });
-    }
-
-    row.querySelectorAll('.mention-link').forEach((btn) => {
-      btn.addEventListener('click', (e) => handleMentionClick(e, btn));
-    });
-
-    // (react button handled via delegation on messagesEl)
-
-    // Click reply quote to scroll to original message
-    const replyQuote = row.querySelector('.msg-reply');
-    if (replyQuote) {
-      replyQuote.style.cursor = 'pointer';
-      replyQuote.addEventListener('click', () => scrollToMessage(+replyQuote.dataset.replyId));
-    }
-
-    const savedOrigin = row.querySelector('.msg-saved-origin');
-    if (savedOrigin) {
-      savedOrigin.addEventListener('click', (e) => {
-        e.stopPropagation();
-        jumpToSavedOriginal(row.__messageData);
-      });
-    }
-
-    const img = row.querySelector('.msg-image');
-    if (img) {
-      img.draggable = false;
-      let imageLayoutHandled = false;
-      let imageLayoutRetryFrame = 0;
-      const markWideImage = () => {
-        if (!img.naturalWidth || !img.naturalHeight) return;
-        row.classList.toggle('wide-media-message', img.naturalWidth >= img.naturalHeight);
-      };
-      const finalizeImageLayout = () => {
-        if (!row.isConnected) {
-          if (imageLayoutRetryFrame) return;
-          imageLayoutRetryFrame = requestAnimationFrame(() => {
-            imageLayoutRetryFrame = 0;
-            finalizeImageLayout();
-          });
-          return;
-        }
-        if (imageLayoutHandled) return;
-        imageLayoutHandled = true;
-        if (!isCurrentMessageRow(row)) {
-          clearPendingMediaBottomScroll(row);
-          return;
-        }
-        const rowChatId = Number(row.__messageData?.chat_id || row.__messageData?.chatId || currentChatId || 0);
-        const shouldAutoScroll = Boolean(row.__autoScrollMediaToBottomOnLoad);
-        const anchor = !shouldAutoScroll && !isNearBottom(8) ? captureScrollAnchor() : null;
-        markWideImage();
-        if (anchor) requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
-        clearPendingMediaBottomScroll(row);
-        if (shouldAutoScroll) settleDeferredMediaBottomScroll(rowChatId);
-        else scheduleMediaBottomScrollAnchorSave(rowChatId);
-      };
-      img.addEventListener('dragstart', (e) => e.preventDefault());
-      img.addEventListener('click', (e) => {
-        if (Date.now() < (row.__suppressMediaClickUntil || 0)) {
-          e.preventDefault();
-          e.stopPropagation();
-          row.__suppressMediaClickUntil = 0;
-          return;
-        }
-        openImageViewer(img.src);
-      });
-      img.addEventListener('load', finalizeImageLayout);
-      if (img.complete) finalizeImageLayout();
-    }
-
-    const expandBtn = row.querySelector('.msg-expand-btn');
-    if (expandBtn && !msg.is_video_note) {
-      expandBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const video = row.querySelector('.msg-video video');
-        const src = video?.querySelector('source')?.getAttribute('src') || '';
-        if (src) openMediaViewer(src, 'video');
-      });
-    }
-
-    // Audio/video duration
-    const audio = row.querySelector('audio');
-    if (audio) {
-      if (!msg.is_voice_note) {
-        bindMediaPlaybackState(audio, msg, 'attachment-audio');
-      }
-      audio.addEventListener('loadedmetadata', () => {
-        const audioWrap = audio.parentElement;
-        if (!audioWrap) return;
-        const dur = formatDuration(audio.duration);
-        const durEl = document.createElement('span');
-        durEl.className = 'media-duration';
-        durEl.textContent = dur;
-        audioWrap.querySelector('div:last-child')?.prepend(durEl);
-      });
-    }
-    const video = row.querySelector('video');
-    if (video && !msg.is_video_note) {
-      bindMediaPlaybackState(video, msg, 'attachment-video');
-      const initialPosterUrl = getAttachmentPosterUrl(msg);
-      if (initialPosterUrl) {
-        applyPosterToVideoElement(video, initialPosterUrl);
-      } else {
-        ensureAttachmentPoster(msg, { videoEl: video }).catch(() => {});
-      }
-      let videoLayoutHandled = false;
-      let videoLayoutRetryFrame = 0;
-      const markWideVideo = () => {
-        if (!video.videoWidth || !video.videoHeight) return;
-        row.classList.toggle('wide-media-message', video.videoWidth >= video.videoHeight);
-      };
-      const finalizeVideoLayout = () => {
-        if (!row.isConnected) {
-          if (videoLayoutRetryFrame) return;
-          videoLayoutRetryFrame = requestAnimationFrame(() => {
-            videoLayoutRetryFrame = 0;
-            finalizeVideoLayout();
-          });
-          return;
-        }
-        if (videoLayoutHandled) return;
-        videoLayoutHandled = true;
-        if (!isCurrentMessageRow(row)) {
-          clearPendingMediaBottomScroll(row);
-          return;
-        }
-        const rowChatId = Number(row.__messageData?.chat_id || row.__messageData?.chatId || currentChatId || 0);
-        const shouldAutoScroll = Boolean(row.__autoScrollMediaToBottomOnLoad);
-        const anchor = !shouldAutoScroll && !isNearBottom(8) ? captureScrollAnchor() : null;
-        markWideVideo();
-        if (anchor) requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
-        const videoWrap = video.parentElement;
-        if (!videoWrap) {
-          clearPendingMediaBottomScroll(row);
-          return;
-        }
-        const dur = formatDuration(video.duration);
-        const durEl = document.createElement('span');
-        durEl.className = 'media-duration';
-        durEl.textContent = dur;
-        videoWrap.querySelector('div:last-child')?.prepend(durEl);
-        clearPendingMediaBottomScroll(row);
-        if (shouldAutoScroll) settleDeferredMediaBottomScroll(rowChatId);
-        else scheduleMediaBottomScrollAnchorSave(rowChatId);
-      };
-      video.addEventListener('loadedmetadata', finalizeVideoLayout);
-      if (video.readyState >= 1) finalizeVideoLayout();
-    }
-
-    window.BananzaVideoNoteHooks?.decorateMessageRow?.(row, msg);
-    window.BananzaVoiceHooks?.decorateMessageRow?.(row, msg);
-    // Ensure status UI is in sync (adds retry button when failed)
-    updateRowStatus(row);
-
-    return row;
+  function createMessageEl(...args) {
+    return messageRenderer?.createMessageEl?.(...args);
   }
 
   // Update visible status indicator inside a message row according to __messageData.client_status
-  function updateRowStatus(row) {
-    try {
-      const d = row.__messageData || {};
-      const statusEl = row.querySelector('.msg-status');
-      if (!statusEl) return;
-      if (d.client_status) {
-        row.dataset.clientStatus = d.client_status;
-        let retryBtn = row.querySelector('.msg-retry-btn');
-        if (!retryBtn) {
-          retryBtn = document.createElement('button');
-          retryBtn.type = 'button';
-          retryBtn.className = 'msg-retry-btn';
-          retryBtn.title = 'Retry';
-          retryBtn.setAttribute('aria-label', 'Retry sending message');
-          retryBtn.textContent = '\u21bb';
-          const bubble = row.querySelector('.msg-bubble');
-          if (bubble) bubble.appendChild(retryBtn);
-          else row.appendChild(retryBtn);
-          retryBtn.addEventListener('mousedown', (e) => e.preventDefault());
-          retryBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            e.currentTarget.blur();
-            retrySend(row);
-          });
-        }
-        const statusValue = String(d.client_status || '').toLowerCase();
-        const isSending = statusValue !== 'failed' || outboxSending.has(d.client_id || row.dataset.clientId || row.dataset.msgId);
-        statusEl.className = `msg-status ${isSending ? 'sending' : 'failed'}`;
-        statusEl.textContent = isSending ? '\u23f3' : '!';
-        retryBtn.disabled = isSending;
-        row.classList.toggle('client-failed', !isSending);
-        row.classList.toggle('client-sending', isSending);
-        scheduleRetryLayout();
-        return;
-      }
-      statusEl.className = `msg-status${d.is_read ? ' read' : ''}`;
-      statusEl.textContent = d.is_read ? '✓✓' : '✓';
-      row.classList.remove('client-failed', 'client-sending');
-      delete row.dataset.clientStatus;
-      const retryBtn = row.querySelector('.msg-retry-btn');
-      const retrySlot = retryBtn?.closest('.msg-retry-slot');
-      if (retryBtn) retryBtn.remove();
-      if (retrySlot && retrySlot.childElementCount === 0) retrySlot.remove();
-    } catch (e) {}
+  function updateRowStatus(...args) {
+    return messageRenderer?.updateRowStatus?.(...args);
   }
 
-  async function retrySend(row) {
-    const clientId = row?.dataset.clientId || row?.dataset.msgId;
-    const chatId = Number(row?.__messageData?.chat_id || row?.__messageData?.chatId || currentChatId || 0);
-    if (!clientId || !chatId) return;
-    const item = row.__outboxItem || await window.messageCache?.getOutboxItem?.(chatId, clientId);
-    if (!item) return;
-    await trySendOutboxItem(item);
+  function retrySend(...args) {
+    return messageOutbox?.retrySend?.(...args);
   }
 
-  function formatDuration(seconds) {
-    if (!seconds || !isFinite(seconds)) return '';
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    return m + ':' + String(s).padStart(2, '0');
+  function formatDuration(...args) {
+    return messageAttachmentRenderer?.formatDuration?.(...args);
   }
 
   function getMediaNoteFallbackLabel(msg, { voiceLabel = 'Голосовое сообщение', videoLabel = 'Видео-заметка' } = {}) {
@@ -15985,1015 +14742,208 @@
     return msg?.is_video_note ? videoLabel : voiceLabel;
   }
 
-  function renderResolvedFileAttachment(msg) {
-    const previewUrl = getAttachmentPreviewUrl(msg);
-    const downloadUrl = getAttachmentDownloadUrl(msg) || previewUrl;
-    const posterUrl = getAttachmentPosterUrl(msg);
-    const posterAttr = posterUrl ? ` poster="${esc(posterUrl)}"` : '';
-    switch (msg.file_type) {
-      case 'image':
-        return `<img class="msg-image" src="${previewUrl}" alt="${esc(msg.file_name)}">`;
-      case 'audio':
-        return `<div class="msg-audio">
-          <div style="font-size:13px;margin-bottom:4px">\uD83C\uDFB5 ${esc(msg.file_name)}</div>
-          <audio controls preload="none"><source src="${previewUrl}" type="${msg.file_mime}"></audio>
-          <div style="font-size:11px;color:var(--text-secondary)">${formatSize(msg.file_size)} · <a href="${downloadUrl}" download="${esc(msg.file_name)}">Download</a></div>
-        </div>`;
-      case 'video':
-        return `<div class="msg-video">
-          <div class="msg-video-wrap">
-            <video controls preload="metadata" playsinline${posterAttr}><source src="${previewUrl}" type="${msg.file_mime}"></video>
-            <button class="msg-expand-btn" type="button" title="Fullscreen">&#x26F6;</button>
-          </div>
-          <div style="font-size:11px;color:var(--text-secondary);margin-top:4px">${esc(msg.file_name)} · ${formatSize(msg.file_size)} · <a href="${downloadUrl}" download="${esc(msg.file_name)}">Download</a></div>
-        </div>`;
-      default:
-        return `<a class="msg-file" href="${downloadUrl}" download="${esc(msg.file_name)}">
-          <div class="msg-file-icon">\uD83D\uDCC4</div>
-          <div class="msg-file-info">
-            <div class="msg-file-name">${esc(msg.file_name)}</div>
-            <div class="msg-file-size">${formatSize(msg.file_size)}</div>
-          </div>
-        </a>`;
-    }
+  function renderResolvedFileAttachment(...args) {
+    return messageAttachmentRenderer?.renderResolvedFileAttachment?.(...args);
   }
 
-  function renderFileAttachment(msg) {
-    const customVideoNoteAttachment = window.BananzaVideoNoteHooks?.renderAttachment?.(msg);
-    if (customVideoNoteAttachment) return customVideoNoteAttachment;
-    return renderResolvedFileAttachment(msg);
-    const previewUrl = getAttachmentPreviewUrl(msg);
-    const downloadUrl = getAttachmentDownloadUrl(msg) || previewUrl;
-    switch (msg.file_type) {
-      case 'image':
-        return `<img class="msg-image" src="${previewUrl}" alt="${esc(msg.file_name)}">`;
-      case 'audio':
-        return `<div class="msg-audio">
-          <div style="font-size:13px;margin-bottom:4px">🎵 ${esc(msg.file_name)}</div>
-          <audio controls preload="none"><source src="${previewUrl}" type="${msg.file_mime}"></audio>
-          <div style="font-size:11px;color:var(--text-secondary)">${formatSize(msg.file_size)} · <a href="${url}" download="${esc(msg.file_name)}">Download</a></div>
-        </div>`;
-      case 'video':
-        return `<div class="msg-video">
-          <div class="msg-video-wrap">
-            <video controls preload="metadata" playsinline><source src="${url}" type="${msg.file_mime}"></video>
-            <button class="msg-expand-btn" type="button" title="Fullscreen">&#x26F6;</button>
-          </div>
-          <div style="font-size:11px;color:var(--text-secondary);margin-top:4px">${esc(msg.file_name)} · ${formatSize(msg.file_size)} · <a href="${url}" download="${esc(msg.file_name)}">Download</a></div>
-        </div>`;
-      default:
-        return `<a class="msg-file" href="${url}" download="${esc(msg.file_name)}">
-          <div class="msg-file-icon">📄</div>
-          <div class="msg-file-info">
-            <div class="msg-file-name">${esc(msg.file_name)}</div>
-            <div class="msg-file-size">${formatSize(msg.file_size)}</div>
-          </div>
-        </a>`;
-    }
+  function renderFileAttachment(...args) {
+    return messageAttachmentRenderer?.renderFileAttachment?.(...args);
   }
 
-  function resolveCallMessageMediaKind(msg, ...sources) {
-    const fields = sources.map((source) => String(source?.media_kind || source?.mediaKind || '').toLowerCase());
-    if (fields.includes('voice')) return 'voice';
-    const texts = [
-      msg?.text,
-      ...sources.flatMap((source) => [source?.text, source?.title, source?.label]),
-    ].map((value) => String(value || '').toLowerCase());
-    if (sources.some((source) => String(source?.room_mode || source?.roomMode || '').toLowerCase() === 'room')) return 'voice';
-    if (texts.some((value) => /\bvoice\s+(call|room)\b/.test(value))) return 'voice';
-    return 'video';
+  function resolveCallMessageMediaKind(...args) {
+    return messageCallCardRenderer?.resolveCallMessageMediaKind?.(...args);
   }
 
-  function resolveCallMessageRoomMode(msg, ...sources) {
-    if (sources.some((source) => String(source?.room_mode || source?.roomMode || '').toLowerCase() === 'room')) return 'room';
-    if (String(msg?.text || '').toLowerCase().includes('voice room')) return 'room';
-    return 'ringing';
+  function resolveCallMessageRoomMode(...args) {
+    return messageCallCardRenderer?.resolveCallMessageRoomMode?.(...args);
   }
 
-  function normalizeCallMessageData(msg) {
-    const callMessage = msg?.call_message || {};
-    const call = msg?.call || {};
-    const rawCall = { ...callMessage, ...call };
-    const id = Number(rawCall.id || rawCall.call_id || msg?.call_id || 0) || 0;
-    const mediaKind = resolveCallMessageMediaKind(msg, callMessage, call, rawCall);
-    const roomMode = resolveCallMessageRoomMode(msg, callMessage, call, rawCall);
-    return {
-      ...rawCall,
-      id,
-      media_kind: mediaKind,
-      mediaKind,
-      room_mode: roomMode,
-      roomMode,
-    };
+  function normalizeCallMessageData(...args) {
+    return messageCallCardRenderer?.normalizeCallMessageData?.(...args);
   }
 
-  function latestCallTranscriptRun(call) {
-    return call?.primary_transcript_run
-      || (Array.isArray(call?.transcript_runs) ? call.transcript_runs[0] : null)
-      || null;
+  function latestCallTranscriptRun(...args) {
+    return messageCallCardRenderer?.latestCallTranscriptRun?.(...args);
   }
 
-  function latestCallArtifactBatch(call) {
-    return call?.artifact_batch
-      || (Array.isArray(call?.artifact_batches) ? call.artifact_batches[0] : null)
-      || null;
+  function latestCallArtifactBatch(...args) {
+    return messageCallCardRenderer?.latestCallArtifactBatch?.(...args);
   }
 
-  function callArtifactProgress(batch) {
-    const runs = Array.isArray(batch?.runs) ? batch.runs : [];
-    if (!runs.length) return '';
-    const ready = runs.filter((run) => run.status === 'completed').length;
-    const failed = runs.filter((run) => run.status === 'error').length;
-    const total = runs.length;
-    if (failed) return `${callArtifactStatusLabel(batch.status || 'error')} ${ready}/${total}, ${t('Error')} ${failed}/${total}`;
-    return `${callArtifactStatusLabel(batch.status || 'queued')} ${ready}/${total}`;
+  function callArtifactProgress(...args) {
+    return messageCallCardRenderer?.callArtifactProgress?.(...args);
   }
 
-  function pushCallMessageMeta(meta, icon, text, kind = '') {
-    const value = String(text || '').trim();
-    if (!value) return;
-    if (meta.some((item) => item.kind === kind && item.text === value)) return;
-    meta.push({ icon, text: value, kind });
+  function pushCallMessageMeta(...args) {
+    return messageCallCardRenderer?.pushCallMessageMeta?.(...args);
   }
 
-  function renderCallMessageMeta(meta) {
-    const items = Array.isArray(meta) && meta.length
-      ? meta
-      : [{ icon: '&#128222;', text: t('Video call'), kind: 'default' }];
-    return items
-      .map((item) => {
-        const kind = String(item?.kind || '').replace(/[^a-z0-9_-]/gi, '');
-        const kindClass = kind ? ` call-message-meta-${kind}` : '';
-        return `<span class="call-message-meta-item${kindClass}"><span class="call-message-meta-icon" aria-hidden="true">${item?.icon || '&#8226;'}</span><span class="call-message-meta-text">${esc(item?.text || '')}</span></span>`;
-      })
-      .join('');
+  function renderCallMessageMeta(...args) {
+    return messageCallCardRenderer?.renderCallMessageMeta?.(...args);
   }
 
-  const CALL_RECORDING_ROLE = 'call-recording-audio';
-  const CALL_RECORDING_PROGRESS_STROKE_WIDTH = 3;
-  const CALL_RECORDING_PROGRESS_HIT_RADIUS = 14;
-  let callRecordingProgressCaptureInstalled = false;
-  const callRecordingSeekRows = new Set();
-
-  function normalizeCallMixedRecording(call = {}) {
-    const recording = call?.mixed_recording || call?.recording || null;
-    if (!recording || String(recording.status || '').toLowerCase() !== 'completed') return null;
-    const url = String(recording.url || '').trim();
-    if (!url) return null;
-    return {
-      ...recording,
-      url,
-      duration_ms: recording.duration_ms == null ? null : Number(recording.duration_ms),
-    };
+  function normalizeCallMixedRecording(...args) {
+    return messageCallCardRenderer?.normalizeCallMixedRecording?.(...args);
   }
 
-  function callRecordingPlaybackUrl(url) {
-    const raw = String(url || '').trim();
-    if (!raw || !token) return raw;
-    try {
-      const parsed = new URL(raw, window.location.origin);
-      parsed.searchParams.set('token', token);
-      return parsed.pathname + parsed.search + parsed.hash;
-    } catch {
-      const separator = raw.includes('?') ? '&' : '?';
-      return `${raw}${separator}token=${encodeURIComponent(token)}`;
-    }
+  function callRecordingPlaybackUrl(...args) {
+    return messageCallCardRenderer?.callRecordingPlaybackUrl?.(...args);
   }
 
-  function callRecordingDurationSeconds(row, audio) {
-    const mediaDuration = Number(audio?.duration || 0);
-    if (Number.isFinite(mediaDuration) && mediaDuration > 0) return mediaDuration;
-    const recordingMs = Number(row?.dataset?.callRecordingDurationMs || row?.querySelector?.('.call-recording-card')?.dataset?.callRecordingDurationMs || 0);
-    if (Number.isFinite(recordingMs) && recordingMs > 0) return recordingMs / 1000;
-    const messageDurationMs = Number(row?.__callRecordingCall?.duration_ms || 0);
-    if (Number.isFinite(messageDurationMs) && messageDurationMs > 0) return messageDurationMs / 1000;
-    return 0;
+  function callRecordingDurationSeconds(...args) {
+    return messageCallCardRenderer?.callRecordingDurationSeconds?.(...args);
   }
 
-  function parseCallRecordingRadiusValue(value) {
-    const firstPart = String(value || '0').trim().split(/\s+/)[0] || '0';
-    const parsed = Number.parseFloat(firstPart);
-    return Number.isFinite(parsed) ? parsed : 0;
+  function parseCallRecordingRadiusValue(...args) {
+    return messageCallCardRenderer?.parseCallRecordingRadiusValue?.(...args);
   }
 
-  function callRecordingRoundedRectPath(width, height, radii = {}, inset = 0) {
-    const safeWidth = Math.max(1, Number(width) || 0);
-    const safeHeight = Math.max(1, Number(height) || 0);
-    const left = inset;
-    const top = inset;
-    const right = Math.max(left, safeWidth - inset);
-    const bottom = Math.max(top, safeHeight - inset);
-    const maxRadius = Math.max(0, Math.min(right - left, bottom - top) / 2);
-    const topLeft = clamp(Number(radii.topLeft || 0) - inset, 0, maxRadius);
-    const topRight = clamp(Number(radii.topRight || 0) - inset, 0, maxRadius);
-    const bottomRight = clamp(Number(radii.bottomRight || 0) - inset, 0, maxRadius);
-    const bottomLeft = clamp(Number(radii.bottomLeft || 0) - inset, 0, maxRadius);
-    const commands = [`M ${left + topLeft} ${top}`, `H ${right - topRight}`];
-    if (topRight > 0) commands.push(`A ${topRight} ${topRight} 0 0 1 ${right} ${top + topRight}`);
-    else commands.push(`L ${right} ${top}`);
-    commands.push(`V ${bottom - bottomRight}`);
-    if (bottomRight > 0) commands.push(`A ${bottomRight} ${bottomRight} 0 0 1 ${right - bottomRight} ${bottom}`);
-    else commands.push(`L ${right} ${bottom}`);
-    commands.push(`H ${left + bottomLeft}`);
-    if (bottomLeft > 0) commands.push(`A ${bottomLeft} ${bottomLeft} 0 0 1 ${left} ${bottom - bottomLeft}`);
-    else commands.push(`L ${left} ${bottom}`);
-    commands.push(`V ${top + topLeft}`);
-    if (topLeft > 0) commands.push(`A ${topLeft} ${topLeft} 0 0 1 ${left + topLeft} ${top}`);
-    else commands.push(`L ${left} ${top}`);
-    commands.push('Z');
-    return commands.join(' ');
+  function callRecordingRoundedRectPath(...args) {
+    return messageCallCardRenderer?.callRecordingRoundedRectPath?.(...args);
   }
 
-  function ensureCallRecordingFooterButton(row) {
-    const footer = row?.querySelector?.('.msg-footer');
-    if (!footer) return null;
-    let button = footer.querySelector('.call-recording-play');
-    if (!button) {
-      button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'voice-footer-play call-recording-play';
-      button.setAttribute('aria-label', t('Play call recording'));
-      footer.insertBefore(button, footer.firstChild);
-    }
-    return button;
+  function ensureCallRecordingFooterButton(...args) {
+    return messageCallCardRenderer?.ensureCallRecordingFooterButton?.(...args);
   }
 
-  function ensureCallRecordingProgress(row) {
-    const card = row?.querySelector?.('.call-recording-card');
-    const bubble = row?.querySelector?.('.msg-bubble');
-    if (!row || !card || !bubble) return null;
-    let controller = row.__callRecordingProgress || null;
-    if (!controller) {
-      controller = row.__callRecordingProgress = {};
-    }
-    controller.card = card;
-    controller.bubble = bubble;
-    controller.audio = row.querySelector('.call-recording-audio');
-    controller.playButton = row.querySelector('.call-recording-play') || ensureCallRecordingFooterButton(row);
-    controller.message = row.__messageData || {};
-    controller.call = normalizeCallMessageData(controller.message);
-    row.__callRecordingCall = controller.call;
-    controller.recording = normalizeCallMixedRecording(controller.call);
-    if (!controller.svg) {
-      const shell = document.createElement('div');
-      shell.className = 'call-recording-progress-shell';
-      shell.innerHTML = `
-        <svg class="call-recording-progress" viewBox="0 0 320 76" preserveAspectRatio="none" aria-hidden="true">
-          <path class="call-recording-progress-track"></path>
-          <path class="call-recording-progress-fill"></path>
-          <path class="call-recording-progress-press"></path>
-          <path class="call-recording-progress-hit"></path>
-        </svg>
-      `;
-      bubble.insertBefore(shell, bubble.firstChild);
-      controller.shell = shell;
-      controller.svg = shell.querySelector('.call-recording-progress');
-      controller.track = shell.querySelector('.call-recording-progress-track');
-      controller.fill = shell.querySelector('.call-recording-progress-fill');
-      controller.press = shell.querySelector('.call-recording-progress-press');
-      controller.hit = shell.querySelector('.call-recording-progress-hit');
-    } else if (controller.shell?.parentNode !== bubble) {
-      bubble.insertBefore(controller.shell, bubble.firstChild);
-    }
-    refreshCallRecordingProgressShape(row);
-    return controller;
+  function ensureCallRecordingProgress(...args) {
+    return messageCallCardRenderer?.ensureCallRecordingProgress?.(...args);
   }
 
-  function refreshCallRecordingProgressShape(row) {
-    const controller = row?.__callRecordingProgress;
-    if (!controller?.bubble || !controller.svg) return;
-    const rect = controller.bubble.getBoundingClientRect?.() || {};
-    const width = Math.max(120, Math.round(Number(rect.width || controller.bubble.offsetWidth || 320)));
-    const height = Math.max(48, Math.round(Number(rect.height || controller.bubble.offsetHeight || 76)));
-    const styles = window.getComputedStyle(controller.bubble);
-    const d = callRecordingRoundedRectPath(width, height, {
-      topLeft: parseCallRecordingRadiusValue(styles.borderTopLeftRadius),
-      topRight: parseCallRecordingRadiusValue(styles.borderTopRightRadius),
-      bottomRight: parseCallRecordingRadiusValue(styles.borderBottomRightRadius),
-      bottomLeft: parseCallRecordingRadiusValue(styles.borderBottomLeftRadius),
-    }, CALL_RECORDING_PROGRESS_STROKE_WIDTH / 2 + 0.5);
-    controller.svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
-    [controller.track, controller.fill, controller.press, controller.hit].forEach((pathEl) => {
-      if (!pathEl) return;
-      pathEl.setAttribute('d', d);
-      pathEl.style.strokeDasharray = '';
-      pathEl.style.strokeDashoffset = '';
-    });
-    try {
-      controller.pathLength = Number(controller.fill?.getTotalLength?.() || controller.track?.getTotalLength?.() || 0);
-    } catch {
-      controller.pathLength = 0;
-    }
-    updateCallRecordingProgress(row);
+  function refreshCallRecordingProgressShape(...args) {
+    return messageCallCardRenderer?.refreshCallRecordingProgressShape?.(...args);
   }
 
-  function updateCallRecordingProgress(row) {
-    const controller = row?.__callRecordingProgress;
-    const audio = controller?.audio;
-    if (!controller?.fill || !audio) return;
-    const duration = callRecordingDurationSeconds(row, audio);
-    const completed = Boolean(isMediaPlaybackCompleted(row.__messageData || {}, CALL_RECORDING_ROLE));
-    const isPlaying = Boolean(!audio.paused && !audio.ended);
-    const progress = completed && !isPlaying
-      ? 1
-      : (duration > 0 ? Math.max(0, Math.min(1, Number(audio.currentTime || 0) / duration)) : 0);
-    const length = Number(controller.pathLength || 0);
-    if (length > 0) {
-      controller.fill.setAttribute('stroke-dasharray', `${length * progress} ${Math.max(0, length * (2 - progress))}`);
-      controller.fill.setAttribute('stroke-dashoffset', '0');
-      controller.fill.style.opacity = progress > 0 ? '1' : '.02';
-    }
-    row.classList.toggle('call-recording-playing', isPlaying);
-    row.classList.toggle('call-recording-completed', completed && !isPlaying);
-    syncCallRecordingPlayButton(controller.playButton, isPlaying);
+  function updateCallRecordingProgress(...args) {
+    return messageCallCardRenderer?.updateCallRecordingProgress?.(...args);
   }
 
-  function syncCallRecordingPlayButton(button, isPlaying) {
-    if (!button) return;
-    button.textContent = isPlaying ? '❚❚' : '▶';
-    button.classList.toggle('is-playing', Boolean(isPlaying));
-    button.setAttribute('aria-label', t(isPlaying ? 'Pause call recording' : 'Play call recording'));
-    button.setAttribute('title', t(isPlaying ? 'Pause call recording' : 'Play call recording'));
+  function syncCallRecordingPlayButton(...args) {
+    return messageCallCardRenderer?.syncCallRecordingPlayButton?.(...args);
   }
 
-  function pointToCallRecordingHit(controller, event) {
-    const pathEl = controller?.hit || controller?.fill || controller?.track;
-    const svg = controller?.svg;
-    if (!pathEl || !svg || typeof pathEl.getTotalLength !== 'function' || typeof pathEl.getPointAtLength !== 'function') return null;
-    const svgRect = svg.getBoundingClientRect?.();
-    if (!svgRect || !(svgRect.width > 0) || !(svgRect.height > 0)) return null;
-    const rawViewBox = String(svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
-    const vbX = rawViewBox[0] || 0;
-    const vbY = rawViewBox[1] || 0;
-    const vbW = rawViewBox[2] || svgRect.width;
-    const vbH = rawViewBox[3] || svgRect.height;
-    let total = Number(controller.pathLength || 0);
-    if (!(total > 0)) {
-      try {
-        total = Number(pathEl.getTotalLength() || 0);
-      } catch {
-        total = 0;
-      }
-    }
-    if (!(total > 0)) return null;
-    const x = Number(event.clientX || 0);
-    const y = Number(event.clientY || 0);
-    const samples = 96;
-    let best = null;
-    for (let index = 0; index <= samples; index += 1) {
-      const length = total * (index / samples);
-      let point;
-      try {
-        point = pathEl.getPointAtLength(length);
-      } catch {
-        continue;
-      }
-      const px = svgRect.left + ((Number(point.x || 0) - vbX) / vbW) * svgRect.width;
-      const py = svgRect.top + ((Number(point.y || 0) - vbY) / vbH) * svgRect.height;
-      const distance = Math.hypot(px - x, py - y);
-      if (!best || distance < best.distance) best = { distance, length, total };
-    }
-    if (!best) return null;
-    return {
-      ...best,
-      progress: Math.max(0, Math.min(1, best.length / best.total)),
-    };
+  function pointToCallRecordingHit(...args) {
+    return messageCallCardRenderer?.pointToCallRecordingHit?.(...args);
   }
 
-  function shouldIgnoreCallRecordingPointer(event) {
-    const target = event?.target;
-    if (!(target instanceof Element)) return false;
-    if (target.closest('.call-recording-progress-hit')) return true;
-    if (!target.closest('.call-recording-card')) return true;
-    return Boolean(target.closest('button, a, input, textarea, select, [role="button"], .call-message-actions, .msg-reply, .reaction-chip, .msg-delete-btn'));
+  function shouldIgnoreCallRecordingPointer(...args) {
+    return messageCallCardRenderer?.shouldIgnoreCallRecordingPointer?.(...args);
   }
 
-  function isPointerNearCallRecordingProgressRect(controller, event) {
-    const rect = controller?.svg?.getBoundingClientRect?.();
-    if (!rect || !(rect.width > 0) || !(rect.height > 0)) return false;
-    const x = Number(event.clientX || 0);
-    const y = Number(event.clientY || 0);
-    const pad = CALL_RECORDING_PROGRESS_HIT_RADIUS + 2;
-    if (x < rect.left - pad || x > rect.right + pad || y < rect.top - pad || y > rect.bottom + pad) return false;
-    const edgeDistance = Math.min(
-      Math.abs(x - rect.left),
-      Math.abs(x - rect.right),
-      Math.abs(y - rect.top),
-      Math.abs(y - rect.bottom)
-    );
-    return edgeDistance <= pad;
+  function isPointerNearCallRecordingProgressRect(...args) {
+    return messageCallCardRenderer?.isPointerNearCallRecordingProgressRect?.(...args);
   }
 
-  function getCallRecordingSeekRows() {
-    const rows = [];
-    callRecordingSeekRows.forEach((row) => {
-      if (!row?.isConnected) {
-        callRecordingSeekRows.delete(row);
-        return;
-      }
-      rows.push(row);
-    });
-    return rows;
+  function getCallRecordingSeekRows(...args) {
+    return messageCallCardRenderer?.getCallRecordingSeekRows?.(...args);
   }
 
-  function seekCallRecordingProgress(row, event, hit = null) {
-    const controller = row?.__callRecordingProgress || ensureCallRecordingProgress(row);
-    const audio = controller?.audio;
-    if (!controller || !audio) return false;
-    const resolvedHit = hit || pointToCallRecordingHit(controller, event);
-    if (!resolvedHit) return false;
-    const duration = callRecordingDurationSeconds(row, audio);
-    if (!(duration > 0)) return false;
-    const targetTime = Math.max(0, Math.min(duration, duration * resolvedHit.progress));
-    const wasPaused = Boolean(audio.paused || audio.ended);
-    try {
-      audio.currentTime = targetTime;
-    } catch {}
-    setMediaPlaybackCompleted(row.__messageData || {}, CALL_RECORDING_ROLE, false);
-    updateCallRecordingProgress(row);
-    if (!wasPaused) {
-      Promise.resolve(audio.play?.()).catch(() => {});
-    }
-    if (event) {
-      event.preventDefault?.();
-      event.stopPropagation?.();
-      event.stopImmediatePropagation?.();
-    }
-    return true;
+  function seekCallRecordingProgress(...args) {
+    return messageCallCardRenderer?.seekCallRecordingProgress?.(...args);
   }
 
-  function resolveNearestCallRecordingHit(event) {
-    if (!messagesEl || shouldIgnoreCallRecordingPointer(event)) return null;
-    const candidates = [];
-    getCallRecordingSeekRows().forEach((row) => {
-      const controller = row.__callRecordingProgress || ensureCallRecordingProgress(row);
-      if (!controller?.audio || !controller.hit) return;
-      const duration = callRecordingDurationSeconds(row, controller.audio);
-      if (!(duration > 0)) return;
-      if (!isPointerNearCallRecordingProgressRect(controller, event)) return;
-      const hit = pointToCallRecordingHit(controller, event);
-      if (hit && hit.distance <= CALL_RECORDING_PROGRESS_HIT_RADIUS) candidates.push({ row, hit });
-    });
-    candidates.sort((a, b) => a.hit.distance - b.hit.distance);
-    return candidates[0] || null;
+  function resolveNearestCallRecordingHit(...args) {
+    return messageCallCardRenderer?.resolveNearestCallRecordingHit?.(...args);
   }
 
-  function installCallRecordingProgressCapture() {
-    if (callRecordingProgressCaptureInstalled) return;
-    callRecordingProgressCaptureInstalled = true;
-    document.addEventListener('pointerdown', (event) => {
-      if (event.button != null && event.button !== 0) return;
-      const best = resolveNearestCallRecordingHit(event);
-      if (!best) return;
-      best.row.classList.add('call-recording-progress-pressed');
-      const clearPressed = () => best.row.classList.remove('call-recording-progress-pressed');
-      document.addEventListener('pointerup', clearPressed, { once: true, capture: true });
-      document.addEventListener('pointercancel', clearPressed, { once: true, capture: true });
-      seekCallRecordingProgress(best.row, event, best.hit);
-    }, true);
+  function installCallRecordingProgressCapture(...args) {
+    return messageCallCardRenderer?.installCallRecordingProgressCapture?.(...args);
   }
 
-  function renderCallMessageCard(msg) {
-    const call = normalizeCallMessageData(msg);
-    const status = String(call.status || 'active');
-    const active = status === 'active' && call.can_join !== false;
-    const duration = Number(call.duration_ms || 0);
-    const notes = call.ai_notes || null;
-    const mediaKind = String(call.media_kind || call.mediaKind || '').toLowerCase() === 'voice' ? 'voice' : 'video';
-    const roomMode = String(call.room_mode || call.roomMode || '').toLowerCase() === 'room' ? 'room' : 'ringing';
-    const voice = mediaKind === 'voice';
-    const voiceRoom = voice && roomMode === 'room';
-    const typeLabel = voiceRoom ? t('Voice room') : (voice ? t('Audio call') : t('Video call'));
-    const labels = {
-      active: voiceRoom ? t('Voice room active') : (voice ? t('Audio call started') : t('Video call started')),
-      ended: voiceRoom ? t('Voice room ended') : (voice ? t('Audio call ended') : t('Video call ended')),
-      missed: voice ? t('Audio call missed') : t('Video call missed'),
-      declined: voice ? t('Audio call declined') : t('Video call declined'),
-      failed: voice ? t('Audio call failed') : t('Video call failed'),
-    };
-    const meta = [];
-    pushCallMessageMeta(meta, voice ? '&#9742;&#65039;' : '&#128249;', typeLabel, 'kind');
-    pushCallMessageMeta(meta, '&#128100;', call.started_by_name ? t('Started by {name}', { name: call.started_by_name }) : '', 'started');
-    pushCallMessageMeta(meta, '&#9201;', duration > 0 ? t('Duration {duration}', { duration: formatDuration(duration / 1000) }) : '', 'duration');
-    if (notes?.status === 'recording') pushCallMessageMeta(meta, '&#127908;', t('AI notes recording'), 'ai-recording');
-    else if (notes?.transcript_status === 'processing' || notes?.status === 'processing') pushCallMessageMeta(meta, '&#128221;', t('Transcript processing'), 'transcript');
-    else if (notes?.transcript_status === 'completed' && notes?.transcript_ready) pushCallMessageMeta(meta, '&#128221;', t('Transcript ready'), 'transcript');
-    else if (notes?.transcript_status === 'error') pushCallMessageMeta(meta, '&#9888;', t('Transcription error'), 'error');
-    const recording = normalizeCallMixedRecording(call);
-    const recordingUrl = recording?.url || '';
-    const recordingDurationMs = Number(recording?.duration_ms || duration || 0);
-    const actions = [];
-    if (active) {
-      const alreadyInside = Boolean(window.BananzaCallHooks?.isCurrentCall?.(call.id));
-      const joinLabel = alreadyInside ? t('Open') : (voiceRoom ? t('Join voice room') : t('Join call'));
-      actions.push(`<button type="button" class="call-message-action primary" data-call-card-join="${Number(call.id || 0)}">${esc(joinLabel)}</button>`);
-    }
-    if (!active && Number(call.id || 0)) {
-      const transcriptRun = latestCallTranscriptRun(call);
-      const transcriptStatus = String(transcriptRun?.status || '');
-      const batch = latestCallArtifactBatch(call);
-      const batchStatus = String(batch?.status || '');
-      const artifactsReadyToOpen = ['completed', 'partial', 'error'].includes(batchStatus);
-      const hasTranscriptionSource = Boolean(recordingUrl || notes || transcriptRun || batch);
-      if (hasTranscriptionSource) {
-        if (transcriptStatus === 'completed' || notes?.transcript_ready) {
-          pushCallMessageMeta(meta, '&#128221;', t('Transcript ready'), 'transcript');
-          actions.push(`<button type="button" class="call-message-action" data-call-card-transcript="${Number(call.id || 0)}">${esc(t('Transcript'))}</button>`);
-        } else if (transcriptStatus === 'queued' || transcriptStatus === 'processing') {
-          pushCallMessageMeta(meta, '&#128221;', t('Transcript processing'), 'transcript');
-          actions.push(`<button type="button" class="call-message-action" disabled>${esc(t('Transcript processing'))}</button>`);
-        } else if (transcriptStatus === 'error') {
-          pushCallMessageMeta(meta, '&#9888;', transcriptRun?.error || t('Transcription error'), 'error');
-          actions.push(`<button type="button" class="call-message-action" data-call-card-transcribe-retry="${Number(call.id || 0)}">${esc(t('Retry'))}</button>`);
-        } else {
-          actions.push(`<button type="button" class="call-message-action" data-call-card-transcribe="${Number(call.id || 0)}">${esc(t('Transcribe'))}</button>`);
-        }
-      }
-      if (batch) {
-        const progress = callArtifactProgress(batch);
-        if (progress) pushCallMessageMeta(meta, '&#129504;', progress, 'summary');
-      }
-      if (hasTranscriptionSource && transcriptStatus === 'completed') {
-        if (batchStatus === 'queued' || batchStatus === 'processing') {
-          actions.push(`<button type="button" class="call-message-action" disabled>${esc(t('AI summary'))}...</button>`);
-        } else {
-          actions.push(`<button type="button" class="call-message-action" data-call-card-artifacts="${Number(call.id || 0)}">${esc(t('AI summary'))}</button>`);
-        }
-      } else if (hasTranscriptionSource && artifactsReadyToOpen) {
-        actions.push(`<button type="button" class="call-message-action" data-call-card-artifacts="${Number(call.id || 0)}">${esc(t('AI summary'))}</button>`);
-      }
-    }
-    const playbackHtml = recordingUrl ? `
-      <audio class="call-recording-audio" preload="metadata" src="${esc(callRecordingPlaybackUrl(recordingUrl))}"></audio>
-    ` : '';
-    const iconClass = voice ? 'call-message-icon-voice' : 'call-message-icon-video';
-    const cardIcon = voice ? '&#9742;&#65039;' : '&#128249;';
-    return `
-      <div class="call-message-card call-recording-card${recordingUrl ? ' has-call-recording' : ''}${voice ? ' is-voice-call-card' : ' is-video-call-card'}" data-call-card="${Number(call.id || 0)}" data-call-recording-duration-ms="${Number(recordingDurationMs || 0)}">
-        ${playbackHtml}
-        <div class="call-message-icon ${iconClass}" aria-hidden="true">${cardIcon}</div>
-        <div class="call-message-main">
-          <div class="call-message-title">${esc(labels[status] || labels.active)}</div>
-          <div class="call-message-meta">${renderCallMessageMeta(meta)}</div>
-        </div>
-        ${actions.length ? `<div class="call-message-actions">${actions.join('')}</div>` : ''}
-      </div>
-    `;
+  function renderCallMessageCard(...args) {
+    return messageCallCardRenderer?.renderCallMessageCard?.(...args);
   }
 
-  function renderCallTranscriptRunCard(msg) {
-    const run = msg?.call_transcript_run || {};
-    const status = String(run.status || 'queued');
-    const provider = run.resolved_provider || run.provider || 'voice';
-    const strategy = run.strategy_label || run.strategy || 'transcript';
-    const labels = {
-      queued: t('Transcript queued'),
-      processing: t('Transcript processing'),
-      completed: t('Transcript ready'),
-      error: t('Transcription error'),
-      canceled: t('Canceled'),
-    };
-    const meta = [`${provider} / ${strategy}`];
-    if (run.model) meta.push(run.model);
-    if (run.error && status === 'error') meta.push(run.error);
-    const actions = [];
-    if (run.transcript_ready || status === 'completed') {
-      actions.push(`<button type="button" class="call-message-action" data-call-transcript-run="${Number(run.id || 0)}">${esc(t('Transcript'))}</button>`);
-    }
-    return `
-      <div class="call-message-card call-transcript-card" data-call-transcript-card="${Number(run.id || 0)}">
-        <div class="call-message-icon" aria-hidden="true">☰</div>
-        <div class="call-message-main">
-          <div class="call-message-title">${esc(labels[status] || labels.queued)}</div>
-          <div class="call-message-meta">${esc(meta.filter(Boolean).join(' / '))}</div>
-        </div>
-        ${actions.length ? `<div class="call-message-actions">${actions.join('')}</div>` : ''}
-      </div>
-    `;
+  function renderCallTranscriptRunCard(...args) {
+    return messageCallCardRenderer?.renderCallTranscriptRunCard?.(...args);
   }
 
-  function callArtifactStatusLabel(status) {
-    const labels = {
-      queued: t('Queued'),
-      processing: t('Processing'),
-      completed: t('Ready'),
-      partial: t('Partially ready'),
-      error: t('Error'),
-      canceled: t('Canceled'),
-      skipped: t('Skipped'),
-    };
-    return labels[status] || status || '';
+  function callArtifactStatusLabel(...args) {
+    return messageCallCardRenderer?.callArtifactStatusLabel?.(...args);
   }
 
-  function callArtifactStatusKind(status) {
-    const raw = String(status || 'queued').trim().toLowerCase();
-    return ['queued', 'processing', 'completed', 'partial', 'error', 'canceled', 'skipped'].includes(raw)
-      ? raw
-      : 'queued';
+  function callArtifactStatusKind(...args) {
+    return messageCallCardRenderer?.callArtifactStatusKind?.(...args);
   }
 
-  function callArtifactKey(run = {}) {
-    return String(run.artifact_key || run.key || '').trim();
+  function callArtifactKey(...args) {
+    return messageCallCardRenderer?.callArtifactKey?.(...args);
   }
 
-  function callArtifactLabel(run = {}) {
-    const key = callArtifactKey(run);
-    if (key) {
-      const translated = t(`callArtifact.${key}`);
-      if (translated && translated !== `callArtifact.${key}`) return translated;
-    }
-    return String(run.label || key || t('Artifact')).trim();
+  function callArtifactLabel(...args) {
+    return messageCallCardRenderer?.callArtifactLabel?.(...args);
   }
 
-  function renderCallArtifactStatus(status) {
-    const kind = callArtifactStatusKind(status);
-    const label = callArtifactStatusLabel(kind);
-    if (kind === 'completed') {
-      return `<span class="call-artifact-status is-completed is-icon-only" aria-label="${esc(label)}" title="${esc(label)}"><span aria-hidden="true">&#10003;</span></span>`;
-    }
-    return `<span class="call-artifact-status is-${kind}">${esc(label)}</span>`;
+  function renderCallArtifactStatus(...args) {
+    return messageCallCardRenderer?.renderCallArtifactStatus?.(...args);
   }
 
-  function callArtifactTextShouldCollapse(text) {
-    const source = String(text || '').trim();
-    if (!source) return false;
-    return source.split(/\r?\n/).length > 20 || source.length > 1800;
+  function callArtifactTextShouldCollapse(...args) {
+    return messageCallCardRenderer?.callArtifactTextShouldCollapse?.(...args);
   }
 
-  function renderCallArtifactTextLine(line, index) {
-    const text = String(line || '').trimEnd();
-    const heading = text.match(/^\s*#{1,6}\s+(.+)$/);
-    if (heading) return `<h4>${esc(heading[1].trim())}</h4>`;
-    const bullet = text.match(/^\s*[-*]\s+(.+)$/);
-    if (bullet) return `<div class="call-artifact-list-line"><span aria-hidden="true">-</span><p>${esc(bullet[1].trim())}</p></div>`;
-    const ordered = text.match(/^\s*(\d+[.)])\s+(.+)$/);
-    if (ordered) return `<div class="call-artifact-list-line"><span>${esc(ordered[1])}</span><p>${esc(ordered[2].trim())}</p></div>`;
-    if (!text.trim()) return index === 0 ? '' : '<div class="call-artifact-spacer" aria-hidden="true"></div>';
-    return `<p>${esc(text.trim())}</p>`;
+  function renderCallArtifactTextLine(...args) {
+    return messageCallCardRenderer?.renderCallArtifactTextLine?.(...args);
   }
 
-  function renderCallArtifactText(text, runId = 0) {
-    const source = String(text || '').trim();
-    if (!source) return '';
-    const collapsed = callArtifactTextShouldCollapse(source);
-    const lines = source.split(/\r?\n/);
-    return `
-      <div class="call-artifact-text${collapsed ? ' is-collapsed' : ''}" data-call-artifact-text="${Number(runId || 0)}">
-        ${lines.map(renderCallArtifactTextLine).join('')}
-      </div>
-      ${collapsed ? `<button type="button" class="call-admin-btn call-artifact-more" data-call-artifact-more="${Number(runId || 0)}"><span>${esc(t('Show more'))}</span><span class="call-artifact-more-icon" aria-hidden="true">&#8594;</span></button>` : ''}
-    `;
+  function renderCallArtifactText(...args) {
+    return messageCallCardRenderer?.renderCallArtifactText?.(...args);
   }
 
-  function callArtifactImageUrl(run = {}) {
-    return String(run?.file?.url || '').trim();
+  function callArtifactImageUrl(...args) {
+    return messageCallCardRenderer?.callArtifactImageUrl?.(...args);
   }
 
-  function callArtifactImageMime(run = {}) {
-    return normalizeMimeType(run?.file?.mime_type || run?.file?.mime || 'image/png') || 'image/png';
+  function callArtifactImageMime(...args) {
+    return messageCallCardRenderer?.callArtifactImageMime?.(...args);
   }
 
-  function callArtifactImageFilename(run = {}) {
-    const file = run?.file || {};
-    let name = String(file.original_name || file.originalName || file.name || file.stored_name || file.storedName || '').trim();
-    if (!name) name = String(callArtifactLabel(run) || 'callshot').trim() || 'callshot';
-    if (!fileExtension(name)) {
-      const mime = callArtifactImageMime(run);
-      name += mime === 'image/jpeg' ? '.jpg' : (mime === 'image/webp' ? '.webp' : '.png');
-    }
-    return name;
+  function callArtifactImageFilename(...args) {
+    return messageCallCardRenderer?.callArtifactImageFilename?.(...args);
   }
 
-  function callArtifactImageContext(run = {}, mediaTarget = null) {
-    const previewUrl = callArtifactImageUrl(run);
-    const absoluteUrl = getAbsoluteMessageMediaUrl(previewUrl);
-    if (!absoluteUrl) return null;
-    return {
-      row: null,
-      msg: { id: 0 },
-      mediaTarget,
-      mediaKind: 'image',
-      mediaKindLabel: 'Image',
-      previewUrl,
-      downloadUrl: previewUrl,
-      absoluteUrl,
-      filename: callArtifactImageFilename(run),
-      mime: callArtifactImageMime(run),
-      copyText: '',
-      canCopyText: false,
-      canReply: false,
-      canForward: false,
-      canSaveNote: false,
-      canEdit: false,
-      canReact: false,
-      pinState: { show: false, isPinned: false, disabled: true },
-      mediaContextKey: `call-artifact:${Number(run?.id || 0)}:${absoluteUrl}`,
-    };
+  function callArtifactImageContext(...args) {
+    return messageCallCardRenderer?.callArtifactImageContext?.(...args);
   }
 
-  function renderCallArtifactImage(run = {}) {
-    const src = callArtifactImageUrl(run);
-    if (!src) return '';
-    const label = callArtifactLabel(run);
-    return `
-      <button type="button" class="call-artifact-image-button" data-call-artifact-image="${Number(run?.id || 0)}" aria-label="${esc(t('Open'))} ${esc(label)}">
-        <img class="call-artifact-image" src="${esc(src)}" alt="${esc(label)}">
-      </button>
-    `;
+  function renderCallArtifactImage(...args) {
+    return messageCallCardRenderer?.renderCallArtifactImage?.(...args);
   }
 
-  function renderCallArtifactRun(run) {
-    const status = callArtifactStatusKind(run?.status);
-    const hasBody = Boolean(run?.result_text || run?.file?.url || run?.error);
-    return `
-      <section class="call-artifact-item" data-call-artifact-item="${Number(run?.id || 0)}">
-        <div class="call-artifact-head">
-          <strong class="call-artifact-title">${esc(callArtifactLabel(run))}</strong>
-          ${renderCallArtifactStatus(status)}
-        </div>
-        ${run?.file?.url ? renderCallArtifactImage(run) : ''}
-        ${run?.result_text ? renderCallArtifactText(run.result_text, run.id) : ''}
-        ${run?.error ? `<div class="call-artifact-error">${esc(run.error)}</div>` : ''}
-        ${!hasBody ? `<div class="call-artifact-placeholder">${esc(callArtifactStatusLabel(status))}</div>` : ''}
-        ${status === 'error' ? `<div class="call-artifact-actions"><button type="button" class="call-admin-btn" data-call-artifact-retry="${Number(run?.id || 0)}">${esc(t('Retry'))}</button></div>` : ''}
-      </section>
-    `;
+  function renderCallArtifactRun(...args) {
+    return messageCallCardRenderer?.renderCallArtifactRun?.(...args);
   }
 
-  function renderCallArtifactBatchCard(msg) {
-    const batch = msg?.call_artifact_batch || {};
-    const runs = Array.isArray(batch.runs) ? batch.runs : [];
-    const ready = runs.filter((run) => run.status === 'completed').length;
-    const total = runs.length;
-    const meta = [`${ready}/${total || 0}`, callArtifactStatusLabel(batch.status || 'queued')].filter(Boolean);
-    const preview = runs
-      .filter((run) => run.status === 'completed' && run.result_text)
-      .slice(0, 2)
-      .map((run) => `${callArtifactLabel(run)}: ${String(run.result_text || '').slice(0, 140)}`)
-      .join(' / ');
-    return `
-      <div class="call-message-card call-artifact-card" data-call-artifact-card="${Number(batch.id || 0)}">
-        <div class="call-message-icon" aria-hidden="true">AI</div>
-        <div class="call-message-main">
-          <div class="call-message-title">${esc(t('Call AI summary'))}</div>
-          <div class="call-message-meta">${esc(meta.join(' / '))}</div>
-          ${preview ? `<div class="call-message-meta">${esc(preview)}</div>` : ''}
-        </div>
-        <div class="call-message-actions">
-          <button type="button" class="call-message-action" data-call-artifacts-open="${Number(batch.id || 0)}">${esc(t('Open'))}</button>
-        </div>
-      </div>
-    `;
+  function renderCallArtifactBatchCard(...args) {
+    return messageCallCardRenderer?.renderCallArtifactBatchCard?.(...args);
   }
 
-  function bindCallMessageControls(row) {
-    const message = row?.__messageData || {};
-    const call = normalizeCallMessageData(message);
-    if (!call?.id) return;
-    const recording = normalizeCallMixedRecording(call);
-    const audio = row.querySelector('.call-recording-audio');
-    if (recording && audio && audio.getAttribute('src') !== callRecordingPlaybackUrl(recording.url)) {
-      audio.setAttribute('src', callRecordingPlaybackUrl(recording.url));
-    }
-    const playButton = recording && audio ? ensureCallRecordingFooterButton(row) : null;
-    row.classList.toggle('call-recording-message', Boolean(recording && audio));
-    if (!recording || !audio) callRecordingSeekRows.delete(row);
-    if (recording && audio) {
-      callRecordingSeekRows.add(row);
-      row.dataset.callRecordingDurationMs = String(Number(recording.duration_ms || call.duration_ms || 0) || 0);
-      bindMediaPlaybackState(audio, message, CALL_RECORDING_ROLE);
-      const controller = ensureCallRecordingProgress(row);
-      installCallRecordingProgressCapture();
-      syncCallRecordingPlayButton(playButton, false);
-      ['loadedmetadata', 'durationchange', 'timeupdate', 'seeking', 'seeked', 'play', 'pause', 'ended'].forEach((eventName) => {
-        audio.addEventListener(eventName, () => updateCallRecordingProgress(row));
-      });
-      audio.addEventListener('play', () => {
-        messagesEl?.querySelectorAll?.('.call-recording-audio')?.forEach((otherAudio) => {
-          if (otherAudio === audio || otherAudio.paused) return;
-          try {
-            otherAudio.pause();
-          } catch {}
-        });
-      });
-      playButton?.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (audio.paused || audio.ended) {
-          if (audio.ended) {
-            try { audio.currentTime = 0; } catch {}
-          }
-          setMediaPlaybackCompleted(message, CALL_RECORDING_ROLE, false);
-          Promise.resolve(audio.play?.()).catch(() => {});
-        } else {
-          try { audio.pause?.(); } catch {}
-        }
-        updateCallRecordingProgress(row);
-      });
-      controller?.hit?.addEventListener('pointerdown', (event) => {
-        row.classList.add('call-recording-progress-pressed');
-        const clearPressed = () => row.classList.remove('call-recording-progress-pressed');
-        document.addEventListener('pointerup', clearPressed, { once: true, capture: true });
-        document.addEventListener('pointercancel', clearPressed, { once: true, capture: true });
-        seekCallRecordingProgress(row, event);
-      });
-      requestAnimationFrame(() => refreshCallRecordingProgressShape(row));
-      if (typeof ResizeObserver !== 'undefined' && !row.__callRecordingResizeObserver) {
-        row.__callRecordingResizeObserver = new ResizeObserver(() => refreshCallRecordingProgressShape(row));
-        const bubble = row.querySelector('.msg-bubble');
-        if (bubble) row.__callRecordingResizeObserver.observe(bubble);
-      }
-      updateCallRecordingProgress(row);
-    }
-    row.querySelector('[data-call-card-join]')?.addEventListener('click', (event) => {
-      event.stopPropagation();
-      const button = event.currentTarget;
-      if (button) button.disabled = true;
-      Promise.resolve(window.BananzaCallHooks?.joinCallFromMessage?.(call))
-        .then(() => {
-          if (button && window.BananzaCallHooks?.isCurrentCall?.(call.id)) button.textContent = t('Open');
-        })
-        .catch((error) => {
-          console.warn('[calls] join from message failed:', error?.message || error);
-          showCenterToast(t('Could not join call'));
-        })
-        .finally(() => {
-          if (button) button.disabled = false;
-        });
-    });
-    row.querySelector('[data-call-card-transcript]')?.addEventListener('click', (event) => {
-      event.stopPropagation();
-      const run = latestCallTranscriptRun(call);
-      if (run?.id) window.BananzaCallHooks?.openTranscriptRun?.(Number(run.id));
-      else window.BananzaCallHooks?.openTranscript?.(call.id);
-    });
-    row.querySelector('[data-call-card-transcribe]')?.addEventListener('click', async (event) => {
-      event.stopPropagation();
-      const button = event.currentTarget;
-      button.disabled = true;
-      try {
-        await api(`/api/calls/${Number(call.id || 0)}/transcribe`, { method: 'POST', body: {} });
-      } catch (error) {
-        showCenterToast(error.message || t('Could not start transcription'));
-      } finally {
-        button.disabled = false;
-      }
-    });
-    row.querySelector('[data-call-card-transcribe-retry]')?.addEventListener('click', async (event) => {
-      event.stopPropagation();
-      const button = event.currentTarget;
-      button.disabled = true;
-      try {
-        await api(`/api/calls/${Number(call.id || 0)}/transcribe/retry`, { method: 'POST', body: {} });
-      } catch (error) {
-        showCenterToast(error.message || t('Could not start transcription'));
-      } finally {
-        button.disabled = false;
-      }
-    });
-    row.querySelector('[data-call-card-artifacts]')?.addEventListener('click', async (event) => {
-      event.stopPropagation();
-      const button = event.currentTarget;
-      const existing = latestCallArtifactBatch(call);
-      if (existing && ['completed', 'partial', 'error'].includes(String(existing.status || ''))) {
-        openCallArtifactsModal(existing);
-        return;
-      }
-      button.disabled = true;
-      try {
-        const result = await api(`/api/calls/${Number(call.id || 0)}/artifacts`, { method: 'POST', body: {} });
-        if (result?.batch && ['completed', 'partial', 'error'].includes(String(result.batch.status || ''))) {
-          openCallArtifactsModal(result.batch);
-        }
-      } catch (error) {
-        showCenterToast(error.message || t('Could not start AI summary'));
-      } finally {
-        button.disabled = false;
-      }
-    });
+  function bindCallMessageControls(...args) {
+    return messageCallCardRenderer?.bindCallMessageControls?.(...args);
   }
 
-  function openCallArtifactsModal(batch) {
-    if (!batch) return;
-    let modal = $('#callArtifactsModal');
-    if (!modal) {
-      modal = document.createElement('div');
-      modal.id = 'callArtifactsModal';
-      modal.className = 'modal hidden';
-      modal.innerHTML = `
-        <div class="modal-content call-artifacts-modal">
-          <div class="modal-header">
-            <h3>${esc(t('Call AI summary'))}</h3>
-            <button type="button" class="modal-close" id="callArtifactsClose" aria-label="${esc(t('Close'))}">&#10005;</button>
-          </div>
-          <div id="callArtifactsBody" class="modal-body call-artifacts-body"></div>
-        </div>
-      `;
-      document.body.appendChild(modal);
-      $('#callArtifactsClose')?.addEventListener('click', () => closeModal('callArtifactsModal'));
-      modal.addEventListener('click', (event) => {
-        if (event.target === modal) closeModal('callArtifactsModal');
-      });
-    }
-    const body = $('#callArtifactsBody');
-    const runs = Array.isArray(batch.runs) ? batch.runs : [];
-    if (body) {
-      const runsById = new Map(runs.map((run) => [Number(run?.id || 0), run]));
-      body.innerHTML = runs.map(renderCallArtifactRun).join('') || `<div class="call-artifacts-empty">${esc(t('No artifacts yet'))}</div>`;
-      body.querySelectorAll('[data-call-artifact-more]').forEach((button) => {
-        button.addEventListener('click', () => {
-          const id = Number(button.dataset.callArtifactMore || 0);
-          const text = body.querySelector(`[data-call-artifact-text="${id}"]`);
-          text?.classList.remove('is-collapsed');
-          button.remove();
-        });
-      });
-      body.querySelectorAll('[data-call-artifact-retry]').forEach((button) => {
-        button.addEventListener('click', async () => {
-          button.disabled = true;
-          try {
-            await api(`/api/calls/artifact-runs/${Number(button.dataset.callArtifactRetry || 0)}/retry`, { method: 'POST', body: {} });
-            closeModal('callArtifactsModal');
-          } catch (error) {
-            showCenterToast(error.message || t('Could not retry artifact'));
-          } finally {
-            button.disabled = false;
-          }
-        });
-      });
-      body.querySelectorAll('[data-call-artifact-image]').forEach((button) => {
-        const run = runsById.get(Number(button.dataset.callArtifactImage || 0));
-        const src = callArtifactImageUrl(run);
-        button.addEventListener('click', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          if (src) openMediaViewer(src, 'image');
-        });
-        button.addEventListener('contextmenu', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          const context = callArtifactImageContext(run, button);
-          if (!context) return;
-          showMediaContextMenuForContext(context, {
-            target: button,
-            x: event.clientX,
-            y: event.clientY,
-            source: 'contextmenu',
-          });
-        });
-      });
-    }
-    openModal('callArtifactsModal');
+  function openCallArtifactsModal(...args) {
+    return messageCallCardRenderer?.openCallArtifactsModal?.(...args);
   }
 
-  function bindCallArtifactMessageControls(row) {
-    row.querySelector('[data-call-artifacts-open]')?.addEventListener('click', (event) => {
-      event.stopPropagation();
-      openCallArtifactsModal(row.__messageData?.call_artifact_batch);
-    });
+  function bindCallArtifactMessageControls(...args) {
+    return messageCallCardRenderer?.bindCallArtifactMessageControls?.(...args);
   }
 
-  function bindCallTranscriptMessageControls(row) {
-    row.querySelector('[data-call-transcript-run]')?.addEventListener('click', (event) => {
-      event.stopPropagation();
-      window.BananzaCallHooks?.openTranscriptRun?.(Number(event.currentTarget.dataset.callTranscriptRun || 0));
-    });
+  function bindCallTranscriptMessageControls(...args) {
+    return messageCallCardRenderer?.bindCallTranscriptMessageControls?.(...args);
   }
 
-  function renderLinkPreview(p) {
-    if (!p || (!p.title && !p.description && !p.image)) return '';
-    let html = `<a class="link-preview" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">`;
-    if (p.hostname) html += `<div class="lp-host">${esc(p.hostname)}</div>`;
-    if (p.title) html += `<div class="lp-title">${esc(p.title)}</div>`;
-    if (p.description) html += `<div class="lp-desc">${esc(p.description)}</div>`;
-    if (p.image) html += `<img class="lp-image" src="${esc(p.image)}" alt="" loading="lazy" onerror="this.remove()">`;
-    html += '</a>';
-    return html;
+  function renderLinkPreview(...args) {
+    return messageAttachmentRenderer?.renderLinkPreview?.(...args);
   }
 
-  function cleanupDuplicateDateSeparators() {
-    const seenDates = new Set();
-    messagesEl.querySelectorAll('.date-separator').forEach(sep => {
-      const text = sep.textContent.trim();
-      if (seenDates.has(text)) sep.remove();
-      else seenDates.add(text);
-    });
+  function cleanupDuplicateDateSeparators(...args) {
+    return messageRenderer?.cleanupDuplicateDateSeparators?.(...args);
   }
 
-  function refreshDateSeparators() {
-    if (!messagesEl) return;
-    messagesEl.querySelectorAll('.date-separator').forEach((sep) => {
-      const createdAt = sep.dataset.dateIso || '';
-      const target = sep.querySelector('span') || sep;
-      if (createdAt) target.textContent = formatDate(createdAt);
-      else target.textContent = tx(target.textContent);
-    });
-    getRenderedMessageRows().forEach((row) => {
-      const createdAt = row.__messageData?.created_at || '';
-      if (createdAt) row.dataset.date = formatDate(createdAt);
-    });
-    cleanupDuplicateDateSeparators();
-    refreshScrollDateIndicator();
+  function refreshDateSeparators(...args) {
+    return messageRenderer?.refreshDateSeparators?.(...args);
   }
 
   async function catchUpCurrentChat(chatId, { fromPush = false } = {}) {
@@ -17054,493 +15004,104 @@
     };
   }
 
-  function outboxUrlKey(clientId, part = 'file') {
-    return `${clientId}:${part}`;
+  function outboxUrlKey(...args) {
+    return messageOutbox?.outboxUrlKey?.(...args);
   }
 
-  function getOutboxObjectUrl(clientId, blob, part = 'file') {
-    if (!blob) return '';
-    const key = outboxUrlKey(clientId, part);
-    if (outboxObjectUrls.has(key)) return outboxObjectUrls.get(key);
-    const url = URL.createObjectURL(blob);
-    outboxObjectUrls.set(key, url);
-    return url;
+  function getOutboxObjectUrl(...args) {
+    return messageOutbox?.getOutboxObjectUrl?.(...args);
   }
 
-  function revokeOutboxObjectUrls(clientId) {
-    const prefix = `${clientId}:`;
-    for (const [key, url] of outboxObjectUrls.entries()) {
-      if (!key.startsWith(prefix)) continue;
-      try { URL.revokeObjectURL(url); } catch (e) {}
-      outboxObjectUrls.delete(key);
-    }
+  function revokeOutboxObjectUrls(...args) {
+    return messageOutbox?.revokeOutboxObjectUrls?.(...args);
   }
 
-  function findOutboxRow(clientId) {
-    if (!clientId) return null;
-    return messagesEl.querySelector(`.msg-row[data-outbox="1"][data-client-id="${clientId}"], .msg-row[data-outbox="1"][data-msg-id="${clientId}"]`);
+  function findOutboxRow(...args) {
+    return messageOutbox?.findOutboxRow?.(...args);
   }
 
-  function removeDuplicatePromotedRows(row, messageId) {
-    const key = String(messageId || '').trim();
-    if (!key) return;
-    messagesEl.querySelectorAll('.msg-row[data-msg-id]').forEach((candidate) => {
-      if (String(candidate.dataset.msgId || '') !== key) return;
-      if (candidate === row) return;
-      forgetDisplayedMessage(candidate.dataset.msgId);
-      candidate.remove();
-    });
-    cleanupEmptyMessageGroups();
+  function removeDuplicatePromotedRows(...args) {
+    return messageOutbox?.removeDuplicatePromotedRows?.(...args);
   }
 
-  function promoteOutboxRow(clientId, serverMsg, options = {}) {
-    if (!clientId || !serverMsg?.id) return null;
-    const row = findOutboxRow(clientId);
-    if (!row) return null;
-    const wasNearBottom = isNearBottom();
-    const anchor = !wasNearBottom && !isNearBottom(8) ? captureScrollAnchor() : null;
-    const previousId = row.dataset.msgId || row.dataset.clientId || clientId;
-    const showName = Boolean(row.querySelector('.msg-sender'));
-    const prepared = withStableOutboxMedia(row, {
-      ...serverMsg,
-      client_id: serverMsg.client_id || clientId,
-      client_status: null,
-      is_outbox: false,
-    });
-
-    forgetDisplayedMessage(previousId);
-    createMessageEl(prepared, showName, {
-      ...options,
-      reuseRow: row,
-      entering: false,
-    });
-    delete row.__outboxItem;
-    row.classList.remove('client-failed', 'client-sending');
-    delete row.dataset.clientStatus;
-    removeDuplicatePromotedRows(row, prepared.id);
-    rememberDisplayedMessage(prepared.id);
-    scheduleRetryLayout();
-    updateScrollBottomButton();
-    if (anchor) requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
-    return row;
+  function promoteOutboxRow(...args) {
+    return messageOutbox?.promoteOutboxRow?.(...args);
   }
 
-  function cleanupEmptyMessageGroups() {
-    messagesEl.querySelectorAll('.msg-group').forEach((group) => {
-      if (!group.querySelector('.msg-row')) group.remove();
-    });
+  function cleanupEmptyMessageGroups(...args) {
+    return messageOutbox?.cleanupEmptyMessageGroups?.(...args);
   }
 
-  function removeOutboxRows() {
-    messagesEl.querySelectorAll('.msg-row[data-outbox="1"]').forEach((row) => {
-      forgetDisplayedMessage(row.dataset.msgId);
-      revokeOutboxObjectUrls(row.dataset.clientId || row.dataset.msgId);
-      row.remove();
-    });
-    cleanupEmptyMessageGroups();
+  function removeOutboxRows(...args) {
+    return messageOutbox?.removeOutboxRows?.(...args);
   }
 
-  function buildLocalMessageFromOutbox(item) {
-    const attachment = (item.attachments && item.attachments[0]) || null;
-    const serverMeta = item.serverFileMeta || null;
-    const isVoice = item.kind === 'voice';
-    const isVideoNote = item.kind === 'video_note';
-    const mediaNote = isVideoNote ? (item.videoNote || {}) : (item.voice || {});
-    const fileBlob = (isVoice || isVideoNote) ? mediaNote.blob : attachment?.file;
-    const posterBlob = isVideoNote ? (mediaNote.posterBlob || attachment?.posterBlob || null) : (attachment?.posterBlob || null);
-    const localUrl = serverMeta?.stored_name ? '' : getOutboxObjectUrl(item.clientId, fileBlob, attachment?.localId || (isVideoNote ? 'video-note' : 'file'));
-    const localPosterUrl = posterBlob ? getOutboxObjectUrl(item.clientId, posterBlob, `${attachment?.localId || (isVideoNote ? 'video-note' : 'file')}-poster`) : '';
-    const fileName = serverMeta?.original_name || attachment?.name || mediaNote.name || (isVideoNote ? 'video-note.webm' : 'voice-note.wav');
-    const fileSize = serverMeta?.size || attachment?.size || fileBlob?.size || 0;
-    const fileMime = serverMeta?.mime_type || attachment?.mime || mediaNote.mime || (isVideoNote ? 'video/webm' : 'audio/wav');
-    const fileType = serverMeta?.type || attachment?.type || (isVideoNote ? 'video' : (isVoice ? 'audio' : null));
-    const hasPoster = Boolean(
-      localPosterUrl
-      || serverMeta?.poster_available
-      || serverMeta?.posterAvailable
-      || (fileType === 'video' && posterBlob)
-    );
-    const reply = item.reply || null;
-
-    return {
-      id: item.clientId,
-      client_id: item.clientId,
-      client_status: item.status || 'queued',
-      is_outbox: true,
-      chat_id: item.chatId,
-      user_id: currentUser.id,
-      username: currentUser.username,
-      display_name: currentUser.display_name,
-      avatar_color: currentUser.avatar_color,
-      avatar_url: currentUser.avatar_url,
-      text: item.text || null,
-      file_id: (attachment || isVoice || isVideoNote || serverMeta) ? (item.serverFileId || item.clientId) : null,
-      file_name: fileName,
-      file_stored: serverMeta?.stored_name || null,
-      client_file_url: localUrl,
-      client_poster_url: localPosterUrl,
-      file_mime: fileMime,
-      file_size: fileSize,
-      file_type: fileType,
-      file_poster_available: hasPoster,
-      reply_to_id: item.replyToId || null,
-      reply_display_name: reply?.display_name || null,
-      reply_text: reply?.text || null,
-      reply_is_voice_note: reply?.is_voice_note ? 1 : 0,
-      reply_note_kind: reply?.is_video_note ? 'video_note' : (reply?.is_voice_note ? 'voice' : null),
-      created_at: item.createdAt,
-      is_read: false,
-      reactions: [],
-      previews: [],
-      is_deleted: false,
-      is_voice_note: isVoice || isVideoNote,
-      is_video_note: isVideoNote,
-      media_note_kind: isVideoNote ? 'video_note' : (isVoice ? 'voice' : null),
-      voice_duration_ms: (isVoice || isVideoNote) ? mediaNote.durationMs : null,
-      video_note_shape_id: isVideoNote ? mediaNote.shapeId || 'banana-fat' : null,
-      video_note_shape_snapshot: isVideoNote ? mediaNote.shapeSnapshot || null : null,
-      transcription_status: isVoice && item.autoTranscribe ? 'pending' : 'idle',
-      transcription_text: '',
-      transcription_provider: '',
-      transcription_model: '',
-      transcription_error: '',
-      ai_response_mode_hint: item.aiResponseModeHint || null,
-      ai_document_format_hint: item.aiDocumentFormatHint || null,
-    };
+  function buildLocalMessageFromOutbox(...args) {
+    return messageOutbox?.buildLocalMessageFromOutbox?.(...args);
   }
 
-  function renderOutboxItem(item) {
-    if (!item || Number(item.chatId) !== Number(currentChatId)) return null;
-    if (isMessageDisplayed(item.clientId)) return findOutboxRow(item.clientId);
-    const localMsg = buildLocalMessageFromOutbox(item);
-    appendMessage(localMsg);
-    const row = findOutboxRow(item.clientId);
-    if (row) {
-      row.__outboxItem = item;
-      row.__messageData = { ...(row.__messageData || {}), ...localMsg };
-      updateRowStatus(row);
-    }
-    scheduleRetryLayout();
-    return row;
+  function renderOutboxItem(...args) {
+    return messageOutbox?.renderOutboxItem?.(...args);
   }
 
-  async function renderOutboxForChat(chatId) {
-    const id = Number(chatId || 0);
-    if (!id || id !== Number(currentChatId || 0)) return;
-    removeOutboxRows();
-    const items = await window.messageCache?.readOutbox?.(id) || [];
-    if (id !== Number(currentChatId || 0)) return;
-    items
-      .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')))
-      .forEach((item) => renderOutboxItem(item));
-    updateScrollBottomButton();
+  function renderOutboxForChat(...args) {
+    return messageOutbox?.renderOutboxForChat?.(...args);
   }
 
-  function scheduleRetryLayout() {
-    clearTimeout(retryLayoutTimer);
-    retryLayoutTimer = setTimeout(() => requestAnimationFrame(layoutRetryButtons), 0);
+  function scheduleRetryLayout(...args) {
+    return messageOutbox?.scheduleRetryLayout?.(...args);
   }
 
-  function layoutRetryButtons() {
-    if (!messagesEl) return;
-    const containerRect = messagesEl.getBoundingClientRect();
-    messagesEl.querySelectorAll('.msg-row[data-outbox="1"] .msg-retry-btn').forEach((btn) => {
-      const row = btn.closest('.msg-row');
-      const bubble = row?.querySelector('.msg-bubble') || btn.closest('.msg-bubble');
-      if (!bubble) return;
-      const bubbleRect = bubble.getBoundingClientRect();
-      const retryWidth = btn.offsetWidth || 22;
-      const useRightSide = Boolean(row?.classList.contains('own') && messagesEl.classList.contains('compact-view'));
-      const shouldInline = useRightSide
-        ? bubbleRect.right + retryWidth + 2 > containerRect.right - 2
-        : bubbleRect.left - retryWidth - 2 < containerRect.left + 2;
-      btn.classList.toggle('retry-side-right', useRightSide);
-      btn.classList.toggle('retry-side-left', !useRightSide);
-      bubble.classList.toggle('retry-inline', shouldInline);
-      if (shouldInline) {
-        const footer = bubble.querySelector('.msg-footer');
-        let slot = footer?.querySelector('.msg-retry-slot');
-        if (footer && !slot) {
-          slot = document.createElement('span');
-          slot.className = 'msg-retry-slot';
-          const time = footer.querySelector('.msg-time');
-          footer.insertBefore(slot, time || null);
-        }
-        if (slot) {
-          if (btn.parentElement !== slot) slot.appendChild(btn);
-        }
-        btn.classList.add('inline');
-      } else {
-        const slot = bubble.querySelector('.msg-retry-slot');
-        if (btn.parentElement !== bubble) bubble.appendChild(btn);
-        if (slot && slot.childElementCount === 0) slot.remove();
-        btn.classList.remove('inline');
-      }
-    });
+  function layoutRetryButtons(...args) {
+    return messageOutbox?.layoutRetryButtons?.(...args);
   }
 
-  async function persistOutboxItem(item) {
-    item.status = item.status || 'queued';
-    await window.messageCache?.upsertOutboxItem?.(item);
-    const row = findOutboxRow(item.clientId);
-    if (row) row.__outboxItem = item;
-    return item;
+  function persistOutboxItem(...args) {
+    return messageOutbox?.persistOutboxItem?.(...args);
   }
 
-  function setOutboxSending(clientId, sending) {
-    if (!clientId) return;
-    if (sending) outboxSending.add(clientId);
-    else outboxSending.delete(clientId);
-    const row = findOutboxRow(clientId);
-    if (row) updateRowStatus(row);
+  function setOutboxSending(...args) {
+    return messageOutbox?.setOutboxSending?.(...args);
   }
 
-  async function uploadOutboxAttachment(item) {
-    if (item.serverFileId) return item.serverFileId;
-    const attachment = item.attachments && item.attachments[0];
-    if (!attachment?.file) throw new Error('Attachment is not available locally');
-    const fd = new FormData();
-    fd.append('file', attachment.file, attachment.name || 'attachment');
-    if (attachment.posterBlob) {
-      fd.append('poster', attachment.posterBlob, 'video-poster.jpg');
-    }
-    const data = await api('/api/upload', { method: 'POST', body: fd });
-    item.serverFileId = data.id;
-    item.serverFileMeta = data;
-    await persistOutboxItem(item);
-    return data.id;
+  function uploadOutboxAttachment(...args) {
+    return messageOutbox?.uploadOutboxAttachment?.(...args);
   }
 
-  async function sendOutboxMessageItem(item) {
-    const attachment = item.attachments && item.attachments[0];
-    let fileId = item.serverFileId || null;
-    if (attachment && !fileId) fileId = await uploadOutboxAttachment(item);
-    return api(`/api/chats/${item.chatId}/messages`, {
-      method: 'POST',
-      body: {
-        text: item.text || null,
-        fileId: fileId || null,
-        replyToId: item.replyToId || null,
-        client_id: item.clientId,
-        aiImageRiskAccepted: Boolean(item.aiImageRiskAccepted),
-        ai_response_mode_hint: item.aiResponseModeHint || null,
-        ai_document_format_hint: item.aiDocumentFormatHint || null,
-      },
-    });
+  function sendOutboxMessageItem(...args) {
+    return messageOutbox?.sendOutboxMessageItem?.(...args);
   }
 
-  async function sendOutboxVoiceItem(item) {
-    const voice = item.voice || {};
-    if (!voice.blob) throw new Error('Voice note is not available locally');
-    const formData = new FormData();
-    formData.append('file', voice.blob, voice.name || `voice-note-${Date.now()}.wav`);
-    formData.append('durationMs', String(voice.durationMs || 0));
-    formData.append('sampleRate', String(voice.sampleRate || 16000));
-    formData.append('client_id', item.clientId);
-    if (item.replyToId) formData.append('replyToId', String(item.replyToId));
-    return api(`/api/chats/${item.chatId}/voice-message`, {
-      method: 'POST',
-      body: formData,
-    });
+  function sendOutboxVoiceItem(...args) {
+    return messageOutbox?.sendOutboxVoiceItem?.(...args);
   }
 
-  async function sendOutboxVideoNoteItem(item) {
-    const videoNote = item.videoNote || {};
-    if (!videoNote.blob || !videoNote.audioBlob) throw new Error('Video note is not available locally');
-    const normalizedVideoMime = String(videoNote.mime || 'video/webm').split(';')[0].trim().toLowerCase() || 'video/webm';
-    const formData = new FormData();
-    formData.append('video', videoNote.blob, videoNote.name || `video-note-${Date.now()}.webm`);
-    formData.append('audio', videoNote.audioBlob, videoNote.audioName || `video-note-${Date.now()}.wav`);
-    if (videoNote.posterBlob) {
-      formData.append('poster', videoNote.posterBlob, 'video-note-poster.jpg');
-    }
-    formData.append('durationMs', String(videoNote.durationMs || 0));
-    formData.append('sampleRate', String(videoNote.sampleRate || 16000));
-    formData.append('videoMime', normalizedVideoMime);
-    formData.append('client_id', item.clientId);
-    formData.append('shapeId', String(videoNote.shapeId || 'banana-fat'));
-    formData.append('shapeSnapshot', JSON.stringify(videoNote.shapeSnapshot || null));
-    if (item.replyToId) formData.append('replyToId', String(item.replyToId));
-    return api(`/api/chats/${item.chatId}/video-note`, {
-      method: 'POST',
-      body: formData,
-    });
+  function sendOutboxVideoNoteItem(...args) {
+    return messageOutbox?.sendOutboxVideoNoteItem?.(...args);
   }
 
-  async function completeOutboxSend(item, serverMsg) {
-    if (!serverMsg) return;
-    await window.messageCache?.deleteOutboxItem?.(item.chatId, item.clientId);
-    outboxSending.delete(item.clientId);
-    applyOwnReadStateToMessage(serverMsg, item.chatId);
-    try { window.messageCache?.upsertMessage?.(serverMsg).catch(()=>{}); } catch (e) {}
-    updateChatListLastMessage(serverMsg);
-
-    const row = promoteOutboxRow(item.clientId, serverMsg, { mediaAutoScrollToBottom: true });
-    const alreadyDisplayed = isMessageDisplayed(serverMsg.id);
-    if (!row && Number(serverMsg.chat_id) === Number(currentChatId) && !alreadyDisplayed) {
-      appendMessage(serverMsg, { mediaAutoScrollToBottom: true });
-    }
-    updateScrollBottomButton();
-    if (Number(serverMsg.chat_id) === Number(currentChatId)) {
-      requestAnimationFrame(() => {
-        scrollToBottom();
-        requestAnimationFrame(() => scrollToBottom());
-      });
-    }
+  function completeOutboxSend(...args) {
+    return messageOutbox?.completeOutboxSend?.(...args);
   }
 
-  async function trySendOutboxItem(rawItem) {
-    const latest = await window.messageCache?.getOutboxItem?.(rawItem.chatId, rawItem.clientId);
-    const item = latest || rawItem;
-    if (!item?.clientId || outboxSending.has(item.clientId)) return;
-    item.status = 'sending';
-    await persistOutboxItem(item);
-    setOutboxSending(item.clientId, true);
-    try {
-      const serverMsg = item.kind === 'voice'
-        ? await sendOutboxVoiceItem(item)
-        : item.kind === 'video_note'
-          ? await sendOutboxVideoNoteItem(item)
-          : await sendOutboxMessageItem(item);
-      await completeOutboxSend(item, serverMsg);
-    } catch (e) {
-      item.status = 'failed';
-      await persistOutboxItem(item);
-    } finally {
-      setOutboxSending(item.clientId, false);
-    }
+  function trySendOutboxItem(...args) {
+    return messageOutbox?.trySendOutboxItem?.(...args);
   }
 
-  async function queueOutboxItem(item, { attempt = true } = {}) {
-    await persistOutboxItem(item);
-    renderOutboxItem(item);
-    if (attempt) await trySendOutboxItem(item);
-    return item;
+  function queueOutboxItem(...args) {
+    return messageOutbox?.queueOutboxItem?.(...args);
   }
 
-  function createMessageOutboxItem({
-    text = null,
-    attachment = null,
-    reply = null,
-    createdAt = null,
-    aiImageRiskAccepted = false,
-    aiResponseModeHint = null,
-    aiDocumentFormatHint = null,
-  } = {}) {
-    const clientId = makeClientId('c');
-    return {
-      clientId,
-      chatId: currentChatId,
-      userId: currentUser.id,
-      status: 'queued',
-      kind: 'message',
-      createdAt: createdAt || new Date().toISOString(),
-      text: text || null,
-      aiImageRiskAccepted: Boolean(aiImageRiskAccepted),
-      aiResponseModeHint: aiResponseModeHint || null,
-      aiDocumentFormatHint: aiDocumentFormatHint || null,
-      replyToId: reply?.id || null,
-      reply,
-      attachments: attachment ? [attachment] : [],
-      serverFileId: null,
-      serverFileMeta: null,
-    };
+  function createMessageOutboxItem(...args) {
+    return messageOutbox?.createMessageOutboxItem?.(...args);
   }
 
-  async function queueVoiceOutbox({ blob, durationMs, sampleRate, replyTo: suppliedReply, autoTranscribe = false } = {}) {
-    if (!currentChatId || !blob) return null;
-    const reply = getReplySnapshot(suppliedReply || replyTo);
-    const clientId = makeClientId('c');
-    const voiceName = `voice-note-${Date.now()}.wav`;
-    const item = {
-      clientId,
-      chatId: currentChatId,
-      userId: currentUser.id,
-      status: 'queued',
-      kind: 'voice',
-      autoTranscribe: Boolean(autoTranscribe),
-      createdAt: new Date().toISOString(),
-      text: null,
-      replyToId: reply?.id || null,
-      reply,
-      attachments: [{
-        localId: 'voice',
-        file: blob,
-        name: voiceName,
-        size: blob.size || 0,
-        mime: 'audio/wav',
-        type: 'audio',
-      }],
-      voice: {
-        blob,
-        name: voiceName,
-        durationMs,
-        sampleRate,
-        mime: 'audio/wav',
-      },
-    };
-    clearReply();
-    await queueOutboxItem(item, { attempt: false });
-    playAppSound('send');
-    scrollToBottom();
-    trySendOutboxItem(item);
-    return item;
+  function queueVoiceOutbox(...args) {
+    return messageOutbox?.queueVoiceOutbox?.(...args);
   }
 
-  async function queueVideoNoteOutbox({
-    videoBlob,
-    audioBlob,
-    posterBlob,
-    durationMs,
-    sampleRate,
-    videoMime,
-    shapeId,
-    shapeSnapshot,
-    replyTo: suppliedReply,
-  } = {}) {
-    if (!currentChatId || !videoBlob || !audioBlob) return null;
-    const reply = getReplySnapshot(suppliedReply || replyTo);
-    const clientId = makeClientId('c');
-    const videoName = `video-note-${Date.now()}.webm`;
-    const audioName = `video-note-${Date.now()}.wav`;
-    const item = {
-      clientId,
-      chatId: currentChatId,
-      userId: currentUser.id,
-      status: 'queued',
-      kind: 'video_note',
-      createdAt: new Date().toISOString(),
-      text: null,
-      replyToId: reply?.id || null,
-      reply,
-      attachments: [{
-        localId: 'video-note',
-        file: videoBlob,
-        name: videoName,
-        size: videoBlob.size || 0,
-        mime: videoMime || 'video/webm',
-        type: 'video',
-        posterBlob: posterBlob || null,
-      }],
-      videoNote: {
-        blob: videoBlob,
-        audioBlob,
-        posterBlob: posterBlob || null,
-        name: videoName,
-        audioName,
-        durationMs,
-        sampleRate,
-        mime: videoMime || 'video/webm',
-        shapeId: shapeId || 'banana-fat',
-        shapeSnapshot: shapeSnapshot || null,
-      },
-    };
-    clearReply();
-    await queueOutboxItem(item, { attempt: false });
-    playAppSound('send');
-    scrollToBottom();
-    trySendOutboxItem(item);
-    return item;
+  function queueVideoNoteOutbox(...args) {
+    return messageOutbox?.queueVideoNoteOutbox?.(...args);
   }
 
   // SEND MESSAGE
@@ -17643,162 +15204,20 @@
   // ═══════════════════════════════════════════════════════════════════════════
   // DELETE MESSAGE
   // ═══════════════════════════════════════════════════════════════════════════
-  async function deleteMessage(id) {
-    if (!confirm('Delete this message?')) return;
-    try {
-      await api(`/api/messages/${id}`, { method: 'DELETE' });
-      // Immediately update UI in case WS is slow
-      markMessageDeleted(id);
-      loadChats();
-    } catch (err) { console.error('[delete] failed:', err); }
+  function deleteMessage(...args) {
+    return messageUpdates?.deleteMessage?.(...args);
   }
 
-  function markMessageDeleted(msgId, chatId = currentChatId) {
-    try { if (window.messageCache) window.messageCache.deleteMessage(chatId, msgId).catch(()=>{}); } catch (e) {}
-    ensureScrollAnchorsLoaded();
-    const activeChatId = Number(currentChatId || 0);
-    const targetChatId = Number(chatId || activeChatId || 0);
-    const savedAnchor = targetChatId ? scrollController.getScrollAnchor(targetChatId) : null;
-    const deletedAnchorWasSaved = Boolean(savedAnchor?.messageId && Number(savedAnchor.messageId) === Number(msgId));
-    const isActiveChat = targetChatId > 0 && targetChatId === activeChatId;
-    const preserveAnchor = isActiveChat ? captureScrollAnchor() : null;
-    const el = messagesEl.querySelector(`[data-msg-id="${msgId}"]`);
-    if (!el) {
-      if (deletedAnchorWasSaved && targetChatId) {
-        scrollController.deleteScrollAnchor(targetChatId);
-      }
-      console.warn('[markDeleted] element not found for', msgId);
-      return;
-    }
-    if (
-      String(activeMessageActionsRow?.dataset?.msgId || '') === String(msgId)
-      || String(reactionPickerMsgId || '') === String(msgId)
-    ) {
-      hideFloatingMessageActions({ immediate: true });
-    }
-    if (editTo?.id === msgId) clearEdit({ clearInput: true });
-    el.querySelectorAll('audio, video').forEach((media) => {
-      try {
-        media.pause?.();
-        media.currentTime = 0;
-      } catch (e) {}
-    });
-
-    const previousMessage = el.__messageData ? { ...el.__messageData } : null;
-    const deletedPreviewText = 'Message deleted';
-    const deletedMessage = {
-      ...(previousMessage || {}),
-      id: Number(previousMessage?.id || msgId || 0),
-      chat_id: Number(previousMessage?.chat_id || previousMessage?.chatId || targetChatId || activeChatId || 0),
-      user_id: Number(previousMessage?.user_id || el.dataset.userId || 0),
-      is_deleted: true,
-      text: deletedPreviewText,
-      file_id: null,
-      file_name: null,
-      file_stored: null,
-      file_type: null,
-      file_mime: null,
-      file_size: null,
-      client_file_url: '',
-      client_poster_url: '',
-      file_poster_available: false,
-      previews: [],
-      reactions: [],
-      edited_at: null,
-      poll: null,
-      is_voice_note: false,
-      is_video_note: false,
-      voice_duration_ms: null,
-      media_note_duration_ms: null,
-      transcription_status: 'idle',
-      transcription_text: '',
-      transcription_provider: '',
-      transcription_model: '',
-      transcription_error: '',
-      client_status: null,
-    };
-
-    let replaced = false;
-    try {
-      replaced = replaceRenderedMessage(deletedMessage);
-    } catch (e) {
-      console.warn('[markDeleted] rerender failed for', msgId, e);
-    }
-
-    if (!replaced) {
-      const bubble = el.querySelector('.msg-bubble');
-      if (!bubble) {
-        console.warn('[markDeleted] bubble not found');
-        return;
-      }
-      const timeEl = bubble.querySelector('.msg-time');
-      const timeText = timeEl ? timeEl.textContent : '';
-      bubble.innerHTML = `<span class="msg-deleted">Message deleted</span><span class="msg-time">${esc(timeText)}</span>`;
-      el.classList.remove('video-note-row', 'video-note-playing', 'media-message', 'poll-message', 'emoji-only-message', 'client-failed', 'client-sending');
-      delete el.dataset.clientStatus;
-      el.__messageData = deletedMessage;
-      el.__voiceMessage = null;
-      if (el.__replyPayload) {
-        el.__replyPayload = {
-          ...el.__replyPayload,
-          text: deletedPreviewText,
-          is_voice_note: false,
-          is_video_note: false,
-        };
-      }
-      el.querySelector('.msg-reply-btn')?.remove();
-      el.querySelector('.msg-react-btn')?.remove();
-      el.querySelector('.msg-edit-btn')?.remove();
-      el.querySelector('.msg-context-convert-btn')?.remove();
-      el.querySelector('.msg-restore-original-btn')?.remove();
-      el.querySelector('.msg-save-note-btn')?.remove();
-      el.querySelector('.msg-forward-btn')?.remove();
-      el.querySelector('.msg-actions')?.remove();
-    } else {
-      const replacement = messagesEl.querySelector(`[data-msg-id="${msgId}"]`);
-      if (replacement?.__replyPayload) {
-        replacement.__replyPayload = {
-          ...replacement.__replyPayload,
-          text: deletedPreviewText,
-          is_voice_note: false,
-          is_video_note: false,
-        };
-      }
-    }
-
-    updateVisibleReplyQuotesFromMessage(deletedMessage);
-    requestAnimationFrame(() => {
-      if (isActiveChat && preserveAnchor?.messageId) restoreScrollAnchor(preserveAnchor, 1);
-      if (targetChatId) saveCurrentScrollAnchor(targetChatId, { force: true });
-    });
+  function markMessageDeleted(...args) {
+    return messageUpdates?.markMessageDeleted?.(...args);
   }
 
-  function updateVisibleReplyQuotesFromMessage(msg) {
-    if (!msg?.id) return;
-    const text = getReplyPreviewText(msg);
-    if (replyTo?.id === msg.id && !editTo) {
-      replyTo.text = text;
-      replyBarText.textContent = text || '📎 Attachment';
-    }
-    messagesEl.querySelectorAll(`.msg-reply[data-reply-id="${msg.id}"] .msg-reply-text`).forEach((el) => {
-      el.textContent = text;
-    });
+  function updateVisibleReplyQuotesFromMessage(...args) {
+    return messageUpdates?.updateVisibleReplyQuotesFromMessage?.(...args);
   }
 
-  function applyMessageUpdate(msg, options = {}) {
-    if (!msg?.id) return;
-    updateVisibleReplyQuotesFromMessage(msg);
-    applyOwnReadStateToMessage(msg, msg.chat_id || currentChatId);
-    try { if (window.messageCache) window.messageCache.upsertMessage(msg).catch(()=>{}); } catch (e) {}
-    if (msg.chat_id !== currentChatId) return;
-    replaceRenderedMessage(msg, options);
-    if (Number(reactionPickerMsgId || 0) === Number(msg.id || 0) && isFloatingSurfaceVisible(reactionPicker)) {
-      renderReactionPickerContent();
-      positionMessageActionSurfaces({
-        includeActions: Boolean(activeMessageActionsRow),
-        includePicker: true,
-      });
-    }
+  function applyMessageUpdate(...args) {
+    return messageUpdates?.applyMessageUpdate?.(...args);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -19866,8 +17285,6 @@
   let gallerySessionId = 0;
   let galleryImagePreloads = new Map();
   let galleryVideoPreloads = new Map();
-  const pendingMediaBottomScrollRows = new Set();
-  let mediaBottomAutoScrollUserIntentAt = 0;
   let galleryEdgeToastTimer = null;
   let galleryEdgeBounceTimer = null;
   let ivScale = 1, ivPanX = 0, ivPanY = 0;
@@ -22972,7 +20389,7 @@
       hideAvatarUserMenu();
     });
     document.addEventListener('pointerdown', (e) => {
-      if (!activePulseVoterPopover) return;
+      if (!messagePollRenderer?.getState?.().activePulseVoterPopover) return;
       if (e.target.closest('[data-poll-voter-avatar], [data-poll-voter-more], [data-poll-voter-popover]')) return;
       clearActivePulseVoterPopover();
     });
