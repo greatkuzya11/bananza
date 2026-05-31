@@ -1777,6 +1777,19 @@ html[data-visual-mode="rich"] .call-admin-status {
   flex-wrap: wrap;
 }
 
+.call-transcript-body .call-admin-status {
+  justify-self: start;
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 2px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+  background: color-mix(in srgb, var(--call-bg-panel) 72%, transparent);
+}
+
 .call-transcript-action {
   gap: 6px;
   min-height: 24px;
