@@ -47,6 +47,13 @@ const appChatListScriptPaths = Object.freeze([
   'public/js/app/chat-list/presence.js',
   'public/js/app/chat-list/recovery.js',
 ]);
+const appOpenChatScriptPaths = Object.freeze([
+  'public/js/app/open-chat/pages.js',
+  'public/js/app/open-chat/read-receipts.js',
+  'public/js/app/open-chat/scroll.js',
+  'public/js/app/open-chat/media-playback.js',
+  'public/js/app/open-chat/controller.js',
+]);
 const appRuntimeScriptPaths = Object.freeze([
   ...appShellScriptPaths,
   ...appCoreHelperScriptPaths,
@@ -55,6 +62,7 @@ const appRuntimeScriptPaths = Object.freeze([
   ...appSettingsScriptPaths,
   ...appFolderScriptPaths,
   ...appChatListScriptPaths,
+  ...appOpenChatScriptPaths,
 ]);
 
 class FakeAudioNode {
@@ -367,6 +375,10 @@ function loadAppChatListScripts(dom) {
   loadBrowserScripts(dom, appChatListScriptPaths);
 }
 
+function loadAppOpenChatScripts(dom) {
+  loadBrowserScripts(dom, appOpenChatScriptPaths);
+}
+
 function loadAppRuntimeScripts(dom) {
   loadBrowserScripts(dom, appRuntimeScriptPaths);
 }
@@ -454,6 +466,7 @@ module.exports = {
   appCoreHelperScriptPaths,
   appDomMobileShellScriptPaths,
   appFolderScriptPaths,
+  appOpenChatScriptPaths,
   appModalManagerScriptPaths,
   appSettingsScriptPaths,
   appRuntimeScriptPaths,
@@ -467,6 +480,7 @@ module.exports = {
   loadAppDomMobileShellScripts,
   loadAppFolderScripts,
   loadAppModalManagerScripts,
+  loadAppOpenChatScripts,
   loadAppSettingsScripts,
   loadAppRuntimeScripts,
   loadAppShellScripts,
