@@ -5,6 +5,39 @@ const path = require('path');
 
 const { repoRoot } = require('../support/paths');
 const RUNTIME_ASSEMBLY_LINE_LIMIT = 160;
+const FEATURE_COMPOSITION_LINE_LIMIT = 180;
+const COMPOSITION_SCRIPTS = [
+  '/js/app/boot/composition/export-utils.js',
+  '/js/app/boot/composition/feature-primitives.js',
+  '/js/app/boot/composition/dom-shell.js',
+  '/js/app/boot/composition/runtime-proxy-scope.js',
+  '/js/app/boot/composition/ai-admin-composition.js',
+  '/js/app/boot/composition/ui-shell-adapters.js',
+  '/js/app/boot/composition/admin-settings-composition.js',
+  '/js/app/boot/composition/folders-composition.js',
+  '/js/app/boot/composition/chat-list-composition.js',
+  '/js/app/boot/composition/open-chat-composition.js',
+  '/js/app/boot/composition/messages-composition.js',
+  '/js/app/boot/composition/composer-composition.js',
+  '/js/app/boot/composition/shell-runtime-composition.js',
+  '/js/app/boot/composition/interactions-composition.js',
+];
+const COMPOSITION_FILE_LIMITS = {
+  'public/js/app/boot/composition/export-utils.js': 120,
+  'public/js/app/boot/composition/feature-primitives.js': 120,
+  'public/js/app/boot/composition/dom-shell.js': 450,
+  'public/js/app/boot/composition/runtime-proxy-scope.js': 120,
+  'public/js/app/boot/composition/ai-admin-composition.js': 140,
+  'public/js/app/boot/composition/ui-shell-adapters.js': 140,
+  'public/js/app/boot/composition/admin-settings-composition.js': 300,
+  'public/js/app/boot/composition/folders-composition.js': 220,
+  'public/js/app/boot/composition/chat-list-composition.js': 300,
+  'public/js/app/boot/composition/open-chat-composition.js': 300,
+  'public/js/app/boot/composition/messages-composition.js': 350,
+  'public/js/app/boot/composition/composer-composition.js': 320,
+  'public/js/app/boot/composition/shell-runtime-composition.js': 100,
+  'public/js/app/boot/composition/interactions-composition.js': 320,
+};
 
 function readRelative(filePath) {
   return fs.readFileSync(path.join(repoRoot, filePath), 'utf8');
@@ -65,6 +98,7 @@ test('boot scripts are explicit and load before runtime entrypoint', () => {
     '/js/app/boot/websocket.js',
     '/js/app/boot/ws-dispatch.js',
     '/js/app/boot/runtime-core.js',
+    ...COMPOSITION_SCRIPTS,
     '/js/app/boot/feature-composition.js',
     '/js/app/boot/events.js',
     '/js/app/boot/public-bridge.js',
@@ -95,7 +129,7 @@ test('new boot modules stay small and keep assembly debt visible', () => {
     if (file === 'runtime-assembly.js') continue;
     const source = readRelative(`public/js/app/boot/${file}`);
     const lineLimits = {
-      'feature-composition.js': 2100,
+      'feature-composition.js': FEATURE_COMPOSITION_LINE_LIMIT,
       'init.js': 250,
       'public-bridge.js': 550,
       'runtime-core.js': 700,
@@ -106,6 +140,53 @@ test('new boot modules stay small and keep assembly debt visible', () => {
     if (file !== 'ws-dispatch.js' && file !== 'feature-composition.js') {
       assert.doesNotMatch(source, /\bCHAT LIST\b|\bMESSAGES\b|\bEVENT LISTENERS\b/);
     }
+  }
+});
+
+test('feature composition is a small orchestrator and composition files stay bounded', () => {
+  const indexHtml = readRelative('public/index.html');
+  const scripts = [...indexHtml.matchAll(/<script\s+src="([^"]+)"/g)].map((match) => match[1]);
+  const runtimeCoreIndex = scripts.findIndex((src) => src.startsWith('/js/app/boot/runtime-core.js'));
+  const featureCompositionIndex = scripts.findIndex((src) => src.startsWith('/js/app/boot/feature-composition.js'));
+  const featureComposition = readRelative('public/js/app/boot/feature-composition.js');
+
+  assert.notEqual(runtimeCoreIndex, -1, 'runtime-core.js script must be present');
+  assert.notEqual(featureCompositionIndex, -1, 'feature-composition.js script must be present');
+  assert.ok(lineCount(featureComposition) < FEATURE_COMPOSITION_LINE_LIMIT, `feature-composition.js should stay below ${FEATURE_COMPOSITION_LINE_LIMIT} lines`);
+  assert.match(featureComposition, /composeFeatureRuntime/);
+
+  const forbiddenFeatureCompositionPatterns = [
+    /__bananzaRuntimeExportNames/,
+    /\bfunction\s+createRuntimeProxyScope\b/,
+    /\bfunction\s+createFallbackDomRefs\b/,
+    /createMessageRenderer/,
+    /createChatListStore/,
+    /createOpenChatController/,
+    /installRuntimeModules/,
+    /createUiRuntimeAdapter/,
+    /createShellRuntimeAdapter/,
+    /window\.BananzaApp\?\.composer/,
+    /window\.BananzaApp\?\.messages/,
+    /window\.BananzaApp\?\.chatList/,
+    /window\.BananzaApp\?\.folders/,
+    /window\.BananzaApp\?\.interactions/,
+    /window\.BananzaApp\?\.aiAdmin/,
+  ];
+
+  for (const pattern of forbiddenFeatureCompositionPatterns) {
+    assert.doesNotMatch(featureComposition, pattern, `feature-composition.js must not contain ${pattern}`);
+  }
+
+  for (const script of COMPOSITION_SCRIPTS) {
+    const scriptIndex = scripts.findIndex((src) => src.startsWith(script));
+    const filePath = `public${script}`;
+    const source = readRelative(filePath);
+    const maxLines = COMPOSITION_FILE_LIMITS[filePath] || 450;
+    assert.notEqual(scriptIndex, -1, `${script} script must be present`);
+    assert.ok(runtimeCoreIndex < scriptIndex, `${script} must load after runtime-core.js`);
+    assert.ok(scriptIndex < featureCompositionIndex, `${script} must load before feature-composition.js`);
+    assert.ok(lineCount(source) < maxLines, `${filePath} should stay below ${maxLines} lines`);
+    assert.doesNotMatch(source, /__bananzaRuntimeExportNames/, `${filePath} must not keep the old monolithic export registry`);
   }
 });
 
@@ -120,6 +201,7 @@ test('runtime assembly no longer owns extracted shell and websocket sections', (
     '/js/app/shell/mobile-runtime-adapters.js',
     '/js/app/boot/ws-dispatch.js',
     '/js/app/boot/runtime-core.js',
+    ...COMPOSITION_SCRIPTS,
     '/js/app/boot/feature-composition.js',
   ];
   const extractedRuntimeLimits = {
@@ -128,7 +210,8 @@ test('runtime assembly no longer owns extracted shell and websocket sections', (
     'public/js/app/shell/mobile-runtime-adapters.js': 150,
     'public/js/app/boot/ws-dispatch.js': 950,
     'public/js/app/boot/runtime-core.js': 700,
-    'public/js/app/boot/feature-composition.js': 2100,
+    'public/js/app/boot/feature-composition.js': FEATURE_COMPOSITION_LINE_LIMIT,
+    ...COMPOSITION_FILE_LIMITS,
   };
 
   assert.ok(lineCount(assembly) < RUNTIME_ASSEMBLY_LINE_LIMIT, `runtime-assembly.js line count ${lineCount(assembly)} should stay below ${RUNTIME_ASSEMBLY_LINE_LIMIT}`);
@@ -173,6 +256,7 @@ test('runtime composition and adapters do not expose legacy naming', () => {
     'public/js/app/boot/runtime-assembly.js',
     'public/js/app/boot/runtime-core.js',
     'public/js/app/boot/feature-composition.js',
+    ...COMPOSITION_SCRIPTS.map((script) => `public${script}`),
     'public/js/app/boot/public-bridge.js',
     'public/js/app/boot/ws-dispatch.js',
     'public/js/app/boot/init.js',
@@ -265,7 +349,7 @@ test('core auth api and websocket ownership lives in boot modules', () => {
 
 test('chat list state and presence ownership lives behind boot service', () => {
   const assembly = readRelative('public/js/app/boot/runtime-assembly.js');
-  const featureComposition = readRelative('public/js/app/boot/feature-composition.js');
+  const chatListComposition = readRelative('public/js/app/boot/composition/chat-list-composition.js');
   const chatListService = readRelative('public/js/app/boot/chat-list-service.js');
   const state = readRelative('public/js/app/boot/state.js');
 
@@ -279,13 +363,13 @@ test('chat list state and presence ownership lives behind boot service', () => {
   assert.doesNotMatch(assembly, /\bfunction\s+hydrateChatListCache\b/);
   assert.doesNotMatch(assembly, /chatListService\.configure/);
   assert.doesNotMatch(assembly, /chatListService\.getChats/);
-  assert.match(featureComposition, /chatListService\.configure/);
+  assert.match(chatListComposition, /chatListService\.configure/);
 });
 
 test('open chat pagination and scroll ownership lives behind open-chat service', () => {
   const assembly = readRelative('public/js/app/boot/runtime-assembly.js');
   const runtimeCore = readRelative('public/js/app/boot/runtime-core.js');
-  const featureComposition = readRelative('public/js/app/boot/feature-composition.js');
+  const openChatComposition = readRelative('public/js/app/boot/composition/open-chat-composition.js');
   const openChatService = readRelative('public/js/app/boot/open-chat-service.js');
   const openChatController = readRelative('public/js/app/open-chat/controller.js');
   const state = readRelative('public/js/app/boot/state.js');
@@ -308,14 +392,14 @@ test('open chat pagination and scroll ownership lives behind open-chat service',
   assert.doesNotMatch(assembly, /\bfunction\s+restoreScrollAnchor\b/);
   assert.doesNotMatch(assembly, /openChatService\.configure/);
   assert.doesNotMatch(assembly, /openChatService\.openChat/);
-  assert.match(featureComposition, /openChatService\.configure/);
+  assert.match(openChatComposition, /openChatService\.configure/);
   assert.match(runtimeCore, /openChatService\.openChat/);
 });
 
 test('message rendering update and outbox ownership lives behind messages service', () => {
   const assembly = readRelative('public/js/app/boot/runtime-assembly.js');
   const runtimeCore = readRelative('public/js/app/boot/runtime-core.js');
-  const featureComposition = readRelative('public/js/app/boot/feature-composition.js');
+  const messagesComposition = readRelative('public/js/app/boot/composition/messages-composition.js');
   const messagesService = readRelative('public/js/app/boot/messages-service.js');
   const state = readRelative('public/js/app/boot/state.js');
 
@@ -350,6 +434,6 @@ test('message rendering update and outbox ownership lives behind messages servic
 
   assert.doesNotMatch(assembly, /messagesService\.configure/);
   assert.doesNotMatch(assembly, /messagesService\?\.appendMessage|messageServiceCall/);
-  assert.match(featureComposition, /messagesService\.configure/);
+  assert.match(messagesComposition, /messagesService\.configure/);
   assert.match(runtimeCore, /messageServiceCall/);
 });

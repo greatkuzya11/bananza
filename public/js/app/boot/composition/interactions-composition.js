@@ -1,0 +1,251 @@
+(function () {
+  const root = window.BananzaApp = window.BananzaApp || {};
+  const bootRoot = root.boot = root.boot || {};
+  const compositionRoot = bootRoot.composition = bootRoot.composition || {};
+
+  compositionRoot.composeInteractions = function composeInteractions(scope = {}) {
+    with (scope) {
+      const composerServices = {
+        state: composerStateController,
+        text: composerTextController,
+        replyEdit: composerReplyEditController,
+        files: composerFilesController,
+        send: composerSendController,
+        emojiPicker: composerEmojiPickerController,
+        mentions: composerMentionsController,
+        typingDragDrop: composerTypingDragDropController,
+        pollComposer: pollComposerController,
+      };
+      if (appContext) appContext.services.composer = composerServices;
+    
+      const interactionState = {
+        getCurrentUser: () => currentUser,
+        getCurrentChatId: () => currentChatId,
+        getCurrentModalAnimation: () => currentModalAnimation,
+        getChats: () => chats,
+        getOnlineUsers: () => onlineUsers,
+        contextConvertPendingMessageIds,
+        contextOriginalRestorePendingMessageIds,
+      };
+      searchController = searchControllerFactory({
+        window,
+        document,
+        dom: appDom,
+        state: interactionState,
+        config: appConfig,
+        api: (url, opts) => api(url, opts),
+        esc,
+        t,
+        tx,
+        $,
+        services: {
+          openChat: { openChat, scroll: scrollController },
+          messages: messageServices,
+        },
+        actions: {
+          clamp: (value, min, max) => clamp(value, min, max),
+          showCenterToast: (message) => showCenterToast(message),
+          openChat: (chatId, options = {}) => openChat(chatId, options),
+          closeMobileComposerTransientUi: (options = {}) => closeMobileComposerTransientUi(options),
+          dismissMobileComposer: (options = {}) => dismissMobileComposer(options),
+          getMobileComposerSafeReturnFocusEl: (fallback) => getMobileComposerSafeReturnFocusEl(fallback),
+          forceIosAnimationMount: (el) => forceIosAnimationMount(el),
+          getElementTransitionTotalMs: (el) => getElementTransitionTotalMs(el),
+          focusElementIfPossible: (el) => focusElementIfPossible(el),
+          blurFocusedElementWithin: (root) => blurFocusedElementWithin(root),
+          prefersReducedMotion: () => prefersReducedMotion(),
+          isMobileLayoutViewport: () => isMobileLayoutViewport(),
+          revealSidebarFromChat: (options = {}) => revealSidebarFromChat(options),
+          normalizeMobileChatListHistoryState: (...args) => normalizeMobileChatListHistoryState(...args),
+          isResolvedMobileChatScene: (scene) => isResolvedMobileChatScene(scene),
+          waitForAnimationFrames: (count) => waitForAnimationFrames(count),
+        },
+      });
+      floatingMessageActionsController = floatingMessageActionsFactory({
+        window,
+        document,
+        dom: appDom,
+        state: interactionState,
+        config: appConfig,
+        getReactions: () => reactionController,
+        actions: {
+          forceIosAnimationMount: (el) => forceIosAnimationMount(el),
+          getElementTransitionTotalMs: (el) => getElementTransitionTotalMs(el),
+          prefersReducedMotion: () => prefersReducedMotion(),
+          isMobileComposerKeyboardOpen: () => isMobileComposerKeyboardOpen(),
+          focusComposerKeepKeyboard: (force) => focusComposerKeepKeyboard(force),
+        },
+      });
+      forwardingController = forwardingControllerFactory({
+        window,
+        document,
+        dom: appDom,
+        state: interactionState,
+        config: appConfig,
+        api: (url, opts) => api(url, opts),
+        esc,
+        actions: {
+          isNotesChat: (chat) => isNotesChat(chat),
+          getChatSearchHaystack: (chat) => getChatSearchHaystack(chat),
+          formatChatListTimestamp: (value) => formatChatListTimestamp(value),
+          chatItemAvatarHtml: (chat) => chatItemAvatarHtml(chat),
+          renderChatLastPreviewHtml: (chat, options = {}) => renderChatLastPreviewHtml(chat, options),
+          closeModal: (modalOrId, options = {}) => closeModal(modalOrId, options),
+          openModal: (modalOrId, options = {}) => openModal(modalOrId, options),
+          closeAllModals: (options = {}) => closeAllModals(options),
+          showCenterToast: (message) => showCenterToast(message),
+          playAppSound: (type, options = {}) => playAppSound(type, options),
+          scrollToBottom: (instant, markRead, options = {}) => scrollToBottom(instant, markRead, options),
+          updateChatListLastMessage: (message) => updateChatListLastMessage(message),
+          hideFloatingMessageActions: (options = {}) => hideFloatingMessageActions(options),
+          isMobileLayoutViewport: () => isMobileLayoutViewport(),
+          prefersReducedMotion: () => prefersReducedMotion(),
+          getElementTransitionTotalMs: (el) => getElementTransitionTotalMs(el),
+        },
+      });
+      reactionController = reactionControllerFactory({
+        window,
+        document,
+        dom: appDom,
+        state: interactionState,
+        api: (url, opts) => api(url, opts),
+        esc,
+        t,
+        getFloatingActions: () => floatingMessageActionsController,
+        actions: {
+          getEmojiPickerCategories: () => getEmojiPickerCategories(),
+          isCustomEmojiCategory: (category) => isCustomEmojiCategory(category),
+          getEmojiCategoryItems: (category) => getEmojiCategoryItems(category),
+          getRecentEmojiCategory: () => getRecentEmojiCategory(),
+          isCustomEmojiToken: (value) => isCustomEmojiToken(value),
+          createHorizontalSwipePager: (options = {}) => createHorizontalSwipePager(options),
+          scheduleScrollableItemCenter: (...args) => scheduleScrollableItemCenter(...args),
+          rememberRecentEmoji: (emoji) => rememberRecentEmoji(emoji),
+          canContextConvertMessage: (msg, row, options = {}) => canContextConvertMessage(msg, row, options),
+          canRestoreContextOriginalMessage: (msg) => canRestoreContextOriginalMessage(msg),
+          openMessageContextConvertPicker: (row, anchor, options = {}) => openMessageContextConvertPicker(row, anchor, options),
+          restoreContextOriginalMessage: (messageId, options = {}) => restoreContextOriginalMessage(messageId, options),
+          bindTouchSafeButtonActivation: (button, handler, options = {}) => bindTouchSafeButtonActivation(button, handler, options),
+          isMobileComposerKeyboardOpen: () => isMobileComposerKeyboardOpen(),
+          preventMobileComposerBlur: (event) => preventMobileComposerBlur(event),
+          focusComposerKeepKeyboard: (force) => focusComposerKeepKeyboard(force),
+          safeVibrate: (pattern) => safeVibrate(pattern),
+          getSelectedMessageFragment: (row) => getSelectedMessageFragment(row),
+          isSelectableMessageTextTarget: (target) => isSelectableMessageTextTarget(target),
+          getMessageMediaContextTarget: (target) => getMessageMediaContextTarget(target),
+        },
+      });
+      mediaViewerController = mediaViewerFactory({
+        window,
+        document,
+        dom: appDom,
+        state: interactionState,
+        config: appConfig,
+        api: (url, opts) => api(url, opts),
+        esc,
+        services: {
+          openChat: { mediaPlayback: mediaPlaybackController },
+        },
+        actions: {
+          getAttachmentPreviewUrl: (source) => getAttachmentPreviewUrl(source),
+          getAttachmentPosterUrl: (source) => getAttachmentPosterUrl(source),
+          ensureAttachmentPoster: (source, options = {}) => ensureAttachmentPoster(source, options),
+          markAttachmentPosterAvailable: (message) => markAttachmentPosterAvailable(message),
+          applyPosterToVideoElement: (videoEl, posterUrl) => applyPosterToVideoElement(videoEl, posterUrl),
+          closeMobileComposerTransientUi: (options = {}) => closeMobileComposerTransientUi(options),
+          dismissMobileComposer: (options = {}) => dismissMobileComposer(options),
+          isMobileLayoutViewport: () => isMobileLayoutViewport(),
+          scheduleMobileViewportRecovery: (delay) => scheduleMobileViewportRecovery(delay),
+          isGroupLikeCurrentChat: () => isGroupLikeCurrentChat(),
+          openAvatarUserMenu: (avatarEl) => openAvatarUserMenu(avatarEl),
+        },
+      });
+      contextMenusController = contextMenusFactory({
+        window,
+        document,
+        dom: appDom,
+        state: interactionState,
+        config: appConfig,
+        api: (url, opts) => api(url, opts),
+        esc,
+        t,
+        tx,
+        confirm: (message) => confirm(message),
+        getFloatingActions: () => floatingMessageActionsController,
+        getReactions: () => reactionController,
+        getForwarding: () => forwardingController,
+        services: {
+          chatList: chatListControllers,
+          folders: folderControllers,
+          openChat: openChatControllers,
+          messages: messageServices,
+          composer: composerServices,
+        },
+        actions: {
+          getChatById: (chatId) => getChatById(chatId),
+          getActiveChatFolder: () => getActiveChatFolder(),
+          getPinnedChatMoveState: (chatId, list = chats) => getPinnedChatMoveState(chatId, list),
+          getFolderPinnedChatMoveState: (folderId, chatId) => getFolderPinnedChatMoveState(folderId, chatId),
+          isChatPinned: (chat) => isChatPinned(chat),
+          isChatPinnedInFolder: (folderId, chat) => isChatPinnedInFolder(folderId, chat),
+          localChatPreferenceEnabled: (value) => localChatPreferenceEnabled(value),
+          canHideChat: (chat) => canHideChat(chat),
+          canLeaveChat: (chat) => canLeaveChat(chat),
+          canManageDestructiveChat: (chat) => canManageDestructiveChat(chat),
+          setChatSidebarPin: (chatId, pinned) => setChatSidebarPin(chatId, pinned),
+          moveChatSidebarPin: (chatId, direction) => moveChatSidebarPin(chatId, direction),
+          setFolderChatPin: (folderId, chatId, pinned) => setFolderChatPin(folderId, chatId, pinned),
+          moveFolderChatPin: (folderId, chatId, direction) => moveFolderChatPin(folderId, chatId, direction),
+          removeChatFromFolder: (folderId, chatId) => removeChatFromFolder(folderId, chatId),
+          openChatFolderManageModal: (chatId, opener) => openChatFolderManageModal(chatId, opener),
+          hideChatFromList: (chatId) => hideChatFromList(chatId),
+          leaveChat: (chatId) => leaveChat(chatId),
+          deleteChatCompletely: (chatId) => deleteChatCompletely(chatId),
+          loadChats: () => loadChats(),
+          renderChatList: (filter) => renderChatList(filter),
+          renderChatPreferencesForm: (chat) => renderChatPreferencesForm(chat),
+          getAttachmentPreviewUrl: (source) => getAttachmentPreviewUrl(source),
+          getAttachmentDownloadUrl: (source) => getAttachmentDownloadUrl(source),
+          getMediaNoteFallbackLabel: (msg) => getMediaNoteFallbackLabel(msg),
+          normalizeMimeType: (value) => normalizeMimeType(value),
+          filenameFromContentDisposition: (header, fallback) => filenameFromContentDisposition(header, fallback),
+          getMessageCopyTextData: (row) => getMessageCopyTextData(row),
+          canForwardMessage: (msg) => canForwardMessage(msg),
+          canSaveMessageToNotes: (msg) => canSaveMessageToNotes(msg),
+          canEditMessage: (msg) => canEditMessage(msg),
+          getPinActionState: (msg) => getPinActionState(msg),
+          copyTextToClipboard: (text) => copyTextToClipboard(text),
+          showCenterToast: (message) => showCenterToast(message),
+          setReplyFromRow: (row) => setReplyFromRow(row),
+          setEditFromRow: (row) => setEditFromRow(row),
+          togglePinFromRow: (row) => togglePinFromRow(row),
+          hasAndroidNativeBridge: () => hasAndroidNativeBridge(),
+          safeVibrate: (pattern) => safeVibrate(pattern),
+          isMobileLayoutViewport: () => isMobileLayoutViewport(),
+          isMobileComposerKeyboardOpen: () => isMobileComposerKeyboardOpen(),
+          focusComposerKeepKeyboard: (force) => focusComposerKeepKeyboard(force),
+        },
+      });
+      const interactionServices = {
+        search: searchController,
+        reactions: reactionController,
+        floatingActions: floatingMessageActionsController,
+        mediaViewer: mediaViewerController,
+        contextMenus: contextMenusController,
+        forwarding: forwardingController,
+      };
+      if (appContext) appContext.services.interactions = interactionServices;
+      const isIosViewportFixTarget = Boolean(mobileViewportShell.isIosViewportFixTarget?.());
+      if (isIosViewportFixTarget) {
+        document.documentElement.classList.add('is-ios-webkit');
+      }
+      return window.BananzaApp.boot.composition.createEvalExports(["composerServices","interactionState","interactionServices","isIosViewportFixTarget"], {
+        get: (name) => eval(name),
+        set: (name, value) => {
+          const __bananzaRuntimeExportValue = value;
+          eval(name + ' = __bananzaRuntimeExportValue');
+        },
+      });
+    }
+  };
+})();
