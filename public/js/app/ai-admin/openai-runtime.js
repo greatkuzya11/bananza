@@ -2,7 +2,7 @@
   const root = window.BananzaApp = window.BananzaApp || {};
   const aiAdmin = root.aiAdmin = root.aiAdmin || {};
 
-  function createLegacyOpenAiRuntime(scope = {}) {
+  function createOpenAiRuntime(scope = {}) {
     with (scope) {
       function setInlineStatus(targetIds, message, type = '') {
         const ids = Array.isArray(targetIds) ? targetIds : [targetIds];
@@ -1463,5 +1463,5 @@
     }
   }
 
-  aiAdmin.openaiRuntime = { createLegacyOpenAiRuntime };
+  aiAdmin.openaiRuntime = { createOpenAiRuntime };
 })();

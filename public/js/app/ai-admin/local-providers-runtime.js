@@ -2,7 +2,7 @@
   const root = window.BananzaApp = window.BananzaApp || {};
   const aiAdmin = root.aiAdmin = root.aiAdmin || {};
 
-  function createLegacyLocalProvidersRuntime(scope = {}) {
+  function createLocalProvidersRuntime(scope = {}) {
     with (scope) {
       function setDeepseekAiStatus(message, type = '') {
         setInlineStatus('deepseekAiStatus', message, type);
@@ -1591,5 +1591,5 @@
     }
   }
 
-  aiAdmin.localProvidersRuntime = { createLegacyLocalProvidersRuntime };
+  aiAdmin.localProvidersRuntime = { createLocalProvidersRuntime };
 })();

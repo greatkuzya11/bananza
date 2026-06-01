@@ -2,7 +2,7 @@
   const root = window.BananzaApp = window.BananzaApp || {};
   const shellRoot = root.shell = root.shell || {};
 
-  function createLegacyUiRuntime(scope = {}) {
+  function createUiRuntimeAdapter(scope = {}) {
     with (scope) {
       // UTILS
       // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
@@ -2835,5 +2835,5 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
     }
   }
 
-  shellRoot.legacyUiRuntime = { createLegacyUiRuntime };
+  shellRoot.uiRuntimeAdapter = { createUiRuntimeAdapter };
 })();

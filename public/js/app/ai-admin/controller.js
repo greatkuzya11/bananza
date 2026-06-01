@@ -5,30 +5,30 @@
   const aiAdmin = root.aiAdmin = root.aiAdmin || {};
 
   function createController(options = {}) {
-    const installedLegacyModules = new Set();
-    const legacyApi = {};
+    const installedRuntimeModules = new Set();
+    const runtimeApi = {};
 
-    function installLegacyModule(key, factory, scope) {
-      if (!key || typeof factory !== 'function' || installedLegacyModules.has(key)) return legacyApi;
+    function installRuntimeModule(key, factory, scope) {
+      if (!key || typeof factory !== 'function' || installedRuntimeModules.has(key)) return runtimeApi;
       const api = factory(scope) || {};
-      Object.assign(legacyApi, api);
-      installedLegacyModules.add(key);
-      return legacyApi;
+      Object.assign(runtimeApi, api);
+      installedRuntimeModules.add(key);
+      return runtimeApi;
     }
 
-    function installLegacyModules(scope = {}) {
-      installLegacyModule('openai', aiAdmin.openaiRuntime?.createLegacyOpenAiRuntime, scope);
-      installLegacyModule('localProviders', aiAdmin.localProvidersRuntime?.createLegacyLocalProvidersRuntime, scope);
-      installLegacyModule('grok', aiAdmin.grokRuntime?.createLegacyGrokRuntime, scope);
-      installLegacyModule('grokImageRisk', aiAdmin.grokImageRiskRuntime?.createLegacyGrokImageRiskRuntime, scope);
-      installLegacyModule('contextChatShot', aiAdmin.contextChatShotRuntime?.createLegacyContextChatShotRuntime, scope);
-      return legacyApi;
+    function installRuntimeModules(scope = {}) {
+      installRuntimeModule('openai', aiAdmin.openaiRuntime?.createOpenAiRuntime, scope);
+      installRuntimeModule('localProviders', aiAdmin.localProvidersRuntime?.createLocalProvidersRuntime, scope);
+      installRuntimeModule('grok', aiAdmin.grokRuntime?.createGrokRuntime, scope);
+      installRuntimeModule('grokImageRisk', aiAdmin.grokImageRiskRuntime?.createGrokImageRiskRuntime, scope);
+      installRuntimeModule('contextChatShot', aiAdmin.contextChatShotRuntime?.createContextChatShotRuntime, scope);
+      return runtimeApi;
     }
 
     return {
       options,
-      installLegacyModules,
-      getLegacyApi: () => legacyApi,
+      installRuntimeModules,
+      getRuntimeApi: () => runtimeApi,
     };
   }
 

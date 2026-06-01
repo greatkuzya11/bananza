@@ -2,7 +2,7 @@
   const root = window.BananzaApp = window.BananzaApp || {};
   const aiAdmin = root.aiAdmin = root.aiAdmin || {};
 
-  function createLegacyGrokImageRiskRuntime(scope = {}) {
+  function createGrokImageRiskRuntime(scope = {}) {
     with (scope) {
       async function retryGrokImageRiskPrompt(row, button = null) {
         const noticeId = Number(row?.dataset?.msgId || row?.__messageData?.id || 0);
@@ -402,5 +402,5 @@
     }
   }
 
-  aiAdmin.grokImageRiskRuntime = { createLegacyGrokImageRiskRuntime };
+  aiAdmin.grokImageRiskRuntime = { createGrokImageRiskRuntime };
 })();

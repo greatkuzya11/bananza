@@ -155,16 +155,40 @@ test('runtime assembly no longer owns extracted shell and websocket sections', (
     /\bfunction\s+openChatInfoModal\b/,
     /\bfunction\s+setupProfileEvents\b/,
     /\bfunction\s+autoResize\b/,
-    /\bfunction\s+createLegacyEventScope\b/,
+    /\bfunction\s+createRuntimeEventScope\b/,
     /\bfunction\s+getMobileAppViewportHeight\b/,
     /\bconst\s+composerFactories\b/,
-    /\bfunction\s+createLegacyAiAdminScope\b/,
+    /\bfunction\s+createRuntimeProxyScope\b/,
     /Object\.assign\(appBridge/,
     /\basync\s+function\s+init\b/,
   ];
 
   for (const pattern of forbiddenAssemblySections) {
     assert.doesNotMatch(assembly, pattern, `runtime-assembly.js must not contain extracted runtime section ${pattern}`);
+  }
+});
+
+test('runtime composition and adapters do not expose legacy naming', () => {
+  const files = [
+    'public/js/app/boot/runtime-assembly.js',
+    'public/js/app/boot/runtime-core.js',
+    'public/js/app/boot/feature-composition.js',
+    'public/js/app/boot/public-bridge.js',
+    'public/js/app/boot/ws-dispatch.js',
+    'public/js/app/boot/init.js',
+    'public/js/app/shell/ui-runtime.js',
+    'public/js/app/shell/shell-runtime.js',
+    'public/js/app/shell/mobile-runtime-adapters.js',
+    'public/js/app/ai-admin/controller.js',
+    'public/js/app/ai-admin/openai-runtime.js',
+    'public/js/app/ai-admin/local-providers-runtime.js',
+    'public/js/app/ai-admin/grok-runtime.js',
+    'public/js/app/ai-admin/grok-image-risk-runtime.js',
+    'public/js/app/ai-admin/context-chatshot-runtime.js',
+  ];
+
+  for (const file of files) {
+    assert.doesNotMatch(readRelative(file), /legacy/i, `${file} must not expose legacy runtime naming`);
   }
 });
 

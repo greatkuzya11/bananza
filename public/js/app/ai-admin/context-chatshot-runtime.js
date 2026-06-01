@@ -2,7 +2,7 @@
   const root = window.BananzaApp = window.BananzaApp || {};
   const aiAdmin = root.aiAdmin = root.aiAdmin || {};
 
-  function createLegacyContextChatShotRuntime(scope = {}) {
+  function createContextChatShotRuntime(scope = {}) {
     with (scope) {
       function contextConvertProviderLabel(provider = 'openai') {
         if (provider === 'yandex') return 'Yandex';
@@ -1351,5 +1351,5 @@
     }
   }
 
-  aiAdmin.contextChatShotRuntime = { createLegacyContextChatShotRuntime };
+  aiAdmin.contextChatShotRuntime = { createContextChatShotRuntime };
 })();

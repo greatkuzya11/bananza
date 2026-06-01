@@ -2,7 +2,7 @@
   const root = window.BananzaApp = window.BananzaApp || {};
   const aiAdmin = root.aiAdmin = root.aiAdmin || {};
 
-  function createLegacyGrokRuntime(scope = {}) {
+  function createGrokRuntime(scope = {}) {
     with (scope) {
       function setGrokStatus(statusId, message, type = '') {
         setInlineStatus(statusId, message, type);
@@ -1167,5 +1167,5 @@
     }
   }
 
-  aiAdmin.grokRuntime = { createLegacyGrokRuntime };
+  aiAdmin.grokRuntime = { createGrokRuntime };
 })();

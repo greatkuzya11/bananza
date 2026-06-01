@@ -174,7 +174,7 @@ test('BananzaApp.dom exposes selectors and current DOM refs', () => {
   });
 });
 
-test('legacy ui runtime calls getComputedStyle with the window receiver through proxy scope', () => {
+test('ui runtime adapter calls getComputedStyle with the window receiver through proxy scope', () => {
   const dom = createAppDom();
   loadAppRuntimeScripts(dom);
   const { window } = dom;
@@ -224,7 +224,7 @@ test('legacy ui runtime calls getComputedStyle with the window receiver through 
     },
   });
 
-  const api = window.BananzaApp.shell.legacyUiRuntime.createLegacyUiRuntime(scope);
+  const api = window.BananzaApp.shell.uiRuntimeAdapter.createUiRuntimeAdapter(scope);
   assert.equal(api.getElementTransitionTotalMs(sidebar), 130);
   assert.equal(calls, 1);
 });

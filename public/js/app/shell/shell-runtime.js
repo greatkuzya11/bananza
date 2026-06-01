@@ -2,7 +2,7 @@
   const root = window.BananzaApp = window.BananzaApp || {};
   const shellRoot = root.shell = root.shell || {};
 
-  function createLegacyShellRuntime(scope = {}) {
+  function createShellRuntimeAdapter(scope = {}) {
     with (scope) {
       // SIDEBAR RESIZE
       // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
@@ -1273,7 +1273,7 @@
       // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
       // EVENT LISTENERS
       // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-      function createLegacyEventScope() {
+      function createRuntimeEventScope() {
         const scope = Object.create(null);
         const bindGlobal = (name, value) => {
           if (typeof value !== 'undefined') scope[name] = value;
@@ -1355,12 +1355,12 @@
       const setupEvents = () => {
         if (!shellEventController) {
           shellEventController = window.BananzaApp?.shell?.createEventController?.({
-            scope: createLegacyEventScope(),
+            scope: createRuntimeEventScope(),
           }) || null;
         }
         if (!aiAdminEventController) {
           aiAdminEventController = window.BananzaApp?.aiAdmin?.createEventController?.({
-            scope: createLegacyAiAdminScope(),
+            scope: createRuntimeProxyScope(),
           }) || null;
         }
         const shellBound = shellEventController?.bindAll?.();
@@ -1387,11 +1387,11 @@
         syncProfileColorSelection, renderProfileColorPicker, renderProfileEditor, openMenuDrawer, uploadProfileAvatar, removeProfileAvatar, saveProfileChanges, setupProfileEvents,
         getVisibleComposerToolCount, getComposerInputWidthForMode, getNormalComposerInputWidth, measureMsgInputScrollHeight, getComposerInputTextMetrics, renderComposerRichPreviewContent, syncComposerRichPreview, autoResize,
         animateSendButton, animateBackButton, resetBackButtonNavigationState, deferBackButtonNavigationRelease, animateChatHeaderActionButton, prefersReducedMotion, cancelPendingSidebarReveal, isMobileChatHistoryState,
-        isResolvedMobileChatScene, normalizeMobileChatListHistoryState, revealSidebarFromChat, navigateBackToChatList, setupPasswordPreviewToggles, createLegacyEventScope, NEW_CHAT_MODAL_TABS, AVATAR_COLORS,
+        isResolvedMobileChatScene, normalizeMobileChatListHistoryState, revealSidebarFromChat, navigateBackToChatList, setupPasswordPreviewToggles, createRuntimeEventScope, NEW_CHAT_MODAL_TABS, AVATAR_COLORS,
         setupEvents,
       };
     }
   }
 
-  shellRoot.legacyShellRuntime = { createLegacyShellRuntime };
+  shellRoot.shellRuntimeAdapter = { createShellRuntimeAdapter };
 })();
