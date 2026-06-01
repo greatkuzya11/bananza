@@ -95,6 +95,50 @@ test('new boot modules stay small and keep legacy debt isolated', () => {
   }
 });
 
+test('ai admin provider ownership stays out of legacy runtime', () => {
+  const legacy = readRelative('public/js/app/boot/legacy-runtime.js');
+  const indexHtml = readRelative('public/index.html');
+  const scripts = [...indexHtml.matchAll(/<script\s+src="([^"]+)"/g)].map((match) => match[1]);
+  const legacyIndex = scripts.findIndex((src) => src.startsWith('/js/app/boot/legacy-runtime.js'));
+  const aiControllerIndex = scripts.findIndex((src) => src.startsWith('/js/app/ai-admin/controller.js'));
+
+  const aiRuntimeScripts = [
+    '/js/app/ai-admin/openai-runtime.js',
+    '/js/app/ai-admin/local-providers-runtime.js',
+    '/js/app/ai-admin/grok-runtime.js',
+    '/js/app/ai-admin/context-chatshot-runtime.js',
+    '/js/app/ai-admin/grok-image-risk-runtime.js',
+  ];
+
+  assert.ok(lineCount(legacy) < 8200, `legacy-runtime.js line count ${lineCount(legacy)} should stay below 8200`);
+  assert.notEqual(legacyIndex, -1, 'legacy-runtime.js script must be present');
+  assert.notEqual(aiControllerIndex, -1, 'ai admin controller script must be present');
+
+  for (const aiRuntimeScript of aiRuntimeScripts) {
+    const scriptIndex = scripts.findIndex((src) => src.startsWith(aiRuntimeScript));
+    assert.notEqual(scriptIndex, -1, `${aiRuntimeScript} script must be present`);
+    assert.ok(scriptIndex < aiControllerIndex, `${aiRuntimeScript} must load before ai-admin/controller.js`);
+    assert.ok(scriptIndex < legacyIndex, `${aiRuntimeScript} must load before legacy-runtime.js`);
+  }
+
+  const forbiddenLegacyProviderBodies = [
+    /\bfunction\s+setOpenAiStatus\b/,
+    /\bfunction\s+saveAiBot\b/,
+    /\bfunction\s+setDeepseekAiStatus\b/,
+    /\bfunction\s+setQwenAiStatus\b/,
+    /\bfunction\s+setYandexAiStatus\b/,
+    /\bfunction\s+setGrokStatus\b/,
+    /\bfunction\s+retryGrokImageRiskPrompt\b/,
+    /\bfunction\s+contextConvertProviderLabel\b/,
+    /\bfunction\s+renderContextConvertAdminSettings\b/,
+    /\bfunction\s+runChatShotGeneration\b/,
+  ];
+
+  for (const pattern of forbiddenLegacyProviderBodies) {
+    assert.doesNotMatch(legacy, pattern, `legacy-runtime.js must not contain provider body ${pattern}`);
+  }
+});
+
 test('core auth api and websocket ownership lives in boot modules', () => {
   const legacy = readRelative('public/js/app/boot/legacy-runtime.js');
   const api = readRelative('public/js/app/boot/api.js');

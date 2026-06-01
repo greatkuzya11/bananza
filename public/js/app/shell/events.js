@@ -396,9 +396,6 @@
         soundSettingsController.bindEvents();
     
         // Settings feature/admin buttons
-        window.BananzaApp?.aiAdmin?.createEventController?.({
-          scope: __bananzaShellEventScope,
-        })?.bindEvents?.();
         $('#settingsChangePassword').addEventListener('click', openChangePasswordModal);
         $('#settingsAdminPanel').addEventListener('click', openAdminModal);
         $('#settingsBackupPanel')?.addEventListener('click', openBackupExportModal);

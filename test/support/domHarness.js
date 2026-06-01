@@ -93,15 +93,21 @@ const appAdminScriptPaths = Object.freeze([
 const appAiAdminScriptPaths = Object.freeze([
   'public/js/app/ai-admin/shared.js',
   'public/js/app/ai-admin/openai.js',
+  'public/js/app/ai-admin/openai-runtime.js',
   'public/js/app/ai-admin/yandex.js',
   'public/js/app/ai-admin/deepseek.js',
   'public/js/app/ai-admin/qwen.js',
+  'public/js/app/ai-admin/local-providers-runtime.js',
   'public/js/app/ai-admin/grok.js',
+  'public/js/app/ai-admin/grok-runtime.js',
   'public/js/app/ai-admin/context-convert.js',
   'public/js/app/ai-admin/chatshot.js',
+  'public/js/app/ai-admin/context-chatshot-runtime.js',
   'public/js/app/ai-admin/grok-image-risk.js',
+  'public/js/app/ai-admin/grok-image-risk-runtime.js',
   'public/js/app/ai-admin/modals.js',
   'public/js/app/ai-admin/events.js',
+  'public/js/app/ai-admin/controller.js',
 ]);
 const appBootScriptPaths = Object.freeze([
   'public/js/app/boot/state.js',
