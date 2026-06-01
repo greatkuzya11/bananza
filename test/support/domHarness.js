@@ -99,6 +99,18 @@ const appAiAdminScriptPaths = Object.freeze([
   'public/js/app/ai-admin/grok-image-risk.js',
   'public/js/app/ai-admin/modals.js',
 ]);
+const appBootScriptPaths = Object.freeze([
+  'public/js/app/boot/state.js',
+  'public/js/app/boot/runtime-context.js',
+  'public/js/app/boot/api.js',
+  'public/js/app/boot/auth.js',
+  'public/js/app/boot/websocket.js',
+  'public/js/app/boot/events.js',
+  'public/js/app/boot/public-bridge.js',
+  'public/js/app/boot/chat-list-service.js',
+  'public/js/app/boot/legacy-runtime.js',
+  'public/js/app/boot/init.js',
+]);
 const appRuntimeScriptPaths = Object.freeze([
   ...appShellScriptPaths,
   ...appCoreHelperScriptPaths,
@@ -113,6 +125,7 @@ const appRuntimeScriptPaths = Object.freeze([
   ...appInteractionScriptPaths,
   ...appAdminScriptPaths,
   ...appAiAdminScriptPaths,
+  ...appBootScriptPaths,
   'public/js/app/runtime.js',
 ]);
 
@@ -538,6 +551,7 @@ function installAppBridge(dom, overrides = {}) {
 module.exports = {
   appAdminScriptPaths,
   appAiAdminScriptPaths,
+  appBootScriptPaths,
   appChatListScriptPaths,
   appComposerScriptPaths,
   appCoreHelperScriptPaths,

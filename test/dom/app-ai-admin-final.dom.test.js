@@ -445,7 +445,5 @@ test('final boot loads runtime scripts, keeps bridge helpers, dispatches ready o
   const runtimeJsLines = fs.readFileSync(path.join(repoRoot, 'public/js/app/runtime.js'), 'utf8').trim().split(/\r?\n/).length;
   assert.ok(appJsLines < 100, `public/js/app.js line count ${appJsLines} should stay below 100`);
   assert.ok(modalsJsLines < 200, `public/js/app/ai-admin/modals.js line count ${modalsJsLines} should stay below 200`);
-  if (runtimeJsLines >= 900) {
-    console.warn(`public/js/app/runtime.js line count ${runtimeJsLines} still needs follow-up domain extraction`);
-  }
+  assert.ok(runtimeJsLines < 800, `public/js/app/runtime.js line count ${runtimeJsLines} should stay below 800`);
 });
