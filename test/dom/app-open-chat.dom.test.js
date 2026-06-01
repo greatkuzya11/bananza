@@ -389,11 +389,15 @@ test('full app bridge opens chats through extracted controller and keeps media b
 
   await BananzaAppBridge.__testing.openChat(1);
   assert.equal(BananzaAppBridge.getCurrentChatId(), 1);
+  assert.equal(dom.window.__bananzaBootContext.state.getCurrentChat().id, 1);
+  assert.deepEqual(dom.window.__bananzaBootContext.state.getMessages().map((msg) => msg.id), [1]);
   assert.equal(document.querySelectorAll('#messages .msg-row[data-msg-id]').length, 1);
   assert.equal(document.querySelector('#messages .msg-row[data-msg-id="1"]').__messageData.text, 'One');
 
   await BananzaAppBridge.__testing.openChat(2);
   assert.equal(BananzaAppBridge.getCurrentChat().id, 2);
+  assert.equal(dom.window.__bananzaBootContext.state.getCurrentChat().id, 2);
+  assert.deepEqual(dom.window.__bananzaBootContext.state.getMessages().map((msg) => msg.id), [2]);
   assert.equal(document.querySelector('#messages .msg-row[data-msg-id="2"]').__messageData.text, 'Two');
 
   const audio = document.createElement('audio');

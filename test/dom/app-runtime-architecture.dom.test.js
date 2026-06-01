@@ -65,6 +65,8 @@ test('boot scripts are explicit and load before runtime entrypoint', () => {
     '/js/app/boot/events.js',
     '/js/app/boot/public-bridge.js',
     '/js/app/boot/chat-list-service.js',
+    '/js/app/boot/open-chat-service.js',
+    '/js/app/boot/messages-service.js',
     '/js/app/boot/legacy-runtime.js',
     '/js/app/boot/init.js',
   ];
@@ -129,4 +131,68 @@ test('chat list state and presence ownership lives behind boot service', () => {
   assert.doesNotMatch(legacy, /\bfunction\s+hydrateChatListCache\b/);
   assert.match(legacy, /chatListService\.configure/);
   assert.match(legacy, /chatListService\.getChats/);
+});
+
+test('open chat pagination and scroll ownership lives behind open-chat service', () => {
+  const legacy = readRelative('public/js/app/boot/legacy-runtime.js');
+  const openChatService = readRelative('public/js/app/boot/open-chat-service.js');
+  const openChatController = readRelative('public/js/app/open-chat/controller.js');
+  const state = readRelative('public/js/app/boot/state.js');
+
+  assert.ok(lineCount(legacy) < 16370, `legacy-runtime.js line count ${lineCount(legacy)} should stay below 16370`);
+  assert.match(openChatService, /createOpenChatService/);
+  assert.match(openChatService, /scrollToBottom/);
+  assert.match(openChatService, /loadMoreAfter/);
+  assert.match(openChatController, /setCurrentChat/);
+  assert.match(openChatController, /setStateMessages/);
+  assert.match(state, /setCurrentChat/);
+  assert.match(state, /mergeMessages/);
+  assert.doesNotMatch(legacy, /\bOPEN CHAT\b/);
+  assert.doesNotMatch(legacy, /\bfunction\s+openChat\b/);
+  assert.doesNotMatch(legacy, /\bfunction\s+loadMessages\b/);
+  assert.doesNotMatch(legacy, /\bfunction\s+loadMoreMessages\b/);
+  assert.doesNotMatch(legacy, /\bfunction\s+loadMore\b/);
+  assert.doesNotMatch(legacy, /\bfunction\s+loadMoreAfter\b/);
+  assert.doesNotMatch(legacy, /\bfunction\s+scrollToBottom\b/);
+  assert.doesNotMatch(legacy, /\bfunction\s+restoreScrollAnchor\b/);
+  assert.match(legacy, /openChatService\.configure/);
+  assert.match(legacy, /openChatService\.openChat/);
+});
+
+test('message rendering update and outbox ownership lives behind messages service', () => {
+  const legacy = readRelative('public/js/app/boot/legacy-runtime.js');
+  const messagesService = readRelative('public/js/app/boot/messages-service.js');
+  const state = readRelative('public/js/app/boot/state.js');
+
+  assert.ok(lineCount(legacy) < 15850, `legacy-runtime.js line count ${lineCount(legacy)} should keep trending down`);
+  assert.match(messagesService, /createMessagesService/);
+  assert.match(messagesService, /replaceRenderedMessages/);
+  assert.match(messagesService, /appendMessage/);
+  assert.match(messagesService, /applyMessageUpdate/);
+  assert.match(messagesService, /completeOutboxSend/);
+  assert.match(state, /setMessages/);
+  assert.match(state, /mergeMessages/);
+
+  const forbiddenLegacyPatterns = [
+    /\bMESSAGES\b/,
+    /\bSEND MESSAGE\b/,
+    /\bfunction\s+renderMessages\b/,
+    /\bfunction\s+appendMessage\b/,
+    /\bfunction\s+createMessageEl\b/,
+    /\bfunction\s+replaceRenderedMessages\b/,
+    /\bfunction\s+applyMessageUpdate\b/,
+    /\bfunction\s+updateRowStatus\b/,
+    /\bfunction\s+renderOutboxForChat\b/,
+    /\bfunction\s+completeOutboxSend\b/,
+    /\bfunction\s+renderPollCard\b/,
+    /\bfunction\s+renderFileAttachment\b/,
+    /\bfunction\s+renderCallMessageMeta\b/,
+  ];
+
+  for (const pattern of forbiddenLegacyPatterns) {
+    assert.doesNotMatch(legacy, pattern, `legacy-runtime.js must not contain ${pattern}`);
+  }
+
+  assert.match(legacy, /messagesService\.configure/);
+  assert.match(legacy, /messagesService\?\.appendMessage|messageServiceCall/);
 });

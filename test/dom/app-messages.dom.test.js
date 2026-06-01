@@ -146,6 +146,7 @@ test('bridge renderer appends rows, groups senders, preserves data, and skips du
   assert.ok(rows.some((row) => row.classList.contains('other')));
   assert.equal(document.querySelector('.msg-group .msg-group-body')?.querySelectorAll('.msg-row').length, 2);
   assert.equal(document.querySelector('[data-msg-id="1"]').__messageData.text, 'One');
+  assert.equal(dom.window.__bananzaBootContext.state.getMessages().map((msg) => msg.id).join(','), '1,2,3');
 });
 
 test('attachments render media/file HTML and renderer binds playback with poster behavior', () => {
@@ -290,6 +291,7 @@ test('outbox renders pending rows, promotes echoes, retries, and revokes URLs', 
   await BananzaAppBridge.__testing.completeOutboxSend(item, { id: 99, client_id: 'c-test', chat_id: 1, user_id: 1, display_name: 'Alice', text: 'Sent', created_at: '2026-05-31T10:00:01.000Z' });
   assert.ok(document.querySelector('[data-msg-id="99"]'));
   assert.equal(document.querySelector('[data-msg-id="c-test"]'), null);
+  assert.ok(window.__bananzaBootContext.state.getMessages().some((msg) => Number(msg.id) === 99));
   assert.ok(revoked.includes('blob:outbox-file'));
 });
 
@@ -302,9 +304,11 @@ test('updates mark rows deleted and refresh reply quotes', async (t) => {
   BananzaAppBridge.__testing.appendMessage({ id: 2, chat_id: 1, user_id: 1, display_name: 'Alice', text: 'Reply', reply_to_id: 1, reply_display_name: 'Bob', reply_text: 'Original', created_at: '2026-05-31T10:01:00.000Z' });
   BananzaAppBridge.__testing.applyMessageUpdate({ id: 1, chat_id: 1, user_id: 2, display_name: 'Bob', text: 'Changed', created_at: '2026-05-31T10:00:00.000Z' });
   assert.equal(document.querySelector('.msg-reply[data-reply-id="1"] .msg-reply-text').textContent, 'Changed');
+  assert.equal(dom.window.__bananzaBootContext.state.getMessages().find((msg) => Number(msg.id) === 1)?.text, 'Changed');
   BananzaAppBridge.__testing.applyMessageUpdate({ id: 1, chat_id: 1, user_id: 2, display_name: 'Bob', text: 'Message deleted', is_deleted: true, created_at: '2026-05-31T10:00:00.000Z' });
   BananzaAppBridge.__testing.applyMessageUpdate({ id: 1, chat_id: 1, user_id: 2, display_name: 'Bob', text: 'Message deleted', is_deleted: true, created_at: '2026-05-31T10:00:00.000Z' });
   assert.ok(document.querySelector('[data-msg-id="1"] .msg-deleted'));
+  assert.equal(dom.window.__bananzaBootContext.state.getMessages().find((msg) => Number(msg.id) === 1)?.is_deleted, true);
 });
 
 test('full app bridge keeps message methods and open-chat rendering path', async (t) => {

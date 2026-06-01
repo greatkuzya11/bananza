@@ -108,6 +108,8 @@ const appBootScriptPaths = Object.freeze([
   'public/js/app/boot/events.js',
   'public/js/app/boot/public-bridge.js',
   'public/js/app/boot/chat-list-service.js',
+  'public/js/app/boot/open-chat-service.js',
+  'public/js/app/boot/messages-service.js',
   'public/js/app/boot/legacy-runtime.js',
   'public/js/app/boot/init.js',
 ]);

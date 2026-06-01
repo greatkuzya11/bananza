@@ -10,6 +10,8 @@
     ctx.services.auth = bootRoot.createAuthService?.(ctx) || {};
     ctx.services.websocket = bootRoot.createWebSocketService?.(ctx) || {};
     ctx.services.chatList = bootRoot.createChatListService?.(ctx) || {};
+    ctx.services.openChat = bootRoot.createOpenChatService?.(ctx) || {};
+    ctx.services.messages = bootRoot.createMessagesService?.(ctx) || {};
     return ctx;
   }
 

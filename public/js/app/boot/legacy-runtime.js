@@ -163,7 +163,11 @@
       const authService = ctx?.services?.auth || bootRoot.createAuthService?.(ctx || { state: runtimeState }) || {};
       const websocketService = ctx?.services?.websocket || bootRoot.createWebSocketService?.(ctx || { state: runtimeState, config: appConfig }) || {};
       const chatListService = ctx?.services?.chatList || bootRoot.createChatListService?.(ctx || { state: runtimeState }) || {};
+      const openChatService = ctx?.services?.openChat || bootRoot.createOpenChatService?.(ctx || { state: runtimeState }) || {};
+      const messagesService = ctx?.services?.messages || bootRoot.createMessagesService?.(ctx || { state: runtimeState }) || {};
       if (ctx?.services && !ctx.services.chatList) ctx.services.chatList = chatListService;
+      if (ctx?.services && !ctx.services.openChat) ctx.services.openChat = openChatService;
+      if (ctx?.services && !ctx.services.messages) ctx.services.messages = messagesService;
       let currentUser = runtimeState.getCurrentUser?.() || runtimeState.currentUser || null;
       let token = runtimeState.getToken?.() || runtimeState.token || null;
       let chats = chatListService.getChats?.() || runtimeState.chats || [];
@@ -196,6 +200,7 @@
         runtimeState.currentUser = currentUser || null;
         runtimeState.token = token || null;
         runtimeState.currentChatId = currentChatId || null;
+        runtimeState.currentChat = getChatById(currentChatId);
         runtimeState.ws = ws || null;
         runtimeState.wsRetry = wsRetry || 1000;
         runtimeState.wsReconnectTimer = wsReconnectTimer || null;
@@ -205,6 +210,7 @@
         runtimeState.activePinIndexByChat = activePinIndexByChat;
         runtimeState.allUsers = allUsers;
         chatListService.syncRuntimeState?.();
+        openChatService.syncRuntimeState?.();
         refreshChatListReferences();
         return runtimeState;
       }
@@ -246,6 +252,108 @@
       const refreshWebSocketAfterResume = () => chatListService.refreshWebSocketAfterResume?.();
       const handleAppResume = (reason) => chatListService.handleAppResume?.(reason);
       const setupLifecycleRecovery = () => chatListService.setupLifecycleRecovery?.();
+      const openChat = (chatId, options = {}) => openChatService.openChat?.(chatId, options);
+      const openChatFromPush = (chatId) => openChatService.openChatFromPush?.(chatId);
+      const catchUpCurrentChat = (chatId, options = {}) => openChatService.catchUpCurrentChat?.(chatId, options);
+      const loadMore = () => openChatService.loadMore?.();
+      const loadMoreAfter = () => openChatService.loadMoreAfter?.();
+      const updateHasMoreAfterFromChat = (chatId = currentChatId) => openChatService.updateHasMoreAfterFromChat?.(chatId);
+      const maybeLoadMoreAtTop = () => openChatService.maybeLoadMoreAtTop?.();
+      const maybeLoadMoreAtBottom = () => openChatService.maybeLoadMoreAtBottom?.();
+      const isNearBottom = (threshold = 150) => openChatService.isNearBottom?.(threshold);
+      const scrollToBottom = (instant = false, markRead = false, options = {}) => openChatService.scrollToBottom?.(instant, markRead, options);
+      const saveCurrentScrollAnchor = (chatId = currentChatId, options = {}) => openChatService.saveCurrentScrollAnchor?.(chatId, options);
+      const flushCurrentChatScrollAnchor = (chatId = currentChatId, options = {}) => openChatService.flushCurrentChatScrollAnchor?.(chatId, options);
+      const scheduleScrollAnchorSave = () => openChatService.scheduleScrollAnchorSave?.();
+      const restoreScrollAnchor = (anchor, attempts = 3, options = {}) => openChatService.restoreScrollAnchor?.(anchor, attempts, options);
+      const markCurrentChatReadIfAtBottom = (force = false) => openChatService.markCurrentChatReadIfAtBottom?.(force);
+      const markChatReadThrough = (chatId, lastReadId) => openChatService.markChatReadThrough?.(chatId, lastReadId);
+      const setHasMoreBefore = (value) => openChatService.setHasMoreBefore?.(value);
+      const setLoadMoreAfterLoading = (value) => openChatService.setLoadMoreAfterLoading?.(value);
+      const setHasMoreAfter = (value) => openChatService.setHasMoreAfter?.(value);
+      const getMessagesAfterLoader = () => openChatService.getMessagesAfterLoader?.();
+      const getMessagesLastContentChild = () => openChatService.getMessagesLastContentChild?.();
+      const insertAtMessagesEnd = (node) => openChatService.insertAtMessagesEnd?.(node);
+      const buildMessagesRootChildren = (fragment = null) => openChatService.buildMessagesRootChildren?.(fragment);
+      const messageIdKey = (id) => openChatService.messageIdKey?.(id);
+      const getMessageIdNumber = (msg) => openChatService.getMessageIdNumber?.(msg);
+      const minMessageId = (messages = []) => openChatService.minMessageId?.(messages);
+      const maxMessageId = (messages = []) => openChatService.maxMessageId?.(messages);
+      const filterNewMessages = (messages = []) => openChatService.filterNewMessages?.(messages) || [];
+      const getChatLastMessageId = (chatId, fallback = 0) => openChatService.getChatLastMessageId?.(chatId, fallback);
+      const cacheMessages = (chatId, messages = [], page = null, options = {}) => openChatService.cacheMessages?.(chatId, messages, page, options);
+      const writeCachedChatMeta = (chatId, patch = {}) => openChatService.writeCachedChatMeta?.(chatId, patch);
+      const readCachedChatRange = (chatId) => openChatService.readCachedChatRange?.(chatId);
+      const debugMessageCache = (event, detail = {}) => openChatService.debugMessageCache?.(event, detail);
+      const warmMessageWindowAssets = (chat, messages = []) => openChatService.warmMessageWindowAssets?.(chat, messages);
+      const cacheCursorPage = (chatId, direction, cursor, messages = [], page = {}) => openChatService.cacheCursorPage?.(chatId, direction, cursor, messages, page);
+      const readCachedCursorPage = (chatId, direction, cursor) => openChatService.readCachedCursorPage?.(chatId, direction, cursor);
+      const scrollAnchorStorageKey = () => openChatService.scrollAnchorStorageKey?.();
+      const ensureScrollAnchorsLoaded = () => openChatService.ensureScrollAnchorsLoaded?.();
+      const persistScrollAnchors = () => openChatService.persistScrollAnchors?.();
+      const getRenderedMessageRows = () => openChatService.getRenderedMessageRows?.() || [];
+      const ensureScrollDateIndicator = () => openChatService.ensureScrollDateIndicator?.();
+      const hideScrollDateIndicator = (options = {}) => openChatService.hideScrollDateIndicator?.(options);
+      const pickScrollDateMessageRow = () => openChatService.pickScrollDateMessageRow?.();
+      const getScrollDateTextForRow = (row) => openChatService.getScrollDateTextForRow?.(row);
+      const positionScrollDateIndicator = (el) => openChatService.positionScrollDateIndicator?.(el);
+      const updateScrollDateIndicator = (options = {}) => openChatService.updateScrollDateIndicator?.(options);
+      const scheduleScrollDateIndicatorUpdate = (options = {}) => openChatService.scheduleScrollDateIndicatorUpdate?.(options);
+      const refreshScrollDateIndicator = () => openChatService.refreshScrollDateIndicator?.();
+      const pickScrollAnchorRow = (rows, atBottom, containerRect) => openChatService.pickScrollAnchorRow?.(rows, atBottom, containerRect);
+      const findRestorableAnchorRow = (anchor) => openChatService.findRestorableAnchorRow?.(anchor);
+      const getMaxRenderedMessageId = () => openChatService.getMaxRenderedMessageId?.() || 0;
+      const captureScrollAnchor = () => openChatService.captureScrollAnchor?.();
+      const canCaptureCurrentChatScrollAnchor = (chatId = currentChatId) => openChatService.canCaptureCurrentChatScrollAnchor?.(chatId);
+      const clearScheduledScrollAnchorSave = () => openChatService.clearScheduledScrollAnchorSave?.();
+      const anchorForChatOpen = (chat) => openChatService.anchorForChatOpen?.(chat, scrollRestoreMode);
+      const messageServiceCall = (method, ...args) => messagesService?.[method]?.(...args);
+      const messageServiceDelegates = new Proxy({}, {
+        get: (_target, method) => (...args) => messageServiceCall(method, ...args),
+      });
+      const {
+        normalizePoll, isPollMessage, isPulsePoll, pulseInlineVotersCacheKey, getPulseInlineVotersRevision,
+        invalidatePulseInlineVotersForMessage, getPulseVoterDisplayName, isPulseVoterOptionExpanded,
+        getPulseVoterPopoverElement, schedulePulseVoterPopoverAutoHide, mountPulseVoterPopover,
+        clearActivePulseVoterPopover, clearActivePulseVoterPopoverForMessage, bindPulseInlineVoterControls,
+        togglePulseVoterOptionExpanded, togglePulseVoterPopover, getPollCompactFooterMeta, canClosePollMessage,
+        buildOptimisticPollState, nextPollVoteSelection, resetReusableMessageRow, withStableOutboxMedia,
+        replaceRenderedMessage, replaceRenderedPollCard, applyPollUpdate, togglePollVote, closePollMessage,
+        pollAccentVar, buildPollRenderState, buildPollOrbitGradient, renderPollCloseButton, renderPollCompactFooter,
+        renderPollVotersButton, renderPulseInlineVoterAvatar, renderPulseInlineVoterStack, buildPulsePreviewVoters,
+        renderPulseInlineVoterSummaryContent, renderPulseInlineVoterSummary, refreshPulseInlineVoterSlots,
+        ensurePulseInlineVoters, hydratePulseInlineVoters, renderPulsePollCard, renderStackPollCard, renderOrbitPollCard,
+        resetPollVotersModal, openPollVotersModal, renderPollCard, updateVisibleOwnReadStateRows,
+        clearRenderedMessages, getRenderedMessageIdList, renderedMessageIdsMatch, pinEventIdKey, rememberPinEvent,
+        isPinEventDisplayed, filterNewPinEvents, timelineTimestamp, buildTimelineItems, renderPinSystemEvent,
+        buildMessagesFragment, replaceRenderedMessages, primeAppendedMessageSideEffects, appendTimelineItems,
+        appendPinEventIfVisible, isCurrentMessageRow, messageHasDeferredMediaLayout, clearPendingMediaBottomScroll,
+        noteMessageScrollUserIntent, scheduleMediaBottomScrollAnchorSave, settleDeferredMediaBottomScroll,
+        markPendingMediaBottomScroll, markPendingMediaBottomScrollForMessages, cancelPendingMediaBottomScrollIfNeeded,
+        createMessageGroup, renderMessages, appendMessage, bindPollControls, createMessageEl, updateRowStatus,
+        retrySend, formatDuration, renderResolvedFileAttachment, renderFileAttachment, renderLinkPreview,
+        resolveCallMessageMediaKind, resolveCallMessageRoomMode, normalizeCallMessageData, latestCallTranscriptRun,
+        latestCallArtifactBatch, callArtifactProgress, pushCallMessageMeta, renderCallMessageMeta,
+        normalizeCallMixedRecording, callRecordingPlaybackUrl, callRecordingDurationSeconds,
+        parseCallRecordingRadiusValue, callRecordingRoundedRectPath, ensureCallRecordingFooterButton,
+        ensureCallRecordingProgress, refreshCallRecordingProgressShape, updateCallRecordingProgress,
+        syncCallRecordingPlayButton, pointToCallRecordingHit, shouldIgnoreCallRecordingPointer,
+        isPointerNearCallRecordingProgressRect, getCallRecordingSeekRows, seekCallRecordingProgress,
+        resolveNearestCallRecordingHit, installCallRecordingProgressCapture, renderCallMessageCard,
+        renderCallTranscriptRunCard, callArtifactStatusLabel, callArtifactStatusKind, callArtifactKey,
+        callArtifactLabel, renderCallArtifactStatus, callArtifactTextShouldCollapse, renderCallArtifactTextLine,
+        renderCallArtifactText, callArtifactImageUrl, callArtifactImageMime, callArtifactImageFilename,
+        callArtifactImageContext, renderCallArtifactImage, renderCallArtifactRun, renderCallArtifactBatchCard,
+        bindCallMessageControls, openCallArtifactsModal, bindCallArtifactMessageControls,
+        bindCallTranscriptMessageControls, cleanupDuplicateDateSeparators, refreshDateSeparators,
+        outboxUrlKey, getOutboxObjectUrl, revokeOutboxObjectUrls, findOutboxRow, removeDuplicatePromotedRows,
+        promoteOutboxRow, cleanupEmptyMessageGroups, removeOutboxRows, buildLocalMessageFromOutbox,
+        renderOutboxItem, renderOutboxForChat, scheduleRetryLayout, layoutRetryButtons, persistOutboxItem,
+        setOutboxSending, uploadOutboxAttachment, sendOutboxMessageItem, sendOutboxVoiceItem,
+        sendOutboxVideoNoteItem, completeOutboxSend, trySendOutboxItem, queueOutboxItem,
+        createMessageOutboxItem, queueVoiceOutbox, queueVideoNoteOutbox, deleteMessage, markMessageDeleted,
+        updateVisibleReplyQuotesFromMessage, applyMessageUpdate,
+      } = messageServiceDelegates;
       let checkAuth = () => false;
       let logout = () => {};
       let connectWS = () => null;
@@ -1560,8 +1668,17 @@
           setCurrentChatId: (chatId) => {
             const nextId = Number(chatId || 0);
             currentChatId = nextId > 0 ? nextId : null;
+            runtimeState.setCurrentChatId?.(currentChatId);
+            runtimeState.setCurrentChat?.(getChatById(currentChatId));
+            openChatService.syncRuntimeState?.();
             return currentChatId;
           },
+          setCurrentChat: (chat) => {
+            runtimeState.setCurrentChat?.(chat);
+            return chat || null;
+          },
+          setMessages: (messages) => openChatService.setMessages?.(messages),
+          mergeMessages: (messages, options = {}) => openChatService.mergeMessages?.(messages, options),
           getChats: () => chats,
           getChatById: (chatId) => getChatById(chatId),
           getChatSearchValue: () => chatSearch?.value || '',
@@ -1630,7 +1747,10 @@
         scroll: scrollController,
         mediaPlayback: mediaPlaybackController,
         controller: openChatController,
+        service: openChatService,
       };
+      openChatService.configure?.(openChatControllers);
+      openChatService.syncRuntimeState?.();
       if (appContext) appContext.services.openChat = openChatControllers;
     
       const messageStateFactory = window.BananzaApp?.messages?.state?.createMessageState;
@@ -1880,15 +2000,16 @@
           },
         },
       });
-      const messageServices = {
+      messagesService.configure?.({
         state: messageStateController,
         attachments: messageAttachmentRenderer,
         polls: messagePollRenderer,
         callCards: messageCallCardRenderer,
-        render: messageRenderer,
+        renderer: messageRenderer,
         outbox: messageOutbox,
         updates: messageUpdates,
-      };
+      });
+      const messageServices = messagesService;
       if (appContext) appContext.services.messages = messageServices;
     
       const refreshVoiceComposerState = () => window.BananzaVoiceHooks?.refreshComposerState?.();
@@ -3884,78 +4005,6 @@
         return Boolean(msg?.is_outbox || msg?.client_status || (typeof msg?.id === 'string' && msg.id.startsWith('c-')));
       }
     
-      function normalizePoll(...args) {
-        return messagePollRenderer?.normalizePoll?.(...args);
-      }
-    
-      function isPollMessage(...args) {
-        return messagePollRenderer?.isPollMessage?.(...args);
-      }
-    
-      function isPulsePoll(...args) {
-        return messagePollRenderer?.isPulsePoll?.(...args);
-      }
-    
-      function pulseInlineVotersCacheKey(...args) {
-        return messagePollRenderer?.pulseInlineVotersCacheKey?.(...args);
-      }
-    
-      function getPulseInlineVotersRevision(...args) {
-        return messagePollRenderer?.getPulseInlineVotersRevision?.(...args);
-      }
-    
-      function invalidatePulseInlineVotersForMessage(...args) {
-        return messagePollRenderer?.invalidatePulseInlineVotersForMessage?.(...args);
-      }
-    
-      function getPulseVoterDisplayName(...args) {
-        return messagePollRenderer?.getPulseVoterDisplayName?.(...args);
-      }
-    
-      function isPulseVoterOptionExpanded(...args) {
-        return messagePollRenderer?.isPulseVoterOptionExpanded?.(...args);
-      }
-    
-      function getPulseVoterPopoverElement(...args) {
-        return messagePollRenderer?.getPulseVoterPopoverElement?.(...args);
-      }
-    
-      function schedulePulseVoterPopoverAutoHide(...args) {
-        return messagePollRenderer?.schedulePulseVoterPopoverAutoHide?.(...args);
-      }
-    
-      function mountPulseVoterPopover(...args) {
-        return messagePollRenderer?.mountPulseVoterPopover?.(...args);
-      }
-    
-      function clearActivePulseVoterPopover(...args) {
-        return messagePollRenderer?.clearActivePulseVoterPopover?.(...args);
-      }
-    
-      function clearActivePulseVoterPopoverForMessage(...args) {
-        return messagePollRenderer?.clearActivePulseVoterPopoverForMessage?.(...args);
-      }
-    
-      function bindPulseInlineVoterControls(...args) {
-        return messagePollRenderer?.bindPulseInlineVoterControls?.(...args);
-      }
-    
-      function togglePulseVoterOptionExpanded(...args) {
-        return messagePollRenderer?.togglePulseVoterOptionExpanded?.(...args);
-      }
-    
-      function togglePulseVoterPopover(...args) {
-        return messagePollRenderer?.togglePulseVoterPopover?.(...args);
-      }
-    
-      function getPollCompactFooterMeta(...args) {
-        return messagePollRenderer?.getPollCompactFooterMeta?.(...args);
-      }
-    
-      function canClosePollMessage(...args) {
-        return messagePollRenderer?.canClosePollMessage?.(...args);
-      }
-    
       function setPollComposerStatus(...args) { return pollComposerController?.setPollComposerStatus?.(...args); }
     
       function readPollComposerForm(...args) { return pollComposerController?.readPollComposerForm?.(...args) || { question: '', options: [] }; }
@@ -3972,123 +4021,7 @@
     
       function openPollComposer(...args) { return pollComposerController?.openPollComposer?.(...args); }
     
-      function buildOptimisticPollState(...args) {
-        return messagePollRenderer?.buildOptimisticPollState?.(...args);
-      }
-    
-      function nextPollVoteSelection(...args) {
-        return messagePollRenderer?.nextPollVoteSelection?.(...args);
-      }
-    
-      function resetReusableMessageRow(...args) {
-        return messageRenderer?.resetReusableMessageRow?.(...args);
-      }
-    
-      function withStableOutboxMedia(...args) {
-        return messageRenderer?.withStableOutboxMedia?.(...args);
-      }
-    
-      function replaceRenderedMessage(...args) {
-        return messageRenderer?.replaceRenderedMessage?.(...args);
-      }
-    
-      function replaceRenderedPollCard(...args) {
-        return messagePollRenderer?.replaceRenderedPollCard?.(...args);
-      }
-    
-      function applyPollUpdate(...args) {
-        return messagePollRenderer?.applyPollUpdate?.(...args);
-      }
-    
-      async function submitPollComposer(...args) { return pollComposerController?.submitPollComposer?.(...args); }
-    
-      function togglePollVote(...args) {
-        return messagePollRenderer?.togglePollVote?.(...args);
-      }
-    
-      function closePollMessage(...args) {
-        return messagePollRenderer?.closePollMessage?.(...args);
-      }
-    
-      function pollAccentVar(...args) {
-        return messagePollRenderer?.pollAccentVar?.(...args);
-      }
-    
-      function buildPollRenderState(...args) {
-        return messagePollRenderer?.buildPollRenderState?.(...args);
-      }
-    
-      function buildPollOrbitGradient(...args) {
-        return messagePollRenderer?.buildPollOrbitGradient?.(...args);
-      }
-    
-      function renderPollCloseButton(...args) {
-        return messagePollRenderer?.renderPollCloseButton?.(...args);
-      }
-    
-      function renderPollCompactFooter(...args) {
-        return messagePollRenderer?.renderPollCompactFooter?.(...args);
-      }
-    
-      function renderPollVotersButton(...args) {
-        return messagePollRenderer?.renderPollVotersButton?.(...args);
-      }
-    
-      function renderPulseInlineVoterAvatar(...args) {
-        return messagePollRenderer?.renderPulseInlineVoterAvatar?.(...args);
-      }
-    
-      function renderPulseInlineVoterStack(...args) {
-        return messagePollRenderer?.renderPulseInlineVoterStack?.(...args);
-      }
-    
-      function buildPulsePreviewVoters(...args) {
-        return messagePollRenderer?.buildPulsePreviewVoters?.(...args);
-      }
-    
-      function renderPulseInlineVoterSummaryContent(...args) {
-        return messagePollRenderer?.renderPulseInlineVoterSummaryContent?.(...args);
-      }
-    
-      function renderPulseInlineVoterSummary(...args) {
-        return messagePollRenderer?.renderPulseInlineVoterSummary?.(...args);
-      }
-    
-      function refreshPulseInlineVoterSlots(...args) {
-        return messagePollRenderer?.refreshPulseInlineVoterSlots?.(...args);
-      }
-    
-      function ensurePulseInlineVoters(...args) {
-        return messagePollRenderer?.ensurePulseInlineVoters?.(...args);
-      }
-    
-      function hydratePulseInlineVoters(...args) {
-        return messagePollRenderer?.hydratePulseInlineVoters?.(...args);
-      }
-    
-      function renderPulsePollCard(...args) {
-        return messagePollRenderer?.renderPulsePollCard?.(...args);
-      }
-    
-      function renderStackPollCard(...args) {
-        return messagePollRenderer?.renderStackPollCard?.(...args);
-      }
-    
-      function renderOrbitPollCard(...args) {
-        return messagePollRenderer?.renderOrbitPollCard?.(...args);
-      }
-    
-      function resetPollVotersModal(...args) {
-        return messagePollRenderer?.resetPollVotersModal?.(...args);
-      }
-    
-      function openPollVotersModal(...args) {
-        return messagePollRenderer?.openPollVotersModal?.(...args);
-      }
-    
-      function renderPollCard(...args) {
-        return messagePollRenderer?.renderPollCard?.(...args);
-      }
+async function submitPollComposer(...args) { return pollComposerController?.submitPollComposer?.(...args); }
     
       function avatarHtml(name, color, avatarUrl, size) {
         const cls = size === 'large' ? 'avatar-large' : 'avatar';
@@ -4369,10 +4302,6 @@
         return chatListService.flushDeferredRecoverySync(reason);
       }
     
-      function cancelPendingScrollRestores() {
-        return scrollController.cancelPendingScrollRestores();
-      }
-    
       function setChatHydrating(active) {
         if (active) document.documentElement.dataset.viewTransition = 'chat-open';
         else if (document.documentElement.dataset.viewTransition === 'chat-open') delete document.documentElement.dataset.viewTransition;
@@ -4381,18 +4310,6 @@
       function revealChatHydration(seq, chatId = currentChatId) {
         if (seq && !isCurrentChatOpenTransition(seq, chatId)) return false;
         setChatHydrating(false);
-        return true;
-      }
-    
-      function beginChatOpenTransition(chatId) {
-        setChatHydrating(true);
-        return { seq: openChatController.getOpenSeq(), controller: null, chatId: Number(chatId || 0) };
-      }
-    
-      function endChatOpenTransition(seq, chatId = currentChatId) {
-        if (!isCurrentChatOpenTransition(seq, chatId)) return false;
-        revealChatHydration(seq, chatId);
-        flushDeferredRecoverySync();
         return true;
       }
     
@@ -10019,10 +9936,6 @@
         return Number.isInteger(id) && id > 0 ? id : 0;
       }
     
-      async function openChatFromPush(chatId) {
-        return openChatController.openChatFromPush(chatId);
-      }
-    
       function handleServiceWorkerMessage(event) {
         const data = event.data || {};
         if (data.type === 'open_chat') {
@@ -12710,22 +12623,7 @@
         return readReceiptController.applyOwnReadStateToMessages(chatId, messages);
       }
     
-      function updateVisibleOwnReadStateRows(chatId, threshold) {
-        const id = Number(chatId || 0);
-        if (!id || id !== Number(currentChatId || 0) || threshold == null) return;
-        if (threshold == null) return;
-        messagesEl.querySelectorAll('.msg-row.own').forEach((row) => {
-          const msgId = Number(row.dataset.msgId || 0);
-          const statusEl = row.querySelector('.msg-status');
-          if (!msgId || !statusEl) return;
-          const isRead = msgId <= threshold;
-          statusEl.classList.toggle('read', isRead);
-          statusEl.textContent = isRead ? '\u2713\u2713' : '\u2713';
-          if (row.__messageData) row.__messageData.is_read = isRead ? 1 : 0;
-        });
-      }
-    
-      function updateVisibleOwnReadState(chatId = currentChatId) {
+function updateVisibleOwnReadState(chatId = currentChatId) {
         return readReceiptController.updateVisibleOwnReadState(chatId);
       }
     
@@ -12767,46 +12665,6 @@
           });
       }
     
-      function normalizeMessagesPage(data) {
-        return openChatPagesController.normalizeMessagesPage(data);
-      }
-    
-      async function fetchMessagesPage(chatId, params, { signal = null } = {}) {
-        return openChatPagesController.fetchMessagesPage(chatId, params, { signal });
-      }
-    
-      function setHasMoreBefore(value) {
-        return openChatController.setHasMoreBefore(value);
-      }
-    
-      function setLoadMoreAfterLoading(value) {
-        return openChatController.setLoadMoreAfterLoading(value);
-      }
-    
-      function setHasMoreAfter(value) {
-        return openChatController.setHasMoreAfter(value);
-      }
-    
-      function getMessagesAfterLoader() {
-        return openChatController.getMessagesAfterLoader();
-      }
-    
-      function getMessagesLastContentChild() {
-        return openChatController.getMessagesLastContentChild();
-      }
-    
-      function insertAtMessagesEnd(node) {
-        return openChatController.insertAtMessagesEnd(node);
-      }
-    
-      function buildMessagesRootChildren(fragment = null) {
-        return openChatController.buildMessagesRootChildren(fragment);
-      }
-    
-      function messageIdKey(id) {
-        return openChatPagesController.messageIdKey(id);
-      }
-    
       function rememberDisplayedMessage(id) {
         return messageStateController?.rememberDisplayedMessage?.(id);
       }
@@ -12817,42 +12675,6 @@
     
       function isMessageDisplayed(id) {
         return Boolean(messageStateController?.isMessageDisplayed?.(id));
-      }
-    
-      function getMessageIdNumber(msg) {
-        return openChatPagesController.getMessageIdNumber(msg);
-      }
-    
-      function minMessageId(messages = []) {
-        return openChatPagesController.minMessageId(messages);
-      }
-    
-      function maxMessageId(messages = []) {
-        return openChatPagesController.maxMessageId(messages);
-      }
-    
-      function filterNewMessages(messages = []) {
-        return openChatPagesController.filterNewMessages(messages);
-      }
-    
-      function getChatLastMessageId(chatId, fallback = 0) {
-        return openChatPagesController.getChatLastMessageId(chatId, fallback);
-      }
-    
-      function cacheMessages(chatId, messages = [], page = null, options = {}) {
-        return openChatPagesController.cacheMessages(chatId, messages, page, options);
-      }
-    
-      function writeCachedChatMeta(chatId, patch = {}) {
-        return openChatPagesController.writeCachedChatMeta(chatId, patch);
-      }
-    
-      async function readCachedChatRange(chatId) {
-        return openChatPagesController.readCachedChatRange(chatId);
-      }
-    
-      function debugMessageCache(event, detail = {}) {
-        return openChatPagesController.debugMessageCache(event, detail);
       }
     
       function revealActiveMobileChatRoute({ suppressHistoryPush = false, chatId = currentChatId } = {}) {
@@ -12878,104 +12700,8 @@
         beginMobileRouteTransition(transitionMs + 90);
       }
     
-      function warmMessageWindowAssets(chat, messages = []) {
-        return openChatPagesController.warmMessageWindowAssets(chat, messages);
-      }
-    
-      function cacheCursorPage(chatId, direction, cursor, messages = [], page = {}) {
-        return openChatPagesController.cacheCursorPage(chatId, direction, cursor, messages, page);
-      }
-    
-      async function readCachedCursorPage(chatId, direction, cursor) {
-        return openChatPagesController.readCachedCursorPage(chatId, direction, cursor);
-      }
-    
-      function updateHasMoreAfterFromChat(chatId = currentChatId) {
-        return openChatController.updateHasMoreAfterFromChat(chatId);
-      }
-    
-      function maybeLoadMoreAtTop() {
-        return openChatController.maybeLoadMoreAtTop();
-      }
-    
-      function maybeLoadMoreAtBottom() {
-        return openChatController.maybeLoadMoreAtBottom();
-      }
-    
-      function scrollAnchorStorageKey() {
-        return scrollController.scrollAnchorStorageKey();
-      }
-    
-      function ensureScrollAnchorsLoaded() {
-        return scrollController.ensureScrollAnchorsLoaded();
-      }
-    
-      function persistScrollAnchors() {
-        return scrollController.persistScrollAnchors();
-      }
-    
-      function getRenderedMessageRows() {
-        return scrollController.getRenderedMessageRows();
-      }
-    
-      function ensureScrollDateIndicator() {
-        return scrollController.ensureScrollDateIndicator();
-      }
-    
-      function hideScrollDateIndicator({ immediate = false } = {}) {
-        return scrollController.hideScrollDateIndicator({ immediate });
-      }
-    
-      function pickScrollDateMessageRow() {
-        return scrollController.pickScrollDateMessageRow();
-      }
-    
-      function getScrollDateTextForRow(row) {
-        return scrollController.getScrollDateTextForRow(row);
-      }
-    
-      function positionScrollDateIndicator(el) {
-        return scrollController.positionScrollDateIndicator(el);
-      }
-    
-      function updateScrollDateIndicator(options = {}) {
-        return scrollController.updateScrollDateIndicator(options);
-      }
-    
-      function scheduleScrollDateIndicatorUpdate(options = {}) {
-        return scrollController.scheduleScrollDateIndicatorUpdate(options);
-      }
-    
-      function refreshScrollDateIndicator() {
-        return scrollController.refreshScrollDateIndicator();
-      }
-    
       function isDeletedMessageRow(row) {
         return Boolean(row?.__messageData?.is_deleted);
-      }
-    
-      function pickScrollAnchorRow(rows, atBottom, containerRect) {
-        return scrollController.pickScrollAnchorRow(rows, atBottom, containerRect);
-      }
-    
-      function findRestorableAnchorRow(anchor) {
-        return scrollController.findRestorableAnchorRow(anchor);
-      }
-    
-      function getMaxRenderedMessageId() {
-        return scrollController.getMaxRenderedMessageId();
-      }
-    
-      function captureScrollAnchor() {
-        return scrollController.captureScrollAnchor();
-      }
-    
-      function saveCurrentScrollAnchor(chatId = currentChatId, { force = false, allowPendingMedia = false } = {}) {
-        return scrollController.saveCurrentScrollAnchor(chatId, { force, allowPendingMedia });
-      }
-    
-      function canCaptureCurrentChatScrollAnchor(chatId = currentChatId) {
-        return scrollController.canCaptureCurrentChatScrollAnchor(chatId);
       }
     
       function isCurrentChatActivelyVisible(chatId = currentChatId) {
@@ -12988,34 +12714,7 @@
         return getResolvedMobileBaseScene() === 'chat';
       }
     
-      function clearScheduledScrollAnchorSave() {
-        return scrollController.clearScheduledScrollAnchorSave();
-      }
-    
-      function flushCurrentChatScrollAnchor(chatId = currentChatId, { force = true, allowPendingMedia = true } = {}) {
-        return scrollController.flushCurrentChatScrollAnchor(chatId, { force, allowPendingMedia });
-      }
-    
-      function scheduleScrollAnchorSave() {
-        return scrollController.scheduleScrollAnchorSave();
-      }
-    
-      function restoreScrollAnchor(anchor, attempts = 3, options = {}) {
-        return scrollController.restoreScrollAnchor(anchor, attempts, options);
-      }
-    
-      function anchorForChatOpen(chat) {
-        return scrollController.anchorForChatOpen(chat, scrollRestoreMode);
-      }
-    
-      async function markChatReadThrough(chatId, lastReadId) {
-        return readReceiptController.markChatReadThrough(chatId, lastReadId);
-      }
-    
-      function markCurrentChatReadIfAtBottom(force = false) {
-        return readReceiptController.markCurrentChatReadIfAtBottom(force);
-      }
-    
+
       function renderAdminUserRow(u) {
         return adminUsersController.renderAdminUserRow(u);
       }
@@ -13084,7 +12783,7 @@
       }
     
       // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-      // OPEN CHAT
+      // CHAT SHELL AND COMPOSER DRAFTS
       // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
       function normalizeComposerDraftChatId(...args) { return composerStateController.normalizeComposerDraftChatId(...args); }
     
@@ -13108,10 +12807,6 @@
         syncMentionOpenButton();
         window.BananzaVoiceHooks?.refreshComposerState?.();
         updateComposerAiOverrideState().catch(() => {});
-      }
-    
-      async function openChat(chatId, options = {}) {
-        return openChatController.openChat(chatId, options);
       }
     
       function updateChatStatus() {
@@ -13276,366 +12971,9 @@
         return mediaPlaybackController.pauseCurrentChatMediaPlayback();
       }
     
-      // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-      // MESSAGES
-      // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-      function clearRenderedMessages(...args) {
-        return messageRenderer?.clearRenderedMessages?.(...args);
-      }
-    
-      function getRenderedMessageIdList(...args) {
-        return messageRenderer?.getRenderedMessageIdList?.(...args);
-      }
-    
-      function renderedMessageIdsMatch(...args) {
-        return messageRenderer?.renderedMessageIdsMatch?.(...args);
-      }
-    
-      function pinEventIdKey(...args) {
-        return messageRenderer?.pinEventIdKey?.(...args);
-      }
-    
-      function rememberPinEvent(...args) {
-        return messageRenderer?.rememberPinEvent?.(...args);
-      }
-    
-      function isPinEventDisplayed(...args) {
-        return messageRenderer?.isPinEventDisplayed?.(...args);
-      }
-    
-      function filterNewPinEvents(...args) {
-        return messageRenderer?.filterNewPinEvents?.(...args);
-      }
-    
-      function timelineTimestamp(...args) {
-        return messageRenderer?.timelineTimestamp?.(...args);
-      }
-    
-      function buildTimelineItems(...args) {
-        return messageRenderer?.buildTimelineItems?.(...args);
-      }
-    
-      function renderPinSystemEvent(...args) {
-        return messageRenderer?.renderPinSystemEvent?.(...args);
-      }
-    
-      function buildMessagesFragment(...args) {
-        return messageRenderer?.buildMessagesFragment?.(...args);
-      }
-    
-      function replaceRenderedMessages(...args) {
-        return messageRenderer?.replaceRenderedMessages?.(...args);
-      }
-    
-      function primeAppendedMessageSideEffects(...args) {
-        return messageRenderer?.primeAppendedMessageSideEffects?.(...args);
-      }
-    
-      function appendTimelineItems(...args) {
-        return messageRenderer?.appendTimelineItems?.(...args);
-      }
-    
-      function appendPinEventIfVisible(...args) {
-        return messageRenderer?.appendPinEventIfVisible?.(...args);
-      }
-    
-      function isCurrentMessageRow(...args) {
-        return messageRenderer?.isCurrentMessageRow?.(...args);
-      }
-    
-      function messageHasDeferredMediaLayout(...args) {
-        return messageRenderer?.messageHasDeferredMediaLayout?.(...args);
-      }
-    
-      function clearPendingMediaBottomScroll(...args) {
-        return messageRenderer?.clearPendingMediaBottomScroll?.(...args);
-      }
-    
-      function noteMessageScrollUserIntent(...args) {
-        return messageRenderer?.noteMessageScrollUserIntent?.(...args);
-      }
-    
-      function scheduleMediaBottomScrollAnchorSave(...args) {
-        return messageRenderer?.scheduleMediaBottomScrollAnchorSave?.(...args);
-      }
-    
-      function settleDeferredMediaBottomScroll(...args) {
-        return messageRenderer?.settleDeferredMediaBottomScroll?.(...args);
-      }
-    
-      function markPendingMediaBottomScroll(...args) {
-        return messageRenderer?.markPendingMediaBottomScroll?.(...args);
-      }
-    
-      function markPendingMediaBottomScrollForMessages(...args) {
-        return messageRenderer?.markPendingMediaBottomScrollForMessages?.(...args);
-      }
-    
-      function cancelPendingMediaBottomScrollIfNeeded(...args) {
-        return messageRenderer?.cancelPendingMediaBottomScrollIfNeeded?.(...args);
-      }
-    
-      function createMessageGroup(...args) {
-        return messageRenderer?.createMessageGroup?.(...args);
-      }
-    
-      function renderMessages(...args) {
-        return messageRenderer?.renderMessages?.(...args);
-      }
-    
-      function appendMessage(...args) {
-        return messageRenderer?.appendMessage?.(...args);
-      }
-    
-      function bindPollControls(...args) {
-        return messagePollRenderer?.bindPollControls?.(...args);
-      }
-    
-      function createMessageEl(...args) {
-        return messageRenderer?.createMessageEl?.(...args);
-      }
-    
-      // Update visible status indicator inside a message row according to __messageData.client_status
-      function updateRowStatus(...args) {
-        return messageRenderer?.updateRowStatus?.(...args);
-      }
-    
-      function retrySend(...args) {
-        return messageOutbox?.retrySend?.(...args);
-      }
-    
-      function formatDuration(...args) {
-        return messageAttachmentRenderer?.formatDuration?.(...args);
-      }
-    
       function getMediaNoteFallbackLabel(msg, { voiceLabel = '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435', videoLabel = '\u0412\u0438\u0434\u0435\u043e-\u0437\u0430\u043c\u0435\u0442\u043a\u0430' } = {}) {
         if (!msg?.is_voice_note) return '';
         return msg?.is_video_note ? videoLabel : voiceLabel;
-      }
-    
-      function renderResolvedFileAttachment(...args) {
-        return messageAttachmentRenderer?.renderResolvedFileAttachment?.(...args);
-      }
-    
-      function renderFileAttachment(...args) {
-        return messageAttachmentRenderer?.renderFileAttachment?.(...args);
-      }
-    
-      function resolveCallMessageMediaKind(...args) {
-        return messageCallCardRenderer?.resolveCallMessageMediaKind?.(...args);
-      }
-    
-      function resolveCallMessageRoomMode(...args) {
-        return messageCallCardRenderer?.resolveCallMessageRoomMode?.(...args);
-      }
-    
-      function normalizeCallMessageData(...args) {
-        return messageCallCardRenderer?.normalizeCallMessageData?.(...args);
-      }
-    
-      function latestCallTranscriptRun(...args) {
-        return messageCallCardRenderer?.latestCallTranscriptRun?.(...args);
-      }
-    
-      function latestCallArtifactBatch(...args) {
-        return messageCallCardRenderer?.latestCallArtifactBatch?.(...args);
-      }
-    
-      function callArtifactProgress(...args) {
-        return messageCallCardRenderer?.callArtifactProgress?.(...args);
-      }
-    
-      function pushCallMessageMeta(...args) {
-        return messageCallCardRenderer?.pushCallMessageMeta?.(...args);
-      }
-    
-      function renderCallMessageMeta(...args) {
-        return messageCallCardRenderer?.renderCallMessageMeta?.(...args);
-      }
-    
-      function normalizeCallMixedRecording(...args) {
-        return messageCallCardRenderer?.normalizeCallMixedRecording?.(...args);
-      }
-    
-      function callRecordingPlaybackUrl(...args) {
-        return messageCallCardRenderer?.callRecordingPlaybackUrl?.(...args);
-      }
-    
-      function callRecordingDurationSeconds(...args) {
-        return messageCallCardRenderer?.callRecordingDurationSeconds?.(...args);
-      }
-    
-      function parseCallRecordingRadiusValue(...args) {
-        return messageCallCardRenderer?.parseCallRecordingRadiusValue?.(...args);
-      }
-    
-      function callRecordingRoundedRectPath(...args) {
-        return messageCallCardRenderer?.callRecordingRoundedRectPath?.(...args);
-      }
-    
-      function ensureCallRecordingFooterButton(...args) {
-        return messageCallCardRenderer?.ensureCallRecordingFooterButton?.(...args);
-      }
-    
-      function ensureCallRecordingProgress(...args) {
-        return messageCallCardRenderer?.ensureCallRecordingProgress?.(...args);
-      }
-    
-      function refreshCallRecordingProgressShape(...args) {
-        return messageCallCardRenderer?.refreshCallRecordingProgressShape?.(...args);
-      }
-    
-      function updateCallRecordingProgress(...args) {
-        return messageCallCardRenderer?.updateCallRecordingProgress?.(...args);
-      }
-    
-      function syncCallRecordingPlayButton(...args) {
-        return messageCallCardRenderer?.syncCallRecordingPlayButton?.(...args);
-      }
-    
-      function pointToCallRecordingHit(...args) {
-        return messageCallCardRenderer?.pointToCallRecordingHit?.(...args);
-      }
-    
-      function shouldIgnoreCallRecordingPointer(...args) {
-        return messageCallCardRenderer?.shouldIgnoreCallRecordingPointer?.(...args);
-      }
-    
-      function isPointerNearCallRecordingProgressRect(...args) {
-        return messageCallCardRenderer?.isPointerNearCallRecordingProgressRect?.(...args);
-      }
-    
-      function getCallRecordingSeekRows(...args) {
-        return messageCallCardRenderer?.getCallRecordingSeekRows?.(...args);
-      }
-    
-      function seekCallRecordingProgress(...args) {
-        return messageCallCardRenderer?.seekCallRecordingProgress?.(...args);
-      }
-    
-      function resolveNearestCallRecordingHit(...args) {
-        return messageCallCardRenderer?.resolveNearestCallRecordingHit?.(...args);
-      }
-    
-      function installCallRecordingProgressCapture(...args) {
-        return messageCallCardRenderer?.installCallRecordingProgressCapture?.(...args);
-      }
-    
-      function renderCallMessageCard(...args) {
-        return messageCallCardRenderer?.renderCallMessageCard?.(...args);
-      }
-    
-      function renderCallTranscriptRunCard(...args) {
-        return messageCallCardRenderer?.renderCallTranscriptRunCard?.(...args);
-      }
-    
-      function callArtifactStatusLabel(...args) {
-        return messageCallCardRenderer?.callArtifactStatusLabel?.(...args);
-      }
-    
-      function callArtifactStatusKind(...args) {
-        return messageCallCardRenderer?.callArtifactStatusKind?.(...args);
-      }
-    
-      function callArtifactKey(...args) {
-        return messageCallCardRenderer?.callArtifactKey?.(...args);
-      }
-    
-      function callArtifactLabel(...args) {
-        return messageCallCardRenderer?.callArtifactLabel?.(...args);
-      }
-    
-      function renderCallArtifactStatus(...args) {
-        return messageCallCardRenderer?.renderCallArtifactStatus?.(...args);
-      }
-    
-      function callArtifactTextShouldCollapse(...args) {
-        return messageCallCardRenderer?.callArtifactTextShouldCollapse?.(...args);
-      }
-    
-      function renderCallArtifactTextLine(...args) {
-        return messageCallCardRenderer?.renderCallArtifactTextLine?.(...args);
-      }
-    
-      function renderCallArtifactText(...args) {
-        return messageCallCardRenderer?.renderCallArtifactText?.(...args);
-      }
-    
-      function callArtifactImageUrl(...args) {
-        return messageCallCardRenderer?.callArtifactImageUrl?.(...args);
-      }
-    
-      function callArtifactImageMime(...args) {
-        return messageCallCardRenderer?.callArtifactImageMime?.(...args);
-      }
-    
-      function callArtifactImageFilename(...args) {
-        return messageCallCardRenderer?.callArtifactImageFilename?.(...args);
-      }
-    
-      function callArtifactImageContext(...args) {
-        return messageCallCardRenderer?.callArtifactImageContext?.(...args);
-      }
-    
-      function renderCallArtifactImage(...args) {
-        return messageCallCardRenderer?.renderCallArtifactImage?.(...args);
-      }
-    
-      function renderCallArtifactRun(...args) {
-        return messageCallCardRenderer?.renderCallArtifactRun?.(...args);
-      }
-    
-      function renderCallArtifactBatchCard(...args) {
-        return messageCallCardRenderer?.renderCallArtifactBatchCard?.(...args);
-      }
-    
-      function bindCallMessageControls(...args) {
-        return messageCallCardRenderer?.bindCallMessageControls?.(...args);
-      }
-    
-      function openCallArtifactsModal(...args) {
-        return messageCallCardRenderer?.openCallArtifactsModal?.(...args);
-      }
-    
-      function bindCallArtifactMessageControls(...args) {
-        return messageCallCardRenderer?.bindCallArtifactMessageControls?.(...args);
-      }
-    
-      function bindCallTranscriptMessageControls(...args) {
-        return messageCallCardRenderer?.bindCallTranscriptMessageControls?.(...args);
-      }
-    
-      function renderLinkPreview(...args) {
-        return messageAttachmentRenderer?.renderLinkPreview?.(...args);
-      }
-    
-      function cleanupDuplicateDateSeparators(...args) {
-        return messageRenderer?.cleanupDuplicateDateSeparators?.(...args);
-      }
-    
-      function refreshDateSeparators(...args) {
-        return messageRenderer?.refreshDateSeparators?.(...args);
-      }
-    
-      async function catchUpCurrentChat(chatId, { fromPush = false } = {}) {
-        return openChatController.catchUpCurrentChat(chatId, { fromPush });
-      }
-    
-      // Load more messages
-      async function loadMore() {
-        return openChatController.loadMore();
-      }
-    
-      async function loadMoreAfter() {
-        return openChatController.loadMoreAfter();
-      }
-    
-      function isNearBottom(threshold = 150) {
-        return scrollController.isNearBottom(threshold);
-      }
-    
-      function scrollToBottom(instant = false, markRead = false, options = {}) {
-        return scrollController.scrollToBottom(instant, markRead, options);
       }
     
       function suppressScrollBottomFollowupClick(ms = 520) {
@@ -13662,129 +13000,11 @@
       // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
       function getReplySnapshot(...args) { return composerReplyEditController?.getReplySnapshot?.(...args) || null; }
     
-      function outboxUrlKey(...args) {
-        return messageOutbox?.outboxUrlKey?.(...args);
-      }
-    
-      function getOutboxObjectUrl(...args) {
-        return messageOutbox?.getOutboxObjectUrl?.(...args);
-      }
-    
-      function revokeOutboxObjectUrls(...args) {
-        return messageOutbox?.revokeOutboxObjectUrls?.(...args);
-      }
-    
-      function findOutboxRow(...args) {
-        return messageOutbox?.findOutboxRow?.(...args);
-      }
-    
-      function removeDuplicatePromotedRows(...args) {
-        return messageOutbox?.removeDuplicatePromotedRows?.(...args);
-      }
-    
-      function promoteOutboxRow(...args) {
-        return messageOutbox?.promoteOutboxRow?.(...args);
-      }
-    
-      function cleanupEmptyMessageGroups(...args) {
-        return messageOutbox?.cleanupEmptyMessageGroups?.(...args);
-      }
-    
-      function removeOutboxRows(...args) {
-        return messageOutbox?.removeOutboxRows?.(...args);
-      }
-    
-      function buildLocalMessageFromOutbox(...args) {
-        return messageOutbox?.buildLocalMessageFromOutbox?.(...args);
-      }
-    
-      function renderOutboxItem(...args) {
-        return messageOutbox?.renderOutboxItem?.(...args);
-      }
-    
-      function renderOutboxForChat(...args) {
-        return messageOutbox?.renderOutboxForChat?.(...args);
-      }
-    
-      function scheduleRetryLayout(...args) {
-        return messageOutbox?.scheduleRetryLayout?.(...args);
-      }
-    
-      function layoutRetryButtons(...args) {
-        return messageOutbox?.layoutRetryButtons?.(...args);
-      }
-    
-      function persistOutboxItem(...args) {
-        return messageOutbox?.persistOutboxItem?.(...args);
-      }
-    
-      function setOutboxSending(...args) {
-        return messageOutbox?.setOutboxSending?.(...args);
-      }
-    
-      function uploadOutboxAttachment(...args) {
-        return messageOutbox?.uploadOutboxAttachment?.(...args);
-      }
-    
-      function sendOutboxMessageItem(...args) {
-        return messageOutbox?.sendOutboxMessageItem?.(...args);
-      }
-    
-      function sendOutboxVoiceItem(...args) {
-        return messageOutbox?.sendOutboxVoiceItem?.(...args);
-      }
-    
-      function sendOutboxVideoNoteItem(...args) {
-        return messageOutbox?.sendOutboxVideoNoteItem?.(...args);
-      }
-    
-      function completeOutboxSend(...args) {
-        return messageOutbox?.completeOutboxSend?.(...args);
-      }
-    
-      function trySendOutboxItem(...args) {
-        return messageOutbox?.trySendOutboxItem?.(...args);
-      }
-    
-      function queueOutboxItem(...args) {
-        return messageOutbox?.queueOutboxItem?.(...args);
-      }
-    
-      function createMessageOutboxItem(...args) {
-        return messageOutbox?.createMessageOutboxItem?.(...args);
-      }
-    
-      function queueVoiceOutbox(...args) {
-        return messageOutbox?.queueVoiceOutbox?.(...args);
-      }
-    
-      function queueVideoNoteOutbox(...args) {
-        return messageOutbox?.queueVideoNoteOutbox?.(...args);
-      }
-    
-      // SEND MESSAGE
+      // COMPOSER SEND
       // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
       async function saveEditedMessage(...args) { return composerSendController?.saveEditedMessage?.(...args); }
     
       async function sendMessage(...args) { return composerSendController?.sendMessage?.(...args); }
-    
-      // DELETE MESSAGE
-      // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-      function deleteMessage(...args) {
-        return messageUpdates?.deleteMessage?.(...args);
-      }
-    
-      function markMessageDeleted(...args) {
-        return messageUpdates?.markMessageDeleted?.(...args);
-      }
-    
-      function updateVisibleReplyQuotesFromMessage(...args) {
-        return messageUpdates?.updateVisibleReplyQuotesFromMessage?.(...args);
-      }
-    
-      function applyMessageUpdate(...args) {
-        return messageUpdates?.applyMessageUpdate?.(...args);
-      }
     
       // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
       // FILE UPLOAD

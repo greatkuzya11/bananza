@@ -10,6 +10,8 @@
       token: null,
       chats: [],
       currentChatId: null,
+      currentChat: null,
+      messages: [],
       ws: null,
       wsRetry: 1000,
       wsReconnectTimer: null,
@@ -47,14 +49,47 @@
     state.setCurrentChatId = function setCurrentChatId(chatId) {
       const nextChatId = Number(chatId || 0);
       state.currentChatId = nextChatId > 0 ? nextChatId : null;
+      state.currentChat = state.getCurrentChat();
       return state.currentChatId;
+    };
+    state.getCurrentChat = function getCurrentChat() {
+      const id = Number(state.currentChatId || 0);
+      if (!id) return null;
+      if (state.currentChat && Number(state.currentChat.id || 0) === id) return state.currentChat;
+      return (Array.isArray(state.chats) ? state.chats : []).find((chat) => Number(chat.id || 0) === id) || null;
+    };
+    state.setCurrentChat = function setCurrentChat(chat) {
+      state.currentChat = chat || null;
+      return state.currentChat;
     };
     state.getChats = function getChats() {
       return state.chats;
     };
     state.setChats = function setChats(chats) {
       state.chats = Array.isArray(chats) ? chats : [];
+      state.currentChat = state.getCurrentChat();
       return state.chats;
+    };
+    state.getMessages = function getMessages() {
+      return state.messages;
+    };
+    state.setMessages = function setMessages(messages) {
+      state.messages = Array.isArray(messages) ? messages : [];
+      return state.messages;
+    };
+    state.mergeMessages = function mergeMessages(messages, { prepend = false } = {}) {
+      const incoming = Array.isArray(messages) ? messages.filter(Boolean) : [];
+      if (!incoming.length) return state.messages;
+      const combined = prepend ? [...incoming, ...state.messages] : [...state.messages, ...incoming];
+      const seen = new Set();
+      state.messages = combined.filter((message) => {
+        const key = String(message?.id ?? '').trim();
+        if (!key) return true;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      return state.messages;
     };
     state.getAllUsers = function getAllUsers() {
       return state.allUsers;
@@ -81,6 +116,7 @@
       state.chats = store.getMutableChats?.() || store.getChats?.() || state.chats || [];
       state.allUsers = store.getMutableAllUsers?.() || store.getAllUsers?.() || state.allUsers || [];
       state.onlineUsers = store.getMutableOnlineUsers?.() || store.getOnlineUsers?.() || state.onlineUsers || new Set();
+      state.currentChat = state.getCurrentChat();
       return state;
     };
     state.getWs = function getWs() {

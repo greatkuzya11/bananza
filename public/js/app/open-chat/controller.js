@@ -71,6 +71,18 @@
       return getChats().find((chat) => Number(chat.id) === id) || null;
     }
 
+    function setCurrentChat(chat) {
+      if (typeof state.setCurrentChat === 'function') state.setCurrentChat(chat || null);
+    }
+
+    function setStateMessages(messages = []) {
+      if (typeof state.setMessages === 'function') state.setMessages(messages);
+    }
+
+    function mergeStateMessages(messages = [], options = {}) {
+      if (typeof state.mergeMessages === 'function') state.mergeMessages(messages, options);
+    }
+
     function getCache() {
       return opts.cache || window.messageCache || null;
     }
@@ -250,6 +262,7 @@
           pinEvents,
           mediaAutoScrollToBottom: shouldAutoScrollRenderedMedia,
         });
+        setStateMessages(list);
         if (!isCurrentOpen()) return false;
         committedWindow = true;
         actions.renderOutboxForChat?.(targetChatId)?.catch?.(() => {});
@@ -388,6 +401,7 @@
             actions.appendTimelineItems?.(newMessages, newPinEvents, {
               mediaAutoScrollToBottom: Boolean(wasNearBottom),
             });
+            mergeStateMessages(newMessages);
             if (newMessages.length) actions.updateChatListLastMessage?.(newMessages[newMessages.length - 1]);
             if (wasNearBottom) {
               scroll.scrollToBottom(false, true);
@@ -432,6 +446,7 @@
       actions.closeTransientUi?.();
 
       setCurrentChatId(targetChatId);
+      setCurrentChat(chat);
       if (state.hasEdit?.()) actions.clearEdit?.({ clearInput: true, draftChatId: previousChatId || targetChatId });
       actions.restoreComposerDraft?.(targetChatId);
       actions.clearDisplayedTimelineState?.();
@@ -573,6 +588,7 @@
             scrollTopBefore = messagesEl.scrollTop;
             scrollHeightBefore = messagesEl.scrollHeight;
             actions.renderMessages?.(newMessages, { pinEvents: newPinEvents });
+            mergeStateMessages(newMessages, { prepend: true });
             actions.cleanupDuplicateDateSeparators?.();
             if (newMessages.length) await pages.cacheMessages(chatId, msgs, page);
             prependedAny = true;
@@ -648,6 +664,7 @@
             actions.appendTimelineItems?.(newMessages, newPinEvents, {
               mediaAutoScrollToBottom: bottomOffsetBefore <= 8,
             });
+            mergeStateMessages(newMessages);
             if (newMessages.length) await pages.cacheMessages(chatId, msgs, page);
             appendedAny = true;
             break;
@@ -725,6 +742,7 @@
             actions.appendTimelineItems?.(newMessages, newPinEvents, {
               mediaAutoScrollToBottom: Boolean(wasNearBottom && !doc.hidden),
             });
+            mergeStateMessages(newMessages);
             if (newMessages.length) actions.updateChatListLastMessage?.(newMessages[newMessages.length - 1]);
             appendedAny = true;
           } else if (fromPush && msgs.length) {
