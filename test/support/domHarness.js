@@ -26,6 +26,7 @@ const appDomMobileShellScriptPaths = Object.freeze([
   'public/js/app/shell/events.js',
   'public/js/app/shell/ui-runtime.js',
   'public/js/app/shell/shell-runtime.js',
+  'public/js/app/shell/mobile-runtime-adapters.js',
 ]);
 const appModalManagerScriptPaths = Object.freeze([
   'public/js/app/modal-manager.js',
@@ -118,12 +119,14 @@ const appBootScriptPaths = Object.freeze([
   'public/js/app/boot/auth.js',
   'public/js/app/boot/websocket.js',
   'public/js/app/boot/ws-dispatch.js',
+  'public/js/app/boot/runtime-core.js',
+  'public/js/app/boot/feature-composition.js',
   'public/js/app/boot/events.js',
   'public/js/app/boot/public-bridge.js',
   'public/js/app/boot/chat-list-service.js',
   'public/js/app/boot/open-chat-service.js',
   'public/js/app/boot/messages-service.js',
-  'public/js/app/boot/legacy-runtime.js',
+  'public/js/app/boot/runtime-assembly.js',
   'public/js/app/boot/init.js',
 ]);
 const appRuntimeScriptPaths = Object.freeze([

@@ -2,7 +2,7 @@
   const root = window.BananzaApp = window.BananzaApp || {};
   const bootRoot = root.boot = root.boot || {};
 
-  function createLegacyWsDispatch(scope = {}) {
+  function createRuntimeWsDispatch(scope = {}) {
     with (scope) {
       // WEBSOCKET
       // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
@@ -911,5 +911,5 @@ function updateVisibleOwnReadState(chatId = currentChatId) {
     }
   }
 
-  bootRoot.wsDispatch = { createLegacyWsDispatch };
+  bootRoot.wsDispatch = { createRuntimeWsDispatch };
 })();

@@ -2,7 +2,7 @@
 
 ## Purpose
 - This folder contains app shell runtime helpers: global event binding, mobile keyboard/composer guards, viewport glue, and other non-feature UI wiring.
-- Scripts load before boot legacy runtime and publish factories through `window.BananzaApp.shell`.
+- Scripts load before boot runtime assembly and publish factories through `window.BananzaApp.shell`.
 
 ## Runtime Contract
 - Do not own chats, messages, folders, composer content, reactions, media viewer state, or AI provider state.
