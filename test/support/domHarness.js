@@ -22,6 +22,8 @@ const appDomMobileShellScriptPaths = Object.freeze([
   'public/js/app/android-bridge.js',
   'public/js/app/mobile-viewport.js',
   'public/js/app/chat-header-actions.js',
+  'public/js/app/shell/mobile-composer-guard.js',
+  'public/js/app/shell/events.js',
 ]);
 const appModalManagerScriptPaths = Object.freeze([
   'public/js/app/modal-manager.js',
@@ -39,6 +41,7 @@ const appFolderScriptPaths = Object.freeze([
   'public/js/app/folders/actions.js',
   'public/js/app/folders/manage-modal.js',
   'public/js/app/folders/new-folder-tab.js',
+  'public/js/app/folders/mobile-gestures.js',
 ]);
 const appChatListScriptPaths = Object.freeze([
   'public/js/app/chat-list/store.js',
@@ -98,6 +101,7 @@ const appAiAdminScriptPaths = Object.freeze([
   'public/js/app/ai-admin/chatshot.js',
   'public/js/app/ai-admin/grok-image-risk.js',
   'public/js/app/ai-admin/modals.js',
+  'public/js/app/ai-admin/events.js',
 ]);
 const appBootScriptPaths = Object.freeze([
   'public/js/app/boot/state.js',

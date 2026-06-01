@@ -649,7 +649,6 @@
       let reactionEmojiSwipePager = null;
       let newChatTabSwipePager = null;
       let avatarUserMenuState = null;
-      let avatarUserMenuClickSuppressUntil = 0;
       let chatAreaResizeObserver = null;
       let chatHeaderActionsOpen = false;
       let mobileRouteTransitionActive = false;
@@ -658,20 +657,9 @@
       let mobileSceneRepaintFrame = 0;
       let mobileSceneRepaintCleanupFrame = 0;
       let mobileSceneRepaintTarget = null;
-      let mobileViewportLayoutSyncFrame = 0;
       let mobileViewportElementResizeObserver = null;
       let mobileVisualViewportBaselineHeight = 0;
       let mobileVisualViewportBaselineWidth = 0;
-      let mobileKeyboardDockTop = 0;
-      let mobileKeyboardDockHeight = 0;
-      let mobileKeyboardDockWidth = 0;
-      let mobileKeyboardDockBottom = 0;
-      let mobileKeyboardDockInputHeight = 0;
-      let mobileKeyboardDockRecentInputDelta = 0;
-      let mobileKeyboardDockRecentInputDeltaAt = 0;
-      let mobileKeyboardDockActive = false;
-      let iosComposerFocused = false;
-      let iosComposerBlurTimer = null;
       let iosBackNavigationToken = 0;
       let inAppChatBackSkipNextPopstate = false;
       let pendingMobileChatListHistoryNormalization = false;
@@ -679,28 +667,6 @@
       let mobileViewportHeightSyncBound = false;
       let mobileViewportRecoveryFrame = 0;
       let mobileViewportRecoveryTimer = null;
-      let mobileComposerGestureGuard = {
-        source: '',
-        pointerId: null,
-        touchId: null,
-        startX: 0,
-        startY: 0,
-        lastX: 0,
-        lastY: 0,
-        moved: false,
-        target: null,
-      };
-      let mobileMessageInteractionGuard = {
-        source: '',
-        pointerId: null,
-        touchId: null,
-        startX: 0,
-        startY: 0,
-        moved: false,
-        target: null,
-        keyboardOpenAtStart: false,
-      };
-      let mobileComposerDismissClickSuppressUntil = 0;
       let scrollBottomFollowupClickSuppressUntil = 0;
     
       const composerFactories = window.BananzaApp?.composer || {};
@@ -936,6 +902,7 @@
       const OPENAI_IMAGE_BACKGROUND_OPTIONS = ['auto', 'transparent', 'opaque'];
       const OPENAI_IMAGE_OUTPUT_OPTIONS = ['png', 'webp', 'jpeg'];
       const DOCUMENT_FORMAT_OPTIONS = ['md', 'txt'];
+      let mobileComposerGuard = null;
     
       const mobileViewportShell = window.BananzaApp?.mobileViewport?.createMobileViewportShell?.({
         document,
@@ -943,7 +910,7 @@
         dom: appDom,
         state: {
           getCurrentModalAnimation: () => currentModalAnimation,
-          getIosComposerFocused: () => iosComposerFocused,
+          getIosComposerFocused: () => mobileComposerGuard?.getIosComposerFocused?.() || false,
           getMobileViewportPrevHeight: () => mobileViewportPrevHeight,
           getMobileVisualViewportBaselineHeight: () => mobileVisualViewportBaselineHeight,
           getMobileVisualViewportBaselineWidth: () => mobileVisualViewportBaselineWidth,
@@ -976,6 +943,35 @@
           },
         },
       }) || null;
+      mobileComposerGuard = window.BananzaApp?.shell?.createMobileComposerGuard?.({
+        window,
+        document,
+        dom: appDom,
+        mobileViewport: mobileViewportShell,
+        controllers: {
+          composerState: () => composerStateController,
+          mentions: () => composerMentionsController,
+          search: () => searchController,
+          floatingActions: () => floatingMessageActionsController,
+        },
+        actions: {
+          $,
+          isMobileLayoutViewport: () => isMobileLayoutViewport(),
+          isMobileViewportLayoutLocked: () => isMobileViewportLayoutLocked(),
+          scheduleMobileViewportRecovery: (retryDelayMs) => scheduleMobileViewportRecovery(retryDelayMs),
+          isFloatingSurfaceVisible: (el) => isFloatingSurfaceVisible(el),
+          isContextConvertPickerActive: () => Boolean(contextConvertPickerState.active),
+          hideMentionPicker: (...args) => hideMentionPicker(...args),
+          hideContextConvertPicker: (...args) => hideContextConvertPicker(...args),
+          hideFloatingMessageActions: (...args) => hideFloatingMessageActions(...args),
+          hideAvatarUserMenu: (...args) => hideAvatarUserMenu(...args),
+          clearActivePulseVoterPopover: (...args) => clearActivePulseVoterPopover(...args),
+          closeEmojiPicker: (...args) => closeEmojiPicker(...args),
+          closeFloatingSurface: (...args) => closeFloatingSurface(...args),
+          rememberActiveElement: () => rememberActiveElement(),
+          showMessageActions: (...args) => showMessageActions(...args),
+        },
+      }) || {};
     
       const appContext = appRuntime?.createContext ? appRuntime.createContext({
         config: {
@@ -998,6 +994,7 @@
           androidBridge,
           chatHeaderActions: chatHeaderActionsShell,
           mobileViewport: mobileViewportShell,
+          mobileComposerGuard,
           t,
           tx,
         },
@@ -1008,6 +1005,7 @@
         appContext.dom = appDom;
         appContext.services = appContext.services || {};
         appContext.services.mobileViewport = mobileViewportShell;
+        appContext.services.mobileComposerGuard = mobileComposerGuard;
         appContext.services.androidBridge = androidBridge;
         appContext.services.chatHeaderActions = chatHeaderActionsShell;
         appContext.services.auth = authService;
@@ -2030,8 +2028,7 @@
         esc,
         actions: {
           noteMobileKeyboardInputDelta: (delta) => {
-            mobileKeyboardDockRecentInputDelta = delta;
-            mobileKeyboardDockRecentInputDeltaAt = Date.now();
+            mobileComposerGuard?.noteMobileKeyboardInputDelta?.(delta);
           },
           isFloatingSurfaceVisible: (el) => isFloatingSurfaceVisible(el),
           positionEmojiPicker: (anchor) => positionEmojiPicker(anchor),
@@ -2474,718 +2471,50 @@
         document.documentElement.classList.add('is-ios-webkit');
       }
     
-      function getMobileAppViewportHeight(viewport = null) {
-        if (typeof mobileViewportShell.getMobileAppViewportHeight === 'function') {
-          return mobileViewportShell.getMobileAppViewportHeight(viewport);
-        }
-        return Math.max(0, Number(viewport?.height) || window.visualViewport?.height || window.innerHeight || 0);
-      }
-    
-      function getMobileAppViewportTopInset() {
-        return typeof mobileViewportShell.getMobileAppViewportTopInset === 'function'
-          ? mobileViewportShell.getMobileAppViewportTopInset()
-          : 0;
-      }
-    
-      function isIosMobileViewportTarget() {
-        return typeof mobileViewportShell.isIosMobileViewportTarget === 'function'
-          ? mobileViewportShell.isIosMobileViewportTarget()
-          : Boolean(isIosViewportFixTarget && isMobileViewportTarget());
-      }
-    
-      function isMobileViewportTarget() {
-        return typeof mobileViewportShell.isMobileViewportTarget === 'function'
-          ? mobileViewportShell.isMobileViewportTarget()
-          : Boolean(window.innerWidth <= 768);
-      }
-    
-      function isIosWebkitMotionAllowed() {
-        return typeof mobileViewportShell.isIosWebkitMotionAllowed === 'function'
-          ? mobileViewportShell.isIosWebkitMotionAllowed()
-          : false;
-      }
-    
-      function forceIosAnimationMount(...elements) {
-        return mobileViewportShell.forceIosAnimationMount?.(...elements);
-      }
-    
-      function getMobileVisualViewportMetrics() {
-        if (typeof mobileViewportShell.getMobileVisualViewportMetrics === 'function') {
-          return mobileViewportShell.getMobileVisualViewportMetrics();
-        }
-        const height = Math.max(0, window.visualViewport?.height || window.innerHeight || 0);
-        const top = Math.max(0, window.visualViewport?.offsetTop || 0);
-        const width = Math.max(0, window.visualViewport?.width || window.innerWidth || 0);
-        return { top, height, width, bottom: top + height };
-      }
-    
-      function getIosVisualViewportMetrics() {
-        return typeof mobileViewportShell.getIosVisualViewportMetrics === 'function'
-          ? mobileViewportShell.getIosVisualViewportMetrics()
-          : getMobileVisualViewportMetrics();
-      }
-    
-      function getMobileViewportBaselineHeight() {
-        return typeof mobileViewportShell.getMobileViewportBaselineHeight === 'function'
-          ? mobileViewportShell.getMobileViewportBaselineHeight()
-          : Math.max(0, window.visualViewport?.height || window.innerHeight || 0);
-      }
-    
-      function getIosViewportBaselineHeight() {
-        return typeof mobileViewportShell.getIosViewportBaselineHeight === 'function'
-          ? mobileViewportShell.getIosViewportBaselineHeight()
-          : getMobileViewportBaselineHeight();
-      }
-    
-      function isMobileKeyboardOpen() {
-        return typeof mobileViewportShell.isMobileKeyboardOpen === 'function'
-          ? mobileViewportShell.isMobileKeyboardOpen()
-          : false;
-      }
-    
-      function isIosKeyboardOpen() {
-        return typeof mobileViewportShell.isIosKeyboardOpen === 'function'
-          ? mobileViewportShell.isIosKeyboardOpen()
-          : Boolean(isIosMobileViewportTarget() && isMobileKeyboardOpen());
-      }
-    
-      function isMobileChatKeyboardLayoutActive() {
-        return typeof mobileViewportShell.isMobileChatKeyboardLayoutActive === 'function'
-          ? mobileViewportShell.isMobileChatKeyboardLayoutActive()
-          : false;
-      }
-    
-      function isIosChatKeyboardLayoutActive() {
-        return typeof mobileViewportShell.isIosChatKeyboardLayoutActive === 'function'
-          ? mobileViewportShell.isIosChatKeyboardLayoutActive()
-          : Boolean(isIosMobileViewportTarget() && isMobileChatKeyboardLayoutActive());
-      }
-    
-      function resetMobileKeyboardDock() {
-        mobileKeyboardDockActive = false;
-        mobileKeyboardDockTop = 0;
-        mobileKeyboardDockHeight = 0;
-        mobileKeyboardDockWidth = 0;
-        mobileKeyboardDockBottom = 0;
-        mobileKeyboardDockInputHeight = 0;
-        mobileKeyboardDockRecentInputDelta = 0;
-        mobileKeyboardDockRecentInputDeltaAt = 0;
-      }
-    
-      function getLockedMobileKeyboardViewportMetrics(viewport, keyboardLayoutActive, inputHeight = 0) {
-        if (!keyboardLayoutActive) {
-          resetMobileKeyboardDock();
-          return viewport;
-        }
-    
-        const height = Math.max(0, Number(viewport?.height) || 0);
-        const width = Math.max(0, Number(viewport?.width) || 0);
-        const top = Math.max(0, Number(viewport?.top) || 0);
-        const bottom = top + height;
-        const nextInputHeight = Math.max(0, Number(inputHeight) || 0);
-        const bottomDelta = bottom - mobileKeyboardDockBottom;
-        const topDelta = top - mobileKeyboardDockTop;
-        const heightDelta = height - mobileKeyboardDockHeight;
-        const inputDelta = nextInputHeight - mobileKeyboardDockInputHeight;
-        const recentDeltaAge = Date.now() - mobileKeyboardDockRecentInputDeltaAt;
-        const recentInputDelta = recentDeltaAge >= 0 && recentDeltaAge < 700
-          ? mobileKeyboardDockRecentInputDelta
-          : 0;
-        const relevantInputGrowth = Math.max(inputDelta, recentInputDelta, 0);
-        const relevantInputShrink = Math.max(0 - inputDelta, 0 - recentInputDelta, 0);
-        const inputDrivenBottomShrink = mobileKeyboardDockActive
-          && bottomDelta < -1
-          && relevantInputGrowth > 1
-          && Math.abs(bottomDelta) <= relevantInputGrowth + 24;
-        const inputDrivenBottomGrowth = mobileKeyboardDockActive
-          && bottomDelta > 1
-          && relevantInputShrink > 1
-          && bottomDelta <= relevantInputShrink + 24;
-        const scrollOnlyViewportShift = mobileKeyboardDockActive
-          && Math.abs(width - mobileKeyboardDockWidth) <= 48
-          && Math.abs(heightDelta) <= 1
-          && Math.abs(topDelta) > 1
-          && Math.abs(bottomDelta - topDelta) <= 1;
-        const shouldResetDock = !mobileKeyboardDockActive
-          || Math.abs(width - mobileKeyboardDockWidth) > 48
-          || (
-            Math.abs(bottomDelta) > 48
-            && !inputDrivenBottomShrink
-            && !inputDrivenBottomGrowth
-            && !scrollOnlyViewportShift
-          );
-        const shouldAcceptSmallBottomChange = mobileKeyboardDockActive
-          && Math.abs(bottomDelta) > 1
-          && Math.abs(bottomDelta) <= 48
-          && !inputDrivenBottomShrink
-          && !inputDrivenBottomGrowth
-          && !scrollOnlyViewportShift;
-    
-        if (shouldResetDock) {
-          mobileKeyboardDockTop = top;
-          mobileKeyboardDockHeight = height;
-          mobileKeyboardDockWidth = width;
-          mobileKeyboardDockBottom = bottom;
-          mobileKeyboardDockActive = true;
-        } else if (shouldAcceptSmallBottomChange) {
-          mobileKeyboardDockTop = top;
-          mobileKeyboardDockHeight = height;
-          mobileKeyboardDockBottom = bottom;
-        }
-        mobileKeyboardDockInputHeight = nextInputHeight;
-    
-        const lockedHeight = Math.max(0, mobileKeyboardDockBottom - mobileKeyboardDockTop);
-        mobileKeyboardDockHeight = lockedHeight;
-    
-        return {
-          ...viewport,
-          top: mobileKeyboardDockTop,
-          height: lockedHeight,
-          bottom: mobileKeyboardDockBottom,
-        };
-      }
-    
-      function restoreMobileKeyboardDocumentScroll() {
-        return Boolean(mobileViewportShell.restoreMobileKeyboardDocumentScroll?.());
-      }
-    
-      function syncMobileViewportLayoutState() {
-        const root = document?.documentElement;
-        if (!root) return;
-        const isMobile = isMobileViewportTarget();
-        if (!isMobile) {
-          root.classList.remove('is-mobile-keyboard-open', 'is-mobile-chat-keyboard-layout');
-          root.classList.remove('is-ios-keyboard-open', 'is-ios-chat-keyboard-layout');
-          return;
-        }
-        const headerHeight = Math.max(0, Math.round(chatHeader?.getBoundingClientRect?.().height || 0));
-        const inputHeight = Math.max(0, Math.round(inputArea?.getBoundingClientRect?.().height || 0));
-        const keyboardOpen = isMobileKeyboardOpen();
-        const keyboardLayoutActive = isMobileChatKeyboardLayoutActive();
-        const viewport = getLockedMobileKeyboardViewportMetrics(getMobileVisualViewportMetrics(), keyboardLayoutActive, inputHeight);
-    
-        root.classList.toggle('is-mobile-keyboard-open', keyboardOpen);
-        root.classList.toggle('is-mobile-chat-keyboard-layout', keyboardLayoutActive);
-        if (isIosViewportFixTarget) root.classList.add('is-ios-webkit');
-        root.classList.toggle('is-ios-keyboard-open', Boolean(isIosViewportFixTarget && keyboardOpen));
-        root.classList.toggle('is-ios-chat-keyboard-layout', Boolean(isIosViewportFixTarget && keyboardLayoutActive));
-        root.style.setProperty('--mobile-visual-viewport-top', `${Math.round(viewport.top)}px`);
-        root.style.setProperty('--mobile-visual-viewport-height', `${Math.round(viewport.height)}px`);
-        root.style.setProperty('--mobile-chat-header-height', `${headerHeight}px`);
-        root.style.setProperty('--mobile-chat-input-area-height', `${inputHeight}px`);
-        root.style.setProperty('--ios-visual-viewport-top', `${Math.round(viewport.top)}px`);
-        root.style.setProperty('--ios-visual-viewport-height', `${Math.round(viewport.height)}px`);
-        root.style.setProperty('--ios-chat-header-height', `${headerHeight}px`);
-        root.style.setProperty('--ios-chat-input-area-height', `${inputHeight}px`);
-        restoreMobileKeyboardDocumentScroll();
-      }
-    
-      function syncIosViewportLayoutState() {
-        syncMobileViewportLayoutState();
-      }
-    
-      function queueMobileViewportLayoutSync() {
-        if (mobileViewportLayoutSyncFrame) cancelAnimationFrame(mobileViewportLayoutSyncFrame);
-        mobileViewportLayoutSyncFrame = requestAnimationFrame(() => {
-          mobileViewportLayoutSyncFrame = 0;
-          syncMobileViewportLayoutState();
-        });
-      }
-    
-      function queueIosViewportLayoutSync() {
-        queueMobileViewportLayoutSync();
-      }
-    
-      function isMobileComposerKeyboardOpen() {
-        if (!isMobileViewportTarget()) return false;
-        return isMobileKeyboardOpen();
-      }
-    
-      function focusComposerKeepKeyboard(force = false) {
-        if (!force && !isMobileComposerKeyboardOpen()) return;
-        requestAnimationFrame(() => {
-          try {
-            msgInput.focus({ preventScroll: true });
-          } catch {
-            msgInput.focus();
-          }
-        });
-      }
-    
-      function restoreComposerFocusAfterMentionPicker(keyboardAttached = composerStateController.mentionPickerState.keyboardAttached) {
-        if (!isMobileViewportTarget() || keyboardAttached) {
-          focusComposerKeepKeyboard(true);
-          return true;
-        }
-        return false;
-      }
-    
-      function dismissMentionPickerAfterKeyboardClose() {
-        if (!isMobileViewportTarget()) return false;
-        return Boolean(composerMentionsController?.dismissMentionPickerAfterKeyboardClose?.());
-      }
-    
-      function preventMobileComposerBlur(e) {
-        if (!isMobileComposerKeyboardOpen()) return false;
-        e.preventDefault();
-        return true;
-      }
-    
-      function isMobileComposerSessionActive() {
-        if (!isMobileViewportTarget()) return false;
-        return Boolean(document.activeElement === msgInput || iosComposerFocused || isMobileComposerKeyboardOpen());
-      }
-    
-      function suppressMobileComposerDismissClick(ms = 520) {
-        mobileComposerDismissClickSuppressUntil = Math.max(mobileComposerDismissClickSuppressUntil, Date.now() + ms);
-      }
-    
-      function resetMobileComposerGestureGuard(source = '') {
-        if (source && mobileComposerGestureGuard.source && mobileComposerGestureGuard.source !== source) return;
-        mobileComposerGestureGuard = {
-          source: '',
-          pointerId: null,
-          touchId: null,
-          startX: 0,
-          startY: 0,
-          lastX: 0,
-          lastY: 0,
-          moved: false,
-          target: null,
-        };
-      }
-    
-      function getComposerGuardTextarea(target) {
-        if (!(target instanceof Element)) return null;
-        const textarea = target.closest?.('#msgInput');
-        return textarea instanceof HTMLTextAreaElement ? textarea : null;
-      }
-    
-      function getMobileKeyboardDockScrollSurface(target) {
-        if (!(target instanceof Element)) return null;
-        return getComposerGuardTextarea(target)
-          || target.closest?.('.emoji-grid, .reaction-emoji-grid, .mention-picker-list');
-      }
-    
-      function scrollMobileKeyboardDockSurface(surface, clientY, dy) {
-        if (!(surface instanceof Element)) return false;
-        const maxScrollTop = Math.max(0, Number(surface.scrollHeight || 0) - Number(surface.clientHeight || 0));
-        if (maxScrollTop <= 1) return false;
-        const scrollTop = Math.max(0, Number(surface.scrollTop || 0));
-        if (dy < 0 && scrollTop >= maxScrollTop - 1) return false;
-        if (dy > 0 && scrollTop <= 1) return false;
-    
-        const state = mobileComposerGestureGuard;
-        const previousY = Number.isFinite(Number(state.lastY)) && state.lastY
-          ? Number(state.lastY)
-          : Number(state.startY || clientY || 0);
-        const deltaY = Number(clientY || 0) - previousY;
-        if (!deltaY) return true;
-        const nextScrollTop = Math.max(0, Math.min(maxScrollTop, scrollTop - deltaY));
-        surface.scrollTop = nextScrollTop;
-        state.lastY = Number(clientY || 0);
-        return true;
-      }
-    
-      function isMobileKeyboardDockGestureSurface(target) {
-        if (!(target instanceof Element)) return false;
-        if (inputArea?.contains?.(target)) return true;
-        const floatingSurface = target.closest?.(
-          '.emoji-picker, #mentionPicker, #contextConvertPicker, #attachMenu, #reactionPicker, #reactionEmojiPopover'
-        );
-        return Boolean(floatingSurface && isFloatingSurfaceVisible(floatingSurface));
-      }
-    
-      function handleMobileComposerDockMove(event, clientX, clientY) {
-        if (event?.__bananzaMobileComposerDockHandled) return true;
-        const state = mobileComposerGestureGuard;
-        const target = state.target;
-        if (!target || !isMobileKeyboardDockGestureSurface(target)) return false;
-        if (!isMobileComposerSessionActive()) return false;
-        const dx = clientX - state.startX;
-        const dy = clientY - state.startY;
-        const absX = Math.abs(dx);
-        const absY = Math.abs(dy);
-        if (absY < 4 || absY <= absX) return false;
-        if (!event?.cancelable) return false;
-    
-        const scrollSurface = getMobileKeyboardDockScrollSurface(target);
-        const consumedByScrollSurface = scrollMobileKeyboardDockSurface(scrollSurface, clientY, dy);
-        state.moved = true;
-        event.preventDefault();
-        event.stopPropagation?.();
-        event.__bananzaMobileComposerDockHandled = true;
-        if (!consumedByScrollSurface) restoreMobileKeyboardDocumentScroll();
-        queueMobileViewportLayoutSync();
-        return true;
-      }
-    
-      function startMobileComposerDockGesture({
-        source,
-        pointerId = null,
-        touchId = null,
-        clientX = 0,
-        clientY = 0,
-        target = null,
-      } = {}) {
-        if (!isMobileKeyboardDockGestureSurface(target)) return false;
-        if (!isMobileComposerSessionActive()) return false;
-        mobileComposerGestureGuard = {
-          source,
-          pointerId,
-          touchId,
-          startX: Number(clientX || 0),
-          startY: Number(clientY || 0),
-          lastX: Number(clientX || 0),
-          lastY: Number(clientY || 0),
-          moved: false,
-          target: target instanceof Element ? target : null,
-        };
-        return true;
-      }
-    
-      function finishMobileComposerDockGesture(event, source = '') {
-        const state = mobileComposerGestureGuard;
-        if (source && state.source && state.source !== source) return;
-        const shouldConsumeEnd = Boolean(state.moved && state.target && isMobileKeyboardDockGestureSurface(state.target));
-        resetMobileComposerGestureGuard(source);
-        if (!shouldConsumeEnd || !event?.cancelable) return;
-        event.preventDefault();
-        event.stopImmediatePropagation?.();
-        event.stopPropagation?.();
-        suppressMobileComposerDismissClick();
-      }
-    
-      function setupMobileComposerGestureGuard() {
-        if (!(inputArea instanceof HTMLElement) || inputArea.__mobileComposerGestureGuardBound) return;
-        inputArea.__mobileComposerGestureGuardBound = true;
-    
-        inputArea.addEventListener('pointerdown', (event) => {
-          if (!isTouchLikePointerEvent(event)) return;
-          if (typeof event.button === 'number' && event.button !== 0) return;
-          startMobileComposerDockGesture({
-            source: 'pointer',
-            pointerId: Number.isFinite(Number(event.pointerId)) ? Number(event.pointerId) : null,
-            clientX: event.clientX,
-            clientY: event.clientY,
-            target: event.target,
-          });
-        }, { passive: true });
-    
-        inputArea.addEventListener('pointermove', (event) => {
-          if (mobileComposerGestureGuard.source !== 'pointer') return;
-          if (!isTouchLikePointerEvent(event)) return;
-          if (mobileComposerGestureGuard.pointerId != null && Number(event.pointerId) !== mobileComposerGestureGuard.pointerId) return;
-          handleMobileComposerDockMove(event, Number(event.clientX || 0), Number(event.clientY || 0));
-        }, { passive: false });
-    
-        ['pointerup', 'pointercancel'].forEach((type) => {
-          inputArea.addEventListener(type, (event) => finishMobileComposerDockGesture(event, 'pointer'), { passive: false });
-        });
-    
-        inputArea.addEventListener('touchstart', (event) => {
-          if (mobileComposerGestureGuard.source === 'pointer') return;
-          const touch = event.changedTouches?.[0] || event.touches?.[0] || null;
-          if (!touch) return;
-          startMobileComposerDockGesture({
-            source: 'touch',
-            touchId: Number.isFinite(Number(touch.identifier)) ? Number(touch.identifier) : null,
-            clientX: touch.clientX,
-            clientY: touch.clientY,
-            target: event.target,
-          });
-        }, { passive: true });
-    
-        inputArea.addEventListener('touchmove', (event) => {
-          if (mobileComposerGestureGuard.source !== 'touch') return;
-          const touches = Array.from(event.touches || []);
-          const touch = mobileComposerGestureGuard.touchId == null
-            ? touches[0]
-            : touches.find((item) => Number(item.identifier) === mobileComposerGestureGuard.touchId);
-          if (!touch) return;
-          handleMobileComposerDockMove(event, Number(touch.clientX || 0), Number(touch.clientY || 0));
-        }, { passive: false });
-    
-        ['touchend', 'touchcancel'].forEach((type) => {
-          inputArea.addEventListener(type, (event) => finishMobileComposerDockGesture(event, 'touch'), { passive: false });
-        });
-    
-        document.addEventListener('pointerdown', (event) => {
-          if (inputArea.contains(event.target)) return;
-          if (!isTouchLikePointerEvent(event)) return;
-          if (typeof event.button === 'number' && event.button !== 0) return;
-          startMobileComposerDockGesture({
-            source: 'dock-pointer',
-            pointerId: Number.isFinite(Number(event.pointerId)) ? Number(event.pointerId) : null,
-            clientX: event.clientX,
-            clientY: event.clientY,
-            target: event.target,
-          });
-        }, { passive: true, capture: true });
-    
-        document.addEventListener('pointermove', (event) => {
-          if (mobileComposerGestureGuard.source !== 'dock-pointer' && mobileComposerGestureGuard.source !== 'pointer') return;
-          if (!isTouchLikePointerEvent(event)) return;
-          if (mobileComposerGestureGuard.pointerId != null && Number(event.pointerId) !== mobileComposerGestureGuard.pointerId) return;
-          handleMobileComposerDockMove(event, Number(event.clientX || 0), Number(event.clientY || 0));
-        }, { passive: false, capture: true });
-    
-        ['pointerup', 'pointercancel'].forEach((type) => {
-          document.addEventListener(type, (event) => {
-            const source = mobileComposerGestureGuard.source;
-            if (source !== 'dock-pointer' && source !== 'pointer') return;
-            finishMobileComposerDockGesture(event, source);
-          }, { passive: false, capture: true });
-        });
-    
-        document.addEventListener('touchstart', (event) => {
-          if (inputArea.contains(event.target) || mobileComposerGestureGuard.source === 'pointer') return;
-          const touch = event.changedTouches?.[0] || event.touches?.[0] || null;
-          if (!touch) return;
-          startMobileComposerDockGesture({
-            source: 'dock-touch',
-            touchId: Number.isFinite(Number(touch.identifier)) ? Number(touch.identifier) : null,
-            clientX: touch.clientX,
-            clientY: touch.clientY,
-            target: event.target,
-          });
-        }, { passive: true, capture: true });
-    
-        document.addEventListener('touchmove', (event) => {
-          if (mobileComposerGestureGuard.source !== 'dock-touch' && mobileComposerGestureGuard.source !== 'touch') return;
-          const touches = Array.from(event.touches || []);
-          const touch = mobileComposerGestureGuard.touchId == null
-            ? touches[0]
-            : touches.find((item) => Number(item.identifier) === mobileComposerGestureGuard.touchId);
-          if (!touch) return;
-          handleMobileComposerDockMove(event, Number(touch.clientX || 0), Number(touch.clientY || 0));
-        }, { passive: false, capture: true });
-    
-        ['touchend', 'touchcancel'].forEach((type) => {
-          document.addEventListener(type, (event) => {
-            const source = mobileComposerGestureGuard.source;
-            if (source !== 'dock-touch' && source !== 'touch') return;
-            finishMobileComposerDockGesture(event, source);
-          }, { passive: false, capture: true });
-        });
-      }
-    
-      function preserveMobileComposerOnPointerDown(e, { requireOpenKeyboard = true } = {}) {
-        if (!isMobileLayoutViewport()) return false;
-        if (requireOpenKeyboard && !isMobileComposerKeyboardOpen()) return false;
-        if (typeof e.button === 'number' && e.button !== 0) return false;
-        e.preventDefault();
-        return true;
-      }
-    
-      function dismissMobileComposer({ consumeTap = false, forceRecovery = true, reason = '', recoveryDelayMs = 240 } = {}) {
-        if (!isMobileLayoutViewport()) return false;
-        const hadComposerSession = isMobileComposerSessionActive();
-        if (consumeTap) suppressMobileComposerDismissClick();
-        if (document.activeElement === msgInput) {
-          try { msgInput.blur(); } catch {}
-        }
-        if (iosComposerFocused) iosComposerFocused = false;
-        queueIosViewportLayoutSync();
-        if (forceRecovery) scheduleMobileViewportRecovery(recoveryDelayMs);
-        return hadComposerSession;
-      }
-    
-      function closeMobileComposerTransientUi({ immediate = true, preserveEmoji = false } = {}) {
-        hideMentionPicker();
-        if (contextConvertPickerState.active) hideContextConvertPicker();
-        hideFloatingMessageActions({ immediate, keepComposerState: false });
-        hideAvatarUserMenu();
-        clearActivePulseVoterPopover({ skipRefresh: true });
-        if (!preserveEmoji) closeEmojiPicker({ immediate });
-        hideAttachMenu({ immediate });
-      }
-    
-      function hideAttachMenu({ immediate = false } = {}) {
-        return closeFloatingSurface($('#attachMenu'), { immediate });
-      }
-    
-      function getMobileComposerSafeReturnFocusEl(fallback = null) {
-        const active = rememberActiveElement();
-        if (isMobileLayoutViewport() && active === msgInput) {
-          return fallback instanceof HTMLElement ? fallback : null;
-        }
-        return active instanceof HTMLElement ? active : (fallback instanceof HTMLElement ? fallback : null);
-      }
-    
-      function isTouchLikePointerEvent(event) {
-        return Boolean(event && typeof event.pointerType === 'string' && event.pointerType !== 'mouse');
-      }
-    
-      function isPickerDismissPassThroughTarget(target) {
-        return Boolean(
-          target instanceof Element
-          && target.closest(
-            '#menuBtn, #settingsBtn, #searchBtn, #chatShotBtn, #chatSettingsActionBtn, #callStartBtn, #callVoiceStartBtn, #chatInfoBtn, #backBtn, #emojiBtn, #attachBtn, #mentionOpenBtn, #composerContextConvertBtn, #msgInput'
-          )
-        );
-      }
-    
-      function isFollowupClickSuppressPassThroughTarget(target) {
-        return Boolean(
-          target instanceof Element
-          && target.closest(
-            '.msg-actions button, #reactionPicker button[data-reaction-action], #reactionEmojiPopover button'
-          )
-        );
-      }
-    
-      function consumeOutsidePickerDismissGesture(event, suppressFollowupClick) {
-        suppressFollowupClick();
-        event.preventDefault();
-        event.stopImmediatePropagation?.();
-        event.stopPropagation();
-      }
-    
-      function suppressSearchPanelFollowupClick(ms = 550) {
-        return searchController?.suppressSearchPanelFollowupClick?.(ms);
-      }
-    
-      function suppressAvatarUserMenuFollowupClick(ms = 550) {
-        avatarUserMenuClickSuppressUntil = Math.max(avatarUserMenuClickSuppressUntil, Date.now() + ms);
-      }
-    
-      // Touch-first browsers can drop the synthesized click after we prevent textarea blur.
-      // For these controls we execute the action directly from pointerup/touchend and only
-      // keep click as the desktop/mouse fallback.
-      function bindTouchSafeButtonActivation(button, onActivate, { suppressClickMs = 520 } = {}) {
-        if (!(button instanceof HTMLElement) || typeof onActivate !== 'function') return;
-        const gestureState = {
-          source: '',
-          pointerId: null,
-          touchId: null,
-          keyboardOpenAtStart: false,
-        };
-    
-        const clearGestureState = () => {
-          gestureState.source = '';
-          gestureState.pointerId = null;
-          gestureState.touchId = null;
-          gestureState.keyboardOpenAtStart = false;
-        };
-    
-        const suppressFollowupClick = (ms = suppressClickMs) => {
-          button.__touchSafeSuppressUntil = Math.max(
-            Number(button.__touchSafeSuppressUntil || 0),
-            Date.now() + Math.max(0, Number(ms) || 0)
-          );
-        };
-    
-        const isFollowupClickSuppressed = () => Date.now() < Number(button.__touchSafeSuppressUntil || 0);
-    
-        const buildActivationContext = (event, source) => {
-          const startKeyboardOpen = Boolean(
-            gestureState.keyboardOpenAtStart
-            || button.__mouseDownKeyboardWasOpen
-            || (source === 'click' && isMobileComposerKeyboardOpen())
-          );
-          return {
-            event,
-            source,
-            startKeyboardOpen,
-            keepKeyboardOpen: !isMobileLayoutViewport() || startKeyboardOpen || isMobileComposerKeyboardOpen(),
-            isTouchLike: source === 'pointer' || source === 'touch',
-          };
-        };
-    
-        const maybePreserveComposerOnGestureStart = (event, keyboardOpenAtStart) => {
-          if (!isMobileLayoutViewport() || !keyboardOpenAtStart || !event?.cancelable) return false;
-          event.preventDefault();
-          return true;
-        };
-    
-        const startGesture = (event, source) => {
-          gestureState.source = source;
-          gestureState.pointerId = source === 'pointer' && Number.isFinite(Number(event.pointerId))
-            ? Number(event.pointerId)
-            : null;
-          const touch = source === 'touch'
-            ? (event.changedTouches?.[0] || event.touches?.[0] || null)
-            : null;
-          gestureState.touchId = touch && Number.isFinite(Number(touch.identifier))
-            ? Number(touch.identifier)
-            : null;
-          gestureState.keyboardOpenAtStart = isMobileComposerKeyboardOpen();
-          maybePreserveComposerOnGestureStart(event, gestureState.keyboardOpenAtStart);
-        };
-    
-        const activateFromGesture = (event, source) => {
-          const context = buildActivationContext(event, source);
-          suppressFollowupClick();
-          button.__mouseDownKeyboardWasOpen = false;
-          clearGestureState();
-          onActivate(context);
-          event.preventDefault?.();
-          event.stopPropagation?.();
-        };
-    
-        button.addEventListener('pointerdown', (event) => {
-          if (gestureState.source === 'touch') return;
-          if (!isTouchLikePointerEvent(event)) return;
-          if (typeof event.button === 'number' && event.button !== 0) return;
-          startGesture(event, 'pointer');
-        }, { passive: false });
-    
-        button.addEventListener('pointerup', (event) => {
-          if (gestureState.source !== 'pointer') return;
-          if (!isTouchLikePointerEvent(event)) {
-            clearGestureState();
-            return;
-          }
-          if (gestureState.pointerId != null && Number(event.pointerId) !== gestureState.pointerId) return;
-          activateFromGesture(event, 'pointer');
-        }, { passive: false });
-    
-        button.addEventListener('pointercancel', () => {
-          if (gestureState.source === 'pointer') clearGestureState();
-        }, { passive: true });
-    
-        button.addEventListener('touchstart', (event) => {
-          if (gestureState.source === 'pointer' || gestureState.source === 'touch') return;
-          startGesture(event, 'touch');
-        }, { passive: false });
-    
-        button.addEventListener('touchend', (event) => {
-          if (gestureState.source !== 'touch') return;
-          if (gestureState.touchId != null) {
-            const matchesTouch = Array.from(event.changedTouches || [])
-              .some((touch) => Number(touch.identifier) === gestureState.touchId);
-            if (!matchesTouch && (event.changedTouches?.length || 0) > 0) return;
-          }
-          activateFromGesture(event, 'touch');
-        }, { passive: false });
-    
-        button.addEventListener('touchcancel', () => {
-          if (gestureState.source === 'touch') clearGestureState();
-        }, { passive: true });
-    
-        button.addEventListener('mousedown', (event) => {
-          if (typeof event.button === 'number' && event.button !== 0) return;
-          button.__mouseDownKeyboardWasOpen = isMobileComposerKeyboardOpen();
-          if (isMobileLayoutViewport() && button.__mouseDownKeyboardWasOpen && event.cancelable) {
-            event.preventDefault();
-          }
-        });
-    
-        button.addEventListener('click', (event) => {
-          if (isFollowupClickSuppressed()) {
-            event.preventDefault();
-            event.stopPropagation();
-            button.__mouseDownKeyboardWasOpen = false;
-            return;
-          }
-          const context = buildActivationContext(event, 'click');
-          button.__mouseDownKeyboardWasOpen = false;
-          clearGestureState();
-          onActivate(context);
-        });
-      }
-    
+      function getMobileAppViewportHeight(...args) { return mobileComposerGuard?.getMobileAppViewportHeight?.(...args) || 0; }
+      function getMobileAppViewportTopInset(...args) { return mobileComposerGuard?.getMobileAppViewportTopInset?.(...args) || 0; }
+      function isIosMobileViewportTarget(...args) { return Boolean(mobileComposerGuard?.isIosMobileViewportTarget?.(...args)); }
+      function isMobileViewportTarget(...args) { return Boolean(mobileComposerGuard?.isMobileViewportTarget?.(...args)); }
+      function isIosWebkitMotionAllowed(...args) { return Boolean(mobileComposerGuard?.isIosWebkitMotionAllowed?.(...args)); }
+      function forceIosAnimationMount(...args) { return mobileComposerGuard?.forceIosAnimationMount?.(...args); }
+      function getMobileVisualViewportMetrics(...args) { return mobileComposerGuard?.getMobileVisualViewportMetrics?.(...args) || { top: 0, height: window.innerHeight || 0, width: window.innerWidth || 0, bottom: window.innerHeight || 0 }; }
+      function getIosVisualViewportMetrics(...args) { return mobileComposerGuard?.getIosVisualViewportMetrics?.(...args) || getMobileVisualViewportMetrics(); }
+      function getMobileViewportBaselineHeight(...args) { return mobileComposerGuard?.getMobileViewportBaselineHeight?.(...args) || 0; }
+      function getIosViewportBaselineHeight(...args) { return mobileComposerGuard?.getIosViewportBaselineHeight?.(...args) || getMobileViewportBaselineHeight(); }
+      function isMobileKeyboardOpen(...args) { return Boolean(mobileComposerGuard?.isMobileKeyboardOpen?.(...args)); }
+      function isIosKeyboardOpen(...args) { return Boolean(mobileComposerGuard?.isIosKeyboardOpen?.(...args)); }
+      function isMobileChatKeyboardLayoutActive(...args) { return Boolean(mobileComposerGuard?.isMobileChatKeyboardLayoutActive?.(...args)); }
+      function isIosChatKeyboardLayoutActive(...args) { return Boolean(mobileComposerGuard?.isIosChatKeyboardLayoutActive?.(...args)); }
+      function resetMobileKeyboardDock(...args) { return mobileComposerGuard?.resetMobileKeyboardDock?.(...args); }
+      function getLockedMobileKeyboardViewportMetrics(...args) { return mobileComposerGuard?.getLockedMobileKeyboardViewportMetrics?.(...args); }
+      function restoreMobileKeyboardDocumentScroll(...args) { return Boolean(mobileComposerGuard?.restoreMobileKeyboardDocumentScroll?.(...args)); }
+      function syncMobileViewportLayoutState(...args) { return mobileComposerGuard?.syncMobileViewportLayoutState?.(...args); }
+      function syncIosViewportLayoutState(...args) { return mobileComposerGuard?.syncIosViewportLayoutState?.(...args); }
+      function queueMobileViewportLayoutSync(...args) { return mobileComposerGuard?.queueMobileViewportLayoutSync?.(...args); }
+      function queueIosViewportLayoutSync(...args) { return mobileComposerGuard?.queueIosViewportLayoutSync?.(...args); }
+      function isMobileComposerKeyboardOpen(...args) { return Boolean(mobileComposerGuard?.isMobileComposerKeyboardOpen?.(...args)); }
+      function focusComposerKeepKeyboard(...args) { return mobileComposerGuard?.focusComposerKeepKeyboard?.(...args); }
+      function restoreComposerFocusAfterMentionPicker(...args) { return Boolean(mobileComposerGuard?.restoreComposerFocusAfterMentionPicker?.(...args)); }
+      function dismissMentionPickerAfterKeyboardClose(...args) { return Boolean(mobileComposerGuard?.dismissMentionPickerAfterKeyboardClose?.(...args)); }
+      function preventMobileComposerBlur(...args) { return Boolean(mobileComposerGuard?.preventMobileComposerBlur?.(...args)); }
+      function isMobileComposerSessionActive(...args) { return Boolean(mobileComposerGuard?.isMobileComposerSessionActive?.(...args)); }
+      function setupMobileComposerGestureGuard(...args) { return mobileComposerGuard?.setupMobileComposerGestureGuard?.(...args); }
+      function preserveMobileComposerOnPointerDown(...args) { return Boolean(mobileComposerGuard?.preserveMobileComposerOnPointerDown?.(...args)); }
+      function dismissMobileComposer(...args) { return Boolean(mobileComposerGuard?.dismissMobileComposer?.(...args)); }
+      function closeMobileComposerTransientUi(...args) { return mobileComposerGuard?.closeMobileComposerTransientUi?.(...args); }
+      function hideAttachMenu(...args) { return mobileComposerGuard?.hideAttachMenu?.(...args); }
+      function getMobileComposerSafeReturnFocusEl(...args) { return mobileComposerGuard?.getMobileComposerSafeReturnFocusEl?.(...args) || null; }
+      function isTouchLikePointerEvent(...args) { return Boolean(mobileComposerGuard?.isTouchLikePointerEvent?.(...args)); }
+      function isPickerDismissPassThroughTarget(...args) { return Boolean(mobileComposerGuard?.isPickerDismissPassThroughTarget?.(...args)); }
+      function isFollowupClickSuppressPassThroughTarget(...args) { return Boolean(mobileComposerGuard?.isFollowupClickSuppressPassThroughTarget?.(...args)); }
+      function consumeOutsidePickerDismissGesture(...args) { return mobileComposerGuard?.consumeOutsidePickerDismissGesture?.(...args); }
+      function suppressSearchPanelFollowupClick(...args) { return mobileComposerGuard?.suppressSearchPanelFollowupClick?.(...args); }
+      function suppressAvatarUserMenuFollowupClick(...args) { return mobileComposerGuard?.suppressAvatarUserMenuFollowupClick?.(...args); }
+      function bindTouchSafeButtonActivation(...args) { return mobileComposerGuard?.bindTouchSafeButtonActivation?.(...args); }
+      function shouldKeepComposerForMobileMessageInteraction(...args) { return Boolean(mobileComposerGuard?.shouldKeepComposerForMobileMessageInteraction?.(...args)); }
+      function setupMobileMessageInteractionGuard(...args) { return mobileComposerGuard?.setupMobileMessageInteractionGuard?.(...args); }
+      function shouldBypassLockedMobileViewportSync(...args) { return mobileComposerGuard?.shouldBypassLockedMobileViewportSync?.(...args) ?? true; }
+
       function getChatSettingsActionOpener() {
         return chatHeaderActionsShell?.getChatSettingsActionOpener?.()
           || chatSettingsActionBtn
@@ -3217,182 +2546,12 @@
       function closeChatHeaderActions() {
         return chatHeaderActionsShell?.closeChatHeaderActions?.() ?? setChatHeaderActionsOpen(false);
       }
-    
-      function isMobileComposerDismissMessageTarget(target) {
-        if (!(target instanceof Element)) return false;
-        const row = target.closest('.msg-row');
-        if (!row || !messagesEl.contains(row) || row.dataset.outbox === '1' || row.querySelector('.msg-deleted')) return false;
-        if (target.closest(
-          '.msg-actions, button, a, input, textarea, select, label, audio, video, .video-note-stage, .msg-reply, .reaction-badge, .msg-image, .msg-video, .msg-file, .link-preview, .msg-group-avatar'
-        )) return false;
-        return true;
-      }
-    
-      function isMobileComposerDismissBackgroundTarget(target) {
-        if (!(target instanceof Element) || !messagesEl.contains(target)) return false;
-        if (target.closest('.msg-row')) return false;
-        if (target.closest('button, a, input, textarea, select, label, audio, video')) return false;
-        return true;
-      }
-    
-      function resetMobileMessageInteractionGuard(source = '') {
-        if (source && mobileMessageInteractionGuard.source && mobileMessageInteractionGuard.source !== source) return;
-        mobileMessageInteractionGuard = {
-          source: '',
-          pointerId: null,
-          touchId: null,
-          startX: 0,
-          startY: 0,
-          moved: false,
-          target: null,
-          keyboardOpenAtStart: false,
-        };
-      }
-    
-      function isMobileMessageKeyboardPreserveTarget(target) {
-        return isMobileComposerDismissMessageTarget(target) || isMobileComposerDismissBackgroundTarget(target);
-      }
-    
-      function shouldKeepComposerForMobileMessageInteraction() {
-        if (!isMobileLayoutViewport()) return false;
-        return Boolean(mobileMessageInteractionGuard.keyboardOpenAtStart || isMobileComposerKeyboardOpen());
-      }
-    
-      function startMobileMessageInteractionGuard({
-        source,
-        pointerId = null,
-        touchId = null,
-        clientX = 0,
-        clientY = 0,
-        target = null,
-      } = {}) {
-        if (!isMobileComposerSessionActive()) return false;
-        if (!isMobileMessageKeyboardPreserveTarget(target)) return false;
-        mobileMessageInteractionGuard = {
-          source,
-          pointerId,
-          touchId,
-          startX: Number(clientX || 0),
-          startY: Number(clientY || 0),
-          moved: false,
-          target: target instanceof Element ? target : null,
-          keyboardOpenAtStart: isMobileComposerKeyboardOpen(),
-        };
-        return mobileMessageInteractionGuard.keyboardOpenAtStart;
-      }
-    
-      function updateMobileMessageInteractionGuard(clientX, clientY) {
-        const state = mobileMessageInteractionGuard;
-        if (!state.source) return;
-        const dx = Number(clientX || 0) - state.startX;
-        const dy = Number(clientY || 0) - state.startY;
-        if (Math.hypot(dx, dy) > 10) state.moved = true;
-      }
-    
-      function finishMobileMessageInteractionGuard(event, source = '') {
-        const state = mobileMessageInteractionGuard;
-        if (!state.source || (source && state.source !== source)) return;
-        const { target, moved, keyboardOpenAtStart } = state;
-        resetMobileMessageInteractionGuard(source);
-        if (!keyboardOpenAtStart || moved || !target || !isMobileMessageKeyboardPreserveTarget(target)) return;
-        if (floatingMessageActionsController?.isMessageActionTapSuppressed?.() || isFloatingSurfaceVisible(reactionPicker)) {
-          focusComposerKeepKeyboard(true);
-          return;
-        }
-    
-        if (event?.cancelable) event.preventDefault();
-        suppressMobileComposerDismissClick();
-    
-        const row = isMobileComposerDismissMessageTarget(target) ? target.closest('.msg-row') : null;
-        if (row) showMessageActions(row, { toggle: true, keepComposerFocus: true });
-        else hideFloatingMessageActions({ keepComposerState: true });
-        focusComposerKeepKeyboard(true);
-      }
-    
-      function setupMobileMessageInteractionGuard() {
-        if (!(messagesEl instanceof HTMLElement) || messagesEl.__mobileMessageInteractionGuardBound) return;
-        messagesEl.__mobileMessageInteractionGuardBound = true;
-    
-        messagesEl.addEventListener('pointerdown', (event) => {
-          if (!isTouchLikePointerEvent(event)) return;
-          if (typeof event.button === 'number' && event.button !== 0) return;
-          startMobileMessageInteractionGuard({
-            source: 'pointer',
-            pointerId: Number.isFinite(Number(event.pointerId)) ? Number(event.pointerId) : null,
-            clientX: event.clientX,
-            clientY: event.clientY,
-            target: event.target,
-          });
-        }, { passive: true, capture: true });
-    
-        messagesEl.addEventListener('pointermove', (event) => {
-          if (mobileMessageInteractionGuard.source !== 'pointer') return;
-          if (!isTouchLikePointerEvent(event)) return;
-          if (mobileMessageInteractionGuard.pointerId != null && Number(event.pointerId) !== mobileMessageInteractionGuard.pointerId) return;
-          updateMobileMessageInteractionGuard(event.clientX, event.clientY);
-        }, { passive: true, capture: true });
-    
-        ['pointerup', 'pointercancel'].forEach((type) => {
-          messagesEl.addEventListener(type, (event) => {
-            if (mobileMessageInteractionGuard.source !== 'pointer') return;
-            if (mobileMessageInteractionGuard.pointerId != null && Number(event.pointerId) !== mobileMessageInteractionGuard.pointerId) return;
-            if (type === 'pointercancel') resetMobileMessageInteractionGuard('pointer');
-            else finishMobileMessageInteractionGuard(event, 'pointer');
-          }, { passive: false, capture: true });
-        });
-    
-        messagesEl.addEventListener('touchstart', (event) => {
-          if (mobileMessageInteractionGuard.source === 'pointer') return;
-          const touch = event.changedTouches?.[0] || event.touches?.[0] || null;
-          if (!touch) return;
-          startMobileMessageInteractionGuard({
-            source: 'touch',
-            touchId: Number.isFinite(Number(touch.identifier)) ? Number(touch.identifier) : null,
-            clientX: touch.clientX,
-            clientY: touch.clientY,
-            target: event.target,
-          });
-        }, { passive: true, capture: true });
-    
-        messagesEl.addEventListener('touchmove', (event) => {
-          if (mobileMessageInteractionGuard.source !== 'touch') return;
-          const touches = Array.from(event.touches || []);
-          const touch = mobileMessageInteractionGuard.touchId == null
-            ? touches[0]
-            : touches.find((item) => Number(item.identifier) === mobileMessageInteractionGuard.touchId);
-          if (!touch) return;
-          updateMobileMessageInteractionGuard(touch.clientX, touch.clientY);
-        }, { passive: true, capture: true });
-    
-        ['touchend', 'touchcancel'].forEach((type) => {
-          messagesEl.addEventListener(type, (event) => {
-            if (mobileMessageInteractionGuard.source !== 'touch') return;
-            if (type === 'touchcancel') {
-              resetMobileMessageInteractionGuard('touch');
-              return;
-            }
-            if (mobileMessageInteractionGuard.touchId != null && (event.changedTouches?.length || 0) > 0) {
-              const matchesTouch = Array.from(event.changedTouches || [])
-                .some((touch) => Number(touch.identifier) === mobileMessageInteractionGuard.touchId);
-              if (!matchesTouch) return;
-            }
-            finishMobileMessageInteractionGuard(event, 'touch');
-          }, { passive: false, capture: true });
-        });
-      }
-    
+
       function shouldKeepEmojiPickerKeyboard(...args) { return composerEmojiPickerController?.shouldKeepEmojiPickerKeyboard?.(...args) || false; }
     
       function clearEmojiPickerKeyboardOpenStabilizer(...args) { return composerEmojiPickerController?.clearEmojiPickerKeyboardOpenStabilizer?.(...args); }
     
       function stabilizeEmojiPickerKeyboardOnOpen(...args) { return composerEmojiPickerController?.stabilizeEmojiPickerKeyboardOnOpen?.(...args) || false; }
-    
-      function shouldBypassLockedMobileViewportSync(newViewportHeight, { force = false, mentionPickerDismissed = false } = {}) {
-        if (typeof mobileViewportShell.shouldBypassLockedMobileViewportSync === 'function') {
-          return mobileViewportShell.shouldBypassLockedMobileViewportSync(newViewportHeight, { force, mentionPickerDismissed });
-        }
-        return true;
-      }
     
       const appBridge = appRuntime?.createBridge
         ? appRuntime.createBridge(appContext)
@@ -3620,20 +2779,7 @@
             ariaHidden: chatArea?.getAttribute?.('aria-hidden') || null,
           },
         }),
-        getMobileKeyboardDockSnapshot: () => ({
-          keyboardOpen: document.documentElement.classList.contains('is-mobile-keyboard-open'),
-          chatKeyboardLayout: document.documentElement.classList.contains('is-mobile-chat-keyboard-layout'),
-          iosKeyboardOpen: document.documentElement.classList.contains('is-ios-keyboard-open'),
-          iosChatKeyboardLayout: document.documentElement.classList.contains('is-ios-chat-keyboard-layout'),
-          mobileViewportTop: document.documentElement.style.getPropertyValue('--mobile-visual-viewport-top'),
-          mobileViewportHeight: document.documentElement.style.getPropertyValue('--mobile-visual-viewport-height'),
-          mobileInputHeight: document.documentElement.style.getPropertyValue('--mobile-chat-input-area-height'),
-          appHeight: document.getElementById('app')?.style?.height || '',
-          dockActive: mobileKeyboardDockActive,
-          dockBottom: mobileKeyboardDockBottom,
-          dockInputHeight: mobileKeyboardDockInputHeight,
-          dockRecentInputDelta: mobileKeyboardDockRecentInputDelta,
-        }),
+        getMobileKeyboardDockSnapshot: () => mobileComposerGuard?.getMobileKeyboardDockSnapshot?.() || {},
       });
     
       weatherSettingsController.bindWidget();
@@ -14433,1232 +13579,93 @@ function updateVisibleOwnReadState(chatId = currentChatId) {
       // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
       // EVENT LISTENERS
       // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-      function setupEvents() {
-        setupPasswordPreviewToggles();
-        setupMessageSwipeGestures();
-        setupMobileComposerGestureGuard();
-        setupMobileMessageInteractionGuard();
-        wireAiBotToggleLabels();
-        ensureSearchPanelReady();
-        document.addEventListener('click', (e) => {
-          if (isFollowupClickSuppressPassThroughTarget(e.target)) return;
-          if (
-            Date.now() >= composerStateController.mentionPickerClickSuppressUntil
-            && Date.now() >= contextConvertPickerClickSuppressUntil
-            && Date.now() >= avatarUserMenuClickSuppressUntil
-            && !searchController?.isFollowupClickSuppressed?.()
-            && Date.now() >= mobileComposerDismissClickSuppressUntil
-            && !mediaViewerController?.isFollowupClickSuppressed?.()
-          ) return;
-          e.preventDefault();
-          e.stopImmediatePropagation();
-        }, true);
-        const dismissMentionPickerOutsideGesture = (e) => composerMentionsController?.dismissMentionPickerOutsideGesture?.(e);
-        const dismissContextConvertPickerOutsideGesture = (e) => {
-          const picker = $('#contextConvertPicker');
-          if (!picker || picker.classList.contains('hidden')) return;
-          const target = e.target;
-          if (picker.contains(target) || target?.closest?.('#composerContextConvertBtn')) return;
-          hideContextConvertPicker({ immediate: true });
-          if (isPickerDismissPassThroughTarget(target)) return;
-          consumeOutsidePickerDismissGesture(e, suppressContextConvertPickerFollowupClick);
+      function createLegacyEventScope() {
+        const scope = Object.create(null);
+        const bindGlobal = (name, value) => {
+          if (typeof value !== 'undefined') scope[name] = value;
         };
-        document.addEventListener('pointerdown', dismissMentionPickerOutsideGesture, { passive: false, capture: true });
-        document.addEventListener('touchstart', dismissMentionPickerOutsideGesture, { passive: false, capture: true });
-        document.addEventListener('pointerdown', dismissContextConvertPickerOutsideGesture, { passive: false, capture: true });
-        document.addEventListener('touchstart', dismissContextConvertPickerOutsideGesture, { passive: false, capture: true });
-    
-        // Send message
-        sendBtn.addEventListener('click', (e) => {
-          e.preventDefault();
-          sendBtn.blur();
-          sendMessage();
-          // Keep keyboard open on mobile
-          if (isMobileLayoutViewport()) msgInput.focus();
-        });
-        bindTouchSafeButtonActivation(mentionOpenBtn, ({ startKeyboardOpen }) => {
-          openMentionPickerFromButton({ keyboardAttached: startKeyboardOpen }).catch((error) => {
-            console.warn('[mentions] composer picker open failed:', error.message);
+        bindGlobal('window', window);
+        bindGlobal('document', document);
+        bindGlobal('$', $);
+        bindGlobal('$$', $$);
+        bindGlobal('console', window.console || console);
+        bindGlobal('Math', window.Math || Math);
+        bindGlobal('Date', window.Date || Date);
+        bindGlobal('Number', window.Number || Number);
+        bindGlobal('String', window.String || String);
+        bindGlobal('Boolean', window.Boolean || Boolean);
+        bindGlobal('Array', window.Array || Array);
+        bindGlobal('Object', window.Object || Object);
+        bindGlobal('Promise', window.Promise || Promise);
+        bindGlobal('Set', window.Set || Set);
+        bindGlobal('Map', window.Map || Map);
+        bindGlobal('WeakMap', window.WeakMap || WeakMap);
+        bindGlobal('RegExp', window.RegExp || RegExp);
+        bindGlobal('JSON', window.JSON || JSON);
+        bindGlobal('parseInt', window.parseInt || parseInt);
+        bindGlobal('parseFloat', window.parseFloat || parseFloat);
+        bindGlobal('encodeURIComponent', window.encodeURIComponent || encodeURIComponent);
+        bindGlobal('decodeURIComponent', window.decodeURIComponent || decodeURIComponent);
+        bindGlobal('URL', window.URL);
+        bindGlobal('URLSearchParams', window.URLSearchParams);
+        bindGlobal('FormData', window.FormData);
+        bindGlobal('Blob', window.Blob);
+        bindGlobal('File', window.File);
+        bindGlobal('FileReader', window.FileReader);
+        bindGlobal('Image', window.Image);
+        bindGlobal('MutationObserver', window.MutationObserver);
+        bindGlobal('IntersectionObserver', window.IntersectionObserver);
+        bindGlobal('ResizeObserver', window.ResizeObserver);
+        bindGlobal('localStorage', window.localStorage);
+        bindGlobal('sessionStorage', window.sessionStorage);
+        bindGlobal('history', window.history);
+        bindGlobal('navigator', window.navigator);
+        bindGlobal('location', window.location);
+        bindGlobal('confirm', window.confirm?.bind?.(window));
+        bindGlobal('alert', window.alert?.bind?.(window));
+        bindGlobal('setTimeout', window.setTimeout?.bind?.(window) || setTimeout);
+        bindGlobal('clearTimeout', window.clearTimeout?.bind?.(window) || clearTimeout);
+        bindGlobal('setInterval', window.setInterval?.bind?.(window) || setInterval);
+        bindGlobal('clearInterval', window.clearInterval?.bind?.(window) || clearInterval);
+        bindGlobal('requestAnimationFrame', window.requestAnimationFrame?.bind?.(window) || ((callback) => window.setTimeout(callback, 16)));
+        bindGlobal('cancelAnimationFrame', window.cancelAnimationFrame?.bind?.(window) || ((id) => window.clearTimeout(id)));
+
+        const names = "          activateScrollBottomButton activeChatFolderBar activeChatFolderName activeChatFolderStrip activeChatFolderStripRows activeChatShotProvider activeContextConvertProvider activePinIndexByChat\n          addChatsToFolder adminBackupController adminBackupFactory adminBotAuditController adminBotAuditFactory adminModal adminUsersController adminUsersFactory\n          aiBotFormPayload aiBotSettingsModal aiBotSettingsPayload aiBotState aiImageRiskApi aiModelCatalog aiModelRefreshTriggeredByButton ALL_CHATS_FOLDER_ID\n          allUsers analyzeOutgoingGrokImageRisk anchorForChatOpen androidBridge animateBackButton animateChatFolderContentEntry animateChatHeaderActionButton animateSearchResultChatSwitch\n          animateSendButton animationSettingsModal api appBridge appConfig appContext appDom appDomApi\n          appendMessage appendPinEventIfVisible appendTimelineItems applyBackgroundStyleToElement applyBackupRestore applyChatBackground applyChatFolderStripVisibilityInAllChats applyChatUpdate\n          applyCurrentUserUpdateFromPresence applyMediaPlaybackCompletedMeta applyMessageActionsLayout applyMessageUpdate applyMobileFontSize applyModalAnimation applyModalAnimationSpeed applyNewChatModalTab\n          applyOwnReadStateToMessage applyOwnReadStateToMessages applyPinsUpdate applyPollUpdate applyPosterToVideoElement applyScreenRotationPreference applySoundSettings applyUiLanguage\n          applyUiTheme applyUserUpdate applyVisualMode appRuntime attachBtn attachmentHelpers AUDIO_EXTENSIONS AUDIO_MIME_TYPES\n          authService autoResize AVATAR_COLORS avatarHtml avatarMenuTargetFromEl avatarUserMenuState backBtn beginChatFolderStripPreview\n          beginMobileRouteTransition bindAsyncActionButtons bindCallArtifactMessageControls bindCallMessageControls bindCallTranscriptMessageControls bindContextConvertMessageButton bindContextOriginalRestoreButton bindMediaPlaybackState\n          bindPollControls bindPulseInlineVoterControls bindTouchSafeButtonActivation blurFocusedElementWithin BOT_SAVE_BOOLEAN_FIELDS BOT_SAVE_NUMERIC_FIELDS botChatMemberMetaText botMentionText\n          botModelText buildLocalMessageFromOutbox buildMessagesFragment buildMessagesRootChildren buildOptimisticPollState buildPinBrowserNotification buildPollComposerPreviewMessage buildPollOrbitGradient\n          buildPollRenderState buildPulsePreviewVoters buildReplyBotTarget buildTimelineItems buildVerifiedBotSaveStatus cacheCursorPage cacheMessages callArtifactImageContext\n          callArtifactImageFilename callArtifactImageMime callArtifactImageUrl callArtifactKey callArtifactLabel callArtifactProgress callArtifactStatusKind callArtifactStatusLabel\n          callArtifactTextShouldCollapse callRecordingDurationSeconds callRecordingPlaybackUrl callRecordingRoundedRectPath canAnimateChatFolderContent canAnimateChatFolderSwipe canAnimateHorizontalPager canCaptureCurrentChatScrollAnchor\n          cancelPendingMediaBottomScrollIfNeeded cancelPendingSidebarReveal cancelScheduledActiveChatFolderChipCenter cancelScheduledScrollableItemCenter canClosePollMessage canContextConvertMessage canEditMessage canForwardMessage\n          canHideChat canLeaveChat canManageContextTransformSettings canManageDestructiveChat canManagePinSettings canRestoreContextOriginalMessage canSaveMessageToNotes canShareMediaFileContext\n          canUnpinPin captureBoundMediaPlaybackState captureScrollAnchor catchUpCurrentChat centerActiveChatFolderChip centerScrollableItem centerToastTimer changePasswordModal\n          CHAT_CONTEXT_LONG_PRESS_MS CHAT_FOLDER_ICON_EMOJI CHAT_FOLDER_SWIPE_COMMIT_MIN_PX CHAT_FOLDER_SWIPE_COMMIT_RATIO CHAT_FOLDER_SWIPE_EDGE_DAMPING CHAT_FOLDER_SWIPE_EDGE_MAX_PX CHAT_FOLDER_SWIPE_START_PX CHAT_LIST_CACHE_SYNC_DEBOUNCE_MS\n          CHAT_LIST_CACHE_VERSION CHAT_LIST_PULL_MAX_OFFSET CHAT_LIST_PULL_REFRESH_OFFSET CHAT_LIST_PULL_THRESHOLD CHAT_LIST_PULL_TRIGGER_PX CHAT_LIST_REQUEST_TIMEOUT_MS chatAllowsUnpinAnyPin chatArea\n          chatAreaResizeObserver chatContextMenu chatContextMenuBackdrop chatFolderContent chatFolderContextMenu chatFolderContextMenuBackdrop chatFolderEmojiMarkup chatFolderIconEmoji\n          chatFolderIconMarkup chatFolderListSurface chatFolderManageModal chatFolderManageSaveBtn chatFolderPicker chatFolderPickerBackdrop chatFoldersBtn chatFolderStore\n          chatFolderStripLabelForSelection chatFolderStripStructureSignature chatFolderSwipePagerState chatFolderSwitchSeq chatHeader chatHeaderActions chatHeaderActionsOpen chatHeaderActionsShell\n          chatHeaderAvatar chatInfoBtn chatInfoModal chatItemAvatarHtml chatList chatListCacheKey chatListControllers chatListDataController\n          chatListDataFactory chatListPullIcon chatListPullIndicator chatListPullLabel chatListRecoveryController chatListRecoveryFactory chatListRenderer chatListRendererFactory\n          chatListService chatListStatus chatListStore chatListStoreApi chatListStoreFactory chatMembersCache chatPinsByChat chats\n          chatSearch chatSearchClear chatSearchToggle chatSettingsActionBtn chatShotAdminFormPayload chatShotAdminStates chatShotBotsModal chatShotBtn\n          chatShotGeneratingByChat chatShotRouteBase chatShotStateByChat chatShotStateFailuresByChat chatShotStateRequests chatStatus chatTitle chatView\n          checkAuth checkDeepseekAiBalance clamp cleanupDuplicateDateSeparators cleanupEmptyMessageGroups clearActivePulseVoterPopover clearActivePulseVoterPopoverForMessage clearCachedChat\n          clearChatContextLongPress clearChatHistoryForEveryone clearComposerDraft clearContextConvertPickerFollowupClickSuppress clearEdit clearEmojiPickerKeyboardOpenStabilizer clearFloatingMessageActionsStateIfClosed clearLocalChatHistory\n          clearMediaContextLongPress clearMediaPlaybackState clearMessageActionsPlacement clearMobileFontSizeStatusTimer clearMobileSceneElementState clearMobileSceneRepaint clearModalAnimationStatusTimer clearPendingFile\n          clearPendingMediaBottomScroll clearRenderedMessages clearReply clearScheduledScrollAnchorSave clearScreenRotationStatusSoon clearSearchPanelTransitionState clearSearchResults closeAllModals\n          closeChatHeaderActions closeChatViewForChat closeEmojiPicker closeFloatingSurface closeForwardMessageModal closeMediaViewer closeMobileComposerTransientUi closeModal\n          closePollMessage closeSearchPanel closeTopModal collectChatAvatarUrls compactView compactViewMap compareChatActivity compareChatsForFolder\n          compareChatsForList completeOutboxSend composerAiOverrideDocumentFormatEl composerAiOverrideDocumentWrap composerAiOverrideEl composerAiOverrideHint composerAiOverrideLabel composerAiOverrideModeEl\n          composerAiOverrideSeq composerAiOverrideState composerContextConvertBtn composerCustomEmojiClusterBoundary composerEmojiPickerController composerEmojiPickerFactory composerFactories composerFilesController\n          composerFilesFactory composerMentionsController composerMentionsFactory composerReplyEditController composerReplyEditFactory composerRichPreview composerSendController composerSendFactory\n          composerServices composerStateController composerStateFactory composerTextController composerTextFactory composerTypingDragDropController composerTypingDragDropFactory connectWS\n          consumeOutsidePickerDismissGesture contextConvertAdminFormPayload contextConvertAdminStates contextConvertAvailabilityByChat contextConvertAvailabilityRequests contextConvertBotsModal contextConvertComposerPending contextConvertPendingMessageIds\n          contextConvertPickerClickSuppressUntil contextConvertPickerPointerState contextConvertPickerState contextConvertProviderLabel contextConvertRouteBase contextMenusController contextMenusFactory contextOriginalRestorePendingMessageIds\n          copyImageFromMediaContext copyMessageFromRow copyTextToClipboard coreApiService createAttachmentPosterBlob createChatFolder createChatFolderSwipePage createContextConvertMessageButton\n          createFallbackDomRefs createFolderBtn createHorizontalSwipePager createMessageEl createMessageGroup createMessageOutboxItem createNewChatTabPreview createTimeoutError\n          currentAiBot currentChatId currentChatShotAdminBot currentChatShotAdminState currentContextConvertAdminBot currentContextConvertAdminState currentDeepseekBot currentGrokBot\n          currentGrokImageBot currentGrokTextBotFormFingerprint currentGrokUniversalBot currentMobileFontSize currentModalAnimation currentModalAnimationSpeed currentOpenAiImageBot currentOpenAiUniversalBot\n          currentQwenBot currentUiLanguage currentUiTheme currentUser currentUserInfo currentVisualMode currentYandexBot CUSTOM_EMOJI_BY_CATEGORY\n          CUSTOM_EMOJI_CATALOGS customEmoji debugMessageCache deepseekAiSettingsModal deepseekAiSettingsPayload deepseekAiTextBotsModal deepseekBotFormPayload deepseekBotState\n          deferBackButtonNavigationRelease deleteAiBotKey deleteChatCompletely deleteChatFolder deleteComposerCustomEmojiCluster deleteDeepseekAiKey deleteGrokAiKey deleteMessage\n          deleteQwenAiKey deleteYandexAiKey destroyChatFolderSwipePager disableAiBot disableChatShotAdminBot disableContextConvertAdminBot disableDeepseekBot disableGrokBot\n          disableGrokUniversalBot disableOpenAiImageBot disableOpenAiUniversalBot disablePushOnThisDevice disableQwenBot disableYandexBot dismissEmojiPickerOutsideGesture dismissMentionPickerAfterKeyboardClose\n          dismissMobileComposer DOCUMENT_FORMAT_OPTIONS downloadBackupExport dragOverlay drawVideoPosterBlob emojiBtn emojiPicker emptyState\n          enablePushNotifications endMobileRouteTransition ensureAttachmentPoster ensureAvatarUserMenu ensureBotVisibilityToggles ensureCallRecordingFooterButton ensureCallRecordingProgress ensureContextConvertPicker\n          ensureContextConvertPickerBackdrop ensureDeepseekTextBotsModalContent ensureMentionPicker ensureMentionPickerBackdrop ensurePulseInlineVoters ensureQwenTextBotsModalContent ensureScrollAnchorsLoaded ensureScrollDateIndicator\n          ensureSearchPanelReady esc escapeRegExpText exportAiBotJson exportChatShotAdminBot exportContextConvertAdminBot exportDeepseekBotJson exportGrokBotJson\n          exportGrokUniversalBotJson exportMediaPlaybackCompletedMeta exportOpenAiImageBotJson exportOpenAiUniversalBotJson exportQwenBotJson exportYandexBotJson extractMentionTokensFromText fetchMessageMediaBlob\n          fileExtension fileInput filenameFromContentDisposition fillAiBotForm fillDeepseekBotForm fillGrokBotForm fillGrokImageBotForm fillGrokUniversalBotForm\n          fillOpenAiImageBotForm fillOpenAiUniversalBotForm fillQwenBotForm fillYandexBotForm filterNewMessages filterNewPinEvents finalizeChatFolderStripPreview findComposerCustomEmojiClusterAfter\n          findComposerCustomEmojiClusterAt findComposerCustomEmojiClusterBefore findMentionTrigger findMessageRowById findOutboxRow findRestorableAnchorRow floatingMessageActionsController floatingMessageActionsFactory\n          flushCurrentChatScrollAnchor flushDeferredRecoverySync flushMobileFontSizeSave flushModalAnimationSave flushSearchPanelPendingAction focusChatSearchInput focusComposerKeepKeyboard focusElementIfPossible\n          focusSearchInput folderActionsController folderActionsFactory folderControllers folderManageModalController folderManageModalFactory folderStoreFactory folderSummaryText\n          folderUiController folderUiFactory forceIosAnimationMount forceMobileViewportLayoutSync forgetDisplayedMessage formatBotAuditSource formatCapabilityState formatChatListTimestamp\n          formatDate formatDeepseekBalanceResult formatDeepseekBalanceValue formatDuration formatPollDeadline formatRelativeDuration formatSearchResultTimestamp formatSize\n          formatters formatTime formatUiErrorMessage formatWeatherValue forwardChatList forwardChatSearch forwardingController forwardingControllerFactory\n          forwardMessageModal forwardMessageStatus forwardMessageToChat galleryNav getAbsoluteMessageMediaUrl getActiveChatFolder getActiveMessageActionsEl getActiveMessageActionsRow\n          getAdjacentChatFolderPage getAiChatSetting getAttachmentDownloadUrl getAttachmentPosterUrl getAttachmentPreviewUrl getBotVisibilityToggle getCallRecordingSeekRows getChatById\n          getChatFolderPageIndex getChatFolderPageRows getChatFolderSwipeCommitDistance getChatFolderSwipeSurfaceWidth getChatFolderSwipeTransformTarget getChatFolderSwitchTargets getChatLastMessageId getChatLastPreviewText\n          getChatMemberLastReads getChatPinOrder getChatPins getChatReadReceiptThreshold getChatSearchHaystack getChatSettingsActionOpener getChatShotAdminChatSetting getComposerAiOverridePayload\n          getComposerCustomEmojiCluster getComposerCustomEmojiClusterEnd getComposerCustomEmojiItemFromMarker getComposerDraftStorageKey getComposerInputTextMetrics getComposerInputWidthForMode getComposerTextValue getContextConvertChatSetting\n          getCurrentChatContextConvertState getCurrentChatShotState getCurrentModalAnimationPreferences getCustomEmoji getCustomEmojiCatalog getCustomEmojiRenderedSize getDeepseekChatSetting getDefaultMessageMediaMime\n          getDirectPrivateAiBotTarget getEditableText getElementTransitionTotalMs getEmojiCategoryItems getEmojiCategoryLabel getEmojiPickerCategories getEmojiPickerInsertionValue getFloatingMessageActionRow\n          getFloatingMessageActionsState getFloatingViewportRect getFolderPinnedChatMoveState getFolderPinnedChatOrder getGrokChatSetting getGrokImageChatSetting getGrokUniversalChatSetting getIosViewportBaselineHeight\n          getIosVisualViewportMetrics getLockedMobileKeyboardViewportMetrics getManualMentionRange getMaxRenderedMessageId getMediaNoteFallbackLabel getMediaPlaybackBucket getMediaPlaybackCompletedBucket getMessageActionsElement\n          getMessageCopyText getMessageCopyTextData getMessageIdNumber getMessageMediaContext getMessageMediaContextTarget getMessageMediaKindLabel getMessagesAfterLoader getMessagesLastContentChild\n          getMicrophoneMode getMobileAppViewportHeight getMobileAppViewportTopInset getMobileComposerSafeReturnFocusEl getMobileFontAdjustPercent getMobileViewportBaselineHeight getMobileVisualViewportMetrics getModalAnimationSpeedFactor\n          getNewChatModalActiveTab getNewChatTabPane getNormalComposerInputWidth getOpenAiImageChatSetting getOpenAiUniversalChatSetting getOutboxObjectUrl getPayloadChatId getPersistedMobileFontSize\n          getPersistedModalAnimationPreferences getPinActionState getPinActorName getPinForMessage getPinnedChatMoveState getPinnedChats getPinPreviewText getPinToastText\n          getPollCompactFooterMeta getProfileSelectedColor getPulseInlineVotersRevision getPulseVoterDisplayName getPulseVoterPopoverElement getQwenChatSetting getReactionPickerKeepKeyboard getReactionPickerMsgId\n          getRecentEmojiCategory getRecentEmojiStorageKey getRenderedChatFolderSelectionId getRenderedMessageIdList getRenderedMessageRows getReplyPreviewText getReplyQuoteText getReplySnapshot\n          getResolvedMobileBaseScene getScreenRotationAllowed getScrollDateTextForRow getSearchPanelTransitionFallbackMs getSelectableFolderChats getSelectedMessageFragment getSelectedNewFolderChatIds getSingleEmojiPattern\n          getSoundSettingsFromForm getStoredAttachmentPosterUrl getStoredAttachmentUrl getTopModal getUniversalBotModes getVisibleComposerToolCount getVisibleMessageAreaRect getYandexChatSetting\n          GROK_TEXT_BOT_DIRTY_STATUS grokAiImageBotsModal grokAiSettingsModal grokAiSettingsPayload grokAiTextBotsModal grokAiUniversalBotsModal grokBotFormPayload grokBotState\n          grokImageBotFormPayload grokImageRiskCancel grokImageRiskConfirm grokImageRiskConfirmModal grokImageRiskConfirmResolver grokImageRiskRetryPending grokImageRiskTerms grokTextBotFormFingerprint\n          grokTextBotFormHydrating grokUniversalBotFormPayload grokUniversalState grokUniversalTargetAllowsImage handleAppResume handleChatContextMenuAction handleChatFolderContextMenuAction handleComposerCustomEmojiBeforeInput\n          handleComposerCustomEmojiKeydown handleDragEnter handleDragLeave handleDragOver handleDrop handleGrokImageRiskModalClosed handleMediaContextMenuAction handleMediaViewerControlActivation\n          handleMentionClick handleMentionPickerKeydown handlePinnedMessageUpdate handleServiceWorkerMessage handleWSMessage hasAndroidNativeBridge hasOpenModal hideActiveMessageActions\n          hideAttachMenu hideAvatarUserMenu hideChatContextMenu hideChatFolderContextMenu hideChatFolderPicker hideChatFromList hideContextConvertPicker hideFloatingMessageActions\n          hideMediaContextMenu hideMentionPicker hideReactionPicker hideReactionUi hideScrollDateIndicator hideTyping HORIZONTAL_PAGER_SWIPE_COMMIT_MIN_PX HORIZONTAL_PAGER_SWIPE_COMMIT_RATIO\n          HORIZONTAL_PAGER_SWIPE_EDGE_DAMPING HORIZONTAL_PAGER_SWIPE_EDGE_MAX_PX HORIZONTAL_PAGER_SWIPE_START_PX horizontalPagerCommitDistance hydrateChatListCache hydrateComposerDraftsForCurrentUser hydratePulseInlineVoters i18n\n          i18nHelpers IMAGE_EXTENSIONS IMAGE_MIME_TYPES imageViewer importAiBotJsonFile importChatShotAdminBot importContextConvertAdminBot importDeepseekBotJsonFile\n          importGrokBotJsonFile importGrokUniversalBotJsonFile importOpenAiImageBotJsonFile importOpenAiUniversalBotJsonFile importQwenBotJsonFile importYandexBotJsonFile inAppChatBackSkipNextPopstate initEmojiPicker\n          initials initNewChatTabSwipePager inputArea inputRow insertAtMessagesEnd insertComposerTextAtSelection insertDictatedText insertMentionTarget\n          insertMentionTokenIntoComposer insertRawMentionTriggerAtCursor installCallRecordingProgressCapture interactionFactories interactionServices interactionState invalidateChatShotState invalidateContextConvertAvailability\n          invalidatePulseInlineVotersForMessage iosBackNavigationToken isAbortError isAiBotDirectoryUser isAllChatsFolderActive isChatFolderStripVisibleInAllChatsEnabled isChatIncomingSoundEnabled isChatListWaitingForActiveFolder\n          isChatNotificationEnabled isChatPinned isChatPinnedInFolder isChatSearchOpen isClientSideMessage isComposerMeaningfullyEmpty isContextTransformAvailableForChat isCurrentChatActivelyVisible\n          isCurrentChatOpenTransition isCurrentMessageRow isCurrentNotesChat isCustomEmojiCategory isCustomEmojiToken isDeletedMessageRow isFloatingSurfaceVisible isFollowupClickSuppressPassThroughTarget\n          isGeneralChat isGrokImageBotTarget isGrokUniversalBotTarget isGroupLikeCurrentChat isGroupOrPrivateChat isIosChatKeyboardLayoutActive isIosKeyboardOpen isIosMobileViewportTarget\n          isIosViewportFixTarget isIosWebkitMotionAllowed isLocalhost isMediaPlaybackCompleted isMediaPlaybackNearEnd isMentionSoundEnabled isMessageDisplayed isMessageMentioningCurrentUser\n          isMobileBaseSceneHardHidden isMobileChatHistoryState isMobileChatKeyboardLayoutActive isMobileComposerKeyboardOpen isMobileComposerSessionActive isMobileKeyboardOpen isMobileLayoutViewport isMobileViewportLayoutLocked\n          isMobileViewportTarget isNearBottom isNotesChat isPickerDismissPassThroughTarget isPinEventDisplayed isPinNotificationEnabled isPinSoundEnabled isPointerNearCallRecordingProgressRect\n          isPollMessage isPulsePoll isPulseVoterOptionExpanded isPushSupported isResolvedMobileChatScene isSearchPanelOpen isSelectableMessageTextTarget isSingleCustomEmojiMessage\n          isSingleEmojiMessage isTouchLikePointerEvent isUiTransitionBusy isUniversalBotTarget isValidRecentEmojiValue isVideoAttachmentMessage ivStrip jumpToPinnedMessage\n          jumpToSavedOriginal jumpToSearchResult languageDisplayName languageSettingsModal latestCallArtifactBatch latestCallTranscriptRun layoutRetryButtons leaveChat\n          linkify loadAiBotState loadAiModelOptions loadAllUsers loadChatFolders loadChatPins loadChatPreferences loadChats\n          loadChatShotAdminState loadChatShotState loadContextConvertAdminState loadContextConvertAvailability loadCurrentWeather loadDeepseekAiState loadGrokAiState loadGrokUniversalState\n          loadHiddenChatSearch loadLocalRecentEmojis loadMentionTargets loadMore loadMoreAfter loadMoreAfterWrap loadMoreBtn loadMoreWrap\n          loadNotificationSettings loadOpenAiImageState loadOpenAiUniversalState loadQwenAiState loadRecentEmojis loadSoundSettings loadWeatherSettings loadYandexAiState\n          localAttachmentFromFile localChatPreferenceEnabled logout makeClientId markAttachmentPosterAvailable markChatReadThrough markCurrentChatReadIfAtBottom markMessageDeleted\n          markPendingMediaBottomScroll markPendingMediaBottomScrollForMessages MAX_ATTACHMENTS MAX_FILE_SIZE MAX_FILE_SIZE_LABEL MAX_MSG maxMessageId maybeLoadMoreAtBottom\n          maybeLoadMoreAtTop measureFloatingSurface measureMessageActions measureMsgInputScrollHeight MEDIA_CONTEXT_LONG_PRESS_MS MEDIA_CONTEXT_TARGET_SELECTOR mediaContextMenu mediaContextMenuBackdrop\n          mediaPlaybackController mediaPlaybackFactory mediaViewerController mediaViewerFactory MENTION_PICKER_TAP_DEAD_ZONE mentionKey mentionOpenBtn menuDrawer\n          mergeAiBotState mergeChatShotAdminState mergeContextConvertAdminState mergeDeepseekAiState mergeGrokAiState mergeGrokUniversalState mergeOpenAiImageState mergeOpenAiUniversalState\n          mergeQwenAiState mergeRecentEmojiLists mergeYandexAiState MESSAGE_BACKGROUND_SYNC_CONCURRENCY MESSAGE_BACKGROUND_SYNC_MAX_CHATS MESSAGE_BACKGROUND_SYNC_MAX_PAGES MESSAGE_CACHE_LIMIT messageAttachmentFactory\n          messageAttachmentRenderer messageCallCardFactory messageCallCardRenderer messageHasDeferredMediaLayout messageIdKey messageOutbox messageOutboxFactory messagePollFactory\n          messagePollRenderer messageRenderer messageRendererFactory messagesEl messageServiceCall messageServiceDelegates messageServices messagesService\n          messageStateController messageStateFactory messageUpdates messageUpdatesFactory MICROPHONE_MODE_STORAGE_KEY MICROPHONE_MODE_VALUES microphoneMode minMessageId\n          MOBILE_FONT_SIZE_DEFAULT MOBILE_FONT_SIZE_MAX MOBILE_FONT_SIZE_MIN MOBILE_FONT_SIZE_PERCENTS mobileBaseScene mobileComposerGuard mobileFontSettingsModal mobileRouteTransitionActive\n          mobileRouteTransitionTimer mobileSceneRepaintCleanupFrame mobileSceneRepaintFrame mobileSceneRepaintTarget mobileViewportElementResizeObserver mobileViewportHeightSyncBound mobileViewportPrevHeight mobileViewportRecoveryFrame\n          mobileViewportRecoveryTimer mobileViewportShell mobileVisualViewportBaselineHeight mobileVisualViewportBaselineWidth MODAL_ANIMATION_SPEED_DEFAULT MODAL_ANIMATION_SPEED_FACTORS MODAL_ANIMATION_STYLE_IDS MODAL_ANIMATION_STYLES\n          MODAL_TRANSITION_BUFFER_MS modalAnimationMeta modalAnimationPreferencesEqual modalEntryOf modalManager modalManagerFactory mountGrokBotPanels mountPulseVoterPopover\n          moveChatFolder moveChatSidebarPin moveFocusOutOfChatHeaderActions moveFolderChatPin msgInput navigateBackToChatList NEW_CHAT_MODAL_TABS newChatModal\n          newChatTabSwipePager newFolderChatList newFolderChatSearchInput newFolderNameInput newFolderTabController newFolderTabFactory nextPollVoteSelection normalizeBotSaveComparisonValue\n          normalizeCachedChats normalizeCallMessageData normalizeCallMixedRecording normalizeChatFolderId normalizeChatListEntry normalizeChatShotState normalizeComposerDraftChatId normalizeComposerInputValue\n          normalizeComposerTextToInternal normalizeContextConvertAvailability normalizeMediaPlaybackCompletedEntries normalizeMemberLastReads normalizeMentionTarget normalizeMicrophoneMode normalizeMimeType normalizeMobileBaseScene\n          normalizeMobileChatListHistoryState normalizeMobileFontSize normalizeModalAnimationSpeed normalizeModalAnimationStyle normalizeNewChatModalTab normalizePin normalizePinEvent normalizePinEvents\n          normalizePins normalizePoll normalizePollStyle normalizeRecentEmojiList normalizeRecentEmojiValue normalizeUiLanguage normalizeUiTheme normalizeVisualMode\n          noteMessageScrollUserIntent NOTES_CHAT_EMOJI notificationPermissionLabel notificationSettingsController notificationSettingsFactory notificationSettingsModal notifyAndroidMobileFontSize notifyAndroidScreenRotationPreference\n          onlineUsers openAdminBotAuditModal openAdminModal OPENAI_IMAGE_BACKGROUND_OPTIONS OPENAI_IMAGE_OUTPUT_OPTIONS OPENAI_IMAGE_QUALITY_OPTIONS OPENAI_IMAGE_SIZE_OPTIONS openAiBotSettingsModal\n          openAiImageBotFormPayload openAiImageBotsModal openAiImageState openAiTextBotsModal openAiUniversalBotFormPayload openAiUniversalBotsModal openAiUniversalState openAnimationSettingsModal\n          openAvatarUserMenu openBackupExportModal openCallArtifactsModal openChangePasswordModal openChat openChatController openChatControllerFactory openChatControllers\n          openChatFolderManageModal openChatFromPush openChatInfoModal openChatPagesController openChatPagesFactory openChatService openChatShotBotsModal openComposerContextConvertPicker\n          openContextConvertBotsModal openDeepseekAiSettingsModal openDeepseekTextBotsModal openEmojiPicker openFloatingSurface openForwardMessageModal openGrokAiSettingsModal openGrokImageBotsModal\n          openGrokImageRiskConfirm openGrokTextBotsModal openGrokUniversalBotsModal openHiddenChatFromSearch openImageViewer openLanguageSettingsModal openLastChatOnReload openMediaViewer\n          openMentionPickerFromButton openMenuDrawer openMessageContextConvertPicker openMobileFontSettingsModal openModal openNewChatModal openNotificationSettingsModal openOpenAiImageBotsModal\n          openOpenAiTextBotsModal openOpenAiUniversalBotsModal openPollComposer openPollStyleSettingsModal openPollVotersModal openPrivateChatFromDirectory openPrivateChatWithUser openQwenAiSettingsModal\n          openQwenTextBotsModal openSearchPanel openSettingsModal openSoundSettingsModal openThemeSettingsModal openVisualModeSettingsModal openWeatherSettingsModal openYandexAiSettingsModal\n          outboxUrlKey PAGE_SIZE PAGINATION_BOTTOM_THRESHOLD PAGINATION_FETCH_MAX_PAGES PAGINATION_TOP_THRESHOLD parseCallRecordingRadiusValue parseTransitionTimeMs patchAiBotUserForPresence\n          patchChatMembersCacheForPresence patchMentionTargetsForPresence pauseCurrentChatMediaPlayback pendingFileEl pendingMobileChatListHistoryNormalization performSearch persistAiBotSettings persistChatListCache\n          persistComposerDrafts persistCurrentUser persistDeepseekAiSettings persistGrokAiSettings persistLocalRecentEmojis persistOutboxItem persistQwenAiSettings persistScrollAnchors\n          persistYandexAiSettings pickScrollAnchorRow pickScrollDateMessageRow pinEventIdKey pinMessage pinnedBar playAppSound playChatFolderSwitchPhase\n          pointToCallRecordingHit POLL_CLOSE_PRESET_MS POLL_MAX_OPTIONS POLL_MIN_OPTIONS POLL_STYLE_IDS POLL_STYLES pollAccentVar pollBtn\n          pollComposerController pollComposerFactory pollComposerModal pollComposerPreview pollComposerStatus pollComposerStyle pollOptionsList pollQuestionInput\n          pollStyleMeta pollStyleSettingsModal pollVotersList pollVotersMeta pollVotersModal pollVotersStatus pollVotersTitle portalMessageActions\n          positionAvatarUserMenu positionChatContextMenu positionChatFolderContextMenu positionChatFolderPicker positionContextConvertPicker positionEmojiPicker positionFloatingElement positionMediaContextMenu\n          positionMentionPicker positionMessageActionSurfaces positionReactionEmojiPopover positionScrollDateIndicator prefersReducedMotion prepareChatFolderSwipePager prepareNewChatTabContent presenceController\n          presenceControllerFactory preserveMobileComposerOnPointerDown preventMobileComposerBlur previewAllSounds previewBackupRestore previewSound primeAppendedMessageSideEffects primeMediaPlaybackCompletedCache\n          promoteOutboxRow providerAccent providerInteractiveEnabled providerInteractiveSummary pulseInlineVotersCacheKey pushCallMessageMeta queueIosViewportLayoutSync queueMobileViewportLayoutSync\n          queueOutboxItem queueSearchPanelPendingAction queueVideoNoteOutbox queueVoiceOutbox qwenAiSettingsModal qwenAiSettingsPayload qwenAiTextBotsModal qwenBotFormPayload\n          qwenBotState reactionController reactionControllerFactory reactionEmojiPopover reactionEmojiSwipePager reactionPicker readCachedChatRange readCachedCursorPage\n          readChatListCache readMediaPlaybackState readPollComposerForm readReceiptController readReceiptFactory reconcileChatReadState RECOVERY_CATCHUP_MAX_PAGES RECOVERY_SYNC_MIN_INTERVAL_MS\n          refreshAdminUserStatuses refreshCallRecordingProgressShape refreshChatFolderContextMenu refreshChatInfoPresentation refreshChatInfoStatus refreshChatListReferences refreshChatMemberStatuses refreshDateSeparators\n          refreshDeepseekAiModels refreshGrokAiModels refreshGrokTextBotDirtyState refreshLocalizedUi refreshMentionPickerForUserUpdate refreshPollComposerActionState refreshPollComposerPreview refreshPulseInlineVoterSlots\n          refreshPushDeviceState refreshQwenAiModels refreshRenderedAiBotAvatar refreshRenderedUserMessages refreshScrollDateIndicator refreshVisiblePinButtons refreshVoiceComposerState refreshWebSocketAfterResume\n          refreshYandexAiModels registerBuiltinModals registerModal rememberActiveElement rememberDisplayedMessage rememberPinEvent rememberRecentEmoji removeAiBotAvatar\n          removeChatFromFolder removeChatLocally removeDeepseekBotAvatar removeDuplicatePromotedRows removeGrokBotAvatar removeGrokUniversalBotAvatar removeOpenAiImageBotAvatar removeOpenAiUniversalBotAvatar\n          removeOutboxRows removeProfileAvatar removeQwenBotAvatar removeYandexBotAvatar renameChatFolder renderActiveChatFolderBar renderAdminUserRow renderAiBotAvatar\n          renderAiBotList renderAiBotSettings renderAiChatBotSettings renderAiModelOptions renderBackupRestorePreview renderCallArtifactBatchCard renderCallArtifactImage renderCallArtifactRun\n          renderCallArtifactStatus renderCallArtifactText renderCallArtifactTextLine renderCallMessageCard renderCallMessageMeta renderCallTranscriptRunCard renderChatContextMenu renderChatContextTransformForm\n          renderChatDangerControls renderChatFolderContextMenu renderChatFolderManageModal renderChatFolderPicker renderChatFolderStripStructure renderChatLastPreviewHtml renderChatList renderChatListInto\n          renderChatMemberItem renderChatPinSettingsForm renderChatPreferencesForm renderChatShotAdminChatSettings renderChatShotAdminForm renderChatShotAdminSettings renderChatShotBotList renderChatShotForm\n          renderComposerAiOverride renderComposerRichPreviewContent renderContextConvertAdminSettings renderContextConvertBotList renderContextConvertChatSettings renderContextConvertForm renderContextConvertPicker renderCurrentChatHeader\n          renderCustomEmojiHtml renderCustomEmojiPreviewHtml renderDeepseekAiSettings renderDeepseekBotAvatar renderDeepseekBotList renderDeepseekChatBotSettings renderDeepseekModelOptions renderedMessageIdsMatch\n          renderEmojiGridItemHtml renderEmojiGridItemsHtml renderEmojiPickerGrid renderFileAttachment renderFolderSelectableChatItem renderForwardChatList renderGrokAiSettings renderGrokBotAvatar\n          renderGrokBotList renderGrokBotModelOptions renderGrokChatBotSettings renderGrokGlobalImageModelOptions renderGrokGlobalTextModelOptions renderGrokImageBotAvatar renderGrokImageBotList renderGrokImageBotModelOptions\n          renderGrokImageBotsSettings renderGrokImageChatBotSettings renderGrokImageRiskTerms renderGrokTextBotsSettings renderGrokUniversalBotAvatar renderGrokUniversalBotList renderGrokUniversalBotModelOptions renderGrokUniversalBotsSettings\n          renderGrokUniversalChatBotSettings renderLanguagePicker renderLinkPreview renderMediaContextMenu renderMentionPicker renderMessages renderMessageText renderMobileFontSizeControl\n          renderModalAnimationOptions renderModalAnimationSpeedControl renderNamedGrokAvatar renderNewFolderChatList renderNotificationSettingsForm renderOpenAiImageBotAvatar renderOpenAiImageBotList renderOpenAiImageChatBotSettings\n          renderOpenAiImageModelOptions renderOpenAiImageSettings renderOpenAiProviderSettings renderOpenAiTextBotsSettings renderOpenAiUniversalBotAvatar renderOpenAiUniversalBotList renderOpenAiUniversalChatBotSettings renderOpenAiUniversalModelOptions\n          renderOpenAiUniversalSettings renderOrbitPollCard renderOutboxForChat renderOutboxItem renderPendingFiles renderPinActionButton renderPinnedBar renderPinSystemEvent\n          renderPollCard renderPollCloseButton renderPollCompactFooter renderPollComposerOptionInputs renderPollStyleCardPreview renderPollStylePicker renderPollVotersButton renderProfileAvatarPreview\n          renderProfileColorPicker renderProfileEditor renderPulseInlineVoterAvatar renderPulseInlineVoterStack renderPulseInlineVoterSummary renderPulseInlineVoterSummaryContent renderPulsePollCard renderQuickReactionButtonsHtml\n          renderQwenAiSettings renderQwenBotAvatar renderQwenBotList renderQwenChatBotSettings renderQwenModelOptions renderReactionPickerContent renderReactions renderResolvedFileAttachment\n          renderSearchResultsEmpty renderSearchScopeToggle renderSelectableUserItem renderSoundSettingsForm renderStackPollCard renderThemePicker renderTypingBar renderVisualModePicker\n          renderWeatherSearchResults renderWeatherSettingsForm renderWeatherWidget renderYandexAiSettings renderYandexBotAvatar renderYandexBotList renderYandexChatBotSettings renderYandexModelOptions\n          replaceRenderedMessage replaceRenderedMessages replaceRenderedPollCard replyBar replyBarName replyBarText requireCoreExport requireCoreFunction\n          resetBackButtonNavigationState resetBackupRestoreState resetChangePasswordFields resetChatFolderManageModal resetChatFolderSwipeSurface resetChatFolderSwitchAnimations resetChatPreviewAfterHistoryClear resetForwardMessageModal\n          resetManagedModalScroll resetMobileKeyboardDock resetNewFolderForm resetPollComposer resetPollVotersModal resetReusableMessageRow resolveActionButtons resolveAttachmentUrl\n          resolveCallMessageMediaKind resolveCallMessageRoomMode resolveComposerUniversalBotTarget resolveMediaPlaybackChatId resolveMediaPlaybackKey resolveMessageActionLayout resolveNearestCallRecordingHit resolveTriggeredGrokImageBot\n          resolveUiTarget restoreComposerDraft restoreComposerFocusAfterMentionPicker restoreContextOriginalMessage restoreMessageActions restoreMobileKeyboardDocumentScroll restoreScrollAnchor RESUME_WS_REFRESH_AFTER_MS\n          retryGrokImageRiskPrompt retrySend revealActiveMobileChatRoute revealChatHydration revealChatListAfterActiveChatClose revealSidebarFromChat revokeOutboxObjectUrls runChatShotGeneration\n          runMessageBackgroundSync runRecoverySync runtimeState safeVibrate saveAiBot saveAiBotSettings saveAiChatBotSettings saveChatContextTransformSetting\n          saveChatFolderManageChanges saveChatFolderStripVisibilityInAllChats saveChatPinSettings saveChatPreferences saveChatShotAdminBot saveChatShotAdminChatSetting saveChatShotChatSetting saveComposerDraft\n          saveContextConvertAdminBot saveContextConvertAdminChatSetting saveCurrentScrollAnchor saveDeepseekAiSettings saveDeepseekBot saveDeepseekChatBotSettings saveEditedMessage saveGrokAiSettings\n          saveGrokBot saveGrokChatBotSettings saveGrokImageBot saveGrokImageChatBotSettings saveGrokUniversalBot saveGrokUniversalChatBotSettings saveMessageToNotes saveNotificationSettings\n          saveOpenAiImageBot saveOpenAiImageChatBotSettings saveOpenAiUniversalBot saveOpenAiUniversalChatBotSettings saveProfileChanges saveQwenAiSettings saveQwenBot saveQwenChatBotSettings\n          saveSoundSettings saveWeatherSettings saveYandexAiSettings saveYandexBot saveYandexChatBotSettings scheduleActiveChatFolderChipCenter scheduleActiveMobileSceneRepaint scheduleChatListCacheSync\n          scheduleHiddenChatSearch scheduleMediaBottomScrollAnchorSave scheduleMessageBackgroundSync scheduleMobileFontSizeSave scheduleMobileFontSizeStatusClear scheduleMobileViewportRecovery scheduleModalAnimationSave scheduleModalAnimationStatusClear\n          schedulePulseVoterPopoverAutoHide scheduleRecoverySync scheduleRetryLayout scheduleScrollableItemCenter scheduleScrollAnchorSave scheduleScrollDateIndicatorUpdate scheduleSoundSettingsSave scheduleWeatherRefresh\n          SCREEN_ROTATION_ALLOWED_STORAGE_KEY screenRotationAllowed SCROLL_DATE_HIDE_DELAY_MS scrollAnchorStorageKey scrollBottomBtn scrollBottomFollowupClickSuppressUntil scrollController scrollControllerFactory\n          scrollRestoreMode scrollToBottom scrollToMessage searchAllChatsToggle searchBtn searchController searchControllerFactory searchInput\n          searchPanel searchPanelSheet searchResults searchWeatherLocations seekCallRecordingProgress seekVideoFrame selectedAiBotId selectedChatShotBotIds\n          selectedContextConvertBotIds selectedDeepseekBotId selectedGrokBotId selectedGrokImageBotId selectedGrokUniversalBotId selectedOpenAiImageBotId selectedOpenAiUniversalBotId selectedQwenBotId\n          selectedYandexBotId selectModalAnimation selectPollStyle selectUiLanguage selectUiTheme selectVisualMode sendBtn sendByEnter\n          sendComposerWsPayload sendMessage sendOutboxMessageItem sendOutboxVideoNoteItem sendOutboxVoiceItem sendTyping serializeComposerTextValue setActionButtonsPending\n          setActiveChatFolder setAiBotChatStatus setAiBotModalStatus setAiBotSettingsStatus setAiBotStatus setAiBotTextModalStatus setAiModelSelectOptions setAiModelStatus\n          setAvatarElementVisual setBackupExportStatus setBackupRestoreStatus setBotVisibilityToggle setChatContextTransformStatus setChatDangerStatus setChatFolderManageStatus setChatFolderOrder\n          setChatFolderSwipeOffset setChatHeaderActionsOpen setChatHydrating setChatListStatus setChatPinSettingsStatus setChatPreferencesStatus setChatSearchOpen setChatShotAdminChatStatus\n          setChatShotBotStatus setChatShotChatStatus setChatShotModalStatus setChatSidebarPin setComposerContextConvertButtonVisible setComposerTextValue setContextConvertBotStatus setContextConvertChatStatus\n          setContextConvertInlineStatus setContextConvertModalStatus setCurrentUserFromSettings setDeepseekAiBalanceStatus setDeepseekAiModelStatus setDeepseekAiProviderStatus setDeepseekAiStatus setDeepseekBotStatus\n          setDeepseekChatStatus setEditFromRow setEmojiPickerCategory setFolderChatPin setForwardMessageStatus setGrokAiModelStatus setGrokAiProviderStatus setGrokAiStatus\n          setGrokBotStatus setGrokImageChatStatus setGrokImageEditorStatus setGrokImageStatus setGrokStatus setGrokTextChatStatus setGrokTextEditorStatus setGrokTextStatus\n          setGrokUniversalChatStatus setGrokUniversalEditorStatus setGrokUniversalStatus setHasMoreAfter setHasMoreBefore setInlineStatus setLanguageStatus setLoadMoreAfterLoading\n          setMediaPlaybackCompleted setMicrophoneMode setMobileFontAdjustPercent setMobileFontSizeStatus setMobileSceneElementState setModalAnimationStatus setNewChatModalTab setNotificationStatus\n          setOpenAiImageChatStatus setOpenAiImageModalStatus setOpenAiImageStatus setOpenAiStatus setOpenAiUniversalChatStatus setOpenAiUniversalModalStatus setOpenAiUniversalStatus setOutboxSending\n          setPendingChatFolderChipCenterBehavior setPollComposerStatus setPollStyleStatus setPollStyleSurface setProfileAvatarUploadPending setProfileStatus setQwenAiModelStatus setQwenAiProviderStatus\n          setQwenAiStatus setQwenBotStatus setQwenChatStatus setReply setReplyFromRow setScreenRotationAllowed setScreenRotationStatus setSoundStatus\n          setStaticSelectOptions setThemeStatus settingsControllers settingsModal settingsModalController settingsModalFactory settleChatFolderSwipeOffset settleDeferredMediaBottomScroll\n          setupChatAreaMetricsSync setupLifecycleRecovery setupMessageSwipeGestures setupMobileComposerGestureGuard setupMobileMessageInteractionGuard setupMobileViewportHeightSync setupPasswordPreviewToggles setupProfileEvents\n          setVisualModeStatus setWeatherStatus setYandexAiModelStatus setYandexAiProviderStatus setYandexAiStatus setYandexBotStatus setYandexChatStatus shareMediaFromContext\n          shouldAutoFocusSearchInput shouldBackgroundSyncMessages shouldBypassLockedMobileViewportSync shouldIgnoreCallRecordingPointer shouldKeepComposerForMobileMessageInteraction shouldKeepEmojiPickerKeyboard shouldPreserveKeyboardForScrollBottomGesture shouldShowActiveChatFolderBar\n          shouldShowChatFolderBarForSelection showCenterToast showChatContextMenuForRow showChatFolderContextMenu showChatFolderPicker showMediaContextMenuForContext showMediaContextMenuForRow showMessageActions\n          showReactionPicker showTyping sidebar sidebarSearch singleEmojiPattern snapChatFolderSwipeBack snapComposerSelectionToCustomEmojiBoundary sortChatsInPlace\n          soundSettingsController soundSettingsFactory soundSettingsModal splitGraphemes stabilizeEmojiPickerKeyboardOnOpen storeChatMemberLastReads stripCloneIds stripTriggeredBotMention\n          suppressAvatarUserMenuFollowupClick suppressContextConvertPickerFollowupClick suppressMediaViewerFollowupClick suppressMentionPickerFollowupClick suppressNextChatItemTap suppressNextChatItemTapUntil suppressNextMessageActionTap suppressScrollBottomFollowupClick\n          suppressSearchPanelFollowupClick syncActiveChatFolderStripState syncBackupRestoreFileName syncCallRecordingPlayButton syncChatAreaMetrics syncChatAreaMetricsFromViewport syncChatFolderPickerAllChatsToggleState syncChatHeaderActionsAccessibility\n          syncChatInfoStatusVisibility syncChatMessagesInBackground syncChatShotButton syncClonedFormControls syncComposerRichPreview syncContextConvertComposerButton syncContextConvertPendingMessageState syncContextOriginalRestorePendingMessageState\n          syncCoreStateFromRuntime syncCoreStateToRuntime syncCurrentChatContextConvertUi syncEmojiPickerButton syncGrokBotUser syncGrokTextBotFormFingerprint syncIosViewportLayoutState syncLanguageSettingsButton\n          syncMentionOpenButton syncMobileAppHeightToViewport syncMobileBaseSceneState syncMobileFontSettingsButton syncMobileFontSizeViewportState syncMobileViewportLayoutState syncModalAnimationSettingsButton syncOpenAiImageBotUser\n          syncOpenAiUniversalBotUser syncPollComposerStyleUi syncProfileColorSelection syncRecentEmojiToServer syncScreenRotationToggle syncSharedGrokSettings syncSharedOpenAiSettings syncVisibleContextConvertMessageButtons\n          t testAiBot testChatShotAdminBot testContextConvertAdminBot testDeepseekAiConnection testDeepseekBot testGrokAiConnection testGrokBot\n          testGrokUniversalBot testOpenAiImageBot testOpenAiUniversalBot testPushNotification testQwenAiConnection testQwenBot testYandexAiConnection testYandexBot\n          themeSettingsModal timelineTimestamp toggleChatHeaderActions toggleEmojiPicker togglePinFromRow togglePollVote togglePulseVoterOptionExpanded togglePulseVoterPopover\n          toggleReaction token totalUnreadForFolder transformComposerTextWithContextConvertBot transformMessageWithContextConvertBot transitionToChatFolder transitionToChatFolderBySwipe trySendOutboxItem\n          tx typingBar UI_THEME_IDS UI_THEMES UI_VISUAL_MODE_IDS UI_VISUAL_MODES uiSettings uiSettingsFactory\n          uniqueAiModelValues unpinPin updateCallRecordingProgress updateChatContextPreference updateChatListLastMessage updateChatStatus updateComposerAiOverrideState updateCurrentUserFooter\n          updateFloatingMessageActionsState updateGalleryArrows updateHasMoreAfterFromChat updateLocalChatReadProgress updateMentionPicker updateMobileFontSize updateModalAnimationSpeed updateOnlineDisplay\n          updateReactionBar updateRowStatus updateScrollBottomButton updateScrollDateIndicator updateSearchTriggerState updateVisibleOwnReadStateRows updateVisibleReplyQuotesFromMessage uploadAiBotAvatar\n          uploadDeepseekBotAvatar uploadFiles uploadGrokBotAvatar uploadGrokUniversalBotAvatar uploadOpenAiImageBotAvatar uploadOpenAiUniversalBotAvatar uploadOutboxAttachment uploadProfileAvatar\n          uploadQwenBotAvatar uploadYandexBotAvatar userSecondaryLineText verifyBotSaveResponse VIDEO_EXTENSIONS VIDEO_MIME_TYPES VIDEO_POSTER_CAPTURE_SEEKS VIDEO_POSTER_CAPTURE_TIMEOUT_MS\n          VIDEO_POSTER_MAX_DIMENSION VIDEO_POSTER_MIME VIDEO_POSTER_QUALITY visibleChatCountForFolder visualModeMeta visualModeSettingsModal visualModeStateLabel waitForAnimationFrames\n          waitForMediaEvent waitForMs waitForVideoFrame warmChatListAvatarAssets warmMessageWindowAssets weatherIcon weatherLocationLabel weatherSettingsController\n          weatherSettingsFactory weatherSettingsModal weatherWidget websocketService wireAiBotToggleLabels withActionButtons withStableOutboxMedia writeCachedChatMeta\n          writeMediaPlaybackState ws WS_URL wsReconnectTimer wsRetry yandexAiSettingsModal yandexAiSettingsPayload yandexBotFormPayload\n          yandexBotState".trim().split(/\s+/).filter(Boolean);
+        names.forEach((__bananzaScopeName) => {
+          if (Object.prototype.hasOwnProperty.call(scope, __bananzaScopeName)) return;
+          Object.defineProperty(scope, __bananzaScopeName, {
+            configurable: true,
+            enumerable: false,
+            get() { return eval(__bananzaScopeName); },
+            set(__bananzaScopeValue) { eval(__bananzaScopeName + ' = __bananzaScopeValue'); },
           });
         });
-        bindTouchSafeButtonActivation(composerContextConvertBtn, ({ startKeyboardOpen }) => {
-          openComposerContextConvertPicker({ keyboardAttached: startKeyboardOpen }).catch((error) => {
-            console.warn('[context-convert] composer picker open failed:', error.message);
-          });
-        });
-        msgInput.addEventListener('beforeinput', (e) => {
-          handleComposerCustomEmojiBeforeInput(e);
-        });
-        msgInput.addEventListener('keydown', (e) => {
-          if (handleMentionPickerKeydown(e)) return;
-          if (handleComposerCustomEmojiKeydown(e)) return;
-          if (e.key === 'Enter') {
-            if (sendByEnter && !e.shiftKey && !e.ctrlKey) { e.preventDefault(); sendMessage(); }
-            else if (!sendByEnter && e.ctrlKey) { e.preventDefault(); sendMessage(); }
-          }
-        });
-        msgInput.addEventListener('input', () => {
-          normalizeComposerInputValue();
-          saveComposerDraft(currentChatId);
-          autoResize();
-          syncMentionOpenButton();
-          window.BananzaVoiceHooks?.refreshComposerState?.();
-          updateComposerAiOverrideState().catch(() => {});
-          updateMentionPicker();
-          // Typing indicator
-          if (!composerStateController.typingSendTimeout) {
-            sendTyping();
-            composerStateController.typingSendTimeout = setTimeout(() => { composerStateController.typingSendTimeout = null; }, 2000);
-          }
-        });
-        msgInput.addEventListener('focus', () => {
-          clearTimeout(iosComposerBlurTimer);
-          iosComposerBlurTimer = null;
-          iosComposerFocused = true;
-          getIosViewportBaselineHeight();
-          queueIosViewportLayoutSync();
-        });
-        msgInput.addEventListener('blur', () => {
-          clearTimeout(iosComposerBlurTimer);
-          iosComposerBlurTimer = setTimeout(() => {
-            iosComposerFocused = false;
-            resetMobileKeyboardDock();
-            queueIosViewportLayoutSync();
-          }, 180);
-          requestAnimationFrame(() => queueIosViewportLayoutSync());
-        });
-        composerAiOverrideModeEl?.addEventListener('change', () => {
-          composerAiOverrideState.mode = composerAiOverrideModeEl.value || 'auto';
-          renderComposerAiOverride();
-        });
-        composerAiOverrideDocumentFormatEl?.addEventListener('change', () => {
-          composerAiOverrideState.documentFormat = composerAiOverrideDocumentFormatEl.value || 'md';
-          renderComposerAiOverride();
-        });
-        msgInput.addEventListener('click', () => {
-          snapComposerSelectionToCustomEmojiBoundary();
-          updateMentionPicker();
-        });
-        msgInput.addEventListener('keyup', (e) => {
-          snapComposerSelectionToCustomEmojiBoundary();
-          if (!['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(e.key)) updateMentionPicker();
-        });
-        window.visualViewport?.addEventListener('resize', () => {
-          const mentionPickerDismissed = dismissMentionPickerAfterKeyboardClose();
-          if (mentionPickerDismissed) forceMobileViewportLayoutSync();
-          positionEmojiPicker();
-          positionMentionPicker();
-          positionContextConvertPicker();
-          positionAvatarUserMenu(avatarUserMenuState?.anchor);
-          positionMessageActionSurfaces();
-          scheduleRetryLayout();
-          queueIosViewportLayoutSync();
-        });
-        window.visualViewport?.addEventListener('scroll', () => {
-          const mentionPickerDismissed = dismissMentionPickerAfterKeyboardClose();
-          if (mentionPickerDismissed) forceMobileViewportLayoutSync();
-          positionEmojiPicker();
-          positionMentionPicker();
-          positionContextConvertPicker();
-          positionAvatarUserMenu(avatarUserMenuState?.anchor);
-          positionMessageActionSurfaces();
-          queueIosViewportLayoutSync();
-        });
-        window.addEventListener('resize', () => {
-          positionEmojiPicker();
-          positionContextConvertPicker();
-          positionMessageActionSurfaces();
-          scheduleRetryLayout();
-          queueIosViewportLayoutSync();
-        });
-        document.addEventListener('pointerdown', (e) => {
-          const menu = $('#avatarUserMenu');
-          if (!menu || menu.classList.contains('hidden')) return;
-          if (menu.contains(e.target) || e.target.closest('.msg-group-avatar')) return;
-          hideAvatarUserMenu();
-        });
-        document.addEventListener('pointerdown', (e) => {
-          if (!messagePollRenderer?.getState?.().activePulseVoterPopover) return;
-          if (e.target.closest('[data-poll-voter-avatar], [data-poll-voter-more], [data-poll-voter-popover]')) return;
-          clearActivePulseVoterPopover();
-        });
-    
-        // File attach and poll composer
-        syncMentionOpenButton();
-        renderComposerAiOverride();
-        composerFilesController?.bindAttachMenuEvents?.({ openPollComposer: () => openPollComposer() });
-        pollComposerController?.bindPollComposerEvents?.();
-    
-        // Emoji
-        bindTouchSafeButtonActivation(emojiBtn, ({ keepKeyboardOpen }) => {
-          toggleEmojiPicker(emojiBtn, { keepKeyboardOpen });
-        });
-    
-        mediaViewerController?.bindEvents?.();
-    
-        reactionController?.bindEvents?.();
-    
-        contextMenusController?.bindEvents?.();
-    
-        folderUiController.bindEvents({ bindTouchSafeButtonActivation });
-    
-        (() => {
-          if (!chatFolderListSurface || !chatList || !sidebar) return;
-    
-          const state = {
-            tracking: false,
-            dragging: false,
-            switching: false,
-            touchId: null,
-            startX: 0,
-            startY: 0,
-            dx: 0,
-          };
-    
-          const clearTracking = () => {
-            state.tracking = false;
-            state.dragging = false;
-            state.touchId = null;
-            state.startX = 0;
-            state.startY = 0;
-            state.dx = 0;
-          };
-    
-          const getTrackedTouch = (touches) => {
-            if (!touches?.length) return null;
-            if (state.touchId == null) return touches[0] || null;
-            return Array.from(touches).find((touch) => Number(touch.identifier) === Number(state.touchId)) || null;
-          };
-    
-          const isAllowedStartTarget = (target) => {
-            if (!target || !chatFolderListSurface.contains(target)) return false;
-            return !target.closest('button, a, input, textarea, select, label, [contenteditable="true"], .chat-context-menu, .modal');
-          };
-    
-          const isSwipeAvailable = () => (
-            isMobileLayoutViewport()
-            && !sidebar.classList.contains('sidebar-hidden')
-            && !sidebar.classList.contains('mobile-scene-hidden')
-            && !isMobileViewportLayoutLocked()
-            && !state.switching
-            && !String(chatSearch?.value || '').trim()
-            && chatFolderStore.getFolders().length > 0
-            && getChatFolderPageRows().length > 1
-          );
-    
-          const dampEdgeOffset = (dx) => clamp(
-            Math.round(dx * CHAT_FOLDER_SWIPE_EDGE_DAMPING),
-            -CHAT_FOLDER_SWIPE_EDGE_MAX_PX,
-            CHAT_FOLDER_SWIPE_EDGE_MAX_PX
-          );
-    
-          const finishSwipeAsync = async (promise) => {
-            state.switching = true;
-            try {
-              await promise;
-            } catch (error) {
-              console.warn('Failed to swipe chat folder', error);
-              showCenterToast(error?.message || 'Could not open folder');
-              resetChatFolderSwipeSurface();
-            } finally {
-              clearTracking();
-              state.switching = false;
-            }
-          };
-    
-          chatFolderListSurface.addEventListener('touchstart', (e) => {
-            if (e.touches.length !== 1 || !isSwipeAvailable() || !isAllowedStartTarget(e.target)) return;
-            const touch = e.touches[0];
-            state.tracking = true;
-            state.dragging = false;
-            state.touchId = Number(touch.identifier);
-            state.startX = touch.clientX;
-            state.startY = touch.clientY;
-            state.dx = 0;
-          }, { passive: true });
-    
-          chatFolderListSurface.addEventListener('touchmove', (e) => {
-            if (!state.tracking || state.switching || e.touches.length !== 1) return;
-            const touch = getTrackedTouch(e.touches);
-            if (!touch) return;
-            const dx = touch.clientX - state.startX;
-            const dy = touch.clientY - state.startY;
-            const absX = Math.abs(dx);
-            const absY = Math.abs(dy);
-    
-            if (!state.dragging) {
-              if (absY > CHAT_FOLDER_SWIPE_START_PX && absY >= absX) {
-                clearTracking();
-                return;
-              }
-              if (absX <= CHAT_FOLDER_SWIPE_START_PX || absX <= absY + 4) return;
-              state.dragging = true;
-              clearChatContextLongPress();
-              resetChatFolderSwipeSurface();
-            }
-    
-            if (!isSwipeAvailable()) {
-              clearTracking();
-              resetChatFolderSwipeSurface();
-              return;
-            }
-    
-            state.dx = dx;
-            const direction = dx < 0 ? 1 : -1;
-            const adjacent = getAdjacentChatFolderPage(direction);
-            if (adjacent && canAnimateChatFolderSwipe()) {
-              const pager = prepareChatFolderSwipePager(direction, adjacent.id);
-              if (pager) setChatFolderSwipeOffset(pager.baseOffset + dx, 'dragging');
-            } else {
-              destroyChatFolderSwipePager();
-              if (canAnimateChatFolderSwipe()) setChatFolderSwipeOffset(adjacent ? dx : dampEdgeOffset(dx), 'dragging');
-            }
-            if (e.cancelable) e.preventDefault();
-          }, { passive: false });
-    
-          const finishGesture = (e) => {
-            if (!state.tracking) return;
-            const wasDragging = state.dragging;
-            const dx = state.dx;
-            clearTracking();
-    
-            if (!wasDragging) {
-              resetChatFolderSwipeSurface();
-              return;
-            }
-    
-            suppressNextChatItemTap();
-            if (e?.cancelable) e.preventDefault();
-    
-            const direction = dx < 0 ? 1 : -1;
-            const adjacent = getAdjacentChatFolderPage(direction);
-            const shouldSwitch = Boolean(adjacent && Math.abs(dx) >= getChatFolderSwipeCommitDistance());
-            const swipePromise = shouldSwitch
-              ? transitionToChatFolder(adjacent.id, { persist: true, swipeDirection: direction })
-              : snapChatFolderSwipeBack();
-            finishSwipeAsync(swipePromise);
-          };
-    
-          chatFolderListSurface.addEventListener('touchend', finishGesture, { passive: false });
-          chatFolderListSurface.addEventListener('touchcancel', () => {
-            if (!state.tracking) return;
-            const wasDragging = state.dragging;
-            clearTracking();
-            if (!wasDragging) {
-              resetChatFolderSwipeSurface();
-              return;
-            }
-            suppressNextChatItemTap();
-            finishSwipeAsync(snapChatFolderSwipeBack());
-          }, { passive: true });
-    
-          window.addEventListener('resize', () => {
-            if (!state.tracking && !state.switching) return;
-            clearTracking();
-            state.switching = false;
-            resetChatFolderSwipeSurface();
-          }, { passive: true });
-        })();
-    
-        (() => {
-          if (!chatList || !sidebar || !chatListPullIndicator || !chatListPullLabel) return;
-          chatListPullIndicator.classList.remove('hidden');
-          chatListPullIndicator.setAttribute('aria-hidden', 'true');
-    
-          const state = {
-            tracking: false,
-            engaged: false,
-            refreshing: false,
-            startY: 0,
-            offset: 0,
-          };
-          let resetPullUiTimer = null;
-    
-          const clearResetPullUiTimer = () => {
-            if (!resetPullUiTimer) return;
-            clearTimeout(resetPullUiTimer);
-            resetPullUiTimer = null;
-          };
-    
-          const setChatListPullLabel = (key) => {
-            chatListPullLabel.dataset.i18n = key;
-            chatListPullLabel.textContent = tx(key);
-          };
-          setChatListPullLabel('Pull to refresh');
-    
-          const isSidebarListPullAvailable = () => (
-            isMobileLayoutViewport()
-            && !sidebar.classList.contains('sidebar-hidden')
-            && !state.refreshing
-            && !chatListService.hasActiveChatListRequest()
-          );
-    
-          const positionChatListPullIndicator = () => {
-            const anchor = chatListPullIndicator.offsetParent || chatFolderListSurface || sidebar;
-            const anchorRect = anchor.getBoundingClientRect();
-            const listRect = chatList.getBoundingClientRect();
-            const chipRect = chatListPullIndicator.querySelector('.chat-list-pull-chip')?.getBoundingClientRect?.();
-            const chipHeight = Math.max(28, Math.round(chipRect?.height || 34));
-            const anchorHeight = Math.max(0, Math.round(anchor.clientHeight || anchorRect.height || 0));
-            const minTop = 6;
-            const listTop = Math.max(0, Math.round(listRect.top - anchorRect.top));
-            const gap = Math.max(0, state.offset);
-            const centeredInGap = listTop + Math.max(minTop, Math.round((gap - chipHeight) / 2));
-            const maxTop = anchorHeight > 0 ? Math.max(minTop, anchorHeight - chipHeight - minTop) : centeredInGap;
-            const top = Math.max(minTop, Math.min(maxTop, centeredInGap));
-            chatListPullIndicator.style.top = `${top}px`;
-          };
-    
-          const setChatListPullUi = (offset, { dragging = false, refreshing = false } = {}) => {
-            const ready = !refreshing && offset >= CHAT_LIST_PULL_THRESHOLD;
-            state.offset = Math.max(0, Math.round(offset));
-            clearResetPullUiTimer();
-            positionChatListPullIndicator();
-            chatList.style.transition = dragging ? 'none' : 'padding-top .18s cubic-bezier(.22, .84, .24, 1)';
-            chatList.style.paddingTop = `${state.offset}px`;
-            chatListPullIndicator.setAttribute('aria-hidden', 'false');
-            chatListPullIndicator.style.transform = 'translateY(0)';
-            sidebar.classList.toggle('is-chat-list-pull-visible', state.offset > 0 || refreshing);
-            sidebar.classList.toggle('is-chat-list-pull-ready', ready);
-            sidebar.classList.toggle('is-chat-list-refreshing', refreshing);
-            setChatListPullLabel(refreshing
-              ? 'Refreshing chats...'
-              : ready
-                ? 'Release to refresh'
-                : 'Pull to refresh');
-          };
-    
-          const resetChatListPullUi = ({ immediate = false } = {}) => {
-            clearResetPullUiTimer();
-            state.engaged = false;
-            state.offset = 0;
-            sidebar.classList.remove('is-chat-list-pull-ready');
-            if (immediate) {
-              sidebar.classList.remove('is-chat-list-pull-visible', 'is-chat-list-refreshing');
-              chatList.style.transition = '';
-              chatList.style.paddingTop = '';
-              chatListPullIndicator.style.transform = '';
-              chatListPullIndicator.setAttribute('aria-hidden', 'true');
-              setChatListPullLabel('Pull to refresh');
-              return;
-            }
-            chatList.style.transition = 'padding-top .18s cubic-bezier(.22, .84, .24, 1)';
-            chatList.style.paddingTop = '0px';
-            chatListPullIndicator.style.transform = '';
-            chatListPullIndicator.setAttribute('aria-hidden', 'true');
-            setChatListPullLabel('Pull to refresh');
-            resetPullUiTimer = setTimeout(() => {
-              if (state.tracking || state.refreshing) return;
-              sidebar.classList.remove('is-chat-list-pull-visible', 'is-chat-list-refreshing');
-              chatList.style.transition = '';
-              chatList.style.paddingTop = '';
-              resetPullUiTimer = null;
-            }, 190);
-          };
-    
-          const clearPullTracking = () => {
-            state.tracking = false;
-            state.startY = 0;
-          };
-    
-          const startChatListPullRefresh = async () => {
-            if (state.refreshing) return;
-            state.refreshing = true;
-            setChatListPullUi(CHAT_LIST_PULL_REFRESH_OFFSET, { refreshing: true });
-            setChatListPullLabel('Reloading app...');
-            requestAnimationFrame(() => {
-              setTimeout(() => {
-                window.location.reload();
-              }, 80);
-            });
-          };
-    
-          const dampPullDistance = (distance) => Math.min(CHAT_LIST_PULL_MAX_OFFSET, Math.round(distance * 0.62));
-    
-          chatList.addEventListener('touchstart', (e) => {
-            if (!isSidebarListPullAvailable() || e.touches.length !== 1) return;
-            if (chatList.scrollTop > 0) return;
-            state.tracking = true;
-            state.engaged = false;
-            state.startY = e.touches[0].clientY;
-            state.offset = 0;
-            positionChatListPullIndicator();
-          }, { passive: true });
-    
-          chatList.addEventListener('touchmove', (e) => {
-            if (!state.tracking || state.refreshing || e.touches.length !== 1) return;
-            const delta = e.touches[0].clientY - state.startY;
-            if (!state.engaged && delta <= CHAT_LIST_PULL_TRIGGER_PX) {
-              if (delta < 0) clearPullTracking();
-              return;
-            }
-            if (chatList.scrollTop > 0 || delta <= 0 || !isSidebarListPullAvailable()) {
-              clearPullTracking();
-              resetChatListPullUi({ immediate: true });
-              return;
-            }
-            state.engaged = true;
-            if (e.cancelable) e.preventDefault();
-            setChatListPullUi(dampPullDistance(delta), { dragging: true });
-          }, { passive: false });
-    
-          const handleChatListPullEnd = async () => {
-            if (!state.tracking) return;
-            const shouldRefresh = state.engaged && state.offset >= CHAT_LIST_PULL_THRESHOLD && !state.refreshing;
-            clearPullTracking();
-            if (shouldRefresh) {
-              await startChatListPullRefresh();
-              return;
-            }
-            resetChatListPullUi();
-          };
-    
-          chatList.addEventListener('touchend', () => {
-            handleChatListPullEnd().catch(() => {
-              state.refreshing = false;
-              resetChatListPullUi();
-            });
-          }, { passive: true });
-          chatList.addEventListener('touchcancel', () => {
-            clearPullTracking();
-            if (!state.refreshing) resetChatListPullUi();
-          }, { passive: true });
-    
-          const syncChatListPullLayout = () => {
-            if (!sidebar.classList.contains('is-chat-list-pull-visible') && !state.refreshing) return;
-            positionChatListPullIndicator();
-          };
-          window.addEventListener('resize', syncChatListPullLayout, { passive: true });
-          window.visualViewport?.addEventListener('resize', syncChatListPullLayout);
-          window.visualViewport?.addEventListener('scroll', syncChatListPullLayout);
-        })();
-    
-        // Sidebar search
-        setChatSearchOpen(false, { clear: true, focus: false, render: false });
-        chatSearchToggle?.addEventListener('click', () => {
-          if (isChatSearchOpen()) {
-            setChatSearchOpen(false, { clear: true, focus: true });
-            return;
-          }
-          setChatSearchOpen(true, { focus: true });
-        });
-        chatSearch.addEventListener('input', () => {
-          if (!isChatSearchOpen()) setChatSearchOpen(true);
-          renderChatList(chatSearch.value);
-        });
-        chatSearchClear?.addEventListener('click', () => {
-          setChatSearchOpen(false, { clear: true, focus: true });
-        });
-    
-        // Back button (mobile)
-        bindTouchSafeButtonActivation(backBtn, () => {
-          if (hasOpenModal()) {
-            closeTopModal();
-            return;
-          }
-          if (isSearchPanelOpen()) {
-            closeSearchPanel();
-            return;
-          }
-          if (searchController?.hasPopStateSkipPending?.()) {
-            queueSearchPanelPendingAction(() => {
-              navigateBackToChatList({ fromInAppButton: true });
-            });
-            return;
-          }
-          if (backBtn.__isNavigating) return;
-          const expectsHistoryPopstate = Boolean(history.state && history.state.chat);
-          const finishBackNavigation = () => {
-            navigateBackToChatList({ fromInAppButton: true });
-            clearTimeout(backBtn.__spinTimer);
-            backBtn.classList.remove('is-spinning');
-            if (expectsHistoryPopstate) {
-              deferBackButtonNavigationRelease();
-              return;
-            }
-            backBtn.__isNavigating = false;
-          };
-          backBtn.__isNavigating = true;
-          clearTimeout(backBtn.__navTimer);
-          if (prefersReducedMotion()) {
-            finishBackNavigation();
-            return;
-          }
-          animateBackButton();
-          backBtn.__navTimer = setTimeout(finishBackNavigation, 120);
-        });
-    
-        // Android back gesture / button
-        window.addEventListener('popstate', () => {
-          if (inAppChatBackSkipNextPopstate) {
-            inAppChatBackSkipNextPopstate = false;
-            searchController?.resetPopStateSkip?.();
-            mediaViewerController?.resetPopStateSkip?.();
-            iosBackNavigationToken = 0;
-            if (pendingMobileChatListHistoryNormalization) {
-              normalizeMobileChatListHistoryState();
-            }
-            resetBackButtonNavigationState();
-            return;
-          }
-          if (modalManager.handlePopState(null, { skipOnly: true })) return;
-          if (searchController?.handlePopStateSkip?.()) return;
-          if (mediaViewerController?.handlePopStateSkip?.()) return;
-          if (iosBackNavigationToken > 0) {
-            iosBackNavigationToken -= 1;
-            resetBackButtonNavigationState();
-            return;
-          }
-          resetBackButtonNavigationState();
-          if (isFloatingSurfaceVisible(chatFolderContextMenu)) {
-            hideChatFolderContextMenu();
-            return;
-          }
-          if (isFloatingSurfaceVisible(chatFolderPicker)) {
-            hideChatFolderPicker();
-            return;
-          }
-          if (isFloatingSurfaceVisible(chatContextMenu)) {
-            hideChatContextMenu();
-            return;
-          }
-          if (isFloatingSurfaceVisible(mediaContextMenu)) {
-            hideMediaContextMenu();
-            return;
-          }
-          if (modalManager.handlePopState()) return;
-          if (isSearchPanelOpen()) {
-            closeSearchPanel({ fromHistory: true });
-            return;
-          }
-          if (!imageViewer.classList.contains('hidden')) {
-            mediaViewerController?.closeMediaViewerFromHistory?.();
-            return;
-          }
-          if (isMobileLayoutViewport()) {
-            const resolvedScene = getResolvedMobileBaseScene();
-            if (resolvedScene === 'chat') {
-              revealSidebarFromChat({ forceAnimation: true });
-              normalizeMobileChatListHistoryState();
-              return;
-            }
-            if (pendingMobileChatListHistoryNormalization || isMobileChatHistoryState(history.state)) {
-              normalizeMobileChatListHistoryState();
-              return;
-            }
-            // Already on chat list \u2014 push state back to prevent exit
-            history.pushState({ view: 'chatlist' }, '');
-          }
-        });
-    
-        // New chat / folders
-        $('#newChatBtn').addEventListener('click', openNewChatModal);
-        // Create group
-        $('#createGroupBtn').addEventListener('click', async () => {
-          const name = $('#groupName').value.trim();
-          if (!name) { alert('Enter group name'); return; }
-          const selected = [...$$('#userListGroup .user-list-item.selected')].map(el => +el.dataset.uid);
-          try {
-            const chat = await api('/api/chats', { method: 'POST', body: { name, type: 'group', memberIds: selected } });
-            closeAllModals();
-            await loadChats();
-            openChat(chat.id);
-          } catch (e) { alert(e.message); }
-        });
-        newFolderTabController.bindEvents();
-        folderManageModalController.bindEvents();
-    
-        // Modal tabs
-        initNewChatTabSwipePager();
-        newChatModal.querySelectorAll('.modal-tab').forEach(tab => {
-          tab.addEventListener('click', () => {
-            const nextTab = normalizeNewChatModalTab(tab.dataset.tab);
-            const tabs = NEW_CHAT_MODAL_TABS;
-            const currentIndex = tabs.indexOf(getNewChatModalActiveTab());
-            const nextIndex = tabs.indexOf(nextTab);
-            setNewChatModalTab(nextTab, {
-              animate: true,
-              direction: nextIndex >= currentIndex ? 1 : -1,
-              source: 'tab',
-            });
-          });
-        });
-        const adminBotAuditCloseBtn = document.querySelector('#adminBotAuditModal .modal-close');
-        if (adminBotAuditCloseBtn) {
-          adminBotAuditCloseBtn.textContent = '\u2715';
-          adminBotAuditCloseBtn.setAttribute('aria-label', 'Close');
-          adminBotAuditCloseBtn.setAttribute('title', 'Close');
-        }
-    
-        // Modal close buttons
-        $$('.modal-close').forEach(btn => {
-          btn.addEventListener('click', (e) => {
-            const modal = e.currentTarget.closest('.modal');
-            if (!modal) return;
-            closeModal(modal.id);
-          });
-        });
-        $$('.modal').forEach(modal => {
-          modal.addEventListener('click', (e) => {
-            const entry = modalEntryOf(modal.id);
-            if (!entry?.closeOnBackdrop) return;
-            if (e.target === modal && getTopModal()?.id === modal.id) closeModal(modal.id);
-          });
-        });
-    
-        forwardingController?.bindEvents?.();
-    
-        // Settings controllers
-        settingsModalController.bindEvents({ bindTouchSafeButtonActivation });
-        weatherSettingsController.bindEvents({ bindAsyncActionButtons, withActionButtons });
-        notificationSettingsController.bindEvents({ bindAsyncActionButtons });
-        soundSettingsController.bindEvents();
-    
-        // Settings feature/admin buttons
-        $('#settingsAiBotsPanel')?.addEventListener('click', openAiBotSettingsModal);
-        $('#settingsYandexAiPanel')?.addEventListener('click', openYandexAiSettingsModal);
-        $('#settingsDeepSeekAiPanel')?.addEventListener('click', openDeepseekAiSettingsModal);
-        $('#settingsQwenAiPanel')?.addEventListener('click', openQwenAiSettingsModal);
-        $('#settingsGrokAiPanel')?.addEventListener('click', openGrokAiSettingsModal);
-        $('#settingsChangePassword').addEventListener('click', openChangePasswordModal);
-        $('#settingsAdminPanel').addEventListener('click', openAdminModal);
-        $('#settingsBackupPanel')?.addEventListener('click', openBackupExportModal);
-        bindAsyncActionButtons('backupExportDownloadBtn', null, 'Preparing backup...', downloadBackupExport);
-        bindAsyncActionButtons('backupRestorePreviewBtn', null, 'Validating backup...', previewBackupRestore);
-        bindAsyncActionButtons('backupRestoreApplyBtn', null, 'Applying restore...', applyBackupRestore);
-        $('#backupRestoreFilePickBtn')?.addEventListener('click', () => $('#backupRestoreFile')?.click());
-        $('#backupRestoreFile')?.addEventListener('change', () => resetBackupRestoreState({ clearFile: false }));
-        syncBackupRestoreFileName();
-    
-        grokImageRiskCancel?.addEventListener('click', () => {
-          closeModal('grokImageRiskConfirmModal');
-        });
-        grokImageRiskConfirm?.addEventListener('click', () => {
-          const resolve = grokImageRiskConfirmResolver;
-          grokImageRiskConfirmResolver = null;
-          closeModal('grokImageRiskConfirmModal');
-          if (typeof resolve === 'function') resolve(true);
-        });
-    
-        // AI bot admin settings
-        bindAsyncActionButtons('aiBotsSaveSettings', null, 'Saving...', saveAiBotSettings);
-        $('#aiBotsRefreshModels')?.addEventListener('click', () => {
-          if ($('#aiBotsRefreshModels')?.dataset.adminBusy === '1') return;
-          aiModelRefreshTriggeredByButton = true;
-          setAiModelStatus('\u0417\u0430\u0433\u0440\u0443\u0436\u0430\u044e \u043c\u043e\u0434\u0435\u043b\u0438...');
-          loadAiModelOptions(true).catch((e) => setAiModelStatus(e.message || '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u043c\u043e\u0434\u0435\u043b\u0438', 'error'));
-        });
-        bindAsyncActionButtons('aiBotsDeleteKey', null, 'Deleting...', deleteAiBotKey);
-        $('#openAiOpenTextBots')?.addEventListener('click', openOpenAiTextBotsModal);
-        $('#openAiOpenUniversalBots')?.addEventListener('click', openOpenAiUniversalBotsModal);
-        $('#openAiOpenImageBots')?.addEventListener('click', openOpenAiImageBotsModal);
-        $('#openAiOpenConvertBots')?.addEventListener('click', () => openContextConvertBotsModal('openai'));
-        $('#openAiOpenChatShotBots')?.addEventListener('click', () => openChatShotBotsModal('openai'));
-        $('#aiBotCreateNew')?.addEventListener('click', () => {
-          fillAiBotForm(null);
-          setAiBotStatus('\u041d\u043e\u0432\u044b\u0439 \u0431\u043e\u0442: \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u043f\u043e\u043b\u044f \u0438 \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u0435');
-        });
-        bindAsyncActionButtons(['aiBotSave', 'aiBotSaveBottom'], null, 'Saving...', saveAiBot);
-        bindAsyncActionButtons('aiBotDisable', null, 'Disabling...', disableAiBot);
-        bindAsyncActionButtons('aiBotTest', null, 'Testing...', testAiBot);
-        bindAsyncActionButtons('aiBotExportJson', null, 'Preparing...', exportAiBotJson);
-        $('#aiBotImportJson')?.addEventListener('click', () => $('#aiBotImportFile')?.click());
-        $('#aiBotImportFile')?.addEventListener('change', (event) => importAiBotJsonFile(event.target.files?.[0]));
-        $('#aiBotAvatarInput')?.addEventListener('change', (event) => uploadAiBotAvatar(event.target.files?.[0]));
-        bindAsyncActionButtons('removeAiBotAvatar', null, 'Removing...', removeAiBotAvatar);
-        $('#aiBotName')?.addEventListener('input', () => {
-          if (!currentAiBot()?.avatar_url) renderAiBotAvatar(currentAiBot());
-        });
-        $('#aiBotList')?.addEventListener('click', (e) => {
-          const btn = e.target.closest('.ai-bot-list-item');
-          if (!btn) return;
-          const bot = aiBotState.bots.find(item => item.id === Number(btn.dataset.botId));
-          if (bot) fillAiBotForm(bot);
-        });
-        $('#aiBotChatSelect')?.addEventListener('change', renderAiChatBotSettings);
-        $('#aiBotChatBotSelect')?.addEventListener('change', renderAiChatBotSettings);
-        bindAsyncActionButtons('aiBotChatSave', null, 'Saving...', saveAiChatBotSettings);
-        $('#openAiUniversalBotCreateNew')?.addEventListener('click', () => {
-          fillOpenAiUniversalBotForm(null);
-          setOpenAiUniversalStatus('New OpenAI universal bot: fill fields and save');
-        });
-        bindAsyncActionButtons(['openAiUniversalBotSave', 'openAiUniversalBotSaveBottom'], null, 'Saving...', saveOpenAiUniversalBot);
-        bindAsyncActionButtons('openAiUniversalBotDisable', null, 'Disabling...', disableOpenAiUniversalBot);
-        bindAsyncActionButtons('openAiUniversalBotTest', null, 'Testing...', testOpenAiUniversalBot);
-        bindAsyncActionButtons('openAiUniversalBotExportJson', null, 'Preparing...', exportOpenAiUniversalBotJson);
-        $('#openAiUniversalBotImportJson')?.addEventListener('click', () => $('#openAiUniversalBotImportFile')?.click());
-        $('#openAiUniversalBotImportFile')?.addEventListener('change', (event) => importOpenAiUniversalBotJsonFile(event.target.files?.[0]));
-        $('#openAiUniversalBotAvatarInput')?.addEventListener('change', (event) => uploadOpenAiUniversalBotAvatar(event.target.files?.[0]));
-        bindAsyncActionButtons('removeOpenAiUniversalBotAvatar', null, 'Removing...', removeOpenAiUniversalBotAvatar);
-        $('#openAiUniversalBotName')?.addEventListener('input', () => {
-          if (!currentOpenAiUniversalBot()?.avatar_url) renderOpenAiUniversalBotAvatar(currentOpenAiUniversalBot());
-        });
-        $('#openAiUniversalBotList')?.addEventListener('click', (e) => {
-          const btn = e.target.closest('.ai-bot-list-item');
-          if (!btn) return;
-          const bot = openAiUniversalState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
-          if (bot) fillOpenAiUniversalBotForm(bot);
-        });
-        $('#openAiUniversalBotChatSelect')?.addEventListener('change', renderOpenAiUniversalChatBotSettings);
-        $('#openAiUniversalBotChatBotSelect')?.addEventListener('change', renderOpenAiUniversalChatBotSettings);
-        bindAsyncActionButtons('openAiUniversalBotChatSave', null, 'Saving...', saveOpenAiUniversalChatBotSettings);
-        $('#openAiImageBotCreateNew')?.addEventListener('click', () => {
-          fillOpenAiImageBotForm(null);
-          setOpenAiImageStatus('New OpenAI image bot: fill fields and save');
-        });
-        bindAsyncActionButtons(['openAiImageBotSave', 'openAiImageBotSaveBottom'], null, 'Saving...', saveOpenAiImageBot);
-        bindAsyncActionButtons('openAiImageBotDisable', null, 'Disabling...', disableOpenAiImageBot);
-        bindAsyncActionButtons('openAiImageBotTest', null, 'Testing...', testOpenAiImageBot);
-        bindAsyncActionButtons('openAiImageBotExportJson', null, 'Preparing...', exportOpenAiImageBotJson);
-        $('#openAiImageBotImportJson')?.addEventListener('click', () => $('#openAiImageBotImportFile')?.click());
-        $('#openAiImageBotImportFile')?.addEventListener('change', (event) => importOpenAiImageBotJsonFile(event.target.files?.[0]));
-        $('#openAiImageBotAvatarInput')?.addEventListener('change', (event) => uploadOpenAiImageBotAvatar(event.target.files?.[0]));
-        bindAsyncActionButtons('removeOpenAiImageBotAvatar', null, 'Removing...', removeOpenAiImageBotAvatar);
-        $('#openAiImageBotName')?.addEventListener('input', () => {
-          if (!currentOpenAiImageBot()?.avatar_url) renderOpenAiImageBotAvatar(currentOpenAiImageBot());
-        });
-        $('#openAiImageBotList')?.addEventListener('click', (e) => {
-          const btn = e.target.closest('.ai-bot-list-item');
-          if (!btn) return;
-          const bot = openAiImageState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
-          if (bot) fillOpenAiImageBotForm(bot);
-        });
-        $('#openAiImageBotChatSelect')?.addEventListener('change', renderOpenAiImageChatBotSettings);
-        $('#openAiImageBotChatBotSelect')?.addEventListener('change', renderOpenAiImageChatBotSettings);
-        bindAsyncActionButtons('openAiImageBotChatSave', null, 'Saving...', saveOpenAiImageChatBotSettings);
-    
-        // Yandex AI bot admin settings
-        bindAsyncActionButtons('yandexAiSaveSettings', null, 'Saving...', saveYandexAiSettings);
-        bindAsyncActionButtons('yandexAiTestConnection', null, 'Testing...', testYandexAiConnection);
-        bindAsyncActionButtons('yandexAiRefreshModels', null, 'Refreshing...', refreshYandexAiModels);
-        bindAsyncActionButtons('yandexAiDeleteKey', null, 'Deleting...', deleteYandexAiKey);
-        $('#yandexAiOpenConvertBots')?.addEventListener('click', () => openContextConvertBotsModal('yandex'));
-        $('#yandexAiBotCreateNew')?.addEventListener('click', () => {
-          fillYandexBotForm(null);
-          setYandexBotStatus('New Yandex bot: fill fields and save');
-        });
-        bindAsyncActionButtons('yandexAiBotSave', null, 'Saving...', saveYandexBot);
-        bindAsyncActionButtons('yandexAiBotDisable', null, 'Disabling...', disableYandexBot);
-        bindAsyncActionButtons('yandexAiBotTest', null, 'Testing...', testYandexBot);
-        bindAsyncActionButtons('yandexAiBotExportJson', null, 'Preparing...', exportYandexBotJson);
-        $('#yandexAiBotImportJson')?.addEventListener('click', () => $('#yandexAiBotImportFile')?.click());
-        $('#yandexAiBotImportFile')?.addEventListener('change', (event) => importYandexBotJsonFile(event.target.files?.[0]));
-        $('#yandexAiBotAvatarInput')?.addEventListener('change', (event) => uploadYandexBotAvatar(event.target.files?.[0]));
-        bindAsyncActionButtons('removeYandexAiBotAvatar', null, 'Removing...', removeYandexBotAvatar);
-        $('#yandexAiBotName')?.addEventListener('input', () => {
-          if (!currentYandexBot()?.avatar_url) renderYandexBotAvatar(currentYandexBot());
-        });
-        $('#yandexAiBotList')?.addEventListener('click', (e) => {
-          const btn = e.target.closest('.ai-bot-list-item');
-          if (!btn) return;
-          const bot = yandexBotState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
-          if (bot) fillYandexBotForm(bot);
-        });
-        $('#yandexAiBotChatSelect')?.addEventListener('change', renderYandexChatBotSettings);
-        $('#yandexAiBotChatBotSelect')?.addEventListener('change', renderYandexChatBotSettings);
-        bindAsyncActionButtons('yandexAiBotChatSave', null, 'Saving...', saveYandexChatBotSettings);
-    
-        // DeepSeek AI bot admin settings
-        bindAsyncActionButtons('deepseekAiSaveSettings', null, 'Saving...', saveDeepseekAiSettings);
-        bindAsyncActionButtons('deepseekAiTestConnection', null, 'Testing...', testDeepseekAiConnection);
-        bindAsyncActionButtons('deepseekAiRefreshModels', null, 'Refreshing...', refreshDeepseekAiModels);
-        bindAsyncActionButtons('deepseekAiCheckBalance', null, 'Checking...', checkDeepseekAiBalance);
-        bindAsyncActionButtons('deepseekAiDeleteKey', null, 'Deleting...', deleteDeepseekAiKey);
-        $('#deepseekAiOpenTextBots')?.addEventListener('click', openDeepseekTextBotsModal);
-        $('#deepseekAiOpenConvertBots')?.addEventListener('click', () => openContextConvertBotsModal('deepseek'));
-        $('#deepseekAiBotCreateNew')?.addEventListener('click', () => {
-          fillDeepseekBotForm(null);
-          setDeepseekBotStatus('New DeepSeek bot: fill fields and save');
-        });
-        bindAsyncActionButtons('deepseekAiBotSave', null, 'Saving...', saveDeepseekBot);
-        bindAsyncActionButtons('deepseekAiBotDisable', null, 'Disabling...', disableDeepseekBot);
-        bindAsyncActionButtons('deepseekAiBotTest', null, 'Testing...', testDeepseekBot);
-        bindAsyncActionButtons('deepseekAiBotExportJson', null, 'Preparing...', exportDeepseekBotJson);
-        $('#deepseekAiBotImportJson')?.addEventListener('click', () => $('#deepseekAiBotImportFile')?.click());
-        $('#deepseekAiBotImportFile')?.addEventListener('change', (event) => importDeepseekBotJsonFile(event.target.files?.[0]));
-        $('#deepseekAiBotAvatarInput')?.addEventListener('change', (event) => uploadDeepseekBotAvatar(event.target.files?.[0]));
-        bindAsyncActionButtons('removeDeepseekAiBotAvatar', null, 'Removing...', removeDeepseekBotAvatar);
-        $('#deepseekAiBotName')?.addEventListener('input', () => {
-          if (!currentDeepseekBot()?.avatar_url) renderDeepseekBotAvatar(currentDeepseekBot());
-        });
-        $('#deepseekAiBotList')?.addEventListener('click', (e) => {
-          const btn = e.target.closest('.ai-bot-list-item');
-          if (!btn) return;
-          const bot = deepseekBotState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
-          if (bot) fillDeepseekBotForm(bot);
-        });
-        $('#deepseekAiBotChatSelect')?.addEventListener('change', renderDeepseekChatBotSettings);
-        $('#deepseekAiBotChatBotSelect')?.addEventListener('change', renderDeepseekChatBotSettings);
-        bindAsyncActionButtons('deepseekAiBotChatSave', null, 'Saving...', saveDeepseekChatBotSettings);
-    
-        // Qwen AI bot admin settings
-        bindAsyncActionButtons('qwenAiSaveSettings', null, 'Saving...', saveQwenAiSettings);
-        bindAsyncActionButtons('qwenAiTestConnection', null, 'Testing...', testQwenAiConnection);
-        bindAsyncActionButtons('qwenAiRefreshModels', null, 'Refreshing...', refreshQwenAiModels);
-        bindAsyncActionButtons('qwenAiDeleteKey', null, 'Deleting...', deleteQwenAiKey);
-        $('#qwenAiOpenTextBots')?.addEventListener('click', openQwenTextBotsModal);
-        $('#qwenAiOpenConvertBots')?.addEventListener('click', () => openContextConvertBotsModal('qwen'));
-        $('#qwenAiBotCreateNew')?.addEventListener('click', () => {
-          fillQwenBotForm(null);
-          setQwenBotStatus('New Qwen bot: fill fields and save');
-        });
-        bindAsyncActionButtons('qwenAiBotSave', null, 'Saving...', saveQwenBot);
-        bindAsyncActionButtons('qwenAiBotDisable', null, 'Disabling...', disableQwenBot);
-        bindAsyncActionButtons('qwenAiBotTest', null, 'Testing...', testQwenBot);
-        bindAsyncActionButtons('qwenAiBotExportJson', null, 'Preparing...', exportQwenBotJson);
-        $('#qwenAiBotImportJson')?.addEventListener('click', () => $('#qwenAiBotImportFile')?.click());
-        $('#qwenAiBotImportFile')?.addEventListener('change', (event) => importQwenBotJsonFile(event.target.files?.[0]));
-        $('#qwenAiBotAvatarInput')?.addEventListener('change', (event) => uploadQwenBotAvatar(event.target.files?.[0]));
-        bindAsyncActionButtons('removeQwenAiBotAvatar', null, 'Removing...', removeQwenBotAvatar);
-        $('#qwenAiBotName')?.addEventListener('input', () => {
-          if (!currentQwenBot()?.avatar_url) renderQwenBotAvatar(currentQwenBot());
-        });
-        $('#qwenAiBotList')?.addEventListener('click', (e) => {
-          const btn = e.target.closest('.ai-bot-list-item');
-          if (!btn) return;
-          const bot = qwenBotState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
-          if (bot) fillQwenBotForm(bot);
-        });
-        $('#qwenAiBotChatSelect')?.addEventListener('change', renderQwenChatBotSettings);
-        $('#qwenAiBotChatBotSelect')?.addEventListener('change', renderQwenChatBotSettings);
-        bindAsyncActionButtons('qwenAiBotChatSave', null, 'Saving...', saveQwenChatBotSettings);
-    
-        // Grok AI bot admin settings
-        bindAsyncActionButtons('grokAiSaveSettings', null, 'Saving...', saveGrokAiSettings);
-        bindAsyncActionButtons('grokAiTestConnection', null, 'Testing...', testGrokAiConnection);
-        bindAsyncActionButtons('grokAiRefreshModels', null, 'Refreshing...', refreshGrokAiModels);
-        bindAsyncActionButtons('grokAiDeleteKey', null, 'Deleting...', deleteGrokAiKey);
-        $('#grokAiOpenTextBots')?.addEventListener('click', openGrokTextBotsModal);
-        $('#grokAiOpenImageBots')?.addEventListener('click', openGrokImageBotsModal);
-        $('#grokAiOpenUniversalBots')?.addEventListener('click', openGrokUniversalBotsModal);
-        $('#grokAiOpenConvertBots')?.addEventListener('click', () => openContextConvertBotsModal('grok'));
-        $('#grokAiOpenChatShotBots')?.addEventListener('click', () => openChatShotBotsModal('grok'));
-        $('#grokAiBotCreateNew')?.addEventListener('click', () => {
-          fillGrokBotForm(null);
-          setGrokTextEditorStatus('New Grok text bot: fill fields and save');
-        });
-        bindAsyncActionButtons(['grokAiBotSave', 'grokAiBotSaveBottom'], null, 'Saving...', saveGrokBot);
-        bindAsyncActionButtons('grokAiBotDisable', null, 'Disabling...', () => disableGrokBot('text'));
-        bindAsyncActionButtons('grokAiBotTest', null, 'Testing...', () => testGrokBot('text'));
-        bindAsyncActionButtons('grokAiBotExportJson', null, 'Preparing...', () => exportGrokBotJson('text'));
-        $('#grokAiBotImportJson')?.addEventListener('click', () => $('#grokAiBotImportFile')?.click());
-        $('#grokAiBotImportFile')?.addEventListener('change', (event) => importGrokBotJsonFile(event.target.files?.[0], 'text'));
-        $('#grokAiBotAvatarInput')?.addEventListener('change', (event) => uploadGrokBotAvatar(event.target.files?.[0], 'text'));
-        bindAsyncActionButtons('removeGrokAiBotAvatar', null, 'Removing...', () => removeGrokBotAvatar('text'));
-        $('#grokAiBotName')?.addEventListener('input', () => {
-          if (!currentGrokBot()?.avatar_url) renderGrokBotAvatar(currentGrokBot());
-        });
-        [
-          'grokAiBotName',
-          'grokAiBotMention',
-          'grokAiBotEnabled',
-          'grokAiBotResponseModel',
-          'grokAiBotSummaryModel',
-          'grokAiBotTemperature',
-          'grokAiBotMaxTokens',
-          'grokAiBotStyle',
-          'grokAiBotTone',
-          'grokAiBotRules',
-          'grokAiBotSpeech',
-        ].forEach((id) => {
-          $(id)?.addEventListener('input', refreshGrokTextBotDirtyState);
-          $(id)?.addEventListener('change', refreshGrokTextBotDirtyState);
-        });
-        $('#grokAiBotList')?.addEventListener('click', (e) => {
-          const btn = e.target.closest('.ai-bot-list-item');
-          if (!btn) return;
-          const bot = grokBotState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
-          if (bot) fillGrokBotForm(bot);
-        });
-        $('#grokAiBotChatSelect')?.addEventListener('change', renderGrokChatBotSettings);
-        $('#grokAiBotChatBotSelect')?.addEventListener('change', renderGrokChatBotSettings);
-        bindAsyncActionButtons('grokAiBotChatSave', null, 'Saving...', saveGrokChatBotSettings);
-    
-        $('#grokAiImageBotCreateNew')?.addEventListener('click', () => {
-          fillGrokImageBotForm(null);
-          setGrokImageEditorStatus('New Grok image bot: fill fields and save');
-        });
-        bindAsyncActionButtons('grokAiImageBotSave', null, 'Saving...', saveGrokImageBot);
-        bindAsyncActionButtons('grokAiImageBotDisable', null, 'Disabling...', () => disableGrokBot('image'));
-        bindAsyncActionButtons('grokAiImageBotTest', null, 'Testing...', () => testGrokBot('image'));
-        bindAsyncActionButtons('grokAiImageBotExportJson', null, 'Preparing...', () => exportGrokBotJson('image'));
-        $('#grokAiImageBotImportJson')?.addEventListener('click', () => $('#grokAiImageBotImportFile')?.click());
-        $('#grokAiImageBotImportFile')?.addEventListener('change', (event) => importGrokBotJsonFile(event.target.files?.[0], 'image'));
-        $('#grokAiImageBotAvatarInput')?.addEventListener('change', (event) => uploadGrokBotAvatar(event.target.files?.[0], 'image'));
-        bindAsyncActionButtons('removeGrokAiImageBotAvatar', null, 'Removing...', () => removeGrokBotAvatar('image'));
-        $('#grokAiImageBotName')?.addEventListener('input', () => {
-          if (!currentGrokImageBot()?.avatar_url) renderGrokImageBotAvatar(currentGrokImageBot());
-        });
-        $('#grokAiImageBotList')?.addEventListener('click', (e) => {
-          const btn = e.target.closest('.ai-bot-list-item');
-          if (!btn) return;
-          const bot = grokBotState.imageBots.find(item => Number(item.id) === Number(btn.dataset.botId));
-          if (bot) fillGrokImageBotForm(bot);
-        });
-        $('#grokAiImageBotChatSelect')?.addEventListener('change', renderGrokImageChatBotSettings);
-        $('#grokAiImageBotChatBotSelect')?.addEventListener('change', renderGrokImageChatBotSettings);
-        bindAsyncActionButtons('grokAiImageBotChatSave', null, 'Saving...', saveGrokImageChatBotSettings);
-        $('#grokAiUniversalBotCreateNew')?.addEventListener('click', () => {
-          fillGrokUniversalBotForm(null);
-          setGrokUniversalEditorStatus('New Grok universal bot: fill fields and save');
-        });
-        bindAsyncActionButtons('grokAiUniversalBotSave', null, 'Saving...', saveGrokUniversalBot);
-        bindAsyncActionButtons('grokAiUniversalBotDisable', null, 'Disabling...', disableGrokUniversalBot);
-        bindAsyncActionButtons('grokAiUniversalBotTest', null, 'Testing...', testGrokUniversalBot);
-        bindAsyncActionButtons('grokAiUniversalBotExportJson', null, 'Preparing...', exportGrokUniversalBotJson);
-        $('#grokAiUniversalBotImportJson')?.addEventListener('click', () => $('#grokAiUniversalBotImportFile')?.click());
-        $('#grokAiUniversalBotImportFile')?.addEventListener('change', (event) => importGrokUniversalBotJsonFile(event.target.files?.[0]));
-        $('#grokAiUniversalBotAvatarInput')?.addEventListener('change', (event) => uploadGrokUniversalBotAvatar(event.target.files?.[0]));
-        bindAsyncActionButtons('removeGrokAiUniversalBotAvatar', null, 'Removing...', removeGrokUniversalBotAvatar);
-        $('#grokAiUniversalBotName')?.addEventListener('input', () => {
-          if (!currentGrokUniversalBot()?.avatar_url) renderGrokUniversalBotAvatar(currentGrokUniversalBot());
-        });
-        $('#grokAiUniversalBotList')?.addEventListener('click', (e) => {
-          const btn = e.target.closest('.ai-bot-list-item');
-          if (!btn) return;
-          const bot = grokUniversalState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
-          if (bot) fillGrokUniversalBotForm(bot);
-        });
-        $('#grokAiUniversalBotChatSelect')?.addEventListener('change', renderGrokUniversalChatBotSettings);
-        $('#grokAiUniversalBotChatBotSelect')?.addEventListener('change', renderGrokUniversalChatBotSettings);
-        bindAsyncActionButtons('grokAiUniversalBotChatSave', null, 'Saving...', saveGrokUniversalChatBotSettings);
-        $('#contextConvertBotCreateNew')?.addEventListener('click', () => {
-          selectedContextConvertBotIds[activeContextConvertProvider] = null;
-          renderContextConvertAdminSettings();
-          setContextConvertBotStatus('New convert bot: fill fields and save');
-          setContextConvertChatStatus('');
-        });
-        bindAsyncActionButtons(['contextConvertBotSave', 'contextConvertBotSaveBottom'], null, 'Saving...', saveContextConvertAdminBot);
-        bindAsyncActionButtons('contextConvertBotDisable', null, 'Disabling...', disableContextConvertAdminBot);
-        bindAsyncActionButtons('contextConvertBotTest', null, 'Testing...', testContextConvertAdminBot);
-        bindAsyncActionButtons('contextConvertBotExportJson', null, 'Preparing...', exportContextConvertAdminBot);
-        $('#contextConvertBotEnabled')?.addEventListener('change', (event) => {
-          const allChatsToggle = $('#contextConvertBotAvailableAllChats');
-          if (allChatsToggle) allChatsToggle.disabled = !event.target.checked;
-        });
-        $('#contextConvertBotImportJson')?.addEventListener('click', () => $('#contextConvertBotImportFile')?.click());
-        $('#contextConvertBotImportFile')?.addEventListener('change', (event) => {
-          importContextConvertAdminBot(event.target.files?.[0]);
-          event.target.value = '';
-        });
-        $('#contextConvertBotList')?.addEventListener('click', (e) => {
-          const btn = e.target.closest('[data-context-convert-bot-id]');
-          if (!btn) return;
-          selectedContextConvertBotIds[activeContextConvertProvider] = Number(btn.dataset.contextConvertBotId || 0) || null;
-          renderContextConvertAdminSettings();
-          setContextConvertBotStatus('');
-          setContextConvertChatStatus('');
-        });
-        $('#contextConvertBotChatSelect')?.addEventListener('change', renderContextConvertChatSettings);
-        $('#contextConvertBotChatBotSelect')?.addEventListener('change', renderContextConvertChatSettings);
-        bindAsyncActionButtons('contextConvertBotChatSave', null, 'Saving...', saveContextConvertAdminChatSetting);
-        $('#chatShotBotCreateNew')?.addEventListener('click', () => {
-          selectedChatShotBotIds[activeChatShotProvider] = null;
-          renderChatShotAdminSettings();
-          setChatShotBotStatus('New ChatShot bot: fill fields and save');
-          setChatShotAdminChatStatus('');
-        });
-        bindAsyncActionButtons(['chatShotBotSave', 'chatShotBotSaveBottom'], null, 'Saving...', saveChatShotAdminBot);
-        bindAsyncActionButtons('chatShotBotDisable', null, 'Disabling...', disableChatShotAdminBot);
-        bindAsyncActionButtons('chatShotBotTest', null, 'Testing...', testChatShotAdminBot);
-        bindAsyncActionButtons('chatShotBotExportJson', null, 'Preparing...', exportChatShotAdminBot);
-        $('#chatShotBotEnabled')?.addEventListener('change', (event) => {
-          const allChatsToggle = $('#chatShotBotAvailableAllChats');
-          if (allChatsToggle) allChatsToggle.disabled = !event.target.checked;
-        });
-        $('#chatShotBotImportJson')?.addEventListener('click', () => $('#chatShotBotImportFile')?.click());
-        $('#chatShotBotImportFile')?.addEventListener('change', (event) => {
-          importChatShotAdminBot(event.target.files?.[0]);
-          event.target.value = '';
-        });
-        $('#chatShotBotList')?.addEventListener('click', (e) => {
-          const btn = e.target.closest('[data-chat-shot-bot-id]');
-          if (!btn) return;
-          selectedChatShotBotIds[activeChatShotProvider] = Number(btn.dataset.chatShotBotId || 0) || null;
-          renderChatShotAdminSettings();
-          setChatShotBotStatus('');
-          setChatShotAdminChatStatus('');
-        });
-        $('#chatShotBotChatSelect')?.addEventListener('change', renderChatShotAdminChatSettings);
-        $('#chatShotBotChatBotSelect')?.addEventListener('change', renderChatShotAdminChatSettings);
-        bindAsyncActionButtons('chatShotBotChatSave', null, 'Saving...', saveChatShotAdminChatSetting);
-    
-        // Change password save
-        $('#cpSaveBtn').addEventListener('click', async () => {
-          await withActionButtons('cpSaveBtn', 'Saving...', async () => {
-            const cpErr = $('#cpError');
-            const cpOk = $('#cpSuccess');
-            cpErr.textContent = '';
-            cpOk.textContent = '';
-            const oldPass = $('#cpOldPass').value;
-            const newPass = $('#cpNewPass').value;
-            const confirmPass = $('#cpNewPassConfirm').value;
-            if (!oldPass || !newPass) { cpErr.textContent = 'Fill in all fields'; return; }
-            if (newPass !== confirmPass) { cpErr.textContent = 'New passwords do not match'; return; }
-            if (newPass.length < 6) { cpErr.textContent = 'Password must be at least 6 characters'; return; }
-            try {
-              await api('/api/profile/change-password', { method: 'POST', body: { oldPassword: oldPass, newPassword: newPass } });
-              cpOk.textContent = 'Password changed successfully!';
-              resetChangePasswordFields();
-            } catch (e) { cpErr.textContent = e.message; }
-          });
-        });
-    
-        // Menu button
-        bindTouchSafeButtonActivation($('#menuBtn'), () => openMenuDrawer($('#menuBtn')));
-    
-        // Chat header actions
-        bindTouchSafeButtonActivation(chatInfoBtn, () => {
-          animateChatHeaderActionButton(chatInfoBtn);
-          toggleChatHeaderActions();
-        });
-        bindTouchSafeButtonActivation(chatSettingsActionBtn, () => {
-          closeChatHeaderActions();
-          animateChatHeaderActionButton(chatSettingsActionBtn);
-          openChatInfoModal(chatSettingsActionBtn);
-        });
-        bindTouchSafeButtonActivation(chatShotBtn, () => {
-          closeChatHeaderActions();
-          animateChatHeaderActionButton(chatShotBtn);
-          runChatShotGeneration();
-        });
-    
-        // Compact view toggle (per-chat)
-        $('#compactViewToggle').addEventListener('change', (e) => {
-          compactView = e.target.checked;
-          if (currentChatId) {
-            if (compactView) compactViewMap[currentChatId] = true;
-            else delete compactViewMap[currentChatId];
-            localStorage.setItem('compactViewMap', JSON.stringify(compactViewMap));
-          }
-          messagesEl.classList.toggle('compact-view', compactView);
-          // Re-render
-          if (currentChatId) openChat(currentChatId);
-        });
-        $('#chatNotifyToggle')?.addEventListener('change', () => saveChatPreferences());
-        $('#chatSoundToggle')?.addEventListener('change', () => saveChatPreferences());
-        $('#chatAllowUnpinAnyPinToggle')?.addEventListener('change', () => saveChatPinSettings());
-    
-        // Logout
-        $('#profileLogoutBtn')?.addEventListener('click', () => { if (confirm('Logout?')) logout(); });
-    
-        // Load more
-        loadMoreBtn.addEventListener('click', loadMore);
-        const keepScrollBottomButtonKeyboardState = (e) => {
-          if (!shouldPreserveKeyboardForScrollBottomGesture(e)) return;
-          e.preventDefault();
-        };
-        const activateScrollBottomFromGesture = (e) => {
-          if (Date.now() < scrollBottomFollowupClickSuppressUntil) {
-            e.preventDefault?.();
-            return;
-          }
-          if (!shouldPreserveKeyboardForScrollBottomGesture(e)) return;
-          suppressScrollBottomFollowupClick();
-          activateScrollBottomButton();
-          e.preventDefault();
-          e.stopPropagation();
-        };
-        scrollBottomBtn?.addEventListener('pointerdown', keepScrollBottomButtonKeyboardState, { passive: false });
-        scrollBottomBtn?.addEventListener('pointerup', activateScrollBottomFromGesture, { passive: false });
-        scrollBottomBtn?.addEventListener('touchstart', keepScrollBottomButtonKeyboardState, { passive: false });
-        scrollBottomBtn?.addEventListener('touchend', activateScrollBottomFromGesture, { passive: false });
-        scrollBottomBtn?.addEventListener('click', (e) => {
-          if (Date.now() < scrollBottomFollowupClickSuppressUntil) {
-            e.preventDefault();
-            e.stopPropagation();
-            return;
-          }
-          activateScrollBottomButton();
-        });
-        messagesEl.addEventListener('wheel', noteMessageScrollUserIntent, { passive: true });
-        messagesEl.addEventListener('touchmove', noteMessageScrollUserIntent, { passive: true });
-    
-        // Scroll to load more
-        messagesEl.addEventListener('scroll', () => {
-          hideAvatarUserMenu();
-          hideFloatingMessageActions({ immediate: true });
-          if (contextConvertPickerState.active && contextConvertPickerState.mode === 'message') hideContextConvertPicker();
-          else positionContextConvertPicker();
-          cancelPendingMediaBottomScrollIfNeeded();
-          if (!scrollController.isScrollAnchorSaveSuppressed() && !openChatController.isLoadingMore() && !openChatController.isLoadingMoreAfter()) scheduleScrollAnchorSave();
-          scheduleScrollDateIndicatorUpdate({ show: true });
-          maybeLoadMoreAtTop();
-          maybeLoadMoreAtBottom();
-          if (!scrollController.isScrollAnchorSaveSuppressed() && isNearBottom(8)) markCurrentChatReadIfAtBottom();
-          updateScrollBottomButton();
-        });
-    
-        document.addEventListener('pointerdown', dismissEmojiPickerOutsideGesture, { passive: true, capture: true });
-    
-        // Reply bar close
-        bindTouchSafeButtonActivation($('#replyBarClose'), ({ event, startKeyboardOpen }) => {
-          event?.stopPropagation?.();
-          const keepComposerFocus = Boolean(startKeyboardOpen || isMobileComposerKeyboardOpen());
-          if (composerStateController.editTo) clearEdit({ clearInput: true });
-          else clearReply();
-          if (keepComposerFocus) focusComposerKeepKeyboard(true);
-        });
-    
-        searchController?.bindEvents?.({ bindTouchSafeButtonActivation, closeChatHeaderActions, animateChatHeaderActionButton });
-    
-        // Drag & drop
-        composerTypingDragDropController?.bindDragDropEvents?.(chatView);
-    
-        // Escape key
-        document.addEventListener('keydown', (e) => {
-          if (e.key === 'Escape') {
-            if (contextConvertPickerState.active) {
-              e.preventDefault();
-              hideContextConvertPicker();
-              return;
-            }
-            if (isFloatingSurfaceVisible(chatFolderContextMenu)) {
-              e.preventDefault();
-              hideChatFolderContextMenu();
-              return;
-            }
-            if (isFloatingSurfaceVisible(chatFolderPicker)) {
-              e.preventDefault();
-              hideChatFolderPicker();
-              return;
-            }
-            if (isFloatingSurfaceVisible(chatContextMenu)) {
-              e.preventDefault();
-              hideChatContextMenu();
-              return;
-            }
-            if (isFloatingSurfaceVisible(mediaContextMenu)) {
-              e.preventDefault();
-              hideMediaContextMenu();
-              return;
-            }
-            if (hasOpenModal()) {
-              e.preventDefault();
-              closeTopModal();
-              return;
-            }
-            if (isSearchPanelOpen()) {
-              e.preventDefault();
-              closeSearchPanel();
-              return;
-            }
-            if (chatHeaderActionsOpen) {
-              e.preventDefault();
-              closeChatHeaderActions();
-              focusElementIfPossible(chatInfoBtn);
-              return;
-            }
-            if (isChatSearchOpen()) {
-              e.preventDefault();
-              setChatSearchOpen(false, { clear: true, focus: true });
-              return;
-            }
-            hideAvatarUserMenu();
-            clearReply();
-          }
+
+        return new Proxy(scope, {
+          has() { return true; },
+          get(target, key) {
+            if (key === Symbol.unscopables) return undefined;
+            if (Object.prototype.hasOwnProperty.call(target, key)) return target[key];
+            if (typeof key === 'string' && key in window) return window[key];
+            return undefined;
+          },
+          set(target, key, value) {
+            target[key] = value;
+            return true;
+          },
         });
       }
+
+      let shellEventController = null;
+      const setupEvents = () => {
+        if (!shellEventController) {
+          shellEventController = window.BananzaApp?.shell?.createEventController?.({
+            scope: createLegacyEventScope(),
+          }) || null;
+        }
+        return shellEventController?.bindAll?.();
+      };
+
     
       // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
       // INIT
