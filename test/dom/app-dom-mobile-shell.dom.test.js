@@ -174,6 +174,61 @@ test('BananzaApp.dom exposes selectors and current DOM refs', () => {
   });
 });
 
+test('legacy ui runtime calls getComputedStyle with the window receiver through proxy scope', () => {
+  const dom = createAppDom();
+  loadAppRuntimeScripts(dom);
+  const { window } = dom;
+  const sidebar = window.document.getElementById('sidebar');
+  let calls = 0;
+
+  Object.defineProperty(window, 'getComputedStyle', {
+    configurable: true,
+    value(el) {
+      assert.equal(this, window);
+      assert.equal(el, sidebar);
+      calls += 1;
+      return {
+        transitionDuration: '0.12s, 75ms',
+        transitionDelay: '10ms, 0s',
+      };
+    },
+  });
+
+  const scopeTarget = Object.assign(Object.create(null), {
+    authService: {
+      configure() {},
+      getToken() {
+        return '';
+      },
+      checkAuth() {
+        return false;
+      },
+      logout() {},
+    },
+  });
+  const scope = new Proxy(scopeTarget, {
+    has() {
+      return true;
+    },
+    get(target, key) {
+      if (key === Symbol.unscopables) return undefined;
+      if (Object.prototype.hasOwnProperty.call(target, key)) return target[key];
+      if (key === 'window') return window;
+      if (key === 'document') return window.document;
+      if (typeof key === 'string' && key in window) return window[key];
+      return undefined;
+    },
+    set(target, key, value) {
+      target[key] = value;
+      return true;
+    },
+  });
+
+  const api = window.BananzaApp.shell.legacyUiRuntime.createLegacyUiRuntime(scope);
+  assert.equal(api.getElementTransitionTotalMs(sidebar), 130);
+  assert.equal(calls, 1);
+});
+
 test('android bridge helper no-ops without bridge and posts matching payloads with bridge', () => {
   const dom = createAppDom();
   loadAppRuntimeScripts(dom);

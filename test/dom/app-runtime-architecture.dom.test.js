@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { repoRoot } = require('../support/paths');
+const LEGACY_RUNTIME_LINE_LIMIT = 3200;
 
 function readRelative(filePath) {
   return fs.readFileSync(path.join(repoRoot, filePath), 'utf8');
@@ -62,6 +63,7 @@ test('boot scripts are explicit and load before runtime entrypoint', () => {
     '/js/app/boot/api.js',
     '/js/app/boot/auth.js',
     '/js/app/boot/websocket.js',
+    '/js/app/boot/ws-dispatch.js',
     '/js/app/boot/events.js',
     '/js/app/boot/public-bridge.js',
     '/js/app/boot/chat-list-service.js',
@@ -90,8 +92,59 @@ test('new boot modules stay small and keep legacy debt isolated', () => {
   for (const file of files) {
     if (file === 'legacy-runtime.js') continue;
     const source = readRelative(`public/js/app/boot/${file}`);
-    assert.ok(lineCount(source) < 250, `${file} should stay below 250 lines`);
-    assert.doesNotMatch(source, /\bCHAT LIST\b|\bMESSAGES\b|\bEVENT LISTENERS\b/);
+    const maxLines = file === 'ws-dispatch.js' ? 950 : 250;
+    assert.ok(lineCount(source) < maxLines, `${file} should stay below ${maxLines} lines`);
+    if (file !== 'ws-dispatch.js') {
+      assert.doesNotMatch(source, /\bCHAT LIST\b|\bMESSAGES\b|\bEVENT LISTENERS\b/);
+    }
+  }
+});
+
+test('legacy runtime no longer owns extracted shell and websocket sections', () => {
+  const legacy = readRelative('public/js/app/boot/legacy-runtime.js');
+  const indexHtml = readRelative('public/index.html');
+  const scripts = [...indexHtml.matchAll(/<script\s+src="([^"]+)"/g)].map((match) => match[1]);
+  const legacyIndex = scripts.findIndex((src) => src.startsWith('/js/app/boot/legacy-runtime.js'));
+  const extractedRuntimeScripts = [
+    '/js/app/shell/ui-runtime.js',
+    '/js/app/shell/shell-runtime.js',
+    '/js/app/boot/ws-dispatch.js',
+  ];
+  const extractedRuntimeLimits = {
+    'public/js/app/shell/ui-runtime.js': 2900,
+    'public/js/app/shell/shell-runtime.js': 1450,
+    'public/js/app/boot/ws-dispatch.js': 950,
+  };
+
+  assert.ok(lineCount(legacy) < LEGACY_RUNTIME_LINE_LIMIT, `legacy-runtime.js line count ${lineCount(legacy)} should stay below ${LEGACY_RUNTIME_LINE_LIMIT}`);
+  assert.notEqual(legacyIndex, -1, 'legacy-runtime.js script must be present');
+
+  for (const script of extractedRuntimeScripts) {
+    const scriptIndex = scripts.findIndex((src) => src.startsWith(script));
+    assert.notEqual(scriptIndex, -1, `${script} script must be present`);
+    assert.ok(scriptIndex < legacyIndex, `${script} must load before legacy-runtime.js`);
+    const filePath = `public${script}`;
+    const source = readRelative(filePath);
+    assert.ok(lineCount(source) < extractedRuntimeLimits[filePath], `${filePath} should stay below ${extractedRuntimeLimits[filePath]} lines`);
+  }
+
+  const forbiddenLegacySections = [
+    /\bUTILS\b/,
+    /\bWEBSOCKET\b/,
+    /\bSIDEBAR RESIZE\b/,
+    /\bMODALS\b/,
+    /\bAUTO RESIZE TEXTAREA\b/,
+    /\bEVENT LISTENERS\b/,
+    /\bfunction\s+handleWSMessage\b/,
+    /\bfunction\s+openNewChatModal\b/,
+    /\bfunction\s+openChatInfoModal\b/,
+    /\bfunction\s+setupProfileEvents\b/,
+    /\bfunction\s+autoResize\b/,
+    /\bfunction\s+createLegacyEventScope\b/,
+  ];
+
+  for (const pattern of forbiddenLegacySections) {
+    assert.doesNotMatch(legacy, pattern, `legacy-runtime.js must not contain extracted legacy section ${pattern}`);
   }
 });
 
@@ -110,7 +163,7 @@ test('ai admin provider ownership stays out of legacy runtime', () => {
     '/js/app/ai-admin/grok-image-risk-runtime.js',
   ];
 
-  assert.ok(lineCount(legacy) < 8200, `legacy-runtime.js line count ${lineCount(legacy)} should stay below 8200`);
+  assert.ok(lineCount(legacy) < LEGACY_RUNTIME_LINE_LIMIT, `legacy-runtime.js line count ${lineCount(legacy)} should stay below ${LEGACY_RUNTIME_LINE_LIMIT}`);
   assert.notEqual(legacyIndex, -1, 'legacy-runtime.js script must be present');
   assert.notEqual(aiControllerIndex, -1, 'ai admin controller script must be present');
 
@@ -144,20 +197,24 @@ test('core auth api and websocket ownership lives in boot modules', () => {
   const api = readRelative('public/js/app/boot/api.js');
   const auth = readRelative('public/js/app/boot/auth.js');
   const websocket = readRelative('public/js/app/boot/websocket.js');
+  const wsDispatch = readRelative('public/js/app/boot/ws-dispatch.js');
 
-  assert.ok(lineCount(legacy) < 16650, `legacy-runtime.js line count ${lineCount(legacy)} should keep trending down`);
+  assert.ok(lineCount(legacy) < LEGACY_RUNTIME_LINE_LIMIT, `legacy-runtime.js line count ${lineCount(legacy)} should keep trending down`);
   assert.doesNotMatch(legacy, /\basync\s+function\s+api\b|\bfunction\s+api\b/);
   assert.doesNotMatch(legacy, /\bfunction\s+checkAuth\b/);
   assert.doesNotMatch(legacy, /\bfunction\s+logout\b/);
   assert.doesNotMatch(legacy, /\bfunction\s+connectWS\b/);
+  assert.doesNotMatch(legacy, /authService\.configure/);
+  assert.doesNotMatch(legacy, /websocketService\.configure/);
   assert.match(legacy, /coreApiService\.request/);
-  assert.match(legacy, /authService\.configure/);
-  assert.match(legacy, /websocketService\.configure/);
 
   assert.match(api, /\basync\s+function\s+request\b/);
+  assert.match(auth, /\bfunction\s+configure\b/);
   assert.match(auth, /\bfunction\s+checkAuth\b/);
   assert.match(auth, /\bfunction\s+logout\b/);
+  assert.match(websocket, /\bfunction\s+configure\b/);
   assert.match(websocket, /\bfunction\s+connect\b/);
+  assert.match(wsDispatch, /websocketService\.configure/);
 });
 
 test('chat list state and presence ownership lives behind boot service', () => {
@@ -165,7 +222,7 @@ test('chat list state and presence ownership lives behind boot service', () => {
   const chatListService = readRelative('public/js/app/boot/chat-list-service.js');
   const state = readRelative('public/js/app/boot/state.js');
 
-  assert.ok(lineCount(legacy) < 16550, `legacy-runtime.js line count ${lineCount(legacy)} should stay below 16550`);
+  assert.ok(lineCount(legacy) < LEGACY_RUNTIME_LINE_LIMIT, `legacy-runtime.js line count ${lineCount(legacy)} should stay below ${LEGACY_RUNTIME_LINE_LIMIT}`);
   assert.match(chatListService, /createChatListService/);
   assert.match(chatListService, /setOnlineUsers/);
   assert.match(state, /syncChatListStore/);
@@ -183,7 +240,7 @@ test('open chat pagination and scroll ownership lives behind open-chat service',
   const openChatController = readRelative('public/js/app/open-chat/controller.js');
   const state = readRelative('public/js/app/boot/state.js');
 
-  assert.ok(lineCount(legacy) < 16370, `legacy-runtime.js line count ${lineCount(legacy)} should stay below 16370`);
+  assert.ok(lineCount(legacy) < LEGACY_RUNTIME_LINE_LIMIT, `legacy-runtime.js line count ${lineCount(legacy)} should stay below ${LEGACY_RUNTIME_LINE_LIMIT}`);
   assert.match(openChatService, /createOpenChatService/);
   assert.match(openChatService, /scrollToBottom/);
   assert.match(openChatService, /loadMoreAfter/);
@@ -208,7 +265,7 @@ test('message rendering update and outbox ownership lives behind messages servic
   const messagesService = readRelative('public/js/app/boot/messages-service.js');
   const state = readRelative('public/js/app/boot/state.js');
 
-  assert.ok(lineCount(legacy) < 15850, `legacy-runtime.js line count ${lineCount(legacy)} should keep trending down`);
+  assert.ok(lineCount(legacy) < LEGACY_RUNTIME_LINE_LIMIT, `legacy-runtime.js line count ${lineCount(legacy)} should keep trending down`);
   assert.match(messagesService, /createMessagesService/);
   assert.match(messagesService, /replaceRenderedMessages/);
   assert.match(messagesService, /appendMessage/);
