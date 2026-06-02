@@ -6,6 +6,8 @@ const path = require('path');
 const {
   createAppDom,
   installVisualViewportMock,
+  loadAppAdminScripts,
+  loadAppAiAdminScripts,
   loadAppRuntimeScripts,
   loadAppScript,
   loadBrowserScript,
@@ -25,6 +27,8 @@ function loadAiAdminRuntime({ risk = null } = {}) {
   if (risk) dom.window.BananzaAiImageRisk = risk;
   dom.window.HTMLAnchorElement.prototype.click = function click() {};
   loadAppRuntimeScripts(dom);
+  loadAppAdminScripts(dom);
+  loadAppAiAdminScripts(dom);
   return dom;
 }
 

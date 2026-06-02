@@ -5,77 +5,124 @@
 
   compositionRoot.composeAdminSettings = function composeAdminSettings(scope = {}) {
     with (scope) {
-      const adminBotAuditFactory = window.BananzaApp?.admin?.botAudit?.createBotAuditController;
-      const adminBackupFactory = window.BananzaApp?.admin?.backup?.createBackupController;
-      const adminUsersFactory = window.BananzaApp?.admin?.users?.createAdminUsersController;
-      if (typeof adminBotAuditFactory !== 'function'
-        || typeof adminBackupFactory !== 'function'
-        || typeof adminUsersFactory !== 'function') {
-        throw new Error('BananzaApp admin modules are required before app.js');
-      }
-      const adminBotAuditController = adminBotAuditFactory({
-        document,
-        $,
-        api: (url, opts) => api(url, opts),
-        esc,
-        avatarHtml,
-        formatDate,
-        formatTime,
-        openModal: (id, options = {}) => openModal(id, options),
-      });
-      const adminBackupController = adminBackupFactory({
-        document,
-        window,
-        $,
-        api: (url, opts) => api(url, opts),
-        fetch: (url, opts) => window.fetch(url, opts),
-        openModal: (id, options = {}) => openModal(id, options),
-        getTopModal: () => getTopModal(),
-        setInlineStatus: (id, message, type = '') => setInlineStatus(id, message, type),
-        tx,
-        esc,
-        formatSize,
-        filenameFromContentDisposition,
-        getCurrentUser: () => currentUser,
-        getToken: () => token,
-        onRestoreApplied: () => {
-          websocketService.clearReconnectTimer?.();
-          localStorage.removeItem('token');
-          localStorage.removeItem('user');
-          token = null;
-          currentUser = null;
-          if (ws) {
-            try { ws.onclose = null; ws.close(1012, 'Backup restore'); } catch (e) {}
-            ws = null;
-          }
-          syncCoreStateToRuntime();
-          setTimeout(() => {
-            location.href = '/login.html';
-          }, 900);
-        },
-      });
-      const adminUsersController = adminUsersFactory({
-        document,
-        $,
-        api: (url, opts) => api(url, opts),
-        openModal: (id, options = {}) => openModal(id, options),
-        getTopModal: () => getTopModal(),
-        getOnlineUsers: () => onlineUsers,
-        avatarHtml,
-        esc,
-        formatDate,
-        formatTime,
-        alert: (message) => alert(message),
-        confirm: (message) => confirm(message),
-        openAdminBotAuditModal: (userId, displayName) => openAdminBotAuditModal(userId, displayName),
-      });
-      if (appContext) {
-        appContext.services.admin = {
-          users: adminUsersController,
-          botAudit: adminBotAuditController,
-          backup: adminBackupController,
+      let resolvedAdminControllers = null;
+      let adminControllerLoadPromise = null;
+
+      function readAdminFactories() {
+        const adminRoot = window.BananzaApp?.admin || {};
+        const factories = {
+          botAudit: adminRoot.botAudit?.createBotAuditController,
+          backup: adminRoot.backup?.createBackupController,
+          users: adminRoot.users?.createAdminUsersController,
         };
+        if (typeof factories.botAudit !== 'function'
+          || typeof factories.backup !== 'function'
+          || typeof factories.users !== 'function') {
+          throw new Error('BananzaApp admin modules are not loaded');
+        }
+        return factories;
       }
+
+      async function ensureAdminControllers() {
+        if (resolvedAdminControllers) return resolvedAdminControllers;
+        if (adminControllerLoadPromise) return adminControllerLoadPromise;
+        adminControllerLoadPromise = (async () => {
+          if (!window.BananzaApp?.admin?.users && window.BananzaApp?.featureLoader?.loadFeature) {
+            await window.BananzaApp.featureLoader.loadFeature('admin');
+          }
+          const factories = readAdminFactories();
+          const adminBotAuditController = factories.botAudit({
+            document,
+            $,
+            api: (url, opts) => api(url, opts),
+            esc,
+            avatarHtml,
+            formatDate,
+            formatTime,
+            openModal: (id, options = {}) => openModal(id, options),
+          });
+          const adminBackupController = factories.backup({
+            document,
+            window,
+            $,
+            api: (url, opts) => api(url, opts),
+            fetch: (url, opts) => window.fetch(url, opts),
+            openModal: (id, options = {}) => openModal(id, options),
+            getTopModal: () => getTopModal(),
+            setInlineStatus: (id, message, type = '') => setInlineStatus(id, message, type),
+            tx,
+            esc,
+            formatSize,
+            filenameFromContentDisposition,
+            getCurrentUser: () => currentUser,
+            getToken: () => token,
+            onRestoreApplied: () => {
+              websocketService.clearReconnectTimer?.();
+              localStorage.removeItem('token');
+              localStorage.removeItem('user');
+              token = null;
+              currentUser = null;
+              if (ws) {
+                try { ws.onclose = null; ws.close(1012, 'Backup restore'); } catch (e) {}
+                ws = null;
+              }
+              syncCoreStateToRuntime();
+              setTimeout(() => {
+                location.href = '/login.html';
+              }, 900);
+            },
+          });
+          const adminUsersController = factories.users({
+            document,
+            $,
+            api: (url, opts) => api(url, opts),
+            openModal: (id, options = {}) => openModal(id, options),
+            getTopModal: () => getTopModal(),
+            getOnlineUsers: () => onlineUsers,
+            avatarHtml,
+            esc,
+            formatDate,
+            formatTime,
+            alert: (message) => alert(message),
+            confirm: (message) => confirm(message),
+            openAdminBotAuditModal: (userId, displayName) => openAdminBotAuditModal(userId, displayName),
+          });
+          resolvedAdminControllers = {
+            users: adminUsersController,
+            botAudit: adminBotAuditController,
+            backup: adminBackupController,
+          };
+          if (appContext) appContext.services.admin = resolvedAdminControllers;
+          return resolvedAdminControllers;
+        })().finally(() => {
+          adminControllerLoadPromise = null;
+        });
+        return adminControllerLoadPromise;
+      }
+
+      const adminBotAuditFactory = () => readAdminFactories().botAudit;
+      const adminBackupFactory = () => readAdminFactories().backup;
+      const adminUsersFactory = () => readAdminFactories().users;
+      const adminBotAuditController = {
+        formatBotAuditSource: (source) => window.BananzaApp?.admin?.botAudit?.formatBotAuditSource?.(source) || String(source || 'Unknown'),
+        openAdminBotAuditModal: async (userId, displayName = 'User') => (await ensureAdminControllers()).botAudit.openAdminBotAuditModal(userId, displayName),
+      };
+      const adminBackupController = {
+        setBackupExportStatus: (message, type = '') => setInlineStatus('backupExportStatus', message, type),
+        setBackupRestoreStatus: (message, type = '') => setInlineStatus('backupRestoreStatus', message, type),
+        syncBackupRestoreFileName: () => resolvedAdminControllers?.backup?.syncBackupRestoreFileName?.(),
+        resetBackupRestoreState: (options = {}) => resolvedAdminControllers?.backup?.resetBackupRestoreState?.(options),
+        renderBackupRestorePreview: (data = {}) => resolvedAdminControllers?.backup?.renderBackupRestorePreview?.(data),
+        openBackupExportModal: async () => (await ensureAdminControllers()).backup.openBackupExportModal(),
+        downloadBackupExport: async () => (await ensureAdminControllers()).backup.downloadBackupExport(),
+        previewBackupRestore: async () => (await ensureAdminControllers()).backup.previewBackupRestore(),
+        applyBackupRestore: async () => (await ensureAdminControllers()).backup.applyBackupRestore(),
+      };
+      const adminUsersController = {
+        renderAdminUserRow: (user) => resolvedAdminControllers?.users?.renderAdminUserRow?.(user) || '',
+        refreshAdminUserStatuses: () => resolvedAdminControllers?.users?.refreshAdminUserStatuses?.(),
+        openAdminModal: async () => (await ensureAdminControllers()).users.openAdminModal(),
+      };
     
       const uiSettingsFactory = window.BananzaApp?.settings?.ui?.createUiSettings;
       const weatherSettingsFactory = window.BananzaApp?.settings?.weather?.createWeatherSettings;

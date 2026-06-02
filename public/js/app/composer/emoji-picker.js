@@ -47,7 +47,11 @@
     const RECENT_EMOJI_LIMIT = 32;
     const RECENT_EMOJI_STORAGE_PREFIX = 'bananza:recentEmojis:v1';
     let recentEmojis = [];
+    let recentEmojiLoadPromise = null;
+    let emojiPickerInitialized = false;
     const recentEmojiServerRejected = new Set();
+    const recentEmojiServerSynced = new Set();
+    const recentEmojiServerSyncing = new Set();
 
     const CUSTOM_EMOJI_CATALOGS = customEmoji.CUSTOM_EMOJI_CATALOGS || [];
     const getCustomEmoji = customEmoji.getCustomEmoji || (() => null);
@@ -230,7 +234,7 @@
     function syncMissingRecentEmojisToServer(list, serverList = []) {
       const serverSet = new Set(normalizeRecentEmojiList(serverList));
       const missing = normalizeRecentEmojiList(list)
-        .filter((emoji) => !serverSet.has(emoji) && !recentEmojiServerRejected.has(emoji));
+        .filter((emoji) => !serverSet.has(emoji) && !recentEmojiServerRejected.has(emoji) && !recentEmojiServerSynced.has(emoji));
       if (!missing.length) return;
       missing.slice().reverse().forEach((emoji) => {
         syncRecentEmojiToServer(emoji, 'backfill');
@@ -243,8 +247,15 @@
 
     function syncRecentEmojiToServer(emoji, reason) {
       const value = normalizeRecentEmojiValue(emoji);
-      if (!value || recentEmojiServerRejected.has(value)) return Promise.resolve(null);
+      if (!value || recentEmojiServerRejected.has(value) || recentEmojiServerSynced.has(value) || recentEmojiServerSyncing.has(value)) {
+        return Promise.resolve(null);
+      }
+      recentEmojiServerSyncing.add(value);
       return api('/api/user/recent-emojis', { method: 'POST', body: { emoji: value } })
+        .then((data) => {
+          recentEmojiServerSynced.add(value);
+          return data;
+        })
         .catch((error) => {
           if (isInvalidRecentEmojiApiError(error)) {
             recentEmojiServerRejected.add(value);
@@ -252,6 +263,9 @@
           }
           console.warn(`[emoji] recent ${reason} failed:`, error);
           return null;
+        })
+        .finally(() => {
+          recentEmojiServerSyncing.delete(value);
         });
     }
 
@@ -266,19 +280,25 @@
         });
     }
 
-    async function loadRecentEmojis() {
-      const localRecent = loadLocalRecentEmojis();
-      if (localRecent.length) applyRecentEmojis(localRecent, { persist: false });
-      try {
-        const data = await api('/api/user/recent-emojis');
-        const serverRecent = normalizeRecentEmojiList(data?.emojis || []);
-        const merged = mergeRecentEmojiLists(localRecent, serverRecent);
-        applyRecentEmojis(merged);
-        syncMissingRecentEmojisToServer(merged, serverRecent);
-      } catch (error) {
-        console.warn('[emoji] recent load failed:', error);
-        applyRecentEmojis(localRecent);
-      }
+    function loadRecentEmojis() {
+      if (recentEmojiLoadPromise) return recentEmojiLoadPromise;
+      recentEmojiLoadPromise = (async () => {
+        const localRecent = loadLocalRecentEmojis();
+        if (localRecent.length) applyRecentEmojis(localRecent, { persist: false });
+        try {
+          const data = await api('/api/user/recent-emojis');
+          const serverRecent = normalizeRecentEmojiList(data?.emojis || []);
+          const merged = mergeRecentEmojiLists(localRecent, serverRecent);
+          applyRecentEmojis(merged);
+          syncMissingRecentEmojisToServer(merged, serverRecent);
+        } catch (error) {
+          console.warn('[emoji] recent load failed:', error);
+          applyRecentEmojis(localRecent);
+        }
+      })().finally(() => {
+        recentEmojiLoadPromise = null;
+      });
+      return recentEmojiLoadPromise;
     }
 
     function shouldKeepEmojiPickerKeyboard() {
@@ -318,9 +338,14 @@
       return true;
     }
 
-    function initEmojiPicker() {
+    function initEmojiPicker(options = {}) {
+      const force = Boolean(objectOrDefault(options).force);
       const emojiPicker = dom.emojiPicker;
-      if (!emojiPicker) return;
+      if (!emojiPicker) return false;
+      if (emojiPickerInitialized && !force) {
+        syncEmojiPickerButton();
+        return true;
+      }
       const cats = getEmojiPickerCategories();
       let html = '<div class="emoji-tabs">';
       cats.forEach((cat, index) => {
@@ -353,7 +378,8 @@
         },
       });
 
-      if (emojiPicker.__composerEmojiPickerBound) return;
+      emojiPickerInitialized = true;
+      if (emojiPicker.__composerEmojiPickerBound) return true;
       emojiPicker.__composerEmojiPickerBound = true;
       const isEmojiPickerScrollSurface = (target) => Boolean(
         target instanceof win.Element
@@ -419,6 +445,17 @@
           }
         }
       });
+      return true;
+    }
+
+    function ensureEmojiPickerInitialized({ loadRecent = true } = {}) {
+      if (!emojiPickerInitialized) {
+        const localRecent = loadLocalRecentEmojis();
+        if (localRecent.length) applyRecentEmojis(localRecent, { persist: false });
+      }
+      const initialized = initEmojiPicker();
+      if (loadRecent) loadRecentEmojis().catch(() => {});
+      return initialized;
     }
 
     function syncEmojiPickerButton() {
@@ -477,6 +514,7 @@
     }
 
     function openEmojiPicker(anchorEl = dom.emojiBtn, { keepKeyboardOpen } = {}) {
+      ensureEmojiPickerInitialized();
       if (!(dom.emojiPicker instanceof win.HTMLElement)) return false;
       const keyboardAttached = typeof keepKeyboardOpen === 'boolean'
         ? keepKeyboardOpen
@@ -563,6 +601,7 @@
       renderEmojiPickerGrid,
       setEmojiPickerCategory,
       initEmojiPicker,
+      ensureEmojiPickerInitialized,
       syncEmojiPickerButton,
       positionEmojiPicker,
       openEmojiPicker,

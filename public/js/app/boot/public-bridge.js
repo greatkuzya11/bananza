@@ -255,6 +255,13 @@
           },
         }),
         getMobileKeyboardDockSnapshot: () => mobileComposerGuard?.getMobileKeyboardDockSnapshot?.() || {},
+        getPerformanceSummary: () => window.BananzaApp?.performance?.getSummary?.() || { marks: {}, measures: {}, entries: [] },
+        resetPerformanceMarks: () => window.BananzaApp?.performance?.resetForTests?.(),
+        getFeatureLoaderState: () => window.BananzaApp?.featureLoader?.getRegisteredFeatures?.() || [],
+        loadFeatureForTest: (name) => window.BananzaApp?.featureLoader?.loadFeature?.(name),
+        preloadFeatureForTest: (name) => window.BananzaApp?.featureLoader?.preloadFeature?.(name),
+        preloadByStrategyForTest: (strategy) => window.BananzaApp?.featureLoader?.preloadByStrategy?.(strategy),
+        installAiAdminRuntimeModulesForTest: () => installAiAdminRuntimeModules(),
       });
     
       weatherSettingsController.bindWidget();

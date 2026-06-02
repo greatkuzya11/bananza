@@ -214,6 +214,43 @@
           },
         })?.bindEvents?.();
 
+        const preloadFeaturePack = (featureNames) => {
+          const loader = window.BananzaApp?.featureLoader;
+          if (!loader?.preloadFeature) return;
+          const names = Array.isArray(featureNames) ? featureNames : [featureNames];
+          names.filter(Boolean).forEach((featureName) => {
+            loader.preloadFeature(featureName).catch((error) => {
+              console.warn(`[feature-loader] ${featureName} preload failed:`, error?.message || error);
+            });
+          });
+        };
+
+        const bindFeaturePreload = (target, featureNames) => {
+          if (!target) return;
+          const names = (Array.isArray(featureNames) ? featureNames : [featureNames]).filter(Boolean);
+          if (!names.length) return;
+          target.__bananzaFeaturePreloadBound = target.__bananzaFeaturePreloadBound || new Set();
+          const pendingNames = names.filter((name) => !target.__bananzaFeaturePreloadBound.has(name));
+          if (!pendingNames.length) return;
+          pendingNames.forEach((name) => target.__bananzaFeaturePreloadBound.add(name));
+          let started = false;
+          const start = () => {
+            if (started) return;
+            started = true;
+            preloadFeaturePack(pendingNames);
+          };
+          target.addEventListener('pointerenter', start, { passive: true });
+          target.addEventListener('pointerdown', start, { passive: true });
+          target.addEventListener('touchstart', start, { passive: true });
+          target.addEventListener('focus', start);
+        };
+
+        bindFeaturePreload($('#settingsBtn'), 'settings');
+        bindFeaturePreload(searchBtn, 'search');
+        bindFeaturePreload(chatSearchToggle, 'search');
+        bindFeaturePreload(chatShotBtn, 'context-chatshot-runtime');
+        bindFeaturePreload(composerContextConvertBtn, 'context-chatshot-runtime');
+
         // Sidebar search
         setChatSearchOpen(false, { clear: true, focus: false, render: false });
         chatSearchToggle?.addEventListener('click', () => {
@@ -396,9 +433,38 @@
         soundSettingsController.bindEvents();
     
         // Settings feature/admin buttons
+        const bindLazyAiAdminPanel = (id, handler, runtimePacks = []) => {
+          const button = document.getElementById(id);
+          if (!button || button.dataset.bananzaAiAdminPanelBound === '1') return;
+          button.dataset.bananzaAiAdminPanelBound = '1';
+          bindFeaturePreload(button, ['ai-admin-ui', 'ai-admin-events', ...runtimePacks]);
+          button.addEventListener('click', () => {
+            const result = handler?.();
+            if (result && typeof result.catch === 'function') {
+              result.catch((error) => console.error('AI admin action failed', error));
+            }
+          });
+        };
+        const bindAiAdminAvailabilityToggle = (enabledId, availabilityId) => {
+          const enabledToggle = document.getElementById(enabledId);
+          const availabilityToggle = document.getElementById(availabilityId);
+          if (!enabledToggle || !availabilityToggle) return;
+          enabledToggle.addEventListener('change', () => {
+            availabilityToggle.disabled = !enabledToggle.checked;
+          });
+        };
         $('#settingsChangePassword').addEventListener('click', openChangePasswordModal);
+        bindFeaturePreload($('#settingsAdminPanel'), 'admin');
+        bindFeaturePreload($('#settingsBackupPanel'), 'admin');
         $('#settingsAdminPanel').addEventListener('click', openAdminModal);
         $('#settingsBackupPanel')?.addEventListener('click', openBackupExportModal);
+        bindLazyAiAdminPanel('settingsAiBotsPanel', openAiBotSettingsModal, ['openai-runtime']);
+        bindLazyAiAdminPanel('settingsYandexAiPanel', openYandexAiSettingsModal, ['local-providers-runtime']);
+        bindLazyAiAdminPanel('settingsDeepSeekAiPanel', openDeepseekAiSettingsModal, ['local-providers-runtime']);
+        bindLazyAiAdminPanel('settingsQwenAiPanel', openQwenAiSettingsModal, ['local-providers-runtime']);
+        bindLazyAiAdminPanel('settingsGrokAiPanel', openGrokAiSettingsModal, ['grok-runtime']);
+        bindAiAdminAvailabilityToggle('contextConvertBotEnabled', 'contextConvertBotAvailableAllChats');
+        bindAiAdminAvailabilityToggle('chatShotBotEnabled', 'chatShotBotAvailableAllChats');
         bindAsyncActionButtons('backupExportDownloadBtn', null, 'Preparing backup...', downloadBackupExport);
         bindAsyncActionButtons('backupRestorePreviewBtn', null, 'Validating backup...', previewBackupRestore);
         bindAsyncActionButtons('backupRestoreApplyBtn', null, 'Applying restore...', applyBackupRestore);

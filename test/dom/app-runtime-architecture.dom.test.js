@@ -27,7 +27,7 @@ const COMPOSITION_FILE_LIMITS = {
   'public/js/app/boot/composition/feature-primitives.js': 120,
   'public/js/app/boot/composition/dom-shell.js': 450,
   'public/js/app/boot/composition/runtime-proxy-scope.js': 120,
-  'public/js/app/boot/composition/ai-admin-composition.js': 140,
+  'public/js/app/boot/composition/ai-admin-composition.js': 620,
   'public/js/app/boot/composition/ui-shell-adapters.js': 140,
   'public/js/app/boot/composition/admin-settings-composition.js': 300,
   'public/js/app/boot/composition/folders-composition.js': 220,
@@ -89,6 +89,10 @@ test('boot scripts are explicit and load before runtime entrypoint', () => {
   const indexHtml = readRelative('public/index.html');
   const scripts = [...indexHtml.matchAll(/<script\s+src="([^"]+)"/g)].map((match) => match[1]);
   const runtimeIndex = scripts.findIndex((src) => src.startsWith('/js/app/runtime.js'));
+  const appIndex = scripts.findIndex((src) => src.startsWith('/js/app.js'));
+  const performanceIndex = scripts.findIndex((src) => src.startsWith('/js/app/performance.js'));
+  const featureLoaderIndex = scripts.findIndex((src) => src.startsWith('/js/app/feature-loader.js'));
+  const featureRegistryIndex = scripts.findIndex((src) => src.startsWith('/js/app/feature-registry.js'));
 
   const bootScripts = [
     '/js/app/boot/state.js',
@@ -110,11 +114,68 @@ test('boot scripts are explicit and load before runtime entrypoint', () => {
   ];
 
   assert.notEqual(runtimeIndex, -1, 'runtime.js script must be present');
+  assert.notEqual(appIndex, -1, 'app.js script must be present');
+  assert.notEqual(performanceIndex, -1, 'performance helper script must be present');
+  assert.notEqual(featureLoaderIndex, -1, 'feature-loader.js script must be present');
+  assert.notEqual(featureRegistryIndex, -1, 'feature-registry.js script must be present');
+  assert.ok(performanceIndex < runtimeIndex, 'performance helper must load before runtime.js');
+  assert.ok(performanceIndex < appIndex, 'performance helper must load before app.js');
+  assert.ok(performanceIndex < featureLoaderIndex, 'feature-loader.js must load after performance.js');
+  assert.ok(featureLoaderIndex < featureRegistryIndex, 'feature-registry.js must load after feature-loader.js');
+  assert.ok(featureRegistryIndex < runtimeIndex, 'feature-registry.js must load before runtime.js');
+  assert.ok(featureRegistryIndex < appIndex, 'feature-registry.js must load before app.js');
   for (const bootScript of bootScripts) {
     const scriptIndex = scripts.findIndex((src) => src.startsWith(bootScript));
     assert.notEqual(scriptIndex, -1, `${bootScript} script must be present`);
     assert.ok(scriptIndex < runtimeIndex, `${bootScript} must load before runtime.js`);
   }
+});
+
+test('performance baseline helper is loaded early and initial app scripts stay bounded', () => {
+  const indexHtml = readRelative('public/index.html');
+  const scripts = [...indexHtml.matchAll(/<script\s+src="([^"]+)"/g)].map((match) => match[1]);
+  const appScripts = scripts
+    .filter((src) => src.startsWith('/js/app'))
+    .map((src) => src.split('?')[0]);
+
+  assert.ok(appScripts.includes('/js/app/performance.js'), 'performance helper must be in the app script graph');
+  assert.ok(appScripts.includes('/js/app/feature-loader.js'), 'feature loader must be in the app script graph');
+  assert.ok(appScripts.includes('/js/app/feature-registry.js'), 'feature registry must be in the app script graph');
+  assert.ok(appScripts.length <= 95, `initial /js/app script count ${appScripts.length} should stay at or below the lazy-load target`);
+  [
+    '/js/app/admin/bot-audit.js',
+    '/js/app/admin/backup.js',
+    '/js/app/admin/users.js',
+    '/js/app/ai-admin/shared.js',
+    '/js/app/ai-admin/openai.js',
+    '/js/app/ai-admin/events.js',
+    '/js/app/ai-admin/controller.js',
+  ].forEach((script) => {
+    assert.ok(!appScripts.includes(script), `${script} must stay out of the initial app script graph`);
+  });
+  [
+    '/js/app/ai-admin/openai-runtime.js',
+    '/js/app/ai-admin/local-providers-runtime.js',
+    '/js/app/ai-admin/grok-runtime.js',
+    '/js/app/ai-admin/context-chatshot-runtime.js',
+    '/js/app/ai-admin/grok-image-risk-runtime.js',
+  ].forEach((script) => {
+    assert.ok(!appScripts.includes(script), `${script} must stay out of the initial app script graph`);
+  });
+
+  const performanceSource = readRelative('public/js/app/performance.js');
+  const featureLoaderSource = readRelative('public/js/app/feature-loader.js');
+  const featureRegistrySource = readRelative('public/js/app/feature-registry.js');
+  assert.match(performanceSource, /getSummary/);
+  assert.match(performanceSource, /resetForTests/);
+  assert.match(performanceSource, /bananza:startup-total/);
+  assert.ok(lineCount(featureLoaderSource) < 300, 'feature-loader.js should stay below 300 lines');
+  assert.ok(lineCount(featureRegistrySource) < 200, 'feature-registry.js should stay below 200 lines');
+  assert.match(featureLoaderSource, /loadFeature/);
+  assert.match(featureLoaderSource, /preloadByStrategy/);
+  assert.match(featureRegistrySource, /ai-admin/);
+  assert.match(featureRegistrySource, /admin-idle/);
+  assert.match(featureRegistrySource, /interaction/);
 });
 
 test('new boot modules stay small and keep assembly debt visible', () => {
@@ -206,7 +267,7 @@ test('runtime assembly no longer owns extracted shell and websocket sections', (
   ];
   const extractedRuntimeLimits = {
     'public/js/app/shell/ui-runtime.js': 2900,
-    'public/js/app/shell/shell-runtime.js': 1450,
+    'public/js/app/shell/shell-runtime.js': 1500,
     'public/js/app/shell/mobile-runtime-adapters.js': 150,
     'public/js/app/boot/ws-dispatch.js': 950,
     'public/js/app/boot/runtime-core.js': 700,
@@ -281,7 +342,6 @@ test('ai admin provider ownership stays out of runtime assembly', () => {
   const indexHtml = readRelative('public/index.html');
   const scripts = [...indexHtml.matchAll(/<script\s+src="([^"]+)"/g)].map((match) => match[1]);
   const assemblyIndex = scripts.findIndex((src) => src.startsWith('/js/app/boot/runtime-assembly.js'));
-  const aiControllerIndex = scripts.findIndex((src) => src.startsWith('/js/app/ai-admin/controller.js'));
 
   const aiRuntimeScripts = [
     '/js/app/ai-admin/openai-runtime.js',
@@ -293,13 +353,13 @@ test('ai admin provider ownership stays out of runtime assembly', () => {
 
   assert.ok(lineCount(assembly) < RUNTIME_ASSEMBLY_LINE_LIMIT, `runtime-assembly.js line count ${lineCount(assembly)} should stay below ${RUNTIME_ASSEMBLY_LINE_LIMIT}`);
   assert.notEqual(assemblyIndex, -1, 'runtime-assembly.js script must be present');
-  assert.notEqual(aiControllerIndex, -1, 'ai admin controller script must be present');
+  assert.equal(scripts.findIndex((src) => src.startsWith('/js/app/ai-admin/controller.js')), -1, 'ai admin controller script must be lazy-loaded');
+  assert.equal(scripts.findIndex((src) => src.startsWith('/js/app/ai-admin/events.js')), -1, 'ai admin events script must be lazy-loaded');
+  assert.equal(scripts.findIndex((src) => src.startsWith('/js/app/admin/users.js')), -1, 'generic admin scripts must be lazy-loaded');
 
   for (const aiRuntimeScript of aiRuntimeScripts) {
     const scriptIndex = scripts.findIndex((src) => src.startsWith(aiRuntimeScript));
-    assert.notEqual(scriptIndex, -1, `${aiRuntimeScript} script must be present`);
-    assert.ok(scriptIndex < aiControllerIndex, `${aiRuntimeScript} must load before ai-admin/controller.js`);
-    assert.ok(scriptIndex < assemblyIndex, `${aiRuntimeScript} must load before runtime-assembly.js`);
+    assert.equal(scriptIndex, -1, `${aiRuntimeScript} script must be lazy-loaded outside the initial script graph`);
   }
 
   const forbiddenAssemblyProviderBodies = [

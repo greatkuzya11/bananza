@@ -10,11 +10,17 @@
       if (bound) return false;
       bound = true;
       with (scope) {
-        $('#settingsAiBotsPanel')?.addEventListener('click', openAiBotSettingsModal);
-        $('#settingsYandexAiPanel')?.addEventListener('click', openYandexAiSettingsModal);
-        $('#settingsDeepSeekAiPanel')?.addEventListener('click', openDeepseekAiSettingsModal);
-        $('#settingsQwenAiPanel')?.addEventListener('click', openQwenAiSettingsModal);
-        $('#settingsGrokAiPanel')?.addEventListener('click', openGrokAiSettingsModal);
+        const bindAiAdminPanel = (id, handler) => {
+          const button = document.getElementById(id);
+          if (!button || button.dataset.bananzaAiAdminPanelBound === '1') return;
+          button.dataset.bananzaAiAdminPanelBound = '1';
+          button.addEventListener('click', handler);
+        };
+        bindAiAdminPanel('settingsAiBotsPanel', openAiBotSettingsModal);
+        bindAiAdminPanel('settingsYandexAiPanel', openYandexAiSettingsModal);
+        bindAiAdminPanel('settingsDeepSeekAiPanel', openDeepseekAiSettingsModal);
+        bindAiAdminPanel('settingsQwenAiPanel', openQwenAiSettingsModal);
+        bindAiAdminPanel('settingsGrokAiPanel', openGrokAiSettingsModal);
 
         grokImageRiskCancel?.addEventListener('click', () => {
           closeModal('grokImageRiskConfirmModal');

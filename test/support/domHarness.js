@@ -9,6 +9,9 @@ const appShellScriptPaths = Object.freeze([
   'public/js/app/namespace.js',
   'public/js/app/context.js',
   'public/js/app/bridge.js',
+  'public/js/app/performance.js',
+  'public/js/app/feature-loader.js',
+  'public/js/app/feature-registry.js',
 ]);
 const appCoreHelperScriptPaths = Object.freeze([
   'public/js/app/config.js',
@@ -112,6 +115,7 @@ const appAiAdminScriptPaths = Object.freeze([
   'public/js/app/ai-admin/events.js',
   'public/js/app/ai-admin/controller.js',
 ]);
+const appAiAdminInitialRuntimeScriptPaths = Object.freeze([]);
 const appBootScriptPaths = Object.freeze([
   'public/js/app/boot/state.js',
   'public/js/app/boot/runtime-context.js',
@@ -155,8 +159,6 @@ const appRuntimeScriptPaths = Object.freeze([
   ...appMessageScriptPaths,
   ...appComposerScriptPaths,
   ...appInteractionScriptPaths,
-  ...appAdminScriptPaths,
-  ...appAiAdminScriptPaths,
   ...appBootScriptPaths,
   'public/js/app/runtime.js',
 ]);
@@ -583,6 +585,7 @@ function installAppBridge(dom, overrides = {}) {
 module.exports = {
   appAdminScriptPaths,
   appAiAdminScriptPaths,
+  appAiAdminInitialRuntimeScriptPaths,
   appBootScriptPaths,
   appChatListScriptPaths,
   appComposerScriptPaths,

@@ -213,8 +213,8 @@
     }
 
     function warmMessageWindowAssets(chat, messages = []) {
-      if (typeof cacheAssets !== 'function') return;
-      (async () => {
+      if (typeof cacheAssets !== 'function') return Promise.resolve();
+      return (async () => {
         try {
           const assetUrls = new Set();
           if (chat?.background_url) assetUrls.add(chat.background_url);

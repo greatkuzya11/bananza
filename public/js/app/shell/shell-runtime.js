@@ -349,8 +349,33 @@
       function openWeatherSettingsModal() { return settingsModalController.openWeatherSettingsModal(); }
       function openNotificationSettingsModal() { return settingsModalController.openNotificationSettingsModal(); }
       function openSoundSettingsModal() { return settingsModalController.openSoundSettingsModal(); }
+      let aiAdminEventsLoadPromise = null;
+      function ensureAiAdminEventsBound() {
+        if (aiAdminEventController?.bindEvents?.()) return Promise.resolve(true);
+        const hasEventController = typeof window.BananzaApp?.aiAdmin?.createEventController === 'function';
+        if (!hasEventController && window.BananzaApp?.featureLoader?.loadFeature) {
+          aiAdminEventsLoadPromise = aiAdminEventsLoadPromise || window.BananzaApp.featureLoader.loadFeature('ai-admin-events')
+            .finally(() => {
+              aiAdminEventsLoadPromise = null;
+            });
+          return aiAdminEventsLoadPromise.then(() => ensureAiAdminEventsBound());
+        }
+        if (!aiAdminEventController && hasEventController) {
+          aiAdminEventController = window.BananzaApp.aiAdmin.createEventController({
+            scope: createRuntimeProxyScope(),
+          });
+        }
+        aiAdminEventController?.bindEvents?.();
+        return Promise.resolve(Boolean(aiAdminEventController));
+      }
+      function primeAiAdminEvents() {
+        ensureAiAdminEventsBound().catch((error) => {
+          console.error('Failed to bind AI admin events', error);
+        });
+      }
       function openAiBotSettingsModal() {
         if (!currentUser?.is_admin) return;
+        primeAiAdminEvents();
         openModal('aiBotSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
         resetManagedModalScroll('aiBotSettingsModal');
         setAiBotModalStatus('\u0417\u0430\u0433\u0440\u0443\u0436\u0430\u044e...', 'pending');
@@ -365,6 +390,7 @@
     
       function openOpenAiTextBotsModal() {
         if (!currentUser?.is_admin) return;
+        primeAiAdminEvents();
         openModal('openAiTextBotsModal', { replaceStack: false, opener: $('#openAiOpenTextBots') });
         resetManagedModalScroll('openAiTextBotsModal');
         setAiBotTextModalStatus('\u0417\u0430\u0433\u0440\u0443\u0436\u0430\u044e...', 'pending');
@@ -379,6 +405,7 @@
     
       function openOpenAiUniversalBotsModal() {
         if (!currentUser?.is_admin) return;
+        primeAiAdminEvents();
         openModal('openAiUniversalBotsModal', { replaceStack: false, opener: $('#openAiOpenUniversalBots') });
         resetManagedModalScroll('openAiUniversalBotsModal');
         setOpenAiUniversalModalStatus('Loading...', 'pending');
@@ -393,6 +420,7 @@
     
       function openOpenAiImageBotsModal() {
         if (!currentUser?.is_admin) return;
+        primeAiAdminEvents();
         openModal('openAiImageBotsModal', { replaceStack: false, opener: $('#openAiOpenImageBots') });
         resetManagedModalScroll('openAiImageBotsModal');
         setOpenAiImageModalStatus('Loading...', 'pending');
@@ -413,6 +441,7 @@
     
       function openYandexAiSettingsModal() {
         if (!currentUser?.is_admin) return;
+        primeAiAdminEvents();
         openModal('yandexAiSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
         setYandexAiStatus('Loading...');
         loadYandexAiState().then(() => setYandexAiStatus('')).catch((e) => {
@@ -422,6 +451,7 @@
     
       function openDeepseekAiSettingsModal() {
         if (!currentUser?.is_admin) return;
+        primeAiAdminEvents();
         openModal('deepseekAiSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
         setDeepseekAiStatus('Loading...');
         loadDeepseekAiState().then(() => setDeepseekAiStatus('')).catch((e) => {
@@ -431,6 +461,7 @@
     
       function openDeepseekTextBotsModal() {
         if (!currentUser?.is_admin) return;
+        primeAiAdminEvents();
         ensureDeepseekTextBotsModalContent();
         openModal('deepseekAiTextBotsModal', { replaceStack: false, opener: $('#deepseekAiOpenTextBots') });
         resetManagedModalScroll('deepseekAiTextBotsModal');
@@ -446,6 +477,7 @@
     
       function openQwenAiSettingsModal() {
         if (!currentUser?.is_admin) return;
+        primeAiAdminEvents();
         openModal('qwenAiSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
         setQwenAiStatus('Loading...');
         loadQwenAiState().then(() => setQwenAiStatus('')).catch((e) => {
@@ -455,6 +487,7 @@
     
       function openQwenTextBotsModal() {
         if (!currentUser?.is_admin) return;
+        primeAiAdminEvents();
         ensureQwenTextBotsModalContent();
         openModal('qwenAiTextBotsModal', { replaceStack: false, opener: $('#qwenAiOpenTextBots') });
         resetManagedModalScroll('qwenAiTextBotsModal');
@@ -474,6 +507,7 @@
     
       function openGrokAiSettingsModal() {
         if (!currentUser?.is_admin) return;
+        primeAiAdminEvents();
         openModal('grokAiSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
         resetManagedModalScroll('grokAiSettingsModal');
         setGrokAiStatus('Loading...');
@@ -488,6 +522,7 @@
     
       function openGrokTextBotsModal() {
         if (!currentUser?.is_admin) return;
+        primeAiAdminEvents();
         mountGrokBotPanels();
         openModal('grokAiTextBotsModal', { replaceStack: false, opener: $('#grokAiOpenTextBots') });
         resetManagedModalScroll('grokAiTextBotsModal');
@@ -509,6 +544,7 @@
     
       function openGrokImageBotsModal() {
         if (!currentUser?.is_admin) return;
+        primeAiAdminEvents();
         mountGrokBotPanels();
         openModal('grokAiImageBotsModal', { replaceStack: false, opener: $('#grokAiOpenImageBots') });
         resetManagedModalScroll('grokAiImageBotsModal');
@@ -530,6 +566,7 @@
     
       function openGrokUniversalBotsModal() {
         if (!currentUser?.is_admin) return;
+        primeAiAdminEvents();
         mountGrokBotPanels();
         openModal('grokAiUniversalBotsModal', { replaceStack: false, opener: $('#grokAiOpenUniversalBots') });
         resetManagedModalScroll('grokAiUniversalBotsModal');
@@ -1117,7 +1154,7 @@
         cancelPendingSidebarReveal();
         syncMobileBaseSceneState({
           scene: 'sidebar',
-          hideInactive: false,
+          hideInactive: true,
         });
     
         if (!shouldAnimateReveal) {
@@ -1177,6 +1214,7 @@
           );
           animation.id = 'sidebarRevealAnimation';
           sidebar.__revealAnimation = animation;
+          sidebar.__revealFallbackTimer = setTimeout(finishReveal, 240);
           animation.onfinish = finishReveal;
           animation.oncancel = () => {
             if (sidebar.__revealAnimation === animation) sidebar.__revealAnimation = null;
@@ -1187,7 +1225,7 @@
         sidebar.__revealFrame = requestAnimationFrame(() => {
           sidebar.style.transform = 'translate3d(0,0,0)';
           sidebar.__revealFrame = 0;
-          sidebar.__revealFallbackTimer = setTimeout(finishReveal, 280);
+          sidebar.__revealFallbackTimer = setTimeout(finishReveal, 240);
         });
       }
     

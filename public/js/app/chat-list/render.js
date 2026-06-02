@@ -447,6 +447,8 @@
         folderId: folderStore.activeFolderId,
         includeSearchExtras: true,
       });
+      root.performance?.markOnce?.('bananza:chats-first-render');
+      root.performance?.measure?.('bananza:first-chat-list', 'bananza:script-start', 'bananza:chats-first-render');
       actions.renderChatFolderPicker?.();
       actions.scheduleChatListCacheSync?.();
       return result;
@@ -471,4 +473,3 @@
     createChatListRenderer,
   };
 })();
-

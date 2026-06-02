@@ -45,8 +45,52 @@
     with (scope) {
       // INIT
       // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+      function scheduleIdleTask(callback, delayMs = 0) {
+        const scheduleIdle = window.requestIdleCallback || ((idleCallback) => window.setTimeout(idleCallback, 0));
+        window.setTimeout(() => {
+          scheduleIdle(() => callback());
+        }, Math.max(0, Number(delayMs || 0)));
+      }
+
+      function runMeasuredTask(name, task) {
+        const perf = window.BananzaApp?.performance;
+        const measureName = `bananza:${name}`;
+        const startMark = `${measureName}-start`;
+        const endMark = `${measureName}-end`;
+        perf?.mark?.(startMark);
+        return Promise.resolve()
+          .then(() => task?.())
+          .catch(() => {})
+          .finally(() => {
+            perf?.mark?.(endMark);
+            perf?.measure?.(measureName, startMark, endMark);
+          });
+      }
+
+      function scheduleMeasuredIdleTask(name, task, delayMs = 0) {
+        scheduleIdleTask(() => runMeasuredTask(name, task), delayMs);
+      }
+
+      function scheduleFeaturePreloadStrategy(strategy, delayMs = 0) {
+        const loader = window.BananzaApp?.featureLoader;
+        if (!loader?.preloadByStrategy) return;
+        scheduleIdleTask(() => {
+          loader.preloadByStrategy(strategy).catch((error) => {
+            console.warn(`[feature-loader] ${strategy} preload failed:`, error?.message || error);
+          });
+        }, delayMs);
+      }
+
+      function schedulePostReadyFeaturePreloads() {
+        scheduleFeaturePreloadStrategy('idle', 250);
+        if (currentUser?.is_admin) scheduleFeaturePreloadStrategy('admin-idle', 3000);
+      }
+
       async function init() {
+        const perf = window.BananzaApp?.performance;
+        perf?.mark?.('bananza:init-start');
         if (!checkAuth()) return;
+        perf?.mark?.('bananza:shell-setup-start');
         chatFolderStore.hydrateActiveFolderId();
         setChatSearchOpen(false, { clear: true, focus: false, render: false });
         syncChatHeaderActionsAccessibility();
@@ -68,9 +112,12 @@
         if (isMobileLayoutViewport()) {
           history.replaceState({ view: 'chatlist' }, '');
         }
+        perf?.mark?.('bananza:shell-setup-end');
+        perf?.measure?.('bananza:shell-setup', 'bananza:shell-setup-start', 'bananza:shell-setup-end');
     
         // Verify token
         try {
+          perf?.mark?.('bananza:auth-restore-start');
           const data = await api('/api/auth/me');
           currentUser = {
             ...data.user,
@@ -87,18 +134,21 @@
           localStorage.setItem('user', JSON.stringify(currentUser));
           await window.messageCache?.init?.(currentUser.id);
           hydrateComposerDraftsForCurrentUser({ force: true });
-        } catch { return; }
+          perf?.mark?.('bananza:auth-restore-end');
+          perf?.measure?.('bananza:auth-restore', 'bananza:auth-restore-start', 'bananza:auth-restore-end');
+        } catch {
+          perf?.mark?.('bananza:auth-restore-end');
+          perf?.measure?.('bananza:auth-restore', 'bananza:auth-restore-start', 'bananza:auth-restore-end');
+          return;
+        }
     
         // Update UI
+        perf?.mark?.('bananza:post-auth-ui-start');
         updateCurrentUserFooter();
         renderActiveChatFolderBar();
-        loadWeatherSettings().then(() => loadCurrentWeather(false)).catch(() => {});
-        await loadSoundSettings().catch(() => {});
         if ('serviceWorker' in navigator) {
           navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage);
-          navigator.serviceWorker.register('/sw.js').catch(() => {});
         }
-        loadNotificationSettings().catch(() => {});
     
         ensureBotVisibilityToggles();
         registerBuiltinModals();
@@ -108,13 +158,19 @@
         resetPollVotersModal();
         refreshPollComposerActionState();
         setupProfileEvents();
-        await loadRecentEmojis();
-        initEmojiPicker();
+        syncEmojiPickerButton();
+        perf?.mark?.('bananza:post-auth-ui-end');
+        perf?.measure?.('bananza:post-auth-ui', 'bananza:post-auth-ui-start', 'bananza:post-auth-ui-end');
+        perf?.mark?.('bananza:ws-connect-kickoff-start');
         connectWS();
+        perf?.mark?.('bananza:ws-connect-kickoff-end');
+        perf?.measure?.('bananza:ws-connect-kickoff', 'bananza:ws-connect-kickoff-start', 'bananza:ws-connect-kickoff-end');
+        perf?.mark?.('bananza:chats-load-start');
         await loadChats();
+        perf?.mark?.('bananza:chats-load-end');
+        perf?.measure?.('bananza:chats-load', 'bananza:chats-load-start', 'bananza:chats-load-end');
         chatListStore.setInitialChatLoadFinished(true);
         setupLifecycleRecovery();
-        loadAllUsers().catch(() => {});
     
         // Optional startup behavior: push deep-link, restore the last opened chat, or stay on the chat list.
         const startupChatId = Number(new URLSearchParams(location.search).get('chatId'));
@@ -128,7 +184,20 @@
           }
         }
     
+        perf?.mark?.('bananza:app-interactive');
+        perf?.measure?.('bananza:startup-total', 'bananza:script-start', 'bananza:app-interactive');
+        perf?.measure?.('bananza:init-total', 'bananza:init-start', 'bananza:app-interactive');
+        perf?.measure?.('bananza:time-to-interactive', 'bananza:script-start', 'bananza:app-interactive');
         window.dispatchEvent(new Event('bananza:ready'));
+        scheduleMeasuredIdleTask('sound-settings-load', () => loadSoundSettings(), 0);
+        scheduleMeasuredIdleTask('notification-settings-load', () => loadNotificationSettings(), 50);
+        scheduleMeasuredIdleTask('weather-settings-load', () => loadWeatherSettings().then(() => loadCurrentWeather(false)), 100);
+        scheduleMeasuredIdleTask('emoji-recent-load', () => loadRecentEmojis(), 0);
+        scheduleMeasuredIdleTask('users-background-load', () => loadAllUsers(), 200);
+        if ('serviceWorker' in navigator) {
+          scheduleMeasuredIdleTask('service-worker-boot', () => navigator.serviceWorker.register('/sw.js'), 250);
+        }
+        schedulePostReadyFeaturePreloads();
       }
     
       init();

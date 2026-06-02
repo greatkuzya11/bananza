@@ -47,6 +47,13 @@
       return dom.messagesEl || doc.getElementById('messages');
     }
 
+    function scheduleIdleTask(callback, delayMs = 0) {
+      const scheduleIdle = win.requestIdleCallback || ((idleCallback) => win.setTimeout(idleCallback, 0));
+      win.setTimeout(() => {
+        scheduleIdle(() => callback());
+      }, Math.max(0, Number(delayMs || 0)));
+    }
+
     function getCurrentChatId() {
       return Number(state.getCurrentChatId?.() || 0) || null;
     }
@@ -204,6 +211,8 @@
 
     async function openChat(chatId, options = {}) {
       const targetChatId = Number(chatId);
+      const perf = root.performance;
+      perf?.mark?.('bananza:open-chat-start');
       const chat = getChatById(targetChatId);
       if (!chat) {
         throw new Error('Chat not found in local list');
@@ -221,6 +230,19 @@
       let postOpenScheduled = false;
       const openStartedAt = win.performance?.now?.() || Date.now();
       const isCurrentOpen = () => isCurrentChatOpenTransition(seq, targetChatId);
+
+      const scheduleMessageWindowWarmup = (msgs = []) => {
+        const list = Array.isArray(msgs) ? msgs.slice(0) : [];
+        scheduleIdleTask(() => {
+          if (!isCurrentOpen()) return;
+          perf?.mark?.('bananza:open-chat-warmup-start');
+          Promise.resolve(pages.warmMessageWindowAssets(chat, list))
+            .finally(() => {
+              perf?.mark?.('bananza:open-chat-warmup-end');
+              perf?.measure?.('bananza:open-chat-warmup', 'bananza:open-chat-warmup-start', 'bananza:open-chat-warmup-end');
+            });
+        }, 0);
+      };
 
       const applyOpenScroll = () => {
         const messagesEl = getMessagesEl();
@@ -242,6 +264,7 @@
       const commitMessageWindow = async (msgs = [], page = null, { source = 'network', pinEvents = [] } = {}) => {
         if (!isCurrentOpen()) return false;
         const list = Array.isArray(msgs) ? msgs : [];
+        perf?.mark?.('bananza:open-chat-data-ready');
         const shouldAutoScrollRenderedMedia = Boolean(restoreAnchor?.atBottom || !restoreAnchor?.messageId);
         const firstId = pages.minMessageId(list);
         const lastId = pages.maxMessageId(list);
@@ -262,6 +285,8 @@
           pinEvents,
           mediaAutoScrollToBottom: shouldAutoScrollRenderedMedia,
         });
+        perf?.mark?.('bananza:open-chat-first-render');
+        perf?.measure?.('bananza:open-chat-render', 'bananza:open-chat-data-ready', 'bananza:open-chat-first-render');
         setStateMessages(list);
         if (!isCurrentOpen()) return false;
         committedWindow = true;
@@ -276,6 +301,9 @@
         actions.revealChatHydration?.(seq, targetChatId);
         finishVisibleOpen();
         schedulePostOpenWork();
+        perf?.mark?.('bananza:open-chat-end');
+        perf?.measure?.('bananza:open-chat-total', 'bananza:open-chat-start', 'bananza:open-chat-end');
+        perf?.measure?.('bananza:open-chat-data', 'bananza:open-chat-start', 'bananza:open-chat-data-ready');
       };
 
       const finishVisibleOpen = () => {
@@ -344,7 +372,14 @@
         const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
         params.set('meta', '1');
         if (restoreAnchor?.messageId && !restoreAnchor?.atBottom) params.set('anchor', String(restoreAnchor.messageId));
-        const result = await pages.fetchMessagesPage(targetChatId, params, { signal: controller.signal });
+        perf?.mark?.('bananza:open-chat-network-start');
+        let result = null;
+        try {
+          result = await pages.fetchMessagesPage(targetChatId, params, { signal: controller.signal });
+        } finally {
+          perf?.mark?.('bananza:open-chat-network-end');
+          perf?.measure?.('bananza:open-chat-network', 'bananza:open-chat-network-start', 'bananza:open-chat-network-end');
+        }
         pages.debugMessageCache('network-window-done', {
           chatId: targetChatId,
           fetchMs: Math.round((win.performance?.now?.() || Date.now()) - networkStartedAt),
@@ -362,8 +397,8 @@
         } else {
           if (!await commitMessageWindow(msgs, page, { source: 'network', pinEvents })) return false;
         }
-        pages.warmMessageWindowAssets(chat, msgs);
         revealCommittedWindow();
+        scheduleMessageWindowWarmup(msgs);
         return true;
       };
 
@@ -482,12 +517,18 @@
         const cache = getCache();
         if (cache) {
           const cacheStartedAt = win.performance?.now?.() || Date.now();
-          cachedRange = await pages.readCachedChatRange(targetChatId);
-          mediaPlayback.primeMediaPlaybackCompletedCache(targetChatId, cachedRange).catch(() => {});
-          const preferLatestCachedWindow = !restoreAnchor?.messageId || restoreAnchor?.atBottom;
-          cachedMsgs = preferLatestCachedWindow
-            ? await cache.readLatest(targetChatId, { limit: PAGE_SIZE })
-            : await cache.readAround(targetChatId, restoreAnchor.messageId, { limit: PAGE_SIZE });
+          perf?.mark?.('bananza:open-chat-cache-read-start');
+          try {
+            cachedRange = await pages.readCachedChatRange(targetChatId);
+            mediaPlayback.primeMediaPlaybackCompletedCache(targetChatId, cachedRange).catch(() => {});
+            const preferLatestCachedWindow = !restoreAnchor?.messageId || restoreAnchor?.atBottom;
+            cachedMsgs = preferLatestCachedWindow
+              ? await cache.readLatest(targetChatId, { limit: PAGE_SIZE })
+              : await cache.readAround(targetChatId, restoreAnchor.messageId, { limit: PAGE_SIZE });
+          } finally {
+            perf?.mark?.('bananza:open-chat-cache-read-end');
+            perf?.measure?.('bananza:open-chat-cache-read', 'bananza:open-chat-cache-read-start', 'bananza:open-chat-cache-read-end');
+          }
           const cacheReadMs = Math.round((win.performance?.now?.() || Date.now()) - cacheStartedAt);
           const hasAnchorInCache = !restoreAnchor?.messageId || restoreAnchor?.atBottom
             || cachedMsgs.some((msg) => Number(msg?.id || 0) === Number(restoreAnchor.messageId));
@@ -515,8 +556,8 @@
                 ? cachedRange.hasMoreAfter
                 : Boolean(pages.getChatLastMessageId(targetChatId, pages.maxMessageId(cachedMsgs)) > pages.maxMessageId(cachedMsgs)),
             }, { source: 'cache' });
-            pages.warmMessageWindowAssets(chat, cachedMsgs);
             revealCommittedWindow();
+            scheduleMessageWindowWarmup(cachedMsgs);
             syncCachedOpenInBackground();
             return;
           }
@@ -537,6 +578,7 @@
           }
         }
         revealCommittedWindow();
+        if (Array.isArray(cachedMsgs) && cachedMsgs.length) scheduleMessageWindowWarmup(cachedMsgs);
       }
     }
 

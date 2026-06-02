@@ -927,6 +927,11 @@ function loadCallFeatureScripts(dom) {
   dom.window.dispatchEvent(new dom.window.Event('bananza:ready'));
 }
 
+function loadContextChatShotRuntimeForTest(dom) {
+  loadBrowserScript(dom, 'public/js/app/ai-admin/context-chatshot-runtime.js');
+  dom.window.BananzaAppBridge.__testing.installAiAdminRuntimeModulesForTest();
+}
+
 function createCallArtifactMessage(chatId, messageId, overrides = {}) {
   const batchId = Number(overrides.batch_id || overrides.call_artifact_batch?.id || messageId + 3000);
   const callId = Number(overrides.call_id || overrides.call_artifact_batch?.call_id || messageId + 1000);
@@ -1134,6 +1139,7 @@ async function openSingleChatDom({
   mentionTargetsByChatId = {},
   contextConvertAvailabilityByChatId = {},
   chatShotStateByChatId = {},
+  loadContextRuntime = false,
 } = {}) {
   const chatId = Number(chat.id || 1);
   const dom = await bootAppDom({
@@ -1144,6 +1150,7 @@ async function openSingleChatDom({
       chatShotStateByChatId,
     }),
   });
+  if (loadContextRuntime) loadContextChatShotRuntimeForTest(dom);
   dom.window.BananzaAppBridge.__testing.setChats([chat]);
   await dom.window.BananzaAppBridge.__testing.openChat(chatId);
   await wait(dom, 60);
@@ -2588,6 +2595,7 @@ test('composer context convert opens on pointerup without a synthetic click and 
         bots: [{ id: 7, name: 'Banana Convert', provider: 'openai' }],
       },
     },
+    loadContextRuntime: true,
   });
   t.after(() => {
     dom.window.close();
@@ -2621,6 +2629,7 @@ test('context convert all-chat admin toggle is inactive when the bot is disabled
   t.after(() => {
     dom.window.close();
   });
+  loadContextChatShotRuntimeForTest(dom);
   const { document, BananzaAppBridge } = dom.window;
 
   BananzaAppBridge.__testing.setContextConvertAdminState('openai', {
@@ -2774,6 +2783,7 @@ test('context convert picker lets search act immediately on one touch gesture', 
         bots: [{ id: 7, name: 'Banana Convert', provider: 'openai' }],
       },
     },
+    loadContextRuntime: true,
   });
   t.after(() => {
     dom.window.close();
@@ -2820,6 +2830,7 @@ test('context convert picker outside message taps only close the picker without 
         bots: [{ id: 7, name: 'Banana Convert', provider: 'openai' }],
       },
     },
+    loadContextRuntime: true,
   });
   t.after(() => {
     dom.window.close();
@@ -3935,6 +3946,7 @@ test('mobile message context convert action keeps the keyboard attached', async 
         bots: [{ id: 7, name: 'Banana Convert', provider: 'openai' }],
       },
     },
+    loadContextRuntime: true,
   });
   t.after(() => {
     dom.window.close();
@@ -3973,6 +3985,7 @@ test('context transform restore original action updates the message and disappea
         }),
       ],
     },
+    loadContextRuntime: true,
   });
   t.after(() => {
     dom.window.close();
