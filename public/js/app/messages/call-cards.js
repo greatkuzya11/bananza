@@ -156,11 +156,11 @@
       if (!raw || !getToken()) return raw;
       try {
         const parsed = new URL(raw, window.location.origin);
-        parsed.searchParams.set('getToken()', getToken());
+        parsed.searchParams.set('token', getToken());
         return parsed.pathname + parsed.search + parsed.hash;
       } catch {
         const separator = raw.includes('?') ? '&' : '?';
-        return `${raw}${separator}getToken()=${encodeURIComponent(getToken())}`;
+        return `${raw}${separator}token=${encodeURIComponent(getToken())}`;
       }
     }
     

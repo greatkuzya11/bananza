@@ -111,6 +111,106 @@ async function bootFullApp(options = {}) {
   return dom;
 }
 
+function createOutboxUnitHarness({ replySnapshot = null } = {}) {
+  const dom = createAppDom();
+  loadAppRuntimeScripts(dom);
+  const { window } = dom;
+  const { document } = window;
+  const messagesEl = document.getElementById('messages');
+  const messageState = window.BananzaApp.messages.state.createMessageState();
+  const savedItems = [];
+  const apiCalls = [];
+  let clientSeq = 0;
+  let clearReplyCalls = 0;
+
+  window.messageCache = {
+    async upsertOutboxItem(item) {
+      savedItems.push({
+        ...item,
+        attachments: Array.isArray(item.attachments) ? item.attachments.slice() : [],
+        voice: item.voice ? { ...item.voice } : null,
+        videoNote: item.videoNote ? { ...item.videoNote } : null,
+      });
+    },
+    async getOutboxItem() {
+      return null;
+    },
+    async deleteOutboxItem() {},
+  };
+
+  const renderer = {
+    appendMessage(msg) {
+      const row = document.createElement('div');
+      row.className = 'msg-row';
+      row.dataset.outbox = '1';
+      row.dataset.clientId = String(msg.client_id || msg.clientId || msg.id || '');
+      row.dataset.msgId = String(msg.id || row.dataset.clientId);
+      row.__messageData = msg;
+      row.innerHTML = '<div class="msg-bubble"><div class="msg-footer"></div></div>';
+      messagesEl.appendChild(row);
+      return row;
+    },
+    updateRowStatus() {},
+    withStableOutboxMedia(_row, msg) {
+      return msg;
+    },
+    createMessageEl(msg) {
+      return this.appendMessage(msg);
+    },
+  };
+
+  const currentUser = {
+    id: 1,
+    username: 'alice',
+    display_name: 'Alice',
+    avatar_color: '#65aadd',
+  };
+  const outbox = window.BananzaApp.messages.outbox.createMessageOutbox({
+    window,
+    document,
+    dom: { messagesEl },
+    api: async (url, opts = {}) => {
+      apiCalls.push({ url, opts });
+      return null;
+    },
+    renderer,
+    messageState,
+    state: {
+      getCurrentUser: () => currentUser,
+      getCurrentChatId: () => 1,
+    },
+    actions: {
+      updateScrollBottomButton() {},
+      isNearBottom: () => true,
+      captureScrollAnchor: () => null,
+      restoreScrollAnchor() {},
+      applyOwnReadStateToMessage: (msg) => msg,
+      updateChatListLastMessage() {},
+      scrollToBottom() {},
+      getReplySnapshot: (source) => {
+        if (source) return { ...source };
+        return replySnapshot ? { ...replySnapshot } : null;
+      },
+      clearReply: () => {
+        clearReplyCalls += 1;
+      },
+      playAppSound() {},
+      makeClientId: () => `c-unit-${++clientSeq}`,
+    },
+  });
+
+  return {
+    dom,
+    window,
+    document,
+    messagesEl,
+    outbox,
+    savedItems,
+    apiCalls,
+    getClearReplyCalls: () => clearReplyCalls,
+  };
+}
+
 test('message modules publish expected factories', () => {
   const dom = createAppDom();
   loadAppRuntimeScripts(dom);
@@ -265,6 +365,79 @@ test('call cards render and delegate controls to call hooks', async () => {
   transcriptRow.querySelector('[data-call-transcript-run]').click();
   assert.deepEqual(transcripts, [9]);
   dom.window.close();
+});
+
+test('call recording playback URL uses token query parameter', () => {
+  const dom = createAppDom();
+  loadAppRuntimeScripts(dom);
+  const { window } = dom;
+  const { document } = window;
+  const callCards = window.BananzaApp.messages.callCards.createCallCardRenderer({
+    document,
+    dom: { messagesEl: document.getElementById('messages') },
+    getToken: () => 'abc123',
+  });
+
+  const url = callCards.callRecordingPlaybackUrl('/api/calls/42/recording/mixed');
+  assert.equal(url, '/api/calls/42/recording/mixed?token=abc123');
+  assert.equal(url.includes('getToken'), false);
+  dom.window.close();
+});
+
+test('voice outbox queues without explicit or current reply', async (t) => {
+  const harness = createOutboxUnitHarness();
+  t.after(() => harness.dom.window.close());
+
+  const item = await harness.outbox.queueVoiceOutbox({
+    blob: new harness.window.Blob(['voice'], { type: 'audio/wav' }),
+    durationMs: 1200,
+    sampleRate: 16000,
+  });
+
+  assert.equal(item.kind, 'voice');
+  assert.equal(item.replyToId, null);
+  assert.equal(item.reply, null);
+  assert.equal(harness.savedItems[0].replyToId, null);
+  assert.equal(harness.getClearReplyCalls(), 1);
+  const row = harness.document.querySelector('.msg-row[data-client-id="c-unit-1"]');
+  assert.ok(row);
+  assert.equal(row.__messageData.is_voice_note, true);
+  assert.equal(row.__messageData.reply_to_id, null);
+});
+
+test('video note outbox queues without explicit reply and preserves current reply snapshot', async (t) => {
+  const harness = createOutboxUnitHarness({
+    replySnapshot: {
+      id: 92,
+      display_name: 'Bob',
+      text: 'Quoted video note reply',
+      is_voice_note: true,
+      is_video_note: false,
+    },
+  });
+  t.after(() => harness.dom.window.close());
+
+  const item = await harness.outbox.queueVideoNoteOutbox({
+    videoBlob: new harness.window.Blob(['video'], { type: 'video/webm' }),
+    audioBlob: new harness.window.Blob(['audio'], { type: 'audio/wav' }),
+    durationMs: 1800,
+    sampleRate: 16000,
+    videoMime: 'video/webm',
+    shapeId: 'circle',
+    shapeSnapshot: { id: 'circle' },
+  });
+
+  assert.equal(item.kind, 'video_note');
+  assert.equal(item.replyToId, 92);
+  assert.equal(item.reply.text, 'Quoted video note reply');
+  assert.equal(harness.savedItems[0].replyToId, 92);
+  assert.equal(harness.getClearReplyCalls(), 1);
+  const row = harness.document.querySelector('.msg-row[data-client-id="c-unit-1"]');
+  assert.ok(row);
+  assert.equal(row.__messageData.is_voice_note, true);
+  assert.equal(row.__messageData.is_video_note, true);
+  assert.equal(row.__messageData.reply_to_id, 92);
+  assert.equal(row.__messageData.reply_note_kind, 'voice');
 });
 
 test('outbox renders pending rows, promotes echoes, retries, and revokes URLs', async (t) => {

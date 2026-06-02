@@ -464,7 +464,7 @@
     
     async function queueVoiceOutbox({ blob, durationMs, sampleRate, replyTo: suppliedReply, autoTranscribe = false } = {}) {
       if (!getCurrentChatId() || !blob) return null;
-      const reply = actions.getReplySnapshot(suppliedReply || replyTo);
+      const reply = suppliedReply ? actions.getReplySnapshot(suppliedReply) : actions.getReplySnapshot();
       const clientId = actions.makeClientId('c');
       const voiceName = `voice-note-${Date.now()}.wav`;
       const item = {
@@ -516,7 +516,7 @@
       replyTo: suppliedReply,
     } = {}) {
       if (!getCurrentChatId() || !videoBlob || !audioBlob) return null;
-      const reply = actions.getReplySnapshot(suppliedReply || replyTo);
+      const reply = suppliedReply ? actions.getReplySnapshot(suppliedReply) : actions.getReplySnapshot();
       const clientId = actions.makeClientId('c');
       const videoName = `video-note-${Date.now()}.webm`;
       const audioName = `video-note-${Date.now()}.wav`;

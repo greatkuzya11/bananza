@@ -4970,6 +4970,9 @@ test('call recording card renders media controls and seeks without starting paus
   assert.ok(audio);
   assert.ok(play);
   assert.ok(hit);
+  const audioSrc = audio.getAttribute('src') || '';
+  assert.match(audioSrc, /[?&]token=test-token(?:$|&)/);
+  assert.equal(audioSrc.includes('getToken'), false);
 
   const mediaState = installMockMediaElement(dom, audio, {
     duration: 24,
