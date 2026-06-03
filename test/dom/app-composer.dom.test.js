@@ -427,6 +427,32 @@ test('file controller validates uploads and renders pending files', async (t) =>
   assert.equal(h.appDom.pendingFileEl.classList.contains('hidden'), true);
 });
 
+test('attach menu routes gallery camera and file actions to separate inputs', (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+
+  const clicked = [];
+  const galleryInput = h.document.getElementById('fileInputGallery');
+  const cameraInput = h.document.getElementById('fileInputCamera');
+  const docsInput = h.document.getElementById('fileInputDocs');
+  galleryInput.click = () => clicked.push('gallery');
+  cameraInput.click = () => clicked.push('camera');
+  docsInput.click = () => clicked.push('file');
+
+  h.files.bindAttachMenuEvents();
+
+  h.document.getElementById('attachMenuGallery').click();
+  assert.deepEqual(clicked, ['gallery']);
+
+  clicked.length = 0;
+  h.document.getElementById('attachMenuCamera').click();
+  assert.deepEqual(clicked, ['camera']);
+
+  clicked.length = 0;
+  h.document.getElementById('attachMenuFile').click();
+  assert.deepEqual(clicked, ['file']);
+});
+
 test('send controller queues text payloads and patches edits', async (t) => {
   const h = createComposerHarness();
   t.after(() => h.window.close());

@@ -234,9 +234,14 @@ test('public/index.html keeps universal file pickers and mobile media shortcuts'
   const document = dom.window.document;
 
   assert.equal(document.getElementById('fileInput').getAttribute('accept'), null);
+  assert.equal(document.getElementById('fileInput').hasAttribute('multiple'), true);
   assert.equal(document.getElementById('fileInputDocs').getAttribute('accept'), null);
+  assert.equal(document.getElementById('fileInputDocs').hasAttribute('multiple'), true);
   assert.equal(document.getElementById('fileInputGallery').getAttribute('accept'), 'image/*,video/*');
+  assert.equal(document.getElementById('fileInputGallery').hasAttribute('multiple'), true);
   assert.equal(document.getElementById('fileInputCamera').getAttribute('accept'), 'image/*');
+  assert.equal(document.getElementById('fileInputCamera').getAttribute('capture'), 'environment');
+  assert.equal(document.getElementById('fileInputCamera').hasAttribute('multiple'), false);
   assert.equal(document.getElementById('chatAvatarInput').getAttribute('accept'), 'image/*');
 });
 
