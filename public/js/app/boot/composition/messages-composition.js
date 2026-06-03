@@ -138,6 +138,7 @@
           getMessagesLastContentChild: () => getMessagesLastContentChild(),
           updateScrollBottomButton: () => updateScrollBottomButton(),
           refreshScrollDateIndicator: () => refreshScrollDateIndicator(),
+          getRenderedMessageRows: () => getRenderedMessageRows(),
           updateHasMoreAfterFromChat: (chatId) => updateHasMoreAfterFromChat(chatId),
           isLoadingMoreAfter: () => openChatController?.isLoadingMoreAfter?.(),
           setAvatarElementVisual: (el, options = {}) => setAvatarElementVisual(el, options),

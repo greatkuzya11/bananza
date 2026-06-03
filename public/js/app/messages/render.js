@@ -45,6 +45,7 @@
     const getMessagesLastContentChild = (...args) => actions.getMessagesLastContentChild?.(...args);
     const updateScrollBottomButton = (...args) => actions.updateScrollBottomButton?.(...args);
     const refreshScrollDateIndicator = (...args) => actions.refreshScrollDateIndicator?.(...args);
+    const getRenderedMessageRows = (...args) => actions.getRenderedMessageRows?.(...args) || [];
     const updateHasMoreAfterFromChat = (...args) => actions.updateHasMoreAfterFromChat?.(...args);
     const setAvatarElementVisual = (...args) => actions.setAvatarElementVisual?.(...args);
     const applyOwnReadStateToMessage = (...args) => actions.applyOwnReadStateToMessage?.(...args);

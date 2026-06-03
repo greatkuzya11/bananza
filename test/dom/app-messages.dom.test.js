@@ -293,6 +293,41 @@ test('attachments render media/file HTML and renderer binds playback with poster
   dom.window.close();
 });
 
+test('message renderer refreshes date separators through injected rendered rows provider', () => {
+  const dom = createAppDom();
+  loadAppRuntimeScripts(dom);
+  const { window } = dom;
+  const { document } = window;
+  const messagesEl = document.getElementById('messages');
+  const row = document.createElement('div');
+  let rowReads = 0;
+
+  row.className = 'msg-row';
+  row.dataset.msgId = '42';
+  row.__messageData = { id: 42, created_at: '2026-06-03T10:00:00.000Z' };
+  messagesEl.innerHTML = '<div class="date-separator" data-date-iso="2026-06-03T00:00:00.000Z"><span></span></div>';
+  messagesEl.appendChild(row);
+
+  const renderer = window.BananzaApp.messages.render.createMessageRenderer({
+    document,
+    dom: { messagesEl },
+    formatDate: (value) => `fmt:${value}`,
+    actions: {
+      getRenderedMessageRows: () => {
+        rowReads += 1;
+        return [row];
+      },
+      refreshScrollDateIndicator() {},
+    },
+  });
+
+  assert.doesNotThrow(() => renderer.refreshDateSeparators());
+  assert.equal(rowReads, 1);
+  assert.equal(row.dataset.date, 'fmt:2026-06-03T10:00:00.000Z');
+  assert.equal(messagesEl.querySelector('.date-separator span').textContent, 'fmt:2026-06-03T00:00:00.000Z');
+  dom.window.close();
+});
+
 test('poll renderer renders cards, votes/closes through API, and applies updates', async () => {
   const dom = createAppDom();
   loadAppRuntimeScripts(dom);
