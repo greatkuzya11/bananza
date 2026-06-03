@@ -77,6 +77,7 @@ test('pages controller normalizes, fetches, caches, and warms assets', async () 
       return {
         messages: [{ id: 1 }, { id: 2 }],
         pin_events: [{ id: 5, chat_id: 7, message_id: 1, action: 'pinned' }],
+        system_events: [{ id: 6, chat_id: 7, event_type: 'chat_created', actor_name: 'Alice' }],
         has_more_before: true,
         has_more_after: false,
         member_last_reads: { 1: 2 },
@@ -94,6 +95,7 @@ test('pages controller normalizes, fetches, caches, and warms assets', async () 
   assert.deepEqual(JSON.parse(JSON.stringify(controller.normalizeMessagesPage([{ id: 1 }]))), {
     messages: [{ id: 1 }],
     pinEvents: [],
+    systemEvents: [],
     hasMoreBefore: null,
     hasMoreAfter: null,
   });
@@ -104,6 +106,7 @@ test('pages controller normalizes, fetches, caches, and warms assets', async () 
   assert.equal(calls[0].url, '/api/chats/7/messages?limit=2&before=9');
   assert.deepEqual(result.messages.map((msg) => msg.id), [1, 2]);
   assert.equal(result.pinEvents[0].message_id, 1);
+  assert.equal(result.systemEvents[0].event_type, 'chat_created');
   assert.deepEqual(result.memberLastReads, { 1: 2 });
 
   await controller.cacheMessages(7, [{ id: 4 }], { hasMoreBefore: true, hasMoreAfter: false });

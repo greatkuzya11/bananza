@@ -132,6 +132,8 @@
           buildMessagesRootChildren: (fragment = null) => buildMessagesRootChildren(fragment),
           normalizePinEvents: (events = []) => normalizePinEvents(events),
           normalizePinEvent: (event) => normalizePinEvent(event),
+          normalizeSystemEvents: (events = []) => normalizeSystemEvents(events),
+          normalizeSystemEvent: (event) => normalizeSystemEvent(event),
           jumpToPinnedMessage: (pin) => jumpToPinnedMessage(pin),
           filterNewMessages: (messages = []) => filterNewMessages(messages),
           insertAtMessagesEnd: (node) => insertAtMessagesEnd(node),

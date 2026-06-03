@@ -74,20 +74,20 @@
       return refs[refName]?.[method]?.(...args);
     }
 
-    function replaceRenderedMessages(messages = [], pinEvents = [], options = {}) {
-      const result = call('renderer', 'replaceRenderedMessages', messages, pinEvents, options);
+    function replaceRenderedMessages(messages = [], pinEvents = [], systemEvents = [], options = {}) {
+      const result = call('renderer', 'replaceRenderedMessages', messages, pinEvents, systemEvents, options);
       setMessages(Array.isArray(messages) ? messages : []);
       return result;
     }
 
-    function renderMessages(messages = [], pinEvents = []) {
-      const result = call('renderer', 'renderMessages', messages, pinEvents);
+    function renderMessages(messages = [], pinEvents = [], systemEvents = []) {
+      const result = call('renderer', 'renderMessages', messages, pinEvents, systemEvents);
       mergeMessages(messages, { prepend: true });
       return result;
     }
 
-    function appendTimelineItems(messages = [], pinEvents = [], options = {}) {
-      const result = call('renderer', 'appendTimelineItems', messages, pinEvents, options);
+    function appendTimelineItems(messages = [], pinEvents = [], systemEvents = [], options = {}) {
+      const result = call('renderer', 'appendTimelineItems', messages, pinEvents, systemEvents, options);
       mergeMessages(messages);
       return result;
     }
@@ -167,7 +167,7 @@
     };
 
     [
-      ['renderer', ['clearRenderedMessages', 'getRenderedMessageIdList', 'renderedMessageIdsMatch', 'resetReusableMessageRow', 'pinEventIdKey', 'rememberPinEvent', 'isPinEventDisplayed', 'filterNewPinEvents', 'timelineTimestamp', 'buildTimelineItems', 'renderPinSystemEvent', 'buildMessagesFragment', 'primeAppendedMessageSideEffects', 'appendPinEventIfVisible', 'isCurrentMessageRow', 'messageHasDeferredMediaLayout', 'clearPendingMediaBottomScroll', 'noteMessageScrollUserIntent', 'scheduleMediaBottomScrollAnchorSave', 'settleDeferredMediaBottomScroll', 'markPendingMediaBottomScroll', 'markPendingMediaBottomScrollForMessages', 'cancelPendingMediaBottomScrollIfNeeded', 'createMessageGroup', 'createMessageEl', 'replaceRenderedMessage', 'withStableOutboxMedia', 'updateRowStatus', 'cleanupDuplicateDateSeparators', 'refreshDateSeparators']],
+      ['renderer', ['clearRenderedMessages', 'getRenderedMessageIdList', 'renderedMessageIdsMatch', 'resetReusableMessageRow', 'pinEventIdKey', 'rememberPinEvent', 'isPinEventDisplayed', 'systemEventIdKey', 'rememberSystemEvent', 'isSystemEventDisplayed', 'filterNewPinEvents', 'filterNewSystemEvents', 'timelineTimestamp', 'buildTimelineItems', 'renderPinSystemEvent', 'renderChatSystemEvent', 'buildMessagesFragment', 'primeAppendedMessageSideEffects', 'appendPinEventIfVisible', 'appendSystemEventIfVisible', 'isCurrentMessageRow', 'messageHasDeferredMediaLayout', 'clearPendingMediaBottomScroll', 'noteMessageScrollUserIntent', 'scheduleMediaBottomScrollAnchorSave', 'settleDeferredMediaBottomScroll', 'markPendingMediaBottomScroll', 'markPendingMediaBottomScrollForMessages', 'cancelPendingMediaBottomScrollIfNeeded', 'createMessageGroup', 'createMessageEl', 'replaceRenderedMessage', 'withStableOutboxMedia', 'updateRowStatus', 'cleanupDuplicateDateSeparators', 'refreshDateSeparators']],
       ['attachments', ['renderResolvedFileAttachment', 'renderFileAttachment', 'renderLinkPreview', 'formatDuration', 'ensureAttachmentPoster', 'applyPosterToVideoElement', 'markAttachmentPosterAvailable']],
       ['polls', ['normalizePoll', 'isPollMessage', 'isPulsePoll', 'pulseInlineVotersCacheKey', 'getPulseInlineVotersRevision', 'invalidatePulseInlineVotersForMessage', 'getPulseVoterDisplayName', 'isPulseVoterOptionExpanded', 'getPulseVoterPopoverElement', 'schedulePulseVoterPopoverAutoHide', 'mountPulseVoterPopover', 'bindPollControls', 'bindPulseInlineVoterControls', 'togglePulseVoterOptionExpanded', 'togglePulseVoterPopover', 'getPollCompactFooterMeta', 'canClosePollMessage', 'buildOptimisticPollState', 'nextPollVoteSelection', 'hydratePulseInlineVoters', 'clearActivePulseVoterPopover', 'clearActivePulseVoterPopoverForMessage', 'resetPollVotersModal', 'openPollVotersModal', 'renderPollCard', 'pollAccentVar', 'buildPollRenderState', 'buildPollOrbitGradient', 'renderPollCloseButton', 'renderPollCompactFooter', 'renderPollVotersButton', 'renderPulseInlineVoterAvatar', 'renderPulseInlineVoterStack', 'buildPulsePreviewVoters', 'renderPulseInlineVoterSummaryContent', 'renderPulseInlineVoterSummary', 'refreshPulseInlineVoterSlots', 'ensurePulseInlineVoters', 'renderPulsePollCard', 'renderStackPollCard', 'renderOrbitPollCard', 'applyPollUpdate', 'replaceRenderedPollCard', 'togglePollVote', 'closePollMessage']],
       ['callCards', ['resolveCallMessageMediaKind', 'resolveCallMessageRoomMode', 'normalizeCallMessageData', 'latestCallTranscriptRun', 'latestCallArtifactBatch', 'callArtifactProgress', 'pushCallMessageMeta', 'renderCallMessageMeta', 'normalizeCallMixedRecording', 'callRecordingPlaybackUrl', 'callRecordingDurationSeconds', 'parseCallRecordingRadiusValue', 'callRecordingRoundedRectPath', 'ensureCallRecordingFooterButton', 'ensureCallRecordingProgress', 'refreshCallRecordingProgressShape', 'updateCallRecordingProgress', 'syncCallRecordingPlayButton', 'pointToCallRecordingHit', 'shouldIgnoreCallRecordingPointer', 'isPointerNearCallRecordingProgressRect', 'getCallRecordingSeekRows', 'seekCallRecordingProgress', 'resolveNearestCallRecordingHit', 'installCallRecordingProgressCapture', 'renderCallMessageCard', 'renderCallTranscriptRunCard', 'callArtifactStatusLabel', 'callArtifactStatusKind', 'callArtifactKey', 'callArtifactLabel', 'renderCallArtifactStatus', 'callArtifactTextShouldCollapse', 'renderCallArtifactTextLine', 'renderCallArtifactText', 'callArtifactImageUrl', 'callArtifactImageMime', 'callArtifactImageFilename', 'callArtifactImageContext', 'renderCallArtifactImage', 'renderCallArtifactRun', 'renderCallArtifactBatchCard', 'bindCallMessageControls', 'openCallArtifactsModal', 'bindCallArtifactMessageControls', 'bindCallTranscriptMessageControls']],

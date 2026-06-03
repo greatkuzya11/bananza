@@ -669,6 +669,7 @@ function createAiBotFeature({
   onMessagePublished,
   saveMessageMentions,
   messageActions,
+  onBotMembershipChanged,
 }) {
   const botByIdStmt = db.prepare(`
     SELECT b.*, u.avatar_color, u.avatar_url
@@ -1262,7 +1263,7 @@ function createAiBotFeature({
   `);
   const addBotMemberStmt = db.prepare('INSERT OR IGNORE INTO chat_members(chat_id,user_id) VALUES(?,?)');
   const removeBotMemberStmt = db.prepare('DELETE FROM chat_members WHERE chat_id=? AND user_id=?');
-  const removeBotFromAllChatsStmt = db.prepare('DELETE FROM chat_members WHERE user_id=?');
+  const botMemberChatsStmt = db.prepare('SELECT chat_id FROM chat_members WHERE user_id=?');
   const enabledBotChatsStmt = db.prepare('SELECT chat_id FROM ai_chat_bots WHERE bot_id=? AND enabled=1');
   const syntheticMentionUserStmt = db.prepare('SELECT id, username, display_name FROM users WHERE id=? AND COALESCE(is_ai_bot,0)=0');
   const passThroughLimiter = (_req, _res, next) => next();
@@ -2689,17 +2690,66 @@ function createAiBotFeature({
     if (fs.existsSync(oldFile)) fs.unlinkSync(oldFile);
   }
 
-  function syncBotMemberships(bot, isEnabled = true) {
-    if (!bot?.user_id) return;
-    removeBotFromAllChatsStmt.run(bot.user_id);
-    if (isChatShotBot(bot)) return;
-    if (!isEnabled) return;
-    enabledBotChatsStmt.all(bot.id).forEach((row) => {
-      addBotMemberStmt.run(row.chat_id, bot.user_id);
+  function notifyBotMembershipChanged({ chatId, bot, action, actorUserId = null, source = '' } = {}) {
+    if (typeof onBotMembershipChanged !== 'function') return;
+    onBotMembershipChanged({
+      chatId,
+      bot: sanitizeBot(bot),
+      action,
+      actorUserId,
+      source: source || 'bot_membership_sync',
     });
   }
 
-  const saveChatBotSettingTx = db.transaction(({ chatId, bot, enabled, mode, hotContextLimit, triggerMode, autoReactOnMention }) => {
+  function syncBotMemberships(bot, isEnabled = true, options = {}) {
+    if (!bot?.user_id) return;
+    const before = new Set(botMemberChatsStmt.all(bot.user_id).map((row) => Number(row.chat_id) || 0).filter(Boolean));
+    const desired = new Set();
+    if (!isChatShotBot(bot) && isEnabled) {
+      enabledBotChatsStmt.all(bot.id).forEach((row) => {
+        const chatId = Number(row.chat_id) || 0;
+        if (chatId) desired.add(chatId);
+      });
+    }
+    before.forEach((chatId) => {
+      if (desired.has(chatId)) return;
+      const removed = removeBotMemberStmt.run(chatId, bot.user_id);
+      if (removed.changes > 0) {
+        notifyBotMembershipChanged({
+          chatId,
+          bot,
+          action: 'removed',
+          actorUserId: options.actorUserId,
+          source: options.source || 'bot_membership_sync',
+        });
+      }
+    });
+    desired.forEach((chatId) => {
+      if (before.has(chatId)) return;
+      const added = addBotMemberStmt.run(chatId, bot.user_id);
+      if (added.changes > 0) {
+        notifyBotMembershipChanged({
+          chatId,
+          bot,
+          action: 'added',
+          actorUserId: options.actorUserId,
+          source: options.source || 'bot_membership_sync',
+        });
+      }
+    });
+  }
+
+  const saveChatBotSettingTx = db.transaction(({
+    chatId,
+    bot,
+    enabled,
+    mode,
+    hotContextLimit,
+    triggerMode,
+    autoReactOnMention,
+    actorUserId = null,
+    source = 'chat_bot_setting',
+  }) => {
     upsertChatBotSettingStmt.run(
       chatId,
       bot.id,
@@ -2711,13 +2761,22 @@ function createAiBotFeature({
     );
     if (!bot.user_id) return;
     if (isChatShotBot(bot)) {
-      removeBotMemberStmt.run(chatId, bot.user_id);
+      const removed = removeBotMemberStmt.run(chatId, bot.user_id);
+      if (removed.changes > 0) {
+        notifyBotMembershipChanged({ chatId, bot, action: 'removed', actorUserId, source });
+      }
       return;
     }
     if (enabled && bot.enabled !== 0) {
-      addBotMemberStmt.run(chatId, bot.user_id);
+      const added = addBotMemberStmt.run(chatId, bot.user_id);
+      if (added.changes > 0) {
+        notifyBotMembershipChanged({ chatId, bot, action: 'added', actorUserId, source });
+      }
     } else {
-      removeBotMemberStmt.run(chatId, bot.user_id);
+      const removed = removeBotMemberStmt.run(chatId, bot.user_id);
+      if (removed.changes > 0) {
+        notifyBotMembershipChanged({ chatId, bot, action: 'removed', actorUserId, source });
+      }
     }
   });
 
@@ -5404,6 +5463,8 @@ function createAiBotFeature({
       hotContextLimit: 50,
       triggerMode: 'mention_reply',
       autoReactOnMention: false,
+      actorUserId: req.user.id,
+      source: `${provider}_convert_chat_setting`,
     });
     broadcastContextConvertBotsUpdated([chatId]);
     return res.json({ ok: true, state: serializeConvertAdminStateByProvider(provider) });
@@ -5429,6 +5490,8 @@ function createAiBotFeature({
       hotContextLimit: intValue(bot.chatshot_context_limit, CHATSHOT_DEFAULT_CONTEXT_LIMIT, CHATSHOT_MIN_CONTEXT_LIMIT, CHATSHOT_MAX_CONTEXT_LIMIT),
       triggerMode: 'manual',
       autoReactOnMention: false,
+      actorUserId: req.user.id,
+      source: `${provider}_chatshot_chat_setting`,
     });
     broadcastChatShotBotsUpdated([chatId]);
     return res.json({ ok: true, state: serializeChatShotAdminStateByProvider(provider) });
@@ -7607,7 +7670,17 @@ function createAiBotFeature({
     const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
     const triggerMode = 'mention_reply';
     const autoReactOnMention = boolValue(req.body?.auto_react_on_mention, false);
-    saveChatBotSettingTx({ chatId, bot, enabled, mode, hotContextLimit, triggerMode, autoReactOnMention });
+    saveChatBotSettingTx({
+      chatId,
+      bot,
+      enabled,
+      mode,
+      hotContextLimit,
+      triggerMode,
+      autoReactOnMention,
+      actorUserId: req.user.id,
+      source: 'openai_text_chat_setting',
+    });
     if (enabled && mode === 'hybrid') {
       memoryQueue.enqueue(`ai:backfill:${chatId}`, { type: 'backfill-chat', chatId });
     }
@@ -7686,7 +7759,7 @@ function createAiBotFeature({
       if (typeof notifyUserUpdated === 'function') notifyUserUpdated(current.user_id);
     }
     const updated = botByIdStmt.get(botId);
-    syncBotMemberships(updated, updated.enabled !== 0);
+    syncBotMemberships(updated, updated.enabled !== 0, { actorUserId: req.user.id, source: 'openai_text_bot_update' });
     res.json({ bot: sanitizeBot(updated), state: serializeAdminState() });
   });
 
@@ -7696,7 +7769,7 @@ function createAiBotFeature({
     if (!current) return;
     db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(botId);
     db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(botId);
-    syncBotMemberships(current, false);
+    syncBotMemberships(current, false, { actorUserId: req.user.id, source: 'openai_text_bot_disabled' });
     res.json({ ok: true, state: serializeAdminState() });
   });
 
@@ -7824,7 +7897,7 @@ function createAiBotFeature({
     const input = normalizeBotInput({ ...(req.body || {}), provider: 'openai', kind: 'chatshot' }, current);
     updateChatShotBot('openai', current, input);
     const updated = botByIdStmt.get(current.id);
-    syncBotMemberships(updated, updated?.enabled !== 0);
+    syncBotMemberships(updated, updated?.enabled !== 0, { actorUserId: req.user.id, source: 'openai_chatshot_bot_update' });
     broadcastChatShotBotUpdatedForBot(current.id, [current, updated]);
     res.json({ bot: sanitizeBot(updated), state: serializeOpenAiChatShotAdminState() });
   });
@@ -7834,7 +7907,7 @@ function createAiBotFeature({
     if (!current) return;
     db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
     db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
-    syncBotMemberships(current, false);
+    syncBotMemberships(current, false, { actorUserId: req.user.id, source: 'openai_chatshot_bot_disabled' });
     broadcastChatShotBotUpdatedForBot(current.id, [current]);
     res.json({ ok: true, state: serializeOpenAiChatShotAdminState() });
   });
@@ -7911,6 +7984,8 @@ function createAiBotFeature({
       hotContextLimit: 50,
       triggerMode: 'mention_reply',
       autoReactOnMention: false,
+      actorUserId: req.user.id,
+      source: 'openai_image_chat_setting',
     });
     res.json({ ok: true, state: serializeOpenAiImageAdminState() });
   });
@@ -7956,7 +8031,7 @@ function createAiBotFeature({
     const input = normalizeBotInput({ ...(req.body || {}), provider: 'openai', kind: 'image' }, current);
     updateOpenAiImageBot(current, input);
     const updated = botByIdStmt.get(current.id);
-    syncBotMemberships(updated, updated.enabled !== 0);
+    syncBotMemberships(updated, updated.enabled !== 0, { actorUserId: req.user.id, source: 'openai_image_bot_update' });
     res.json({ bot: sanitizeBot(updated), state: serializeOpenAiImageAdminState() });
   });
 
@@ -7965,7 +8040,7 @@ function createAiBotFeature({
     if (!current) return;
     db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
     db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
-    syncBotMemberships(current, false);
+    syncBotMemberships(current, false, { actorUserId: req.user.id, source: 'openai_image_bot_disabled' });
     res.json({ ok: true, state: serializeOpenAiImageAdminState() });
   });
 
@@ -8079,7 +8154,17 @@ function createAiBotFeature({
     const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
     const triggerMode = 'mention_reply';
     const autoReactOnMention = boolValue(req.body?.auto_react_on_mention, false);
-    saveChatBotSettingTx({ chatId, bot, enabled, mode, hotContextLimit, triggerMode, autoReactOnMention });
+    saveChatBotSettingTx({
+      chatId,
+      bot,
+      enabled,
+      mode,
+      hotContextLimit,
+      triggerMode,
+      autoReactOnMention,
+      actorUserId: req.user.id,
+      source: 'openai_universal_chat_setting',
+    });
     if (enabled && mode === 'hybrid') {
       memoryQueue.enqueue(`ai:backfill:${chatId}`, { type: 'backfill-chat', chatId });
     }
@@ -8169,7 +8254,7 @@ function createAiBotFeature({
       if (typeof notifyUserUpdated === 'function') notifyUserUpdated(current.user_id);
     }
     const updated = botByIdStmt.get(current.id);
-    syncBotMemberships(updated, updated.enabled !== 0);
+    syncBotMemberships(updated, updated.enabled !== 0, { actorUserId: req.user.id, source: 'openai_universal_bot_update' });
     res.json({ bot: sanitizeBot(updated), state: serializeOpenAiUniversalAdminState() });
   });
 
@@ -8178,7 +8263,7 @@ function createAiBotFeature({
     if (!current) return;
     db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
     db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
-    syncBotMemberships(current, false);
+    syncBotMemberships(current, false, { actorUserId: req.user.id, source: 'openai_universal_bot_disabled' });
     res.json({ ok: true, state: serializeOpenAiUniversalAdminState() });
   });
 
@@ -8456,7 +8541,17 @@ function createAiBotFeature({
     const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
     const triggerMode = 'mention_reply';
     const autoReactOnMention = boolValue(req.body?.auto_react_on_mention, false);
-    saveChatBotSettingTx({ chatId, bot, enabled, mode: 'simple', hotContextLimit, triggerMode, autoReactOnMention });
+    saveChatBotSettingTx({
+      chatId,
+      bot,
+      enabled,
+      mode: 'simple',
+      hotContextLimit,
+      triggerMode,
+      autoReactOnMention,
+      actorUserId: req.user.id,
+      source: 'deepseek_text_chat_setting',
+    });
     res.json({ ok: true, state: serializeDeepSeekAdminState() });
   });
 
@@ -8531,7 +8626,7 @@ function createAiBotFeature({
       if (typeof notifyUserUpdated === 'function') notifyUserUpdated(current.user_id);
     }
     const updated = botByIdStmt.get(current.id);
-    syncBotMemberships(updated, updated.enabled !== 0);
+    syncBotMemberships(updated, updated.enabled !== 0, { actorUserId: req.user.id, source: 'deepseek_text_bot_update' });
     res.json({ bot: sanitizeBot(updated), state: serializeDeepSeekAdminState() });
   });
 
@@ -8540,7 +8635,7 @@ function createAiBotFeature({
     if (!current) return;
     db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
     db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
-    syncBotMemberships(current, false);
+    syncBotMemberships(current, false, { actorUserId: req.user.id, source: 'deepseek_text_bot_disabled' });
     res.json({ ok: true, state: serializeDeepSeekAdminState() });
   });
 
@@ -8834,7 +8929,17 @@ function createAiBotFeature({
     const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
     const triggerMode = 'mention_reply';
     const autoReactOnMention = boolValue(req.body?.auto_react_on_mention, false);
-    saveChatBotSettingTx({ chatId, bot, enabled, mode: 'simple', hotContextLimit, triggerMode, autoReactOnMention });
+    saveChatBotSettingTx({
+      chatId,
+      bot,
+      enabled,
+      mode: 'simple',
+      hotContextLimit,
+      triggerMode,
+      autoReactOnMention,
+      actorUserId: req.user.id,
+      source: 'qwen_text_chat_setting',
+    });
     res.json({ ok: true, state: serializeQwenAdminState() });
   });
 
@@ -8909,7 +9014,7 @@ function createAiBotFeature({
       if (typeof notifyUserUpdated === 'function') notifyUserUpdated(current.user_id);
     }
     const updated = botByIdStmt.get(current.id);
-    syncBotMemberships(updated, updated.enabled !== 0);
+    syncBotMemberships(updated, updated.enabled !== 0, { actorUserId: req.user.id, source: 'qwen_text_bot_update' });
     res.json({ bot: sanitizeBot(updated), state: serializeQwenAdminState() });
   });
 
@@ -8918,7 +9023,7 @@ function createAiBotFeature({
     if (!current) return;
     db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
     db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
-    syncBotMemberships(current, false);
+    syncBotMemberships(current, false, { actorUserId: req.user.id, source: 'qwen_text_bot_disabled' });
     res.json({ ok: true, state: serializeQwenAdminState() });
   });
 
@@ -9216,7 +9321,17 @@ function createAiBotFeature({
     const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
     const triggerMode = 'mention_reply';
     const autoReactOnMention = boolValue(req.body?.auto_react_on_mention, false);
-    saveChatBotSettingTx({ chatId, bot, enabled, mode, hotContextLimit, triggerMode, autoReactOnMention });
+    saveChatBotSettingTx({
+      chatId,
+      bot,
+      enabled,
+      mode,
+      hotContextLimit,
+      triggerMode,
+      autoReactOnMention,
+      actorUserId: req.user.id,
+      source: 'yandex_text_chat_setting',
+    });
     if (enabled && mode === 'hybrid') {
       memoryQueue.enqueue(`yandex:backfill:${chatId}`, { type: 'yandex-backfill-chat', chatId });
     }
@@ -9294,7 +9409,7 @@ function createAiBotFeature({
       if (typeof notifyUserUpdated === 'function') notifyUserUpdated(current.user_id);
     }
     const updated = botByIdStmt.get(current.id);
-    syncBotMemberships(updated, updated.enabled !== 0);
+    syncBotMemberships(updated, updated.enabled !== 0, { actorUserId: req.user.id, source: 'yandex_text_bot_update' });
     res.json({ bot: sanitizeBot(updated), state: serializeYandexAdminState() });
   });
 
@@ -9303,7 +9418,7 @@ function createAiBotFeature({
     if (!current) return;
     db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
     db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
-    syncBotMemberships(current, false);
+    syncBotMemberships(current, false, { actorUserId: req.user.id, source: 'yandex_text_bot_disabled' });
     res.json({ ok: true, state: serializeYandexAdminState() });
   });
 
@@ -9586,7 +9701,17 @@ function createAiBotFeature({
     const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
     const triggerMode = 'mention_reply';
     const autoReactOnMention = botKind === 'image' ? false : boolValue(req.body?.auto_react_on_mention, false);
-    saveChatBotSettingTx({ chatId, bot, enabled, mode, hotContextLimit, triggerMode, autoReactOnMention });
+    saveChatBotSettingTx({
+      chatId,
+      bot,
+      enabled,
+      mode,
+      hotContextLimit,
+      triggerMode,
+      autoReactOnMention,
+      actorUserId: req.user.id,
+      source: 'grok_text_chat_setting',
+    });
     if (enabled && mode === 'hybrid' && botKind === 'text') {
       memoryQueue.enqueue(`grok:backfill:${chatId}`, { type: 'grok-backfill-chat', chatId });
     }
@@ -9685,7 +9810,7 @@ function createAiBotFeature({
       if (typeof notifyUserUpdated === 'function') notifyUserUpdated(current.user_id);
     }
     const updated = botByIdStmt.get(current.id);
-    syncBotMemberships(updated, updated.enabled !== 0);
+    syncBotMemberships(updated, updated.enabled !== 0, { actorUserId: req.user.id, source: 'grok_text_bot_update' });
     res.json({ bot: sanitizeBot(updated), state: serializeGrokAdminState() });
   });
 
@@ -9697,7 +9822,7 @@ function createAiBotFeature({
     }
     db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
     db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
-    syncBotMemberships(current, false);
+    syncBotMemberships(current, false, { actorUserId: req.user.id, source: 'grok_text_bot_disabled' });
     res.json({ ok: true, state: serializeGrokAdminState() });
   });
 
@@ -9956,7 +10081,7 @@ function createAiBotFeature({
     const input = normalizeBotInput({ ...(req.body || {}), provider: 'grok', kind: 'chatshot' }, current);
     updateChatShotBot('grok', current, input);
     const updated = botByIdStmt.get(current.id);
-    syncBotMemberships(updated, updated?.enabled !== 0);
+    syncBotMemberships(updated, updated?.enabled !== 0, { actorUserId: req.user.id, source: 'grok_chatshot_bot_update' });
     broadcastChatShotBotUpdatedForBot(current.id, [current, updated]);
     res.json({ bot: sanitizeBot(updated), state: serializeGrokChatShotAdminState() });
   });
@@ -9966,7 +10091,7 @@ function createAiBotFeature({
     if (!current) return;
     db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
     db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
-    syncBotMemberships(current, false);
+    syncBotMemberships(current, false, { actorUserId: req.user.id, source: 'grok_chatshot_bot_disabled' });
     broadcastChatShotBotUpdatedForBot(current.id, [current]);
     res.json({ ok: true, state: serializeGrokChatShotAdminState() });
   });
@@ -10066,7 +10191,17 @@ function createAiBotFeature({
     const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
     const triggerMode = 'mention_reply';
     const autoReactOnMention = boolValue(req.body?.auto_react_on_mention, false);
-    saveChatBotSettingTx({ chatId, bot, enabled, mode, hotContextLimit, triggerMode, autoReactOnMention });
+    saveChatBotSettingTx({
+      chatId,
+      bot,
+      enabled,
+      mode,
+      hotContextLimit,
+      triggerMode,
+      autoReactOnMention,
+      actorUserId: req.user.id,
+      source: 'grok_universal_chat_setting',
+    });
     if (enabled && mode === 'hybrid') {
       memoryQueue.enqueue(`grok:backfill:${chatId}`, { type: 'grok-backfill-chat', chatId });
     }
@@ -10154,7 +10289,7 @@ function createAiBotFeature({
       if (typeof notifyUserUpdated === 'function') notifyUserUpdated(current.user_id);
     }
     const updated = botByIdStmt.get(current.id);
-    syncBotMemberships(updated, updated.enabled !== 0);
+    syncBotMemberships(updated, updated.enabled !== 0, { actorUserId: req.user.id, source: 'grok_universal_bot_update' });
     res.json({ bot: sanitizeBot(updated), state: serializeGrokUniversalAdminState() });
   });
 
@@ -10163,7 +10298,7 @@ function createAiBotFeature({
     if (!current) return;
     db.prepare('UPDATE ai_bots SET enabled=0, updated_at=datetime(\'now\') WHERE id=?').run(current.id);
     db.prepare('UPDATE ai_chat_bots SET enabled=0, updated_at=datetime(\'now\') WHERE bot_id=?').run(current.id);
-    syncBotMemberships(current, false);
+    syncBotMemberships(current, false, { actorUserId: req.user.id, source: 'grok_universal_bot_disabled' });
     res.json({ ok: true, state: serializeGrokUniversalAdminState() });
   });
 

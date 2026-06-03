@@ -35,6 +35,8 @@
           isMessageDisplayed: (id) => isMessageDisplayed(id),
           normalizePinEvent: (raw) => normalizePinEvent(raw),
           normalizePinEvents: (events) => normalizePinEvents(events),
+          normalizeSystemEvent: (raw) => normalizeSystemEvent(raw),
+          normalizeSystemEvents: (events) => normalizeSystemEvents(events),
         },
       });
       const readReceiptController = readReceiptFactory({
@@ -130,12 +132,13 @@
           hasEdit: () => Boolean(composerStateController.editTo),
         },
         actions: {
-          appendTimelineItems: (messages, pinEvents, options = {}) => appendTimelineItems(messages, pinEvents, options),
+          appendTimelineItems: (messages, pinEvents, systemEvents = [], options = {}) => appendTimelineItems(messages, pinEvents, systemEvents, options),
           applyChatBackground: (chat) => applyChatBackground(chat),
           cleanupDuplicateDateSeparators: () => cleanupDuplicateDateSeparators(),
           clearDisplayedTimelineState: () => {
             messageStateController?.clearDisplayedMessages?.();
             messageStateController?.clearDisplayedPinEvents?.();
+            messageStateController?.clearDisplayedSystemEvents?.();
           },
           clearEdit: (options = {}) => clearEdit(options),
           clearPendingFile: () => clearPendingFile(),
@@ -152,6 +155,7 @@
             hideFloatingMessageActions({ immediate: true });
           },
           filterNewPinEvents: (events) => filterNewPinEvents(events),
+          filterNewSystemEvents: (events) => filterNewSystemEvents(events),
           flushDeferredRecoverySync: () => flushDeferredRecoverySync(),
           isAbortError: (error) => isAbortError(error),
           isChatPinned: (chat) => isChatPinned(chat),
@@ -167,10 +171,10 @@
           renderChatList: (filter = chatSearch?.value || '') => renderChatList(filter),
           renderCurrentChatHeader: (chat) => renderCurrentChatHeader(chat),
           renderedMessageIdsMatch: (messages) => renderedMessageIdsMatch(messages),
-          renderMessages: (messages, options = {}) => renderMessages(messages, options.pinEvents || []),
+          renderMessages: (messages, options = {}) => renderMessages(messages, options.pinEvents || [], options.systemEvents || []),
           renderOutboxForChat: (chatId) => renderOutboxForChat(chatId),
           renderPinnedBar: (chatId) => renderPinnedBar(chatId),
-          replaceRenderedMessages: (messages, options = {}) => replaceRenderedMessages(messages, options.pinEvents || [], options),
+          replaceRenderedMessages: (messages, options = {}) => replaceRenderedMessages(messages, options.pinEvents || [], options.systemEvents || [], options),
           restoreComposerDraft: (chatId) => restoreComposerDraft(chatId),
           revealActiveMobileChatRoute: (options = {}) => revealActiveMobileChatRoute(options),
           revealChatHydration: (seq, chatId) => revealChatHydration(seq, chatId),

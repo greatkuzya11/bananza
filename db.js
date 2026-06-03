@@ -200,6 +200,31 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS chat_system_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL CHECK(event_type IN (
+      'chat_created',
+      'member_added',
+      'member_left',
+      'member_removed',
+      'chat_renamed',
+      'chat_avatar_updated',
+      'chat_avatar_removed',
+      'chat_background_updated',
+      'chat_background_removed',
+      'chat_background_style_updated',
+      'chat_history_cleared'
+    )),
+    actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    actor_name TEXT DEFAULT NULL,
+    target_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    target_user_name TEXT DEFAULT NULL,
+    target_is_ai_bot INTEGER DEFAULT 0,
+    metadata_json TEXT DEFAULT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS push_subscriptions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -223,6 +248,8 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_message_pins_message ON message_pins(message_id);
   CREATE INDEX IF NOT EXISTS idx_message_pin_events_chat ON message_pin_events(chat_id, id);
   CREATE INDEX IF NOT EXISTS idx_message_pin_events_message ON message_pin_events(message_id, id);
+  CREATE INDEX IF NOT EXISTS idx_chat_system_events_chat_created ON chat_system_events(chat_id, created_at, id);
+  CREATE INDEX IF NOT EXISTS idx_chat_system_events_target ON chat_system_events(target_user_id, chat_id);
   CREATE INDEX IF NOT EXISTS idx_message_context_transform_originals_active ON message_context_transform_originals(message_id, restored_at);
   CREATE INDEX IF NOT EXISTS idx_user_recent_emojis_user_time ON user_recent_emojis(user_id, last_used_at DESC);
 `);
@@ -598,6 +625,34 @@ db.prepare(`
       AND e.created_at=p.created_at
   )
 `).run();
+db.exec(`
+  CREATE TABLE IF NOT EXISTS chat_system_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL CHECK(event_type IN (
+      'chat_created',
+      'member_added',
+      'member_left',
+      'member_removed',
+      'chat_renamed',
+      'chat_avatar_updated',
+      'chat_avatar_removed',
+      'chat_background_updated',
+      'chat_background_removed',
+      'chat_background_style_updated',
+      'chat_history_cleared'
+    )),
+    actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    actor_name TEXT DEFAULT NULL,
+    target_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    target_user_name TEXT DEFAULT NULL,
+    target_is_ai_bot INTEGER DEFAULT 0,
+    metadata_json TEXT DEFAULT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_chat_system_events_chat_created ON chat_system_events(chat_id, created_at, id);
+  CREATE INDEX IF NOT EXISTS idx_chat_system_events_target ON chat_system_events(target_user_id, chat_id);
+`);
 db.exec(`
   CREATE TABLE IF NOT EXISTS polls (
     message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,

@@ -39,6 +39,8 @@
     const buildMessagesRootChildren = (...args) => actions.buildMessagesRootChildren?.(...args) || [];
     const normalizePinEvents = (...args) => actions.normalizePinEvents?.(...args) || [];
     const normalizePinEvent = (...args) => actions.normalizePinEvent?.(...args);
+    const normalizeSystemEvents = (...args) => actions.normalizeSystemEvents?.(...args) || [];
+    const normalizeSystemEvent = (...args) => actions.normalizeSystemEvent?.(...args);
     const jumpToPinnedMessage = (...args) => actions.jumpToPinnedMessage?.(...args);
     const filterNewMessages = (...args) => actions.filterNewMessages?.(...args) || [];
     const insertAtMessagesEnd = (...args) => actions.insertAtMessagesEnd?.(...args);
@@ -151,6 +153,7 @@
       if (resetDisplayed) {
         messageState.clearDisplayedMessages();
         messageState.clearDisplayedPinEvents();
+        messageState.clearDisplayedSystemEvents?.();
       }
     }
     
@@ -192,6 +195,27 @@
       const key = pinEventIdKey(id);
       return key ? messageState.isPinEventDisplayed(key) : false;
     }
+
+
+
+    function systemEventIdKey(id) {
+      const key = String(id ?? '').trim();
+      return key || '';
+    }
+
+
+
+    function rememberSystemEvent(id) {
+      const key = systemEventIdKey(id);
+      if (key) messageState.rememberDisplayedSystemEvent?.(key);
+    }
+
+
+
+    function isSystemEventDisplayed(id) {
+      const key = systemEventIdKey(id);
+      return key ? Boolean(messageState.isSystemEventDisplayed?.(key)) : false;
+    }
     
     
     
@@ -200,6 +224,18 @@
       return normalizePinEvents(events).filter((event) => {
         const key = pinEventIdKey(event.id);
         if (!key || seen.has(key) || isPinEventDisplayed(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+
+
+
+    function filterNewSystemEvents(events = []) {
+      const seen = new Set();
+      return normalizeSystemEvents(events).filter((event) => {
+        const key = systemEventIdKey(event.id);
+        if (!key || seen.has(key) || isSystemEventDisplayed(key)) return false;
         seen.add(key);
         return true;
       });
@@ -215,14 +251,16 @@
     
     
     
-    function buildTimelineItems(msgs = [], pinEvents = []) {
+    function buildTimelineItems(msgs = [], pinEvents = [], systemEvents = []) {
       return [
         ...(Array.isArray(msgs) ? msgs : []).map((message) => ({ kind: 'message', message, created_at: message?.created_at })),
+        ...normalizeSystemEvents(systemEvents).map((event) => ({ kind: 'system-event', event, created_at: event.created_at })),
         ...normalizePinEvents(pinEvents).map((event) => ({ kind: 'pin-event', event, created_at: event.created_at })),
       ].sort((a, b) => {
         const byTime = timelineTimestamp(a) - timelineTimestamp(b);
         if (byTime) return byTime;
-        if (a.kind !== b.kind) return a.kind === 'message' ? -1 : 1;
+        const order = { 'system-event': 0, message: 1, 'pin-event': 2 };
+        if (a.kind !== b.kind) return (order[a.kind] ?? 9) - (order[b.kind] ?? 9);
         const aId = Number(a.message?.id || a.event?.id || 0);
         const bId = Number(b.message?.id || b.event?.id || 0);
         return aId - bId;
@@ -260,14 +298,71 @@
       });
       return row;
     }
+
+
+
+    function systemEventText(event) {
+      const actor = String(event.actor_name || t('Someone')).trim() || t('Someone');
+      const target = String(event.target_user_name || t('Someone')).trim() || t('Someone');
+      const metadata = event.metadata && typeof event.metadata === 'object' ? event.metadata : {};
+      const isBot = Number(event.target_is_ai_bot || 0) !== 0;
+      switch (event.event_type) {
+        case 'chat_created':
+          return t('{actor} created the chat', { actor });
+        case 'member_added':
+          return isBot
+            ? t('{actor} added bot {target}', { actor, target })
+            : t('{actor} added {target}', { actor, target });
+        case 'member_left':
+          return t('{target} left the chat', { target });
+        case 'member_removed':
+          return isBot
+            ? t('{actor} removed bot {target}', { actor, target })
+            : t('{actor} removed {target}', { actor, target });
+        case 'chat_renamed':
+          return t('{actor} renamed the chat to {name}', { actor, name: metadata.new_name || '' });
+        case 'chat_avatar_updated':
+          return t('{actor} changed the chat avatar', { actor });
+        case 'chat_avatar_removed':
+          return t('{actor} removed the chat avatar', { actor });
+        case 'chat_background_updated':
+          return t('{actor} changed the chat background', { actor });
+        case 'chat_background_removed':
+          return t('{actor} removed the chat background', { actor });
+        case 'chat_background_style_updated':
+          return t('{actor} changed the chat background style', { actor });
+        case 'chat_history_cleared':
+          return t('{actor} cleared chat history', { actor });
+        default:
+          return t('Chat event');
+      }
+    }
+
+
+
+    function renderChatSystemEvent(event) {
+      const item = normalizeSystemEvent(event);
+      if (!item) return null;
+      const row = document.createElement('div');
+      const eventClass = String(item.event_type || 'event').replace(/[^a-z0-9_-]/gi, '_');
+      row.className = `pin-system-row chat-system-row chat-system-row--${eventClass}`;
+      row.dataset.systemEventId = String(item.id);
+      row.dataset.chatId = String(item.chat_id);
+      row.dataset.systemEventType = String(item.event_type || '');
+      row.innerHTML = `
+        <span class="pin-system-icon chat-system-icon" aria-hidden="true">&#9432;</span>
+        <span class="pin-system-copy chat-system-copy">${esc(systemEventText(item))}</span>
+      `;
+      return row;
+    }
     
     
     
-    function buildMessagesFragment(msgs = [], pinEvents = [], options = {}) {
+    function buildMessagesFragment(msgs = [], pinEvents = [], systemEvents = [], options = {}) {
       const fragment = document.createDocumentFragment();
       let lastDate = null;
       let currentGroupBody = null;
-      const items = buildTimelineItems(msgs, pinEvents);
+      const items = buildTimelineItems(msgs, pinEvents, systemEvents);
     
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
@@ -290,6 +385,16 @@
           currentGroupBody = null;
           fragment.appendChild(systemRow);
           rememberPinEvent(item.event.id);
+          continue;
+        }
+
+        if (item.kind === 'system-event') {
+          if (isSystemEventDisplayed(item.event?.id)) continue;
+          const systemRow = renderChatSystemEvent(item.event);
+          if (!systemRow) continue;
+          currentGroupBody = null;
+          fragment.appendChild(systemRow);
+          rememberSystemEvent(item.event.id);
           continue;
         }
     
@@ -324,11 +429,12 @@
     
     
     
-    function replaceRenderedMessages(msgs = [], pinEvents = [], options = {}) {
+    function replaceRenderedMessages(msgs = [], pinEvents = [], systemEvents = [], options = {}) {
       messageState.clearDisplayedMessages();
       messageState.clearDisplayedPinEvents();
+      messageState.clearDisplayedSystemEvents?.();
       messageState.clearPendingMediaBottomScrollRows();
-      const fragment = buildMessagesFragment(Array.isArray(msgs) ? msgs : [], pinEvents, options);
+      const fragment = buildMessagesFragment(Array.isArray(msgs) ? msgs : [], pinEvents, systemEvents, options);
       messagesEl.replaceChildren(...buildMessagesRootChildren(fragment));
       updateScrollBottomButton();
       refreshScrollDateIndicator();
@@ -353,14 +459,15 @@
     
     
     
-    function appendTimelineItems(msgs = [], pinEvents = [], options = {}) {
+    function appendTimelineItems(msgs = [], pinEvents = [], systemEvents = [], options = {}) {
       const messages = filterNewMessages(msgs);
       const events = filterNewPinEvents(pinEvents);
-      if (!events.length) {
+      const systemItems = filterNewSystemEvents(systemEvents);
+      if (!events.length && !systemItems.length) {
         messages.forEach((message) => appendMessage(message, options));
         return;
       }
-      const fragment = buildMessagesFragment(messages, events, { ...options, entering: options.entering !== false });
+      const fragment = buildMessagesFragment(messages, events, systemItems, { ...options, entering: options.entering !== false });
       if (fragment.childNodes.length) {
         insertAtMessagesEnd(fragment);
         markPendingMediaBottomScrollForMessages(messages, Boolean(options.mediaAutoScrollToBottom));
@@ -378,7 +485,24 @@
       if (!item || item.action !== 'pinned' || Number(item.chat_id || 0) !== Number(getCurrentChatId() || 0)) return false;
       const wasNearBottom = isNearBottom(120);
       const anchor = wasNearBottom ? null : captureScrollAnchor();
-      appendTimelineItems([], [item]);
+      appendTimelineItems([], [item], []);
+      if (wasNearBottom) {
+        scrollToBottom(false, true);
+      } else if (anchor?.messageId) {
+        requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
+        saveCurrentScrollAnchor(getCurrentChatId(), { force: true });
+      }
+      return true;
+    }
+
+
+
+    function appendSystemEventIfVisible(event) {
+      const item = normalizeSystemEvent(event);
+      if (!item || Number(item.chat_id || 0) !== Number(getCurrentChatId() || 0)) return false;
+      const wasNearBottom = isNearBottom(120);
+      const anchor = wasNearBottom ? null : captureScrollAnchor();
+      appendTimelineItems([], [], [item]);
       if (wasNearBottom) {
         scrollToBottom(false, true);
       } else if (anchor?.messageId) {
@@ -520,9 +644,9 @@
     
     
     
-    function renderMessages(msgs, pinEvents = []) {
+    function renderMessages(msgs, pinEvents = [], systemEvents = []) {
       const existingFirst = messagesEl.querySelector('.date-separator, .pin-system-row, .msg-row, .msg-group');
-      const fragment = buildMessagesFragment(msgs, pinEvents);
+      const fragment = buildMessagesFragment(msgs, pinEvents, systemEvents);
       if (existingFirst) messagesEl.insertBefore(fragment, existingFirst);
       else insertAtMessagesEnd(fragment);
       updateScrollBottomButton();
@@ -1122,6 +1246,9 @@
       pinEventIdKey,
       rememberPinEvent,
       isPinEventDisplayed,
+      systemEventIdKey,
+      rememberSystemEvent,
+      isSystemEventDisplayed,
       timelineTimestamp,
       buildTimelineItems,
       buildMessagesFragment,
@@ -1129,6 +1256,7 @@
       primeAppendedMessageSideEffects,
       appendTimelineItems,
       appendPinEventIfVisible,
+      appendSystemEventIfVisible,
       isCurrentMessageRow,
       messageHasDeferredMediaLayout,
       clearPendingMediaBottomScroll,
@@ -1148,7 +1276,9 @@
       cleanupDuplicateDateSeparators,
       refreshDateSeparators,
       filterNewPinEvents,
+      filterNewSystemEvents,
       renderPinSystemEvent,
+      renderChatSystemEvent,
     };
   }
 

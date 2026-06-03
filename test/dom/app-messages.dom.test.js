@@ -226,6 +226,87 @@ test('message modules publish expected factories', () => {
   dom.window.close();
 });
 
+test('message renderer mixes chat system events into an empty timeline and deduplicates them', () => {
+  const dom = createAppDom();
+  loadAppRuntimeScripts(dom);
+  const { window } = dom;
+  const { document } = window;
+  const messagesEl = document.getElementById('messages');
+  const messageState = window.BananzaApp.messages.state.createMessageState();
+  const interpolate = (key, values = {}) => String(key).replace(/\{(\w+)\}/g, (_match, name) => values[name] ?? '');
+  const normalizeSystemEvent = (raw = {}) => ({
+    id: Number(raw.id),
+    chat_id: Number(raw.chat_id || raw.chatId || 1),
+    event_type: raw.event_type || raw.eventType,
+    actor_id: raw.actor_id ?? null,
+    actor_name: raw.actor_name || '',
+    target_user_id: raw.target_user_id ?? null,
+    target_user_name: raw.target_user_name || '',
+    target_is_ai_bot: Number(raw.target_is_ai_bot || 0),
+    metadata: raw.metadata || {},
+    created_at: raw.created_at || '2026-05-31T10:00:00.000Z',
+  });
+
+  const renderer = window.BananzaApp.messages.render.createMessageRenderer({
+    window,
+    document,
+    dom: { messagesEl },
+    messageState,
+    t: interpolate,
+    esc: (value) => String(value ?? ''),
+    formatDate: () => 'May 31, 2026',
+    formatTime: () => '10:00',
+    state: {
+      getCurrentUser: () => ({ id: 1 }),
+      getCurrentChatId: () => 1,
+      isCompactView: () => false,
+    },
+    actions: {
+      buildMessagesRootChildren: (fragment = null) => fragment ? [fragment] : [],
+      normalizePinEvents: () => [],
+      normalizePinEvent: () => null,
+      normalizeSystemEvent,
+      normalizeSystemEvents: (events = []) => events.map(normalizeSystemEvent).filter((event) => event.id),
+      filterNewMessages: () => [],
+      insertAtMessagesEnd: (node) => messagesEl.appendChild(node),
+      getMessagesLastContentChild: () => messagesEl.lastElementChild,
+      updateScrollBottomButton() {},
+      refreshScrollDateIndicator() {},
+      getRenderedMessageRows: () => [],
+      isLoadingMoreAfter: () => false,
+      isNearBottom: () => true,
+      captureScrollAnchor: () => null,
+      restoreScrollAnchor() {},
+      saveCurrentScrollAnchor() {},
+      scrollToBottom() {},
+    },
+  });
+
+  const event = {
+    id: 10,
+    chat_id: 1,
+    event_type: 'member_added',
+    actor_name: 'Alice',
+    target_user_name: 'Bot',
+    target_is_ai_bot: 1,
+    created_at: '2026-05-31T10:00:00.000Z',
+  };
+  renderer.replaceRenderedMessages([], [], [event]);
+
+  const rows = messagesEl.querySelectorAll('.chat-system-row');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].dataset.systemEventId, '10');
+  assert.equal(rows[0].getAttribute('role'), null);
+  assert.equal(rows[0].tabIndex, -1);
+  assert.match(rows[0].textContent, /Alice added bot Bot/);
+
+  renderer.appendSystemEventIfVisible(event);
+  assert.equal(messagesEl.querySelectorAll('.chat-system-row').length, 1);
+  renderer.appendSystemEventIfVisible({ ...event, id: 11, event_type: 'chat_history_cleared', actor_name: 'Alice' });
+  assert.equal(messagesEl.querySelectorAll('.chat-system-row').length, 2);
+  dom.window.close();
+});
+
 test('bridge renderer appends rows, groups senders, preserves data, and skips duplicates', async (t) => {
   const dom = await bootFullApp();
   t.after(() => dom.window.close());

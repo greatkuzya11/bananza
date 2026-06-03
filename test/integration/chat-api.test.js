@@ -337,6 +337,117 @@ test('creator-only chat management routes enforce permissions and mutate state',
   assert.equal(deleted.data.ok, true);
 });
 
+test('chat system events are persisted for membership, bots, profile changes and history clear', async () => {
+  const { admin, bob, carol } = scenario;
+  const suffix = Date.now();
+  const dave = createSession(sandbox.baseUrl);
+  await dave.register(makeUser('sysdave'));
+
+  const { data: chat } = await admin.request('/api/chats', {
+    method: 'POST',
+    json: {
+      name: `System ${suffix}`,
+      type: 'group',
+      memberIds: [bob.user.id, carol.user.id],
+    },
+  });
+  const chatId = Number(chat.id);
+
+  const initial = await admin.request(`/api/chats/${chatId}/messages`, { searchParams: { meta: 1 } });
+  assert.deepEqual(initial.data.messages, []);
+  assert.ok(initial.data.system_events.some((event) => event.event_type === 'chat_created'));
+  assert.ok(initial.data.system_events.some((event) => event.event_type === 'member_added' && Number(event.target_user_id) === Number(bob.user.id)));
+  assert.ok(initial.data.system_events.some((event) => event.event_type === 'member_added' && Number(event.target_user_id) === Number(carol.user.id)));
+
+  await admin.request(`/api/chats/${chatId}/members`, {
+    method: 'POST',
+    json: { userId: dave.user.id },
+  });
+  await dave.request(`/api/chats/${chatId}/members/me`, { method: 'DELETE' });
+  await admin.request(`/api/chats/${chatId}/members`, {
+    method: 'POST',
+    json: { userId: dave.user.id },
+  });
+  await admin.request(`/api/chats/${chatId}/members/${dave.user.id}`, { method: 'DELETE' });
+
+  const bot = await createOpenAiBot(admin, { visibleToUsers: true });
+  await admin.request(`/api/chats/${chatId}/members`, {
+    method: 'POST',
+    json: { userId: Number(bot.user_id) },
+  });
+  await admin.request(`/api/chats/${chatId}/members/${bot.user_id}`, { method: 'DELETE' });
+
+  await admin.request(`/api/chats/${chatId}`, {
+    method: 'PUT',
+    json: { name: `System renamed ${suffix}` },
+  });
+
+  const avatar = new FormData();
+  avatar.append('avatar', new Blob([Buffer.from('avatar')], { type: 'image/png' }), 'avatar.png');
+  await admin.request(`/api/chats/${chatId}/avatar`, { method: 'POST', formData: avatar });
+  await admin.request(`/api/chats/${chatId}/avatar`, { method: 'DELETE' });
+
+  const background = new FormData();
+  background.append('background', new Blob([Buffer.from('background')], { type: 'image/png' }), 'background.png');
+  background.append('style', 'cover');
+  await admin.request(`/api/chats/${chatId}/background`, { method: 'POST', formData: background });
+  await admin.request(`/api/chats/${chatId}/background-style`, {
+    method: 'PUT',
+    json: { style: 'tile' },
+  });
+  await admin.request(`/api/chats/${chatId}/background`, { method: 'DELETE' });
+
+  const beforeClearEvents = await admin.request(`/api/chats/${chatId}/messages`, { searchParams: { meta: 1 } });
+  const beforeClearTypes = beforeClearEvents.data.system_events.map((event) => event.event_type);
+  [
+    'member_added',
+    'member_left',
+    'member_removed',
+    'chat_renamed',
+    'chat_avatar_updated',
+    'chat_avatar_removed',
+    'chat_background_updated',
+    'chat_background_style_updated',
+    'chat_background_removed',
+  ].forEach((type) => assert.ok(beforeClearTypes.includes(type), `missing ${type}`));
+  assert.ok(beforeClearEvents.data.system_events.some((event) => event.event_type === 'member_added' && Number(event.target_user_id) === Number(bot.user_id) && Number(event.target_is_ai_bot) === 1));
+  assert.ok(beforeClearEvents.data.system_events.some((event) => event.event_type === 'member_removed' && Number(event.target_user_id) === Number(bot.user_id) && Number(event.target_is_ai_bot) === 1));
+
+  const beforeClearList = await bob.request('/api/chats');
+  const beforeClearEntry = beforeClearList.data.find((item) => Number(item.id) === chatId);
+  assert.equal(beforeClearEntry.unread_count, 0);
+  assert.equal(Number(beforeClearEntry.last_message_id || 0), 0);
+
+  await admin.request(`/api/chats/${chatId}/history`, { method: 'DELETE' });
+  const afterClear = await admin.request(`/api/chats/${chatId}/messages`, { searchParams: { meta: 1 } });
+  assert.deepEqual(afterClear.data.messages, []);
+  assert.equal(afterClear.data.system_events.length, 1);
+  assert.equal(afterClear.data.system_events[0].event_type, 'chat_history_cleared');
+
+  const afterClearList = await bob.request('/api/chats');
+  const afterClearEntry = afterClearList.data.find((item) => Number(item.id) === chatId);
+  assert.equal(afterClearEntry.unread_count, 0);
+  assert.equal(Number(afterClearEntry.last_message_id || 0), 0);
+
+  const db = new Database(path.join(sandbox.appDir, 'bananza.db'));
+  try {
+    const rows = db.prepare('SELECT event_type, target_user_id, target_is_ai_bot FROM chat_system_events WHERE chat_id=? ORDER BY id').all(chatId);
+    const eventTypes = rows.map((row) => row.event_type);
+    assert.ok(eventTypes.includes('chat_history_cleared'));
+    assert.equal(eventTypes.filter((type) => type === 'chat_history_cleared').length, 1);
+  } finally {
+    db.close();
+  }
+
+  const privateBotChat = await admin.request('/api/chats/private', {
+    method: 'POST',
+    json: { targetUserId: Number(bot.user_id) },
+  });
+  const privateBotEvents = await admin.request(`/api/chats/${privateBotChat.data.id}/messages`);
+  assert.ok(privateBotEvents.data.system_events.some((event) => event.event_type === 'chat_created'));
+  assert.ok(privateBotEvents.data.system_events.some((event) => event.event_type === 'member_added' && Number(event.target_user_id) === Number(bot.user_id) && Number(event.target_is_ai_bot) === 1));
+});
+
 test('context convert all-chat availability respects chat-level gates and bot enabled state', async () => {
   const { admin, bob, carol } = scenario;
   const db = new Database(path.join(sandbox.appDir, 'bananza.db'));

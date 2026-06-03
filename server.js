@@ -522,6 +522,7 @@ aiBotFeature = createAiBotFeature({
   onMessagePublished: (message) => handleChatListMessageCreated(message),
   saveMessageMentions: (messageId, chatId, text) => saveMessageMentions(messageId, chatId, text),
   messageActions,
+  onBotMembershipChanged: (event) => handleBotMembershipSystemEvent(event),
 });
 
 aiInitiativeFeature = createAiInitiativeFeature({
@@ -852,6 +853,75 @@ const pinEventsBetweenStmt = db.prepare(`
   ORDER BY created_at ASC, id ASC
   LIMIT 200
 `);
+const systemUserSnapshotStmt = db.prepare(`
+  SELECT id, username, display_name, COALESCE(is_ai_bot,0) as is_ai_bot
+  FROM users
+  WHERE id=?
+`);
+const chatCreatedAtStmt = db.prepare('SELECT created_at FROM chats WHERE id=?');
+const messageCreatedAtStmt = db.prepare('SELECT created_at FROM messages WHERE chat_id=? AND id=?');
+const insertChatSystemEventStmt = db.prepare(`
+  INSERT INTO chat_system_events(
+    chat_id,
+    event_type,
+    actor_id,
+    actor_name,
+    target_user_id,
+    target_user_name,
+    target_is_ai_bot,
+    metadata_json,
+    created_at
+  ) VALUES(?,?,?,?,?,?,?,?,COALESCE(?, datetime('now')))
+`);
+const chatSystemEventByIdStmt = db.prepare(`
+  SELECT
+    id,
+    chat_id,
+    event_type,
+    actor_id,
+    actor_name,
+    target_user_id,
+    target_user_name,
+    target_is_ai_bot,
+    metadata_json,
+    created_at
+  FROM chat_system_events
+  WHERE id=?
+`);
+const chatSystemEventsFromStmt = db.prepare(`
+  SELECT
+    id,
+    chat_id,
+    event_type,
+    actor_id,
+    actor_name,
+    target_user_id,
+    target_user_name,
+    target_is_ai_bot,
+    metadata_json,
+    created_at
+  FROM chat_system_events
+  WHERE chat_id=? AND created_at>=?
+  ORDER BY created_at ASC, id ASC
+  LIMIT 300
+`);
+const chatSystemEventsBetweenStmt = db.prepare(`
+  SELECT
+    id,
+    chat_id,
+    event_type,
+    actor_id,
+    actor_name,
+    target_user_id,
+    target_user_name,
+    target_is_ai_bot,
+    metadata_json,
+    created_at
+  FROM chat_system_events
+  WHERE chat_id=? AND created_at>=? AND created_at<=?
+  ORDER BY created_at ASC, id ASC
+  LIMIT 300
+`);
 
 function applyReplyTextFallback(row) {
   if (!row || Number(row.reply_text_is_fallback || 0) !== 1) return row;
@@ -1171,6 +1241,194 @@ function getPinEventsForWindow(chatId, messages = [], { openEnded = false } = {}
     ? pinEventsFromStmt.all(chatId, from)
     : pinEventsBetweenStmt.all(chatId, from, to);
   return rows.map(pinEventPayload).filter(Boolean);
+}
+
+const CHAT_SYSTEM_EVENT_TYPES = new Set([
+  'chat_created',
+  'member_added',
+  'member_left',
+  'member_removed',
+  'chat_renamed',
+  'chat_avatar_updated',
+  'chat_avatar_removed',
+  'chat_background_updated',
+  'chat_background_removed',
+  'chat_background_style_updated',
+  'chat_history_cleared',
+]);
+
+function systemActorPayload(actor) {
+  if (!actor) return { id: null, name: null };
+  const id = Number(actor.id || actor.user_id || 0) || null;
+  const name = String(actor.display_name || actor.username || actor.name || '').trim() || null;
+  return { id, name };
+}
+
+function systemTargetPayload(target) {
+  if (!target) return { id: null, name: null, isAiBot: 0 };
+  const id = Number(target.id || target.user_id || 0) || null;
+  const name = String(target.display_name || target.name || target.username || '').trim() || null;
+  const isAiBot = Number(target.is_ai_bot || target.target_is_ai_bot || 0) !== 0 ? 1 : 0;
+  return { id, name, isAiBot };
+}
+
+function userSystemSnapshot(userId) {
+  const id = Number(userId || 0);
+  return id ? systemUserSnapshotStmt.get(id) || null : null;
+}
+
+function chatSystemEventMetadata(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const clean = {};
+  Object.keys(value).forEach((key) => {
+    const normalizedKey = String(key || '').trim();
+    if (!normalizedKey) return;
+    const item = value[key];
+    if (item == null) return;
+    if (typeof item === 'string') clean[normalizedKey] = item.substring(0, 500);
+    else if (typeof item === 'number' || typeof item === 'boolean') clean[normalizedKey] = item;
+  });
+  if (!Object.keys(clean).length) return null;
+  try {
+    return JSON.stringify(clean);
+  } catch {
+    return null;
+  }
+}
+
+function parseChatSystemEventMetadata(value) {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function chatSystemEventPayload(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id) || 0,
+    chat_id: Number(row.chat_id) || 0,
+    event_type: row.event_type || '',
+    actor_id: row.actor_id == null ? null : Number(row.actor_id),
+    actor_name: row.actor_name || '',
+    target_user_id: row.target_user_id == null ? null : Number(row.target_user_id),
+    target_user_name: row.target_user_name || '',
+    target_is_ai_bot: Number(row.target_is_ai_bot) || 0,
+    metadata: row.metadata && typeof row.metadata === 'object'
+      ? row.metadata
+      : parseChatSystemEventMetadata(row.metadata_json),
+    created_at: row.created_at,
+  };
+}
+
+function broadcastChatSystemEvent(chatId, event) {
+  const payload = chatSystemEventPayload(event);
+  if (!payload || !payload.id) return null;
+  broadcastToChatAll(chatId, {
+    type: 'chat_system_event',
+    chatId,
+    event: payload,
+  });
+  return payload;
+}
+
+function recordChatSystemEvent({
+  chatId,
+  eventType,
+  actor = null,
+  actorId = null,
+  target = null,
+  targetUserId = null,
+  targetUserName = null,
+  targetIsAiBot = 0,
+  metadata = null,
+  createdAt = null,
+  broadcast = true,
+} = {}) {
+  const normalizedChatId = Number(chatId || 0);
+  const normalizedType = String(eventType || '').trim();
+  if (!normalizedChatId || !CHAT_SYSTEM_EVENT_TYPES.has(normalizedType)) return null;
+  const actorSnapshot = actor || userSystemSnapshot(actorId);
+  const targetSnapshot = target || userSystemSnapshot(targetUserId) || (
+    targetUserId || targetUserName
+      ? { id: targetUserId, display_name: targetUserName, is_ai_bot: targetIsAiBot }
+      : null
+  );
+  const actorPayload = systemActorPayload(actorSnapshot);
+  const targetPayload = systemTargetPayload(targetSnapshot);
+  const info = insertChatSystemEventStmt.run(
+    normalizedChatId,
+    normalizedType,
+    actorPayload.id,
+    actorPayload.name,
+    targetPayload.id,
+    targetPayload.name,
+    targetPayload.isAiBot,
+    chatSystemEventMetadata(metadata),
+    createdAt || null
+  );
+  const payload = chatSystemEventPayload(chatSystemEventByIdStmt.get(info.lastInsertRowid));
+  if (broadcast && payload) broadcastChatSystemEvent(normalizedChatId, payload);
+  return payload;
+}
+
+function messageCursorCreatedAt(chatId, messageId) {
+  const cid = Number(chatId || 0);
+  const mid = Number(messageId || 0);
+  if (!cid || !mid) return null;
+  return messageCreatedAtStmt.get(cid, mid)?.created_at || null;
+}
+
+function getSystemEventsForWindow(chatId, messages = [], {
+  openEnded = false,
+  before = null,
+  after = null,
+  anchor = null,
+  fallbackStart = null,
+} = {}) {
+  const times = (Array.isArray(messages) ? messages : [])
+    .map((msg) => msg?.created_at)
+    .filter(Boolean)
+    .sort();
+  let from = times[0] || null;
+  let to = times[times.length - 1] || null;
+  const afterCreatedAt = after ? messageCursorCreatedAt(chatId, after) : null;
+  const beforeCreatedAt = before ? messageCursorCreatedAt(chatId, before) : null;
+  const anchorCreatedAt = anchor ? messageCursorCreatedAt(chatId, anchor) : null;
+  if (afterCreatedAt) from = afterCreatedAt;
+  if (beforeCreatedAt) to = beforeCreatedAt;
+  if (anchorCreatedAt && !from) from = anchorCreatedAt;
+  if (anchorCreatedAt && !to) to = anchorCreatedAt;
+  if (!from) from = fallbackStart || chatCreatedAtStmt.get(chatId)?.created_at || null;
+  if (!from) return [];
+  const rows = openEnded || !to
+    ? chatSystemEventsFromStmt.all(chatId, from)
+    : chatSystemEventsBetweenStmt.all(chatId, from, to);
+  return rows.map(chatSystemEventPayload).filter(Boolean);
+}
+
+function handleBotMembershipSystemEvent({ chatId, bot, action, actorUserId = null, source = '' } = {}) {
+  const normalizedChatId = Number(chatId || 0);
+  const normalizedAction = action === 'removed' ? 'removed' : action === 'added' ? 'added' : '';
+  if (!normalizedChatId || !normalizedAction || !bot?.user_id) return null;
+  return recordChatSystemEvent({
+    chatId: normalizedChatId,
+    eventType: normalizedAction === 'removed' ? 'member_removed' : 'member_added',
+    actorId: actorUserId || null,
+    targetUserId: bot.user_id,
+    targetUserName: bot.name || bot.display_name || '',
+    targetIsAiBot: 1,
+    metadata: {
+      source: String(source || '').trim() || 'bot_membership',
+      bot_id: Number(bot.id || 0),
+      bot_provider: bot.provider || 'openai',
+      bot_kind: bot.kind || 'text',
+    },
+    broadcast: !String(source || '').endsWith('_chat_create'),
+  });
 }
 
 function getChatPins(chatId) {
@@ -1671,6 +1929,7 @@ const deleteChatMessageDataTx = db.transaction((chatId, { deleteChat = false } =
   `).run(chatId);
 
   db.prepare('DELETE FROM message_pin_events WHERE chat_id=?').run(chatId);
+  db.prepare('DELETE FROM chat_system_events WHERE chat_id=?').run(chatId);
   db.prepare('DELETE FROM message_pins WHERE chat_id=?').run(chatId);
   db.prepare('DELETE FROM message_mentions WHERE chat_id=?').run(chatId);
   deleteAiMemoryForChat(chatId);
@@ -1886,6 +2145,23 @@ app.post('/api/chats', auth, (req, res) => {
     addMemberStmt.run(createdChatId, req.user.id);
     humanTargets.forEach((user) => addMemberStmt.run(createdChatId, user.id));
     const createdChat = db.prepare('SELECT * FROM chats WHERE id=?').get(createdChatId);
+    recordChatSystemEvent({
+      chatId: createdChatId,
+      eventType: 'chat_created',
+      actor: req.user,
+      metadata: { chat_name: createdChat.name },
+      broadcast: false,
+    });
+    humanTargets.forEach((user) => {
+      recordChatSystemEvent({
+        chatId: createdChatId,
+        eventType: 'member_added',
+        actor: req.user,
+        target: user,
+        metadata: { source: 'group_chat_create' },
+        broadcast: false,
+      });
+    });
     selectableBots.forEach((bot) => {
       aiBotFeature?.attachBotToChatWithDefaults(createdChatId, bot, {
         actorUserId: req.user.id,
@@ -1987,6 +2263,13 @@ app.post('/api/chats/private', auth, (req, res) => {
     db.prepare('INSERT INTO chat_members(chat_id,user_id) VALUES(?,?)').run(createdChatId, req.user.id);
     if (botTarget) {
       const chatRow = db.prepare('SELECT * FROM chats WHERE id=?').get(createdChatId);
+      recordChatSystemEvent({
+        chatId: createdChatId,
+        eventType: 'chat_created',
+        actor: req.user,
+        metadata: { chat_name: chatRow.name },
+        broadcast: false,
+      });
       aiBotFeature?.attachBotToChatWithDefaults(createdChatId, botTarget, {
         actorUserId: req.user.id,
         source: 'private_chat_create',
@@ -2154,6 +2437,12 @@ app.delete('/api/chats/:chatId/history', auth, (req, res) => {
     chatId,
     actorId: req.user.id,
   });
+  recordChatSystemEvent({
+    chatId,
+    eventType: 'chat_history_cleared',
+    actor: req.user,
+    metadata: { source: 'history_clear' },
+  });
   const members = db.prepare('SELECT user_id FROM chat_members WHERE chat_id=?').all(chatId);
   members.forEach(({ user_id }) => sendChatListUpdated(user_id, { chatId, reason: 'history_cleared' }));
   res.json({ ok: true });
@@ -2282,7 +2571,7 @@ app.post('/api/chats/:chatId/members', auth, (req, res) => {
   if (chat.type === 'private') return res.status(400).json({ error: 'Cannot add to private chat' });
   if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
-  const targetUser = db.prepare('SELECT id,COALESCE(is_ai_bot,0) as is_ai_bot FROM users WHERE id=?').get(userId);
+  const targetUser = db.prepare('SELECT id,username,display_name,COALESCE(is_ai_bot,0) as is_ai_bot FROM users WHERE id=?').get(userId);
   if (!targetUser) return res.status(404).json({ error: 'User not found' });
   if (Number(targetUser.is_ai_bot) !== 0) {
     const existingBotMember = db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, userId);
@@ -2302,10 +2591,16 @@ app.post('/api/chats/:chatId/members', auth, (req, res) => {
     chatFoldersFeature?.notifyChatMembersChatFoldersUpdated(chatId, { reason: 'bot_attached' });
     return res.json({ ok: true });
   }
-  const user = db.prepare('SELECT id,is_ai_bot FROM users WHERE id=?').get(userId);
-  if (!user) return res.status(404).json({ error: 'User not found' });
-  if (user.is_ai_bot) return res.status(400).json({ error: 'AI bots are managed from the AI bot settings' });
   const added = db.prepare('INSERT OR IGNORE INTO chat_members(chat_id,user_id) VALUES(?,?)').run(chatId, userId);
+  if (added.changes > 0) {
+    recordChatSystemEvent({
+      chatId,
+      eventType: 'member_added',
+      actor: req.user,
+      target: targetUser,
+      metadata: { source: 'group_member_add' },
+    });
+  }
   sendToUser(userId, {
     type: 'chat_created',
     chat,
@@ -2345,6 +2640,13 @@ app.delete('/api/chats/:chatId/members/me', auth, (req, res) => {
     WHERE chat_id=? AND bot_id IN (SELECT id FROM ai_bots WHERE user_id=?)
   `).run(chatId, req.user.id);
   chatFoldersFeature?.removeChatFromUserFolders(req.user.id, chatId);
+  recordChatSystemEvent({
+    chatId,
+    eventType: 'member_left',
+    actor: req.user,
+    target: req.user,
+    metadata: { source: 'member_leave' },
+  });
   sendToUser(req.user.id, { type: 'chat_removed', chatId, reason: 'left' });
   res.json({ ok: true });
 });
@@ -2407,6 +2709,7 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
 
   if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
+  const chat = db.prepare('SELECT id, created_at FROM chats WHERE id=?').get(chatId);
 
   const selectSql = `
     SELECT m.*, u.username, u.display_name, u.avatar_color, u.avatar_url,
@@ -2501,6 +2804,13 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
   const pinEvents = getPinEventsForWindow(chatId, result, {
     openEnded: !before && !after && !anchor,
   });
+  const systemEvents = getSystemEventsForWindow(chatId, result, {
+    openEnded: !before && !after && !anchor,
+    before,
+    after,
+    anchor,
+    fallbackStart: chat?.created_at || null,
+  });
   // Build per-member last-read map so clients can atomically reconcile local cache/UI.
   const members = db.prepare(`
     SELECT cm.user_id, COALESCE(cm.last_read_id,0) as last_read_id
@@ -2523,10 +2833,17 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
     const hasMoreAfter = lastId
       ? !!db.prepare('SELECT 1 FROM messages WHERE chat_id=? AND id>? AND is_deleted=0 LIMIT 1').get(chatId, lastId)
       : false;
-    return res.json({ messages: result, pin_events: pinEvents, has_more_before: hasMoreBefore, has_more_after: hasMoreAfter, member_last_reads });
+    return res.json({
+      messages: result,
+      pin_events: pinEvents,
+      system_events: systemEvents,
+      has_more_before: hasMoreBefore,
+      has_more_after: hasMoreAfter,
+      member_last_reads,
+    });
   }
 
-  return res.json({ messages: result, pin_events: pinEvents, member_last_reads });
+  return res.json({ messages: result, pin_events: pinEvents, system_events: systemEvents, member_last_reads });
 });
 
 app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
@@ -3326,9 +3643,19 @@ app.put('/api/chats/:chatId', auth, (req, res) => {
   if (!name || typeof name !== 'string' || name.trim().length < 1 || name.length > 50)
     return res.status(400).json({ error: 'Invalid name (1-50 chars)' });
 
-  db.prepare('UPDATE chats SET name=? WHERE id=?').run(name.trim(), chatId);
+  const nextName = name.trim();
+  const nameChanged = nextName !== String(chat.name || '');
+  db.prepare('UPDATE chats SET name=? WHERE id=?').run(nextName, chatId);
   const updated = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
   broadcastToChatAll(chatId, { type: 'chat_updated', chat: updated });
+  if (nameChanged) {
+    recordChatSystemEvent({
+      chatId,
+      eventType: 'chat_renamed',
+      actor: req.user,
+      metadata: { old_name: chat.name || '', new_name: nextName },
+    });
+  }
   res.json(updated);
 });
 
@@ -3354,6 +3681,12 @@ app.post('/api/chats/:chatId/avatar', auth, upLimiter, (req, res) => {
     db.prepare('UPDATE chats SET avatar_url=? WHERE id=?').run(avatarUrl, chatId);
     const updated = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
     broadcastToChatAll(chatId, { type: 'chat_updated', chat: updated });
+    recordChatSystemEvent({
+      chatId,
+      eventType: 'chat_avatar_updated',
+      actor: req.user,
+      metadata: { had_avatar: Boolean(chat.avatar_url) },
+    });
     res.json(updated);
   });
 });
@@ -3372,6 +3705,14 @@ app.delete('/api/chats/:chatId/avatar', auth, (req, res) => {
   db.prepare('UPDATE chats SET avatar_url=NULL WHERE id=?').run(chatId);
   const updated = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
   broadcastToChatAll(chatId, { type: 'chat_updated', chat: updated });
+  if (chat.avatar_url) {
+    recordChatSystemEvent({
+      chatId,
+      eventType: 'chat_avatar_removed',
+      actor: req.user,
+      metadata: { had_avatar: true },
+    });
+  }
   res.json(updated);
 });
 
@@ -3379,7 +3720,7 @@ app.delete('/api/chats/:chatId/members/:userId', auth, (req, res) => {
   const chatId = +req.params.chatId;
   const userId = +req.params.userId;
   const chat = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
-  const targetUser = db.prepare('SELECT id, COALESCE(is_ai_bot,0) as is_ai_bot FROM users WHERE id=?').get(userId);
+  const targetUser = db.prepare('SELECT id, username, display_name, COALESCE(is_ai_bot,0) as is_ai_bot FROM users WHERE id=?').get(userId);
   if (!chat) return res.status(404).json({ error: 'Chat not found' });
   if (!targetUser) return res.status(404).json({ error: 'User not found' });
   if (chat.type !== 'group') return res.status(400).json({ error: 'Cannot remove from this chat' });
@@ -3392,7 +3733,7 @@ app.delete('/api/chats/:chatId/members/:userId', auth, (req, res) => {
   if (userId !== req.user.id && chat.created_by !== req.user.id && !req.user.is_admin)
     return res.status(403).json({ error: 'Only creator or admin can remove members' });
 
-  db.prepare('DELETE FROM chat_members WHERE chat_id=? AND user_id=?').run(chatId, userId);
+  const removed = db.prepare('DELETE FROM chat_members WHERE chat_id=? AND user_id=?').run(chatId, userId);
   db.prepare(`
     UPDATE ai_chat_bots
     SET enabled=0, updated_at=datetime('now')
@@ -3401,6 +3742,15 @@ app.delete('/api/chats/:chatId/members/:userId', auth, (req, res) => {
   chatFoldersFeature?.removeChatFromUserFolders(userId, chatId);
   if (Number(targetUser.is_ai_bot) !== 0) {
     chatFoldersFeature?.notifyChatMembersChatFoldersUpdated(chatId, { reason: 'bot_detached' });
+  }
+  if (removed.changes > 0) {
+    recordChatSystemEvent({
+      chatId,
+      eventType: userId === req.user.id ? 'member_left' : 'member_removed',
+      actor: req.user,
+      target: targetUser,
+      metadata: { source: userId === req.user.id ? 'member_leave' : 'member_remove' },
+    });
   }
   sendToUser(userId, { type: 'chat_removed', chatId });
   res.json({ ok: true });
@@ -3511,6 +3861,15 @@ app.post('/api/chats/:chatId/background', auth, upLimiter, (req, res) => {
     db.prepare('UPDATE chats SET background_url=?, background_style=? WHERE id=?').run(bgUrl, style, chatId);
     const updated = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
     broadcastToChatAll(chatId, { type: 'chat_updated', chat: updated });
+    recordChatSystemEvent({
+      chatId,
+      eventType: 'chat_background_updated',
+      actor: req.user,
+      metadata: {
+        had_background: Boolean(chat.background_url),
+        style,
+      },
+    });
     res.json(updated);
   });
 });
@@ -3529,6 +3888,14 @@ app.delete('/api/chats/:chatId/background', auth, (req, res) => {
   db.prepare('UPDATE chats SET background_url=NULL WHERE id=?').run(chatId);
   const updated = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
   broadcastToChatAll(chatId, { type: 'chat_updated', chat: updated });
+  if (chat.background_url) {
+    recordChatSystemEvent({
+      chatId,
+      eventType: 'chat_background_removed',
+      actor: req.user,
+      metadata: { had_background: true },
+    });
+  }
   res.json(updated);
 });
 
@@ -3542,9 +3909,19 @@ app.put('/api/chats/:chatId/background-style', auth, (req, res) => {
   if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
 
+  const oldStyle = chat.background_style || 'cover';
+  const styleChanged = style !== oldStyle;
   db.prepare('UPDATE chats SET background_style=? WHERE id=?').run(style, chatId);
   const updated = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
   broadcastToChatAll(chatId, { type: 'chat_updated', chat: updated });
+  if (styleChanged) {
+    recordChatSystemEvent({
+      chatId,
+      eventType: 'chat_background_style_updated',
+      actor: req.user,
+      metadata: { old_style: oldStyle, new_style: style },
+    });
+  }
   res.json(updated);
 });
 

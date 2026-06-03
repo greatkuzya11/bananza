@@ -261,7 +261,7 @@
         }
       };
 
-      const commitMessageWindow = async (msgs = [], page = null, { source = 'network', pinEvents = [] } = {}) => {
+      const commitMessageWindow = async (msgs = [], page = null, { source = 'network', pinEvents = [], systemEvents = [] } = {}) => {
         if (!isCurrentOpen()) return false;
         const list = Array.isArray(msgs) ? msgs : [];
         perf?.mark?.('bananza:open-chat-data-ready');
@@ -283,6 +283,7 @@
         setHasMoreAfter(page?.hasMoreAfter ?? fallbackHasMoreAfter);
         actions.replaceRenderedMessages?.(list, {
           pinEvents,
+          systemEvents,
           mediaAutoScrollToBottom: shouldAutoScrollRenderedMedia,
         });
         perf?.mark?.('bananza:open-chat-first-render');
@@ -385,17 +386,17 @@
           fetchMs: Math.round((win.performance?.now?.() || Date.now()) - networkStartedAt),
           count: result.messages?.length || 0,
         });
-        const { page, messages: msgs, pinEvents } = result;
+        const { page, messages: msgs, pinEvents, systemEvents } = result;
         if (!isCurrentOpen()) return false;
         if (!await reconcileFetchedPage(result)) return false;
         if (!isCurrentOpen()) return false;
-        if (committedWindow && actions.renderedMessageIdsMatch?.(msgs) && !pinEvents.length) {
+        if (committedWindow && actions.renderedMessageIdsMatch?.(msgs) && !pinEvents.length && !systemEvents.length) {
           setHasMoreBefore(page.hasMoreBefore ?? (restoreAnchor?.messageId ? msgs.length > 0 : msgs.length >= PAGE_SIZE));
           setHasMoreAfter(page.hasMoreAfter ?? Boolean(restoreAnchor?.messageId && chat?.last_message_id && pages.maxMessageId(msgs) < Number(chat.last_message_id || 0)));
           actions.renderOutboxForChat?.(targetChatId)?.catch?.(() => {});
           if (!isCurrentOpen()) return false;
         } else {
-          if (!await commitMessageWindow(msgs, page, { source: 'network', pinEvents })) return false;
+          if (!await commitMessageWindow(msgs, page, { source: 'network', pinEvents, systemEvents })) return false;
         }
         revealCommittedWindow();
         scheduleMessageWindowWarmup(msgs);
@@ -414,11 +415,28 @@
             after: String(cursor),
           });
           const result = await pages.fetchMessagesPage(targetChatId, params, { signal: controller.signal });
-          const { page, messages: msgs, pinEvents } = result;
+          const { page, messages: msgs, pinEvents, systemEvents } = result;
           if (!await reconcileFetchedPage(result)) return appendedAny;
           if (!isCurrentOpen()) return appendedAny;
 
+          const newMessages = pages.filterNewMessages(msgs);
+          const newPinEvents = actions.filterNewPinEvents?.(pinEvents) || [];
+          const newSystemEvents = actions.filterNewSystemEvents?.(systemEvents) || [];
+
           if (!msgs.length) {
+            if (newPinEvents.length || newSystemEvents.length) {
+              const wasNearBottom = scroll.isNearBottom(120);
+              const anchor = wasNearBottom ? null : scroll.captureScrollAnchor();
+              actions.appendTimelineItems?.([], newPinEvents, newSystemEvents, {
+                mediaAutoScrollToBottom: Boolean(wasNearBottom),
+              });
+              if (wasNearBottom) {
+                scroll.scrollToBottom(false, true);
+              } else if (anchor?.messageId) {
+                win.requestAnimationFrame(() => scroll.restoreScrollAnchor(anchor, 1, { openSeq: seq, chatId: targetChatId }));
+              }
+              appendedAny = true;
+            }
             await pages.writeCachedChatMeta(targetChatId, {
               maxId: cursor,
               hasMoreAfter: page.hasMoreAfter ?? false,
@@ -428,12 +446,10 @@
             return appendedAny;
           }
 
-          const newMessages = pages.filterNewMessages(msgs);
-          const newPinEvents = actions.filterNewPinEvents?.(pinEvents) || [];
-          if (newMessages.length || newPinEvents.length) {
+          if (newMessages.length || newPinEvents.length || newSystemEvents.length) {
             const wasNearBottom = scroll.isNearBottom(120);
             const anchor = wasNearBottom ? null : scroll.captureScrollAnchor();
-            actions.appendTimelineItems?.(newMessages, newPinEvents, {
+            actions.appendTimelineItems?.(newMessages, newPinEvents, newSystemEvents, {
               mediaAutoScrollToBottom: Boolean(wasNearBottom),
             });
             mergeStateMessages(newMessages);
@@ -626,10 +642,11 @@
 
           const newMessages = pages.filterNewMessages(msgs);
           const newPinEvents = actions.filterNewPinEvents?.(page.pinEvents || []) || [];
-          if (newMessages.length || newPinEvents.length) {
+          const newSystemEvents = actions.filterNewSystemEvents?.(page.systemEvents || []) || [];
+          if (newMessages.length || newPinEvents.length || newSystemEvents.length) {
             scrollTopBefore = messagesEl.scrollTop;
             scrollHeightBefore = messagesEl.scrollHeight;
-            actions.renderMessages?.(newMessages, { pinEvents: newPinEvents });
+            actions.renderMessages?.(newMessages, { pinEvents: newPinEvents, systemEvents: newSystemEvents });
             mergeStateMessages(newMessages, { prepend: true });
             actions.cleanupDuplicateDateSeparators?.();
             if (newMessages.length) await pages.cacheMessages(chatId, msgs, page);
@@ -701,9 +718,10 @@
 
           const newMessages = pages.filterNewMessages(msgs);
           const newPinEvents = actions.filterNewPinEvents?.(page.pinEvents || []) || [];
-          if (newMessages.length || newPinEvents.length) {
+          const newSystemEvents = actions.filterNewSystemEvents?.(page.systemEvents || []) || [];
+          if (newMessages.length || newPinEvents.length || newSystemEvents.length) {
             bottomOffsetBefore = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
-            actions.appendTimelineItems?.(newMessages, newPinEvents, {
+            actions.appendTimelineItems?.(newMessages, newPinEvents, newSystemEvents, {
               mediaAutoScrollToBottom: bottomOffsetBefore <= 8,
             });
             mergeStateMessages(newMessages);
@@ -768,6 +786,7 @@
           const page = result.page;
           const msgs = page.messages || [];
           const pinEvents = page.pinEvents || [];
+          const systemEvents = page.systemEvents || [];
 
           const readState = await readReceipts.reconcileChatReadState(id, result.memberLastReads, {
             replace: true,
@@ -780,8 +799,9 @@
 
           const newMessages = pages.filterNewMessages(msgs);
           const newPinEvents = actions.filterNewPinEvents?.(pinEvents) || [];
-          if (newMessages.length || newPinEvents.length) {
-            actions.appendTimelineItems?.(newMessages, newPinEvents, {
+          const newSystemEvents = actions.filterNewSystemEvents?.(systemEvents) || [];
+          if (newMessages.length || newPinEvents.length || newSystemEvents.length) {
+            actions.appendTimelineItems?.(newMessages, newPinEvents, newSystemEvents, {
               mediaAutoScrollToBottom: Boolean(wasNearBottom && !doc.hidden),
             });
             mergeStateMessages(newMessages);

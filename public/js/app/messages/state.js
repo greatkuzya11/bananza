@@ -19,6 +19,7 @@
 
     const displayedMsgIds = new Set();
     const displayedPinEventIds = new Set();
+    const displayedSystemEventIds = new Set();
     const pendingVideoPosterBackfills = new Map();
     const failedVideoPosterBackfills = new Set();
     const outboxObjectUrls = new Map();
@@ -30,6 +31,39 @@
     function pinEventIdKey(id) {
       const key = String(id ?? '').trim();
       return key || '';
+    }
+
+    function systemEventIdKey(id) {
+      const key = String(id ?? '').trim();
+      return key || '';
+    }
+
+    function normalizeSystemEvent(raw = {}) {
+      const id = Number(raw.id || raw.event_id || 0);
+      const chatId = Number(raw.chat_id || raw.chatId || opts.currentChatId || 0);
+      const eventType = String(raw.event_type || raw.eventType || '').trim();
+      if (!id || !chatId || !eventType) return null;
+      return {
+        id,
+        chat_id: chatId,
+        event_type: eventType,
+        actor_id: raw.actor_id == null && raw.actorId == null ? null : Number(raw.actor_id || raw.actorId || 0),
+        actor_name: raw.actor_name || raw.actorName || '',
+        target_user_id: raw.target_user_id == null && raw.targetUserId == null ? null : Number(raw.target_user_id || raw.targetUserId || 0),
+        target_user_name: raw.target_user_name || raw.targetUserName || '',
+        target_is_ai_bot: Number(raw.target_is_ai_bot || raw.targetIsAiBot || 0) ? 1 : 0,
+        metadata: raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : {},
+        created_at: raw.created_at || raw.createdAt || new Date().toISOString(),
+      };
+    }
+
+    function normalizeSystemEvents(events = []) {
+      const seen = new Set();
+      return (Array.isArray(events) ? events : []).map(normalizeSystemEvent).filter((event) => {
+        if (!event || seen.has(event.id)) return false;
+        seen.add(event.id);
+        return true;
+      });
     }
 
     function rememberDisplayedMessage(id) {
@@ -55,6 +89,16 @@
     function isPinEventDisplayed(id) {
       const key = pinEventIdKey(id);
       return key ? displayedPinEventIds.has(key) : false;
+    }
+
+    function rememberDisplayedSystemEvent(id) {
+      const key = systemEventIdKey(id);
+      if (key) displayedSystemEventIds.add(key);
+    }
+
+    function isSystemEventDisplayed(id) {
+      const key = systemEventIdKey(id);
+      return key ? displayedSystemEventIds.has(key) : false;
     }
 
     function outboxUrlKey(clientId, part = 'file') {
@@ -118,6 +162,7 @@
     return {
       displayedMsgIds,
       displayedPinEventIds,
+      displayedSystemEventIds,
       pendingVideoPosterBackfills,
       failedVideoPosterBackfills,
       outboxObjectUrls,
@@ -131,6 +176,11 @@
       rememberDisplayedPinEvent,
       isPinEventDisplayed,
       clearDisplayedPinEvents: () => displayedPinEventIds.clear(),
+      rememberDisplayedSystemEvent,
+      isSystemEventDisplayed,
+      clearDisplayedSystemEvents: () => displayedSystemEventIds.clear(),
+      normalizeSystemEvent,
+      normalizeSystemEvents,
       outboxUrlKey,
       getOutboxObjectUrl,
       revokeOutboxObjectUrls,

@@ -71,17 +71,50 @@
         });
     }
 
+    function normalizeSystemEvent(raw = {}) {
+      if (typeof actions.normalizeSystemEvent === 'function') return actions.normalizeSystemEvent(raw);
+      const id = toPositiveNumber(raw.id || raw.event_id);
+      const chatId = toPositiveNumber(raw.chat_id || raw.chatId || state.getCurrentChatId?.());
+      const eventType = String(raw.event_type || raw.eventType || '').trim();
+      if (!id || !chatId || !eventType) return null;
+      return {
+        id,
+        chat_id: chatId,
+        event_type: eventType,
+        actor_id: raw.actor_id == null && raw.actorId == null ? null : Number(raw.actor_id || raw.actorId || 0),
+        actor_name: raw.actor_name || raw.actorName || '',
+        target_user_id: raw.target_user_id == null && raw.targetUserId == null ? null : Number(raw.target_user_id || raw.targetUserId || 0),
+        target_user_name: raw.target_user_name || raw.targetUserName || '',
+        target_is_ai_bot: Number(raw.target_is_ai_bot || raw.targetIsAiBot || 0) ? 1 : 0,
+        metadata: raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : {},
+        created_at: raw.created_at || raw.createdAt || new Date().toISOString(),
+      };
+    }
+
+    function normalizeSystemEvents(events = []) {
+      if (typeof actions.normalizeSystemEvents === 'function') return actions.normalizeSystemEvents(events);
+      const seen = new Set();
+      return (Array.isArray(events) ? events : [])
+        .map(normalizeSystemEvent)
+        .filter((event) => {
+          if (!event || seen.has(event.id)) return false;
+          seen.add(event.id);
+          return true;
+        });
+    }
+
     function normalizeMessagesPage(data) {
-      if (Array.isArray(data)) return { messages: data, pinEvents: [], hasMoreBefore: null, hasMoreAfter: null };
+      if (Array.isArray(data)) return { messages: data, pinEvents: [], systemEvents: [], hasMoreBefore: null, hasMoreAfter: null };
       if (data && Array.isArray(data.messages)) {
         return {
           messages: data.messages,
           pinEvents: normalizePinEvents(data.pin_events || data.pinEvents || []),
+          systemEvents: normalizeSystemEvents(data.system_events || data.systemEvents || []),
           hasMoreBefore: typeof data.has_more_before === 'boolean' ? data.has_more_before : null,
           hasMoreAfter: typeof data.has_more_after === 'boolean' ? data.has_more_after : null,
         };
       }
-      return { messages: [], pinEvents: [], hasMoreBefore: false, hasMoreAfter: false };
+      return { messages: [], pinEvents: [], systemEvents: [], hasMoreBefore: false, hasMoreAfter: false };
     }
 
     async function fetchMessagesPage(chatId, params, { signal = null } = {}) {
@@ -94,6 +127,7 @@
         page,
         messages: page.messages || [],
         pinEvents: page.pinEvents || [],
+        systemEvents: page.systemEvents || [],
         memberLastReads: raw && (raw.member_last_reads || raw.memberLastReads) ? (raw.member_last_reads || raw.memberLastReads) : null,
       };
     }

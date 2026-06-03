@@ -3200,6 +3200,26 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
   color: var(--text-primary);
   font-weight: 700;
 }
+.chat-system-row {
+  cursor: default;
+}
+.chat-system-row:hover,
+.chat-system-row:focus-visible {
+  background: rgba(255,255,255,.07);
+  color: var(--text-secondary);
+}
+.chat-system-row .chat-system-icon {
+  color: var(--text-secondary);
+}
+.chat-system-row--member_added .chat-system-icon,
+.chat-system-row--chat_created .chat-system-icon {
+  color: var(--accent);
+}
+.chat-system-row--member_removed .chat-system-icon,
+.chat-system-row--member_left .chat-system-icon,
+.chat-system-row--chat_history_cleared .chat-system-icon {
+  color: var(--danger, #ff6b6b);
+}
 
 /* ── File attachments ────────────────────────────────────────────────────── */
 .msg-image {

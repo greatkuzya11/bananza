@@ -104,6 +104,64 @@ test('typing, messages, reactions, poll updates, pins and read receipts fan out 
   assert.equal(readEvent.lastReadId, created.data.id);
 });
 
+test('chat system events fan out to remaining members but not removed users', async () => {
+  const owner = createSession(sandbox.baseUrl);
+  const peer = createSession(sandbox.baseUrl);
+  const removed = createSession(sandbox.baseUrl);
+  await owner.register(makeUser('wssystem'));
+  await peer.register(makeUser('wspeer'));
+  await removed.register(makeUser('wsremoved'));
+
+  const { data: chat } = await owner.request('/api/chats', {
+    method: 'POST',
+    json: {
+      name: `Realtime system ${Date.now()}`,
+      type: 'group',
+      memberIds: [peer.user.id, removed.user.id],
+    },
+  });
+
+  const peerSocket = await peer.openWebSocket();
+  const removedSocket = await removed.openWebSocket();
+  const removedSystemEvents = [];
+  const onRemovedMessage = (raw) => {
+    try {
+      const message = JSON.parse(String(raw));
+      if (message.type === 'chat_system_event' && Number(message.chatId || message.chat_id) === Number(chat.id)) {
+        removedSystemEvents.push(message);
+      }
+    } catch {}
+  };
+  removedSocket.on('message', onRemovedMessage);
+
+  try {
+    const systemEventPromise = waitForSocketMessage(peerSocket, (message) => (
+      message.type === 'chat_system_event'
+      && Number(message.chatId || message.chat_id) === Number(chat.id)
+      && message.event?.event_type === 'member_removed'
+      && Number(message.event?.target_user_id) === Number(removed.user.id)
+    ));
+    const removedPromise = waitForSocketMessage(removedSocket, (message) => (
+      message.type === 'chat_removed'
+      && Number(message.chatId) === Number(chat.id)
+    ));
+
+    await owner.request(`/api/chats/${chat.id}/members/${removed.user.id}`, { method: 'DELETE' });
+
+    const systemEvent = await systemEventPromise;
+    const removedEvent = await removedPromise;
+    assert.equal(systemEvent.event.actor_id, owner.user.id);
+    assert.equal(removedEvent.reason || '', '');
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(removedSystemEvents.length, 0);
+  } finally {
+    removedSocket.off('message', onRemovedMessage);
+    peerSocket.close();
+    removedSocket.close();
+  }
+});
+
 test('chat folder mutations emit user-scoped chat_folders_updated websocket events', async () => {
   const owner = createSession(sandbox.baseUrl);
   const peer = createSession(sandbox.baseUrl);

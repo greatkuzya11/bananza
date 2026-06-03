@@ -260,6 +260,24 @@
             }
             break;
           }
+          case 'chat_system_event': {
+            const event = normalizeSystemEvent(msg.event || msg.system_event || msg.systemEvent || {});
+            if (!event) break;
+            const chatId = Number(msg.chatId || msg.chat_id || event.chat_id || 0);
+            const memberEventTypes = new Set(['member_added', 'member_left', 'member_removed']);
+            if (memberEventTypes.has(event.event_type)) {
+              try { chatMembersCache.delete(chatId); } catch (e) {}
+              if (Number(chatId || 0) === Number(currentChatId || 0)) {
+                refreshChatMemberStatuses();
+                refreshChatInfoStatus();
+              }
+            }
+            if (Number(chatId || 0) === Number(currentChatId || 0)) {
+              appendSystemEventIfVisible(event);
+            }
+            loadChats({ silent: true }).catch(() => {});
+            break;
+          }
           case 'chat_updated': {
             applyChatUpdate(msg.chat || {});
             break;
@@ -381,6 +399,13 @@ function updateVisibleOwnReadState(chatId = currentChatId) {
             return true;
           });
       }
+
+      function normalizeSystemEvent(raw = {}) {
+        const event = raw && typeof raw === 'object' ? raw : {};
+        return messageStateController?.normalizeSystemEvent?.({ ...event, chatId: event.chat_id || event.chatId || currentChatId });
+      }
+
+      function normalizeSystemEvents(events = []) { return messageStateController?.normalizeSystemEvents?.(events) || []; }
     
       function rememberDisplayedMessage(id) {
         return messageStateController?.rememberDisplayedMessage?.(id);
@@ -891,7 +916,7 @@ function updateVisibleOwnReadState(chatId = currentChatId) {
       return {
         handleWSMessage, sendTyping, scheduleMessageBackgroundSync, shouldBackgroundSyncMessages, syncChatMessagesInBackground, runMessageBackgroundSync, updateScrollBottomButton, normalizeMemberLastReads,
         getChatMemberLastReads, storeChatMemberLastReads, getChatReadReceiptThreshold, applyOwnReadStateToMessage, applyOwnReadStateToMessages, updateLocalChatReadProgress, reconcileChatReadState, normalizePinEvent,
-        normalizePinEvents, rememberDisplayedMessage, forgetDisplayedMessage, isMessageDisplayed, revealActiveMobileChatRoute, isDeletedMessageRow, isCurrentChatActivelyVisible, renderAdminUserRow,
+        normalizePinEvents, normalizeSystemEvent, normalizeSystemEvents, rememberDisplayedMessage, forgetDisplayedMessage, isMessageDisplayed, revealActiveMobileChatRoute, isDeletedMessageRow, isCurrentChatActivelyVisible, renderAdminUserRow,
         refreshAdminUserStatuses, refreshChatMemberStatuses, refreshChatInfoStatus, normalizeComposerDraftChatId, getComposerDraftStorageKey, persistComposerDrafts, hydrateComposerDraftsForCurrentUser, saveComposerDraft,
         clearComposerDraft, restoreComposerDraft, updateChatStatus, applyBackgroundStyleToElement, applyChatBackground, resolveMediaPlaybackChatId, resolveMediaPlaybackKey, normalizeMediaPlaybackCompletedEntries,
         getMediaPlaybackCompletedBucket, applyMediaPlaybackCompletedMeta, exportMediaPlaybackCompletedMeta, primeMediaPlaybackCompletedCache, isMediaPlaybackCompleted, setMediaPlaybackCompleted, isMediaPlaybackNearEnd, getMediaPlaybackBucket,
