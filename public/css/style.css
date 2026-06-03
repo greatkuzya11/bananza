@@ -5941,9 +5941,15 @@ html[data-visual-mode="rich"] .poll-card {
 .profile-section > .profile-section-title,
 .profile-section > legend.profile-section-title {
   display: block;
-  width: auto;
+  width: 100%;
   margin: 0 0 10px;
   padding: 0;
+}
+.profile-section > legend.profile-section-title {
+  float: left;
+}
+.profile-section > legend.profile-section-title + * {
+  clear: left;
 }
 #menuDrawer .modal-input {
   min-height: 44px;
