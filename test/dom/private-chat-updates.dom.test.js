@@ -161,7 +161,7 @@ function installAppRuntimeStubs(dom, { fetchHandler = null } = {}) {
 async function bootAppDom(options = {}) {
   const dom = createAppDom();
   installAppRuntimeStubs(dom, options);
-  installVisualViewportMock(dom.window, {
+  dom.visualViewportMock = installVisualViewportMock(dom.window, {
     width: 390,
     height: 844,
     offsetTop: 0,
@@ -469,6 +469,149 @@ test('applyChatUpdate immediately applies bot private chat title changes without
   assert.equal(chatNameText(document, 77), 'Trip Budget Planning');
   assert.equal(document.getElementById('chatTitle').textContent.trim(), 'Trip Budget Planning');
   assert.equal(document.getElementById('chatInfoTitle').textContent.trim(), 'Trip Budget Planning');
+});
+
+test('chat background is rendered on a stable layer instead of the messages scroller', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  const chatView = document.getElementById('chatView');
+  const layer = document.getElementById('chatBackgroundLayer');
+  const messages = document.getElementById('messages');
+
+  BananzaAppBridge.__testing.setChats([{
+    id: 81,
+    type: 'private',
+    name: 'Bob',
+    created_at: '2026-04-28 10:00:00',
+    private_user: {
+      id: 2,
+      display_name: 'Bob',
+      username: 'bob',
+      avatar_color: '#65aadd',
+      avatar_url: null,
+      is_ai_bot: 0,
+    },
+  }], { currentChatId: 81 });
+
+  BananzaAppBridge.__testing.applyChatUpdate({
+    id: 81,
+    background_url: '/uploads/backgrounds/test-bg.jpg',
+    background_style: 'tile',
+  });
+
+  assert.equal(chatView.classList.contains('has-chat-background'), true);
+  assert.match(layer.style.backgroundImage, /test-bg\.jpg/);
+  assert.equal(layer.style.backgroundRepeat, 'repeat');
+  assert.equal(layer.style.backgroundSize, 'auto');
+  assert.equal(layer.style.backgroundPosition, 'left top');
+  assert.equal(messages.classList.contains('has-bg'), false);
+  assert.equal(messages.style.backgroundImage, '');
+
+  BananzaAppBridge.__testing.applyChatUpdate({
+    id: 81,
+    background_url: '/uploads/backgrounds/test-bg.jpg',
+    background_style: 'contain',
+  });
+
+  assert.match(layer.style.backgroundImage, /test-bg\.jpg/);
+  assert.equal(layer.style.backgroundRepeat, 'no-repeat');
+  assert.equal(layer.style.backgroundSize, 'contain');
+  assert.equal(layer.style.backgroundPosition, 'center center');
+  assert.equal(messages.style.backgroundImage, '');
+
+  BananzaAppBridge.__testing.applyChatUpdate({
+    id: 81,
+    background_url: '/uploads/backgrounds/test-bg.jpg',
+    background_style: '100%',
+  });
+
+  assert.equal(layer.style.backgroundRepeat, 'no-repeat');
+  assert.equal(layer.style.backgroundSize, '100%');
+  assert.equal(layer.style.backgroundPosition, 'center center');
+  assert.equal(messages.style.backgroundImage, '');
+
+  BananzaAppBridge.__testing.applyChatUpdate({
+    id: 81,
+    background_url: '/uploads/backgrounds/test-bg.jpg',
+    background_style: 'center',
+  });
+
+  assert.equal(layer.style.backgroundRepeat, 'no-repeat');
+  assert.equal(layer.style.backgroundSize, 'contain');
+  assert.equal(layer.style.backgroundPosition, 'center center');
+  assert.equal(messages.style.backgroundImage, '');
+
+  BananzaAppBridge.__testing.applyChatUpdate({
+    id: 81,
+    background_url: null,
+  });
+
+  assert.equal(chatView.classList.contains('has-chat-background'), false);
+  assert.equal(layer.style.backgroundImage, '');
+  assert.equal(layer.style.backgroundRepeat, '');
+  assert.equal(layer.style.backgroundSize, '');
+  assert.equal(layer.style.backgroundPosition, '');
+  assert.equal(messages.style.backgroundImage, '');
+});
+
+test('mobile keyboard resize keeps chat background height anchored to viewport baseline', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  const root = document.documentElement;
+  const chatArea = document.getElementById('chatArea');
+  const layer = document.getElementById('chatBackgroundLayer');
+  const messages = document.getElementById('messages');
+  let chatAreaHeight = 844;
+
+  chatArea.getBoundingClientRect = () => ({
+    left: 0,
+    top: 0,
+    width: 390,
+    height: chatAreaHeight,
+    right: 390,
+    bottom: chatAreaHeight,
+  });
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: false, syncChatMetrics: true });
+  assert.equal(root.style.getPropertyValue('--chat-bg-stable-height'), '844px');
+
+  BananzaAppBridge.__testing.setChats([{
+    id: 82,
+    type: 'private',
+    name: 'Bob',
+    created_at: '2026-04-28 10:00:00',
+    private_user: {
+      id: 2,
+      display_name: 'Bob',
+      username: 'bob',
+      avatar_color: '#65aadd',
+      avatar_url: null,
+      is_ai_bot: 0,
+    },
+  }], { currentChatId: 82 });
+  BananzaAppBridge.__testing.applyChatUpdate({
+    id: 82,
+    background_url: '/uploads/backgrounds/mobile-bg.jpg',
+    background_style: 'cover',
+  });
+
+  chatAreaHeight = 420;
+  dom.visualViewportMock.setAndDispatch('resize', { height: 420 });
+  await waitForAnimationFrames(dom.window, 2);
+
+  assert.equal(root.style.getPropertyValue('--chat-bg-stable-height'), '844px');
+  assert.match(layer.style.backgroundImage, /mobile-bg\.jpg/);
+  assert.equal(layer.style.backgroundSize, 'cover');
+  assert.equal(messages.style.backgroundImage, '');
+  assert.equal(messages.classList.contains('has-bg'), false);
 });
 
 test('chat info renders bot members once inside the members list', async (t) => {

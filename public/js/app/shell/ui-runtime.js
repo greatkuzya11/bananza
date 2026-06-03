@@ -532,11 +532,13 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         const root = document.documentElement;
         const width = Math.max(0, rect.width || 0);
         const height = Math.max(0, rect.height || 0);
+        const bgHeight = Math.max(height || window.innerHeight || 0, isMobileLayoutViewport() && typeof getMobileViewportBaselineHeight === 'function' ? Number(getMobileViewportBaselineHeight() || 0) || 0 : 0);
         if (!force && isMobileLayoutViewport() && (!width || !height)) return;
         root.style.setProperty('--chat-area-left', `${Math.max(0, rect.left || 0)}px`);
         root.style.setProperty('--chat-area-top', `${Math.max(0, rect.top || 0)}px`);
         root.style.setProperty('--chat-area-width', `${Math.max(0, width || window.innerWidth || 0)}px`);
         root.style.setProperty('--chat-area-height', `${Math.max(0, height || window.innerHeight || 0)}px`);
+        root.style.setProperty('--chat-bg-stable-height', `${Math.round(bgHeight)}px`);
         queueIosViewportLayoutSync();
       }
     

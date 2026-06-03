@@ -635,20 +635,21 @@ function updateVisibleOwnReadState(chatId = currentChatId) {
         }
       }
     
-      // Apply chat background to messages area
       function applyChatBackground(chat) {
-        if (!messagesEl) return;
+        const layer = document.getElementById('chatBackgroundLayer');
+        const targetChatView = chatView || document.getElementById('chatView');
+        const clearBg = (el) => { if (el) el.style.backgroundImage = el.style.backgroundSize = el.style.backgroundRepeat = el.style.backgroundPosition = ''; };
+        messagesEl?.classList?.remove('has-bg');
+        clearBg(messagesEl);
         if (!chat || !chat.background_url) {
-          messagesEl.classList.remove('has-bg');
-          messagesEl.style.backgroundImage = '';
-          messagesEl.style.backgroundSize = '';
-          messagesEl.style.backgroundRepeat = '';
-          messagesEl.style.backgroundPosition = '';
+          targetChatView?.classList?.remove('has-chat-background');
+          clearBg(layer);
           return;
         }
-        messagesEl.classList.add('has-bg');
-        messagesEl.style.backgroundImage = `url(${chat.background_url})`;
-        applyBackgroundStyleToElement(messagesEl, chat.background_style || 'cover');
+        targetChatView?.classList?.add('has-chat-background');
+        if (!layer) return;
+        layer.style.backgroundImage = `url(${chat.background_url})`;
+        applyBackgroundStyleToElement(layer, chat.background_style || 'cover');
       }
     
       function resolveMediaPlaybackChatId(message = {}) {

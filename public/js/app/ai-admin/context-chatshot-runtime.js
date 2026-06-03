@@ -19,6 +19,10 @@
         if (provider === 'grok') return '#5f8cff';
         return '#10a37f';
       }
+
+      function contextConvertMaxTokensLimit(provider = 'openai') {
+        return provider === 'openai' ? 128000 : 8000;
+      }
     
       function contextConvertRouteBase(provider = 'openai') {
         if (provider === 'yandex') return '/api/admin/yandex-convert-bots';
@@ -116,7 +120,12 @@
         );
         $('#contextConvertBotName').value = bot?.name || `${contextConvertProviderLabel(activeContextConvertProvider)} Convert`;
         $('#contextConvertBotTemperature').value = bot?.temperature ?? 0.3;
-        $('#contextConvertBotMaxTokens').value = bot?.max_tokens ?? 1000;
+        const maxTokensInput = $('#contextConvertBotMaxTokens');
+        if (maxTokensInput) {
+          maxTokensInput.min = activeContextConvertProvider === 'openai' ? '16' : '1';
+          maxTokensInput.max = String(contextConvertMaxTokensLimit(activeContextConvertProvider));
+          maxTokensInput.value = bot?.max_tokens ?? 1000;
+        }
         const enabledToggle = $('#contextConvertBotEnabled');
         const allChatsToggle = $('#contextConvertBotAvailableAllChats');
         if (enabledToggle) enabledToggle.checked = bot?.enabled !== false;

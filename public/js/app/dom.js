@@ -41,6 +41,7 @@
       chatArea: $('#chatArea', doc),
       emptyState: $('#emptyState', doc),
       chatView,
+      chatBackgroundLayer: $('#chatBackgroundLayer', doc),
       chatHeader: chatView?.querySelector('.chat-header') || null,
       backBtn: $('#backBtn', doc),
       chatTitle: $('#chatTitle', doc),

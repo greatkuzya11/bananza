@@ -9,6 +9,7 @@
   --chat-area-top: 0px;
   --chat-area-width: 100vw;
   --chat-area-height: 100vh;
+  --chat-bg-stable-height: 100vh;
   --mobile-visual-viewport-top: 0px;
   --mobile-visual-viewport-height: 100vh;
   --mobile-chat-header-height: 0px;
@@ -1346,6 +1347,31 @@ html[data-modal-animation="none"] .chat-folder-list-surface {
   isolation: isolate;
   background-color: var(--bg-dark);
   background-image: var(--bg-app-gradient);
+}
+.chat-background-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  height: 100%;
+  min-height: var(--chat-bg-stable-height, 100%);
+  pointer-events: none;
+  background-color: var(--bg-dark);
+  background-image: var(--bg-app-gradient);
+  background-position: center center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  opacity: 0;
+}
+.chat-view.has-chat-background .chat-background-layer {
+  opacity: 1;
+}
+.chat-view > :where(.chat-header, .pinned-bar, .messages, .input-area) {
+  position: relative;
+  z-index: 1;
+}
+.chat-view.has-chat-background .messages {
+  background-color: transparent;
+  background-image: none;
 }
 
 /* ── Chat header ─────────────────────────────────────────────────────────── */

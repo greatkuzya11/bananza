@@ -21,6 +21,7 @@ const {
 } = require('./settings');
 const {
   OPENAI_MIN_OUTPUT_TOKENS,
+  OPENAI_MAX_OUTPUT_TOKENS,
   createEmbedding,
   listModelIds,
   createResponse: createOpenAIResponse,
@@ -152,6 +153,20 @@ function floatValue(value, fallback, min, max) {
 
 function cleanText(value, limit = 5000) {
   return String(value || '').trim().slice(0, limit);
+}
+
+function maxOutputTokensForProvider(provider = 'openai') {
+  return normalizeProvider(provider, 'openai') === 'openai' ? OPENAI_MAX_OUTPUT_TOKENS : 8000;
+}
+
+function openAiMaxOutputTokens(value, fallback = 1000) {
+  return intValue(value, fallback, OPENAI_MIN_OUTPUT_TOKENS, OPENAI_MAX_OUTPUT_TOKENS);
+}
+
+function cleanGeneratedBotText(value, bot = {}, fallbackLimit = 5000) {
+  const text = stripBotSpeakerLabel(value, bot);
+  if (normalizeProvider(bot?.provider, 'openai') === 'openai') return String(text || '').trim();
+  return cleanText(text, fallbackLimit);
 }
 
 function normalizeChatShotStyle(value, fallback = 'comic') {
@@ -2315,7 +2330,7 @@ function createAiBotFeature({
             row.max_tokens,
             defaultMaxTokens == null ? OPENAI_MIN_OUTPUT_TOKENS : defaultMaxTokens,
             provider === 'openai' ? OPENAI_MIN_OUTPUT_TOKENS : 1,
-            8000
+            maxOutputTokensForProvider(provider)
           ),
       avatar_color: row.avatar_color || BOT_COLORS[0],
       avatar_url: row.avatar_url || null,
@@ -3244,7 +3259,7 @@ function createAiBotFeature({
             input.max_tokens ?? current.max_tokens,
             maxTokensFallback,
             provider === 'openai' ? OPENAI_MIN_OUTPUT_TOKENS : 1,
-            8000
+            maxOutputTokensForProvider(provider)
           ),
       chatshot_context_limit: intValue(
         input.chatshot_context_limit ?? current.chatshot_context_limit,
@@ -4424,12 +4439,12 @@ function createAiBotFeature({
         model: bot.response_model || settings.default_response_model,
         system,
         user,
-        maxOutputTokens: intValue(bot.max_tokens, 1000, OPENAI_MIN_OUTPUT_TOKENS, 8000),
+        maxOutputTokens: openAiMaxOutputTokens(bot.max_tokens, 1000),
         temperature: floatValue(bot.temperature, 0.55, 0, 1),
       });
     }
 
-    const responseText = cleanText(stripBotSpeakerLabel(rawText, bot), 5000);
+    const responseText = cleanGeneratedBotText(rawText, bot, 5000);
     if (!responseText) {
       const error = new Error('Transform result is empty');
       error.status = 400;
@@ -4632,7 +4647,7 @@ function createAiBotFeature({
           model: bot.response_model || settings.default_response_model,
           system: buildChatShotPromptSystem(style, bananaFilterEnabled, languageContract),
           user,
-          maxOutputTokens: Math.min(intValue(bot.max_tokens, 900, OPENAI_MIN_OUTPUT_TOKENS, 8000), 900),
+          maxOutputTokens: Math.min(openAiMaxOutputTokens(bot.max_tokens, 900), 900),
           temperature: floatValue(bot.temperature, 0.45, 0, 1),
         });
       }
@@ -4667,7 +4682,7 @@ function createAiBotFeature({
       ],
       tools: [buildOpenAiUniversalImageTool(bot, null, settings)],
       toolChoice: { type: 'image_generation' },
-      maxOutputTokens: Math.min(intValue(bot.max_tokens, 900, OPENAI_MIN_OUTPUT_TOKENS, 8000), 1200),
+      maxOutputTokens: Math.min(openAiMaxOutputTokens(bot.max_tokens, 900), 1200),
       temperature: floatValue(bot.temperature, 0.45, 0, 1),
     });
     const generatedImage = findOpenAiGeneratedImage(response);
@@ -4921,7 +4936,7 @@ function createAiBotFeature({
       model: bot.response_model || settings.default_response_model,
       system,
       user,
-      maxOutputTokens: intValue(bot.max_tokens, maxOutputTokens, OPENAI_MIN_OUTPUT_TOKENS, 8000),
+      maxOutputTokens: openAiMaxOutputTokens(bot.max_tokens, maxOutputTokens),
       temperature: floatValue(bot.temperature, 0.45, 0, 1),
     });
   }
@@ -4980,7 +4995,7 @@ function createAiBotFeature({
         system,
         user: isConvert ? `Source text:\n${chunks[0]}` : chunks[0],
       });
-      return cleanText(stripBotSpeakerLabel(raw, bot), 20000);
+      return cleanGeneratedBotText(raw, bot, 20000);
     }
     const partials = [];
     for (let index = 0; index < chunks.length; index += 1) {
@@ -4993,7 +5008,7 @@ function createAiBotFeature({
           chunks[index],
         ].join('\n'),
       });
-      partials.push(cleanText(stripBotSpeakerLabel(raw, bot), 12000));
+      partials.push(cleanGeneratedBotText(raw, bot, 12000));
     }
     let reduceChunks = splitCallArtifactText(partials.join('\n\n---\n\n'), chunkLimit);
     let reducePasses = 0;
@@ -5010,7 +5025,7 @@ function createAiBotFeature({
             reduceChunks[index],
           ].join('\n'),
         });
-        nextPartials.push(cleanText(stripBotSpeakerLabel(raw, bot), 12000));
+        nextPartials.push(cleanGeneratedBotText(raw, bot, 12000));
       }
       reduceChunks = splitCallArtifactText(nextPartials.join('\n\n---\n\n'), chunkLimit);
     }
@@ -5023,7 +5038,7 @@ function createAiBotFeature({
         reduceChunks.join('\n\n---\n\n'),
       ].join('\n'),
     });
-    return cleanText(stripBotSpeakerLabel(finalRaw, bot), 20000);
+    return cleanGeneratedBotText(finalRaw, bot, 20000);
   }
 
   async function createCallArtifactImage(bot, prompt, artifactKey = 'callshot') {
@@ -6058,11 +6073,11 @@ function createAiBotFeature({
         model: bot.response_model || settings.default_response_model,
         system: textSystem,
         user,
-        maxOutputTokens: intValue(bot.max_tokens, 1000, OPENAI_MIN_OUTPUT_TOKENS, 8000),
+        maxOutputTokens: openAiMaxOutputTokens(bot.max_tokens, 1000),
         temperature: floatValue(bot.temperature, 0.55, 0, 1),
       });
     }
-    return cleanText(stripBotSpeakerLabel(rawText, bot), 5000);
+    return cleanGeneratedBotText(rawText, bot, 5000);
   }
 
   function sanitizeDetectedBotAction(rawAction) {
@@ -6700,11 +6715,11 @@ function createAiBotFeature({
       tools,
       toolChoice,
       include: ['code_interpreter_call.outputs'],
-      maxOutputTokens: intValue(bot.max_tokens, 1000, OPENAI_MIN_OUTPUT_TOKENS, 8000),
+      maxOutputTokens: openAiMaxOutputTokens(bot.max_tokens, 1000),
       temperature: floatValue(bot.temperature, 0.55, 0, 1),
     });
 
-    const responseText = cleanText(stripBotSpeakerLabel(extractResponseText(response), bot), 5000);
+    const responseText = cleanGeneratedBotText(extractResponseText(response), bot, 5000);
     const citation = findOpenAiDocumentCitation(response);
     if (citation) {
       const downloaded = await downloadContainerFile({
@@ -6918,7 +6933,7 @@ function createAiBotFeature({
       maxOutputTokens: intValue(bot.max_tokens, settings.grok_max_tokens, 1, 8000),
       temperature: floatValue(bot.temperature, settings.grok_temperature, 0, 1),
     });
-    const responseText = cleanText(stripBotSpeakerLabel(grokAi.extractResponseText(response), bot), 5000);
+    const responseText = cleanGeneratedBotText(grokAi.extractResponseText(response), bot, 5000);
     if (!responseText) return null;
     const result = insertBotMessageStmt.run(
       sourceMessage.chat_id,
@@ -7073,7 +7088,7 @@ function createAiBotFeature({
             model: bot.response_model || settings.default_response_model,
             system: textSystem,
             user: context.user,
-            maxOutputTokens: intValue(bot.max_tokens, 1000, OPENAI_MIN_OUTPUT_TOKENS, 8000),
+            maxOutputTokens: openAiMaxOutputTokens(bot.max_tokens, 1000),
             temperature: floatValue(bot.temperature, 0.55, 0, 1),
           });
       if (shouldRecoverActionsFromGeneratedText(bot, sourceMessage)) {
@@ -7131,7 +7146,7 @@ function createAiBotFeature({
           return;
         }
       }
-      const responseText = cleanText(stripBotSpeakerLabel(rawText, bot), 5000);
+      const responseText = cleanGeneratedBotText(rawText, bot, 5000);
       if (!responseText) return;
 
       const result = insertBotMessageStmt.run(
@@ -7358,11 +7373,11 @@ function createAiBotFeature({
           model: bot.response_model || settings.default_response_model,
           system,
           user: context.user,
-          maxOutputTokens: intValue(bot.max_tokens, 1000, OPENAI_MIN_OUTPUT_TOKENS, 8000),
+          maxOutputTokens: openAiMaxOutputTokens(bot.max_tokens, 1000),
           temperature: floatValue(bot.temperature, 0.55, 0, 1),
         });
 
-    let responseText = cleanText(stripBotSpeakerLabel(rawText, bot), 5000);
+    let responseText = cleanGeneratedBotText(rawText, bot, 5000);
     if (mentionPrefix && responseText && !new RegExp(`(^|\\s)${escapeRegExp(mentionPrefix)}(?=$|\\s|[,.:;!?])`, 'i').test(responseText)) {
       responseText = `${mentionPrefix} ${responseText}`;
     }
@@ -8302,7 +8317,7 @@ function createAiBotFeature({
         tools,
         toolChoice,
         include: ['code_interpreter_call.outputs'],
-        maxOutputTokens: Math.min(intValue(bot.max_tokens, 1000, OPENAI_MIN_OUTPUT_TOKENS, 8000), 1200),
+        maxOutputTokens: Math.min(openAiMaxOutputTokens(bot.max_tokens, 1000), 1200),
         temperature: floatValue(bot.temperature, 0.55, 0, 1),
       });
       const citation = findOpenAiDocumentCitation(response);

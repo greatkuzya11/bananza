@@ -1,7 +1,18 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { normalizeImageResponseResult } = require('../ai/openai');
+const {
+  OPENAI_MAX_OUTPUT_TOKENS,
+  OPENAI_MIN_OUTPUT_TOKENS,
+  normalizeImageResponseResult,
+  normalizeMaxOutputTokens,
+} = require('../ai/openai');
+
+test('normalizeMaxOutputTokens allows current OpenAI upper limit and caps above it', () => {
+  assert.equal(normalizeMaxOutputTokens(128000), OPENAI_MAX_OUTPUT_TOKENS);
+  assert.equal(normalizeMaxOutputTokens(250000), OPENAI_MAX_OUTPUT_TOKENS);
+  assert.equal(normalizeMaxOutputTokens(1), OPENAI_MIN_OUTPUT_TOKENS);
+});
 
 test('normalizeImageResponseResult extracts base64 image payloads', () => {
   const result = normalizeImageResponseResult({

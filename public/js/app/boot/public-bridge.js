@@ -109,6 +109,7 @@
           sendBtn,
           msgInput,
           messagesEl,
+          chatBackgroundLayer: document.getElementById('chatBackgroundLayer'),
           pendingFileEl,
           settingsModal,
           chatView,

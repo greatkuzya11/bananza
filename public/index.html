@@ -97,6 +97,7 @@
       </div>
 
       <div id="chatView" class="chat-view hidden">
+        <div id="chatBackgroundLayer" class="chat-background-layer" aria-hidden="true"></div>
         <div class="chat-header">
           <button id="backBtn" class="icon-btn chat-back-btn mobile-only" title="Back to chats" aria-label="Back to chats">
             <span class="chat-back-btn-icon" aria-hidden="true">👈</span>
@@ -958,7 +959,7 @@
               <label>Summary model<select id="aiBotSummaryModel" class="modal-input"></select></label>
               <label>Embedding model<input id="aiBotEmbeddingModel" class="modal-input" readonly></label>
               <label>Temperature<input id="aiBotTemperature" class="modal-input" type="number" min="0" max="2" step="0.05" value="0.55"></label>
-              <label>Max tokens<input id="aiBotMaxTokens" class="modal-input" type="number" min="16" max="8000" step="50" value="1000"></label>
+              <label>Max tokens<input id="aiBotMaxTokens" class="modal-input" type="number" min="16" max="128000" step="50" value="1000"></label>
               <div class="ai-bot-toggle-label"><span>Enabled</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="aiBotEnabled" checked>
@@ -1063,7 +1064,7 @@
                 <option value="txt">Plain text (.txt)</option>
               </select></label>
               <label>Temperature<input id="openAiUniversalBotTemperature" class="modal-input" type="number" min="0" max="2" step="0.05" value="0.55"></label>
-              <label>Max tokens<input id="openAiUniversalBotMaxTokens" class="modal-input" type="number" min="16" max="8000" step="50" value="1000"></label>
+              <label>Max tokens<input id="openAiUniversalBotMaxTokens" class="modal-input" type="number" min="16" max="128000" step="50" value="1000"></label>
               <div class="ai-bot-toggle-label"><span>Enabled</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="openAiUniversalBotEnabled" checked>

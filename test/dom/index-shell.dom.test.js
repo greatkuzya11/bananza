@@ -246,6 +246,24 @@ test('public/index.html keeps universal file pickers and mobile media shortcuts'
   assert.equal(document.getElementById('chatBackgroundInput').getAttribute('accept'), 'image/*');
 });
 
+test('chat background layer sits behind the chat view without replacing messages', () => {
+  const dom = new JSDOM(indexHtml);
+  const document = dom.window.document;
+  const chatView = document.getElementById('chatView');
+  const layer = document.getElementById('chatBackgroundLayer');
+  const header = chatView.querySelector('.chat-header');
+  const messages = document.getElementById('messages');
+
+  assert.ok(layer);
+  assert.equal(layer.parentElement, chatView);
+  assert.equal(layer.getAttribute('aria-hidden'), 'true');
+  assert.equal(layer.nextElementSibling, header);
+  assert.equal(messages.parentElement, chatView);
+  assert.equal(messages.previousElementSibling.id, 'pinnedBar');
+  assert.match(styleCss, /\.chat-background-layer\b/);
+  assert.match(styleCss, /\.chat-view\.has-chat-background \.messages\b/);
+});
+
 test('profile settings modal exposes accessible profile controls', () => {
   const dom = new JSDOM(indexHtml);
   const document = dom.window.document;

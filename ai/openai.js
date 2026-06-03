@@ -1,6 +1,7 @@
 const OpenAI = require('openai');
 
 const OPENAI_MIN_OUTPUT_TOKENS = 16;
+const OPENAI_MAX_OUTPUT_TOKENS = 128000;
 
 function createClient(apiKey) {
   const key = String(apiKey || '').trim();
@@ -9,11 +10,12 @@ function createClient(apiKey) {
 }
 
 function normalizeMaxOutputTokens(value, fallback = 900) {
-  if (value == null || value === '') return Math.max(OPENAI_MIN_OUTPUT_TOKENS, Math.round(Number(fallback) || 900));
-  const parsed = Number(value);
   const safeFallback = Math.max(OPENAI_MIN_OUTPUT_TOKENS, Math.round(Number(fallback) || 900));
-  if (!Number.isFinite(parsed)) return safeFallback;
-  return Math.max(OPENAI_MIN_OUTPUT_TOKENS, Math.round(parsed));
+  const cappedFallback = Math.min(OPENAI_MAX_OUTPUT_TOKENS, safeFallback);
+  if (value == null || value === '') return cappedFallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return cappedFallback;
+  return Math.min(OPENAI_MAX_OUTPUT_TOKENS, Math.max(OPENAI_MIN_OUTPUT_TOKENS, Math.round(parsed)));
 }
 
 function errorText(error) {
@@ -286,6 +288,7 @@ async function downloadContainerFile({ apiKey, containerId, fileId }) {
 
 module.exports = {
   OPENAI_MIN_OUTPUT_TOKENS,
+  OPENAI_MAX_OUTPUT_TOKENS,
   createEmbedding,
   listModelIds,
   createResponse,
@@ -297,6 +300,7 @@ module.exports = {
   generateJson,
   generateImage,
   editImage,
+  normalizeMaxOutputTokens,
   normalizeImageResponseResult,
   downloadContainerFile,
 };
