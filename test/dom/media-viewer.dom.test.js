@@ -5415,7 +5415,7 @@ test('call AI summary modal uses one scroll body and expands long artifacts', as
   assert.equal(collapsed.classList.contains('is-collapsed'), false);
   assert.equal(modal.querySelector('[data-call-artifact-more="9101"]'), null);
 
-  const callshotButton = modal.querySelector('[data-call-artifact-image="9104"]');
+  let callshotButton = modal.querySelector('[data-call-artifact-image="9104"]');
   assert.ok(callshotButton);
   callshotButton.click();
   await wait(dom, 20);
@@ -5423,8 +5423,21 @@ test('call AI summary modal uses one scroll body and expands long artifacts', as
   assert.equal(imageViewer.classList.contains('hidden'), false);
   assert.ok(imageViewer.querySelector('.iv-slide img')?.getAttribute('src')?.endsWith('/uploads/callshot.png'));
 
-  dom.window.BananzaAppBridge.__testing.closeMediaViewer();
+  dom.window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
   await wait(dom, 20);
+  assert.equal(imageViewer.classList.contains('hidden'), true);
+  assert.equal(modal.classList.contains('hidden'), false);
+
+  dom.window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+  await wait(dom, 320);
+  assert.equal(modal.classList.contains('hidden'), true);
+
+  document.querySelector('[data-call-artifacts-open]').click();
+  await wait(dom, 20);
+  assert.equal(modal.classList.contains('hidden'), false);
+  callshotButton = modal.querySelector('[data-call-artifact-image="9104"]');
+  assert.ok(callshotButton);
+
   Object.defineProperty(dom.window, 'isSecureContext', {
     configurable: true,
     value: true,

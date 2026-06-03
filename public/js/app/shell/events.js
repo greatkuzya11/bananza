@@ -426,13 +426,13 @@
             hideMediaContextMenu();
             return;
           }
+          if (!imageViewer.classList.contains('hidden')) {
+            mediaViewerController?.closeMediaViewerFromHistory?.();
+            return;
+          }
           if (modalManager.handlePopState()) return;
           if (isSearchPanelOpen()) {
             closeSearchPanel({ fromHistory: true });
-            return;
-          }
-          if (!imageViewer.classList.contains('hidden')) {
-            mediaViewerController?.closeMediaViewerFromHistory?.();
             return;
           }
           if (isMobileLayoutViewport()) {
