@@ -28,6 +28,7 @@ const appDomMobileShellScriptPaths = Object.freeze([
   'public/js/app/shell/mobile-composer-guard.js',
   'public/js/app/shell/events.js',
   'public/js/app/shell/ui-runtime.js',
+  'public/js/app/shell/profile-avatar-camera.js',
   'public/js/app/shell/shell-runtime.js',
   'public/js/app/shell/mobile-runtime-adapters.js',
 ]);

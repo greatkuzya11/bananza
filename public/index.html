@@ -2516,10 +2516,11 @@
         <section class="profile-hero" aria-labelledby="profileDisplayPreview">
           <div class="avatar-upload-wrap profile-avatar-wrap">
             <div id="profileAvatar" class="avatar-large profile-avatar-preview" aria-hidden="true"></div>
-            <button id="profileAvatarPickIcon" class="avatar-upload-label profile-avatar-upload profile-avatar-picker" type="button" title="Change avatar" data-i18n-title="Change avatar" aria-label="Change avatar" data-i18n-aria-label="Change avatar">
+            <button id="profileAvatarPickIcon" class="avatar-upload-label profile-avatar-upload profile-avatar-camera" type="button" title="Take profile photo" data-i18n-title="Take profile photo" aria-label="Take profile photo" data-i18n-aria-label="Take profile photo">
               <span aria-hidden="true">&#128247;</span>
             </button>
-            <input type="file" id="profileAvatarInput" accept=".jpg,.jpeg,.png,.webp" hidden>
+            <input type="file" id="profileAvatarInput" accept="image/*" hidden>
+            <input type="file" id="profileAvatarCameraInput" accept="image/*" capture="user" hidden>
           </div>
           <div class="profile-identity">
             <span class="profile-kicker" data-i18n="Account">Account</span>
@@ -2559,6 +2560,23 @@
         <section class="profile-section profile-danger-section">
           <button id="profileLogoutBtn" type="button" class="settings-item chat-danger-action profile-logout-btn">Logout</button>
         </section>
+      </div>
+    </div>
+  </div>
+
+  <div id="profileCameraModal" class="modal hidden" aria-hidden="true">
+    <div class="modal-content profile-camera-modal">
+      <div class="modal-header">
+        <h3 data-i18n="Take profile photo">Take profile photo</h3>
+        <button class="modal-close" type="button" aria-label="Close" data-i18n-aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body profile-camera-body">
+        <video id="profileCameraVideo" class="profile-camera-preview" autoplay playsinline muted></video>
+        <div id="profileCameraStatus" class="profile-status profile-camera-status" role="status" aria-live="polite"></div>
+        <div class="profile-camera-actions">
+          <button id="profileCameraCancelBtn" class="profile-action-btn" type="button" data-i18n="Cancel">Cancel</button>
+          <button id="profileCameraCaptureBtn" class="btn-primary profile-camera-capture-btn" type="button" data-i18n="Take photo">Take photo</button>
+        </div>
       </div>
     </div>
   </div>

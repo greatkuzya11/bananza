@@ -6035,6 +6035,37 @@ html[data-visual-mode="rich"] .poll-card {
   margin-top: 0;
 }
 
+.profile-camera-modal {
+  max-width: 420px;
+}
+.profile-camera-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.profile-camera-preview {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  display: block;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: #000;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+.profile-camera-status {
+  min-height: 18px;
+}
+.profile-camera-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+.profile-camera-capture-btn {
+  margin: 0;
+  min-height: 38px;
+}
+
 .inline-edit { display: flex; gap: 8px; align-items: center; }
 .inline-edit .modal-input { flex: 1; }
 

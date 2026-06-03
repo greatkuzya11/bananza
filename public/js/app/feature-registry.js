@@ -92,6 +92,10 @@
     '/js/app/interactions/media-viewer.js',
   ], { preload: 'interaction' });
 
+  loader.registerFeature('profile-avatar-camera', [
+    '/js/app/shell/profile-avatar-camera.js',
+  ], { preload: 'interaction' });
+
   loader.registerFeature('search', [
     '/js/app/interactions/search.js',
   ], { preload: 'interaction' });

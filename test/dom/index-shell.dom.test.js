@@ -248,7 +248,11 @@ test('profile settings modal exposes accessible profile controls', () => {
   assert.ok(menuDrawer.querySelector('.profile-hero'));
   assert.ok(document.getElementById('profileForm'));
   assert.ok(document.getElementById('profileDisplayPreview'));
-  assert.equal(document.getElementById('profileAvatarInput').getAttribute('accept'), '.jpg,.jpeg,.png,.webp');
+  assert.equal(document.getElementById('profileAvatarInput').getAttribute('accept'), 'image/*');
+  assert.equal(document.getElementById('profileAvatarCameraInput').getAttribute('accept'), 'image/*');
+  assert.equal(document.getElementById('profileAvatarCameraInput').getAttribute('capture'), 'user');
+  assert.equal(document.getElementById('profileAvatarPickIcon').getAttribute('aria-label'), 'Take profile photo');
+  assert.equal(document.getElementById('profileAvatarPickIcon').getAttribute('title'), 'Take profile photo');
   assert.equal(document.getElementById('profileAvatarPickBtn').getAttribute('type'), 'button');
   assert.equal(document.getElementById('removeProfileAvatar').getAttribute('type'), 'button');
   assert.equal(document.getElementById('saveProfileBtn').getAttribute('type'), 'submit');
@@ -256,6 +260,10 @@ test('profile settings modal exposes accessible profile controls', () => {
   assert.equal(document.getElementById('profileStatus').getAttribute('aria-live'), 'polite');
   assert.equal(document.getElementById('colorPicker').getAttribute('role'), 'radiogroup');
   assert.equal(document.getElementById('colorPicker').getAttribute('aria-labelledby'), 'profileColorLegend');
+  assert.ok(document.getElementById('profileCameraModal'));
+  assert.equal(document.getElementById('profileCameraStatus').getAttribute('role'), 'status');
+  assert.equal(document.getElementById('profileCameraStatus').getAttribute('aria-live'), 'polite');
+  assert.equal(document.getElementById('profileCameraCaptureBtn').textContent.trim(), 'Take photo');
 });
 
 test('style.css keeps a dedicated unread badge contrast override for active chats', () => {

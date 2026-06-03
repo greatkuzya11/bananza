@@ -72,6 +72,7 @@ test('feature registry publishes lazy-load feature packs', () => {
     'local-providers-runtime',
     'media-viewer',
     'openai-runtime',
+    'profile-avatar-camera',
     'search',
     'settings',
   ]);
@@ -79,6 +80,7 @@ test('feature registry publishes lazy-load feature packs', () => {
   assert.equal(features.find((feature) => feature.name === 'admin')?.preload, 'admin-idle');
   assert.equal(features.find((feature) => feature.name === 'ai-admin-runtime')?.preload, 'manual');
   assert.equal(features.find((feature) => feature.name === 'openai-runtime')?.preload, 'interaction');
+  assert.equal(features.find((feature) => feature.name === 'profile-avatar-camera')?.preload, 'interaction');
   assert.equal(features.find((feature) => feature.name === 'context-chatshot-runtime')?.preload, 'manual');
 });
 

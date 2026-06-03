@@ -859,7 +859,7 @@
     
       // Profile editor (menu drawer)
       const AVATAR_COLORS = ['#e17076','#7bc862','#e5ca77','#65aadd','#a695e7','#ee7aae','#6ec9cb','#faa774'];
-    
+
       function setProfileStatus(message, type = '') {
         setInlineStatus('profileStatus', message, type);
       }
@@ -870,9 +870,11 @@
       }
     
       function setProfileAvatarUploadPending(pending) {
-        const input = $('#profileAvatarInput');
-        if (input) input.disabled = !!pending;
-        document.querySelectorAll('.profile-avatar-picker').forEach((button) => {
+        ['#profileAvatarInput', '#profileAvatarCameraInput'].forEach((selector) => {
+          const input = $(selector);
+          if (input) input.disabled = !!pending;
+        });
+        document.querySelectorAll('.profile-avatar-picker, .profile-avatar-camera, #profileCameraCaptureBtn').forEach((button) => {
           button.classList.toggle('is-pending', !!pending);
           if (pending) button.setAttribute('aria-busy', 'true');
           else button.removeAttribute('aria-busy');
@@ -928,24 +930,42 @@
         renderProfileEditor();
         openModal('menuDrawer', { replaceStack: true, opener });
       }
-    
+
       async function uploadProfileAvatar(file) {
-        if (!file) return;
+        if (!file) return false;
         const fd = new FormData();
-        fd.append('avatar', file);
+        const BlobCtor = typeof window.Blob === 'function' ? window.Blob : null;
+        const isBlob = Boolean(BlobCtor && file instanceof BlobCtor);
+        const isBlobLike = isBlob || Boolean(
+          file
+          && typeof file === 'object'
+          && (typeof file.arrayBuffer === 'function' || typeof file.size === 'number')
+          && typeof file.type === 'string'
+        );
+        if (isBlobLike) {
+          try {
+            fd.append('avatar', file, file.name || 'avatar-camera.jpg');
+          } catch {
+            fd.append('avatar', file);
+          }
+        } else {
+          fd.append('avatar', file);
+        }
         setProfileStatus('Uploading...', 'pending');
         setProfileAvatarUploadPending(true);
         try {
           const res = await api('/api/profile/avatar', { method: 'POST', body: fd });
           applyUserUpdate(res.user || {});
           setProfileStatus('Profile saved', 'success');
+          return true;
         } catch (e) {
           setProfileStatus(e.message || 'Upload failed', 'error');
+          return false;
         } finally {
           setProfileAvatarUploadPending(false);
         }
       }
-    
+
       async function removeProfileAvatar() {
         setProfileStatus('Removing...', 'pending');
         try {
@@ -974,17 +994,22 @@
           setProfileStatus(e.message || 'Profile save failed', 'error');
         }
       }
+
+      function bindProfileAvatarCameraEvents() {
+        const factory = window.BananzaApp?.shell?.profileAvatarCamera?.createProfileAvatarCameraController;
+        if (typeof factory !== 'function') return false;
+        factory({
+          window, document, navigator, $, openModal, closeModal, registerModal, setInlineStatus, setProfileStatus, uploadProfileAvatar,
+        }).bindEvents();
+        return true;
+      }
     
       function setupProfileEvents() {
-        $$('.profile-avatar-picker').forEach((button) => {
-          button.addEventListener('click', () => $('#profileAvatarInput')?.click());
-        });
-    
-        $('#profileAvatarInput')?.addEventListener('change', async (e) => {
-          const file = e.target.files?.[0];
-          await uploadProfileAvatar(file);
-          e.target.value = '';
-        });
+        if (!bindProfileAvatarCameraEvents()) {
+          window.BananzaApp?.featureLoader?.loadFeature?.('profile-avatar-camera')
+            ?.then(bindProfileAvatarCameraEvents)
+            .catch((error) => setProfileStatus(error.message || 'Camera unavailable', 'error'));
+        }
     
         $('#removeProfileAvatar')?.addEventListener('click', () => {
           withActionButtons('removeProfileAvatar', 'Removing...', removeProfileAvatar).catch((e) => {
