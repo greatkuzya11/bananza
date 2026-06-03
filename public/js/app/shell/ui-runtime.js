@@ -397,7 +397,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
       }
     
       function isAiBotDirectoryUser(user) {
-        return Number(user?.is_ai_bot) !== 0;
+        return Number(user?.is_ai_bot || 0) !== 0;
       }
     
       function botMentionText(user) {
@@ -414,13 +414,26 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
       function botChatMemberMetaText(user) {
         return [botMentionText(user), botModelText(user)].filter(Boolean).join(' \u2022 ') || 'AI bot';
       }
-    
+
+      function normalizeProfileStatusText(value) { return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 48); }
+
+      function profileStatusLabel(user) {
+        if (!user || isAiBotDirectoryUser(user)) return '';
+        const key = String(user.profile_status_key || '').trim().toLowerCase();
+        if (key === 'custom') return normalizeProfileStatusText(user.profile_status_text);
+        const labels = { available: 'Available', busy: 'Busy', dnd: 'Do not disturb', away: 'Away', working: 'Working', resting: 'Resting' };
+        return labels[key] ? t(labels[key]) : '';
+      }
+
+      function userHandleText(user) { return user?.username ? `@${user.username}` : ''; }
+
+      function userProfileLineText(user) { return [profileStatusLabel(user), userHandleText(user)].filter(Boolean).join(' \u2022 '); }
+
       function userSecondaryLineText(user, { showPresence = false } = {}) {
         if (isAiBotDirectoryUser(user)) {
           return ['AI bot', botMentionText(user), botModelText(user)].filter(Boolean).join(' \u2022 ');
         }
-        if (showPresence) return user?.online ? 'online' : 'offline';
-        return user?.username ? `@${user.username}` : '';
+        return userProfileLineText(user) || (showPresence ? (user?.online ? 'online' : 'offline') : '');
       }
     
       function renderSelectableUserItem(user, { showPresence = false } = {}) {
@@ -439,6 +452,8 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         const isOwner = ownerId && Number(user?.id) === Number(ownerId);
         const isBot = isAiBotDirectoryUser(user);
         const isOnline = onlineUsers.has(user?.id);
+        const status = profileStatusLabel(user);
+        const presenceText = isOnline ? 'online' : 'offline';
         return `
           <div class="user-list-item${isOwner ? ' chat-owner' : ''}${isBot ? ' is-ai-bot' : ''}" data-uid="${user.id}" data-bot="${isBot ? 1 : 0}">
             <div class="member-avatar-wrap${isOwner ? ' is-owner' : ''}" title="${isOwner ? 'Chat creator' : ''}">
@@ -449,7 +464,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
               <div class="name">${esc(user.display_name)}</div>
               ${isBot
                 ? `<div class="user-list-meta">${esc(botChatMemberMetaText(user))}</div>`
-                : `<div class="admin-user-status ${isOnline ? 'online' : 'offline'}"><span class="status-dot"></span>${isOnline ? 'online' : 'offline'}</div>`}
+                : `<div class="admin-user-status ${isOnline ? 'online' : 'offline'}"><span class="status-dot"></span><span class="admin-user-status-label">${presenceText}${status ? ` <span class="user-profile-status-inline">\u2022 ${esc(status)}</span>` : ''}</span></div>`}
             </div>
             ${canRemove && Number(user.id) !== Number(currentUser?.id || 0) ? `<button class="member-remove" data-uid="${user.id}" title="Remove">\u2715</button>` : ''}
           </div>
@@ -1264,7 +1279,12 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
           if (avatarEl) {
             avatarEl.title = user.display_name || avatarEl.title || '';
             avatarEl.dataset.displayName = user.display_name || avatarEl.dataset.displayName || '';
+            avatarEl.dataset.username = user.username || avatarEl.dataset.username || '';
             if (mentionToken) avatarEl.dataset.mentionToken = mentionToken;
+            avatarEl.dataset.avatarColor = user.avatar_color || avatarEl.dataset.avatarColor || '';
+            avatarEl.dataset.avatarUrl = user.avatar_url || '';
+            avatarEl.dataset.profileStatusKey = user.profile_status_key || '';
+            avatarEl.dataset.profileStatusText = user.profile_status_text || '';
             setAvatarElementVisual(avatarEl, {
               name: user.display_name || '',
               color: user.avatar_color || '#65aadd',
@@ -1283,6 +1303,8 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
             row.__messageData.display_name = user.display_name || row.__messageData.display_name;
             row.__messageData.avatar_color = user.avatar_color || row.__messageData.avatar_color;
             row.__messageData.avatar_url = user.avatar_url || null;
+            row.__messageData.profile_status_key = user.profile_status_key || '';
+            row.__messageData.profile_status_text = user.profile_status_text || '';
             if (user.username) row.__messageData.username = user.username;
           }
           if (row.__replyPayload && user.display_name) {
@@ -1377,6 +1399,8 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
               avatar_color: user.avatar_color || target.avatar_color,
               avatar_url: user.avatar_url,
               username: user.username || target.username,
+              profile_status_key: user.profile_status_key || '',
+              profile_status_text: user.profile_status_text || '',
             };
           });
           if (changed) {
@@ -2717,11 +2741,32 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
           userId,
           token,
           displayName: avatarEl.dataset.displayName || '',
+          username: avatarEl.dataset.username || token,
+          avatarColor: avatarEl.dataset.avatarColor || '#65aadd',
+          avatarUrl: avatarEl.dataset.avatarUrl || '',
+          profile_status_key: avatarEl.dataset.profileStatusKey || '',
+          profile_status_text: avatarEl.dataset.profileStatusText || '',
           isAiBot: avatarEl.dataset.isAiBot === '1',
           isSelf: userId === currentUser?.id,
         };
       }
-    
+
+      function findAvatarMenuUser(target) {
+        const userId = Number(target?.userId || 0);
+        if (!userId) return null;
+        const matches = (user) => Number(user?.id || user?.user_id || 0) === userId;
+        if (matches(currentUser)) return currentUser;
+        for (const members of [allUsers, [getChatById(currentChatId)?.private_user], chatMembersCache?.get?.(currentChatId)]) {
+          const found = (members || []).filter(Boolean).find(matches);
+          if (found) return found;
+        }
+        let found = null;
+        chatMembersCache?.forEach?.((members) => { if (!found) found = members.find?.(matches) || null; });
+        if (found) return found;
+        composerStateController?.mentionTargetsByChat?.forEach?.((targets) => { if (!found) found = targets.find?.(matches) || null; });
+        return found;
+      }
+
       function openAvatarUserMenu(avatarEl) {
         if (!isGroupLikeCurrentChat()) return;
         const target = avatarMenuTargetFromEl(avatarEl);
@@ -2729,7 +2774,20 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         hideMentionPicker();
         const menu = ensureAvatarUserMenu();
         const canOpenPrivate = !target.isSelf && !target.isAiBot;
+        const sourceUser = findAvatarMenuUser(target) || {};
+        const user = { id: target.userId, username: sourceUser.username || target.username || target.token, display_name: sourceUser.display_name || target.displayName || target.token, avatar_color: sourceUser.avatar_color || target.avatarColor || '#65aadd', avatar_url: sourceUser.avatar_url || target.avatarUrl || '', profile_status_key: sourceUser.profile_status_key || target.profile_status_key || '', profile_status_text: sourceUser.profile_status_text || target.profile_status_text || '', is_ai_bot: target.isAiBot ? 1 : 0 };
+        const status = profileStatusLabel(user);
+        const handle = user.username ? `@${user.username}` : '';
+        const avatarVisual = user.avatar_url ? `<img class="avatar-img" src="${esc(user.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">` : esc(initials(user.display_name || user.username || '?'));
         menu.innerHTML = `
+          <div class="avatar-user-card">
+            <div class="avatar-user-card-avatar" style="background:${esc(user.avatar_color || '#65aadd')}">${avatarVisual}</div>
+            <div class="avatar-user-card-copy">
+              <div class="avatar-user-card-name">${esc(user.display_name || target.displayName || target.token)}</div>
+              ${handle ? `<div class="avatar-user-card-handle">${esc(handle)}</div>` : ''}
+              ${status ? `<div class="avatar-user-card-status">${esc(status)}</div>` : ''}
+            </div>
+          </div>
           <button type="button" data-avatar-action="mention">&#1059;&#1087;&#1086;&#1084;&#1103;&#1085;&#1091;&#1090;&#1100;</button>
           ${canOpenPrivate ? '<button type="button" data-avatar-action="private">&#1055;&#1077;&#1088;&#1077;&#1081;&#1090;&#1080; &#1074; &#1083;&#1080;&#1095;&#1085;&#1099;&#1081; &#1095;&#1072;&#1090;</button>' : ''}
         `;
@@ -2795,7 +2853,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         scheduleMobileFontSizeStatusClear, getPersistedMobileFontSize, renderMobileFontSizeControl, applyMobileFontSize, syncMobileFontSizeViewportState, flushMobileFontSizeSave, scheduleMobileFontSizeSave, updateMobileFontSize,
         getSingleEmojiPattern, splitGraphemes, isSingleEmojiMessage, applyPosterToVideoElement, markAttachmentPosterAvailable, ensureAttachmentPoster, localAttachmentFromFile, makeClientId,
         isClientSideMessage, setPollComposerStatus, readPollComposerForm, renderPollComposerOptionInputs, refreshPollComposerActionState, buildPollComposerPreviewMessage, refreshPollComposerPreview, resetPollComposer,
-        openPollComposer, avatarHtml, isAiBotDirectoryUser, botMentionText, botModelText, botChatMemberMetaText, userSecondaryLineText, renderSelectableUserItem,
+        openPollComposer, avatarHtml, isAiBotDirectoryUser, botMentionText, botModelText, botChatMemberMetaText, profileStatusLabel, userSecondaryLineText, renderSelectableUserItem,
         renderChatMemberItem, formatBotAuditSource, ensureBotVisibilityToggles, setBotVisibilityToggle, getBotVisibilityToggle, updateCurrentUserFooter, persistCurrentUser, syncChatAreaMetrics,
         syncMobileAppHeightToViewport, forceMobileViewportLayoutSync, scheduleMobileViewportRecovery, setupMobileViewportHeightSync, setupChatAreaMetricsSync, isAbortError, isCurrentChatOpenTransition, isUiTransitionBusy,
         isMobileViewportLayoutLocked, syncChatAreaMetricsFromViewport, flushDeferredRecoverySync, setChatHydrating, revealChatHydration, beginMobileRouteTransition, endMobileRouteTransition, isChatSearchOpen,

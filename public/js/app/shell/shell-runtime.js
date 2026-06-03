@@ -863,6 +863,14 @@
       function setProfileStatus(message, type = '') {
         setInlineStatus('profileStatus', message, type);
       }
+
+      const profileStatusEditor = window.BananzaApp?.shell?.profileStatusEditor?.createProfileStatusEditor?.({
+        $, esc, t, getCurrentUser: () => currentUser, setProfileStatus,
+      }) || null;
+
+      function getProfileStatusSelection() {
+        return profileStatusEditor?.getSelection?.() || { key: '', text: '' };
+      }
     
       function getProfileSelectedColor() {
         const checked = $('#colorPicker input[name="profileAvatarColor"]:checked');
@@ -902,7 +910,7 @@
         });
         if (!currentUser?.avatar_url) renderProfileAvatarPreview(selected);
       }
-    
+
       function renderProfileColorPicker() {
         const picker = $('#colorPicker');
         if (!picker) return;
@@ -921,6 +929,7 @@
         $('#profileDisplayPreview').textContent = currentUser.display_name || currentUser.username || '';
         $('#profileUsername').textContent = '@' + currentUser.username;
         $('#profileName').value = currentUser.display_name || '';
+        profileStatusEditor?.hydrate?.();
         renderProfileColorPicker();
         if (!preserveStatus) setProfileStatus('');
       }
@@ -985,9 +994,23 @@
           return;
         }
         const color = getProfileSelectedColor();
+        const profileStatus = getProfileStatusSelection();
+        if (profileStatus.key === 'custom' && !profileStatus.text) {
+          setProfileStatus('Custom status is required', 'error');
+          $('#profileCustomStatus')?.focus();
+          return;
+        }
         setProfileStatus('Saving...', 'pending');
         try {
-          const res = await api('/api/profile', { method: 'PUT', body: { displayName: name, avatarColor: color } });
+          const res = await api('/api/profile', {
+            method: 'PUT',
+            body: {
+              displayName: name,
+              avatarColor: color,
+              profileStatusKey: profileStatus.key,
+              profileStatusText: profileStatus.text,
+            },
+          });
           applyUserUpdate(res.user || {});
           setProfileStatus('Profile saved', 'success');
         } catch (e) {
@@ -1023,7 +1046,9 @@
           syncProfileColorSelection(input.value);
           setProfileStatus('');
         });
-    
+
+        profileStatusEditor?.bindEvents?.();
+     
         $('#profileName')?.addEventListener('input', (e) => {
           const value = e.target.value.trim();
           if (value) $('#profileDisplayPreview').textContent = value;

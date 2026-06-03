@@ -133,6 +133,78 @@ test('auth and chat membership endpoints return expected data', async () => {
   assert.ok(mentionTargets.data.targets.some((target) => target.user_id === admin.user.id));
 });
 
+test('profile status persists and is exposed through user payloads', async () => {
+  const { admin, bob, groupChat, privateChat } = scenario;
+
+  const standard = await bob.request('/api/profile', {
+    method: 'PUT',
+    json: { profileStatusKey: 'available', profileStatusText: 'ignored' },
+  });
+  assert.equal(standard.data.user.profile_status_key, 'available');
+  assert.equal(standard.data.user.profile_status_text, '');
+
+  await bob.request('/api/profile', {
+    method: 'PUT',
+    json: { profileStatusKey: 'unknown' },
+    expectedStatus: 400,
+  });
+  await bob.request('/api/profile', {
+    method: 'PUT',
+    json: { profileStatusKey: 'custom', profileStatusText: '' },
+    expectedStatus: 400,
+  });
+  await bob.request('/api/profile', {
+    method: 'PUT',
+    json: { profileStatusKey: 'custom', profileStatusText: 'x'.repeat(49) },
+    expectedStatus: 400,
+  });
+
+  const custom = await bob.request('/api/profile', {
+    method: 'PUT',
+    json: { profileStatusKey: 'custom', profileStatusText: '  Focus   mode \n until 18:00  ' },
+  });
+  assert.equal(custom.data.user.profile_status_key, 'custom');
+  assert.equal(custom.data.user.profile_status_text, 'Focus mode until 18:00');
+
+  const me = await bob.request('/api/auth/me');
+  assert.equal(me.data.user.profile_status_key, 'custom');
+  assert.equal(me.data.user.profile_status_text, 'Focus mode until 18:00');
+
+  const users = await admin.request('/api/users');
+  const bobUser = users.data.find((user) => Number(user.id) === Number(bob.user.id));
+  assert.equal(bobUser.profile_status_key, 'custom');
+  assert.equal(bobUser.profile_status_text, 'Focus mode until 18:00');
+
+  const members = await admin.request(`/api/chats/${groupChat.id}/members`);
+  const bobMember = members.data.find((user) => Number(user.id) === Number(bob.user.id));
+  assert.equal(bobMember.profile_status_key, 'custom');
+  assert.equal(bobMember.profile_status_text, 'Focus mode until 18:00');
+
+  const mentions = await admin.request(`/api/chats/${groupChat.id}/mention-targets`);
+  const bobMention = mentions.data.targets.find((user) => Number(user.user_id) === Number(bob.user.id));
+  assert.equal(bobMention.profile_status_key, 'custom');
+  assert.equal(bobMention.profile_status_text, 'Focus mode until 18:00');
+
+  const chatList = await admin.request('/api/chats');
+  const privateEntry = chatList.data.find((chat) => Number(chat.id) === Number(privateChat.id));
+  assert.equal(privateEntry.private_user.profile_status_key, 'custom');
+  assert.equal(privateEntry.private_user.profile_status_text, 'Focus mode until 18:00');
+
+  const sent = await bob.request(`/api/chats/${groupChat.id}/messages`, {
+    method: 'POST',
+    json: { text: 'profile status payload check' },
+  });
+  assert.equal(sent.data.profile_status_key, 'custom');
+  assert.equal(sent.data.profile_status_text, 'Focus mode until 18:00');
+
+  const cleared = await bob.request('/api/profile', {
+    method: 'PUT',
+    json: { profileStatusKey: '', profileStatusText: 'ignored' },
+  });
+  assert.equal(cleared.data.user.profile_status_key, '');
+  assert.equal(cleared.data.user.profile_status_text, '');
+});
+
 test('chat preferences, sidebar pinning and hide/unhide work through public routes', async () => {
   const { admin, bob, groupChat, privateChat } = scenario;
 

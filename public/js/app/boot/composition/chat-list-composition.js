@@ -142,9 +142,11 @@
           refreshMentionPickerForUserUpdate: () => refreshMentionPickerForUserUpdate(),
           refreshRenderedUserMessages: (user) => refreshRenderedUserMessages(user),
           renderCurrentChatHeader: (chat) => renderCurrentChatHeader(chat),
+          profileStatusLabel: (user) => profileStatusLabel(user),
           setAvatarElementVisual: (el, options = {}) => setAvatarElementVisual(el, options),
           updateCachedMessagesByUser: (user) => window.messageCache?.updateMessagesByUser?.(user).catch(() => {}),
           updateChatStatus: () => updateChatStatus(),
+          userSecondaryLineText: (user) => userSecondaryLineText(user),
         },
       });
     

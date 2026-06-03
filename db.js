@@ -21,6 +21,8 @@ db.exec(`
     is_ai_bot INTEGER DEFAULT 0,
     avatar_color TEXT NOT NULL,
     avatar_url TEXT DEFAULT NULL,
+    profile_status_key TEXT DEFAULT '',
+    profile_status_text TEXT DEFAULT '',
     ui_theme TEXT DEFAULT 'bananza',
     ui_poll_style TEXT DEFAULT 'pulse',
     ui_visual_mode TEXT DEFAULT 'classic',
@@ -237,6 +239,18 @@ try {
 } catch {
   db.exec("ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT NULL");
 }
+try {
+  db.prepare("SELECT profile_status_key FROM users LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE users ADD COLUMN profile_status_key TEXT DEFAULT ''");
+}
+try {
+  db.prepare("SELECT profile_status_text FROM users LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE users ADD COLUMN profile_status_text TEXT DEFAULT ''");
+}
+db.prepare("UPDATE users SET profile_status_key='' WHERE profile_status_key IS NULL OR TRIM(profile_status_key) NOT IN ('available','busy','dnd','away','working','resting','custom')").run();
+db.prepare("UPDATE users SET profile_status_text='' WHERE profile_status_key<>'custom' OR profile_status_text IS NULL").run();
 try {
   db.prepare("SELECT ui_theme FROM users LIMIT 1").get();
 } catch {

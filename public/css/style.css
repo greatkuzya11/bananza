@@ -1380,6 +1380,8 @@ html[data-modal-animation="none"] .chat-folder-list-surface {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.chat-status-presence.online { color: var(--success); }
+.chat-status-presence.offline { color: var(--text-secondary); }
 
 .pinned-bar {
   display: flex;
@@ -2316,13 +2318,74 @@ html[data-modal-animation="none"] .scroll-date-indicator {
   flex-direction: column;
   gap: 4px;
   min-width: 178px;
+  width: min(280px, calc(100vw - 16px));
+  max-width: calc(100vw - 16px);
   padding: 7px;
+  box-sizing: border-box;
   border-radius: 14px;
   background: var(--bg-modal);
   border: 1px solid var(--border-light);
   box-shadow: 0 12px 34px rgba(0,0,0,.45);
+  overflow: hidden;
 }
 .avatar-user-menu.hidden { display: none; }
+.avatar-user-card {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 8px;
+  border-bottom: 1px solid var(--border-light);
+}
+.avatar-user-card-avatar {
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  overflow: hidden;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 800;
+  flex: 0 0 auto;
+}
+.avatar-user-card-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.avatar-user-card-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.avatar-user-card-name,
+.avatar-user-card-handle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.avatar-user-card-name {
+  color: var(--text-primary);
+  font-weight: 800;
+  line-height: 1.25;
+}
+.avatar-user-card-handle {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.25;
+}
+.avatar-user-card-status {
+  color: var(--text-secondary);
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  font-size: 12px;
+  line-height: 1.3;
+}
 .avatar-user-menu button {
   border: 0;
   border-radius: 10px;
@@ -2333,6 +2396,7 @@ html[data-modal-animation="none"] .scroll-date-indicator {
   font: inherit;
   font-weight: 700;
   cursor: pointer;
+  overflow-wrap: anywhere;
 }
 .avatar-user-menu button:hover,
 .avatar-user-menu button:active {
@@ -4202,6 +4266,7 @@ select.modal-input optgroup {
 .user-list-item {
   display: flex; align-items: center; gap: 12px; padding: 8px 10px;
   border-radius: 8px; cursor: pointer; transition: background .15s;
+  min-width: 0;
 }
 .user-list-item:hover { background: var(--bg-hover); }
 .user-list-item .avatar {
@@ -4244,7 +4309,14 @@ select.modal-input optgroup {
   font-weight: 700;
   vertical-align: middle;
 }
-.user-list-item .name { font-size: 15px; font-weight: 500; }
+.user-list-item .name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: 500;
+}
 .user-list-item .status-text { font-size: 12px; color: var(--text-secondary); }
 
 .checkable .user-list-item { position: relative; padding-left: 40px; }
@@ -4421,12 +4493,23 @@ html[data-visual-mode="rich"] .poll-card {
 }
 .admin-user-status {
   display: inline-flex; align-items: center; gap: 6px;
+  max-width: 100%;
+  min-width: 0;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .admin-user-status .status-dot {
   width: 8px; height: 8px; border-radius: 50%;
   background: currentColor;
   flex-shrink: 0;
+}
+.admin-user-status-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .admin-user-status.online { color: var(--success); }
 .admin-user-status.offline { color: var(--text-secondary); }
@@ -4556,12 +4639,33 @@ html[data-visual-mode="rich"] .poll-card {
 }
 
 .user-list-item .user-list-copy {
+  flex: 1 1 auto;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 .user-list-item .user-list-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 12px;
   color: var(--text-secondary);
   line-height: 1.4;
+}
+.user-profile-status-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.user-profile-status-inline {
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 .user-list-item.is-ai-bot .name::after {
   content: 'AI';
@@ -5934,6 +6038,9 @@ html[data-visual-mode="rich"] .poll-card {
 .profile-section {
   margin: 0;
   padding: 14px;
+  width: 100%;
+  min-inline-size: 0;
+  box-sizing: border-box;
   border: 1px solid var(--profile-section-border);
   border-radius: 8px;
   background: var(--profile-section-bg);
@@ -5959,6 +6066,39 @@ html[data-visual-mode="rich"] .poll-card {
 #menuDrawer .modal-input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.profile-user-status-select {
+  width: 100%;
+  color: var(--text-primary);
+  border-color: var(--border-light);
+  cursor: pointer;
+}
+.profile-custom-status {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  width: 100%;
+  margin-top: 9px;
+}
+.profile-custom-status.hidden {
+  display: none;
+}
+.profile-custom-status-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.profile-user-status-preview {
+  min-width: 0;
+  margin-top: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.35;
 }
 
 .color-picker {

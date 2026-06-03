@@ -2537,6 +2537,16 @@
             <input type="text" id="profileName" maxlength="30" class="modal-input" autocomplete="nickname" aria-describedby="profileStatus">
           </section>
 
+          <fieldset class="profile-section profile-user-status-section">
+            <legend id="profileUserStatusLegend" class="profile-section-title" data-i18n="Profile status">Profile status</legend>
+            <select id="profileUserStatusSelect" class="modal-input profile-user-status-select" aria-labelledby="profileUserStatusLegend"></select>
+            <label id="profileCustomStatusWrap" class="profile-custom-status hidden" for="profileCustomStatus">
+              <span class="profile-custom-status-label" data-i18n="Custom status">Custom status</span>
+              <input type="text" id="profileCustomStatus" maxlength="48" class="modal-input" placeholder="Write custom status" data-i18n-placeholder="Write custom status" aria-describedby="profileUserStatusPreview profileStatus">
+            </label>
+            <div id="profileUserStatusPreview" class="profile-user-status-preview"></div>
+          </fieldset>
+
           <fieldset class="profile-section profile-photo-section">
             <legend class="profile-section-title" data-i18n="Profile avatar">Profile avatar</legend>
             <div class="profile-avatar-actions">

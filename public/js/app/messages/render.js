@@ -498,8 +498,13 @@
       avatar.title = name || '';
       avatar.dataset.userId = String(Number(msg.user_id) || 0);
       avatar.dataset.displayName = name || '';
+      avatar.dataset.username = isOwn ? (getCurrentUser().username || '') : (msg.username || '');
       avatar.dataset.mentionToken = mentionToken || '';
       avatar.dataset.isAiBot = isAiBot ? '1' : '0';
+      avatar.dataset.avatarColor = avatarColor || '';
+      avatar.dataset.avatarUrl = avatarUrl || '';
+      avatar.dataset.profileStatusKey = isAiBot ? '' : (isOwn ? (getCurrentUser().profile_status_key || '') : (msg.profile_status_key || ''));
+      avatar.dataset.profileStatusText = isAiBot ? '' : (isOwn ? (getCurrentUser().profile_status_text || '') : (msg.profile_status_text || ''));
       setAvatarElementVisual(avatar, {
         name: name || '',
         color: avatarColor,

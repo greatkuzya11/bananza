@@ -2,6 +2,88 @@
   const root = window.BananzaApp = window.BananzaApp || {};
   const shellRoot = root.shell = root.shell || {};
 
+  const PROFILE_STATUS_OPTIONS = [
+    { key: '', label: 'No status' },
+    { key: 'available', label: 'Available' },
+    { key: 'busy', label: 'Busy' },
+    { key: 'dnd', label: 'Do not disturb' },
+    { key: 'away', label: 'Away' },
+    { key: 'working', label: 'Working' },
+    { key: 'resting', label: 'Resting' },
+    { key: 'custom', label: 'Custom status' },
+  ];
+
+  function createProfileStatusEditor(options = {}) {
+    const $ = typeof options.$ === 'function' ? options.$ : (selector) => document.querySelector(selector);
+    const esc = typeof options.esc === 'function' ? options.esc : (value) => String(value ?? '');
+    const t = typeof options.t === 'function' ? options.t : (value) => value;
+    const getCurrentUser = typeof options.getCurrentUser === 'function' ? options.getCurrentUser : () => null;
+    const setProfileStatus = typeof options.setProfileStatus === 'function' ? options.setProfileStatus : () => {};
+    let bound = false;
+
+    function normalizeText(value) { return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 48); }
+    function normalizeKey(value) {
+      const key = String(value || '').trim().toLowerCase();
+      return PROFILE_STATUS_OPTIONS.some((option) => option.key === key) ? key : '';
+    }
+    function label(user) {
+      if (!user || Number(user.is_ai_bot || 0) !== 0) return '';
+      const key = normalizeKey(user.profile_status_key);
+      if (key === 'custom') return normalizeText(user.profile_status_text);
+      const option = PROFILE_STATUS_OPTIONS.find((item) => item.key === key);
+      return option?.key ? t(option.label) : '';
+    }
+    function previewLine(user) {
+      const handle = user?.username ? `@${user.username}` : '';
+      return [handle, label(user)].filter(Boolean).join(' \u2022 ');
+    }
+    function getSelection() {
+      const currentUser = getCurrentUser();
+      const selectEl = $('#profileUserStatusSelect');
+      const inputEl = $('#profileCustomStatus');
+      const key = normalizeKey(selectEl ? selectEl.value : (currentUser?.profile_status_key || ''));
+      const text = normalizeText(inputEl ? inputEl.value : (currentUser?.profile_status_text || ''));
+      return { key, text: key === 'custom' ? text : '' };
+    }
+    function renderOptions() {
+      const selectEl = $('#profileUserStatusSelect');
+      if (!selectEl) return;
+      const selectedKey = normalizeKey(getCurrentUser()?.profile_status_key || '');
+      selectEl.innerHTML = PROFILE_STATUS_OPTIONS.map((option) => `<option value="${esc(option.key)}">${esc(t(option.label))}</option>`).join('');
+      selectEl.value = selectedKey;
+    }
+    function syncSelection() {
+      const { key, text } = getSelection();
+      const selectEl = $('#profileUserStatusSelect');
+      if (selectEl) selectEl.value = key;
+      $('#profileCustomStatusWrap')?.classList.toggle('hidden', key !== 'custom');
+      const preview = $('#profileUserStatusPreview');
+      if (preview) preview.textContent = previewLine({ ...getCurrentUser(), profile_status_key: key, profile_status_text: text }) || t('No status');
+    }
+    function hydrate() {
+      const currentUser = getCurrentUser();
+      const customInput = $('#profileCustomStatus');
+      if (customInput) customInput.value = normalizeKey(currentUser?.profile_status_key) === 'custom' ? normalizeText(currentUser?.profile_status_text) : '';
+      renderOptions();
+      syncSelection();
+    }
+    function bindEvents() {
+      if (bound) return;
+      bound = true;
+      $('#profileUserStatusSelect')?.addEventListener('change', (event) => {
+        syncSelection();
+        if (event.target.value === 'custom') $('#profileCustomStatus')?.focus();
+        setProfileStatus('');
+      });
+      $('#profileCustomStatus')?.addEventListener('input', () => {
+        syncSelection();
+        setProfileStatus('');
+      });
+    }
+
+    return { bindEvents, getSelection, hydrate, label, normalizeKey, normalizeText, syncSelection };
+  }
+
   function createEventController(options = {}) {
     const scope = options.scope || {};
     let bound = false;
@@ -654,5 +736,6 @@
     return { bindAll };
   }
 
+  shellRoot.profileStatusEditor = { createProfileStatusEditor, PROFILE_STATUS_OPTIONS };
   shellRoot.createEventController = createEventController;
 })();

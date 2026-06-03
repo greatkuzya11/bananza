@@ -444,15 +444,18 @@ function updateVisibleOwnReadState(chatId = currentChatId) {
         if (chatInfoModal.classList.contains('hidden')) return;
         const list = $('#chatMemberList');
         if (!list) return;
+        const membersById = new Map((chatMembersCache.get(currentChatId) || []).map((member) => [Number(member.id || member.user_id || 0), member]));
         list.querySelectorAll('.user-list-item').forEach(item => {
           if (item.dataset.bot === '1') return;
           const uid = +item.dataset.uid;
           const statusEl = item.querySelector('.admin-user-status');
           if (!statusEl) return;
           const isOnline = onlineUsers.has(uid);
+          const status = profileStatusLabel(membersById.get(uid));
           statusEl.classList.toggle('online', isOnline);
           statusEl.classList.toggle('offline', !isOnline);
-          statusEl.innerHTML = `<span class="status-dot"></span>${isOnline ? 'online' : 'offline'}`;
+          statusEl.innerHTML = `<span class="status-dot"></span><span class="admin-user-status-label">${isOnline ? 'online' : 'offline'}${status ? ` <span class="user-profile-status-inline">\u2022 ${esc(status)}</span>` : ''}</span>`;
+          item.querySelector('.user-profile-status-line')?.remove();
         });
       }
     
@@ -543,8 +546,11 @@ function updateVisibleOwnReadState(chatId = currentChatId) {
             return;
           }
           const isOnline = onlineUsers.has(chat.private_user.id);
-          chatStatus.textContent = isOnline ? 'online' : 'offline';
-          chatStatus.style.color = isOnline ? 'var(--success)' : '';
+          const status = profileStatusLabel(chat.private_user);
+          chatStatus.classList.toggle('online', isOnline);
+          chatStatus.classList.toggle('offline', !isOnline);
+          chatStatus.innerHTML = `<span class="chat-status-presence ${isOnline ? 'online' : 'offline'}">${isOnline ? 'online' : 'offline'}</span>${status ? ` <span class="user-profile-status-inline">\u2022 ${esc(status)}</span>` : ''}`;
+          chatStatus.style.color = '';
         } else {
           // Prefer counting only members of this chat if we have them cached
           const members = chatMembersCache.get(chat.id);

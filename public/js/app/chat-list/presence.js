@@ -67,9 +67,25 @@
           color: user.avatar_color || '#65aadd',
           avatarUrl: user.avatar_url || '',
         });
+        avatarEl.dataset.username = user.username || avatarEl.dataset.username || '';
+        avatarEl.dataset.avatarColor = user.avatar_color || avatarEl.dataset.avatarColor || '';
+        avatarEl.dataset.avatarUrl = user.avatar_url || '';
+        avatarEl.dataset.profileStatusKey = user.profile_status_key || '';
+        avatarEl.dataset.profileStatusText = user.profile_status_text || '';
       }
       const nameEl = item.querySelector('.name');
       if (nameEl && user.display_name) nameEl.textContent = user.display_name;
+      const metaEl = item.querySelector('.user-list-meta');
+      if (metaEl && typeof actions.userSecondaryLineText === 'function') {
+        metaEl.textContent = actions.userSecondaryLineText(user);
+      }
+      const memberOnlineEl = item.querySelector('.admin-user-status');
+      if (memberOnlineEl && item.dataset.bot !== '1') {
+        const status = typeof actions.profileStatusLabel === 'function' ? actions.profileStatusLabel(user) : '';
+        const isOnline = memberOnlineEl.classList.contains('online');
+        memberOnlineEl.innerHTML = `<span class="status-dot"></span><span class="admin-user-status-label">${isOnline ? 'online' : 'offline'}${status ? ` <span class="user-profile-status-inline">\u2022 ${esc(status)}</span>` : ''}</span>`;
+        item.querySelector('.user-profile-status-line')?.remove();
+      }
     }
 
     function updateAdminUserRowElement(row, user) {
@@ -202,4 +218,3 @@
     createPresenceController,
   };
 })();
-

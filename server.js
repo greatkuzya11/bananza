@@ -160,8 +160,10 @@ const UI_MOBILE_FONT_SIZE_MIN = 1;
 const UI_MOBILE_FONT_SIZE_MAX = 10;
 const UI_LANGUAGES = new Set(['ru', 'en']);
 const UI_LANGUAGE_DEFAULT = 'ru';
+const PROFILE_STATUS_KEYS = new Set(['', 'available', 'busy', 'dnd', 'away', 'working', 'resting', 'custom']);
+const PROFILE_STATUS_CUSTOM_MAX = 48;
 const RECENT_EMOJI_LIMIT = 32;
-const USER_PUBLIC_FIELDS = 'id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,ui_theme,ui_visual_mode,ui_modal_animation,ui_modal_animation_speed,ui_mobile_font_size,ui_language,ui_show_chat_folder_strip_in_all_chats';
+const USER_PUBLIC_FIELDS = 'id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,profile_status_key,profile_status_text,ui_theme,ui_visual_mode,ui_modal_animation,ui_modal_animation_speed,ui_mobile_font_size,ui_language,ui_show_chat_folder_strip_in_all_chats';
 const USER_REALTIME_FIELDS = `${USER_PUBLIC_FIELDS},is_ai_bot`;
 const POLL_MAX_OPTIONS = 10;
 const POLL_MIN_OPTIONS = 2;
@@ -181,6 +183,37 @@ function normalizeMobileFontSize(size) {
 function normalizeUiLanguage(language) {
   const next = String(language || '').trim().toLowerCase();
   return UI_LANGUAGES.has(next) ? next : UI_LANGUAGE_DEFAULT;
+}
+
+function normalizeProfileStatusInput(rawKey, rawText, { strict = false } = {}) {
+  const key = String(rawKey || '').trim().toLowerCase();
+  if (!PROFILE_STATUS_KEYS.has(key)) {
+    if (strict) {
+      const error = new Error('Unknown profile status');
+      error.status = 400;
+      throw error;
+    }
+    return { key: '', text: '' };
+  }
+
+  if (key === 'custom') {
+    const text = String(rawText || '').replace(/\s+/g, ' ').trim();
+    if (!text) {
+      if (!strict) return { key: '', text: '' };
+      const error = new Error('Custom status is required');
+      error.status = 400;
+      throw error;
+    }
+    if (text.length > PROFILE_STATUS_CUSTOM_MAX) {
+      if (!strict) return { key, text: text.slice(0, PROFILE_STATUS_CUSTOM_MAX) };
+      const error = new Error('Custom status too long');
+      error.status = 400;
+      throw error;
+    }
+    return { key, text };
+  }
+
+  return { key, text: '' };
 }
 
 function boolValue(value, fallback = false) {
@@ -249,6 +282,7 @@ function normalizeAiDocumentFormatHint(value) {
 }
 
 function publicUser(u) {
+  const profileStatus = normalizeProfileStatusInput(u.profile_status_key, u.profile_status_text);
   return {
     id: u.id,
     username: u.username,
@@ -257,6 +291,8 @@ function publicUser(u) {
     is_blocked: u.is_blocked,
     avatar_color: u.avatar_color,
     avatar_url: u.avatar_url,
+    profile_status_key: profileStatus.key,
+    profile_status_text: profileStatus.text,
     ui_theme: UI_THEMES.has(u.ui_theme) ? u.ui_theme : 'bananza',
     ui_visual_mode: UI_VISUAL_MODES.has(u.ui_visual_mode) ? u.ui_visual_mode : 'classic',
     ui_modal_animation: UI_MODAL_ANIMATIONS.has(u.ui_modal_animation) ? u.ui_modal_animation : 'soft',
@@ -507,6 +543,7 @@ chatFoldersFeature = createChatFoldersFeature({
 
 const messageByIdStmt = db.prepare(`
   SELECT m.*, u.username, u.display_name, u.avatar_color, u.avatar_url,
+    u.profile_status_key, u.profile_status_text,
     COALESCE(u.is_ai_bot, 0) as is_ai_bot, ab.mention as ai_bot_mention,
     ab.provider as ai_bot_provider, ab.kind as ai_bot_kind,
     ab.image_risk_filter_enabled as ai_bot_image_risk_filter_enabled,
@@ -552,6 +589,8 @@ const messageMentionsStmt = db.prepare(`
     u.display_name,
     u.avatar_color,
     u.avatar_url,
+    u.profile_status_key,
+    u.profile_status_text,
     COALESCE(u.is_ai_bot, 0) as is_ai_bot,
     ab.mention as bot_mention
   FROM message_mentions mm
@@ -567,6 +606,8 @@ const mentionTargetsStmt = db.prepare(`
     u.display_name,
     u.avatar_color,
     u.avatar_url,
+    u.profile_status_key,
+    u.profile_status_text,
     COALESCE(u.is_ai_bot, 0) as is_ai_bot,
     ab.id as bot_id,
     ab.mention as bot_mention,
@@ -595,6 +636,8 @@ const privatePeerStmt = db.prepare(`
     u.display_name,
     u.avatar_color,
     u.avatar_url,
+    u.profile_status_key,
+    u.profile_status_text,
     COALESCE(u.is_ai_bot, 0) as is_ai_bot,
     ab.id as ai_bot_id,
     ab.provider as ai_bot_provider,
@@ -842,6 +885,8 @@ function mentionPayload(row) {
     document_default_format: row.bot_document_default_format || '',
     avatar_color: row.avatar_color,
     avatar_url: row.avatar_url,
+    profile_status_key: isAiBot ? '' : (row.profile_status_key || ''),
+    profile_status_text: isAiBot ? '' : (row.profile_status_text || ''),
   };
 }
 
@@ -870,6 +915,8 @@ function privatePeerPayload(chatId, viewerUserId) {
     display_name: peer.display_name || '',
     avatar_color: peer.avatar_color || '#65aadd',
     avatar_url: peer.avatar_url || null,
+    profile_status_key: Number(peer.is_ai_bot) ? '' : (peer.profile_status_key || ''),
+    profile_status_text: Number(peer.is_ai_bot) ? '' : (peer.profile_status_text || ''),
     is_ai_bot: Number(peer.is_ai_bot) || 0,
     ai_bot_id: Number(peer.ai_bot_id) || 0,
     ai_bot_provider: peer.ai_bot_provider || '',
@@ -1281,7 +1328,7 @@ app.get('/api/auth/me', auth, (req, res) => {
 // USER ROUTES
 
 app.get('/api/users', auth, (req, res) => {
-  const users = db.prepare('SELECT id,username,display_name,avatar_color,avatar_url,is_blocked,0 as is_ai_bot FROM users WHERE id!=? AND COALESCE(is_ai_bot,0)=0').all(req.user.id);
+  const users = db.prepare('SELECT id,username,display_name,avatar_color,avatar_url,profile_status_key,profile_status_text,is_blocked,0 as is_ai_bot FROM users WHERE id!=? AND COALESCE(is_ai_bot,0)=0').all(req.user.id);
   const botUsers = aiBotFeature?.listSelectableBotUsersForViewer(req.user) || [];
   const online = [...clients.keys()];
   res.json([
@@ -2015,6 +2062,8 @@ app.get('/api/chats/:chatId/members', auth, (req, res) => {
       u.display_name,
       u.avatar_color,
       u.avatar_url,
+      u.profile_status_key,
+      u.profile_status_text,
       COALESCE(u.is_ai_bot, 0) as is_ai_bot,
       COALESCE(ab.id, 0) as ai_bot_id,
       COALESCE(ab.provider, '') as ai_bot_provider,
@@ -2361,6 +2410,7 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
 
   const selectSql = `
     SELECT m.*, u.username, u.display_name, u.avatar_color, u.avatar_url,
+      u.profile_status_key, u.profile_status_text,
       COALESCE(u.is_ai_bot, 0) as is_ai_bot, ab.mention as ai_bot_mention,
       ab.provider as ai_bot_provider, ab.kind as ai_bot_kind,
       ab.image_risk_filter_enabled as ai_bot_image_risk_filter_enabled,
@@ -2573,6 +2623,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
 
   const msg = db.prepare(`
     SELECT m.*, u.username, u.display_name, u.avatar_color, u.avatar_url,
+      u.profile_status_key, u.profile_status_text,
       COALESCE(u.is_ai_bot, 0) as is_ai_bot, ab.mention as ai_bot_mention,
       ab.provider as ai_bot_provider, ab.kind as ai_bot_kind,
       ab.image_risk_filter_enabled as ai_bot_image_risk_filter_enabled,
@@ -3126,6 +3177,18 @@ app.put('/api/profile', auth, (req, res) => {
   if (avatarColor && typeof avatarColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(avatarColor)) {
     updates.push('avatar_color=?');
     params.push(avatarColor);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(req.body || {}, 'profileStatusKey') ||
+    Object.prototype.hasOwnProperty.call(req.body || {}, 'profileStatusText')
+  ) {
+    try {
+      const status = normalizeProfileStatusInput(req.body.profileStatusKey, req.body.profileStatusText, { strict: true });
+      updates.push('profile_status_key=?', 'profile_status_text=?');
+      params.push(status.key, status.text);
+    } catch (error) {
+      return res.status(error.status || 400).json({ error: error.message || 'Invalid profile status' });
+    }
   }
 
   if (updates.length === 0) return res.status(400).json({ error: 'Nothing to update' });
