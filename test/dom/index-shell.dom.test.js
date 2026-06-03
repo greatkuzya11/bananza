@@ -243,6 +243,7 @@ test('public/index.html keeps universal file pickers and mobile media shortcuts'
   assert.equal(document.getElementById('fileInputCamera').getAttribute('capture'), 'environment');
   assert.equal(document.getElementById('fileInputCamera').hasAttribute('multiple'), false);
   assert.equal(document.getElementById('chatAvatarInput').getAttribute('accept'), 'image/*');
+  assert.equal(document.getElementById('chatBackgroundInput').getAttribute('accept'), 'image/*');
 });
 
 test('profile settings modal exposes accessible profile controls', () => {
