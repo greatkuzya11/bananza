@@ -1163,15 +1163,15 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
       async function loadChatFolders({ silent = false, renderAfterLoad = true } = {}) {
         return folderActionsController.loadChatFolders({ silent, renderAfterLoad });
       }
-    
       function setAvatarElementVisual(el, { name = '', color = '#65aadd', avatarUrl = '', fallbackText = '' } = {}) {
         if (!el) return;
-        el.style.background = color || '#65aadd';
-        if (avatarUrl) {
-          el.innerHTML = `<img class="avatar-img" src="${esc(avatarUrl)}" alt="" loading="lazy" onerror="this.remove()">`;
-          return;
-        }
-        el.textContent = fallbackText || initials(name || '?');
+        const resolvedColor = color || '#65aadd', resolvedAvatarUrl = avatarUrl || '', resolvedText = fallbackText || initials(name || '?');
+        const signature = JSON.stringify([name || '', resolvedColor, resolvedAvatarUrl, resolvedText]);
+        const currentImg = el.querySelector('img.avatar-img'), currentMatches = resolvedAvatarUrl ? currentImg?.getAttribute('src') === resolvedAvatarUrl : (!currentImg && el.textContent === resolvedText);
+        if (el.dataset.avatarVisualSignature === signature && currentMatches) return;
+        el.dataset.avatarVisualSignature = signature; el.style.background = resolvedColor;
+        if (resolvedAvatarUrl) { if (!currentMatches) el.innerHTML = `<img class="avatar-img" src="${esc(resolvedAvatarUrl)}" alt="" loading="lazy" onerror="this.remove()">`; return; }
+        el.textContent = resolvedText;
       }
     
       function renderCurrentChatHeader(chat = chats.find(c => c.id === currentChatId)) {

@@ -325,6 +325,75 @@ test('ChatShot state loads, form renders, generation calls endpoint, and button 
   assert.ok(calls.some((call) => call.url === '/api/chats/7/chatshot' && call.options.method === 'POST'));
 });
 
+test('ChatShot chat setting save keeps Saved status and skips own refresh echo', async () => {
+  const dom = loadAiAdminRuntime();
+  const { document } = dom.window;
+  const calls = [];
+  const savedState = {
+    chatId: 7,
+    enabled: true,
+    requested_enabled: true,
+    ready: true,
+    botId: 31,
+    style: 'photo',
+    banana_filter_enabled: false,
+    message_count: 3,
+    bots: [{ id: 31, name: 'Shot', provider: 'openai' }],
+    selectedBot: { id: 31, name: 'Shot', provider: 'openai' },
+  };
+  const api = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url === '/api/chats/7/chatshot' && options.method === 'PUT') return savedState;
+    if (url === '/api/chats/7/chatshot') {
+      return {
+        ...savedState,
+        style: 'comic',
+        banana_filter_enabled: true,
+      };
+    }
+    throw new Error(`Unexpected ChatShot request: ${url}`);
+  };
+  const scope = {
+    currentChatId: 7,
+    chatShotStateByChat: new Map(),
+    chatShotStateRequests: new Map(),
+    chatShotStateFailuresByChat: new Set(),
+    chatShotGeneratingByChat: new Set(),
+    chatShotBtn: document.getElementById('chatShotBtn'),
+    chatInfoModal: document.getElementById('chatInfoModal'),
+    api,
+    esc: (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch])),
+    $: (selector) => document.querySelector(selector),
+    syncChatHeaderActionsAccessibility() {},
+  };
+  const runtime = dom.window.BananzaApp.aiAdmin.contextChatShotRuntime.createContextChatShotRuntime(scope);
+
+  await runtime.loadChatShotState(7);
+  const botSelect = document.getElementById('chatShotBotSelect');
+  const firstOption = botSelect.options[0];
+  document.getElementById('chatShotStyleSelect').value = 'photo';
+  document.getElementById('chatShotBananaFilterToggle').checked = false;
+
+  await runtime.saveChatShotChatSetting();
+  assert.equal(document.getElementById('chatShotChatStatus').textContent, 'Saved');
+  assert.equal(runtime.invalidateChatShotState(7, {
+    chat: {
+      id: 7,
+      chatshot_enabled: 1,
+      chatshot_bot_id: 31,
+      chatshot_style: 'photo',
+      chatshot_banana_filter_enabled: 0,
+    },
+    source: 'chat_updated',
+  }), false);
+  assert.equal(runtime.invalidateChatShotState(7, { source: 'chatshot_bots_updated' }), false);
+  runtime.renderChatShotForm(runtime.getCurrentChatShotState());
+
+  assert.equal(document.getElementById('chatShotChatStatus').textContent, 'Saved');
+  assert.equal(botSelect.options[0], firstOption);
+  assert.equal(calls.filter((call) => call.url === '/api/chats/7/chatshot' && call.options.method !== 'PUT').length, 1);
+});
+
 test('Grok image risk resolves targets and confirm modal resolves on confirm/cancel', async () => {
   const dom = loadAiAdminRuntime({
     risk: {

@@ -34,6 +34,48 @@
     };
   }
 
+  const CHATSHOT_SAVE_ECHO_TTL_MS = 2500;
+
+  function chatShotSelectedBotId(state = {}) {
+    return Number(state.botId || state.bot_id || state.selectedBot?.id || state.selected_bot?.id || 0) || null;
+  }
+
+  function chatShotBananaFilterEnabled(value) {
+    return value !== false && value !== 0;
+  }
+
+  function chatShotStateSignature(state = {}) {
+    return JSON.stringify([
+      !!state.enabled,
+      !!state.requested_enabled,
+      chatShotSelectedBotId(state),
+      ['comic', 'illustration', 'photo'].includes(String(state.style || '').toLowerCase()) ? String(state.style).toLowerCase() : 'comic',
+      chatShotBananaFilterEnabled(state.banana_filter_enabled),
+    ]);
+  }
+
+  function chatShotStateMatchesChat(state = {}, chat = {}) {
+    return Boolean(chat)
+      && !!state.requested_enabled === !!chat.chatshot_enabled
+      && chatShotSelectedBotId(state) === (Number(chat.chatshot_bot_id || 0) || null)
+      && String(state.style || 'comic') === String(chat.chatshot_style || 'comic')
+      && chatShotBananaFilterEnabled(state.banana_filter_enabled) === (chat.chatshot_banana_filter_enabled !== 0);
+  }
+
+  function syncChatShotBotSelectOptions(botSelect, bots, selectedBotId) {
+    const optionModels = bots.map((bot) => ({
+      id: Number(bot.id || 0),
+      label: bot.name || 'ChatShot',
+    }));
+    const signature = JSON.stringify(optionModels);
+    if (botSelect.dataset.chatShotOptionsSignature !== signature) {
+      botSelect.innerHTML = optionModels.map((bot) => `<option value="${bot.id}">${shared.esc(bot.label)}</option>`).join('');
+      botSelect.dataset.chatShotOptionsSignature = signature;
+    }
+    if (bots.some((bot) => Number(bot.id) === selectedBotId)) botSelect.value = String(selectedBotId);
+    botSelect.disabled = !bots.length || bots.length === 1;
+  }
+
   function createDefaultAdminStates() {
     return {
       openai: { settings: {}, bots: [], chats: [], chatSettings: [], models: {} },
@@ -54,6 +96,43 @@
     const requests = new Map();
     const failuresByChat = new Set();
     const generatingByChat = new Set();
+    const recentSavesByChat = new Map();
+
+    function rememberChatShotSaveEcho(chatId, state) {
+      const id = Number(chatId || 0);
+      if (!id || !state) return;
+      recentSavesByChat.set(id, {
+        state,
+        signature: chatShotStateSignature(state),
+        expiresAt: Date.now() + CHATSHOT_SAVE_ECHO_TTL_MS,
+        remainingEchoes: 2,
+      });
+    }
+
+    function forgetChatShotSaveEcho(chatId) {
+      recentSavesByChat.delete(Number(chatId || 0));
+    }
+
+    function getRecentChatShotSave(chatId) {
+      const id = Number(chatId || 0);
+      const recent = recentSavesByChat.get(id);
+      if (!recent) return null;
+      if (recent.expiresAt < Date.now()) {
+        recentSavesByChat.delete(id);
+        return null;
+      }
+      return recent;
+    }
+
+    function consumeRecentChatShotSaveEcho(chatId, options = {}) {
+      const id = Number(chatId || 0);
+      const recent = getRecentChatShotSave(id);
+      if (!recent) return false;
+      if (options.chat && !chatShotStateMatchesChat(recent.state, options.chat)) return false;
+      if (recent.remainingEchoes <= 0) return false;
+      recent.remainingEchoes -= 1;
+      return true;
+    }
 
     function currentAdminState() {
       return states[activeProvider] || states.openai;
@@ -230,13 +309,16 @@
       return request;
     }
 
-    function invalidateChatShotState(chatId) {
+    function invalidateChatShotState(chatId, options = {}) {
       const id = Number(chatId || 0);
-      if (!id) return;
-      stateByChat.delete(id);
+      if (!id) return false;
+      if (consumeRecentChatShotSaveEcho(id, options)) return false;
+      const keepCurrentState = options.keepCurrentState && stateByChat.has(id);
+      if (!keepCurrentState) stateByChat.delete(id);
       requests.delete(id);
       failuresByChat.delete(id);
       if (id === Number(getCurrentChatId() || 0)) syncChatShotButton();
+      return true;
     }
 
     function renderChatShotForm(state = getCurrentChatShotState()) {
@@ -254,9 +336,7 @@
       }
       if (botSelect) {
         const selectedBotId = Number(state?.botId || state?.selectedBot?.id || bots[0]?.id || 0);
-        botSelect.innerHTML = bots.map((bot) => `<option value="${bot.id}">${shared.esc(bot.name)}</option>`).join('');
-        if (bots.some((bot) => Number(bot.id) === selectedBotId)) botSelect.value = String(selectedBotId);
-        botSelect.disabled = !bots.length || bots.length === 1;
+        syncChatShotBotSelectOptions(botSelect, bots, selectedBotId);
       }
       if (styleSelect) styleSelect.value = state?.style || 'comic';
       if (bananaFilterToggle) {
@@ -277,12 +357,35 @@
         style: shared.valueOf('chatShotStyleSelect', dom, previous?.style || 'comic'),
         bananaFilterEnabled: shared.checkedOf('chatShotBananaFilterToggle', dom, true),
       };
-      const data = await api(`/api/chats/${chatId}/chatshot`, { method: 'PUT', body });
-      const normalized = normalizeChatShotState(data);
-      stateByChat.set(chatId, normalized);
-      renderChatShotForm(normalized);
-      syncChatShotButton();
-      return normalized;
+      const optimisticState = normalizeChatShotState({
+        ...(previous || {}),
+        chatId,
+        enabled: !!body.enabled && !!body.botId,
+        requested_enabled: !!body.enabled,
+        botId: body.botId,
+        style: body.style,
+        bananaFilterEnabled: body.bananaFilterEnabled,
+        selectedBot: (previous?.bots || []).find((bot) => Number(bot.id) === Number(body.botId)) || previous?.selectedBot || null,
+      });
+      stateByChat.set(chatId, optimisticState);
+      rememberChatShotSaveEcho(chatId, optimisticState);
+      try {
+        const data = await api(`/api/chats/${chatId}/chatshot`, { method: 'PUT', body });
+        const normalized = normalizeChatShotState(data);
+        stateByChat.set(chatId, normalized);
+        renderChatShotForm(normalized);
+        syncChatShotButton();
+        rememberChatShotSaveEcho(chatId, normalized);
+        return normalized;
+      } catch (error) {
+        forgetChatShotSaveEcho(chatId);
+        if (previous) {
+          stateByChat.set(chatId, previous);
+          renderChatShotForm(previous);
+        }
+        syncChatShotButton();
+        throw error;
+      }
     }
 
     function syncChatShotButton() {

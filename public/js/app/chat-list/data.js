@@ -344,6 +344,7 @@
       const previousChatShotBotId = Number(current.chatshot_bot_id || 0);
       const previousChatShotStyle = String(current.chatshot_style || '');
       const previousChatShotBananaFilterEnabled = current.chatshot_banana_filter_enabled !== 0;
+      let chatShotInvalidated = null;
       const merged = {
         ...current,
         ...nextChat,
@@ -367,7 +368,7 @@
         || previousChatShotStyle !== String(updated.chatshot_style || '')
         || previousChatShotBananaFilterEnabled !== (updated.chatshot_banana_filter_enabled !== 0)
       ) {
-        actions.invalidateChatShotState?.(chatId);
+        chatShotInvalidated = actions.invalidateChatShotState?.(chatId, { chat: updated, source: 'chat_updated', keepCurrentState: true });
       }
       renderer?.renderChatList?.(getChatSearchValue());
       if (Number(getCurrentChatId()) === chatId) {
@@ -381,7 +382,7 @@
       actions.refreshChatInfoPresentation?.(updated);
       actions.renderChatPinSettingsForm?.(updated);
       actions.renderChatContextTransformForm?.(updated);
-      actions.renderChatShotForm?.(actions.getCurrentChatShotState?.());
+      if (chatShotInvalidated !== false) actions.renderChatShotForm?.(actions.getCurrentChatShotState?.());
       return updated;
     }
 
@@ -426,4 +427,3 @@
     createChatListDataController,
   };
 })();
-

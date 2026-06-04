@@ -356,6 +356,97 @@
         if (provider === 'grok') return '/api/admin/grok-chatshot-bots';
         return '/api/admin/openai-chatshot-bots';
       }
+
+      const CHATSHOT_SAVE_ECHO_TTL_MS = 2500;
+      const chatShotRecentSavesByChat = new Map();
+
+      function chatShotSelectedBotId(state = {}) {
+        return Number(state.botId || state.bot_id || state.selectedBot?.id || state.selected_bot?.id || 0) || null;
+      }
+
+      function chatShotBananaFilterEnabled(value) {
+        return value !== false && value !== 0;
+      }
+
+      function chatShotStateSignature(state = {}) {
+        return JSON.stringify([
+          !!state.enabled,
+          !!state.requested_enabled,
+          chatShotSelectedBotId(state),
+          ['comic', 'illustration', 'photo'].includes(String(state.style || '').toLowerCase()) ? String(state.style).toLowerCase() : 'comic',
+          chatShotBananaFilterEnabled(state.banana_filter_enabled),
+        ]);
+      }
+
+      function chatShotStateMatchesChat(state = {}, chat = {}) {
+        return Boolean(chat)
+          && !!state.requested_enabled === !!chat.chatshot_enabled
+          && chatShotSelectedBotId(state) === (Number(chat.chatshot_bot_id || 0) || null)
+          && String(state.style || 'comic') === String(chat.chatshot_style || 'comic')
+          && chatShotBananaFilterEnabled(state.banana_filter_enabled) === (chat.chatshot_banana_filter_enabled !== 0);
+      }
+
+      function rememberChatShotSaveEcho(chatId, state) {
+        const id = Number(chatId || 0);
+        if (!id || !state) return;
+        chatShotRecentSavesByChat.set(id, {
+          state,
+          signature: chatShotStateSignature(state),
+          expiresAt: Date.now() + CHATSHOT_SAVE_ECHO_TTL_MS,
+          remainingEchoes: 2,
+        });
+      }
+
+      function forgetChatShotSaveEcho(chatId) {
+        chatShotRecentSavesByChat.delete(Number(chatId || 0));
+      }
+
+      function getRecentChatShotSave(chatId) {
+        const id = Number(chatId || 0);
+        const recent = chatShotRecentSavesByChat.get(id);
+        if (!recent) return null;
+        if (recent.expiresAt < Date.now()) {
+          chatShotRecentSavesByChat.delete(id);
+          return null;
+        }
+        return recent;
+      }
+
+      function consumeRecentChatShotSaveEcho(chatId, options = {}) {
+        const id = Number(chatId || 0);
+        const recent = getRecentChatShotSave(id);
+        if (!recent) return false;
+        if (options.chat && !chatShotStateMatchesChat(recent.state, options.chat)) return false;
+        if (recent.remainingEchoes <= 0) return false;
+        recent.remainingEchoes -= 1;
+        return true;
+      }
+
+      function shouldPreserveChatShotSaveStatus(state = null) {
+        const id = Number(state?.chatId || state?.chat_id || currentChatId || 0);
+        const recent = getRecentChatShotSave(id);
+        const statusEl = $('#chatShotChatStatus');
+        return Boolean(
+          recent
+          && state
+          && recent.signature === chatShotStateSignature(state)
+          && statusEl?.textContent
+        );
+      }
+
+      function syncChatShotBotSelectOptions(botSelect, bots, selectedBotId) {
+        const optionModels = bots.map((bot) => ({
+          id: Number(bot.id || 0),
+          label: `${bot.name || 'ChatShot'} (${contextConvertProviderLabel(bot.provider)})`,
+        }));
+        const signature = JSON.stringify(optionModels);
+        if (botSelect.dataset.chatShotOptionsSignature !== signature) {
+          botSelect.innerHTML = optionModels.map((bot) => `<option value="${bot.id}">${esc(bot.label)}</option>`).join('');
+          botSelect.dataset.chatShotOptionsSignature = signature;
+        }
+        if (bots.some((bot) => Number(bot.id) === selectedBotId)) botSelect.value = String(selectedBotId);
+        botSelect.disabled = !bots.length || bots.length === 1;
+      }
     
       function currentChatShotAdminState() {
         return chatShotAdminStates[activeChatShotProvider] || chatShotAdminStates.openai;
@@ -740,8 +831,8 @@
         };
       }
     
-      function getCurrentChatShotState() {
-        return chatShotStateByChat.get(Number(currentChatId || 0)) || null;
+      function getCurrentChatShotState(chatId = currentChatId) {
+        return chatShotStateByChat.get(Number(chatId || 0)) || null;
       }
     
       function setChatShotChatStatus(message, type = '') {
@@ -784,10 +875,12 @@
         return request;
       }
     
-      function invalidateChatShotState(chatId) {
+      function invalidateChatShotState(chatId, options = {}) {
         const id = Number(chatId || 0);
-        if (!id) return;
-        chatShotStateByChat.delete(id);
+        if (!id) return false;
+        if (consumeRecentChatShotSaveEcho(id, options)) return false;
+        const keepCurrentState = options.keepCurrentState && chatShotStateByChat.has(id);
+        if (!keepCurrentState) chatShotStateByChat.delete(id);
         chatShotStateRequests.delete(id);
         chatShotStateFailuresByChat.delete(id);
         if (id === Number(currentChatId || 0)) {
@@ -799,6 +892,7 @@
             });
           }
         }
+        return true;
       }
     
       function renderChatShotForm(state = getCurrentChatShotState()) {
@@ -813,12 +907,11 @@
         toggle.checked = !!state?.enabled || !!state?.requested_enabled;
         toggle.disabled = !bots.length;
         const selectedBotId = Number(state?.botId || state?.selectedBot?.id || bots[0]?.id || 0);
-        botSelect.innerHTML = bots.map((bot) => `<option value="${bot.id}">${esc(bot.name)} (${esc(contextConvertProviderLabel(bot.provider))})</option>`).join('');
-        if (bots.some((bot) => Number(bot.id) === selectedBotId)) botSelect.value = String(selectedBotId);
-        botSelect.disabled = !bots.length || bots.length === 1;
+        syncChatShotBotSelectOptions(botSelect, bots, selectedBotId);
         styleSelect.value = state?.style || 'comic';
         bananaFilterToggle.checked = state?.banana_filter_enabled !== false;
         bananaFilterToggle.disabled = !bots.length;
+        if (shouldPreserveChatShotSaveStatus(state)) return;
         const messageCount = Number(state?.message_count || 0);
         if (!bots.length) setChatShotChatStatus('');
         else if (toggle.checked && messageCount < 2) setChatShotChatStatus('ChatShot \u0432\u043a\u043b\u044e\u0447\u0438\u0442\u0441\u044f \u043f\u043e\u0441\u043b\u0435 \u0434\u0432\u0443\u0445 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0439 \u0432 \u0447\u0430\u0442\u0435.');
@@ -826,28 +919,43 @@
       }
     
       async function saveChatShotChatSetting() {
-        if (!currentChatId) return;
-        const previous = getCurrentChatShotState();
+        const chatId = Number(currentChatId || 0);
+        if (!chatId) return;
+        const previous = getCurrentChatShotState(chatId);
         const payload = {
           enabled: $('#chatShotToggle')?.checked,
           botId: Number($('#chatShotBotSelect')?.value || previous?.botId || 0) || null,
           style: $('#chatShotStyleSelect')?.value || previous?.style || 'comic',
           bananaFilterEnabled: $('#chatShotBananaFilterToggle')?.checked !== false,
         };
+        const optimisticState = normalizeChatShotState({
+          ...(previous || {}),
+          chatId,
+          enabled: !!payload.enabled && !!payload.botId,
+          requested_enabled: !!payload.enabled,
+          botId: payload.botId,
+          style: payload.style,
+          bananaFilterEnabled: payload.bananaFilterEnabled,
+          selectedBot: (previous?.bots || []).find((bot) => Number(bot.id) === Number(payload.botId)) || previous?.selectedBot || null,
+        });
+        chatShotStateByChat.set(chatId, optimisticState);
+        rememberChatShotSaveEcho(chatId, optimisticState);
         setChatShotChatStatus('Saving...');
         try {
-          const data = await api(`/api/chats/${currentChatId}/chatshot`, {
+          const data = await api(`/api/chats/${chatId}/chatshot`, {
             method: 'PUT',
             body: payload,
           });
           const normalized = normalizeChatShotState(data);
-          chatShotStateByChat.set(Number(currentChatId), normalized);
+          chatShotStateByChat.set(chatId, normalized);
           renderChatShotForm(normalized);
           syncChatShotButton();
+          rememberChatShotSaveEcho(chatId, normalized);
           setChatShotChatStatus('Saved', 'success');
         } catch (error) {
+          forgetChatShotSaveEcho(chatId);
           if (previous) {
-            chatShotStateByChat.set(Number(currentChatId), previous);
+            chatShotStateByChat.set(chatId, previous);
             renderChatShotForm(previous);
           }
           syncChatShotButton();

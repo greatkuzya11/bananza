@@ -290,8 +290,8 @@
             break;
           }
           case 'chatshot_bots_updated': {
-            invalidateChatShotState(msg.chatId || msg.chat_id);
-            if (Number(msg.chatId || msg.chat_id || 0) === Number(currentChatId || 0)) {
+            const invalidated = invalidateChatShotState(msg.chatId || msg.chat_id, { source: 'chatshot_bots_updated' });
+            if (invalidated !== false && Number(msg.chatId || msg.chat_id || 0) === Number(currentChatId || 0)) {
               loadChatShotState(currentChatId, { force: true }).catch(() => {});
             }
             break;

@@ -884,6 +884,41 @@ test('chat list shows compact tool badges for context convert and ChatShot', asy
   assert.equal(document.querySelector('.chat-item[data-chat-id="63"] .chat-item-tool-indicator'), null);
 });
 
+test('chatshot-only chat update keeps header avatar image stable', async (t) => {
+  const chatId = 64;
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  const chat = {
+    id: chatId,
+    type: 'group',
+    name: 'Shot room',
+    unread_count: 0,
+    created_at: '2026-04-29 20:00:00',
+    avatar_url: '/uploads/shot-room.png',
+    context_transform_enabled: 0,
+    chatshot_enabled: 1,
+    chatshot_bot_id: 31,
+    chatshot_style: 'comic',
+    chatshot_banana_filter_enabled: 1,
+  };
+  BananzaAppBridge.__testing.setChats([chat], { currentChatId: chatId });
+
+  const headerAvatarImg = document.querySelector('#chatHeaderAvatar img.avatar-img');
+  assert.ok(headerAvatarImg);
+
+  BananzaAppBridge.__testing.applyChatUpdate({
+    ...chat,
+    chatshot_style: 'photo',
+    chatshot_banana_filter_enabled: 0,
+  });
+
+  assert.equal(document.querySelector('#chatHeaderAvatar img.avatar-img'), headerAvatarImg);
+});
+
 test('saved active chat folder is restored after startup folders load', async (t) => {
   const initialChats = [
     {
