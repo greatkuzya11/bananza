@@ -131,6 +131,7 @@
       if (immediate) {
         scrollDateLastText = '';
         scrollDateIndicatorEl.textContent = '';
+        scrollDateIndicatorEl.style.left = '';
         scrollDateIndicatorEl.style.top = '';
         scrollDateIndicatorEl.style.maxWidth = '';
       }
@@ -164,10 +165,71 @@
       if (!el || !chatView || !messagesEl) return;
       const chatRect = chatView.getBoundingClientRect();
       const messagesRect = messagesEl.getBoundingClientRect();
-      const top = Math.max(8, Math.round((messagesRect.top || 0) - (chatRect.top || 0) + 8));
-      const maxWidth = Math.max(120, Math.min(360, Math.round((messagesRect.width || chatRect.width || 0) - 24)));
+      const chatLeft = Number.isFinite(chatRect.left) ? chatRect.left : 0;
+      const chatTop = Number.isFinite(chatRect.top) ? chatRect.top : 0;
+      const messagesLeft = Number.isFinite(messagesRect.left) ? messagesRect.left : chatLeft;
+      const messagesTop = Number.isFinite(messagesRect.top) ? messagesRect.top : chatTop;
+      const messagesWidth = messagesRect.width || messagesEl.clientWidth || chatRect.width || 0;
+      const top = Math.max(8, Math.round(messagesTop - chatTop + 8));
+      const left = Math.round((messagesLeft - chatLeft) + (messagesWidth / 2));
+      const maxWidth = Math.max(120, Math.min(360, Math.round(messagesWidth - 24)));
+      el.style.left = `${left}px`;
       el.style.top = `${top}px`;
       el.style.maxWidth = `${maxWidth}px`;
+    }
+
+    function rectsIntersect(left, right) {
+      if (!left || !right) return false;
+      if (left.width <= 0 || left.height <= 0 || right.width <= 0 || right.height <= 0) return false;
+      return left.left < right.right
+        && left.right > right.left
+        && left.top < right.bottom
+        && left.bottom > right.top;
+    }
+
+    function visibleScrollDateIndicatorRect(el) {
+      if (!el) return null;
+      const rect = el.getBoundingClientRect();
+      const chatView = getChatView();
+      const chatRect = chatView?.getBoundingClientRect?.() || { left: 0, top: 0 };
+      const width = Number(el.offsetWidth || rect.width || 0);
+      const height = Number(el.offsetHeight || rect.height || 0);
+      const left = Number.parseFloat(el.style.left || '');
+      const top = Number.parseFloat(el.style.top || '');
+      if (width <= 0 || height <= 0) return null;
+      if (!Number.isFinite(left) || !Number.isFinite(top)) return rect;
+      const chatLeft = Number.isFinite(chatRect.left) ? chatRect.left : 0;
+      const chatTop = Number.isFinite(chatRect.top) ? chatRect.top : 0;
+      const viewportLeft = chatLeft + left - (width / 2);
+      const viewportTop = chatTop + top;
+      return {
+        left: viewportLeft,
+        right: viewportLeft + width,
+        top: viewportTop,
+        bottom: viewportTop + height,
+        width,
+        height,
+      };
+    }
+
+    function isSameDateSeparatorUnderIndicator(el, text) {
+      const messagesEl = getMessagesEl();
+      if (!messagesEl || !text) return false;
+      const indicatorRect = visibleScrollDateIndicatorRect(el);
+      if (!indicatorRect) return false;
+      return Array.from(messagesEl.querySelectorAll('.date-separator span')).some((sep) => {
+        if (String(sep.textContent || '').trim() !== text) return false;
+        const sepRect = sep.getBoundingClientRect();
+        return rectsIntersect(indicatorRect, sepRect);
+      });
+    }
+
+    function suppressScrollDateIndicatorVisibility(el) {
+      clearTimeout(scrollDateHideTimer);
+      scrollDateHideTimer = null;
+      if (!el) return;
+      el.classList.remove('is-visible');
+      el.setAttribute('aria-hidden', 'true');
     }
 
     function updateScrollDateIndicator(options = {}) {
@@ -190,6 +252,10 @@
         el.textContent = text;
       }
       if (show || el.classList.contains('is-visible')) {
+        if (isSameDateSeparatorUnderIndicator(el, text)) {
+          suppressScrollDateIndicatorVisibility(el);
+          return;
+        }
         el.classList.add('is-visible');
         el.setAttribute('aria-hidden', 'false');
         clearTimeout(scrollDateHideTimer);

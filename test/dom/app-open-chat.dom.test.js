@@ -190,9 +190,9 @@ test('scroll controller saves and restores anchors and manages date indicator', 
   Object.defineProperty(messagesEl, 'clientHeight', { configurable: true, value: 100 });
   Object.defineProperty(messagesEl, 'scrollHeight', { configurable: true, value: 300 });
   messagesEl.scrollTop = 195;
-  messagesEl.getBoundingClientRect = () => ({ top: 0, bottom: 100, height: 100, width: 300 });
-  row.getBoundingClientRect = () => ({ top: 10, bottom: 30, height: 20, width: 260 });
-  chatView.getBoundingClientRect = () => ({ top: 0, bottom: 500, height: 500, width: 320 });
+  messagesEl.getBoundingClientRect = () => ({ left: 20, right: 320, top: 25, bottom: 125, height: 100, width: 300 });
+  row.getBoundingClientRect = () => ({ left: 32, right: 292, top: 35, bottom: 55, height: 20, width: 260 });
+  chatView.getBoundingClientRect = () => ({ left: 10, right: 350, top: 5, bottom: 505, height: 500, width: 340 });
 
   const controller = openChat.scroll.createScrollController({
     window,
@@ -220,11 +220,41 @@ test('scroll controller saves and restores anchors and manages date indicator', 
   assert.equal(controller.restoreScrollAnchor({ messageId: 10, offsetTop: 5 }, 1, { openSeq: 1, chatId: 7 }), true);
 
   const indicator = controller.ensureScrollDateIndicator();
+  indicator.getBoundingClientRect = () => ({ left: 127, right: 213, top: 33, bottom: 61, height: 28, width: 86 });
   controller.updateScrollDateIndicator({ show: true });
   assert.equal(indicator.parentElement, chatView);
   assert.equal(indicator.textContent, 'May 31, 2026');
+  assert.equal(indicator.style.left, '160px');
+  assert.equal(indicator.getAttribute('aria-hidden'), 'false');
+
+  const sep = document.createElement('div');
+  sep.className = 'date-separator';
+  const sepLabel = document.createElement('span');
+  sepLabel.textContent = 'May 31, 2026';
+  sep.appendChild(sepLabel);
+  messagesEl.insertBefore(sep, row);
+
+  let sepRect = { left: 135, right: 205, top: 38, bottom: 58, height: 20, width: 70 };
+  sepLabel.getBoundingClientRect = () => sepRect;
+
+  controller.updateScrollDateIndicator({ show: true });
+  assert.equal(indicator.getAttribute('aria-hidden'), 'true');
+  assert.equal(indicator.classList.contains('is-visible'), false);
+
+  sepRect = { left: 135, right: 205, top: 82, bottom: 102, height: 20, width: 70 };
+  controller.updateScrollDateIndicator({ show: true });
+  assert.equal(indicator.getAttribute('aria-hidden'), 'false');
+  assert.equal(indicator.classList.contains('is-visible'), true);
+
+  sepLabel.textContent = 'June 1, 2026';
+  sepRect = { left: 135, right: 205, top: 38, bottom: 58, height: 20, width: 70 };
+  controller.updateScrollDateIndicator({ show: true });
+  assert.equal(indicator.getAttribute('aria-hidden'), 'false');
+  assert.equal(indicator.classList.contains('is-visible'), true);
+
   controller.hideScrollDateIndicator({ immediate: true });
   assert.equal(indicator.getAttribute('aria-hidden'), 'true');
+  assert.equal(indicator.style.left, '');
   dom.window.close();
 });
 
