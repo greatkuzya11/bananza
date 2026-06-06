@@ -3927,8 +3927,13 @@ html[data-modal-animation="none"] .composer-context-convert-btn {
   display: flex; align-items: center; justify-content: center;
   background: rgba(255,255,255,.1); z-index: 203;
   touch-action: manipulation;
+  transition: opacity .18s ease, background .18s ease;
 }
 .iv-close:hover { background: rgba(255,255,255,.2); }
+.image-viewer.iv-close-hidden .iv-close {
+  opacity: 0;
+  pointer-events: none;
+}
 .iv-loading {
   position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%);
   z-index: 202; color: #fff; font-size: 13px; letter-spacing: .01em;

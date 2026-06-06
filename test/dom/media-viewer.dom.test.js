@@ -1278,6 +1278,73 @@ test('settings button still opens settings without preceding media-viewer close'
   assert.equal(settingsModal.classList.contains('hidden'), false);
 });
 
+test('media viewer close button auto-hides and touch release reveals it', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+
+  BananzaAppBridge.__testing.openMediaViewer('https://example.com/auto-hide-close.jpg', 'image');
+  await wait(dom, 0);
+
+  const imageViewer = document.getElementById('imageViewer');
+  const slide = document.querySelector('#ivStrip .iv-slide');
+  assert.ok(slide, 'Expected an image slide in the media viewer');
+  assert.equal(imageViewer.classList.contains('iv-close-hidden'), false);
+
+  await wait(dom, 3150);
+  assert.equal(imageViewer.classList.contains('iv-close-hidden'), true);
+
+  const tapStart = createTouchPoint({ identifier: 61, clientX: 190, clientY: 520 });
+  slide.dispatchEvent(createTouchEvent(dom.window, 'touchstart', { touches: [tapStart] }));
+  assert.equal(imageViewer.classList.contains('iv-close-hidden'), true);
+
+  slide.dispatchEvent(createTouchEvent(dom.window, 'touchend', {
+    touches: [],
+    changedTouches: [tapStart],
+  }));
+  assert.equal(imageViewer.classList.contains('iv-close-hidden'), false);
+
+  await wait(dom, 3150);
+  assert.equal(imageViewer.classList.contains('iv-close-hidden'), true);
+});
+
+test('media viewer gallery swipe does not reveal the hidden close button', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const firstSrc = 'https://example.com/swipe-close-1.jpg';
+  const secondSrc = 'https://example.com/swipe-close-2.jpg';
+
+  appendImageMessageRow(dom, { id: 331, src: firstSrc, text: 'Swipe close one' });
+  appendImageMessageRow(dom, { id: 332, src: secondSrc, text: 'Swipe close two' });
+
+  BananzaAppBridge.__testing.openMediaViewer(firstSrc, 'image');
+  await wait(dom, 0);
+
+  const imageViewer = document.getElementById('imageViewer');
+  const slide = document.querySelector('#ivStrip .iv-slide');
+  assert.ok(slide, 'Expected the first gallery slide to render');
+  imageViewer.classList.add('iv-close-hidden');
+
+  const swipeStart = createTouchPoint({ identifier: 71, clientX: 300, clientY: 520 });
+  const swipeMove = createTouchPoint({ identifier: 71, clientX: 160, clientY: 520 });
+  slide.dispatchEvent(createTouchEvent(dom.window, 'touchstart', { touches: [swipeStart] }));
+  slide.dispatchEvent(createTouchEvent(dom.window, 'touchmove', { touches: [swipeMove] }));
+  slide.dispatchEvent(createTouchEvent(dom.window, 'touchend', {
+    touches: [],
+    changedTouches: [swipeMove],
+  }));
+  await wait(dom, 0);
+
+  const state = getMediaViewerState(dom);
+  assert.equal(state.galleryIndex, 1);
+  assert.equal(imageViewer.classList.contains('iv-close-hidden'), true);
+});
+
 test('off-center pinch keeps the fullscreen image anchored under the fingers', async (t) => {
   const dom = await bootAppDom();
   t.after(() => {

@@ -88,6 +88,7 @@ const IMAGE_VIEWER_DOUBLE_TAP_DISTANCE_PX = 40;
 const IMAGE_VIEWER_SWIPE_START_PX = 6;
 const IMAGE_VIEWER_SWIPE_COMMIT_PX = 50;
 const IMAGE_VIEWER_MAX_SCALE = 5;
+const IMAGE_VIEWER_CLOSE_AUTO_HIDE_MS = 3000;
 const ivTouchState = {
   activeTouchId: null,
   startX: 0,
@@ -115,6 +116,7 @@ const ivTouchState = {
 };
 let ivZoomAnimationTimer = null;
 let ivZoomAnimationImg = null;
+let imageViewerCloseHideTimer = null;
 let ivHistoryPushed = false;    // true when we pushed { view: 'mediaviewer' } to history
 let ivSkipNextPopstate = false; // skip chat-nav after closeMediaViewer calls history.back()
 
@@ -627,6 +629,31 @@ function suppressMediaViewerFollowupClick(ms = 550) {
   );
 }
 
+function clearImageViewerCloseAutoHide() {
+  clearTimeout(imageViewerCloseHideTimer);
+  imageViewerCloseHideTimer = null;
+}
+
+function scheduleImageViewerCloseAutoHide() {
+  clearImageViewerCloseAutoHide();
+  imageViewerCloseHideTimer = setTimeout(() => {
+    imageViewerCloseHideTimer = null;
+    if (imageViewer.classList.contains('hidden')) return;
+    imageViewer.classList.add('iv-close-hidden');
+  }, IMAGE_VIEWER_CLOSE_AUTO_HIDE_MS);
+}
+
+function showImageViewerClose() {
+  if (imageViewer.classList.contains('hidden')) return;
+  imageViewer.classList.remove('iv-close-hidden');
+  scheduleImageViewerCloseAutoHide();
+}
+
+function resetImageViewerCloseVisibility() {
+  clearImageViewerCloseAutoHide();
+  imageViewer.classList.remove('iv-close-hidden');
+}
+
 function moveGalleryToIndex(newIdx) {
   if (newIdx < 0 || newIdx >= galleryItems.length) return false;
   resetImageViewerTouchState();
@@ -684,6 +711,7 @@ function openMediaViewer(src, type = 'image') {
   } catch (e) {}
 
   imageViewer.classList.remove('hidden');
+  showImageViewerClose();
   ensureGalleryItemPoster(galleryItems[galleryIndex]).catch(() => {});
   preloadGalleryAssets();
   ensureGalleryBuffered('before');
@@ -697,6 +725,7 @@ function closeMediaViewer() {
   gallerySessionId += 1;
   ivClearZoomTransition();
   mediaViewerSuppressClickUntil = 0;
+  resetImageViewerCloseVisibility();
   resetImageViewerTouchState();
   ivStrip.querySelectorAll('video').forEach(v => v.pause());
   ivResetZoom();
@@ -794,7 +823,9 @@ function bindEvents() {
       }  
       if (e.target.closest('.iv-prev')) { galleryNav(-1); return; }  
       if (e.target.closest('.iv-next')) { galleryNav(1); return; }  
-      if (e.target.closest('.iv-close')) closeMediaViewer();  
+      if (e.target.closest('.iv-close')) closeMediaViewer();
+
+      if (e.target.closest('.iv-slide')) showImageViewerClose();
     });  
     imageViewer.addEventListener('dblclick', (e) => {  
       if (imageViewer.classList.contains('hidden')) return;  
@@ -979,8 +1010,9 @@ function bindEvents() {
         const dragDx = ivTouchState.dx;  
         clearImageViewerActiveTouch();  
     
-        if (wasTapCandidate && dragDistance <= IMAGE_VIEWER_TAP_MAX_DRIFT_PX) {  
-          if (canTapZoom) {  
+        if (wasTapCandidate && dragDistance <= IMAGE_VIEWER_TAP_MAX_DRIFT_PX) {
+          showImageViewerClose();
+          if (canTapZoom) {
             const now = Date.now();  
             if (isImageViewerDoubleTap(endX, endY, now)) {  
               e.preventDefault();  
