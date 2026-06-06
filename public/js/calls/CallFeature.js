@@ -56,6 +56,7 @@
     publishingLocalTracks: false,
     publishRetryTimer: 0,
     publishRetryCount: 0,
+    surfaceDurationTimer: 0,
     localMediaOptions: null,
     roomConnectionState: '',
     roomConnectedAt: 0,
@@ -162,6 +163,61 @@
 
   function formatDuration(ms) {
     return STORE.formatDuration?.(ms) || '0:00';
+  }
+
+  function parseCallTimeMs(value) {
+    const text = String(value || '').trim();
+    if (!text) return 0;
+    const hasTimezone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(text);
+    const normalized = hasTimezone ? text : `${text.replace(' ', 'T')}Z`;
+    const parsed = Date.parse(normalized);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }
+
+  function callStartedAtMs(call = state.currentCall) {
+    const started = parseCallTimeMs(call?.started_at || call?.startedAt || '');
+    return Number.isFinite(started) && started > 0 ? started : 0;
+  }
+
+  function clearSurfaceDuration() {
+    if (state.surfaceDurationTimer) {
+      window.clearInterval(state.surfaceDurationTimer);
+      state.surfaceDurationTimer = 0;
+    }
+    const duration = document.getElementById('callSurfaceDuration');
+    if (duration) {
+      duration.textContent = '';
+      duration.hidden = true;
+    }
+  }
+
+  function updateSurfaceDuration() {
+    const duration = document.getElementById('callSurfaceDuration');
+    const surface = document.getElementById('callSurface');
+    const started = callStartedAtMs();
+    const visible = Boolean(surface && !surface.classList.contains('hidden'));
+    const active = Boolean(state.currentCall?.id && state.currentCall?.status === 'active' && visible && started);
+    if (!duration || !active) {
+      if (duration) {
+        duration.textContent = '';
+        duration.hidden = true;
+      }
+      return false;
+    }
+    duration.textContent = formatDuration(Math.max(0, Date.now() - started));
+    duration.hidden = false;
+    return true;
+  }
+
+  function syncSurfaceDurationTimer() {
+    const shouldRun = updateSurfaceDuration();
+    if (shouldRun && !state.surfaceDurationTimer) {
+      state.surfaceDurationTimer = window.setInterval(() => {
+        if (!updateSurfaceDuration()) clearSurfaceDuration();
+      }, 1000);
+    } else if (!shouldRun && state.surfaceDurationTimer) {
+      clearSurfaceDuration();
+    }
   }
 
   function mergePublicSettings(settings = {}) {
@@ -284,6 +340,7 @@
     if (isCurrentCall) {
       await disconnectRoom({ intentional: true });
       state.currentCall = null;
+      clearSurfaceDuration();
       state.minimized = false;
       state.participantsOpen = false;
       document.getElementById('callSurface')?.classList.add('hidden');
@@ -461,7 +518,10 @@
         <div class="call-surface-card">
           <div class="call-surface-head">
             <div>
-              <div class="call-surface-title" id="callSurfaceTitle">${escapeHtml(t('Video call'))}</div>
+              <div class="call-surface-title-row">
+                <div class="call-surface-title" id="callSurfaceTitle">${escapeHtml(t('Video call'))}</div>
+                <span class="call-surface-duration" id="callSurfaceDuration" hidden></span>
+              </div>
               <div class="call-surface-status" id="callSurfaceStatus"></div>
               <div class="call-debug-log" id="callDebugLog"></div>
             </div>
@@ -1243,6 +1303,7 @@
       MEDIA.stopStream?.(handoffPreviewStream);
       await disconnectRoom({ intentional: true });
       state.currentCall = null;
+      clearSurfaceDuration();
       document.getElementById('callSurface')?.classList.add('hidden');
       state.pendingJoinCall = call;
       state.prejoinMode = 'join';
@@ -1406,6 +1467,7 @@
     applySpeakerDevice();
     renderSurfaceControls();
     renderRoomTiles();
+    syncSurfaceDurationTimer();
     renderCallDebug();
     refreshRoomTilesSoon();
     addCallDebug('local media scheduled', 'after connect settle');
@@ -1618,6 +1680,7 @@
   async function disconnectRoom(options = {}) {
     const room = state.room;
     state.room = null;
+    clearSurfaceDuration();
     state.screenShareEnabled = false;
     if (state.publishRetryTimer) window.clearTimeout(state.publishRetryTimer);
     state.publishRetryTimer = 0;
@@ -1821,6 +1884,7 @@
       state.leaveSentForCallId = call.id;
     }
     state.currentCall = null;
+    clearSurfaceDuration();
     document.getElementById('callSurface')?.classList.add('hidden');
     await loadActiveCalls().catch(() => {});
   }
@@ -2340,10 +2404,14 @@
 
   function renderSurface() {
     const surface = document.getElementById('callSurface');
-    if (!surface || !state.currentCall) return;
+    if (!surface || !state.currentCall) {
+      clearSurfaceDuration();
+      return;
+    }
     surface.classList.toggle('is-minimized', state.minimized);
     surface.classList.toggle('is-voice-call', isVoiceCall(state.currentCall));
     document.getElementById('callSurfaceTitle').textContent = state.currentCall.chat_name || callDisplayTitle(state.currentCall);
+    syncSurfaceDurationTimer();
     const notes = state.currentCall.ai_notes || null;
     const status = document.getElementById('callSurfaceStatus');
     if (status) {

@@ -590,6 +590,91 @@ test('CallFeature joins and leaves a mocked LiveKit room', async (t) => {
   assert.ok(state.requests.some((request) => request.url === '/api/calls/92/leave'));
 });
 
+test('CallFeature shows live call duration from started_at in the surface header', async (t) => {
+  const startedAt = '2026-01-01 12:00:00';
+  const initialNow = Date.parse('2026-01-01T12:00:42Z');
+  let now = initialNow;
+  const state = defaultState({
+    features: {
+      calls_enabled: true,
+      livekit_ready: true,
+      allow_private_calls: true,
+      allow_group_calls: true,
+      ring_timeout_ms: 60000,
+    },
+  });
+  state.chatCall = {
+    id: 94,
+    chat_id: state.chat.id,
+    chat_name: state.chat.name,
+    participant_count: 1,
+    started_by: 2,
+    started_at: startedAt,
+    status: 'active',
+    participants: [
+      { user_id: 1, display_name: 'Alice', username: 'alice', state: 'joined' },
+      { user_id: 2, display_name: 'Bob', username: 'bob', state: 'invited' },
+    ],
+  };
+  const dom = await bootCallFeature(state);
+  t.after(() => dom.window.close());
+  dom.window.Date.now = () => now;
+  const roomState = installMockLiveKitRoom(dom);
+
+  dom.window.BananzaCallHooks.handleWSMessage({ type: 'call_updated', call: state.chatCall });
+  dom.window.document.getElementById('callBannerJoin').click();
+  await waitForCondition(dom.window, () => !dom.window.document.getElementById('callPrejoin').classList.contains('hidden'));
+  dom.window.document.getElementById('callPrejoinJoinBtn').click();
+  await waitForCondition(dom.window, () => roomState.isConnected());
+  await waitForCondition(dom.window, () => state.requests.some((request) => request.url === '/api/calls/94/joined'));
+
+  const title = dom.window.document.getElementById('callSurfaceTitle');
+  const duration = dom.window.document.getElementById('callSurfaceDuration');
+  assert.equal(title.textContent, state.chat.name);
+  await waitForCondition(dom.window, () => !duration.hidden && duration.textContent === '0:42');
+
+  now += 5000;
+  dom.window.BananzaCallHooks.handleWSMessage({ type: 'call_updated', call: { ...state.chatCall } });
+  await waitForCondition(dom.window, () => !duration.hidden && duration.textContent === '0:47');
+});
+
+test('CallFeature hides live call duration when started_at is missing', async (t) => {
+  const state = defaultState({
+    features: {
+      calls_enabled: true,
+      livekit_ready: true,
+      allow_private_calls: true,
+      allow_group_calls: true,
+      ring_timeout_ms: 60000,
+    },
+  });
+  state.chatCall = {
+    id: 95,
+    chat_id: state.chat.id,
+    chat_name: state.chat.name,
+    participant_count: 1,
+    started_by: 2,
+    status: 'active',
+    participants: [
+      { user_id: 1, display_name: 'Alice', username: 'alice', state: 'joined' },
+      { user_id: 2, display_name: 'Bob', username: 'bob', state: 'invited' },
+    ],
+  };
+  const dom = await bootCallFeature(state);
+  t.after(() => dom.window.close());
+  const roomState = installMockLiveKitRoom(dom);
+
+  dom.window.BananzaCallHooks.handleWSMessage({ type: 'call_updated', call: state.chatCall });
+  dom.window.document.getElementById('callBannerJoin').click();
+  await waitForCondition(dom.window, () => !dom.window.document.getElementById('callPrejoin').classList.contains('hidden'));
+  dom.window.document.getElementById('callPrejoinJoinBtn').click();
+  await waitForCondition(dom.window, () => roomState.isConnected());
+
+  const duration = dom.window.document.getElementById('callSurfaceDuration');
+  assert.equal(duration.hidden, true);
+  assert.equal(duration.textContent, '');
+});
+
 test('CallFeature starts and joins a voice room without camera UI or publishing', async (t) => {
   const state = defaultState({
     user: { id: 1, display_name: 'Alice', is_admin: 1 },

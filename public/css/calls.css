@@ -528,13 +528,41 @@ html[data-visual-mode="rich"] .call-admin-status {
   background: var(--call-bg-modal);
 }
 
+.call-surface-head > div:first-child {
+  min-width: 0;
+}
+
+.call-surface-title-row {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  white-space: nowrap;
+}
+
 .call-surface-title {
+  min-width: 0;
   color: var(--text-primary);
   font-size: 17px;
   font-weight: 750;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.call-surface-duration {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.call-surface-duration::before {
+  content: "·";
+  margin: 0 8px;
+  opacity: .85;
 }
 
 .call-surface-status {
