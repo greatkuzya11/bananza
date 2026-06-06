@@ -28,6 +28,7 @@
           isFloatingSurfaceVisible: (el) => isFloatingSurfaceVisible(el),
           positionEmojiPicker: (anchor) => positionEmojiPicker(anchor),
           isMobileLayoutViewport: () => isMobileLayoutViewport(),
+          forceMobileViewportLayoutSync: () => forceMobileViewportLayoutSync(),
           scheduleMobileViewportRecovery: (delay) => scheduleMobileViewportRecovery(delay),
           queueIosViewportLayoutSync: () => queueIosViewportLayoutSync(),
           refreshVoiceComposerState,

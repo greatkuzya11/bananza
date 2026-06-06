@@ -372,6 +372,7 @@
           win.requestAnimationFrame(() => (actions.positionEmojiPicker || noop)(dom.emojiBtn));
         }
         if ((changed || heightChanged) && (actions.isMobileLayoutViewport || (() => false))()) {
+          (actions.forceMobileViewportLayoutSync || noop)();
           (actions.scheduleMobileViewportRecovery || noop)(90);
         }
       }

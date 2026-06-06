@@ -127,6 +127,12 @@ test('mobile composer stays docked when multiline paste causes visual viewport d
   ].join('\n'));
 
   const afterPaste = await readComposerLayout(page);
+  const pasteBottomDelta = Math.abs(Math.round(afterPaste.inputBottom) - keyboardDockBottom);
+  const pasteKeyboardGap = keyboardDockBottom - Math.round(afterPaste.inputBottom);
+  expect(pasteBottomDelta).toBeLessThanOrEqual(2);
+  expect(Math.max(0, pasteKeyboardGap)).toBeLessThanOrEqual(2);
+  expect(Math.round(afterPaste.cssViewportBottom)).toBe(keyboardDockBottom);
+
   const inputGrowth = Math.max(0, afterPaste.msgHeight - before.msgHeight);
   const viewportDrift = Math.max(48, Math.min(110, Math.round(inputGrowth || 64)));
   await setFakeVisualViewport(page, { height: 430 - viewportDrift, offsetTop: 0 });
@@ -137,7 +143,9 @@ test('mobile composer stays docked when multiline paste causes visual viewport d
   }).toBeLessThanOrEqual(2);
 
   const finalLayout = await readComposerLayout(page);
+  const finalKeyboardGap = keyboardDockBottom - Math.round(finalLayout.inputBottom);
   expect(Math.round(finalLayout.fakeViewportHeight)).toBe(430 - viewportDrift);
   expect(Math.round(finalLayout.cssViewportBottom)).toBe(keyboardDockBottom);
+  expect(Math.max(0, finalKeyboardGap)).toBeLessThanOrEqual(2);
   expect(finalLayout.snapshot.dockActive).toBeTruthy();
 });
