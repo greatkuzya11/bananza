@@ -858,7 +858,7 @@
       }
     
       // Profile editor (menu drawer)
-      const AVATAR_COLORS = ['#e17076','#7bc862','#e5ca77','#65aadd','#a695e7','#ee7aae','#6ec9cb','#faa774'];
+      const AVATAR_COLORS = ['#e17076','#7bc862','#e5ca77','#65aadd','#a695e7','#ee7aae','#6ec9cb','#faa774','#9b2f4a','#7f8f2f','#2f5d9b','#5f3f8f','#9a5a2f','#6f7b8a','#2fae8f','#4b5563'];
 
       function setProfileStatus(message, type = '') {
         setInlineStatus('profileStatus', message, type);

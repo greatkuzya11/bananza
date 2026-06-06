@@ -83,7 +83,16 @@ test('UI flow covers register, private chat creation, sending, search and poll c
       await expect(page.locator('#profileForm')).toBeVisible();
       await expect(page.locator('#profileName')).toHaveValue(member.displayName);
       await expect(page.locator('#profileUsername')).toContainText(`@${member.username}`);
-      await expect(page.locator('#colorPicker input[name="profileAvatarColor"]')).toHaveCount(8);
+      await expect(page.locator('#colorPicker input[name="profileAvatarColor"]')).toHaveCount(16);
+      await page.locator('#profileUserStatusSelect').selectOption('custom');
+      await page.locator('#profileCustomStatus').fill('Writing profile layout check');
+      const profileModalBox = await page.locator('#menuDrawer .profile-settings-modal').boundingBox();
+      expect(profileModalBox?.y || 0).toBeLessThanOrEqual(90);
+      const profileBodyOverflow = await page.locator('#menuDrawer .profile-settings-body').evaluate((el) => ({
+        clientHeight: el.clientHeight,
+        scrollHeight: el.scrollHeight,
+      }));
+      expect(profileBodyOverflow.scrollHeight).toBeLessThanOrEqual(profileBodyOverflow.clientHeight + 2);
       await page.locator('#colorPicker .color-swatch').nth(1).click();
       await expect(page.locator('#colorPicker input[name="profileAvatarColor"]').nth(1)).toBeChecked();
       await expectMobileScene(page, 'sidebar');
