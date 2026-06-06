@@ -582,6 +582,7 @@
     'Enable ChatShot in this chat': 'Включить ChatShot в этом чате',
     'Banana safety filter': 'Банановый safety-фильтр',
     'When off, Bananza will not rewrite risky prompts into banana-safe prompts. Provider safety rules may still block generation.': 'Если выключено, Bananza не будет переписывать рисковые промпты в бананово-безопасные. Правила safety провайдера все еще могут блокировать генерацию.',
+    'When enabled and the chat has at least two messages, a camera button appears near search and posts a generated chat snapshot as chatShot.': 'Если включено и в чате есть минимум два сообщения, рядом с поиском появляется кнопка камеры и публикует сгенерированный снимок чата как chatShot.',
     'Picture without text': 'Картинка без текста',
     'DeepSeek bots and persona': 'Боты DeepSeek и персона',
     'DeepSeek bots in chats': 'Боты DeepSeek в чатах',
