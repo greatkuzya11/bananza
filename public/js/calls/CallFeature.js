@@ -42,6 +42,7 @@
     selectedDevices: STORE.loadDevicePrefs?.() || { audioinput: '', videoinput: '', audiooutput: '' },
     devices: [],
     previewStream: null,
+    prejoinEnding: false,
     prejoinMicEnabled: true,
     prejoinCameraEnabled: true,
     prejoinMode: 'join',
@@ -62,6 +63,7 @@
     videoCollapsedTiles: new Set(),
     subscriptionChangingTiles: new Set(),
     focusedVideoTileKey: '',
+    speakingTileKeys: new Set(),
     lastTileTap: { key: '', at: 0 },
     aiNotesTrackNotified: new Set(),
     transcriptModal: { callId: 0, text: '', segments: [] },
@@ -422,8 +424,9 @@
               <label id="callSpeakerSelectWrap">${escapeHtml(t('Speaker'))}<select id="callSpeakerSelect" class="call-device-select"></select></label>
             </div>
             <div id="callPrejoinStatus" class="call-prejoin-status"></div>
-            <div class="call-inline-actions">
+            <div class="call-inline-actions call-prejoin-actions">
               <button type="button" id="callPrejoinJoinBtn" class="call-action-btn primary">${escapeHtml(t('Join'))}</button>
+              <button type="button" id="callPrejoinEndBtn" class="call-action-btn danger hidden">${escapeHtml(t('End'))}</button>
               <button type="button" id="callPrejoinCancelBtn" class="call-action-btn">${escapeHtml(t('Cancel'))}</button>
             </div>
           </div>
@@ -439,6 +442,9 @@
         joinCall(state.pendingJoinCall).catch((error) => setPrejoinStatus(error.message || t('Could not join call'), 'error'));
       });
       document.getElementById('callPrejoinCancelBtn')?.addEventListener('click', closePrejoin);
+      document.getElementById('callPrejoinEndBtn')?.addEventListener('click', () => {
+        endPendingPrejoinCall().catch((error) => setPrejoinStatus(error.message || t('Could not end call'), 'error'));
+      });
       document.getElementById('callPrejoinMicBtn')?.addEventListener('click', () => togglePrejoinMic().catch(() => {}));
       document.getElementById('callPrejoinCameraBtn')?.addEventListener('click', () => togglePrejoinCamera().catch(() => {}));
       ['callMicSelect', 'callCameraSelect', 'callSpeakerSelect'].forEach((id) => {
@@ -488,7 +494,7 @@
               <span class="call-icon" aria-hidden="true"></span>
               <span class="call-control-label">${escapeHtml(t('Share screen'))}</span>
             </button>
-            <button type="button" id="callAiNotesBtn" class="call-control-btn call-tool-btn call-icon-ai-notes" title="${escapeHtml(t('AI notes'))}" aria-label="${escapeHtml(t('AI notes'))}" aria-pressed="false">
+            <button type="button" id="callAiNotesBtn" class="call-control-btn call-tool-btn call-icon-ai-badge" title="${escapeHtml(t('AI notes'))}" aria-label="${escapeHtml(t('AI notes'))}" aria-pressed="false">
               <span class="call-icon" aria-hidden="true"></span>
               <span class="call-control-label">${escapeHtml(t('AI notes'))}</span>
             </button>
@@ -871,11 +877,16 @@
   function setPrejoinBusy(busy) {
     const joinBtn = document.getElementById('callPrejoinJoinBtn');
     const cancelBtn = document.getElementById('callPrejoinCancelBtn');
+    const endBtn = document.getElementById('callPrejoinEndBtn');
     if (joinBtn) {
       joinBtn.disabled = Boolean(busy);
       joinBtn.classList.toggle('is-busy', Boolean(busy));
     }
     if (cancelBtn) cancelBtn.disabled = Boolean(busy);
+    if (endBtn) {
+      endBtn.disabled = Boolean(busy || state.prejoinEnding);
+      endBtn.classList.toggle('is-busy', Boolean(state.prejoinEnding));
+    }
   }
 
   function selectedDevice(kind) {
@@ -963,23 +974,53 @@
     button.setAttribute('aria-label', label);
   }
 
+  function callStarterId(call = {}) {
+    return Number(call.started_by || call.startedBy || call.started_by_user_id || call.startedByUserId || 0);
+  }
+
+  function canEndPendingPrejoinCall(call = state.pendingJoinCall) {
+    return Boolean(
+      call?.id
+      && state.prejoinMode === 'join'
+      && Number(currentUser()?.id || 0) === callStarterId(call)
+    );
+  }
+
   function renderPrejoinControls() {
     const mic = document.getElementById('callPrejoinMicBtn');
     const camera = document.getElementById('callPrejoinCameraBtn');
     const cameraWrap = document.getElementById('callCameraSelectWrap');
     const avatar = document.getElementById('callPrejoinAvatar');
     const video = document.getElementById('callPrejoinVideo');
+    const endBtn = document.getElementById('callPrejoinEndBtn');
     const voiceMode = isVoiceCall(state.pendingJoinCall);
     setIconToggleState(mic, state.prejoinMicEnabled, t('Mic'), t('Mic off'));
     setIconToggleState(camera, state.prejoinCameraEnabled, t('Camera'), t('Camera off'));
     camera?.classList.toggle('hidden', voiceMode);
     cameraWrap?.classList.toggle('hidden', voiceMode);
+    if (endBtn) {
+      const canEnd = canEndPendingPrejoinCall();
+      endBtn.classList.toggle('hidden', !canEnd);
+      endBtn.disabled = Boolean(state.joining || state.prejoinEnding);
+      endBtn.textContent = t('End');
+      endBtn.closest('.call-prejoin-actions')?.classList.toggle('has-end-call', canEnd);
+    }
     if (avatar) {
       const name = currentUser()?.display_name || t('You');
       avatar.textContent = initials(name);
       avatar.classList.toggle('hidden', voiceMode || (state.prejoinCameraEnabled && Boolean(state.previewStream)));
     }
     if (video) video.classList.toggle('hidden', voiceMode || !state.prejoinCameraEnabled || !state.previewStream);
+  }
+
+  function streamHasTrack(stream, kind) {
+    const getter = kind === 'audio' ? 'getAudioTracks' : 'getVideoTracks';
+    try {
+      const tracks = stream?.[getter]?.() || Array.from(stream?.getTracks?.() || []).filter((track) => track?.kind === kind);
+      return Array.from(tracks || []).some((track) => track?.readyState !== 'ended');
+    } catch {
+      return false;
+    }
   }
 
   async function refreshPreview() {
@@ -994,15 +1035,29 @@
     }
     try {
       setPrejoinStatus(t('Checking devices...'));
-      state.previewStream = await MEDIA.getPreviewStream?.({
+      const previewOptions = {
         audioEnabled: state.prejoinMicEnabled,
         videoEnabled: !voiceMode && state.prejoinCameraEnabled,
         audioDeviceId: selectedDevice('audioinput'),
         videoDeviceId: voiceMode ? '' : selectedDevice('videoinput'),
-      });
-      if (!voiceMode) MEDIA.attachPreview?.(document.getElementById('callPrejoinVideo'), state.previewStream);
+      };
+      const media = MEDIA.getPreviewMedia
+        ? await MEDIA.getPreviewMedia(previewOptions)
+        : { stream: await MEDIA.getPreviewStream?.(previewOptions), requestedAudio: previewOptions.audioEnabled, requestedVideo: previewOptions.videoEnabled };
+      state.previewStream = media?.stream || null;
+      const hasAudio = Boolean(previewOptions.audioEnabled && (media?.audio || streamHasTrack(state.previewStream, 'audio')));
+      const hasVideo = Boolean(previewOptions.videoEnabled && (media?.video || streamHasTrack(state.previewStream, 'video')));
+      if (previewOptions.audioEnabled && !hasAudio) state.prejoinMicEnabled = false;
+      if (previewOptions.videoEnabled && !hasVideo) state.prejoinCameraEnabled = false;
+      if (!voiceMode && hasVideo) MEDIA.attachPreview?.(document.getElementById('callPrejoinVideo'), state.previewStream);
       await populateDeviceSelects();
-      setPrejoinStatus(t('Devices ready'), 'success');
+      if (previewOptions.audioEnabled && !hasAudio && previewOptions.videoEnabled && hasVideo) {
+        setPrejoinStatus(t('Camera ready, microphone unavailable'), 'success');
+      } else if (previewOptions.videoEnabled && !hasVideo && previewOptions.audioEnabled && hasAudio) {
+        setPrejoinStatus(t('Microphone ready, camera unavailable'), 'success');
+      } else {
+        setPrejoinStatus(t('Devices ready'), 'success');
+      }
     } catch (error) {
       const message = error?.code === 'media_unsupported'
         ? t('Media devices are not supported')
@@ -1018,6 +1073,7 @@
     ensureUi();
     state.pendingJoinCall = call;
     state.prejoinMode = options.mode || 'join';
+    state.prejoinEnding = false;
     const voiceMode = isVoiceCall(call);
     if (voiceMode) state.prejoinCameraEnabled = false;
     if (!options.keepIncoming) {
@@ -1038,6 +1094,7 @@
       ? t('Apply')
       : (isVoiceRoom(call) ? t('Join voice room') : t('Join'));
     setPrejoinBusy(false);
+    renderPrejoinControls();
     wrap?.classList.remove('hidden');
     await populateDeviceSelects();
     await refreshPreview();
@@ -1049,11 +1106,34 @@
     state.previewStream = null;
     state.pendingJoinCall = null;
     state.prejoinMode = 'join';
+    state.prejoinEnding = false;
     setPrejoinBusy(false);
     document.getElementById('callPrejoin')?.classList.add('hidden');
     document.getElementById('callPrejoin')?.classList.remove('is-voice-call');
     document.getElementById('callSurface')?.classList.remove('is-behind-prejoin');
     renderPrejoinControls();
+  }
+
+  async function endPendingPrejoinCall() {
+    const call = state.pendingJoinCall;
+    if (!canEndPendingPrejoinCall(call) || state.prejoinEnding) return;
+    state.prejoinEnding = true;
+    setPrejoinBusy(true);
+    renderPrejoinControls();
+    setPrejoinStatus(t('Ending call...'));
+    try {
+      const data = await api(`/api/calls/${call.id}/end`, { method: 'POST', body: {} });
+      removeCall(data?.call || { ...call, status: 'ended' });
+      closePrejoin();
+      await loadActiveCalls().catch(() => {});
+    } catch (error) {
+      setPrejoinStatus(error.message || t('Could not end call'), 'error');
+    } finally {
+      state.prejoinEnding = false;
+      setPrejoinBusy(false);
+      renderPrejoinControls();
+      renderAll();
+    }
   }
 
   async function applyPrejoinDevicesToRoom() {
@@ -1275,6 +1355,10 @@
     room.on?.(events.TrackUnmuted || 'trackUnmuted', (publication, participant) => {
       addCallDebug('track unmuted', `${participant?.identity || ''} ${publication?.kind || publication?.track?.kind || 'unknown'} ${publication?.source || publication?.track?.source || ''}`.trim());
       refreshRoomTilesSoon(participant, participant?.isLocal === true);
+    });
+    room.on?.(events.ActiveSpeakersChanged || 'activeSpeakersChanged', (speakers = []) => {
+      addCallDebug('active speakers', speakers.map((participant) => participant?.identity || participant?.name || '').filter(Boolean).join(', '));
+      setSpeakingParticipants(speakers);
     });
     room.on?.(events.Reconnecting || 'reconnecting', () => {
       state.roomConnectionState = 'reconnecting';
@@ -1545,6 +1629,7 @@
     state.videoFillTiles.clear();
     state.subscriptionChangingTiles.clear();
     state.focusedVideoTileKey = '';
+    state.speakingTileKeys.clear();
     state.lastTileTap = { key: '', at: 0 };
     state.aiNotesTrackNotified.clear();
     const previousIntent = state.disconnectingIntentionally;
@@ -1774,6 +1859,34 @@
     return local ? 'local' : String(participant?.identity || participant?.sid || participant?.name || 'remote');
   }
 
+  function isLocalRoomParticipant(participant) {
+    const local = state.room?.localParticipant;
+    return Boolean(
+      participant
+      && (participant === local
+        || participant.isLocal === true
+        || (local?.identity && participant.identity === local.identity))
+    );
+  }
+
+  function applySpeakingTileClasses() {
+    const grid = document.getElementById('callGrid');
+    if (!grid) return;
+    Array.from(grid.querySelectorAll('.call-tile')).forEach((tile) => {
+      tile.classList.toggle('is-speaking', state.speakingTileKeys.has(tile.dataset.callTileKey));
+    });
+  }
+
+  function setSpeakingParticipants(participants = []) {
+    state.speakingTileKeys.clear();
+    (Array.isArray(participants) ? participants : []).forEach((participant) => {
+      if (!participant) return;
+      state.speakingTileKeys.add(videoTileKey(participant, isLocalRoomParticipant(participant)));
+    });
+    if (isVoiceCall(state.currentCall)) renderVoiceRoomTiles();
+    else applySpeakingTileClasses();
+  }
+
   function safeVideoDimension(value) {
     const number = Math.round(Number(value || 0));
     return Number.isFinite(number) && number > 0 ? number : 0;
@@ -1858,31 +1971,40 @@
     window.requestAnimationFrame?.(refresh);
   }
 
-  function renderVideoFitButton(tile, key, isFill) {
+  function updateVideoFocusButton(button, focused) {
+    if (!button) return;
+    const label = focused ? t('Exit full screen video') : t('Full screen video');
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    button.setAttribute('aria-pressed', focused ? 'true' : 'false');
+  }
+
+  function renderVideoFitButton(tile, key, focused) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'call-tile-fit-btn call-icon-fill';
-    const applyButtonState = (fill) => {
-      button.title = fill ? t('Show full video') : t('Fill video tile');
-      button.setAttribute('aria-label', button.title);
-      button.setAttribute('aria-pressed', fill ? 'true' : 'false');
-    };
-    applyButtonState(isFill);
+    updateVideoFocusButton(button, focused);
     button.innerHTML = '<span class="call-icon" aria-hidden="true"></span>';
     button.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      const nextFill = !state.videoFillTiles.has(key);
-      if (nextFill) state.videoFillTiles.add(key);
-      else state.videoFillTiles.delete(key);
-      tile.classList.toggle('is-video-fill', nextFill);
-      applyButtonState(nextFill);
+      setVideoTileFocus(tile, key, true);
     });
     tile.appendChild(button);
   }
 
   function canFocusVideoTile(local, isCollapsed, track) {
-    return !local && !isCollapsed && Boolean(track?.attach);
+    return !isCollapsed && Boolean(track?.attach);
+  }
+
+  function applyVideoTileActionState() {
+    const grid = document.getElementById('callGrid');
+    if (!grid) return;
+    Array.from(grid.querySelectorAll('.call-tile')).forEach((tile) => {
+      const focused = Boolean(state.focusedVideoTileKey && tile.dataset.callTileKey === state.focusedVideoTileKey);
+      tile.classList.toggle('is-video-fill', focused);
+      updateVideoFocusButton(tile.querySelector('.call-tile-fit-btn'), focused);
+    });
   }
 
   function applyVideoFocusClasses() {
@@ -1895,27 +2017,23 @@
       tile.classList.toggle('is-video-focused', isFocused);
       tile.classList.toggle('is-video-secondary', Boolean(focusKey && !isFocused));
     });
+    applyVideoTileActionState();
   }
 
   function setFocusedVideoTile(key = '') {
     state.focusedVideoTileKey = key;
+    state.videoFillTiles.clear();
+    if (key) state.videoFillTiles.add(key);
     applyVideoFocusClasses();
   }
 
-  function handleVideoTileDoubleTap(tile, key, canFocus) {
+  function setVideoTileFocus(_tile, key, canFocus) {
     if (!canFocus) return;
-    const nextKey = state.focusedVideoTileKey === key ? '' : key;
-    setFocusedVideoTile(nextKey);
-    if (nextKey && !state.videoFillTiles.has(key)) {
-      state.videoFillTiles.add(key);
-      tile.classList.add('is-video-fill');
-      const button = tile.querySelector('.call-tile-fit-btn');
-      if (button) {
-        button.title = t('Show full video');
-        button.setAttribute('aria-label', button.title);
-        button.setAttribute('aria-pressed', 'true');
-      }
-    }
+    setFocusedVideoTile(state.focusedVideoTileKey === key ? '' : key);
+  }
+
+  function handleVideoTileDoubleTap(tile, key, canFocus) {
+    setVideoTileFocus(tile, key, canFocus);
   }
 
   function setRemoteVideoCollapsed(participant, key, collapsed) {
@@ -1957,6 +2075,7 @@
     if (local) {
       if (collapsed) state.videoCollapsedTiles.add(key);
       else state.videoCollapsedTiles.delete(key);
+      if (collapsed && state.focusedVideoTileKey === key) setFocusedVideoTile('');
       replaceCallTile(participant, true);
       return;
     }
@@ -1972,6 +2091,7 @@
     current.replaceWith(renderCallTile(participant, local));
     updateCallGridLayout(grid);
     applyVideoFocusClasses();
+    applySpeakingTileClasses();
   }
 
   function renderCallTile(participant, local) {
@@ -1985,10 +2105,13 @@
     const track = isCollapsed ? null : firstVisibleVideoTrack(participant);
     if (state.focusedVideoTileKey === tileKey && !canFocusVideoTile(local, isCollapsed, track)) {
       state.focusedVideoTileKey = '';
+      state.videoFillTiles.delete(tileKey);
     }
+    const isFocused = state.focusedVideoTileKey === tileKey;
     const isFill = state.videoFillTiles.has(tileKey);
     tile.classList.toggle('is-video-fill', isFill);
     tile.classList.toggle('is-video-collapsed', isCollapsed);
+    tile.classList.toggle('is-speaking', state.speakingTileKeys.has(tileKey));
     if (track?.attach) {
       try {
         const video = track.attach();
@@ -2002,7 +2125,7 @@
         tile.appendChild(video);
         bindCallTileVideoGeometry(tile, video, track);
         video.play?.().catch(() => {});
-        renderVideoFitButton(tile, tileKey, isFill);
+        renderVideoFitButton(tile, tileKey, isFocused);
       } catch {
         tile.innerHTML = bananaTilePlaceholder(name);
       }
@@ -2091,7 +2214,7 @@
     const name = meta?.display_name || meta?.username || getParticipantName(roomParticipant, local ? t('You') : t('Participant'));
     const connected = Boolean(roomParticipant);
     const muted = connected && isVoiceParticipantMuted(roomParticipant, local);
-    const speaking = Boolean(connected && roomParticipant?.isSpeaking);
+    const speaking = Boolean(connected && (roomParticipant?.isSpeaking || state.speakingTileKeys.has(videoTileKey(roomParticipant, local))));
     const stateText = connected
       ? (speaking ? t('Speaking') : (muted ? t('Muted') : t('Connected')))
       : (isVoiceRoom(state.currentCall) && meta?.state === 'invited' ? t('Can join') : participantStateText(meta?.state || 'invited'));
@@ -2177,6 +2300,7 @@
     });
     updateCallGridLayout(grid);
     applyVideoFocusClasses();
+    applySpeakingTileClasses();
     renderParticipantsPanel();
   }
 
@@ -2577,7 +2701,7 @@
     syncCurrentChatCall().catch(() => renderAll());
   };
 
-  hooks.openPrejoin = (call) => openPrejoin(call);
+  hooks.openPrejoin = (call, options = {}) => openPrejoin(call, options);
   hooks.joinCallFromMessage = (call) => {
     if (call?.id && isCurrentCall(call) && state.room) return revealCurrentCallSurface();
     return isVoiceCall(call) ? joinVoiceCallDirectly(call) : openPrejoin(call);
