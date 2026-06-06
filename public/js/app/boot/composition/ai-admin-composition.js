@@ -269,6 +269,53 @@
         return error?.message || String(error || fallback);
       }
 
+      const fallbackBotSaveBooleanFields = new Set('enabled visible_to_users allow_text allow_image_generate allow_image_edit allow_document allow_poll_create allow_poll_vote allow_react allow_pin image_risk_filter_enabled'.split(' '));
+      const fallbackBotSaveNumericFields = new Set(['temperature', 'max_tokens']);
+      const fallbackCapabilityFields = [
+        ['allow_poll_create', 'poll create'], ['allow_poll_vote', 'poll vote'], ['allow_react', 'reactions'], ['allow_pin', 'pin'],
+      ];
+
+      function fallbackNormalizeBotSaveComparisonValue(key, value) {
+        if (fallbackBotSaveBooleanFields.has(key) || typeof value === 'boolean') return value ? 1 : 0;
+        if (fallbackBotSaveNumericFields.has(key) || typeof value === 'number') {
+          const numeric = Number(value);
+          return Number.isFinite(numeric) ? numeric : null;
+        }
+        return String(value ?? '').trim();
+      }
+
+      function fallbackVerifyBotSaveResponse(bot, payload = {}) {
+        if (!bot || !payload || typeof payload !== 'object') {
+          return { ok: false, mismatches: ['server_response'] };
+        }
+        const mismatches = Object.keys(payload).filter((key) => (
+          fallbackNormalizeBotSaveComparisonValue(key, bot[key]) !== fallbackNormalizeBotSaveComparisonValue(key, payload[key])
+        ));
+        return { ok: mismatches.length === 0, mismatches };
+      }
+
+      function fallbackBuildVerifiedBotSaveStatus(savedLabel, bot, payload = {}, detailLine = '') {
+        const verification = fallbackVerifyBotSaveResponse(bot, payload);
+        if (verification.ok) {
+          return {
+            type: 'success',
+            message: [savedLabel, 'Values were saved on the server.', detailLine].filter(Boolean).join('\n'),
+          };
+        }
+        const fields = verification.mismatches.length ? `Fields: ${verification.mismatches.join(', ')}` : '';
+        return {
+          type: 'error',
+          message: [savedLabel, 'Server returned different values. The form was refreshed from saved state.', fields, detailLine].filter(Boolean).join('\n'),
+        };
+      }
+
+      function fallbackFormatCapabilityState(bot = {}) {
+        const values = fallbackCapabilityFields.map(([key]) => !!bot[key]);
+        if (values.every(Boolean)) return 'interactive actions: on';
+        if (values.every((value) => !value)) return 'interactive actions: off';
+        return fallbackCapabilityFields.map(([key, label]) => `${label}: ${bot[key] ? 'on' : 'off'}`).join(', ');
+      }
+
       function fallbackWireAiBotToggleLabels() {
         document.querySelectorAll('.ai-bot-toggle-label').forEach((label) => {
           if (label.dataset.toggleLabelBound === '1') return;
@@ -409,6 +456,10 @@
         loadAiModelOptions: async () => ({}),
         filenameFromContentDisposition: fallbackFilenameFromContentDisposition,
         formatUiErrorMessage: fallbackFormatUiErrorMessage,
+        normalizeBotSaveComparisonValue: fallbackNormalizeBotSaveComparisonValue,
+        verifyBotSaveResponse: fallbackVerifyBotSaveResponse,
+        buildVerifiedBotSaveStatus: fallbackBuildVerifiedBotSaveStatus,
+        formatCapabilityState: fallbackFormatCapabilityState,
         setDeepseekAiStatus: (message, type = '') => fallbackSetInlineStatus('deepseekAiStatus', message, type),
         setDeepseekAiProviderStatus: (message, type = '') => fallbackSetInlineStatus('deepseekAiProviderStatus', message, type),
         setDeepseekAiBalanceStatus: (message, type = '') => fallbackSetInlineStatus('deepseekAiBalanceStatus', message, type),

@@ -54,6 +54,107 @@ function createApiRecorder(dom) {
   return { api, calls };
 }
 
+function installEvalExports(scope, runtimeExports) {
+  Object.defineProperties(scope, Object.getOwnPropertyDescriptors(runtimeExports));
+}
+
+function escapeTestHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function loadAiAdminRuntimeOnly(dom, runtimeScriptPath) {
+  loadBrowserScript(dom, 'public/js/app/boot/composition/export-utils.js');
+  loadBrowserScript(dom, 'public/js/app/boot/composition/runtime-proxy-scope.js');
+  loadBrowserScript(dom, 'public/js/app/boot/composition/ai-admin-composition.js');
+  loadBrowserScript(dom, runtimeScriptPath);
+}
+
+function createLazyAiAdminScope(dom, api) {
+  const { window } = dom;
+  const { document } = window;
+  return Object.assign(Object.create(null), {
+    window,
+    document,
+    console,
+    ctx: null,
+    appDom: {},
+    $: (selector, base = document) => base.querySelector(selector),
+    $$: (selector, base = document) => Array.from(base.querySelectorAll(selector)),
+    resolveUiTarget(targetId) {
+      if (!targetId) return null;
+      if (typeof targetId !== 'string') return targetId;
+      return document.getElementById(targetId.replace(/^#/, '')) || document.querySelector(targetId);
+    },
+    tx: (text) => String(text || ''),
+    t: (text) => String(text || ''),
+    esc: escapeTestHtml,
+    initials: (value) => String(value || '?').trim().slice(0, 2).toUpperCase() || '?',
+    api,
+    token: 'test-token',
+    currentChatId: null,
+    aiModelRefreshTriggeredByButton: false,
+    aiModelCatalog: {
+      response: ['gpt-5.1'],
+      summary: ['gpt-4o-mini'],
+      embedding: ['text-embedding-3-small'],
+      image: ['gpt-image-2'],
+    },
+    aiBotState: {
+      settings: {},
+      bots: [{ id: 11, name: 'Bot', mention: 'bot', enabled: true }],
+      chats: [],
+      chatSettings: [],
+    },
+    openAiUniversalState: { settings: {}, bots: [], chats: [], chatSettings: [] },
+    openAiImageState: { settings: {}, bots: [], chats: [], chatSettings: [] },
+    deepseekBotState: {
+      settings: {},
+      bots: [{ id: 21, name: 'Deep', mention: 'deep', enabled: true }],
+      chats: [],
+      chatSettings: [],
+      models: { response: ['deepseek-chat'], summary: ['deepseek-chat'] },
+    },
+    qwenBotState: { settings: {}, bots: [], chats: [], chatSettings: [], models: {} },
+    yandexBotState: { settings: {}, bots: [], chats: [], chatSettings: [], models: {} },
+    grokBotState: { settings: {} },
+    grokUniversalState: { settings: {} },
+    selectedAiBotId: 11,
+    selectedOpenAiUniversalBotId: null,
+    selectedOpenAiImageBotId: null,
+    selectedDeepseekBotId: 21,
+    selectedQwenBotId: null,
+    selectedYandexBotId: null,
+    composerStateController: { mentionTargetsByChat: new Map() },
+    updateComposerAiOverrideState: async () => {},
+    applyUserUpdate: () => {},
+    refreshRenderedAiBotAvatar: () => {},
+    OPENAI_IMAGE_SIZE_OPTIONS: ['1024x1024'],
+    OPENAI_IMAGE_QUALITY_OPTIONS: ['auto'],
+    OPENAI_IMAGE_BACKGROUND_OPTIONS: ['auto'],
+    OPENAI_IMAGE_OUTPUT_OPTIONS: ['png'],
+    DOCUMENT_FORMAT_OPTIONS: ['md'],
+    getBotVisibilityToggle(id) {
+      return !!document.getElementById(id)?.checked;
+    },
+    setBotVisibilityToggle(id, value) {
+      const el = document.getElementById(id);
+      if (el) el.checked = !!value;
+    },
+  });
+}
+
+function installAiAdminCompositionForTest(dom, scope) {
+  const composition = dom.window.BananzaApp.boot.composition;
+  installEvalExports(scope, composition.composeRuntimeProxyScope(scope));
+  installEvalExports(scope, composition.composeAiAdmin(scope));
+  return scope;
+}
+
 test('ai-admin modules publish expected namespaces', () => {
   const dom = loadAiAdminRuntime();
   const aiAdmin = dom.window.BananzaApp.aiAdmin;
@@ -76,6 +177,79 @@ test('ai-admin modules publish expected namespaces', () => {
   assert.equal(typeof aiAdmin.modals.openContextConvertBotsModal, 'function');
   assert.equal(typeof aiAdmin.modals.createFinalAppRuntime, 'undefined');
   assert.equal(typeof dom.window.BananzaApp.runtime.createAppRuntime, 'function');
+});
+
+test('OpenAI runtime saves text bots without Grok runtime formatter loaded', async () => {
+  const dom = createAppDom();
+  const calls = [];
+  let scope = null;
+  loadAiAdminRuntimeOnly(dom, 'public/js/app/ai-admin/openai-runtime.js');
+  assert.equal(typeof dom.window.BananzaApp.aiAdmin.grokRuntime, 'undefined');
+
+  scope = createLazyAiAdminScope(dom, async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url === '/api/admin/ai-bots/settings') {
+      return { settings: { openai_interactive_enabled: true } };
+    }
+    if (url === '/api/admin/ai-bots/11') {
+      const bot = { id: 11, ...options.body };
+      return {
+        state: { settings: scope.aiBotState.settings, bots: [bot], chats: [], chatSettings: [] },
+        bot,
+      };
+    }
+    throw new Error(`Unexpected OpenAI admin request: ${url}`);
+  });
+  installAiAdminCompositionForTest(dom, scope);
+
+  dom.window.document.getElementById('aiBotName').value = 'Saved';
+  dom.window.document.getElementById('aiBotMention').value = 'saved';
+  await scope.saveAiBot();
+
+  const status = dom.window.document.getElementById('aiBotEditorStatus').textContent;
+  assert.match(status, /interactive actions: off/);
+  assert.doesNotMatch(status, /formatCapabilityState|is not a function/);
+  assert.ok(calls.some((call) => call.url === '/api/admin/ai-bots/11' && call.options.method === 'PUT'));
+});
+
+test('local provider runtime saves bots without OpenAI save helpers loaded', async () => {
+  const dom = createAppDom();
+  const calls = [];
+  let scope = null;
+  loadAiAdminRuntimeOnly(dom, 'public/js/app/ai-admin/local-providers-runtime.js');
+  assert.equal(typeof dom.window.BananzaApp.aiAdmin.openaiRuntime, 'undefined');
+
+  scope = createLazyAiAdminScope(dom, async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url === '/api/admin/deepseek-ai-bots/settings') {
+      return { settings: { deepseek_interactive_enabled: true } };
+    }
+    if (url === '/api/admin/deepseek-ai-bots/21') {
+      const bot = { id: 21, ...options.body };
+      return {
+        state: {
+          settings: scope.deepseekBotState.settings,
+          bots: [bot],
+          chats: [],
+          chatSettings: [],
+          models: scope.deepseekBotState.models,
+        },
+        bot,
+      };
+    }
+    throw new Error(`Unexpected DeepSeek admin request: ${url}`);
+  });
+  installAiAdminCompositionForTest(dom, scope);
+
+  dom.window.document.getElementById('deepseekAiBotName').value = 'Deep Saved';
+  dom.window.document.getElementById('deepseekAiBotMention').value = 'deep_saved';
+  await scope.saveDeepseekBot();
+
+  const status = dom.window.document.getElementById('deepseekAiBotEditorStatus').textContent;
+  assert.match(status, /Values were saved on the server/);
+  assert.match(status, /interactive actions: off/);
+  assert.doesNotMatch(status, /buildVerifiedBotSaveStatus|formatCapabilityState|is not a function/);
+  assert.ok(calls.some((call) => call.url === '/api/admin/deepseek-ai-bots/21' && call.options.method === 'PUT'));
 });
 
 test('provider controllers create, render, and call expected endpoints', async () => {
