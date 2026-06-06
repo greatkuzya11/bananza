@@ -5578,6 +5578,9 @@ html[data-visual-mode="rich"] .poll-card {
   flex-wrap: wrap;
   gap: 8px;
 }
+.ai-initiative-enabled-toggle {
+  grid-column: 1 / -1;
+}
 .ai-initiative-news-test-result {
   display: flex;
   flex-direction: column;

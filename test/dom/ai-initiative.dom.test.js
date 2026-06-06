@@ -68,6 +68,11 @@ test('AI initiative modal renders admin state and saves a rule', async () => {
   await waitTick();
 
   assert.equal(dom.window.document.getElementById('aiInitiativeModal').classList.contains('hidden'), false);
+  const enabledToggle = dom.window.document.getElementById('aiInitiativeEnabled')?.closest('.ai-initiative-enabled-toggle');
+  const chatField = dom.window.document.getElementById('aiInitiativeChatSelect')?.closest('label');
+  assert.ok(enabledToggle);
+  assert.ok(chatField);
+  assert.ok(enabledToggle.compareDocumentPosition(chatField) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
   assert.equal(dom.window.document.getElementById('aiInitiativeChatSelect').value, '1');
   assert.equal(dom.window.document.getElementById('aiInitiativeBotSelect').value, '2');
   assert.equal(dom.window.document.getElementById('aiInitiativeTimezone').tagName, 'SELECT');

@@ -815,6 +815,12 @@
           <div class="ai-bot-panel">
             <h4>Rule settings</h4>
             <div class="ai-bot-grid">
+              <div class="ai-bot-toggle-label ai-initiative-enabled-toggle"><span>Enabled</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="aiInitiativeEnabled">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
               <label>Chat<select id="aiInitiativeChatSelect" class="modal-input"></select></label>
               <label>Bot<select id="aiInitiativeBotSelect" class="modal-input"></select></label>
               <label>Schedule<select id="aiInitiativeScheduleType" class="modal-input">
@@ -859,12 +865,6 @@
               <div class="settings-hint ai-initiative-wide-hint">Set idle minutes to 0 to run regardless of recent chat activity.</div>
               <div class="settings-hint ai-initiative-wide-hint">When enabled, this rule can send only this many initiative messages after the same latest human message. New human activity resets the counter.</div>
               <div id="aiInitiativeNewsSourceHint" class="settings-hint ai-initiative-wide-hint"></div>
-              <div class="ai-bot-toggle-label"><span>Enabled</span>
-                <label class="toggle-switch">
-                  <input type="checkbox" id="aiInitiativeEnabled">
-                  <span class="toggle-slider"></span>
-                </label>
-              </div>
             </div>
             <label id="aiInitiativeNewsPromptField" class="ai-bot-field">News prompt<textarea id="aiInitiativeNewsPrompt" class="modal-input" rows="4"></textarea></label>
             <label class="ai-bot-field">Custom prompt<textarea id="aiInitiativeCustomPrompt" class="modal-input" rows="4"></textarea></label>
