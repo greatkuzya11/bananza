@@ -145,7 +145,7 @@ test('realtime chat flow and media-note ui hooks work with mocked browser media 
   const sendBtn = page.locator('#sendBtn');
   await sendBtn.dispatchEvent('pointerdown', { pointerId: 1, button: 0, pointerType: 'mouse' });
   await expect(sendBtn).toHaveClass(/is-hold-armed/);
-  await sendBtn.dispatchEvent('pointerup', { pointerId: 1, button: 0, pointerType: 'mouse' });
+  await page.locator('body').dispatchEvent('pointerup', { pointerId: 1, button: 0, pointerType: 'mouse' });
   await expect(sendBtn).toHaveAttribute('data-media-note-mode', 'video');
 
   await secondContext.close();

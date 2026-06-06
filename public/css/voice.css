@@ -20,6 +20,8 @@
 }
 
 .send-btn.voice-enabled.is-mic-mode::before {
+  position: relative;
+  z-index: 1;
   width: 22px;
   height: 22px;
   border: none;
@@ -36,7 +38,20 @@
 }
 
 .send-btn.voice-enabled.is-mic-mode::after {
-  display: none;
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 2;
+  display: block;
+  width: 64px;
+  height: 64px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  pointer-events: auto;
 }
 
 .send-btn.voice-enabled.is-mic-mode.is-hold-armed {
@@ -44,7 +59,7 @@
 }
 
 .send-btn.voice-enabled.is-mic-mode.is-hold-armed::before {
-  transform: scale(1.08);
+  transform: scale(1.12);
   opacity: 1;
   filter: drop-shadow(0 0 8px rgba(143,216,255,0.2));
 }
@@ -89,9 +104,16 @@ html[data-modal-animation="none"] .send-btn.voice-enabled.is-mic-mode.is-mode-sw
 }
 
 .send-btn.voice-enabled.is-mic-mode.is-recording::before {
-  transform: scale(1.12);
+  transform: scale(1.16);
   opacity: 1;
   filter: drop-shadow(0 0 10px rgba(255,107,120,0.28));
+}
+
+@media (max-width: 768px) {
+  .send-btn.voice-enabled.is-mic-mode::after {
+    width: 78px;
+    height: 78px;
+  }
 }
 
 @keyframes mediaNoteModeSwitchSoft {

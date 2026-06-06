@@ -24,6 +24,8 @@
     recorder: {
       holdTimer: null,
       holdDelayMs: 280,
+      pointerId: null,
+      startPromise: null,
       recording: false,
       suppressNextClick: false,
       startAt: 0,
@@ -1001,6 +1003,7 @@
     sendBtn.classList.toggle('is-mic-mode', keepMicMode);
     sendBtn.classList.toggle('is-send-mode', !keepMicMode && !state.recorder.recording);
     sendBtn.classList.toggle('is-recording', Boolean(state.recorder.recording));
+    sendBtn.classList.toggle('is-hold-armed', Boolean(state.recorder.holdTimer) && keepMicMode && !state.recorder.recording);
     sendBtn.classList.toggle('is-uploading', Boolean(state.recorder.uploading));
     sendBtn.title = state.recorder.recording
       ? t('Recording in progress')
@@ -1966,10 +1969,9 @@
 
     sendBtn.addEventListener('pointerdown', handleSendPointerDown, { passive: false });
     sendBtn.addEventListener('pointerup', handleSendPointerUp, { passive: false });
-    sendBtn.addEventListener('pointercancel', cancelPendingHold, { passive: false });
-    sendBtn.addEventListener('pointerleave', () => {
-      if (!state.recorder.recording) cancelPendingHold();
-    });
+    sendBtn.addEventListener('pointercancel', handleSendPointerCancel, { passive: false });
+    document.addEventListener('pointerup', handleDocumentSendPointerUp, { passive: false, capture: true });
+    document.addEventListener('pointercancel', handleDocumentSendPointerCancel, { passive: false, capture: true });
   }
 
   function canUseVoiceGesture() {
@@ -2074,27 +2076,51 @@
     if (typeof event.button === 'number' && event.button !== 0) return;
     event.currentTarget?.blur?.();
     if (!canUseVoiceGesture()) return;
-    event.currentTarget?.setPointerCapture?.(event.pointerId);
+    state.recorder.pointerId = event.pointerId;
+    captureRecorderPointer(event.currentTarget, event.pointerId);
     state.recorder.holdTimer = window.setTimeout(() => {
       state.recorder.holdTimer = null;
+      syncSendButtonState();
       state.recorder.suppressNextClick = true;
-      startRecording().catch((error) => {
+      const startPromise = startRecording();
+      state.recorder.startPromise = startPromise;
+      startPromise.catch((error) => {
         setRecorderMessage(error.message || 'Could not start recording', 'error');
+      }).finally(() => {
+        if (state.recorder.startPromise === startPromise) {
+          state.recorder.startPromise = null;
+          syncSendButtonState();
+        }
       });
     }, state.recorder.holdDelayMs);
+    syncSendButtonState();
     event.preventDefault();
   }
 
   function handleSendPointerUp(event) {
-    event.currentTarget?.blur?.();
-    event.currentTarget?.releasePointerCapture?.(event.pointerId);
+    if (!matchesRecorderPointer(event)) return;
+    getDom().sendBtn?.blur?.();
+    releaseRecorderPointer(event.pointerId);
+    state.recorder.pointerId = null;
     if (state.recorder.holdTimer) {
       clearTimeout(state.recorder.holdTimer);
       state.recorder.holdTimer = null;
+      syncSendButtonState();
       return;
     }
 
-    if (!state.recorder.recording) return;
+    if (!state.recorder.recording && state.recorder.startPromise) {
+      const startPromise = state.recorder.startPromise;
+      event.preventDefault();
+      state.recorder.suppressNextClick = true;
+      startPromise.then(() => stopRecordingAndSend()).catch(() => {});
+      return;
+    }
+
+    if (!state.recorder.recording) {
+      syncSendButtonState();
+      return;
+    }
     event.preventDefault();
     state.recorder.suppressNextClick = true;
     stopRecordingAndSend().catch((error) => {
@@ -2102,10 +2128,73 @@
     });
   }
 
+  function handleSendPointerCancel(event) {
+    if (!matchesRecorderPointer(event)) return;
+    getDom().sendBtn?.blur?.();
+    releaseRecorderPointer(event.pointerId);
+    state.recorder.pointerId = null;
+    if (state.recorder.holdTimer) {
+      cancelPendingHold();
+      event.preventDefault();
+      return;
+    }
+    if (!state.recorder.recording && state.recorder.startPromise) {
+      const startPromise = state.recorder.startPromise;
+      event.preventDefault();
+      startPromise.then(() => cancelActiveRecording()).catch(() => {});
+      return;
+    }
+    if (!state.recorder.recording) return;
+    event.preventDefault();
+    cancelActiveRecording().catch((error) => {
+      setRecorderMessage(error.message || 'Could not cancel voice message', 'error');
+    });
+  }
+
+  function handleDocumentSendPointerUp(event) {
+    if (!matchesRecorderPointer(event)) return;
+    if (isSendButtonEventTarget(event)) return;
+    handleSendPointerUp(event);
+  }
+
+  function handleDocumentSendPointerCancel(event) {
+    if (!matchesRecorderPointer(event)) return;
+    if (isSendButtonEventTarget(event)) return;
+    handleSendPointerCancel(event);
+  }
+
+  function isSendButtonEventTarget(event) {
+    const sendBtn = getDom().sendBtn;
+    return Boolean(sendBtn && (event?.target === sendBtn || sendBtn.contains?.(event?.target)));
+  }
+
+  function matchesRecorderPointer(event) {
+    if (!state.recorder.holdTimer && !state.recorder.recording && !state.recorder.startPromise) return false;
+    if (state.recorder.pointerId == null) return true;
+    return Number(event?.pointerId) === Number(state.recorder.pointerId);
+  }
+
+  function captureRecorderPointer(target, pointerId) {
+    if (pointerId == null || !target?.setPointerCapture) return;
+    try {
+      target.setPointerCapture(pointerId);
+    } catch {}
+  }
+
+  function releaseRecorderPointer(pointerId) {
+    const sendBtn = getDom().sendBtn;
+    if (pointerId == null || !sendBtn?.releasePointerCapture) return;
+    try {
+      sendBtn.releasePointerCapture(pointerId);
+    } catch {}
+  }
+
   function cancelPendingHold() {
     if (!state.recorder.holdTimer) return;
     clearTimeout(state.recorder.holdTimer);
     state.recorder.holdTimer = null;
+    state.recorder.pointerId = null;
+    syncSendButtonState();
   }
 
   async function startRecording() {

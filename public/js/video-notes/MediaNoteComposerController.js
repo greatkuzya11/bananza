@@ -6,6 +6,22 @@
   const STORAGE_KEY = 'bananza-media-note-mode';
   const HOLD_DELAY_MS = 1000;
   const CLICK_SUPPRESS_MS = 500;
+  const EXPANDED_HIT_SLOP_MOUSE_PX = 8;
+  const EXPANDED_HIT_SLOP_TOUCH_PX = 18;
+  const START_EXCLUSION_SELECTOR = [
+    '#msgInput',
+    '.composer-input-wrap',
+    '#attachBtn',
+    '#pollBtn',
+    '#emojiBtn',
+    '#mentionOpenBtn',
+    '#composerContextConvertBtn',
+    '.scroll-bottom-btn',
+    'input',
+    'textarea',
+    'select',
+    '[contenteditable="true"]',
+  ].join(',');
   const MODAL_ANIMATION_SPEED_FACTORS = Object.freeze({
     1: 4.5,
     2: 4.0,
@@ -38,6 +54,9 @@
       this.mode = 'audio';
       try { localStorage.removeItem(STORAGE_KEY); } catch {}
       this.holdTimer = null;
+      this.holdDelayMs = HOLD_DELAY_MS;
+      this.expandedHitSlopMousePx = EXPANDED_HIT_SLOP_MOUSE_PX;
+      this.expandedHitSlopTouchPx = EXPANDED_HIT_SLOP_TOUCH_PX;
       this.pointerId = null;
       this.touchIdentifier = null;
       this.activeGestureSource = '';
@@ -158,8 +177,12 @@
       sendBtn.addEventListener('pointercancel', (event) => this.handlePointerCancel(event), { passive: false });
       sendBtn.addEventListener('touchstart', (event) => this.handleTouchStart(event), { passive: false });
 
-      document.addEventListener('touchend', (event) => this.handleTouchEnd(event), { passive: false });
-      document.addEventListener('touchcancel', (event) => this.handleTouchCancel(event), { passive: false });
+      document.addEventListener('pointerdown', (event) => this.handleDocumentPointerDown(event), { passive: false, capture: true });
+      document.addEventListener('pointerup', (event) => this.handleDocumentPointerUp(event), { passive: false, capture: true });
+      document.addEventListener('pointercancel', (event) => this.handleDocumentPointerCancel(event), { passive: false, capture: true });
+      document.addEventListener('touchstart', (event) => this.handleDocumentTouchStart(event), { passive: false, capture: true });
+      document.addEventListener('touchend', (event) => this.handleTouchEnd(event), { passive: false, capture: true });
+      document.addEventListener('touchcancel', (event) => this.handleTouchCancel(event), { passive: false, capture: true });
       this.getBridge()?.onLanguageChange?.(() => this.refreshComposerState());
       window.addEventListener('bananza:languagechange', () => this.refreshComposerState());
 
@@ -248,6 +271,131 @@
       return Math.max(0, Math.round(baseDuration * factor));
     }
 
+    getSendButton() {
+      return this.getBridge()?.getDom?.()?.sendBtn || null;
+    }
+
+    getGesturePoint(event) {
+      const touch = event?.changedTouches?.[0] || event?.touches?.[0] || null;
+      const source = touch || event || {};
+      const clientX = Number(source.clientX);
+      const clientY = Number(source.clientY);
+      if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
+      return { clientX, clientY };
+    }
+
+    getGestureKind(event) {
+      if (event?.changedTouches || event?.touches) return 'touch';
+      return String(event?.pointerType || 'mouse').toLowerCase();
+    }
+
+    getExpandedHitSlop(event) {
+      const kind = this.getGestureKind(event);
+      if (kind === 'touch' || kind === 'pen') return this.expandedHitSlopTouchPx;
+      return this.expandedHitSlopMousePx;
+    }
+
+    isPointInsideRect(point, rect, slop = 0) {
+      if (!point || !rect) return false;
+      const left = Number(rect.left);
+      const right = Number(rect.right);
+      const top = Number(rect.top);
+      const bottom = Number(rect.bottom);
+      if (![left, right, top, bottom].every(Number.isFinite)) return false;
+      return (
+        point.clientX >= left - slop
+        && point.clientX <= right + slop
+        && point.clientY >= top - slop
+        && point.clientY <= bottom + slop
+      );
+    }
+
+    isPointInsideSendButton(event, sendBtn) {
+      return this.isPointInsideRect(this.getGesturePoint(event), sendBtn?.getBoundingClientRect?.(), 0);
+    }
+
+    isPointInsideExpandedSendButton(event, sendBtn) {
+      return this.isPointInsideRect(
+        this.getGesturePoint(event),
+        sendBtn?.getBoundingClientRect?.(),
+        this.getExpandedHitSlop(event)
+      );
+    }
+
+    isProtectedStartTarget(target, sendBtn) {
+      if (!target || typeof target.closest !== 'function') return false;
+      if (sendBtn && (target === sendBtn || sendBtn.contains?.(target))) return false;
+      const button = target.closest('button');
+      if (button && button !== sendBtn) return true;
+      return Boolean(target.closest(START_EXCLUSION_SELECTOR));
+    }
+
+    getUnderlyingStartTarget(event, sendBtn) {
+      const point = this.getGesturePoint(event);
+      if (!point || !sendBtn || typeof document.elementFromPoint !== 'function') return null;
+      const previousPointerEvents = sendBtn.style.pointerEvents;
+      try {
+        sendBtn.style.pointerEvents = 'none';
+        return document.elementFromPoint(point.clientX, point.clientY);
+      } catch {
+        return null;
+      } finally {
+        sendBtn.style.pointerEvents = previousPointerEvents;
+      }
+    }
+
+    isProtectedExpandedStart(event, sendBtn) {
+      if (this.isProtectedStartTarget(event?.target, sendBtn)) return true;
+      if (!sendBtn || !(event?.target === sendBtn || sendBtn.contains?.(event?.target))) return false;
+      if (this.isPointInsideSendButton(event, sendBtn)) return false;
+      return this.isProtectedStartTarget(this.getUnderlyingStartTarget(event, sendBtn), sendBtn);
+    }
+
+    canStartPointerGestureFromEvent(event, { allowButtonTarget = false } = {}) {
+      if (typeof event?.button === 'number' && event.button !== 0) return false;
+      const sendBtn = this.getSendButton();
+      if (!sendBtn) return false;
+      const isSendButtonTarget = event?.target === sendBtn || sendBtn.contains?.(event?.target);
+      if (isSendButtonTarget && !allowButtonTarget) return false;
+      if (!isSendButtonTarget && !this.isPointInsideExpandedSendButton(event, sendBtn)) return false;
+      return !this.isProtectedExpandedStart(event, sendBtn);
+    }
+
+    canStartTouchGestureFromEvent(event, { allowButtonTarget = false } = {}) {
+      if ((event?.touches?.length || 0) > 1) return false;
+      const sendBtn = this.getSendButton();
+      if (!sendBtn) return false;
+      const isSendButtonTarget = event?.target === sendBtn || sendBtn.contains?.(event?.target);
+      if (isSendButtonTarget && !allowButtonTarget) return false;
+      if (!isSendButtonTarget && !this.isPointInsideExpandedSendButton(event, sendBtn)) return false;
+      return !this.isProtectedExpandedStart(event, sendBtn);
+    }
+
+    capturePointer(sendBtn, pointerId) {
+      if (pointerId == null || !sendBtn?.setPointerCapture) return;
+      try {
+        sendBtn.setPointerCapture(pointerId);
+      } catch {}
+    }
+
+    releasePointer(sendBtn, pointerId) {
+      if (pointerId == null || !sendBtn?.releasePointerCapture) return;
+      try {
+        sendBtn.releasePointerCapture(pointerId);
+      } catch {}
+    }
+
+    matchesActivePointer(event) {
+      if (this.activeGestureSource !== 'pointer') return false;
+      if (this.pointerId == null) return true;
+      return Number(event?.pointerId) === Number(this.pointerId);
+    }
+
+    isSendButtonEventTarget(event) {
+      const sendBtn = this.getSendButton();
+      return Boolean(sendBtn && (event?.target === sendBtn || sendBtn.contains?.(event?.target)));
+    }
+
     playModeSwitchAnimation() {
       const sendBtn = this.getBridge()?.getDom?.()?.sendBtn;
       if (!sendBtn) return;
@@ -273,7 +421,7 @@
       if (this.holdTimer || this.activeMode || this.activeGestureSource || this.activeRecorderStartPromise) return false;
       if (!this.canUseGesture()) return false;
 
-      const sendBtn = this.getBridge()?.getDom?.()?.sendBtn;
+      const sendBtn = this.getSendButton();
       sendBtn?.blur?.();
       this.pointerId = pointerId;
       this.touchIdentifier = touchIdentifier;
@@ -282,7 +430,7 @@
       this.setHoldArmed(true);
 
       if (source === 'pointer' && pointerId != null) {
-        sendBtn?.setPointerCapture?.(pointerId);
+        this.capturePointer(sendBtn, pointerId);
       }
 
       this.holdTimer = window.setTimeout(() => {
@@ -296,15 +444,15 @@
           this.resetGestureSession();
           window.BananzaVoiceHooks?.setRecorderMessage?.(error.message || this.t(TEXT.startError), 'error');
         });
-      }, HOLD_DELAY_MS);
+      }, this.holdDelayMs);
 
       event?.preventDefault?.();
       return true;
     }
 
     handlePointerDown(event) {
-      if (typeof event.button === 'number' && event.button !== 0) return;
       if (this.shouldIgnorePointerEvent(event)) return;
+      if (!this.canStartPointerGestureFromEvent(event, { allowButtonTarget: true })) return;
       this.beginHoldGesture({
         event,
         source: 'pointer',
@@ -314,7 +462,32 @@
 
     handleTouchStart(event) {
       if (!this.isIosGestureTarget()) return;
-      if ((event.touches?.length || 0) > 1) return;
+      if (!this.canStartTouchGestureFromEvent(event, { allowButtonTarget: true })) return;
+      const touch = event.changedTouches?.[0];
+      if (!touch) return;
+      this.ignoreSyntheticPointerUntil = Date.now() + 900;
+      this.beginHoldGesture({
+        event,
+        source: 'touch',
+        touchIdentifier: touch.identifier,
+      });
+    }
+
+    handleDocumentPointerDown(event) {
+      if (this.activeGestureSource || this.holdTimer || this.activeMode || this.activeRecorderStartPromise) return;
+      if (this.shouldIgnorePointerEvent(event)) return;
+      if (!this.canStartPointerGestureFromEvent(event, { allowButtonTarget: false })) return;
+      this.beginHoldGesture({
+        event,
+        source: 'pointer',
+        pointerId: event.pointerId,
+      });
+    }
+
+    handleDocumentTouchStart(event) {
+      if (!this.isIosGestureTarget()) return;
+      if (this.activeGestureSource || this.holdTimer || this.activeMode || this.activeRecorderStartPromise) return;
+      if (!this.canStartTouchGestureFromEvent(event, { allowButtonTarget: false })) return;
       const touch = event.changedTouches?.[0];
       if (!touch) return;
       this.ignoreSyntheticPointerUntil = Date.now() + 900;
@@ -355,13 +528,27 @@
 
     handlePointerUp(event) {
       if (this.shouldIgnorePointerEvent(event)) return;
+      if (!this.matchesActivePointer(event)) return;
       if (this.activeGestureSource && this.activeGestureSource !== 'pointer') return;
       this.finishGesture({ event, pointerId: event.pointerId, cancelOnly: false });
     }
 
     handlePointerCancel(event) {
       if (this.shouldIgnorePointerEvent(event)) return;
+      if (!this.matchesActivePointer(event)) return;
       if (this.activeGestureSource && this.activeGestureSource !== 'pointer') return;
+      this.finishGesture({ event, pointerId: event.pointerId, cancelOnly: true });
+    }
+
+    handleDocumentPointerUp(event) {
+      if (!this.matchesActivePointer(event)) return;
+      if (this.isSendButtonEventTarget(event)) return;
+      this.finishGesture({ event, pointerId: event.pointerId, cancelOnly: false });
+    }
+
+    handleDocumentPointerCancel(event) {
+      if (!this.matchesActivePointer(event)) return;
+      if (this.isSendButtonEventTarget(event)) return;
       this.finishGesture({ event, pointerId: event.pointerId, cancelOnly: true });
     }
 
@@ -380,8 +567,8 @@
     }
 
     finishGesture({ event, pointerId = null, cancelOnly = false } = {}) {
-      const sendBtn = this.getBridge()?.getDom?.()?.sendBtn;
-      if (pointerId != null) sendBtn?.releasePointerCapture?.(pointerId);
+      const sendBtn = this.getSendButton();
+      this.releasePointer(sendBtn, pointerId != null ? pointerId : this.pointerId);
       sendBtn?.blur?.();
 
       if (this.holdTimer) {

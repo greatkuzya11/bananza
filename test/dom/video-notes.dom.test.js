@@ -19,6 +19,99 @@ const VIDEO_NOTE_SCRIPTS = [
   'public/js/video-notes/VideoNoteFeature.js',
 ];
 
+function createPointerEvent(window, type, {
+  pointerType = 'mouse',
+  pointerId = 1,
+  button = 0,
+  clientX = 0,
+  clientY = 0,
+} = {}) {
+  const event = new window.Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperties(event, {
+    pointerType: { configurable: true, value: pointerType },
+    pointerId: { configurable: true, value: pointerId },
+    button: { configurable: true, value: button },
+    clientX: { configurable: true, value: clientX },
+    clientY: { configurable: true, value: clientY },
+  });
+  return event;
+}
+
+function waitForWindowTimer(window) {
+  return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
+
+function setupMediaNoteController({ holdDelayMs = 1000 } = {}) {
+  const dom = createAppDom();
+  const bridge = installAppBridge(dom);
+  loadBrowserScript(dom, 'public/js/video-notes/MediaNoteComposerController.js');
+
+  const sendBtn = dom.window.document.getElementById('sendBtn');
+  sendBtn.classList.add('voice-enabled', 'is-mic-mode');
+
+  dom.window.BananzaVoiceHooks = {
+    getFeatures() {
+      return {
+        __loaded: true,
+        voice_notes_enabled: true,
+        video_notes_enabled: true,
+      };
+    },
+  };
+
+  const calls = {
+    audioStart: 0,
+    audioStop: 0,
+    audioCancel: 0,
+  };
+  let audioRecording = false;
+
+  const audioAdapter = {
+    canUseGesture() {
+      return true;
+    },
+    isRecording() {
+      return audioRecording;
+    },
+    async start() {
+      calls.audioStart += 1;
+      audioRecording = true;
+    },
+    async stopAndSend() {
+      calls.audioStop += 1;
+      audioRecording = false;
+    },
+    async cancel() {
+      calls.audioCancel += 1;
+      audioRecording = false;
+    },
+  };
+  const videoRecorder = {
+    isRecording() {
+      return false;
+    },
+  };
+
+  const controller = new dom.window.BananzaVideoNotes.MediaNoteComposerController({
+    bridge,
+    audioAdapter,
+    videoRecorder,
+  });
+  controller.holdDelayMs = holdDelayMs;
+  controller.init();
+
+  return {
+    dom,
+    bridge,
+    controller,
+    sendBtn,
+    msgInput: dom.window.document.getElementById('msgInput'),
+    inputArea: dom.window.document.querySelector('.input-area'),
+    calls,
+    isAudioRecording: () => audioRecording,
+  };
+}
+
 test('video note scripts bootstrap namespaces and bridge hooks in index order', () => {
   const dom = createAppDom();
   installAppBridge(dom);
@@ -44,6 +137,85 @@ test('video note scripts bootstrap namespaces and bridge hooks in index order', 
   assert.equal(dom.window.BananzaMediaNoteHooks.ownsComposer(), true);
   assert.equal(typeof dom.window.BananzaVideoNoteHooks.renderAttachment, 'function');
   assert.ok(voiceRefreshCalls >= 1);
+});
+
+test('media note hold stays armed after pointerleave and finishes on document pointerup', () => {
+  const { dom, controller, sendBtn } = setupMediaNoteController();
+
+  sendBtn.dispatchEvent(createPointerEvent(dom.window, 'pointerdown', { pointerId: 7 }));
+  assert.equal(sendBtn.classList.contains('is-hold-armed'), true);
+
+  sendBtn.dispatchEvent(createPointerEvent(dom.window, 'pointerleave', { pointerId: 7 }));
+  assert.equal(sendBtn.classList.contains('is-hold-armed'), true);
+
+  dom.window.document.dispatchEvent(createPointerEvent(dom.window, 'pointerup', { pointerId: 7 }));
+  assert.equal(sendBtn.classList.contains('is-hold-armed'), false);
+  assert.equal(controller.mode, 'video');
+});
+
+test('media note long hold stops and sends when pointerup lands outside the button', async () => {
+  const { dom, sendBtn, calls, isAudioRecording } = setupMediaNoteController({ holdDelayMs: 0 });
+
+  sendBtn.dispatchEvent(createPointerEvent(dom.window, 'pointerdown', { pointerId: 8 }));
+  await waitForWindowTimer(dom.window);
+  assert.equal(calls.audioStart, 1);
+  assert.equal(isAudioRecording(), true);
+
+  dom.window.document.body.dispatchEvent(createPointerEvent(dom.window, 'pointerup', { pointerId: 8 }));
+  await waitForWindowTimer(dom.window);
+  assert.equal(calls.audioStop, 1);
+  assert.equal(isAudioRecording(), false);
+});
+
+test('media note pointercancel cancels pending and active hold gestures', async () => {
+  {
+    const { dom, sendBtn, calls } = setupMediaNoteController();
+    sendBtn.dispatchEvent(createPointerEvent(dom.window, 'pointerdown', { pointerId: 9 }));
+    dom.window.document.body.dispatchEvent(createPointerEvent(dom.window, 'pointercancel', { pointerId: 9 }));
+    assert.equal(sendBtn.classList.contains('is-hold-armed'), false);
+    assert.equal(calls.audioStart, 0);
+  }
+
+  {
+    const { dom, sendBtn, calls, isAudioRecording } = setupMediaNoteController({ holdDelayMs: 0 });
+    sendBtn.dispatchEvent(createPointerEvent(dom.window, 'pointerdown', { pointerId: 10 }));
+    await waitForWindowTimer(dom.window);
+    assert.equal(calls.audioStart, 1);
+    assert.equal(isAudioRecording(), true);
+
+    dom.window.document.body.dispatchEvent(createPointerEvent(dom.window, 'pointercancel', { pointerId: 10 }));
+    await waitForWindowTimer(dom.window);
+    assert.equal(calls.audioCancel, 1);
+    assert.equal(isAudioRecording(), false);
+  }
+});
+
+test('media note expanded start zone avoids the message input', () => {
+  const { dom, sendBtn, msgInput, inputArea } = setupMediaNoteController();
+  sendBtn.getBoundingClientRect = () => ({
+    left: 100,
+    top: 100,
+    right: 144,
+    bottom: 144,
+    width: 44,
+    height: 44,
+  });
+
+  msgInput.dispatchEvent(createPointerEvent(dom.window, 'pointerdown', {
+    pointerId: 11,
+    clientX: 96,
+    clientY: 122,
+  }));
+  assert.equal(sendBtn.classList.contains('is-hold-armed'), false);
+
+  inputArea.dispatchEvent(createPointerEvent(dom.window, 'pointerdown', {
+    pointerId: 12,
+    clientX: 152,
+    clientY: 122,
+  }));
+  assert.equal(sendBtn.classList.contains('is-hold-armed'), true);
+
+  dom.window.document.body.dispatchEvent(createPointerEvent(dom.window, 'pointercancel', { pointerId: 12 }));
 });
 
 test('video note admin settings adds separate admin entry and loads form values', async () => {
