@@ -376,4 +376,19 @@ test('full app runtime still publishes bridge, testing API and bananza ready', a
   assert.ok(window.BananzaAppBridge.__testing);
   assert.equal(window.document.documentElement.classList.contains('is-ios-webkit'), true);
   assert.equal(typeof window.BananzaAppBridge.__testing.getMobileKeyboardDockSnapshot, 'function');
+  assert.equal(typeof window.BananzaAppBridge.recoverChatViewportLayout, 'function');
+  const msgInput = window.document.getElementById('msgInput');
+  msgInput.focus();
+  assert.equal(window.document.activeElement, msgInput);
+  window.document.documentElement.classList.add(
+    'is-mobile-keyboard-open',
+    'is-mobile-chat-keyboard-layout',
+    'is-ios-keyboard-open',
+    'is-ios-chat-keyboard-layout'
+  );
+  assert.equal(window.BananzaAppBridge.recoverChatViewportLayout({ reason: 'call_prejoin_open' }), true);
+  assert.equal(window.document.documentElement.dataset.mobileScene, 'chat');
+  assert.equal(window.document.documentElement.classList.contains('is-mobile-chat-keyboard-layout'), false);
+  assert.equal(window.document.documentElement.classList.contains('is-ios-chat-keyboard-layout'), false);
+  assert.notEqual(window.document.activeElement, msgInput);
 });

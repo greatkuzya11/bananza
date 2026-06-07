@@ -93,6 +93,16 @@
     bridge()?.applyLocalizedDom?.(root);
   }
 
+  function recoverHostChatViewport(reason) {
+    if (state.externalMode) return;
+    try {
+      bridge()?.recoverChatViewportLayout?.({ reason });
+    } catch {}
+    const syncMiniPosition = () => applyMinimizedCardPosition();
+    if (window.requestAnimationFrame) window.requestAnimationFrame(syncMiniPosition);
+    else window.setTimeout(syncMiniPosition, 0);
+  }
+
   function escapeHtml(value) {
     const div = document.createElement('div');
     div.textContent = String(value ?? '');
@@ -886,8 +896,13 @@
     const meta = document.getElementById('callBannerMeta');
     if (!banner || !title || !meta) return;
     const call = state.activeCalls.get(currentChatId());
-    banner.classList.toggle('hidden', !call || !state.settings.calls_enabled);
-    if (!call) return;
+    const prejoinOpen = Boolean(
+      state.pendingJoinCall?.id
+      || !document.getElementById('callPrejoin')?.classList.contains('hidden')
+    );
+    const alreadyInside = Boolean(call && isCurrentCall(call) && state.room);
+    banner.classList.toggle('hidden', !call || !state.settings.calls_enabled || prejoinOpen || alreadyInside);
+    if (!call || prejoinOpen || alreadyInside) return;
     title.textContent = isVoiceRoom(call)
       ? t('Voice room active')
       : (isVoiceCall(call) ? t('Voice call active') : t('Call in progress'));
@@ -897,7 +912,6 @@
       : t('Waiting');
     const join = document.getElementById('callBannerJoin');
     if (join) {
-      const alreadyInside = Boolean(isCurrentCall(call) && state.room);
       join.textContent = alreadyInside ? t('Open') : (isVoiceRoom(call) ? t('Join voice room') : t('Join call'));
       join.disabled = Boolean(state.joining && !alreadyInside);
     }
@@ -982,6 +996,7 @@
         roomMode: kind === 'voice' && currentChat()?.type === 'group' ? 'room' : 'ringing',
       });
       upsertCall(nextCall);
+      if (kind !== 'voice') state.pendingJoinCall = nextCall;
       renderAll();
       if (kind === 'voice') await joinVoiceCallDirectly(nextCall);
       else await openPrejoin(nextCall);
@@ -1240,10 +1255,17 @@
   }
 
   function handleMinimizedCardClick(event) {
-    if (Date.now() > state.minimizedSuppressClickUntil) return;
+    if (!state.minimized) return;
+    if (Date.now() <= state.minimizedSuppressClickUntil) {
+      state.minimizedSuppressClickUntil = 0;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
     state.minimizedSuppressClickUntil = 0;
     event.preventDefault();
     event.stopImmediatePropagation();
+    toggleMinimized();
   }
 
   function handleMinimizedCardContextMenu(event) {
@@ -1373,9 +1395,11 @@
   async function openPrejoin(call, options = {}) {
     if (!call?.id) return;
     ensureUi();
+    recoverHostChatViewport('call_prejoin_open');
     state.pendingJoinCall = call;
     state.prejoinMode = options.mode || 'join';
     state.prejoinEnding = false;
+    if (!state.externalMode) renderBanner();
     const voiceMode = isVoiceCall(call);
     if (voiceMode) state.prejoinCameraEnabled = false;
     if (!options.keepIncoming) {
@@ -1420,6 +1444,7 @@
     document.getElementById('callPrejoin')?.classList.add('hidden');
     document.getElementById('callPrejoin')?.classList.remove('is-voice-call');
     document.getElementById('callSurface')?.classList.remove('is-behind-prejoin');
+    if (!state.externalMode) renderBanner();
     renderPrejoinControls();
   }
 
@@ -2231,6 +2256,7 @@
     renderMinimizeButton();
     renderSurfaceControls();
     renderParticipantsPanel();
+    if (state.minimized) recoverHostChatViewport('call_minimized');
   }
 
   function toggleParticipantsPanel() {
@@ -2266,6 +2292,7 @@
     state.currentCall = null;
     clearSurfaceDuration();
     document.getElementById('callSurface')?.classList.add('hidden');
+    recoverHostChatViewport(endForEveryone ? 'call_ended' : 'call_left');
     await loadActiveCalls().catch(() => {});
   }
 

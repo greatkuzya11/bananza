@@ -38,6 +38,7 @@ function dispatchPointer(window, target, type, init = {}) {
 function installCallBridge(dom, state) {
   const { document, window } = dom.window;
   state.requests = [];
+  state.viewportRecoveries = [];
   window.BananzaAppBridge = {
     api: async (url, opts = {}) => {
       state.requests.push({ url, opts });
@@ -133,6 +134,9 @@ function installCallBridge(dom, state) {
     getCurrentUser: () => state.user,
     openManagedModal: (id) => document.getElementById(id)?.classList.remove('hidden'),
     registerManagedModal: () => {},
+    recoverChatViewportLayout: (options = {}) => {
+      state.viewportRecoveries.push(options);
+    },
     t: (key, params = {}) => window.BananzaI18n?.t?.(key, params) || key,
   };
 }
@@ -154,6 +158,7 @@ async function bootExternalCallFeature(state) {
   const dom = createAppDom();
   const { window } = dom;
   state.requests = [];
+  state.viewportRecoveries = [];
   window.BananzaExternalCall = { inviteToken: state.inviteToken || 'external-token' };
   window.BananzaAppBridge = {
     api: async (url, opts = {}) => {
@@ -190,6 +195,9 @@ async function bootExternalCallFeature(state) {
     getCurrentChatId: () => 0,
     getCurrentUser: () => null,
     refreshCallIndicators: () => {},
+    recoverChatViewportLayout: (options = {}) => {
+      state.viewportRecoveries.push(options);
+    },
     syncChatHeaderActions: () => {},
     t: (key, params = {}) => window.BananzaI18n?.t?.(key, params) || key,
   };
@@ -474,8 +482,10 @@ test('CallFeature lets the call initiator end a call from video prejoin', async 
   t.after(() => dom.window.close());
 
   dom.window.BananzaCallHooks.handleWSMessage({ type: 'call_updated', call: state.chatCall });
+  assert.equal(dom.window.document.getElementById('callBanner').classList.contains('hidden'), false);
   dom.window.document.getElementById('callBannerJoin').click();
   await waitForCondition(dom.window, () => !dom.window.document.getElementById('callPrejoin').classList.contains('hidden'));
+  assert.equal(dom.window.document.getElementById('callBanner').classList.contains('hidden'), true);
 
   const endBtn = dom.window.document.getElementById('callPrejoinEndBtn');
   assert.equal(endBtn.classList.contains('hidden'), false);
@@ -513,13 +523,17 @@ test('CallFeature hides prejoin end button for non-initiators and device selecti
   t.after(() => dom.window.close());
 
   dom.window.BananzaCallHooks.handleWSMessage({ type: 'call_updated', call: state.chatCall });
+  assert.equal(dom.window.document.getElementById('callBanner').classList.contains('hidden'), false);
   dom.window.document.getElementById('callBannerJoin').click();
   await waitForCondition(dom.window, () => !dom.window.document.getElementById('callPrejoin').classList.contains('hidden'));
+  assert.equal(dom.window.document.getElementById('callBanner').classList.contains('hidden'), true);
   assert.equal(dom.window.document.getElementById('callPrejoinEndBtn').classList.contains('hidden'), true);
 
   dom.window.document.getElementById('callPrejoinCancelBtn').click();
+  assert.equal(dom.window.document.getElementById('callBanner').classList.contains('hidden'), false);
   state.chatCall = { ...state.chatCall, started_by: state.user.id };
   await dom.window.BananzaCallHooks.openPrejoin(state.chatCall, { mode: 'devices' });
+  assert.equal(dom.window.document.getElementById('callBanner').classList.contains('hidden'), true);
   assert.equal(dom.window.document.getElementById('callPrejoinEndBtn').classList.contains('hidden'), true);
 });
 
@@ -549,6 +563,10 @@ test('CallFeature external mode requires guest name and hides internal-only cont
   assert.equal(dom.window.document.getElementById('callSurface').classList.contains('hidden'), false);
   assert.equal(dom.window.document.getElementById('callEndBtn').classList.contains('hidden'), true);
   assert.equal(dom.window.document.getElementById('callAiNotesBtn').classList.contains('hidden'), true);
+
+  dom.window.document.getElementById('callLeaveBtn').click();
+  await waitForCondition(dom.window, () => Boolean(state.leftPayload));
+  assert.deepEqual(state.viewportRecoveries, []);
 });
 
 test('CallFeature treats partial prejoin media success as usable preview state', async (t) => {
@@ -684,6 +702,8 @@ test('CallFeature joins and leaves a mocked LiveKit room', async (t) => {
 
   dom.window.document.getElementById('callBannerJoin').click();
   await waitForCondition(dom.window, () => !dom.window.document.getElementById('callPrejoin').classList.contains('hidden'));
+  assert.equal(banner.classList.contains('hidden'), true);
+  assert.deepEqual(state.viewportRecoveries.map((item) => item.reason), ['call_prejoin_open']);
   const prejoinMic = dom.window.document.getElementById('callPrejoinMicBtn');
   const prejoinCamera = dom.window.document.getElementById('callPrejoinCameraBtn');
   assert.equal(prejoinMic.textContent.trim(), '');
@@ -697,6 +717,7 @@ test('CallFeature joins and leaves a mocked LiveKit room', async (t) => {
   await waitForCondition(dom.window, () => connected);
   await waitForCondition(dom.window, () => state.requests.some((request) => request.url === '/api/calls/92/joined'));
   assert.equal(dom.window.document.getElementById('callSurface').classList.contains('hidden'), false);
+  assert.equal(banner.classList.contains('hidden'), true);
   assert.equal(dom.window.document.getElementById('callMicBtn').textContent.trim(), '');
   assert.ok(dom.window.document.getElementById('callCameraBtn').querySelector('.call-icon'));
   assert.equal(dom.window.document.querySelector('.call-tile-placeholder')?.textContent.trim(), '🍌');
@@ -714,6 +735,7 @@ test('CallFeature joins and leaves a mocked LiveKit room', async (t) => {
 
   dom.window.document.getElementById('callMinimizeBtn').click();
   await waitForCondition(dom.window, () => dom.window.document.getElementById('callSurface').classList.contains('is-minimized'));
+  assert.deepEqual(state.viewportRecoveries.map((item) => item.reason), ['call_prejoin_open', 'call_minimized']);
   assert.equal(dom.window.document.getElementById('callParticipantsBtn').classList.contains('hidden'), true);
   assert.equal(dom.window.document.getElementById('callParticipantsPanel').classList.contains('hidden'), true);
   const surface = dom.window.document.getElementById('callSurface');
@@ -732,13 +754,15 @@ test('CallFeature joins and leaves a mocked LiveKit room', async (t) => {
   assert.equal(surface.style.getPropertyValue('--call-mini-x'), '128px');
   assert.equal(surface.style.getPropertyValue('--call-mini-y'), '316px');
   await waitForMs(dom.window, 240);
-  dom.window.document.getElementById('callMinimizeBtn').click();
+  surfaceCard.click();
   await waitForCondition(dom.window, () => !dom.window.document.getElementById('callSurface').classList.contains('is-minimized'));
   assert.equal(dom.window.document.getElementById('callParticipantsBtn').classList.contains('hidden'), false);
 
   dom.window.document.getElementById('callLeaveBtn').click();
   await waitForCondition(dom.window, () => disconnected);
   assert.ok(state.requests.some((request) => request.url === '/api/calls/92/leave'));
+  await waitForCondition(dom.window, () => state.viewportRecoveries.length === 3);
+  assert.deepEqual(state.viewportRecoveries.map((item) => item.reason), ['call_prejoin_open', 'call_minimized', 'call_left']);
 });
 
 test('CallFeature shows live call duration from started_at in the surface header', async (t) => {

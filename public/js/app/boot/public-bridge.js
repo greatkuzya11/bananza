@@ -10,6 +10,7 @@
       getToken: () => ctx?.services?.auth?.getToken?.() || '',
       getCurrentUser: () => ctx?.services?.auth?.getCurrentUser?.() || null,
       getCurrentChatId: () => ctx?.state?.getCurrentChatId?.() || ctx?.state?.currentChatId || null,
+      recoverChatViewportLayout: (options) => ctx?.actions?.recoverChatViewportLayout?.(options) || false,
     };
     return root.createBridge
       ? root.createBridge(ctx, coreApi)
@@ -60,6 +61,53 @@
         applyLocalizedDom: (root) => i18n?.applyStaticDom?.(root || document),
         refreshCallIndicators: () => {
           if (chatList) renderChatList(chatSearch?.value || '');
+        },
+        recoverChatViewportLayout: (options = {}) => {
+          if (isMobileLayoutViewport()) {
+            const root = document.documentElement;
+            const reason = String(options?.reason || '');
+            const isCallRecovery = reason === 'call_prejoin_open'
+              || reason === 'call_minimized'
+              || reason === 'call_left'
+              || reason === 'call_ended';
+            const visualViewport = window.visualViewport || null;
+            const visualBottom = Math.max(0, Number(visualViewport?.offsetTop || 0) + Number(visualViewport?.height || 0));
+            const layoutHeight = Math.max(
+              0,
+              Number(window.innerHeight || 0),
+              Number(document.documentElement?.clientHeight || 0)
+            );
+            const keyboardProbablyClosed = !visualViewport || !layoutHeight || (layoutHeight - visualBottom) <= 80;
+            if (isCallRecovery && keyboardProbablyClosed && typeof dismissMobileComposer === 'function') {
+              dismissMobileComposer({ forceRecovery: false, reason });
+            }
+            const keyboardLayoutActive = typeof isMobileChatKeyboardLayoutActive === 'function'
+              ? Boolean(isMobileChatKeyboardLayoutActive())
+              : false;
+            if (!keyboardLayoutActive || (isCallRecovery && keyboardProbablyClosed)) {
+              if (typeof resetMobileKeyboardDock === 'function') resetMobileKeyboardDock();
+              root?.classList?.remove(
+                'is-mobile-keyboard-open',
+                'is-mobile-chat-keyboard-layout',
+                'is-ios-keyboard-open',
+                'is-ios-chat-keyboard-layout'
+              );
+            }
+            if (typeof syncMobileViewportLayoutState === 'function') syncMobileViewportLayoutState();
+            if (typeof renderPinnedBar === 'function') renderPinnedBar(currentChatId);
+            syncMobileBaseSceneState({
+              scene: 'chat',
+              hideInactive: true,
+              syncChatMetrics: true,
+              repaint: true,
+            });
+            forceMobileViewportLayoutSync();
+            syncChatAreaMetrics({ force: true });
+            scheduleMobileViewportRecovery(80);
+            return true;
+          }
+          syncChatAreaMetrics({ force: true });
+          return false;
         },
         getPendingFiles: () => composerStateController.getPendingFiles(),
         getReplyTo: () => composerStateController.getReplyTo(),
