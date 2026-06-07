@@ -12,6 +12,8 @@
   const EXTERNAL_CONFIG = window.BananzaExternalCall || null;
   const MINIMIZED_DRAG_HOLD_MS = 260;
   const MINIMIZED_DRAG_MARGIN = 12;
+  const CALL_LAYOUT_FIT_ALL = 'fit-all';
+  const CALL_LAYOUT_ADAPTIVE = 'adaptive';
 
   const state = {
     ready: false,
@@ -66,6 +68,8 @@
     localMediaOptions: null,
     roomConnectionState: '',
     roomConnectedAt: 0,
+    layoutMode: STORE.loadLayoutMode?.() || CALL_LAYOUT_FIT_ALL,
+    fitLayoutFrame: 0,
     videoFillTiles: new Set(),
     videoCollapsedTiles: new Set(),
     subscriptionChangingTiles: new Set(),
@@ -596,6 +600,10 @@
               <div class="call-debug-log" id="callDebugLog"></div>
             </div>
             <div class="call-inline-actions">
+              <button type="button" id="callLayoutBtn" class="call-control-btn call-tool-btn call-layout-btn call-icon-grid" title="${escapeHtml(t('Call layout: {mode}', { mode: t('Grid') }))}" aria-label="${escapeHtml(t('Call layout: {mode}', { mode: t('Grid') }))}" aria-pressed="true">
+                <span class="call-icon" aria-hidden="true"></span>
+                <span class="call-control-label">${escapeHtml(t('Grid'))}</span>
+              </button>
               <button type="button" id="callParticipantsBtn" class="call-control-btn call-tool-btn call-icon-users" title="${escapeHtml(t('Participants'))}" aria-label="${escapeHtml(t('Participants'))}" aria-pressed="false">
                 <span class="call-icon" aria-hidden="true"></span>
                 <span class="call-control-label">${escapeHtml(t('Participants'))}</span>
@@ -645,6 +653,7 @@
       surfaceCard?.addEventListener('pointerdown', handleMinimizedCardPointerDown);
       surfaceCard?.addEventListener('click', handleMinimizedCardClick, true);
       surfaceCard?.addEventListener('contextmenu', handleMinimizedCardContextMenu);
+      document.getElementById('callLayoutBtn')?.addEventListener('click', toggleCallLayoutMode);
       document.getElementById('callParticipantsBtn')?.addEventListener('click', toggleParticipantsPanel);
       document.getElementById('callMicBtn')?.addEventListener('click', toggleMic);
       document.getElementById('callCameraBtn')?.addEventListener('click', toggleCamera);
@@ -1109,6 +1118,37 @@
     button.setAttribute('title', label);
     button.setAttribute('aria-label', label);
     button.setAttribute('aria-pressed', minimized ? 'true' : 'false');
+  }
+
+  function normalizeCallLayoutMode(mode) {
+    return String(mode || '').trim() === CALL_LAYOUT_ADAPTIVE ? CALL_LAYOUT_ADAPTIVE : CALL_LAYOUT_FIT_ALL;
+  }
+
+  function callLayoutLabel(mode = state.layoutMode) {
+    return normalizeCallLayoutMode(mode) === CALL_LAYOUT_ADAPTIVE ? t('Adaptive') : t('Grid');
+  }
+
+  function renderCallLayoutButton() {
+    const button = document.getElementById('callLayoutBtn');
+    if (!button) return;
+    const voiceMode = isVoiceCall(state.currentCall);
+    const visible = Boolean(state.currentCall?.id && !voiceMode && !state.minimized);
+    button.classList.toggle('hidden', !visible);
+    if (!visible) return;
+    const mode = normalizeCallLayoutMode(state.layoutMode);
+    const label = callLayoutLabel(mode);
+    setToolButtonLabel(button, label);
+    button.classList.toggle('is-active', mode === CALL_LAYOUT_FIT_ALL);
+    button.setAttribute('aria-pressed', mode === CALL_LAYOUT_FIT_ALL ? 'true' : 'false');
+    button.setAttribute('title', t('Call layout: {mode}', { mode: label }));
+    button.setAttribute('aria-label', t('Call layout: {mode}', { mode: label }));
+  }
+
+  function toggleCallLayoutMode() {
+    const next = normalizeCallLayoutMode(state.layoutMode) === CALL_LAYOUT_FIT_ALL ? CALL_LAYOUT_ADAPTIVE : CALL_LAYOUT_FIT_ALL;
+    state.layoutMode = STORE.saveLayoutMode?.(next) || next;
+    renderCallLayoutButton();
+    updateCallGridLayout();
   }
 
   function clampValue(value, min, max) {
@@ -2255,6 +2295,7 @@
     applyMinimizedCardPosition();
     renderMinimizeButton();
     renderSurfaceControls();
+    updateCallGridLayout();
     renderParticipantsPanel();
     if (state.minimized) recoverHostChatViewport('call_minimized');
   }
@@ -2263,6 +2304,7 @@
     state.participantsOpen = !state.participantsOpen;
     renderParticipantsPanel();
     renderSurfaceControls();
+    scheduleCallGridFit();
   }
 
   async function leaveCall(endForEveryone) {
@@ -2394,6 +2436,147 @@
     return 'square';
   }
 
+  function clearCallFitGridLayout(grid) {
+    if (!grid) return;
+    grid.style.removeProperty('--call-fit-cols');
+    grid.style.removeProperty('--call-fit-rows');
+    grid.removeAttribute('data-call-fit-cols');
+    grid.removeAttribute('data-call-fit-rows');
+  }
+
+  function parseTileAspect(tile) {
+    const raw = String(tile?.style?.getPropertyValue('--call-tile-aspect') || '').trim();
+    const parts = raw.split('/').map((part) => Number(part.trim()));
+    if (parts.length === 2 && parts[0] > 0 && parts[1] > 0) return parts[0] / parts[1];
+    const orientation = tile?.dataset?.videoOrientation || '';
+    if (orientation === 'portrait') return 9 / 16;
+    if (orientation === 'square') return 1;
+    return 16 / 9;
+  }
+
+  function averageVisibleTileAspect(tiles) {
+    const aspects = tiles.map(parseTileAspect).filter((aspect) => Number.isFinite(aspect) && aspect > 0);
+    if (!aspects.length) return 16 / 9;
+    const average = aspects.reduce((sum, aspect) => sum + aspect, 0) / aspects.length;
+    return clampValue(average, 0.55, 2.4);
+  }
+
+  function gridGapPx(grid) {
+    try {
+      const style = window.getComputedStyle?.(grid);
+      const raw = style?.getPropertyValue('--call-grid-gap') || style?.rowGap || style?.gap || '';
+      const value = Number.parseFloat(raw);
+      return Number.isFinite(value) ? value : 8;
+    } catch {
+      return 8;
+    }
+  }
+
+  function callGridContentSize(grid) {
+    const rect = grid?.getBoundingClientRect?.();
+    let width = Number(grid?.clientWidth || rect?.width || 0);
+    let height = Number(grid?.clientHeight || rect?.height || 0);
+    try {
+      const style = window.getComputedStyle?.(grid);
+      const paddingX = Number.parseFloat(style?.paddingLeft || '0') + Number.parseFloat(style?.paddingRight || '0');
+      const paddingY = Number.parseFloat(style?.paddingTop || '0') + Number.parseFloat(style?.paddingBottom || '0');
+      if (Number.isFinite(paddingX)) width -= paddingX;
+      if (Number.isFinite(paddingY)) height -= paddingY;
+    } catch {}
+    return {
+      width: Math.max(1, width || 1280),
+      height: Math.max(1, height || 720),
+    };
+  }
+
+  function bestFitGridShape(count, width, height, gap, targetAspect) {
+    const tileCount = Math.max(1, Number(count || 0));
+    const safeWidth = Math.max(1, Number(width || 0));
+    const safeHeight = Math.max(1, Number(height || 0));
+    const safeGap = Math.max(0, Number(gap || 0));
+    const aspect = Math.max(0.2, Number(targetAspect || 16 / 9));
+    let best = { cols: tileCount, rows: 1, score: -Infinity };
+    for (let cols = 1; cols <= tileCount; cols += 1) {
+      const rows = Math.ceil(tileCount / cols);
+      const cellWidth = (safeWidth - safeGap * (cols - 1)) / cols;
+      const cellHeight = (safeHeight - safeGap * (rows - 1)) / rows;
+      if (cellWidth <= 0 || cellHeight <= 0) continue;
+      const scale = Math.min(cellWidth / aspect, cellHeight);
+      const emptySlots = rows * cols - tileCount;
+      const cellAspect = cellWidth / cellHeight;
+      const aspectPenalty = Math.abs(Math.log(Math.max(0.01, cellAspect / aspect))) * 120;
+      const score = (scale * scale * aspect) - (emptySlots * 900) - aspectPenalty;
+      if (score > best.score) best = { cols, rows, score };
+    }
+    return best;
+  }
+
+  function applyCallFitGridLayout(grid = document.getElementById('callGrid')) {
+    if (!grid) return;
+    const visibleTiles = Array.from(grid.children).filter((tile) => (
+      tile?.classList?.contains('call-tile') && !tile.classList.contains('is-video-collapsed')
+    ));
+    const count = visibleTiles.length || 1;
+    const { width, height } = callGridContentSize(grid);
+    const gap = gridGapPx(grid);
+    const targetAspect = averageVisibleTileAspect(visibleTiles);
+    const shape = bestFitGridShape(count, width, height, gap, targetAspect);
+    grid.style.setProperty('--call-fit-cols', String(shape.cols));
+    grid.style.setProperty('--call-fit-rows', String(shape.rows));
+    grid.dataset.callFitCols = String(shape.cols);
+    grid.dataset.callFitRows = String(shape.rows);
+  }
+
+  function scheduleCallGridFit() {
+    if (state.fitLayoutFrame) return;
+    const run = () => {
+      state.fitLayoutFrame = 0;
+      const grid = document.getElementById('callGrid');
+      if (!grid || grid.dataset.callLayout !== CALL_LAYOUT_FIT_ALL || grid.classList.contains('is-video-focus-mode')) return;
+      applyCallFitGridLayout(grid);
+    };
+    if (window.requestAnimationFrame) state.fitLayoutFrame = window.requestAnimationFrame(run);
+    else state.fitLayoutFrame = window.setTimeout(run, 0);
+  }
+
+  function clearVideoFocusLayout(grid) {
+    if (!grid) return;
+    grid.style.removeProperty('--call-focus-rail-width');
+    grid.style.removeProperty('--call-focus-thumb-height');
+    grid.removeAttribute('data-video-secondary-count');
+    Array.from(grid.children).forEach((tile) => {
+      tile?.style?.removeProperty('--call-secondary-top');
+    });
+  }
+
+  function applyVideoFocusLayout(grid, secondaryTiles = null) {
+    if (!grid) return;
+    const secondaries = secondaryTiles || Array.from(grid.querySelectorAll('.call-tile.is-video-secondary'));
+    const count = secondaries.length;
+    grid.dataset.videoSecondaryCount = String(count);
+    if (!count) {
+      clearVideoFocusLayout(grid);
+      return;
+    }
+    const { width, height } = callGridContentSize(grid);
+    const inset = 10;
+    const gap = 10;
+    const railWidth = Math.round(clampValue(width * 0.12, 126, 184));
+    const availableHeight = Math.max(44, height - (inset * 2) - (gap * Math.max(0, count - 1)));
+    const thumbHeight = Math.round(Math.max(44, Math.min(104, railWidth * 9 / 16, availableHeight / count)));
+    grid.style.setProperty('--call-focus-rail-width', `${railWidth}px`);
+    grid.style.setProperty('--call-focus-thumb-height', `${thumbHeight}px`);
+    secondaries.forEach((tile, index) => {
+      tile.style.setProperty('--call-secondary-top', `${inset + index * (thumbHeight + gap)}px`);
+    });
+  }
+
+  function refreshVideoFocusLayout() {
+    const grid = document.getElementById('callGrid');
+    if (!grid?.classList?.contains('is-video-focus-mode')) return;
+    applyVideoFocusLayout(grid);
+  }
+
   function updateCallGridLayout(grid = document.getElementById('callGrid')) {
     if (!grid) return;
     const tiles = Array.from(grid.children).filter((tile) => tile?.classList?.contains('call-tile'));
@@ -2407,6 +2590,14 @@
     ));
     const portraitCount = orientations.filter((item) => item === 'portrait').length;
     const landscapeCount = orientations.filter((item) => item === 'landscape').length;
+    if (normalizeCallLayoutMode(state.layoutMode) === CALL_LAYOUT_FIT_ALL && !isVoiceCall(state.currentCall) && !state.minimized) {
+      grid.dataset.callTileCount = String(count);
+      grid.dataset.callLayout = CALL_LAYOUT_FIT_ALL;
+      applyCallFitGridLayout(grid);
+      scheduleCallGridFit();
+      return;
+    }
+    clearCallFitGridLayout(grid);
     let layout = 'dense';
     if (count <= 1) layout = 'single';
     else if (count === 2 && portraitCount === 2) layout = 'portrait-pair';
@@ -2483,12 +2674,19 @@
     if (!grid) return;
     const focusKey = state.focusedVideoTileKey;
     grid.classList.toggle('is-video-focus-mode', Boolean(focusKey));
+    const secondaryTiles = [];
     Array.from(grid.children).forEach((tile) => {
       const isFocused = Boolean(focusKey && tile.dataset.callTileKey === focusKey);
+      const isSecondary = Boolean(focusKey && !isFocused);
       tile.classList.toggle('is-video-focused', isFocused);
-      tile.classList.toggle('is-video-secondary', Boolean(focusKey && !isFocused));
+      tile.classList.toggle('is-video-secondary', isSecondary);
+      if (isSecondary) secondaryTiles.push(tile);
+      else tile.style.removeProperty('--call-secondary-top');
     });
+    if (focusKey) applyVideoFocusLayout(grid, secondaryTiles);
+    else clearVideoFocusLayout(grid);
     applyVideoTileActionState();
+    if (!focusKey && grid.dataset.callLayout === CALL_LAYOUT_FIT_ALL) scheduleCallGridFit();
   }
 
   function setFocusedVideoTile(key = '') {
@@ -2705,6 +2903,7 @@
   function renderVoiceRoomTiles() {
     const grid = document.getElementById('callGrid');
     if (!grid) return;
+    clearCallFitGridLayout(grid);
     grid.classList.add('is-voice-room-grid');
     grid.classList.remove('is-video-focus-mode');
     grid.replaceChildren();
@@ -2867,6 +3066,7 @@
     setIconToggleState(mic, state.micEnabled, t('Mic'), t('Mic off'));
     setIconToggleState(camera, state.cameraEnabled, t('Camera'), t('Camera off'));
     camera?.classList.toggle('hidden', voiceMode);
+    renderCallLayoutButton();
     setToolButtonLabel(participants, t('Participants'));
     participants?.classList.toggle('hidden', state.minimized);
     participants?.classList.toggle('is-active', state.participantsOpen);
@@ -3276,9 +3476,16 @@
     notifyLeaveCurrentCall({ fireAndForget: true }).catch(() => {});
   }
 
+  function handleCallViewportResize() {
+    applyMinimizedCardPosition();
+    refreshVideoFocusLayout();
+    scheduleCallGridFit();
+  }
+
   window.addEventListener('pagehide', handlePageLeaving);
   window.addEventListener('beforeunload', handlePageLeaving);
-  window.addEventListener('resize', applyMinimizedCardPosition);
+  window.addEventListener('resize', handleCallViewportResize);
+  window.visualViewport?.addEventListener?.('resize', handleCallViewportResize);
   if (state.externalMode) {
     bootstrapExternal().catch(() => {});
   } else {

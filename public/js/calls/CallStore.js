@@ -2,6 +2,9 @@
   'use strict';
 
   const DEVICE_PREFS_KEY = 'bananza.call.devicePrefs.v1';
+  const LAYOUT_MODE_KEY = 'bananza.call.layoutMode.v1';
+  const DEFAULT_LAYOUT_MODE = 'fit-all';
+  const LAYOUT_MODES = new Set([DEFAULT_LAYOUT_MODE, 'adaptive']);
 
   function readJson(key, fallback) {
     try {
@@ -19,6 +22,11 @@
     } catch {}
   }
 
+  function normalizeLayoutMode(value) {
+    const mode = String(value || '').trim();
+    return LAYOUT_MODES.has(mode) ? mode : DEFAULT_LAYOUT_MODE;
+  }
+
   function loadDevicePrefs() {
     const prefs = readJson(DEVICE_PREFS_KEY, {});
     return {
@@ -31,6 +39,22 @@
   function saveDevicePrefs(patch = {}) {
     const next = { ...loadDevicePrefs(), ...patch };
     writeJson(DEVICE_PREFS_KEY, next);
+    return next;
+  }
+
+  function loadLayoutMode() {
+    try {
+      return normalizeLayoutMode(window.localStorage?.getItem(LAYOUT_MODE_KEY));
+    } catch {
+      return DEFAULT_LAYOUT_MODE;
+    }
+  }
+
+  function saveLayoutMode(mode) {
+    const next = normalizeLayoutMode(mode);
+    try {
+      window.localStorage?.setItem(LAYOUT_MODE_KEY, next);
+    } catch {}
     return next;
   }
 
@@ -61,6 +85,8 @@
     defaultSettings,
     formatDuration,
     loadDevicePrefs,
+    loadLayoutMode,
     saveDevicePrefs,
+    saveLayoutMode,
   };
 })();

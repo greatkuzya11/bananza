@@ -143,6 +143,7 @@ function installCallBridge(dom, state) {
 
 async function bootCallFeature(state) {
   const dom = createAppDom();
+  if (state.layoutMode) dom.window.localStorage.setItem('bananza.call.layoutMode.v1', state.layoutMode);
   installCallBridge(dom, state);
   loadBrowserScript(dom, 'public/js/i18n.js');
   loadBrowserScript(dom, 'public/js/calls/CallStore.js');
@@ -157,6 +158,7 @@ async function bootCallFeature(state) {
 async function bootExternalCallFeature(state) {
   const dom = createAppDom();
   const { window } = dom;
+  if (state.layoutMode) window.localStorage.setItem('bananza.call.layoutMode.v1', state.layoutMode);
   state.requests = [];
   state.viewportRecoveries = [];
   window.BananzaExternalCall = { inviteToken: state.inviteToken || 'external-token' };
@@ -937,6 +939,7 @@ test('CallFeature starts and joins a voice room without camera UI or publishing'
   assert.equal(dom.window.document.getElementById('callPrejoin').classList.contains('hidden'), true);
   assert.equal(state.previewConstraints, undefined);
   assert.equal(dom.window.document.getElementById('callSurface').classList.contains('is-voice-call'), true);
+  assert.equal(dom.window.document.getElementById('callLayoutBtn').classList.contains('hidden'), true);
   assert.equal(dom.window.document.getElementById('callCameraBtn').classList.contains('hidden'), true);
   assert.equal(dom.window.document.getElementById('callScreenBtn').classList.contains('hidden'), true);
   assert.ok(dom.window.document.querySelector('.call-voice-tile'));
@@ -949,6 +952,7 @@ test('CallFeature starts and joins a voice room without camera UI or publishing'
 
 test('CallFeature adapts active call tiles to portrait pair geometry', async (t) => {
   const state = defaultState({
+    layoutMode: 'adaptive',
     user: { id: 1, display_name: 'Alice', is_admin: 1 },
     features: {
       calls_enabled: true,
@@ -1012,6 +1016,152 @@ test('CallFeature adapts active call tiles to portrait pair geometry', async (t)
   assert.equal(prejoinPreview.classList.contains('is-video-portrait'), false);
 });
 
+test('CallFeature fits all fullscreen video tiles and persists layout mode', async (t) => {
+  const state = defaultState({
+    user: { id: 1, display_name: 'Alice', is_admin: 1 },
+    features: {
+      calls_enabled: true,
+      livekit_ready: true,
+      allow_private_calls: true,
+      allow_group_calls: true,
+      ring_timeout_ms: 60000,
+      screen_share_enabled: true,
+      ringtone_enabled: true,
+      call_messages_enabled: true,
+      max_call_participants: 20,
+    },
+  });
+  state.chatCall = {
+    id: 99,
+    chat_id: state.chat.id,
+    chat_name: state.chat.name,
+    participant_count: 3,
+    started_by: 2,
+    status: 'active',
+    participants: [
+      { user_id: 1, display_name: 'Alice', username: 'alice', state: 'joined' },
+      { user_id: 2, display_name: 'Bob', username: 'bob', state: 'joined' },
+      { user_id: 3, display_name: 'Cara', username: 'cara', state: 'joined' },
+    ],
+  };
+  const dom = await bootCallFeature(state);
+  t.after(() => dom.window.close());
+  const roomState = installMockLiveKitRoom(dom, {
+    localVideo: { width: 1280, height: 720 },
+    remoteVideos: [
+      { identity: 'user:2', name: 'Bob', video: { width: 1280, height: 720 } },
+      { identity: 'user:3', name: 'Cara', video: { width: 1280, height: 720 } },
+    ],
+  });
+
+  dom.window.BananzaCallHooks.handleWSMessage({ type: 'call_updated', call: state.chatCall });
+  dom.window.document.getElementById('callBannerJoin').click();
+  await waitForCondition(dom.window, () => !dom.window.document.getElementById('callPrejoin').classList.contains('hidden'));
+  dom.window.document.getElementById('callPrejoinJoinBtn').click();
+  await waitForCondition(dom.window, () => roomState.isConnected());
+
+  const grid = dom.window.document.getElementById('callGrid');
+  await waitForCondition(dom.window, () => grid.dataset.callLayout === 'fit-all');
+  assert.equal(grid.dataset.callTileCount, '3');
+  assert.equal(grid.dataset.callFitCols, '2');
+  assert.equal(grid.dataset.callFitRows, '2');
+  assert.equal(grid.style.getPropertyValue('--call-fit-cols'), '2');
+  assert.equal(grid.style.getPropertyValue('--call-fit-rows'), '2');
+
+  const layoutBtn = dom.window.document.getElementById('callLayoutBtn');
+  assert.ok(layoutBtn);
+  assert.equal(layoutBtn.classList.contains('hidden'), false);
+  assert.equal(layoutBtn.getAttribute('aria-pressed'), 'true');
+
+  layoutBtn.click();
+  await waitForCondition(dom.window, () => grid.dataset.callLayout === 'dense');
+  assert.equal(dom.window.localStorage.getItem('bananza.call.layoutMode.v1'), 'adaptive');
+  assert.equal(layoutBtn.getAttribute('aria-pressed'), 'false');
+  assert.match(layoutBtn.textContent, /Адаптивно|Adaptive/);
+  assert.equal(grid.style.getPropertyValue('--call-fit-cols'), '');
+  assert.equal(grid.style.getPropertyValue('--call-fit-rows'), '');
+
+  dom.window.document.getElementById('callMinimizeBtn').click();
+  await waitForCondition(dom.window, () => dom.window.document.getElementById('callSurface').classList.contains('is-minimized'));
+  assert.equal(layoutBtn.classList.contains('hidden'), true);
+});
+
+test('CallFeature stacks focused secondary videos in one desktop rail', async (t) => {
+  const state = defaultState({
+    user: { id: 1, display_name: 'Alice', is_admin: 1 },
+    features: {
+      calls_enabled: true,
+      livekit_ready: true,
+      allow_private_calls: true,
+      allow_group_calls: true,
+      ring_timeout_ms: 60000,
+      screen_share_enabled: true,
+      ringtone_enabled: true,
+      call_messages_enabled: true,
+      max_call_participants: 20,
+    },
+  });
+  state.chatCall = {
+    id: 100,
+    chat_id: state.chat.id,
+    chat_name: state.chat.name,
+    participant_count: 4,
+    started_by: 2,
+    status: 'active',
+    participants: [
+      { user_id: 1, display_name: 'Alice', username: 'alice', state: 'joined' },
+      { user_id: 2, display_name: 'Bob', username: 'bob', state: 'joined' },
+      { user_id: 3, display_name: 'Cara', username: 'cara', state: 'joined' },
+      { user_id: 4, display_name: 'Dan', username: 'dan', state: 'joined' },
+    ],
+  };
+  const dom = await bootCallFeature(state);
+  t.after(() => dom.window.close());
+  const roomState = installMockLiveKitRoom(dom, {
+    localVideo: { width: 1280, height: 720 },
+    remoteVideos: [
+      { identity: 'user:2', name: 'Bob', video: { width: 1280, height: 720 } },
+      { identity: 'user:3', name: 'Cara', video: { width: 1280, height: 720 } },
+      { identity: 'user:4', name: 'Dan', video: { width: 1280, height: 720 } },
+    ],
+  });
+
+  dom.window.BananzaCallHooks.handleWSMessage({ type: 'call_updated', call: state.chatCall });
+  dom.window.document.getElementById('callBannerJoin').click();
+  await waitForCondition(dom.window, () => !dom.window.document.getElementById('callPrejoin').classList.contains('hidden'));
+  dom.window.document.getElementById('callPrejoinJoinBtn').click();
+  await waitForCondition(dom.window, () => roomState.isConnected());
+
+  const grid = dom.window.document.getElementById('callGrid');
+  await waitForCondition(dom.window, () => grid.dataset.callLayout === 'fit-all');
+  const focusedTile = grid.querySelector('[data-call-tile-key="user:3"]');
+  const focusBtn = focusedTile.querySelector('.call-tile-fit-btn');
+  assert.ok(focusedTile);
+  assert.ok(focusBtn);
+
+  focusBtn.click();
+  await waitForCondition(dom.window, () => grid.classList.contains('is-video-focus-mode'));
+  assert.equal(focusedTile.classList.contains('is-video-focused'), true);
+  assert.equal(grid.dataset.videoSecondaryCount, '3');
+  assert.notEqual(grid.style.getPropertyValue('--call-focus-rail-width'), '');
+  assert.notEqual(grid.style.getPropertyValue('--call-focus-thumb-height'), '');
+  const secondaryTiles = Array.from(grid.querySelectorAll('.call-tile.is-video-secondary'));
+  assert.equal(secondaryTiles.length, 3);
+  const tops = secondaryTiles.map((tile) => tile.style.getPropertyValue('--call-secondary-top'));
+  assert.equal(tops.every(Boolean), true);
+  assert.equal(new Set(tops).size, 3);
+  assert.equal(focusedTile.style.getPropertyValue('--call-secondary-top'), '');
+
+  focusBtn.click();
+  await waitForCondition(dom.window, () => !grid.classList.contains('is-video-focus-mode'));
+  assert.equal(grid.hasAttribute('data-video-secondary-count'), false);
+  assert.equal(grid.style.getPropertyValue('--call-focus-rail-width'), '');
+  assert.equal(grid.style.getPropertyValue('--call-focus-thumb-height'), '');
+  assert.equal(Array.from(grid.querySelectorAll('.call-tile')).every((tile) => (
+    tile.style.getPropertyValue('--call-secondary-top') === ''
+  )), true);
+});
+
 test('CallFeature focuses video tiles and marks active speakers', async (t) => {
   const state = defaultState({
     user: { id: 1, display_name: 'Alice', is_admin: 1 },
@@ -1056,6 +1206,7 @@ test('CallFeature focuses video tiles and marks active speakers', async (t) => {
 
   const grid = dom.window.document.getElementById('callGrid');
   await waitForCondition(dom.window, () => grid.querySelectorAll('.call-tile-fit-btn').length === 2);
+  await waitForCondition(dom.window, () => grid.dataset.callLayout === 'fit-all');
   const localTile = grid.querySelector('[data-call-tile-key="local"]');
   const remoteTile = grid.querySelector('[data-call-tile-key="user:2"]');
   const focusBtn = remoteTile.querySelector('.call-tile-fit-btn');
@@ -1071,6 +1222,7 @@ test('CallFeature focuses video tiles and marks active speakers', async (t) => {
 
   focusBtn.click();
   await waitForCondition(dom.window, () => !grid.classList.contains('is-video-focus-mode'));
+  await waitForCondition(dom.window, () => grid.dataset.callLayout === 'fit-all');
   assert.equal(remoteTile.classList.contains('is-video-focused'), false);
   assert.equal(focusBtn.getAttribute('aria-pressed'), 'false');
 
@@ -1090,6 +1242,7 @@ test('CallFeature focuses video tiles and marks active speakers', async (t) => {
 
 test('CallFeature marks landscape active call tiles from video geometry', async (t) => {
   const state = defaultState({
+    layoutMode: 'adaptive',
     user: { id: 1, display_name: 'Alice', is_admin: 1 },
     features: {
       calls_enabled: true,
