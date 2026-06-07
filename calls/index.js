@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { randomUUID } = require('crypto');
+const { createHash, randomBytes, randomUUID } = require('crypto');
 const express = require('express');
 const { AccessToken, EgressClient, RoomServiceClient, WebhookReceiver } = require('livekit-server-sdk');
 const { DirectFileOutput, EncodedFileOutput, EncodedFileType, TrackSource } = require('@livekit/protocol');
@@ -27,6 +27,8 @@ const CALL_RING_WORKER_MS = 10_000;
 const CALL_RECONCILE_WORKER_MS = 30_000;
 const CALL_RECONCILE_MIN_AGE_MS = 90_000;
 const CALL_TRANSCRIPT_MERGE_GAP_MS = 2500;
+const CALL_EXTERNAL_INVITE_TOKEN_BYTES = 24;
+const CALL_GUEST_SESSION_TOKEN_BYTES = 24;
 const CALL_VOSK_CHUNK_SECONDS = 2 * 60;
 const CALL_OPENAI_CHUNK_SECONDS = 5 * 60;
 const CALL_VOSK_TRANSCRIPTION_TIMEOUT_MS = 20 * 60 * 1000;
@@ -64,6 +66,31 @@ function normalizeCallMediaKind(value) {
 
 function normalizeCallRoomMode(value) {
   return String(value || '').trim().toLowerCase() === 'room' ? 'room' : 'ringing';
+}
+
+function randomUrlToken(bytes = CALL_EXTERNAL_INVITE_TOKEN_BYTES) {
+  return randomBytes(bytes).toString('base64url');
+}
+
+function sha256Hex(value) {
+  return createHash('sha256').update(String(value || '')).digest('hex');
+}
+
+function normalizeExternalInviteToken(value) {
+  const token = String(value || '').trim();
+  return /^[a-zA-Z0-9_-]{20,128}$/.test(token) ? token : '';
+}
+
+function normalizeGuestId(value) {
+  const text = String(value || '').trim();
+  return /^[a-zA-Z0-9_-]{12,80}$/.test(text) ? text : '';
+}
+
+function normalizeGuestDisplayName(value) {
+  return String(value || '')
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function callMessageText(mediaKind, roomMode) {
@@ -148,6 +175,17 @@ function createCallFeature({
     JOIN users u ON u.id=cp.user_id
     WHERE cp.call_id=? AND cp.user_id=?
   `);
+  const guestsStmt = db.prepare(`
+    SELECT call_id, guest_id, display_name, state, livekit_identity, joined_at, left_at, created_at, updated_at
+    FROM call_guest_participants
+    WHERE call_id=?
+    ORDER BY created_at ASC, guest_id ASC
+  `);
+  const guestStmt = db.prepare(`
+    SELECT call_id, guest_id, display_name, state, livekit_identity, session_token_hash, joined_at, left_at, created_at, updated_at
+    FROM call_guest_participants
+    WHERE call_id=? AND guest_id=?
+  `);
   const callByRoomStmt = db.prepare(`
     SELECT cs.*, c.name as chat_name, c.type as chat_type, c.is_notes as chat_is_notes,
       u.display_name as started_by_name, u.username as started_by_username
@@ -156,11 +194,30 @@ function createCallFeature({
     JOIN users u ON u.id=cs.started_by
     WHERE cs.livekit_room_name=?
   `);
+  const callByExternalTokenStmt = db.prepare(`
+    SELECT cs.*, c.name as chat_name, c.type as chat_type, c.is_notes as chat_is_notes,
+      u.display_name as started_by_name, u.username as started_by_username
+    FROM call_sessions cs
+    JOIN chats c ON c.id=cs.chat_id
+    JOIN users u ON u.id=cs.started_by
+    WHERE cs.external_invite_token=?
+  `);
+  const externalTokenExistsStmt = db.prepare('SELECT id FROM call_sessions WHERE external_invite_token=?');
+  const updateExternalInviteTokenStmt = db.prepare(`
+    UPDATE call_sessions
+    SET external_invite_token=?, updated_at=datetime('now')
+    WHERE id=?
+  `);
   const joinedHumanCountStmt = db.prepare(`
     SELECT COUNT(*) as total
     FROM call_participants cp
     JOIN users u ON u.id=cp.user_id
     WHERE cp.call_id=? AND cp.state='joined' AND COALESCE(u.is_ai_bot,0)=0
+  `);
+  const joinedGuestCountStmt = db.prepare(`
+    SELECT COUNT(*) as total
+    FROM call_guest_participants
+    WHERE call_id=? AND state='joined'
   `);
   const activeCallsStmt = db.prepare(`
     SELECT cs.*, c.name as chat_name, c.type as chat_type, c.is_notes as chat_is_notes,
@@ -249,9 +306,29 @@ function createCallFeature({
     JOIN call_sessions cs ON cs.id=an.call_id
     WHERE an.call_id=? AND an.status='recording' AND cs.status='active'
   `);
+  const insertGuestStmt = db.prepare(`
+    INSERT INTO call_guest_participants(call_id, guest_id, display_name, state, livekit_identity, session_token_hash, created_at, updated_at)
+    VALUES(?, ?, ?, 'invited', ?, ?, datetime('now'), datetime('now'))
+  `);
+  const updateGuestSessionStmt = db.prepare(`
+    UPDATE call_guest_participants
+    SET livekit_identity=?,
+      session_token_hash=?,
+      updated_at=datetime('now')
+    WHERE call_id=? AND guest_id=?
+  `);
+  const updateGuestStateStmt = db.prepare(`
+    UPDATE call_guest_participants
+    SET state=?,
+      livekit_identity=CASE WHEN ?!='' THEN ? ELSE livekit_identity END,
+      joined_at=CASE WHEN ?='joined' THEN COALESCE(joined_at, datetime('now')) ELSE joined_at END,
+      left_at=CASE WHEN ?='left' THEN datetime('now') ELSE left_at END,
+      updated_at=datetime('now')
+    WHERE call_id=? AND guest_id=?
+  `);
   const insertRecordingStmt = db.prepare(`
-    INSERT INTO call_recordings(call_id, user_id, scope, livekit_identity, track_id, egress_id, file_path, status, started_at, created_at, updated_at)
-    VALUES(?, ?, ?, ?, ?, ?, ?, 'recording', ?, datetime('now'), datetime('now'))
+    INSERT INTO call_recordings(call_id, user_id, guest_id, guest_display_name, scope, livekit_identity, track_id, egress_id, file_path, status, started_at, created_at, updated_at)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'recording', ?, datetime('now'), datetime('now'))
   `);
   const recordingByEgressStmt = db.prepare('SELECT * FROM call_recordings WHERE egress_id=?');
   const recordingByTrackStmt = db.prepare(`
@@ -269,6 +346,9 @@ function createCallFeature({
   `);
   const activeRecordingsForUserStmt = db.prepare(`
     SELECT * FROM call_recordings WHERE call_id=? AND user_id=? AND scope='participant' AND status='recording'
+  `);
+  const activeRecordingsForGuestStmt = db.prepare(`
+    SELECT * FROM call_recordings WHERE call_id=? AND guest_id=? AND scope='participant' AND status='recording'
   `);
   const updateRecordingStartedStmt = db.prepare(`
     UPDATE call_recordings
@@ -298,15 +378,15 @@ function createCallFeature({
   `);
   const deleteSegmentsForRecordingStmt = db.prepare('DELETE FROM call_transcript_segments WHERE recording_id=?');
   const insertTranscriptSegmentStmt = db.prepare(`
-    INSERT INTO call_transcript_segments(call_id, recording_id, user_id, speaker_name, start_ms, end_ms, text, timing_approximate)
-    VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO call_transcript_segments(call_id, recording_id, user_id, guest_id, guest_display_name, speaker_name, start_ms, end_ms, text, timing_approximate)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const transcriptSegmentsStmt = db.prepare(`
     SELECT cts.*, u.display_name, u.username
     FROM call_transcript_segments cts
-    JOIN users u ON u.id=cts.user_id
+    LEFT JOIN users u ON u.id=cts.user_id
     WHERE cts.call_id=?
-    ORDER BY cts.start_ms ASC, cts.user_id ASC, cts.id ASC
+    ORDER BY cts.start_ms ASC, cts.user_id ASC, cts.guest_id ASC, cts.id ASC
   `);
   const recordingCountsStmt = db.prepare(`
     SELECT
@@ -382,8 +462,8 @@ function createCallFeature({
     LIMIT 1
   `);
   const insertRunSegmentStmt = db.prepare(`
-    INSERT INTO call_transcript_run_segments(run_id, call_id, recording_id, user_id, speaker_name, speaker_label, start_ms, end_ms, text, timing_approximate)
-    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO call_transcript_run_segments(run_id, call_id, recording_id, user_id, guest_id, guest_display_name, speaker_name, speaker_label, start_ms, end_ms, text, timing_approximate)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const deleteRunSegmentsStmt = db.prepare('DELETE FROM call_transcript_run_segments WHERE run_id=?');
   const transcriptRunSegmentsStmt = db.prepare(`
@@ -523,11 +603,14 @@ function createCallFeature({
     return text || fallback;
   }
 
-  function callRecordingPath(callId, userId, trackId) {
+  function callRecordingPath(callId, participantRef, trackId) {
     const root = ensureRecordingRoot();
     const dir = path.join(root, `call-${Number(callId) || 0}`);
     fs.mkdirSync(dir, { recursive: true });
-    return path.join(dir, `user-${Number(userId) || 0}-${safePathPart(trackId, randomUUID())}.ogg`);
+    const prefix = participantRef?.type === 'guest'
+      ? `guest-${safePathPart(participantRef.guestId, 'guest')}`
+      : `user-${Number(participantRef?.userId || participantRef || 0) || 0}`;
+    return path.join(dir, `${prefix}-${safePathPart(trackId, randomUUID())}.ogg`);
   }
 
   function mixedRecordingPath(callId) {
@@ -633,13 +716,14 @@ function createCallFeature({
     rows.forEach((row) => {
       const text = String(row.text || '').trim();
       if (!text) return;
-      const speaker = row.speaker_name || row.display_name || row.username || 'User';
+      const speaker = row.speaker_name || row.guest_display_name || row.display_name || row.username || 'User';
       const prev = merged[merged.length - 1];
       const start = Number(row.start_ms || 0);
       const end = Number(row.end_ms || start);
+      const speakerKey = row.guest_id ? `guest:${row.guest_id}` : `user:${Number(row.user_id || 0)}`;
       if (
         prev
-        && Number(prev.user_id) === Number(row.user_id)
+        && prev.speaker_key === speakerKey
         && start - Number(prev.end_ms || 0) <= CALL_TRANSCRIPT_MERGE_GAP_MS
       ) {
         prev.text = `${prev.text} ${text}`.trim();
@@ -648,7 +732,9 @@ function createCallFeature({
         return;
       }
       merged.push({
-        user_id: Number(row.user_id),
+        speaker_key: speakerKey,
+        user_id: row.user_id == null ? null : Number(row.user_id),
+        guest_id: row.guest_id || '',
         speaker,
         start_ms: start,
         end_ms: end,
@@ -875,8 +961,10 @@ function createCallFeature({
       if (!text) return;
       const start = Number(row.start_ms || 0);
       const end = Number(row.end_ms || start);
-      const speakerKey = row.user_id == null ? `label:${row.speaker_label || row.speaker_name || 'unknown'}` : `user:${row.user_id}`;
-      const speaker = row.speaker_name || row.display_name || row.username || row.speaker_label || 'Speaker';
+      const speakerKey = row.guest_id
+        ? `guest:${row.guest_id}`
+        : (row.user_id == null ? `label:${row.speaker_label || row.speaker_name || 'unknown'}` : `user:${row.user_id}`);
+      const speaker = row.speaker_name || row.guest_display_name || row.display_name || row.username || row.speaker_label || 'Speaker';
       const prev = merged[merged.length - 1];
       if (prev && prev.speaker_key === speakerKey && start - Number(prev.end_ms || 0) <= CALL_TRANSCRIPT_MERGE_GAP_MS) {
         prev.text = `${prev.text} ${text}`.trim();
@@ -921,6 +1009,7 @@ function createCallFeature({
     return {
       user_id: Number(row.user_id),
       id: Number(row.user_id),
+      kind: 'user',
       state: row.state,
       joined_at: row.joined_at || null,
       left_at: row.left_at || null,
@@ -931,6 +1020,38 @@ function createCallFeature({
       avatar_url: row.avatar_url || null,
       is_ai_bot: Number(row.is_ai_bot) || 0,
     };
+  }
+
+  function serializeGuestParticipant(row) {
+    const name = row.display_name || 'Guest';
+    return {
+      user_id: null,
+      guest_id: row.guest_id || '',
+      id: `guest:${row.guest_id || ''}`,
+      kind: 'guest',
+      is_guest: 1,
+      state: row.state || 'invited',
+      joined_at: row.joined_at || null,
+      left_at: row.left_at || null,
+      updated_at: row.updated_at || null,
+      display_name: name,
+      username: '',
+      avatar_color: '#65aadd',
+      avatar_url: null,
+      is_ai_bot: 0,
+    };
+  }
+
+  function callParticipants(callId) {
+    return [
+      ...participantsStmt.all(callId).map(serializeParticipant),
+      ...guestsStmt.all(callId).map(serializeGuestParticipant),
+    ];
+  }
+
+  function joinedParticipantCount(callId) {
+    return Number(joinedHumanCountStmt.get(callId)?.total || 0)
+      + Number(joinedGuestCountStmt.get(callId)?.total || 0);
   }
 
   function parseTimeMs(value) {
@@ -957,7 +1078,7 @@ function createCallFeature({
 
   function serializeCall(row) {
     if (!row) return null;
-    const participants = participantsStmt.all(row.id).map(serializeParticipant);
+    const participants = callParticipants(row.id);
     const settings = getCallSettings(db);
     const isActive = row.status === 'active';
     const duration = row.duration_ms == null ? callDurationMs(row) : Number(row.duration_ms);
@@ -992,8 +1113,65 @@ function createCallFeature({
     };
   }
 
+  function serializeExternalCall(row) {
+    const call = serializeCall(row);
+    if (!call) return null;
+    return {
+      id: call.id,
+      status: call.status,
+      media_kind: call.media_kind,
+      mediaKind: call.mediaKind,
+      room_mode: call.room_mode,
+      roomMode: call.roomMode,
+      title: call.chat_name || call.started_by_name || 'Call',
+      started_by_name: call.started_by_name,
+      started_at: call.started_at,
+      ended_at: call.ended_at,
+      ended_reason: call.ended_reason,
+      duration_ms: call.duration_ms,
+      participants: call.participants,
+      participant_count: call.participant_count,
+      can_join: call.can_join,
+      can_screen_share: call.can_screen_share,
+      external: true,
+    };
+  }
+
   function getCall(callId) {
     return serializeCall(callByIdStmt.get(callId));
+  }
+
+  function ensureExternalInviteToken(callId) {
+    const row = callByIdStmt.get(callId);
+    if (!row) return '';
+    const existing = String(row.external_invite_token || '').trim();
+    if (existing) return existing;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const token = randomUrlToken();
+      if (externalTokenExistsStmt.get(token)) continue;
+      try {
+        updateExternalInviteTokenStmt.run(token, callId);
+        return token;
+      } catch (error) {
+        if (!String(error?.message || '').includes('UNIQUE')) throw error;
+      }
+    }
+    throw new Error('Could not generate call invite token');
+  }
+
+  function externalCallUrl(req, token) {
+    const safeToken = normalizeExternalInviteToken(token);
+    if (!safeToken) return '';
+    const host = String(req.get?.('host') || '').trim();
+    if (!host) return `/call/${safeToken}`;
+    const forwardedProto = String(req.get?.('x-forwarded-proto') || '').split(',')[0].trim();
+    const proto = forwardedProto || req.protocol || 'http';
+    return `${proto}://${host}/call/${safeToken}`;
+  }
+
+  function guestSessionMatches(guest, sessionToken) {
+    const expected = String(guest?.session_token_hash || '');
+    return Boolean(expected && sessionToken && expected === sha256Hex(sessionToken));
   }
 
   function hasParticipant(callId, userId) {
@@ -1005,13 +1183,37 @@ function createCallFeature({
     return match ? normalizeId(match[1]) : 0;
   }
 
-  function userIdFromLiveKitParticipant(participant = {}) {
+  function participantRefFromLiveKitIdentity(identity) {
+    const text = String(identity || '').trim();
+    const userMatch = text.match(/^user:(\d+)(?::|$)/);
+    if (userMatch) {
+      const userId = normalizeId(userMatch[1]);
+      return userId ? { type: 'user', userId } : null;
+    }
+    const guestMatch = text.match(/^guest:(\d+):([a-zA-Z0-9_-]{12,80})(?::|$)/);
+    if (guestMatch) {
+      const callId = normalizeId(guestMatch[1]);
+      const guestId = normalizeGuestId(guestMatch[2]);
+      return callId && guestId ? { type: 'guest', callId, guestId } : null;
+    }
+    return null;
+  }
+
+  function participantRefFromLiveKitParticipant(participant = {}) {
     try {
       const metadata = participant.metadata ? JSON.parse(participant.metadata) : null;
       const metadataUserId = normalizeId(metadata?.userId);
-      if (metadataUserId) return metadataUserId;
+      if (metadataUserId) return { type: 'user', userId: metadataUserId };
+      const metadataCallId = normalizeId(metadata?.callId);
+      const metadataGuestId = normalizeGuestId(metadata?.guestId);
+      if (metadataCallId && metadataGuestId) return { type: 'guest', callId: metadataCallId, guestId: metadataGuestId };
     } catch {}
-    return userIdFromLiveKitIdentity(participant.identity || participant.participantIdentity || '');
+    return participantRefFromLiveKitIdentity(participant.identity || participant.participantIdentity || '');
+  }
+
+  function userIdFromLiveKitParticipant(participant = {}) {
+    const ref = participantRefFromLiveKitParticipant(participant);
+    return ref?.type === 'user' ? ref.userId : 0;
   }
 
   function broadcastAll(payload) {
@@ -1159,6 +1361,13 @@ function createCallFeature({
         updated_at=datetime('now')
       WHERE call_id=?
     `).run(isRoomMode ? 1 : 0, callId);
+    db.prepare(`
+      UPDATE call_guest_participants
+      SET state=CASE WHEN state='joined' THEN 'left' ELSE state END,
+        left_at=CASE WHEN state='joined' AND left_at IS NULL THEN datetime('now') ELSE left_at END,
+        updated_at=datetime('now')
+      WHERE call_id=?
+    `).run(callId);
     if (aiNotesByCallStmt.get(callId)?.status === 'recording') {
       updateAiNotesStatusStmt.run('completed', 'idle', endedAt, '', callId);
       stopActiveRecordingsForCall(callId);
@@ -1181,7 +1390,7 @@ function createCallFeature({
   }
 
   function maybeEndWhenEmpty(callId) {
-    const total = Number(joinedHumanCountStmt.get(callId)?.total || 0);
+    const total = joinedParticipantCount(callId);
     if (total <= 0) return endCall(callId, null, 'empty');
     return getCall(callId);
   }
@@ -1198,6 +1407,7 @@ function createCallFeature({
     const row = callByIdStmt.get(callId);
     const call = serializeCall(row);
     if (call) {
+      broadcastCall(call.chat_id, { type: 'call_updated', call });
       broadcastCall(call.chat_id, {
         type: 'call_participant_updated',
         call,
@@ -1210,6 +1420,42 @@ function createCallFeature({
 
   function participantJoined(callId, userId) {
     return participantState(callId, userId, 'joined');
+  }
+
+  function guestParticipantState(callId, guestId, state, livekitIdentity = '') {
+    const safeGuestId = normalizeGuestId(guestId);
+    if (!safeGuestId || !guestStmt.get(callId, safeGuestId)) return getCall(callId);
+    const identity = String(livekitIdentity || '').trim();
+    updateGuestStateStmt.run(state, identity, identity, state, state, callId, safeGuestId);
+    const row = callByIdStmt.get(callId);
+    const call = serializeCall(row);
+    if (call) {
+      broadcastCall(call.chat_id, { type: 'call_updated', call });
+      broadcastCall(call.chat_id, {
+        type: 'call_participant_updated',
+        call,
+        participant: call.participants.find((item) => item.guest_id === safeGuestId) || null,
+      });
+      broadcastCallMessageUpdated(call);
+    }
+    return call;
+  }
+
+  function guestParticipantJoined(callId, guestId, livekitIdentity = '') {
+    return guestParticipantState(callId, guestId, 'joined', livekitIdentity);
+  }
+
+  function guestParticipantLeft(callId, guestId) {
+    const safeGuestId = normalizeGuestId(guestId);
+    if (safeGuestId) {
+      activeRecordingsForGuestStmt.all(callId, safeGuestId).forEach((recording) => {
+        stopRecording(recording).catch((error) => {
+          console.warn('[calls] guest recording stop failed:', error.message);
+        });
+      });
+      guestParticipantState(callId, safeGuestId, 'left');
+    }
+    return maybeEndWhenEmpty(callId);
   }
 
   function participantLeft(callId, userId) {
@@ -1249,18 +1495,34 @@ function createCallFeature({
     if (!['participant', 'mixed_participant'].includes(mode)) return null;
     const trackId = String(track.sid || track.id || track.trackSid || '').trim();
     if (!trackId || recordingByTrackStmt.get(callId, trackId)) return null;
-    const userId = userIdFromLiveKitParticipant(participant);
-    if (!userId || !hasParticipant(callId, userId)) return null;
+    const participantRef = participantRefFromLiveKitParticipant(participant);
+    const identity = String(participant.identity || participant.participantIdentity || '');
+    let userId = null;
+    let guestId = '';
+    let guestDisplayName = '';
+    if (participantRef?.type === 'user') {
+      userId = participantRef.userId;
+      if (!userId || !hasParticipant(callId, userId)) return null;
+    } else if (participantRef?.type === 'guest' && Number(participantRef.callId) === Number(callId)) {
+      const guest = guestStmt.get(callId, participantRef.guestId);
+      if (!guest) return null;
+      guestId = guest.guest_id;
+      guestDisplayName = guest.display_name || 'Guest';
+    } else {
+      return null;
+    }
 
     let recordingId = 0;
     try {
-      const filepath = callRecordingPath(callId, userId, trackId);
+      const filepath = callRecordingPath(callId, participantRef, trackId);
       const startedAt = new Date().toISOString();
       const inserted = insertRecordingStmt.run(
         callId,
         userId,
+        guestId,
+        guestDisplayName,
         'participant',
-        String(participant.identity || participant.participantIdentity || ''),
+        identity,
         trackId,
         '',
         filepath,
@@ -1278,6 +1540,7 @@ function createCallFeature({
       console.info('[calls] AI notes recording started:', {
         callId,
         userId,
+        guestId,
         trackId,
         egressId: String(info?.egressId || ''),
         filepath,
@@ -1288,6 +1551,7 @@ function createCallFeature({
       console.warn('[calls] AI notes recording start failed:', {
         callId,
         userId,
+        guestId,
         trackId,
         room: notes.livekit_room_name,
         error: message,
@@ -1315,6 +1579,8 @@ function createCallFeature({
       const inserted = insertRecordingStmt.run(
         callId,
         Number(notes.requested_by || row.started_by || 0),
+        '',
+        '',
         'mixed',
         '',
         `mixed:${callId}`,
@@ -1564,8 +1830,8 @@ function createCallFeature({
     try {
       deleteSegmentsForRecordingStmt.run(recording.id);
       const chunks = splitRecordingIntoChunks(filepath, recording.id);
-      const participant = participantStmt.get(recording.call_id, recording.user_id) || userStmt.get(recording.user_id);
-      const speaker = participant?.display_name || participant?.username || `User ${recording.user_id}`;
+      const speakerRef = recordingSpeaker(recording);
+      const speaker = speakerRef.name;
       const callRow = callByIdStmt.get(recording.call_id);
       const callStart = parseTimeMs(callRow?.started_at);
       const recordingStart = parseTimeMs(recording.started_at) || callStart;
@@ -1604,7 +1870,9 @@ function createCallFeature({
           insertTranscriptSegmentStmt.run(
             recording.call_id,
             recording.id,
-            recording.user_id,
+            speakerRef.userId || null,
+            speakerRef.guestId || '',
+            speakerRef.guestDisplayName || '',
             speaker,
             segment.start_ms,
             segment.end_ms,
@@ -1663,10 +1931,23 @@ function createCallFeature({
   }
 
   function recordingSpeaker(recording) {
-    if (!recording || recording.scope === 'mixed') return { userId: null, name: 'Разговор' };
+    if (!recording || recording.scope === 'mixed') {
+      return { userId: null, guestId: '', guestDisplayName: '', name: 'Разговор' };
+    }
+    if (recording.guest_id) {
+      const name = recording.guest_display_name || guestStmt.get(recording.call_id, recording.guest_id)?.display_name || 'Guest';
+      return {
+        userId: null,
+        guestId: recording.guest_id,
+        guestDisplayName: name,
+        name,
+      };
+    }
     const participant = participantStmt.get(recording.call_id, recording.user_id) || userStmt.get(recording.user_id);
     return {
       userId: Number(recording.user_id || 0) || null,
+      guestId: '',
+      guestDisplayName: '',
       name: participant?.display_name || participant?.username || `User ${recording.user_id}`,
     };
   }
@@ -1754,6 +2035,8 @@ function createCallFeature({
         allSegments.push({
           recording_id: Number(recording.id),
           user_id: recording.scope === 'participant' ? speaker.userId : null,
+          guest_id: recording.scope === 'participant' ? (speaker.guestId || '') : '',
+          guest_display_name: recording.scope === 'participant' ? (speaker.guestDisplayName || '') : '',
           speaker_name: recording.scope === 'participant' ? speaker.name : (segment.speaker || speaker.name || 'Speaker'),
           speaker_label: String(segment.speaker || ''),
           start_ms: segment.start_ms,
@@ -1777,32 +2060,53 @@ function createCallFeature({
     return Math.max(0, end - start);
   }
 
+  function transcriptParticipantKey(row) {
+    if (row.guest_id) return `guest:${row.guest_id}`;
+    if (row.user_id) return `user:${Number(row.user_id)}`;
+    return '';
+  }
+
+  function transcriptParticipantPayload(key, fallbackName = 'Speaker') {
+    if (String(key || '').startsWith('guest:')) {
+      const guestId = String(key).slice('guest:'.length);
+      return {
+        user_id: null,
+        guest_id: guestId,
+        guest_display_name: fallbackName,
+        speaker_name: fallbackName,
+      };
+    }
+    const userId = normalizeId(String(key || '').replace(/^user:/, ''));
+    return userId
+      ? { user_id: userId, guest_id: '', guest_display_name: '', speaker_name: fallbackName }
+      : {};
+  }
+
   function assignSegmentsByOverlap(targetSegments, referenceSegments) {
     return targetSegments.map((segment) => {
       const scores = new Map();
       referenceSegments.forEach((ref) => {
-        if (!ref.user_id) return;
+        const key = transcriptParticipantKey(ref);
+        if (!key) return;
         const overlap = overlapMs(segment, ref);
         if (overlap <= 0) return;
-        const key = Number(ref.user_id);
-        const prev = scores.get(key) || { score: 0, name: ref.speaker_name || `User ${key}` };
+        const prev = scores.get(key) || { score: 0, name: ref.speaker_name || ref.guest_display_name || `User ${key}` };
         prev.score += overlap;
-        if (ref.speaker_name) prev.name = ref.speaker_name;
+        if (ref.speaker_name || ref.guest_display_name) prev.name = ref.speaker_name || ref.guest_display_name;
         scores.set(key, prev);
       });
-      let bestUserId = null;
+      let bestKey = '';
       let best = null;
       scores.forEach((value, key) => {
         if (!best || value.score > best.score) {
           best = value;
-          bestUserId = key;
+          bestKey = key;
         }
       });
-      if (!bestUserId) return segment;
+      if (!bestKey) return segment;
       return {
         ...segment,
-        user_id: bestUserId,
-        speaker_name: best.name,
+        ...transcriptParticipantPayload(bestKey, best.name),
       };
     });
   }
@@ -1813,29 +2117,29 @@ function createCallFeature({
       const label = String(segment.speaker_label || segment.speaker_name || '').trim();
       if (!label) return;
       referenceSegments.forEach((ref) => {
-        if (!ref.user_id) return;
+        const key = transcriptParticipantKey(ref);
+        if (!key) return;
         const overlap = overlapMs(segment, ref);
         if (overlap <= 0) return;
         if (!labelScores.has(label)) labelScores.set(label, new Map());
-        const byUser = labelScores.get(label);
-        const key = Number(ref.user_id);
-        const prev = byUser.get(key) || { score: 0, name: ref.speaker_name || `User ${key}` };
+        const byParticipant = labelScores.get(label);
+        const prev = byParticipant.get(key) || { score: 0, name: ref.speaker_name || ref.guest_display_name || `User ${key}` };
         prev.score += overlap;
-        if (ref.speaker_name) prev.name = ref.speaker_name;
-        byUser.set(key, prev);
+        if (ref.speaker_name || ref.guest_display_name) prev.name = ref.speaker_name || ref.guest_display_name;
+        byParticipant.set(key, prev);
       });
     });
     const labelMap = new Map();
-    labelScores.forEach((byUser, label) => {
-      let bestUserId = null;
+    labelScores.forEach((byParticipant, label) => {
+      let bestKey = '';
       let best = null;
-      byUser.forEach((value, key) => {
+      byParticipant.forEach((value, key) => {
         if (!best || value.score > best.score) {
           best = value;
-          bestUserId = key;
+          bestKey = key;
         }
       });
-      if (bestUserId) labelMap.set(label, { userId: bestUserId, name: best.name });
+      if (bestKey) labelMap.set(label, { key: bestKey, name: best.name });
     });
     return diarizedSegments.map((segment) => {
       const label = String(segment.speaker_label || segment.speaker_name || '').trim();
@@ -1843,8 +2147,7 @@ function createCallFeature({
       if (!mapped) return segment;
       return {
         ...segment,
-        user_id: mapped.userId,
-        speaker_name: mapped.name,
+        ...transcriptParticipantPayload(mapped.key, mapped.name),
       };
     });
   }
@@ -1860,6 +2163,8 @@ function createCallFeature({
           run.call_id,
           segment.recording_id || null,
           segment.user_id || null,
+          segment.guest_id || '',
+          segment.guest_display_name || '',
           segment.speaker_name || segment.speaker_label || 'Speaker',
           segment.speaker_label || '',
           Math.max(0, Math.round(Number(segment.start_ms || 0))),
@@ -1973,8 +2278,8 @@ function createCallFeature({
   function artifactSourceText({ call, run, transcript, setting, artifactKey }) {
     const parts = [];
     if (setting.include_call_meta) {
-      const participants = participantsStmt.all(call.id)
-        .map((participant) => participant.display_name || participant.username || `user:${participant.user_id}`)
+      const participants = callParticipants(call.id)
+        .map((participant) => participant.display_name || participant.username || participant.guest_id || `user:${participant.user_id}`)
         .filter(Boolean)
         .join(', ');
       parts.push([
@@ -2194,6 +2499,35 @@ function createCallFeature({
     return token.toJwt();
   }
 
+  async function createTokenForGuestCall(call, guest) {
+    const config = livekitConfig();
+    const settings = getCallSettings(db);
+    const mediaKind = normalizeCallMediaKind(call?.media_kind || call?.mediaKind);
+    const canPublishSources = mediaKind === 'voice'
+      ? [TrackSource.MICROPHONE]
+      : [TrackSource.CAMERA, TrackSource.MICROPHONE];
+    if (mediaKind !== 'voice' && settings.screen_share_enabled) {
+      canPublishSources.push(TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO);
+    }
+    const identity = `guest:${call.id}:${guest.guest_id}:${randomUUID()}`;
+    const token = new AccessToken(config.apiKey, config.apiSecret, {
+      identity,
+      name: guest.display_name || 'Guest',
+      ttl: CALL_TOKEN_TTL_SECONDS,
+      metadata: JSON.stringify({ callId: call.id, guestId: guest.guest_id, externalGuest: true }),
+    });
+    token.addGrant({
+      roomJoin: true,
+      room: call.livekit_room_name,
+      canPublish: true,
+      canSubscribe: true,
+      canPublishData: false,
+      canUpdateOwnMetadata: false,
+      canPublishSources,
+    });
+    return { jwt: await token.toJwt(), identity };
+  }
+
   function validateChatForCall(chat, members, userId, res) {
     const settings = getCallSettings(db);
     if (!chat) return boolError(res, 404, 'Chat not found', 'chat_not_found');
@@ -2222,10 +2556,11 @@ function createCallFeature({
   }
 
   const createCallTx = db.transaction(({ chat, members, user, roomName, ringExpiresAt, settings, mediaKind, roomMode }) => {
+    const inviteToken = randomUrlToken();
     const inserted = db.prepare(`
-      INSERT INTO call_sessions(chat_id, livekit_room_name, status, started_by, ring_expires_at, media_kind, room_mode)
-      VALUES(?, ?, 'active', ?, ?, ?, ?)
-    `).run(chat.id, roomName, user.id, ringExpiresAt, mediaKind, roomMode);
+      INSERT INTO call_sessions(chat_id, livekit_room_name, external_invite_token, status, started_by, ring_expires_at, media_kind, room_mode)
+      VALUES(?, ?, ?, 'active', ?, ?, ?, ?)
+    `).run(chat.id, roomName, inviteToken, user.id, ringExpiresAt, mediaKind, roomMode);
     const callId = Number(inserted.lastInsertRowid);
     const finalRoomName = `bananza-call-${callId}`;
     db.prepare('UPDATE call_sessions SET livekit_room_name=?, updated_at=datetime(\'now\') WHERE id=?')
@@ -2270,7 +2605,7 @@ function createCallFeature({
       const expiresAt = parseTimeMs(row.ring_expires_at);
       if (!expiresAt || expiresAt > now) return;
       markMissed.run(row.id);
-      const joinedTotal = Number(joinedHumanCountStmt.get(row.id)?.total || 0);
+      const joinedTotal = joinedParticipantCount(row.id);
       if ((row.chat_type === 'private' && joinedTotal < 2) || joinedTotal <= 0) {
         endCall(row.id, null, 'missed');
         changed += 1;
@@ -2310,10 +2645,20 @@ function createCallFeature({
           continue;
         }
         if (Array.isArray(participants)) {
-          const liveUserIds = new Set(participants.map(userIdFromLiveKitParticipant).filter(Boolean));
+          const liveUserIds = new Set();
+          const liveGuestIds = new Set();
+          participants.forEach((participant) => {
+            const ref = participantRefFromLiveKitParticipant(participant);
+            if (ref?.type === 'user') liveUserIds.add(Number(ref.userId));
+            if (ref?.type === 'guest' && Number(ref.callId) === Number(row.id)) liveGuestIds.add(ref.guestId);
+          });
           participantsStmt.all(row.id)
             .filter((participant) => participant.state === 'joined' && !liveUserIds.has(Number(participant.user_id)))
             .forEach((participant) => participantState(row.id, participant.user_id, 'left'));
+          guestsStmt.all(row.id)
+            .filter((participant) => participant.state === 'joined' && !liveGuestIds.has(participant.guest_id))
+            .forEach((participant) => guestParticipantState(row.id, participant.guest_id, 'left'));
+          maybeEndWhenEmpty(row.id);
         }
       } catch (error) {
         const message = String(error?.message || '');
@@ -2347,6 +2692,102 @@ function createCallFeature({
       settings: publicSettings(),
       calls: activeCallsForUserStmt.all(req.user.id).map(serializeCall),
     });
+  });
+
+  function handleExternalLinkRequest(req, res) {
+    const callId = normalizeId(req.params.callId);
+    const row = callByIdStmt.get(callId);
+    if (!row) return boolError(res, 404, 'Call not found', 'call_not_found');
+    if (!req.user.is_admin && Number(row.started_by) !== Number(req.user.id)) {
+      return boolError(res, 403, 'Forbidden', 'forbidden');
+    }
+    if (row.status !== 'active') return boolError(res, 409, 'Call is not active', 'call_not_active');
+    const token = ensureExternalInviteToken(callId);
+    res.json({
+      token,
+      external_path: `/call/${token}`,
+      external_url: externalCallUrl(req, token),
+      call: serializeCall(callByIdStmt.get(callId)),
+    });
+  }
+
+  app.get('/api/calls/:callId/external-link', auth, callLimiter, handleExternalLinkRequest);
+  app.post('/api/calls/:callId/external-link', auth, callLimiter, handleExternalLinkRequest);
+
+  app.get('/api/calls/external/:inviteToken', (req, res) => {
+    const token = normalizeExternalInviteToken(req.params.inviteToken);
+    if (!token) return boolError(res, 404, 'Call not found', 'call_not_found');
+    const row = callByExternalTokenStmt.get(token);
+    if (!row) return boolError(res, 404, 'Call not found', 'call_not_found');
+    const call = serializeExternalCall(row);
+    res.json({
+      ended: row.status !== 'active',
+      settings: publicSettings(),
+      call,
+    });
+  });
+
+  app.post('/api/calls/external/:inviteToken/token', callLimiter, async (req, res) => {
+    if (!assertCallsAvailable(res)) return;
+    const token = normalizeExternalInviteToken(req.params.inviteToken);
+    if (!token) return boolError(res, 404, 'Call not found', 'call_not_found');
+    const row = callByExternalTokenStmt.get(token);
+    if (!row) return boolError(res, 404, 'Call not found', 'call_not_found');
+    if (row.status !== 'active') return boolError(res, 410, 'Call is not active', 'call_not_active');
+    const displayName = normalizeGuestDisplayName(req.body?.display_name || req.body?.displayName || req.body?.name);
+    if (!displayName) return boolError(res, 400, 'Name is required', 'display_name_required');
+    if (displayName.length > 60) return boolError(res, 400, 'Name must be 60 characters or less', 'display_name_too_long');
+    const guestId = randomUrlToken(12);
+    const sessionToken = randomUrlToken(CALL_GUEST_SESSION_TOKEN_BYTES);
+    insertGuestStmt.run(row.id, guestId, displayName, '', sha256Hex(sessionToken));
+    const guest = guestStmt.get(row.id, guestId);
+    const tokenResult = await createTokenForGuestCall(serializeCall(row), guest);
+    updateGuestSessionStmt.run(tokenResult.identity, sha256Hex(sessionToken), row.id, guestId);
+    res.status(201).json({
+      call: serializeExternalCall(callByIdStmt.get(row.id)),
+      guest: {
+        guest_id: guestId,
+        display_name: displayName,
+        session_token: sessionToken,
+        livekit_identity: tokenResult.identity,
+      },
+      livekit: {
+        url: livekitConfig().wsUrl,
+        token: tokenResult.jwt,
+      },
+    });
+  });
+
+  function handleExternalGuestState(req, res, state) {
+    const token = normalizeExternalInviteToken(req.params.inviteToken);
+    if (!token) return boolError(res, 404, 'Call not found', 'call_not_found');
+    const row = callByExternalTokenStmt.get(token);
+    if (!row) return boolError(res, 404, 'Call not found', 'call_not_found');
+    const guestId = normalizeGuestId(req.body?.guest_id || req.body?.guestId);
+    const sessionToken = String(req.body?.session_token || req.body?.sessionToken || '').trim();
+    const guest = guestId ? guestStmt.get(row.id, guestId) : null;
+    if (!guest || !guestSessionMatches(guest, sessionToken)) {
+      return boolError(res, 403, 'Forbidden', 'forbidden');
+    }
+    if (row.status !== 'active') {
+      if (state === 'leave') guestParticipantState(row.id, guestId, 'left');
+      return res.status(410).json({ ended: true, call: serializeExternalCall(callByIdStmt.get(row.id)) });
+    }
+    const call = state === 'joined'
+      ? guestParticipantJoined(row.id, guestId, guest.livekit_identity || '')
+      : guestParticipantLeft(row.id, guestId);
+    res.json({
+      call: serializeExternalCall(callByIdStmt.get(row.id)),
+      participant: call?.participants?.find((item) => item.guest_id === guestId) || null,
+    });
+  }
+
+  app.post('/api/calls/external/:inviteToken/joined', callLimiter, (req, res) => {
+    handleExternalGuestState(req, res, 'joined');
+  });
+
+  app.post('/api/calls/external/:inviteToken/leave', callLimiter, (req, res) => {
+    handleExternalGuestState(req, res, 'leave');
   });
 
   function authCallRecordingQueryToken(req, _res, next) {
@@ -2771,7 +3212,9 @@ function createCallFeature({
       const segments = transcriptRunSegmentsStmt.all(primaryRun.id).map((segment) => ({
         id: Number(segment.id),
         user_id: segment.user_id == null ? null : Number(segment.user_id),
-        speaker_name: segment.speaker_name || segment.display_name || segment.username || segment.speaker_label || 'Speaker',
+        guest_id: segment.guest_id || '',
+        guest_display_name: segment.guest_display_name || '',
+        speaker_name: segment.speaker_name || segment.guest_display_name || segment.display_name || segment.username || segment.speaker_label || 'Speaker',
         speaker_label: segment.speaker_label || '',
         start_ms: Number(segment.start_ms || 0),
         end_ms: Number(segment.end_ms || 0),
@@ -2788,8 +3231,10 @@ function createCallFeature({
     const notes = aiNotesByCallStmt.get(callId);
     const segments = transcriptSegmentsStmt.all(callId).map((segment) => ({
       id: Number(segment.id),
-      user_id: Number(segment.user_id),
-      speaker_name: segment.speaker_name || segment.display_name || segment.username || 'User',
+      user_id: segment.user_id == null ? null : Number(segment.user_id),
+      guest_id: segment.guest_id || '',
+      guest_display_name: segment.guest_display_name || '',
+      speaker_name: segment.speaker_name || segment.guest_display_name || segment.display_name || segment.username || 'User',
       start_ms: Number(segment.start_ms || 0),
       end_ms: Number(segment.end_ms || 0),
       text: segment.text || '',
@@ -2813,7 +3258,9 @@ function createCallFeature({
     const segments = transcriptRunSegmentsStmt.all(runId).map((segment) => ({
       id: Number(segment.id),
       user_id: segment.user_id == null ? null : Number(segment.user_id),
-      speaker_name: segment.speaker_name || segment.display_name || segment.username || segment.speaker_label || 'Speaker',
+      guest_id: segment.guest_id || '',
+      guest_display_name: segment.guest_display_name || '',
+      speaker_name: segment.speaker_name || segment.guest_display_name || segment.display_name || segment.username || segment.speaker_label || 'Speaker',
       speaker_label: segment.speaker_label || '',
       start_ms: Number(segment.start_ms || 0),
       end_ms: Number(segment.end_ms || 0),
@@ -2967,8 +3414,14 @@ function createCallFeature({
     const roomName = event.room?.name || event.roomName || '';
     const row = roomName ? callByRoomStmt.get(roomName) : null;
     if (!row || row.status !== 'active') return null;
-    const userId = userIdFromLiveKitParticipant(event.participant || { participantIdentity: event.participantIdentity });
-    if (event.event === 'participant_joined' && userId) return participantJoined(row.id, userId);
+    const participant = event.participant || { participantIdentity: event.participantIdentity };
+    const participantRef = participantRefFromLiveKitParticipant(participant);
+    if (event.event === 'participant_joined') {
+      if (participantRef?.type === 'user') return participantJoined(row.id, participantRef.userId);
+      if (participantRef?.type === 'guest' && Number(participantRef.callId) === Number(row.id)) {
+        return guestParticipantJoined(row.id, participantRef.guestId, participant.identity || participant.participantIdentity || '');
+      }
+    }
     if (event.event === 'track_published') {
       const mode = getCallSettings(db).call_recording_mode || 'mixed_participant';
       if (['participant', 'mixed_participant'].includes(mode)) {
@@ -2986,8 +3439,11 @@ function createCallFeature({
       });
       return getCall(row.id);
     }
-    if ((event.event === 'participant_left' || event.event === 'participant_connection_aborted') && userId) {
-      return participantLeft(row.id, userId);
+    if (event.event === 'participant_left' || event.event === 'participant_connection_aborted') {
+      if (participantRef?.type === 'user') return participantLeft(row.id, participantRef.userId);
+      if (participantRef?.type === 'guest' && Number(participantRef.callId) === Number(row.id)) {
+        return guestParticipantLeft(row.id, participantRef.guestId);
+      }
     }
     if (event.event === 'room_finished') return endCall(row.id, null, 'livekit_room_finished');
     return getCall(row.id);

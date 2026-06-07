@@ -52,9 +52,11 @@
         fileExtension,
         clamp,
         getToken: () => token,
+        getCurrentUser: () => currentUser,
         $,
         actions: {
           showCenterToast: (message) => showCenterToast(message),
+          copyTextToClipboard: (text) => copyTextToClipboard(text),
           openModal: (id, options = {}) => openModal(id, options),
           closeModal: (id, options = {}) => closeModal(id, options),
           openMediaViewer: (src, type = 'image') => openMediaViewer(src, type),

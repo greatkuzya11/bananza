@@ -15,12 +15,18 @@ function addColumnIfMissing(db, tableName, columnName, columnSql) {
   }
 }
 
+function columnIsNotNull(db, tableName, columnName) {
+  return db.prepare(`PRAGMA table_info(${tableName})`).all()
+    .some((column) => column.name === columnName && Number(column.notnull) !== 0);
+}
+
 function createCallSessionsTable(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS call_sessions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
       livekit_room_name TEXT NOT NULL UNIQUE,
+      external_invite_token TEXT DEFAULT NULL,
       status TEXT NOT NULL DEFAULT 'active' CHECK(status IN (${CALL_SESSION_STATUSES})),
       started_by INTEGER NOT NULL REFERENCES users(id),
       ended_by INTEGER DEFAULT NULL REFERENCES users(id),
@@ -34,6 +40,53 @@ function createCallSessionsTable(db) {
       room_mode TEXT NOT NULL DEFAULT 'ringing' CHECK(room_mode IN ('ringing','room')),
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+}
+
+function createCallRecordingsTable(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS call_recordings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      call_id INTEGER NOT NULL REFERENCES call_sessions(id) ON DELETE CASCADE,
+      user_id INTEGER DEFAULT NULL REFERENCES users(id) ON DELETE CASCADE,
+      guest_id TEXT DEFAULT '',
+      guest_display_name TEXT DEFAULT '',
+      scope TEXT NOT NULL DEFAULT 'participant' CHECK(scope IN ('participant','mixed')),
+      livekit_identity TEXT NOT NULL DEFAULT '',
+      track_id TEXT NOT NULL DEFAULT '',
+      egress_id TEXT NOT NULL DEFAULT '',
+      file_path TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'recording' CHECK(status IN ('recording','processing','completed','error','canceled')),
+      started_at TEXT DEFAULT NULL,
+      ended_at TEXT DEFAULT NULL,
+      duration_ms INTEGER DEFAULT NULL,
+      size_bytes INTEGER DEFAULT NULL,
+      transcription_text TEXT DEFAULT '',
+      transcription_provider TEXT DEFAULT '',
+      transcription_model TEXT DEFAULT '',
+      transcription_error TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+}
+
+function createCallTranscriptSegmentsTable(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS call_transcript_segments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      call_id INTEGER NOT NULL REFERENCES call_sessions(id) ON DELETE CASCADE,
+      recording_id INTEGER DEFAULT NULL REFERENCES call_recordings(id) ON DELETE CASCADE,
+      user_id INTEGER DEFAULT NULL REFERENCES users(id) ON DELETE CASCADE,
+      guest_id TEXT DEFAULT '',
+      guest_display_name TEXT DEFAULT '',
+      speaker_name TEXT NOT NULL DEFAULT '',
+      start_ms INTEGER NOT NULL DEFAULT 0,
+      end_ms INTEGER NOT NULL DEFAULT 0,
+      text TEXT NOT NULL DEFAULT '',
+      timing_approximate INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now'))
     );
   `);
 }
@@ -94,6 +147,82 @@ function migrateCallSessionsStatus(db) {
   }
 }
 
+function rebuildTableWithNullableUser(db, tableName, createTable, columns) {
+  if (!tableSql(db, tableName) || !columnIsNotNull(db, tableName, 'user_id')) return;
+
+  const legacyTable = `${tableName}_legacy_user_id`;
+  const existingColumns = new Set(db.prepare(`PRAGMA table_info(${tableName})`).all().map((column) => column.name));
+  const foreignKeys = Number(db.pragma('foreign_keys', { simple: true }) || 0);
+  const legacyAlter = Number(db.pragma('legacy_alter_table', { simple: true }) || 0);
+  db.pragma('foreign_keys = OFF');
+  db.pragma('legacy_alter_table = ON');
+  try {
+    db.exec(`
+      DROP TABLE IF EXISTS ${legacyTable};
+      ALTER TABLE ${tableName} RENAME TO ${legacyTable};
+    `);
+    createTable(db);
+    const insertColumns = columns.join(', ');
+    const selectColumns = columns.map((column) => (
+      existingColumns.has(column) ? column : (
+        column === 'guest_id' || column === 'guest_display_name' ? "''" : 'NULL'
+      )
+    )).join(', ');
+    db.exec(`
+      INSERT INTO ${tableName} (${insertColumns})
+      SELECT ${selectColumns}
+      FROM ${legacyTable};
+      DROP TABLE ${legacyTable};
+    `);
+  } finally {
+    db.pragma(`legacy_alter_table = ${legacyAlter ? 'ON' : 'OFF'}`);
+    db.pragma(`foreign_keys = ${foreignKeys ? 'ON' : 'OFF'}`);
+  }
+}
+
+function migrateCallRecordingUsersNullable(db) {
+  rebuildTableWithNullableUser(db, 'call_recordings', createCallRecordingsTable, [
+    'id',
+    'call_id',
+    'user_id',
+    'guest_id',
+    'guest_display_name',
+    'scope',
+    'livekit_identity',
+    'track_id',
+    'egress_id',
+    'file_path',
+    'status',
+    'started_at',
+    'ended_at',
+    'duration_ms',
+    'size_bytes',
+    'transcription_text',
+    'transcription_provider',
+    'transcription_model',
+    'transcription_error',
+    'created_at',
+    'updated_at',
+  ]);
+}
+
+function migrateCallTranscriptSegmentUsersNullable(db) {
+  rebuildTableWithNullableUser(db, 'call_transcript_segments', createCallTranscriptSegmentsTable, [
+    'id',
+    'call_id',
+    'recording_id',
+    'user_id',
+    'guest_id',
+    'guest_display_name',
+    'speaker_name',
+    'start_ms',
+    'end_ms',
+    'text',
+    'timing_approximate',
+    'created_at',
+  ]);
+}
+
 function initCallSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS app_settings (
@@ -105,6 +234,7 @@ function initCallSchema(db) {
 
   createCallSessionsTable(db);
   migrateCallSessionsStatus(db);
+  addColumnIfMissing(db, 'call_sessions', 'external_invite_token', 'external_invite_token TEXT DEFAULT NULL');
   addColumnIfMissing(db, 'call_sessions', 'ended_reason', 'ended_reason TEXT DEFAULT NULL');
   addColumnIfMissing(db, 'call_sessions', 'duration_ms', 'duration_ms INTEGER DEFAULT NULL');
   addColumnIfMissing(db, 'call_sessions', 'message_id', 'message_id INTEGER DEFAULT NULL REFERENCES messages(id) ON DELETE SET NULL');
@@ -121,6 +251,20 @@ function initCallSchema(db) {
       left_at TEXT DEFAULT NULL,
       updated_at TEXT DEFAULT (datetime('now')),
       PRIMARY KEY (call_id, user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS call_guest_participants (
+      call_id INTEGER NOT NULL REFERENCES call_sessions(id) ON DELETE CASCADE,
+      guest_id TEXT NOT NULL,
+      display_name TEXT NOT NULL DEFAULT '',
+      state TEXT NOT NULL DEFAULT 'invited' CHECK(state IN ('invited','joined','left')),
+      livekit_identity TEXT DEFAULT '',
+      session_token_hash TEXT NOT NULL DEFAULT '',
+      joined_at TEXT DEFAULT NULL,
+      left_at TEXT DEFAULT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (call_id, guest_id)
     );
 
     CREATE TABLE IF NOT EXISTS call_messages (
@@ -163,7 +307,9 @@ function initCallSchema(db) {
     CREATE TABLE IF NOT EXISTS call_recordings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       call_id INTEGER NOT NULL REFERENCES call_sessions(id) ON DELETE CASCADE,
-      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id INTEGER DEFAULT NULL REFERENCES users(id) ON DELETE CASCADE,
+      guest_id TEXT DEFAULT '',
+      guest_display_name TEXT DEFAULT '',
       scope TEXT NOT NULL DEFAULT 'participant' CHECK(scope IN ('participant','mixed')),
       livekit_identity TEXT NOT NULL DEFAULT '',
       track_id TEXT NOT NULL DEFAULT '',
@@ -186,7 +332,9 @@ function initCallSchema(db) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       call_id INTEGER NOT NULL REFERENCES call_sessions(id) ON DELETE CASCADE,
       recording_id INTEGER DEFAULT NULL REFERENCES call_recordings(id) ON DELETE CASCADE,
-      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id INTEGER DEFAULT NULL REFERENCES users(id) ON DELETE CASCADE,
+      guest_id TEXT DEFAULT '',
+      guest_display_name TEXT DEFAULT '',
       speaker_name TEXT NOT NULL DEFAULT '',
       start_ms INTEGER NOT NULL DEFAULT 0,
       end_ms INTEGER NOT NULL DEFAULT 0,
@@ -220,6 +368,8 @@ function initCallSchema(db) {
       call_id INTEGER NOT NULL REFERENCES call_sessions(id) ON DELETE CASCADE,
       recording_id INTEGER DEFAULT NULL REFERENCES call_recordings(id) ON DELETE SET NULL,
       user_id INTEGER DEFAULT NULL REFERENCES users(id) ON DELETE SET NULL,
+      guest_id TEXT DEFAULT '',
+      guest_display_name TEXT DEFAULT '',
       speaker_name TEXT NOT NULL DEFAULT '',
       speaker_label TEXT NOT NULL DEFAULT '',
       start_ms INTEGER NOT NULL DEFAULT 0,
@@ -276,12 +426,19 @@ function initCallSchema(db) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_call_sessions_active_chat
       ON call_sessions(chat_id)
       WHERE status='active';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_call_sessions_external_invite_token
+      ON call_sessions(external_invite_token)
+      WHERE external_invite_token IS NOT NULL AND external_invite_token!='';
     CREATE INDEX IF NOT EXISTS idx_call_sessions_chat_status
       ON call_sessions(chat_id, status);
     CREATE INDEX IF NOT EXISTS idx_call_sessions_message
       ON call_sessions(message_id);
     CREATE INDEX IF NOT EXISTS idx_call_participants_user
       ON call_participants(user_id, state);
+    CREATE INDEX IF NOT EXISTS idx_call_guest_participants_call
+      ON call_guest_participants(call_id, state);
+    CREATE INDEX IF NOT EXISTS idx_call_guest_participants_session
+      ON call_guest_participants(call_id, guest_id, session_token_hash);
     CREATE INDEX IF NOT EXISTS idx_call_messages_call
       ON call_messages(call_id);
     CREATE INDEX IF NOT EXISTS idx_call_recordings_call
@@ -307,13 +464,33 @@ function initCallSchema(db) {
       ON call_artifact_runs(batch_id, artifact_key);
   `);
 
+  migrateCallRecordingUsersNullable(db);
+  migrateCallTranscriptSegmentUsersNullable(db);
+
   addColumnIfMissing(db, 'call_messages', 'media_kind', "media_kind TEXT NOT NULL DEFAULT 'video' CHECK(media_kind IN ('video','voice'))");
   addColumnIfMissing(db, 'call_messages', 'room_mode', "room_mode TEXT NOT NULL DEFAULT 'ringing' CHECK(room_mode IN ('ringing','room'))");
 
   addColumnIfMissing(db, 'call_recordings', 'scope', "scope TEXT NOT NULL DEFAULT 'participant'");
+  addColumnIfMissing(db, 'call_recordings', 'guest_id', "guest_id TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'call_recordings', 'guest_display_name', "guest_display_name TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'call_transcript_segments', 'guest_id', "guest_id TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'call_transcript_segments', 'guest_display_name', "guest_display_name TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'call_transcript_run_segments', 'guest_id', "guest_id TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'call_transcript_run_segments', 'guest_display_name', "guest_display_name TEXT DEFAULT ''");
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_call_recordings_call_scope
       ON call_recordings(call_id, scope, status);
+    CREATE INDEX IF NOT EXISTS idx_call_recordings_call
+      ON call_recordings(call_id, status);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_call_recordings_active_track
+      ON call_recordings(call_id, track_id)
+      WHERE status IN ('recording','processing');
+    CREATE INDEX IF NOT EXISTS idx_call_recordings_egress
+      ON call_recordings(egress_id);
+    CREATE INDEX IF NOT EXISTS idx_call_transcript_segments_call
+      ON call_transcript_segments(call_id, start_ms, user_id);
+    CREATE INDEX IF NOT EXISTS idx_call_transcript_run_segments_run
+      ON call_transcript_run_segments(run_id, start_ms, id);
   `);
 }
 

@@ -4273,6 +4273,10 @@ app.use('/api', (_req, res) => {
   res.status(404).json({ error: 'API endpoint not found' });
 });
 
+app.get('/call/:inviteToken', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'call.html'));
+});
+
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api/') || req.path.startsWith('/uploads/'))
     return res.status(404).json({ error: 'Not found' });

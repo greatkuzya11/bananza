@@ -5,7 +5,7 @@ const jwt = require('jsonwebtoken');
 
 const { createSandbox } = require('../support/runtimeSandbox');
 const { createBasicChatScenario } = require('../support/scenario');
-const { waitForSocketMessage } = require('../support/api');
+const { createSession, waitForSocketMessage } = require('../support/api');
 
 let sandbox;
 let scenario;
@@ -125,6 +125,74 @@ test('admin can enable calls and users can run call lifecycle', async () => {
     assert.equal(activeCard.call.status, 'active');
     assert.equal(activeCard.call.can_join, true);
 
+    const forbiddenLink = await bob.request(`/api/calls/${created.data.call.id}/external-link`, {
+      method: 'POST',
+      json: {},
+      expectedStatus: 403,
+    });
+    assert.equal(forbiddenLink.data.code, 'forbidden');
+
+    const externalLink = await admin.request(`/api/calls/${created.data.call.id}/external-link`, {
+      method: 'POST',
+      json: {},
+    });
+    assert.match(externalLink.data.external_url, /\/call\/[A-Za-z0-9_-]+$/);
+    const inviteToken = externalLink.data.external_url.split('/').pop();
+    assert.ok(inviteToken);
+
+    const publicGuest = createSession(sandbox.baseUrl);
+    const publicStatus = await publicGuest.request(`/api/calls/external/${inviteToken}`);
+    assert.equal(publicStatus.data.ended, false);
+    assert.equal(publicStatus.data.call.id, created.data.call.id);
+    assert.equal(publicStatus.data.call.status, 'active');
+    assert.equal(Object.prototype.hasOwnProperty.call(publicStatus.data.call, 'chat_id'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(publicStatus.data.call, 'livekit_room_name'), false);
+
+    const missingGuestName = await publicGuest.request(`/api/calls/external/${inviteToken}/token`, {
+      method: 'POST',
+      json: { display_name: '' },
+      expectedStatus: 400,
+    });
+    assert.equal(missingGuestName.data.code, 'display_name_required');
+
+    const guestToken = await publicGuest.request(`/api/calls/external/${inviteToken}/token`, {
+      method: 'POST',
+      json: { display_name: 'Guest User' },
+      expectedStatus: 201,
+    });
+    assert.equal(guestToken.data.livekit.url, 'ws://admin-livekit.local:7880');
+    const decodedGuestToken = jwt.decode(guestToken.data.livekit.token) || {};
+    assert.match(decodedGuestToken.sub || '', new RegExp(`^guest:${created.data.call.id}:`));
+    assert.equal(decodedGuestToken.name, 'Guest User');
+    const guestSources = tokenPublishSources(guestToken.data.livekit.token);
+    assert.equal(guestSources.some((source) => source.includes('camera')), true);
+    assert.equal(guestSources.some((source) => source.includes('microphone')), true);
+    assert.equal(guestSources.some((source) => source.includes('screen_share')), true);
+
+    const guestUpdatePromise = waitForSocketMessage(bobSocket, (msg) => (
+      msg.type === 'call_participant_updated'
+      && Number(msg.call?.id || 0) === Number(created.data.call.id)
+      && msg.participant?.guest_id === guestToken.data.guest.guest_id
+      && msg.participant?.state === 'joined'
+    ));
+    const guestJoined = await publicGuest.request(`/api/calls/external/${inviteToken}/joined`, {
+      method: 'POST',
+      json: {
+        guest_id: guestToken.data.guest.guest_id,
+        session_token: guestToken.data.guest.session_token,
+      },
+    });
+    assert.equal(guestJoined.data.call.participant_count, 1);
+    assert.equal(
+      guestJoined.data.call.participants.some((participant) => (
+        participant.guest_id === guestToken.data.guest.guest_id
+        && participant.display_name === 'Guest User'
+        && participant.state === 'joined'
+      )),
+      true
+    );
+    await guestUpdatePromise;
+
     const invite = await invitePromise;
     assert.equal(invite.call.id, created.data.call.id);
     assert.equal(invite.call.chat_id, groupChat.id);
@@ -166,6 +234,24 @@ test('admin can enable calls and users can run call lifecycle', async () => {
       )),
       true
     );
+    assert.equal(joinedResponse.data.call.participant_count, 2);
+
+    const guestLeft = await publicGuest.request(`/api/calls/external/${inviteToken}/leave`, {
+      method: 'POST',
+      json: {
+        guest_id: guestToken.data.guest.guest_id,
+        session_token: guestToken.data.guest.session_token,
+      },
+    });
+    assert.equal(guestLeft.data.call.status, 'active');
+    assert.equal(guestLeft.data.call.participant_count, 1);
+    assert.equal(
+      guestLeft.data.call.participants.some((participant) => (
+        participant.guest_id === guestToken.data.guest.guest_id
+        && participant.state === 'left'
+      )),
+      true
+    );
 
     const ended = await admin.request(`/api/calls/${created.data.call.id}/end`, {
       method: 'POST',
@@ -185,6 +271,17 @@ test('admin can enable calls and users can run call lifecycle', async () => {
 
     const activeAfterEnd = await bob.request(`/api/chats/${groupChat.id}/calls/active`);
     assert.equal(activeAfterEnd.data.call, null);
+
+    const publicEnded = await publicGuest.request(`/api/calls/external/${inviteToken}`);
+    assert.equal(publicEnded.data.ended, true);
+    assert.equal(publicEnded.data.call.status, 'ended');
+
+    const guestTokenAfterEnd = await publicGuest.request(`/api/calls/external/${inviteToken}/token`, {
+      method: 'POST',
+      json: { display_name: 'Late Guest' },
+      expectedStatus: 410,
+    });
+    assert.equal(guestTokenAfterEnd.data.code, 'call_not_active');
   } finally {
     bobSocket.close();
   }

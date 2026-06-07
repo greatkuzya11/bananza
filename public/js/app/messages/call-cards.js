@@ -27,7 +27,9 @@
     const fileExtension = typeof opts.fileExtension === 'function' ? opts.fileExtension : (typeof formatters.fileExtension === 'function' ? formatters.fileExtension : (value) => String(value || '').split('.').pop());
     const clamp = typeof opts.clamp === 'function' ? opts.clamp : (value, min, max) => Math.max(min, Math.min(max, value));
     const getToken = typeof opts.getToken === 'function' ? opts.getToken : () => '';
+    const getCurrentUser = typeof opts.getCurrentUser === 'function' ? opts.getCurrentUser : () => null;
     const showCenterToast = typeof actions.showCenterToast === 'function' ? actions.showCenterToast : () => {};
+    const copyTextToClipboard = typeof actions.copyTextToClipboard === 'function' ? actions.copyTextToClipboard : () => Promise.resolve(false);
     const openModal = typeof actions.openModal === 'function' ? actions.openModal : () => {};
     const closeModal = typeof actions.closeModal === 'function' ? actions.closeModal : () => {};
     const openMediaViewer = typeof actions.openMediaViewer === 'function' ? actions.openMediaViewer : () => {};
@@ -523,6 +525,11 @@
         const alreadyInside = Boolean(window.BananzaCallHooks?.isCurrentCall?.(call.id));
         const joinLabel = alreadyInside ? t('Open') : (voiceRoom ? t('Join voice room') : t('Join call'));
         actions.push(`<button type="button" class="call-message-action primary" data-call-card-join="${Number(call.id || 0)}">${esc(joinLabel)}</button>`);
+        const user = getCurrentUser() || {};
+        const canCopyExternalLink = Boolean(Number(call.id || 0) && (user.is_admin || Number(user.id || 0) === Number(call.started_by || 0)));
+        if (canCopyExternalLink) {
+          actions.push(`<button type="button" class="call-message-action" data-call-card-copy-link="${Number(call.id || 0)}">${esc(t('Copy call link'))}</button>`);
+        }
       }
       if (!active && Number(call.id || 0)) {
         const transcriptRun = latestCallTranscriptRun(call);
@@ -890,6 +897,22 @@
           .finally(() => {
             if (button) button.disabled = false;
           });
+      });
+      row.querySelector('[data-call-card-copy-link]')?.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        const button = event.currentTarget;
+        if (!Number(call.id || 0)) return;
+        button.disabled = true;
+        try {
+          const data = await api(`/api/calls/${Number(call.id || 0)}/external-link`, { method: 'POST', body: {} });
+          const link = data?.external_url || data?.url || data?.external_path || '';
+          const copied = await copyTextToClipboard(link);
+          showCenterToast(copied ? t('Call link copied') : t('Could not copy call link'));
+        } catch (error) {
+          showCenterToast(error.message || t('Could not copy call link'));
+        } finally {
+          button.disabled = false;
+        }
       });
       row.querySelector('[data-call-card-transcript]')?.addEventListener('click', (event) => {
         event.stopPropagation();

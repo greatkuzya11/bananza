@@ -18,6 +18,23 @@ async function waitForCondition(window, predicate, { attempts = 30 } = {}) {
   throw new Error('Timed out waiting for condition');
 }
 
+function dispatchPointer(window, target, type, init = {}) {
+  const event = new window.MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    button: init.button ?? 0,
+    clientX: init.clientX ?? 0,
+    clientY: init.clientY ?? 0,
+  });
+  Object.defineProperties(event, {
+    pointerId: { configurable: true, value: init.pointerId ?? 1 },
+    pointerType: { configurable: true, value: init.pointerType || 'mouse' },
+    isPrimary: { configurable: true, value: true },
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
 function installCallBridge(dom, state) {
   const { document, window } = dom.window;
   state.requests = [];
@@ -133,6 +150,58 @@ async function bootCallFeature(state) {
   return dom;
 }
 
+async function bootExternalCallFeature(state) {
+  const dom = createAppDom();
+  const { window } = dom;
+  state.requests = [];
+  window.BananzaExternalCall = { inviteToken: state.inviteToken || 'external-token' };
+  window.BananzaAppBridge = {
+    api: async (url, opts = {}) => {
+      state.requests.push({ url, opts });
+      if (url === `/api/calls/external/${state.inviteToken || 'external-token'}`) {
+        return { settings: state.features, ended: false, call: state.externalCall };
+      }
+      if (url === `/api/calls/external/${state.inviteToken || 'external-token'}/token`) {
+        state.tokenPayload = opts.body || {};
+        state.externalGuest = { guest_id: 'guest123456789', display_name: state.tokenPayload.display_name, session_token: 'session-token' };
+        state.externalCall = {
+          ...state.externalCall,
+          participants: [{ guest_id: state.externalGuest.guest_id, display_name: state.externalGuest.display_name, state: 'invited', is_guest: 1 }],
+        };
+        return { call: state.externalCall, guest: state.externalGuest, livekit: { url: 'ws://livekit.test', token: 'guest-token' } };
+      }
+      if (url === `/api/calls/external/${state.inviteToken || 'external-token'}/joined`) {
+        state.joinedPayload = opts.body || {};
+        state.externalCall = {
+          ...state.externalCall,
+          participant_count: 1,
+          participants: (state.externalCall.participants || []).map((participant) => ({ ...participant, state: 'joined' })),
+        };
+        return { call: state.externalCall };
+      }
+      if (url === `/api/calls/external/${state.inviteToken || 'external-token'}/leave`) {
+        state.leftPayload = opts.body || {};
+        return { call: state.externalCall };
+      }
+      throw new Error(`Unexpected external call feature request: ${url}`);
+    },
+    applyLocalizedDom: () => {},
+    getCurrentChat: () => null,
+    getCurrentChatId: () => 0,
+    getCurrentUser: () => null,
+    refreshCallIndicators: () => {},
+    syncChatHeaderActions: () => {},
+    t: (key, params = {}) => window.BananzaI18n?.t?.(key, params) || key,
+  };
+  loadBrowserScript(dom, 'public/js/i18n.js');
+  loadBrowserScript(dom, 'public/js/calls/CallStore.js');
+  loadBrowserScript(dom, 'public/js/calls/CallMedia.js');
+  loadBrowserScript(dom, 'public/js/calls/CallNotifications.js');
+  loadBrowserScript(dom, 'public/js/calls/CallFeature.js');
+  await waitForCondition(window, () => state.requests.some((request) => request.url === `/api/calls/external/${state.inviteToken || 'external-token'}`));
+  return dom;
+}
+
 function defaultState(overrides = {}) {
   return {
     user: { id: 1, display_name: 'Alice', is_admin: 1 },
@@ -176,6 +245,36 @@ function defaultState(overrides = {}) {
         masked_api_secret: '',
         source: '',
       },
+    },
+    ...overrides,
+  };
+}
+
+function defaultExternalState(overrides = {}) {
+  return {
+    inviteToken: 'external-token',
+    features: {
+      calls_enabled: true,
+      livekit_ready: true,
+      allow_private_calls: true,
+      allow_group_calls: true,
+      ring_timeout_ms: 60000,
+      screen_share_enabled: true,
+      ringtone_enabled: true,
+      call_messages_enabled: true,
+      max_call_participants: 20,
+    },
+    externalCall: {
+      id: 310,
+      title: 'External demo',
+      status: 'active',
+      media_kind: 'video',
+      room_mode: 'ringing',
+      started_at: new Date(Date.now() - 5000).toISOString(),
+      participants: [],
+      participant_count: 0,
+      can_join: true,
+      can_screen_share: true,
     },
     ...overrides,
   };
@@ -424,6 +523,34 @@ test('CallFeature hides prejoin end button for non-initiators and device selecti
   assert.equal(dom.window.document.getElementById('callPrejoinEndBtn').classList.contains('hidden'), true);
 });
 
+test('CallFeature external mode requires guest name and hides internal-only controls', async (t) => {
+  const state = defaultExternalState();
+  const dom = await bootExternalCallFeature(state);
+  t.after(() => dom.window.close());
+
+  await waitForCondition(dom.window, () => !dom.window.document.getElementById('callPrejoin').classList.contains('hidden'));
+  assert.equal(dom.window.document.getElementById('callGuestNameWrap').classList.contains('hidden'), false);
+  assert.equal(dom.window.document.getElementById('callPrejoinEndBtn').classList.contains('hidden'), true);
+  assert.equal(dom.window.document.getElementById('callPrejoinCancelBtn').classList.contains('hidden'), true);
+
+  dom.window.document.getElementById('callPrejoinJoinBtn').click();
+  await waitForCondition(dom.window, () => dom.window.document.getElementById('callPrejoinStatus').textContent === dom.window.BananzaI18n.t('Name is required'));
+  assert.equal(state.requests.some((request) => request.url.endsWith('/token')), false);
+
+  installMockLiveKitRoom(dom);
+  dom.window.document.getElementById('callGuestNameInput').value = 'Outside Guest';
+  dom.window.document.getElementById('callPrejoinJoinBtn').click();
+  await waitForCondition(dom.window, () => Boolean(state.joinedPayload));
+
+  assert.equal(state.tokenPayload.display_name, 'Outside Guest');
+  assert.equal(state.joinedPayload.guest_id, 'guest123456789');
+  assert.equal(state.joinedPayload.session_token, 'session-token');
+  assert.equal(dom.window.document.getElementById('callPrejoin').classList.contains('hidden'), true);
+  assert.equal(dom.window.document.getElementById('callSurface').classList.contains('hidden'), false);
+  assert.equal(dom.window.document.getElementById('callEndBtn').classList.contains('hidden'), true);
+  assert.equal(dom.window.document.getElementById('callAiNotesBtn').classList.contains('hidden'), true);
+});
+
 test('CallFeature treats partial prejoin media success as usable preview state', async (t) => {
   const state = defaultState({
     features: {
@@ -584,6 +711,30 @@ test('CallFeature joins and leaves a mocked LiveKit room', async (t) => {
   await waitForCondition(dom.window, () => !dom.window.document.getElementById('callParticipantsPanel').classList.contains('hidden'));
   assert.equal(dom.window.document.querySelectorAll('.call-participant-avatar img').length, 2);
   assert.ok(dom.window.document.getElementById('callSurface'));
+
+  dom.window.document.getElementById('callMinimizeBtn').click();
+  await waitForCondition(dom.window, () => dom.window.document.getElementById('callSurface').classList.contains('is-minimized'));
+  assert.equal(dom.window.document.getElementById('callParticipantsBtn').classList.contains('hidden'), true);
+  assert.equal(dom.window.document.getElementById('callParticipantsPanel').classList.contains('hidden'), true);
+  const surface = dom.window.document.getElementById('callSurface');
+  const surfaceCard = surface.querySelector('.call-surface-card');
+  surface.getBoundingClientRect = () => ({ left: 0, top: 0, width: 500, height: 400, right: 500, bottom: 400 });
+  surfaceCard.getBoundingClientRect = () => {
+    const x = Number.parseFloat(surface.style.getPropertyValue('--call-mini-x')) || 122;
+    const y = Number.parseFloat(surface.style.getPropertyValue('--call-mini-y')) || 310;
+    return { left: x, top: y, width: 360, height: 72, right: x + 360, bottom: y + 72 };
+  };
+  dispatchPointer(dom.window, surfaceCard, 'pointerdown', { clientX: 200, clientY: 330 });
+  await waitForMs(dom.window, 320);
+  dispatchPointer(dom.window, dom.window, 'pointermove', { clientX: 470, clientY: 390 });
+  dispatchPointer(dom.window, dom.window, 'pointerup', { clientX: 470, clientY: 390 });
+  await waitForCondition(dom.window, () => surface.classList.contains('is-mini-positioned'));
+  assert.equal(surface.style.getPropertyValue('--call-mini-x'), '128px');
+  assert.equal(surface.style.getPropertyValue('--call-mini-y'), '316px');
+  await waitForMs(dom.window, 240);
+  dom.window.document.getElementById('callMinimizeBtn').click();
+  await waitForCondition(dom.window, () => !dom.window.document.getElementById('callSurface').classList.contains('is-minimized'));
+  assert.equal(dom.window.document.getElementById('callParticipantsBtn').classList.contains('hidden'), false);
 
   dom.window.document.getElementById('callLeaveBtn').click();
   await waitForCondition(dom.window, () => disconnected);
@@ -891,7 +1042,7 @@ test('CallFeature focuses video tiles and marks active speakers', async (t) => {
   focusBtn.click();
   await waitForCondition(dom.window, () => grid.classList.contains('is-video-focus-mode'));
   assert.equal(remoteTile.classList.contains('is-video-focused'), true);
-  assert.equal(remoteTile.classList.contains('is-video-fill'), true);
+  assert.equal(remoteTile.classList.contains('is-video-fill'), false);
   assert.equal(focusBtn.getAttribute('aria-pressed'), 'true');
 
   focusBtn.click();

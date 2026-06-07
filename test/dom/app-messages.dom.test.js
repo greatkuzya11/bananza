@@ -453,6 +453,9 @@ test('call cards render and delegate controls to call hooks', async () => {
   const { document } = window;
   const joined = [];
   const transcripts = [];
+  const copied = [];
+  const toasts = [];
+  const apiCalls = [];
   window.BananzaCallHooks = {
     isCurrentCall: () => false,
     joinCallFromMessage(call) { joined.push(call.id); return Promise.resolve(); },
@@ -461,18 +464,35 @@ test('call cards render and delegate controls to call hooks', async () => {
   const callCards = window.BananzaApp.messages.callCards.createCallCardRenderer({
     document,
     dom: { messagesEl: document.getElementById('messages') },
+    api: async (url, opts = {}) => {
+      apiCalls.push({ url, opts });
+      return { external_url: 'https://example.test/call/invite-token' };
+    },
     t: (key) => key,
     esc: window.BananzaApp.formatters.esc,
-    actions: { bindMediaPlaybackState() {}, showCenterToast() {} },
+    getCurrentUser: () => ({ id: 1, is_admin: 0 }),
+    actions: {
+      bindMediaPlaybackState() {},
+      showCenterToast(message) { toasts.push(message); },
+      copyTextToClipboard(text) {
+        copied.push(text);
+        return Promise.resolve(true);
+      },
+    },
   });
   const row = document.createElement('div');
   row.className = 'msg-row';
-  row.__messageData = { id: 1, call: { id: 44, status: 'active', can_join: true, media_kind: 'video' } };
+  row.__messageData = { id: 1, call: { id: 44, status: 'active', can_join: true, media_kind: 'video', started_by: 1 } };
   row.innerHTML = callCards.renderCallMessageCard(row.__messageData);
   callCards.bindCallMessageControls(row);
   row.querySelector('[data-call-card-join]').click();
   await wait(window);
   assert.deepEqual(joined, [44]);
+  row.querySelector('[data-call-card-copy-link]').click();
+  await wait(window);
+  assert.equal(apiCalls.at(-1).url, '/api/calls/44/external-link');
+  assert.deepEqual(copied, ['https://example.test/call/invite-token']);
+  assert.equal(toasts.at(-1), 'Call link copied');
 
   const transcriptRow = document.createElement('div');
   transcriptRow.__messageData = { call_transcript_run: { id: 9, status: 'completed', transcript_ready: true } };

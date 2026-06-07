@@ -48,6 +48,8 @@
 .call-admin-status.hidden,
 .call-control-btn.hidden,
 .call-device-list label.hidden,
+.call-guest-name.hidden,
+.call-external-ended.hidden,
 .call-prejoin-avatar.hidden,
 .call-prejoin video.hidden,
 .call-participants-panel.hidden {
@@ -318,6 +320,31 @@
   color: var(--success);
 }
 
+.call-guest-name {
+  display: grid;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.call-guest-name-input {
+  width: 100%;
+  height: 42px;
+  border: 1px solid var(--call-border);
+  border-radius: 8px;
+  background: var(--call-bg-panel);
+  color: var(--text-primary);
+  padding: 0 12px;
+  font: inherit;
+  outline: none;
+}
+
+.call-guest-name-input:focus {
+  border-color: var(--accent);
+  box-shadow: var(--call-focus-ring);
+}
+
 .call-prejoin-toggles,
 .call-device-list {
   display: grid;
@@ -378,6 +405,86 @@
 .call-device-select optgroup {
   background: var(--call-bg-modal);
   color: var(--text-primary);
+}
+
+.call-external-page {
+  --chat-area-left: 0px;
+  --chat-area-top: 0px;
+  --chat-area-width: 100vw;
+  --chat-area-height: 100dvh;
+  width: 100vw;
+  height: 100dvh;
+  min-height: 100dvh;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg-main, #0f1720);
+  color: var(--text-primary, #f3f6fb);
+}
+
+.call-external-page .call-prejoin,
+.call-external-page .call-surface {
+  background: var(--bg-main, #0f1720);
+}
+
+.call-external-page .call-surface {
+  left: 0;
+  top: 0;
+  width: 100vw;
+  height: 100dvh;
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 0;
+}
+
+.call-external-page .call-surface-card {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  border-radius: 0;
+}
+
+.call-external-page .call-grid[data-call-layout="single"] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: minmax(0, 1fr);
+  align-content: stretch;
+  align-items: stretch;
+}
+
+.call-external-page .call-grid[data-call-layout="single"] .call-tile {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+}
+
+.call-external-ended {
+  position: fixed;
+  inset: 0;
+  z-index: 7100;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: var(--bg-main, #0f1720);
+  color: var(--text-primary, #f3f6fb);
+}
+
+.call-external-ended-card {
+  width: min(420px, 100%);
+  border: 1px solid var(--call-border-soft);
+  border-radius: 8px;
+  background: var(--call-bg-modal);
+  padding: 24px;
+  box-shadow: 0 22px 70px rgba(0, 0, 0, .34);
+}
+
+.call-external-ended-title {
+  font-size: 22px;
+  font-weight: 800;
+  margin-bottom: 8px;
+}
+
+.call-external-ended-text {
+  color: var(--text-secondary);
+  line-height: 1.45;
 }
 
 html[data-visual-mode="rich"] .call-incoming-card,
@@ -491,7 +598,7 @@ html[data-visual-mode="rich"] .call-admin-status {
 .call-surface.is-minimized {
   align-items: flex-end;
   justify-content: flex-end;
-  padding: 18px;
+  padding: 0;
   pointer-events: none;
 }
 
@@ -500,11 +607,30 @@ html[data-visual-mode="rich"] .call-admin-status {
 }
 
 .call-surface.is-minimized .call-surface-card {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
   width: min(360px, calc(100vw - 36px));
   height: 72px;
   max-height: 72px;
   grid-template-rows: 1fr;
+  border-radius: var(--radius-msg, 12px);
+  cursor: grab;
   pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+}
+
+.call-surface.is-minimized.is-mini-positioned .call-surface-card {
+  left: var(--call-mini-x);
+  top: var(--call-mini-y);
+  right: auto;
+  bottom: auto;
+}
+
+.call-surface.is-minimized.is-mini-dragging .call-surface-card {
+  cursor: grabbing;
+  box-shadow: 0 20px 70px rgba(0, 0, 0, .4);
 }
 
 .call-surface.is-minimized .call-room-layout,
@@ -514,6 +640,7 @@ html[data-visual-mode="rich"] .call-admin-status {
 
 .call-surface.is-minimized .call-surface-head {
   border-bottom: 0;
+  border-radius: inherit;
   height: 100%;
   padding: 12px 14px;
 }
@@ -890,7 +1017,7 @@ html[data-visual-mode="rich"] .call-admin-status {
 }
 
 .call-grid.is-video-focus-mode .call-tile.is-video-focused video {
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .call-grid.is-video-focus-mode .call-tile.is-video-secondary {
@@ -2049,11 +2176,13 @@ html[data-visual-mode="rich"] .call-admin-status {
   }
 
   .call-surface.is-minimized {
-    padding: 10px;
+    padding: 0;
   }
 
   .call-surface.is-minimized .call-surface-card {
-    width: 100%;
+    right: 10px;
+    bottom: 10px;
+    width: min(360px, calc(100vw - 20px));
   }
 
   .call-grid {

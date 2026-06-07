@@ -9,6 +9,9 @@
   const STORE = window.BananzaCallStore || {};
   const MEDIA = window.BananzaCallMedia || {};
   const NOTIFICATIONS = window.BananzaCallNotifications || {};
+  const EXTERNAL_CONFIG = window.BananzaExternalCall || null;
+  const MINIMIZED_DRAG_HOLD_MS = 260;
+  const MINIMIZED_DRAG_MARGIN = 12;
 
   const state = {
     ready: false,
@@ -38,6 +41,9 @@
     cameraEnabled: true,
     screenShareEnabled: false,
     minimized: false,
+    minimizedPosition: null,
+    minimizedDrag: null,
+    minimizedSuppressClickUntil: 0,
     participantsOpen: false,
     selectedDevices: STORE.loadDevicePrefs?.() || { audioinput: '', videoinput: '', audiooutput: '' },
     devices: [],
@@ -68,6 +74,11 @@
     lastTileTap: { key: '', at: 0 },
     aiNotesTrackNotified: new Set(),
     transcriptModal: { callId: 0, text: '', segments: [] },
+    externalMode: Boolean(EXTERNAL_CONFIG?.inviteToken),
+    externalInviteToken: String(EXTERNAL_CONFIG?.inviteToken || '').trim(),
+    externalGuest: null,
+    externalEnded: false,
+    externalStatusTimer: 0,
   };
 
   function bridge() {
@@ -98,6 +109,25 @@
 
   function api(url, opts) {
     const call = bridge()?.api;
+    if (!call && state.externalMode && window.fetch) {
+      const init = { method: opts?.method || 'GET', headers: { ...(opts?.headers || {}) } };
+      if (opts?.body !== undefined) {
+        init.headers['Content-Type'] = 'application/json';
+        init.body = typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body || {});
+      }
+      return window.fetch(url, init).then(async (res) => {
+        const text = await res.text();
+        let data = null;
+        try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+        if (!res.ok) {
+          const error = new Error(data?.error || data?.message || res.statusText || t('Request failed'));
+          error.status = res.status;
+          error.data = data;
+          throw error;
+        }
+        return data;
+      });
+    }
     if (!call) return Promise.reject(new Error(t('App is not ready')));
     return call(url, opts);
   }
@@ -116,6 +146,13 @@
   }
 
   function currentUser() {
+    if (state.externalMode) {
+      return {
+        id: 0,
+        display_name: state.externalGuest?.display_name || document.getElementById('callGuestNameInput')?.value || t('Guest'),
+        is_guest: 1,
+      };
+    }
     return bridge()?.getCurrentUser?.() || null;
   }
 
@@ -150,12 +187,28 @@
     return match ? Number(match[1]) : 0;
   }
 
+  function guestIdFromIdentity(identity) {
+    const text = String(identity || '').trim();
+    const match = text.match(/^guest:\d+:([a-zA-Z0-9_-]+)(?::|$)/);
+    return match ? match[1] : '';
+  }
+
   function callParticipantForRoomParticipant(participant, local = false) {
+    if (local && state.externalMode) {
+      const guestId = state.externalGuest?.guest_id || guestIdFromIdentity(participant?.identity);
+      const byGuest = (state.currentCall?.participants || []).find((item) => item.guest_id === guestId);
+      return { ...(currentUser() || {}), ...(byGuest || {}), guest_id: guestId, is_guest: 1 };
+    }
     if (local) return { ...(currentUser() || {}), ...(state.currentCall?.participants || []).find((item) => Number(item.user_id) === Number(currentUser()?.id || 0)) };
     const userId = userIdFromIdentity(participant?.identity);
     if (userId) {
       const byId = (state.currentCall?.participants || []).find((item) => Number(item.user_id) === userId);
       if (byId) return byId;
+    }
+    const guestId = guestIdFromIdentity(participant?.identity);
+    if (guestId) {
+      const byGuest = (state.currentCall?.participants || []).find((item) => item.guest_id === guestId);
+      if (byGuest) return byGuest;
     }
     const name = String(participant?.name || participant?.identity || '').trim();
     return (state.currentCall?.participants || []).find((item) => [item.display_name, item.username].some((value) => String(value || '').trim() === name)) || null;
@@ -467,6 +520,10 @@
           <div class="call-prejoin-panel">
             <div class="call-prejoin-title" id="callPrejoinTitle">${escapeHtml(t('Ready to join?'))}</div>
             <div class="call-prejoin-meta" id="callPrejoinMeta"></div>
+            <label id="callGuestNameWrap" class="call-guest-name hidden">
+              <span>${escapeHtml(t('Your name'))}</span>
+              <input id="callGuestNameInput" class="call-guest-name-input" type="text" maxlength="60" autocomplete="name" placeholder="${escapeHtml(t('Enter your name'))}">
+            </label>
             <div class="call-prejoin-toggles">
               <button type="button" id="callPrejoinMicBtn" class="call-control-btn call-icon-toggle call-icon-mic" aria-label="${escapeHtml(t('Mic'))}" title="${escapeHtml(t('Mic'))}" aria-pressed="true">
                 <span class="call-icon" aria-hidden="true"></span>
@@ -499,6 +556,9 @@
         joinCall(state.pendingJoinCall).catch((error) => setPrejoinStatus(error.message || t('Could not join call'), 'error'));
       });
       document.getElementById('callPrejoinCancelBtn')?.addEventListener('click', closePrejoin);
+      document.getElementById('callGuestNameInput')?.addEventListener('input', () => {
+        if (state.externalGuest) state.externalGuest.display_name = document.getElementById('callGuestNameInput')?.value || state.externalGuest.display_name;
+      });
       document.getElementById('callPrejoinEndBtn')?.addEventListener('click', () => {
         endPendingPrejoinCall().catch((error) => setPrejoinStatus(error.message || t('Could not end call'), 'error'));
       });
@@ -571,6 +631,10 @@
       `;
       document.body.appendChild(surface);
       document.getElementById('callMinimizeBtn')?.addEventListener('click', toggleMinimized);
+      const surfaceCard = surface.querySelector('.call-surface-card');
+      surfaceCard?.addEventListener('pointerdown', handleMinimizedCardPointerDown);
+      surfaceCard?.addEventListener('click', handleMinimizedCardClick, true);
+      surfaceCard?.addEventListener('contextmenu', handleMinimizedCardContextMenu);
       document.getElementById('callParticipantsBtn')?.addEventListener('click', toggleParticipantsPanel);
       document.getElementById('callMicBtn')?.addEventListener('click', toggleMic);
       document.getElementById('callCameraBtn')?.addEventListener('click', toggleCamera);
@@ -582,8 +646,24 @@
       applyLocalized(surface);
     }
 
-    ensureAdminUi();
-    ensureTranscriptUi();
+    if (state.externalMode && !document.getElementById('callExternalEnded')) {
+      const ended = document.createElement('div');
+      ended.id = 'callExternalEnded';
+      ended.className = 'call-external-ended hidden';
+      ended.innerHTML = `
+        <div class="call-external-ended-card">
+          <div class="call-external-ended-title">${escapeHtml(t('Call ended'))}</div>
+          <div class="call-external-ended-text">${escapeHtml(t('The call has ended. You can close this window.'))}</div>
+        </div>
+      `;
+      document.body.appendChild(ended);
+      applyLocalized(ended);
+    }
+
+    if (!state.externalMode) {
+      ensureAdminUi();
+      ensureTranscriptUi();
+    }
     state.uiReady = true;
   }
 
@@ -837,11 +917,13 @@
 
   function renderAll() {
     ensureUi();
-    renderHeaderButton();
-    renderBanner();
-    renderIncoming();
+    if (!state.externalMode) {
+      renderHeaderButton();
+      renderBanner();
+      renderIncoming();
+    }
     renderSurface();
-    renderAdminEntry();
+    if (!state.externalMode) renderAdminEntry();
     notifyChatCallIndicatorsChanged();
   }
 
@@ -1014,6 +1096,161 @@
     button.setAttribute('aria-pressed', minimized ? 'true' : 'false');
   }
 
+  function clampValue(value, min, max) {
+    const number = Number(value || 0);
+    return Math.min(Math.max(number, min), max);
+  }
+
+  function minimizedCardGeometry() {
+    const surface = document.getElementById('callSurface');
+    const card = surface?.querySelector('.call-surface-card');
+    if (!surface || !card) return null;
+    const surfaceRect = surface.getBoundingClientRect();
+    const cardRect = card.getBoundingClientRect();
+    const surfaceWidth = Number(surfaceRect.width || surface.offsetWidth || 0);
+    const surfaceHeight = Number(surfaceRect.height || surface.offsetHeight || 0);
+    const cardWidth = Number(cardRect.width || card.offsetWidth || 0);
+    const cardHeight = Number(cardRect.height || card.offsetHeight || 0);
+    if (!surfaceWidth || !surfaceHeight || !cardWidth || !cardHeight) return null;
+    return { surface, card, surfaceRect, cardRect, surfaceWidth, surfaceHeight, cardWidth, cardHeight };
+  }
+
+  function clampMinimizedPosition(x, y) {
+    const geometry = minimizedCardGeometry();
+    if (!geometry) return { x: Number(x || 0), y: Number(y || 0) };
+    const maxX = Math.max(0, geometry.surfaceWidth - geometry.cardWidth - MINIMIZED_DRAG_MARGIN);
+    const maxY = Math.max(0, geometry.surfaceHeight - geometry.cardHeight - MINIMIZED_DRAG_MARGIN);
+    const minX = Math.min(MINIMIZED_DRAG_MARGIN, maxX);
+    const minY = Math.min(MINIMIZED_DRAG_MARGIN, maxY);
+    return {
+      x: clampValue(x, minX, maxX),
+      y: clampValue(y, minY, maxY),
+    };
+  }
+
+  function currentMinimizedPosition() {
+    const geometry = minimizedCardGeometry();
+    if (!geometry) return state.minimizedPosition || { x: 0, y: 0 };
+    return clampMinimizedPosition(
+      geometry.cardRect.left - geometry.surfaceRect.left,
+      geometry.cardRect.top - geometry.surfaceRect.top,
+    );
+  }
+
+  function applyMinimizedCardPosition() {
+    const surface = document.getElementById('callSurface');
+    const card = surface?.querySelector('.call-surface-card');
+    if (!surface || !card) return;
+    const positioned = Boolean(state.minimized && state.minimizedPosition);
+    surface.classList.toggle('is-mini-positioned', positioned);
+    surface.classList.toggle('is-mini-dragging', Boolean(state.minimizedDrag?.dragging));
+    if (!positioned) {
+      surface.style.removeProperty('--call-mini-x');
+      surface.style.removeProperty('--call-mini-y');
+      return;
+    }
+    const position = clampMinimizedPosition(state.minimizedPosition.x, state.minimizedPosition.y);
+    state.minimizedPosition = position;
+    surface.style.setProperty('--call-mini-x', `${Math.round(position.x)}px`);
+    surface.style.setProperty('--call-mini-y', `${Math.round(position.y)}px`);
+  }
+
+  function setMinimizedCardPosition(x, y) {
+    state.minimizedPosition = clampMinimizedPosition(x, y);
+    applyMinimizedCardPosition();
+  }
+
+  function clearMinimizedDragTimer() {
+    if (state.minimizedDrag?.timer) window.clearTimeout(state.minimizedDrag.timer);
+    if (state.minimizedDrag) state.minimizedDrag.timer = 0;
+  }
+
+  function updateMinimizedDrag(clientX, clientY) {
+    const drag = state.minimizedDrag;
+    const geometry = minimizedCardGeometry();
+    if (!drag || !geometry) return;
+    setMinimizedCardPosition(
+      clientX - geometry.surfaceRect.left - drag.offsetX,
+      clientY - geometry.surfaceRect.top - drag.offsetY,
+    );
+  }
+
+  function startMinimizedDrag() {
+    const drag = state.minimizedDrag;
+    if (!drag || !state.minimized) return;
+    drag.dragging = true;
+    drag.suppressClick = true;
+    state.minimizedPosition = { x: drag.originX, y: drag.originY };
+    applyMinimizedCardPosition();
+    updateMinimizedDrag(drag.lastClientX, drag.lastClientY);
+  }
+
+  function stopMinimizedDrag(event) {
+    const drag = state.minimizedDrag;
+    if (!drag || (event?.pointerId != null && drag.pointerId !== event.pointerId)) return;
+    clearMinimizedDragTimer();
+    window.removeEventListener('pointermove', handleMinimizedPointerMove, true);
+    window.removeEventListener('pointerup', stopMinimizedDrag, true);
+    window.removeEventListener('pointercancel', stopMinimizedDrag, true);
+    try {
+      drag.card?.releasePointerCapture?.(drag.pointerId);
+    } catch {}
+    if (drag.dragging) {
+      event?.preventDefault?.();
+      state.minimizedSuppressClickUntil = Date.now() + 220;
+    }
+    state.minimizedDrag = null;
+    applyMinimizedCardPosition();
+  }
+
+  function handleMinimizedPointerMove(event) {
+    const drag = state.minimizedDrag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    drag.lastClientX = event.clientX;
+    drag.lastClientY = event.clientY;
+    if (!drag.dragging) return;
+    event.preventDefault();
+    updateMinimizedDrag(event.clientX, event.clientY);
+  }
+
+  function handleMinimizedCardPointerDown(event) {
+    if (!state.minimized || (event.button != null && event.button !== 0)) return;
+    const geometry = minimizedCardGeometry();
+    if (!geometry) return;
+    const origin = currentMinimizedPosition();
+    state.minimizedDrag = {
+      pointerId: event.pointerId,
+      card: geometry.card,
+      originX: origin.x,
+      originY: origin.y,
+      offsetX: event.clientX - geometry.surfaceRect.left - origin.x,
+      offsetY: event.clientY - geometry.surfaceRect.top - origin.y,
+      lastClientX: event.clientX,
+      lastClientY: event.clientY,
+      dragging: false,
+      suppressClick: false,
+      timer: window.setTimeout(startMinimizedDrag, MINIMIZED_DRAG_HOLD_MS),
+    };
+    try {
+      geometry.card.setPointerCapture?.(event.pointerId);
+    } catch {}
+    window.addEventListener('pointermove', handleMinimizedPointerMove, true);
+    window.addEventListener('pointerup', stopMinimizedDrag, true);
+    window.addEventListener('pointercancel', stopMinimizedDrag, true);
+  }
+
+  function handleMinimizedCardClick(event) {
+    if (Date.now() > state.minimizedSuppressClickUntil) return;
+    state.minimizedSuppressClickUntil = 0;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+
+  function handleMinimizedCardContextMenu(event) {
+    if (!state.minimized) return;
+    event.preventDefault();
+  }
+
   function setToolButtonLabel(button, label) {
     if (!button) return;
     let icon = button.querySelector('.call-icon');
@@ -1039,6 +1276,7 @@
   }
 
   function canEndPendingPrejoinCall(call = state.pendingJoinCall) {
+    if (state.externalMode) return false;
     return Boolean(
       call?.id
       && state.prejoinMode === 'join'
@@ -1053,11 +1291,15 @@
     const avatar = document.getElementById('callPrejoinAvatar');
     const video = document.getElementById('callPrejoinVideo');
     const endBtn = document.getElementById('callPrejoinEndBtn');
+    const cancelBtn = document.getElementById('callPrejoinCancelBtn');
+    const guestNameWrap = document.getElementById('callGuestNameWrap');
     const voiceMode = isVoiceCall(state.pendingJoinCall);
     setIconToggleState(mic, state.prejoinMicEnabled, t('Mic'), t('Mic off'));
     setIconToggleState(camera, state.prejoinCameraEnabled, t('Camera'), t('Camera off'));
     camera?.classList.toggle('hidden', voiceMode);
     cameraWrap?.classList.toggle('hidden', voiceMode);
+    guestNameWrap?.classList.toggle('hidden', !(state.externalMode && state.prejoinMode === 'join'));
+    cancelBtn?.classList.toggle('hidden', Boolean(state.externalMode && state.prejoinMode === 'join' && !state.currentCall));
     if (endBtn) {
       const canEnd = canEndPendingPrejoinCall();
       endBtn.classList.toggle('hidden', !canEnd);
@@ -1145,10 +1387,17 @@
     document.getElementById('callSurface')?.classList.add('is-behind-prejoin');
     const title = document.getElementById('callPrejoinTitle');
     const meta = document.getElementById('callPrejoinMeta');
-    if (title) title.textContent = call.chat_name || callDisplayTitle(call);
-    if (meta) meta.textContent = state.prejoinMode === 'devices'
+    const displayTitle = call.title || call.chat_name || callDisplayTitle(call);
+    if (title) title.textContent = displayTitle;
+    if (meta) meta.textContent = state.externalMode && state.prejoinMode === 'join'
+      ? t('Enter your name and choose devices before joining')
+      : (state.prejoinMode === 'devices'
       ? t('Change devices for this call')
-      : (voiceMode ? t('Choose microphone before joining') : t('Choose devices before joining'));
+      : (voiceMode ? t('Choose microphone before joining') : t('Choose devices before joining')));
+    const guestInput = document.getElementById('callGuestNameInput');
+    if (guestInput && state.externalGuest?.display_name && !guestInput.value) {
+      guestInput.value = state.externalGuest.display_name;
+    }
     const joinBtn = document.getElementById('callPrejoinJoinBtn');
     if (joinBtn) joinBtn.textContent = state.prejoinMode === 'devices'
       ? t('Apply')
@@ -1255,7 +1504,97 @@
     renderAll();
   }
 
+  function externalGuestName() {
+    return String(document.getElementById('callGuestNameInput')?.value || state.externalGuest?.display_name || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 60);
+  }
+
+  function externalGuestBody() {
+    return {
+      guest_id: state.externalGuest?.guest_id || '',
+      session_token: state.externalGuest?.session_token || '',
+    };
+  }
+
+  async function joinExternalCall(call) {
+    if (!state.externalInviteToken) throw new Error(t('Call link is invalid'));
+    const displayName = externalGuestName();
+    if (!displayName) {
+      setPrejoinStatus(t('Name is required'), 'error');
+      document.getElementById('callGuestNameInput')?.focus();
+      throw new Error(t('Name is required'));
+    }
+    if (state.joining) return;
+    state.joining = true;
+    let handoffPreviewStream = null;
+    setPrejoinBusy(true);
+    setPrejoinStatus(t('Joining call...'));
+    showSurface(call);
+    setSurfaceStatus(t('Joining call...'));
+    try {
+      const data = await api(`/api/calls/external/${encodeURIComponent(state.externalInviteToken)}/token`, {
+        method: 'POST',
+        body: { display_name: displayName },
+      });
+      state.externalGuest = data.guest || { display_name: displayName };
+      const nextCall = normalizeClientCall({ ...call, ...(data.call || {}) }, {
+        forceVoice: isVoiceCall(call),
+        roomMode: callRoomMode(call),
+      });
+      const voiceMode = isVoiceCall(nextCall);
+      state.currentCall = nextCall;
+      const publishStream = state.previewStream;
+      handoffPreviewStream = publishStream;
+      state.previewStream = null;
+      MEDIA.attachPreview?.(document.getElementById('callPrejoinVideo'), null);
+      closePrejoin();
+      showSurface(nextCall);
+      setSurfaceStatus(t('Connecting...'));
+      await connectRoom(data.livekit?.url, data.livekit?.token, {
+        micEnabled: state.prejoinMicEnabled,
+        cameraEnabled: voiceMode ? false : state.prejoinCameraEnabled,
+        audioDeviceId: selectedDevice('audioinput'),
+        videoDeviceId: voiceMode ? '' : selectedDevice('videoinput'),
+        previewStream: publishStream,
+      });
+      const joined = await api(`/api/calls/external/${encodeURIComponent(state.externalInviteToken)}/joined`, {
+        method: 'POST',
+        body: externalGuestBody(),
+      }).catch(() => null);
+      if (joined?.call) {
+        state.currentCall = normalizeClientCall({ ...nextCall, ...joined.call }, {
+          forceVoice: voiceMode,
+          roomMode: callRoomMode(nextCall),
+        });
+      }
+      setSurfaceStatus(t('Connected'));
+    } catch (error) {
+      MEDIA.stopStream?.(handoffPreviewStream);
+      await disconnectRoom({ intentional: true });
+      state.currentCall = null;
+      clearSurfaceDuration();
+      document.getElementById('callSurface')?.classList.add('hidden');
+      if (error?.status === 409 || error?.status === 410 || error?.data?.ended) {
+        await showExternalEnded(error?.data?.call || call);
+      } else {
+        state.pendingJoinCall = call;
+        state.prejoinMode = 'join';
+        document.getElementById('callPrejoin')?.classList.remove('hidden');
+        document.getElementById('callPrejoin')?.classList.toggle('is-voice-call', isVoiceCall(call));
+        document.getElementById('callSurface')?.classList.add('is-behind-prejoin');
+      }
+      throw error;
+    } finally {
+      setPrejoinBusy(false);
+      state.joining = false;
+      renderAll();
+    }
+  }
+
   async function joinCall(call) {
+    if (state.externalMode) return joinExternalCall(call);
     if (call?.id && isCurrentCall(call) && state.room) return revealCurrentCallSurface();
     if (!call?.id || state.joining) return;
     state.joining = true;
@@ -1692,6 +2031,9 @@
     state.videoFillTiles.clear();
     state.subscriptionChangingTiles.clear();
     state.focusedVideoTileKey = '';
+    clearMinimizedDragTimer();
+    state.minimizedPosition = null;
+    state.minimizedDrag = null;
     state.speakingTileKeys.clear();
     state.lastTileTap = { key: '', at: 0 };
     state.aiNotesTrackNotified.clear();
@@ -1710,6 +2052,23 @@
     const callId = Number(state.currentCall?.id || 0);
     if (!callId || state.leaveSentForCallId === callId) return;
     state.leaveSentForCallId = callId;
+    if (state.externalMode) {
+      const url = `/api/calls/external/${encodeURIComponent(state.externalInviteToken)}/leave`;
+      const body = JSON.stringify(externalGuestBody());
+      if (options.fireAndForget) {
+        try {
+          window.fetch?.(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body,
+            keepalive: true,
+          }).catch(() => {});
+        } catch {}
+        return;
+      }
+      await api(url, { method: 'POST', body: externalGuestBody() }).catch(() => {});
+      return;
+    }
     const url = `/api/calls/${callId}/leave`;
     if (options.fireAndForget) {
       try {
@@ -1770,6 +2129,7 @@
   }
 
   async function toggleAiNotes() {
+    if (state.externalMode) return;
     const callId = Number(state.currentCall?.id || 0);
     if (!callId || !state.settings.call_ai_notes_enabled) return;
     const notes = state.currentCall?.ai_notes || null;
@@ -1864,9 +2224,13 @@
 
   function toggleMinimized() {
     state.minimized = !state.minimized;
+    if (state.minimized) state.participantsOpen = false;
     const surface = document.getElementById('callSurface');
     surface?.classList.toggle('is-minimized', state.minimized);
+    applyMinimizedCardPosition();
     renderMinimizeButton();
+    renderSurfaceControls();
+    renderParticipantsPanel();
   }
 
   function toggleParticipantsPanel() {
@@ -1879,6 +2243,22 @@
     const call = state.currentCall;
     state.leaveSentForCallId = 0;
     await disconnectRoom({ intentional: true });
+    if (state.externalMode) {
+      if (call?.id) {
+        await api(`/api/calls/external/${encodeURIComponent(state.externalInviteToken)}/leave`, {
+          method: 'POST',
+          body: externalGuestBody(),
+        }).catch((error) => {
+          if (error?.status === 409 || error?.status === 410 || error?.data?.ended) showExternalEnded(error?.data?.call || call).catch(() => {});
+        });
+        state.leaveSentForCallId = call.id;
+      }
+      state.currentCall = null;
+      clearSurfaceDuration();
+      document.getElementById('callSurface')?.classList.add('hidden');
+      if (!state.externalEnded) await refreshExternalStatus({ openPrejoin: true }).catch(() => {});
+      return;
+    }
     if (call?.id) {
       await api(`/api/calls/${call.id}/${endForEveryone ? 'end' : 'leave'}`, { method: 'POST', body: {} }).catch(() => {});
       state.leaveSentForCallId = call.id;
@@ -2066,7 +2446,7 @@
     if (!grid) return;
     Array.from(grid.querySelectorAll('.call-tile')).forEach((tile) => {
       const focused = Boolean(state.focusedVideoTileKey && tile.dataset.callTileKey === state.focusedVideoTileKey);
-      tile.classList.toggle('is-video-fill', focused);
+      tile.classList.remove('is-video-fill');
       updateVideoFocusButton(tile.querySelector('.call-tile-fit-btn'), focused);
     });
   }
@@ -2087,7 +2467,6 @@
   function setFocusedVideoTile(key = '') {
     state.focusedVideoTileKey = key;
     state.videoFillTiles.clear();
-    if (key) state.videoFillTiles.add(key);
     applyVideoFocusClasses();
   }
 
@@ -2410,14 +2789,17 @@
     }
     surface.classList.toggle('is-minimized', state.minimized);
     surface.classList.toggle('is-voice-call', isVoiceCall(state.currentCall));
-    document.getElementById('callSurfaceTitle').textContent = state.currentCall.chat_name || callDisplayTitle(state.currentCall);
+    applyMinimizedCardPosition();
+    document.getElementById('callSurfaceTitle').textContent = state.currentCall.title || state.currentCall.chat_name || callDisplayTitle(state.currentCall);
     syncSurfaceDurationTimer();
     const notes = state.currentCall.ai_notes || null;
     const status = document.getElementById('callSurfaceStatus');
     if (status) {
-      status.textContent = notes?.status === 'recording'
+      status.textContent = state.externalMode
+        ? (status.textContent || '')
+        : (notes?.status === 'recording'
         ? t('AI notes recording')
-        : (notes?.transcript_status === 'processing' ? t('Transcript processing') : '');
+        : (notes?.transcript_status === 'processing' ? t('Transcript processing') : ''));
       status.classList.toggle('is-recording', notes?.status === 'recording');
     }
     renderMinimizeButton();
@@ -2459,11 +2841,13 @@
     setIconToggleState(camera, state.cameraEnabled, t('Camera'), t('Camera off'));
     camera?.classList.toggle('hidden', voiceMode);
     setToolButtonLabel(participants, t('Participants'));
+    participants?.classList.toggle('hidden', state.minimized);
     participants?.classList.toggle('is-active', state.participantsOpen);
     participants?.setAttribute('aria-pressed', state.participantsOpen ? 'true' : 'false');
     setToolButtonLabel(devices, t('Devices'));
     setToolButtonLabel(leave, t('Leave'));
     setToolButtonLabel(end, t('End for everyone'));
+    end?.classList.toggle('hidden', state.externalMode);
     if (screen) {
       const supported = Boolean(!voiceMode && state.settings.screen_share_enabled && MEDIA.isScreenShareSupported?.());
       screen.classList.toggle('hidden', !supported);
@@ -2476,7 +2860,7 @@
       const notes = state.currentCall?.ai_notes || null;
       const recording = notes?.status === 'recording';
       const available = Boolean(state.settings.call_ai_notes_enabled && state.currentCall?.status === 'active');
-      aiNotes.classList.toggle('hidden', !state.settings.call_ai_notes_enabled);
+      aiNotes.classList.toggle('hidden', state.externalMode || !state.settings.call_ai_notes_enabled);
       aiNotes.disabled = !available || ['processing', 'completed'].includes(notes?.transcript_status || '');
       setToolButtonLabel(aiNotes, recording ? t('Stop AI notes') : t('AI notes'));
       aiNotes.classList.toggle('is-active', recording);
@@ -2713,6 +3097,59 @@
     el.classList.toggle('error', type === 'error');
   }
 
+  function clearExternalStatusPolling() {
+    if (state.externalStatusTimer) {
+      window.clearInterval(state.externalStatusTimer);
+      state.externalStatusTimer = 0;
+    }
+  }
+
+  async function showExternalEnded(call = null) {
+    state.externalEnded = true;
+    clearExternalStatusPolling();
+    if (call?.id) state.currentCall = { ...(state.currentCall || {}), ...call, status: call.status || 'ended' };
+    await disconnectRoom({ intentional: true });
+    state.currentCall = null;
+    state.pendingJoinCall = null;
+    clearSurfaceDuration();
+    document.getElementById('callPrejoin')?.classList.add('hidden');
+    document.getElementById('callSurface')?.classList.add('hidden');
+    document.getElementById('callSurface')?.classList.remove('is-behind-prejoin');
+    document.getElementById('callExternalEnded')?.classList.remove('hidden');
+  }
+
+  async function refreshExternalStatus(options = {}) {
+    if (!state.externalMode || !state.externalInviteToken) return null;
+    const data = await api(`/api/calls/external/${encodeURIComponent(state.externalInviteToken)}`);
+    if (data?.settings) mergePublicSettings(data.settings);
+    if (data?.ended || data?.call?.status !== 'active') {
+      await showExternalEnded(data?.call || null);
+      return data;
+    }
+    state.externalEnded = false;
+    document.getElementById('callExternalEnded')?.classList.add('hidden');
+    const call = normalizeClientCall(data.call || {}, {
+      forceVoice: isVoiceCall(data.call || {}),
+      roomMode: callRoomMode(data.call || {}),
+    });
+    if (state.currentCall?.id === call.id) state.currentCall = { ...state.currentCall, ...call };
+    if (!state.room && options.openPrejoin) {
+      state.pendingJoinCall = call;
+      await openPrejoin(call);
+    } else if (!state.currentCall?.id) {
+      state.pendingJoinCall = call;
+    }
+    renderAll();
+    return data;
+  }
+
+  function startExternalStatusPolling() {
+    clearExternalStatusPolling();
+    state.externalStatusTimer = window.setInterval(() => {
+      refreshExternalStatus({ openPrejoin: false }).catch(() => {});
+    }, 5000);
+  }
+
   hooks.handleWSMessage = (msg) => {
     if (!msg || typeof msg !== 'object') return;
     if (msg.type === 'call_settings_updated') {
@@ -2788,6 +3225,25 @@
     renderAll();
   }
 
+  async function bootstrapExternal() {
+    ensureUi();
+    document.body.classList.add('call-external-page');
+    state.ready = true;
+    try {
+      await refreshExternalStatus({ openPrejoin: true });
+      if (!state.externalEnded) startExternalStatusPolling();
+    } catch (error) {
+      setPrejoinStatus(error.message || t('Could not load call'), 'error');
+      const ended = document.getElementById('callExternalEnded');
+      if (ended) {
+        ended.classList.remove('hidden');
+        const text = ended.querySelector('.call-external-ended-text');
+        if (text) text.textContent = error?.status === 404 ? t('Call link is invalid') : (error.message || t('Could not load call'));
+      }
+    }
+    renderAll();
+  }
+
   function handlePageLeaving() {
     if (!state.currentCall?.id) return;
     notifyLeaveCurrentCall({ fireAndForget: true }).catch(() => {});
@@ -2795,5 +3251,10 @@
 
   window.addEventListener('pagehide', handlePageLeaving);
   window.addEventListener('beforeunload', handlePageLeaving);
-  window.addEventListener('bananza:ready', bootstrap);
+  window.addEventListener('resize', applyMinimizedCardPosition);
+  if (state.externalMode) {
+    bootstrapExternal().catch(() => {});
+  } else {
+    window.addEventListener('bananza:ready', bootstrap);
+  }
 })();

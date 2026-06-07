@@ -690,6 +690,44 @@ test('token issuance does not mark participant joined before connect confirmatio
   }
 });
 
+test('serializeCall and LiveKit webhook handle guest participants', () => {
+  const db = createDb();
+  const feature = createFeature(db);
+  try {
+    seedUsersAndChat(db, 'private');
+    const { callId } = seedCall(db);
+    db.prepare(`
+      INSERT INTO call_guest_participants(call_id, guest_id, display_name, state, livekit_identity, session_token_hash)
+      VALUES(?, 'guest123456789', 'Guest User', 'invited', '', 'hash')
+    `).run(callId);
+
+    const invited = feature.getCall(callId);
+    const guest = invited.participants.find((participant) => participant.guest_id === 'guest123456789');
+    assert.equal(guest.display_name, 'Guest User');
+    assert.equal(guest.kind, 'guest');
+    assert.equal(invited.participant_count, 1);
+
+    feature._private.handleLiveKitWebhook({
+      event: 'participant_joined',
+      room: { name: 'room-1' },
+      participant: { identity: `guest:${callId}:guest123456789:livekit`, metadata: JSON.stringify({ callId, guestId: 'guest123456789' }) },
+    });
+    assert.equal(db.prepare('SELECT state FROM call_guest_participants WHERE call_id=? AND guest_id=?').get(callId, 'guest123456789').state, 'joined');
+    assert.equal(feature.getCall(callId).participant_count, 2);
+
+    feature._private.handleLiveKitWebhook({
+      event: 'participant_left',
+      room: { name: 'room-1' },
+      participant: { identity: `guest:${callId}:guest123456789:livekit` },
+    });
+    assert.equal(db.prepare('SELECT state FROM call_guest_participants WHERE call_id=? AND guest_id=?').get(callId, 'guest123456789').state, 'left');
+    assert.equal(feature.getCall(callId).status, 'active');
+  } finally {
+    feature.stopWorkers();
+    db.close();
+  }
+});
+
 test('call card metadata exposes only completed mixed recordings with an existing file', (t) => {
   const db = createDb();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bananza-call-recordings-'));
