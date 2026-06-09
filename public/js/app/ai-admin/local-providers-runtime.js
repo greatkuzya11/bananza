@@ -4,6 +4,14 @@
 
   function createLocalProvidersRuntime(scope = {}) {
     with (scope) {
+      function renderAiAdminChatOptions(chats = []) {
+        const shared = window.BananzaApp?.aiAdmin?.shared;
+        if (typeof shared?.renderChatOptions === 'function') return shared.renderChatOptions(chats);
+        return (Array.isArray(chats) ? chats : [])
+          .map((chat) => `<option value="${esc(chat.id)}">${esc(chat.name)} (${esc(chat.type)})</option>`)
+          .join('');
+      }
+
       function setDeepseekAiStatus(message, type = '') {
         setInlineStatus('deepseekAiStatus', message, type);
       }
@@ -154,7 +162,7 @@
         const currentChatValue = chatSelect.value || String(currentChatId || deepseekBotState.chats[0]?.id || '');
         const currentBotValue = botSelect.value || String(selectedDeepseekBotId || deepseekBotState.bots[0]?.id || '');
     
-        chatSelect.innerHTML = deepseekBotState.chats.map(chat => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+        chatSelect.innerHTML = renderAiAdminChatOptions(deepseekBotState.chats);
         botSelect.innerHTML = deepseekBotState.bots.map(bot => `<option value="${bot.id}">${esc(bot.name)} @${esc(bot.mention)}</option>`).join('');
         if (deepseekBotState.chats.some(chat => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
         if (deepseekBotState.bots.some(bot => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;
@@ -681,7 +689,7 @@
         const currentChatValue = chatSelect.value || String(currentChatId || qwenBotState.chats[0]?.id || '');
         const currentBotValue = botSelect.value || String(selectedQwenBotId || qwenBotState.bots[0]?.id || '');
     
-        chatSelect.innerHTML = qwenBotState.chats.map(chat => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+        chatSelect.innerHTML = renderAiAdminChatOptions(qwenBotState.chats);
         botSelect.innerHTML = qwenBotState.bots.map(bot => `<option value="${bot.id}">${esc(bot.name)} @${esc(bot.mention)}</option>`).join('');
         if (qwenBotState.chats.some(chat => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
         if (qwenBotState.bots.some(bot => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;
@@ -1198,7 +1206,7 @@
         const currentChatValue = chatSelect.value || String(currentChatId || yandexBotState.chats[0]?.id || '');
         const currentBotValue = botSelect.value || String(selectedYandexBotId || yandexBotState.bots[0]?.id || '');
     
-        chatSelect.innerHTML = yandexBotState.chats.map(chat => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+        chatSelect.innerHTML = renderAiAdminChatOptions(yandexBotState.chats);
         botSelect.innerHTML = yandexBotState.bots.map(bot => `<option value="${bot.id}">${esc(bot.name)} @${esc(bot.mention)}</option>`).join('');
         if (yandexBotState.chats.some(chat => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
         if (yandexBotState.bots.some(bot => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;

@@ -164,6 +164,8 @@ test('ai-admin modules publish expected namespaces', () => {
   assert.equal(typeof admin.backup.createBackupController, 'function');
   assert.equal(typeof admin.users.createAdminUsersController, 'function');
   assert.equal(typeof aiAdmin.shared.uniqueAiModelValues, 'function');
+  assert.equal(typeof aiAdmin.shared.formatChatOptionLabel, 'function');
+  assert.equal(typeof aiAdmin.shared.renderChatOptions, 'function');
   assert.equal(typeof aiAdmin.openai.createOpenAiAdmin, 'function');
   assert.equal(typeof aiAdmin.yandex.createYandexAdmin, 'function');
   assert.equal(typeof aiAdmin.deepseek.createDeepseekAdmin, 'function');
@@ -177,6 +179,37 @@ test('ai-admin modules publish expected namespaces', () => {
   assert.equal(typeof aiAdmin.modals.openContextConvertBotsModal, 'function');
   assert.equal(typeof aiAdmin.modals.createFinalAppRuntime, 'undefined');
   assert.equal(typeof dom.window.BananzaApp.runtime.createAppRuntime, 'function');
+});
+
+test('AI admin chat option renderer uses option_label and legacy fallback', () => {
+  const dom = loadAiAdminRuntime();
+  const shared = dom.window.BananzaApp.aiAdmin.shared;
+  const select = dom.window.document.createElement('select');
+
+  select.innerHTML = shared.renderChatOptions([
+    {
+      id: 7,
+      name: 'Private: Alice',
+      type: 'private',
+      option_label: 'Topic Plan — Alice, Bot (private)',
+    },
+    {
+      id: 8,
+      name: 'Legacy Room',
+      type: 'group',
+    },
+  ]);
+
+  assert.equal(shared.formatChatOptionLabel({
+    id: 9,
+    name: 'Computed Room',
+    type: 'group',
+    participant_label: 'Alice, Bot',
+  }), 'Computed Room — Alice, Bot (group)');
+  assert.equal(select.options[0].value, '7');
+  assert.equal(select.options[0].textContent, 'Topic Plan — Alice, Bot (private)');
+  assert.equal(select.options[1].value, '8');
+  assert.equal(select.options[1].textContent, 'Legacy Room (group)');
 });
 
 test('OpenAI runtime saves text bots without Grok runtime formatter loaded', async () => {

@@ -684,6 +684,44 @@ test('human private chats remain single-threaded while bot private chats always 
   assert.ok(botPrivateChats.some((chat) => Number(chat.id) === Number(secondBotChat.data.id)));
 });
 
+test('AI admin chat state labels private bot chats with title and participants', async () => {
+  const { admin, bob } = scenario;
+  const db = new Database(path.join(sandbox.appDir, 'bananza.db'));
+  const title = `Bot Thread ${Date.now().toString(36)}`.slice(0, 50);
+
+  try {
+    const bot = await createOpenAiBot(admin, { visibleToUsers: true });
+    await admin.request(`/api/admin/users/${bob.user.id}/bot-access`, {
+      method: 'PUT',
+      json: { can_add_bots_to_chats: true },
+    });
+
+    const privateChat = await bob.request('/api/chats/private', {
+      method: 'POST',
+      json: { targetUserId: Number(bot.user_id) },
+    });
+    const chatId = Number(privateChat.data.id);
+    db.prepare('UPDATE chats SET name=? WHERE id=?').run(title, chatId);
+
+    const aiState = await admin.request('/api/admin/ai-bots');
+    const chat = aiState.data.chats.find((item) => Number(item.id) === chatId);
+    const bobName = bob.user.display_name || bob.user.username;
+
+    assert.ok(chat);
+    assert.equal(chat.chat_title, title);
+    assert.equal(chat.name, `Private: ${bobName}`);
+    assert.deepEqual(chat.participant_names, [bobName, bot.name]);
+    assert.equal(chat.participant_label, `${bobName}, ${bot.name}`);
+    assert.equal(chat.option_label, `${title} — ${bobName}, ${bot.name} (private)`);
+  } finally {
+    await admin.request(`/api/admin/users/${bob.user.id}/bot-access`, {
+      method: 'PUT',
+      json: { can_add_bots_to_chats: false },
+    }).catch(() => {});
+    db.close();
+  }
+});
+
 test('bot discovery, private chats, defaults and audit respect user and bot flags', async () => {
   const { admin, bob, groupChat } = scenario;
   const db = new Database(path.join(sandbox.appDir, 'bananza.db'));

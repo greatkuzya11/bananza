@@ -4,6 +4,14 @@
 
   function createOpenAiRuntime(scope = {}) {
     with (scope) {
+      function renderAiAdminChatOptions(chats = []) {
+        const shared = window.BananzaApp?.aiAdmin?.shared;
+        if (typeof shared?.renderChatOptions === 'function') return shared.renderChatOptions(chats);
+        return (Array.isArray(chats) ? chats : [])
+          .map((chat) => `<option value="${esc(chat.id)}">${esc(chat.name)} (${esc(chat.type)})</option>`)
+          .join('');
+      }
+
       function setInlineStatus(targetIds, message, type = '') {
         const ids = Array.isArray(targetIds) ? targetIds : [targetIds];
         ids.forEach((targetId) => {
@@ -403,7 +411,7 @@
         if (!chatSelect || !botSelect) return;
         const currentChatValue = chatSelect.value || String(currentChatId || openAiUniversalState.chats[0]?.id || '');
         const currentBotValue = botSelect.value || String(selectedOpenAiUniversalBotId || openAiUniversalState.bots[0]?.id || '');
-        chatSelect.innerHTML = openAiUniversalState.chats.map(chat => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+        chatSelect.innerHTML = renderAiAdminChatOptions(openAiUniversalState.chats);
         botSelect.innerHTML = openAiUniversalState.bots.map(bot => `<option value="${bot.id}">${esc(bot.name)} @${esc(bot.mention)}</option>`).join('');
         if (openAiUniversalState.chats.some(chat => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
         if (openAiUniversalState.bots.some(bot => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;
@@ -604,7 +612,7 @@
         const currentChatValue = chatSelect.value || String(currentChatId || aiBotState.chats[0]?.id || '');
         const currentBotValue = botSelect.value || String(selectedAiBotId || aiBotState.bots[0]?.id || '');
     
-        chatSelect.innerHTML = aiBotState.chats.map(chat => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+        chatSelect.innerHTML = renderAiAdminChatOptions(aiBotState.chats);
         botSelect.innerHTML = aiBotState.bots.map(bot => `<option value="${bot.id}">${esc(bot.name)} @${esc(bot.mention)}</option>`).join('');
         if (aiBotState.chats.some(chat => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
         if (aiBotState.bots.some(bot => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;
@@ -1246,7 +1254,7 @@
         if (!chatSelect || !botSelect) return;
         const currentChatValue = chatSelect.value || String(currentChatId || openAiImageState.chats[0]?.id || '');
         const currentBotValue = botSelect.value || String(selectedOpenAiImageBotId || openAiImageState.bots[0]?.id || '');
-        chatSelect.innerHTML = openAiImageState.chats.map(chat => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+        chatSelect.innerHTML = renderAiAdminChatOptions(openAiImageState.chats);
         botSelect.innerHTML = openAiImageState.bots.map(bot => `<option value="${bot.id}">${esc(bot.name)} @${esc(bot.mention)}</option>`).join('');
         if (openAiImageState.chats.some(chat => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
         if (openAiImageState.bots.some(bot => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;

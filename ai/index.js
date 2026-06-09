@@ -2363,13 +2363,31 @@ function createAiBotFeature({
 
   function serializeAdminState() {
     const chats = db.prepare('SELECT id, name, type FROM chats ORDER BY type ASC, name COLLATE NOCASE ASC').all();
-    const memberNamesStmt = db.prepare(`
-      SELECT u.display_name
+    const memberRows = db.prepare(`
+      SELECT
+        cm.chat_id,
+        COALESCE(NULLIF(u.display_name, ''), u.username, ('User #' || u.id)) as display_name,
+        COALESCE(u.is_ai_bot,0) as is_ai_bot
       FROM chat_members cm
       JOIN users u ON u.id=cm.user_id
-      WHERE cm.chat_id=? AND COALESCE(u.is_ai_bot,0)=0
-      ORDER BY u.display_name COLLATE NOCASE ASC
-    `);
+      ORDER BY cm.chat_id ASC, COALESCE(u.is_ai_bot,0) ASC, u.display_name COLLATE NOCASE ASC, u.id ASC
+    `).all();
+    const membersByChatId = new Map();
+    memberRows.forEach((row) => {
+      const chatId = Number(row.chat_id || 0);
+      if (!chatId) return;
+      if (!membersByChatId.has(chatId)) membersByChatId.set(chatId, []);
+      membersByChatId.get(chatId).push({
+        name: row.display_name || '',
+        is_ai_bot: Number(row.is_ai_bot || 0) !== 0,
+      });
+    });
+    const participantLabel = (names = [], limit = 5) => {
+      const cleanNames = names.map((name) => cleanText(name, 80)).filter(Boolean);
+      const visible = cleanNames.slice(0, limit);
+      if (cleanNames.length > limit) visible.push(`+${cleanNames.length - limit}`);
+      return visible.join(', ');
+    };
     const openAiBots = allOpenAiTextBotsStmt.all().map(sanitizeBot);
     const openAiBotIds = new Set(openAiBots.map((bot) => Number(bot.id)));
     return {
@@ -2377,9 +2395,25 @@ function createAiBotFeature({
       bots: openAiBots,
       chatSettings: serializeChatSettingsForBotIds(openAiBotIds),
       chats: chats.map((chat) => {
-        if (chat.type !== 'private') return chat;
-        const names = memberNamesStmt.all(chat.id).map(row => row.display_name).join(', ');
-        return { ...chat, name: names ? `Private: ${names}` : chat.name };
+        const chatMembers = membersByChatId.get(Number(chat.id || 0)) || [];
+        const participantNames = chatMembers.map((member) => cleanText(member.name, 80)).filter(Boolean);
+        const humanNames = chatMembers
+          .filter((member) => !member.is_ai_bot)
+          .map((member) => cleanText(member.name, 80))
+          .filter(Boolean);
+        const label = participantLabel(participantNames);
+        const title = cleanText(chat.name || '', 80);
+        const optionTitle = title || chat.name || '';
+        const optionLabel = label ? `${optionTitle} — ${label} (${chat.type})` : `${optionTitle} (${chat.type})`;
+        const humanLabel = participantLabel(humanNames, 50);
+        return {
+          ...chat,
+          name: chat.type === 'private' && humanLabel ? `Private: ${humanLabel}` : chat.name,
+          chat_title: chat.name,
+          participant_names: participantNames,
+          participant_label: label,
+          option_label: optionLabel,
+        };
       }),
     };
   }

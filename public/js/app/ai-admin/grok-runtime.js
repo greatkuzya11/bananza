@@ -4,6 +4,14 @@
 
   function createGrokRuntime(scope = {}) {
     with (scope) {
+      function renderAiAdminChatOptions(chats = []) {
+        const shared = window.BananzaApp?.aiAdmin?.shared;
+        if (typeof shared?.renderChatOptions === 'function') return shared.renderChatOptions(chats);
+        return (Array.isArray(chats) ? chats : [])
+          .map((chat) => `<option value="${esc(chat.id)}">${esc(chat.name)} (${esc(chat.type)})</option>`)
+          .join('');
+      }
+
       function setGrokStatus(statusId, message, type = '') {
         setInlineStatus(statusId, message, type);
       }
@@ -541,7 +549,7 @@
         if (!chatSelect || !botSelect) return;
         const currentChatValue = chatSelect.value || String(currentChatId || grokBotState.chats[0]?.id || '');
         const currentBotValue = botSelect.value || String(selectedGrokBotId || grokBotState.bots[0]?.id || '');
-        chatSelect.innerHTML = grokBotState.chats.map(chat => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+        chatSelect.innerHTML = renderAiAdminChatOptions(grokBotState.chats);
         botSelect.innerHTML = grokBotState.bots.map(bot => `<option value="${bot.id}">${esc(bot.name)} @${esc(bot.mention)}</option>`).join('');
         if (grokBotState.chats.some(chat => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
         if (grokBotState.bots.some(bot => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;
@@ -559,7 +567,7 @@
         if (!chatSelect || !botSelect) return;
         const currentChatValue = chatSelect.value || String(currentChatId || grokBotState.chats[0]?.id || '');
         const currentBotValue = botSelect.value || String(selectedGrokImageBotId || grokBotState.imageBots[0]?.id || '');
-        chatSelect.innerHTML = grokBotState.chats.map(chat => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+        chatSelect.innerHTML = renderAiAdminChatOptions(grokBotState.chats);
         botSelect.innerHTML = grokBotState.imageBots.map(bot => `<option value="${bot.id}">${esc(bot.name)} @${esc(bot.mention)}</option>`).join('');
         if (grokBotState.chats.some(chat => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
         if (grokBotState.imageBots.some(bot => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;
@@ -574,7 +582,7 @@
         if (!chatSelect || !botSelect) return;
         const currentChatValue = chatSelect.value || String(currentChatId || grokUniversalState.chats[0]?.id || '');
         const currentBotValue = botSelect.value || String(selectedGrokUniversalBotId || grokUniversalState.bots[0]?.id || '');
-        chatSelect.innerHTML = grokUniversalState.chats.map(chat => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+        chatSelect.innerHTML = renderAiAdminChatOptions(grokUniversalState.chats);
         botSelect.innerHTML = grokUniversalState.bots.map(bot => `<option value="${bot.id}">${esc(bot.name)} @${esc(bot.mention)}</option>`).join('');
         if (grokUniversalState.chats.some(chat => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
         if (grokUniversalState.bots.some(bot => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;

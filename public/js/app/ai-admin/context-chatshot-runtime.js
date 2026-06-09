@@ -4,6 +4,14 @@
 
   function createContextChatShotRuntime(scope = {}) {
     with (scope) {
+      function renderAiAdminChatOptions(chats = []) {
+        const shared = window.BananzaApp?.aiAdmin?.shared;
+        if (typeof shared?.renderChatOptions === 'function') return shared.renderChatOptions(chats);
+        return (Array.isArray(chats) ? chats : [])
+          .map((chat) => `<option value="${esc(chat.id)}">${esc(chat.name)} (${esc(chat.type)})</option>`)
+          .join('');
+      }
+
       function contextConvertProviderLabel(provider = 'openai') {
         if (provider === 'yandex') return 'Yandex';
         if (provider === 'deepseek') return 'DeepSeek';
@@ -143,7 +151,7 @@
         if (!chatSelect || !botSelect) return;
         const currentChatValue = chatSelect.value || String(currentChatId || state.chats[0]?.id || '');
         const currentBotValue = botSelect.value || String(selectedContextConvertBotIds[activeContextConvertProvider] || state.bots[0]?.id || '');
-        chatSelect.innerHTML = state.chats.map((chat) => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+        chatSelect.innerHTML = renderAiAdminChatOptions(state.chats);
         botSelect.innerHTML = state.bots.map((bot) => `<option value="${bot.id}">${esc(bot.name)}</option>`).join('');
         if (state.chats.some((chat) => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
         if (state.bots.some((bot) => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;
@@ -555,7 +563,7 @@
         if (!chatSelect || !botSelect) return;
         const currentChatValue = chatSelect.value || String(currentChatId || state.chats[0]?.id || '');
         const currentBotValue = botSelect.value || String(selectedChatShotBotIds[activeChatShotProvider] || state.bots[0]?.id || '');
-        chatSelect.innerHTML = state.chats.map((chat) => `<option value="${chat.id}">${esc(chat.name)} (${esc(chat.type)})</option>`).join('');
+        chatSelect.innerHTML = renderAiAdminChatOptions(state.chats);
         botSelect.innerHTML = state.bots.map((bot) => `<option value="${bot.id}">${esc(bot.name)}</option>`).join('');
         if (state.chats.some((chat) => String(chat.id) === String(currentChatValue))) chatSelect.value = currentChatValue;
         if (state.bots.some((bot) => String(bot.id) === String(currentBotValue))) botSelect.value = currentBotValue;

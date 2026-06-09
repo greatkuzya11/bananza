@@ -318,6 +318,23 @@
     return JSON.parse(JSON.stringify(value == null ? null : value));
   }
 
+  function formatChatOptionLabel(chat = {}) {
+    const serverLabel = String(chat?.option_label || '').trim();
+    if (serverLabel) return serverLabel;
+    const title = String(chat?.chat_title || chat?.name || chat?.id || '').trim();
+    const participantLabel = String(chat?.participant_label || '').trim();
+    const type = String(chat?.type || '').trim();
+    const suffix = type ? ` (${type})` : '';
+    if (title && participantLabel) return `${title} — ${participantLabel}${suffix}`;
+    return title ? `${title}${suffix}` : suffix.trim();
+  }
+
+  function renderChatOptions(chats = []) {
+    return (Array.isArray(chats) ? chats : [])
+      .map((chat) => `<option value="${esc(chat?.id ?? '')}">${esc(formatChatOptionLabel(chat))}</option>`)
+      .join('');
+  }
+
   function mergeProviderState(current, data = {}) {
     const incoming = data.state || data || {};
     return {
@@ -539,6 +556,7 @@
     exportJson,
     filenameFromContentDisposition,
     formatBotAuditSource,
+    formatChatOptionLabel,
     importJsonFile,
     initials,
     normalizeBotSaveComparisonValue,
@@ -546,6 +564,7 @@
     openAdminBotAuditModal,
     removeBotAvatar,
     renderBotAvatar,
+    renderChatOptions,
     setActionButtonsPending,
     setChecked,
     setInlineStatus,
