@@ -342,15 +342,16 @@
           setContextConvertChatStatus('This bot is already available in all context-enabled chats', 'success');
           return;
         }
+        const body = {
+          chatId,
+          botId,
+          enabled: $('#contextConvertBotChatEnabled')?.checked,
+        };
         setContextConvertChatStatus('Saving...');
         try {
           const data = await api(`${contextConvertRouteBase(activeContextConvertProvider)}/chat-settings`, {
             method: 'PUT',
-            body: {
-              chatId,
-              botId,
-              enabled: $('#contextConvertBotChatEnabled')?.checked,
-            },
+            body,
           });
           mergeContextConvertAdminState(activeContextConvertProvider, data);
           renderContextConvertChatSettings();
@@ -754,15 +755,16 @@
           setChatShotAdminChatStatus('This bot is already available in all chats', 'success');
           return;
         }
+        const body = {
+          chatId,
+          botId,
+          enabled: $('#chatShotBotChatEnabled')?.checked,
+        };
         setChatShotAdminChatStatus('Saving...');
         try {
           const data = await api(`${chatShotRouteBase(activeChatShotProvider)}/chat-settings`, {
             method: 'PUT',
-            body: {
-              chatId,
-              botId,
-              enabled: $('#chatShotBotChatEnabled')?.checked,
-            },
+            body,
           });
           mergeChatShotAdminState(activeChatShotProvider, data);
           invalidateChatShotState(chatId);

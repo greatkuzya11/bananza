@@ -927,6 +927,14 @@
       async function saveGrokChatBotSettings() {
         const chatId = Number($('#grokAiBotChatSelect')?.value || 0);
         const botId = Number($('#grokAiBotChatBotSelect')?.value || 0);
+        const body = {
+          chatId,
+          botId,
+          enabled: $('#grokAiBotChatEnabled')?.checked,
+          mode: $('#grokAiBotChatMode')?.value || 'simple',
+          hot_context_limit: Number($('#grokAiBotChatHotLimit')?.value || 50),
+          auto_react_on_mention: $('#grokAiBotChatAutoReact')?.checked,
+        };
         const botExists = grokBotState.bots.some(bot => Number(bot.id) === Number(botId));
         if (!chatId || !botId) { setGrokTextChatStatus('Choose chat and bot', 'error'); return; }
         if (!botExists) {
@@ -937,14 +945,7 @@
         try {
           const data = await api('/api/admin/grok-ai-bots/chat-settings', {
             method: 'PUT',
-            body: {
-              chatId,
-              botId,
-              enabled: $('#grokAiBotChatEnabled')?.checked,
-              mode: $('#grokAiBotChatMode')?.value || 'simple',
-              hot_context_limit: Number($('#grokAiBotChatHotLimit')?.value || 50),
-              auto_react_on_mention: $('#grokAiBotChatAutoReact')?.checked,
-            },
+            body,
           });
           mergeGrokAiState(data);
           renderGrokChatBotSettings();
@@ -957,6 +958,13 @@
       async function saveGrokImageChatBotSettings() {
         const chatId = Number($('#grokAiImageBotChatSelect')?.value || 0);
         const botId = Number($('#grokAiImageBotChatBotSelect')?.value || 0);
+        const body = {
+          chatId,
+          botId,
+          enabled: $('#grokAiImageBotChatEnabled')?.checked,
+          mode: 'simple',
+          hot_context_limit: 50,
+        };
         const botExists = grokBotState.imageBots.some(bot => Number(bot.id) === Number(botId));
         if (!chatId || !botId) { setGrokImageChatStatus('Choose chat and image bot', 'error'); return; }
         if (!botExists) {
@@ -967,13 +975,7 @@
         try {
           const data = await api('/api/admin/grok-ai-bots/chat-settings', {
             method: 'PUT',
-            body: {
-              chatId,
-              botId,
-              enabled: $('#grokAiImageBotChatEnabled')?.checked,
-              mode: 'simple',
-              hot_context_limit: 50,
-            },
+            body,
           });
           mergeGrokAiState(data);
           renderGrokImageChatBotSettings();
@@ -1131,6 +1133,14 @@
       async function saveGrokUniversalChatBotSettings() {
         const chatId = Number($('#grokAiUniversalBotChatSelect')?.value || 0);
         const botId = Number($('#grokAiUniversalBotChatBotSelect')?.value || 0);
+        const body = {
+          chatId,
+          botId,
+          enabled: $('#grokAiUniversalBotChatEnabled')?.checked,
+          mode: $('#grokAiUniversalBotChatMode')?.value || 'simple',
+          hot_context_limit: Number($('#grokAiUniversalBotChatHotLimit')?.value || 50),
+          auto_react_on_mention: $('#grokAiUniversalBotChatAutoReact')?.checked,
+        };
         const botExists = grokUniversalState.bots.some(bot => Number(bot.id) === Number(botId));
         if (!chatId || !botId) { setGrokUniversalChatStatus('Choose chat and bot', 'error'); return; }
         if (!botExists) {
@@ -1141,14 +1151,7 @@
         try {
           const data = await api('/api/admin/grok-universal-bots/chat-settings', {
             method: 'PUT',
-            body: {
-              chatId,
-              botId,
-              enabled: $('#grokAiUniversalBotChatEnabled')?.checked,
-              mode: $('#grokAiUniversalBotChatMode')?.value || 'simple',
-              hot_context_limit: Number($('#grokAiUniversalBotChatHotLimit')?.value || 50),
-              auto_react_on_mention: $('#grokAiUniversalBotChatAutoReact')?.checked,
-            },
+            body,
           });
           mergeGrokUniversalState(data);
           renderGrokUniversalChatBotSettings();

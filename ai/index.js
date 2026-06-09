@@ -7712,8 +7712,8 @@ function createAiBotFeature({
     const chatId = Number(req.body?.chatId);
     const botId = Number(req.body?.botId);
     if (!db.prepare('SELECT 1 FROM chats WHERE id=?').get(chatId)) return res.status(404).json({ error: 'Chat not found' });
-    const bot = botByIdStmt.get(botId);
-    if (!bot) return res.status(404).json({ error: 'Bot not found' });
+    const bot = providerBotByRequestId({ params: { id: botId } }, res, { provider: 'openai', kind: 'text' });
+    if (!bot) return;
     const enabled = boolValue(req.body?.enabled, false);
     const mode = req.body?.mode === 'hybrid' ? 'hybrid' : 'simple';
     const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
@@ -8582,10 +8582,8 @@ function createAiBotFeature({
     const chatId = Number(req.body?.chatId);
     const botId = Number(req.body?.botId);
     if (!db.prepare('SELECT 1 FROM chats WHERE id=?').get(chatId)) return res.status(404).json({ error: 'Chat not found' });
-    const bot = botByIdStmt.get(botId);
-    if (!bot || normalizeProvider(bot.provider, 'openai') !== 'deepseek' || normalizeBotKind(bot.kind, 'deepseek', 'text') !== 'text') {
-      return res.status(404).json({ error: 'DeepSeek bot not found' });
-    }
+    const bot = providerBotByRequestId({ params: { id: botId } }, res, { provider: 'deepseek', kind: 'text' });
+    if (!bot) return;
     const enabled = boolValue(req.body?.enabled, false);
     const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
     const triggerMode = 'mention_reply';
@@ -8970,10 +8968,8 @@ function createAiBotFeature({
     const chatId = Number(req.body?.chatId);
     const botId = Number(req.body?.botId);
     if (!db.prepare('SELECT 1 FROM chats WHERE id=?').get(chatId)) return res.status(404).json({ error: 'Chat not found' });
-    const bot = botByIdStmt.get(botId);
-    if (!bot || normalizeProvider(bot.provider, 'openai') !== 'qwen' || normalizeBotKind(bot.kind, 'qwen', 'text') !== 'text') {
-      return res.status(404).json({ error: 'Qwen bot not found' });
-    }
+    const bot = providerBotByRequestId({ params: { id: botId } }, res, { provider: 'qwen', kind: 'text' });
+    if (!bot) return;
     const enabled = boolValue(req.body?.enabled, false);
     const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
     const triggerMode = 'mention_reply';
@@ -9361,10 +9357,8 @@ function createAiBotFeature({
     const chatId = Number(req.body?.chatId);
     const botId = Number(req.body?.botId);
     if (!db.prepare('SELECT 1 FROM chats WHERE id=?').get(chatId)) return res.status(404).json({ error: 'Chat not found' });
-    const bot = botByIdStmt.get(botId);
-    if (!bot || normalizeProvider(bot.provider, 'openai') !== 'yandex' || normalizeBotKind(bot.kind, 'yandex', 'text') !== 'text') {
-      return res.status(404).json({ error: 'Yandex bot not found' });
-    }
+    const bot = providerBotByRequestId({ params: { id: botId } }, res, { provider: 'yandex', kind: 'text' });
+    if (!bot) return;
     const enabled = boolValue(req.body?.enabled, false);
     const mode = req.body?.mode === 'hybrid' ? 'hybrid' : 'simple';
     const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
@@ -9741,11 +9735,11 @@ function createAiBotFeature({
     const chatId = Number(req.body?.chatId);
     const botId = Number(req.body?.botId);
     if (!db.prepare('SELECT 1 FROM chats WHERE id=?').get(chatId)) return res.status(404).json({ error: 'Chat not found' });
-    const bot = botByIdStmt.get(botId);
-    if (!bot || normalizeProvider(bot.provider, 'openai') !== 'grok') return res.status(404).json({ error: 'Grok bot not found' });
-    if (normalizeBotKind(bot.kind, 'grok', 'text') === 'universal') return res.status(404).json({ error: 'Grok bot not found' });
+    const bot = providerBotByRequestId({ params: { id: botId } }, res, { provider: 'grok' });
+    if (!bot) return;
     const enabled = boolValue(req.body?.enabled, false);
     const botKind = normalizeBotKind(bot.kind, 'grok', 'text');
+    if (!['text', 'image'].includes(botKind)) return res.status(404).json({ error: 'Grok bot not found' });
     const mode = botKind === 'image' ? 'simple' : (req.body?.mode === 'hybrid' ? 'hybrid' : 'simple');
     const hotContextLimit = intValue(req.body?.hot_context_limit, 50, 20, 100);
     const triggerMode = 'mention_reply';
@@ -9759,7 +9753,7 @@ function createAiBotFeature({
       triggerMode,
       autoReactOnMention,
       actorUserId: req.user.id,
-      source: 'grok_text_chat_setting',
+      source: `grok_${botKind}_chat_setting`,
     });
     if (enabled && mode === 'hybrid' && botKind === 'text') {
       memoryQueue.enqueue(`grok:backfill:${chatId}`, { type: 'grok-backfill-chat', chatId });

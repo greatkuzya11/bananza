@@ -155,6 +155,10 @@ function installAiAdminCompositionForTest(dom, scope) {
   return scope;
 }
 
+function waitForAsyncAction() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 test('ai-admin modules publish expected namespaces', () => {
   const dom = loadAiAdminRuntime();
   const aiAdmin = dom.window.BananzaApp.aiAdmin;
@@ -283,6 +287,410 @@ test('local provider runtime saves bots without OpenAI save helpers loaded', asy
   assert.match(status, /interactive actions: off/);
   assert.doesNotMatch(status, /buildVerifiedBotSaveStatus|formatCapabilityState|is not a function/);
   assert.ok(calls.some((call) => call.url === '/api/admin/deepseek-ai-bots/21' && call.options.method === 'PUT'));
+});
+
+test('AI admin chat save handlers send current form values without provider settings save', async () => {
+  const cases = [
+    {
+      name: 'openai text',
+      runtime: 'public/js/app/ai-admin/openai-runtime.js',
+      stateName: 'aiBotState',
+      selectedName: 'selectedAiBotId',
+      renderName: 'renderAiChatBotSettings',
+      saveName: 'saveAiChatBotSettings',
+      chatUrl: '/api/admin/ai-bots/chat-settings',
+      settingsUrl: '/api/admin/ai-bots/settings',
+      bot: { id: 11, name: 'OpenAI Text', mention: 'open_text', enabled: true },
+      ids: {
+        chat: 'aiBotChatSelect',
+        bot: 'aiBotChatBotSelect',
+        enabled: 'aiBotChatEnabled',
+        mode: 'aiBotChatMode',
+        hot: 'aiBotChatHotLimit',
+        auto: 'aiBotChatAutoReact',
+      },
+      expectedMode: 'hybrid',
+    },
+    {
+      name: 'deepseek text',
+      runtime: 'public/js/app/ai-admin/local-providers-runtime.js',
+      stateName: 'deepseekBotState',
+      selectedName: 'selectedDeepseekBotId',
+      renderName: 'renderDeepseekChatBotSettings',
+      saveName: 'saveDeepseekChatBotSettings',
+      chatUrl: '/api/admin/deepseek-ai-bots/chat-settings',
+      settingsUrl: '/api/admin/deepseek-ai-bots/settings',
+      bot: { id: 21, name: 'DeepSeek Text', mention: 'deep_text', enabled: true },
+      ids: {
+        chat: 'deepseekAiBotChatSelect',
+        bot: 'deepseekAiBotChatBotSelect',
+        enabled: 'deepseekAiBotChatEnabled',
+        mode: 'deepseekAiBotChatMode',
+        hot: 'deepseekAiBotChatHotLimit',
+        auto: 'deepseekAiBotChatAutoReact',
+      },
+      expectedMode: 'simple',
+    },
+    {
+      name: 'qwen text',
+      runtime: 'public/js/app/ai-admin/local-providers-runtime.js',
+      stateName: 'qwenBotState',
+      selectedName: 'selectedQwenBotId',
+      renderName: 'renderQwenChatBotSettings',
+      saveName: 'saveQwenChatBotSettings',
+      chatUrl: '/api/admin/qwen-ai-bots/chat-settings',
+      settingsUrl: '/api/admin/qwen-ai-bots/settings',
+      bot: { id: 31, name: 'Qwen Text', mention: 'qwen_text', enabled: true },
+      ids: {
+        chat: 'qwenAiBotChatSelect',
+        bot: 'qwenAiBotChatBotSelect',
+        enabled: 'qwenAiBotChatEnabled',
+        mode: 'qwenAiBotChatMode',
+        hot: 'qwenAiBotChatHotLimit',
+        auto: 'qwenAiBotChatAutoReact',
+      },
+      expectedMode: 'simple',
+    },
+    {
+      name: 'yandex text',
+      runtime: 'public/js/app/ai-admin/local-providers-runtime.js',
+      stateName: 'yandexBotState',
+      selectedName: 'selectedYandexBotId',
+      renderName: 'renderYandexChatBotSettings',
+      saveName: 'saveYandexChatBotSettings',
+      chatUrl: '/api/admin/yandex-ai-bots/chat-settings',
+      settingsUrl: '/api/admin/yandex-ai-bots/settings',
+      bot: { id: 41, name: 'Yandex Text', mention: 'yandex_text', enabled: true },
+      ids: {
+        chat: 'yandexAiBotChatSelect',
+        bot: 'yandexAiBotChatBotSelect',
+        enabled: 'yandexAiBotChatEnabled',
+        mode: 'yandexAiBotChatMode',
+        hot: 'yandexAiBotChatHotLimit',
+        auto: 'yandexAiBotChatAutoReact',
+      },
+      expectedMode: 'hybrid',
+    },
+  ];
+
+  for (const item of cases) {
+    const dom = createAppDom();
+    const calls = [];
+    const chat = { id: 7, name: 'Chat', type: 'group' };
+    let scope = null;
+    loadAiAdminRuntimeOnly(dom, item.runtime);
+    scope = createLazyAiAdminScope(dom, async (url, options = {}) => {
+      calls.push({ url, options });
+      if (url === item.chatUrl) {
+        const body = options.body || {};
+        const mode = item.expectedMode === 'simple' ? 'simple' : (body.mode || 'simple');
+        return {
+          state: {
+            settings: scope[item.stateName].settings || {},
+            bots: [item.bot],
+            chats: [chat],
+            chatSettings: [{
+              chat_id: body.chatId,
+              bot_id: body.botId,
+              enabled: !!body.enabled,
+              mode,
+              hot_context_limit: body.hot_context_limit,
+              auto_react_on_mention: !!body.auto_react_on_mention,
+            }],
+            models: scope[item.stateName].models || {},
+          },
+        };
+      }
+      if (url === item.settingsUrl) {
+        return {
+          state: {
+            settings: scope[item.stateName].settings || {},
+            bots: [item.bot],
+            chats: [chat],
+            chatSettings: [{
+              chat_id: chat.id,
+              bot_id: item.bot.id,
+              enabled: false,
+              mode: 'simple',
+              hot_context_limit: 50,
+              auto_react_on_mention: false,
+            }],
+          },
+        };
+      }
+      throw new Error(`Unexpected ${item.name} request: ${url}`);
+    });
+    installAiAdminCompositionForTest(dom, scope);
+
+    scope[item.stateName].bots = [item.bot];
+    scope[item.stateName].chats = [chat];
+    scope[item.stateName].chatSettings = [];
+    scope[item.selectedName] = item.bot.id;
+    scope[item.renderName]();
+
+    dom.window.document.getElementById(item.ids.chat).value = String(chat.id);
+    dom.window.document.getElementById(item.ids.bot).value = String(item.bot.id);
+    dom.window.document.getElementById(item.ids.enabled).checked = true;
+    dom.window.document.getElementById(item.ids.mode).value = item.expectedMode;
+    dom.window.document.getElementById(item.ids.hot).value = '77';
+    dom.window.document.getElementById(item.ids.auto).checked = true;
+
+    await scope[item.saveName]();
+
+    const chatSaveCall = calls.find((call) => call.url === item.chatUrl);
+    assert.ok(chatSaveCall, `expected ${item.name} chat settings request`);
+    assert.equal(calls.some((call) => call.url === item.settingsUrl), false, `${item.name} should not save provider settings`);
+    assert.deepEqual(JSON.parse(JSON.stringify(chatSaveCall.options.body)), {
+      chatId: chat.id,
+      botId: item.bot.id,
+      enabled: true,
+      mode: item.expectedMode,
+      hot_context_limit: 77,
+      auto_react_on_mention: true,
+    });
+    assert.equal(dom.window.document.getElementById(item.ids.hot).value, '77');
+    assert.equal(dom.window.document.getElementById(item.ids.auto).checked, true);
+    assert.equal(dom.window.document.getElementById(item.ids.mode).value, item.expectedMode);
+  }
+});
+
+test('AI admin chat save buttons are bound and show click feedback', async () => {
+  const dom = createAppDom();
+  const calls = [];
+  const chat = { id: 7, name: 'Chat', type: 'group' };
+  let scope = null;
+
+  loadAiAdminRuntimeOnly(dom, 'public/js/app/ai-admin/openai-runtime.js');
+  loadBrowserScript(dom, 'public/js/app/ai-admin/local-providers-runtime.js');
+  loadBrowserScript(dom, 'public/js/app/ai-admin/events.js');
+
+  const cases = [
+    {
+      name: 'openai text',
+      stateName: 'aiBotState',
+      selectedName: 'selectedAiBotId',
+      renderName: 'renderAiChatBotSettings',
+      buttonId: 'aiBotChatSave',
+      chatUrl: '/api/admin/ai-bots/chat-settings',
+      settingsUrl: '/api/admin/ai-bots/settings',
+      statusId: 'aiBotChatStatus',
+      bot: { id: 11, name: 'OpenAI Text', mention: 'open_text', enabled: true },
+      ids: {
+        chat: 'aiBotChatSelect',
+        bot: 'aiBotChatBotSelect',
+        enabled: 'aiBotChatEnabled',
+        mode: 'aiBotChatMode',
+        hot: 'aiBotChatHotLimit',
+        auto: 'aiBotChatAutoReact',
+      },
+      expectedMode: 'hybrid',
+    },
+    {
+      name: 'deepseek text',
+      stateName: 'deepseekBotState',
+      selectedName: 'selectedDeepseekBotId',
+      renderName: 'renderDeepseekChatBotSettings',
+      buttonId: 'deepseekAiBotChatSave',
+      chatUrl: '/api/admin/deepseek-ai-bots/chat-settings',
+      settingsUrl: '/api/admin/deepseek-ai-bots/settings',
+      statusId: 'deepseekAiBotChatStatus',
+      bot: { id: 21, name: 'DeepSeek Text', mention: 'deep_text', enabled: true },
+      ids: {
+        chat: 'deepseekAiBotChatSelect',
+        bot: 'deepseekAiBotChatBotSelect',
+        enabled: 'deepseekAiBotChatEnabled',
+        mode: 'deepseekAiBotChatMode',
+        hot: 'deepseekAiBotChatHotLimit',
+        auto: 'deepseekAiBotChatAutoReact',
+      },
+      expectedMode: 'simple',
+    },
+    {
+      name: 'qwen text',
+      stateName: 'qwenBotState',
+      selectedName: 'selectedQwenBotId',
+      renderName: 'renderQwenChatBotSettings',
+      buttonId: 'qwenAiBotChatSave',
+      chatUrl: '/api/admin/qwen-ai-bots/chat-settings',
+      settingsUrl: '/api/admin/qwen-ai-bots/settings',
+      statusId: 'qwenAiBotChatStatus',
+      bot: { id: 31, name: 'Qwen Text', mention: 'qwen_text', enabled: true },
+      ids: {
+        chat: 'qwenAiBotChatSelect',
+        bot: 'qwenAiBotChatBotSelect',
+        enabled: 'qwenAiBotChatEnabled',
+        mode: 'qwenAiBotChatMode',
+        hot: 'qwenAiBotChatHotLimit',
+        auto: 'qwenAiBotChatAutoReact',
+      },
+      expectedMode: 'simple',
+    },
+    {
+      name: 'yandex text',
+      stateName: 'yandexBotState',
+      selectedName: 'selectedYandexBotId',
+      renderName: 'renderYandexChatBotSettings',
+      buttonId: 'yandexAiBotChatSave',
+      chatUrl: '/api/admin/yandex-ai-bots/chat-settings',
+      settingsUrl: '/api/admin/yandex-ai-bots/settings',
+      statusId: 'yandexAiBotChatStatus',
+      bot: { id: 41, name: 'Yandex Text', mention: 'yandex_text', enabled: true },
+      ids: {
+        chat: 'yandexAiBotChatSelect',
+        bot: 'yandexAiBotChatBotSelect',
+        enabled: 'yandexAiBotChatEnabled',
+        mode: 'yandexAiBotChatMode',
+        hot: 'yandexAiBotChatHotLimit',
+        auto: 'yandexAiBotChatAutoReact',
+      },
+      expectedMode: 'hybrid',
+    },
+  ];
+
+  scope = createLazyAiAdminScope(dom, async (url, options = {}) => {
+    calls.push({ url, options });
+    const item = cases.find((candidate) => candidate.chatUrl === url);
+    if (!item) throw new Error(`Unexpected chat save request: ${url}`);
+    await waitForAsyncAction();
+    const body = options.body || {};
+    const mode = item.expectedMode === 'simple' ? 'simple' : (body.mode || 'simple');
+    return {
+      state: {
+        settings: scope[item.stateName].settings || {},
+        bots: [item.bot],
+        chats: [chat],
+        chatSettings: [{
+          chat_id: body.chatId,
+          bot_id: body.botId,
+          enabled: !!body.enabled,
+          mode,
+          hot_context_limit: body.hot_context_limit,
+          auto_react_on_mention: !!body.auto_react_on_mention,
+        }],
+        models: scope[item.stateName].models || {},
+      },
+    };
+  });
+  installAiAdminCompositionForTest(dom, scope);
+  [
+    'openAiBotSettingsModal',
+    'openYandexAiSettingsModal',
+    'openDeepseekAiSettingsModal',
+    'openQwenAiSettingsModal',
+    'openGrokAiSettingsModal',
+    'openOpenAiTextBotsModal',
+    'openOpenAiUniversalBotsModal',
+    'openOpenAiImageBotsModal',
+    'openDeepseekTextBotsModal',
+    'openQwenTextBotsModal',
+    'openGrokTextBotsModal',
+    'openGrokImageBotsModal',
+    'openGrokUniversalBotsModal',
+    'closeModal',
+  ].forEach((name) => {
+    scope[name] = () => {};
+  });
+
+  const controller = dom.window.BananzaApp.aiAdmin.createEventController({ scope });
+  assert.equal(controller.bindEvents(), true);
+  assert.equal(controller.bindEvents(), false);
+
+  for (const item of cases) {
+    scope[item.stateName].bots = [item.bot];
+    scope[item.stateName].chats = [chat];
+    scope[item.stateName].chatSettings = [];
+    scope[item.selectedName] = item.bot.id;
+    scope[item.renderName]();
+
+    dom.window.document.getElementById(item.ids.chat).value = String(chat.id);
+    dom.window.document.getElementById(item.ids.bot).value = String(item.bot.id);
+    dom.window.document.getElementById(item.ids.enabled).checked = true;
+    dom.window.document.getElementById(item.ids.mode).value = item.expectedMode;
+    dom.window.document.getElementById(item.ids.hot).value = '77';
+    dom.window.document.getElementById(item.ids.auto).checked = true;
+
+    const button = dom.window.document.getElementById(item.buttonId);
+    button.click();
+
+    assert.equal(button.dataset.adminBusy, '1', `${item.name} should show pending click state`);
+    assert.equal(button.textContent, 'Saving...', `${item.name} should show pending label`);
+
+    for (let i = 0; i < 5 && button.dataset.adminBusy === '1'; i += 1) {
+      await waitForAsyncAction();
+    }
+
+    const chatSaveCall = calls.find((call) => call.url === item.chatUrl);
+    assert.ok(chatSaveCall, `expected ${item.name} chat settings request`);
+    assert.equal(calls.some((call) => call.url === item.settingsUrl), false, `${item.name} should not save provider settings`);
+    assert.deepEqual(JSON.parse(JSON.stringify(chatSaveCall.options.body)), {
+      chatId: chat.id,
+      botId: item.bot.id,
+      enabled: true,
+      mode: item.expectedMode,
+      hot_context_limit: 77,
+      auto_react_on_mention: true,
+    });
+    const status = dom.window.document.getElementById(item.statusId);
+    assert.equal(status.classList.contains('is-success'), true, `${item.name} should show saved status`);
+    assert.equal(dom.window.document.getElementById(item.ids.hot).value, '77');
+    assert.equal(dom.window.document.getElementById(item.ids.auto).checked, true);
+    assert.equal(dom.window.document.getElementById(item.ids.mode).value, item.expectedMode);
+  }
+});
+
+test('AI admin chat save buttons resolve runtime handlers at click time', async () => {
+  const dom = createAppDom();
+  let firstHandlerCalled = false;
+  let secondHandlerCalled = false;
+  let currentSaveHandler = async () => {
+    firstHandlerCalled = true;
+  };
+
+  loadBrowserScript(dom, 'public/js/app/boot/composition/export-utils.js');
+  loadBrowserScript(dom, 'public/js/app/boot/composition/runtime-proxy-scope.js');
+  loadBrowserScript(dom, 'public/js/app/boot/composition/ai-admin-composition.js');
+  loadBrowserScript(dom, 'public/js/app/ai-admin/events.js');
+
+  const scope = createLazyAiAdminScope(dom, async () => {
+    throw new Error('API should not be called by deferred handler test');
+  });
+  installAiAdminCompositionForTest(dom, scope);
+  [
+    'openAiBotSettingsModal',
+    'openYandexAiSettingsModal',
+    'openDeepseekAiSettingsModal',
+    'openQwenAiSettingsModal',
+    'openGrokAiSettingsModal',
+    'openOpenAiTextBotsModal',
+    'openOpenAiUniversalBotsModal',
+    'openOpenAiImageBotsModal',
+    'openDeepseekTextBotsModal',
+    'openQwenTextBotsModal',
+    'openGrokTextBotsModal',
+    'openGrokImageBotsModal',
+    'openGrokUniversalBotsModal',
+    'closeModal',
+  ].forEach((name) => {
+    scope[name] = () => {};
+  });
+  Object.defineProperty(scope, 'saveAiChatBotSettings', {
+    configurable: true,
+    get() {
+      return currentSaveHandler;
+    },
+  });
+
+  const controller = dom.window.BananzaApp.aiAdmin.createEventController({ scope });
+  assert.equal(controller.bindEvents(), true);
+
+  currentSaveHandler = async () => {
+    secondHandlerCalled = true;
+  };
+  dom.window.document.getElementById('aiBotChatSave').click();
+  await waitForAsyncAction();
+
+  assert.equal(firstHandlerCalled, false);
+  assert.equal(secondHandlerCalled, true);
 });
 
 test('provider controllers create, render, and call expected endpoints', async () => {

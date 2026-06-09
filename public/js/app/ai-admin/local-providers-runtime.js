@@ -515,6 +515,14 @@
       async function saveDeepseekChatBotSettings() {
         const chatId = Number($('#deepseekAiBotChatSelect')?.value || 0);
         const botId = Number($('#deepseekAiBotChatBotSelect')?.value || 0);
+        const body = {
+          chatId,
+          botId,
+          enabled: $('#deepseekAiBotChatEnabled')?.checked,
+          mode: 'simple',
+          hot_context_limit: Number($('#deepseekAiBotChatHotLimit')?.value || 50),
+          auto_react_on_mention: $('#deepseekAiBotChatAutoReact')?.checked,
+        };
         const botExists = deepseekBotState.bots.some(bot => Number(bot.id) === botId);
         if (!chatId || !botId) { setDeepseekChatStatus('Choose chat and bot', 'error'); return; }
         if (!botExists) {
@@ -523,17 +531,9 @@
           return;
         }
         try {
-          await persistDeepseekAiSettings();
           const data = await api('/api/admin/deepseek-ai-bots/chat-settings', {
             method: 'PUT',
-            body: {
-              chatId,
-              botId,
-              enabled: $('#deepseekAiBotChatEnabled')?.checked,
-              mode: 'simple',
-              hot_context_limit: Number($('#deepseekAiBotChatHotLimit')?.value || 50),
-              auto_react_on_mention: $('#deepseekAiBotChatAutoReact')?.checked,
-            },
+            body,
           });
           mergeDeepseekAiState(data);
           renderDeepseekChatBotSettings();
@@ -1000,6 +1000,14 @@
       async function saveQwenChatBotSettings() {
         const chatId = Number($('#qwenAiBotChatSelect')?.value || 0);
         const botId = Number($('#qwenAiBotChatBotSelect')?.value || 0);
+        const body = {
+          chatId,
+          botId,
+          enabled: $('#qwenAiBotChatEnabled')?.checked,
+          mode: 'simple',
+          hot_context_limit: Number($('#qwenAiBotChatHotLimit')?.value || 50),
+          auto_react_on_mention: $('#qwenAiBotChatAutoReact')?.checked,
+        };
         const botExists = qwenBotState.bots.some(bot => Number(bot.id) === botId);
         if (!chatId || !botId) { setQwenChatStatus('Choose chat and bot', 'error'); return; }
         if (!botExists) {
@@ -1008,17 +1016,9 @@
           return;
         }
         try {
-          await persistQwenAiSettings();
           const data = await api('/api/admin/qwen-ai-bots/chat-settings', {
             method: 'PUT',
-            body: {
-              chatId,
-              botId,
-              enabled: $('#qwenAiBotChatEnabled')?.checked,
-              mode: 'simple',
-              hot_context_limit: Number($('#qwenAiBotChatHotLimit')?.value || 50),
-              auto_react_on_mention: $('#qwenAiBotChatAutoReact')?.checked,
-            },
+            body,
           });
           mergeQwenAiState(data);
           renderQwenChatBotSettings();
@@ -1553,6 +1553,14 @@
       async function saveYandexChatBotSettings() {
         const chatId = Number($('#yandexAiBotChatSelect')?.value || 0);
         const botId = Number($('#yandexAiBotChatBotSelect')?.value || 0);
+        const body = {
+          chatId,
+          botId,
+          enabled: $('#yandexAiBotChatEnabled')?.checked,
+          mode: $('#yandexAiBotChatMode')?.value || 'simple',
+          hot_context_limit: Number($('#yandexAiBotChatHotLimit')?.value || 50),
+          auto_react_on_mention: $('#yandexAiBotChatAutoReact')?.checked,
+        };
         const botExists = yandexBotState.bots.some(bot => Number(bot.id) === botId);
         if (!chatId || !botId) { setYandexChatStatus('Choose chat and bot', 'error'); return; }
         if (!botExists) {
@@ -1561,17 +1569,9 @@
           return;
         }
         try {
-          await persistYandexAiSettings();
           const data = await api('/api/admin/yandex-ai-bots/chat-settings', {
             method: 'PUT',
-            body: {
-              chatId,
-              botId,
-              enabled: $('#yandexAiBotChatEnabled')?.checked,
-              mode: $('#yandexAiBotChatMode')?.value || 'simple',
-              hot_context_limit: Number($('#yandexAiBotChatHotLimit')?.value || 50),
-              auto_react_on_mention: $('#yandexAiBotChatAutoReact')?.checked,
-            },
+            body,
           });
           mergeYandexAiState(data);
           renderYandexChatBotSettings();

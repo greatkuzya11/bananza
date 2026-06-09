@@ -901,6 +901,14 @@
       async function saveAiChatBotSettings() {
         const chatId = Number($('#aiBotChatSelect')?.value || 0);
         const botId = Number($('#aiBotChatBotSelect')?.value || 0);
+        const body = {
+          chatId,
+          botId,
+          enabled: $('#aiBotChatEnabled')?.checked,
+          mode: $('#aiBotChatMode')?.value || 'simple',
+          hot_context_limit: Number($('#aiBotChatHotLimit')?.value || 50),
+          auto_react_on_mention: $('#aiBotChatAutoReact')?.checked,
+        };
         const botExists = aiBotState.bots.some(bot => Number(bot.id) === botId);
         if (!chatId || !botId) { setAiBotChatStatus('\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0447\u0430\u0442 \u0438 \u0431\u043e\u0442\u0430', 'error'); return; }
         if (!botExists) {
@@ -909,17 +917,9 @@
           return;
         }
         try {
-          await persistAiBotSettings();
           const data = await api('/api/admin/ai-bots/chat-settings', {
             method: 'PUT',
-            body: {
-              chatId,
-              botId,
-              enabled: $('#aiBotChatEnabled')?.checked,
-              mode: $('#aiBotChatMode')?.value || 'simple',
-              hot_context_limit: Number($('#aiBotChatHotLimit')?.value || 50),
-              auto_react_on_mention: $('#aiBotChatAutoReact')?.checked,
-            },
+            body,
           });
           mergeAiBotState(data);
           renderAiChatBotSettings();
@@ -1090,6 +1090,14 @@
       async function saveOpenAiUniversalChatBotSettings() {
         const chatId = Number($('#openAiUniversalBotChatSelect')?.value || 0);
         const botId = Number($('#openAiUniversalBotChatBotSelect')?.value || 0);
+        const body = {
+          chatId,
+          botId,
+          enabled: $('#openAiUniversalBotChatEnabled')?.checked,
+          mode: $('#openAiUniversalBotChatMode')?.value || 'simple',
+          hot_context_limit: Number($('#openAiUniversalBotChatHotLimit')?.value || 50),
+          auto_react_on_mention: $('#openAiUniversalBotChatAutoReact')?.checked,
+        };
         const botExists = openAiUniversalState.bots.some(bot => Number(bot.id) === Number(botId));
         if (!chatId || !botId) { setOpenAiUniversalChatStatus('Choose chat and bot', 'error'); return; }
         if (!botExists) {
@@ -1100,14 +1108,7 @@
         try {
           const data = await api('/api/admin/openai-universal-bots/chat-settings', {
             method: 'PUT',
-            body: {
-              chatId,
-              botId,
-              enabled: $('#openAiUniversalBotChatEnabled')?.checked,
-              mode: $('#openAiUniversalBotChatMode')?.value || 'simple',
-              hot_context_limit: Number($('#openAiUniversalBotChatHotLimit')?.value || 50),
-              auto_react_on_mention: $('#openAiUniversalBotChatAutoReact')?.checked,
-            },
+            body,
           });
           mergeOpenAiUniversalState(data);
           renderOpenAiUniversalChatBotSettings();
@@ -1424,6 +1425,13 @@
       async function saveOpenAiImageChatBotSettings() {
         const chatId = Number($('#openAiImageBotChatSelect')?.value || 0);
         const botId = Number($('#openAiImageBotChatBotSelect')?.value || 0);
+        const body = {
+          chatId,
+          botId,
+          enabled: $('#openAiImageBotChatEnabled')?.checked,
+          mode: 'simple',
+          hot_context_limit: 50,
+        };
         const botExists = openAiImageState.bots.some(bot => Number(bot.id) === Number(botId));
         if (!chatId || !botId) { setOpenAiImageChatStatus('Choose chat and image bot', 'error'); return; }
         if (!botExists) {
@@ -1434,13 +1442,7 @@
         try {
           const data = await api('/api/admin/openai-image-bots/chat-settings', {
             method: 'PUT',
-            body: {
-              chatId,
-              botId,
-              enabled: $('#openAiImageBotChatEnabled')?.checked,
-              mode: 'simple',
-              hot_context_limit: 50,
-            },
+            body,
           });
           mergeOpenAiImageState(data);
           renderOpenAiImageChatBotSettings();

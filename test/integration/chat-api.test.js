@@ -103,6 +103,58 @@ async function enableOpenAiForTests(admin, overrides = {}) {
   return response.data.settings;
 }
 
+function modelForProvider(provider) {
+  if (provider === 'deepseek') return 'deepseek-chat';
+  if (provider === 'qwen') return 'qwen';
+  if (provider === 'yandex') return 'yandexgpt/latest';
+  if (provider === 'grok') return 'grok-4.20-reasoning';
+  return 'gpt-4o-mini';
+}
+
+function imageModelForProvider(provider) {
+  return provider === 'grok' ? 'grok-imagine-image' : 'gpt-image-2';
+}
+
+function buildBotPayload({ provider = 'openai', kind = 'text', label = 'Bot' } = {}) {
+  const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+  const mentionBase = `${provider}_${kind}_${token}`.replace(/[^a-z0-9_]/gi, '_').toLowerCase();
+  return {
+    name: `${label} ${token}`.slice(0, 50),
+    mention: mentionBase.slice(0, 28),
+    provider,
+    kind,
+    enabled: true,
+    visible_to_users: true,
+    available_in_all_chats: false,
+    response_model: modelForProvider(provider),
+    summary_model: modelForProvider(provider),
+    image_model: imageModelForProvider(provider),
+    image_aspect_ratio: '1:1',
+    image_resolution: provider === 'grok' ? '1k' : '1024x1024',
+    image_quality: 'auto',
+    image_background: 'auto',
+    image_output_format: 'png',
+    allow_text: true,
+    allow_image_generate: kind === 'image' || kind === 'universal' || kind === 'chatshot',
+    allow_image_edit: kind === 'image' || kind === 'universal',
+    allow_document: kind === 'universal',
+    image_risk_filter_enabled: true,
+    transform_prompt: 'Rewrite the source text clearly and return only the rewritten text.',
+    chatshot_context_limit: 33,
+    temperature: 0.3,
+    max_tokens: 1000,
+  };
+}
+
+async function createAdminBot(admin, { route, provider = 'openai', kind = 'text', label = 'Bot' }) {
+  const response = await admin.request(route, {
+    method: 'POST',
+    json: buildBotPayload({ provider, kind, label }),
+  });
+  assert.ok(response.data?.bot?.id, `expected ${label} bot to be created`);
+  return response.data.bot;
+}
+
 function responseHasBot(response, botId) {
   return Array.isArray(response.data?.bots)
     && response.data.bots.some((bot) => Number(bot.id) === Number(botId));
@@ -549,6 +601,234 @@ test('context convert all-chat availability respects chat-level gates and bot en
       method: 'PUT',
       json: { enabled: false, openai_interactive_enabled: false },
     }).catch(() => {});
+    db.close();
+  }
+});
+
+test('AI bot chat settings persist through admin state reload for every bot type', async () => {
+  const { admin, bob, carol } = scenario;
+  const db = new Database(path.join(sandbox.appDir, 'bananza.db'));
+  const suffix = Date.now();
+
+  const cases = [
+    {
+      label: 'OpenAI text',
+      provider: 'openai',
+      kind: 'text',
+      createRoute: '/api/admin/ai-bots',
+      settingsRoute: '/api/admin/ai-bots/chat-settings',
+      stateRoute: '/api/admin/ai-bots',
+      save: { mode: 'hybrid', hot_context_limit: 77, auto_react_on_mention: true },
+      expected: { mode: 'hybrid', hot_context_limit: 77, trigger_mode: 'mention_reply', auto_react_on_mention: 1 },
+    },
+    {
+      label: 'OpenAI universal',
+      provider: 'openai',
+      kind: 'universal',
+      createRoute: '/api/admin/openai-universal-bots',
+      settingsRoute: '/api/admin/openai-universal-bots/chat-settings',
+      stateRoute: '/api/admin/openai-universal-bots',
+      save: { mode: 'hybrid', hot_context_limit: 78, auto_react_on_mention: true },
+      expected: { mode: 'hybrid', hot_context_limit: 78, trigger_mode: 'mention_reply', auto_react_on_mention: 1 },
+    },
+    {
+      label: 'OpenAI image',
+      provider: 'openai',
+      kind: 'image',
+      createRoute: '/api/admin/openai-image-bots',
+      settingsRoute: '/api/admin/openai-image-bots/chat-settings',
+      stateRoute: '/api/admin/openai-image-bots',
+      save: { mode: 'hybrid', hot_context_limit: 79, auto_react_on_mention: true },
+      expected: { mode: 'simple', hot_context_limit: 50, trigger_mode: 'mention_reply', auto_react_on_mention: 0 },
+    },
+    {
+      label: 'OpenAI convert',
+      provider: 'openai',
+      kind: 'convert',
+      createRoute: '/api/admin/openai-convert-bots',
+      settingsRoute: '/api/admin/openai-convert-bots/chat-settings',
+      stateRoute: '/api/admin/openai-convert-bots',
+      save: { mode: 'hybrid', hot_context_limit: 80, auto_react_on_mention: true },
+      expected: { mode: 'simple', hot_context_limit: 50, trigger_mode: 'mention_reply', auto_react_on_mention: 0 },
+    },
+    {
+      label: 'OpenAI ChatShot',
+      provider: 'openai',
+      kind: 'chatshot',
+      createRoute: '/api/admin/openai-chatshot-bots',
+      settingsRoute: '/api/admin/openai-chatshot-bots/chat-settings',
+      stateRoute: '/api/admin/openai-chatshot-bots',
+      save: { mode: 'hybrid', hot_context_limit: 81, auto_react_on_mention: true },
+      expected: { mode: 'simple', hot_context_limit: 33, trigger_mode: 'manual', auto_react_on_mention: 0 },
+    },
+    {
+      label: 'DeepSeek text',
+      provider: 'deepseek',
+      kind: 'text',
+      createRoute: '/api/admin/deepseek-ai-bots',
+      settingsRoute: '/api/admin/deepseek-ai-bots/chat-settings',
+      stateRoute: '/api/admin/deepseek-ai-bots',
+      save: { mode: 'hybrid', hot_context_limit: 82, auto_react_on_mention: true },
+      expected: { mode: 'simple', hot_context_limit: 82, trigger_mode: 'mention_reply', auto_react_on_mention: 1 },
+    },
+    {
+      label: 'DeepSeek convert',
+      provider: 'deepseek',
+      kind: 'convert',
+      createRoute: '/api/admin/deepseek-convert-bots',
+      settingsRoute: '/api/admin/deepseek-convert-bots/chat-settings',
+      stateRoute: '/api/admin/deepseek-convert-bots',
+      save: { mode: 'hybrid', hot_context_limit: 83, auto_react_on_mention: true },
+      expected: { mode: 'simple', hot_context_limit: 50, trigger_mode: 'mention_reply', auto_react_on_mention: 0 },
+    },
+    {
+      label: 'Qwen text',
+      provider: 'qwen',
+      kind: 'text',
+      createRoute: '/api/admin/qwen-ai-bots',
+      settingsRoute: '/api/admin/qwen-ai-bots/chat-settings',
+      stateRoute: '/api/admin/qwen-ai-bots',
+      save: { mode: 'hybrid', hot_context_limit: 84, auto_react_on_mention: true },
+      expected: { mode: 'simple', hot_context_limit: 84, trigger_mode: 'mention_reply', auto_react_on_mention: 1 },
+    },
+    {
+      label: 'Qwen convert',
+      provider: 'qwen',
+      kind: 'convert',
+      createRoute: '/api/admin/qwen-convert-bots',
+      settingsRoute: '/api/admin/qwen-convert-bots/chat-settings',
+      stateRoute: '/api/admin/qwen-convert-bots',
+      save: { mode: 'hybrid', hot_context_limit: 85, auto_react_on_mention: true },
+      expected: { mode: 'simple', hot_context_limit: 50, trigger_mode: 'mention_reply', auto_react_on_mention: 0 },
+    },
+    {
+      label: 'Yandex text',
+      provider: 'yandex',
+      kind: 'text',
+      createRoute: '/api/admin/yandex-ai-bots',
+      settingsRoute: '/api/admin/yandex-ai-bots/chat-settings',
+      stateRoute: '/api/admin/yandex-ai-bots',
+      save: { mode: 'hybrid', hot_context_limit: 86, auto_react_on_mention: true },
+      expected: { mode: 'hybrid', hot_context_limit: 86, trigger_mode: 'mention_reply', auto_react_on_mention: 1 },
+    },
+    {
+      label: 'Yandex convert',
+      provider: 'yandex',
+      kind: 'convert',
+      createRoute: '/api/admin/yandex-convert-bots',
+      settingsRoute: '/api/admin/yandex-convert-bots/chat-settings',
+      stateRoute: '/api/admin/yandex-convert-bots',
+      save: { mode: 'hybrid', hot_context_limit: 87, auto_react_on_mention: true },
+      expected: { mode: 'simple', hot_context_limit: 50, trigger_mode: 'mention_reply', auto_react_on_mention: 0 },
+    },
+    {
+      label: 'Grok text',
+      provider: 'grok',
+      kind: 'text',
+      createRoute: '/api/admin/grok-ai-bots',
+      settingsRoute: '/api/admin/grok-ai-bots/chat-settings',
+      stateRoute: '/api/admin/grok-ai-bots',
+      save: { mode: 'hybrid', hot_context_limit: 88, auto_react_on_mention: true },
+      expected: { mode: 'hybrid', hot_context_limit: 88, trigger_mode: 'mention_reply', auto_react_on_mention: 1 },
+    },
+    {
+      label: 'Grok image',
+      provider: 'grok',
+      kind: 'image',
+      createRoute: '/api/admin/grok-ai-bots',
+      settingsRoute: '/api/admin/grok-ai-bots/chat-settings',
+      stateRoute: '/api/admin/grok-ai-bots',
+      stateKey: 'imageChatSettings',
+      save: { mode: 'hybrid', hot_context_limit: 89, auto_react_on_mention: true },
+      expected: { mode: 'simple', hot_context_limit: 89, trigger_mode: 'mention_reply', auto_react_on_mention: 0 },
+    },
+    {
+      label: 'Grok universal',
+      provider: 'grok',
+      kind: 'universal',
+      createRoute: '/api/admin/grok-universal-bots',
+      settingsRoute: '/api/admin/grok-universal-bots/chat-settings',
+      stateRoute: '/api/admin/grok-universal-bots',
+      save: { mode: 'hybrid', hot_context_limit: 90, auto_react_on_mention: true },
+      expected: { mode: 'hybrid', hot_context_limit: 90, trigger_mode: 'mention_reply', auto_react_on_mention: 1 },
+    },
+    {
+      label: 'Grok convert',
+      provider: 'grok',
+      kind: 'convert',
+      createRoute: '/api/admin/grok-convert-bots',
+      settingsRoute: '/api/admin/grok-convert-bots/chat-settings',
+      stateRoute: '/api/admin/grok-convert-bots',
+      save: { mode: 'hybrid', hot_context_limit: 91, auto_react_on_mention: true },
+      expected: { mode: 'simple', hot_context_limit: 50, trigger_mode: 'mention_reply', auto_react_on_mention: 0 },
+    },
+    {
+      label: 'Grok ChatShot',
+      provider: 'grok',
+      kind: 'chatshot',
+      createRoute: '/api/admin/grok-chatshot-bots',
+      settingsRoute: '/api/admin/grok-chatshot-bots/chat-settings',
+      stateRoute: '/api/admin/grok-chatshot-bots',
+      save: { mode: 'hybrid', hot_context_limit: 92, auto_react_on_mention: true },
+      expected: { mode: 'simple', hot_context_limit: 33, trigger_mode: 'manual', auto_react_on_mention: 0 },
+    },
+  ];
+
+  try {
+    const chat = await admin.request('/api/chats', {
+      method: 'POST',
+      json: {
+        name: `AI Bot Settings ${suffix}`,
+        type: 'group',
+        memberIds: [bob.user.id, carol.user.id],
+      },
+    });
+    const chatId = Number(chat.data.id);
+
+    for (const item of cases) {
+      const bot = await createAdminBot(admin, {
+        route: item.createRoute,
+        provider: item.provider,
+        kind: item.kind,
+        label: item.label,
+      });
+      const saveResponse = await admin.request(item.settingsRoute, {
+        method: 'PUT',
+        json: {
+          chatId,
+          botId: Number(bot.id),
+          enabled: true,
+          ...item.save,
+        },
+      });
+      assert.equal(saveResponse.data.ok, true, `${item.label} save should succeed`);
+
+      const row = db.prepare(`
+        SELECT enabled, mode, hot_context_limit, trigger_mode, auto_react_on_mention
+        FROM ai_chat_bots
+        WHERE chat_id=? AND bot_id=?
+      `).get(chatId, Number(bot.id));
+      assert.deepEqual(row, {
+        enabled: 1,
+        mode: item.expected.mode,
+        hot_context_limit: item.expected.hot_context_limit,
+        trigger_mode: item.expected.trigger_mode,
+        auto_react_on_mention: item.expected.auto_react_on_mention,
+      }, `${item.label} sqlite row should persist`);
+
+      const reloaded = await admin.request(item.stateRoute);
+      const stateKey = item.stateKey || 'chatSettings';
+      const setting = (reloaded.data[stateKey] || []).find((entry) => (
+        Number(entry.chat_id) === chatId && Number(entry.bot_id) === Number(bot.id)
+      ));
+      assert.ok(setting, `${item.label} setting should reload from ${stateKey}`);
+      assert.equal(setting.enabled, true, `${item.label} enabled should reload`);
+      assert.equal(setting.mode, item.expected.mode, `${item.label} mode should reload`);
+      assert.equal(setting.hot_context_limit, item.expected.hot_context_limit, `${item.label} context limit should reload`);
+      assert.equal(setting.trigger_mode, item.expected.trigger_mode, `${item.label} trigger should reload`);
+      assert.equal(setting.auto_react_on_mention, item.expected.auto_react_on_mention !== 0, `${item.label} auto-react should reload`);
+    }
+  } finally {
     db.close();
   }
 });

@@ -7,6 +7,9 @@
     throw new Error('BananzaApp feature loader is required before feature-registry.js');
   }
 
+  const AI_ADMIN_SCRIPT_VERSION = '20260609-chat-settings-events';
+  const aiAdminScript = (file) => `/js/app/ai-admin/${file}.js?v=${AI_ADMIN_SCRIPT_VERSION}`;
+
   loader.registerFeature('admin', [
     '/js/app/admin/bot-audit.js',
     '/js/app/admin/backup.js',
@@ -14,70 +17,70 @@
   ], { preload: 'admin-idle' });
 
   loader.registerFeature('ai-admin', [
-    '/js/app/ai-admin/shared.js',
-    '/js/app/ai-admin/openai.js',
-    '/js/app/ai-admin/openai-runtime.js',
-    '/js/app/ai-admin/yandex.js',
-    '/js/app/ai-admin/deepseek.js',
-    '/js/app/ai-admin/qwen.js',
-    '/js/app/ai-admin/local-providers-runtime.js',
-    '/js/app/ai-admin/grok.js',
-    '/js/app/ai-admin/grok-runtime.js',
-    '/js/app/ai-admin/context-convert.js',
-    '/js/app/ai-admin/chatshot.js',
-    '/js/app/ai-admin/context-chatshot-runtime.js',
-    '/js/app/ai-admin/grok-image-risk.js',
-    '/js/app/ai-admin/grok-image-risk-runtime.js',
-    '/js/app/ai-admin/modals.js',
-    '/js/app/ai-admin/events.js',
-    '/js/app/ai-admin/controller.js',
+    aiAdminScript('shared'),
+    aiAdminScript('openai'),
+    aiAdminScript('openai-runtime'),
+    aiAdminScript('yandex'),
+    aiAdminScript('deepseek'),
+    aiAdminScript('qwen'),
+    aiAdminScript('local-providers-runtime'),
+    aiAdminScript('grok'),
+    aiAdminScript('grok-runtime'),
+    aiAdminScript('context-convert'),
+    aiAdminScript('chatshot'),
+    aiAdminScript('context-chatshot-runtime'),
+    aiAdminScript('grok-image-risk'),
+    aiAdminScript('grok-image-risk-runtime'),
+    aiAdminScript('modals'),
+    aiAdminScript('events'),
+    aiAdminScript('controller'),
   ], { preload: 'manual' });
 
   loader.registerFeature('ai-admin-runtime', [
-    '/js/app/ai-admin/openai-runtime.js',
-    '/js/app/ai-admin/local-providers-runtime.js',
-    '/js/app/ai-admin/grok-runtime.js',
-    '/js/app/ai-admin/context-chatshot-runtime.js',
-    '/js/app/ai-admin/grok-image-risk-runtime.js',
+    aiAdminScript('openai-runtime'),
+    aiAdminScript('local-providers-runtime'),
+    aiAdminScript('grok-runtime'),
+    aiAdminScript('context-chatshot-runtime'),
+    aiAdminScript('grok-image-risk-runtime'),
   ], { preload: 'manual' });
 
   loader.registerFeature('openai-runtime', [
-    '/js/app/ai-admin/openai-runtime.js',
+    aiAdminScript('openai-runtime'),
   ], { preload: 'interaction' });
 
   loader.registerFeature('local-providers-runtime', [
-    '/js/app/ai-admin/local-providers-runtime.js',
+    aiAdminScript('local-providers-runtime'),
   ], { preload: 'interaction' });
 
   loader.registerFeature('grok-runtime', [
-    '/js/app/ai-admin/grok-runtime.js',
+    aiAdminScript('grok-runtime'),
   ], { preload: 'interaction' });
 
   loader.registerFeature('context-chatshot-runtime', [
-    '/js/app/ai-admin/context-chatshot-runtime.js',
+    aiAdminScript('context-chatshot-runtime'),
   ], { preload: 'manual' });
 
   loader.registerFeature('grok-risk-runtime', [
-    '/js/app/ai-admin/grok-image-risk-runtime.js',
+    aiAdminScript('grok-image-risk-runtime'),
   ], { preload: 'manual' });
 
   loader.registerFeature('ai-admin-events', [
-    '/js/app/ai-admin/events.js',
+    aiAdminScript('events'),
   ], { preload: 'admin-idle' });
 
   loader.registerFeature('ai-admin-ui', [
-    '/js/app/ai-admin/shared.js',
-    '/js/app/ai-admin/openai.js',
-    '/js/app/ai-admin/yandex.js',
-    '/js/app/ai-admin/deepseek.js',
-    '/js/app/ai-admin/qwen.js',
-    '/js/app/ai-admin/grok.js',
-    '/js/app/ai-admin/context-convert.js',
-    '/js/app/ai-admin/chatshot.js',
-    '/js/app/ai-admin/grok-image-risk.js',
-    '/js/app/ai-admin/modals.js',
-    '/js/app/ai-admin/events.js',
-    '/js/app/ai-admin/controller.js',
+    aiAdminScript('shared'),
+    aiAdminScript('openai'),
+    aiAdminScript('yandex'),
+    aiAdminScript('deepseek'),
+    aiAdminScript('qwen'),
+    aiAdminScript('grok'),
+    aiAdminScript('context-convert'),
+    aiAdminScript('chatshot'),
+    aiAdminScript('grok-image-risk'),
+    aiAdminScript('modals'),
+    aiAdminScript('events'),
+    aiAdminScript('controller'),
   ], { preload: 'admin-idle' });
 
   loader.registerFeature('settings', [

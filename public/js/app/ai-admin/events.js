@@ -8,29 +8,29 @@
 
     function bindEvents() {
       if (bound) return false;
-      bound = true;
-      with (scope) {
-        const bindAiAdminPanel = (id, handler) => {
-          const button = document.getElementById(id);
-          if (!button || button.dataset.bananzaAiAdminPanelBound === '1') return;
-          button.dataset.bananzaAiAdminPanelBound = '1';
-          button.addEventListener('click', handler);
-        };
-        bindAiAdminPanel('settingsAiBotsPanel', openAiBotSettingsModal);
-        bindAiAdminPanel('settingsYandexAiPanel', openYandexAiSettingsModal);
-        bindAiAdminPanel('settingsDeepSeekAiPanel', openDeepseekAiSettingsModal);
-        bindAiAdminPanel('settingsQwenAiPanel', openQwenAiSettingsModal);
-        bindAiAdminPanel('settingsGrokAiPanel', openGrokAiSettingsModal);
+      try {
+        with (scope) {
+          const bindAiAdminPanel = (id, handler) => {
+            const button = document.getElementById(id);
+            if (!button || button.dataset.bananzaAiAdminPanelBound === '1') return;
+            button.dataset.bananzaAiAdminPanelBound = '1';
+            button.addEventListener('click', handler);
+          };
+          bindAiAdminPanel('settingsAiBotsPanel', openAiBotSettingsModal);
+          bindAiAdminPanel('settingsYandexAiPanel', openYandexAiSettingsModal);
+          bindAiAdminPanel('settingsDeepSeekAiPanel', openDeepseekAiSettingsModal);
+          bindAiAdminPanel('settingsQwenAiPanel', openQwenAiSettingsModal);
+          bindAiAdminPanel('settingsGrokAiPanel', openGrokAiSettingsModal);
 
-        grokImageRiskCancel?.addEventListener('click', () => {
-          closeModal('grokImageRiskConfirmModal');
-        });
-        grokImageRiskConfirm?.addEventListener('click', () => {
-          const resolve = grokImageRiskConfirmResolver;
-          grokImageRiskConfirmResolver = null;
-          closeModal('grokImageRiskConfirmModal');
-          if (typeof resolve === 'function') resolve(true);
-        });
+          $('#grokImageRiskCancel')?.addEventListener('click', () => {
+            closeModal('grokImageRiskConfirmModal');
+          });
+          $('#grokImageRiskConfirm')?.addEventListener('click', () => {
+            const resolve = grokImageRiskConfirmResolver;
+            grokImageRiskConfirmResolver = null;
+            closeModal('grokImageRiskConfirmModal');
+            if (typeof resolve === 'function') resolve(true);
+          });
     
         // AI bot admin settings
         bindAsyncActionButtons('aiBotsSaveSettings', null, 'Saving...', saveAiBotSettings);
@@ -67,9 +67,9 @@
           const bot = aiBotState.bots.find(item => item.id === Number(btn.dataset.botId));
           if (bot) fillAiBotForm(bot);
         });
-        $('#aiBotChatSelect')?.addEventListener('change', renderAiChatBotSettings);
-        $('#aiBotChatBotSelect')?.addEventListener('change', renderAiChatBotSettings);
-        bindAsyncActionButtons('aiBotChatSave', null, 'Saving...', saveAiChatBotSettings);
+        $('#aiBotChatSelect')?.addEventListener('change', () => renderAiChatBotSettings());
+        $('#aiBotChatBotSelect')?.addEventListener('change', () => renderAiChatBotSettings());
+        bindAsyncActionButtons('aiBotChatSave', null, 'Saving...', () => saveAiChatBotSettings());
         $('#openAiUniversalBotCreateNew')?.addEventListener('click', () => {
           fillOpenAiUniversalBotForm(null);
           setOpenAiUniversalStatus('New OpenAI universal bot: fill fields and save');
@@ -91,9 +91,9 @@
           const bot = openAiUniversalState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
           if (bot) fillOpenAiUniversalBotForm(bot);
         });
-        $('#openAiUniversalBotChatSelect')?.addEventListener('change', renderOpenAiUniversalChatBotSettings);
-        $('#openAiUniversalBotChatBotSelect')?.addEventListener('change', renderOpenAiUniversalChatBotSettings);
-        bindAsyncActionButtons('openAiUniversalBotChatSave', null, 'Saving...', saveOpenAiUniversalChatBotSettings);
+        $('#openAiUniversalBotChatSelect')?.addEventListener('change', () => renderOpenAiUniversalChatBotSettings());
+        $('#openAiUniversalBotChatBotSelect')?.addEventListener('change', () => renderOpenAiUniversalChatBotSettings());
+        bindAsyncActionButtons('openAiUniversalBotChatSave', null, 'Saving...', () => saveOpenAiUniversalChatBotSettings());
         $('#openAiImageBotCreateNew')?.addEventListener('click', () => {
           fillOpenAiImageBotForm(null);
           setOpenAiImageStatus('New OpenAI image bot: fill fields and save');
@@ -115,9 +115,9 @@
           const bot = openAiImageState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
           if (bot) fillOpenAiImageBotForm(bot);
         });
-        $('#openAiImageBotChatSelect')?.addEventListener('change', renderOpenAiImageChatBotSettings);
-        $('#openAiImageBotChatBotSelect')?.addEventListener('change', renderOpenAiImageChatBotSettings);
-        bindAsyncActionButtons('openAiImageBotChatSave', null, 'Saving...', saveOpenAiImageChatBotSettings);
+        $('#openAiImageBotChatSelect')?.addEventListener('change', () => renderOpenAiImageChatBotSettings());
+        $('#openAiImageBotChatBotSelect')?.addEventListener('change', () => renderOpenAiImageChatBotSettings());
+        bindAsyncActionButtons('openAiImageBotChatSave', null, 'Saving...', () => saveOpenAiImageChatBotSettings());
     
         // Yandex AI bot admin settings
         bindAsyncActionButtons('yandexAiSaveSettings', null, 'Saving...', saveYandexAiSettings);
@@ -146,9 +146,9 @@
           const bot = yandexBotState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
           if (bot) fillYandexBotForm(bot);
         });
-        $('#yandexAiBotChatSelect')?.addEventListener('change', renderYandexChatBotSettings);
-        $('#yandexAiBotChatBotSelect')?.addEventListener('change', renderYandexChatBotSettings);
-        bindAsyncActionButtons('yandexAiBotChatSave', null, 'Saving...', saveYandexChatBotSettings);
+        $('#yandexAiBotChatSelect')?.addEventListener('change', () => renderYandexChatBotSettings());
+        $('#yandexAiBotChatBotSelect')?.addEventListener('change', () => renderYandexChatBotSettings());
+        bindAsyncActionButtons('yandexAiBotChatSave', null, 'Saving...', () => saveYandexChatBotSettings());
     
         // DeepSeek AI bot admin settings
         bindAsyncActionButtons('deepseekAiSaveSettings', null, 'Saving...', saveDeepseekAiSettings);
@@ -179,9 +179,9 @@
           const bot = deepseekBotState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
           if (bot) fillDeepseekBotForm(bot);
         });
-        $('#deepseekAiBotChatSelect')?.addEventListener('change', renderDeepseekChatBotSettings);
-        $('#deepseekAiBotChatBotSelect')?.addEventListener('change', renderDeepseekChatBotSettings);
-        bindAsyncActionButtons('deepseekAiBotChatSave', null, 'Saving...', saveDeepseekChatBotSettings);
+        $('#deepseekAiBotChatSelect')?.addEventListener('change', () => renderDeepseekChatBotSettings());
+        $('#deepseekAiBotChatBotSelect')?.addEventListener('change', () => renderDeepseekChatBotSettings());
+        bindAsyncActionButtons('deepseekAiBotChatSave', null, 'Saving...', () => saveDeepseekChatBotSettings());
     
         // Qwen AI bot admin settings
         bindAsyncActionButtons('qwenAiSaveSettings', null, 'Saving...', saveQwenAiSettings);
@@ -211,9 +211,9 @@
           const bot = qwenBotState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
           if (bot) fillQwenBotForm(bot);
         });
-        $('#qwenAiBotChatSelect')?.addEventListener('change', renderQwenChatBotSettings);
-        $('#qwenAiBotChatBotSelect')?.addEventListener('change', renderQwenChatBotSettings);
-        bindAsyncActionButtons('qwenAiBotChatSave', null, 'Saving...', saveQwenChatBotSettings);
+        $('#qwenAiBotChatSelect')?.addEventListener('change', () => renderQwenChatBotSettings());
+        $('#qwenAiBotChatBotSelect')?.addEventListener('change', () => renderQwenChatBotSettings());
+        bindAsyncActionButtons('qwenAiBotChatSave', null, 'Saving...', () => saveQwenChatBotSettings());
     
         // Grok AI bot admin settings
         bindAsyncActionButtons('grokAiSaveSettings', null, 'Saving...', saveGrokAiSettings);
@@ -262,9 +262,9 @@
           const bot = grokBotState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
           if (bot) fillGrokBotForm(bot);
         });
-        $('#grokAiBotChatSelect')?.addEventListener('change', renderGrokChatBotSettings);
-        $('#grokAiBotChatBotSelect')?.addEventListener('change', renderGrokChatBotSettings);
-        bindAsyncActionButtons('grokAiBotChatSave', null, 'Saving...', saveGrokChatBotSettings);
+        $('#grokAiBotChatSelect')?.addEventListener('change', () => renderGrokChatBotSettings());
+        $('#grokAiBotChatBotSelect')?.addEventListener('change', () => renderGrokChatBotSettings());
+        bindAsyncActionButtons('grokAiBotChatSave', null, 'Saving...', () => saveGrokChatBotSettings());
     
         $('#grokAiImageBotCreateNew')?.addEventListener('click', () => {
           fillGrokImageBotForm(null);
@@ -287,9 +287,9 @@
           const bot = grokBotState.imageBots.find(item => Number(item.id) === Number(btn.dataset.botId));
           if (bot) fillGrokImageBotForm(bot);
         });
-        $('#grokAiImageBotChatSelect')?.addEventListener('change', renderGrokImageChatBotSettings);
-        $('#grokAiImageBotChatBotSelect')?.addEventListener('change', renderGrokImageChatBotSettings);
-        bindAsyncActionButtons('grokAiImageBotChatSave', null, 'Saving...', saveGrokImageChatBotSettings);
+        $('#grokAiImageBotChatSelect')?.addEventListener('change', () => renderGrokImageChatBotSettings());
+        $('#grokAiImageBotChatBotSelect')?.addEventListener('change', () => renderGrokImageChatBotSettings());
+        bindAsyncActionButtons('grokAiImageBotChatSave', null, 'Saving...', () => saveGrokImageChatBotSettings());
         $('#grokAiUniversalBotCreateNew')?.addEventListener('click', () => {
           fillGrokUniversalBotForm(null);
           setGrokUniversalEditorStatus('New Grok universal bot: fill fields and save');
@@ -311,9 +311,9 @@
           const bot = grokUniversalState.bots.find(item => Number(item.id) === Number(btn.dataset.botId));
           if (bot) fillGrokUniversalBotForm(bot);
         });
-        $('#grokAiUniversalBotChatSelect')?.addEventListener('change', renderGrokUniversalChatBotSettings);
-        $('#grokAiUniversalBotChatBotSelect')?.addEventListener('change', renderGrokUniversalChatBotSettings);
-        bindAsyncActionButtons('grokAiUniversalBotChatSave', null, 'Saving...', saveGrokUniversalChatBotSettings);
+        $('#grokAiUniversalBotChatSelect')?.addEventListener('change', () => renderGrokUniversalChatBotSettings());
+        $('#grokAiUniversalBotChatBotSelect')?.addEventListener('change', () => renderGrokUniversalChatBotSettings());
+        bindAsyncActionButtons('grokAiUniversalBotChatSave', null, 'Saving...', () => saveGrokUniversalChatBotSettings());
         $('#contextConvertBotCreateNew')?.addEventListener('click', () => {
           selectedContextConvertBotIds[activeContextConvertProvider] = null;
           renderContextConvertAdminSettings();
@@ -341,9 +341,9 @@
           setContextConvertBotStatus('');
           setContextConvertChatStatus('');
         });
-        $('#contextConvertBotChatSelect')?.addEventListener('change', renderContextConvertChatSettings);
-        $('#contextConvertBotChatBotSelect')?.addEventListener('change', renderContextConvertChatSettings);
-        bindAsyncActionButtons('contextConvertBotChatSave', null, 'Saving...', saveContextConvertAdminChatSetting);
+        $('#contextConvertBotChatSelect')?.addEventListener('change', () => renderContextConvertChatSettings());
+        $('#contextConvertBotChatBotSelect')?.addEventListener('change', () => renderContextConvertChatSettings());
+        bindAsyncActionButtons('contextConvertBotChatSave', null, 'Saving...', () => saveContextConvertAdminChatSetting());
         $('#chatShotBotCreateNew')?.addEventListener('click', () => {
           selectedChatShotBotIds[activeChatShotProvider] = null;
           renderChatShotAdminSettings();
@@ -371,13 +371,19 @@
           setChatShotBotStatus('');
           setChatShotAdminChatStatus('');
         });
-        $('#chatShotBotChatSelect')?.addEventListener('change', renderChatShotAdminChatSettings);
-        $('#chatShotBotChatBotSelect')?.addEventListener('change', renderChatShotAdminChatSettings);
-        bindAsyncActionButtons('chatShotBotChatSave', null, 'Saving...', saveChatShotAdminChatSetting);
+        $('#chatShotBotChatSelect')?.addEventListener('change', () => renderChatShotAdminChatSettings());
+        $('#chatShotBotChatBotSelect')?.addEventListener('change', () => renderChatShotAdminChatSettings());
+        bindAsyncActionButtons('chatShotBotChatSave', null, 'Saving...', () => saveChatShotAdminChatSetting());
     
 
+        }
+        bound = true;
+        return true;
+      } catch (error) {
+        bound = false;
+        console.error('Failed to bind AI admin events', error);
+        throw error;
       }
-      return true;
     }
 
     return { bindEvents };
