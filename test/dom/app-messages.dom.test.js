@@ -1,5 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+const { JSDOM } = require('jsdom');
 
 const {
   createAppDom,
@@ -8,6 +11,7 @@ const {
   loadAppScript,
   loadBrowserScript,
 } = require('../support/domHarness');
+const { repoRoot } = require('../support/paths');
 
 function wait(window, ms = 0) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -19,6 +23,22 @@ function createJsonResponse(dom, data, init = {}) {
     headers: { 'Content-Type': 'application/json' },
     ...init,
   });
+}
+
+function createLoginDom(url) {
+  const html = fs.readFileSync(path.join(repoRoot, 'public', 'login.html'), 'utf8');
+  const dom = new JSDOM(html, {
+    url,
+    pretendToBeVisual: true,
+    runScripts: 'outside-only',
+  });
+  const i18nSource = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'i18n.js'), 'utf8');
+  dom.window.eval(i18nSource);
+  const inlineScript = [...dom.window.document.querySelectorAll('script')]
+    .map((script) => script.textContent || '')
+    .find((source) => source.includes('function safeNextPath'));
+  dom.window.eval(inlineScript);
+  return dom;
 }
 
 function installFullAppStubs(dom, { fetchHandler = null } = {}) {
@@ -328,6 +348,77 @@ test('bridge renderer appends rows, groups senders, preserves data, and skips du
   assert.equal(document.querySelector('.msg-group .msg-group-body')?.querySelectorAll('.msg-row').length, 2);
   assert.equal(document.querySelector('[data-msg-id="1"]').__messageData.text, 'One');
   assert.equal(dom.window.__bananzaBootContext.state.getMessages().map((msg) => msg.id).join(','), '1,2,3');
+});
+
+test('invite URLs render as in-app links and clicking joins and opens target chat', async (t) => {
+  const inviteToken = 'abcdefghijklmnopqrstuvwxyzABCDEF123456';
+  const fetchCalls = [];
+  const chats = [
+    { id: 1, type: 'group', name: 'One', last_message_id: 3, unread_count: 0 },
+    { id: 2, type: 'group', name: 'Joined', last_message_id: 0, unread_count: 0 },
+  ];
+  const dom = await bootFullApp({
+    fetchHandler: async ({ url, init, dom: appDom }) => {
+      fetchCalls.push({ path: url.pathname, method: init.method || 'GET' });
+      if (url.pathname === '/api/chats') return createJsonResponse(appDom, chats);
+      if (url.pathname === `/api/chat-invites/${inviteToken}/join`) {
+        return createJsonResponse(appDom, { ok: true, chatId: 2, chat: chats[1], joined: true });
+      }
+      return null;
+    },
+  });
+  t.after(() => dom.window.close());
+  const { document, BananzaAppBridge } = dom.window;
+  BananzaAppBridge.__testing.setChats(chats, { currentChatId: 1 });
+
+  const inviteUrl = `${dom.window.location.origin}/join/${inviteToken}`;
+  const externalUrl = `https://example.com/join/${inviteToken}`;
+  BananzaAppBridge.__testing.appendMessage({
+    id: 50,
+    chat_id: 1,
+    user_id: 2,
+    display_name: 'Bob',
+    text: `Internal ${inviteUrl} external ${externalUrl}`,
+    created_at: '2026-05-31T10:00:00.000Z',
+  });
+
+  const inviteAnchor = document.querySelector(`a[data-chat-invite-token="${inviteToken}"]`);
+  assert.ok(inviteAnchor);
+  assert.equal(inviteAnchor.getAttribute('target'), null);
+  const externalAnchor = [...document.querySelectorAll('#messages a')]
+    .find((anchor) => anchor.href.startsWith('https://example.com/'));
+  assert.ok(externalAnchor);
+  assert.equal(externalAnchor.getAttribute('target'), '_blank');
+  assert.equal(externalAnchor.dataset.chatInviteToken, undefined);
+
+  const clickResult = inviteAnchor.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  assert.equal(clickResult, false);
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (dom.window.__bananzaBootContext.state.getCurrentChatId() === 2) break;
+    await wait(dom.window, 20);
+  }
+
+  assert.ok(fetchCalls.some((call) => call.path === `/api/chat-invites/${inviteToken}/join` && call.method === 'POST'));
+  assert.ok(fetchCalls.some((call) => call.path === '/api/chats'));
+  assert.equal(dom.window.__bananzaBootContext.state.getCurrentChatId(), 2);
+});
+
+test('login invite next path is preserved only for safe join routes', () => {
+  const token = 'abcdefghijklmnopqrstuvwxyzABCDEF123456';
+  const validDom = createLoginDom(`http://localhost:3000/login.html?next=/join/${token}`);
+  assert.equal(validDom.window.safeNextPath(), `/join/${token}`);
+  validDom.window.close();
+
+  const externalDom = createLoginDom(`http://localhost:3000/login.html?next=${encodeURIComponent(`https://evil.test/join/${token}`)}`);
+  assert.equal(externalDom.window.safeNextPath(), '/');
+  externalDom.window.close();
+
+  const shortDom = createLoginDom('http://localhost:3000/login.html?next=/join/short');
+  assert.equal(shortDom.window.safeNextPath(), '/');
+  shortDom.window.close();
 });
 
 test('attachments render media/file HTML and renderer binds playback with poster behavior', () => {

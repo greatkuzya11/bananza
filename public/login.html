@@ -108,7 +108,12 @@
   <script src="/js/i18n.js?v=20260506-chat-pull-refresh"></script>
   <script>
     const i18n = window.BananzaI18n;
-    if (localStorage.getItem('token')) location.href = '/';
+    function safeNextPath(){
+      const next = new URLSearchParams(location.search).get('next') || '';
+      return /^\/join\/[A-Za-z0-9_-]{32,128}$/.test(next) ? next : '/';
+    }
+    function goAfterAuth(){ location.href = safeNextPath(); }
+    if (localStorage.getItem('token')) location.href = safeNextPath();
     function t(key){ return i18n?.t ? i18n.t(key) : key; }
     function tx(text){ return i18n?.text ? i18n.text(text) : text; }
     function selectedLanguage(){ return i18n?.getLanguage?.() || 'ru'; }
@@ -175,7 +180,7 @@
         const user = await syncServerLanguage(data.token, data.user);
         localStorage.setItem('token', data.token);
         localStorage.setItem('user', JSON.stringify(user));
-        location.href = '/';
+        goAfterAuth();
       } catch (ex) { err.textContent = ex.message; }
     });
 
@@ -197,8 +202,8 @@
         localStorage.setItem('user', JSON.stringify(data.user));
         const overlay = document.getElementById('successOverlay');
         overlay.style.display = 'flex';
-        document.getElementById('successGoBtn').addEventListener('click', () => { location.href = '/'; });
-        setTimeout(() => { location.href = '/'; }, 3000);
+        document.getElementById('successGoBtn').addEventListener('click', goAfterAuth);
+        setTimeout(goAfterAuth, 3000);
       } catch (ex) { err.textContent = ex.message; }
     });
 

@@ -114,6 +114,7 @@ test('weather, notification and sound settings use deterministic mocked integrat
 test('admin backup export downloads a complete archive and stays admin-only', async () => {
   const { admin, bob } = scenario;
   const uploaded = await admin.uploadTextFile('backup-note.txt', 'Backup export payload');
+  const invite = await admin.request(`/api/chats/${scenario.groupChat.id}/invite-link`);
 
   const forbidden = await bob.request('/api/admin/backup/export', {
     expectedStatus: 403,
@@ -174,9 +175,12 @@ test('admin backup export downloads a complete archive and stays admin-only', as
         const userCount = backupDb.prepare('SELECT COUNT(*) AS count FROM users').get().count;
         const fileRow = backupDb.prepare('SELECT stored_name FROM files WHERE id = ?').get(uploaded.id);
         const newsSource = backupDb.prepare('SELECT name, url FROM ai_news_sources WHERE url = ?').get('https://lenta.ru/rss/top7');
+        const inviteRow = backupDb.prepare('SELECT invite_token, invite_token_created_at FROM chats WHERE id = ?').get(scenario.groupChat.id);
         assert.ok(userCount >= 2);
         assert.equal(fileRow.stored_name, uploaded.stored_name);
         assert.equal(newsSource.name, 'Lenta.ru top7');
+        assert.equal(inviteRow.invite_token, invite.data.token);
+        assert.ok(inviteRow.invite_token_created_at);
       } finally {
         backupDb.close();
       }

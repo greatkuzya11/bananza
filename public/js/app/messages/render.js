@@ -310,6 +310,9 @@
         case 'chat_created':
           return t('{actor} created the chat', { actor });
         case 'member_added':
+          if (metadata.source === 'invite_link') {
+            return t('{target} joined the chat by link', { target });
+          }
           return isBot
             ? t('{actor} added bot {target}', { actor, target })
             : t('{actor} added {target}', { actor, target });

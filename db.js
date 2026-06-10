@@ -47,6 +47,8 @@ db.exec(`
     chatshot_bot_id INTEGER DEFAULT NULL,
     chatshot_style TEXT DEFAULT 'comic',
     chatshot_banana_filter_enabled INTEGER DEFAULT 1,
+    invite_token TEXT DEFAULT NULL,
+    invite_token_created_at TEXT DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -380,12 +382,23 @@ try {
 } catch {
   db.exec("ALTER TABLE chats ADD COLUMN chatshot_banana_filter_enabled INTEGER DEFAULT 1");
 }
+try {
+  db.prepare("SELECT invite_token FROM chats LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE chats ADD COLUMN invite_token TEXT DEFAULT NULL");
+}
+try {
+  db.prepare("SELECT invite_token_created_at FROM chats LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE chats ADD COLUMN invite_token_created_at TEXT DEFAULT NULL");
+}
 db.prepare("UPDATE chats SET is_notes=0 WHERE is_notes IS NULL").run();
 db.prepare("UPDATE chats SET context_transform_enabled=0 WHERE context_transform_enabled IS NULL").run();
 db.prepare("UPDATE chats SET chatshot_enabled=0 WHERE chatshot_enabled IS NULL").run();
 db.prepare("UPDATE chats SET chatshot_style='comic' WHERE chatshot_style IS NULL OR chatshot_style NOT IN ('comic','illustration','photo')").run();
 db.prepare("UPDATE chats SET chatshot_banana_filter_enabled=1 WHERE chatshot_banana_filter_enabled IS NULL").run();
 db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_chats_notes_owner ON chats(created_by) WHERE is_notes=1");
+db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_chats_invite_token ON chats(invite_token) WHERE invite_token IS NOT NULL");
 // Migration: chat background columns
 try {
   db.prepare("SELECT background_url FROM chats LIMIT 1").get();

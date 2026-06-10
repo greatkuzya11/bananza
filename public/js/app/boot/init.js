@@ -174,7 +174,10 @@
     
         // Optional startup behavior: push deep-link, restore the last opened chat, or stay on the chat list.
         const startupChatId = Number(new URLSearchParams(location.search).get('chatId'));
-        if (startupChatId && chats.find(c => c.id === startupChatId)) {
+        const startupInviteToken = chatInviteTokenFromPath(location.pathname);
+        if (startupInviteToken) {
+          await joinChatInviteToken(startupInviteToken, { replaceHistory: true });
+        } else if (startupChatId && chats.find(c => c.id === startupChatId)) {
           await openChat(startupChatId);
           history.replaceState(history.state || {}, '', location.pathname);
         } else if (openLastChatOnReload) {

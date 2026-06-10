@@ -197,6 +197,7 @@
           actions.refreshChatInfoPresentation?.(currentChat);
           actions.renderChatPreferencesForm?.(currentChat);
           actions.renderChatPinSettingsForm?.(currentChat);
+          actions.renderChatInviteLinkForm?.(currentChat);
           actions.renderChatDangerControls?.(currentChat);
         }
         setChatListStatus('', '');

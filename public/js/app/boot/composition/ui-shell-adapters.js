@@ -5,6 +5,8 @@
 
   compositionRoot.composeUiShellAdapters = function composeUiShellAdapters(scope = {}) {
     with (scope) {
+      const inviteRuntimeApi = window.BananzaApp?.shell?.inviteRuntimeAdapter?.createInviteRuntimeAdapter?.(createRuntimeProxyScope()) || {};
+      publishRuntimeApi(inviteRuntimeApi);
       const uiRuntimeApi = window.BananzaApp?.shell?.uiRuntimeAdapter?.createUiRuntimeAdapter?.(createRuntimeProxyScope()) || {};
       const {
         isMobileLayoutViewport, normalizeMobileBaseScene, clearMobileSceneRepaint, getResolvedMobileBaseScene, isMobileBaseSceneHardHidden, setMobileSceneElementState,

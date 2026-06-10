@@ -143,6 +143,7 @@
           refreshRenderedUserMessages: (user) => refreshRenderedUserMessages(user),
           renderCurrentChatHeader: (chat) => renderCurrentChatHeader(chat),
           profileStatusLabel: (user) => profileStatusLabel(user),
+          renderChatInviteLinkForm: (chat) => renderChatInviteLinkForm(chat),
           setAvatarElementVisual: (el, options = {}) => setAvatarElementVisual(el, options),
           updateCachedMessagesByUser: (user) => window.messageCache?.updateMessagesByUser?.(user).catch(() => {}),
           updateChatStatus: () => updateChatStatus(),

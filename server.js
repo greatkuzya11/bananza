@@ -1638,6 +1638,94 @@ function isGroupOrPrivateChatRow(chat) {
   return type === 'group' || type === 'private';
 }
 
+const CHAT_INVITE_TOKEN_RE = /^[A-Za-z0-9_-]{32,128}$/;
+
+function publicChatPayload(chat) {
+  if (!chat || typeof chat !== 'object') return chat;
+  const payload = { ...chat };
+  delete payload.invite_token;
+  delete payload.invite_token_created_at;
+  return payload;
+}
+
+function publicChatPayloadForViewer(chat, viewerUserId) {
+  const payload = publicChatPayload(chat);
+  if (!payload) return payload;
+  if (isNotesChatRow(payload)) return notesChatPayload(payload);
+  if (payload.type === 'private') {
+    const other = privatePeerPayload(payload.id, viewerUserId);
+    if (other) {
+      payload.private_user = other;
+      if (Number(other.is_ai_bot) === 0 || !String(payload.name || '').trim()) {
+        payload.name = other.display_name;
+      }
+    }
+  }
+  if (payload.type === 'group') payload.avatar_url = payload.avatar_url || null;
+  return payload;
+}
+
+function generateChatInviteToken() {
+  return crypto.randomBytes(32).toString('base64url');
+}
+
+function chatInvitePath(token) {
+  return `/join/${encodeURIComponent(String(token || ''))}`;
+}
+
+function chatInvitePayload(req, token) {
+  const pathValue = chatInvitePath(token);
+  const origin = `${req.protocol}://${req.get('host') || 'localhost'}`;
+  return {
+    path: pathValue,
+    url: new URL(pathValue, origin).href,
+    token,
+  };
+}
+
+function inviteLinksSupportedForChat(chat) {
+  return Boolean(chat && chat.type === 'group' && !isNotesChatRow(chat) && !isGeneralChatRow(chat));
+}
+
+function canManageChatInviteLink(chat, user) {
+  if (!chat || !user || !inviteLinksSupportedForChat(chat)) return false;
+  return Boolean(user.is_admin || Number(chat.created_by || 0) === Number(user.id || 0));
+}
+
+function ensureChatInviteToken(chatId) {
+  const id = Number(chatId || 0);
+  if (!id) return null;
+  const existing = db.prepare('SELECT invite_token FROM chats WHERE id=?').get(id);
+  if (existing?.invite_token) return existing.invite_token;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const token = generateChatInviteToken();
+    try {
+      db.prepare("UPDATE chats SET invite_token=?, invite_token_created_at=datetime('now') WHERE id=?")
+        .run(token, id);
+      return token;
+    } catch (error) {
+      if (!String(error?.code || error?.message || '').includes('CONSTRAINT')) throw error;
+    }
+  }
+  throw new Error('Could not create invite link');
+}
+
+function rotateChatInviteToken(chatId) {
+  const id = Number(chatId || 0);
+  if (!id) return null;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const token = generateChatInviteToken();
+    try {
+      db.prepare("UPDATE chats SET invite_token=?, invite_token_created_at=datetime('now') WHERE id=?")
+        .run(token, id);
+      return token;
+    } catch (error) {
+      if (!String(error?.code || error?.message || '').includes('CONSTRAINT')) throw error;
+    }
+  }
+  throw new Error('Could not refresh invite link');
+}
+
 function canManageDestructiveChat(chat, user) {
   if (!chat || !user) return false;
   if (isNotesChatRow(chat) || isGeneralChatRow(chat) || !isGroupOrPrivateChatRow(chat)) return false;
@@ -1956,6 +2044,8 @@ function deleteChatMessageData(chatId, options = {}) {
 function decorateChatListRows(rows, viewerUserId) {
   const uid = Number(viewerUserId || 0);
   for (const chat of rows) {
+    delete chat.invite_token;
+    delete chat.invite_token_created_at;
     Object.assign(chat, chatPreferencesPayload(chat));
     Object.assign(chat, chatSidebarPinPayload(chat));
     if (isNotesChatRow(chat)) {
@@ -2031,6 +2121,8 @@ app.get('/api/chats', auth, (req, res) => {
   `).all(req.user.id);
 
   for (const chat of rows) {
+    delete chat.invite_token;
+    delete chat.invite_token_created_at;
     Object.assign(chat, chatPreferencesPayload(chat));
     Object.assign(chat, chatSidebarPinPayload(chat));
     if (isNotesChatRow(chat)) {
@@ -2178,19 +2270,19 @@ app.post('/api/chats', auth, (req, res) => {
   groupCreateResult.humanMemberIds.forEach((userId) => {
     sendToUser(userId, {
       type: 'chat_created',
-      chat: groupCreateResult.createdChat,
+      chat: publicChatPayload(groupCreateResult.createdChat),
       actorId: req.user.id,
       actorName: req.user.display_name,
       is_invite: userId !== req.user.id,
     });
     if (userId !== req.user.id) {
       pushFeature.notifyChatInvite(userId, {
-        chat: groupCreateResult.createdChat,
+        chat: publicChatPayload(groupCreateResult.createdChat),
         actorName: req.user.display_name,
       });
     }
   });
-  return res.json(groupCreateResult.createdChat);
+  return res.json(publicChatPayload(groupCreateResult.createdChat));
 
   const r = db.prepare('INSERT INTO chats(name,type,created_by) VALUES(?,?,?)').run(name.trim(), 'group', req.user.id);
   const chatId = r.lastInsertRowid;
@@ -2208,19 +2300,19 @@ app.post('/api/chats', auth, (req, res) => {
   members.forEach(({ user_id }) => {
     sendToUser(user_id, {
       type: 'chat_created',
-      chat,
+      chat: publicChatPayload(chat),
       actorId: req.user.id,
       actorName: req.user.display_name,
       is_invite: user_id !== req.user.id,
     });
     if (user_id !== req.user.id) {
       pushFeature.notifyChatInvite(user_id, {
-        chat,
+        chat: publicChatPayload(chat),
         actorName: req.user.display_name,
       });
     }
   });
-  res.json(chat);
+  res.json(publicChatPayload(chat));
 });
 
 app.post('/api/chats/private', auth, (req, res) => {
@@ -2250,7 +2342,7 @@ app.post('/api/chats/private', auth, (req, res) => {
     if (existingPrivateChat) {
       revealHiddenChatForUser(existingPrivateChat.id, req.user.id, { reason: 'private_search' });
       const existingChat = db.prepare('SELECT * FROM chats WHERE id=?').get(existingPrivateChat.id);
-      return res.json(existingChat);
+      return res.json(publicChatPayload(existingChat));
     }
   }
 
@@ -2284,18 +2376,18 @@ app.post('/api/chats/private', auth, (req, res) => {
   if (!botTarget) {
     sendToUser(targetUserId, {
       type: 'chat_created',
-      chat: { ...createdPrivateChat, name: req.user.display_name },
+      chat: { ...publicChatPayload(createdPrivateChat), name: req.user.display_name },
       actorId: req.user.id,
       actorName: req.user.display_name,
       is_invite: true,
     });
     pushFeature.notifyChatInvite(targetUserId, {
-      chat: { ...createdPrivateChat, name: req.user.display_name },
+      chat: { ...publicChatPayload(createdPrivateChat), name: req.user.display_name },
       actorName: req.user.display_name,
       title: req.user.display_name,
     });
   }
-  return res.json(createdPrivateChat);
+  return res.json(publicChatPayload(createdPrivateChat));
 
   const target = db.prepare('SELECT id,display_name FROM users WHERE id=?').get(targetUserId);
   if (!target) return res.status(404).json({ error: 'User not found' });
@@ -2310,7 +2402,7 @@ app.post('/api/chats/private', auth, (req, res) => {
   if (existing) {
     revealHiddenChatForUser(existing.id, req.user.id, { reason: 'private_search' });
     const chat = db.prepare('SELECT * FROM chats WHERE id=?').get(existing.id);
-    return res.json(chat);
+    return res.json(publicChatPayload(chat));
   }
 
   const r = db.prepare("INSERT INTO chats(name,type,created_by) VALUES('Private','private',?)").run(req.user.id);
@@ -2321,17 +2413,17 @@ app.post('/api/chats/private', auth, (req, res) => {
   const chat = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
   sendToUser(targetUserId, {
     type: 'chat_created',
-    chat: { ...chat, name: req.user.display_name },
+    chat: { ...publicChatPayload(chat), name: req.user.display_name },
     actorId: req.user.id,
     actorName: req.user.display_name,
     is_invite: true,
   });
   pushFeature.notifyChatInvite(targetUserId, {
-    chat: { ...chat, name: req.user.display_name },
+    chat: { ...publicChatPayload(chat), name: req.user.display_name },
     actorName: req.user.display_name,
     title: req.user.display_name,
   });
-  res.json(chat);
+  res.json(publicChatPayload(chat));
 });
 
 app.get('/api/chats/:chatId/members', auth, (req, res) => {
@@ -2537,7 +2629,7 @@ app.put('/api/chats/:chatId/pin-settings', auth, (req, res) => {
   db.prepare('UPDATE chats SET allow_unpin_any_pin=? WHERE id=?')
     .run(allowUnpinAnyPin ? 1 : 0, chatId);
 
-  const updated = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+  const updated = publicChatPayload(db.prepare('SELECT * FROM chats WHERE id=?').get(chatId));
   broadcastToChatAll(chatId, { type: 'chat_updated', chat: updated });
   res.json(updated);
 });
@@ -2558,9 +2650,87 @@ app.put('/api/chats/:chatId/context-transform-settings', auth, (req, res) => {
   db.prepare('UPDATE chats SET context_transform_enabled=? WHERE id=?')
     .run(enabled ? 1 : 0, chatId);
 
-  const updated = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+  const updated = publicChatPayload(db.prepare('SELECT * FROM chats WHERE id=?').get(chatId));
   broadcastToChatAll(chatId, { type: 'chat_updated', chat: updated });
   res.json(updated);
+});
+
+app.get('/api/chats/:chatId/invite-link', auth, (req, res) => {
+  try {
+    const chatId = +req.params.chatId;
+    if (!chatId) return res.status(400).json({ error: 'Invalid chat' });
+    const chat = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+    if (!chat) return res.status(404).json({ error: 'Chat not found' });
+    if (!inviteLinksSupportedForChat(chat)) return res.status(400).json({ error: 'Invite links are only available for group chats' });
+    if (!canManageChatInviteLink(chat, req.user)) return res.status(403).json({ error: 'Only chat creator or admin can copy invite link' });
+    const token = ensureChatInviteToken(chatId);
+    res.json(chatInvitePayload(req, token));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message || 'Could not create invite link' });
+  }
+});
+
+app.post('/api/chats/:chatId/invite-link/rotate', auth, (req, res) => {
+  try {
+    const chatId = +req.params.chatId;
+    if (!chatId) return res.status(400).json({ error: 'Invalid chat' });
+    const chat = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+    if (!chat) return res.status(404).json({ error: 'Chat not found' });
+    if (!inviteLinksSupportedForChat(chat)) return res.status(400).json({ error: 'Invite links are only available for group chats' });
+    if (!canManageChatInviteLink(chat, req.user)) return res.status(403).json({ error: 'Only chat creator or admin can refresh invite link' });
+    const token = rotateChatInviteToken(chatId);
+    res.json(chatInvitePayload(req, token));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message || 'Could not refresh invite link' });
+  }
+});
+
+app.post('/api/chat-invites/:token/join', auth, (req, res) => {
+  try {
+    const token = String(req.params.token || '').trim();
+    if (!CHAT_INVITE_TOKEN_RE.test(token)) return res.status(404).json({ error: 'Invite link is invalid' });
+    const chat = db.prepare("SELECT * FROM chats WHERE invite_token=? AND type='group' AND COALESCE(is_notes,0)=0").get(token);
+    if (!chat || !inviteLinksSupportedForChat(chat)) return res.status(404).json({ error: 'Invite link is invalid' });
+
+    const chatId = Number(chat.id || 0);
+    const alreadyMember = isChatMember(chatId, req.user.id);
+    let joined = false;
+    if (alreadyMember) {
+      revealHiddenChatForUser(chatId, req.user.id, { reason: 'invite_link' });
+    } else {
+      const added = db.prepare('INSERT OR IGNORE INTO chat_members(chat_id,user_id) VALUES(?,?)').run(chatId, req.user.id);
+      joined = added.changes > 0;
+      if (joined) {
+        recordChatSystemEvent({
+          chatId,
+          eventType: 'member_added',
+          actor: req.user,
+          target: req.user,
+          metadata: { source: 'invite_link' },
+        });
+        sendToUser(req.user.id, {
+          type: 'chat_created',
+          chat: publicChatPayloadForViewer(chat, req.user.id),
+          actorId: req.user.id,
+          actorName: req.user.display_name,
+          is_invite: false,
+          source: 'invite_link',
+        });
+      }
+    }
+    sendChatListUpdated(req.user.id, { chatId, reason: 'invite_link' });
+    res.json({
+      ok: true,
+      chatId,
+      chat: publicChatPayloadForViewer(chat, req.user.id),
+      joined,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message || 'Could not join chat by link' });
+  }
 });
 
 app.post('/api/chats/:chatId/members', auth, (req, res) => {
@@ -2603,14 +2773,14 @@ app.post('/api/chats/:chatId/members', auth, (req, res) => {
   }
   sendToUser(userId, {
     type: 'chat_created',
-    chat,
+    chat: publicChatPayload(chat),
     actorId: req.user.id,
     actorName: req.user.display_name,
     is_invite: added.changes > 0 && userId !== req.user.id,
   });
   if (added.changes > 0 && userId !== req.user.id) {
     pushFeature.notifyChatInvite(userId, {
-      chat,
+      chat: publicChatPayload(chat),
       actorName: req.user.display_name,
     });
   }
@@ -3646,7 +3816,7 @@ app.put('/api/chats/:chatId', auth, (req, res) => {
   const nextName = name.trim();
   const nameChanged = nextName !== String(chat.name || '');
   db.prepare('UPDATE chats SET name=? WHERE id=?').run(nextName, chatId);
-  const updated = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+  const updated = publicChatPayload(db.prepare('SELECT * FROM chats WHERE id=?').get(chatId));
   broadcastToChatAll(chatId, { type: 'chat_updated', chat: updated });
   if (nameChanged) {
     recordChatSystemEvent({
@@ -3679,7 +3849,7 @@ app.post('/api/chats/:chatId/avatar', auth, upLimiter, (req, res) => {
 
     const avatarUrl = '/uploads/avatars/' + req.file.filename;
     db.prepare('UPDATE chats SET avatar_url=? WHERE id=?').run(avatarUrl, chatId);
-    const updated = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+    const updated = publicChatPayload(db.prepare('SELECT * FROM chats WHERE id=?').get(chatId));
     broadcastToChatAll(chatId, { type: 'chat_updated', chat: updated });
     recordChatSystemEvent({
       chatId,
@@ -3703,7 +3873,7 @@ app.delete('/api/chats/:chatId/avatar', auth, (req, res) => {
     if (fs.existsSync(oldFile)) fs.unlinkSync(oldFile);
   }
   db.prepare('UPDATE chats SET avatar_url=NULL WHERE id=?').run(chatId);
-  const updated = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+  const updated = publicChatPayload(db.prepare('SELECT * FROM chats WHERE id=?').get(chatId));
   broadcastToChatAll(chatId, { type: 'chat_updated', chat: updated });
   if (chat.avatar_url) {
     recordChatSystemEvent({
@@ -3859,7 +4029,7 @@ app.post('/api/chats/:chatId/background', auth, upLimiter, (req, res) => {
     const style = (req.body && typeof req.body.style === 'string') ? req.body.style : 'cover';
     const bgUrl = '/uploads/backgrounds/' + req.file.filename;
     db.prepare('UPDATE chats SET background_url=?, background_style=? WHERE id=?').run(bgUrl, style, chatId);
-    const updated = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+    const updated = publicChatPayload(db.prepare('SELECT * FROM chats WHERE id=?').get(chatId));
     broadcastToChatAll(chatId, { type: 'chat_updated', chat: updated });
     recordChatSystemEvent({
       chatId,
@@ -3886,7 +4056,7 @@ app.delete('/api/chats/:chatId/background', auth, (req, res) => {
     if (fs.existsSync(oldFile)) fs.unlinkSync(oldFile);
   }
   db.prepare('UPDATE chats SET background_url=NULL WHERE id=?').run(chatId);
-  const updated = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+  const updated = publicChatPayload(db.prepare('SELECT * FROM chats WHERE id=?').get(chatId));
   broadcastToChatAll(chatId, { type: 'chat_updated', chat: updated });
   if (chat.background_url) {
     recordChatSystemEvent({
@@ -3912,7 +4082,7 @@ app.put('/api/chats/:chatId/background-style', auth, (req, res) => {
   const oldStyle = chat.background_style || 'cover';
   const styleChanged = style !== oldStyle;
   db.prepare('UPDATE chats SET background_style=? WHERE id=?').run(style, chatId);
-  const updated = db.prepare('SELECT * FROM chats WHERE id=?').get(chatId);
+  const updated = publicChatPayload(db.prepare('SELECT * FROM chats WHERE id=?').get(chatId));
   broadcastToChatAll(chatId, { type: 'chat_updated', chat: updated });
   if (styleChanged) {
     recordChatSystemEvent({
@@ -4275,6 +4445,10 @@ app.use('/api', (_req, res) => {
 
 app.get('/call/:inviteToken', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'call.html'));
+});
+
+app.get('/join/:inviteToken', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.get('*', (req, res) => {

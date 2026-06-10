@@ -137,15 +137,10 @@
       }
     
       function getComposerTextValue(...args) { return composerTextController?.getComposerTextValue?.(...args) || ''; }
-    
       function setComposerTextValue(...args) { return composerTextController?.setComposerTextValue?.(...args); }
-    
       function normalizeComposerInputValue(...args) { return composerTextController?.normalizeComposerInputValue?.(...args) || false; }
-    
       function snapComposerSelectionToCustomEmojiBoundary(...args) { return composerTextController?.snapComposerSelectionToCustomEmojiBoundary?.(...args) || false; }
-    
       function insertComposerTextAtSelection(...args) { return composerTextController?.insertComposerTextAtSelection?.(...args); }
-    
       function normalizeMicrophoneMode(value) { return uiSettings.normalizeMicrophoneMode(value); }
       function getMicrophoneMode() { return uiSettings.getMicrophoneMode(); }
       function setMicrophoneMode(value, options = {}) { return uiSettings.setMicrophoneMode(value, options); }
@@ -156,13 +151,9 @@
       function applyScreenRotationPreference(options = {}) { return uiSettings.applyScreenRotationPreference(options); }
       function setScreenRotationAllowed(value, options = {}) { return uiSettings.setScreenRotationAllowed(value, options); }
       function insertDictatedText(...args) { return composerTextController?.insertDictatedText?.(...args) || getComposerTextValue(); }
-    
       function getEmojiPickerInsertionValue(...args) { return composerTextController?.getEmojiPickerInsertionValue?.(...args) || ''; }
-    
       function deleteComposerCustomEmojiCluster(...args) { return composerTextController?.deleteComposerCustomEmojiCluster?.(...args) || false; }
-    
       function handleComposerCustomEmojiKeydown(...args) { return composerTextController?.handleComposerCustomEmojiKeydown?.(...args) || false; }
-    
       function handleComposerCustomEmojiBeforeInput(...args) { return composerTextController?.handleComposerCustomEmojiBeforeInput?.(...args) || false; }
     
       function safeVibrate(pattern) {
@@ -175,11 +166,11 @@
           return false;
         }
       }
-    
+
       function linkify(text) {
         return esc(text).replace(
-          /https?:\/\/[^\s<>"')\]]+/gi,
-          (url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`
+          /https?:\/\/[^\s<>"')\]]+|\/join\/[A-Za-z0-9_-]{32,128}/gi,
+          (url) => renderLinkAnchor(url)
         );
       }
     
@@ -193,7 +184,7 @@
           const token = mentionKey(mention.token || mention.mention || mention.username);
           if (token && !mentionMap.has(token)) mentionMap.set(token, mention);
         });
-        const re = /(:qip-infium-\d{3}:|:qip-hd-[a-z0-9][a-z0-9-]{0,63}:)|(https?:\/\/[^\s<>"')\]]+)|@([a-zA-Z0-9_][a-zA-Z0-9_-]{0,31})/gi;
+        const re = /(:qip-infium-\d{3}:|:qip-hd-[a-z0-9][a-z0-9-]{0,63}:)|(https?:\/\/[^\s<>"')\]]+|\/join\/[A-Za-z0-9_-]{32,128})|@([a-zA-Z0-9_][a-zA-Z0-9_-]{0,31})/gi;
         let html = '';
         let lastIndex = 0;
         let match;
@@ -205,7 +196,7 @@
               : esc(match[1]);
           } else if (match[2]) {
             const url = match[2];
-            html += `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>`;
+            html += renderLinkAnchor(url);
           } else {
             const prev = match.index > 0 ? source[match.index - 1] : '';
             const token = mentionKey(match[3]);
@@ -1254,6 +1245,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
           }
         }
         if (bgStyleSelect) bgStyleSelect.value = chat.background_style || 'cover';
+        renderChatInviteLinkForm(chat);
         renderChatShotForm(getCurrentChatShotState());
         renderChatDangerControls(chat);
       }
@@ -1666,7 +1658,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
           && (currentUser.is_admin || Number(chat.created_by || 0) === Number(currentUser.id))
         );
       }
-    
+
       function setChatPinSettingsStatus(message, type = '') {
         const el = $('#chatPinSettingsStatus');
         if (!el) return;
@@ -2824,7 +2816,12 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
           currentMobileFontSize = MOBILE_FONT_SIZE_DEFAULT;
           setMobileFontAdjustPercent(100);
         },
-        redirectToLogin: () => { location.href = '/login.html'; },
+        redirectToLogin: () => {
+          const inviteToken = chatInviteTokenFromPath(location.pathname);
+          location.href = inviteToken
+            ? `/login.html?next=${encodeURIComponent(`/join/${inviteToken}`)}`
+            : '/login.html';
+        },
       });
       checkAuth = () => {
         const ok = authService.checkAuth?.() || false;
@@ -2844,7 +2841,8 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         isMobileLayoutViewport, normalizeMobileBaseScene, clearMobileSceneRepaint, getResolvedMobileBaseScene, isMobileBaseSceneHardHidden, setMobileSceneElementState, clearMobileSceneElementState, scheduleActiveMobileSceneRepaint,
         syncMobileBaseSceneState, getComposerTextValue, setComposerTextValue, normalizeComposerInputValue, snapComposerSelectionToCustomEmojiBoundary, insertComposerTextAtSelection, normalizeMicrophoneMode, getMicrophoneMode,
         setMicrophoneMode, getScreenRotationAllowed, syncScreenRotationToggle, setScreenRotationStatus, clearScreenRotationStatusSoon, applyScreenRotationPreference, setScreenRotationAllowed, insertDictatedText,
-        getEmojiPickerInsertionValue, deleteComposerCustomEmojiCluster, handleComposerCustomEmojiKeydown, handleComposerCustomEmojiBeforeInput, safeVibrate, linkify, mentionKey, renderMessageText,
+        getEmojiPickerInsertionValue, deleteComposerCustomEmojiCluster, handleComposerCustomEmojiKeydown, handleComposerCustomEmojiBeforeInput, safeVibrate,
+        normalizeChatInviteToken, chatInviteTokenFromPath, chatInviteTokenFromUrl, linkify, mentionKey, renderMessageText,
         normalizeUiTheme, renderThemePicker, applyUiTheme, selectUiTheme, setThemeStatus, normalizeUiLanguage, languageDisplayName, renderLanguagePicker,
         applyUiLanguage, selectUiLanguage, refreshLocalizedUi, syncLanguageSettingsButton, setLanguageStatus, normalizeVisualMode, visualModeMeta, visualModeStateLabel,
         renderVisualModePicker, applyVisualMode, selectVisualMode, setVisualModeStatus, normalizePollStyle, pollStyleMeta, renderPollStyleCardPreview, renderPollStylePicker,
@@ -2874,7 +2872,8 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         getChatById, isChatPinned, getActiveChatFolder, isAllChatsFolderActive, getFolderPinnedChatOrder, isChatPinnedInFolder, compareChatsForFolder, folderSummaryText,
         sortChatsInPlace, getPinnedChats, getPinnedChatMoveState, isNotesChat, isCurrentNotesChat, isChatNotificationEnabled, isChatIncomingSoundEnabled, isPinNotificationEnabled,
         isPinSoundEnabled, isMentionSoundEnabled, isMessageMentioningCurrentUser, setChatPreferencesStatus, renderChatPreferencesForm, loadChatPreferences, saveChatPreferences, chatAllowsUnpinAnyPin,
-        canManagePinSettings, isGeneralChat, isGroupOrPrivateChat, canHideChat, canLeaveChat, canManageDestructiveChat, setChatPinSettingsStatus, renderChatPinSettingsForm,
+        canManagePinSettings, isGeneralChat, isGroupOrPrivateChat, canHideChat, canLeaveChat, canManageDestructiveChat, isInviteCapableGroupChat, canManageInviteLink,
+        setChatInviteLinkStatus, renderChatInviteLinkForm, copyCurrentChatInviteLink, refreshCurrentChatInviteLink, joinChatInviteToken, setChatPinSettingsStatus, renderChatPinSettingsForm,
         canManageContextTransformSettings, setChatContextTransformStatus, renderChatContextTransformForm, saveChatContextTransformSetting, setChatDangerStatus, renderChatDangerControls, saveChatPinSettings, normalizePin,
         normalizePins, getPinPreviewText, getPinActorName, getPinToastText, buildPinBrowserNotification, getChatPins, getPinForMessage, canUnpinPin,
         getPinActionState, renderPinActionButton, applyPinsUpdate, handlePinnedMessageUpdate, loadChatPins, renderPinnedBar, jumpToPinnedMessage, pinMessage,

@@ -84,6 +84,204 @@
     return { bindEvents, getSelection, hydrate, label, normalizeKey, normalizeText, syncSelection };
   }
 
+  function createInviteRuntimeAdapter(scope = {}) {
+    with (scope) {
+      const chatInviteTokenPattern = /^[A-Za-z0-9_-]{32,128}$/;
+      let chatInviteLinkLoadSeq = 0;
+
+      function normalizeChatInviteToken(value) {
+        const tokenValue = String(value || '').trim();
+        return chatInviteTokenPattern.test(tokenValue) ? tokenValue : '';
+      }
+
+      function chatInviteTokenFromPath(pathname = '') {
+        const match = String(pathname || '').match(/^\/join\/([A-Za-z0-9_-]{32,128})\/?$/);
+        return normalizeChatInviteToken(match?.[1]);
+      }
+
+      function chatInviteTokenFromUrl(value = '') {
+        const raw = String(value || '').trim();
+        if (!raw) return '';
+        try {
+          const parsed = new URL(raw, location.origin);
+          if (parsed.origin !== location.origin) return '';
+          return chatInviteTokenFromPath(parsed.pathname);
+        } catch (e) {
+          return '';
+        }
+      }
+
+      function renderLinkAnchor(url) {
+        const href = esc(url);
+        const label = esc(url);
+        const inviteToken = chatInviteTokenFromUrl(url);
+        if (inviteToken) {
+          return `<a href="${href}" rel="noopener noreferrer" data-chat-invite-token="${esc(inviteToken)}">${label}</a>`;
+        }
+        return `<a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+      }
+
+      function isInviteCapableGroupChat(chat) {
+        return Boolean(chat && chat.type === 'group' && !isNotesChat(chat) && !isGeneralChat(chat));
+      }
+
+      function canManageInviteLink(chat = getChatById(currentChatId)) {
+        return Boolean(
+          currentUser
+          && isInviteCapableGroupChat(chat)
+          && (currentUser.is_admin || Number(chat.created_by || 0) === Number(currentUser.id))
+        );
+      }
+
+      function setChatInviteLinkStatus(message, type = '') {
+        const el = $('#chatInviteLinkStatus');
+        if (!el) return;
+        el.textContent = message ? tx(message) : '';
+        el.classList.toggle('is-error', type === 'error');
+        el.classList.toggle('is-success', type === 'success');
+        el.classList.toggle('is-pending', type === 'pending');
+      }
+
+      function setChatInviteLinkInputValue(value = '', chatId = currentChatId) {
+        const input = $('#chatInviteLinkInput');
+        if (!input) return;
+        const url = String(value || '');
+        input.value = url;
+        input.title = url;
+        input.dataset.chatId = chatId ? String(chatId) : '';
+      }
+
+      function renderChatInviteLinkForm(chat = getChatById(currentChatId)) {
+        const section = $('#chatInviteLinkSection');
+        if (!section) return;
+        const visible = canManageInviteLink(chat);
+        section.classList.toggle('hidden', !visible);
+        setChatInviteLinkStatus('');
+        if (!visible) {
+          setChatInviteLinkInputValue('');
+          return;
+        }
+        const input = $('#chatInviteLinkInput');
+        if (input && (input.dataset.chatId !== String(chat?.id || '') || !input.value)) {
+          setChatInviteLinkInputValue('', chat?.id || currentChatId);
+          loadCurrentChatInviteLink();
+        }
+      }
+
+      function inviteLinkUrlFromPayload(payload = {}) {
+        payload = payload || {};
+        if (payload.url) return String(payload.url);
+        if (payload.path) return new URL(String(payload.path), location.origin).href;
+        if (payload.token) return new URL(`/join/${encodeURIComponent(String(payload.token))}`, location.origin).href;
+        return '';
+      }
+
+      async function loadCurrentChatInviteLink(options = {}) {
+        const chat = getChatById(currentChatId);
+        if (!canManageInviteLink(chat)) return null;
+        const seq = ++chatInviteLinkLoadSeq;
+        if (!options.silent) setChatInviteLinkStatus('Loading...', 'pending');
+        try {
+          const payload = await api(`/api/chats/${currentChatId}/invite-link`);
+          if (seq !== chatInviteLinkLoadSeq) return payload;
+          const url = inviteLinkUrlFromPayload(payload);
+          setChatInviteLinkInputValue(url, currentChatId);
+          if (!options.silent) setChatInviteLinkStatus('');
+          return payload;
+        } catch (error) {
+          if (seq !== chatInviteLinkLoadSeq) return null;
+          if (!options.silent) {
+            const message = error.message || 'Could not copy invite link';
+            setChatInviteLinkStatus(message, 'error');
+            showCenterToast(message);
+          }
+          return null;
+        }
+      }
+
+      async function copyCurrentChatInviteLink() {
+        const chat = getChatById(currentChatId);
+        if (!canManageInviteLink(chat)) return null;
+        setChatInviteLinkStatus('Loading...', 'pending');
+        try {
+          const input = $('#chatInviteLinkInput');
+          let payload = null;
+          let url = input && input.dataset.chatId === String(currentChatId) ? input.value : '';
+          if (!url) {
+            payload = await loadCurrentChatInviteLink({ silent: true });
+            url = inviteLinkUrlFromPayload(payload);
+          }
+          if (!url) throw new Error('Could not copy invite link');
+          const copied = await copyTextToClipboard(url);
+          if (!copied) throw new Error('Could not copy invite link');
+          setChatInviteLinkStatus('Invite link copied', 'success');
+          showCenterToast('Invite link copied');
+          return payload || { url };
+        } catch (error) {
+          const message = error.message || 'Could not copy invite link';
+          setChatInviteLinkStatus(message, 'error');
+          showCenterToast(message);
+          return null;
+        }
+      }
+
+      async function refreshCurrentChatInviteLink() {
+        const chat = getChatById(currentChatId);
+        if (!canManageInviteLink(chat)) return null;
+        if (!confirm('Refresh invite link? Old link will stop working.')) return null;
+        setChatInviteLinkStatus('Refreshing...', 'pending');
+        try {
+          const payload = await api(`/api/chats/${currentChatId}/invite-link/rotate`, { method: 'POST' });
+          const url = inviteLinkUrlFromPayload(payload);
+          setChatInviteLinkInputValue(url, currentChatId);
+          const copied = await copyTextToClipboard(url);
+          if (!copied) throw new Error('Could not copy invite link');
+          setChatInviteLinkStatus('New invite link copied', 'success');
+          showCenterToast('New invite link copied');
+          return payload;
+        } catch (error) {
+          const message = error.message || 'Could not refresh invite link';
+          setChatInviteLinkStatus(message, 'error');
+          showCenterToast(message);
+          return null;
+        }
+      }
+
+      async function joinChatInviteToken(tokenValue, options = {}) {
+        const inviteToken = normalizeChatInviteToken(tokenValue);
+        if (!inviteToken) {
+          showCenterToast('Invite link is invalid');
+          return null;
+        }
+        showCenterToast('Joining chat...');
+        try {
+          const result = await api(`/api/chat-invites/${encodeURIComponent(inviteToken)}/join`, { method: 'POST' });
+          const targetChatId = Number(result?.chatId || result?.chat?.id || 0);
+          if (result?.chat && !getChatById(targetChatId)) applyChatUpdate(result.chat);
+          await loadChats({ silent: true });
+          if (targetChatId) await openChat(targetChatId);
+          closeChatHeaderActions?.();
+          if (options.replaceHistory && history?.replaceState) history.replaceState(history.state || {}, '', '/');
+          showCenterToast(result?.joined === false ? 'Chat opened' : 'Joined chat');
+          return result || null;
+        } catch (error) {
+          if (options.replaceHistory && history?.replaceState) history.replaceState(history.state || {}, '', '/');
+          const message = error.message || 'Could not join chat by link';
+          showCenterToast(message);
+          return null;
+        }
+      }
+
+      return {
+        normalizeChatInviteToken, chatInviteTokenFromPath, chatInviteTokenFromUrl, renderLinkAnchor,
+        isInviteCapableGroupChat, canManageInviteLink, setChatInviteLinkStatus, renderChatInviteLinkForm,
+        copyCurrentChatInviteLink, refreshCurrentChatInviteLink, joinChatInviteToken,
+      };
+    }
+  }
+
+  shellRoot.inviteRuntimeAdapter = { createInviteRuntimeAdapter };
+
   function createEventController(options = {}) {
     const scope = options.scope || {};
     let bound = false;
@@ -112,6 +310,17 @@
           e.preventDefault();
           e.stopImmediatePropagation();
         }, true);
+        document.addEventListener('click', (e) => {
+          const link = e.target?.closest?.('a[data-chat-invite-token]');
+          if (!link) return;
+          const inviteToken = chatInviteTokenFromUrl(link.getAttribute('href') || '') || normalizeChatInviteToken(link.dataset.chatInviteToken);
+          if (!inviteToken) return;
+          e.preventDefault();
+          e.stopPropagation();
+          joinChatInviteToken(inviteToken).catch((error) => {
+            console.warn('[chat-invite] join failed:', error.message);
+          });
+        });
         const dismissMentionPickerOutsideGesture = (e) => composerMentionsController?.dismissMentionPickerOutsideGesture?.(e);
         const dismissContextConvertPickerOutsideGesture = (e) => {
           const picker = $('#contextConvertPicker');
@@ -609,6 +818,8 @@
         $('#chatNotifyToggle')?.addEventListener('change', () => saveChatPreferences());
         $('#chatSoundToggle')?.addEventListener('change', () => saveChatPreferences());
         $('#chatAllowUnpinAnyPinToggle')?.addEventListener('change', () => saveChatPinSettings());
+        $('#copyChatInviteLinkBtn')?.addEventListener('click', () => copyCurrentChatInviteLink());
+        $('#refreshChatInviteLinkBtn')?.addEventListener('click', () => refreshCurrentChatInviteLink());
     
         // Logout
         $('#profileLogoutBtn')?.addEventListener('click', () => { if (confirm('Logout?')) logout(); });

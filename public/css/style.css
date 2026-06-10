@@ -5855,6 +5855,64 @@ html[data-visual-mode="rich"] .poll-card {
 }
 .chat-preferences-status.is-success { color: var(--success); }
 .chat-preferences-status.is-error { color: var(--danger); }
+.chat-invite-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border-light);
+  cursor: default;
+}
+.chat-invite-card:hover,
+.chat-invite-card:focus,
+.chat-invite-card:focus-visible,
+.chat-invite-card:active {
+  background: var(--bg-input);
+  transform: none;
+}
+.chat-invite-field {
+  min-width: 0;
+}
+.chat-invite-input {
+  width: 100%;
+  height: 36px;
+  margin: 0;
+  padding: 0 10px;
+  border-color: transparent;
+  background: rgba(0,0,0,.14);
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-overflow: ellipsis;
+}
+.chat-invite-input:focus {
+  border-color: var(--accent);
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+.chat-invite-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chat-invite-action {
+  min-height: 36px;
+  padding: 0 12px;
+  box-shadow: none;
+  white-space: nowrap;
+}
+@media (max-width: 520px) {
+  .chat-invite-card {
+    grid-template-columns: 1fr;
+  }
+  .chat-invite-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+  .chat-invite-action {
+    width: 100%;
+  }
+}
 
 .ai-initiative-reminders-list {
   display: flex;

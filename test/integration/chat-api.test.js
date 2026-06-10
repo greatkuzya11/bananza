@@ -500,6 +500,76 @@ test('chat system events are persisted for membership, bots, profile changes and
   assert.ok(privateBotEvents.data.system_events.some((event) => event.event_type === 'member_added' && Number(event.target_user_id) === Number(bot.user_id) && Number(event.target_is_ai_bot) === 1));
 });
 
+test('group invite links enforce permissions, rotate tokens and join users once', async () => {
+  const { admin, bob, carol, privateChat } = scenario;
+  const dave = createSession(sandbox.baseUrl);
+  const erin = createSession(sandbox.baseUrl);
+  await dave.register(makeUser('invdave'));
+  await erin.register(makeUser('inverin'));
+
+  const { data: chat } = await bob.request('/api/chats', {
+    method: 'POST',
+    json: {
+      name: `Invite ${Date.now()}`,
+      type: 'group',
+      memberIds: [carol.user.id],
+    },
+  });
+  const chatId = Number(chat.id);
+
+  const link = await bob.request(`/api/chats/${chatId}/invite-link`);
+  assert.match(link.data.token, /^[A-Za-z0-9_-]{32,128}$/);
+  assert.equal(link.data.path, `/join/${link.data.token}`);
+  assert.equal(new URL(link.data.url).pathname, link.data.path);
+
+  const bobChats = await bob.request('/api/chats');
+  const bobChat = bobChats.data.find((item) => Number(item.id) === chatId);
+  assert.ok(bobChat);
+  assert.equal(Object.prototype.hasOwnProperty.call(bobChat, 'invite_token'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(bobChat, 'invite_token_created_at'), false);
+
+  await carol.request(`/api/chats/${chatId}/invite-link`, { expectedStatus: 403 });
+  await carol.request(`/api/chats/${chatId}/invite-link/rotate`, { method: 'POST', expectedStatus: 403 });
+  await admin.request(`/api/chats/${privateChat.id}/invite-link`, { expectedStatus: 400 });
+
+  const rotated = await admin.request(`/api/chats/${chatId}/invite-link/rotate`, { method: 'POST' });
+  assert.match(rotated.data.token, /^[A-Za-z0-9_-]{32,128}$/);
+  assert.notEqual(rotated.data.token, link.data.token);
+
+  await erin.request(`/api/chat-invites/${link.data.token}/join`, { method: 'POST', expectedStatus: 404 });
+
+  const joined = await dave.request(`/api/chat-invites/${rotated.data.token}/join`, { method: 'POST' });
+  assert.equal(joined.data.ok, true);
+  assert.equal(joined.data.chatId, chatId);
+  assert.equal(joined.data.joined, true);
+  assert.equal(joined.data.chat.id, chatId);
+  assert.equal(Object.prototype.hasOwnProperty.call(joined.data.chat, 'invite_token'), false);
+
+  const daveChats = await dave.request('/api/chats');
+  assert.ok(daveChats.data.some((item) => Number(item.id) === chatId));
+
+  const eventsAfterJoin = await bob.request(`/api/chats/${chatId}/messages`, { searchParams: { meta: 1 } });
+  const inviteEventsAfterJoin = eventsAfterJoin.data.system_events.filter((event) => (
+    event.event_type === 'member_added'
+    && Number(event.target_user_id) === Number(dave.user.id)
+    && event.metadata?.source === 'invite_link'
+  ));
+  assert.equal(inviteEventsAfterJoin.length, 1);
+
+  const repeated = await dave.request(`/api/chat-invites/${rotated.data.token}/join`, { method: 'POST' });
+  assert.equal(repeated.data.ok, true);
+  assert.equal(repeated.data.chatId, chatId);
+  assert.equal(repeated.data.joined, false);
+
+  const eventsAfterRepeat = await bob.request(`/api/chats/${chatId}/messages`, { searchParams: { meta: 1 } });
+  const inviteEventsAfterRepeat = eventsAfterRepeat.data.system_events.filter((event) => (
+    event.event_type === 'member_added'
+    && Number(event.target_user_id) === Number(dave.user.id)
+    && event.metadata?.source === 'invite_link'
+  ));
+  assert.equal(inviteEventsAfterRepeat.length, 1);
+});
+
 test('context convert all-chat availability respects chat-level gates and bot enabled state', async () => {
   const { admin, bob, carol } = scenario;
   const db = new Database(path.join(sandbox.appDir, 'bananza.db'));
