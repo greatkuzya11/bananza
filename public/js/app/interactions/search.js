@@ -139,18 +139,34 @@ function updateSearchTriggerState(active) {
   $('#searchBtn')?.classList.toggle('is-active', !!active);
 }
 
-function renderSearchResultsEmpty(message = 'No results') {
+function localizedSearchText(message) {
+  return tx(message == null ? '' : message);
+}
+
+function renderSearchResultsEmpty(message = 'No results', kind = 'empty') {
   if (!searchResults) return;
-  searchResults.innerHTML = `<div class="search-results-empty">${esc(message)}</div>`;
+  const safeKind = String(kind || 'empty').replace(/[^a-z0-9_-]/gi, '');
+  searchResults.innerHTML = `<div class="search-results-empty search-results-empty--${esc(safeKind)}">${esc(localizedSearchText(message))}</div>`;
+}
+
+function renderSearchResultsIdle() {
+  renderSearchResultsEmpty('Type at least 2 characters to search', 'idle');
+}
+
+function renderSearchResultsLoading() {
+  renderSearchResultsEmpty('Searching...', 'loading');
 }
 
 function renderSearchScopeToggle() {
   if (!searchAllChatsToggle) return;
   const forcedGlobal = !currentChatId;
-  searchAllChatsToggle.checked = forcedGlobal ? true : searchAllChats;
+  const effectiveAllChats = forcedGlobal ? true : searchAllChats;
+  searchAllChatsToggle.checked = effectiveAllChats;
   searchAllChatsToggle.disabled = forcedGlobal;
   searchAllChatsToggle.setAttribute('aria-disabled', forcedGlobal ? 'true' : 'false');
-  searchPanel?.querySelector('.search-panel-scope')?.classList.toggle('is-disabled', forcedGlobal);
+  const scopeEl = searchPanel?.querySelector('.search-panel-scope');
+  scopeEl?.classList.toggle('is-disabled', forcedGlobal);
+  scopeEl?.classList.toggle('is-all-chats', effectiveAllChats);
 }
 
 function clearSearchPanelTransitionState() {
@@ -894,7 +910,7 @@ function openSearchPanel(options = {}) {
   searchAllChats = false;
   renderSearchScopeToggle();
   if (searchInput) searchInput.value = '';
-  clearSearchResults();
+  renderSearchResultsIdle();
   searchPanel.setAttribute('aria-hidden', 'false');
   searchPanel.classList.remove('is-open', 'is-closing');
   forceIosAnimationMount(searchPanel, searchPanelSheet);
@@ -965,11 +981,12 @@ function performSearch({ immediate = false } = {}) {
   searchDebounce = null;
   const requestId = ++searchRequestSeq;
   if (q.length < 2) {
-    clearSearchResults();
+    renderSearchResultsIdle();
     return;
   }
   const runSearch = async () => {
     try {
+      renderSearchResultsLoading();
       const params = new URLSearchParams({ q });
       const isGlobalSearch = searchAllChats || !currentChatId;
       if (!isGlobalSearch && currentChatId) params.set('chatId', currentChatId);
@@ -977,7 +994,7 @@ function performSearch({ immediate = false } = {}) {
       if (requestId !== searchRequestSeq || !isSearchPanelOpen()) return;
       clearSearchResults();
       if (results.length === 0) {
-        renderSearchResultsEmpty('No results');
+        renderSearchResultsEmpty('No results', 'empty');
         return;
       }
       const escapedQuery = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -985,35 +1002,44 @@ function performSearch({ immediate = false } = {}) {
       for (const r of results) {
         const el = document.createElement('div');
         el.className = 'search-result-item';
+        el.setAttribute('role', 'button');
+        el.tabIndex = 0;
         const highlighted = esc(r.text || '').replace(
           queryPattern,
           '<mark>$1</mark>'
         );
         const chatContext = r.chat_name
           ? r.chat_name
-          : (r.chat_type === 'group' ? 'Group chat' : 'Direct chat');
+          : t(r.chat_type === 'group' ? 'Group chat' : 'Direct chat');
+        const displayName = r.display_name || t('Unknown');
         el.innerHTML = `
           <div class="search-result-meta">
-            <div class="search-result-name">${esc(r.display_name || 'Unknown')}</div>
+            <div class="search-result-name">${esc(displayName)}</div>
             <div class="search-result-chat">${esc(chatContext)}</div>
           </div>
           <div class="search-result-text">${highlighted}</div>
           <div class="search-result-time">${esc(formatSearchResultTimestamp(r.created_at))}</div>
         `;
-        el.addEventListener('click', () => {
+        const activateResult = () => {
           closeSearchPanel({
             afterClose: () => {
               jumpToSearchResult(r).catch((e) => {
-                showCenterToast(e?.message || 'Message not found');
+                showCenterToast(localizedSearchText(e?.message || 'Message not found'));
               });
             },
           });
+        };
+        el.addEventListener('click', activateResult);
+        el.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          activateResult();
         });
         searchResults.appendChild(el);
       }
     } catch (e) {
       if (requestId !== searchRequestSeq) return;
-      renderSearchResultsEmpty(e?.message || 'Search failed');
+      renderSearchResultsEmpty(e?.message || 'Search failed', 'error');
     }
   };
   if (immediate) {
@@ -1041,7 +1067,7 @@ async function jumpToSearchResult(result) {
   const chatId = Number(result?.chat_id || 0);
   const messageId = Number(result?.id || 0);
   if (!chatId || !messageId) {
-    showCenterToast('Message not found');
+    showCenterToast(t('Message not found'));
     return false;
   }
   const sameChat = chatId === Number(currentChatId || 0);
@@ -1053,7 +1079,7 @@ async function jumpToSearchResult(result) {
     source: 'search',
   });
   if (scrollToMessage(messageId)) return true;
-  showCenterToast('Message not found');
+  showCenterToast(t('Message not found'));
   return false;
 }
 
@@ -1088,6 +1114,7 @@ function bindEvents(options = {}) {
       return;
     }
     searchAllChats = !!searchAllChatsToggle.checked;
+    renderSearchScopeToggle();
     if (searchInput.value.trim().length >= 2) performSearch({ immediate: true });
     else clearSearchResults();
   });
