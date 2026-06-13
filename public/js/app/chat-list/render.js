@@ -80,6 +80,10 @@
         : Boolean(chat && (chat.type === 'notes' || Number(chat.is_notes) === 1));
     }
 
+    function isDocumentChat(chat) {
+      return Boolean(chat && Number(chat.is_document || 0) === 1);
+    }
+
     function isAiBotDirectoryUser(user) {
       return typeof actions.isAiBotDirectoryUser === 'function'
         ? actions.isAiBotDirectoryUser(user)
@@ -137,8 +141,16 @@
       return preview ? renderCustomEmojiPreviewHtml(preview) : esc(emptyText);
     }
 
+    function renderDocumentPreviewHtml(chat) {
+      const title = String(chat && (chat.document_title || chat.name) || '').trim();
+      return `<span class="chat-item-document-preview">${esc(t('Document'))}${title ? ` &middot; ${esc(title)}` : ''}</span>`;
+    }
+
     function chatItemAvatarHtml(chat) {
       if (typeof actions.chatItemAvatarHtml === 'function') return actions.chatItemAvatarHtml(chat);
+      if (isDocumentChat(chat)) {
+        return '<div class="chat-item-avatar document-chat-avatar" style="background:#7c8cf8">&#128196;';
+      }
       if (isNotesChat(chat)) {
         return `<div class="chat-item-avatar notes-chat-avatar" style="background:#5eb5f7">${esc(chat.avatar_emoji || NOTES_CHAT_EMOJI)}`;
       }
@@ -195,6 +207,7 @@
       el.className = 'chat-item'
         + (isActive ? ' active' : '')
         + (pinned ? ' is-pinned' : '')
+        + (isDocumentChat(chat) ? ' is-document' : '')
         + (hiddenSearchResult ? ' is-hidden-search-result' : '')
         + (hasActiveCall ? ' has-active-call' : '');
       el.dataset.chatId = chat && chat.id;
@@ -223,6 +236,9 @@
       const chatShotIndicator = Number(chat && chat.chatshot_enabled || 0) !== 0
         ? `<span class="chat-item-state-indicator chat-item-tool-indicator chat-item-chatshot-indicator" role="img" aria-label="${esc(t('ChatShot enabled'))}" title="${esc(t('ChatShot enabled'))}">&#128248;</span>`
         : '';
+      const documentIndicator = isDocumentChat(chat)
+        ? `<span class="chat-item-state-indicator chat-item-document-indicator" role="img" aria-label="${esc(t('Document'))}" title="${esc(t('Document'))}">&#128196;</span>`
+        : '';
       const activeCallMediaKind = String(activeCall && (activeCall.media_kind || activeCall.mediaKind) || '').toLowerCase();
       const activeCallRoomMode = String(activeCall && (activeCall.room_mode || activeCall.roomMode) || '').toLowerCase();
       const callIndicatorLabel = activeCallMediaKind === 'voice'
@@ -244,6 +260,7 @@
             ${pinIndicator}
             ${notifyDisabledIndicator}
             ${soundDisabledIndicator}
+            ${documentIndicator}
             ${contextConvertIndicator}
             ${chatShotIndicator}
             <span class="chat-item-time">${lastTime}</span>
@@ -251,7 +268,7 @@
         </div>
         <div class="chat-item-last">
           ${callIndicator}
-          <span>${renderChatLastPreviewHtml(chat)}</span>
+          <span>${isDocumentChat(chat) ? renderDocumentPreviewHtml(chat) : renderChatLastPreviewHtml(chat)}</span>
           ${unread}
         </div>
       </div>

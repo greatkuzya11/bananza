@@ -41,6 +41,7 @@ db.exec(`
     created_by INTEGER REFERENCES users(id),
     avatar_url TEXT DEFAULT NULL,
     is_notes INTEGER DEFAULT 0,
+    is_document INTEGER DEFAULT 0,
     allow_unpin_any_pin INTEGER DEFAULT 0,
     context_transform_enabled INTEGER DEFAULT 0,
     chatshot_enabled INTEGER DEFAULT 0,
@@ -63,6 +64,16 @@ db.exec(`
     hidden_at TEXT DEFAULT NULL,
     hidden_after_message_id INTEGER DEFAULT NULL,
     PRIMARY KEY (chat_id, user_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS documents (
+    chat_id INTEGER PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    ydoc_state BLOB DEFAULT NULL,
+    invite_token TEXT DEFAULT NULL,
+    invite_token_created_at TEXT DEFAULT NULL,
+    updated_at TEXT DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (datetime('now'))
   );
 
   CREATE TABLE IF NOT EXISTS messages (
@@ -242,6 +253,8 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, id);
   CREATE INDEX IF NOT EXISTS idx_chat_members_user ON chat_members(user_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_invite_token ON documents(invite_token) WHERE invite_token IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON documents(updated_at);
   CREATE INDEX IF NOT EXISTS idx_link_previews_msg ON link_previews(message_id);
   CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);
   CREATE INDEX IF NOT EXISTS idx_message_mentions_user ON message_mentions(mentioned_user_id, chat_id);
@@ -358,6 +371,11 @@ try {
   db.exec("ALTER TABLE chats ADD COLUMN is_notes INTEGER DEFAULT 0");
 }
 try {
+  db.prepare("SELECT is_document FROM chats LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE chats ADD COLUMN is_document INTEGER DEFAULT 0");
+}
+try {
   db.prepare("SELECT context_transform_enabled FROM chats LIMIT 1").get();
 } catch {
   db.exec("ALTER TABLE chats ADD COLUMN context_transform_enabled INTEGER DEFAULT 0");
@@ -393,6 +411,7 @@ try {
   db.exec("ALTER TABLE chats ADD COLUMN invite_token_created_at TEXT DEFAULT NULL");
 }
 db.prepare("UPDATE chats SET is_notes=0 WHERE is_notes IS NULL").run();
+db.prepare("UPDATE chats SET is_document=0 WHERE is_document IS NULL").run();
 db.prepare("UPDATE chats SET context_transform_enabled=0 WHERE context_transform_enabled IS NULL").run();
 db.prepare("UPDATE chats SET chatshot_enabled=0 WHERE chatshot_enabled IS NULL").run();
 db.prepare("UPDATE chats SET chatshot_style='comic' WHERE chatshot_style IS NULL OR chatshot_style NOT IN ('comic','illustration','photo')").run();

@@ -63,6 +63,7 @@ const appOpenChatScriptPaths = Object.freeze([
   'public/js/app/open-chat/scroll.js',
   'public/js/app/open-chat/media-playback.js',
   'public/js/app/open-chat/controller.js',
+  'public/js/app/documents.js',
 ]);
 const appMessageScriptPaths = Object.freeze([
   'public/js/app/messages/state.js',

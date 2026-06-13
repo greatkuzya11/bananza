@@ -10,11 +10,13 @@
       const scrollControllerFactory = window.BananzaApp?.openChat?.scroll?.createScrollController;
       const mediaPlaybackFactory = window.BananzaApp?.openChat?.mediaPlayback?.createMediaPlaybackController;
       const openChatControllerFactory = window.BananzaApp?.openChat?.controller?.createOpenChatController;
+      const documentRuntimeFactory = window.BananzaApp?.documents?.createDocumentRuntime;
       if (typeof openChatPagesFactory !== 'function'
         || typeof readReceiptFactory !== 'function'
         || typeof scrollControllerFactory !== 'function'
         || typeof mediaPlaybackFactory !== 'function'
-        || typeof openChatControllerFactory !== 'function') {
+        || typeof openChatControllerFactory !== 'function'
+        || typeof documentRuntimeFactory !== 'function') {
         throw new Error('BananzaApp open-chat modules are required before app.js');
       }
     
@@ -92,6 +94,43 @@
           getCurrentChatId: () => currentChatId,
         },
       });
+      const documentRuntime = documentRuntimeFactory({
+        window,
+        document,
+        dom: appDom,
+        api: (url, opts) => api(url, opts),
+        t,
+        state: {
+          getToken: () => token,
+          getCurrentUser: () => currentUser,
+          getCurrentChatId: () => currentChatId,
+          getCurrentChat: () => getChatById(currentChatId),
+        },
+        actions: {
+          applyChatBackground: (chat) => applyChatBackground(chat),
+          clearDisplayedTimelineState: () => {
+            messageStateController?.clearDisplayedMessages?.();
+            messageStateController?.clearDisplayedPinEvents?.();
+            messageStateController?.clearDisplayedSystemEvents?.();
+            clearRenderedMessages?.();
+          },
+          clearPendingFile: () => clearPendingFile(),
+          clearReply: () => clearReply(),
+          closeTransientUi: () => {
+            hideMentionPicker();
+            closeEmojiPicker({ immediate: true });
+            hideAttachMenu({ immediate: true });
+            hideContextConvertPicker();
+            hideAvatarUserMenu();
+            hideChatContextMenu({ immediate: true });
+            hideFloatingMessageActions({ immediate: true });
+          },
+          renderCurrentChatHeader: (chat) => renderCurrentChatHeader(chat),
+          revealActiveMobileChatRoute: (options = {}) => revealActiveMobileChatRoute(options),
+          syncChatAreaMetrics: () => syncChatAreaMetrics(),
+          updateChatStatus: () => updateChatStatus(),
+        },
+      });
       openChatController = openChatControllerFactory({
         window,
         document,
@@ -143,6 +182,7 @@
           clearEdit: (options = {}) => clearEdit(options),
           clearPendingFile: () => clearPendingFile(),
           clearReply: () => clearReply(),
+          closeDocumentMode: () => documentRuntime?.closeDocumentMode?.(),
           closeChatHeaderActions: () => closeChatHeaderActions(),
           closeTransientUi: () => {
             hideMentionPicker();
@@ -159,6 +199,7 @@
           flushDeferredRecoverySync: () => flushDeferredRecoverySync(),
           isAbortError: (error) => isAbortError(error),
           isChatPinned: (chat) => isChatPinned(chat),
+          isDocumentChat: (chat) => documentRuntime?.isDocumentChat?.(chat),
           isMobileLayoutViewport: () => isMobileLayoutViewport(),
           isUiTransitionBusy: () => isUiTransitionBusy(),
           loadChatPins: (chatId) => loadChatPins(chatId),
@@ -166,6 +207,7 @@
           loadChats: (options = {}) => loadChats(options),
           loadContextConvertAvailability: (chatId, options = {}) => loadContextConvertAvailability(chatId, options),
           markRecoveryRequested: (reason) => chatListService.markRecoveryRequested(reason),
+          openDocument: (chatId, options = {}) => documentRuntime?.openDocument?.(chatId, options),
           refreshPollComposerActionState: () => refreshPollComposerActionState(),
           refreshVoiceComposerState: () => window.BananzaVoiceHooks?.refreshComposerState?.(),
           renderChatList: (filter = chatSearch?.value || '') => renderChatList(filter),
@@ -192,13 +234,14 @@
         readReceipts: readReceiptController,
         scroll: scrollController,
         mediaPlayback: mediaPlaybackController,
+        documents: documentRuntime,
         controller: openChatController,
         service: openChatService,
       };
       openChatService.configure?.(openChatControllers);
       openChatService.syncRuntimeState?.();
       if (appContext) appContext.services.openChat = openChatControllers;
-      return window.BananzaApp.boot.composition.createEvalExports(["openChatPagesFactory","readReceiptFactory","scrollControllerFactory","mediaPlaybackFactory","openChatControllerFactory","openChatController","openChatPagesController","readReceiptController","scrollController","mediaPlaybackController","openChatControllers"], {
+      return window.BananzaApp.boot.composition.createEvalExports(["openChatPagesFactory","readReceiptFactory","scrollControllerFactory","mediaPlaybackFactory","openChatControllerFactory","documentRuntimeFactory","openChatController","openChatPagesController","readReceiptController","scrollController","mediaPlaybackController","documentRuntime","openChatControllers"], {
         get: (name) => eval(name),
         set: (name, value) => {
           const __bananzaRuntimeExportValue = value;

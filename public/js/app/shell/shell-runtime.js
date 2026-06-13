@@ -167,7 +167,7 @@
       function renderNewFolderChatList(filter = '') { return newFolderTabController.renderNewFolderChatList(filter); }
       function resetNewFolderForm() { return newFolderTabController.resetNewFolderForm(); }
     
-      const NEW_CHAT_MODAL_TABS = Object.freeze(['private', 'group', 'folder']);
+      const NEW_CHAT_MODAL_TABS = Object.freeze(['private', 'group', 'document', 'folder']);
     
       function normalizeNewChatModalTab(tabName = 'private') {
         const nextTab = String(tabName || 'private');
@@ -262,16 +262,20 @@
         newChatTabSwipePager?.reset();
         setNewChatModalTab('private');
         $('#groupName').value = '';
+        const documentNameEl = $('#documentName');
+        if (documentNameEl) documentNameEl.value = '';
         resetNewFolderForm();
         try {
           const users = await api('/api/users');
           const privateList = $('#userListPrivate');
           const groupList = $('#userListGroup');
+          const documentList = $('#userListDocument');
     
           privateList.innerHTML = users.map((user) => renderSelectableUserItem(user, { showPresence: true })).join('')
             || '<div style="color:var(--text-secondary);padding:12px">No other users yet</div>';
     
           groupList.innerHTML = users.map((user) => renderSelectableUserItem(user)).join('');
+          if (documentList) documentList.innerHTML = users.map((user) => renderSelectableUserItem(user)).join('');
     
           // Private: click to start chat
           privateList.querySelectorAll('.user-list-item').forEach(el => {
@@ -287,6 +291,9 @@
     
           // Group: toggle selection
           groupList.querySelectorAll('.user-list-item').forEach(el => {
+            el.addEventListener('click', () => el.classList.toggle('selected'));
+          });
+          documentList?.querySelectorAll('.user-list-item')?.forEach(el => {
             el.addEventListener('click', () => el.classList.toggle('selected'));
           });
           renderNewFolderChatList();

@@ -11,6 +11,7 @@ const ROOT_FILES = [
   'server.js',
   'db.js',
   'chatFolders.js',
+  'documents.js',
   'forwarding.js',
   'linkPreview.js',
   'messageActions.js',

@@ -5,7 +5,20 @@ const db = require('./db');
 const clients = new Map(); // userId -> Set<ws>
 
 function setupWebSocket(server, jwtSecret) {
-  const wss = new WebSocketServer({ server, path: '/ws' });
+  const wss = new WebSocketServer({ noServer: true });
+
+  server.on('upgrade', (req, socket, head) => {
+    let pathname = '';
+    try {
+      pathname = new URL(req.url, 'http://localhost').pathname;
+    } catch {
+      return;
+    }
+    if (pathname !== '/ws') return;
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit('connection', ws, req);
+    });
+  });
 
   wss.on('connection', (ws, req) => {
     const url = new URL(req.url, 'http://localhost');

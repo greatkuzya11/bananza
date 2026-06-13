@@ -8,6 +8,7 @@ const { repoRoot } = require('../support/paths');
 
 const indexHtml = fs.readFileSync(path.join(repoRoot, 'public', 'index.html'), 'utf8');
 const styleCss = fs.readFileSync(path.join(repoRoot, 'public', 'css', 'style.css'), 'utf8');
+const documentEditorBundleJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'document-editor.bundle.js'), 'utf8');
 
 test('public/index.html keeps expected stylesheet and script order', () => {
   const dom = new JSDOM(indexHtml);
@@ -17,7 +18,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
   const scripts = [...document.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
 
   assert.deepEqual(styles, [
-    '/css/style.css?v=20260527-native-screen-orientation',
+    '/css/style.css?v=20260613-doc-fullwidth',
     '/css/calls.css?v=20260509-call-modal-surface',
     '/css/voice.css',
     '/css/video-notes.css',
@@ -28,6 +29,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
     '/js/i18n.js?v=20260527-native-screen-orientation',
+    '/js/document-editor.bundle.js?v=20260613-doc-cursor',
     '/js/qip-infium-original.js?v=20260523-qip-infium-original',
     '/js/qip-hd.js?v=20260523-qip-hd',
     '/js/app/namespace.js?v=20260530-app-shell',
@@ -72,6 +74,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/open-chat/scroll.js?v=20260531-open-chat',
     '/js/app/open-chat/media-playback.js?v=20260531-open-chat',
     '/js/app/open-chat/controller.js?v=20260531-open-chat',
+    '/js/app/documents.js?v=20260613-documents',
     '/js/app/messages/state.js?v=20260531-messages',
     '/js/app/messages/attachments.js?v=20260531-messages',
     '/js/app/messages/polls.js?v=20260531-messages',
@@ -155,6 +158,12 @@ test('public/index.html exposes core shell nodes used by runtime modules', () =>
     'activeChatFolderStrip',
     'chatArea',
     'messages',
+    'documentWorkspace',
+    'documentTitleInput',
+    'documentToolbar',
+    'documentEditor',
+    'documentConnectionStatus',
+    'copyDocumentInviteLinkBtn',
     'sendBtn',
     'msgInput',
     'composerRichPreview',
@@ -167,6 +176,10 @@ test('public/index.html exposes core shell nodes used by runtime modules', () =>
     'chatFolderPicker',
     'chatFolderManageModal',
     'folderTab',
+    'documentTab',
+    'documentName',
+    'userListDocument',
+    'createDocumentBtn',
     'createFolderBtn',
   ];
 
@@ -177,6 +190,8 @@ test('public/index.html exposes core shell nodes used by runtime modules', () =>
   assert.equal(document.getElementById('chatBotInfoSection'), null);
   assert.equal(document.getElementById('activeChatFolderVisibilityToggle'), null);
   assert.equal(document.getElementById('refreshChatsBtn'), null);
+  assert.equal(document.querySelector('#documentTab .new-document-members-note')?.getAttribute('data-i18n'), 'Members can be added later');
+  assert.equal(document.querySelector('#documentTab .new-document-create-panel #createDocumentBtn')?.id, 'createDocumentBtn');
 });
 
 test('settings modal places microphone mode immediately after Send by Enter', () => {
@@ -252,14 +267,16 @@ test('chat background layer sits behind the chat view without replacing messages
   const chatView = document.getElementById('chatView');
   const layer = document.getElementById('chatBackgroundLayer');
   const header = chatView.querySelector('.chat-header');
+  const documentWorkspace = document.getElementById('documentWorkspace');
   const messages = document.getElementById('messages');
 
   assert.ok(layer);
   assert.equal(layer.parentElement, chatView);
   assert.equal(layer.getAttribute('aria-hidden'), 'true');
   assert.equal(layer.nextElementSibling, header);
+  assert.equal(documentWorkspace.previousElementSibling.id, 'pinnedBar');
   assert.equal(messages.parentElement, chatView);
-  assert.equal(messages.previousElementSibling.id, 'pinnedBar');
+  assert.equal(messages.previousElementSibling.id, 'documentWorkspace');
   assert.match(styleCss, /\.chat-background-layer\b/);
   assert.match(styleCss, /\.chat-view\.has-chat-background \.messages\b/);
 });
@@ -299,12 +316,29 @@ test('style.css keeps a dedicated unread badge contrast override for active chat
   assert.match(ruleBody, /color\s*:\s*#fff\s*;/);
 });
 
-test('style.css keeps New Chat modal folder tab height aligned with the other tabs', () => {
+test('style.css keeps New Chat modal scrollable tabs aligned', () => {
   assert.match(styleCss, /#newChatModal\s+\.modal-content\s*\{[^}]*height\s*:\s*min\(620px,\s*80vh\)/s);
   assert.match(styleCss, /#newChatModal\s+\.modal-body\s*\{[^}]*display\s*:\s*flex[^}]*overflow\s*:\s*hidden/s);
   assert.match(styleCss, /#newChatModal\s+\.tab-pane\.active\s*\{[^}]*display\s*:\s*flex[^}]*flex\s*:\s*1/s);
   assert.match(styleCss, /#newChatModal\s+#newFolderChatList\s*\{[^}]*overflow-y\s*:\s*auto/s);
+  assert.match(styleCss, /#newChatModal\s+#userListGroup,\s*#newChatModal\s+#userListDocument,\s*#newChatModal\s+#newFolderChatList\s*\{[^}]*overflow-y\s*:\s*auto/s);
+  assert.match(styleCss, /#newChatModal\s+\.new-document-create-panel\s*\{[^}]*flex\s*:\s*0 0 auto/s);
   assert.match(styleCss, /#newChatModal\s+\.folder-chat-selection-list\s*\{[^}]*max-height\s*:\s*none\s*;/s);
+});
+
+test('style.css keeps document editor full width and theme-colored', () => {
+  assert.match(styleCss, /\.document-workspace\s*\{[^}]*background-color\s*:\s*var\(--bg-dark\)[^}]*background-image\s*:\s*var\(--bg-app-gradient\)/s);
+  assert.match(styleCss, /\.document-toolbar\s*\{[^}]*background-color\s*:\s*var\(--bg-sidebar\)[^}]*background-image\s*:\s*var\(--bg-panel-gradient\)/s);
+  assert.match(styleCss, /\.document-editor-shell\s*\{[^}]*background\s*:\s*var\(--rich-other-msg-bg,\s*var\(--bg-other-msg\)\)/s);
+  assert.match(styleCss, /\.document-editor\s+\.ProseMirror\s*\{[^}]*width\s*:\s*100%[^}]*max-width\s*:\s*none[^}]*margin\s*:\s*0/s);
+  assert.doesNotMatch(styleCss, /\.document-editor\s+\.ProseMirror\s*\{[^}]*max-width\s*:\s*920px/s);
+});
+
+test('document collab cursor label stays out of table layout flow', () => {
+  assert.match(styleCss, /\.document-editor\s+\.ProseMirror\s+\.document-collab-cursor-name,[\s\S]*\.ProseMirror-yjs-cursor\s*>\s*div\s*\{[^}]*position\s*:\s*absolute[^}]*width\s*:\s*max-content/s);
+  assert.match(styleCss, /\.document-editor\s+\.ProseMirror\s+\.ProseMirror-yjs-cursor\s*>\s*div\s*\{[^}]*width\s*:\s*max-content\s*!important/s);
+  assert.match(documentEditorBundleJs, /className\s*=\s*"document-collab-cursor"/);
+  assert.match(documentEditorBundleJs, /cursorBuilder:\s*createCollabCursor/);
 });
 
 test('style.css clamps New Chat folder selection rows to compact previews', () => {

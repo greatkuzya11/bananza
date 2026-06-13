@@ -282,6 +282,7 @@
             applyChatUpdate(msg.chat || {});
             break;
           }
+          case 'document_saved': { openChatControllers?.documents?.handleRealtimeMessage?.(msg); loadChats({ silent: true }).catch(() => {}); break; }
           case 'context_convert_bots_updated': {
             invalidateContextConvertAvailability(msg.chatId || msg.chat_id);
             if (Number(msg.chatId || msg.chat_id || 0) === Number(currentChatId || 0)) {

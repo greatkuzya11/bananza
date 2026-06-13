@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>BananZa Document</title>
+  <link rel="stylesheet" href="/css/style.css?v=20260613-doc-fullwidth">
+</head>
+<body class="document-guest-body">
+  <main id="documentGuestApp" class="document-guest-app">
+    <div class="document-guest-header">
+      <div class="document-guest-brand">BananZa</div>
+      <span id="documentGuestStatus" class="document-connection-status" data-status="offline" data-i18n="Offline">Offline</span>
+    </div>
+    <section class="document-workspace document-workspace--guest" aria-label="Document" data-i18n-aria-label="Document">
+      <div class="document-topbar">
+        <input id="documentGuestTitleInput" class="document-title-input" type="text" maxlength="80" placeholder="Document title" data-i18n-placeholder="Document title" aria-label="Document title" data-i18n-aria-label="Document title">
+      </div>
+      <div id="documentGuestToolbar" class="document-toolbar" aria-label="Document toolbar" data-i18n-aria-label="Document toolbar"></div>
+      <div class="document-editor-shell">
+        <div id="documentGuestEditor" class="document-editor"></div>
+      </div>
+    </section>
+  </main>
+  <script src="/js/i18n.js?v=20260527-native-screen-orientation"></script>
+  <script src="/js/document-editor.bundle.js?v=20260613-doc-cursor"></script>
+  <script src="/js/document-guest.js?v=20260613-doc-fullwidth"></script>
+</body>
+</html>

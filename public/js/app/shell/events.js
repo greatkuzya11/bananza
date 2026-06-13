@@ -674,6 +674,17 @@
             openChat(chat.id);
           } catch (e) { alert(e.message); }
         });
+        $('#createDocumentBtn')?.addEventListener('click', async () => {
+          const name = ($('#documentName')?.value || '').trim();
+          if (!name) { alert(t('Enter document title')); return; }
+          const selected = [...$$('#userListDocument .user-list-item.selected')].map(el => +el.dataset.uid);
+          try {
+            const chat = await api('/api/documents', { method: 'POST', body: { title: name, memberIds: selected } });
+            closeAllModals();
+            await loadChats();
+            openChat(chat.id);
+          } catch (e) { alert(e.message); }
+        });
         newFolderTabController.bindEvents();
         folderManageModalController.bindEvents();
     

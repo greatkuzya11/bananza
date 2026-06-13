@@ -72,6 +72,7 @@
   function getChatSearchHaystack(chat) {
     return [
       chat && chat.name || '',
+      chat && chat.document_title || '',
       chat && chat.private_user && chat.private_user.display_name || '',
       chat && chat.private_user && chat.private_user.username || '',
       chat && chat.private_user && chat.private_user.ai_bot_mention || '',
@@ -80,6 +81,9 @@
   }
 
   function getChatLastPreviewText(chat) {
+    if (chat && Number(chat.is_document || 0) === 1) {
+      return '';
+    }
     if (chat && chat.last_text) {
       return (chat.last_user ? `${chat.last_user}: ` : '') + chat.last_text;
     }
@@ -262,4 +266,3 @@
     normalizeChatListEntry,
   };
 })();
-

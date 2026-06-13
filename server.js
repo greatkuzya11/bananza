@@ -50,6 +50,7 @@ const { createAiBotFeature } = require('./ai');
 const { createAiInitiativeFeature } = require('./ai/initiative');
 const { createChatFoldersFeature } = require('./chatFolders');
 const { createCallFeature } = require('./calls');
+const { createDocumentsFeature } = require('./documents');
 const { createPollService, POLL_CLOSE_PRESETS, toDbDate } = require('./polls');
 const { createMessageActionsService } = require('./messageActions');
 const { createVideoNoteFeature } = require('./videoNotes');
@@ -393,6 +394,7 @@ let aiInitiativeFeature = null;
 let chatFoldersFeature = null;
 let callFeature = null;
 let videoNoteFeature = null;
+let documentsFeature = null;
 const videoNoteStorage = createVideoNoteStorage({
   db,
   uploadsDir: UPLOADS_DIR,
@@ -1493,6 +1495,10 @@ function isNotesChatRow(chat) {
   return Number(chat?.is_notes) === 1;
 }
 
+function isDocumentChatRow(chat) {
+  return Number(chat?.is_document) === 1;
+}
+
 function notesChatPayload(chat) {
   if (!chat) return null;
   return {
@@ -1684,7 +1690,7 @@ function chatInvitePayload(req, token) {
 }
 
 function inviteLinksSupportedForChat(chat) {
-  return Boolean(chat && chat.type === 'group' && !isNotesChatRow(chat) && !isGeneralChatRow(chat));
+  return Boolean(chat && chat.type === 'group' && !isNotesChatRow(chat) && !isDocumentChatRow(chat) && !isGeneralChatRow(chat));
 }
 
 function canManageChatInviteLink(chat, user) {
@@ -1725,6 +1731,20 @@ function rotateChatInviteToken(chatId) {
   }
   throw new Error('Could not refresh invite link');
 }
+
+documentsFeature = createDocumentsFeature({
+  app,
+  server,
+  db,
+  auth,
+  jwtSecret: JWT_SECRET,
+  sendToUser,
+  broadcastToChatAll,
+  publicChatPayload,
+  publicChatPayloadForViewer,
+  recordChatSystemEvent,
+  pushFeature,
+});
 
 function canManageDestructiveChat(chat, user) {
   if (!chat || !user) return false;
@@ -2048,7 +2068,14 @@ function decorateChatListRows(rows, viewerUserId) {
     delete chat.invite_token_created_at;
     Object.assign(chat, chatPreferencesPayload(chat));
     Object.assign(chat, chatSidebarPinPayload(chat));
-    if (isNotesChatRow(chat)) {
+    if (isDocumentChatRow(chat)) {
+      chat.is_document = 1;
+      chat.document_title = chat.document_title || chat.name;
+      chat.last_time = chat.document_updated_at || chat.last_time || chat.created_at || null;
+      chat.last_message_id = 0;
+      chat.first_unread_id = null;
+      chat.unread_count = 0;
+    } else if (isNotesChatRow(chat)) {
       Object.assign(chat, notesChatPayload(chat));
     } else if (chat.type === 'private') {
       const other = privatePeerPayload(chat.id, uid);
@@ -2062,9 +2089,11 @@ function decorateChatListRows(rows, viewerUserId) {
     if (chat.type === 'group') {
       chat.avatar_url = chat.avatar_url || null;
     }
-    const lastRead = chat.last_read_id || 0;
-    const unread = db.prepare('SELECT COUNT(*) as c FROM messages WHERE chat_id=? AND id>? AND is_deleted=0 AND user_id!=?').get(chat.id, lastRead, uid);
-    chat.unread_count = unread ? unread.c : 0;
+    if (!isDocumentChatRow(chat)) {
+      const lastRead = chat.last_read_id || 0;
+      const unread = db.prepare('SELECT COUNT(*) as c FROM messages WHERE chat_id=? AND id>? AND is_deleted=0 AND user_id!=?').get(chat.id, lastRead, uid);
+      chat.unread_count = unread ? unread.c : 0;
+    }
     if (!String(chat.last_text || '').trim() && Number(chat.last_voice_message_id || 0) > 0) {
       chat.last_text = chat.last_note_kind === 'video_note' ? 'Видео-заметка' : 'Голосовое сообщение';
     }
@@ -2076,34 +2105,38 @@ app.get('/api/chats', auth, (req, res) => {
   ensureNotesChatForUser(req.user.id);
   const rows = db.prepare(`
     SELECT c.*,
+      d.title as document_title,
+      d.updated_at as document_updated_at,
       cm.notify_enabled,
       cm.sounds_enabled,
       cm.chat_list_pin_order,
       cm.hidden_at,
       cm.hidden_after_message_id,
       CASE WHEN cm.chat_list_pin_order IS NULL THEN 0 ELSE 1 END as is_pinned,
-      (SELECT COALESCE(NULLIF(m.text, ''), NULLIF(vm.transcription_text, ''))
+      CASE WHEN COALESCE(c.is_document,0)=1 THEN NULL ELSE (SELECT COALESCE(NULLIF(m.text, ''), NULLIF(vm.transcription_text, ''))
         FROM messages m
         LEFT JOIN voice_messages vm ON vm.message_id=m.id
         WHERE m.chat_id=c.id AND m.is_deleted=0
-        ORDER BY m.id DESC LIMIT 1) as last_text,
-      (SELECT vm.message_id
+        ORDER BY m.id DESC LIMIT 1) END as last_text,
+      CASE WHEN COALESCE(c.is_document,0)=1 THEN NULL ELSE (SELECT vm.message_id
         FROM messages m
         LEFT JOIN voice_messages vm ON vm.message_id=m.id
         WHERE m.chat_id=c.id AND m.is_deleted=0
-        ORDER BY m.id DESC LIMIT 1) as last_voice_message_id,
-      (SELECT COALESCE(vm.note_kind, 'voice')
+        ORDER BY m.id DESC LIMIT 1) END as last_voice_message_id,
+      CASE WHEN COALESCE(c.is_document,0)=1 THEN NULL ELSE (SELECT COALESCE(vm.note_kind, 'voice')
         FROM messages m
         LEFT JOIN voice_messages vm ON vm.message_id=m.id
         WHERE m.chat_id=c.id AND m.is_deleted=0
-        ORDER BY m.id DESC LIMIT 1) as last_note_kind,
-      (SELECT m.created_at FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) as last_time,
-      (SELECT u.display_name FROM messages m JOIN users u ON u.id=m.user_id WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) as last_user,
-      (SELECT m.file_id FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) as last_file_id,
-      (SELECT MAX(m.id) FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0) as last_message_id,
-      (SELECT MIN(m.id) FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 AND m.id>COALESCE(cm.last_read_id,0) AND m.user_id!=cm.user_id) as first_unread_id,
+        ORDER BY m.id DESC LIMIT 1) END as last_note_kind,
+      CASE WHEN COALESCE(c.is_document,0)=1 THEN d.updated_at ELSE (SELECT m.created_at FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) END as last_time,
+      CASE WHEN COALESCE(c.is_document,0)=1 THEN NULL ELSE (SELECT u.display_name FROM messages m JOIN users u ON u.id=m.user_id WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) END as last_user,
+      CASE WHEN COALESCE(c.is_document,0)=1 THEN NULL ELSE (SELECT m.file_id FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) END as last_file_id,
+      CASE WHEN COALESCE(c.is_document,0)=1 THEN 0 ELSE (SELECT MAX(m.id) FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0) END as last_message_id,
+      CASE WHEN COALESCE(c.is_document,0)=1 THEN NULL ELSE (SELECT MIN(m.id) FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 AND m.id>COALESCE(cm.last_read_id,0) AND m.user_id!=cm.user_id) END as first_unread_id,
       cm.last_read_id
-    FROM chats c JOIN chat_members cm ON cm.chat_id=c.id
+    FROM chats c
+    JOIN chat_members cm ON cm.chat_id=c.id
+    LEFT JOIN documents d ON d.chat_id=c.id
     WHERE cm.user_id=?
       AND (
         cm.hidden_after_message_id IS NULL
@@ -2120,34 +2153,7 @@ app.get('/api/chats', auth, (req, res) => {
       c.created_at DESC
   `).all(req.user.id);
 
-  for (const chat of rows) {
-    delete chat.invite_token;
-    delete chat.invite_token_created_at;
-    Object.assign(chat, chatPreferencesPayload(chat));
-    Object.assign(chat, chatSidebarPinPayload(chat));
-    if (isNotesChatRow(chat)) {
-      Object.assign(chat, notesChatPayload(chat));
-    } else if (chat.type === 'private') {
-      const other = privatePeerPayload(chat.id, req.user.id);
-      if (other) {
-        chat.private_user = other;
-        if (Number(other.is_ai_bot) === 0 || !String(chat.name || '').trim()) {
-          chat.name = other.display_name;
-        }
-      }
-    }
-    if (chat.type === 'group') {
-      chat.avatar_url = chat.avatar_url || null;
-    }
-    // Unread count
-    const lastRead = chat.last_read_id || 0;
-    const unread = db.prepare('SELECT COUNT(*) as c FROM messages WHERE chat_id=? AND id>? AND is_deleted=0 AND user_id!=?').get(chat.id, lastRead, req.user.id);
-    chat.unread_count = unread ? unread.c : 0;
-    if (!String(chat.last_text || '').trim() && Number(chat.last_voice_message_id || 0) > 0) {
-      chat.last_text = chat.last_note_kind === 'video_note' ? '\u0412\u0438\u0434\u0435\u043e-\u0437\u0430\u043c\u0435\u0442\u043a\u0430' : '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435';
-    }
-  }
-  res.json(rows);
+  res.json(decorateChatListRows(rows, req.user.id));
 });
 
 app.get('/api/chats/hidden', auth, (req, res) => {
@@ -2155,34 +2161,38 @@ app.get('/api/chats/hidden', auth, (req, res) => {
   if (query.length > 80) return res.status(400).json({ error: 'Search query is too long' });
   const rows = db.prepare(`
     SELECT c.*,
+      d.title as document_title,
+      d.updated_at as document_updated_at,
       cm.notify_enabled,
       cm.sounds_enabled,
       cm.chat_list_pin_order,
       cm.hidden_at,
       cm.hidden_after_message_id,
       CASE WHEN cm.chat_list_pin_order IS NULL THEN 0 ELSE 1 END as is_pinned,
-      (SELECT COALESCE(NULLIF(m.text, ''), NULLIF(vm.transcription_text, ''))
+      CASE WHEN COALESCE(c.is_document,0)=1 THEN NULL ELSE (SELECT COALESCE(NULLIF(m.text, ''), NULLIF(vm.transcription_text, ''))
         FROM messages m
         LEFT JOIN voice_messages vm ON vm.message_id=m.id
         WHERE m.chat_id=c.id AND m.is_deleted=0
-        ORDER BY m.id DESC LIMIT 1) as last_text,
-      (SELECT vm.message_id
+        ORDER BY m.id DESC LIMIT 1) END as last_text,
+      CASE WHEN COALESCE(c.is_document,0)=1 THEN NULL ELSE (SELECT vm.message_id
         FROM messages m
         LEFT JOIN voice_messages vm ON vm.message_id=m.id
         WHERE m.chat_id=c.id AND m.is_deleted=0
-        ORDER BY m.id DESC LIMIT 1) as last_voice_message_id,
-      (SELECT COALESCE(vm.note_kind, 'voice')
+        ORDER BY m.id DESC LIMIT 1) END as last_voice_message_id,
+      CASE WHEN COALESCE(c.is_document,0)=1 THEN NULL ELSE (SELECT COALESCE(vm.note_kind, 'voice')
         FROM messages m
         LEFT JOIN voice_messages vm ON vm.message_id=m.id
         WHERE m.chat_id=c.id AND m.is_deleted=0
-        ORDER BY m.id DESC LIMIT 1) as last_note_kind,
-      (SELECT m.created_at FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) as last_time,
-      (SELECT u.display_name FROM messages m JOIN users u ON u.id=m.user_id WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) as last_user,
-      (SELECT m.file_id FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) as last_file_id,
-      (SELECT MAX(m.id) FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0) as last_message_id,
-      (SELECT MIN(m.id) FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 AND m.id>COALESCE(cm.last_read_id,0) AND m.user_id!=cm.user_id) as first_unread_id,
+        ORDER BY m.id DESC LIMIT 1) END as last_note_kind,
+      CASE WHEN COALESCE(c.is_document,0)=1 THEN d.updated_at ELSE (SELECT m.created_at FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) END as last_time,
+      CASE WHEN COALESCE(c.is_document,0)=1 THEN NULL ELSE (SELECT u.display_name FROM messages m JOIN users u ON u.id=m.user_id WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) END as last_user,
+      CASE WHEN COALESCE(c.is_document,0)=1 THEN NULL ELSE (SELECT m.file_id FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) END as last_file_id,
+      CASE WHEN COALESCE(c.is_document,0)=1 THEN 0 ELSE (SELECT MAX(m.id) FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0) END as last_message_id,
+      CASE WHEN COALESCE(c.is_document,0)=1 THEN NULL ELSE (SELECT MIN(m.id) FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 AND m.id>COALESCE(cm.last_read_id,0) AND m.user_id!=cm.user_id) END as first_unread_id,
       cm.last_read_id
-    FROM chats c JOIN chat_members cm ON cm.chat_id=c.id
+    FROM chats c
+    JOIN chat_members cm ON cm.chat_id=c.id
+    LEFT JOIN documents d ON d.chat_id=c.id
     WHERE cm.user_id=?
       AND cm.hidden_after_message_id IS NOT NULL
     ORDER BY
@@ -2196,6 +2206,7 @@ app.get('/api/chats/hidden', auth, (req, res) => {
       if (!query) return true;
       return [
         chat.name || '',
+        chat.document_title || '',
         chat.private_user?.display_name || '',
         chat.private_user?.username || '',
         chat.private_user?.ai_bot_mention || '',
@@ -2879,7 +2890,8 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
 
   if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
-  const chat = db.prepare('SELECT id, created_at FROM chats WHERE id=?').get(chatId);
+  const chat = db.prepare('SELECT id, created_at, is_document FROM chats WHERE id=?').get(chatId);
+  if (isDocumentChatRow(chat)) return res.status(400).json({ error: 'Documents do not have chat messages' });
 
   const selectSql = `
     SELECT m.*, u.username, u.display_name, u.avatar_color, u.avatar_url,
@@ -3032,11 +3044,12 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   const riskAccepted = aiImageRiskAccepted === true || aiImageRiskAccepted === 1 || aiImageRiskAccepted === '1';
   const aiResponseModeHint = normalizeAiResponseModeHint(ai_response_mode_hint);
   const aiDocumentFormatHint = normalizeAiDocumentFormatHint(ai_document_format_hint);
-  const chat = db.prepare('SELECT id,is_notes FROM chats WHERE id=?').get(chatId);
+  const chat = db.prepare('SELECT id,is_notes,is_document FROM chats WHERE id=?').get(chatId);
 
   if (!chat) return res.status(404).json({ error: 'Chat not found' });
   if (!db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
+  if (isDocumentChatRow(chat)) return res.status(400).json({ error: 'Documents do not have chat messages' });
   if (clientId) {
     const existing = db.prepare('SELECT id FROM messages WHERE chat_id=? AND user_id=? AND client_id=?').get(chatId, req.user.id, clientId);
     if (existing) return res.json(hydrateMessageById(existing.id, req.user.id));
@@ -4449,6 +4462,10 @@ app.get('/call/:inviteToken', (_req, res) => {
 
 app.get('/join/:inviteToken', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.get('/doc/:token', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'document.html'));
 });
 
 app.get('*', (req, res) => {

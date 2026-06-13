@@ -222,6 +222,29 @@
       if (!sameChat) actions.closeChatHeaderActions?.();
       const explicitAnchorId = Number(options?.anchorMessageId || 0);
       const suppressHistoryPush = Boolean(options?.suppressHistoryPush);
+      if (actions.isDocumentChat?.(chat)) {
+        const { seq } = beginChatOpenTransition(targetChatId);
+        try {
+          if (previousChatId && previousChatId !== targetChatId) actions.saveComposerDraft?.(previousChatId);
+          actions.closeDocumentMode?.();
+          setCurrentChatId(targetChatId);
+          setCurrentChat(chat);
+          setStateMessages([]);
+          hasMore = false;
+          setHasMoreAfter(false);
+          setHasMoreBefore(false);
+          await actions.openDocument?.(targetChatId, {
+            chat,
+            previousChatId,
+            suppressHistoryPush,
+            seq,
+          });
+        } finally {
+          endChatOpenTransition(seq, targetChatId);
+        }
+        return;
+      }
+      actions.closeDocumentMode?.();
       const { seq, controller } = beginChatOpenTransition(targetChatId);
       let restoreAnchor = null;
       let cachedMsgs = [];

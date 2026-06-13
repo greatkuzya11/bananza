@@ -141,7 +141,7 @@ test('performance baseline helper is loaded early and initial app scripts stay b
   assert.ok(appScripts.includes('/js/app/performance.js'), 'performance helper must be in the app script graph');
   assert.ok(appScripts.includes('/js/app/feature-loader.js'), 'feature loader must be in the app script graph');
   assert.ok(appScripts.includes('/js/app/feature-registry.js'), 'feature registry must be in the app script graph');
-  assert.ok(appScripts.length <= 95, `initial /js/app script count ${appScripts.length} should stay at or below the lazy-load target`);
+  assert.ok(appScripts.length <= 96, `initial /js/app script count ${appScripts.length} should stay at or below the lazy-load target`);
   [
     '/js/app/admin/bot-audit.js',
     '/js/app/admin/backup.js',
