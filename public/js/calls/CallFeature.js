@@ -1448,6 +1448,7 @@
       copyLinkBtn.classList.toggle('hidden', !canCopy);
       copyLinkBtn.disabled = Boolean(state.joining || state.prejoinEnding || state.copyingCallLink);
       copyLinkBtn.textContent = t('Copy call link');
+      copyLinkBtn.closest('.call-prejoin-actions')?.classList.toggle('has-copy-link', canCopy);
     }
     if (avatar) {
       const name = currentUser()?.display_name || t('You');

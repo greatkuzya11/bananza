@@ -369,10 +369,25 @@
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, .82fr);
 }
 
+.call-prejoin-actions.has-copy-link,
+.call-prejoin-actions.has-copy-link.has-end-call {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.call-prejoin-actions.has-copy-link #callPrejoinCopyLinkBtn,
+.call-prejoin-actions.has-copy-link.has-end-call #callPrejoinCancelBtn {
+  grid-column: 1 / -1;
+}
+
 .call-prejoin-actions .call-action-btn {
   width: 100%;
   min-width: 0;
   padding: 0 10px;
+  min-height: 46px;
+  line-height: 1.15;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
 }
 
 .call-device-list label {
