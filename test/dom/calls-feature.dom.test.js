@@ -309,7 +309,8 @@ function setVideoIntrinsicSize(video, width, height) {
 }
 
 function createMockVideoTrack(window, { width, height }) {
-  return {
+  let attachCount = 0;
+  const track = {
     kind: 'video',
     source: 'camera',
     dimensions: { width, height },
@@ -320,13 +321,22 @@ function createMockVideoTrack(window, { width, height }) {
       readyState: 'live',
       getSettings: () => ({ width, height }),
     },
-    attach() {
-      const video = window.document.createElement('video');
+    get attachCount() {
+      return attachCount;
+    },
+    attach(element = null) {
+      attachCount += 1;
+      const video = element || window.document.createElement('video');
       setVideoIntrinsicSize(video, width, height);
       video.play = () => Promise.resolve();
       return video;
     },
+    detach(element = null) {
+      if (element) return element;
+      return [];
+    },
   };
+  return track;
 }
 
 function createMockParticipant(window, { identity, name, video = null, isLocal = false }) {
@@ -1369,6 +1379,129 @@ test('CallFeature marks landscape active call tiles from video geometry', async 
   assert.equal(tile.dataset.videoOrientation, 'landscape');
   assert.equal(tile.classList.contains('is-video-landscape'), true);
   assert.equal(tile.style.getPropertyValue('--call-tile-aspect'), '1280 / 720');
+});
+
+test('CallFeature keeps attached video elements across call rerenders', async (t) => {
+  const state = defaultState({
+    user: { id: 1, display_name: 'Alice', is_admin: 1 },
+    features: {
+      calls_enabled: true,
+      livekit_ready: true,
+      allow_private_calls: true,
+      allow_group_calls: true,
+      ring_timeout_ms: 60000,
+      screen_share_enabled: true,
+      ringtone_enabled: true,
+      call_messages_enabled: true,
+      max_call_participants: 20,
+    },
+  });
+  state.chatCall = {
+    id: 101,
+    chat_id: state.chat.id,
+    chat_name: state.chat.name,
+    participant_count: 2,
+    started_by: 2,
+    status: 'active',
+    participants: [
+      { user_id: 1, display_name: 'Alice', username: 'alice', state: 'joined' },
+      { user_id: 2, display_name: 'Bob', username: 'bob', state: 'joined' },
+    ],
+  };
+  const dom = await bootCallFeature(state);
+  t.after(() => dom.window.close());
+  const roomState = installMockLiveKitRoom(dom, {
+    localVideo: { width: 1280, height: 720 },
+    remoteVideos: [
+      { identity: 'user:2', name: 'Bob', video: { width: 1280, height: 720 } },
+    ],
+  });
+
+  dom.window.BananzaCallHooks.handleWSMessage({ type: 'call_updated', call: state.chatCall });
+  dom.window.document.getElementById('callBannerJoin').click();
+  await waitForCondition(dom.window, () => !dom.window.document.getElementById('callPrejoin').classList.contains('hidden'));
+  dom.window.document.getElementById('callPrejoinJoinBtn').click();
+  await waitForCondition(dom.window, () => roomState.isConnected());
+
+  const grid = dom.window.document.getElementById('callGrid');
+  await waitForCondition(dom.window, () => grid.querySelector('[data-call-tile-key="user:2"] video'));
+  await waitForMs(dom.window, 720);
+  const remoteParticipant = roomState.getRemoteParticipant('user:2');
+  const remoteTrack = remoteParticipant.videoTrackPublications.get('camera').track;
+  const remoteTile = grid.querySelector('[data-call-tile-key="user:2"]');
+  const remoteVideo = remoteTile.querySelector('video');
+
+  assert.equal(remoteTrack.attachCount, 1);
+  dom.window.BananzaCallHooks.handleWSMessage({ type: 'call_updated', call: { ...state.chatCall } });
+
+  const nextRemoteTile = grid.querySelector('[data-call-tile-key="user:2"]');
+  assert.strictEqual(nextRemoteTile, remoteTile);
+  assert.strictEqual(nextRemoteTile.querySelector('video'), remoteVideo);
+  assert.equal(remoteTrack.attachCount, 1);
+});
+
+test('CallFeature keeps video visible during temporary muted media stream state', async (t) => {
+  const state = defaultState({
+    user: { id: 1, display_name: 'Alice', is_admin: 1 },
+    features: {
+      calls_enabled: true,
+      livekit_ready: true,
+      allow_private_calls: true,
+      allow_group_calls: true,
+      ring_timeout_ms: 60000,
+      screen_share_enabled: true,
+      ringtone_enabled: true,
+      call_messages_enabled: true,
+      max_call_participants: 20,
+    },
+  });
+  state.chatCall = {
+    id: 102,
+    chat_id: state.chat.id,
+    chat_name: state.chat.name,
+    participant_count: 2,
+    started_by: 2,
+    status: 'active',
+    participants: [
+      { user_id: 1, display_name: 'Alice', username: 'alice', state: 'joined' },
+      { user_id: 2, display_name: 'Bob', username: 'bob', state: 'joined' },
+    ],
+  };
+  const dom = await bootCallFeature(state);
+  t.after(() => dom.window.close());
+  const roomState = installMockLiveKitRoom(dom, {
+    localVideo: { width: 1280, height: 720 },
+    remoteVideos: [
+      { identity: 'user:2', name: 'Bob', video: { width: 1280, height: 720 } },
+    ],
+  });
+
+  dom.window.BananzaCallHooks.handleWSMessage({ type: 'call_updated', call: state.chatCall });
+  dom.window.document.getElementById('callBannerJoin').click();
+  await waitForCondition(dom.window, () => !dom.window.document.getElementById('callPrejoin').classList.contains('hidden'));
+  dom.window.document.getElementById('callPrejoinJoinBtn').click();
+  await waitForCondition(dom.window, () => roomState.isConnected());
+
+  const grid = dom.window.document.getElementById('callGrid');
+  await waitForCondition(dom.window, () => grid.querySelector('[data-call-tile-key="user:2"] video'));
+  const remoteParticipant = roomState.getRemoteParticipant('user:2');
+  const remotePublication = remoteParticipant.videoTrackPublications.get('camera');
+  const remoteTrack = remotePublication.track;
+  const remoteTile = grid.querySelector('[data-call-tile-key="user:2"]');
+  const remoteVideo = remoteTile.querySelector('video');
+
+  remoteTrack.mediaStreamTrack.muted = true;
+  dom.window.BananzaCallHooks.handleWSMessage({ type: 'call_updated', call: { ...state.chatCall } });
+  roomState.emit('trackStreamStateChanged', remotePublication, 'paused', remoteParticipant);
+
+  const pausedTile = grid.querySelector('[data-call-tile-key="user:2"]');
+  assert.strictEqual(pausedTile.querySelector('video'), remoteVideo);
+  assert.equal(pausedTile.querySelector('.call-tile-placeholder'), null);
+  assert.equal(remoteTrack.attachCount, 1);
+
+  remoteTrack.mediaStreamTrack.muted = false;
+  roomState.emit('trackStreamStateChanged', remotePublication, 'active', remoteParticipant);
+  assert.strictEqual(grid.querySelector('[data-call-tile-key="user:2"] video'), remoteVideo);
 });
 
 test('CallFeature admin modal saves LiveKit credentials without requiring visible secrets', async (t) => {

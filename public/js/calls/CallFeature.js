@@ -73,6 +73,7 @@
     videoFillTiles: new Set(),
     videoCollapsedTiles: new Set(),
     subscriptionChangingTiles: new Set(),
+    videoTileCache: new Map(),
     focusedVideoTileKey: '',
     speakingTileKeys: new Set(),
     lastTileTap: { key: '', at: 0 },
@@ -1853,7 +1854,8 @@
           return;
         }
       }
-      renderRoomTiles();
+      if (participant) replaceCallTile(participant, false);
+      else renderRoomTiles();
     });
     room.on?.(events.TrackSubscriptionFailed || 'trackSubscriptionFailed', (_trackSid, participant) => {
       addCallDebug('track subscription failed', participant?.identity || '');
@@ -1861,10 +1863,12 @@
     });
     room.on?.(events.TrackUnpublished || 'trackUnpublished', (publication, participant) => {
       addCallDebug('remote track unpublished', `${participant?.identity || ''} ${publication?.kind || publication?.source || ''}`.trim());
+      if (participant && isVideoPublication(publication)) cleanupVideoTileForParticipant(participant, false);
       refreshRoomTilesSoon(participant, false);
     });
     room.on?.(events.TrackUnsubscribed || 'trackUnsubscribed', (track, _publication, participant) => {
       addCallDebug('remote track unsubscribed', `${track?.kind || track?.mediaStreamTrack?.kind || 'unknown'} ${track?.source || ''}`.trim());
+      if (participant && isVideoTrack(track)) cleanupVideoTileForParticipant(participant, false);
       detachTrack(track);
       if (participant) {
         const key = videoTileKey(participant, false);
@@ -1873,7 +1877,8 @@
           return;
         }
       }
-      renderRoomTiles();
+      if (participant) replaceCallTile(participant, false);
+      else renderRoomTiles();
     });
     room.on?.(events.ParticipantConnected || 'participantConnected', (participant) => {
       addCallDebug('participant connected', participant?.identity || '');
@@ -1882,25 +1887,37 @@
     });
     room.on?.(events.ParticipantDisconnected || 'participantDisconnected', (participant) => {
       addCallDebug('participant disconnected', participant?.identity || '');
+      cleanupVideoTileForParticipant(participant, false);
       renderRoomTiles();
     });
-    room.on?.(events.LocalTrackPublished || 'localTrackPublished', (publication) => {
+    room.on?.(events.LocalTrackPublished || 'localTrackPublished', (publication, participant) => {
       addCallDebug('local track published', `${publication?.kind || publication?.track?.kind || 'unknown'} ${publication?.source || publication?.track?.source || ''}`.trim());
       notifyLocalMicrophoneTrackForAiNotes().catch(() => {});
-      renderRoomTiles();
+      replaceCallTile(participant || room.localParticipant, true);
     });
-    room.on?.(events.LocalTrackUnpublished || 'localTrackUnpublished', (publication) => {
+    room.on?.(events.LocalTrackUnpublished || 'localTrackUnpublished', (publication, participant) => {
       addCallDebug('local track unpublished', `${publication?.kind || publication?.track?.kind || 'unknown'} ${publication?.source || publication?.track?.source || ''}`.trim());
+      if (isVideoPublication(publication)) cleanupVideoTileForParticipant(participant || room.localParticipant, true);
       scheduleLocalMediaRetry(3000, { resetCount: true });
-      renderRoomTiles();
+      replaceCallTile(participant || room.localParticipant, true);
     });
     room.on?.(events.TrackMuted || 'trackMuted', (publication, participant) => {
       addCallDebug('track muted', `${participant?.identity || ''} ${publication?.kind || publication?.track?.kind || 'unknown'} ${publication?.source || publication?.track?.source || ''}`.trim());
-      renderRoomTiles();
+      if (isVideoPublication(publication) && participant) cleanupVideoTileForParticipant(participant, isLocalRoomParticipant(participant));
+      if (participant) replaceCallTile(participant, isLocalRoomParticipant(participant));
+      else renderRoomTiles();
     });
     room.on?.(events.TrackUnmuted || 'trackUnmuted', (publication, participant) => {
       addCallDebug('track unmuted', `${participant?.identity || ''} ${publication?.kind || publication?.track?.kind || 'unknown'} ${publication?.source || publication?.track?.source || ''}`.trim());
-      refreshRoomTilesSoon(participant, participant?.isLocal === true);
+      refreshRoomTilesSoon(participant, isLocalRoomParticipant(participant));
+    });
+    room.on?.(events.TrackStreamStateChanged || 'trackStreamStateChanged', (publication, streamState, participant) => {
+      addCallDebug('track stream state', `${participant?.identity || ''} ${publication?.kind || publication?.track?.kind || 'unknown'} ${streamState || ''}`.trim());
+      retryParticipantVideoPlayback(participant, false);
+    });
+    room.on?.(events.VideoPlaybackStatusChanged || 'videoPlaybackChanged', () => {
+      addCallDebug('video playback status');
+      retryAllCallTilePlayback();
     });
     room.on?.(events.ActiveSpeakersChanged || 'activeSpeakersChanged', (speakers = []) => {
       addCallDebug('active speakers', speakers.map((participant) => participant?.identity || participant?.name || '').filter(Boolean).join(', '));
@@ -2141,9 +2158,7 @@
   }
 
   function attachSubscribedTrack(track) {
-    const LK = window.LivekitClient || {};
-    const kind = track?.kind || track?.mediaStreamTrack?.kind;
-    if (kind === 'audio' || track?.source === LK.Track?.Source?.Microphone) {
+    if (isAudioTrack(track)) {
       const audio = track.attach?.();
       if (audio) {
         audio.autoplay = true;
@@ -2159,7 +2174,9 @@
     try {
       track?.detach?.().forEach((el) => el.remove());
     } catch {}
-    document.querySelectorAll('[data-call-remote-audio="1"]').forEach((el) => el.remove());
+    if (isAudioTrack(track)) {
+      document.querySelectorAll('[data-call-remote-audio="1"]').forEach((el) => el.remove());
+    }
   }
 
   async function disconnectRoom(options = {}) {
@@ -2176,6 +2193,7 @@
     state.videoCollapsedTiles.clear();
     state.videoFillTiles.clear();
     state.subscriptionChangingTiles.clear();
+    cleanupVideoTileCache();
     state.focusedVideoTileKey = '';
     clearMinimizedDragTimer();
     state.minimizedPosition = null;
@@ -2434,6 +2452,37 @@
     return null;
   }
 
+  function trackKind(track) {
+    return String(track?.kind || track?.mediaStreamTrack?.kind || '').toLowerCase();
+  }
+
+  function publicationKind(publication) {
+    return String(publication?.kind || publication?.track?.kind || publication?.track?.mediaStreamTrack?.kind || '').toLowerCase();
+  }
+
+  function isAudioTrack(track) {
+    const LK = window.LivekitClient || {};
+    return trackKind(track) === 'audio' || track?.source === LK.Track?.Source?.Microphone;
+  }
+
+  function isVideoTrack(track) {
+    if (!track) return false;
+    const kind = trackKind(track);
+    if (kind) return kind !== 'audio';
+    const source = String(track?.source || '').toLowerCase();
+    if (source) return !source.includes('microphone') && !source.includes('audio');
+    return false;
+  }
+
+  function isVideoPublication(publication) {
+    if (!publication) return false;
+    const kind = publicationKind(publication);
+    if (kind) return kind !== 'audio';
+    const source = String(publication?.source || publication?.track?.source || '').toLowerCase();
+    if (source) return !source.includes('microphone') && !source.includes('audio');
+    return false;
+  }
+
   function firstVisibleVideoTrack(participant) {
     const publications = participant?.videoTrackPublications || participant?.trackPublications;
     if (!publications?.values) return null;
@@ -2441,12 +2490,94 @@
       const track = publication?.track;
       const kind = track?.kind || track?.mediaStreamTrack?.kind;
       const mediaTrack = track?.mediaStreamTrack;
-      const isMuted = Boolean(publication?.isMuted || publication?.muted || track?.isMuted || mediaTrack?.muted);
+      const isMuted = Boolean(publication?.isMuted || publication?.muted || track?.isMuted);
       const isLive = !mediaTrack || mediaTrack.readyState === 'live';
-      const isEnabled = !mediaTrack || mediaTrack.enabled !== false;
+      const isEnabled = publication?.isEnabled !== false && (!mediaTrack || mediaTrack.enabled !== false);
       if (track && kind !== 'audio' && !isMuted && isLive && isEnabled) return track;
     }
     return null;
+  }
+
+  function cleanupVideoTileCacheEntry(key) {
+    const tileKey = String(key || '');
+    const entry = state.videoTileCache.get(tileKey);
+    if (!entry) return;
+    try {
+      entry.cleanup?.();
+    } catch {}
+    try {
+      entry.track?.detach?.(entry.video);
+    } catch {}
+    try {
+      entry.video?.remove?.();
+    } catch {}
+    state.videoTileCache.delete(tileKey);
+  }
+
+  function cleanupVideoTileCache(keys = null) {
+    const keep = keys instanceof Set ? keys : null;
+    Array.from(state.videoTileCache.keys()).forEach((key) => {
+      if (!keep || !keep.has(key)) cleanupVideoTileCacheEntry(key);
+    });
+  }
+
+  function cleanupVideoTileForParticipant(participant, local = false) {
+    if (!participant) return;
+    cleanupVideoTileCacheEntry(videoTileKey(participant, local));
+  }
+
+  function configureCallTileVideo(video, local) {
+    if (!video) return video;
+    video.autoplay = true;
+    video.playsInline = true;
+    video.setAttribute('playsinline', '');
+    video.muted = Boolean(local);
+    video.controls = false;
+    video.removeAttribute('controls');
+    video.preload = 'auto';
+    return video;
+  }
+
+  function attachCallTileVideo(tile, tileKey, track, local) {
+    if (!tile || !tileKey || !track?.attach) return null;
+    let entry = state.videoTileCache.get(tileKey);
+    if (entry && entry.track !== track) {
+      cleanupVideoTileCacheEntry(tileKey);
+      entry = null;
+    }
+    if (!entry) {
+      let video = document.createElement('video');
+      const attached = track.attach(video);
+      if (attached?.nodeType === 1) video = attached;
+      configureCallTileVideo(video, local);
+      entry = { track, video, cleanup: null, tile: null };
+      state.videoTileCache.set(tileKey, entry);
+    }
+    configureCallTileVideo(entry.video, local);
+    if (entry.video.parentElement !== tile) tile.prepend(entry.video);
+    if (entry.tile !== tile) {
+      try {
+        entry.cleanup?.();
+      } catch {}
+      entry.cleanup = bindCallTileVideoGeometry(tile, entry.video, track);
+      entry.tile = tile;
+    } else {
+      applyCallTileVideoGeometry(tile, entry.video, track);
+    }
+    entry.video.play?.().catch(() => {});
+    return entry.video;
+  }
+
+  function retryParticipantVideoPlayback(participant, local = false) {
+    if (!participant) return;
+    const entry = state.videoTileCache.get(videoTileKey(participant, local));
+    entry?.video?.play?.().catch(() => {});
+  }
+
+  function retryAllCallTilePlayback() {
+    state.videoTileCache.forEach((entry) => {
+      entry?.video?.play?.().catch(() => {});
+    });
   }
 
   function videoTileKey(participant, local = false) {
@@ -2705,13 +2836,18 @@
   }
 
   function bindCallTileVideoGeometry(tile, video, track) {
-    if (!tile || !video) return;
+    if (!tile || !video) return () => {};
     const refresh = () => applyCallTileVideoGeometry(tile, video, track);
     refresh();
     ['loadedmetadata', 'loadeddata', 'resize'].forEach((eventName) => {
       video.addEventListener(eventName, refresh);
     });
     window.requestAnimationFrame?.(refresh);
+    return () => {
+      ['loadedmetadata', 'loadeddata', 'resize'].forEach((eventName) => {
+        video.removeEventListener(eventName, refresh);
+      });
+    };
   }
 
   function updateVideoFocusButton(button, focused) {
@@ -2723,6 +2859,7 @@
   }
 
   function renderVideoFitButton(tile, key, focused) {
+    tile?.querySelector?.(':scope > .call-tile-fit-btn')?.remove();
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'call-tile-fit-btn call-icon-fill';
@@ -2831,25 +2968,68 @@
     setRemoteVideoCollapsed(participant, key, collapsed);
   }
 
+  function ensureCallTilePlaceholder(tile, title = '') {
+    let placeholder = tile?.querySelector?.(':scope > .call-tile-placeholder');
+    if (!placeholder) {
+      placeholder = document.createElement('div');
+      placeholder.className = 'call-tile-placeholder';
+      placeholder.setAttribute('aria-hidden', 'true');
+      tile.prepend(placeholder);
+    }
+    placeholder.title = title || '';
+    placeholder.textContent = BANANA_ICON;
+    return placeholder;
+  }
+
+  function clearCallTileVideo(tile, tileKey) {
+    cleanupVideoTileCacheEntry(tileKey);
+    tile?.querySelector?.(':scope > video')?.remove();
+    tile?.querySelector?.(':scope > .call-tile-fit-btn')?.remove();
+    tile?.removeAttribute?.('data-video-orientation');
+    tile?.classList?.remove('is-video-portrait', 'is-video-landscape', 'is-video-square');
+    tile?.style?.removeProperty('--call-tile-aspect');
+  }
+
+  function bindCallTileInteractions(tile) {
+    if (!tile || tile.__bananzaCallTileBound) return;
+    tile.__bananzaCallTileBound = true;
+    tile.addEventListener('dblclick', (event) => {
+      if (event.target?.closest?.('button')) return;
+      event.preventDefault();
+      handleVideoTileDoubleTap(tile, tile.dataset.callTileKey || '', tile.classList.contains('is-video-focusable'));
+    });
+    tile.addEventListener('touchend', (event) => {
+      if (event.target?.closest?.('button')) return;
+      const tileKey = tile.dataset.callTileKey || '';
+      const now = Date.now();
+      const isDoubleTap = state.lastTileTap.key === tileKey && now - state.lastTileTap.at < 320;
+      state.lastTileTap = { key: tileKey, at: now };
+      if (!isDoubleTap) return;
+      event.preventDefault();
+      handleVideoTileDoubleTap(tile, tileKey, tile.classList.contains('is-video-focusable'));
+    }, { passive: false });
+  }
+
   function replaceCallTile(participant, local = false) {
     const grid = document.getElementById('callGrid');
-    if (!grid) return;
+    if (!grid || !participant) return;
     const key = videoTileKey(participant, local);
     const current = Array.from(grid.children).find((item) => item.dataset.callTileKey === key);
-    if (!current) return;
-    current.replaceWith(renderCallTile(participant, local));
+    const next = renderCallTile(participant, local, current || null);
+    if (!current) grid.appendChild(next);
     updateCallGridLayout(grid);
     applyVideoFocusClasses();
     applySpeakingTileClasses();
   }
 
-  function renderCallTile(participant, local) {
-    const tile = document.createElement('div');
+  function renderCallTile(participant, local, existingTile = null) {
+    const tile = existingTile || document.createElement('div');
     tile.className = 'call-tile';
     const meta = callParticipantForRoomParticipant(participant, local);
     const name = meta?.display_name || meta?.username || getParticipantName(participant, local ? t('You') : t('Participant'));
     const tileKey = videoTileKey(participant, local);
     tile.dataset.callTileKey = tileKey;
+    tile.querySelectorAll(':scope > .call-tile-name, :scope > .call-tile-fit-btn').forEach((item) => item.remove());
     const isCollapsed = state.videoCollapsedTiles.has(tileKey);
     const track = isCollapsed ? null : firstVisibleVideoTrack(participant);
     if (state.focusedVideoTileKey === tileKey && !canFocusVideoTile(local, isCollapsed, track)) {
@@ -2861,25 +3041,19 @@
     tile.classList.toggle('is-video-fill', isFill);
     tile.classList.toggle('is-video-collapsed', isCollapsed);
     tile.classList.toggle('is-speaking', state.speakingTileKeys.has(tileKey));
+    let attachedVideo = null;
     if (track?.attach) {
       try {
-        const video = track.attach();
-        video.autoplay = true;
-        video.playsInline = true;
-        video.setAttribute('playsinline', '');
-        video.muted = Boolean(local);
-        video.controls = false;
-        video.removeAttribute('controls');
-        video.preload = 'auto';
-        tile.appendChild(video);
-        bindCallTileVideoGeometry(tile, video, track);
-        video.play?.().catch(() => {});
+        tile.querySelector(':scope > .call-tile-placeholder')?.remove();
+        attachedVideo = attachCallTileVideo(tile, tileKey, track, local);
         renderVideoFitButton(tile, tileKey, isFocused);
       } catch {
-        tile.innerHTML = bananaTilePlaceholder(name);
+        clearCallTileVideo(tile, tileKey);
+        ensureCallTilePlaceholder(tile, name);
       }
     } else {
-      tile.innerHTML = bananaTilePlaceholder(name);
+      clearCallTileVideo(tile, tileKey);
+      ensureCallTilePlaceholder(tile, name);
     }
     const label = document.createElement('div');
     label.className = 'call-tile-name';
@@ -2901,22 +3075,9 @@
     });
     label.appendChild(collapseBtn);
     tile.appendChild(label);
-    const focusable = canFocusVideoTile(local, isCollapsed, track);
+    const focusable = Boolean(attachedVideo && canFocusVideoTile(local, isCollapsed, track));
     tile.classList.toggle('is-video-focusable', focusable);
-    tile.addEventListener('dblclick', (event) => {
-      if (event.target?.closest?.('button')) return;
-      event.preventDefault();
-      handleVideoTileDoubleTap(tile, tileKey, focusable);
-    });
-    tile.addEventListener('touchend', (event) => {
-      if (event.target?.closest?.('button')) return;
-      const now = Date.now();
-      const isDoubleTap = state.lastTileTap.key === tileKey && now - state.lastTileTap.at < 320;
-      state.lastTileTap = { key: tileKey, at: now };
-      if (!isDoubleTap) return;
-      event.preventDefault();
-      handleVideoTileDoubleTap(tile, tileKey, focusable);
-    }, { passive: false });
+    bindCallTileInteractions(tile);
     return tile;
   }
 
@@ -2984,6 +3145,7 @@
   function renderVoiceRoomTiles() {
     const grid = document.getElementById('callGrid');
     if (!grid) return;
+    cleanupVideoTileCache();
     clearCallFitGridLayout(grid);
     grid.classList.add('is-voice-room-grid');
     grid.classList.remove('is-video-focus-mode');
@@ -3029,7 +3191,6 @@
       return;
     }
     grid.classList.remove('is-voice-room-grid');
-    grid.replaceChildren();
     const room = state.room;
     const participants = [];
     if (room?.localParticipant) participants.push({ participant: room.localParticipant, local: true });
@@ -3037,6 +3198,8 @@
       for (const participant of room.remoteParticipants.values()) participants.push({ participant, local: false });
     }
     if (!participants.length) {
+      cleanupVideoTileCache();
+      grid.replaceChildren();
       const empty = document.createElement('div');
       empty.className = 'call-tile';
       empty.innerHTML = `${bananaTilePlaceholder(t('Waiting'))}<div class="call-tile-name">${escapeHtml(t('Waiting'))}</div>`;
@@ -3045,8 +3208,36 @@
       renderParticipantsPanel();
       return;
     }
-    participants.forEach(({ participant, local }) => {
-      grid.appendChild(renderCallTile(participant, local));
+    const existingTiles = new Map();
+    Array.from(grid.children).forEach((child) => {
+      if (child?.classList?.contains('call-tile') && child.dataset.callTileKey) {
+        existingTiles.set(child.dataset.callTileKey, child);
+      } else {
+        child.remove();
+      }
+    });
+    const desiredKeys = new Set();
+    const desiredTiles = participants.map(({ participant, local }) => {
+      const key = videoTileKey(participant, local);
+      desiredKeys.add(key);
+      return renderCallTile(participant, local, existingTiles.get(key) || null);
+    });
+    Array.from(grid.children).forEach((child) => {
+      const key = child?.dataset?.callTileKey || '';
+      if (!key || desiredKeys.has(key)) return;
+      cleanupVideoTileCacheEntry(key);
+      child.remove();
+    });
+    cleanupVideoTileCache(desiredKeys);
+    if (state.focusedVideoTileKey && !desiredKeys.has(state.focusedVideoTileKey)) {
+      const staleFocusKey = state.focusedVideoTileKey;
+      state.focusedVideoTileKey = '';
+      state.videoFillTiles.delete(staleFocusKey);
+    }
+    desiredTiles.forEach((tile, index) => {
+      if (grid.children[index] !== tile) {
+        grid.insertBefore(tile, grid.children[index] || null);
+      }
     });
     updateCallGridLayout(grid);
     applyVideoFocusClasses();
