@@ -82,6 +82,10 @@ function installCallBridge(dom, state) {
         }
         return { call: state.chatCall };
       }
+      if (url === `/api/calls/${state.chatCall?.id}/external-link`) {
+        state.externalLinkRequests = (state.externalLinkRequests || 0) + 1;
+        return { external_url: state.externalUrl || `https://example.test/call/${state.chatCall.id}` };
+      }
       if (url === '/api/admin/call-settings' && !opts.method) return state.adminCallSettings;
       if (url === '/api/admin/call-settings' && opts.method === 'PUT') {
         state.savedAdminPayload = opts.body || {};
@@ -136,6 +140,9 @@ function installCallBridge(dom, state) {
     registerManagedModal: () => {},
     recoverChatViewportLayout: (options = {}) => {
       state.viewportRecoveries.push(options);
+    },
+    showToast: (message) => {
+      state.toasts = [...(state.toasts || []), message];
     },
     t: (key, params = {}) => window.BananzaI18n?.t?.(key, params) || key,
   };
@@ -537,6 +544,82 @@ test('CallFeature hides prejoin end button for non-initiators and device selecti
   await dom.window.BananzaCallHooks.openPrejoin(state.chatCall, { mode: 'devices' });
   assert.equal(dom.window.document.getElementById('callBanner').classList.contains('hidden'), true);
   assert.equal(dom.window.document.getElementById('callPrejoinEndBtn').classList.contains('hidden'), true);
+});
+
+test('CallFeature copies call links from prejoin and active surface', async (t) => {
+  const state = defaultState({
+    chat: {
+      id: 141,
+      type: 'group',
+      name: 'Solo call room',
+      is_notes: 0,
+    },
+    features: {
+      calls_enabled: true,
+      livekit_ready: true,
+      allow_private_calls: true,
+      allow_group_calls: true,
+      ring_timeout_ms: 60000,
+      screen_share_enabled: true,
+      ringtone_enabled: true,
+      call_messages_enabled: true,
+      max_call_participants: 20,
+    },
+    externalUrl: 'https://example.test/call/solo-room-token',
+    createdCall: {
+      id: 1410,
+      chat_id: 141,
+      chat_name: 'Solo call room',
+      media_kind: 'video',
+      room_mode: 'room',
+      participant_count: 0,
+      started_by: 1,
+      status: 'active',
+      participants: [
+        { user_id: 1, display_name: 'Alice', username: 'alice', state: 'invited' },
+      ],
+    },
+  });
+  const dom = await bootCallFeature(state);
+  t.after(() => dom.window.close());
+
+  const copied = [];
+  Object.defineProperty(dom.window.navigator, 'clipboard', {
+    configurable: true,
+    value: {
+      writeText: async (text) => {
+        copied.push(text);
+      },
+    },
+  });
+
+  const roomState = installMockLiveKitRoom(dom);
+  const startBtn = dom.window.document.getElementById('callStartBtn');
+  await waitForCondition(dom.window, () => !startBtn.classList.contains('hidden'));
+  startBtn.click();
+  await waitForCondition(dom.window, () => state.startedCallPayload?.media_kind === 'video');
+  await waitForCondition(dom.window, () => !dom.window.document.getElementById('callPrejoin').classList.contains('hidden'));
+
+  const prejoinCopy = dom.window.document.getElementById('callPrejoinCopyLinkBtn');
+  assert.equal(prejoinCopy.classList.contains('hidden'), false);
+  prejoinCopy.click();
+  await waitForCondition(dom.window, () => copied.length === 1);
+  assert.deepEqual(copied, [state.externalUrl]);
+  assert.equal(state.externalLinkRequests, 1);
+  assert.equal(dom.window.document.getElementById('callPrejoinStatus').textContent, dom.window.BananzaI18n.t('Call link copied'));
+
+  dom.window.document.getElementById('callPrejoinJoinBtn').click();
+  await waitForCondition(dom.window, () => roomState.isConnected());
+  await waitForCondition(dom.window, () => !dom.window.document.getElementById('callSurface').classList.contains('hidden'));
+
+  const surfaceCopy = dom.window.document.getElementById('callCopyLinkBtn');
+  assert.equal(surfaceCopy.classList.contains('hidden'), false);
+  assert.ok(surfaceCopy.querySelector('.call-icon'));
+  surfaceCopy.click();
+  await waitForCondition(dom.window, () => copied.length === 2);
+  assert.deepEqual(copied, [state.externalUrl, state.externalUrl]);
+  assert.equal(state.externalLinkRequests, 2);
+  assert.equal(state.toasts.at(-1), dom.window.BananzaI18n.t('Call link copied'));
 });
 
 test('CallFeature external mode requires guest name and hides internal-only controls', async (t) => {

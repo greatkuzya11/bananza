@@ -287,6 +287,92 @@ test('admin can enable calls and users can run call lifecycle', async () => {
   }
 });
 
+test('single-member group video calls start as external invite rooms', async () => {
+  const { admin } = scenario;
+  await admin.request('/api/admin/call-settings', {
+    method: 'PUT',
+    json: {
+      calls_enabled: true,
+      allow_private_calls: true,
+      allow_group_calls: true,
+      screen_share_enabled: true,
+      ring_timeout_ms: 30000,
+    },
+  });
+
+  const soloGroup = await admin.request('/api/chats', {
+    method: 'POST',
+    json: {
+      name: `Solo Call ${Date.now()}`,
+      type: 'group',
+      memberIds: [],
+    },
+  });
+
+  let createdCallId = 0;
+  try {
+    const created = await admin.request(`/api/chats/${soloGroup.data.id}/calls`, {
+      method: 'POST',
+      json: { media_kind: 'video' },
+      expectedStatus: 201,
+    });
+    createdCallId = Number(created.data.call.id || 0);
+    assert.equal(created.data.call.status, 'active');
+    assert.equal(created.data.call.chat_id, soloGroup.data.id);
+    assert.equal(created.data.call.media_kind, 'video');
+    assert.equal(created.data.call.room_mode, 'room');
+    assert.equal(created.data.call.ring_expires_at, null);
+    assert.equal(created.data.call.participants.length, 1);
+    assert.equal(Number(created.data.call.participants[0].user_id), Number(admin.user.id));
+    assert.equal(created.data.call.participants[0].state, 'invited');
+
+    const activeMessages = await admin.request(`/api/chats/${soloGroup.data.id}/messages`, {
+      searchParams: { meta: 1 },
+    });
+    const activeCard = activeMessages.data.messages.find((message) => Number(message.id) === Number(created.data.call.message_id));
+    assert.ok(activeCard);
+    assert.equal(activeCard.call.room_mode, 'room');
+    assert.equal(activeCard.call_message.room_mode, 'room');
+
+    const externalLink = await admin.request(`/api/calls/${createdCallId}/external-link`, {
+      method: 'POST',
+      json: {},
+    });
+    assert.match(externalLink.data.external_url, /\/call\/[A-Za-z0-9_-]+$/);
+    const inviteToken = externalLink.data.external_url.split('/').pop();
+    assert.ok(inviteToken);
+
+    const publicGuest = createSession(sandbox.baseUrl);
+    const publicStatus = await publicGuest.request(`/api/calls/external/${inviteToken}`);
+    assert.equal(publicStatus.data.ended, false);
+    assert.equal(publicStatus.data.call.id, createdCallId);
+    assert.equal(publicStatus.data.call.media_kind, 'video');
+    assert.equal(publicStatus.data.call.room_mode, 'room');
+    assert.equal(publicStatus.data.call.status, 'active');
+
+    const guestToken = await publicGuest.request(`/api/calls/external/${inviteToken}/token`, {
+      method: 'POST',
+      json: { display_name: 'External Guest' },
+      expectedStatus: 201,
+    });
+    assert.equal(guestToken.data.livekit.url, 'ws://admin-livekit.local:7880');
+    const decodedGuestToken = jwt.decode(guestToken.data.livekit.token) || {};
+    assert.match(decodedGuestToken.sub || '', new RegExp(`^guest:${createdCallId}:`));
+    assert.equal(decodedGuestToken.name, 'External Guest');
+    const guestSources = tokenPublishSources(guestToken.data.livekit.token);
+    assert.equal(guestSources.some((source) => source.includes('camera')), true);
+    assert.equal(guestSources.some((source) => source.includes('microphone')), true);
+  } finally {
+    if (createdCallId) {
+      await admin.request(`/api/calls/${createdCallId}/end`, {
+        method: 'POST',
+        json: {},
+        expectedStatus: [200, 404],
+      });
+    }
+  }
+});
+
 test('voice calls ring privately and group voice rooms are joinable without invites', async () => {
   const { admin, bob, groupChat, privateChat } = scenario;
   await admin.request('/api/admin/call-settings', {

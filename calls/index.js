@@ -2546,7 +2546,7 @@ function createCallFeature({
     if (chat.type === 'private' && humanMembers.length < 2) {
       return boolError(res, 403, 'Calls are unavailable in AI chats', 'ai_private_chat');
     }
-    if (humanMembers.length < 2) {
+    if (chat.type === 'group' && humanMembers.length < 1) {
       return boolError(res, 403, 'Calls need at least two human members', 'not_enough_members');
     }
     if (humanMembers.length > settings.max_call_participants) {
@@ -2866,7 +2866,8 @@ function createCallFeature({
 
     const settings = getCallSettings(db);
     const mediaKind = normalizeCallMediaKind(req.body?.media_kind || req.body?.mediaKind);
-    const roomMode = mediaKind === 'voice' && chat.type === 'group' ? 'room' : 'ringing';
+    const humanMemberCount = members.filter((member) => Number(member.is_ai_bot) === 0).length;
+    const roomMode = chat.type === 'group' && (mediaKind === 'voice' || humanMemberCount === 1) ? 'room' : 'ringing';
     const ringExpiresAt = roomMode === 'room' ? null : new Date(Date.now() + settings.ring_timeout_ms).toISOString();
     let callId;
     let messageId;

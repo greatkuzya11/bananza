@@ -78,6 +78,7 @@
     lastTileTap: { key: '', at: 0 },
     aiNotesTrackNotified: new Set(),
     transcriptModal: { callId: 0, text: '', segments: [] },
+    copyingCallLink: false,
     externalMode: Boolean(EXTERNAL_CONFIG?.inviteToken),
     externalInviteToken: String(EXTERNAL_CONFIG?.inviteToken || '').trim(),
     externalGuest: null,
@@ -553,6 +554,7 @@
             </div>
             <div id="callPrejoinStatus" class="call-prejoin-status"></div>
             <div class="call-inline-actions call-prejoin-actions">
+              <button type="button" id="callPrejoinCopyLinkBtn" class="call-action-btn hidden">${escapeHtml(t('Copy call link'))}</button>
               <button type="button" id="callPrejoinJoinBtn" class="call-action-btn primary">${escapeHtml(t('Join'))}</button>
               <button type="button" id="callPrejoinEndBtn" class="call-action-btn danger hidden">${escapeHtml(t('End'))}</button>
               <button type="button" id="callPrejoinCancelBtn" class="call-action-btn">${escapeHtml(t('Cancel'))}</button>
@@ -570,6 +572,11 @@
         joinCall(state.pendingJoinCall).catch((error) => setPrejoinStatus(error.message || t('Could not join call'), 'error'));
       });
       document.getElementById('callPrejoinCancelBtn')?.addEventListener('click', closePrejoin);
+      document.getElementById('callPrejoinCopyLinkBtn')?.addEventListener('click', () => {
+        copyCurrentCallLink(state.pendingJoinCall, { statusTarget: 'prejoin' }).catch((error) => {
+          setPrejoinStatus(error.message || t('Could not copy call link'), 'error');
+        });
+      });
       document.getElementById('callGuestNameInput')?.addEventListener('input', () => {
         if (state.externalGuest) state.externalGuest.display_name = document.getElementById('callGuestNameInput')?.value || state.externalGuest.display_name;
       });
@@ -636,6 +643,10 @@
               <span class="call-icon" aria-hidden="true"></span>
               <span class="call-control-label">${escapeHtml(t('AI notes'))}</span>
             </button>
+            <button type="button" id="callCopyLinkBtn" class="call-control-btn call-tool-btn call-icon-link" title="${escapeHtml(t('Copy call link'))}" aria-label="${escapeHtml(t('Copy call link'))}">
+              <span class="call-icon" aria-hidden="true"></span>
+              <span class="call-control-label">${escapeHtml(t('Copy call link'))}</span>
+            </button>
             <button type="button" id="callLeaveBtn" class="call-control-btn call-tool-btn call-icon-phone-off danger" title="${escapeHtml(t('Leave'))}" aria-label="${escapeHtml(t('Leave'))}">
               <span class="call-icon" aria-hidden="true"></span>
               <span class="call-control-label">${escapeHtml(t('Leave'))}</span>
@@ -660,6 +671,13 @@
       document.getElementById('callDeviceBtn')?.addEventListener('click', () => openPrejoin(state.currentCall, { keepIncoming: true, mode: 'devices' }).catch(() => {}));
       document.getElementById('callScreenBtn')?.addEventListener('click', toggleScreenShare);
       document.getElementById('callAiNotesBtn')?.addEventListener('click', toggleAiNotes);
+      document.getElementById('callCopyLinkBtn')?.addEventListener('click', () => {
+        copyCurrentCallLink(state.currentCall, { statusTarget: 'surface' }).catch((error) => {
+          const message = error.message || t('Could not copy call link');
+          bridge()?.showToast?.(message);
+          setSurfaceStatus(message);
+        });
+      });
       document.getElementById('callLeaveBtn')?.addEventListener('click', () => leaveCall(false).catch(() => {}));
       document.getElementById('callEndBtn')?.addEventListener('click', () => leaveCall(true).catch(() => {}));
       applyLocalized(surface);
@@ -1346,6 +1364,61 @@
     );
   }
 
+  function canCopyCallLink(call = state.currentCall || state.pendingJoinCall) {
+    if (state.externalMode || !call?.id || call.status !== 'active') return false;
+    const user = currentUser() || {};
+    return Boolean(user.is_admin || Number(user.id || 0) === callStarterId(call));
+  }
+
+  async function writeTextToClipboard(text) {
+    const value = String(text || '');
+    if (!value) return false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+        return true;
+      }
+    } catch {}
+    const textarea = document.createElement('textarea');
+    textarea.value = value;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.top = '-1000px';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      return document.execCommand?.('copy') === true;
+    } catch {
+      return false;
+    } finally {
+      textarea.remove();
+    }
+  }
+
+  async function copyCurrentCallLink(call = state.currentCall || state.pendingJoinCall, options = {}) {
+    if (!canCopyCallLink(call) || state.copyingCallLink) return false;
+    state.copyingCallLink = true;
+    renderPrejoinControls();
+    renderSurfaceControls();
+    try {
+      const data = await api(`/api/calls/${Number(call.id || 0)}/external-link`, { method: 'POST', body: {} });
+      const link = data?.external_url || data?.url || data?.external_path || '';
+      const copied = await writeTextToClipboard(link);
+      const message = copied ? t('Call link copied') : t('Could not copy call link');
+      if (options.statusTarget === 'prejoin') setPrejoinStatus(message, copied ? 'success' : 'error');
+      else {
+        bridge()?.showToast?.(message);
+        setSurfaceStatus(message);
+      }
+      return copied;
+    } finally {
+      state.copyingCallLink = false;
+      renderPrejoinControls();
+      renderSurfaceControls();
+    }
+  }
+
   function renderPrejoinControls() {
     const mic = document.getElementById('callPrejoinMicBtn');
     const camera = document.getElementById('callPrejoinCameraBtn');
@@ -1354,6 +1427,7 @@
     const video = document.getElementById('callPrejoinVideo');
     const endBtn = document.getElementById('callPrejoinEndBtn');
     const cancelBtn = document.getElementById('callPrejoinCancelBtn');
+    const copyLinkBtn = document.getElementById('callPrejoinCopyLinkBtn');
     const guestNameWrap = document.getElementById('callGuestNameWrap');
     const voiceMode = isVoiceCall(state.pendingJoinCall);
     setIconToggleState(mic, state.prejoinMicEnabled, t('Mic'), t('Mic off'));
@@ -1368,6 +1442,12 @@
       endBtn.disabled = Boolean(state.joining || state.prejoinEnding);
       endBtn.textContent = t('End');
       endBtn.closest('.call-prejoin-actions')?.classList.toggle('has-end-call', canEnd);
+    }
+    if (copyLinkBtn) {
+      const canCopy = canCopyCallLink(state.pendingJoinCall) && state.prejoinMode === 'join';
+      copyLinkBtn.classList.toggle('hidden', !canCopy);
+      copyLinkBtn.disabled = Boolean(state.joining || state.prejoinEnding || state.copyingCallLink);
+      copyLinkBtn.textContent = t('Copy call link');
     }
     if (avatar) {
       const name = currentUser()?.display_name || t('You');
@@ -3060,6 +3140,7 @@
     const devices = document.getElementById('callDeviceBtn');
     const screen = document.getElementById('callScreenBtn');
     const aiNotes = document.getElementById('callAiNotesBtn');
+    const copyLink = document.getElementById('callCopyLinkBtn');
     const leave = document.getElementById('callLeaveBtn');
     const end = document.getElementById('callEndBtn');
     const voiceMode = isVoiceCall(state.currentCall);
@@ -3072,6 +3153,9 @@
     participants?.classList.toggle('is-active', state.participantsOpen);
     participants?.setAttribute('aria-pressed', state.participantsOpen ? 'true' : 'false');
     setToolButtonLabel(devices, t('Devices'));
+    setToolButtonLabel(copyLink, t('Copy call link'));
+    copyLink?.classList.toggle('hidden', state.minimized || !canCopyCallLink(state.currentCall));
+    if (copyLink) copyLink.disabled = Boolean(state.copyingCallLink);
     setToolButtonLabel(leave, t('Leave'));
     setToolButtonLabel(end, t('End for everyone'));
     end?.classList.toggle('hidden', state.externalMode);
