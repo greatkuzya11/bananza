@@ -576,6 +576,8 @@ test('call cards render and delegate controls to call hooks', async () => {
   row.__messageData = { id: 1, call: { id: 44, status: 'active', can_join: true, media_kind: 'video', started_by: 1 } };
   row.innerHTML = callCards.renderCallMessageCard(row.__messageData);
   callCards.bindCallMessageControls(row);
+  assert.ok(row.querySelector('.is-video-call-card'));
+  assert.match(row.textContent, /Video call started/);
   row.querySelector('[data-call-card-join]').click();
   await wait(window);
   assert.deepEqual(joined, [44]);
@@ -591,6 +593,36 @@ test('call cards render and delegate controls to call hooks', async () => {
   callCards.bindCallTranscriptMessageControls(transcriptRow);
   transcriptRow.querySelector('[data-call-transcript-run]').click();
   assert.deepEqual(transcripts, [9]);
+
+  const videoRoomRow = document.createElement('div');
+  videoRoomRow.className = 'msg-row';
+  videoRoomRow.__messageData = {
+    id: 2,
+    is_call_message: true,
+    text: 'Video call',
+    call_message: {
+      call_id: 45,
+      status: 'active',
+      can_join: true,
+      media_kind: 'video',
+      room_mode: 'room',
+      started_by: 1,
+    },
+    call: {
+      id: 45,
+      status: 'active',
+      can_join: true,
+      media_kind: 'video',
+      room_mode: 'room',
+      started_by: 1,
+    },
+  };
+  videoRoomRow.innerHTML = callCards.renderCallMessageCard(videoRoomRow.__messageData);
+  assert.ok(videoRoomRow.querySelector('.is-video-call-card'));
+  assert.equal(videoRoomRow.querySelector('.is-voice-call-card'), null);
+  assert.match(videoRoomRow.textContent, /Video call started/);
+  assert.doesNotMatch(videoRoomRow.textContent, /Voice room active/);
+
   dom.window.close();
 });
 

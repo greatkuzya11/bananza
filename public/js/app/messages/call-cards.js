@@ -49,6 +49,7 @@
     function resolveCallMessageMediaKind(msg, ...sources) {
       const fields = sources.map((source) => String(source?.media_kind || source?.mediaKind || '').toLowerCase());
       if (fields.includes('voice')) return 'voice';
+      if (fields.includes('video')) return 'video';
       const texts = [
         msg?.text,
         ...sources.flatMap((source) => [source?.text, source?.title, source?.label]),

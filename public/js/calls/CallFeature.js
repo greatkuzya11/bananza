@@ -1915,6 +1915,16 @@
       addCallDebug('track stream state', `${participant?.identity || ''} ${publication?.kind || publication?.track?.kind || 'unknown'} ${streamState || ''}`.trim());
       retryParticipantVideoPlayback(participant, false);
     });
+    room.on?.(events.TrackSubscriptionStatusChanged || 'trackSubscriptionStatusChanged', (publication, status, participant) => {
+      addCallDebug('track subscription status', `${participant?.identity || ''} ${publication?.kind || publication?.track?.kind || 'unknown'} ${status || ''}`.trim());
+      if (!participant || !isVideoPublication(publication)) return;
+      if (publication?.track) state.subscriptionChangingTiles.delete(videoTileKey(participant, false));
+      replaceCallTile(participant, false);
+    });
+    room.on?.(events.TrackSubscriptionPermissionChanged || 'trackSubscriptionPermissionChanged', (publication, status, participant) => {
+      addCallDebug('track subscription permission', `${participant?.identity || ''} ${publication?.kind || publication?.track?.kind || 'unknown'} ${status || ''}`.trim());
+      if (participant && isVideoPublication(publication)) replaceCallTile(participant, false);
+    });
     room.on?.(events.VideoPlaybackStatusChanged || 'videoPlaybackChanged', () => {
       addCallDebug('video playback status');
       retryAllCallTilePlayback();
@@ -2580,6 +2590,42 @@
     });
   }
 
+  function ensureRemoteVideoSubscription(participant, key) {
+    if (!participant || !key || key === 'local' || state.videoCollapsedTiles.has(key)) return;
+    const publication = firstVideoPublication(participant);
+    const shouldRequest = Boolean(
+      publication
+      && (
+        !publication.track
+        || publication.isEnabled === false
+        || publication.isDesired === false
+        || publication.isSubscribed === false
+      )
+    );
+    if (!shouldRequest || state.subscriptionChangingTiles.has(key)) return;
+    state.subscriptionChangingTiles.add(key);
+    try {
+      publication.setEnabled?.(true);
+      publication.setSubscribed?.(true);
+      addCallDebug('video subscription requested', participant?.identity || key);
+    } catch (error) {
+      addCallDebug('video subscription request failed', error?.message || String(error || ''));
+      state.subscriptionChangingTiles.delete(key);
+      return;
+    }
+    if (publication.track) {
+      window.setTimeout(() => {
+        state.subscriptionChangingTiles.delete(key);
+        replaceCallTile(participant, false);
+      }, 80);
+      return;
+    }
+    window.setTimeout(() => {
+      if (firstVideoPublication(participant)?.track) return;
+      state.subscriptionChangingTiles.delete(key);
+    }, 3500);
+  }
+
   function videoTileKey(participant, local = false) {
     return local ? 'local' : String(participant?.identity || participant?.sid || participant?.name || 'remote');
   }
@@ -3053,6 +3099,7 @@
       }
     } else {
       clearCallTileVideo(tile, tileKey);
+      if (!local && !isCollapsed) ensureRemoteVideoSubscription(participant, tileKey);
       ensureCallTilePlaceholder(tile, name);
     }
     const label = document.createElement('div');

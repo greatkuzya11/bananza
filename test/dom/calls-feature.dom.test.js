@@ -342,13 +342,28 @@ function createMockVideoTrack(window, { width, height }) {
 function createMockParticipant(window, { identity, name, video = null, isLocal = false }) {
   const publications = new Map();
   if (video) {
-    const track = createMockVideoTrack(window, video);
+    const pendingTrack = createMockVideoTrack(window, video);
+    const track = video.subscribed === false ? null : pendingTrack;
     publications.set('camera', {
       kind: 'video',
       source: 'camera',
       track,
+      pendingTrack,
       isMuted: false,
       muted: false,
+      isEnabled: video.enabled !== false,
+      isSubscribed: video.subscribed !== false,
+      setEnabledCalls: 0,
+      setSubscribedCalls: 0,
+      setEnabled(enabled) {
+        this.setEnabledCalls += 1;
+        this.isEnabled = enabled;
+      },
+      setSubscribed(subscribed) {
+        this.setSubscribedCalls += 1;
+        this.isSubscribed = subscribed;
+        if (subscribed && video.attachOnSubscribe) this.track = pendingTrack;
+      },
     });
   }
   return {
@@ -1502,6 +1517,66 @@ test('CallFeature keeps video visible during temporary muted media stream state'
   remoteTrack.mediaStreamTrack.muted = false;
   roomState.emit('trackStreamStateChanged', remotePublication, 'active', remoteParticipant);
   assert.strictEqual(grid.querySelector('[data-call-tile-key="user:2"] video'), remoteVideo);
+});
+
+test('CallFeature requests remote video subscription when a joined participant has no track yet', async (t) => {
+  const state = defaultState({
+    user: { id: 1, display_name: 'Alice', is_admin: 1 },
+    features: {
+      calls_enabled: true,
+      livekit_ready: true,
+      allow_private_calls: true,
+      allow_group_calls: true,
+      ring_timeout_ms: 60000,
+      screen_share_enabled: true,
+      ringtone_enabled: true,
+      call_messages_enabled: true,
+      max_call_participants: 20,
+    },
+  });
+  state.chatCall = {
+    id: 103,
+    chat_id: state.chat.id,
+    chat_name: state.chat.name,
+    participant_count: 2,
+    started_by: 2,
+    status: 'active',
+    participants: [
+      { user_id: 1, display_name: 'Alice', username: 'alice', state: 'joined' },
+      { user_id: 2, display_name: 'Bob', username: 'bob', state: 'joined' },
+    ],
+  };
+  const dom = await bootCallFeature(state);
+  t.after(() => dom.window.close());
+  const roomState = installMockLiveKitRoom(dom, {
+    localVideo: { width: 1280, height: 720 },
+    remoteVideos: [
+      { identity: 'user:2', name: 'Bob', video: { width: 1280, height: 720, subscribed: false } },
+    ],
+  });
+
+  dom.window.BananzaCallHooks.handleWSMessage({ type: 'call_updated', call: state.chatCall });
+  dom.window.document.getElementById('callBannerJoin').click();
+  await waitForCondition(dom.window, () => !dom.window.document.getElementById('callPrejoin').classList.contains('hidden'));
+  dom.window.document.getElementById('callPrejoinJoinBtn').click();
+  await waitForCondition(dom.window, () => roomState.isConnected());
+
+  const grid = dom.window.document.getElementById('callGrid');
+  const remoteParticipant = roomState.getRemoteParticipant('user:2');
+  const remotePublication = remoteParticipant.videoTrackPublications.get('camera');
+  await waitForCondition(dom.window, () => remotePublication.setSubscribedCalls > 0);
+  assert.equal(remotePublication.setEnabledCalls > 0, true);
+
+  const remoteTile = grid.querySelector('[data-call-tile-key="user:2"]');
+  assert.ok(remoteTile.querySelector('.call-tile-placeholder'));
+  assert.equal(remoteTile.querySelector('video'), null);
+
+  remotePublication.track = remotePublication.pendingTrack;
+  roomState.emit('trackSubscribed', remotePublication.track, remotePublication, remoteParticipant);
+
+  await waitForCondition(dom.window, () => grid.querySelector('[data-call-tile-key="user:2"] video'));
+  assert.equal(grid.querySelector('[data-call-tile-key="user:2"] .call-tile-placeholder'), null);
+  assert.equal(remotePublication.pendingTrack.attachCount, 1);
 });
 
 test('CallFeature admin modal saves LiveKit credentials without requiring visible secrets', async (t) => {
