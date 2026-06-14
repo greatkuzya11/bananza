@@ -22,7 +22,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
   const scripts = [...document.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
 
   assert.deepEqual(styles, [
-    '/css/style.css?v=20260614-doc-mobile-topbar1',
+    '/css/style.css?v=20260614-doc-codeblock1',
     '/css/calls.css?v=20260509-call-modal-surface',
     '/css/voice.css',
     '/css/video-notes.css',
@@ -33,7 +33,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
     '/js/i18n.js?v=20260614-doc-settings1',
-    '/js/document-editor.bundle.js?v=20260614-doc-cursors-fresh3',
+    '/js/document-editor.bundle.js?v=20260614-doc-clear-quote1',
     '/js/qip-infium-original.js?v=20260523-qip-infium-original',
     '/js/qip-hd.js?v=20260523-qip-hd',
     '/js/app/namespace.js?v=20260530-app-shell',
@@ -53,7 +53,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/chat-header-actions.js?v=20260531-dom-mobile-shell',
     '/js/app/shell/mobile-composer-guard.js?v=20260601-shell-events',
     '/js/app/shell/events.js?v=20260614-doc-settings1',
-    '/js/app/shell/ui-runtime.js?v=20260614-doc-settings1',
+    '/js/app/shell/ui-runtime.js?v=20260614-doc-bugfix1',
     '/js/app/shell/shell-runtime.js?v=20260614-doc-settings1',
     '/js/app/shell/mobile-runtime-adapters.js?v=20260601-runtime-final',
     '/js/app/modal-manager.js?v=20260531-modal-manager',
@@ -69,7 +69,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/folders/new-folder-tab.js?v=20260531-folders',
     '/js/app/folders/mobile-gestures.js?v=20260601-shell-events',
     '/js/app/chat-list/store.js?v=20260531-chat-list',
-    '/js/app/chat-list/render.js?v=20260531-chat-list',
+    '/js/app/chat-list/render.js?v=20260614-doc-bugfix1',
     '/js/app/chat-list/data.js?v=20260531-chat-list',
     '/js/app/chat-list/presence.js?v=20260531-chat-list',
     '/js/app/chat-list/recovery.js?v=20260531-chat-list',
@@ -77,8 +77,8 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/open-chat/read-receipts.js?v=20260531-open-chat',
     '/js/app/open-chat/scroll.js?v=20260531-open-chat',
     '/js/app/open-chat/media-playback.js?v=20260531-open-chat',
-    '/js/app/open-chat/controller.js?v=20260531-open-chat',
-    '/js/app/documents.js?v=20260614-doc-token-stable1',
+    '/js/app/open-chat/controller.js?v=20260614-doc-bugfix1',
+    '/js/app/documents.js?v=20260614-doc-bugfix1',
     '/js/app/messages/state.js?v=20260531-messages',
     '/js/app/messages/attachments.js?v=20260531-messages',
     '/js/app/messages/polls.js?v=20260531-messages',
@@ -99,14 +99,14 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/interactions/reactions.js?v=20260531-interactions',
     '/js/app/interactions/floating-actions.js?v=20260531-interactions',
     '/js/app/interactions/media-viewer.js?v=20260531-interactions',
-    '/js/app/interactions/context-menus.js?v=20260531-interactions',
+    '/js/app/interactions/context-menus.js?v=20260614-doc-bugfix1',
     '/js/app/interactions/forwarding.js?v=20260531-interactions',
     '/js/app/boot/state.js?v=20260531-runtime-split',
     '/js/app/boot/runtime-context.js?v=20260531-runtime-split',
     '/js/app/boot/api.js?v=20260531-runtime-split',
     '/js/app/boot/auth.js?v=20260531-runtime-split',
     '/js/app/boot/websocket.js?v=20260531-runtime-split',
-    '/js/app/boot/ws-dispatch.js?v=20260601-runtime-big-cut',
+    '/js/app/boot/ws-dispatch.js?v=20260614-doc-bugfix1',
     '/js/app/boot/runtime-core.js?v=20260601-runtime-final',
     '/js/app/boot/composition/export-utils.js?v=20260601-feature-composition-final',
     '/js/app/boot/composition/feature-primitives.js?v=20260601-feature-composition-final',
@@ -116,7 +116,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/boot/composition/ui-shell-adapters.js?v=20260601-feature-composition-final',
     '/js/app/boot/composition/admin-settings-composition.js?v=20260601-feature-composition-final',
     '/js/app/boot/composition/folders-composition.js?v=20260601-feature-composition-final',
-    '/js/app/boot/composition/chat-list-composition.js?v=20260601-feature-composition-final',
+    '/js/app/boot/composition/chat-list-composition.js?v=20260614-doc-bugfix1',
     '/js/app/boot/composition/open-chat-composition.js?v=20260601-feature-composition-final',
     '/js/app/boot/composition/messages-composition.js?v=20260601-feature-composition-final',
     '/js/app/boot/composition/composer-composition.js?v=20260601-feature-composition-final',
@@ -397,6 +397,15 @@ test('document editor bundle exposes v2 rich editing and keeps image insertion d
   assert.match(documentEditorBundleJs, /document-toolbar-dropdown-panel/);
   assert.match(documentEditorBundleJs, /document-toolbar-dropdown-option/);
   assert.match(documentEditorBundleJs, /toggleListCommand/);
+  assert.match(documentEditorBundleJs, /ancestorBlockActive/);
+  assert.match(documentEditorBundleJs, /toggleBlockquoteCommand/);
+  assert.match(documentEditorBundleJs, /liftSelectionOutOfAncestorNode/);
+  assert.match(documentEditorBundleJs, /liftTarget/);
+  assert.match(documentEditorBundleJs, /Quote",\s*toggleBlockquoteCommand\(schema\d*\)/);
+  assert.doesNotMatch(documentEditorBundleJs, /Quote",\s*wrapIn\(schema\d*\.nodes\.blockquote\)/);
+  assert.match(documentEditorBundleJs, /toggleCodeBlockCommand/);
+  assert.match(documentEditorBundleJs, /Code block",\s*toggleCodeBlockCommand\(schema\d*\)/);
+  assert.doesNotMatch(documentEditorBundleJs, /Code block",\s*setBlockType\(schema\d*\.nodes\.code_block\)/);
   assert.match(documentEditorBundleJs, /listItemTypeForList/);
   assert.match(documentEditorBundleJs, /convertListNode/);
   assert.match(documentEditorBundleJs, /task_list/);
@@ -436,6 +445,9 @@ test('document editor bundle exposes v2 rich editing and keeps image insertion d
   assert.match(styleCss, /\.document-toolbar-scrollbar\s*\{[^}]*position\s*:\s*fixed[^}]*opacity\s*:\s*0[^}]*pointer-events\s*:\s*none/s);
   assert.match(styleCss, /\.document-toolbar\.is-overflowing:hover\s+\.document-toolbar-scrollbar,[\s\S]*\.document-toolbar:focus-within\s+\.document-toolbar-scrollbar\s*\{[^}]*opacity\s*:\s*\.55/s);
   assert.match(styleCss, /\.document-toolbar\.is-scroll-active\s+\.document-toolbar-scrollbar\s*\{[^}]*opacity\s*:\s*\.95/s);
+  assert.match(styleCss, /\.document-editor \.ProseMirror pre\s*\{[^}]*white-space\s*:\s*pre-wrap/s);
+  assert.match(styleCss, /\.document-editor \.ProseMirror pre\s*\{[^}]*overflow-wrap\s*:\s*anywhere/s);
+  assert.doesNotMatch(styleCss, /\.document-editor \.ProseMirror pre\s*\{[^}]*overflow-x\s*:\s*auto/s);
   assert.match(styleCss, /@media\s*\(hover:\s*none\),\s*\(pointer:\s*coarse\)\s*\{[\s\S]*\.document-toolbar\s*\{[^}]*touch-action\s*:\s*pan-x[^}]*scrollbar-width\s*:\s*thin/s);
   assert.match(styleCss, /@media\s*\(hover:\s*none\),\s*\(pointer:\s*coarse\)\s*\{[\s\S]*\.document-toolbar-scrollbar\s*\{[^}]*display\s*:\s*none/s);
   assert.doesNotMatch(documentEditorBundleJs, /uploadAndInsertImage/);

@@ -42,7 +42,23 @@
         state: {
           getChatSearchValue: () => chatSearch?.value || '',
           getCurrentChatId: () => currentChatId,
-          shouldSuppressChatItemTap: () => Date.now() < suppressNextChatItemTapUntil,
+          shouldSuppressChatItemTap: (event) => {
+            const state = suppressNextChatItemTapUntil;
+            const until = state && typeof state === 'object'
+              ? Number(state.until || 0)
+              : Number(state || 0);
+            if (!until || Date.now() >= until) {
+              suppressNextChatItemTapUntil = 0;
+              return false;
+            }
+            const expectedPointer = state && typeof state === 'object' ? state.pointerType || 'touch' : 'touch';
+            const sourcePointer = event?.pointerType
+              || (event?.sourceCapabilities?.firesTouchEvents ? 'touch' : '')
+              || ((typeof isMobileLayoutViewport === 'function' && isMobileLayoutViewport()) || window.innerWidth <= 768 ? 'touch' : 'mouse');
+            const shouldSuppress = expectedPointer === 'any' || sourcePointer === expectedPointer;
+            if (shouldSuppress) suppressNextChatItemTapUntil = 0;
+            return shouldSuppress;
+          },
         },
         actions: {
           alert: (message) => alert(message),

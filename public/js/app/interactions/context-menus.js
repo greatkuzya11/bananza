@@ -994,7 +994,7 @@ function bindEvents() {
         clearTimeout(chatContextLongPressTimer);  
         chatContextLongPressTimer = setTimeout(() => {  
           chatContextLongPressTimer = null;  
-          suppressNextChatItemTap();  
+          suppressNextChatItemTap({ pointerType: e.pointerType === 'mouse' ? 'mouse' : 'touch' });
           suppressChatContextDismissUntil = Date.now() + 550;  
           safeVibrate(30);  
           showChatContextMenuForRow(row, {  

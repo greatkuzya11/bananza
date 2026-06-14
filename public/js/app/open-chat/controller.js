@@ -226,7 +226,6 @@
         const { seq } = beginChatOpenTransition(targetChatId);
         try {
           if (previousChatId && previousChatId !== targetChatId) actions.saveComposerDraft?.(previousChatId);
-          actions.closeDocumentMode?.();
           setCurrentChatId(targetChatId);
           setCurrentChat(chat);
           setStateMessages([]);

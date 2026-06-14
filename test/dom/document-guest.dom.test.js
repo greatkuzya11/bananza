@@ -6,6 +6,7 @@ const { JSDOM } = require('jsdom');
 
 const rootDir = path.resolve(__dirname, '..', '..');
 const documentHtml = fs.readFileSync(path.join(rootDir, 'public', 'document.html'), 'utf8');
+const styleCss = fs.readFileSync(path.join(rootDir, 'public', 'css', 'style.css'), 'utf8');
 const guestScript = fs.readFileSync(path.join(rootDir, 'public', 'js', 'document-guest.js'), 'utf8');
 
 function createGuestDom(storedUser) {
@@ -35,8 +36,16 @@ test('document guest page falls back to the default theme for invalid stored val
 test('document guest page uses cache-busted document assets', () => {
   const dom = new JSDOM(documentHtml);
   const document = dom.window.document;
-  assert.equal(document.querySelector('link[rel="stylesheet"]')?.getAttribute('href'), '/css/style.css?v=20260614-doc-mobile-topbar1');
+  assert.equal(document.querySelector('link[rel="stylesheet"]')?.getAttribute('href'), '/css/style.css?v=20260614-doc-codeblock1');
   assert.ok([...document.querySelectorAll('script')].some((script) => script.getAttribute('src') === '/js/i18n.js?v=20260614-doc-settings1'));
-  assert.ok([...document.querySelectorAll('script')].some((script) => script.getAttribute('src') === '/js/document-editor.bundle.js?v=20260614-doc-cursors-fresh3'));
+  assert.ok([...document.querySelectorAll('script')].some((script) => script.getAttribute('src') === '/js/document-editor.bundle.js?v=20260614-doc-clear-quote1'));
   assert.ok([...document.querySelectorAll('script')].some((script) => script.getAttribute('src') === '/js/document-guest.js?v=20260614-doc-v2'));
+});
+
+test('document guest page keeps the editor scrollable in both directions', () => {
+  assert.match(styleCss, /\.document-guest-body\s*\{[^}]*overflow:\s*hidden/s);
+  assert.match(styleCss, /\.document-guest-app\s*\{[^}]*height:\s*100dvh/s);
+  assert.match(styleCss, /\.document-workspace--guest \.document-editor-shell\s*\{[^}]*overflow:\s*auto/s);
+  assert.match(styleCss, /\.document-workspace--guest \.document-editor\s*\{[^}]*min-width:\s*max-content/s);
+  assert.match(styleCss, /\.document-workspace--guest \.document-editor \.ProseMirror table\s*\{[^}]*width:\s*max-content/s);
 });

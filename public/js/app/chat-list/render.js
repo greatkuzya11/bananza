@@ -277,8 +277,8 @@
         el.innerHTML = nextHtml;
         el.__chatListHtml = nextHtml;
       }
-      el.onclick = () => {
-        if (typeof state.shouldSuppressChatItemTap === 'function' && state.shouldSuppressChatItemTap()) return;
+      el.onclick = (event) => {
+        if (typeof state.shouldSuppressChatItemTap === 'function' && state.shouldSuppressChatItemTap(event)) return;
         const openAction = hiddenSearchResult
           ? actions.openHiddenChatFromSearch?.(chat.id)
           : actions.openChat?.(chat.id);

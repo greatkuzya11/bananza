@@ -21664,6 +21664,15 @@ ${reason}`);
       }
     return null;
   }
+  var lift2 = (state, dispatch) => {
+    let { $from, $to } = state.selection;
+    let range = $from.blockRange($to), target = range && liftTarget(range);
+    if (target == null)
+      return false;
+    if (dispatch)
+      dispatch(state.tr.lift(range, target).scrollIntoView());
+    return true;
+  };
   var newlineInCode = (state, dispatch) => {
     let { $head, $anchor } = state.selection;
     if (!$head.parent.type.spec.code || !$head.sameParent($anchor))
@@ -23079,6 +23088,9 @@ ${reason}`);
   function pointsAtCell($pos) {
     return $pos.parent.type.spec.tableRole == "row" && !!$pos.nodeAfter;
   }
+  function moveCellForward($pos) {
+    return $pos.node(0).resolve($pos.pos + $pos.nodeAfter.nodeSize);
+  }
   function inSameTable($cellA, $cellB) {
     return $cellA.depth == $cellB.depth && $cellA.pos >= $cellB.start(-1) && $cellA.pos <= $cellB.end(-1);
   }
@@ -23827,6 +23839,39 @@ ${reason}`);
   var toggleHeaderRow = toggleHeader("row", { useDeprecatedLogic: true });
   var toggleHeaderColumn = toggleHeader("column", { useDeprecatedLogic: true });
   var toggleHeaderCell = toggleHeader("cell", { useDeprecatedLogic: true });
+  function findNextCell($cell, dir) {
+    if (dir < 0) {
+      const before = $cell.nodeBefore;
+      if (before) return $cell.pos - before.nodeSize;
+      for (let row = $cell.index(-1) - 1, rowEnd = $cell.before(); row >= 0; row--) {
+        const rowNode = $cell.node(-1).child(row);
+        const lastChild = rowNode.lastChild;
+        if (lastChild) return rowEnd - 1 - lastChild.nodeSize;
+        rowEnd -= rowNode.nodeSize;
+      }
+    } else {
+      if ($cell.index() < $cell.parent.childCount - 1) return $cell.pos + $cell.nodeAfter.nodeSize;
+      const table = $cell.node(-1);
+      for (let row = $cell.indexAfter(-1), rowStart = $cell.after(); row < table.childCount; row++) {
+        const rowNode = table.child(row);
+        if (rowNode.childCount) return rowStart + 1;
+        rowStart += rowNode.nodeSize;
+      }
+    }
+    return null;
+  }
+  function goToNextCell(direction) {
+    return function(state, dispatch) {
+      if (!isInTable(state)) return false;
+      const cell = findNextCell(selectionCell(state), direction);
+      if (cell == null) return false;
+      if (dispatch) {
+        const $cell = state.doc.resolve(cell);
+        dispatch(state.tr.setSelection(TextSelection.between($cell, moveCellForward($cell))).scrollIntoView());
+      }
+      return true;
+    };
+  }
   function deleteTable(state, dispatch) {
     const $pos = state.selection.$anchor;
     for (let d = $pos.depth; d > 0; d--) if ($pos.node(d).type.spec.tableRole == "table") {
@@ -26333,6 +26378,17 @@ ${reason}`);
     if (node) return node.hasMarkup(nodeType, attrs);
     return to <= $from.end() && $from.parent.type === nodeType && Object.entries(attrs).every(([key, value]) => $from.parent.attrs[key] === value);
   }
+  function ancestorBlockActive(state, nodeType, attrs = {}) {
+    const { $from, node } = state.selection;
+    if (node?.hasMarkup(nodeType, attrs)) return true;
+    for (let depth = $from.depth; depth > 0; depth -= 1) {
+      const current = $from.node(depth);
+      if (current.type === nodeType && Object.entries(attrs).every(([key, value]) => current.attrs[key] === value)) {
+        return true;
+      }
+    }
+    return false;
+  }
   function listActive(state, listType) {
     const { $from } = state.selection;
     for (let depth = $from.depth; depth > 0; depth -= 1) {
@@ -26398,6 +26454,34 @@ ${reason}`);
       return changed;
     };
   }
+  function toggleCodeBlockCommand(schema2) {
+    return (state, dispatch, view) => {
+      if (!schema2.nodes.code_block || !schema2.nodes.paragraph) return false;
+      const targetNode = blockActive(state, schema2.nodes.code_block) ? schema2.nodes.paragraph : schema2.nodes.code_block;
+      return setBlockType2(targetNode)(state, dispatch, view);
+    };
+  }
+  function toggleBlockquoteCommand(schema2) {
+    return (state, dispatch, view) => {
+      if (!schema2.nodes.blockquote) return false;
+      if (ancestorBlockActive(state, schema2.nodes.blockquote)) {
+        return lift2(state, dispatch, view);
+      }
+      return wrapIn(schema2.nodes.blockquote)(state, dispatch, view);
+    };
+  }
+  function liftSelectionOutOfAncestorNode(tr, nodeType) {
+    let changed = false;
+    for (let guard = 0; guard < 20; guard += 1) {
+      const { $from, $to } = tr.selection;
+      const range = $from.blockRange($to, (node) => node.type === nodeType);
+      const target = range && liftTarget(range);
+      if (target == null) break;
+      tr.lift(range, target);
+      changed = true;
+    }
+    return changed;
+  }
   function clearFormattingCommand(schema2) {
     return (state, dispatch) => {
       if (!dispatch) return true;
@@ -26412,6 +26496,9 @@ ${reason}`);
           tr = tr.setNodeMarkup(pos, null, attrs);
         }
       });
+      if (schema2.nodes.blockquote) {
+        liftSelectionOutOfAncestorNode(tr, schema2.nodes.blockquote);
+      }
       dispatch(tr.scrollIntoView());
       return true;
     };
@@ -26959,10 +27046,10 @@ ${reason}`);
     toolbarEl.appendChild(commandButton(options, viewRef, "", "\u2611", "Checklist", toggleListCommand(schema2, schema2.nodes.task_list), {
       active: (state) => listActive(state, schema2.nodes.task_list)
     }));
-    toolbarEl.appendChild(commandButton(options, viewRef, "", "\u275D", "Quote", wrapIn(schema2.nodes.blockquote), {
-      active: (state) => blockActive(state, schema2.nodes.blockquote)
+    toolbarEl.appendChild(commandButton(options, viewRef, "", "\u275D", "Quote", toggleBlockquoteCommand(schema2), {
+      active: (state) => ancestorBlockActive(state, schema2.nodes.blockquote)
     }));
-    toolbarEl.appendChild(commandButton(options, viewRef, "", "\u{1F4BB}", "Code block", setBlockType2(schema2.nodes.code_block), {
+    toolbarEl.appendChild(commandButton(options, viewRef, "", "\u{1F4BB}", "Code block", toggleCodeBlockCommand(schema2), {
       active: (state) => blockActive(state, schema2.nodes.code_block)
     }));
     addSep();
@@ -27003,6 +27090,20 @@ ${reason}`);
     if (options.token) params2.token = options.token;
     if (options.guestToken) params2.guestToken = options.guestToken;
     const provider = new WebsocketProvider(serverUrl, options.room, ydoc, { params: params2 });
+    let destroyed = false;
+    let ready = false;
+    let readyResolve = null;
+    const readyPromise = new Promise((resolve) => {
+      readyResolve = resolve;
+    });
+    const readyTimer = window.setTimeout(() => markReady(), 800);
+    function markReady() {
+      if (ready || destroyed) return;
+      ready = true;
+      window.clearTimeout(readyTimer);
+      readyResolve?.();
+      options.onReady?.();
+    }
     const localUser = {
       id: options.user?.id || "",
       name: options.user?.name || "User",
@@ -27013,8 +27114,14 @@ ${reason}`);
       const count = provider.awareness ? provider.awareness.getStates().size : 0;
       options.onStatusChange?.(status, count);
     }
-    provider.on("status", (event) => emitStatus(event.status === "connected" ? "online" : "offline"));
-    provider.awareness.on("change", () => emitStatus(provider.wsconnected ? "online" : "offline"));
+    const handleProviderStatus = (event) => emitStatus(event.status === "connected" ? "online" : "offline");
+    const handleAwarenessChange = () => emitStatus(provider.wsconnected ? "online" : "offline");
+    const handleProviderSync = (synced) => {
+      if (synced !== false) markReady();
+    };
+    provider.on("status", handleProviderStatus);
+    provider.on("sync", handleProviderSync);
+    provider.awareness.on("change", handleAwarenessChange);
     const state = EditorState.create({
       schema: schema2,
       plugins: [
@@ -27040,8 +27147,8 @@ ${reason}`);
           "Mod-b": toggleMark(schema2.marks.strong),
           "Mod-i": toggleMark(schema2.marks.em),
           "Mod-u": toggleMark(schema2.marks.underline),
-          "Tab": chainCommands(sinkListItem(schema2.nodes.task_item), sinkListItem(schema2.nodes.list_item)),
-          "Shift-Tab": chainCommands(liftListItem(schema2.nodes.task_item), liftListItem(schema2.nodes.list_item))
+          "Tab": chainCommands(goToNextCell(1), sinkListItem(schema2.nodes.task_item), sinkListItem(schema2.nodes.list_item)),
+          "Shift-Tab": chainCommands(goToNextCell(-1), liftListItem(schema2.nodes.task_item), liftListItem(schema2.nodes.list_item))
         }),
         keymap(baseKeymap),
         gapCursor(),
@@ -27066,19 +27173,27 @@ ${reason}`);
     }
     yTitle.observe(syncTitleInput);
     syncTitleInput();
-    if (titleInput) {
-      titleInput.addEventListener("input", () => {
-        const next = String(titleInput.value || "").slice(0, 80);
-        ydoc.transact(() => {
-          yTitle.delete(0, yTitle.length);
-          if (next) yTitle.insert(0, next);
-        });
+    const handleTitleInput = () => {
+      if (!titleInput) return;
+      const next = String(titleInput.value || "").slice(0, 80);
+      ydoc.transact(() => {
+        yTitle.delete(0, yTitle.length);
+        if (next) yTitle.insert(0, next);
       });
+    };
+    if (titleInput) {
+      titleInput.addEventListener("input", handleTitleInput);
     }
     emitStatus("offline");
     return {
       destroy() {
+        destroyed = true;
+        window.clearTimeout(readyTimer);
+        if (titleInput) titleInput.removeEventListener("input", handleTitleInput);
         yTitle.unobserve(syncTitleInput);
+        provider.off("status", handleProviderStatus);
+        provider.off("sync", handleProviderSync);
+        provider.awareness.off("change", handleAwarenessChange);
         provider.destroy();
         view.destroy();
         ydoc.destroy();
@@ -27090,6 +27205,7 @@ ${reason}`);
         return yTitle.toString();
       },
       provider,
+      ready: readyPromise,
       view,
       ydoc
     };

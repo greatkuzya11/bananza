@@ -2225,9 +2225,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         }, 2000);
       }
     
-      function suppressNextChatItemTap(ms = 650) {
-        suppressNextChatItemTapUntil = Math.max(suppressNextChatItemTapUntil, Date.now() + Math.max(0, Number(ms) || 0));
-      }
+      function suppressNextChatItemTap(options = 650) { const config = options && typeof options === 'object' ? options : { ms: options }; const current = suppressNextChatItemTapUntil; suppressNextChatItemTapUntil = { until: Math.max(current && typeof current === 'object' ? Number(current.until || 0) : Number(current || 0), Date.now() + Math.max(0, Number(config.ms ?? 650) || 0)), pointerType: config.pointerType === 'mouse' || config.pointerType === 'any' ? config.pointerType : 'touch' }; }
     
       function getFolderPinnedChatMoveState(folderId, chatId) {
         const folder = chatFolderStore.getFolderById(folderId);

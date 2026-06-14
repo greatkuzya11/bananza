@@ -5,11 +5,12 @@ import { EditorState, Plugin } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
 import { schema as basicSchema } from 'prosemirror-schema-basic';
 import { addListNodes, wrapInList, splitListItem, liftListItem, sinkListItem } from 'prosemirror-schema-list';
-import { baseKeymap, chainCommands, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
+import { baseKeymap, chainCommands, lift, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
 import { keymap } from 'prosemirror-keymap';
 import { gapCursor } from 'prosemirror-gapcursor';
 import { inputRules, wrappingInputRule, textblockTypeInputRule } from 'prosemirror-inputrules';
 import { dropCursor } from 'prosemirror-dropcursor';
+import { liftTarget } from 'prosemirror-transform';
 import {
   addColumnAfter,
   addColumnBefore,
@@ -20,6 +21,7 @@ import {
   deleteColumn,
   deleteRow,
   deleteTable,
+  goToNextCell,
   mergeCells,
   selectedRect,
   setCellAttr,
@@ -336,6 +338,19 @@ function blockActive(state, nodeType, attrs = {}) {
     && Object.entries(attrs).every(([key, value]) => $from.parent.attrs[key] === value);
 }
 
+function ancestorBlockActive(state, nodeType, attrs = {}) {
+  const { $from, node } = state.selection;
+  if (node?.hasMarkup(nodeType, attrs)) return true;
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    const current = $from.node(depth);
+    if (current.type === nodeType
+      && Object.entries(attrs).every(([key, value]) => current.attrs[key] === value)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function listActive(state, listType) {
   const { $from } = state.selection;
   for (let depth = $from.depth; depth > 0; depth -= 1) {
@@ -410,6 +425,39 @@ function setTextAlignCommand(align) {
   };
 }
 
+function toggleCodeBlockCommand(schema) {
+  return (state, dispatch, view) => {
+    if (!schema.nodes.code_block || !schema.nodes.paragraph) return false;
+    const targetNode = blockActive(state, schema.nodes.code_block)
+      ? schema.nodes.paragraph
+      : schema.nodes.code_block;
+    return setBlockType(targetNode)(state, dispatch, view);
+  };
+}
+
+function toggleBlockquoteCommand(schema) {
+  return (state, dispatch, view) => {
+    if (!schema.nodes.blockquote) return false;
+    if (ancestorBlockActive(state, schema.nodes.blockquote)) {
+      return lift(state, dispatch, view);
+    }
+    return wrapIn(schema.nodes.blockquote)(state, dispatch, view);
+  };
+}
+
+function liftSelectionOutOfAncestorNode(tr, nodeType) {
+  let changed = false;
+  for (let guard = 0; guard < 20; guard += 1) {
+    const { $from, $to } = tr.selection;
+    const range = $from.blockRange($to, (node) => node.type === nodeType);
+    const target = range && liftTarget(range);
+    if (target == null) break;
+    tr.lift(range, target);
+    changed = true;
+  }
+  return changed;
+}
+
 function clearFormattingCommand(schema) {
   return (state, dispatch) => {
     if (!dispatch) return true;
@@ -426,6 +474,9 @@ function clearFormattingCommand(schema) {
         tr = tr.setNodeMarkup(pos, null, attrs);
       }
     });
+    if (schema.nodes.blockquote) {
+      liftSelectionOutOfAncestorNode(tr, schema.nodes.blockquote);
+    }
     dispatch(tr.scrollIntoView());
     return true;
   };
@@ -1019,10 +1070,10 @@ function buildToolbar(options, toolbarEl, viewRef, schema) {
   toolbarEl.appendChild(commandButton(options, viewRef, '', '☑', 'Checklist', toggleListCommand(schema, schema.nodes.task_list), {
     active: (state) => listActive(state, schema.nodes.task_list),
   }));
-  toolbarEl.appendChild(commandButton(options, viewRef, '', '❝', 'Quote', wrapIn(schema.nodes.blockquote), {
-    active: (state) => blockActive(state, schema.nodes.blockquote),
+  toolbarEl.appendChild(commandButton(options, viewRef, '', '❝', 'Quote', toggleBlockquoteCommand(schema), {
+    active: (state) => ancestorBlockActive(state, schema.nodes.blockquote),
   }));
-  toolbarEl.appendChild(commandButton(options, viewRef, '', '💻', 'Code block', setBlockType(schema.nodes.code_block), {
+  toolbarEl.appendChild(commandButton(options, viewRef, '', '💻', 'Code block', toggleCodeBlockCommand(schema), {
     active: (state) => blockActive(state, schema.nodes.code_block),
   }));
   addSep();
@@ -1064,6 +1115,19 @@ function createEditor(options = {}) {
   if (options.token) params.token = options.token;
   if (options.guestToken) params.guestToken = options.guestToken;
   const provider = new WebsocketProvider(serverUrl, options.room, ydoc, { params });
+  let destroyed = false;
+  let ready = false;
+  let readyResolve = null;
+  const readyPromise = new Promise((resolve) => { readyResolve = resolve; });
+  const readyTimer = window.setTimeout(() => markReady(), 800);
+
+  function markReady() {
+    if (ready || destroyed) return;
+    ready = true;
+    window.clearTimeout(readyTimer);
+    readyResolve?.();
+    options.onReady?.();
+  }
 
   const localUser = {
     id: options.user?.id || '',
@@ -1078,8 +1142,15 @@ function createEditor(options = {}) {
     options.onStatusChange?.(status, count);
   }
 
-  provider.on('status', (event) => emitStatus(event.status === 'connected' ? 'online' : 'offline'));
-  provider.awareness.on('change', () => emitStatus(provider.wsconnected ? 'online' : 'offline'));
+  const handleProviderStatus = (event) => emitStatus(event.status === 'connected' ? 'online' : 'offline');
+  const handleAwarenessChange = () => emitStatus(provider.wsconnected ? 'online' : 'offline');
+  const handleProviderSync = (synced) => {
+    if (synced !== false) markReady();
+  };
+
+  provider.on('status', handleProviderStatus);
+  provider.on('sync', handleProviderSync);
+  provider.awareness.on('change', handleAwarenessChange);
 
   const state = EditorState.create({
     schema,
@@ -1106,8 +1177,8 @@ function createEditor(options = {}) {
         'Mod-b': toggleMark(schema.marks.strong),
         'Mod-i': toggleMark(schema.marks.em),
         'Mod-u': toggleMark(schema.marks.underline),
-        'Tab': chainCommands(sinkListItem(schema.nodes.task_item), sinkListItem(schema.nodes.list_item)),
-        'Shift-Tab': chainCommands(liftListItem(schema.nodes.task_item), liftListItem(schema.nodes.list_item)),
+        'Tab': chainCommands(goToNextCell(1), sinkListItem(schema.nodes.task_item), sinkListItem(schema.nodes.list_item)),
+        'Shift-Tab': chainCommands(goToNextCell(-1), liftListItem(schema.nodes.task_item), liftListItem(schema.nodes.list_item)),
       }),
       keymap(baseKeymap),
       gapCursor(),
@@ -1135,20 +1206,28 @@ function createEditor(options = {}) {
 
   yTitle.observe(syncTitleInput);
   syncTitleInput();
-  if (titleInput) {
-    titleInput.addEventListener('input', () => {
-      const next = String(titleInput.value || '').slice(0, 80);
-      ydoc.transact(() => {
-        yTitle.delete(0, yTitle.length);
-        if (next) yTitle.insert(0, next);
-      });
+  const handleTitleInput = () => {
+    if (!titleInput) return;
+    const next = String(titleInput.value || '').slice(0, 80);
+    ydoc.transact(() => {
+      yTitle.delete(0, yTitle.length);
+      if (next) yTitle.insert(0, next);
     });
+  };
+  if (titleInput) {
+    titleInput.addEventListener('input', handleTitleInput);
   }
   emitStatus('offline');
 
   return {
     destroy() {
+      destroyed = true;
+      window.clearTimeout(readyTimer);
+      if (titleInput) titleInput.removeEventListener('input', handleTitleInput);
       yTitle.unobserve(syncTitleInput);
+      provider.off('status', handleProviderStatus);
+      provider.off('sync', handleProviderSync);
+      provider.awareness.off('change', handleAwarenessChange);
       provider.destroy();
       view.destroy();
       ydoc.destroy();
@@ -1160,6 +1239,7 @@ function createEditor(options = {}) {
       return yTitle.toString();
     },
     provider,
+    ready: readyPromise,
     view,
     ydoc,
   };

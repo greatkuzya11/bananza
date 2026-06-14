@@ -71,6 +71,10 @@
       setStatus(`${label}${people}`, lastStatus);
     }
 
+    function setEditorLoading(loading) {
+      getEl('documentWorkspace', 'documentWorkspace')?.classList?.toggle('is-loading', Boolean(loading));
+    }
+
     function destroyEditor() {
       if (editor) {
         try { editor.destroy(); } catch (e) {}
@@ -78,6 +82,7 @@
       editor = null;
       const editorEl = getEl('documentEditor', 'documentEditor');
       editorEl?.replaceChildren?.();
+      setEditorLoading(false);
     }
 
     function showDocumentWorkspace(chat) {
@@ -159,6 +164,7 @@
       const id = Number(chatId || 0);
       if (!id) return false;
       const chat = options.chat || getCurrentChat();
+      const sameActiveDocument = Number(activeChatId || 0) === id && editor;
       const seq = ++openSeq;
       activeChatId = id;
       actions.closeTransientUi?.();
@@ -167,42 +173,87 @@
       actions.clearDisplayedTimelineState?.();
       showDocumentWorkspace(chat);
       setInviteStatus('');
-      syncConnectionStatus('offline', 0);
       const titleInput = getEl('documentTitleInput', 'documentTitleInput');
       if (titleInput) titleInput.value = chat?.document_title || chat?.name || '';
-      destroyEditor();
       actions.revealActiveMobileChatRoute?.({
         suppressHistoryPush: Boolean(options.suppressHistoryPush),
         chatId: id,
       });
       try { win.localStorage?.setItem?.('lastChat', id); } catch (e) {}
+      if (sameActiveDocument) {
+        bindInviteButtons();
+        editor.focus?.();
+        return true;
+      }
+      syncConnectionStatus('offline', 0);
+      setEditorLoading(true);
 
-      const session = await api(`/api/documents/${id}/session`);
-      if (seq !== openSeq || Number(activeChatId) !== id) return false;
+      let session = null;
+      try {
+        session = await api(`/api/documents/${id}/session`);
+      } catch (error) {
+        if (seq === openSeq && Number(activeChatId) === id) {
+          setEditorLoading(false);
+          setStatus(error?.message || t('Editor unavailable'), 'offline');
+        }
+        throw error;
+      }
+      if (seq !== openSeq || Number(activeChatId) !== id) {
+        setEditorLoading(false);
+        return false;
+      }
       const editorEl = getEl('documentEditor', 'documentEditor');
       const toolbarEl = getEl('documentToolbar', 'documentToolbar');
       if (!editorEl || !win.BananzaDocumentEditor?.createEditor) {
+        setEditorLoading(false);
         setStatus(t('Editor unavailable'), 'offline');
         return false;
       }
-      editor = win.BananzaDocumentEditor.createEditor({
-        editorEl,
-        toolbarEl,
-        titleInput,
-        room: session.room,
-        wsBase: session.wsBase || '/doc-ws',
-        token: getToken(),
-        user: session.user || {
-          id: getCurrentUser()?.id,
-          name: getCurrentUser()?.display_name || getCurrentUser()?.username || 'User',
-          color: getCurrentUser()?.avatar_color || '#65aadd',
-        },
-        initialTitle: session.document?.title || chat?.name || '',
-        t,
-        onStatusChange: syncConnectionStatus,
-      });
-      bindInviteButtons();
-      editor.focus?.();
+      const previousEditor = editor;
+      const stagingEl = doc.createElement('div');
+      stagingEl.className = 'document-editor';
+      let nextEditor = null;
+      let committed = false;
+      const commitEditor = () => {
+        if (committed) return;
+        if (!nextEditor) return;
+        committed = true;
+        if (seq !== openSeq || Number(activeChatId) !== id) {
+          try { nextEditor?.destroy?.(); } catch (e) {}
+          setEditorLoading(false);
+          return;
+        }
+        try { if (previousEditor && previousEditor !== nextEditor) previousEditor.destroy(); } catch (e) {}
+        editorEl.replaceChildren(...Array.from(stagingEl.childNodes));
+        editor = nextEditor;
+        bindInviteButtons();
+        setEditorLoading(false);
+        editor.focus?.();
+      };
+      try {
+        nextEditor = win.BananzaDocumentEditor.createEditor({
+          editorEl: stagingEl,
+          toolbarEl,
+          titleInput,
+          room: session.room,
+          wsBase: session.wsBase || '/doc-ws',
+          token: getToken(),
+          user: session.user || {
+            id: getCurrentUser()?.id,
+            name: getCurrentUser()?.display_name || getCurrentUser()?.username || 'User',
+            color: getCurrentUser()?.avatar_color || '#65aadd',
+          },
+          initialTitle: session.document?.title || chat?.name || '',
+          t,
+          onStatusChange: syncConnectionStatus,
+          onReady: commitEditor,
+        });
+        nextEditor.ready?.then?.(commitEditor);
+      } catch (error) {
+        setEditorLoading(false);
+        setStatus(error?.message || t('Editor unavailable'), 'offline');
+        throw error;
+      }
       return true;
     }
 
