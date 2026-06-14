@@ -1207,33 +1207,36 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         syncChatShotButton();
         window.BananzaCallHooks?.onChatChanged?.(chat.id, chat);
       }
-    
       function refreshChatInfoPresentation(chat = chats.find(c => c.id === currentChatId)) {
         if (!chat || chatInfoModal?.classList.contains('hidden') || Number(chat.id) !== Number(currentChatId)) return;
-        $('#chatInfoTitle').textContent = chat.name || 'Chat Info';
+        const isDocument = isDocumentChat(chat), documentTitle = chat.document_title || chat.name || t('Document');
+        $('#chatInfoTitle').textContent = isDocument ? documentTitle : (chat.name || 'Chat Info');
+        chatInfoModal?.classList.toggle('is-document-settings', isDocument);
         syncChatInfoStatusVisibility(chat);
-    
+        ['#chatCompactViewSection', '#chatPreferencesSection', '#chatRemindersSection', '#chatBackgroundSection']
+          .forEach((selector) => $(selector)?.classList.toggle('hidden', isDocument));
         const editSection = $('#chatEditSection');
         if (editSection) {
-          if (!isNotesChat(chat) && (chat.type === 'group' || chat.type === 'general')) {
+          if (!isNotesChat(chat) && (isDocument || chat.type === 'group' || chat.type === 'general')) {
             editSection.classList.remove('hidden');
+            const chatNameLabel = $('#chatNameFieldLabel'), nameInput = $('#chatNameInput');
+            if (chatNameLabel) chatNameLabel.textContent = t(isDocument ? 'Document name' : 'Group name');
             setAvatarElementVisual($('#chatAvatar'), {
-              name: chat.name,
+              name: isDocument ? (chat.document_title || chat.name) : chat.name,
               color: '#5eb5f7',
               avatarUrl: chat.avatar_url || '',
-              fallbackText: chat.type === 'general' ? '\ud83c\udf10' : '\ud83d\udc65',
+              fallbackText: isDocument ? '\ud83d\udcc4' : (chat.type === 'general' ? '\ud83c\udf10' : '\ud83d\udc65'),
             });
             $('#removeChatAvatar')?.classList.toggle('hidden', !chat.avatar_url);
-            if ($('#chatNameInput')) $('#chatNameInput').value = chat.name || '';
+            if (nameInput) { nameInput.maxLength = isDocument ? 80 : 50; nameInput.value = isDocument ? (chat.document_title || chat.name || '') : (chat.name || ''); }
           } else {
             editSection.classList.add('hidden');
           }
         }
-    
         const bgPreviewEl = $('#chatBackgroundPreview');
         const removeBgBtn = $('#removeChatBackground');
         const bgStyleSelect = $('#chatBackgroundStyle');
-        if (bgPreviewEl) {
+        if (!isDocument && bgPreviewEl) {
           if (chat.background_url) {
             bgPreviewEl.style.backgroundImage = `url(${esc(chat.background_url)})`;
             applyBackgroundStyleToElement(bgPreviewEl, chat.background_style || 'cover');
@@ -1244,12 +1247,11 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
             removeBgBtn?.classList.add('hidden');
           }
         }
-        if (bgStyleSelect) bgStyleSelect.value = chat.background_style || 'cover';
+        if (!isDocument && bgStyleSelect) bgStyleSelect.value = chat.background_style || 'cover';
         renderChatInviteLinkForm(chat);
         renderChatShotForm(getCurrentChatShotState());
         renderChatDangerControls(chat);
       }
-    
       function syncChatInfoStatusVisibility(chat = getChatById(currentChatId)) {
         const statusEl = $('#chatInfoStatus');
         if (!statusEl) return;
@@ -1524,12 +1526,14 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
           canMoveDown: index >= 0 && index < pinned.length - 1,
         };
       }
-    
       function isNotesChat(chatOrId) {
         const chat = typeof chatOrId === 'object' && chatOrId !== null ? chatOrId : getChatById(chatOrId);
         return Boolean(chat && (chat.type === 'notes' || Number(chat.is_notes) === 1));
       }
-    
+      function isDocumentChat(chatOrId) {
+        const chat = typeof chatOrId === 'object' && chatOrId !== null ? chatOrId : getChatById(chatOrId);
+        return Number(chat?.is_document || 0) === 1;
+      }
       function isCurrentNotesChat() {
         return isNotesChat(currentChatId);
       }
@@ -1619,12 +1623,10 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
       function chatAllowsUnpinAnyPin(chat) {
         return chat && (chat.allow_unpin_any_pin === true || chat.allow_unpin_any_pin === 1 || chat.allow_unpin_any_pin === '1');
       }
-    
       function canManagePinSettings(chat = getChatById(currentChatId)) {
-        if (!currentUser || !chat) return false;
+        if (!currentUser || !chat || isDocumentChat(chat)) return false;
         return Boolean(currentUser.is_admin || Number(chat.created_by || 0) === Number(currentUser.id));
       }
-    
       function isGeneralChat(chat) {
         return String(chat?.type || '') === 'general';
       }
@@ -1633,11 +1635,9 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         const type = String(chat?.type || '');
         return type === 'group' || type === 'private';
       }
-    
       function canHideChat(chat) {
-        return Boolean(chat && isGroupOrPrivateChat(chat) && !isNotesChat(chat) && !isGeneralChat(chat));
+        return Boolean(chat && isGroupOrPrivateChat(chat) && !isNotesChat(chat) && !isDocumentChat(chat) && !isGeneralChat(chat));
       }
-    
       function canLeaveChat(chat) {
         return Boolean(
           chat
@@ -1666,13 +1666,12 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         el.classList.toggle('is-error', type === 'error');
         el.classList.toggle('is-success', type === 'success');
       }
-    
       function renderChatPinSettingsForm(chat = getChatById(currentChatId)) {
         const section = $('#chatPinSettingsSection');
         const toggle = $('#chatAllowUnpinAnyPinToggle');
         if (!section || !toggle) return;
         const canManage = canManagePinSettings(chat);
-        section.classList.toggle('hidden', isNotesChat(chat) || !canManage);
+        section.classList.toggle('hidden', isNotesChat(chat) || isDocumentChat(chat) || !canManage);
         toggle.checked = chatAllowsUnpinAnyPin(chat);
         setChatPinSettingsStatus('');
       }
@@ -1725,7 +1724,6 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
           setChatContextTransformStatus(error.message || 'Could not save context transform setting', 'error');
         }
       }
-    
       function setChatDangerStatus(message, type = '') {
         const el = $('#chatDangerStatus');
         if (!el) return;
@@ -1733,17 +1731,21 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         el.classList.toggle('is-error', type === 'error');
         el.classList.toggle('is-success', type === 'success');
       }
-    
       function renderChatDangerControls(chat = getChatById(currentChatId)) {
         const section = $('#chatDangerSection');
         if (!section) return;
         const clearBtn = $('#clearChatHistoryBtn');
         const leaveBtn = $('#leaveChatBtn');
         const deleteBtn = $('#deleteChatBtn');
+        const isDocument = isDocumentChat(chat);
         const showClear = canManageDestructiveChat(chat);
         const showLeave = canLeaveChat(chat);
-        const showDelete = canManageDestructiveChat(chat);
+        const showDelete = showClear;
+        const labels = isDocument
+          ? ['Document management', 'Clear document', 'Leave document', 'Delete document']
+          : ['Chat management', 'Clear history', 'Leave chat', 'Delete chat'];
         section.classList.toggle('hidden', !(showClear || showLeave || showDelete));
+        [section.querySelector('h4'), clearBtn, leaveBtn, deleteBtn].forEach((el, index) => { if (el) el.textContent = t(labels[index]); });
         clearBtn?.classList.toggle('hidden', !showClear);
         leaveBtn?.classList.toggle('hidden', !showLeave);
         deleteBtn?.classList.toggle('hidden', !showDelete);
@@ -2370,7 +2372,6 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         renderChatList(chatSearch.value);
         if (clearCache) await clearCachedChat(id, { includeOutbox: true });
       }
-    
       async function hideChatFromList(chatId) {
         const chat = getChatById(chatId);
         if (!canHideChat(chat)) return;
@@ -2382,49 +2383,49 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
           showCenterToast(e.message || '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043a\u0440\u044b\u0442\u044c \u0447\u0430\u0442');
         }
       }
-    
       async function leaveChat(chatId) {
         const chat = getChatById(chatId);
         if (!canLeaveChat(chat)) return;
-        if (!confirm('\u0412\u044b\u0439\u0442\u0438 \u0438\u0437 \u044d\u0442\u043e\u0433\u043e \u0447\u0430\u0442\u0430?')) return;
+        const isDocument = isDocumentChat(chat);
+        if (!confirm(t(isDocument ? 'Leave this document?' : 'Leave this chat?'))) return;
         try {
           await api(`/api/chats/${chatId}/members/me`, { method: 'DELETE' });
-          await removeChatLocally(chatId, { clearCache: true });
-          closeAllModals({ immediate: true });
-          showCenterToast('\u0412\u044b \u0432\u044b\u0448\u043b\u0438 \u0438\u0437 \u0447\u0430\u0442\u0430');
+          await removeChatLocally(chatId, { clearCache: true }); closeAllModals({ immediate: true });
+          showCenterToast(t(isDocument ? 'You left the document' : 'You left the chat'));
         } catch (e) {
-          showCenterToast(e.message || '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0432\u044b\u0439\u0442\u0438 \u0438\u0437 \u0447\u0430\u0442\u0430');
+          showCenterToast(e.message || t(isDocument ? 'Could not leave document' : 'Could not leave chat'));
         }
       }
-    
       async function deleteChatCompletely(chatId) {
         const chat = getChatById(chatId);
         if (!canManageDestructiveChat(chat)) return;
-        if (!confirm('\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0447\u0430\u0442, \u0432\u0441\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f \u0438 \u043c\u0435\u0434\u0438\u0430 \u0431\u0435\u0437 \u0432\u043e\u0441\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f?')) return;
+        const isDocument = isDocumentChat(chat);
+        if (!confirm(t(isDocument ? 'Delete document permanently?' : 'Delete chat permanently?'))) return;
         try {
           await api(`/api/chats/${chatId}`, { method: 'DELETE' });
-          await removeChatLocally(chatId, { clearCache: true });
-          closeAllModals({ immediate: true });
-          showCenterToast('\u0427\u0430\u0442 \u0443\u0434\u0430\u043b\u0451\u043d');
+          await removeChatLocally(chatId, { clearCache: true }); closeAllModals({ immediate: true });
+          showCenterToast(t(isDocument ? 'Document deleted' : 'Chat deleted'));
         } catch (e) {
-          showCenterToast(e.message || '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0443\u0434\u0430\u043b\u0438\u0442\u044c \u0447\u0430\u0442');
+          showCenterToast(e.message || t(isDocument ? 'Could not delete document' : 'Could not delete chat'));
         }
       }
-    
       async function clearChatHistoryForEveryone(chatId) {
         const chat = getChatById(chatId);
         if (!canManageDestructiveChat(chat)) return;
-        if (!confirm('\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c \u0438\u0441\u0442\u043e\u0440\u0438\u044e \u0447\u0430\u0442\u0430 \u0434\u043b\u044f \u0432\u0441\u0435\u0445 \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a\u043e\u0432?')) return;
+        const isDocument = isDocumentChat(chat);
+        if (!confirm(t(isDocument ? 'Clear document content for everyone?' : 'Clear chat history for everyone?'))) return;
         try {
-          await api(`/api/chats/${chatId}/history`, { method: 'DELETE' });
-          await clearLocalChatHistory(chatId, { clearCache: true });
-          await loadChats({ silent: true });
-          showCenterToast('\u0418\u0441\u0442\u043e\u0440\u0438\u044f \u043e\u0447\u0438\u0449\u0435\u043d\u0430');
+          if (isDocument) {
+            const data = await api(`/api/documents/${chatId}/content`, { method: 'DELETE' }); if (data?.chat) applyChatUpdate(data.chat);
+          } else {
+            await api(`/api/chats/${chatId}/history`, { method: 'DELETE' }); await clearLocalChatHistory(chatId, { clearCache: true });
+            await loadChats({ silent: true });
+          }
+          showCenterToast(t(isDocument ? 'Document cleared' : 'History cleared'));
         } catch (e) {
-          showCenterToast(e.message || '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0447\u0438\u0441\u0442\u0438\u0442\u044c \u0438\u0441\u0442\u043e\u0440\u0438\u044e');
+          showCenterToast(e.message || t(isDocument ? 'Could not clear document' : 'Could not clear history'));
         }
       }
-    
       async function copyTextToClipboard(text) {
         const value = String(text || '');
         if (!value) return false;
@@ -2870,7 +2871,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         loadNotificationSettings, saveNotificationSettings, enablePushNotifications, disablePushOnThisDevice, testPushNotification, refreshPushDeviceState, applySoundSettings, setSoundStatus,
         renderSoundSettingsForm, getSoundSettingsFromForm, loadSoundSettings, saveSoundSettings, scheduleSoundSettingsSave, playAppSound, previewSound, previewAllSounds,
         getChatById, isChatPinned, getActiveChatFolder, isAllChatsFolderActive, getFolderPinnedChatOrder, isChatPinnedInFolder, compareChatsForFolder, folderSummaryText,
-        sortChatsInPlace, getPinnedChats, getPinnedChatMoveState, isNotesChat, isCurrentNotesChat, isChatNotificationEnabled, isChatIncomingSoundEnabled, isPinNotificationEnabled,
+        sortChatsInPlace, getPinnedChats, getPinnedChatMoveState, isNotesChat, isDocumentChat, isCurrentNotesChat, isChatNotificationEnabled, isChatIncomingSoundEnabled, isPinNotificationEnabled,
         isPinSoundEnabled, isMentionSoundEnabled, isMessageMentioningCurrentUser, setChatPreferencesStatus, renderChatPreferencesForm, loadChatPreferences, saveChatPreferences, chatAllowsUnpinAnyPin,
         canManagePinSettings, isGeneralChat, isGroupOrPrivateChat, canHideChat, canLeaveChat, canManageDestructiveChat, isInviteCapableGroupChat, canManageInviteLink,
         setChatInviteLinkStatus, renderChatInviteLinkForm, copyCurrentChatInviteLink, refreshCurrentChatInviteLink, joinChatInviteToken, setChatPinSettingsStatus, renderChatPinSettingsForm,

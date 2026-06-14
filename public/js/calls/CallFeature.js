@@ -308,6 +308,7 @@
   function isCallableChat(chat = currentChat()) {
     if (!chat || !state.settings.calls_enabled || !state.settings.livekit_ready) return false;
     if (chat.is_notes || Number(chat.is_notes || 0) !== 0) return false;
+    if (Number(chat.is_document || 0) === 1) return false;
     if (chat.type === 'private') {
       if (!state.settings.allow_private_calls) return false;
       if (Number(chat.private_user?.is_ai_bot || 0) !== 0) return false;

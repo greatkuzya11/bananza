@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { WebSocketServer } = require('ws');
 const Y = require('yjs');
-const { setupWSConnection, setPersistence } = require('y-websocket/bin/utils');
+const { setupWSConnection, setPersistence, docs: documentRooms } = require('y-websocket/bin/utils');
 
 const DOCUMENT_INVITE_TOKEN_RE = /^[A-Za-z0-9_-]{32,128}$/;
 const DEFAULT_DOCUMENT_TITLE = 'Untitled document';
@@ -83,6 +83,81 @@ function createDocumentsFeature({
 
   function getDocumentMemberIds(chatId) {
     return memberIdsStmt.all(Number(chatId || 0)).map((row) => Number(row.user_id || 0)).filter(Boolean);
+  }
+
+  function documentRoomName(chatId) {
+    return `doc:${Number(chatId || 0)}`;
+  }
+
+  function loadDetachedDocument(chatId) {
+    const row = documentStateStmt.get(Number(chatId || 0));
+    if (!row) return null;
+    const ydoc = new Y.Doc();
+    if (row.ydoc_state) {
+      Y.applyUpdate(ydoc, new Uint8Array(row.ydoc_state));
+    }
+    const titleText = ydoc.getText('title');
+    if (!titleText.toString()) {
+      titleText.insert(0, clampTitle(row.title));
+    }
+    return ydoc;
+  }
+
+  function getMutableDocument(chatId) {
+    const roomName = documentRoomName(chatId);
+    const active = documentRooms.get(roomName);
+    if (active) return { roomName, ydoc: active, active: true };
+    const ydoc = loadDetachedDocument(chatId);
+    if (!ydoc) return null;
+    return { roomName, ydoc, active: false };
+  }
+
+  function updateDocumentTitle(chatId, title) {
+    const target = getMutableDocument(chatId);
+    if (!target) return null;
+    try {
+      const yTitle = target.ydoc.getText('title');
+      target.ydoc.transact(() => {
+        yTitle.delete(0, yTitle.length);
+        yTitle.insert(0, title);
+      });
+      clearTimeout(saveTimers.get(target.roomName));
+      saveTimers.delete(target.roomName);
+      persistDocumentNow(target.roomName, target.ydoc);
+      return getDocumentChat(chatId);
+    } finally {
+      if (!target.active) target.ydoc.destroy();
+    }
+  }
+
+  function clearDocumentContent(chatId) {
+    const target = getMutableDocument(chatId);
+    if (!target) return null;
+    try {
+      const yXml = target.ydoc.getXmlFragment('prosemirror');
+      target.ydoc.transact(() => {
+        if (yXml.length > 0) yXml.delete(0, yXml.length);
+      });
+      clearTimeout(saveTimers.get(target.roomName));
+      saveTimers.delete(target.roomName);
+      persistDocumentNow(target.roomName, target.ydoc);
+      return getDocumentChat(chatId);
+    } finally {
+      if (!target.active) target.ydoc.destroy();
+    }
+  }
+
+  function cleanupDocumentRoom(chatId) {
+    const roomName = documentRoomName(chatId);
+    clearTimeout(saveTimers.get(roomName));
+    saveTimers.delete(roomName);
+    const active = documentRooms.get(roomName);
+    if (!active) return;
+    Array.from(active.conns?.keys?.() || []).forEach((conn) => {
+      try { conn.close(1000, 'Document deleted'); } catch (error) {}
+    });
+    documentRooms.delete(roomName);
+    try { active.destroy?.(); } catch (error) {}
   }
 
   function documentInvitePath(token) {
@@ -232,6 +307,15 @@ function createDocumentsFeature({
     return next();
   }
 
+  function requireDocumentManager(req, res, next) {
+    const chat = req.documentChat;
+    if (!chat) return res.status(404).json({ error: 'Document not found' });
+    if (!req.user?.is_admin && Number(chat.created_by || 0) !== Number(req.user?.id || 0)) {
+      return res.status(403).json({ error: 'Only document creator or admin can manage this document' });
+    }
+    return next();
+  }
+
   app.post('/api/documents', auth, (req, res) => {
     try {
       const title = clampTitle(req.body?.title);
@@ -307,6 +391,29 @@ function createDocumentsFeature({
         color: req.user.avatar_color || '#65aadd',
       },
     }));
+  });
+
+  app.put('/api/documents/:chatId/title', auth, requireDocumentMember, (req, res) => {
+    try {
+      const title = clampTitle(req.body?.title);
+      const chat = updateDocumentTitle(req.documentChat.id, title);
+      if (!chat) return res.status(404).json({ error: 'Document not found' });
+      return res.json({ ok: true, chat: publicDocumentChat(chat, req.user.id), document: { chatId: chat.id, title } });
+    } catch (error) {
+      console.error('[documents] title update failed:', error);
+      return res.status(500).json({ error: 'Server error' });
+    }
+  });
+
+  app.delete('/api/documents/:chatId/content', auth, requireDocumentMember, requireDocumentManager, (req, res) => {
+    try {
+      const chat = clearDocumentContent(req.documentChat.id);
+      if (!chat) return res.status(404).json({ error: 'Document not found' });
+      return res.json({ ok: true, chat: publicDocumentChat(chat, req.user.id) });
+    } catch (error) {
+      console.error('[documents] content clear failed:', error);
+      return res.status(500).json({ error: 'Server error' });
+    }
   });
 
   app.get('/api/documents/:chatId/invite-link', auth, requireDocumentMember, (req, res) => {
@@ -400,6 +507,7 @@ function createDocumentsFeature({
 
   return {
     documentInvitePath,
+    cleanupDocumentRoom,
     getDocumentChat,
     getDocumentSession,
     isDocumentChat: (chat) => boolDocument(chat?.is_document),

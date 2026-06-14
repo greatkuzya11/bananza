@@ -607,14 +607,16 @@
       async function openChatInfoModal(opener = getChatSettingsActionOpener()) {
         if (!currentChatId) return;
         openModal('chatInfoModal', { replaceStack: true, opener });
-    
-        const chat = chats.find(c => c.id === currentChatId);
-        $('#chatInfoTitle').textContent = chat ? chat.name : 'Chat Info';
+        const chat = chats.find(c => c.id === currentChatId), isDocument = isDocumentChat(chat), chatInfoTitle = $('#chatInfoTitle');
+        if (chatInfoTitle) chatInfoTitle.textContent = chat ? (chat.document_title || chat.name) : t('Chat Info');
+        chatInfoModal?.classList.toggle('is-document-settings', isDocument);
         syncChatInfoStatusVisibility(chat);
-    
         // Sync compact view toggle
-        $('#compactViewToggle').checked = compactView;
-        await loadChatPreferences(currentChatId);
+        $('#chatCompactViewSection')?.classList.toggle('hidden', isDocument);
+        if ($('#compactViewToggle')) $('#compactViewToggle').checked = compactView;
+        ['#chatPreferencesSection', '#chatRemindersSection', '#chatBackgroundSection'].forEach((selector) => $(selector)?.classList.toggle('hidden', isDocument));
+        if (isDocument) setChatPreferencesStatus('');
+        else await loadChatPreferences(currentChatId);
         renderChatPinSettingsForm(chat);
         renderChatInviteLinkForm(chat);
         renderChatContextTransformForm(chat);
@@ -643,37 +645,37 @@
             };
           }
         });
-    
-        // Group edit section
+        // Group/document edit section
         const editSection = $('#chatEditSection');
-        if (chat && !isNotesChat(chat) && (chat.type === 'group' || chat.type === 'general')) {
+        if (chat && !isNotesChat(chat) && (isDocument || chat.type === 'group' || chat.type === 'general')) {
           editSection.classList.remove('hidden');
           const chatAvatarEl = $('#chatAvatar');
           const removeChatAvatarBtn = $('#removeChatAvatar');
-    
+          const chatNameInput = $('#chatNameInput');
+          const chatNameLabel = $('#chatNameFieldLabel');
+          if (chatNameLabel) chatNameLabel.textContent = t(isDocument ? 'Document name' : 'Group name');
           if (chat.avatar_url) {
             chatAvatarEl.style.background = '#5eb5f7';
             chatAvatarEl.innerHTML = `<img class="avatar-img" src="${esc(chat.avatar_url)}" alt="">`;
             removeChatAvatarBtn.classList.remove('hidden');
           } else {
             chatAvatarEl.style.background = '#5eb5f7';
-            chatAvatarEl.innerHTML = chat.type === 'general' ? '\ud83c\udf10' : '\ud83d\udc65';
+            chatAvatarEl.innerHTML = isDocument ? '\ud83d\udcc4' : (chat.type === 'general' ? '\ud83c\udf10' : '\ud83d\udc65');
             removeChatAvatarBtn.classList.add('hidden');
           }
-    
-          $('#chatNameInput').value = chat.name;
-    
+          if (chatNameInput) { chatNameInput.maxLength = isDocument ? 80 : 50; chatNameInput.value = isDocument ? (chat.document_title || chat.name || '') : chat.name; }
           // Save name
           $('#saveChatNameBtn').onclick = async () => {
             const name = $('#chatNameInput').value.trim();
             if (!name) return;
             try {
-              const updated = await api(`/api/chats/${currentChatId}`, { method: 'PUT', body: { name } });
-              applyChatUpdate(updated || {});
+              const result = isDocument
+                ? await api(`/api/documents/${currentChatId}/title`, { method: 'PUT', body: { title: name } })
+                : await api(`/api/chats/${currentChatId}`, { method: 'PUT', body: { name } });
+              applyChatUpdate(isDocument ? (result.chat || {}) : (result || {}));
               closeAllModals();
             } catch (e) { alert(e.message); }
           };
-    
           // Upload chat avatar
           $('#chatAvatarInput').onchange = async (e) => {
             const file = e.target.files[0];
@@ -686,7 +688,6 @@
               refreshChatInfoPresentation(updated || {});
             } catch (e) { alert(e.message); }
           };
-    
           // Remove chat avatar
           removeChatAvatarBtn.onclick = async () => {
             try {
@@ -698,15 +699,13 @@
         } else {
           editSection.classList.add('hidden');
         }
-    
-        // Background controls (available for all chats)
+        // Background controls (available for message chats)
         try {
           const bgPreviewEl = $('#chatBackgroundPreview');
           const bgInput = $('#chatBackgroundInput');
           const removeBgBtn = $('#removeChatBackground');
           const bgStyleSelect = $('#chatBackgroundStyle');
-    
-          if (bgPreviewEl) {
+          if (!isDocument && bgPreviewEl) {
             if (chat && chat.background_url) {
               bgPreviewEl.style.backgroundImage = `url(${esc(chat.background_url)})`;
               applyBackgroundStyleToElement(bgPreviewEl, chat.background_style || 'cover');

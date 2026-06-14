@@ -2386,7 +2386,7 @@
         <button class="modal-close">✕</button>
       </div>
       <div class="modal-body">
-        <div class="chat-view-toggle" style="margin-bottom:16px">
+        <div id="chatCompactViewSection" class="chat-view-toggle" style="margin-bottom:16px">
           <label style="display:flex;align-items:center;gap:10px;cursor:pointer;color:var(--text-secondary);font-size:14px">
             <input type="checkbox" id="compactViewToggle">
             <span>Compact view (all messages on one side)</span>
@@ -2503,7 +2503,7 @@
           </div>
           <button id="removeChatAvatar" class="btn-text hidden">Remove avatar</button>
           <div class="field-group" style="margin-top:12px">
-            <label>Group Name</label>
+            <label id="chatNameFieldLabel">Group Name</label>
             <div class="inline-edit">
               <input type="text" id="chatNameInput" maxlength="50" class="modal-input" style="margin-bottom:0">
               <button id="saveChatNameBtn" class="btn-sm">Save</button>
@@ -2512,7 +2512,7 @@
           <hr class="divider">
         </div>
 
-        <div class="field-group" style="margin-top:12px">
+        <div id="chatBackgroundSection" class="field-group" style="margin-top:12px">
           <label>Chat Background</label>
           <div class="bg-upload-wrap center" style="margin-top:8px">
             <div id="chatBackgroundPreview" class="bg-preview"></div>
@@ -2685,7 +2685,7 @@
   <script src="/js/sounds.js"></script>
   <script src="/js/messageCache.js"></script>
   <script src="/js/ai-image-risk.js"></script>
-  <script src="/js/i18n.js?v=20260614-doc-table-menu1"></script>
+  <script src="/js/i18n.js?v=20260614-doc-settings1"></script>
   <script src="/js/document-editor.bundle.js?v=20260614-doc-cursors-fresh3"></script>
   <script src="/js/qip-infium-original.js?v=20260523-qip-infium-original"></script>
   <script src="/js/qip-hd.js?v=20260523-qip-hd"></script>
@@ -2705,9 +2705,9 @@
     <script src="/js/app/mobile-viewport.js?v=20260531-dom-mobile-shell"></script>
     <script src="/js/app/chat-header-actions.js?v=20260531-dom-mobile-shell"></script>
     <script src="/js/app/shell/mobile-composer-guard.js?v=20260601-shell-events"></script>
-    <script src="/js/app/shell/events.js?v=20260601-shell-events"></script>
-    <script src="/js/app/shell/ui-runtime.js?v=20260601-runtime-big-cut-2"></script>
-    <script src="/js/app/shell/shell-runtime.js?v=20260601-runtime-big-cut"></script>
+    <script src="/js/app/shell/events.js?v=20260614-doc-settings1"></script>
+    <script src="/js/app/shell/ui-runtime.js?v=20260614-doc-settings1"></script>
+    <script src="/js/app/shell/shell-runtime.js?v=20260614-doc-settings1"></script>
     <script src="/js/app/shell/mobile-runtime-adapters.js?v=20260601-runtime-final"></script>
     <script src="/js/app/modal-manager.js?v=20260531-modal-manager"></script>
   <script src="/js/app/settings/ui-settings.js?v=20260531-settings"></script>
@@ -2789,7 +2789,7 @@
   <script src="/js/calls/CallStore.js?v=20260509-call-modal-surface"></script>
   <script src="/js/calls/CallMedia.js?v=20260509-call-modal-surface"></script>
   <script src="/js/calls/CallNotifications.js?v=20260509-call-modal-surface"></script>
-  <script src="/js/calls/CallFeature.js?v=20260509-call-modal-surface"></script>
+  <script src="/js/calls/CallFeature.js?v=20260614-doc-settings1"></script>
   <script src="/js/video-notes/video-note-shapes.js"></script>
   <script src="/js/video-notes/VideoShapeRegistry.js"></script>
   <script src="/js/video-notes/AudioNoteRecorderAdapter.js"></script>

@@ -122,7 +122,7 @@
       }
 
       function isInviteCapableGroupChat(chat) {
-        return Boolean(chat && chat.type === 'group' && !isNotesChat(chat) && !isGeneralChat(chat));
+        return Boolean(chat && chat.type === 'group' && !isNotesChat(chat) && Number(chat.is_document || 0) !== 1 && !isGeneralChat(chat));
       }
 
       function canManageInviteLink(chat = getChatById(currentChatId)) {

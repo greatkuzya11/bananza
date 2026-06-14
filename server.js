@@ -2561,6 +2561,9 @@ app.delete('/api/chats/:chatId', auth, (req, res) => {
   const members = db.prepare('SELECT user_id FROM chat_members WHERE chat_id=?').all(chatId);
   const avatarPath = chatAssetPathFromUrl(chat.avatar_url, AVATARS_DIR);
   const backgroundPath = chatAssetPathFromUrl(chat.background_url, BACKGROUNDS_DIR);
+  if (isDocumentChatRow(chat)) {
+    documentsFeature?.cleanupDocumentRoom?.(chatId);
+  }
   deleteChatMessageData(chatId, { deleteChat: true });
   unlinkIfPresent(avatarPath);
   unlinkIfPresent(backgroundPath);

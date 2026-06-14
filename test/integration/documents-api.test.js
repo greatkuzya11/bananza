@@ -114,6 +114,8 @@ test('documents can be created, invited, edited by guest, and are not message ch
     await Promise.all([waitForProviderConnected(memberProvider), waitForProviderConnected(guestProvider)]);
     const memberTitle = memberDoc.getText('title');
     const guestTitle = guestDoc.getText('title');
+    const memberContent = memberDoc.getXmlFragment('prosemirror');
+    const guestContent = guestDoc.getXmlFragment('prosemirror');
     await waitFor(() => assert.equal(memberTitle.toString(), 'Roadmap Doc'), { timeoutMs: 10_000, intervalMs: 100 });
     await waitFor(() => assert.equal(guestTitle.toString(), 'Roadmap Doc'), { timeoutMs: 10_000, intervalMs: 100 });
     memberDoc.transact(() => {
@@ -121,6 +123,38 @@ test('documents can be created, invited, edited by guest, and are not message ch
       memberTitle.insert(0, 'Live Roadmap');
     });
     await waitFor(() => assert.equal(guestTitle.toString(), 'Live Roadmap'), { timeoutMs: 10_000, intervalMs: 100 });
+
+    await carol.request(`/api/documents/${chatId}/title`, {
+      method: 'PUT',
+      json: { title: 'Carol cannot rename' },
+      expectedStatus: 403,
+    });
+    const renamed = await bob.request(`/api/documents/${chatId}/title`, {
+      method: 'PUT',
+      json: { title: 'Settings Roadmap' },
+    });
+    assert.equal(renamed.data.chat.document_title, 'Settings Roadmap');
+    await waitFor(() => assert.equal(memberTitle.toString(), 'Settings Roadmap'), { timeoutMs: 10_000, intervalMs: 100 });
+    await waitFor(() => assert.equal(guestTitle.toString(), 'Settings Roadmap'), { timeoutMs: 10_000, intervalMs: 100 });
+
+    memberDoc.transact(() => {
+      memberContent.push([new Y.XmlElement('paragraph')]);
+    });
+    await waitFor(() => assert.equal(guestContent.length, 1), { timeoutMs: 10_000, intervalMs: 100 });
+    await bob.request(`/api/documents/${chatId}/content`, { method: 'DELETE', expectedStatus: 403 });
+    const beforeClearInviteToken = dbValue(path.join(sandbox.appDir, 'bananza.db'), 'SELECT invite_token FROM documents WHERE chat_id=?', chatId).invite_token;
+    await admin.request(`/api/documents/${chatId}/content`, { method: 'DELETE' });
+    await waitFor(() => assert.equal(memberContent.length, 0), { timeoutMs: 10_000, intervalMs: 100 });
+    await waitFor(() => assert.equal(guestContent.length, 0), { timeoutMs: 10_000, intervalMs: 100 });
+    const afterClear = dbValue(path.join(sandbox.appDir, 'bananza.db'), `
+      SELECT c.name, d.title, d.invite_token, length(d.ydoc_state) as state_size
+      FROM chats c JOIN documents d ON d.chat_id=c.id
+      WHERE c.id=?
+    `, chatId);
+    assert.equal(afterClear.name, 'Settings Roadmap');
+    assert.equal(afterClear.title, 'Settings Roadmap');
+    assert.equal(afterClear.invite_token, beforeClearInviteToken);
+    assert.ok(Number(afterClear.state_size || 0) > 0);
   } finally {
     memberProvider.destroy();
     guestProvider.destroy();
@@ -134,12 +168,32 @@ test('documents can be created, invited, edited by guest, and are not message ch
     try {
       const row = db.prepare('SELECT c.is_document, c.name, d.title, length(d.ydoc_state) as state_size FROM chats c JOIN documents d ON d.chat_id=c.id WHERE c.id=?').get(chatId);
       assert.equal(row.is_document, 1);
-      assert.equal(row.name, 'Live Roadmap');
-      assert.equal(row.title, 'Live Roadmap');
+      assert.equal(row.name, 'Settings Roadmap');
+      assert.equal(row.title, 'Settings Roadmap');
       assert.ok(Number(row.state_size || 0) > 0);
       assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     } finally {
       db.close();
     }
   }, { timeoutMs: 10_000, intervalMs: 250 });
+
+  await admin.request(`/api/chats/${chatId}`, { method: 'DELETE' });
+  await waitFor(() => {
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      assert.equal(db.prepare('SELECT COUNT(*) as count FROM documents WHERE chat_id=?').get(chatId).count, 0);
+      assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+    } finally {
+      db.close();
+    }
+  }, { timeoutMs: 10_000, intervalMs: 250 });
 });
+
+function dbValue(dbPath, sql, ...params) {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    return db.prepare(sql).get(...params);
+  } finally {
+    db.close();
+  }
+}

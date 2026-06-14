@@ -36,7 +36,7 @@ test('document guest page uses cache-busted document assets', () => {
   const dom = new JSDOM(documentHtml);
   const document = dom.window.document;
   assert.equal(document.querySelector('link[rel="stylesheet"]')?.getAttribute('href'), '/css/style.css?v=20260614-doc-mobile-topbar1');
-  assert.ok([...document.querySelectorAll('script')].some((script) => script.getAttribute('src') === '/js/i18n.js?v=20260614-doc-table-menu1'));
+  assert.ok([...document.querySelectorAll('script')].some((script) => script.getAttribute('src') === '/js/i18n.js?v=20260614-doc-settings1'));
   assert.ok([...document.querySelectorAll('script')].some((script) => script.getAttribute('src') === '/js/document-editor.bundle.js?v=20260614-doc-cursors-fresh3'));
   assert.ok([...document.querySelectorAll('script')].some((script) => script.getAttribute('src') === '/js/document-guest.js?v=20260614-doc-v2'));
 });

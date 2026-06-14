@@ -9,6 +9,10 @@ const { repoRoot } = require('../support/paths');
 const indexHtml = fs.readFileSync(path.join(repoRoot, 'public', 'index.html'), 'utf8');
 const styleCss = fs.readFileSync(path.join(repoRoot, 'public', 'css', 'style.css'), 'utf8');
 const documentEditorBundleJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'document-editor.bundle.js'), 'utf8');
+const shellEventsJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'app', 'shell', 'events.js'), 'utf8');
+const shellUiRuntimeJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'app', 'shell', 'ui-runtime.js'), 'utf8');
+const shellRuntimeJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'app', 'shell', 'shell-runtime.js'), 'utf8');
+const callFeatureJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'calls', 'CallFeature.js'), 'utf8');
 
 test('public/index.html keeps expected stylesheet and script order', () => {
   const dom = new JSDOM(indexHtml);
@@ -28,7 +32,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/sounds.js',
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
-    '/js/i18n.js?v=20260614-doc-table-menu1',
+    '/js/i18n.js?v=20260614-doc-settings1',
     '/js/document-editor.bundle.js?v=20260614-doc-cursors-fresh3',
     '/js/qip-infium-original.js?v=20260523-qip-infium-original',
     '/js/qip-hd.js?v=20260523-qip-hd',
@@ -48,9 +52,9 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/mobile-viewport.js?v=20260531-dom-mobile-shell',
     '/js/app/chat-header-actions.js?v=20260531-dom-mobile-shell',
     '/js/app/shell/mobile-composer-guard.js?v=20260601-shell-events',
-    '/js/app/shell/events.js?v=20260601-shell-events',
-    '/js/app/shell/ui-runtime.js?v=20260601-runtime-big-cut-2',
-    '/js/app/shell/shell-runtime.js?v=20260601-runtime-big-cut',
+    '/js/app/shell/events.js?v=20260614-doc-settings1',
+    '/js/app/shell/ui-runtime.js?v=20260614-doc-settings1',
+    '/js/app/shell/shell-runtime.js?v=20260614-doc-settings1',
     '/js/app/shell/mobile-runtime-adapters.js?v=20260601-runtime-final',
     '/js/app/modal-manager.js?v=20260531-modal-manager',
     '/js/app/settings/ui-settings.js?v=20260531-settings',
@@ -132,7 +136,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/calls/CallStore.js?v=20260509-call-modal-surface',
     '/js/calls/CallMedia.js?v=20260509-call-modal-surface',
     '/js/calls/CallNotifications.js?v=20260509-call-modal-surface',
-    '/js/calls/CallFeature.js?v=20260509-call-modal-surface',
+    '/js/calls/CallFeature.js?v=20260614-doc-settings1',
     '/js/video-notes/video-note-shapes.js',
     '/js/video-notes/VideoShapeRegistry.js',
     '/js/video-notes/AudioNoteRecorderAdapter.js',
@@ -173,6 +177,17 @@ test('public/index.html exposes core shell nodes used by runtime modules', () =>
     'settingsScreenRotationStatus',
     'pollComposerModal',
     'chatInfoModal',
+    'chatCompactViewSection',
+    'chatPreferencesSection',
+    'chatPinSettingsSection',
+    'chatInviteLinkSection',
+    'chatContextTransformSection',
+    'chatShotSection',
+    'chatRemindersSection',
+    'chatDangerSection',
+    'chatEditSection',
+    'chatNameFieldLabel',
+    'chatBackgroundSection',
     'chatFolderPicker',
     'chatFolderManageModal',
     'folderTab',
@@ -192,6 +207,21 @@ test('public/index.html exposes core shell nodes used by runtime modules', () =>
   assert.equal(document.getElementById('refreshChatsBtn'), null);
   assert.equal(document.querySelector('#documentTab .new-document-members-note')?.getAttribute('data-i18n'), 'Members can be added later');
   assert.equal(document.querySelector('#documentTab .new-document-create-panel #createDocumentBtn')?.id, 'createDocumentBtn');
+});
+
+test('document chat settings mode hides chat-only controls and uses document endpoints', () => {
+  assert.match(shellUiRuntimeJs, /function\s+isDocumentChat\s*\(/);
+  assert.match(shellUiRuntimeJs, /Document management/);
+  assert.match(shellUiRuntimeJs, /Clear document/);
+  assert.match(shellUiRuntimeJs, /api\/documents\/\$\{chatId\}\/content/);
+  assert.match(shellUiRuntimeJs, /'#chatPreferencesSection'[\s\S]*'#chatBackgroundSection'/);
+  assert.match(shellUiRuntimeJs, /forEach\(\(selector\) => \$\(selector\)\?\.classList\.toggle\('hidden', isDocument\)\)/);
+  assert.match(shellRuntimeJs, /chatCompactViewSection/);
+  assert.match(shellRuntimeJs, /chatBackgroundSection/);
+  assert.match(shellRuntimeJs, /api\/documents\/\$\{currentChatId\}\/title/);
+  assert.match(shellRuntimeJs, /Document name/);
+  assert.match(shellEventsJs, /Number\(chat\.is_document\s*\|\|\s*0\)\s*!==\s*1/);
+  assert.match(callFeatureJs, /Number\(chat\.is_document\s*\|\|\s*0\)\s*===\s*1\)\s*return\s+false/);
 });
 
 test('settings modal places microphone mode immediately after Send by Enter', () => {
