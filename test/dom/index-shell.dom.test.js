@@ -18,7 +18,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
   const scripts = [...document.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
 
   assert.deepEqual(styles, [
-    '/css/style.css?v=20260613-doc-fullwidth',
+    '/css/style.css?v=20260614-doc-mobile-topbar1',
     '/css/calls.css?v=20260509-call-modal-surface',
     '/css/voice.css',
     '/css/video-notes.css',
@@ -28,8 +28,8 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/sounds.js',
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
-    '/js/i18n.js?v=20260527-native-screen-orientation',
-    '/js/document-editor.bundle.js?v=20260613-doc-cursor',
+    '/js/i18n.js?v=20260614-doc-table-menu1',
+    '/js/document-editor.bundle.js?v=20260614-doc-cursors-fresh3',
     '/js/qip-infium-original.js?v=20260523-qip-infium-original',
     '/js/qip-hd.js?v=20260523-qip-hd',
     '/js/app/namespace.js?v=20260530-app-shell',
@@ -74,7 +74,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/open-chat/scroll.js?v=20260531-open-chat',
     '/js/app/open-chat/media-playback.js?v=20260531-open-chat',
     '/js/app/open-chat/controller.js?v=20260531-open-chat',
-    '/js/app/documents.js?v=20260613-documents',
+    '/js/app/documents.js?v=20260614-doc-token-stable1',
     '/js/app/messages/state.js?v=20260531-messages',
     '/js/app/messages/attachments.js?v=20260531-messages',
     '/js/app/messages/polls.js?v=20260531-messages',
@@ -328,6 +328,15 @@ test('style.css keeps New Chat modal scrollable tabs aligned', () => {
 
 test('style.css keeps document editor full width and theme-colored', () => {
   assert.match(styleCss, /\.document-workspace\s*\{[^}]*background-color\s*:\s*var\(--bg-dark\)[^}]*background-image\s*:\s*var\(--bg-app-gradient\)/s);
+  assert.match(styleCss, /\.document-workspace\s*\{[^}]*gap\s*:\s*4px[^}]*padding\s*:\s*6px clamp\(8px,\s*\.9vw,\s*16px\) 12px/s);
+  assert.match(styleCss, /\.document-topbar\s*\{[^}]*min-height\s*:\s*32px/s);
+  assert.match(styleCss, /\.document-title-input\s*\{[^}]*padding\s*:\s*2px 2px 5px/s);
+  assert.match(styleCss, /\.document-invite-status:empty\s*\{[^}]*display\s*:\s*none/s);
+  assert.match(styleCss, /@media\s*\(max-width:\s*720px\)\s*\{[\s\S]*\.document-workspace\s*\{[^}]*gap\s*:\s*4px[^}]*padding\s*:\s*5px 8px 9px/s);
+  assert.match(styleCss, /@media\s*\(max-width:\s*720px\)\s*\{[\s\S]*\.document-topbar\s*\{[^}]*flex-direction\s*:\s*row[^}]*gap\s*:\s*8px[^}]*min-height\s*:\s*32px/s);
+  assert.match(styleCss, /@media\s*\(max-width:\s*720px\)\s*\{[\s\S]*\.document-topbar-actions\s*\{[^}]*width\s*:\s*auto/s);
+  assert.match(styleCss, /@media\s*\(max-width:\s*720px\)\s*\{[\s\S]*\.document-action-btn\s*\{[^}]*flex\s*:\s*0 1 auto[^}]*max-width\s*:\s*44vw[^}]*text-overflow\s*:\s*ellipsis/s);
+  assert.match(styleCss, /@media\s*\(max-width:\s*720px\)\s*\{[\s\S]*\.document-toolbar\s*\{[^}]*min-height\s*:\s*42px[^}]*padding\s*:\s*5px/s);
   assert.match(styleCss, /\.document-toolbar\s*\{[^}]*background-color\s*:\s*var\(--bg-sidebar\)[^}]*background-image\s*:\s*var\(--bg-panel-gradient\)/s);
   assert.match(styleCss, /\.document-editor-shell\s*\{[^}]*background\s*:\s*var\(--rich-other-msg-bg,\s*var\(--bg-other-msg\)\)/s);
   assert.match(styleCss, /\.document-editor\s+\.ProseMirror\s*\{[^}]*width\s*:\s*100%[^}]*max-width\s*:\s*none[^}]*margin\s*:\s*0/s);
@@ -339,6 +348,71 @@ test('document collab cursor label stays out of table layout flow', () => {
   assert.match(styleCss, /\.document-editor\s+\.ProseMirror\s+\.ProseMirror-yjs-cursor\s*>\s*div\s*\{[^}]*width\s*:\s*max-content\s*!important/s);
   assert.match(documentEditorBundleJs, /className\s*=\s*"document-collab-cursor"/);
   assert.match(documentEditorBundleJs, /cursorBuilder:\s*createCollabCursor/);
+});
+
+test('document editor bundle exposes v2 rich editing and keeps image insertion disabled', () => {
+  assert.match(documentEditorBundleJs, /mergeCells/);
+  assert.match(documentEditorBundleJs, /toggleHeaderRow/);
+  assert.match(documentEditorBundleJs, /createAwarenessStateFilter/);
+  assert.match(documentEditorBundleJs, /participantDisplayKey/);
+  assert.match(documentEditorBundleJs, /sameParticipant/);
+  assert.match(documentEditorBundleJs, /documentUserId/);
+  assert.match(documentEditorBundleJs, /awarenessStateFilter/);
+  assert.match(documentEditorBundleJs, /primaryLastUpdated/);
+  assert.match(documentEditorBundleJs, /primaryHasId/);
+  assert.match(documentEditorBundleJs, /lastUpdated > primaryLastUpdated/);
+  assert.match(documentEditorBundleJs, /createTableActionsMenu/);
+  assert.match(documentEditorBundleJs, /document-table-actions-panel/);
+  assert.match(documentEditorBundleJs, /document-toolbar-table-menu/);
+  assert.match(documentEditorBundleJs, /document-toolbar-dropdown-panel/);
+  assert.match(documentEditorBundleJs, /document-toolbar-dropdown-option/);
+  assert.match(documentEditorBundleJs, /toggleListCommand/);
+  assert.match(documentEditorBundleJs, /listItemTypeForList/);
+  assert.match(documentEditorBundleJs, /convertListNode/);
+  assert.match(documentEditorBundleJs, /task_list/);
+  assert.match(documentEditorBundleJs, /task_item/);
+  assert.match(documentEditorBundleJs, /liftListItem/);
+  assert.match(documentEditorBundleJs, /sinkListItem/);
+  assert.match(documentEditorBundleJs, /listActive/);
+  assert.doesNotMatch(documentEditorBundleJs, /insertChecklistCommand/);
+  assert.match(documentEditorBundleJs, /setupToolbarScrollBehavior/);
+  assert.match(documentEditorBundleJs, /document-toolbar-scrollbar/);
+  assert.match(documentEditorBundleJs, /getBoundingClientRect/);
+  assert.match(documentEditorBundleJs, /thumb\.style\.left/);
+  assert.match(documentEditorBundleJs, /thumb\.style\.top/);
+  assert.match(documentEditorBundleJs, /toolbarEl\.addEventListener\("pointerdown"/);
+  assert.match(documentEditorBundleJs, /window\.addEventListener\("pointermove"/);
+  assert.match(documentEditorBundleJs, /event\.pointerType !== "mouse"/);
+  assert.match(documentEditorBundleJs, /DRAG_SCROLL_MULTIPLIER/);
+  assert.match(documentEditorBundleJs, /INERTIA_FRICTION/);
+  assert.match(documentEditorBundleJs, /requestAnimationFrame/);
+  assert.match(documentEditorBundleJs, /cancelAnimationFrame/);
+  assert.doesNotMatch(documentEditorBundleJs, /thumb\.addEventListener\("pointerdown"/);
+  assert.match(documentEditorBundleJs, /\\u\{1F517\}/);
+  assert.match(documentEditorBundleJs, /\\u\{1F9F9\}/);
+  assert.match(documentEditorBundleJs, /\\u25A6/);
+  assert.doesNotMatch(documentEditorBundleJs, /"Link"/);
+  assert.doesNotMatch(documentEditorBundleJs, /"Unlink"/);
+  assert.doesNotMatch(documentEditorBundleJs, /"Row"/);
+  assert.doesNotMatch(documentEditorBundleJs, /"Col"/);
+  assert.doesNotMatch(documentEditorBundleJs, /"All"/);
+  assert.match(styleCss, /\.document-toolbar-btn\.active\s*\{/);
+  assert.match(styleCss, /\.document-toolbar-dropdown-panel\s*\{[^}]*position\s*:\s*fixed[^}]*padding\s*:\s*3px/s);
+  assert.match(styleCss, /\.document-toolbar-dropdown-option\s*\{[^}]*min-height\s*:\s*22px[^}]*font-size\s*:\s*12px[^}]*padding\s*:\s*0 7px/s);
+  assert.match(styleCss, /\.document-table-actions-panel\s*\{[^}]*position\s*:\s*fixed[^}]*grid-template-columns\s*:\s*repeat\(4,\s*34px\)/s);
+  assert.match(styleCss, /\.document-table-actions\.open\s+\.document-table-actions-panel\s*\{[^}]*display\s*:\s*grid/s);
+  assert.match(styleCss, /\.document-toolbar\s*\{[^}]*scrollbar-width\s*:\s*none/s);
+  assert.match(styleCss, /\.document-toolbar::-webkit-scrollbar\s*\{[^}]*display\s*:\s*none/s);
+  assert.match(styleCss, /\.document-toolbar-scrollbar\s*\{[^}]*position\s*:\s*fixed[^}]*opacity\s*:\s*0[^}]*pointer-events\s*:\s*none/s);
+  assert.match(styleCss, /\.document-toolbar\.is-overflowing:hover\s+\.document-toolbar-scrollbar,[\s\S]*\.document-toolbar:focus-within\s+\.document-toolbar-scrollbar\s*\{[^}]*opacity\s*:\s*\.55/s);
+  assert.match(styleCss, /\.document-toolbar\.is-scroll-active\s+\.document-toolbar-scrollbar\s*\{[^}]*opacity\s*:\s*\.95/s);
+  assert.match(styleCss, /@media\s*\(hover:\s*none\),\s*\(pointer:\s*coarse\)\s*\{[\s\S]*\.document-toolbar\s*\{[^}]*touch-action\s*:\s*pan-x[^}]*scrollbar-width\s*:\s*thin/s);
+  assert.match(styleCss, /@media\s*\(hover:\s*none\),\s*\(pointer:\s*coarse\)\s*\{[\s\S]*\.document-toolbar-scrollbar\s*\{[^}]*display\s*:\s*none/s);
+  assert.doesNotMatch(documentEditorBundleJs, /uploadAndInsertImage/);
+  assert.doesNotMatch(documentEditorBundleJs, /document-image-node/);
+  assert.doesNotMatch(documentEditorBundleJs, /Insert image/);
+  assert.doesNotMatch(styleCss, /\.document-image-mini-toolbar\s*\{/);
+  assert.doesNotMatch(styleCss, /\.document-image-resize-handle\s*\{/);
 });
 
 test('style.css clamps New Chat folder selection rows to compact previews', () => {

@@ -5878,8 +5878,8 @@ html[data-visual-mode="rich"] .poll-card {
   flex: 1 1 auto;
   min-height: 0;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px clamp(10px, 1vw, 18px) 18px;
+  gap: 4px;
+  padding: 6px clamp(8px, .9vw, 16px) 12px;
   background-color: var(--bg-dark);
   background-image: var(--bg-app-gradient);
 }
@@ -5892,7 +5892,7 @@ html[data-visual-mode="rich"] .poll-card {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-height: 42px;
+  min-height: 32px;
 }
 
 .document-title-input {
@@ -5907,7 +5907,7 @@ html[data-visual-mode="rich"] .poll-card {
   font-size: 20px;
   font-weight: 650;
   outline: none;
-  padding: 8px 2px;
+  padding: 2px 2px 5px;
 }
 
 .document-title-input:focus {
@@ -5951,23 +5951,95 @@ html[data-visual-mode="rich"] .poll-card {
 }
 
 .document-invite-status {
-  min-height: 18px;
   color: var(--text-secondary);
   font-size: 12px;
 }
 
+.document-invite-status:empty {
+  display: none;
+}
+
 .document-toolbar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 5px;
   min-height: 44px;
   overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
   border: 1px solid color-mix(in srgb, var(--border-light) 70%, transparent);
   border-radius: 8px;
   background-color: var(--bg-sidebar);
   background-image: var(--bg-panel-gradient);
   padding: 6px;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.document-toolbar::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.document-toolbar.is-dragging,
+.document-toolbar.is-dragging * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+.document-toolbar.is-overflowing {
+  cursor: grab;
+}
+
+.document-toolbar-scrollbar {
+  position: fixed;
+  z-index: 30;
+  top: 0;
+  left: 0;
+  height: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 62%, var(--text-secondary));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .16s ease;
+}
+
+.document-toolbar.is-overflowing:hover .document-toolbar-scrollbar,
+.document-toolbar:focus-within .document-toolbar-scrollbar {
+  opacity: .55;
+}
+
+.document-toolbar.is-scroll-active .document-toolbar-scrollbar {
+  opacity: .95;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .document-toolbar {
+    touch-action: pan-x;
+    scrollbar-width: thin;
+    -ms-overflow-style: auto;
+  }
+
+  .document-toolbar::-webkit-scrollbar {
+    display: block;
+    height: 4px;
+  }
+
+  .document-toolbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .document-toolbar::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 48%, transparent);
+  }
+
+  .document-toolbar-scrollbar {
+    display: none;
+  }
 }
 
 .document-toolbar-btn,
@@ -5980,9 +6052,74 @@ html[data-visual-mode="rich"] .poll-card {
   color: var(--text-primary);
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
+  font-size: 15px;
   min-width: 30px;
   padding: 0 8px;
+}
+
+.document-toolbar-select {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.document-toolbar-dropdown {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.document-toolbar-dropdown-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 54px;
+}
+
+.document-toolbar-dropdown-trigger::after {
+  content: "⌄";
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.document-toolbar-dropdown-panel {
+  position: fixed;
+  z-index: 45;
+  display: none;
+  min-width: 86px;
+  max-width: 180px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-modal);
+  box-shadow: var(--panel-shadow);
+  padding: 3px;
+}
+
+.document-toolbar-dropdown.open .document-toolbar-dropdown-panel {
+  display: grid;
+  gap: 1px;
+}
+
+.document-toolbar-dropdown-option {
+  width: 100%;
+  min-height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 7px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.document-toolbar-dropdown-option:hover,
+.document-toolbar-dropdown-option.active {
+  background: color-mix(in srgb, var(--accent) 34%, var(--bg-input));
+  color: var(--text-primary);
 }
 
 .document-toolbar-btn:hover,
@@ -5990,6 +6127,35 @@ html[data-visual-mode="rich"] .poll-card {
 .document-toolbar-select:focus {
   border-color: color-mix(in srgb, var(--accent) 46%, transparent);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
+  outline: none;
+}
+
+.document-toolbar-btn.active {
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: var(--accent);
+}
+
+.document-toolbar-btn:disabled,
+.document-toolbar-select:disabled {
+  cursor: default;
+  opacity: .45;
+}
+
+.document-toolbar-color {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  padding: 3px;
+}
+
+.document-toolbar-color:hover,
+.document-toolbar-color:focus {
+  border-color: color-mix(in srgb, var(--accent) 46%, transparent);
   outline: none;
 }
 
@@ -6016,6 +6182,36 @@ html[data-visual-mode="rich"] .poll-card {
 .document-table-picker {
   position: relative;
   flex: 0 0 auto;
+}
+
+.document-table-actions {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.document-table-actions-panel {
+  position: fixed;
+  z-index: 40;
+  display: none;
+  grid-template-columns: repeat(4, 34px);
+  gap: 6px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-modal);
+  box-shadow: var(--panel-shadow);
+  padding: 8px;
+}
+
+.document-table-actions.open .document-table-actions-panel {
+  display: grid;
+}
+
+.document-table-actions-panel .document-toolbar-btn,
+.document-table-actions-panel .document-toolbar-color {
+  width: 34px;
+  min-width: 34px;
+  height: 32px;
+  padding: 0;
 }
 
 .document-table-picker-panel {
@@ -6101,6 +6297,56 @@ html[data-visual-mode="rich"] .poll-card {
 .document-editor .ProseMirror ul,
 .document-editor .ProseMirror ol {
   padding-left: 1.4em;
+}
+
+.document-editor .ProseMirror a {
+  color: var(--link);
+  text-decoration: underline;
+}
+
+.document-editor .ProseMirror code {
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--bg-input) 78%, transparent);
+  padding: 1px 4px;
+}
+
+.document-editor .ProseMirror pre {
+  overflow-x: auto;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-input) 84%, transparent);
+  padding: 12px;
+}
+
+.document-editor .ProseMirror blockquote {
+  margin: 12px 0;
+  border-left: 3px solid var(--accent);
+  color: var(--text-secondary);
+  padding: 4px 0 4px 12px;
+}
+
+.document-editor .ProseMirror ul[data-task-list] {
+  list-style: none;
+  padding-left: 0;
+}
+
+.document-editor .ProseMirror li[data-task-item] {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 6px;
+  align-items: start;
+  margin: 4px 0;
+}
+
+.document-editor .ProseMirror [data-task-checkbox] {
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 700;
+  line-height: 1.55;
+  user-select: none;
+}
+
+.document-editor .ProseMirror li[data-task-item] > div {
+  min-width: 0;
 }
 
 .document-editor .ProseMirror table {
@@ -6212,27 +6458,70 @@ html[data-visual-mode="rich"] .poll-card {
 
 @media (max-width: 720px) {
   .document-workspace {
-    padding: 10px;
+    gap: 4px;
+    padding: 5px 8px 9px;
   }
 
   .document-topbar {
-    align-items: stretch;
-    flex-direction: column;
+    align-items: center;
+    flex-direction: row;
+    gap: 8px;
+    min-height: 32px;
+  }
+
+  .document-title-input {
+    flex: 1 1 auto;
+    font-size: 18px;
+    min-width: 0;
+    padding: 2px 2px 5px;
   }
 
   .document-topbar-actions {
-    justify-content: space-between;
-    width: 100%;
+    flex: 0 0 auto;
+    justify-content: flex-end;
+    min-width: 0;
+    width: auto;
+    gap: 5px;
+  }
+
+  .document-connection-status {
+    flex: 0 0 auto;
+    max-width: 32vw;
+    overflow: hidden;
+    padding: 5px 7px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .document-action-btn {
-    flex: 1 1 0;
+    flex: 0 1 auto;
+    max-width: 44vw;
     min-width: 0;
+    overflow: hidden;
+    padding: 6px 8px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .document-toolbar {
+    min-height: 42px;
+    padding: 5px;
   }
 
   .document-editor .ProseMirror {
     min-height: calc(100vh - 240px);
     padding: 18px;
+  }
+}
+
+@media (max-width: 380px) {
+  .document-connection-status {
+    max-width: 28vw;
+  }
+
+  .document-action-btn {
+    max-width: 38vw;
+    padding-inline: 7px;
   }
 }
 

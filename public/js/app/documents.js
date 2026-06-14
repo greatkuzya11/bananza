@@ -129,20 +129,17 @@
       return Boolean(ok);
     }
 
-    async function fetchInviteLink({ rotate = false } = {}) {
+    async function fetchInviteLink() {
       const chatId = Number(activeChatId || state.getCurrentChatId?.() || 0);
       if (!chatId) return null;
-      const route = rotate
-        ? `/api/documents/${chatId}/invite-link/rotate`
-        : `/api/documents/${chatId}/invite-link`;
-      const link = await api(route, rotate ? { method: 'POST' } : undefined);
+      const link = await api(`/api/documents/${chatId}/invite-link`);
       return link;
     }
 
-    async function copyCurrentInviteLink({ rotate = false } = {}) {
+    async function copyCurrentInviteLink() {
       try {
         setInviteStatus(t('Preparing link...'));
-        const link = await fetchInviteLink({ rotate });
+        const link = await fetchInviteLink();
         await copyText(link?.url || link?.path || '');
         setInviteStatus(t('Invite link copied'));
       } catch (error) {
@@ -152,14 +149,9 @@
 
     function bindInviteButtons() {
       const copyBtn = getEl('copyDocumentInviteLinkBtn', 'copyDocumentInviteLinkBtn');
-      const refreshBtn = getEl('refreshDocumentInviteLinkBtn', 'refreshDocumentInviteLinkBtn');
       if (copyBtn && !copyBtn.__documentInviteBound) {
         copyBtn.__documentInviteBound = true;
-        copyBtn.addEventListener('click', () => copyCurrentInviteLink({ rotate: false }));
-      }
-      if (refreshBtn && !refreshBtn.__documentInviteBound) {
-        refreshBtn.__documentInviteBound = true;
-        refreshBtn.addEventListener('click', () => copyCurrentInviteLink({ rotate: true }));
+        copyBtn.addEventListener('click', () => copyCurrentInviteLink());
       }
     }
 

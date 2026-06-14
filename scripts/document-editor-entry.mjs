@@ -1,11 +1,11 @@
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { Schema } from 'prosemirror-model';
-import { EditorState } from 'prosemirror-state';
+import { EditorState, Plugin } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
 import { schema as basicSchema } from 'prosemirror-schema-basic';
 import { addListNodes, wrapInList, splitListItem, liftListItem, sinkListItem } from 'prosemirror-schema-list';
-import { baseKeymap, chainCommands, exitCode, setBlockType, toggleMark } from 'prosemirror-commands';
+import { baseKeymap, chainCommands, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
 import { keymap } from 'prosemirror-keymap';
 import { gapCursor } from 'prosemirror-gapcursor';
 import { inputRules, wrappingInputRule, textblockTypeInputRule } from 'prosemirror-inputrules';
@@ -15,13 +15,19 @@ import {
   addColumnBefore,
   addRowAfter,
   addRowBefore,
+  CellSelection,
   columnResizing,
   deleteColumn,
   deleteRow,
   deleteTable,
+  mergeCells,
+  selectedRect,
+  setCellAttr,
+  splitCell,
   tableEditing,
   tableNodeTypes,
   tableNodes,
+  toggleHeaderRow,
 } from 'prosemirror-tables';
 import { redoCommand, undoCommand, yCursorPlugin, ySyncPlugin, yUndoPlugin } from 'y-prosemirror';
 
@@ -31,6 +37,8 @@ const DEFAULT_FONT_FAMILIES = [
   { label: 'Serif', value: 'Georgia, serif' },
   { label: 'Mono', value: 'SFMono-Regular, Consolas, monospace' },
 ];
+const DEFAULT_TEXT_COLORS = ['#ffffff', '#f87171', '#fbbf24', '#34d399', '#60a5fa', '#c084fc'];
+const DEFAULT_HIGHLIGHT_COLORS = ['#f5d76e', '#86efac', '#93c5fd', '#f0abfc', '#fb7185'];
 
 function t(options, key) {
   const fn = typeof options.t === 'function' ? options.t : null;
@@ -41,10 +49,59 @@ function normalizeCursorColor(color) {
   return /^#[0-9a-fA-F]{6}$/.test(String(color || '')) ? String(color) : '#65aadd';
 }
 
+function participantDisplayKey(user = {}, fallbackClientId = '') {
+  const name = String(user.name || '').trim().toLowerCase();
+  const color = normalizeCursorColor(user.color);
+  if (name) return `name:${name}:${color}`;
+  return `client:${fallbackClientId}`;
+}
+
+function sameParticipant(a = {}, b = {}, fallbackA = '', fallbackB = '') {
+  const aId = String(a.id || '').trim();
+  const bId = String(b.id || '').trim();
+  if (aId && bId && aId === bId) return true;
+  return participantDisplayKey(a, fallbackA) === participantDisplayKey(b, fallbackB);
+}
+
+function createAwarenessStateFilter(awareness, localUser = {}) {
+  return (localClientId, clientId, state = {}) => {
+    if (clientId === localClientId) return false;
+    const user = state.user || {};
+    if (!state.cursor || sameParticipant(user, localUser, clientId, localClientId)) return false;
+
+    let primaryClientId = null;
+    let primaryHasId = false;
+    let primaryLastUpdated = -1;
+    let primaryClock = -1;
+    awareness.getStates().forEach((candidateState, candidateClientId) => {
+      if (candidateClientId === localClientId || !candidateState?.cursor) return;
+      const candidateUser = candidateState.user || {};
+      if (!sameParticipant(candidateUser, user, candidateClientId, clientId)) return;
+      if (sameParticipant(candidateUser, localUser, candidateClientId, localClientId)) return;
+      const meta = awareness.meta?.get?.(candidateClientId) || {};
+      const hasId = Boolean(String(candidateUser.id || '').trim());
+      const lastUpdated = Number(meta.lastUpdated || 0);
+      const clock = Number(meta.clock || 0);
+      if (primaryClientId === null
+        || (hasId && !primaryHasId)
+        || (hasId === primaryHasId && lastUpdated > primaryLastUpdated)
+        || (hasId === primaryHasId && lastUpdated === primaryLastUpdated && clock > primaryClock)
+        || (hasId === primaryHasId && lastUpdated === primaryLastUpdated && clock === primaryClock && candidateClientId > primaryClientId)) {
+        primaryClientId = candidateClientId;
+        primaryHasId = hasId;
+        primaryLastUpdated = lastUpdated;
+        primaryClock = clock;
+      }
+    });
+    return primaryClientId === clientId;
+  };
+}
+
 function createCollabCursor(user = {}) {
   const color = normalizeCursorColor(user.color);
   const cursor = document.createElement('span');
   cursor.className = 'document-collab-cursor';
+  cursor.dataset.documentUserId = String(user.id || '');
   cursor.style.setProperty('--document-cursor-color', color);
   cursor.appendChild(document.createTextNode('\u2060'));
 
@@ -64,7 +121,54 @@ function createCollabSelection(user = {}) {
   };
 }
 
+function escAttr(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function normalizeTextAlign(value) {
+  const align = String(value || '').trim().toLowerCase();
+  return ['left', 'center', 'right'].includes(align) ? align : null;
+}
+
+function textblockAttrs(dom) {
+  return { align: normalizeTextAlign(dom?.style?.textAlign) };
+}
+
+function textblockDomAttrs(node, extraStyle = '') {
+  const styles = [];
+  const align = normalizeTextAlign(node.attrs.align);
+  if (align) styles.push(`text-align:${align}`);
+  if (extraStyle) styles.push(extraStyle);
+  return styles.length ? { style: styles.join(';') } : {};
+}
+
+function markStyleValue(value) {
+  return String(value || '').replace(/[;"<>]/g, '').trim();
+}
+
 function createDocumentSchema() {
+  const paragraphNode = {
+    content: 'inline*',
+    group: 'block',
+    attrs: { align: { default: null } },
+    parseDOM: [{ tag: 'p', getAttrs: textblockAttrs }],
+    toDOM: (node) => ['p', textblockDomAttrs(node), 0],
+  };
+  const headingNode = {
+    attrs: { level: { default: 1 }, align: { default: null } },
+    content: 'inline*',
+    group: 'block',
+    defining: true,
+    parseDOM: [1, 2, 3, 4, 5, 6].map((level) => ({
+      tag: `h${level}`,
+      getAttrs: (dom) => ({ level, align: normalizeTextAlign(dom?.style?.textAlign) }),
+    })),
+    toDOM: (node) => [`h${node.attrs.level}`, textblockDomAttrs(node), 0],
+  };
   const underlineMark = {
     parseDOM: [
       { tag: 'u' },
@@ -75,25 +179,95 @@ function createDocumentSchema() {
     ],
     toDOM: () => ['u', 0],
   };
+  const textColorMark = {
+    attrs: { color: {} },
+    parseDOM: [{ style: 'color', getAttrs: (value) => ({ color: markStyleValue(value) }) }],
+    toDOM: (mark) => ['span', { style: `color:${markStyleValue(mark.attrs.color)}` }, 0],
+  };
+  const highlightMark = {
+    attrs: { color: {} },
+    parseDOM: [{ style: 'background-color', getAttrs: (value) => ({ color: markStyleValue(value) }) }],
+    toDOM: (mark) => ['span', { style: `background-color:${markStyleValue(mark.attrs.color)}` }, 0],
+  };
   const fontSizeMark = {
     attrs: { size: {} },
-    parseDOM: [{ style: 'font-size', getAttrs: (value) => ({ size: String(value || '').trim() }) }],
-    toDOM: (mark) => ['span', { style: `font-size:${mark.attrs.size}` }, 0],
+    parseDOM: [{ style: 'font-size', getAttrs: (value) => ({ size: markStyleValue(value) }) }],
+    toDOM: (mark) => ['span', { style: `font-size:${markStyleValue(mark.attrs.size)}` }, 0],
   };
   const fontFamilyMark = {
     attrs: { family: {} },
-    parseDOM: [{ style: 'font-family', getAttrs: (value) => ({ family: String(value || '').trim() }) }],
-    toDOM: (mark) => ['span', { style: `font-family:${mark.attrs.family}` }, 0],
+    parseDOM: [{ style: 'font-family', getAttrs: (value) => ({ family: markStyleValue(value) }) }],
+    toDOM: (mark) => ['span', { style: `font-family:${markStyleValue(mark.attrs.family)}` }, 0],
   };
   const marks = basicSchema.spec.marks
     .addToEnd('underline', underlineMark)
+    .addToEnd('text_color', textColorMark)
+    .addToEnd('highlight', highlightMark)
     .addToEnd('font_size', fontSizeMark)
     .addToEnd('font_family', fontFamilyMark);
-  const nodes = addListNodes(basicSchema.spec.nodes, 'paragraph block*', 'block')
+  const taskListNode = {
+    group: 'block',
+    content: 'task_item+',
+    parseDOM: [{ tag: 'ul[data-task-list]' }],
+    toDOM: () => ['ul', { 'data-task-list': 'true' }, 0],
+  };
+  const taskItemNode = {
+    attrs: { checked: { default: false } },
+    content: 'paragraph block*',
+    defining: true,
+    parseDOM: [{
+      tag: 'li[data-task-item]',
+      getAttrs: (dom) => ({ checked: dom.getAttribute('data-checked') === 'true' }),
+    }],
+    toDOM: (node) => ['li', {
+      'data-task-item': 'true',
+      'data-checked': node.attrs.checked ? 'true' : 'false',
+    }, ['span', { 'data-task-checkbox': 'true', contenteditable: 'false' }, node.attrs.checked ? '☑' : '☐'], ['div', 0]],
+  };
+  const imageBlockNode = {
+    group: 'block',
+    atom: true,
+    selectable: true,
+    isolating: true,
+    attrs: {
+      assetId: { default: null },
+      src: { default: '' },
+      width: { default: 420 },
+      height: { default: null },
+      x: { default: 0 },
+      y: { default: 0 },
+      zIndex: { default: 1 },
+      caption: { default: '' },
+      alt: { default: '' },
+    },
+    parseDOM: [{
+      tag: 'figure[data-document-image]',
+      getAttrs: (dom) => ({ assetId: dom.getAttribute?.('data-asset-id') || null }),
+    }],
+    toDOM: (node) => ['div', {
+      'data-document-legacy-image': 'true',
+      'data-asset-id': node.attrs.assetId || '',
+      contenteditable: 'false',
+    }, ['br']],
+  };
+  const baseNodes = basicSchema.spec.nodes
+    .update('paragraph', paragraphNode)
+    .update('heading', headingNode);
+  const nodes = addListNodes(baseNodes, 'paragraph block*', 'block')
+    .append({ task_list: taskListNode, task_item: taskItemNode, image_block: imageBlockNode })
     .append(tableNodes({
       tableGroup: 'block',
       cellContent: 'block+',
-      cellAttributes: {},
+      cellAttributes: {
+        background: {
+          default: null,
+          getFromDOM: (dom) => dom.style.backgroundColor || null,
+          setDOMAttr: (value, attrs) => {
+            if (!value) return;
+            attrs.style = `${attrs.style || ''};background-color:${markStyleValue(value)}`;
+          },
+        },
+      },
     }));
   return new Schema({ nodes, marks });
 }
@@ -148,7 +322,232 @@ function applyFontMark(view, markType, attrs) {
   return run(view, toggleMark(markType, attrs));
 }
 
-function button(options, className, label, titleKey, command) {
+function markActive(state, markType) {
+  if (!markType) return false;
+  const { from, $from, to, empty } = state.selection;
+  if (empty) return Boolean(markType.isInSet(state.storedMarks || $from.marks()));
+  return state.doc.rangeHasMark(from, to, markType);
+}
+
+function blockActive(state, nodeType, attrs = {}) {
+  const { $from, to, node } = state.selection;
+  if (node) return node.hasMarkup(nodeType, attrs);
+  return to <= $from.end() && $from.parent.type === nodeType
+    && Object.entries(attrs).every(([key, value]) => $from.parent.attrs[key] === value);
+}
+
+function listActive(state, listType) {
+  const { $from } = state.selection;
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    if ($from.node(depth).type === listType) return true;
+  }
+  return false;
+}
+
+function listItemTypeForList(schema, listType) {
+  return listType === schema.nodes.task_list ? schema.nodes.task_item : schema.nodes.list_item;
+}
+
+function currentListInfo(state, schema) {
+  const { $from } = state.selection;
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    const node = $from.node(depth);
+    if (node.type === schema.nodes.bullet_list
+      || node.type === schema.nodes.ordered_list
+      || node.type === schema.nodes.task_list) {
+      return { depth, node, pos: $from.before(depth) };
+    }
+  }
+  return null;
+}
+
+function convertListNode(schema, sourceList, targetListType) {
+  const targetItemType = listItemTypeForList(schema, targetListType);
+  const items = [];
+  sourceList.forEach((item) => {
+    const itemAttrs = targetItemType === schema.nodes.task_item ? { checked: false } : null;
+    items.push(targetItemType.createChecked(itemAttrs, item.content));
+  });
+  return targetListType.createChecked(null, items);
+}
+
+function toggleListCommand(schema, listType) {
+  return (state, dispatch, view) => {
+    if (listActive(state, listType)) {
+      return liftListItem(listItemTypeForList(schema, listType))(state, dispatch, view);
+    }
+    const current = currentListInfo(state, schema);
+    if (current && current.node.type !== listType) {
+      if (dispatch) {
+        const replacement = convertListNode(schema, current.node, listType);
+        dispatch(state.tr.replaceWith(current.pos, current.pos + current.node.nodeSize, replacement).scrollIntoView());
+      }
+      return true;
+    }
+    return wrapInList(listType)(state, dispatch, view);
+  };
+}
+
+function textAlignActive(state, align) {
+  const { $from } = state.selection;
+  return normalizeTextAlign($from.parent.attrs?.align) === normalizeTextAlign(align);
+}
+
+function setTextAlignCommand(align) {
+  const nextAlign = normalizeTextAlign(align);
+  return (state, dispatch) => {
+    const { from, to } = state.selection;
+    let changed = false;
+    let tr = state.tr;
+    state.doc.nodesBetween(from, to, (node, pos) => {
+      if (!node.isTextblock || !Object.prototype.hasOwnProperty.call(node.attrs || {}, 'align')) return;
+      if (normalizeTextAlign(node.attrs.align) === nextAlign) return;
+      changed = true;
+      if (dispatch) tr = tr.setNodeMarkup(pos, null, { ...node.attrs, align: nextAlign });
+    });
+    if (changed && dispatch) dispatch(tr.scrollIntoView());
+    return changed;
+  };
+}
+
+function clearFormattingCommand(schema) {
+  return (state, dispatch) => {
+    if (!dispatch) return true;
+    const { from, to } = state.selection;
+    let tr = state.tr.removeMark(from, to);
+    state.doc.nodesBetween(from, to, (node, pos) => {
+      if (!node.isTextblock) return;
+      const attrs = Object.prototype.hasOwnProperty.call(node.attrs || {}, 'align')
+        ? { ...node.attrs, align: null }
+        : node.attrs;
+      if ((node.type === schema.nodes.heading || node.type === schema.nodes.code_block) && schema.nodes.paragraph) {
+        tr = tr.setNodeMarkup(pos, schema.nodes.paragraph, { align: null });
+      } else if (attrs !== node.attrs) {
+        tr = tr.setNodeMarkup(pos, null, attrs);
+      }
+    });
+    dispatch(tr.scrollIntoView());
+    return true;
+  };
+}
+
+function taskListPlugin(schema) {
+  return new Plugin({
+    props: {
+      handleClickOn(view, _pos, node, nodePos, event) {
+        const target = event.target;
+        if (!target?.closest?.('[data-task-checkbox]') || node.type !== schema.nodes.task_item) return false;
+        event.preventDefault();
+        const tr = view.state.tr.setNodeMarkup(nodePos, null, {
+          ...node.attrs,
+          checked: !node.attrs.checked,
+        });
+        view.dispatch(tr);
+        return true;
+      },
+    },
+  });
+}
+
+function promptText(options, key, initial = '') {
+  return window.prompt(t(options, key), initial);
+}
+
+function setLinkCommand(options, schema) {
+  return (state, dispatch, view) => {
+    if (!schema.marks.link) return false;
+    if (!dispatch || !view) return true;
+    const current = schema.marks.link.isInSet(state.storedMarks || state.selection.$from.marks());
+    const href = promptText(options, 'Link URL', current?.attrs?.href || 'https://');
+    if (!href) return true;
+    return toggleMark(schema.marks.link, { href, title: href })(state, dispatch, view);
+  };
+}
+
+function removeLinkCommand(schema) {
+  return (state, dispatch) => {
+    if (!schema.marks.link) return false;
+    const { from, to } = state.selection;
+    if (dispatch) dispatch(state.tr.removeMark(from, to, schema.marks.link).scrollIntoView());
+    return true;
+  };
+}
+
+function selectedTableCellPositions(state, mode) {
+  try {
+    const rect = selectedRect(state);
+    const width = rect.map.width;
+    const height = rect.map.height;
+    const positions = [];
+    if (mode === 'row') {
+      const row = rect.top;
+      for (let col = 0; col < width; col += 1) positions.push(rect.tableStart + rect.map.map[row * width + col]);
+    } else if (mode === 'column') {
+      const col = rect.left;
+      for (let row = 0; row < height; row += 1) positions.push(rect.tableStart + rect.map.map[row * width + col]);
+    } else {
+      for (let row = 0; row < height; row += 1) {
+        for (let col = 0; col < width; col += 1) positions.push(rect.tableStart + rect.map.map[row * width + col]);
+      }
+    }
+    return [...new Set(positions)];
+  } catch {
+    return [];
+  }
+}
+
+function selectTablePartCommand(mode) {
+  return (state, dispatch) => {
+    const positions = selectedTableCellPositions(state, mode);
+    if (!positions.length) return false;
+    if (dispatch) {
+      const first = state.doc.resolve(positions[0]);
+      const last = state.doc.resolve(positions[positions.length - 1]);
+      dispatch(state.tr.setSelection(new CellSelection(first, last)).scrollIntoView());
+    }
+    return true;
+  };
+}
+
+function colorInput(options, titleKey, value, onChange) {
+  const input = document.createElement('input');
+  input.type = 'color';
+  input.className = 'document-toolbar-color';
+  input.value = value;
+  input.title = t(options, titleKey);
+  input.setAttribute('aria-label', t(options, titleKey));
+  input.addEventListener('input', () => onChange(input.value));
+  return input;
+}
+
+function updateToolbarState(toolbarEl, view) {
+  if (!toolbarEl || !view) return;
+  toolbarEl.querySelectorAll('.document-toolbar-btn').forEach((btn) => {
+    const can = btn.__documentCan;
+    const active = btn.__documentActive;
+    if (typeof can === 'function') {
+      btn.disabled = !can(view.state, view);
+    }
+    if (typeof active === 'function') {
+      btn.classList.toggle('active', Boolean(active(view.state, view)));
+    }
+  });
+}
+
+function toolbarStatePlugin(toolbarEl) {
+  return new Plugin({
+    view(view) {
+      updateToolbarState(toolbarEl, view);
+      return {
+        update(nextView) {
+          updateToolbarState(toolbarEl, nextView);
+        },
+      };
+    },
+  });
+}
+
+function button(options, className, label, titleKey, command, config = {}) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = `document-toolbar-btn ${className || ''}`.trim();
@@ -156,34 +555,90 @@ function button(options, className, label, titleKey, command) {
   const title = t(options, titleKey);
   btn.title = title;
   btn.setAttribute('aria-label', title);
+  if (typeof config.can === 'function') btn.__documentCan = config.can;
+  if (typeof config.active === 'function') btn.__documentActive = config.active;
   btn.addEventListener('click', () => command());
   return btn;
 }
 
-function select(options, titleKey, values, onChange) {
-  const selectEl = document.createElement('select');
-  selectEl.className = 'document-toolbar-select';
-  selectEl.title = t(options, titleKey);
-  selectEl.setAttribute('aria-label', t(options, titleKey));
-  values.forEach((item) => {
-    const option = document.createElement('option');
-    if (typeof item === 'string') {
-      option.value = item;
-      option.textContent = item;
-    } else {
-      option.value = item.value;
-      option.textContent = item.label;
-    }
-    selectEl.appendChild(option);
+function commandButton(options, viewRef, className, label, titleKey, command, config = {}) {
+  const can = config.can || ((state, view) => command(state, null, view));
+  return button(options, className, label, titleKey, () => run(viewRef.current, command), {
+    ...config,
+    can,
   });
-  selectEl.addEventListener('change', () => onChange(selectEl.value));
-  return selectEl;
+}
+
+function select(options, titleKey, values, onChange) {
+  const items = values.map((item) => (typeof item === 'string' ? { label: item, value: item } : item));
+  const wrap = document.createElement('div');
+  wrap.className = 'document-toolbar-dropdown';
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'document-toolbar-select document-toolbar-dropdown-trigger';
+  const title = t(options, titleKey);
+  trigger.title = title;
+  trigger.setAttribute('aria-label', title);
+  trigger.setAttribute('aria-haspopup', 'listbox');
+  trigger.setAttribute('aria-expanded', 'false');
+  trigger.textContent = items[0]?.label || '';
+  wrap.appendChild(trigger);
+
+  const panel = document.createElement('div');
+  panel.className = 'document-toolbar-dropdown-panel';
+  panel.setAttribute('role', 'listbox');
+  panel.setAttribute('aria-label', title);
+  let selectedValue = items[0]?.value || '';
+
+  const close = () => {
+    wrap.classList.remove('open');
+    trigger.setAttribute('aria-expanded', 'false');
+  };
+  const open = () => {
+    wrap.classList.add('open');
+    trigger.setAttribute('aria-expanded', 'true');
+    positionFloatingPanel(trigger, panel);
+  };
+
+  items.forEach((item) => {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'document-toolbar-dropdown-option';
+    option.textContent = item.label;
+    option.setAttribute('role', 'option');
+    option.addEventListener('click', () => {
+      selectedValue = item.value;
+      trigger.textContent = item.label;
+      panel.querySelectorAll('.document-toolbar-dropdown-option').forEach((node) => {
+        node.classList.toggle('active', node === option);
+        node.setAttribute('aria-selected', node === option ? 'true' : 'false');
+      });
+      close();
+      onChange(selectedValue);
+    });
+    option.classList.toggle('active', item.value === selectedValue);
+    option.setAttribute('aria-selected', item.value === selectedValue ? 'true' : 'false');
+    panel.appendChild(option);
+  });
+  wrap.appendChild(panel);
+
+  trigger.addEventListener('click', () => {
+    if (wrap.classList.contains('open')) close();
+    else open();
+  });
+  document.addEventListener('click', (event) => {
+    if (!wrap.contains(event.target)) close();
+  });
+  window.addEventListener('resize', () => {
+    if (wrap.classList.contains('open')) positionFloatingPanel(trigger, panel);
+  }, { passive: true });
+  return wrap;
 }
 
 function createTablePicker(options, viewRef) {
   const wrap = document.createElement('div');
   wrap.className = 'document-table-picker';
-  const trigger = button(options, 'document-toolbar-table', '+', 'Insert table', () => {
+  const trigger = button(options, 'document-toolbar-table', '▦', 'Insert table', () => {
     wrap.classList.toggle('open');
   });
   wrap.appendChild(trigger);
@@ -234,6 +689,279 @@ function createTablePicker(options, viewRef) {
   return wrap;
 }
 
+function positionFloatingPanel(trigger, panel) {
+  const rect = trigger.getBoundingClientRect();
+  const gap = 8;
+  const panelWidth = panel.offsetWidth || 220;
+  const panelHeight = panel.offsetHeight || 160;
+  const left = Math.max(gap, Math.min(rect.left, window.innerWidth - panelWidth - gap));
+  const belowTop = rect.bottom + gap;
+  const aboveTop = rect.top - panelHeight - gap;
+  const top = belowTop + panelHeight <= window.innerHeight - gap ? belowTop : Math.max(gap, aboveTop);
+  panel.style.left = `${Math.round(left)}px`;
+  panel.style.top = `${Math.round(top)}px`;
+}
+
+function createTableActionsMenu(options, viewRef, schema) {
+  const wrap = document.createElement('div');
+  wrap.className = 'document-table-actions';
+  const panel = document.createElement('div');
+  panel.className = 'document-table-actions-panel';
+
+  const trigger = button(options, 'document-toolbar-table-menu', '⋯', 'Table options', () => {
+    wrap.classList.toggle('open');
+    if (wrap.classList.contains('open')) positionFloatingPanel(trigger, panel);
+  });
+  wrap.appendChild(trigger);
+
+  const addAction = (label, titleKey, command, config = {}) => {
+    const can = config.can || ((state, view) => command(state, null, view));
+    const btn = button(options, '', label, titleKey, () => {
+      run(viewRef.current, command);
+      wrap.classList.remove('open');
+    }, { ...config, can });
+    panel.appendChild(btn);
+  };
+
+  addAction('＋↧', 'Add row after', addRowAfter);
+  addAction('＋↥', 'Add row before', addRowBefore);
+  addAction('＋↦', 'Add column after', addColumnAfter);
+  addAction('＋↤', 'Add column before', addColumnBefore);
+  addAction('−↕', 'Delete row', deleteRow);
+  addAction('−↔', 'Delete column', deleteColumn);
+  addAction('🗑', 'Delete table', deleteTable);
+  addAction('⤢', 'Merge cells', mergeCells);
+  addAction('⤡', 'Split cell', splitCell);
+  addAction('🏷', 'Toggle header row', toggleHeaderRow);
+  addAction('↕', 'Select row', selectTablePartCommand('row'));
+  addAction('↔', 'Select column', selectTablePartCommand('column'));
+  addAction('▦', 'Select table', selectTablePartCommand('table'));
+  panel.appendChild(colorInput(options, 'Cell background', '#1e2c3a', (value) => run(viewRef.current, setCellAttr('background', value))));
+
+  wrap.appendChild(panel);
+  document.addEventListener('click', (event) => {
+    if (!wrap.contains(event.target)) wrap.classList.remove('open');
+  });
+  window.addEventListener('resize', () => {
+    if (wrap.classList.contains('open')) positionFloatingPanel(trigger, panel);
+  }, { passive: true });
+  return wrap;
+}
+
+function setupToolbarScrollBehavior(toolbarEl) {
+  if (!toolbarEl) return;
+
+  let hideTimer = 0;
+  let dragging = false;
+  let moved = false;
+  let suppressClick = false;
+  let pointerId = null;
+  let pendingDrag = false;
+  let startX = 0;
+  let startScrollLeft = 0;
+  let lastMoveTime = 0;
+  let lastMoveScrollLeft = 0;
+  let velocity = 0;
+  let inertiaFrame = 0;
+
+  const DRAG_SCROLL_MULTIPLIER = 1.35;
+  const INERTIA_FRICTION = 0.92;
+  const MIN_INERTIA_VELOCITY = 0.04;
+  const MAX_INERTIA_VELOCITY = 2.8;
+
+  const canScroll = () => toolbarEl.scrollWidth - toolbarEl.clientWidth > 2;
+  const maxScrollLeft = () => Math.max(0, toolbarEl.scrollWidth - toolbarEl.clientWidth);
+  const clampScrollLeft = (value) => Math.max(0, Math.min(maxScrollLeft(), value));
+
+  const getGeometry = () => {
+    const rect = toolbarEl.getBoundingClientRect();
+    const maxScroll = Math.max(0, toolbarEl.scrollWidth - toolbarEl.clientWidth);
+    const inset = 8;
+    const trackWidth = Math.max(32, toolbarEl.clientWidth - inset * 2);
+    const thumbWidth = Math.max(34, Math.round(trackWidth * toolbarEl.clientWidth / Math.max(toolbarEl.scrollWidth, 1)));
+    const maxLeft = Math.max(0, trackWidth - thumbWidth);
+    return {
+      inset,
+      maxLeft,
+      maxScroll,
+      rect,
+      thumbWidth: Math.min(trackWidth, thumbWidth),
+      trackWidth,
+    };
+  };
+
+  const updateThumb = () => {
+    const thumb = ensureThumb();
+    const geometry = getGeometry();
+    const isVisible = geometry.rect.width > 0
+      && geometry.rect.height > 0
+      && geometry.rect.bottom >= 0
+      && geometry.rect.top <= window.innerHeight;
+    const overflow = geometry.maxScroll > 0 && isVisible;
+    toolbarEl.classList.toggle('is-overflowing', overflow);
+    if (!overflow) {
+      thumb.hidden = true;
+      return;
+    }
+    thumb.hidden = false;
+    const left = geometry.rect.left + geometry.inset + Math.round(geometry.maxLeft * (toolbarEl.scrollLeft / geometry.maxScroll));
+    const top = geometry.rect.bottom - 6;
+    thumb.style.left = `${Math.round(left)}px`;
+    thumb.style.top = `${Math.round(top)}px`;
+    thumb.style.width = `${geometry.thumbWidth}px`;
+  };
+
+  const reveal = () => {
+    updateThumb();
+    if (!canScroll()) return;
+    toolbarEl.classList.add('is-scroll-active');
+    window.clearTimeout(hideTimer);
+    hideTimer = window.setTimeout(() => {
+      if (!dragging) toolbarEl.classList.remove('is-scroll-active');
+    }, 900);
+  };
+
+  const stopInertia = () => {
+    if (!inertiaFrame) return;
+    window.cancelAnimationFrame(inertiaFrame);
+    inertiaFrame = 0;
+  };
+
+  const startInertia = (initialVelocity) => {
+    stopInertia();
+    if (!canScroll() || Math.abs(initialVelocity) < MIN_INERTIA_VELOCITY) return;
+    let currentVelocity = Math.max(-MAX_INERTIA_VELOCITY, Math.min(MAX_INERTIA_VELOCITY, initialVelocity));
+    let previousTime = 0;
+
+    const step = (time) => {
+      if (!previousTime) previousTime = time;
+      const dt = Math.min(32, Math.max(1, time - previousTime));
+      previousTime = time;
+      const before = toolbarEl.scrollLeft;
+      const next = clampScrollLeft(before + currentVelocity * dt);
+      toolbarEl.scrollLeft = next;
+      reveal();
+
+      const hitEdge = next <= 0 || next >= maxScrollLeft() || next === before;
+      currentVelocity *= Math.pow(INERTIA_FRICTION, dt / 16.67);
+      if (hitEdge || Math.abs(currentVelocity) < MIN_INERTIA_VELOCITY) {
+        inertiaFrame = 0;
+        return;
+      }
+      inertiaFrame = window.requestAnimationFrame(step);
+    };
+
+    inertiaFrame = window.requestAnimationFrame(step);
+  };
+
+  const finishDrag = (withInertia = false) => {
+    if (!pendingDrag && !dragging) return;
+    const releaseVelocity = velocity;
+    const shouldInert = withInertia && moved;
+    pendingDrag = false;
+    dragging = false;
+    pointerId = null;
+    toolbarEl.classList.remove('is-dragging');
+    reveal();
+    if (shouldInert) startInertia(releaseVelocity);
+  };
+
+  const ensureThumb = () => {
+    let thumb = toolbarEl.__documentScrollThumb || null;
+    if (!thumb || thumb.parentElement !== toolbarEl) {
+      thumb = document.createElement('span');
+      thumb.className = 'document-toolbar-scrollbar';
+      thumb.setAttribute('aria-hidden', 'true');
+      toolbarEl.__documentScrollThumb = thumb;
+      toolbarEl.appendChild(thumb);
+    }
+    return thumb;
+  };
+
+  ensureThumb();
+  if (toolbarEl.__documentScrollBehaviorBound) {
+    toolbarEl.__documentUpdateScrollThumb?.();
+    return;
+  }
+  toolbarEl.__documentScrollBehaviorBound = true;
+
+  toolbarEl.__documentUpdateScrollThumb = updateThumb;
+
+  toolbarEl.addEventListener('scroll', reveal, { passive: true });
+  toolbarEl.addEventListener('wheel', (event) => {
+    if (!canScroll()) return;
+    reveal();
+    if (event.ctrlKey || event.metaKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+    toolbarEl.scrollLeft += event.deltaY;
+    event.preventDefault();
+  }, { passive: false });
+  toolbarEl.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || event.pointerType !== 'mouse' || !canScroll()) return;
+    if (event.target?.closest?.('select, input, .document-toolbar-dropdown, .document-table-picker-panel, .document-table-actions-panel')) return;
+    stopInertia();
+    pendingDrag = true;
+    dragging = false;
+    moved = false;
+    pointerId = event.pointerId;
+    startX = event.clientX;
+    startScrollLeft = toolbarEl.scrollLeft;
+    lastMoveTime = event.timeStamp || window.performance.now();
+    lastMoveScrollLeft = toolbarEl.scrollLeft;
+    velocity = 0;
+    toolbarEl.classList.add('is-scroll-active');
+    reveal();
+  });
+  window.addEventListener('pointermove', (event) => {
+    if (!pendingDrag || event.pointerId !== pointerId) return;
+    if (event.buttons !== 1) {
+      finishDrag(false);
+      return;
+    }
+    const dx = event.clientX - startX;
+    if (Math.abs(dx) > 4) {
+      moved = true;
+      dragging = true;
+      toolbarEl.classList.add('is-dragging');
+    }
+    if (!moved) return;
+    const nextScrollLeft = clampScrollLeft(startScrollLeft - dx * DRAG_SCROLL_MULTIPLIER);
+    const now = event.timeStamp || window.performance.now();
+    const dt = Math.max(1, now - lastMoveTime);
+    velocity = (nextScrollLeft - lastMoveScrollLeft) / dt;
+    lastMoveTime = now;
+    lastMoveScrollLeft = nextScrollLeft;
+    toolbarEl.scrollLeft = nextScrollLeft;
+    event.preventDefault();
+    reveal();
+  }, { passive: false });
+  window.addEventListener('pointerup', (event) => {
+    if (pointerId !== null && event.pointerId === pointerId && moved) suppressClick = true;
+    finishDrag(true);
+  }, true);
+  window.addEventListener('pointercancel', () => finishDrag(false), true);
+  toolbarEl.addEventListener('mousemove', reveal, { passive: true });
+  toolbarEl.addEventListener('pointerleave', () => {
+    if (dragging) return;
+    window.clearTimeout(hideTimer);
+    hideTimer = window.setTimeout(() => toolbarEl.classList.remove('is-scroll-active'), 250);
+  });
+  toolbarEl.addEventListener('click', (event) => {
+    if (!suppressClick) return;
+    suppressClick = false;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
+
+  if (window.ResizeObserver) {
+    const resizeObserver = new ResizeObserver(updateThumb);
+    resizeObserver.observe(toolbarEl);
+  } else {
+    window.addEventListener('resize', updateThumb);
+  }
+  window.addEventListener('scroll', updateThumb, { passive: true, capture: true });
+  updateThumb();
+}
+
 function buildToolbar(options, toolbarEl, viewRef, schema) {
   if (!toolbarEl) return;
   toolbarEl.replaceChildren();
@@ -242,11 +970,11 @@ function buildToolbar(options, toolbarEl, viewRef, schema) {
     sep.className = 'document-toolbar-separator';
     toolbarEl.appendChild(sep);
   };
-  toolbarEl.appendChild(button(options, '', '<', 'Undo', () => run(viewRef.current, undoCommand)));
-  toolbarEl.appendChild(button(options, '', '>', 'Redo', () => run(viewRef.current, redoCommand)));
+  toolbarEl.appendChild(commandButton(options, viewRef, '', '↶', 'Undo', undoCommand));
+  toolbarEl.appendChild(commandButton(options, viewRef, '', '↷', 'Redo', redoCommand));
   addSep();
   toolbarEl.appendChild(select(options, 'Heading', [
-    { label: t(options, 'Text'), value: 'paragraph' },
+    { label: '¶', value: 'paragraph' },
     { label: 'H1', value: 'h1' },
     { label: 'H2', value: 'h2' },
     { label: 'H3', value: 'h3' },
@@ -257,30 +985,66 @@ function buildToolbar(options, toolbarEl, viewRef, schema) {
     else run(view, setBlockType(schema.nodes.heading, { level: Number(value.slice(1)) }));
   }));
   addSep();
-  toolbarEl.appendChild(button(options, 'document-toolbar-bold', 'B', 'Bold', () => run(viewRef.current, toggleMark(schema.marks.strong))));
-  toolbarEl.appendChild(button(options, 'document-toolbar-italic', 'I', 'Italic', () => run(viewRef.current, toggleMark(schema.marks.em))));
-  toolbarEl.appendChild(button(options, 'document-toolbar-underline', 'U', 'Underline', () => run(viewRef.current, toggleMark(schema.marks.underline))));
+  toolbarEl.appendChild(commandButton(options, viewRef, 'document-toolbar-bold', '𝐁', 'Bold', toggleMark(schema.marks.strong), {
+    active: (state) => markActive(state, schema.marks.strong),
+  }));
+  toolbarEl.appendChild(commandButton(options, viewRef, 'document-toolbar-italic', '𝐼', 'Italic', toggleMark(schema.marks.em), {
+    active: (state) => markActive(state, schema.marks.em),
+  }));
+  toolbarEl.appendChild(commandButton(options, viewRef, 'document-toolbar-underline', 'U̲', 'Underline', toggleMark(schema.marks.underline), {
+    active: (state) => markActive(state, schema.marks.underline),
+  }));
+  toolbarEl.appendChild(commandButton(options, viewRef, 'document-toolbar-code', '⌨', 'Inline code', toggleMark(schema.marks.code), {
+    active: (state) => markActive(state, schema.marks.code),
+  }));
+  toolbarEl.appendChild(colorInput(options, 'Text color', DEFAULT_TEXT_COLORS[0], (value) => applyFontMark(viewRef.current, schema.marks.text_color, { color: value })));
+  toolbarEl.appendChild(colorInput(options, 'Highlight', DEFAULT_HIGHLIGHT_COLORS[0], (value) => applyFontMark(viewRef.current, schema.marks.highlight, { color: value })));
   addSep();
-  toolbarEl.appendChild(button(options, '', '-', 'Bullet list', () => run(viewRef.current, wrapInList(schema.nodes.bullet_list))));
-  toolbarEl.appendChild(button(options, '', '1.', 'Ordered list', () => run(viewRef.current, wrapInList(schema.nodes.ordered_list))));
+  toolbarEl.appendChild(commandButton(options, viewRef, '', '⇤', 'Align left', setTextAlignCommand('left'), {
+    active: (state) => textAlignActive(state, 'left'),
+  }));
+  toolbarEl.appendChild(commandButton(options, viewRef, '', '↔', 'Align center', setTextAlignCommand('center'), {
+    active: (state) => textAlignActive(state, 'center'),
+  }));
+  toolbarEl.appendChild(commandButton(options, viewRef, '', '⇥', 'Align right', setTextAlignCommand('right'), {
+    active: (state) => textAlignActive(state, 'right'),
+  }));
+  addSep();
+  toolbarEl.appendChild(commandButton(options, viewRef, '', '•', 'Bullet list', toggleListCommand(schema, schema.nodes.bullet_list), {
+    active: (state) => listActive(state, schema.nodes.bullet_list),
+  }));
+  toolbarEl.appendChild(commandButton(options, viewRef, '', '№', 'Ordered list', toggleListCommand(schema, schema.nodes.ordered_list), {
+    active: (state) => listActive(state, schema.nodes.ordered_list),
+  }));
+  toolbarEl.appendChild(commandButton(options, viewRef, '', '☑', 'Checklist', toggleListCommand(schema, schema.nodes.task_list), {
+    active: (state) => listActive(state, schema.nodes.task_list),
+  }));
+  toolbarEl.appendChild(commandButton(options, viewRef, '', '❝', 'Quote', wrapIn(schema.nodes.blockquote), {
+    active: (state) => blockActive(state, schema.nodes.blockquote),
+  }));
+  toolbarEl.appendChild(commandButton(options, viewRef, '', '💻', 'Code block', setBlockType(schema.nodes.code_block), {
+    active: (state) => blockActive(state, schema.nodes.code_block),
+  }));
+  addSep();
+  toolbarEl.appendChild(commandButton(options, viewRef, '', '🔗', 'Insert link', setLinkCommand(options, schema), {
+    active: (state) => markActive(state, schema.marks.link),
+  }));
+  toolbarEl.appendChild(commandButton(options, viewRef, '', '✂', 'Remove link', removeLinkCommand(schema)));
+  toolbarEl.appendChild(commandButton(options, viewRef, '', '🧹', 'Clear formatting', clearFormattingCommand(schema)));
   addSep();
   toolbarEl.appendChild(select(options, 'Font size', [
-    { label: t(options, 'Size'), value: '' },
+    { label: 'A↕', value: '' },
     ...DEFAULT_FONT_SIZES,
   ], (value) => applyFontMark(viewRef.current, schema.marks.font_size, value ? { size: value } : null)));
   toolbarEl.appendChild(select(options, 'Font family', [
-    { label: t(options, 'Font'), value: '' },
+    { label: '𝐅', value: '' },
     ...DEFAULT_FONT_FAMILIES,
   ], (value) => applyFontMark(viewRef.current, schema.marks.font_family, value ? { family: value } : null)));
   addSep();
   toolbarEl.appendChild(createTablePicker(options, viewRef));
-  toolbarEl.appendChild(button(options, '', '+R', 'Add row after', () => run(viewRef.current, addRowAfter)));
-  toolbarEl.appendChild(button(options, '', 'R+', 'Add row before', () => run(viewRef.current, addRowBefore)));
-  toolbarEl.appendChild(button(options, '', '+C', 'Add column after', () => run(viewRef.current, addColumnAfter)));
-  toolbarEl.appendChild(button(options, '', 'C+', 'Add column before', () => run(viewRef.current, addColumnBefore)));
-  toolbarEl.appendChild(button(options, '', 'R-', 'Delete row', () => run(viewRef.current, deleteRow)));
-  toolbarEl.appendChild(button(options, '', 'C-', 'Delete column', () => run(viewRef.current, deleteColumn)));
-  toolbarEl.appendChild(button(options, '', 'T-', 'Delete table', () => run(viewRef.current, deleteTable)));
+  toolbarEl.appendChild(createTableActionsMenu(options, viewRef, schema));
+  setupToolbarScrollBehavior(toolbarEl);
+  updateToolbarState(toolbarEl, viewRef.current);
 }
 
 function createEditor(options = {}) {
@@ -301,10 +1065,13 @@ function createEditor(options = {}) {
   if (options.guestToken) params.guestToken = options.guestToken;
   const provider = new WebsocketProvider(serverUrl, options.room, ydoc, { params });
 
-  provider.awareness.setLocalStateField('user', {
+  const localUser = {
+    id: options.user?.id || '',
     name: options.user?.name || 'User',
     color: options.user?.color || '#65aadd',
-  });
+  };
+
+  provider.awareness.setLocalStateField('user', localUser);
 
   function emitStatus(status) {
     const count = provider.awareness ? provider.awareness.getStates().size : 0;
@@ -319,6 +1086,7 @@ function createEditor(options = {}) {
     plugins: [
       ySyncPlugin(yXmlFragment),
       yCursorPlugin(provider.awareness, {
+        awarenessStateFilter: createAwarenessStateFilter(provider.awareness, localUser),
         cursorBuilder: createCollabCursor,
         selectionBuilder: createCollabSelection,
       }),
@@ -328,9 +1096,9 @@ function createEditor(options = {}) {
         'Mod-z': undoCommand,
         'Mod-y': redoCommand,
         'Mod-Shift-z': redoCommand,
-        'Enter': chainCommands(splitListItem(schema.nodes.list_item), baseKeymap.Enter),
-        'Mod-[': liftListItem(schema.nodes.list_item),
-        'Mod-]': sinkListItem(schema.nodes.list_item),
+        'Enter': chainCommands(splitListItem(schema.nodes.task_item, { checked: false }), splitListItem(schema.nodes.list_item), baseKeymap.Enter),
+        'Mod-[': chainCommands(liftListItem(schema.nodes.task_item), liftListItem(schema.nodes.list_item)),
+        'Mod-]': chainCommands(sinkListItem(schema.nodes.task_item), sinkListItem(schema.nodes.list_item)),
         'Shift-Ctrl-0': setBlockType(schema.nodes.paragraph),
         'Shift-Ctrl-1': setBlockType(schema.nodes.heading, { level: 1 }),
         'Shift-Ctrl-2': setBlockType(schema.nodes.heading, { level: 2 }),
@@ -338,18 +1106,22 @@ function createEditor(options = {}) {
         'Mod-b': toggleMark(schema.marks.strong),
         'Mod-i': toggleMark(schema.marks.em),
         'Mod-u': toggleMark(schema.marks.underline),
-        'Tab': sinkListItem(schema.nodes.list_item),
-        'Shift-Tab': liftListItem(schema.nodes.list_item),
+        'Tab': chainCommands(sinkListItem(schema.nodes.task_item), sinkListItem(schema.nodes.list_item)),
+        'Shift-Tab': chainCommands(liftListItem(schema.nodes.task_item), liftListItem(schema.nodes.list_item)),
       }),
       keymap(baseKeymap),
       gapCursor(),
       dropCursor(),
+      taskListPlugin(schema),
+      toolbarStatePlugin(toolbarEl),
       columnResizing({ cellMinWidth: 48 }),
       tableEditing(),
     ],
   });
 
-  const view = new EditorView(editorEl, { state });
+  const view = new EditorView(editorEl, {
+    state,
+  });
   viewRef.current = view;
   buildToolbar(options, toolbarEl, viewRef, schema);
 

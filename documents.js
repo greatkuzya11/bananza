@@ -121,22 +121,6 @@ function createDocumentsFeature({
     throw new Error('Could not create document invite link');
   }
 
-  function rotateDocumentInviteToken(chatId) {
-    const id = Number(chatId || 0);
-    if (!id) return null;
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      const token = generateDocumentInviteToken();
-      try {
-        db.prepare("UPDATE documents SET invite_token=?, invite_token_created_at=datetime('now') WHERE chat_id=?")
-          .run(token, id);
-        return token;
-      } catch (error) {
-        if (!String(error?.code || error?.message || '').includes('CONSTRAINT')) throw error;
-      }
-    }
-    throw new Error('Could not refresh document invite link');
-  }
-
   function documentSessionPayload(row, extra = {}) {
     if (!row) return null;
     const chatId = Number(row.id || row.chat_id || 0);
@@ -336,14 +320,11 @@ function createDocumentsFeature({
   });
 
   app.post('/api/documents/:chatId/invite-link/rotate', auth, requireDocumentMember, (req, res) => {
-    if (!req.user.is_admin && Number(req.documentChat.created_by || 0) !== Number(req.user.id || 0)) {
-      return res.status(403).json({ error: 'Only the owner or admin can refresh this invite link' });
-    }
     try {
-      const token = rotateDocumentInviteToken(req.documentChat.id);
+      const token = ensureDocumentInviteToken(req.documentChat.id);
       res.json(documentInvitePayload(req, token));
     } catch (error) {
-      console.error('[documents] invite rotate failed:', error);
+      console.error('[documents] invite link failed:', error);
       res.status(500).json({ error: 'Server error' });
     }
   });

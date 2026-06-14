@@ -89,11 +89,12 @@ test('documents can be created, invited, edited by guest, and are not message ch
   assert.equal(guestSession.data.room, `doc:${chatId}`);
   assert.equal(guestSession.data.guestToken, invite.data.token);
 
-  await bob.request(`/api/documents/${chatId}/invite-link/rotate`, { method: 'POST', expectedStatus: 403 });
-  const rotated = await admin.request(`/api/documents/${chatId}/invite-link/rotate`, { method: 'POST' });
-  await createSession(sandbox.baseUrl).request(`/api/document-invites/${invite.data.token}/session`, { expectedStatus: 404 });
-  const rotatedGuest = await createSession(sandbox.baseUrl).request(`/api/document-invites/${rotated.data.token}/session`);
-  assert.equal(rotatedGuest.data.document.chatId, chatId);
+  const repeatedInvite = await admin.request(`/api/documents/${chatId}/invite-link`);
+  assert.equal(repeatedInvite.data.token, invite.data.token);
+  const legacyRotate = await bob.request(`/api/documents/${chatId}/invite-link/rotate`, { method: 'POST' });
+  assert.equal(legacyRotate.data.token, invite.data.token);
+  const sameGuest = await createSession(sandbox.baseUrl).request(`/api/document-invites/${invite.data.token}/session`);
+  assert.equal(sameGuest.data.document.chatId, chatId);
 
   const room = `doc:${chatId}`;
   const wsBase = `${sandbox.baseUrl.replace(/^http/, 'ws')}/doc-ws`;
@@ -105,7 +106,7 @@ test('documents can be created, invited, edited by guest, and are not message ch
     disableBc: true,
   });
   const guestProvider = new WebsocketProvider(wsBase, room, guestDoc, {
-    params: { guestToken: rotated.data.token },
+    params: { guestToken: invite.data.token },
     WebSocketPolyfill: WebSocket,
     disableBc: true,
   });

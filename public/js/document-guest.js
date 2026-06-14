@@ -35,8 +35,9 @@
     el.dataset.status = kind;
   }
 
-  async function requestJson(url) {
-    const response = await fetch(url, { headers: { Accept: 'application/json' } });
+  async function requestJson(url, options = {}) {
+    const headers = { Accept: 'application/json', ...(options.headers || {}) };
+    const response = await fetch(url, { ...options, headers });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
     return data;
