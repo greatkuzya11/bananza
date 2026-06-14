@@ -37,6 +37,7 @@
     "prosemirror-schema-list": "^1.5.1",
     "prosemirror-state": "^1.4.4",
     "prosemirror-tables": "^1.8.5",
+    "prosemirror-transform": "^1.12.0",
     "prosemirror-view": "^1.41.9",
     "tar": "^7.5.15",
     "tar-stream": "^2.2.0",
