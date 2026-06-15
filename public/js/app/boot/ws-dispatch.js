@@ -283,10 +283,11 @@
             break;
           }
           case 'document_saved': { openChatControllers?.documents?.handleRealtimeMessage?.(msg); (msg.chat && Number(msg.chat.id || 0) ? applyChatUpdate(msg.chat || {}) : loadChats({ silent: true }).catch(() => {})); break; }
+          case 'document_system_notice': { openChatControllers?.documents?.handleRealtimeMessage?.(msg); break; }
           case 'context_convert_bots_updated': {
             invalidateContextConvertAvailability(msg.chatId || msg.chat_id);
             if (Number(msg.chatId || msg.chat_id || 0) === Number(currentChatId || 0)) {
-              loadContextConvertAvailability(currentChatId, { force: true }).catch(() => {});
+              loadContextConvertAvailability(currentChatId, { force: true }).then(() => openChatControllers?.documents?.syncDocumentContextConvertUi?.()).catch(() => {});
             }
             break;
           }

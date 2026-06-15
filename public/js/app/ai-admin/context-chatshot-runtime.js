@@ -12,6 +12,11 @@
           .join('');
       }
 
+      function runtimeGetChatById(chatId) {
+        const getter = typeof getChatById === 'function' ? getChatById : null;
+        return getter ? getter(chatId) : null;
+      }
+
       function contextConvertProviderLabel(provider = 'openai') {
         if (provider === 'yandex') return 'Yandex';
         if (provider === 'deepseek') return 'DeepSeek';
@@ -831,6 +836,8 @@
             && data.bananaFilterEnabled !== 0,
           ready: !!data.ready,
           message_count: Number(data.message_count || 0),
+          source: data.source || (data.document ? 'document' : 'chat'),
+          document_text_length: Number(data.document_text_length || data.documentTextLength || 0),
           bots: Array.isArray(data.bots) ? data.bots.map((bot) => ({
             id: Number(bot.id || 0),
             name: bot.name || 'ChatShot',
@@ -923,8 +930,11 @@
         bananaFilterToggle.disabled = !bots.length;
         if (shouldPreserveChatShotSaveStatus(state)) return;
         const messageCount = Number(state?.message_count || 0);
+        const isDocument = state?.source === 'document' || Number(runtimeGetChatById(currentChatId)?.is_document || 0) === 1;
+        const documentTextLength = Number(state?.document_text_length || 0);
         if (!bots.length) setChatShotChatStatus('');
-        else if (toggle.checked && messageCount < 2) setChatShotChatStatus('ChatShot \u0432\u043a\u043b\u044e\u0447\u0438\u0442\u0441\u044f \u043f\u043e\u0441\u043b\u0435 \u0434\u0432\u0443\u0445 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0439 \u0432 \u0447\u0430\u0442\u0435.');
+        else if (toggle.checked && isDocument && documentTextLength <= 0) setChatShotChatStatus(t('ChatShot will be available when the document has text.'));
+        else if (toggle.checked && !isDocument && messageCount < 2) setChatShotChatStatus(t('ChatShot will be available after two chat messages.'));
         else setChatShotChatStatus('');
       }
     
@@ -978,7 +988,9 @@
         const chatId = Number(currentChatId || 0);
         const state = getCurrentChatShotState();
         const generating = chatShotGeneratingByChat.has(chatId);
-        const shouldShow = Boolean(chatId && (generating || (state?.enabled && state?.ready && state?.botId)));
+        const isDocument = state?.source === 'document' || Number(runtimeGetChatById(chatId)?.is_document || 0) === 1;
+        const canRun = Boolean(state?.enabled && state?.botId && (state?.ready || isDocument));
+        const shouldShow = Boolean(chatId && (generating || canRun));
         chatShotBtn.classList.toggle('hidden', !shouldShow);
         chatShotBtn.classList.toggle('is-pending', generating);
         chatShotBtn.disabled = generating || !shouldShow;
@@ -991,12 +1003,14 @@
       async function runChatShotGeneration() {
         const chatId = Number(currentChatId || 0);
         if (!chatId || chatShotGeneratingByChat.has(chatId)) return;
+        const chat = runtimeGetChatById(chatId);
+        const isDocument = Number(chat?.is_document || 0) === 1;
         chatShotGeneratingByChat.add(chatId);
         syncChatShotButton();
         try {
-          await api(`/api/chats/${chatId}/chatshot`, { method: 'POST', body: {} });
+          await api(isDocument ? `/api/documents/${chatId}/chatshot` : `/api/chats/${chatId}/chatshot`, { method: 'POST', body: {} });
         } catch (error) {
-          showCenterToast(error.message || 'ChatShot generation failed');
+          showCenterToast(error.message || t('ChatShot generation failed'));
         } finally {
           chatShotGeneratingByChat.delete(chatId);
           syncChatShotButton();
@@ -1059,6 +1073,7 @@
           const bot = contextConvertPickerState.bots[index];
           if (!bot) return;
           if (contextConvertPickerState.mode === 'message') transformMessageWithContextConvertBot(contextConvertPickerState.messageId, bot);
+          else if (contextConvertPickerState.mode === 'document') transformDocumentSelectionWithContextConvertBot(bot);
           else transformComposerTextWithContextConvertBot(bot);
         }, { passive: false });
         picker.addEventListener('pointercancel', () => {
@@ -1115,6 +1130,7 @@
           mode: options.mode || contextConvertPickerState.mode || 'composer',
           chatId: Number(options.chatId || contextConvertPickerState.chatId || currentChatId || 0),
           messageId: Number(options.messageId || 0),
+          selectionSnapshot: options.selectionSnapshot || contextConvertPickerState.selectionSnapshot || null,
           anchorEl: options.anchorEl || contextConvertPickerState.anchorEl || composerContextConvertBtn,
           keyboardAttached: Boolean(options.keyboardAttached),
         };
@@ -1150,6 +1166,7 @@
           mode: 'composer',
           chatId: 0,
           messageId: 0,
+          selectionSnapshot: null,
           anchorEl: null,
           keyboardAttached: false,
         };
@@ -1165,7 +1182,7 @@
       function isContextTransformAvailableForChat(chatId = currentChatId) {
         const id = Number(chatId || 0);
         if (!id) return false;
-        const chat = getChatById(id);
+        const chat = runtimeGetChatById(id);
         const availability = contextConvertAvailabilityByChat.get(id) || { enabled: false, bots: [] };
         return Boolean(chat?.context_transform_enabled && availability.enabled && availability.bots.length);
       }
@@ -1269,6 +1286,7 @@
     
       function syncCurrentChatContextConvertUi() {
         syncContextConvertComposerButton();
+        openChatControllers?.documents?.syncDocumentContextConvertUi?.();
         const chatId = Number(currentChatId || 0);
         if (!chatId) return;
         if (contextConvertPickerState.active && contextConvertPickerState.chatId === chatId && !isContextTransformAvailableForChat(chatId)) {
@@ -1286,7 +1304,7 @@
       function syncContextConvertComposerButton() {
         if (!composerContextConvertBtn) return;
         const hasText = Boolean(currentChatId && !composerStateController.editTo && getComposerTextValue({ trim: true }));
-        const currentChat = getChatById(currentChatId);
+        const currentChat = runtimeGetChatById(currentChatId);
         const availability = getCurrentChatContextConvertState();
         const shouldShow = Boolean((hasText || contextConvertComposerPending) && isContextTransformAvailableForChat(currentChatId));
         if (!shouldShow && contextConvertPickerState.active && contextConvertPickerState.mode === 'composer') {
@@ -1458,6 +1476,54 @@
         });
         if (keepComposerFocus) focusComposerKeepKeyboard(true);
       }
+
+      async function openDocumentContextConvertPicker(options = {}) {
+        const chatId = Number(options.chatId || currentChatId || 0);
+        const chat = runtimeGetChatById(chatId);
+        const snapshot = options.selectionSnapshot
+          || openChatControllers?.documents?.getContextConvertSelectionSnapshot?.()
+          || null;
+        if (!chatId || Number(chat?.is_document || 0) !== 1 || !snapshot?.text?.trim()) return;
+        hideMentionPicker();
+        hideFloatingMessageActions({ immediate: true });
+        const availability = await loadContextConvertAvailability(chatId).catch(() => ({ enabled: false, bots: [] }));
+        if (!availability.enabled || !availability.bots.length) {
+          openChatControllers?.documents?.syncDocumentContextConvertUi?.();
+          return;
+        }
+        renderContextConvertPicker(availability.bots, {
+          mode: 'document',
+          chatId,
+          anchorEl: options.anchorEl || null,
+          selectionSnapshot: { ...snapshot },
+        });
+      }
+
+      async function transformDocumentSelectionWithContextConvertBot(bot) {
+        const chatId = Number(contextConvertPickerState.chatId || currentChatId || 0);
+        const snapshot = contextConvertPickerState.selectionSnapshot
+          || openChatControllers?.documents?.getContextConvertSelectionSnapshot?.()
+          || null;
+        if (!chatId || !bot?.id || !snapshot?.text?.trim()) return;
+        hideContextConvertPicker();
+        openChatControllers?.documents?.setContextConvertPending?.(true);
+        try {
+          const data = await api(`/api/chats/${chatId}/context-convert`, {
+            method: 'POST',
+            body: {
+              botId: bot.id,
+              text: snapshot.text,
+            },
+          });
+          const replaced = openChatControllers?.documents?.replaceContextConvertSelectionText?.(snapshot, data.text || '');
+          if (!replaced) showCenterToast(t('Selection changed. Select text again'));
+        } catch (error) {
+          showCenterToast(error.message || t('Could not transform selected text'));
+        } finally {
+          clearContextConvertPickerFollowupClickSuppress();
+          openChatControllers?.documents?.setContextConvertPending?.(false);
+        }
+      }
     
       // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
       // AUTH
@@ -1474,6 +1540,7 @@
         runChatShotGeneration, ensureContextConvertPickerBackdrop, ensureContextConvertPicker, positionContextConvertPicker, renderContextConvertPicker, hideContextConvertPicker, getCurrentChatContextConvertState, isContextTransformAvailableForChat,
         setComposerContextConvertButtonVisible, canContextConvertMessage, canRestoreContextOriginalMessage, bindContextConvertMessageButton, createContextConvertMessageButton, bindContextOriginalRestoreButton, syncVisibleContextConvertMessageButtons, syncCurrentChatContextConvertUi,
         syncContextConvertComposerButton, openComposerContextConvertPicker, transformComposerTextWithContextConvertBot, syncContextConvertPendingMessageState, syncContextOriginalRestorePendingMessageState, transformMessageWithContextConvertBot, restoreContextOriginalMessage, openMessageContextConvertPicker,
+        openDocumentContextConvertPicker, transformDocumentSelectionWithContextConvertBot,
       };
     }
   }

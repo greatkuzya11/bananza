@@ -598,6 +598,37 @@ function toolbarStatePlugin(toolbarEl) {
   });
 }
 
+function selectionSnapshotFromView(view) {
+  if (!view) return null;
+  const { doc, selection } = view.state;
+  const from = Number(selection.from || 0);
+  const to = Number(selection.to || 0);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) return null;
+  const text = doc.textBetween(from, to, '\n', '\n');
+  if (!String(text || '').trim()) return null;
+  return { from, to, text };
+}
+
+function selectionObserverPlugin(onSelectionChange) {
+  return new Plugin({
+    view(view) {
+      const emit = () => {
+        if (typeof onSelectionChange === 'function') onSelectionChange(selectionSnapshotFromView(view));
+      };
+      emit();
+      return {
+        update(nextView, prevState) {
+          if (prevState && prevState.selection.eq(nextView.state.selection) && prevState.doc === nextView.state.doc) return;
+          emit();
+        },
+        destroy() {
+          if (typeof onSelectionChange === 'function') onSelectionChange(null);
+        },
+      };
+    },
+  });
+}
+
 function button(options, className, label, titleKey, command, config = {}) {
   const btn = document.createElement('button');
   btn.type = 'button';
@@ -1184,6 +1215,7 @@ function createEditor(options = {}) {
       gapCursor(),
       dropCursor(),
       taskListPlugin(schema),
+      selectionObserverPlugin(options.onSelectionChange),
       toolbarStatePlugin(toolbarEl),
       columnResizing({ cellMinWidth: 48 }),
       tableEditing(),
@@ -1235,8 +1267,22 @@ function createEditor(options = {}) {
     focus() {
       view.focus();
     },
+    getSelectionSnapshot() {
+      return selectionSnapshotFromView(view);
+    },
     getTitle() {
       return yTitle.toString();
+    },
+    replaceSelectionText(snapshot, text) {
+      if (!snapshot || !view) return false;
+      const from = Math.max(0, Math.min(Number(snapshot.from || 0), view.state.doc.content.size));
+      const to = Math.max(0, Math.min(Number(snapshot.to || 0), view.state.doc.content.size));
+      if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) return false;
+      const currentText = view.state.doc.textBetween(from, to, '\n', '\n');
+      if (currentText !== String(snapshot.text || '')) return false;
+      view.dispatch(view.state.tr.insertText(String(text || ''), from, to).scrollIntoView());
+      view.focus();
+      return true;
     },
     provider,
     ready: readyPromise,

@@ -525,6 +525,7 @@ aiBotFeature = createAiBotFeature({
   saveMessageMentions: (messageId, chatId, text) => saveMessageMentions(messageId, chatId, text),
   messageActions,
   onBotMembershipChanged: (event) => handleBotMembershipSystemEvent(event),
+  getDocumentPlainText: (chatId) => documentsFeature?.getDocumentPlainText?.(chatId) || '',
 });
 
 aiInitiativeFeature = createAiInitiativeFeature({
@@ -1744,6 +1745,12 @@ documentsFeature = createDocumentsFeature({
   publicChatPayloadForViewer,
   recordChatSystemEvent,
   pushFeature,
+  aiBotFeature,
+  uploadsDir: UPLOADS_DIR,
+  ensureNotesChatForUser,
+  hydrateMessageById: (messageId, viewerUserId) => hydrateMessageById(messageId, viewerUserId),
+  notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),
+  onMessagePublished: (message) => handleChatListMessageCreated(message),
 });
 
 function canManageDestructiveChat(chat, user) {

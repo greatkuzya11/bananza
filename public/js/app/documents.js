@@ -23,6 +23,9 @@
     let openSeq = 0;
     let lastStatus = 'offline';
     let lastAwarenessCount = 0;
+    let selectionSnapshot = null;
+    let contextConvertPending = false;
+    let contextConvertButton = null;
 
     function isDocumentChat(chat) {
       return Number(chat && chat.is_document || 0) === 1;
@@ -63,6 +66,92 @@
       if (statusEl) statusEl.textContent = text;
     }
 
+    function ensureDocumentContextConvertButton() {
+      if (contextConvertButton && doc.body.contains(contextConvertButton)) return contextConvertButton;
+      const workspace = getEl('documentWorkspace', 'documentWorkspace');
+      if (!workspace) return null;
+      const button = doc.createElement('button');
+      button.type = 'button';
+      button.className = 'document-context-convert-btn hidden';
+      button.title = t('Transform selected text');
+      button.setAttribute('aria-label', t('Transform selected text'));
+      button.textContent = '🍌';
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openDocumentContextPicker().catch((error) => {
+          actions.showToast?.(error?.message || t('Could not transform selected text'));
+        });
+      });
+      workspace.appendChild(button);
+      contextConvertButton = button;
+      return button;
+    }
+
+    function getContextAvailability(chatId = activeChatId) {
+      return actions.getContextConvertAvailability?.(chatId) || null;
+    }
+
+    function canShowDocumentContextConvert() {
+      const chat = getCurrentChat();
+      const currentUser = getCurrentUser();
+      const chatId = Number(activeChatId || state.getCurrentChatId?.() || 0);
+      const availability = getContextAvailability(chatId);
+      return Boolean(
+        chatId
+        && currentUser?.id
+        && isDocumentChat(chat)
+        && chat?.context_transform_enabled
+        && selectionSnapshot?.text?.trim()
+        && (contextConvertPending || (availability?.enabled && Array.isArray(availability?.bots) && availability.bots.length))
+      );
+    }
+
+    function syncDocumentContextConvertUi() {
+      const button = ensureDocumentContextConvertButton();
+      if (!button) return;
+      const shouldShow = canShowDocumentContextConvert();
+      setHidden(button, !shouldShow);
+      button.classList.toggle('is-pending', contextConvertPending);
+      button.disabled = contextConvertPending || !shouldShow;
+      if (shouldShow && !contextConvertPending && !getContextAvailability(activeChatId)) {
+        actions.loadContextConvertAvailability?.(activeChatId)
+          .then(() => syncDocumentContextConvertUi())
+          .catch(() => {});
+      }
+    }
+
+    function setDocumentSelectionSnapshot(snapshot) {
+      selectionSnapshot = snapshot && snapshot.text?.trim() ? { ...snapshot } : null;
+      syncDocumentContextConvertUi();
+    }
+
+    function setContextConvertPending(pending) {
+      contextConvertPending = Boolean(pending);
+      syncDocumentContextConvertUi();
+    }
+
+    async function openDocumentContextPicker() {
+      if (contextConvertPending) return;
+      const chatId = Number(activeChatId || state.getCurrentChatId?.() || 0);
+      const snapshot = editor?.getSelectionSnapshot?.() || selectionSnapshot;
+      if (!chatId || !snapshot?.text?.trim()) {
+        syncDocumentContextConvertUi();
+        return;
+      }
+      selectionSnapshot = { ...snapshot };
+      const availability = await actions.loadContextConvertAvailability?.(chatId).catch(() => null);
+      if (!availability?.enabled || !Array.isArray(availability.bots) || !availability.bots.length) {
+        syncDocumentContextConvertUi();
+        return;
+      }
+      actions.openDocumentContextConvertPicker?.({
+        chatId,
+        anchorEl: ensureDocumentContextConvertButton(),
+        selectionSnapshot: { ...selectionSnapshot },
+      });
+    }
+
     function syncConnectionStatus(status = lastStatus, count = lastAwarenessCount) {
       lastStatus = status === 'online' ? 'online' : 'offline';
       lastAwarenessCount = Number(count || 0);
@@ -93,7 +182,6 @@
       setHidden(dom.inputArea, true);
       setHidden(dom.scrollBottomBtn, true);
       setHidden(dom.searchBtn, true);
-      setHidden(dom.chatShotBtn, true);
       setHidden(dom.composerContextConvertBtn, true);
       setHidden(getEl('documentWorkspace', 'documentWorkspace'), false);
       dom.chatList?.querySelectorAll?.('.chat-item[data-chat-id]').forEach((el) => {
@@ -103,6 +191,14 @@
       actions.updateChatStatus?.();
       actions.applyChatBackground?.(chat || getCurrentChat());
       actions.syncChatAreaMetrics?.();
+      if (isDocumentChat(chat || getCurrentChat())) {
+        actions.loadContextConvertAvailability?.(Number(chat?.id || activeChatId || 0))
+          .then(() => syncDocumentContextConvertUi())
+          .catch(() => {});
+        actions.loadChatShotState?.(Number(chat?.id || activeChatId || 0), { force: true }).catch(() => {});
+        actions.syncChatShotButton?.();
+      }
+      syncDocumentContextConvertUi();
     }
 
     function hideDocumentWorkspace() {
@@ -112,6 +208,7 @@
       setHidden(dom.searchBtn, false);
       setHidden(dom.chatShotBtn, false);
       setHidden(dom.scrollBottomBtn, false);
+      setDocumentSelectionSnapshot(null);
       actions.syncChatAreaMetrics?.();
     }
 
@@ -246,6 +343,7 @@
           initialTitle: session.document?.title || chat?.name || '',
           t,
           onStatusChange: syncConnectionStatus,
+          onSelectionChange: setDocumentSelectionSnapshot,
           onReady: commitEditor,
         });
         nextEditor.ready?.then?.(commitEditor);
@@ -264,16 +362,25 @@
       hideDocumentWorkspace();
       setInviteStatus('');
       syncConnectionStatus('offline', 0);
+      setDocumentSelectionSnapshot(null);
+      setContextConvertPending(false);
     }
 
     function handleRealtimeMessage(message) {
       if (!message || typeof message !== 'object') return false;
+      if (message.type === 'document_system_notice') {
+        const chatId = Number(message.chatId || message.chat_id || 0);
+        if (!chatId || chatId !== Number(activeChatId || 0)) return true;
+        actions.showToast?.(t(message.messageKey || message.message || 'ChatShot saved to notes'));
+        return true;
+      }
       if (message.type !== 'document_saved') return false;
       const chatId = Number(message.chatId || message.chat_id || 0);
       if (!chatId || chatId !== Number(activeChatId || 0)) return true;
       if (message.title && getEl('documentTitleInput', 'documentTitleInput') && doc.activeElement !== getEl('documentTitleInput', 'documentTitleInput')) {
         getEl('documentTitleInput', 'documentTitleInput').value = message.title;
       }
+      actions.loadChatShotState?.(chatId, { force: true }).catch(() => {});
       return true;
     }
 
@@ -281,9 +388,13 @@
 
     return {
       closeDocumentMode,
+      getContextConvertSelectionSnapshot: () => editor?.getSelectionSnapshot?.() || selectionSnapshot,
       handleRealtimeMessage,
       isDocumentChat,
       openDocument,
+      replaceContextConvertSelectionText: (snapshot, text) => editor?.replaceSelectionText?.(snapshot, text) || false,
+      setContextConvertPending,
+      syncDocumentContextConvertUi,
     };
   }
 

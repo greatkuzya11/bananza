@@ -1,7 +1,14 @@
 const crypto = require('crypto');
+const fs = require('fs');
 const jwt = require('jsonwebtoken');
+const path = require('path');
 const { WebSocketServer } = require('ws');
 const Y = require('yjs');
+const { Schema } = require('prosemirror-model');
+const { schema: basicSchema } = require('prosemirror-schema-basic');
+const { addListNodes } = require('prosemirror-schema-list');
+const { tableNodes } = require('prosemirror-tables');
+const { yXmlFragmentToProseMirrorRootNode } = require('y-prosemirror');
 const { setupWSConnection, setPersistence, docs: documentRooms } = require('y-websocket/bin/utils');
 
 const DOCUMENT_INVITE_TOKEN_RE = /^[A-Za-z0-9_-]{32,128}$/;
@@ -18,6 +25,132 @@ function boolDocument(value) {
   return Number(value || 0) === 1;
 }
 
+function normalizeTextAlign(value) {
+  const align = String(value || '').trim().toLowerCase();
+  return ['left', 'center', 'right'].includes(align) ? align : null;
+}
+
+function textblockAttrs(dom) {
+  return { align: normalizeTextAlign(dom?.style?.textAlign) };
+}
+
+function markStyleValue(value) {
+  return String(value || '').replace(/[;"<>]/g, '').trim();
+}
+
+function createDocumentSchema() {
+  const paragraphNode = {
+    content: 'inline*',
+    group: 'block',
+    attrs: { align: { default: null } },
+    parseDOM: [{ tag: 'p', getAttrs: textblockAttrs }],
+    toDOM: () => ['p', 0],
+  };
+  const headingNode = {
+    attrs: { level: { default: 1 }, align: { default: null } },
+    content: 'inline*',
+    group: 'block',
+    defining: true,
+    parseDOM: [1, 2, 3, 4, 5, 6].map((level) => ({
+      tag: `h${level}`,
+      getAttrs: (dom) => ({ level, align: normalizeTextAlign(dom?.style?.textAlign) }),
+    })),
+    toDOM: (node) => [`h${node.attrs.level}`, 0],
+  };
+  const marks = basicSchema.spec.marks
+    .addToEnd('underline', {
+      parseDOM: [{ tag: 'u' }],
+      toDOM: () => ['u', 0],
+    })
+    .addToEnd('text_color', {
+      attrs: { color: {} },
+      parseDOM: [{ style: 'color', getAttrs: (value) => ({ color: markStyleValue(value) }) }],
+      toDOM: (mark) => ['span', { style: `color:${markStyleValue(mark.attrs.color)}` }, 0],
+    })
+    .addToEnd('highlight', {
+      attrs: { color: {} },
+      parseDOM: [{ style: 'background-color', getAttrs: (value) => ({ color: markStyleValue(value) }) }],
+      toDOM: (mark) => ['span', { style: `background-color:${markStyleValue(mark.attrs.color)}` }, 0],
+    })
+    .addToEnd('font_size', {
+      attrs: { size: {} },
+      parseDOM: [{ style: 'font-size', getAttrs: (value) => ({ size: markStyleValue(value) }) }],
+      toDOM: (mark) => ['span', { style: `font-size:${markStyleValue(mark.attrs.size)}` }, 0],
+    })
+    .addToEnd('font_family', {
+      attrs: { family: {} },
+      parseDOM: [{ style: 'font-family', getAttrs: (value) => ({ family: markStyleValue(value) }) }],
+      toDOM: (mark) => ['span', { style: `font-family:${markStyleValue(mark.attrs.family)}` }, 0],
+    });
+  const baseNodes = basicSchema.spec.nodes
+    .update('paragraph', paragraphNode)
+    .update('heading', headingNode);
+  const nodes = addListNodes(baseNodes, 'paragraph block*', 'block')
+    .append({
+      task_list: {
+        group: 'block',
+        content: 'task_item+',
+        parseDOM: [{ tag: 'ul[data-task-list]' }],
+        toDOM: () => ['ul', { 'data-task-list': 'true' }, 0],
+      },
+      task_item: {
+        attrs: { checked: { default: false } },
+        content: 'paragraph block*',
+        defining: true,
+        parseDOM: [{
+          tag: 'li[data-task-item]',
+          getAttrs: (dom) => ({ checked: dom.getAttribute('data-checked') === 'true' }),
+        }],
+        toDOM: (node) => ['li', { 'data-task-item': 'true', 'data-checked': node.attrs.checked ? 'true' : 'false' }, 0],
+      },
+      image_block: {
+        group: 'block',
+        atom: true,
+        selectable: true,
+        isolating: true,
+        attrs: {
+          assetId: { default: null },
+          src: { default: '' },
+          width: { default: 420 },
+          height: { default: null },
+          x: { default: 0 },
+          y: { default: 0 },
+          zIndex: { default: 1 },
+          caption: { default: '' },
+          alt: { default: '' },
+        },
+        parseDOM: [{ tag: 'figure[data-document-image]' }],
+        toDOM: () => ['div', { 'data-document-legacy-image': 'true', contenteditable: 'false' }],
+      },
+    })
+    .append(tableNodes({
+      tableGroup: 'block',
+      cellContent: 'block+',
+      cellAttributes: {
+        background: {
+          default: null,
+          getFromDOM: (dom) => dom.style.backgroundColor || null,
+          setDOMAttr: (value, attrs) => {
+            if (!value) return;
+            attrs.style = `${attrs.style || ''};background-color:${markStyleValue(value)}`;
+          },
+        },
+      },
+    }));
+  return new Schema({ nodes, marks });
+}
+
+const documentSchema = createDocumentSchema();
+
+function imageExtensionForMime(mimeType = '') {
+  const mime = String(mimeType || '').toLowerCase();
+  if (mime === 'image/jpeg' || mime === 'image/jpg') return '.jpg';
+  if (mime === 'image/webp') return '.webp';
+  if (mime === 'image/gif') return '.gif';
+  if (mime === 'image/svg+xml') return '.svg';
+  return '.png';
+}
+
 function createDocumentsFeature({
   app,
   server,
@@ -30,6 +163,12 @@ function createDocumentsFeature({
   publicChatPayloadForViewer,
   recordChatSystemEvent,
   pushFeature = null,
+  aiBotFeature = null,
+  uploadsDir = null,
+  ensureNotesChatForUser = null,
+  hydrateMessageById = null,
+  notifyMessageCreated = null,
+  onMessagePublished = null,
 } = {}) {
   if (!app || !server || !db || typeof auth !== 'function') {
     throw new Error('Document feature requires app, server, db, and auth');
@@ -68,6 +207,21 @@ function createDocumentsFeature({
   const documentStateStmt = db.prepare('SELECT title, ydoc_state FROM documents WHERE chat_id=?');
   const memberStmt = db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?');
   const memberIdsStmt = db.prepare('SELECT user_id FROM chat_members WHERE chat_id=?');
+  const documentHumanMembersStmt = db.prepare(`
+    SELECT u.id, u.username, u.display_name, u.ui_language, COALESCE(u.is_ai_bot,0) as is_ai_bot
+    FROM chat_members cm
+    JOIN users u ON u.id=cm.user_id
+    WHERE cm.chat_id=? AND COALESCE(u.is_ai_bot,0)=0
+    ORDER BY u.id ASC
+  `);
+  const insertFileStmt = db.prepare(`
+    INSERT INTO files(original_name, stored_name, mime_type, size, type, uploaded_by)
+    VALUES(?,?,?,?,?,?)
+  `);
+  const insertDocumentChatShotMessageStmt = db.prepare(`
+    INSERT INTO messages(chat_id, user_id, text, file_id, ai_generated, ai_bot_id)
+    VALUES(?,?,?,?,?,?)
+  `);
 
   function getDocumentChat(chatId) {
     return documentChatStmt.get(Number(chatId || 0)) || null;
@@ -145,6 +299,76 @@ function createDocumentsFeature({
     } finally {
       if (!target.active) target.ydoc.destroy();
     }
+  }
+
+  function getDocumentPlainText(chatId) {
+    const target = getMutableDocument(chatId);
+    if (!target) return '';
+    try {
+      const yXml = target.ydoc.getXmlFragment('prosemirror');
+      if (!yXml || yXml.length <= 0) return '';
+      const pmDoc = yXmlFragmentToProseMirrorRootNode(yXml, documentSchema);
+      return String(pmDoc?.textBetween?.(0, pmDoc.content.size, '\n\n', '\n') || '')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    } catch (error) {
+      console.warn('[documents] plain text extraction failed:', error?.message || error);
+      return '';
+    } finally {
+      if (!target.active) target.ydoc.destroy();
+    }
+  }
+
+  function documentChatShotCaption(member, title, actorName) {
+    const isEnglish = String(member?.ui_language || '').toLowerCase() === 'en';
+    if (isEnglish) return `ChatShot for document "${title}"\nCreated by: ${actorName}`;
+    return `ChatShot \u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u0430 \u00ab${title}\u00bb\n\u0421\u043e\u0437\u0434\u0430\u043b: ${actorName}`;
+  }
+
+  async function publishDocumentChatShotToNotes({ chatId, title, actorName, result }) {
+    if (!uploadsDir || typeof ensureNotesChatForUser !== 'function' || typeof hydrateMessageById !== 'function') {
+      throw new Error('Document ChatShot delivery is not configured');
+    }
+    const image = result?.image || null;
+    const bot = result?.bot || null;
+    const buffer = image?.buffer || null;
+    if (!buffer?.length) throw new Error('Generated image is empty');
+    const botUserId = Number(bot?.user_id || 0);
+    if (!botUserId) throw new Error('ChatShot bot user is unavailable');
+    const members = documentHumanMembersStmt.all(Number(chatId || 0));
+    const delivered = [];
+    for (const member of members) {
+      const notesChat = ensureNotesChatForUser(Number(member.id || 0));
+      if (!notesChat?.id) continue;
+      const ext = path.extname(String(image.originalName || '')).toLowerCase() || imageExtensionForMime(image.mimeType);
+      const storedName = `document-chatshot-${crypto.randomUUID()}${ext || '.png'}`;
+      await fs.promises.writeFile(path.join(uploadsDir, storedName), buffer);
+      const fileRow = insertFileStmt.run(
+        image.originalName || `document-chatshot${ext || '.png'}`,
+        storedName,
+        image.mimeType || 'image/png',
+        buffer.length,
+        'image',
+        botUserId
+      );
+      const caption = documentChatShotCaption(member, title, actorName);
+      const messageRow = insertDocumentChatShotMessageStmt.run(
+        notesChat.id,
+        botUserId,
+        caption,
+        fileRow.lastInsertRowid,
+        1,
+        Number(bot?.id || 0) || null
+      );
+      const message = hydrateMessageById(messageRow.lastInsertRowid, Number(member.id || 0));
+      if (!message) continue;
+      delivered.push(message);
+      try { await Promise.resolve(onMessagePublished?.(message)); } catch (error) {}
+      broadcastToChatAll?.(notesChat.id, { type: 'message', message });
+      try { await Promise.resolve(notifyMessageCreated?.(message)); } catch (error) {}
+    }
+    return delivered;
   }
 
   function cleanupDocumentRoom(chatId) {
@@ -416,6 +640,57 @@ function createDocumentsFeature({
     }
   });
 
+  app.post('/api/documents/:chatId/chatshot', auth, requireDocumentMember, async (req, res) => {
+    try {
+      if (!aiBotFeature?.generateChatShotImageForContext) {
+        return res.status(503).json({ error: 'ChatShot is unavailable' });
+      }
+      const chatId = Number(req.documentChat.id || 0);
+      const contextText = getDocumentPlainText(chatId);
+      if (!contextText) return res.status(400).json({ error: 'Document has no text for ChatShot' });
+      const title = clampTitle(req.documentChat.title || req.documentChat.name || DEFAULT_DOCUMENT_TITLE);
+      const actorName = req.user.display_name || req.user.username || `User ${req.user.id}`;
+      broadcastToChatAll?.(chatId, {
+        type: 'document_system_notice',
+        chatId,
+        kind: 'chatshot_generation_started',
+        message: 'ChatShot is being created. It will be saved to notes.',
+        messageKey: 'ChatShot is being created. It will be saved to notes.',
+        actorName,
+        title,
+      });
+      const result = await aiBotFeature.generateChatShotImageForContext({
+        chatId,
+        actorUserId: req.user.id,
+        contextText,
+      });
+      const delivered = await publishDocumentChatShotToNotes({
+        chatId,
+        title,
+        actorName,
+        result,
+      });
+      broadcastToChatAll?.(chatId, {
+        type: 'document_system_notice',
+        chatId,
+        kind: 'chatshot_saved_to_notes',
+        message: 'ChatShot saved to notes',
+        messageKey: 'ChatShot saved to notes',
+        delivered: delivered.length,
+        actorName,
+        title,
+      });
+      return res.json({
+        ok: true,
+        chatId,
+        delivered: delivered.length,
+      });
+    } catch (error) {
+      console.error('[documents] chatshot failed:', error);
+      return res.status(error.status || 400).json({ error: error?.message || 'ChatShot generation failed' });
+    }
+  });
+
   app.get('/api/documents/:chatId/invite-link', auth, requireDocumentMember, (req, res) => {
     try {
       const token = ensureDocumentInviteToken(req.documentChat.id);
@@ -509,6 +784,7 @@ function createDocumentsFeature({
     documentInvitePath,
     cleanupDocumentRoom,
     getDocumentChat,
+    getDocumentPlainText,
     getDocumentSession,
     isDocumentChat: (chat) => boolDocument(chat?.is_document),
   };

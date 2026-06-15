@@ -24,6 +24,8 @@
         && data.bananaFilterEnabled !== 0,
       ready: !!data.ready,
       message_count: Number(data.message_count || 0),
+      source: data.source || (data.document ? 'document' : 'chat'),
+      document_text_length: Number(data.document_text_length || data.documentTextLength || 0),
       bots: Array.isArray(data.bots) ? data.bots.map((bot) => ({
         id: Number(bot.id || 0),
         name: bot.name || 'ChatShot',
@@ -394,7 +396,9 @@
       const chatId = Number(getCurrentChatId() || 0);
       const state = getCurrentChatShotState(chatId);
       const generating = generatingByChat.has(chatId);
-      const shouldShow = Boolean(chatId && (generating || (state?.enabled && state?.ready && state?.botId)));
+      const isDocument = state?.source === 'document' || Number(options.getChatById?.(chatId)?.is_document || 0) === 1;
+      const canRun = Boolean(state?.enabled && state?.botId && (state?.ready || isDocument));
+      const shouldShow = Boolean(chatId && (generating || canRun));
       button.classList.toggle('hidden', !shouldShow);
       button.classList.toggle('is-pending', generating);
       button.disabled = generating || !shouldShow;
@@ -405,10 +409,12 @@
     async function runChatShotGeneration() {
       const chatId = Number(getCurrentChatId() || 0);
       if (!chatId || generatingByChat.has(chatId)) return null;
+      const chat = options.getChatById?.(chatId) || null;
+      const isDocument = Number(chat?.is_document || 0) === 1;
       generatingByChat.add(chatId);
       syncChatShotButton();
       try {
-        return await api(`/api/chats/${chatId}/chatshot`, { method: 'POST', body: {} });
+        return await api(isDocument ? `/api/documents/${chatId}/chatshot` : `/api/chats/${chatId}/chatshot`, { method: 'POST', body: {} });
       } finally {
         generatingByChat.delete(chatId);
         syncChatShotButton();

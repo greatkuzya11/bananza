@@ -7,7 +7,7 @@
     throw new Error('BananzaApp feature loader is required before feature-registry.js');
   }
 
-  const AI_ADMIN_SCRIPT_VERSION = '20260609-chat-settings-events';
+  const AI_ADMIN_SCRIPT_VERSION = '20260615-doc-chatshot1';
   const aiAdminScript = (file) => `/js/app/ai-admin/${file}.js?v=${AI_ADMIN_SCRIPT_VERSION}`;
 
   loader.registerFeature('admin', [

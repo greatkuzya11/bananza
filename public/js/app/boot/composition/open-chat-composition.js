@@ -127,7 +127,13 @@
           },
           renderCurrentChatHeader: (chat) => renderCurrentChatHeader(chat),
           revealActiveMobileChatRoute: (options = {}) => revealActiveMobileChatRoute(options),
+          getContextConvertAvailability: (chatId) => contextConvertAvailabilityByChat?.get?.(Number(chatId || 0)) || null,
+          loadChatShotState: (chatId, options = {}) => loadChatShotState(chatId, options),
+          loadContextConvertAvailability: (chatId, options = {}) => loadContextConvertAvailability(chatId, options),
+          openDocumentContextConvertPicker: (options = {}) => openDocumentContextConvertPicker(options),
+          showToast: (message) => showCenterToast(message),
           syncChatAreaMetrics: () => syncChatAreaMetrics(),
+          syncChatShotButton: () => syncChatShotButton(),
           updateChatStatus: () => updateChatStatus(),
         },
       });

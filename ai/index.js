@@ -685,6 +685,7 @@ function createAiBotFeature({
   saveMessageMentions,
   messageActions,
   onBotMembershipChanged,
+  getDocumentPlainText = null,
 }) {
   const botByIdStmt = db.prepare(`
     SELECT b.*, u.avatar_color, u.avatar_url
@@ -850,7 +851,7 @@ function createAiBotFeature({
   `);
   const chatSettingsStmt = db.prepare('SELECT * FROM ai_chat_bots ORDER BY chat_id ASC, bot_id ASC');
   const botChatsStmt = db.prepare('SELECT chat_id FROM ai_chat_bots WHERE bot_id=?');
-  const chatRowByIdStmt = db.prepare('SELECT id, name, type, created_by, is_notes, chatshot_enabled, chatshot_bot_id, chatshot_style, chatshot_banana_filter_enabled FROM chats WHERE id=?');
+  const chatRowByIdStmt = db.prepare('SELECT id, name, type, created_by, is_notes, is_document, chatshot_enabled, chatshot_bot_id, chatshot_style, chatshot_banana_filter_enabled FROM chats WHERE id=?');
   const chatContextTransformStmt = db.prepare('SELECT context_transform_enabled FROM chats WHERE id=?');
   const contextTransformEnabledChatIdsStmt = db.prepare('SELECT id FROM chats WHERE context_transform_enabled=1');
   const chatShotEnabledChatIdsStmt = db.prepare('SELECT id FROM chats WHERE chatshot_enabled=1');
@@ -4594,7 +4595,16 @@ function createAiBotFeature({
     if (!chat) return null;
     const bots = getActiveChatShotBotsForChat(chat.id);
     const selectedBot = resolveChatShotBotForChat(chat, bots);
-    const messageCount = getChatShotMessageCount(chat.id);
+    const isDocument = Number(chat.is_document || 0) === 1;
+    let documentTextLength = 0;
+    if (isDocument && typeof getDocumentPlainText === 'function') {
+      try {
+        documentTextLength = cleanText(getDocumentPlainText(chat.id), 12000).length;
+      } catch (error) {
+        documentTextLength = 0;
+      }
+    }
+    const messageCount = isDocument ? (documentTextLength > 0 ? 1 : 0) : getChatShotMessageCount(chat.id);
     const enabled = boolValue(chat.chatshot_enabled, false) && Boolean(selectedBot);
     return {
       chatId: Number(chat.id || 0),
@@ -4603,8 +4613,10 @@ function createAiBotFeature({
       botId: selectedBot ? Number(selectedBot.id || 0) : null,
       style: normalizeChatShotStyle(chat.chatshot_style, 'comic'),
       banana_filter_enabled: boolValue(chat.chatshot_banana_filter_enabled, true),
-      ready: enabled && messageCount >= 2,
+      ready: enabled && (isDocument ? documentTextLength > 0 : messageCount >= 2),
       message_count: messageCount,
+      source: isDocument ? 'document' : 'chat',
+      document_text_length: documentTextLength,
       bots: bots.map(serializeChatShotBot),
       selectedBot: selectedBot ? serializeChatShotBot(selectedBot) : null,
     };
@@ -4878,6 +4890,67 @@ function createAiBotFeature({
         message,
         bot,
         prompt,
+      };
+    } finally {
+      if (typingTimer) clearInterval(typingTimer);
+      if (bot) broadcastBotTyping(bot, id, false, typingOptions);
+      chatShotLocks.delete(lockKey);
+    }
+  }
+
+  async function generateChatShotImageForContext({ chatId, actorUserId, contextText }) {
+    const id = Number(chatId || 0);
+    const state = getChatShotState(id);
+    if (!state) {
+      const error = new Error('Chat not found');
+      error.status = 404;
+      throw error;
+    }
+    if (!chatMemberStmt.get(id, actorUserId)) {
+      const error = new Error('Not a member');
+      error.status = 403;
+      throw error;
+    }
+    if (!state.enabled || !state.selectedBot) {
+      const error = new Error('ChatShot is disabled in this chat');
+      error.status = 403;
+      throw error;
+    }
+    const cleanContext = cleanText(contextText, 12000);
+    if (!cleanContext) {
+      const error = new Error('Document has no text for ChatShot');
+      error.status = 400;
+      throw error;
+    }
+    const lockKey = `context:${id}`;
+    if (chatShotLocks.has(lockKey)) {
+      const error = new Error('ChatShot is already generating');
+      error.status = 409;
+      throw error;
+    }
+    chatShotLocks.add(lockKey);
+    const typingOptions = { username: CHATSHOT_PUBLIC_NAME, activity: CHATSHOT_GENERATION_ACTIVITY };
+    let bot = null;
+    let typingTimer = null;
+    try {
+      bot = sanitizeBot(botByIdStmt.get(state.selectedBot.id));
+      if (!bot || !isChatShotBot(bot)) {
+        const error = new Error('ChatShot bot is not available in this chat');
+        error.status = 404;
+        throw error;
+      }
+      ensureChatShotBackingUser(bot);
+      broadcastBotTyping(bot, id, true, typingOptions);
+      typingTimer = setInterval(() => {
+        broadcastBotTyping(bot, id, true, typingOptions);
+      }, 2200);
+      const prompt = await generateChatShotSafePrompt(bot, state.style, cleanContext, state.banana_filter_enabled);
+      const image = await createChatShotImage(bot, prompt, state.style, state.banana_filter_enabled);
+      return {
+        bot,
+        image,
+        prompt,
+        state,
       };
     } finally {
       if (typingTimer) clearInterval(typingTimer);
@@ -10501,6 +10574,7 @@ function createAiBotFeature({
     listVoiceContextConvertBots,
     getChatShotState,
     generateChatShotForChat,
+    generateChatShotImageForContext,
     listCallArtifactBots,
     runCallArtifactBot,
     listSelectableBotUsersForViewer,

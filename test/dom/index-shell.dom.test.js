@@ -9,6 +9,8 @@ const { repoRoot } = require('../support/paths');
 const indexHtml = fs.readFileSync(path.join(repoRoot, 'public', 'index.html'), 'utf8');
 const styleCss = fs.readFileSync(path.join(repoRoot, 'public', 'css', 'style.css'), 'utf8');
 const documentEditorBundleJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'document-editor.bundle.js'), 'utf8');
+const documentsJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'app', 'documents.js'), 'utf8');
+const contextChatShotRuntimeJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'app', 'ai-admin', 'context-chatshot-runtime.js'), 'utf8');
 const shellEventsJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'app', 'shell', 'events.js'), 'utf8');
 const shellUiRuntimeJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'app', 'shell', 'ui-runtime.js'), 'utf8');
 const shellRuntimeJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'app', 'shell', 'shell-runtime.js'), 'utf8');
@@ -22,7 +24,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
   const scripts = [...document.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
 
   assert.deepEqual(styles, [
-    '/css/style.css?v=20260614-doc-codeblock1',
+    '/css/style.css?v=20260614-doc-ai1',
     '/css/calls.css?v=20260509-call-modal-surface',
     '/css/voice.css',
     '/css/video-notes.css',
@@ -32,8 +34,8 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/sounds.js',
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
-    '/js/i18n.js?v=20260614-doc-settings1',
-    '/js/document-editor.bundle.js?v=20260614-doc-clear-quote1',
+    '/js/i18n.js?v=20260615-doc-chatshot2',
+    '/js/document-editor.bundle.js?v=20260614-doc-ai1',
     '/js/qip-infium-original.js?v=20260523-qip-infium-original',
     '/js/qip-hd.js?v=20260523-qip-hd',
     '/js/app/namespace.js?v=20260530-app-shell',
@@ -41,7 +43,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/bridge.js?v=20260530-app-shell',
     '/js/app/performance.js?v=20260602-performance-baseline',
     '/js/app/feature-loader.js?v=20260602-feature-loader',
-    '/js/app/feature-registry.js?v=20260609-chat-settings-events',
+    '/js/app/feature-registry.js?v=20260615-doc-chatshot1',
     '/js/app/config.js?v=20260531-core-helpers',
     '/js/app/i18n-helpers.js?v=20260531-core-helpers',
     '/js/app/formatters.js?v=20260531-core-helpers',
@@ -78,7 +80,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/open-chat/scroll.js?v=20260531-open-chat',
     '/js/app/open-chat/media-playback.js?v=20260531-open-chat',
     '/js/app/open-chat/controller.js?v=20260614-doc-bugfix1',
-    '/js/app/documents.js?v=20260614-doc-bugfix1',
+    '/js/app/documents.js?v=20260614-doc-ai1',
     '/js/app/messages/state.js?v=20260531-messages',
     '/js/app/messages/attachments.js?v=20260531-messages',
     '/js/app/messages/polls.js?v=20260531-messages',
@@ -106,18 +108,18 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/boot/api.js?v=20260531-runtime-split',
     '/js/app/boot/auth.js?v=20260531-runtime-split',
     '/js/app/boot/websocket.js?v=20260531-runtime-split',
-    '/js/app/boot/ws-dispatch.js?v=20260614-doc-bugfix1',
+    '/js/app/boot/ws-dispatch.js?v=20260614-doc-ai1',
     '/js/app/boot/runtime-core.js?v=20260601-runtime-final',
     '/js/app/boot/composition/export-utils.js?v=20260601-feature-composition-final',
     '/js/app/boot/composition/feature-primitives.js?v=20260601-feature-composition-final',
     '/js/app/boot/composition/dom-shell.js?v=20260601-feature-composition-final',
     '/js/app/boot/composition/runtime-proxy-scope.js?v=20260601-feature-composition-final',
-    '/js/app/boot/composition/ai-admin-composition.js?v=20260601-feature-composition-final',
+    '/js/app/boot/composition/ai-admin-composition.js?v=20260614-doc-ai1',
     '/js/app/boot/composition/ui-shell-adapters.js?v=20260601-feature-composition-final',
     '/js/app/boot/composition/admin-settings-composition.js?v=20260601-feature-composition-final',
     '/js/app/boot/composition/folders-composition.js?v=20260601-feature-composition-final',
     '/js/app/boot/composition/chat-list-composition.js?v=20260614-doc-bugfix1',
-    '/js/app/boot/composition/open-chat-composition.js?v=20260601-feature-composition-final',
+    '/js/app/boot/composition/open-chat-composition.js?v=20260614-doc-ai1',
     '/js/app/boot/composition/messages-composition.js?v=20260601-feature-composition-final',
     '/js/app/boot/composition/composer-composition.js?v=20260601-feature-composition-final',
     '/js/app/boot/composition/shell-runtime-composition.js?v=20260601-feature-composition-final',
@@ -426,6 +428,10 @@ test('document editor bundle exposes v2 rich editing and keeps image insertion d
   assert.match(documentEditorBundleJs, /INERTIA_FRICTION/);
   assert.match(documentEditorBundleJs, /requestAnimationFrame/);
   assert.match(documentEditorBundleJs, /cancelAnimationFrame/);
+  assert.match(documentEditorBundleJs, /selectionSnapshotFromView/);
+  assert.match(documentEditorBundleJs, /selectionObserverPlugin/);
+  assert.match(documentEditorBundleJs, /getSelectionSnapshot/);
+  assert.match(documentEditorBundleJs, /replaceSelectionText/);
   assert.doesNotMatch(documentEditorBundleJs, /thumb\.addEventListener\("pointerdown"/);
   assert.match(documentEditorBundleJs, /\\u\{1F517\}/);
   assert.match(documentEditorBundleJs, /\\u\{1F9F9\}/);
@@ -448,6 +454,14 @@ test('document editor bundle exposes v2 rich editing and keeps image insertion d
   assert.match(styleCss, /\.document-editor \.ProseMirror pre\s*\{[^}]*white-space\s*:\s*pre-wrap/s);
   assert.match(styleCss, /\.document-editor \.ProseMirror pre\s*\{[^}]*overflow-wrap\s*:\s*anywhere/s);
   assert.doesNotMatch(styleCss, /\.document-editor \.ProseMirror pre\s*\{[^}]*overflow-x\s*:\s*auto/s);
+  assert.match(styleCss, /\.document-context-convert-btn\s*\{[^}]*position\s*:\s*absolute[^}]*background\s*:\s*var\(--accent\)/s);
+  assert.match(documentsJs, /document-context-convert-btn/);
+  assert.match(documentsJs, /openDocumentContextConvertPicker/);
+  assert.match(documentsJs, /replaceContextConvertSelectionText/);
+  assert.match(contextChatShotRuntimeJs, /openDocumentContextConvertPicker/);
+  assert.match(contextChatShotRuntimeJs, /transformDocumentSelectionWithContextConvertBot/);
+  assert.match(contextChatShotRuntimeJs, /\/api\/documents\/\$\{chatId\}\/chatshot/);
+  assert.match(contextChatShotRuntimeJs, /Selection changed\. Select text again/);
   assert.match(styleCss, /@media\s*\(hover:\s*none\),\s*\(pointer:\s*coarse\)\s*\{[\s\S]*\.document-toolbar\s*\{[^}]*touch-action\s*:\s*pan-x[^}]*scrollbar-width\s*:\s*thin/s);
   assert.match(styleCss, /@media\s*\(hover:\s*none\),\s*\(pointer:\s*coarse\)\s*\{[\s\S]*\.document-toolbar-scrollbar\s*\{[^}]*display\s*:\s*none/s);
   assert.doesNotMatch(documentEditorBundleJs, /uploadAndInsertImage/);

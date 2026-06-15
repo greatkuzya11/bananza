@@ -1009,6 +1009,57 @@ test('ChatShot chat setting save keeps Saved status and skips own refresh echo',
   assert.equal(calls.filter((call) => call.url === '/api/chats/7/chatshot' && call.options.method !== 'PUT').length, 1);
 });
 
+test('Document ChatShot action appears after enabling even before document text is ready', async () => {
+  const dom = loadAiAdminRuntime();
+  const { document } = dom.window;
+  const calls = [];
+  const documentState = {
+    chatId: 7,
+    enabled: true,
+    requested_enabled: true,
+    ready: false,
+    botId: 31,
+    source: 'document',
+    document_text_length: 0,
+    style: 'photo',
+    banana_filter_enabled: true,
+    message_count: 0,
+    bots: [{ id: 31, name: 'Shot', provider: 'openai' }],
+    selectedBot: { id: 31, name: 'Shot', provider: 'openai' },
+  };
+  const api = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url === '/api/chats/7/chatshot') return documentState;
+    if (url === '/api/documents/7/chatshot' && options.method === 'POST') return { ok: true, delivered: 2 };
+    throw new Error(`Unexpected ChatShot request: ${url}`);
+  };
+  const scope = {
+    currentChatId: 7,
+    chatShotStateByChat: new Map(),
+    chatShotStateRequests: new Map(),
+    chatShotStateFailuresByChat: new Set(),
+    chatShotGeneratingByChat: new Set(),
+    chatShotBtn: document.getElementById('chatShotBtn'),
+    chatInfoModal: document.getElementById('chatInfoModal'),
+    api,
+    getChatById: (chatId) => Number(chatId) === 7 ? { id: 7, is_document: 1 } : null,
+    esc: (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch])),
+    $: (selector) => document.querySelector(selector),
+    t: (key) => key,
+    showCenterToast() {},
+    syncChatHeaderActionsAccessibility() {},
+  };
+  const runtime = dom.window.BananzaApp.aiAdmin.contextChatShotRuntime.createContextChatShotRuntime(scope);
+
+  const state = await runtime.loadChatShotState(7);
+  assert.equal(state.source, 'document');
+  assert.equal(state.ready, false);
+  assert.equal(document.getElementById('chatShotBtn').classList.contains('hidden'), false);
+
+  await runtime.runChatShotGeneration();
+  assert.ok(calls.some((call) => call.url === '/api/documents/7/chatshot' && call.options.method === 'POST'));
+});
+
 test('Grok image risk resolves targets and confirm modal resolves on confirm/cancel', async () => {
   const dom = loadAiAdminRuntime({
     risk: {

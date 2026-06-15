@@ -70,7 +70,7 @@
         renderContextConvertPicker hideContextConvertPicker getCurrentChatContextConvertState isContextTransformAvailableForChat setComposerContextConvertButtonVisible canContextConvertMessage
         canRestoreContextOriginalMessage bindContextConvertMessageButton createContextConvertMessageButton bindContextOriginalRestoreButton syncVisibleContextConvertMessageButtons syncCurrentChatContextConvertUi
         syncContextConvertComposerButton openComposerContextConvertPicker transformComposerTextWithContextConvertBot syncContextConvertPendingMessageState syncContextOriginalRestorePendingMessageState transformMessageWithContextConvertBot
-        restoreContextOriginalMessage openMessageContextConvertPicker
+        restoreContextOriginalMessage openMessageContextConvertPicker openDocumentContextConvertPicker transformDocumentSelectionWithContextConvertBot
       `.trim().split(/\s+/);
 
       function createRuntimeOnlyAiAdminController() {
@@ -562,6 +562,10 @@
           await ensureContextChatShotRuntime();
           return runtimeFunction('openMessageContextConvertPicker')?.(...args);
         },
+        openDocumentContextConvertPicker: async (...args) => {
+          await ensureContextChatShotRuntime();
+          return runtimeFunction('openDocumentContextConvertPicker')?.(...args);
+        },
         transformComposerTextWithContextConvertBot: async (...args) => {
           await ensureContextChatShotRuntime();
           return runtimeFunction('transformComposerTextWithContextConvertBot')?.(...args);
@@ -569,6 +573,10 @@
         transformMessageWithContextConvertBot: async (...args) => {
           await ensureContextChatShotRuntime();
           return runtimeFunction('transformMessageWithContextConvertBot')?.(...args);
+        },
+        transformDocumentSelectionWithContextConvertBot: async (...args) => {
+          await ensureContextChatShotRuntime();
+          return runtimeFunction('transformDocumentSelectionWithContextConvertBot')?.(...args);
         },
         restoreContextOriginalMessage: async (...args) => {
           await ensureContextChatShotRuntime();

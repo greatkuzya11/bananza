@@ -7,7 +7,7 @@ const WebSocket = require('ws');
 const Y = require('yjs');
 const { WebsocketProvider } = require('y-websocket');
 
-const { createSession, makeUser } = require('../support/api');
+const { createSession, makeUser, waitForSocketMessage } = require('../support/api');
 const { createSandbox } = require('../support/runtimeSandbox');
 const { waitFor } = require('../support/scenario');
 
@@ -40,6 +40,58 @@ function waitForProviderConnected(provider) {
       resolve();
     });
   });
+}
+
+async function enableOpenAiForTests(session, overrides = {}) {
+  const response = await session.request('/api/admin/ai-bots/settings', {
+    method: 'PUT',
+    json: {
+      enabled: true,
+      openai_api_key: 'sk-ai-test',
+      default_response_model: 'gpt-4o-mini',
+      ...overrides,
+    },
+  });
+  return response.data.settings;
+}
+
+async function createOpenAiChatShotBot(session, {
+  name,
+  availableInAllChats = false,
+  enabled = true,
+} = {}) {
+  const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const response = await session.request('/api/admin/openai-chatshot-bots', {
+    method: 'POST',
+    json: {
+      name: name || `Doc Shot ${token}`.slice(0, 30),
+      enabled,
+      available_in_all_chats: availableInAllChats,
+      response_model: 'gpt-4o-mini',
+      image_model: 'gpt-image-2',
+      image_resolution: '1024x1024',
+      image_quality: 'auto',
+      image_background: 'auto',
+      image_output_format: 'png',
+      temperature: 0.3,
+      max_tokens: 900,
+      chatshot_context_limit: 12,
+    },
+  });
+  return response.data.bot;
+}
+
+function responseHasBot(response, botId) {
+  return Array.isArray(response.data?.bots)
+    && response.data.bots.some((bot) => Number(bot.id) === Number(botId));
+}
+
+function appendParagraph(fragment, text) {
+  const paragraph = new Y.XmlElement('paragraph');
+  const nodeText = new Y.XmlText();
+  fragment.push([paragraph]);
+  paragraph.push([nodeText]);
+  nodeText.insert(0, String(text || ''));
 }
 
 test('documents can be created, invited, edited by guest, and are not message chats', async () => {
@@ -197,3 +249,143 @@ function dbValue(dbPath, sql, ...params) {
     db.close();
   }
 }
+
+test('document ChatShot uses document text and saves images to member notes', async () => {
+  await enableOpenAiForTests(admin, {
+    openai_default_image_model: 'gpt-image-2',
+    openai_default_image_size: '1024x1024',
+  });
+
+  const created = await admin.request('/api/documents', {
+    method: 'POST',
+    json: {
+      title: 'Document Shot',
+      memberIds: [bob.user.id],
+    },
+  });
+  const chatId = created.data.id;
+  const bot = await createOpenAiChatShotBot(admin, { availableInAllChats: true });
+
+  try {
+    const emptyState = await bob.request(`/api/chats/${chatId}/chatshot`);
+    assert.equal(responseHasBot(emptyState, bot.id), true);
+    assert.equal(emptyState.data.source, 'document');
+    assert.equal(emptyState.data.enabled, false);
+    assert.equal(emptyState.data.ready, false);
+    assert.equal(emptyState.data.document_text_length, 0);
+
+    await createSession(sandbox.baseUrl).request(`/api/documents/${chatId}/chatshot`, {
+      method: 'POST',
+      json: {},
+      expectedStatus: 401,
+    });
+    await carol.request(`/api/documents/${chatId}/chatshot`, {
+      method: 'POST',
+      json: {},
+      expectedStatus: 403,
+    });
+    await bob.request(`/api/documents/${chatId}/chatshot`, {
+      method: 'POST',
+      json: {},
+      expectedStatus: 400,
+    });
+
+    const enabledState = await bob.request(`/api/chats/${chatId}/chatshot`, {
+      method: 'PUT',
+      json: {
+        enabled: true,
+        botId: bot.id,
+        style: 'photo',
+        bananaFilterEnabled: true,
+      },
+    });
+    assert.equal(enabledState.data.enabled, true);
+    assert.equal(enabledState.data.source, 'document');
+    assert.equal(enabledState.data.ready, false);
+
+    const room = `doc:${chatId}`;
+    const wsBase = `${sandbox.baseUrl.replace(/^http/, 'ws')}/doc-ws`;
+    const memberDoc = new Y.Doc();
+    const memberProvider = new WebsocketProvider(wsBase, room, memberDoc, {
+      params: { token: admin.token },
+      WebSocketPolyfill: WebSocket,
+      disableBc: true,
+    });
+    try {
+      await waitForProviderConnected(memberProvider);
+      const memberContent = memberDoc.getXmlFragment('prosemirror');
+      memberDoc.transact(() => {
+        memberContent.delete(0, memberContent.length);
+        appendParagraph(memberContent, 'Document ChatShot should analyze this shared document text.');
+        appendParagraph(memberContent, 'It must save one generated image into each registered member notes chat.');
+      });
+
+      await waitFor(async () => {
+        const readyState = await bob.request(`/api/chats/${chatId}/chatshot`);
+        assert.equal(readyState.data.ready, true);
+        assert.equal(readyState.data.source, 'document');
+        assert.ok(Number(readyState.data.document_text_length || 0) > 20);
+      }, { timeoutMs: 10_000, intervalMs: 250 });
+    } finally {
+      memberProvider.destroy();
+      memberDoc.destroy();
+    }
+
+    const bobSocket = await bob.openWebSocket();
+    try {
+      const startNoticePromise = waitForSocketMessage(bobSocket, (message) => (
+        message.type === 'document_system_notice'
+        && Number(message.chatId || 0) === Number(chatId)
+        && message.kind === 'chatshot_generation_started'
+      ));
+      const generated = await bob.request(`/api/documents/${chatId}/chatshot`, {
+        method: 'POST',
+        json: {},
+      });
+      const startNotice = await startNoticePromise;
+      assert.equal(startNotice.messageKey, 'ChatShot is being created. It will be saved to notes.');
+      assert.equal(generated.data.ok, true);
+      assert.equal(generated.data.chatId, chatId);
+      assert.equal(generated.data.delivered, 2);
+    } finally {
+      try { bobSocket.close(); } catch {}
+    }
+
+    const dbPath = path.join(sandbox.appDir, 'bananza.db');
+    await waitFor(() => {
+      const db = new Database(dbPath, { readonly: true });
+      try {
+        assert.equal(db.prepare('SELECT COUNT(*) as count FROM messages WHERE chat_id=?').get(chatId).count, 0);
+        const rows = db.prepare(`
+          SELECT c.created_by as owner_id, m.text, m.ai_generated, f.mime_type, f.type as file_type, ab.kind as ai_bot_kind
+          FROM messages m
+          JOIN chats c ON c.id=m.chat_id
+          JOIN files f ON f.id=m.file_id
+          LEFT JOIN ai_bots ab ON ab.id=m.ai_bot_id
+          WHERE c.is_notes=1
+            AND c.created_by IN (?,?)
+            AND m.text LIKE ?
+          ORDER BY c.created_by
+        `).all(admin.user.id, bob.user.id, '%Document Shot%');
+        assert.equal(rows.length, 2);
+        assert.deepEqual(rows.map((row) => Number(row.owner_id)).sort((a, b) => a - b), [admin.user.id, bob.user.id].sort((a, b) => a - b));
+        rows.forEach((row) => {
+          assert.equal(row.ai_generated, 1);
+          assert.equal(row.file_type, 'image');
+          assert.equal(row.mime_type, 'image/svg+xml');
+          assert.equal(row.ai_bot_kind, 'chatshot');
+          assert.match(row.text, /Document Shot/);
+        });
+        assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+      } finally {
+        db.close();
+      }
+    }, { timeoutMs: 10_000, intervalMs: 250 });
+  } finally {
+    await admin.request('/api/admin/ai-bots/settings', {
+      method: 'PUT',
+      json: { enabled: false, openai_interactive_enabled: false },
+    }).catch(() => {});
+    await admin.request(`/api/chats/${chatId}`, { method: 'DELETE' }).catch(() => {});
+  }
+});

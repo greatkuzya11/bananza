@@ -26610,6 +26610,35 @@ ${reason}`);
       }
     });
   }
+  function selectionSnapshotFromView(view) {
+    if (!view) return null;
+    const { doc: doc4, selection } = view.state;
+    const from2 = Number(selection.from || 0);
+    const to = Number(selection.to || 0);
+    if (!Number.isFinite(from2) || !Number.isFinite(to) || from2 >= to) return null;
+    const text2 = doc4.textBetween(from2, to, "\n", "\n");
+    if (!String(text2 || "").trim()) return null;
+    return { from: from2, to, text: text2 };
+  }
+  function selectionObserverPlugin(onSelectionChange) {
+    return new Plugin({
+      view(view) {
+        const emit = () => {
+          if (typeof onSelectionChange === "function") onSelectionChange(selectionSnapshotFromView(view));
+        };
+        emit();
+        return {
+          update(nextView, prevState) {
+            if (prevState && prevState.selection.eq(nextView.state.selection) && prevState.doc === nextView.state.doc) return;
+            emit();
+          },
+          destroy() {
+            if (typeof onSelectionChange === "function") onSelectionChange(null);
+          }
+        };
+      }
+    });
+  }
   function button(options, className, label, titleKey, command, config = {}) {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -27154,6 +27183,7 @@ ${reason}`);
         gapCursor(),
         dropCursor(),
         taskListPlugin(schema2),
+        selectionObserverPlugin(options.onSelectionChange),
         toolbarStatePlugin(toolbarEl),
         columnResizing({ cellMinWidth: 48 }),
         tableEditing()
@@ -27201,8 +27231,22 @@ ${reason}`);
       focus() {
         view.focus();
       },
+      getSelectionSnapshot() {
+        return selectionSnapshotFromView(view);
+      },
       getTitle() {
         return yTitle.toString();
+      },
+      replaceSelectionText(snapshot2, text2) {
+        if (!snapshot2 || !view) return false;
+        const from2 = Math.max(0, Math.min(Number(snapshot2.from || 0), view.state.doc.content.size));
+        const to = Math.max(0, Math.min(Number(snapshot2.to || 0), view.state.doc.content.size));
+        if (!Number.isFinite(from2) || !Number.isFinite(to) || from2 >= to) return false;
+        const currentText = view.state.doc.textBetween(from2, to, "\n", "\n");
+        if (currentText !== String(snapshot2.text || "")) return false;
+        view.dispatch(view.state.tr.insertText(String(text2 || ""), from2, to).scrollIntoView());
+        view.focus();
+        return true;
       },
       provider,
       ready: readyPromise,
