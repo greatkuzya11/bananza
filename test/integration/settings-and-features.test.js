@@ -22,6 +22,13 @@ after(async () => {
   await sandbox?.stop?.();
 });
 
+function tinyPngBuffer() {
+  return Buffer.from(
+    '89504E470D0A1A0A0000000D49484452000000010000000108060000001F15C4890000000D49444154789C6360606060000000040001F61738550000000049454E44AE426082',
+    'hex'
+  );
+}
+
 async function createOpenAiBot(admin, {
   name,
   mention,
@@ -114,6 +121,16 @@ test('weather, notification and sound settings use deterministic mocked integrat
 test('admin backup export downloads a complete archive and stays admin-only', async () => {
   const { admin, bob } = scenario;
   const uploaded = await admin.uploadTextFile('backup-note.txt', 'Backup export payload');
+  const documentChat = await admin.request('/api/documents', {
+    method: 'POST',
+    json: { title: 'Backup Image Doc' },
+  });
+  const documentImageForm = new FormData();
+  documentImageForm.append('file', new Blob([tinyPngBuffer()], { type: 'image/png' }), 'backup-document-image.png');
+  const documentImage = await admin.request(`/api/documents/${documentChat.data.id}/images`, {
+    method: 'POST',
+    formData: documentImageForm,
+  });
   const invite = await admin.request(`/api/chats/${scenario.groupChat.id}/invite-link`);
 
   const forbidden = await bob.request('/api/admin/backup/export', {
@@ -151,6 +168,7 @@ test('admin backup export downloads a complete archive and stays admin-only', as
       assert.ok(fs.existsSync(dbPath));
       assert.ok(fs.existsSync(path.join(extractDir, 'uploads')));
       assert.ok(fs.existsSync(path.join(extractDir, 'uploads', uploaded.stored_name)));
+      assert.ok(fs.existsSync(path.join(extractDir, 'uploads', documentImage.data.asset.stored_name)));
       assert.ok(fs.existsSync(path.join(extractDir, '.secret')));
       assert.ok(fs.existsSync(path.join(extractDir, '.vapid.json')));
       assert.equal(fs.existsSync(path.join(extractDir, '.env')), false);
@@ -174,10 +192,20 @@ test('admin backup export downloads a complete archive and stays admin-only', as
         assert.equal(backupDb.pragma('integrity_check', { simple: true }), 'ok');
         const userCount = backupDb.prepare('SELECT COUNT(*) AS count FROM users').get().count;
         const fileRow = backupDb.prepare('SELECT stored_name FROM files WHERE id = ?').get(uploaded.id);
+        const documentAssetRow = backupDb.prepare(`
+          SELECT da.chat_id, da.file_id, da.kind, f.stored_name
+          FROM document_assets da
+          JOIN files f ON f.id=da.file_id
+          WHERE da.id=?
+        `).get(documentImage.data.asset.id);
         const newsSource = backupDb.prepare('SELECT name, url FROM ai_news_sources WHERE url = ?').get('https://lenta.ru/rss/top7');
         const inviteRow = backupDb.prepare('SELECT invite_token, invite_token_created_at FROM chats WHERE id = ?').get(scenario.groupChat.id);
         assert.ok(userCount >= 2);
         assert.equal(fileRow.stored_name, uploaded.stored_name);
+        assert.equal(documentAssetRow.chat_id, documentChat.data.id);
+        assert.equal(documentAssetRow.file_id, documentImage.data.asset.fileId);
+        assert.equal(documentAssetRow.kind, 'image');
+        assert.equal(documentAssetRow.stored_name, documentImage.data.asset.stored_name);
         assert.equal(newsSource.name, 'Lenta.ru top7');
         assert.equal(inviteRow.invite_token, invite.data.token);
         assert.ok(inviteRow.invite_token_created_at);

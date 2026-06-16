@@ -238,6 +238,21 @@
       return link;
     }
 
+    async function uploadDocumentImage(file) {
+      const chatId = Number(activeChatId || state.getCurrentChatId?.() || 0);
+      if (!chatId) throw new Error(t('Could not insert image'));
+      if (!file || !String(file.type || '').toLowerCase().startsWith('image/')) {
+        throw new Error(t('Only images can be inserted'));
+      }
+      const formData = new win.FormData();
+      formData.append('file', file, file.name || 'document-image.png');
+      const data = await api(`/api/documents/${chatId}/images`, {
+        method: 'POST',
+        body: formData,
+      });
+      return data?.asset || data;
+    }
+
     async function copyCurrentInviteLink() {
       try {
         setInviteStatus(t('Preparing link...'));
@@ -342,6 +357,8 @@
           },
           initialTitle: session.document?.title || chat?.name || '',
           t,
+          uploadImage: uploadDocumentImage,
+          onError: (message) => actions.showToast?.(message || t('Could not insert image')),
           onStatusChange: syncConnectionStatus,
           onSelectionChange: setDocumentSelectionSnapshot,
           onReady: commitEditor,

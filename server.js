@@ -1747,6 +1747,7 @@ documentsFeature = createDocumentsFeature({
   pushFeature,
   aiBotFeature,
   uploadsDir: UPLOADS_DIR,
+  uploadLimiter: upLimiter,
   ensureNotesChatForUser,
   hydrateMessageById: (messageId, viewerUserId) => hydrateMessageById(messageId, viewerUserId),
   notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),

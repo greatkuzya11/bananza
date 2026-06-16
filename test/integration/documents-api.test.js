@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
 const path = require('path');
 const { before, after } = require('node:test');
 const Database = require('better-sqlite3');
@@ -92,6 +93,66 @@ function appendParagraph(fragment, text) {
   fragment.push([paragraph]);
   paragraph.push([nodeText]);
   nodeText.insert(0, String(text || ''));
+}
+
+function appendParagraphWithInlineImage(fragment, text, attrs = {}) {
+  const paragraph = new Y.XmlElement('paragraph');
+  const nodeText = new Y.XmlText();
+  const image = new Y.XmlElement(attrs.nodeName || 'image_inline');
+  fragment.push([paragraph]);
+  paragraph.push([nodeText, image]);
+  Object.entries({
+    assetId: attrs.assetId || null,
+    src: attrs.src || '',
+    width: attrs.width || 420,
+    height: null,
+    align: null,
+    x: 0,
+    y: 0,
+    zIndex: 1,
+    caption: '',
+    alt: attrs.alt || '',
+  }).forEach(([key, value]) => {
+    if (value !== null) image.setAttribute(key, value);
+  });
+  nodeText.insert(0, String(text || ''));
+}
+
+function countDocumentImages(type) {
+  let count = 0;
+  const visit = (node) => {
+    if (!node || typeof node.toArray !== 'function') return;
+    node.toArray().forEach((child) => {
+      if (child instanceof Y.XmlElement && ['image', 'image_block', 'image_inline'].includes(child.nodeName)) {
+        count += 1;
+      }
+      visit(child);
+    });
+  };
+  visit(type);
+  return count;
+}
+
+function tinyPngBuffer() {
+  return Buffer.from(
+    '89504E470D0A1A0A0000000D49484452000000010000000108060000001F15C4890000000D49444154789C6360606060000000040001F61738550000000049454E44AE426082',
+    'hex'
+  );
+}
+
+async function uploadDocumentImage(session, chatId, {
+  filename = 'doc-image.png',
+  mimeType = 'image/png',
+  body = tinyPngBuffer(),
+  expectedStatus = 200,
+} = {}) {
+  const form = new FormData();
+  form.append('file', new Blob([body], { type: mimeType }), filename);
+  return session.request(`/api/documents/${chatId}/images`, {
+    method: 'POST',
+    formData: form,
+    expectedStatus,
+  });
 }
 
 test('documents can be created, invited, edited by guest, and are not message chats', async () => {
@@ -249,6 +310,131 @@ function dbValue(dbPath, sql, ...params) {
     db.close();
   }
 }
+
+test('document image assets upload for members and are removed with document cleanup', async () => {
+  const created = await admin.request('/api/documents', {
+    method: 'POST',
+    json: {
+      title: 'Image Asset Doc',
+      memberIds: [bob.user.id],
+    },
+  });
+  const chatId = created.data.id;
+  const dbPath = path.join(sandbox.appDir, 'bananza.db');
+  const uploadsDir = path.join(sandbox.appDir, 'uploads');
+
+  try {
+    await createSession(sandbox.baseUrl).request(`/api/documents/${chatId}/images`, {
+      method: 'POST',
+      formData: new FormData(),
+      expectedStatus: 401,
+    });
+    await uploadDocumentImage(carol, chatId, { expectedStatus: 403 });
+
+    const uploaded = await uploadDocumentImage(bob, chatId);
+    assert.equal(uploaded.data.asset.type, 'image');
+    assert.equal(uploaded.data.asset.mime_type, 'image/png');
+    assert.match(uploaded.data.asset.src, /^\/uploads\/[^/]+\/preview$/);
+    assert.equal(fs.existsSync(path.join(uploadsDir, uploaded.data.asset.stored_name)), true);
+
+    const assetRow = dbValue(dbPath, `
+      SELECT da.chat_id, da.file_id, da.kind, f.stored_name, f.type
+      FROM document_assets da
+      JOIN files f ON f.id=da.file_id
+      WHERE da.id=?
+    `, uploaded.data.asset.id);
+    assert.equal(assetRow.chat_id, chatId);
+    assert.equal(assetRow.file_id, uploaded.data.asset.fileId);
+    assert.equal(assetRow.kind, 'image');
+    assert.equal(assetRow.stored_name, uploaded.data.asset.stored_name);
+    assert.equal(assetRow.type, 'image');
+
+    const beforeBadUploadFiles = new Set(fs.readdirSync(uploadsDir));
+    const beforeBadUploadFileCount = dbValue(dbPath, 'SELECT COUNT(*) as count FROM files').count;
+    const badUpload = await uploadDocumentImage(bob, chatId, {
+      filename: 'not-image.txt',
+      mimeType: 'text/plain',
+      body: 'not an image',
+      expectedStatus: 400,
+    });
+    assert.equal(badUpload.data.error, 'Only images can be inserted');
+    assert.equal(dbValue(dbPath, 'SELECT COUNT(*) as count FROM files').count, beforeBadUploadFileCount);
+    assert.deepEqual(new Set(fs.readdirSync(uploadsDir)), beforeBadUploadFiles);
+
+    await admin.request(`/api/documents/${chatId}/content`, { method: 'DELETE' });
+    assert.equal(dbValue(dbPath, 'SELECT COUNT(*) as count FROM document_assets WHERE chat_id=?', chatId).count, 0);
+    assert.equal(dbValue(dbPath, 'SELECT COUNT(*) as count FROM files WHERE id=?', uploaded.data.asset.fileId).count, 0);
+    assert.equal(fs.existsSync(path.join(uploadsDir, uploaded.data.asset.stored_name)), false);
+
+    const uploadedAgain = await uploadDocumentImage(admin, chatId, { filename: 'doc-delete.png' });
+    assert.equal(fs.existsSync(path.join(uploadsDir, uploadedAgain.data.asset.stored_name)), true);
+    await admin.request(`/api/chats/${chatId}`, { method: 'DELETE' });
+    assert.equal(fs.existsSync(path.join(uploadsDir, uploadedAgain.data.asset.stored_name)), false);
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      assert.equal(db.prepare('SELECT COUNT(*) as count FROM documents WHERE chat_id=?').get(chatId).count, 0);
+      assert.equal(db.prepare('SELECT COUNT(*) as count FROM document_assets WHERE chat_id=?').get(chatId).count, 0);
+      assert.equal(db.prepare('SELECT COUNT(*) as count FROM files WHERE id=?').get(uploadedAgain.data.asset.fileId).count, 0);
+      assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+    } finally {
+      db.close();
+    }
+  } finally {
+    await admin.request(`/api/chats/${chatId}`, { method: 'DELETE' }).catch(() => {});
+  }
+});
+
+test('document server plain text extraction preserves document image nodes', async () => {
+  const created = await admin.request('/api/documents', {
+    method: 'POST',
+    json: {
+      title: 'Inline Image Survival',
+      memberIds: [bob.user.id],
+    },
+  });
+  const chatId = created.data.id;
+  const uploaded = await uploadDocumentImage(admin, chatId, { filename: 'inline-survival.png' });
+  const asset = uploaded.data.asset;
+  const room = `doc:${chatId}`;
+  const wsBase = `${sandbox.baseUrl.replace(/^http/, 'ws')}/doc-ws`;
+  const memberDoc = new Y.Doc();
+  const memberProvider = new WebsocketProvider(wsBase, room, memberDoc, {
+    params: { token: admin.token },
+    WebSocketPolyfill: WebSocket,
+    disableBc: true,
+  });
+
+  try {
+    await waitForProviderConnected(memberProvider);
+    const memberContent = memberDoc.getXmlFragment('prosemirror');
+    memberDoc.transact(() => {
+      memberContent.delete(0, memberContent.length);
+      appendParagraphWithInlineImage(memberContent, 'Text before compatible image.', {
+        nodeName: 'image',
+        assetId: String(asset.id),
+        src: asset.src,
+        alt: asset.original_name,
+      });
+      appendParagraphWithInlineImage(memberContent, 'Text before inline image.', {
+        assetId: String(asset.id),
+        src: asset.src,
+        alt: asset.original_name,
+      });
+    });
+    await waitFor(() => assert.equal(countDocumentImages(memberContent), 2), { timeoutMs: 10_000, intervalMs: 100 });
+
+    const state = await admin.request(`/api/chats/${chatId}/chatshot`);
+    assert.equal(state.data.source, 'document');
+    assert.ok(Number(state.data.document_text_length || 0) > 10);
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(countDocumentImages(memberContent), 2);
+  } finally {
+    memberProvider.destroy();
+    memberDoc.destroy();
+    await admin.request(`/api/chats/${chatId}`, { method: 'DELETE' }).catch(() => {});
+  }
+});
 
 test('document ChatShot uses document text and saves images to member notes', async () => {
   await enableOpenAiForTests(admin, {

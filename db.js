@@ -10,6 +10,19 @@ const db = new Database(path.join(__dirname, 'bananza.db'));
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
+function documentAssetsTableSql({ ifNotExists = true } = {}) {
+  return `
+  CREATE TABLE ${ifNotExists ? 'IF NOT EXISTS ' : ''}document_assets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    kind TEXT NOT NULL DEFAULT 'image' CHECK(kind IN ('image')),
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(chat_id, file_id)
+  );`;
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,6 +137,8 @@ db.exec(`
     uploaded_by INTEGER NOT NULL REFERENCES users(id),
     created_at TEXT DEFAULT (datetime('now'))
   );
+
+  ${documentAssetsTableSql()}
 
   CREATE TABLE IF NOT EXISTS link_previews (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -268,6 +283,134 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_message_context_transform_originals_active ON message_context_transform_originals(message_id, restored_at);
   CREATE INDEX IF NOT EXISTS idx_user_recent_emojis_user_time ON user_recent_emojis(user_id, last_used_at DESC);
 `);
+
+function selectExistingColumn(columns, column, fallbackSql = 'NULL') {
+  return columns.has(column) ? column : `${fallbackSql} AS ${column}`;
+}
+
+function ensureDocumentAssetsSchema() {
+  const rows = db.prepare("PRAGMA table_info(document_assets)").all();
+  const columns = new Set(rows.map((row) => row.name));
+  const requiredColumns = ['id', 'chat_id', 'file_id', 'created_by', 'kind', 'created_at'];
+  const hasCurrentShape = requiredColumns.every((column) => columns.has(column));
+
+  if (!hasCurrentShape) {
+    const legacyRows = columns.has('chat_id')
+      ? db.prepare(`
+          SELECT
+            ${selectExistingColumn(columns, 'id')},
+            ${selectExistingColumn(columns, 'chat_id')},
+            ${selectExistingColumn(columns, 'file_id')},
+            ${selectExistingColumn(columns, 'stored_name')},
+            ${selectExistingColumn(columns, 'original_name')},
+            ${selectExistingColumn(columns, 'mime_type')},
+            ${selectExistingColumn(columns, 'size', '0')},
+            ${selectExistingColumn(columns, 'created_by')},
+            ${selectExistingColumn(columns, 'uploaded_by')},
+            ${selectExistingColumn(columns, 'created_at')}
+          FROM document_assets
+        `).all()
+      : [];
+
+    db.transaction(() => {
+      db.exec(`
+        DROP INDEX IF EXISTS idx_document_assets_chat;
+        DROP INDEX IF EXISTS idx_document_assets_file;
+        ALTER TABLE document_assets RENAME TO document_assets_legacy_migration;
+        ${documentAssetsTableSql({ ifNotExists: false })}
+      `);
+
+      const userExistsStmt = db.prepare("SELECT id FROM users WHERE id=?");
+      const fallbackUserStmt = db.prepare(`
+        SELECT COALESCE(
+          (SELECT created_by FROM chats WHERE id=? AND created_by IS NOT NULL),
+          (SELECT user_id FROM chat_members WHERE chat_id=? ORDER BY joined_at, user_id LIMIT 1),
+          (SELECT id FROM users ORDER BY is_admin DESC, id LIMIT 1)
+        ) AS id
+      `);
+      const existingFileStmt = db.prepare("SELECT id FROM files WHERE stored_name=? ORDER BY id LIMIT 1");
+      const fileExistsStmt = db.prepare("SELECT id FROM files WHERE id=?");
+      const insertFileStmt = db.prepare(`
+        INSERT INTO files(original_name, stored_name, mime_type, size, type, uploaded_by, created_at)
+        VALUES(?,?,?,?, 'image', ?, COALESCE(?, datetime('now')))
+      `);
+      const insertAssetWithIdStmt = db.prepare(`
+        INSERT OR IGNORE INTO document_assets(id, chat_id, file_id, created_by, kind, created_at)
+        VALUES(?,?,?,?, 'image', COALESCE(?, datetime('now')))
+      `);
+      const insertAssetStmt = db.prepare(`
+        INSERT OR IGNORE INTO document_assets(chat_id, file_id, created_by, kind, created_at)
+        VALUES(?,?,?, 'image', COALESCE(?, datetime('now')))
+      `);
+
+      const validUserId = (value) => {
+        const id = Number(value || 0);
+        if (!id) return null;
+        return userExistsStmt.get(id) ? id : null;
+      };
+      const fallbackUserId = (chatId) => {
+        const row = fallbackUserStmt.get(chatId, chatId);
+        return validUserId(row?.id);
+      };
+      const resolveCreatedBy = (row, chatId) => (
+        validUserId(row.created_by)
+        || validUserId(row.uploaded_by)
+        || fallbackUserId(chatId)
+      );
+
+      for (const row of legacyRows) {
+        const chatId = Number(row.chat_id || 0);
+        if (!chatId) continue;
+
+        let fileId = Number(row.file_id || 0);
+        if (fileId && !fileExistsStmt.get(fileId)) {
+          fileId = 0;
+        }
+
+        const storedName = String(row.stored_name || '').trim();
+        if (!fileId && storedName) {
+          const existingFile = existingFileStmt.get(storedName);
+          if (existingFile?.id) {
+            fileId = Number(existingFile.id);
+          } else {
+            const uploaderId = resolveCreatedBy(row, chatId);
+            if (!uploaderId) continue;
+            const originalName = String(row.original_name || storedName).trim() || storedName;
+            const mimeType = String(row.mime_type || 'image/png').trim() || 'image/png';
+            const size = Math.max(0, Number(row.size || 0));
+            const inserted = insertFileStmt.run(
+              originalName,
+              storedName,
+              mimeType,
+              size,
+              uploaderId,
+              row.created_at || null,
+            );
+            fileId = Number(inserted.lastInsertRowid || 0);
+          }
+        }
+
+        if (!fileId) continue;
+        const createdBy = resolveCreatedBy(row, chatId);
+        const assetId = Number(row.id || 0);
+        if (assetId) {
+          insertAssetWithIdStmt.run(assetId, chatId, fileId, createdBy, row.created_at || null);
+        } else {
+          insertAssetStmt.run(chatId, fileId, createdBy, row.created_at || null);
+        }
+      }
+
+      db.exec("DROP TABLE IF EXISTS document_assets_legacy_migration");
+    })();
+  }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_document_assets_chat ON document_assets(chat_id, id);
+    CREATE INDEX IF NOT EXISTS idx_document_assets_file ON document_assets(file_id);
+  `);
+}
+
+ensureDocumentAssetsSchema();
 
 // Seed general chat
 const generalChat = db.prepare("SELECT id FROM chats WHERE type = 'general'").get();

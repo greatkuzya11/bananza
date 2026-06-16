@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const jwt = require('jsonwebtoken');
+const multer = require('multer');
 const path = require('path');
 const { WebSocketServer } = require('ws');
 const Y = require('yjs');
@@ -10,6 +11,14 @@ const { addListNodes } = require('prosemirror-schema-list');
 const { tableNodes } = require('prosemirror-tables');
 const { yXmlFragmentToProseMirrorRootNode } = require('y-prosemirror');
 const { setupWSConnection, setPersistence, docs: documentRooms } = require('y-websocket/bin/utils');
+const { v4: uuidv4 } = require('uuid');
+const { deleteVideoPoster } = require('./videoPosters');
+const {
+  GENERAL_UPLOAD_LIMIT_BYTES,
+  GENERAL_UPLOAD_LIMIT_LABEL,
+  classifyUpload,
+  normalizeMimeType,
+} = require('./uploadUtils');
 
 const DOCUMENT_INVITE_TOKEN_RE = /^[A-Za-z0-9_-]{32,128}$/;
 const DEFAULT_DOCUMENT_TITLE = 'Untitled document';
@@ -36,6 +45,22 @@ function textblockAttrs(dom) {
 
 function markStyleValue(value) {
   return String(value || '').replace(/[;"<>]/g, '').trim();
+}
+
+function documentImageAttrs(extra = {}) {
+  return {
+    assetId: { default: null },
+    src: { default: '' },
+    width: { default: 420 },
+    height: { default: null },
+    align: { default: null },
+    x: { default: 0 },
+    y: { default: 0 },
+    zIndex: { default: 1 },
+    caption: { default: '' },
+    alt: { default: '' },
+    ...extra,
+  };
 }
 
 function createDocumentSchema() {
@@ -84,7 +109,21 @@ function createDocumentSchema() {
     });
   const baseNodes = basicSchema.spec.nodes
     .update('paragraph', paragraphNode)
-    .update('heading', headingNode);
+    .update('heading', headingNode)
+    .update('image', {
+      inline: true,
+      group: 'inline',
+      atom: true,
+      selectable: true,
+      draggable: true,
+      attrs: documentImageAttrs({ title: { default: null } }),
+      parseDOM: [{ tag: 'img[src]' }],
+      toDOM: (node) => ['img', {
+        src: node.attrs.src || '',
+        alt: node.attrs.alt || '',
+        title: node.attrs.title || '',
+      }],
+    });
   const nodes = addListNodes(baseNodes, 'paragraph block*', 'block')
     .append({
       task_list: {
@@ -108,19 +147,18 @@ function createDocumentSchema() {
         atom: true,
         selectable: true,
         isolating: true,
-        attrs: {
-          assetId: { default: null },
-          src: { default: '' },
-          width: { default: 420 },
-          height: { default: null },
-          x: { default: 0 },
-          y: { default: 0 },
-          zIndex: { default: 1 },
-          caption: { default: '' },
-          alt: { default: '' },
-        },
+        attrs: documentImageAttrs(),
         parseDOM: [{ tag: 'figure[data-document-image]' }],
         toDOM: () => ['div', { 'data-document-legacy-image': 'true', contenteditable: 'false' }],
+      },
+      image_inline: {
+        inline: true,
+        group: 'inline',
+        atom: true,
+        selectable: true,
+        attrs: documentImageAttrs(),
+        parseDOM: [{ tag: 'span[data-document-image]' }],
+        toDOM: () => ['span', { 'data-document-legacy-image': 'inline', contenteditable: 'false' }],
       },
     })
     .append(tableNodes({
@@ -169,12 +207,22 @@ function createDocumentsFeature({
   hydrateMessageById = null,
   notifyMessageCreated = null,
   onMessagePublished = null,
+  uploadLimiter = null,
 } = {}) {
   if (!app || !server || !db || typeof auth !== 'function') {
     throw new Error('Document feature requires app, server, db, and auth');
   }
 
   const saveTimers = new Map();
+  const documentImageUpload = uploadsDir
+    ? multer({
+      storage: multer.diskStorage({
+        destination: uploadsDir,
+        filename: (_req, file, cb) => cb(null, `${uuidv4()}${path.extname(file.originalname || '').toLowerCase()}`),
+      }),
+      limits: { fileSize: GENERAL_UPLOAD_LIMIT_BYTES, files: 1 },
+    })
+    : null;
 
   const documentChatStmt = db.prepare(`
     SELECT c.*,
@@ -218,6 +266,16 @@ function createDocumentsFeature({
     INSERT INTO files(original_name, stored_name, mime_type, size, type, uploaded_by)
     VALUES(?,?,?,?,?,?)
   `);
+  const insertDocumentAssetStmt = db.prepare(`
+    INSERT INTO document_assets(chat_id, file_id, created_by, kind)
+    VALUES(?,?,?,'image')
+  `);
+  const documentAssetFilesStmt = db.prepare(`
+    SELECT da.id, da.file_id, f.stored_name
+    FROM document_assets da
+    JOIN files f ON f.id=da.file_id
+    WHERE da.chat_id=?
+  `);
   const insertDocumentChatShotMessageStmt = db.prepare(`
     INSERT INTO messages(chat_id, user_id, text, file_id, ai_generated, ai_bot_id)
     VALUES(?,?,?,?,?,?)
@@ -237,6 +295,33 @@ function createDocumentsFeature({
 
   function getDocumentMemberIds(chatId) {
     return memberIdsStmt.all(Number(chatId || 0)).map((row) => Number(row.user_id || 0)).filter(Boolean);
+  }
+
+  function documentAssetUrl(storedName) {
+    return `/uploads/${encodeURIComponent(String(storedName || ''))}/preview`;
+  }
+
+  function cleanupUploadedDocumentFile(file) {
+    if (file?.path) fs.unlink(file.path, () => {});
+  }
+
+  function cleanupDocumentAssets(chatId) {
+    const id = Number(chatId || 0);
+    if (!id || !uploadsDir) return [];
+    const rows = documentAssetFilesStmt.all(id);
+    const fileIds = rows.map((row) => Number(row.file_id || 0)).filter(Boolean);
+    db.transaction(() => {
+      db.prepare('DELETE FROM document_assets WHERE chat_id=?').run(id);
+      const deleteFile = db.prepare('DELETE FROM files WHERE id=?');
+      fileIds.forEach((fileId) => deleteFile.run(fileId));
+    })();
+    rows.forEach((row) => {
+      const storedName = path.basename(String(row.stored_name || ''));
+      if (!storedName) return;
+      fs.unlink(path.join(uploadsDir, storedName), () => {});
+      deleteVideoPoster(uploadsDir, storedName);
+    });
+    return rows;
   }
 
   function documentRoomName(chatId) {
@@ -295,6 +380,7 @@ function createDocumentsFeature({
       clearTimeout(saveTimers.get(target.roomName));
       saveTimers.delete(target.roomName);
       persistDocumentNow(target.roomName, target.ydoc);
+      cleanupDocumentAssets(chatId);
       return getDocumentChat(chatId);
     } finally {
       if (!target.active) target.ydoc.destroy();
@@ -304,8 +390,10 @@ function createDocumentsFeature({
   function getDocumentPlainText(chatId) {
     const target = getMutableDocument(chatId);
     if (!target) return '';
+    const readDoc = new Y.Doc();
     try {
-      const yXml = target.ydoc.getXmlFragment('prosemirror');
+      Y.applyUpdate(readDoc, Y.encodeStateAsUpdate(target.ydoc));
+      const yXml = readDoc.getXmlFragment('prosemirror');
       if (!yXml || yXml.length <= 0) return '';
       const pmDoc = yXmlFragmentToProseMirrorRootNode(yXml, documentSchema);
       return String(pmDoc?.textBetween?.(0, pmDoc.content.size, '\n\n', '\n') || '')
@@ -316,6 +404,7 @@ function createDocumentsFeature({
       console.warn('[documents] plain text extraction failed:', error?.message || error);
       return '';
     } finally {
+      readDoc.destroy();
       if (!target.active) target.ydoc.destroy();
     }
   }
@@ -375,6 +464,7 @@ function createDocumentsFeature({
     const roomName = documentRoomName(chatId);
     clearTimeout(saveTimers.get(roomName));
     saveTimers.delete(roomName);
+    cleanupDocumentAssets(chatId);
     const active = documentRooms.get(roomName);
     if (!active) return;
     Array.from(active.conns?.keys?.() || []).forEach((conn) => {
@@ -638,6 +728,68 @@ function createDocumentsFeature({
       console.error('[documents] content clear failed:', error);
       return res.status(500).json({ error: 'Server error' });
     }
+  });
+
+  const documentImageMiddlewares = [
+    auth,
+    ...(typeof uploadLimiter === 'function' ? [uploadLimiter] : []),
+    requireDocumentMember,
+  ];
+
+  app.post('/api/documents/:chatId/images', ...documentImageMiddlewares, (req, res) => {
+    if (!documentImageUpload?.single) {
+      return res.status(500).json({ error: 'Document image upload is not configured' });
+    }
+    documentImageUpload.single('file')(req, res, (err) => {
+      if (err) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({ error: `File too large (max ${GENERAL_UPLOAD_LIMIT_LABEL})` });
+        }
+        return res.status(400).json({ error: err.message || 'Image upload failed' });
+      }
+      const file = req.file;
+      if (!file) return res.status(400).json({ error: 'No file' });
+      const originalName = Buffer.from(file.originalname || 'image', 'latin1').toString('utf8');
+      const mimeType = normalizeMimeType(file.mimetype) || 'application/octet-stream';
+      const fileType = classifyUpload({ mimeType, originalName });
+      if (fileType !== 'image') {
+        cleanupUploadedDocumentFile(file);
+        return res.status(400).json({ error: 'Only images can be inserted' });
+      }
+
+      let fileId = null;
+      try {
+        const insertedFile = insertFileStmt.run(
+          originalName,
+          file.filename,
+          mimeType,
+          file.size,
+          fileType,
+          req.user.id
+        );
+        fileId = Number(insertedFile.lastInsertRowid || 0);
+        const insertedAsset = insertDocumentAssetStmt.run(req.documentChat.id, fileId, req.user.id);
+        return res.json({
+          asset: {
+            id: Number(insertedAsset.lastInsertRowid || 0),
+            fileId,
+            original_name: originalName,
+            stored_name: file.filename,
+            mime_type: mimeType,
+            size: file.size,
+            type: fileType,
+            src: documentAssetUrl(file.filename),
+          },
+        });
+      } catch (error) {
+        if (fileId) {
+          try { db.prepare('DELETE FROM files WHERE id=?').run(fileId); } catch (e) {}
+        }
+        cleanupUploadedDocumentFile(file);
+        console.error('[documents] image upload failed:', error);
+        return res.status(500).json({ error: 'Image upload failed' });
+      }
+    });
   });
 
   app.post('/api/documents/:chatId/chatshot', auth, requireDocumentMember, async (req, res) => {

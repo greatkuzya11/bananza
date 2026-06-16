@@ -6223,6 +6223,11 @@ html[data-visual-mode="rich"] .poll-card {
   margin: 0 3px;
 }
 
+.document-image-upload {
+  flex: 0 0 auto;
+  display: inline-flex;
+}
+
 .document-table-picker {
   position: relative;
   flex: 0 0 auto;
@@ -6334,6 +6339,7 @@ html[data-visual-mode="rich"] .poll-card {
   line-height: 1.58;
   outline: none;
   padding: clamp(16px, 2vw, 28px);
+  white-space: pre-wrap;
 }
 
 .document-editor .ProseMirror p {
@@ -6448,6 +6454,118 @@ html[data-visual-mode="rich"] .poll-card {
 
 .resize-cursor {
   cursor: col-resize;
+}
+
+.document-editor .ProseMirror .document-image-node {
+  position: relative;
+  max-width: 100%;
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  line-height: 0;
+}
+
+.document-editor .ProseMirror .document-image-node--block {
+  display: block;
+  margin: 14px 0;
+}
+
+.document-editor .ProseMirror .document-image-node--inline {
+  display: inline-block;
+  vertical-align: middle;
+  max-width: calc(100% - 8px);
+  margin: 2px 4px;
+}
+
+.document-editor .ProseMirror .document-image-node img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  border-radius: 7px;
+  user-select: none;
+}
+
+.document-editor .ProseMirror .document-image-node.selected,
+.document-editor .ProseMirror .document-image-node.ProseMirror-selectednode {
+  border-color: color-mix(in srgb, var(--accent) 72%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.document-editor .ProseMirror .document-image-node.is-resizing {
+  user-select: none;
+}
+
+.document-editor .ProseMirror .document-image-resize-handle {
+  position: absolute;
+  z-index: 4;
+  display: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: var(--bg-modal);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .28);
+  touch-action: none;
+}
+
+.document-editor .ProseMirror .document-image-node:hover .document-image-resize-handle,
+.document-editor .ProseMirror .document-image-node.selected .document-image-resize-handle,
+.document-editor .ProseMirror .document-image-node.ProseMirror-selectednode .document-image-resize-handle,
+.document-editor .ProseMirror .document-image-node.is-resizing .document-image-resize-handle {
+  display: block;
+}
+
+.document-image-resize-handle--top-left {
+  top: -8px;
+  left: -8px;
+  cursor: nwse-resize;
+}
+
+.document-image-resize-handle--top-right {
+  top: -8px;
+  right: -8px;
+  cursor: nesw-resize;
+}
+
+.document-image-resize-handle--bottom-left {
+  bottom: -8px;
+  left: -8px;
+  cursor: nesw-resize;
+}
+
+.document-image-resize-handle--bottom-right {
+  right: -8px;
+  bottom: -8px;
+  cursor: nwse-resize;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .document-editor .ProseMirror .document-image-node .document-image-resize-handle {
+    display: block;
+    width: 22px;
+    height: 22px;
+  }
+
+  .document-image-resize-handle--top-left {
+    top: -12px;
+    left: -12px;
+  }
+
+  .document-image-resize-handle--top-right {
+    top: -12px;
+    right: -12px;
+  }
+
+  .document-image-resize-handle--bottom-left {
+    bottom: -12px;
+    left: -12px;
+  }
+
+  .document-image-resize-handle--bottom-right {
+    right: -12px;
+    bottom: -12px;
+  }
 }
 
 .document-editor .ProseMirror .document-collab-cursor,

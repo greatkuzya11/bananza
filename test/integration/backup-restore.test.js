@@ -10,6 +10,13 @@ const { createBasicChatScenario } = require('../support/scenario');
 
 let sandbox;
 
+function tinyPngBuffer() {
+  return Buffer.from(
+    '89504E470D0A1A0A0000000D49484452000000010000000108060000001F15C4890000000D49444154789C6360606060000000040001F61738550000000049454E44AE426082',
+    'hex'
+  );
+}
+
 test('admin backup restore previews archives, stays admin-only, and applies recovery admin without exiting in test mode', async () => {
   sandbox = await createSandbox({
     name: 'backup-restore',
@@ -22,6 +29,16 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
     const scenario = await createBasicChatScenario(sandbox.baseUrl);
     const { admin, bob } = scenario;
     const uploaded = await admin.uploadTextFile('restore-note.txt', 'restore payload');
+    const documentChat = await admin.request('/api/documents', {
+      method: 'POST',
+      json: { title: 'Restore Image Doc' },
+    });
+    const documentImageForm = new FormData();
+    documentImageForm.append('file', new Blob([tinyPngBuffer()], { type: 'image/png' }), 'restore-document-image.png');
+    const documentImage = await admin.request(`/api/documents/${documentChat.data.id}/images`, {
+      method: 'POST',
+      formData: documentImageForm,
+    });
 
     const exportResponse = await fetch(`${sandbox.baseUrl}/api/admin/backup/export`, {
       headers: {
@@ -111,9 +128,21 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
       assert.equal(recovery.is_blocked, 0);
       assert.equal(await bcrypt.compare('restore-password', recovery.password), true);
       const fileRow = restoredDb.prepare('SELECT stored_name FROM files WHERE id=?').get(uploaded.id);
+      const documentAssetRow = restoredDb.prepare(`
+        SELECT da.chat_id, da.file_id, da.kind, f.stored_name
+        FROM document_assets da
+        JOIN files f ON f.id=da.file_id
+        WHERE da.id=?
+      `).get(documentImage.data.asset.id);
       const newsSource = restoredDb.prepare('SELECT name, url FROM ai_news_sources WHERE url=?').get('https://lenta.ru/rss/top7');
       assert.ok(fileRow);
       assert.equal(fs.existsSync(path.join(sandbox.appDir, 'uploads', fileRow.stored_name)), true);
+      assert.ok(documentAssetRow);
+      assert.equal(documentAssetRow.chat_id, documentChat.data.id);
+      assert.equal(documentAssetRow.file_id, documentImage.data.asset.fileId);
+      assert.equal(documentAssetRow.kind, 'image');
+      assert.equal(documentAssetRow.stored_name, documentImage.data.asset.stored_name);
+      assert.equal(fs.existsSync(path.join(sandbox.appDir, 'uploads', documentImage.data.asset.stored_name)), true);
       assert.equal(newsSource.name, 'Lenta.ru top7');
     } finally {
       restoredDb.close();

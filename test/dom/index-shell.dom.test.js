@@ -24,7 +24,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
   const scripts = [...document.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
 
   assert.deepEqual(styles, [
-    '/css/style.css?v=20260614-doc-ai1',
+    '/css/style.css?v=20260616-doc-images-css1',
     '/css/calls.css?v=20260509-call-modal-surface',
     '/css/voice.css',
     '/css/video-notes.css',
@@ -35,7 +35,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
     '/js/i18n.js?v=20260615-doc-chatshot2',
-    '/js/document-editor.bundle.js?v=20260614-doc-ai1',
+    '/js/document-editor.bundle.js?v=20260616-doc-compat-image1',
     '/js/qip-infium-original.js?v=20260523-qip-infium-original',
     '/js/qip-hd.js?v=20260523-qip-hd',
     '/js/app/namespace.js?v=20260530-app-shell',
@@ -80,7 +80,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/open-chat/scroll.js?v=20260531-open-chat',
     '/js/app/open-chat/media-playback.js?v=20260531-open-chat',
     '/js/app/open-chat/controller.js?v=20260614-doc-bugfix1',
-    '/js/app/documents.js?v=20260614-doc-ai1',
+    '/js/app/documents.js?v=20260615-doc-images1',
     '/js/app/messages/state.js?v=20260531-messages',
     '/js/app/messages/attachments.js?v=20260531-messages',
     '/js/app/messages/polls.js?v=20260531-messages',
@@ -372,6 +372,7 @@ test('style.css keeps document editor full width and theme-colored', () => {
   assert.match(styleCss, /\.document-toolbar\s*\{[^}]*background-color\s*:\s*var\(--bg-sidebar\)[^}]*background-image\s*:\s*var\(--bg-panel-gradient\)/s);
   assert.match(styleCss, /\.document-editor-shell\s*\{[^}]*background\s*:\s*var\(--rich-other-msg-bg,\s*var\(--bg-other-msg\)\)/s);
   assert.match(styleCss, /\.document-editor\s+\.ProseMirror\s*\{[^}]*width\s*:\s*100%[^}]*max-width\s*:\s*none[^}]*margin\s*:\s*0/s);
+  assert.match(styleCss, /\.document-editor\s+\.ProseMirror\s*\{[^}]*white-space\s*:\s*pre-wrap/s);
   assert.doesNotMatch(styleCss, /\.document-editor\s+\.ProseMirror\s*\{[^}]*max-width\s*:\s*920px/s);
 });
 
@@ -382,7 +383,7 @@ test('document collab cursor label stays out of table layout flow', () => {
   assert.match(documentEditorBundleJs, /cursorBuilder:\s*createCollabCursor/);
 });
 
-test('document editor bundle exposes v2 rich editing and keeps image insertion disabled', () => {
+test('document editor bundle exposes v2 rich editing and document image insertion', () => {
   assert.match(documentEditorBundleJs, /mergeCells/);
   assert.match(documentEditorBundleJs, /toggleHeaderRow/);
   assert.match(documentEditorBundleJs, /createAwarenessStateFilter/);
@@ -464,11 +465,45 @@ test('document editor bundle exposes v2 rich editing and keeps image insertion d
   assert.match(contextChatShotRuntimeJs, /Selection changed\. Select text again/);
   assert.match(styleCss, /@media\s*\(hover:\s*none\),\s*\(pointer:\s*coarse\)\s*\{[\s\S]*\.document-toolbar\s*\{[^}]*touch-action\s*:\s*pan-x[^}]*scrollbar-width\s*:\s*thin/s);
   assert.match(styleCss, /@media\s*\(hover:\s*none\),\s*\(pointer:\s*coarse\)\s*\{[\s\S]*\.document-toolbar-scrollbar\s*\{[^}]*display\s*:\s*none/s);
-  assert.doesNotMatch(documentEditorBundleJs, /uploadAndInsertImage/);
-  assert.doesNotMatch(documentEditorBundleJs, /document-image-node/);
-  assert.doesNotMatch(documentEditorBundleJs, /Insert image/);
+  assert.match(documentEditorBundleJs, /uploadAndInsertImage/);
+  assert.match(documentEditorBundleJs, /uploadAndInsertImageUrls/);
+  assert.match(documentEditorBundleJs, /imageInputPlugin/);
+  assert.match(documentEditorBundleJs, /schema\d*\.nodes\.image\s*\|\|\s*schema\d*\.nodes\.image_inline\s*\|\|\s*schema\d*\.nodes\.image_block/);
+  assert.match(documentEditorBundleJs, /image_inline/);
+  assert.match(documentEditorBundleJs, /currentImageInsertPos/);
+  assert.match(documentEditorBundleJs, /pendingInsertPos/);
+  assert.match(documentEditorBundleJs, /pointerdown/);
+  assert.match(documentEditorBundleJs, /mousedown/);
+  assert.match(documentEditorBundleJs, /document-image-node/);
+  assert.match(documentEditorBundleJs, /document\.createElement\(this\.isInline\s*\?\s*"span"\s*:\s*"figure"\)/);
+  assert.match(documentEditorBundleJs, /this\.isInline\s*\?\s*"inline"\s*:\s*"block"/);
+  assert.match(documentEditorBundleJs, /TextSelection\.create\(tr\.doc,\s*cursorPos\)/);
+  assert.match(documentEditorBundleJs, /image:\s*\(node,\s*editorView,\s*getPos\)\s*=>\s*new DocumentImageNodeView/);
+  assert.match(documentEditorBundleJs, /image_inline:\s*\(node,\s*editorView,\s*getPos\)\s*=>\s*new DocumentImageNodeView/);
+  assert.match(documentEditorBundleJs, /document-toolbar-image/);
+  assert.match(documentEditorBundleJs, /Insert image/);
+  assert.match(documentEditorBundleJs, /document-image-resize-handle/);
+  assert.match(documentEditorBundleJs, /top-left/);
+  assert.match(documentEditorBundleJs, /top-right/);
+  assert.match(documentEditorBundleJs, /bottom-left/);
+  assert.match(documentEditorBundleJs, /bottom-right/);
+  assert.match(documentEditorBundleJs, /handleDrop\(view,\s*event\)/);
+  assert.match(documentEditorBundleJs, /handlePaste\(view,\s*event\)/);
+  assert.match(documentEditorBundleJs, /uploadImageUrlsFromHtml/);
+  assert.match(documentEditorBundleJs, /stripPastedImages/);
+  assert.match(documentsJs, /uploadDocumentImage/);
+  assert.match(documentsJs, /\/api\/documents\/\$\{chatId\}\/images/);
+  assert.match(documentsJs, /uploadImage:\s*uploadDocumentImage/);
+  assert.match(styleCss, /\.document-image-upload\s*\{/);
+  assert.match(styleCss, /\.document-editor \.ProseMirror \.document-image-node\s*\{/);
+  assert.match(styleCss, /\.document-editor \.ProseMirror \.document-image-node--inline\s*\{[^}]*display\s*:\s*inline-block/s);
+  assert.match(styleCss, /\.document-editor \.ProseMirror \.document-image-node--inline\s*\{[^}]*vertical-align\s*:\s*middle/s);
+  assert.match(styleCss, /\.document-editor \.ProseMirror \.document-image-resize-handle\s*\{/);
+  assert.match(styleCss, /\.document-image-resize-handle--top-left\s*\{/);
+  assert.match(styleCss, /\.document-image-resize-handle--top-right\s*\{/);
+  assert.match(styleCss, /\.document-image-resize-handle--bottom-left\s*\{/);
+  assert.match(styleCss, /\.document-image-resize-handle--bottom-right\s*\{/);
   assert.doesNotMatch(styleCss, /\.document-image-mini-toolbar\s*\{/);
-  assert.doesNotMatch(styleCss, /\.document-image-resize-handle\s*\{/);
 });
 
 test('style.css clamps New Chat folder selection rows to compact previews', () => {

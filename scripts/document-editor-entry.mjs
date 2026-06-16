@@ -1,7 +1,7 @@
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { Schema } from 'prosemirror-model';
-import { EditorState, Plugin } from 'prosemirror-state';
+import { EditorState, NodeSelection, Plugin, TextSelection } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
 import { schema as basicSchema } from 'prosemirror-schema-basic';
 import { addListNodes, wrapInList, splitListItem, liftListItem, sinkListItem } from 'prosemirror-schema-list';
@@ -152,6 +152,88 @@ function markStyleValue(value) {
   return String(value || '').replace(/[;"<>]/g, '').trim();
 }
 
+function normalizeImageWidth(value, fallback = 420) {
+  const number = Math.round(Number(value || 0));
+  if (!Number.isFinite(number) || number <= 0) return fallback;
+  return Math.max(96, Math.min(4096, number));
+}
+
+function imageWidthFromDom(dom) {
+  const raw = dom?.style?.width || dom?.getAttribute?.('width') || dom?.querySelector?.('img')?.getAttribute?.('width') || '';
+  const match = String(raw || '').match(/(\d+(?:\.\d+)?)/);
+  return normalizeImageWidth(match ? Number(match[1]) : 420);
+}
+
+function imageBlockAttrsFromDom(dom) {
+  const img = dom?.matches?.('img') ? dom : (dom?.querySelector?.('img') || null);
+  return {
+    assetId: dom?.getAttribute?.('data-asset-id') || null,
+    src: img?.getAttribute?.('src') || dom?.getAttribute?.('data-src') || '',
+    width: imageWidthFromDom(dom),
+    height: null,
+    align: normalizeTextAlign(dom?.getAttribute?.('data-align') || dom?.style?.textAlign),
+    x: 0,
+    y: 0,
+    zIndex: 1,
+    caption: '',
+    alt: img?.getAttribute?.('alt') || '',
+  };
+}
+
+function imageCompatAttrsFromDom(dom) {
+  const attrs = imageBlockAttrsFromDom(dom);
+  const img = dom?.matches?.('img') ? dom : (dom?.querySelector?.('img') || null);
+  return {
+    ...attrs,
+    title: img?.getAttribute?.('title') || null,
+  };
+}
+
+function imageBlockDomAttrs(node) {
+  const width = normalizeImageWidth(node.attrs.width);
+  const align = normalizeTextAlign(node.attrs.align);
+  const styles = [`width:${width}px`];
+  if (align === 'center') styles.push('margin-left:auto', 'margin-right:auto');
+  if (align === 'right') styles.push('margin-left:auto', 'margin-right:0');
+  if (align === 'left') styles.push('margin-left:0', 'margin-right:auto');
+  return {
+    'data-document-image': 'true',
+    'data-asset-id': node.attrs.assetId || '',
+    'data-src': node.attrs.src || '',
+    'data-align': align || '',
+    class: 'document-image-node document-image-node--block',
+    contenteditable: 'false',
+    style: styles.join(';'),
+  };
+}
+
+function imageInlineDomAttrs(node) {
+  const width = normalizeImageWidth(node.attrs.width);
+  return {
+    'data-document-image': 'inline',
+    'data-asset-id': node.attrs.assetId || '',
+    'data-src': node.attrs.src || '',
+    class: 'document-image-node document-image-node--inline',
+    contenteditable: 'false',
+    style: `width:${width}px`,
+  };
+}
+
+function imageCompatDomAttrs(node) {
+  const attrs = {
+    src: node.attrs.src || '',
+    alt: node.attrs.alt || '',
+    title: node.attrs.title || '',
+    draggable: 'false',
+    'data-document-image': 'inline',
+    'data-asset-id': node.attrs.assetId || '',
+    'data-src': node.attrs.src || '',
+    width: normalizeImageWidth(node.attrs.width),
+  };
+  if (!attrs.title) delete attrs.title;
+  return attrs;
+}
+
 function createDocumentSchema() {
   const paragraphNode = {
     content: 'inline*',
@@ -236,6 +318,7 @@ function createDocumentSchema() {
       src: { default: '' },
       width: { default: 420 },
       height: { default: null },
+      align: { default: null },
       x: { default: 0 },
       y: { default: 0 },
       zIndex: { default: 1 },
@@ -244,19 +327,57 @@ function createDocumentSchema() {
     },
     parseDOM: [{
       tag: 'figure[data-document-image]',
-      getAttrs: (dom) => ({ assetId: dom.getAttribute?.('data-asset-id') || null }),
+      getAttrs: imageBlockAttrsFromDom,
     }],
-    toDOM: (node) => ['div', {
-      'data-document-legacy-image': 'true',
-      'data-asset-id': node.attrs.assetId || '',
-      contenteditable: 'false',
-    }, ['br']],
+    toDOM: (node) => ['figure', imageBlockDomAttrs(node), ['img', {
+      src: node.attrs.src || '',
+      alt: node.attrs.alt || '',
+      draggable: 'false',
+    }]],
+  };
+  const imageInlineNode = {
+    inline: true,
+    group: 'inline',
+    atom: true,
+    selectable: true,
+    attrs: imageBlockNode.attrs,
+    parseDOM: [{
+      tag: 'span[data-document-image]',
+      getAttrs: imageBlockAttrsFromDom,
+    }],
+    toDOM: (node) => ['span', imageInlineDomAttrs(node), ['img', {
+      src: node.attrs.src || '',
+      alt: node.attrs.alt || '',
+      draggable: 'false',
+    }]],
+  };
+  const imageCompatNode = {
+    inline: true,
+    group: 'inline',
+    atom: true,
+    selectable: true,
+    draggable: true,
+    attrs: {
+      ...imageBlockNode.attrs,
+      title: { default: null },
+    },
+    parseDOM: [
+      { tag: 'span[data-document-image]', getAttrs: imageCompatAttrsFromDom },
+      { tag: 'img[src]', getAttrs: imageCompatAttrsFromDom },
+    ],
+    toDOM: (node) => ['img', imageCompatDomAttrs(node)],
   };
   const baseNodes = basicSchema.spec.nodes
     .update('paragraph', paragraphNode)
-    .update('heading', headingNode);
+    .update('heading', headingNode)
+    .update('image', imageCompatNode);
   const nodes = addListNodes(baseNodes, 'paragraph block*', 'block')
-    .append({ task_list: taskListNode, task_item: taskItemNode, image_block: imageBlockNode })
+    .append({
+      task_list: taskListNode,
+      task_item: taskItemNode,
+      image_block: imageBlockNode,
+      image_inline: imageInlineNode,
+    })
     .append(tableNodes({
       tableGroup: 'block',
       cellContent: 'block+',
@@ -403,19 +524,65 @@ function toggleListCommand(schema, listType) {
   };
 }
 
+function nodeHasAlignAttr(node) {
+  return Object.prototype.hasOwnProperty.call(node?.attrs || {}, 'align');
+}
+
+function isDocumentImageNode(node) {
+  return node?.type?.name === 'image_block' || node?.type?.name === 'image_inline' || node?.type?.name === 'image';
+}
+
+function nearestAlignableTextblock($pos) {
+  for (let depth = $pos.depth; depth > 0; depth -= 1) {
+    const node = $pos.node(depth);
+    if (node.isTextblock && nodeHasAlignAttr(node)) {
+      return { node, pos: $pos.before(depth) };
+    }
+  }
+  return null;
+}
+
+function collectTextAlignTargets(state) {
+  const { selection } = state;
+  const targets = new Map();
+  const addTarget = (node, pos) => {
+    if (!nodeHasAlignAttr(node)) return;
+    targets.set(pos, node);
+  };
+
+  const fromParent = nearestAlignableTextblock(selection.$from);
+  if (fromParent) addTarget(fromParent.node, fromParent.pos);
+  const toParent = nearestAlignableTextblock(selection.$to);
+  if (toParent) addTarget(toParent.node, toParent.pos);
+
+  if (selection instanceof NodeSelection && isDocumentImageNode(selection.node) && nodeHasAlignAttr(selection.node)) {
+    addTarget(selection.node, selection.from);
+  }
+
+  const from = Math.min(selection.from, selection.to);
+  const to = Math.max(selection.from, selection.to);
+  state.doc.nodesBetween(from, to, (node, pos) => {
+    if ((node.isTextblock || isDocumentImageNode(node)) && nodeHasAlignAttr(node)) {
+      addTarget(node, pos);
+    }
+  });
+
+  return [...targets.entries()].sort((a, b) => a[0] - b[0]);
+}
+
 function textAlignActive(state, align) {
-  const { $from } = state.selection;
-  return normalizeTextAlign($from.parent.attrs?.align) === normalizeTextAlign(align);
+  const nextAlign = normalizeTextAlign(align);
+  const target = collectTextAlignTargets(state)[0];
+  return normalizeTextAlign(target?.[1]?.attrs?.align) === nextAlign;
 }
 
 function setTextAlignCommand(align) {
   const nextAlign = normalizeTextAlign(align);
   return (state, dispatch) => {
-    const { from, to } = state.selection;
     let changed = false;
     let tr = state.tr;
-    state.doc.nodesBetween(from, to, (node, pos) => {
-      if (!node.isTextblock || !Object.prototype.hasOwnProperty.call(node.attrs || {}, 'align')) return;
+    const targets = collectTextAlignTargets(state);
+    targets.forEach(([pos, node]) => {
       if (normalizeTextAlign(node.attrs.align) === nextAlign) return;
       changed = true;
       if (dispatch) tr = tr.setNodeMarkup(pos, null, { ...node.attrs, align: nextAlign });
@@ -498,6 +665,436 @@ function taskListPlugin(schema) {
       },
     },
   });
+}
+
+function editorError(options, key, fallback = key) {
+  const message = t(options, key) || fallback;
+  if (typeof options.onError === 'function') options.onError(message);
+}
+
+function isImageFile(file) {
+  return Boolean(file && String(file.type || '').toLowerCase().startsWith('image/'));
+}
+
+function uniqueImageFiles(files = []) {
+  const seen = new Set();
+  return Array.from(files || []).filter((file) => {
+    if (!isImageFile(file)) return false;
+    const key = `${file.name || ''}:${file.size || 0}:${file.type || ''}:${file.lastModified || 0}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function imageFilesFromTransfer(dataTransfer) {
+  const files = [];
+  Array.from(dataTransfer?.items || []).forEach((item) => {
+    if (item.kind !== 'file' || !String(item.type || '').toLowerCase().startsWith('image/')) return;
+    const file = item.getAsFile?.();
+    if (file) files.push(file);
+  });
+  Array.from(dataTransfer?.files || []).forEach((file) => {
+    if (isImageFile(file)) files.push(file);
+  });
+  return uniqueImageFiles(files);
+}
+
+function uploadImageUrlsFromHtml(html) {
+  if (!html || typeof DOMParser === 'undefined') return [];
+  const parser = new DOMParser();
+  const parsed = parser.parseFromString(String(html || ''), 'text/html');
+  const urls = [];
+  parsed.querySelectorAll('img[src]').forEach((img) => {
+    try {
+      const url = new URL(img.getAttribute('src') || '', window.location.href);
+      if (url.origin !== window.location.origin) return;
+      if (!/^\/uploads\/[^/]+(?:\/preview)?$/i.test(url.pathname)) return;
+      urls.push(url.href);
+    } catch (e) {}
+  });
+  return [...new Set(urls)];
+}
+
+function stripPastedImages(html) {
+  return String(html || '').replace(/<img\b[^>]*>/gi, '');
+}
+
+function filenameFromUploadUrl(url) {
+  try {
+    const parsed = new URL(url, window.location.href);
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    const encoded = parts[1] || 'document-image.png';
+    return decodeURIComponent(encoded);
+  } catch {
+    return 'document-image.png';
+  }
+}
+
+function fileFromBlob(blob, filename) {
+  const name = String(filename || 'document-image.png').trim() || 'document-image.png';
+  if (typeof File === 'function') {
+    return new File([blob], name, { type: blob.type || 'image/png' });
+  }
+  blob.name = name;
+  return blob;
+}
+
+async function imageFilesFromUrls(urls = []) {
+  const files = [];
+  for (const url of urls) {
+    const response = await fetch(url, { credentials: 'same-origin' });
+    if (!response.ok) continue;
+    const blob = await response.blob();
+    if (!String(blob.type || '').toLowerCase().startsWith('image/')) continue;
+    files.push(fileFromBlob(blob, filenameFromUploadUrl(url)));
+  }
+  return files;
+}
+
+function imageNodeFromAsset(schema, asset) {
+  const raw = asset?.asset || asset || {};
+  const storedName = raw.stored_name || raw.storedName || '';
+  const src = raw.src || raw.url || raw.client_file_url || (storedName ? `/uploads/${encodeURIComponent(storedName)}/preview` : '');
+  if (!src) throw new Error('Image upload failed');
+  const imageType = schema.nodes.image || schema.nodes.image_inline || schema.nodes.image_block;
+  const attrs = {
+    assetId: raw.id != null ? String(raw.id) : (raw.assetId || null),
+    src,
+    width: normalizeImageWidth(raw.width, 420),
+    height: null,
+    align: null,
+    x: 0,
+    y: 0,
+    zIndex: 1,
+    caption: '',
+    alt: raw.original_name || raw.name || '',
+    title: null,
+  };
+  const allowedAttrs = imageType.spec.attrs || {};
+  const filteredAttrs = {};
+  Object.keys(allowedAttrs).forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(attrs, key)) filteredAttrs[key] = attrs[key];
+  });
+  return imageType.createChecked(filteredAttrs);
+}
+
+function clampDocumentPos(doc, pos) {
+  const number = Number(pos);
+  if (!Number.isFinite(number)) return null;
+  return Math.max(0, Math.min(doc.content.size, Math.round(number)));
+}
+
+function currentImageInsertPos(view) {
+  if (!view?.state?.doc || !view.state.selection) return null;
+  const { doc, selection } = view.state;
+  if (selection instanceof NodeSelection && isDocumentImageNode(selection.node)) {
+    return clampDocumentPos(doc, selection.to);
+  }
+  return clampDocumentPos(doc, selection.from ?? selection.anchor);
+}
+
+function selectInsertedNode(tr, nodeType, preferredPos, fallbackFrom) {
+  const candidates = [
+    preferredPos,
+    Number(fallbackFrom || 0) - 1,
+    Number(fallbackFrom || 0) - 2,
+  ].filter((pos) => Number.isFinite(pos) && pos >= 0 && pos <= tr.doc.content.size);
+  for (const pos of candidates) {
+    const node = tr.doc.nodeAt(pos);
+    if (node?.type === nodeType) {
+      return tr.setSelection(NodeSelection.create(tr.doc, pos));
+    }
+  }
+  return tr;
+}
+
+function insertImageNode(view, node, insertPos = null) {
+  const safePos = clampDocumentPos(view.state.doc, insertPos);
+  let tr = view.state.tr;
+  let preferredPos = null;
+  if (safePos != null) {
+    try {
+      tr = tr.setSelection(TextSelection.near(tr.doc.resolve(safePos)));
+    } catch (e) {}
+  }
+  const beforeFrom = tr.selection.from;
+  const wrapsInlineNode = node.isInline && !tr.selection.$from.parent.inlineContent;
+  const insertionNode = wrapsInlineNode
+    ? view.state.schema.nodes.paragraph?.create(null, node)
+    : node;
+  if (!insertionNode) return safePos ?? beforeFrom;
+  tr = tr.replaceSelectionWith(insertionNode, false);
+  preferredPos = Math.max(0, Math.min(tr.doc.content.size, beforeFrom));
+  if (node.isInline) {
+    const cursorPos = Math.max(0, Math.min(tr.doc.content.size, preferredPos + (wrapsInlineNode ? 1 : 0) + node.nodeSize));
+    try {
+      tr = tr.setSelection(TextSelection.create(tr.doc, cursorPos));
+    } catch (e) {
+      tr = tr.setSelection(TextSelection.near(tr.doc.resolve(cursorPos)));
+    }
+  } else {
+    tr = selectInsertedNode(tr, node.type, preferredPos, tr.selection.from);
+  }
+  tr = tr.scrollIntoView();
+  view.dispatch(tr);
+  view.focus();
+  return Math.min(view.state.doc.content.size, preferredPos + (wrapsInlineNode ? 1 : 0) + node.nodeSize);
+}
+
+async function uploadAndInsertImage(view, files, options = {}, insertPos = null) {
+  if (!view || typeof options.uploadImage !== 'function') return false;
+  const imageFiles = uniqueImageFiles(files);
+  if (!imageFiles.length) {
+    editorError(options, 'Only images can be inserted');
+    return false;
+  }
+  let nextPos = insertPos;
+  for (const file of imageFiles) {
+    try {
+      const asset = await options.uploadImage(file, { source: 'document-editor' });
+      const node = imageNodeFromAsset(view.state.schema, asset);
+      nextPos = insertImageNode(view, node, nextPos);
+    } catch (error) {
+      const message = error?.message || t(options, 'Image upload failed') || 'Image upload failed';
+      if (typeof options.onError === 'function') options.onError(message);
+    }
+  }
+  return true;
+}
+
+async function uploadAndInsertImageUrls(view, urls, options = {}, insertPos = null) {
+  try {
+    const files = await imageFilesFromUrls(urls);
+    if (!files.length) return false;
+    return uploadAndInsertImage(view, files, options, insertPos);
+  } catch (error) {
+    const message = error?.message || t(options, 'Could not insert image') || 'Could not insert image';
+    if (typeof options.onError === 'function') options.onError(message);
+    return false;
+  }
+}
+
+function imageInputPlugin(options, schema) {
+  if (typeof options.uploadImage !== 'function' || !(schema.nodes.image || schema.nodes.image_inline || schema.nodes.image_block)) {
+    return new Plugin({
+      props: {
+        transformPastedHTML: stripPastedImages,
+      },
+    });
+  }
+  return new Plugin({
+    props: {
+      handlePaste(view, event) {
+        const files = imageFilesFromTransfer(event.clipboardData);
+        const insertPos = currentImageInsertPos(view);
+        if (files.length) {
+          event.preventDefault();
+          uploadAndInsertImage(view, files, options, insertPos);
+          return true;
+        }
+        const html = event.clipboardData?.getData?.('text/html') || '';
+        const urls = uploadImageUrlsFromHtml(html);
+        if (urls.length) {
+          event.preventDefault();
+          uploadAndInsertImageUrls(view, urls, options, insertPos);
+          return true;
+        }
+        return false;
+      },
+      handleDrop(view, event) {
+        const files = imageFilesFromTransfer(event.dataTransfer);
+        if (!files.length) return false;
+        event.preventDefault();
+        const coords = { left: event.clientX, top: event.clientY };
+        const dropPos = view.posAtCoords(coords)?.pos ?? null;
+        uploadAndInsertImage(view, files, options, dropPos);
+        return true;
+      },
+      transformPastedHTML: stripPastedImages,
+    },
+  });
+}
+
+class DocumentImageNodeView {
+  constructor(node, view, getPos) {
+    this.node = node;
+    this.view = view;
+    this.getPos = getPos;
+    this.resizeState = null;
+    this.handlePointerDown = this.handlePointerDown.bind(this);
+    this.handleResizeMove = this.handleResizeMove.bind(this);
+    this.handleResizeEnd = this.handleResizeEnd.bind(this);
+
+    this.isInline = Boolean(node.isInline);
+    this.dom = document.createElement(this.isInline ? 'span' : 'figure');
+    this.dom.className = `document-image-node document-image-node--${this.isInline ? 'inline' : 'block'}`;
+    this.dom.setAttribute('data-document-image', 'true');
+    this.dom.setAttribute('contenteditable', 'false');
+
+    this.img = document.createElement('img');
+    this.img.draggable = false;
+    this.dom.appendChild(this.img);
+
+    ['top-left', 'top-right', 'bottom-left', 'bottom-right'].forEach((corner) => {
+      const handle = document.createElement('span');
+      handle.className = `document-image-resize-handle document-image-resize-handle--${corner}`;
+      handle.dataset.corner = corner;
+      handle.setAttribute('aria-hidden', 'true');
+      this.dom.appendChild(handle);
+    });
+
+    this.dom.addEventListener('pointerdown', this.handlePointerDown);
+    this.update(node);
+  }
+
+  getCurrentPos() {
+    try {
+      const pos = this.getPos();
+      return Number.isFinite(pos) ? pos : null;
+    } catch {
+      return null;
+    }
+  }
+
+  maxImageWidth() {
+    const container = this.dom.closest('td, th') || this.view?.dom || this.dom.closest('.ProseMirror');
+    if (!container) return 4096;
+    const styles = window.getComputedStyle(container);
+    const padding = parseFloat(styles.paddingLeft || '0') + parseFloat(styles.paddingRight || '0');
+    return Math.max(96, Math.round((container.clientWidth || 4096) - padding));
+  }
+
+  clampWidth(value) {
+    return Math.max(96, Math.min(this.maxImageWidth(), normalizeImageWidth(value)));
+  }
+
+  applyWidth(width) {
+    const next = this.clampWidth(width);
+    this.dom.style.width = `${next}px`;
+    this.img.style.width = '100%';
+    this.img.style.height = 'auto';
+    return next;
+  }
+
+  applyAlignment() {
+    if (this.isInline) return;
+    const align = normalizeTextAlign(this.node.attrs.align);
+    this.dom.dataset.align = align || '';
+    this.dom.style.marginLeft = '';
+    this.dom.style.marginRight = '';
+    if (align === 'center') {
+      this.dom.style.marginLeft = 'auto';
+      this.dom.style.marginRight = 'auto';
+    } else if (align === 'right') {
+      this.dom.style.marginLeft = 'auto';
+      this.dom.style.marginRight = '0';
+    } else if (align === 'left') {
+      this.dom.style.marginLeft = '0';
+      this.dom.style.marginRight = 'auto';
+    }
+  }
+
+  setNodeSelection() {
+    const pos = this.getCurrentPos();
+    if (pos == null) return;
+    try {
+      this.view.dispatch(this.view.state.tr.setSelection(NodeSelection.create(this.view.state.doc, pos)));
+      this.view.focus();
+    } catch (e) {}
+  }
+
+  handlePointerDown(event) {
+    if (event.button != null && event.button !== 0) return;
+    const handle = event.target?.closest?.('.document-image-resize-handle');
+    if (handle) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.setNodeSelection();
+      const corner = String(handle.dataset.corner || '');
+      this.resizeState = {
+        corner,
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startWidth: this.dom.getBoundingClientRect().width || normalizeImageWidth(this.node.attrs.width),
+        nextWidth: normalizeImageWidth(this.node.attrs.width),
+      };
+      try { handle.setPointerCapture?.(event.pointerId); } catch (e) {}
+      window.addEventListener('pointermove', this.handleResizeMove, { passive: false });
+      window.addEventListener('pointerup', this.handleResizeEnd, true);
+      window.addEventListener('pointercancel', this.handleResizeEnd, true);
+      this.dom.classList.add('is-resizing');
+      return;
+    }
+    this.setNodeSelection();
+  }
+
+  handleResizeMove(event) {
+    const state = this.resizeState;
+    if (!state || event.pointerId !== state.pointerId) return;
+    event.preventDefault();
+    const direction = state.corner.includes('left') ? -1 : 1;
+    const dx = (event.clientX - state.startX) * direction;
+    state.nextWidth = this.applyWidth(state.startWidth + dx);
+  }
+
+  handleResizeEnd(event) {
+    const state = this.resizeState;
+    if (!state || (event?.pointerId != null && event.pointerId !== state.pointerId)) return;
+    window.removeEventListener('pointermove', this.handleResizeMove, { passive: false });
+    window.removeEventListener('pointerup', this.handleResizeEnd, true);
+    window.removeEventListener('pointercancel', this.handleResizeEnd, true);
+    this.dom.classList.remove('is-resizing');
+    this.resizeState = null;
+
+    const nextWidth = this.clampWidth(state.nextWidth);
+    const currentWidth = normalizeImageWidth(this.node.attrs.width);
+    if (Math.abs(nextWidth - currentWidth) < 1) return;
+    const pos = this.getCurrentPos();
+    if (pos == null) return;
+    try {
+      const attrs = { ...this.node.attrs, width: nextWidth, height: null };
+      let tr = this.view.state.tr.setNodeMarkup(pos, null, attrs);
+      tr = tr.setSelection(NodeSelection.create(tr.doc, pos));
+      this.view.dispatch(tr.scrollIntoView());
+      this.view.focus();
+    } catch (e) {}
+  }
+
+  update(node) {
+    if (node.type !== this.node.type) return false;
+    this.node = node;
+    this.dom.dataset.assetId = node.attrs.assetId || '';
+    this.dom.dataset.src = node.attrs.src || '';
+    this.img.src = node.attrs.src || '';
+    this.img.alt = node.attrs.alt || '';
+    this.applyWidth(node.attrs.width);
+    this.applyAlignment();
+    return true;
+  }
+
+  selectNode() {
+    this.dom.classList.add('ProseMirror-selectednode', 'selected');
+  }
+
+  deselectNode() {
+    this.dom.classList.remove('ProseMirror-selectednode', 'selected');
+  }
+
+  stopEvent(event) {
+    return Boolean(event.target?.closest?.('.document-image-resize-handle'));
+  }
+
+  ignoreMutation() {
+    return true;
+  }
+
+  destroy() {
+    this.dom.removeEventListener('pointerdown', this.handlePointerDown);
+    window.removeEventListener('pointermove', this.handleResizeMove, { passive: false });
+    window.removeEventListener('pointerup', this.handleResizeEnd, true);
+    window.removeEventListener('pointercancel', this.handleResizeEnd, true);
+  }
 }
 
 function promptText(options, key, initial = '') {
@@ -830,6 +1427,42 @@ function createTableActionsMenu(options, viewRef, schema) {
   return wrap;
 }
 
+function createImageUploadButton(options, viewRef) {
+  const wrap = document.createElement('span');
+  wrap.className = 'document-image-upload';
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.multiple = true;
+  input.hidden = true;
+  let pendingInsertPos = null;
+  const captureInsertPos = () => {
+    const pos = currentImageInsertPos(viewRef.current);
+    if (pos != null) pendingInsertPos = pos;
+  };
+  const btn = button(options, 'document-toolbar-image', '\u{1F5BC}', 'Insert image', () => {
+    captureInsertPos();
+    input.click();
+  });
+  btn.addEventListener('pointerdown', captureInsertPos, { capture: true });
+  btn.addEventListener('mousedown', (event) => {
+    captureInsertPos();
+    event.preventDefault();
+  }, { capture: true });
+  input.addEventListener('change', () => {
+    const view = viewRef.current;
+    const insertPos = pendingInsertPos ?? currentImageInsertPos(view);
+    pendingInsertPos = null;
+    if (view && input.files?.length) {
+      uploadAndInsertImage(view, input.files, options, insertPos);
+    }
+    input.value = '';
+  });
+  wrap.appendChild(btn);
+  wrap.appendChild(input);
+  return wrap;
+}
+
 function setupToolbarScrollBehavior(toolbarEl) {
   if (!toolbarEl) return;
 
@@ -1108,6 +1741,9 @@ function buildToolbar(options, toolbarEl, viewRef, schema) {
     active: (state) => blockActive(state, schema.nodes.code_block),
   }));
   addSep();
+  if (typeof options.uploadImage === 'function') {
+    toolbarEl.appendChild(createImageUploadButton(options, viewRef));
+  }
   toolbarEl.appendChild(commandButton(options, viewRef, '', '🔗', 'Insert link', setLinkCommand(options, schema), {
     active: (state) => markActive(state, schema.marks.link),
   }));
@@ -1192,9 +1828,10 @@ function createEditor(options = {}) {
         cursorBuilder: createCollabCursor,
         selectionBuilder: createCollabSelection,
       }),
-      yUndoPlugin(),
-      buildInputRules(schema),
-      keymap({
+        yUndoPlugin(),
+        buildInputRules(schema),
+        imageInputPlugin(options, schema),
+        keymap({
         'Mod-z': undoCommand,
         'Mod-y': redoCommand,
         'Mod-Shift-z': redoCommand,
@@ -1224,6 +1861,11 @@ function createEditor(options = {}) {
 
   const view = new EditorView(editorEl, {
     state,
+    nodeViews: {
+      image: (node, editorView, getPos) => new DocumentImageNodeView(node, editorView, getPos),
+      image_block: (node, editorView, getPos) => new DocumentImageNodeView(node, editorView, getPos),
+      image_inline: (node, editorView, getPos) => new DocumentImageNodeView(node, editorView, getPos),
+    },
   });
   viewRef.current = view;
   buildToolbar(options, toolbarEl, viewRef, schema);
