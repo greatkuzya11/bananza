@@ -24,7 +24,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
   const scripts = [...document.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
 
   assert.deepEqual(styles, [
-    '/css/style.css?v=20260616-doc-images-css1',
+    '/css/style.css?v=20260616-doc-touch-zoom1',
     '/css/calls.css?v=20260509-call-modal-surface',
     '/css/voice.css',
     '/css/video-notes.css',
@@ -35,7 +35,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
     '/js/i18n.js?v=20260615-doc-chatshot2',
-    '/js/document-editor.bundle.js?v=20260616-doc-compat-image1',
+    '/js/document-editor.bundle.js?v=20260616-doc-touch-zoom1',
     '/js/qip-infium-original.js?v=20260523-qip-infium-original',
     '/js/qip-hd.js?v=20260523-qip-hd',
     '/js/app/namespace.js?v=20260530-app-shell',
@@ -371,8 +371,13 @@ test('style.css keeps document editor full width and theme-colored', () => {
   assert.match(styleCss, /@media\s*\(max-width:\s*720px\)\s*\{[\s\S]*\.document-toolbar\s*\{[^}]*min-height\s*:\s*42px[^}]*padding\s*:\s*5px/s);
   assert.match(styleCss, /\.document-toolbar\s*\{[^}]*background-color\s*:\s*var\(--bg-sidebar\)[^}]*background-image\s*:\s*var\(--bg-panel-gradient\)/s);
   assert.match(styleCss, /\.document-editor-shell\s*\{[^}]*background\s*:\s*var\(--rich-other-msg-bg,\s*var\(--bg-other-msg\)\)/s);
+  assert.match(styleCss, /\.document-editor-shell\s*\{[^}]*overscroll-behavior\s*:\s*contain[^}]*touch-action\s*:\s*pan-x pan-y[^}]*-webkit-overflow-scrolling\s*:\s*touch/s);
   assert.match(styleCss, /\.document-editor\s+\.ProseMirror\s*\{[^}]*width\s*:\s*100%[^}]*max-width\s*:\s*none[^}]*margin\s*:\s*0/s);
   assert.match(styleCss, /\.document-editor\s+\.ProseMirror\s*\{[^}]*white-space\s*:\s*pre-wrap/s);
+  assert.match(styleCss, /\.document-editor\s+\.ProseMirror\s*\{[^}]*transform-origin\s*:\s*0 0/s);
+  assert.match(styleCss, /\.document-editor\.is-document-zoomed\s*\{[^}]*min-width\s*:\s*max-content/s);
+  assert.match(styleCss, /\.document-editor\.is-document-zooming,\s*\.document-editor\.is-document-zooming \*\s*\{[^}]*user-select\s*:\s*none/s);
+  assert.match(styleCss, /\.document-editor\.is-document-zoomed \.ProseMirror\s*\{[^}]*will-change\s*:\s*transform/s);
   assert.doesNotMatch(styleCss, /\.document-editor\s+\.ProseMirror\s*\{[^}]*max-width\s*:\s*920px/s);
 });
 
@@ -433,6 +438,20 @@ test('document editor bundle exposes v2 rich editing and document image insertio
   assert.match(documentEditorBundleJs, /selectionObserverPlugin/);
   assert.match(documentEditorBundleJs, /getSelectionSnapshot/);
   assert.match(documentEditorBundleJs, /replaceSelectionText/);
+  assert.match(documentEditorBundleJs, /setupDocumentTouchZoom/);
+  assert.match(documentEditorBundleJs, /DOCUMENT_TOUCH_ZOOM_MIN_SCALE\s*=\s*0\.5/);
+  assert.match(documentEditorBundleJs, /DOCUMENT_TOUCH_ZOOM_NEUTRAL_SCALE\s*=\s*1/);
+  assert.match(documentEditorBundleJs, /DOCUMENT_TOUCH_ZOOM_MAX_SCALE\s*=\s*3/);
+  assert.match(documentEditorBundleJs, /isDocumentZoomNeutral/);
+  assert.match(documentEditorBundleJs, /ownerDocument\.addEventListener\("touchstart",\s*handleTouchStart,\s*\{\s*passive:\s*false,\s*capture:\s*true\s*\}\)/);
+  assert.match(documentEditorBundleJs, /ownerDocument\.addEventListener\("touchmove",\s*handleTouchMove,\s*\{\s*passive:\s*false,\s*capture:\s*true\s*\}\)/);
+  assert.match(documentEditorBundleJs, /isEventInsideShell/);
+  assert.match(documentEditorBundleJs, /event\.preventDefault\(\)/);
+  assert.match(documentEditorBundleJs, /shell\.scrollLeft\s*=\s*clampScrollValue/);
+  assert.match(documentEditorBundleJs, /shell\.scrollTop\s*=\s*clampScrollValue/);
+  assert.match(documentEditorBundleJs, /stopImmediatePropagation/);
+  assert.match(documentEditorBundleJs, /destroyDocumentTouchZoom\(\)/);
+  assert.match(documentEditorBundleJs, /removeEventListener\("touchstart",\s*handleTouchStart,\s*true\)/);
   assert.doesNotMatch(documentEditorBundleJs, /thumb\.addEventListener\("pointerdown"/);
   assert.match(documentEditorBundleJs, /\\u\{1F517\}/);
   assert.match(documentEditorBundleJs, /\\u\{1F9F9\}/);

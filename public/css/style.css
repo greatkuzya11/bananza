@@ -6310,13 +6310,25 @@ html[data-visual-mode="rich"] .poll-card {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
   border: 1px solid color-mix(in srgb, var(--border-light) 76%, transparent);
   border-radius: 8px;
   background: var(--rich-other-msg-bg, var(--bg-other-msg));
+  -webkit-overflow-scrolling: touch;
 }
 
 .document-editor {
   min-height: 100%;
+}
+
+.document-editor.is-document-zoomed {
+  min-width: max-content;
+}
+
+.document-editor.is-document-zooming,
+.document-editor.is-document-zooming * {
+  user-select: none;
 }
 
 .document-workspace.is-loading .document-toolbar,
@@ -6339,7 +6351,12 @@ html[data-visual-mode="rich"] .poll-card {
   line-height: 1.58;
   outline: none;
   padding: clamp(16px, 2vw, 28px);
+  transform-origin: 0 0;
   white-space: pre-wrap;
+}
+
+.document-editor.is-document-zoomed .ProseMirror {
+  will-change: transform;
 }
 
 .document-editor .ProseMirror p {

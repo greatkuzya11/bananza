@@ -36,9 +36,9 @@ test('document guest page falls back to the default theme for invalid stored val
 test('document guest page uses cache-busted document assets', () => {
   const dom = new JSDOM(documentHtml);
   const document = dom.window.document;
-  assert.equal(document.querySelector('link[rel="stylesheet"]')?.getAttribute('href'), '/css/style.css?v=20260616-doc-images-css1');
+  assert.equal(document.querySelector('link[rel="stylesheet"]')?.getAttribute('href'), '/css/style.css?v=20260616-doc-touch-zoom1');
   assert.ok([...document.querySelectorAll('script')].some((script) => script.getAttribute('src') === '/js/i18n.js?v=20260615-doc-chatshot2'));
-  assert.ok([...document.querySelectorAll('script')].some((script) => script.getAttribute('src') === '/js/document-editor.bundle.js?v=20260616-doc-compat-image1'));
+  assert.ok([...document.querySelectorAll('script')].some((script) => script.getAttribute('src') === '/js/document-editor.bundle.js?v=20260616-doc-touch-zoom1'));
   assert.ok([...document.querySelectorAll('script')].some((script) => script.getAttribute('src') === '/js/document-guest.js?v=20260614-doc-v2'));
   assert.equal(document.querySelector('.document-context-convert-btn'), null);
   assert.ok(![...document.querySelectorAll('script')].some((script) => String(script.getAttribute('src') || '').includes('context-chatshot-runtime')));
@@ -49,6 +49,8 @@ test('document guest page keeps the editor scrollable in both directions', () =>
   assert.match(styleCss, /\.document-guest-body\s*\{[^}]*overflow:\s*hidden/s);
   assert.match(styleCss, /\.document-guest-app\s*\{[^}]*height:\s*100dvh/s);
   assert.match(styleCss, /\.document-workspace--guest \.document-editor-shell\s*\{[^}]*overflow:\s*auto/s);
+  assert.match(styleCss, /\.document-editor-shell\s*\{[^}]*touch-action\s*:\s*pan-x pan-y/s);
+  assert.match(styleCss, /\.document-editor\s+\.ProseMirror\s*\{[^}]*transform-origin\s*:\s*0 0/s);
   assert.match(styleCss, /\.document-workspace--guest \.document-editor\s*\{[^}]*min-width:\s*max-content/s);
   assert.match(styleCss, /\.document-workspace--guest \.document-editor \.ProseMirror table\s*\{[^}]*width:\s*max-content/s);
 });

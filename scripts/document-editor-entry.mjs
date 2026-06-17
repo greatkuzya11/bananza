@@ -1226,6 +1226,225 @@ function selectionObserverPlugin(onSelectionChange) {
   });
 }
 
+const DOCUMENT_TOUCH_ZOOM_MIN_SCALE = 0.5;
+const DOCUMENT_TOUCH_ZOOM_NEUTRAL_SCALE = 1;
+const DOCUMENT_TOUCH_ZOOM_MAX_SCALE = 3;
+const DOCUMENT_TOUCH_ZOOM_RESET_EPSILON = 0.015;
+const DOCUMENT_TOUCH_ZOOM_GHOST_CLICK_MS = 360;
+
+function clampDocumentZoomScale(value) {
+  const scale = Number(value);
+  if (!Number.isFinite(scale)) return DOCUMENT_TOUCH_ZOOM_NEUTRAL_SCALE;
+  return Math.min(DOCUMENT_TOUCH_ZOOM_MAX_SCALE, Math.max(DOCUMENT_TOUCH_ZOOM_MIN_SCALE, scale));
+}
+
+function isDocumentZoomNeutral(scale) {
+  return Math.abs((Number(scale) || DOCUMENT_TOUCH_ZOOM_NEUTRAL_SCALE) - DOCUMENT_TOUCH_ZOOM_NEUTRAL_SCALE) <= DOCUMENT_TOUCH_ZOOM_RESET_EPSILON;
+}
+
+function documentTouchDistance(touches) {
+  if (!touches || touches.length < 2) return 0;
+  return Math.hypot(touches[1].clientX - touches[0].clientX, touches[1].clientY - touches[0].clientY);
+}
+
+function documentTouchMidpoint(touches) {
+  if (!touches || touches.length < 2) return null;
+  return {
+    x: (touches[0].clientX + touches[1].clientX) / 2,
+    y: (touches[0].clientY + touches[1].clientY) / 2,
+  };
+}
+
+function clampScrollValue(value, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.max(0, Math.min(Math.max(0, max), number));
+}
+
+function setupDocumentTouchZoom(editorEl, view) {
+  const proseMirrorEl = view?.dom || null;
+  if (!editorEl || !proseMirrorEl) return () => {};
+
+  const ownerDocument = proseMirrorEl.ownerDocument || document;
+  const win = ownerDocument.defaultView || window;
+  let scale = DOCUMENT_TOUCH_ZOOM_NEUTRAL_SCALE;
+  let baseScale = DOCUMENT_TOUCH_ZOOM_NEUTRAL_SCALE;
+  let baseDistance = 0;
+  let anchorX = 0;
+  let anchorY = 0;
+  let pinching = false;
+  let naturalWidth = 0;
+  let suppressClickUntil = 0;
+
+  const getContainer = () => proseMirrorEl.parentElement || editorEl;
+  const getShell = () => getContainer()?.closest?.('.document-editor-shell') || null;
+  const isEventInsideShell = (event) => {
+    const shell = getShell();
+    return Boolean(shell && event?.target && shell.contains(event.target));
+  };
+  const getTouchLocalPoint = (shell, midpoint) => {
+    const rect = shell?.getBoundingClientRect?.();
+    if (!rect || !midpoint) return { x: 0, y: 0 };
+    return {
+      x: midpoint.x - rect.left,
+      y: midpoint.y - rect.top,
+    };
+  };
+  const getNaturalHeight = () => Math.max(1, proseMirrorEl.scrollHeight || 0, proseMirrorEl.offsetHeight || 0);
+  const refreshNaturalWidth = () => {
+    const measured = proseMirrorEl.offsetWidth || proseMirrorEl.getBoundingClientRect?.().width || getContainer()?.clientWidth || 0;
+    naturalWidth = Math.max(1, Math.round(measured));
+    return naturalWidth;
+  };
+  const setZoomClasses = (zooming = false) => {
+    const container = getContainer();
+    const shell = getShell();
+    const zoomed = !isDocumentZoomNeutral(scale);
+    container?.classList?.toggle('is-document-zoomed', zoomed);
+    container?.classList?.toggle('is-document-zooming', Boolean(zooming));
+    shell?.classList?.toggle('is-document-zoomed', zoomed);
+    shell?.classList?.toggle('is-document-zooming', Boolean(zooming));
+  };
+  const clearZoomStyles = () => {
+    const container = getContainer();
+    proseMirrorEl.style.transform = '';
+    proseMirrorEl.style.width = '';
+    container.style.width = '';
+    container.style.height = '';
+    container.classList.remove('is-document-zoomed', 'is-document-zooming');
+    getShell()?.classList?.remove('is-document-zoomed', 'is-document-zooming');
+    naturalWidth = 0;
+  };
+  const applyZoom = (nextScale, { zooming = false } = {}) => {
+    scale = clampDocumentZoomScale(nextScale);
+    if (isDocumentZoomNeutral(scale)) {
+      scale = DOCUMENT_TOUCH_ZOOM_NEUTRAL_SCALE;
+      clearZoomStyles();
+      return;
+    }
+
+    const container = getContainer();
+    const width = naturalWidth || refreshNaturalWidth();
+    const height = getNaturalHeight();
+    proseMirrorEl.style.width = `${width}px`;
+    proseMirrorEl.style.transform = `scale(${scale})`;
+    container.style.width = `${Math.ceil(width * scale)}px`;
+    container.style.height = `${Math.ceil(height * scale)}px`;
+    setZoomClasses(zooming);
+  };
+  const scrollToAnchor = (shell, midpoint) => {
+    if (!shell || !midpoint) return;
+    const local = getTouchLocalPoint(shell, midpoint);
+    const maxLeft = shell.scrollWidth - shell.clientWidth;
+    const maxTop = shell.scrollHeight - shell.clientHeight;
+    shell.scrollLeft = clampScrollValue(anchorX * scale - local.x, maxLeft);
+    shell.scrollTop = clampScrollValue(anchorY * scale - local.y, maxTop);
+  };
+
+  const beginPinch = (event) => {
+    if (!event.touches || event.touches.length !== 2) return false;
+    const shell = getShell();
+    if (!shell) return false;
+    const midpoint = documentTouchMidpoint(event.touches);
+    const distance = documentTouchDistance(event.touches);
+    if (!midpoint || distance <= 0) return false;
+
+    if (isDocumentZoomNeutral(scale) || !naturalWidth) {
+      refreshNaturalWidth();
+    }
+    const local = getTouchLocalPoint(shell, midpoint);
+    baseScale = scale;
+    baseDistance = Math.max(1, distance);
+    anchorX = (shell.scrollLeft + local.x) / Math.max(scale, 0.0001);
+    anchorY = (shell.scrollTop + local.y) / Math.max(scale, 0.0001);
+    pinching = true;
+    setZoomClasses(true);
+    event.preventDefault();
+    return true;
+  };
+  const updatePinch = (event) => {
+    if (!pinching || !event.touches || event.touches.length !== 2) return false;
+    const shell = getShell();
+    const midpoint = documentTouchMidpoint(event.touches);
+    if (!shell || !midpoint) return false;
+
+    const distance = Math.max(1, documentTouchDistance(event.touches));
+    applyZoom(baseScale * distance / Math.max(1, baseDistance), { zooming: true });
+    scrollToAnchor(shell, midpoint);
+    event.preventDefault();
+    return true;
+  };
+  const finishPinch = (event) => {
+    if (!pinching) return;
+    pinching = false;
+    baseDistance = 0;
+    baseScale = scale;
+    suppressClickUntil = Date.now() + DOCUMENT_TOUCH_ZOOM_GHOST_CLICK_MS;
+    setZoomClasses(false);
+    if (event?.cancelable) event.preventDefault();
+  };
+  const handleTouchStart = (event) => {
+    if (!isEventInsideShell(event)) return;
+    if (event.touches?.length === 2) beginPinch(event);
+  };
+  const handleTouchMove = (event) => {
+    if (event.touches?.length === 2) {
+      updatePinch(event);
+      return;
+    }
+    if (pinching && event.touches?.length !== 2) finishPinch(event);
+  };
+  const handleTouchEnd = (event) => {
+    if (pinching && (!event.touches || event.touches.length < 2)) finishPinch(event);
+  };
+  const handleTouchCancel = (event) => {
+    if (pinching) finishPinch(event);
+  };
+  const handleClickCapture = (event) => {
+    if (Date.now() > suppressClickUntil) return;
+    if (!isEventInsideShell(event)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+  const handleResize = () => {
+    if (isDocumentZoomNeutral(scale) || pinching) return;
+    const shell = getShell();
+    const previousLeftRatio = shell && shell.scrollWidth > 0 ? shell.scrollLeft / shell.scrollWidth : 0;
+    const previousTopRatio = shell && shell.scrollHeight > 0 ? shell.scrollTop / shell.scrollHeight : 0;
+    applyZoom(scale);
+    if (shell) {
+      shell.scrollLeft = clampScrollValue(shell.scrollWidth * previousLeftRatio, shell.scrollWidth - shell.clientWidth);
+      shell.scrollTop = clampScrollValue(shell.scrollHeight * previousTopRatio, shell.scrollHeight - shell.clientHeight);
+    }
+  };
+
+  ownerDocument.addEventListener('touchstart', handleTouchStart, { passive: false, capture: true });
+  ownerDocument.addEventListener('touchmove', handleTouchMove, { passive: false, capture: true });
+  ownerDocument.addEventListener('touchend', handleTouchEnd, { passive: false, capture: true });
+  ownerDocument.addEventListener('touchcancel', handleTouchCancel, { passive: false, capture: true });
+  ownerDocument.addEventListener('click', handleClickCapture, true);
+  win.addEventListener('resize', handleResize);
+
+  let resizeObserver = null;
+  if (win.ResizeObserver) {
+    resizeObserver = new win.ResizeObserver(handleResize);
+    resizeObserver.observe(proseMirrorEl);
+  }
+
+  return () => {
+    ownerDocument.removeEventListener('touchstart', handleTouchStart, true);
+    ownerDocument.removeEventListener('touchmove', handleTouchMove, true);
+    ownerDocument.removeEventListener('touchend', handleTouchEnd, true);
+    ownerDocument.removeEventListener('touchcancel', handleTouchCancel, true);
+    ownerDocument.removeEventListener('click', handleClickCapture, true);
+    win.removeEventListener('resize', handleResize);
+    resizeObserver?.disconnect?.();
+    pinching = false;
+    scale = DOCUMENT_TOUCH_ZOOM_NEUTRAL_SCALE;
+    clearZoomStyles();
+  };
+}
+
 function button(options, className, label, titleKey, command, config = {}) {
   const btn = document.createElement('button');
   btn.type = 'button';
@@ -1868,6 +2087,7 @@ function createEditor(options = {}) {
     },
   });
   viewRef.current = view;
+  const destroyDocumentTouchZoom = setupDocumentTouchZoom(editorEl, view);
   buildToolbar(options, toolbarEl, viewRef, schema);
 
   function syncTitleInput() {
@@ -1903,6 +2123,7 @@ function createEditor(options = {}) {
       provider.off('sync', handleProviderSync);
       provider.awareness.off('change', handleAwarenessChange);
       provider.destroy();
+      destroyDocumentTouchZoom();
       view.destroy();
       ydoc.destroy();
     },
