@@ -776,6 +776,7 @@
     async function catchUpCurrentChat(chatId, { fromPush = false } = {}) {
       const id = Number(chatId || 0);
       if (!id || Number(getCurrentChatId() || 0) !== id) return false;
+      if (actions.isDocumentChat?.(getChatById(id))) return false;
       if (actions.isUiTransitionBusy?.()) {
         actions.markRecoveryRequested?.(fromPush ? 'push' : 'catch-up');
         return false;

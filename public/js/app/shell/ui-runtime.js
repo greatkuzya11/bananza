@@ -32,9 +32,9 @@
         const declaredScene = normalizeMobileBaseScene(document.documentElement?.dataset?.mobileScene || scene);
         if (!sidebar || !chatArea) return declaredScene;
         if (!isMobileLayoutViewport()) return declaredScene;
+        if (mobileRouteTransitionActive) return declaredScene;
         if (chatArea.classList.contains('mobile-scene-hidden')) return 'sidebar';
         if (sidebar.classList.contains('mobile-scene-hidden')) return 'chat';
-        if (mobileRouteTransitionActive) return declaredScene;
         if (sidebar.classList.contains('sidebar-hidden')) return 'chat';
         return declaredScene;
       }

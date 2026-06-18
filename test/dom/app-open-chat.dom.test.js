@@ -7,6 +7,7 @@ const {
   loadAppRuntimeScripts,
   loadAppScript,
   loadBrowserScript,
+  setDocumentHidden,
 } = require('../support/domHarness');
 
 function wait(window, ms = 0) {
@@ -376,6 +377,7 @@ async function bootFullApp(options = {}) {
   const dom = createAppDom();
   installFullAppStubs(dom, options);
   installVisualViewportMock(dom.window, { width: 390, height: 844, offsetTop: 0, offsetLeft: 0 });
+  if (typeof options.beforeLoad === 'function') options.beforeLoad(dom.window);
   const ready = new Promise((resolve) => dom.window.addEventListener('bananza:ready', resolve, { once: true }));
   loadBrowserScript(dom, 'public/js/ai-image-risk.js');
   loadBrowserScript(dom, 'public/js/qip-infium-original.js');
@@ -385,6 +387,172 @@ async function bootFullApp(options = {}) {
   await wait(dom.window);
   return dom;
 }
+
+function installDocumentEditorMock(window) {
+  window.BananzaDocumentEditor = {
+    createEditor(options = {}) {
+      const marker = window.document.createElement('div');
+      marker.className = 'document-editor-test-marker';
+      options.editorEl?.appendChild(marker);
+      const editor = {
+        destroy() {},
+        getSelectionSnapshot() { return null; },
+        replaceSelectionText() { return false; },
+      };
+      editor.ready = Promise.resolve().then(() => options.onReady?.());
+      return editor;
+    },
+  };
+}
+
+test('startup skips document lastChat restore until the user opens it', async (t) => {
+  const documentChatId = 7;
+  const sessionRequests = [];
+  const documentChat = {
+    id: documentChatId,
+    type: 'group',
+    name: 'Roadmap',
+    document_title: 'Roadmap',
+    is_document: 1,
+    last_message_id: 0,
+    unread_count: 0,
+  };
+  const dom = await bootFullApp({
+    beforeLoad: (window) => {
+      window.localStorage.setItem('lastChat', String(documentChatId));
+    },
+    fetchHandler: ({ url, dom: testDom }) => {
+      if (url.pathname === '/api/chats') return createJsonResponse(testDom, [documentChat]);
+      if (url.pathname === `/api/documents/${documentChatId}/session`) {
+        sessionRequests.push(url.pathname);
+        return createJsonResponse(testDom, {
+          room: `document:${documentChatId}`,
+          wsBase: '/doc-ws',
+          document: { title: 'Roadmap' },
+          user: { id: 1, name: 'Alice', color: '#65aadd' },
+        });
+      }
+      return null;
+    },
+  });
+  t.after(() => dom.window.close());
+
+  const { document, BananzaAppBridge } = dom.window;
+  const row = document.querySelector(`.chat-item[data-chat-id="${documentChatId}"]`);
+
+  assert.equal(BananzaAppBridge.getCurrentChatId(), null);
+  assert.equal(document.getElementById('documentWorkspace').classList.contains('hidden'), true);
+  assert.equal(row?.classList.contains('active'), false);
+  assert.deepEqual(sessionRequests, []);
+  assert.equal(dom.window.localStorage.getItem('lastChat'), null);
+
+  installDocumentEditorMock(dom.window);
+
+  row.click();
+  await wait(dom.window, 20);
+
+  assert.deepEqual(sessionRequests, [`/api/documents/${documentChatId}/session`]);
+  assert.equal(BananzaAppBridge.getCurrentChatId(), documentChatId);
+  assert.equal(document.getElementById('documentWorkspace').classList.contains('hidden'), false);
+  assert.equal(row.classList.contains('active'), true);
+  assert.equal(dom.window.localStorage.getItem('lastChat'), null);
+});
+
+test('resume recovery keeps document chat on the chat list after mobile back', async (t) => {
+  const documentChatId = 8;
+  const sessionRequests = [];
+  const documentChat = {
+    id: documentChatId,
+    type: 'group',
+    name: 'Spec',
+    document_title: 'Spec',
+    is_document: 1,
+    last_message_id: 0,
+    unread_count: 0,
+  };
+  const dom = await bootFullApp({
+    fetchHandler: ({ url, dom: testDom }) => {
+      if (url.pathname === '/api/chats') return createJsonResponse(testDom, [documentChat]);
+      if (url.pathname === `/api/documents/${documentChatId}/session`) {
+        sessionRequests.push(url.pathname);
+        return createJsonResponse(testDom, {
+          room: `document:${documentChatId}`,
+          wsBase: '/doc-ws',
+          document: { title: 'Spec' },
+          user: { id: 1, name: 'Alice', color: '#65aadd' },
+        });
+      }
+      return null;
+    },
+  });
+  t.after(() => dom.window.close());
+
+  const { document, BananzaAppBridge } = dom.window;
+  const row = document.querySelector(`.chat-item[data-chat-id="${documentChatId}"]`);
+  Object.defineProperty(dom.window, 'innerWidth', { configurable: true, value: 390 });
+  Object.defineProperty(dom.window, 'innerHeight', { configurable: true, value: 844 });
+  installDocumentEditorMock(dom.window);
+
+  row.click();
+  await wait(dom.window, 30);
+  assert.equal(BananzaAppBridge.getCurrentChatId(), documentChatId);
+  assert.deepEqual(sessionRequests, [`/api/documents/${documentChatId}/session`]);
+
+  BananzaAppBridge.__testing.revealSidebarFromChat({ forceAnimation: true });
+  document.getElementById('sidebar').classList.add('sidebar-hidden');
+  assert.equal(document.documentElement.dataset.mobileScene, 'sidebar');
+
+  setDocumentHidden(document, true);
+  document.dispatchEvent(new dom.window.Event('visibilitychange'));
+  setDocumentHidden(document, false);
+  document.dispatchEvent(new dom.window.Event('visibilitychange'));
+  await wait(dom.window, 40);
+
+  assert.deepEqual(sessionRequests, [`/api/documents/${documentChatId}/session`]);
+  assert.equal(BananzaAppBridge.__testing.getMobileBaseSceneSnapshot().scene, 'sidebar');
+  assert.equal(document.getElementById('sidebar').classList.contains('mobile-scene-hidden'), false);
+  assert.equal(document.getElementById('chatArea').classList.contains('mobile-scene-hidden'), false);
+});
+
+test('startup still restores regular lastChat', async (t) => {
+  const chatId = 3;
+  const dom = await bootFullApp({
+    beforeLoad: (window) => {
+      window.localStorage.setItem('lastChat', String(chatId));
+    },
+    fetchHandler: ({ url, dom: testDom }) => {
+      if (url.pathname === '/api/chats') {
+        return createJsonResponse(testDom, [
+          { id: chatId, type: 'group', name: 'Regular', last_message_id: 31, unread_count: 0 },
+        ]);
+      }
+      if (url.pathname === `/api/chats/${chatId}/messages`) {
+        return createJsonResponse(testDom, {
+          messages: [{
+            id: 31,
+            chat_id: chatId,
+            user_id: 2,
+            display_name: 'Bob',
+            text: 'Restored',
+            created_at: '2026-05-31T10:00:00.000Z',
+          }],
+          has_more_before: false,
+          has_more_after: false,
+          member_last_reads: { 1: 31, 2: 31 },
+        });
+      }
+      return null;
+    },
+  });
+  t.after(() => dom.window.close());
+
+  const { document, BananzaAppBridge } = dom.window;
+
+  assert.equal(BananzaAppBridge.getCurrentChatId(), chatId);
+  assert.equal(document.querySelector(`.chat-item[data-chat-id="${chatId}"]`)?.classList.contains('active'), true);
+  assert.equal(document.querySelector('#messages .msg-row[data-msg-id="31"]')?.__messageData.text, 'Restored');
+  assert.equal(dom.window.localStorage.getItem('lastChat'), String(chatId));
+});
 
 test('full app bridge opens chats through extracted controller and keeps media bridge methods', async (t) => {
   const messagesByChat = new Map([

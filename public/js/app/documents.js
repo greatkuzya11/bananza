@@ -291,7 +291,7 @@
         suppressHistoryPush: Boolean(options.suppressHistoryPush),
         chatId: id,
       });
-      try { win.localStorage?.setItem?.('lastChat', id); } catch (e) {}
+      try { win.localStorage?.removeItem?.('lastChat'); } catch (e) {}
       if (sameActiveDocument) {
         bindInviteButtons();
         return true;

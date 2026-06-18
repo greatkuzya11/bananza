@@ -182,8 +182,13 @@
           history.replaceState(history.state || {}, '', location.pathname);
         } else if (openLastChatOnReload) {
           const lastChat = +localStorage.getItem('lastChat');
-          if (lastChat && chats.find(c => c.id === lastChat)) {
-            await openChat(lastChat);
+          const lastChatEntry = lastChat ? chats.find(c => Number(c.id) === lastChat) : null;
+          if (lastChatEntry) {
+            if (Number(lastChatEntry.is_document || 0) === 1) {
+              localStorage.removeItem('lastChat');
+            } else {
+              await openChat(lastChat);
+            }
           }
         }
     
