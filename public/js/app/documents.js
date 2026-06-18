@@ -294,7 +294,6 @@
       try { win.localStorage?.setItem?.('lastChat', id); } catch (e) {}
       if (sameActiveDocument) {
         bindInviteButtons();
-        editor.focus?.();
         return true;
       }
       syncConnectionStatus('offline', 0);
@@ -340,7 +339,6 @@
         editor = nextEditor;
         bindInviteButtons();
         setEditorLoading(false);
-        editor.focus?.();
       };
       try {
         nextEditor = win.BananzaDocumentEditor.createEditor({

@@ -6359,6 +6359,16 @@ html[data-visual-mode="rich"] .poll-card {
   will-change: transform;
 }
 
+.document-pending-edit-caret {
+  display: inline-block;
+  width: 0;
+  height: 1.25em;
+  border-left: 2px solid var(--accent);
+  margin-left: -1px;
+  pointer-events: none;
+  vertical-align: text-bottom;
+}
+
 .document-editor .ProseMirror p {
   margin: 0 0 0.8em;
 }

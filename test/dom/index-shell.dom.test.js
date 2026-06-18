@@ -24,7 +24,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
   const scripts = [...document.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
 
   assert.deepEqual(styles, [
-    '/css/style.css?v=20260616-doc-touch-zoom1',
+    '/css/style.css?v=20260617-doc-keyboard-intent1',
     '/css/calls.css?v=20260509-call-modal-surface',
     '/css/voice.css',
     '/css/video-notes.css',
@@ -35,7 +35,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
     '/js/i18n.js?v=20260615-doc-chatshot2',
-    '/js/document-editor.bundle.js?v=20260616-doc-touch-zoom1',
+    '/js/document-editor.bundle.js?v=20260617-doc-keyboard-intent1',
     '/js/qip-infium-original.js?v=20260523-qip-infium-original',
     '/js/qip-hd.js?v=20260523-qip-hd',
     '/js/app/namespace.js?v=20260530-app-shell',
@@ -80,7 +80,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/open-chat/scroll.js?v=20260531-open-chat',
     '/js/app/open-chat/media-playback.js?v=20260531-open-chat',
     '/js/app/open-chat/controller.js?v=20260614-doc-bugfix1',
-    '/js/app/documents.js?v=20260615-doc-images1',
+    '/js/app/documents.js?v=20260617-doc-keyboard-intent1',
     '/js/app/messages/state.js?v=20260531-messages',
     '/js/app/messages/attachments.js?v=20260531-messages',
     '/js/app/messages/polls.js?v=20260531-messages',
@@ -378,7 +378,12 @@ test('style.css keeps document editor full width and theme-colored', () => {
   assert.match(styleCss, /\.document-editor\.is-document-zoomed\s*\{[^}]*min-width\s*:\s*max-content/s);
   assert.match(styleCss, /\.document-editor\.is-document-zooming,\s*\.document-editor\.is-document-zooming \*\s*\{[^}]*user-select\s*:\s*none/s);
   assert.match(styleCss, /\.document-editor\.is-document-zoomed \.ProseMirror\s*\{[^}]*will-change\s*:\s*transform/s);
+  assert.match(styleCss, /\.document-pending-edit-caret\s*\{[^}]*border-left\s*:\s*2px solid var\(--accent\)[^}]*pointer-events\s*:\s*none/s);
   assert.doesNotMatch(styleCss, /\.document-editor\s+\.ProseMirror\s*\{[^}]*max-width\s*:\s*920px/s);
+});
+
+test('document runtime does not autofocus the editor when opening documents', () => {
+  assert.doesNotMatch(documentsJs, /editor\.focus\?\.\(\)/);
 });
 
 test('document collab cursor label stays out of table layout flow', () => {
@@ -439,9 +444,22 @@ test('document editor bundle exposes v2 rich editing and document image insertio
   assert.match(documentEditorBundleJs, /getSelectionSnapshot/);
   assert.match(documentEditorBundleJs, /replaceSelectionText/);
   assert.match(documentEditorBundleJs, /setupDocumentTouchZoom/);
+  assert.match(documentEditorBundleJs, /function setupDocumentTouchZoom\(editorEl,\s*view,\s*callbacks\s*=\s*\{\}\)/);
+  assert.match(documentEditorBundleJs, /onZoomNavigation/);
   assert.match(documentEditorBundleJs, /DOCUMENT_TOUCH_ZOOM_MIN_SCALE\s*=\s*0\.5/);
   assert.match(documentEditorBundleJs, /DOCUMENT_TOUCH_ZOOM_NEUTRAL_SCALE\s*=\s*1/);
   assert.match(documentEditorBundleJs, /DOCUMENT_TOUCH_ZOOM_MAX_SCALE\s*=\s*3/);
+  assert.match(documentEditorBundleJs, /setupDocumentMobileEditIntent/);
+  assert.match(documentEditorBundleJs, /DOCUMENT_EDIT_INTENT_DELAY_MS\s*=\s*1e3|DOCUMENT_EDIT_INTENT_DELAY_MS\s*=\s*1000/);
+  assert.match(documentEditorBundleJs, /DOCUMENT_EDIT_INTENT_MOVE_THRESHOLD_PX\s*=\s*8/);
+  assert.match(documentEditorBundleJs, /pendingEditCaretPlugin/);
+  assert.match(documentEditorBundleJs, /document-pending-edit-caret/);
+  assert.match(documentEditorBundleJs, /Decoration\.widget/);
+  assert.match(documentEditorBundleJs, /view\.setProps\(\{\s*editable:\s*\(\)\s*=>\s*editable\s*\}\)/);
+  assert.match(documentEditorBundleJs, /virtualKeyboard\?\.\s*show\?\.\(/);
+  assert.match(documentEditorBundleJs, /cancelPendingEditIntent/);
+  assert.match(documentEditorBundleJs, /ownerDocument\.addEventListener\("scroll",\s*handleScroll,\s*\{\s*passive:\s*true,\s*capture:\s*true\s*\}\)/);
+  assert.match(documentEditorBundleJs, /win\.visualViewport\?\.\s*addEventListener\?\.\("resize",\s*handleResize\)/);
   assert.match(documentEditorBundleJs, /isDocumentZoomNeutral/);
   assert.match(documentEditorBundleJs, /ownerDocument\.addEventListener\("touchstart",\s*handleTouchStart,\s*\{\s*passive:\s*false,\s*capture:\s*true\s*\}\)/);
   assert.match(documentEditorBundleJs, /ownerDocument\.addEventListener\("touchmove",\s*handleTouchMove,\s*\{\s*passive:\s*false,\s*capture:\s*true\s*\}\)/);
@@ -451,6 +469,8 @@ test('document editor bundle exposes v2 rich editing and document image insertio
   assert.match(documentEditorBundleJs, /shell\.scrollTop\s*=\s*clampScrollValue/);
   assert.match(documentEditorBundleJs, /stopImmediatePropagation/);
   assert.match(documentEditorBundleJs, /destroyDocumentTouchZoom\(\)/);
+  assert.match(documentEditorBundleJs, /onZoomNavigation:\s*\(\)\s*=>\s*mobileEditIntent\.cancelPendingEditIntent\(\)/);
+  assert.match(documentEditorBundleJs, /mobileEditIntent\.destroy\(\)/);
   assert.match(documentEditorBundleJs, /removeEventListener\("touchstart",\s*handleTouchStart,\s*true\)/);
   assert.doesNotMatch(documentEditorBundleJs, /thumb\.addEventListener\("pointerdown"/);
   assert.match(documentEditorBundleJs, /\\u\{1F517\}/);

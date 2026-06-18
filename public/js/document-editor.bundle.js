@@ -26459,10 +26459,17 @@ ${reason}`);
     }
     return types.table.createChecked(null, rowNodes);
   }
+  function focusDocumentEditorForEdit(view) {
+    if (!view) return false;
+    const intent = view.dom?.__documentMobileEditIntent || null;
+    if (intent && typeof intent.focusForEdit === "function") return intent.focusForEdit();
+    view.focus();
+    return true;
+  }
   function run2(view, command) {
     if (!view || typeof command !== "function") return false;
     const handled = command(view.state, view.dispatch, view);
-    if (handled) view.focus();
+    if (handled) focusDocumentEditorForEdit(view);
     return handled;
   }
   function removeMarkInSelection(view, markType) {
@@ -26475,7 +26482,7 @@ ${reason}`);
     if (!view || !markType) return false;
     if (!attrs) {
       removeMarkInSelection(view, markType);
-      view.focus();
+      focusDocumentEditorForEdit(view);
       return true;
     }
     return run2(view, toggleMark(markType, attrs));
@@ -26829,7 +26836,7 @@ ${reason}`);
     }
     tr = tr.scrollIntoView();
     view.dispatch(tr);
-    view.focus();
+    focusDocumentEditorForEdit(view);
     return Math.min(view.state.doc.content.size, preferredPos + (wrapsInlineNode ? 1 : 0) + node.nodeSize);
   }
   async function uploadAndInsertImage(view, files, options = {}, insertPos = null) {
@@ -26977,7 +26984,6 @@ ${reason}`);
       if (pos == null) return;
       try {
         this.view.dispatch(this.view.state.tr.setSelection(NodeSelection.create(this.view.state.doc, pos)));
-        this.view.focus();
       } catch (e) {
       }
     }
@@ -27034,7 +27040,6 @@ ${reason}`);
         let tr = this.view.state.tr.setNodeMarkup(pos, null, attrs);
         tr = tr.setSelection(NodeSelection.create(tr.doc, pos));
         this.view.dispatch(tr.scrollIntoView());
-        this.view.focus();
       } catch (e) {
       }
     }
@@ -27187,6 +27192,43 @@ ${reason}`);
       }
     });
   }
+  var documentPendingEditCaretPluginKey = new PluginKey("documentPendingEditCaret");
+  var DOCUMENT_EDIT_INTENT_DELAY_MS = 1e3;
+  var DOCUMENT_EDIT_INTENT_MOVE_THRESHOLD_PX = 8;
+  function pendingEditCaretPlugin() {
+    return new Plugin({
+      key: documentPendingEditCaretPluginKey,
+      state: {
+        init() {
+          return null;
+        },
+        apply(tr, previous) {
+          const meta = tr.getMeta(documentPendingEditCaretPluginKey);
+          if (meta && Object.prototype.hasOwnProperty.call(meta, "pos")) {
+            const pos = Number(meta.pos);
+            return Number.isFinite(pos) ? clampDocumentPos(tr.doc, pos) : null;
+          }
+          if (previous == null) return previous;
+          if (!tr.docChanged) return previous;
+          return clampDocumentPos(tr.doc, tr.mapping.map(previous, -1));
+        }
+      },
+      props: {
+        decorations(state) {
+          const pos = documentPendingEditCaretPluginKey.getState(state);
+          if (pos == null) return null;
+          return DecorationSet.create(state.doc, [
+            Decoration.widget(pos, () => {
+              const caret = document.createElement("span");
+              caret.className = "document-pending-edit-caret";
+              caret.setAttribute("aria-hidden", "true");
+              return caret;
+            }, { key: "document-pending-edit-caret", side: -1 })
+          ]);
+        }
+      }
+    });
+  }
   var DOCUMENT_TOUCH_ZOOM_MIN_SCALE = 0.5;
   var DOCUMENT_TOUCH_ZOOM_NEUTRAL_SCALE = 1;
   var DOCUMENT_TOUCH_ZOOM_MAX_SCALE = 3;
@@ -27216,7 +27258,7 @@ ${reason}`);
     if (!Number.isFinite(number)) return 0;
     return Math.max(0, Math.min(Math.max(0, max2), number));
   }
-  function setupDocumentTouchZoom(editorEl, view) {
+  function setupDocumentTouchZoom(editorEl, view, callbacks = {}) {
     const proseMirrorEl = view?.dom || null;
     if (!editorEl || !proseMirrorEl) return () => {
     };
@@ -27230,6 +27272,9 @@ ${reason}`);
     let pinching = false;
     let naturalWidth = 0;
     let suppressClickUntil = 0;
+    const notifyZoomNavigation = () => {
+      if (typeof callbacks.onZoomNavigation === "function") callbacks.onZoomNavigation();
+    };
     const getContainer = () => proseMirrorEl.parentElement || editorEl;
     const getShell = () => getContainer()?.closest?.(".document-editor-shell") || null;
     const isEventInsideShell = (event) => {
@@ -27309,6 +27354,7 @@ ${reason}`);
       anchorX = (shell.scrollLeft + local.x) / Math.max(scale, 1e-4);
       anchorY = (shell.scrollTop + local.y) / Math.max(scale, 1e-4);
       pinching = true;
+      notifyZoomNavigation();
       setZoomClasses(true);
       event.preventDefault();
       return true;
@@ -27321,6 +27367,7 @@ ${reason}`);
       const distance = Math.max(1, documentTouchDistance(event.touches));
       applyZoom(baseScale * distance / Math.max(1, baseDistance), { zooming: true });
       scrollToAnchor(shell, midpoint);
+      notifyZoomNavigation();
       event.preventDefault();
       return true;
     };
@@ -27330,6 +27377,7 @@ ${reason}`);
       baseDistance = 0;
       baseScale = scale;
       suppressClickUntil = Date.now() + DOCUMENT_TOUCH_ZOOM_GHOST_CLICK_MS;
+      notifyZoomNavigation();
       setZoomClasses(false);
       if (event?.cancelable) event.preventDefault();
     };
@@ -27358,6 +27406,7 @@ ${reason}`);
     };
     const handleResize = () => {
       if (isDocumentZoomNeutral(scale) || pinching) return;
+      notifyZoomNavigation();
       const shell = getShell();
       const previousLeftRatio = shell && shell.scrollWidth > 0 ? shell.scrollLeft / shell.scrollWidth : 0;
       const previousTopRatio = shell && shell.scrollHeight > 0 ? shell.scrollTop / shell.scrollHeight : 0;
@@ -27390,6 +27439,235 @@ ${reason}`);
       scale = DOCUMENT_TOUCH_ZOOM_NEUTRAL_SCALE;
       clearZoomStyles();
     };
+  }
+  function isDocumentMobileEditIntentViewport(win) {
+    try {
+      if (win?.matchMedia?.("(hover: none), (pointer: coarse)")?.matches) return true;
+    } catch (e) {
+    }
+    return Number(win?.navigator?.maxTouchPoints || 0) > 0;
+  }
+  function isDocumentEditIntentTarget(target, proseMirrorEl) {
+    if (!target || !proseMirrorEl?.contains?.(target)) return false;
+    const element2 = target.nodeType === 1 ? target : target.parentElement;
+    if (!element2) return false;
+    if (element2.closest("button, input, select, textarea, a, [data-task-checkbox], .document-image-node, .document-image-resize-handle")) return false;
+    const nonEditable = element2.closest('[contenteditable="false"]');
+    return !nonEditable || nonEditable === proseMirrorEl;
+  }
+  function setupDocumentMobileEditIntent(editorEl, view) {
+    const proseMirrorEl = view?.dom || null;
+    if (!editorEl || !proseMirrorEl) {
+      return {
+        cancelPendingEditIntent() {
+        },
+        destroy() {
+        },
+        focusForEdit() {
+          view?.focus?.();
+          return true;
+        }
+      };
+    }
+    const ownerDocument = proseMirrorEl.ownerDocument || document;
+    const win = ownerDocument.defaultView || window;
+    const mobileIntentEnabled = isDocumentMobileEditIntentViewport(win);
+    let destroyed = false;
+    let editable = !mobileIntentEnabled;
+    let pendingTimer = 0;
+    let pendingTouch = null;
+    const getShell = () => proseMirrorEl.parentElement?.closest?.(".document-editor-shell") || editorEl.closest?.(".document-editor-shell") || null;
+    const isEventInsideShell = (event) => {
+      const shell = getShell();
+      return Boolean(shell && event?.target && shell.contains(event.target));
+    };
+    const clearPendingCaret = () => {
+      if (documentPendingEditCaretPluginKey.getState(view.state) == null) return;
+      view.dispatch(view.state.tr.setMeta(documentPendingEditCaretPluginKey, { pos: null }));
+    };
+    const clearPendingEditIntent = ({ keepCaret = false } = {}) => {
+      if (pendingTimer) {
+        win.clearTimeout(pendingTimer);
+        pendingTimer = 0;
+      }
+      pendingTouch = null;
+      if (!keepCaret) clearPendingCaret();
+    };
+    const setEditable2 = (enabled) => {
+      if (!mobileIntentEnabled) return;
+      editable = Boolean(enabled);
+      proseMirrorEl.classList.toggle("is-document-editing", editable);
+      view.setProps({ editable: () => editable });
+    };
+    const focusForEdit = () => {
+      if (destroyed) return false;
+      clearPendingEditIntent();
+      setEditable2(true);
+      try {
+        view.focus();
+      } catch (e) {
+      }
+      try {
+        win.navigator?.virtualKeyboard?.show?.();
+      } catch (e) {
+      }
+      return true;
+    };
+    const positionPendingCaret = (clientX, clientY) => {
+      const result = view.posAtCoords?.({ left: clientX, top: clientY });
+      if (!result || !Number.isFinite(result.pos)) return false;
+      try {
+        const safePos = clampDocumentPos(view.state.doc, result.pos);
+        const selection = TextSelection.near(view.state.doc.resolve(safePos));
+        const tr = view.state.tr.setSelection(selection).setMeta(documentPendingEditCaretPluginKey, { pos: selection.from });
+        view.dispatch(tr);
+        return true;
+      } catch (e) {
+        clearPendingCaret();
+        return false;
+      }
+    };
+    const startPendingEditIntent = (touch) => {
+      clearPendingEditIntent({ keepCaret: true });
+      pendingTimer = win.setTimeout(() => {
+        pendingTimer = 0;
+        focusForEdit();
+        try {
+          win.requestAnimationFrame?.(() => {
+            if (!destroyed && editable) {
+              try {
+                view.focus();
+              } catch (e) {
+              }
+              try {
+                win.navigator?.virtualKeyboard?.show?.();
+              } catch (error) {
+              }
+            }
+          });
+        } catch (e) {
+        }
+      }, DOCUMENT_EDIT_INTENT_DELAY_MS);
+      if (!positionPendingCaret(touch.clientX, touch.clientY)) clearPendingEditIntent();
+    };
+    const cancelPendingEditIntent = () => {
+      clearPendingEditIntent();
+    };
+    const handleTouchStart = (event) => {
+      if (!mobileIntentEnabled || destroyed || editable || !isEventInsideShell(event)) return;
+      if (event.touches?.length !== 1) {
+        cancelPendingEditIntent();
+        return;
+      }
+      const touch = event.touches[0];
+      if (!isDocumentEditIntentTarget(event.target, proseMirrorEl)) {
+        cancelPendingEditIntent();
+        return;
+      }
+      const shell = getShell();
+      clearPendingEditIntent();
+      pendingTouch = {
+        id: touch.identifier,
+        startX: touch.clientX,
+        startY: touch.clientY,
+        scrollLeft: Number(shell?.scrollLeft || 0),
+        scrollTop: Number(shell?.scrollTop || 0),
+        moved: false
+      };
+    };
+    const handleTouchMove = (event) => {
+      if (!pendingTouch || editable) return;
+      if (event.touches?.length !== 1) {
+        cancelPendingEditIntent();
+        return;
+      }
+      const touch = event.touches[0];
+      const dx = Math.abs(touch.clientX - pendingTouch.startX);
+      const dy = Math.abs(touch.clientY - pendingTouch.startY);
+      const shell = getShell();
+      const scrollDx = Math.abs(Number(shell?.scrollLeft || 0) - pendingTouch.scrollLeft);
+      const scrollDy = Math.abs(Number(shell?.scrollTop || 0) - pendingTouch.scrollTop);
+      if (dx > DOCUMENT_EDIT_INTENT_MOVE_THRESHOLD_PX || dy > DOCUMENT_EDIT_INTENT_MOVE_THRESHOLD_PX || scrollDx > 1 || scrollDy > 1) {
+        pendingTouch.moved = true;
+        cancelPendingEditIntent();
+      }
+    };
+    const handleTouchEnd = (event) => {
+      if (!pendingTouch || editable) return;
+      const touch = Array.from(event.changedTouches || []).find((item) => item.identifier === pendingTouch.id) || event.changedTouches?.[0];
+      const moved = pendingTouch.moved;
+      pendingTouch = null;
+      if (!touch || moved || event.touches?.length) {
+        cancelPendingEditIntent();
+        return;
+      }
+      const target = ownerDocument.elementFromPoint?.(touch.clientX, touch.clientY) || event.target;
+      if (!target || !getShell()?.contains?.(target) || !isDocumentEditIntentTarget(target, proseMirrorEl)) {
+        cancelPendingEditIntent();
+        return;
+      }
+      startPendingEditIntent(touch);
+    };
+    const handleTouchCancel = () => cancelPendingEditIntent();
+    const handleScroll = () => {
+      clearPendingEditIntent();
+    };
+    const handleResize = () => {
+      clearPendingEditIntent();
+    };
+    const handleFocusOut = () => {
+      if (!mobileIntentEnabled) return;
+      win.setTimeout(() => {
+        if (destroyed) return;
+        if (ownerDocument.activeElement === proseMirrorEl || proseMirrorEl.contains(ownerDocument.activeElement)) return;
+        clearPendingEditIntent();
+        setEditable2(false);
+      }, 0);
+    };
+    if (!mobileIntentEnabled) {
+      const controller2 = {
+        cancelPendingEditIntent() {
+        },
+        destroy() {
+          if (proseMirrorEl.__documentMobileEditIntent === controller2) delete proseMirrorEl.__documentMobileEditIntent;
+        },
+        focusForEdit
+      };
+      proseMirrorEl.__documentMobileEditIntent = controller2;
+      return controller2;
+    }
+    setEditable2(false);
+    ownerDocument.addEventListener("touchstart", handleTouchStart, { passive: true, capture: true });
+    ownerDocument.addEventListener("touchmove", handleTouchMove, { passive: true, capture: true });
+    ownerDocument.addEventListener("touchend", handleTouchEnd, { passive: true, capture: true });
+    ownerDocument.addEventListener("touchcancel", handleTouchCancel, { passive: true, capture: true });
+    ownerDocument.addEventListener("scroll", handleScroll, { passive: true, capture: true });
+    win.addEventListener("resize", handleResize);
+    win.visualViewport?.addEventListener?.("resize", handleResize);
+    win.visualViewport?.addEventListener?.("scroll", handleScroll);
+    proseMirrorEl.addEventListener("focusout", handleFocusOut);
+    const controller = {
+      cancelPendingEditIntent,
+      destroy() {
+        destroyed = true;
+        clearPendingEditIntent();
+        ownerDocument.removeEventListener("touchstart", handleTouchStart, true);
+        ownerDocument.removeEventListener("touchmove", handleTouchMove, true);
+        ownerDocument.removeEventListener("touchend", handleTouchEnd, true);
+        ownerDocument.removeEventListener("touchcancel", handleTouchCancel, true);
+        ownerDocument.removeEventListener("scroll", handleScroll, true);
+        win.removeEventListener("resize", handleResize);
+        win.visualViewport?.removeEventListener?.("resize", handleResize);
+        win.visualViewport?.removeEventListener?.("scroll", handleScroll);
+        proseMirrorEl.removeEventListener("focusout", handleFocusOut);
+        if (proseMirrorEl.__documentMobileEditIntent === controller) delete proseMirrorEl.__documentMobileEditIntent;
+        view.setProps({ editable: () => true });
+        proseMirrorEl.classList.remove("is-document-editing");
+      },
+      focusForEdit
+    };
+    proseMirrorEl.__documentMobileEditIntent = controller;
+    return controller;
   }
   function button(options, className, label, titleKey, command, config = {}) {
     const btn = document.createElement("button");
@@ -27508,7 +27786,7 @@ ${reason}`);
           if (!view) return;
           const table = createTable(view.state.schema, selectedRows, selectedCols);
           view.dispatch(view.state.tr.replaceSelectionWith(table).scrollIntoView());
-          view.focus();
+          focusDocumentEditorForEdit(view);
           wrap2.classList.remove("open");
         });
         cell.dataset.row = String(row);
@@ -27974,6 +28252,7 @@ ${reason}`);
         gapCursor(),
         dropCursor(),
         taskListPlugin(schema2),
+        pendingEditCaretPlugin(),
         selectionObserverPlugin(options.onSelectionChange),
         toolbarStatePlugin(toolbarEl),
         columnResizing({ cellMinWidth: 48 }),
@@ -27989,7 +28268,10 @@ ${reason}`);
       }
     });
     viewRef.current = view;
-    const destroyDocumentTouchZoom = setupDocumentTouchZoom(editorEl, view);
+    const mobileEditIntent = setupDocumentMobileEditIntent(editorEl, view);
+    const destroyDocumentTouchZoom = setupDocumentTouchZoom(editorEl, view, {
+      onZoomNavigation: () => mobileEditIntent.cancelPendingEditIntent()
+    });
     buildToolbar(options, toolbarEl, viewRef, schema2);
     function syncTitleInput() {
       if (!titleInput) return;
@@ -28023,11 +28305,12 @@ ${reason}`);
         provider.awareness.off("change", handleAwarenessChange);
         provider.destroy();
         destroyDocumentTouchZoom();
+        mobileEditIntent.destroy();
         view.destroy();
         ydoc.destroy();
       },
       focus() {
-        view.focus();
+        focusDocumentEditorForEdit(view);
       },
       getSelectionSnapshot() {
         return selectionSnapshotFromView(view);
@@ -28043,7 +28326,7 @@ ${reason}`);
         const currentText = view.state.doc.textBetween(from2, to, "\n", "\n");
         if (currentText !== String(snapshot2.text || "")) return false;
         view.dispatch(view.state.tr.insertText(String(text2 || ""), from2, to).scrollIntoView());
-        view.focus();
+        focusDocumentEditorForEdit(view);
         return true;
       },
       provider,
