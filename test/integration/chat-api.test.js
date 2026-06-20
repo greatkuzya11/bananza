@@ -155,6 +155,36 @@ async function createAdminBot(admin, { route, provider = 'openai', kind = 'text'
   return response.data.bot;
 }
 
+test('admin bot behavior rules preserve 8000 chars and truncate longer input', async () => {
+  const { admin } = scenario;
+  const exactRules = 'r'.repeat(8000);
+  const oversizedRules = `${exactRules}x`;
+  const createPayload = {
+    ...buildBotPayload({ provider: 'deepseek', kind: 'text', label: 'Rules' }),
+    behavior_rules: exactRules,
+  };
+
+  const created = await admin.request('/api/admin/deepseek-ai-bots', {
+    method: 'POST',
+    json: createPayload,
+  });
+  const bot = created.data.bot;
+  assert.ok(bot?.id, 'expected DeepSeek bot to be created');
+  assert.equal(bot.behavior_rules, exactRules);
+  assert.equal(bot.behavior_rules.length, 8000);
+
+  const updated = await admin.request(`/api/admin/deepseek-ai-bots/${bot.id}`, {
+    method: 'PUT',
+    json: {
+      ...createPayload,
+      behavior_rules: oversizedRules,
+    },
+  });
+
+  assert.equal(updated.data.bot.behavior_rules, exactRules);
+  assert.equal(updated.data.bot.behavior_rules.length, 8000);
+});
+
 function responseHasBot(response, botId) {
   return Array.isArray(response.data?.bots)
     && response.data.bots.some((bot) => Number(bot.id) === Number(botId));

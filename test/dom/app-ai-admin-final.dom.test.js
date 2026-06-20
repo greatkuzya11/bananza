@@ -54,6 +54,26 @@ function createApiRecorder(dom) {
   return { api, calls };
 }
 
+test('AI admin behavior rules textareas use the server-side maxlength', (t) => {
+  const dom = createAppDom();
+  t.after(() => dom.window.close());
+
+  [
+    'aiBotRules',
+    'openAiUniversalBotRules',
+    'deepseekAiBotRules',
+    'qwenAiBotRules',
+    'yandexAiBotRules',
+    'grokAiBotRules',
+    'grokAiImageBotRules',
+    'grokAiUniversalBotRules',
+  ].forEach((id) => {
+    const textarea = dom.window.document.getElementById(id);
+    assert.ok(textarea, `expected #${id} to exist`);
+    assert.equal(textarea.getAttribute('maxlength'), '8000', `expected #${id} maxlength`);
+  });
+});
+
 function installEvalExports(scope, runtimeExports) {
   Object.defineProperties(scope, Object.getOwnPropertyDescriptors(runtimeExports));
 }

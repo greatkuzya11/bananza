@@ -995,7 +995,7 @@
             <div class="settings-hint">Embedding model глобальная для долговременной памяти: все боты используют один vector index.</div>
             <label class="ai-bot-field">Style<textarea id="aiBotStyle" class="modal-input" rows="2"></textarea></label>
             <label class="ai-bot-field">Tone<textarea id="aiBotTone" class="modal-input" rows="2"></textarea></label>
-            <label class="ai-bot-field">Behavior rules<textarea id="aiBotRules" class="modal-input" rows="4"></textarea></label>
+            <label class="ai-bot-field">Behavior rules<textarea id="aiBotRules" class="modal-input" rows="4" maxlength="8000"></textarea></label>
             <label class="ai-bot-field">Speech patterns<textarea id="aiBotSpeech" class="modal-input" rows="3"></textarea></label>
             <div class="ai-bot-actions">
               <button id="aiBotSaveBottom" type="button" class="btn-primary">Сохранить бота</button>
@@ -1124,7 +1124,7 @@
             <div class="settings-hint">Universal OpenAI bots can answer with text, generate or edit images, and optionally return a document attachment.</div>
             <label class="ai-bot-field">Style<textarea id="openAiUniversalBotStyle" class="modal-input" rows="2"></textarea></label>
             <label class="ai-bot-field">Tone<textarea id="openAiUniversalBotTone" class="modal-input" rows="2"></textarea></label>
-            <label class="ai-bot-field">Behavior rules<textarea id="openAiUniversalBotRules" class="modal-input" rows="4"></textarea></label>
+            <label class="ai-bot-field">Behavior rules<textarea id="openAiUniversalBotRules" class="modal-input" rows="4" maxlength="8000"></textarea></label>
             <label class="ai-bot-field">Speech patterns<textarea id="openAiUniversalBotSpeech" class="modal-input" rows="3"></textarea></label>
             <div class="ai-bot-actions">
               <button id="openAiUniversalBotSaveBottom" type="button" class="btn-primary">Save bot</button>
@@ -1503,7 +1503,7 @@
             <div class="settings-hint">Выбирайте `deepseek-chat` для обычного текстового режима и `deepseek-reasoner` для reasoning-сценариев. Hybrid memory для DeepSeek отключён.</div>
             <label class="ai-bot-field">Style<textarea id="deepseekAiBotStyle" class="modal-input" rows="2"></textarea></label>
             <label class="ai-bot-field">Tone<textarea id="deepseekAiBotTone" class="modal-input" rows="2"></textarea></label>
-            <label class="ai-bot-field">Behavior rules<textarea id="deepseekAiBotRules" class="modal-input" rows="4"></textarea></label>
+            <label class="ai-bot-field">Behavior rules<textarea id="deepseekAiBotRules" class="modal-input" rows="4" maxlength="8000"></textarea></label>
             <label class="ai-bot-field">Speech patterns<textarea id="deepseekAiBotSpeech" class="modal-input" rows="3"></textarea></label>
           </div>
 
@@ -1655,7 +1655,7 @@
             <div class="settings-hint">Use the exact model id exposed by your Qwen server. Hybrid memory for Qwen is disabled.</div>
             <label class="ai-bot-field">Style<textarea id="qwenAiBotStyle" class="modal-input" rows="2"></textarea></label>
             <label class="ai-bot-field">Tone<textarea id="qwenAiBotTone" class="modal-input" rows="2"></textarea></label>
-            <label class="ai-bot-field">Behavior rules<textarea id="qwenAiBotRules" class="modal-input" rows="4"></textarea></label>
+            <label class="ai-bot-field">Behavior rules<textarea id="qwenAiBotRules" class="modal-input" rows="4" maxlength="8000"></textarea></label>
             <label class="ai-bot-field">Speech patterns<textarea id="qwenAiBotSpeech" class="modal-input" rows="3"></textarea></label>
           </div>
 
@@ -1820,7 +1820,7 @@
             <div class="settings-hint">Yandex hybrid memory uses separate embedding tables and does not touch OpenAI memory.</div>
             <label class="ai-bot-field">Style<textarea id="yandexAiBotStyle" class="modal-input" rows="2"></textarea></label>
             <label class="ai-bot-field">Tone<textarea id="yandexAiBotTone" class="modal-input" rows="2"></textarea></label>
-            <label class="ai-bot-field">Behavior rules<textarea id="yandexAiBotRules" class="modal-input" rows="4"></textarea></label>
+            <label class="ai-bot-field">Behavior rules<textarea id="yandexAiBotRules" class="modal-input" rows="4" maxlength="8000"></textarea></label>
             <label class="ai-bot-field">Speech patterns<textarea id="yandexAiBotSpeech" class="modal-input" rows="3"></textarea></label>
           </div>
 
@@ -1961,7 +1961,7 @@
             <div class="settings-hint">Grok hybrid memory uses separate Grok vector tables and does not touch OpenAI or Yandex memory.</div>
             <label class="ai-bot-field">Style<textarea id="grokAiBotStyle" class="modal-input" rows="2"></textarea></label>
             <label class="ai-bot-field">Tone<textarea id="grokAiBotTone" class="modal-input" rows="2"></textarea></label>
-            <label class="ai-bot-field">Behavior rules<textarea id="grokAiBotRules" class="modal-input" rows="4"></textarea></label>
+            <label class="ai-bot-field">Behavior rules<textarea id="grokAiBotRules" class="modal-input" rows="4" maxlength="8000"></textarea></label>
             <label class="ai-bot-field">Speech patterns<textarea id="grokAiBotSpeech" class="modal-input" rows="3"></textarea></label>
             <div class="ai-bot-actions">
               <button id="grokAiBotSaveBottom" type="button" class="btn-primary">Save bot</button>
@@ -2039,7 +2039,7 @@
             </div>
             <label class="ai-bot-field">Style<textarea id="grokAiImageBotStyle" class="modal-input" rows="2"></textarea></label>
             <label class="ai-bot-field">Tone<textarea id="grokAiImageBotTone" class="modal-input" rows="2"></textarea></label>
-            <label class="ai-bot-field">Behavior rules<textarea id="grokAiImageBotRules" class="modal-input" rows="4"></textarea></label>
+            <label class="ai-bot-field">Behavior rules<textarea id="grokAiImageBotRules" class="modal-input" rows="4" maxlength="8000"></textarea></label>
             <label class="ai-bot-field">Speech patterns<textarea id="grokAiImageBotSpeech" class="modal-input" rows="3"></textarea></label>
             <div class="ai-bot-grid">
               <label>Chat<select id="grokAiImageBotChatSelect" class="modal-input"></select></label>
@@ -2127,7 +2127,7 @@
             <div class="settings-hint">Universal Grok bots can answer with text, analyze images, generate new images, and edit a supported source image.</div>
             <label class="ai-bot-field">Style<textarea id="grokAiUniversalBotStyle" class="modal-input" rows="2"></textarea></label>
             <label class="ai-bot-field">Tone<textarea id="grokAiUniversalBotTone" class="modal-input" rows="2"></textarea></label>
-            <label class="ai-bot-field">Behavior rules<textarea id="grokAiUniversalBotRules" class="modal-input" rows="4"></textarea></label>
+            <label class="ai-bot-field">Behavior rules<textarea id="grokAiUniversalBotRules" class="modal-input" rows="4" maxlength="8000"></textarea></label>
             <label class="ai-bot-field">Speech patterns<textarea id="grokAiUniversalBotSpeech" class="modal-input" rows="3"></textarea></label>
             <div class="ai-bot-grid">
               <label>Test mode<select id="grokAiUniversalBotTestMode" class="modal-input">

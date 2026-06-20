@@ -66,6 +66,7 @@ const { analyzeAiImageRisk } = require('../public/js/ai-image-risk');
 
 const BOT_COLORS = ['#65aadd', '#7bc862', '#a695e7', '#ee7aae', '#6ec9cb', '#faa774'];
 const AI_BOT_EXPORT_VERSION = 5;
+const BEHAVIOR_RULES_MAX_LENGTH = 8000;
 const MODEL_CACHE_MS = 10 * 60 * 1000;
 const FALLBACK_RESPONSE_MODELS = ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'];
 const FALLBACK_SUMMARY_MODELS = ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'];
@@ -3228,7 +3229,7 @@ function createAiBotFeature({
       kind,
       style: (isConvertBot || isChatShot) ? '' : cleanText(input.style ?? current.style ?? 'Helpful chat assistant', 1000),
       tone: (isConvertBot || isChatShot) ? '' : cleanText(input.tone ?? current.tone ?? 'warm, concise, attentive', 1000),
-      behavior_rules: (isConvertBot || isChatShot) ? '' : cleanText(input.behavior_rules ?? current.behavior_rules ?? '', 4000),
+      behavior_rules: (isConvertBot || isChatShot) ? '' : cleanText(input.behavior_rules ?? current.behavior_rules ?? '', BEHAVIOR_RULES_MAX_LENGTH),
       speech_patterns: (isConvertBot || isChatShot) ? '' : cleanText(input.speech_patterns ?? current.speech_patterns ?? '', 4000),
       transform_prompt: isConvertBot ? cleanText(input.transform_prompt ?? current.transform_prompt ?? '', CONTEXT_TRANSFORM_PROMPT_MAX_LENGTH) : '',
       enabled: boolValue(input.enabled, current.enabled == null ? true : current.enabled !== 0),
