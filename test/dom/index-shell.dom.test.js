@@ -446,7 +446,7 @@ test('document editor bundle exposes v2 rich editing and document image insertio
   assert.match(documentEditorBundleJs, /setupDocumentTouchZoom/);
   assert.match(documentEditorBundleJs, /function setupDocumentTouchZoom\(editorEl,\s*view,\s*callbacks\s*=\s*\{\}\)/);
   assert.match(documentEditorBundleJs, /onZoomNavigation/);
-  assert.match(documentEditorBundleJs, /DOCUMENT_TOUCH_ZOOM_MIN_SCALE\s*=\s*0\.5/);
+  assert.match(documentEditorBundleJs, /DOCUMENT_TOUCH_ZOOM_MIN_SCALE\s*=\s*0\.2/);
   assert.match(documentEditorBundleJs, /DOCUMENT_TOUCH_ZOOM_NEUTRAL_SCALE\s*=\s*1/);
   assert.match(documentEditorBundleJs, /DOCUMENT_TOUCH_ZOOM_MAX_SCALE\s*=\s*3/);
   assert.match(documentEditorBundleJs, /setupDocumentMobileEditIntent/);
