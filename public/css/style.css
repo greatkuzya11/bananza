@@ -6568,10 +6568,18 @@ html[data-visual-mode="rich"] .poll-card {
 }
 
 @media (hover: none), (pointer: coarse) {
-  .document-editor .ProseMirror .document-image-node .document-image-resize-handle {
-    display: block;
+  .document-editor .ProseMirror .document-image-node .document-image-resize-handle,
+  .document-editor .ProseMirror .document-image-node:hover .document-image-resize-handle,
+  .document-editor .ProseMirror .document-image-node.selected .document-image-resize-handle,
+  .document-editor .ProseMirror .document-image-node.ProseMirror-selectednode .document-image-resize-handle {
+    display: none;
     width: 22px;
     height: 22px;
+  }
+
+  .document-editor .ProseMirror .document-image-node.is-resize-handles-visible .document-image-resize-handle,
+  .document-editor .ProseMirror .document-image-node.is-resizing .document-image-resize-handle {
+    display: block;
   }
 
   .document-image-resize-handle--top-left {

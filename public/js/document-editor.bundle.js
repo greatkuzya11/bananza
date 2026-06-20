@@ -26125,6 +26125,7 @@ ${reason}`);
   ];
   var DEFAULT_TEXT_COLORS = ["#ffffff", "#f87171", "#fbbf24", "#34d399", "#60a5fa", "#c084fc"];
   var DEFAULT_HIGHLIGHT_COLORS = ["#f5d76e", "#86efac", "#93c5fd", "#f0abfc", "#fb7185"];
+  var DOCUMENT_IMAGE_RESIZE_HANDLES_AUTO_HIDE_MS = 2e3;
   function t(options, key) {
     const fn = typeof options.t === "function" ? options.t : null;
     return fn ? fn(key) : key;
@@ -26916,6 +26917,7 @@ ${reason}`);
       this.view = view;
       this.getPos = getPos;
       this.resizeState = null;
+      this.resizeHandlesHideTimer = null;
       this.handlePointerDown = this.handlePointerDown.bind(this);
       this.handleResizeMove = this.handleResizeMove.bind(this);
       this.handleResizeEnd = this.handleResizeEnd.bind(this);
@@ -26987,6 +26989,31 @@ ${reason}`);
       } catch (e) {
       }
     }
+    clearResizeHandlesAutoHide() {
+      window.clearTimeout(this.resizeHandlesHideTimer);
+      this.resizeHandlesHideTimer = null;
+    }
+    hideResizeHandles() {
+      this.clearResizeHandlesAutoHide();
+      if (this.resizeState) return;
+      this.dom.classList.remove("is-resize-handles-visible");
+    }
+    scheduleResizeHandlesAutoHide() {
+      this.clearResizeHandlesAutoHide();
+      this.resizeHandlesHideTimer = window.setTimeout(() => {
+        this.resizeHandlesHideTimer = null;
+        if (this.resizeState) return;
+        this.dom.classList.remove("is-resize-handles-visible");
+      }, DOCUMENT_IMAGE_RESIZE_HANDLES_AUTO_HIDE_MS);
+    }
+    showResizeHandles() {
+      this.dom.classList.add("is-resize-handles-visible");
+      this.scheduleResizeHandlesAutoHide();
+    }
+    keepResizeHandlesVisible() {
+      this.dom.classList.add("is-resize-handles-visible");
+      this.clearResizeHandlesAutoHide();
+    }
     handlePointerDown(event) {
       if (event.button != null && event.button !== 0) return;
       const handle = event.target?.closest?.(".document-image-resize-handle");
@@ -26994,6 +27021,7 @@ ${reason}`);
         event.preventDefault();
         event.stopPropagation();
         this.setNodeSelection();
+        this.keepResizeHandlesVisible();
         const corner = String(handle.dataset.corner || "");
         this.resizeState = {
           corner,
@@ -27013,6 +27041,7 @@ ${reason}`);
         return;
       }
       this.setNodeSelection();
+      this.showResizeHandles();
     }
     handleResizeMove(event) {
       const state = this.resizeState;
@@ -27030,6 +27059,7 @@ ${reason}`);
       window.removeEventListener("pointercancel", this.handleResizeEnd, true);
       this.dom.classList.remove("is-resizing");
       this.resizeState = null;
+      this.scheduleResizeHandlesAutoHide();
       const nextWidth = this.clampWidth(state.nextWidth);
       const currentWidth = normalizeImageWidth(this.node.attrs.width);
       if (Math.abs(nextWidth - currentWidth) < 1) return;
@@ -27059,6 +27089,7 @@ ${reason}`);
     }
     deselectNode() {
       this.dom.classList.remove("ProseMirror-selectednode", "selected");
+      this.hideResizeHandles();
     }
     stopEvent(event) {
       return Boolean(event.target?.closest?.(".document-image-resize-handle"));
@@ -27067,6 +27098,7 @@ ${reason}`);
       return true;
     }
     destroy() {
+      this.clearResizeHandlesAutoHide();
       this.dom.removeEventListener("pointerdown", this.handlePointerDown);
       window.removeEventListener("pointermove", this.handleResizeMove, { passive: false });
       window.removeEventListener("pointerup", this.handleResizeEnd, true);

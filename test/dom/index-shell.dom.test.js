@@ -24,7 +24,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
   const scripts = [...document.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
 
   assert.deepEqual(styles, [
-    '/css/style.css?v=20260617-doc-keyboard-intent1',
+    '/css/style.css?v=20260620-doc-image-handles1',
     '/css/calls.css?v=20260509-call-modal-surface',
     '/css/voice.css',
     '/css/video-notes.css',
@@ -35,7 +35,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
     '/js/i18n.js?v=20260615-doc-chatshot2',
-    '/js/document-editor.bundle.js?v=20260617-doc-keyboard-intent1',
+    '/js/document-editor.bundle.js?v=20260620-doc-image-handles1',
     '/js/qip-infium-original.js?v=20260523-qip-infium-original',
     '/js/qip-hd.js?v=20260523-qip-hd',
     '/js/app/namespace.js?v=20260530-app-shell',
@@ -526,6 +526,10 @@ test('document editor bundle exposes v2 rich editing and document image insertio
   assert.match(documentEditorBundleJs, /top-right/);
   assert.match(documentEditorBundleJs, /bottom-left/);
   assert.match(documentEditorBundleJs, /bottom-right/);
+  assert.match(documentEditorBundleJs, /DOCUMENT_IMAGE_RESIZE_HANDLES_AUTO_HIDE_MS\s*=\s*(?:2000|2e3)/);
+  assert.match(documentEditorBundleJs, /is-resize-handles-visible/);
+  assert.match(documentEditorBundleJs, /clearResizeHandlesAutoHide/);
+  assert.match(documentEditorBundleJs, /scheduleResizeHandlesAutoHide/);
   assert.match(documentEditorBundleJs, /handleDrop\(view,\s*event\)/);
   assert.match(documentEditorBundleJs, /handlePaste\(view,\s*event\)/);
   assert.match(documentEditorBundleJs, /uploadImageUrlsFromHtml/);
@@ -542,6 +546,9 @@ test('document editor bundle exposes v2 rich editing and document image insertio
   assert.match(styleCss, /\.document-image-resize-handle--top-right\s*\{/);
   assert.match(styleCss, /\.document-image-resize-handle--bottom-left\s*\{/);
   assert.match(styleCss, /\.document-image-resize-handle--bottom-right\s*\{/);
+  assert.match(styleCss, /@media\s*\(hover:\s*none\),\s*\(pointer:\s*coarse\)\s*\{[\s\S]*\.document-image-node\.selected \.document-image-resize-handle,[\s\S]*display\s*:\s*none/s);
+  assert.match(styleCss, /@media\s*\(hover:\s*none\),\s*\(pointer:\s*coarse\)\s*\{[\s\S]*\.document-image-node\.is-resize-handles-visible \.document-image-resize-handle,[\s\S]*display\s*:\s*block/s);
+  assert.doesNotMatch(styleCss, /@media\s*\(hover:\s*none\),\s*\(pointer:\s*coarse\)\s*\{[\s\S]*\.document-image-node \.document-image-resize-handle\s*\{[^}]*display\s*:\s*block/s);
   assert.doesNotMatch(styleCss, /\.document-image-mini-toolbar\s*\{/);
 });
 
