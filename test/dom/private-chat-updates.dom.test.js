@@ -386,6 +386,51 @@ function installFolderStripMetrics(dom, centerCalls = []) {
   });
 }
 
+test('new document member picker excludes selectable AI bots', async (t) => {
+  const dom = await bootAppDom({
+    fetchHandler: ({ url, dom }) => {
+      if (url.pathname === '/api/users') {
+        return createJsonResponse(dom, [
+          {
+            id: 2,
+            username: 'bob',
+            display_name: 'Bob',
+            avatar_color: '#65aadd',
+            avatar_url: null,
+            is_ai_bot: 0,
+            online: false,
+          },
+          {
+            id: 12,
+            username: 'assist_bot',
+            display_name: 'Assist Bot',
+            avatar_color: '#55c4c2',
+            avatar_url: null,
+            is_ai_bot: 1,
+            ai_bot_mention: 'assist',
+            ai_bot_model: 'gpt-4o-mini',
+          },
+        ]);
+      }
+      return null;
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document } = dom.window;
+  document.getElementById('newChatBtn').click();
+  await waitForCondition(dom.window, () => document.querySelectorAll('#userListDocument .user-list-item').length > 0);
+
+  const documentList = document.getElementById('userListDocument');
+  const groupList = document.getElementById('userListGroup');
+  assert.ok(documentList.querySelector('[data-uid="2"]'));
+  assert.equal(documentList.querySelector('[data-uid="12"]'), null);
+  assert.equal(documentList.querySelectorAll('.is-ai-bot').length, 0);
+  assert.ok(groupList.querySelector('[data-uid="12"].is-ai-bot'));
+});
+
 test('applyChatUpdate keeps human private display name when chat_updated omits private_user', async (t) => {
   const dom = await bootAppDom();
   t.after(() => {

@@ -270,12 +270,13 @@
           const privateList = $('#userListPrivate');
           const groupList = $('#userListGroup');
           const documentList = $('#userListDocument');
+          const humanUsers = users.filter((user) => Number(user?.is_ai_bot || 0) === 0);
     
           privateList.innerHTML = users.map((user) => renderSelectableUserItem(user, { showPresence: true })).join('')
             || '<div style="color:var(--text-secondary);padding:12px">No other users yet</div>';
     
           groupList.innerHTML = users.map((user) => renderSelectableUserItem(user)).join('');
-          if (documentList) documentList.innerHTML = users.map((user) => renderSelectableUserItem(user)).join('');
+          if (documentList) documentList.innerHTML = humanUsers.map((user) => renderSelectableUserItem(user)).join('');
     
           // Private: click to start chat
           privateList.querySelectorAll('.user-list-item').forEach(el => {
@@ -842,7 +843,7 @@
             addWrap.classList.remove('hidden');
             const allUsers = await api('/api/users');
             const memberIds = new Set(members.map(m => m.id));
-            const nonMembers = allUsers.filter(u => !memberIds.has(u.id));
+            const nonMembers = allUsers.filter(u => !memberIds.has(u.id) && (!isDocument || Number(u?.is_ai_bot || 0) === 0));
     
             const addList = $('#addMemberList');
             addList.innerHTML = nonMembers.map((user) => renderSelectableUserItem(user)).join('')

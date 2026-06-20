@@ -2766,6 +2766,9 @@ app.post('/api/chats/:chatId/members', auth, (req, res) => {
   const targetUser = db.prepare('SELECT id,username,display_name,COALESCE(is_ai_bot,0) as is_ai_bot FROM users WHERE id=?').get(userId);
   if (!targetUser) return res.status(404).json({ error: 'User not found' });
   if (Number(targetUser.is_ai_bot) !== 0) {
+    if (isDocumentChatRow(chat)) {
+      return res.status(400).json({ error: 'Bots cannot be added to documents' });
+    }
     const existingBotMember = db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(chatId, userId);
     const selectableBot = existingBotMember
       ? (aiBotFeature?.getSelectableBotByUserId(userId, { ...req.user, is_admin: true }) || aiBotFeature?.getSelectableBotByUserId(userId, req.user))

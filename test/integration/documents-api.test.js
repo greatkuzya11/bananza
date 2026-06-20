@@ -82,6 +82,27 @@ async function createOpenAiChatShotBot(session, {
   return response.data.bot;
 }
 
+async function createOpenAiTextBot(session, {
+  name,
+  mention,
+  visibleToUsers = true,
+  enabled = true,
+} = {}) {
+  const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const response = await session.request('/api/admin/ai-bots', {
+    method: 'POST',
+    json: {
+      name: name || `Doc Text Bot ${token}`.slice(0, 30),
+      mention: mention || `doc_bot_${token}`.slice(0, 24),
+      enabled,
+      visible_to_users: visibleToUsers,
+      response_model: 'gpt-4o-mini',
+      summary_model: 'gpt-4o-mini',
+    },
+  });
+  return response.data.bot;
+}
+
 function responseHasBot(response, botId) {
   return Array.isArray(response.data?.bots)
     && response.data.bots.some((bot) => Number(bot.id) === Number(botId));
@@ -310,6 +331,50 @@ function dbValue(dbPath, sql, ...params) {
     db.close();
   }
 }
+
+test('documents reject AI bot members on create and later member add', async () => {
+  const bot = await createOpenAiTextBot(admin, { visibleToUsers: true });
+  assert.ok(Number(bot.user_id) > 0);
+
+  await admin.request('/api/documents', {
+    method: 'POST',
+    json: {
+      title: 'Bot Blocked Draft',
+      memberIds: [Number(bot.user_id)],
+    },
+    expectedStatus: 400,
+  });
+
+  const created = await admin.request('/api/documents', {
+    method: 'POST',
+    json: {
+      title: 'Human Only Draft',
+      memberIds: [bob.user.id],
+    },
+  });
+  const chatId = Number(created.data.id);
+
+  try {
+    await admin.request(`/api/chats/${chatId}/members`, {
+      method: 'POST',
+      json: { userId: Number(bot.user_id) },
+      expectedStatus: 400,
+    });
+
+    const dbPath = path.join(sandbox.appDir, 'bananza.db');
+    assert.equal(dbValue(dbPath, 'SELECT COUNT(*) as count FROM chat_members WHERE chat_id=? AND user_id=?', chatId, Number(bot.user_id)).count, 0);
+    assert.equal(dbValue(dbPath, 'SELECT COUNT(*) as count FROM ai_chat_bots WHERE chat_id=? AND bot_id=?', chatId, Number(bot.id)).count, 0);
+
+    await admin.request(`/api/chats/${chatId}/members`, {
+      method: 'POST',
+      json: { userId: carol.user.id },
+    });
+    const carolSession = await carol.request(`/api/documents/${chatId}/session`);
+    assert.equal(carolSession.data.document.chatId, chatId);
+  } finally {
+    await admin.request(`/api/chats/${chatId}`, { method: 'DELETE' }).catch(() => {});
+  }
+});
 
 test('document image assets upload for members and are removed with document cleanup', async () => {
   const created = await admin.request('/api/documents', {
