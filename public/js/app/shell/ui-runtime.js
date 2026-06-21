@@ -154,6 +154,7 @@
       function getEmojiPickerInsertionValue(...args) { return composerTextController?.getEmojiPickerInsertionValue?.(...args) || ''; }
       function deleteComposerCustomEmojiCluster(...args) { return composerTextController?.deleteComposerCustomEmojiCluster?.(...args) || false; }
       function handleComposerCustomEmojiKeydown(...args) { return composerTextController?.handleComposerCustomEmojiKeydown?.(...args) || false; }
+      function handleComposerHistoryKeydown(...args) { return composerTextController?.handleComposerHistoryKeydown?.(...args) || false; }
       function handleComposerCustomEmojiBeforeInput(...args) { return composerTextController?.handleComposerCustomEmojiBeforeInput?.(...args) || false; }
     
       function safeVibrate(pattern) {
@@ -2810,6 +2811,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
           try { if (window.clearAssetCache) window.clearAssetCache().catch(()=>{}); } catch (e) {}
           try { if (window.messageCache && window.messageCache.clearUserCache) window.messageCache.clearUserCache().catch(()=>{}); } catch (e) {}
           composerStateController.resetComposerDraftsForCurrentUser({ removeStorage: true });
+          composerStateController.resetComposerHistoryForCurrentUser?.({ removeStorage: true });
         },
         onResetUi: () => {
           currentMobileFontSize = MOBILE_FONT_SIZE_DEFAULT;
@@ -2840,7 +2842,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         isMobileLayoutViewport, normalizeMobileBaseScene, clearMobileSceneRepaint, getResolvedMobileBaseScene, isMobileBaseSceneHardHidden, setMobileSceneElementState, clearMobileSceneElementState, scheduleActiveMobileSceneRepaint,
         syncMobileBaseSceneState, getComposerTextValue, setComposerTextValue, normalizeComposerInputValue, snapComposerSelectionToCustomEmojiBoundary, insertComposerTextAtSelection, normalizeMicrophoneMode, getMicrophoneMode,
         setMicrophoneMode, getScreenRotationAllowed, syncScreenRotationToggle, setScreenRotationStatus, clearScreenRotationStatusSoon, applyScreenRotationPreference, setScreenRotationAllowed, insertDictatedText,
-        getEmojiPickerInsertionValue, deleteComposerCustomEmojiCluster, handleComposerCustomEmojiKeydown, handleComposerCustomEmojiBeforeInput, safeVibrate,
+        getEmojiPickerInsertionValue, deleteComposerCustomEmojiCluster, handleComposerCustomEmojiKeydown, handleComposerHistoryKeydown, handleComposerCustomEmojiBeforeInput, safeVibrate,
         normalizeChatInviteToken, chatInviteTokenFromPath, chatInviteTokenFromUrl, linkify, mentionKey, renderMessageText,
         normalizeUiTheme, renderThemePicker, applyUiTheme, selectUiTheme, setThemeStatus, normalizeUiLanguage, languageDisplayName, renderLanguagePicker,
         applyUiLanguage, selectUiLanguage, refreshLocalizedUi, syncLanguageSettingsButton, setLanguageStatus, normalizeVisualMode, visualModeMeta, visualModeStateLabel,

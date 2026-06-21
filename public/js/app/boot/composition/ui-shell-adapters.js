@@ -13,7 +13,7 @@
         clearMobileSceneElementState, scheduleActiveMobileSceneRepaint, syncMobileBaseSceneState, getComposerTextValue, setComposerTextValue, normalizeComposerInputValue,
         snapComposerSelectionToCustomEmojiBoundary, insertComposerTextAtSelection, normalizeMicrophoneMode, getMicrophoneMode, setMicrophoneMode, getScreenRotationAllowed,
         syncScreenRotationToggle, setScreenRotationStatus, clearScreenRotationStatusSoon, applyScreenRotationPreference, setScreenRotationAllowed, insertDictatedText,
-        getEmojiPickerInsertionValue, deleteComposerCustomEmojiCluster, handleComposerCustomEmojiKeydown, handleComposerCustomEmojiBeforeInput, safeVibrate, linkify,
+        getEmojiPickerInsertionValue, deleteComposerCustomEmojiCluster, handleComposerCustomEmojiKeydown, handleComposerHistoryKeydown, handleComposerCustomEmojiBeforeInput, safeVibrate, linkify,
         mentionKey, renderMessageText, normalizeUiTheme, renderThemePicker, applyUiTheme, selectUiTheme,
         setThemeStatus, normalizeUiLanguage, languageDisplayName, renderLanguagePicker, applyUiLanguage, selectUiLanguage,
         refreshLocalizedUi, syncLanguageSettingsButton, setLanguageStatus, normalizeVisualMode, visualModeMeta, visualModeStateLabel,

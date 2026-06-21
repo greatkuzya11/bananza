@@ -360,12 +360,22 @@
         msgInput.addEventListener('keydown', (e) => {
           if (handleMentionPickerKeydown(e)) return;
           if (handleComposerCustomEmojiKeydown(e)) return;
+          if (handleComposerHistoryKeydown(e, currentChatId)) {
+            saveComposerDraft(currentChatId);
+            autoResize();
+            syncMentionOpenButton();
+            window.BananzaVoiceHooks?.refreshComposerState?.();
+            updateComposerAiOverrideState().catch(() => {});
+            updateMentionPicker();
+            return;
+          }
           if (e.key === 'Enter') {
             if (sendByEnter && !e.shiftKey && !e.ctrlKey) { e.preventDefault(); sendMessage(); }
             else if (!sendByEnter && e.ctrlKey) { e.preventDefault(); sendMessage(); }
           }
         });
         msgInput.addEventListener('input', () => {
+          composerStateController.resetComposerHistoryNavigation?.();
           normalizeComposerInputValue();
           saveComposerDraft(currentChatId);
           autoResize();

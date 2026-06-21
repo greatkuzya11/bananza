@@ -37,6 +37,15 @@ function isSurfaceOpen(el) {
   return Boolean(el && !el.classList.contains('hidden'));
 }
 
+function composerKey(window, key, options = {}) {
+  return new window.KeyboardEvent('keydown', {
+    key,
+    bubbles: true,
+    cancelable: true,
+    ...options,
+  });
+}
+
 function loadComposerRuntime(dom) {
   loadBrowserScript(dom, 'public/js/qip-infium-original.js');
   loadBrowserScript(dom, 'public/js/qip-hd.js');
@@ -349,6 +358,18 @@ test('composer modules publish expected factories', () => {
   dom.window.close();
 });
 
+test('composer history APIs are exposed on state and text controllers', (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+
+  assert.equal(typeof h.state.addComposerHistoryEntry, 'function');
+  assert.equal(typeof h.state.getComposerHistoryEntries, 'function');
+  assert.equal(typeof h.state.stepComposerHistory, 'function');
+  assert.equal(typeof h.state.resetComposerHistoryNavigation, 'function');
+  assert.equal(typeof h.state.resetComposerHistoryForCurrentUser, 'function');
+  assert.equal(typeof h.text.handleComposerHistoryKeydown, 'function');
+});
+
 test('composer text reads, writes, inserts, serializes custom emoji, and resizes', (t) => {
   const h = createComposerHarness();
   t.after(() => h.window.close());
@@ -470,6 +491,81 @@ test('send controller queues text payloads and patches edits', async (t) => {
   assert.equal(h.apiCalls.at(-1).url, '/api/messages/44');
   assert.equal(h.apiCalls.at(-1).init.method, 'PATCH');
   assert.deepEqual(plain(h.apiCalls.at(-1).init.body), { text: 'new' });
+});
+
+test('composer history stores sent text per chat and skips consecutive duplicates', async (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+  const key = 'bananza:composerHistory:v1:1';
+
+  h.text.setComposerTextValue('first');
+  await h.send.sendMessage();
+  assert.deepEqual(JSON.parse(h.window.localStorage.getItem(key) || '{}'), { 1: ['first'] });
+
+  h.text.setComposerTextValue('first');
+  await h.send.sendMessage();
+  assert.deepEqual(JSON.parse(h.window.localStorage.getItem(key) || '{}'), { 1: ['first'] });
+
+  h.text.setComposerTextValue('second');
+  await h.send.sendMessage();
+  assert.deepEqual(JSON.parse(h.window.localStorage.getItem(key) || '{}'), { 1: ['first', 'second'] });
+
+  h.setCurrentChatId(2);
+  h.text.setComposerTextValue('chat two');
+  await h.send.sendMessage();
+  assert.deepEqual(JSON.parse(h.window.localStorage.getItem(key) || '{}'), {
+    1: ['first', 'second'],
+    2: ['chat two'],
+  });
+
+  h.state.setPendingFiles([{ name: 'only-file.txt', type: 'document' }]);
+  await h.send.sendMessage();
+  assert.deepEqual(JSON.parse(h.window.localStorage.getItem(key) || '{}'), {
+    1: ['first', 'second'],
+    2: ['chat two'],
+  });
+});
+
+test('composer history arrows navigate only from an empty input or active history', (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+  h.state.addComposerHistoryEntry(1, 'one');
+  h.state.addComposerHistoryEntry(1, 'two');
+  h.state.addComposerHistoryEntry(2, 'other chat');
+
+  h.text.setComposerTextValue('manual');
+  const manualUp = composerKey(h.window, 'ArrowUp');
+  assert.equal(h.text.handleComposerHistoryKeydown(manualUp, 1), false);
+  assert.equal(h.text.getComposerTextValue(), 'manual');
+  assert.equal(manualUp.defaultPrevented, false);
+
+  h.text.setComposerTextValue('');
+  const firstUp = composerKey(h.window, 'ArrowUp');
+  assert.equal(h.text.handleComposerHistoryKeydown(firstUp, 1), true);
+  assert.equal(h.text.getComposerTextValue(), 'two');
+  assert.equal(firstUp.defaultPrevented, true);
+
+  assert.equal(h.text.handleComposerHistoryKeydown(composerKey(h.window, 'ArrowUp'), 1), true);
+  assert.equal(h.text.getComposerTextValue(), 'one');
+
+  assert.equal(h.text.handleComposerHistoryKeydown(composerKey(h.window, 'ArrowUp'), 1), true);
+  assert.equal(h.text.getComposerTextValue(), 'one');
+
+  assert.equal(h.text.handleComposerHistoryKeydown(composerKey(h.window, 'ArrowDown'), 1), true);
+  assert.equal(h.text.getComposerTextValue(), 'two');
+
+  assert.equal(h.text.handleComposerHistoryKeydown(composerKey(h.window, 'ArrowDown'), 1), true);
+  assert.equal(h.text.getComposerTextValue(), '');
+  assert.equal(h.state.composerHistoryNavigation.index, null);
+
+  assert.equal(h.text.handleComposerHistoryKeydown(composerKey(h.window, 'ArrowDown'), 1), false);
+
+  assert.equal(h.text.handleComposerHistoryKeydown(composerKey(h.window, 'ArrowUp'), 2), true);
+  assert.equal(h.text.getComposerTextValue(), 'other chat');
+
+  h.text.setComposerTextValue('');
+  h.state.resetComposerHistoryNavigation();
+  assert.equal(h.text.handleComposerHistoryKeydown(composerKey(h.window, 'ArrowUp', { ctrlKey: true }), 1), false);
 });
 
 test('emoji picker opens, switches category, inserts emoji, and remembers recent', async (t) => {

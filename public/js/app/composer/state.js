@@ -33,12 +33,16 @@
     const opts = objectOrDefault(options);
     const storage = opts.storage || window.localStorage;
     const maxDraftLength = Math.max(1, Number(opts.maxDraftLength || opts.MAX_MSG || 4096) || 4096);
+    const maxHistoryEntries = Math.max(1, Number(opts.maxHistoryEntries || 50) || 50);
     const getCurrentUser = typeof opts.getCurrentUser === 'function' ? opts.getCurrentUser : () => null;
 
     let pendingFile = null;
     let pendingFiles = [];
     const composerDraftsByChatId = new Map();
     let composerDraftsLoadedForUserId = 0;
+    const composerHistoryByChatId = new Map();
+    let composerHistoryLoadedForUserId = 0;
+    let composerHistoryNavigation = { chatId: 0, index: null };
     let replyTo = null;
     let editTo = null;
     let typingSendTimeout = null;
@@ -103,6 +107,15 @@
     function getComposerDraftStorageKey(userId = getCurrentUser()?.id) {
       const id = Number(userId || 0);
       return Number.isFinite(id) && id > 0 ? `bananza:composerDrafts:v1:${id}` : '';
+    }
+
+    function getComposerHistoryStorageKey(userId = getCurrentUser()?.id) {
+      const id = Number(userId || 0);
+      return Number.isFinite(id) && id > 0 ? `bananza:composerHistory:v1:${id}` : '';
+    }
+
+    function normalizeComposerHistoryText(text) {
+      return String(text || '').trim().slice(0, maxDraftLength);
     }
 
     function persistComposerDrafts() {
@@ -174,6 +187,111 @@
       composerDraftsLoadedForUserId = 0;
     }
 
+    function persistComposerHistory() {
+      const key = getComposerHistoryStorageKey();
+      if (!key) return;
+      try {
+        if (!composerHistoryByChatId.size) {
+          storage.removeItem(key);
+          return;
+        }
+        const payload = {};
+        composerHistoryByChatId.forEach((entries, chatId) => {
+          const id = normalizeDraftChatId(chatId);
+          const cleanEntries = Array.isArray(entries)
+            ? entries.map(normalizeComposerHistoryText).filter(Boolean).slice(-maxHistoryEntries)
+            : [];
+          if (id && cleanEntries.length) payload[String(id)] = cleanEntries;
+        });
+        if (Object.keys(payload).length) storage.setItem(key, JSON.stringify(payload));
+        else storage.removeItem(key);
+      } catch (e) {}
+    }
+
+    function hydrateComposerHistoryForCurrentUser({ force = false } = {}) {
+      const userId = Number(getCurrentUser()?.id || 0);
+      if (!userId) return;
+      if (!force && composerHistoryLoadedForUserId === userId) return;
+      composerHistoryByChatId.clear();
+      composerHistoryLoadedForUserId = userId;
+      resetComposerHistoryNavigation();
+      const key = getComposerHistoryStorageKey(userId);
+      if (!key) return;
+      try {
+        const raw = JSON.parse(storage.getItem(key) || '{}');
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
+        Object.entries(raw).forEach(([chatId, entries]) => {
+          const id = normalizeDraftChatId(chatId);
+          if (!id || !Array.isArray(entries)) return;
+          const cleanEntries = entries.map(normalizeComposerHistoryText).filter(Boolean).slice(-maxHistoryEntries);
+          if (cleanEntries.length) composerHistoryByChatId.set(id, cleanEntries);
+        });
+      } catch (e) {
+        storage.removeItem(key);
+      }
+    }
+
+    function addComposerHistoryEntry(chatId, text) {
+      hydrateComposerHistoryForCurrentUser();
+      const id = normalizeDraftChatId(chatId);
+      const value = normalizeComposerHistoryText(text);
+      if (!id || !value) return getComposerHistoryEntries(id);
+      const entries = composerHistoryByChatId.get(id)?.slice() || [];
+      if (entries[entries.length - 1] === value) {
+        resetComposerHistoryNavigation();
+        return entries;
+      }
+      entries.push(value);
+      const nextEntries = entries.slice(-maxHistoryEntries);
+      composerHistoryByChatId.set(id, nextEntries);
+      resetComposerHistoryNavigation();
+      persistComposerHistory();
+      return nextEntries.slice();
+    }
+
+    function getComposerHistoryEntries(chatId) {
+      hydrateComposerHistoryForCurrentUser();
+      const id = normalizeDraftChatId(chatId);
+      return id ? (composerHistoryByChatId.get(id)?.slice() || []) : [];
+    }
+
+    function resetComposerHistoryNavigation() {
+      composerHistoryNavigation = { chatId: 0, index: null };
+      return composerHistoryNavigation;
+    }
+
+    function stepComposerHistory(chatId, direction) {
+      hydrateComposerHistoryForCurrentUser();
+      const id = normalizeDraftChatId(chatId);
+      const entries = getComposerHistoryEntries(id);
+      const delta = Number(direction || 0) < 0 ? -1 : 1;
+      if (!id || !entries.length) {
+        resetComposerHistoryNavigation();
+        return { handled: false, value: '', active: false, index: null };
+      }
+      const active = composerHistoryNavigation.chatId === id
+        && Number.isInteger(composerHistoryNavigation.index);
+      let nextIndex = active ? composerHistoryNavigation.index + delta : entries.length - 1;
+      if (delta > 0 && !active) return { handled: false, value: '', active: false, index: null };
+      if (nextIndex < 0) nextIndex = 0;
+      if (nextIndex >= entries.length) {
+        resetComposerHistoryNavigation();
+        return { handled: true, value: '', active: false, index: null };
+      }
+      composerHistoryNavigation = { chatId: id, index: nextIndex };
+      return { handled: true, value: entries[nextIndex] || '', active: true, index: nextIndex };
+    }
+
+    function resetComposerHistoryForCurrentUser({ removeStorage = false } = {}) {
+      if (removeStorage) {
+        const key = getComposerHistoryStorageKey();
+        if (key) storage.removeItem(key);
+      }
+      composerHistoryByChatId.clear();
+      composerHistoryLoadedForUserId = 0;
+      resetComposerHistoryNavigation();
+    }
+
     function resetMentionPickerState(patch = {}) {
       mentionPickerState = { ...createDefaultMentionPickerState(), ...objectOrDefault(patch) };
       return mentionPickerState;
@@ -191,13 +309,22 @@
       clearPendingFiles,
       normalizeComposerDraftChatId: normalizeDraftChatId,
       getComposerDraftStorageKey,
+      getComposerHistoryStorageKey,
       hydrateComposerDraftsForCurrentUser,
       persistComposerDrafts,
       saveComposerDraftValue,
       clearComposerDraft,
       getComposerDraft,
       resetComposerDraftsForCurrentUser,
+      hydrateComposerHistoryForCurrentUser,
+      persistComposerHistory,
+      addComposerHistoryEntry,
+      getComposerHistoryEntries,
+      stepComposerHistory,
+      resetComposerHistoryNavigation,
+      resetComposerHistoryForCurrentUser,
       composerDraftsByChatId,
+      composerHistoryByChatId,
       mentionTargetsByChat,
       getMentionPickerState: () => mentionPickerState,
       setMentionPickerState: (value) => {
@@ -229,6 +356,14 @@
       composerDraftsLoadedForUserId: {
         get: () => composerDraftsLoadedForUserId,
         set: (value) => { composerDraftsLoadedForUserId = Number(value || 0) || 0; },
+      },
+      composerHistoryLoadedForUserId: {
+        get: () => composerHistoryLoadedForUserId,
+        set: (value) => { composerHistoryLoadedForUserId = Number(value || 0) || 0; },
+      },
+      composerHistoryNavigation: {
+        get: () => composerHistoryNavigation,
+        set: (value) => { composerHistoryNavigation = objectOrDefault(value); },
       },
       replyTo: {
         get: () => replyTo,

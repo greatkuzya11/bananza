@@ -170,6 +170,23 @@
       return false;
     }
 
+    function handleComposerHistoryKeydown(e, chatId) {
+      const msgInput = getMsgInput();
+      if (!msgInput || !e || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return false;
+      if (e.shiftKey || e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return false;
+      const normalizeChatId = state.normalizeComposerDraftChatId || ((value) => Number(value || 0) || 0);
+      const id = normalizeChatId(chatId);
+      if (!id || typeof state.stepComposerHistory !== 'function') return false;
+      const navigation = state.composerHistoryNavigation || {};
+      const historyActive = navigation.chatId === id && Number.isInteger(navigation.index);
+      if (!historyActive && getComposerTextValue({ trim: true })) return false;
+      const result = state.stepComposerHistory(id, e.key === 'ArrowUp' ? -1 : 1);
+      if (!result?.handled) return false;
+      e.preventDefault();
+      setComposerTextValue(result.value || '');
+      return true;
+    }
+
     function handleComposerCustomEmojiBeforeInput(e) {
       const msgInput = getMsgInput();
       if (!msgInput) return false;
@@ -400,6 +417,7 @@
       insertDictatedText,
       deleteComposerCustomEmojiCluster,
       handleComposerCustomEmojiKeydown,
+      handleComposerHistoryKeydown,
       handleComposerCustomEmojiBeforeInput,
       snapComposerSelectionToCustomEmojiBoundary,
       getEmojiPickerInsertionValue,

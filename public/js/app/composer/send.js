@@ -109,6 +109,7 @@
           console.warn('[grok-image-risk] precheck failed:', error?.message || error);
         }
       }
+      if (messageText) state.addComposerHistoryEntry?.(currentChatId, messageText);
       text.animateSendButton?.();
       if (dom.msgInput) dom.msgInput.value = '';
       (actions.clearComposerDraft || noop)(currentChatId);
