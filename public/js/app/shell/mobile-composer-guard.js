@@ -148,7 +148,9 @@
     function getLockedMobileKeyboardViewportMetrics(viewport, keyboardLayoutActive, inputHeight = 0) {
       if (!keyboardLayoutActive) {
         resetMobileKeyboardDock();
-        return viewport;
+        const height = Math.max(0, Number(viewport?.height) || 0);
+        const top = Math.max(0, Number(viewport?.top) || 0);
+        return { ...viewport, top, height, bottom: top + height };
       }
 
       const height = Math.max(0, Number(viewport?.height) || 0);
@@ -171,9 +173,15 @@
         && Math.abs(heightDelta) <= 1
         && Math.abs(topDelta) > 1
         && Math.abs(bottomDelta - topDelta) <= 1;
+      const iosToolbarOnlyShift = isIosMobileViewportTarget()
+        && state.dockActive
+        && Math.abs(width - state.dockWidth) <= 48
+        && Math.abs(heightDelta) <= 1
+        && Math.abs(topDelta) > 1
+        && Math.abs(bottomDelta - topDelta) <= 1;
       const shouldResetDock = !state.dockActive
         || Math.abs(width - state.dockWidth) > 48
-        || (Math.abs(bottomDelta) > 48 && !inputDrivenBottomShrink && !inputDrivenBottomGrowth && !scrollOnlyViewportShift);
+        || (Math.abs(bottomDelta) > 48 && !inputDrivenBottomShrink && !inputDrivenBottomGrowth && !scrollOnlyViewportShift && !iosToolbarOnlyShift);
       const shouldAcceptSmallBottomChange = state.dockActive
         && Math.abs(bottomDelta) > 1
         && Math.abs(bottomDelta) <= 48
@@ -222,10 +230,12 @@
       root.classList.toggle('is-ios-chat-keyboard-layout', Boolean(isIosViewportFixTarget() && keyboardLayoutActive));
       root.style.setProperty('--mobile-visual-viewport-top', `${Math.round(viewport.top)}px`);
       root.style.setProperty('--mobile-visual-viewport-height', `${Math.round(viewport.height)}px`);
+      root.style.setProperty('--mobile-visual-viewport-bottom', `${Math.round(viewport.bottom)}px`);
       root.style.setProperty('--mobile-chat-header-height', `${headerHeight}px`);
       root.style.setProperty('--mobile-chat-input-area-height', `${inputHeight}px`);
       root.style.setProperty('--ios-visual-viewport-top', `${Math.round(viewport.top)}px`);
       root.style.setProperty('--ios-visual-viewport-height', `${Math.round(viewport.height)}px`);
+      root.style.setProperty('--ios-visual-viewport-bottom', `${Math.round(viewport.bottom)}px`);
       root.style.setProperty('--ios-chat-header-height', `${headerHeight}px`);
       root.style.setProperty('--ios-chat-input-area-height', `${inputHeight}px`);
       restoreMobileKeyboardDocumentScroll();
@@ -775,6 +785,10 @@
         iosChatKeyboardLayout: root?.classList.contains('is-ios-chat-keyboard-layout') || false,
         mobileViewportTop: root?.style.getPropertyValue('--mobile-visual-viewport-top') || '',
         mobileViewportHeight: root?.style.getPropertyValue('--mobile-visual-viewport-height') || '',
+        mobileViewportBottom: root?.style.getPropertyValue('--mobile-visual-viewport-bottom') || '',
+        iosViewportTop: root?.style.getPropertyValue('--ios-visual-viewport-top') || '',
+        iosViewportHeight: root?.style.getPropertyValue('--ios-visual-viewport-height') || '',
+        iosViewportBottom: root?.style.getPropertyValue('--ios-visual-viewport-bottom') || '',
         mobileInputHeight: root?.style.getPropertyValue('--mobile-chat-input-area-height') || '',
         appHeight: doc.getElementById('app')?.style?.height || '',
         dockActive: state.dockActive,

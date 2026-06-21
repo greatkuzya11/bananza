@@ -339,6 +339,21 @@ async function openMobileKeyboard(dom, input, { height = 420 } = {}) {
   await wait(dom, 30);
 }
 
+function setIosNavigator(window) {
+  Object.defineProperty(window.navigator, 'userAgent', {
+    configurable: true,
+    value: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+  });
+  Object.defineProperty(window.navigator, 'platform', {
+    configurable: true,
+    value: 'iPhone',
+  });
+  Object.defineProperty(window.navigator, 'maxTouchPoints', {
+    configurable: true,
+    value: 5,
+  });
+}
+
 function setWindowInnerHeight(dom, height) {
   Object.defineProperty(dom.window, 'innerHeight', {
     configurable: true,
@@ -1140,9 +1155,11 @@ async function openSingleChatDom({
   contextConvertAvailabilityByChatId = {},
   chatShotStateByChatId = {},
   loadContextRuntime = false,
+  beforeLoad = null,
 } = {}) {
   const chatId = Number(chat.id || 1);
   const dom = await bootAppDom({
+    beforeLoad,
     fetchHandler: createComposerInteractionFetchHandler({
       chatMessagesByChatId: chatMessagesByChatId || { [chatId]: [] },
       mentionTargetsByChatId,
@@ -1619,6 +1636,47 @@ test('Android-style resized viewport keeps the mobile composer docked to the key
   assert.equal(snapshot.appHeight, '420px');
   assert.equal(snapshot.mobileViewportHeight, '420px');
   assert.equal(app.style.height, '420px');
+});
+
+test('iOS visual viewport offset keeps the mobile composer docked to stable keyboard bottom', async (t) => {
+  const dom = await openSingleChatDom({
+    beforeLoad: ({ window }) => setIosNavigator(window),
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const root = document.documentElement;
+  const app = document.getElementById('app');
+  const msgInput = document.getElementById('msgInput');
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+
+  msgInput.focus();
+  dom.visualViewportMock.setAndDispatch('resize', { height: 430, offsetTop: 64 });
+  await wait(dom, 80);
+
+  let snapshot = BananzaAppBridge.__testing.getMobileKeyboardDockSnapshot();
+  assert.equal(root.classList.contains('is-ios-webkit'), true);
+  assert.equal(snapshot.keyboardOpen, true);
+  assert.equal(snapshot.chatKeyboardLayout, true);
+  assert.equal(snapshot.iosKeyboardOpen, true);
+  assert.equal(snapshot.iosChatKeyboardLayout, true);
+  assert.equal(snapshot.iosViewportTop, '64px');
+  assert.equal(snapshot.iosViewportHeight, '430px');
+  assert.equal(snapshot.iosViewportBottom, '494px');
+  assert.equal(app.style.height, '494px');
+
+  dom.visualViewportMock.setAndDispatch('scroll', { height: 430, offsetTop: 128 });
+  await wait(dom, 80);
+
+  snapshot = BananzaAppBridge.__testing.getMobileKeyboardDockSnapshot();
+  assert.equal(snapshot.iosViewportTop, '64px');
+  assert.equal(snapshot.iosViewportHeight, '430px');
+  assert.equal(snapshot.iosViewportBottom, '494px');
+  assert.equal(root.style.getPropertyValue('--mobile-visual-viewport-bottom'), '494px');
+  assert.equal(app.style.height, '494px');
 });
 
 test('mobile composer vertical drag is swallowed while the keyboard is open', async (t) => {

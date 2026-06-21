@@ -12,10 +12,12 @@
   --chat-bg-stable-height: 100vh;
   --mobile-visual-viewport-top: 0px;
   --mobile-visual-viewport-height: 100vh;
+  --mobile-visual-viewport-bottom: var(--mobile-visual-viewport-height);
   --mobile-chat-header-height: 0px;
   --mobile-chat-input-area-height: 0px;
   --ios-visual-viewport-top: var(--mobile-visual-viewport-top);
   --ios-visual-viewport-height: var(--mobile-visual-viewport-height);
+  --ios-visual-viewport-bottom: var(--mobile-visual-viewport-bottom);
   --ios-chat-header-height: var(--mobile-chat-header-height);
   --ios-chat-input-area-height: var(--mobile-chat-input-area-height);
   --bg-dark: #0e1621;
@@ -7862,6 +7864,16 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
     backface-visibility: hidden;
     -webkit-backface-visibility: hidden;
     overscroll-behavior: contain;
+  }
+  html.is-ios-chat-keyboard-layout #chatView {
+    padding-top: calc(var(--ios-visual-viewport-top) + var(--ios-chat-header-height));
+    padding-bottom: var(--ios-chat-input-area-height);
+  }
+  html.is-ios-chat-keyboard-layout #chatView .chat-header {
+    top: var(--ios-visual-viewport-top);
+  }
+  html.is-ios-chat-keyboard-layout #chatView .input-area {
+    top: calc(var(--ios-visual-viewport-bottom) - var(--ios-chat-input-area-height));
   }
   html.is-mobile-chat-keyboard-layout .emoji-picker,
   html.is-mobile-chat-keyboard-layout .emoji-grid,
