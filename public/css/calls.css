@@ -2248,14 +2248,29 @@ html[data-visual-mode="rich"] .call-admin-status {
   }
 
   .call-controls {
-    gap: 8px;
-    padding: 10px;
+    --call-mobile-control-size: clamp(30px, calc((100% - 28px) / 8), var(--call-control-height));
+    flex-wrap: nowrap;
+    gap: 4px;
+    padding:
+      8px max(4px, env(safe-area-inset-right))
+      calc(8px + env(safe-area-inset-bottom))
+      max(4px, env(safe-area-inset-left));
   }
 
+  .call-controls .call-control-btn,
+  .call-controls .call-icon-toggle,
   .call-controls .call-tool-btn {
-    width: var(--call-control-height);
-    min-width: var(--call-control-height);
+    flex: 0 0 var(--call-mobile-control-size);
+    width: var(--call-mobile-control-size);
+    height: var(--call-mobile-control-size);
+    min-width: 0;
+    min-height: var(--call-mobile-control-size);
     padding: 0;
+  }
+
+  .call-controls .call-icon {
+    width: clamp(17px, calc(var(--call-mobile-control-size) * .52), 22px);
+    height: clamp(17px, calc(var(--call-mobile-control-size) * .52), 22px);
   }
 
   .call-controls .call-tool-btn .call-control-label {

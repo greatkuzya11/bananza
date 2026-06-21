@@ -8,6 +8,7 @@ const { repoRoot } = require('../support/paths');
 
 const indexHtml = fs.readFileSync(path.join(repoRoot, 'public', 'index.html'), 'utf8');
 const styleCss = fs.readFileSync(path.join(repoRoot, 'public', 'css', 'style.css'), 'utf8');
+const callsCss = fs.readFileSync(path.join(repoRoot, 'public', 'css', 'calls.css'), 'utf8');
 const documentEditorBundleJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'document-editor.bundle.js'), 'utf8');
 const documentsJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'app', 'documents.js'), 'utf8');
 const contextChatShotRuntimeJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'app', 'ai-admin', 'context-chatshot-runtime.js'), 'utf8');
@@ -25,7 +26,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
 
   assert.deepEqual(styles, [
     '/css/style.css?v=20260620-doc-image-handles1',
-    '/css/calls.css?v=20260509-call-modal-surface',
+    '/css/calls.css?v=20260621-call-mobile-controls',
     '/css/voice.css',
     '/css/video-notes.css',
   ]);
@@ -550,6 +551,12 @@ test('document editor bundle exposes v2 rich editing and document image insertio
   assert.match(styleCss, /@media\s*\(hover:\s*none\),\s*\(pointer:\s*coarse\)\s*\{[\s\S]*\.document-image-node\.is-resize-handles-visible \.document-image-resize-handle,[\s\S]*display\s*:\s*block/s);
   assert.doesNotMatch(styleCss, /@media\s*\(hover:\s*none\),\s*\(pointer:\s*coarse\)\s*\{[\s\S]*\.document-image-node \.document-image-resize-handle\s*\{[^}]*display\s*:\s*block/s);
   assert.doesNotMatch(styleCss, /\.document-image-mini-toolbar\s*\{/);
+});
+
+test('calls.css keeps active mobile call controls in one compact row', () => {
+  assert.match(callsCss, /@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*\.call-controls\s*\{[^}]*--call-mobile-control-size\s*:\s*clamp\(30px,\s*calc\(\(100%\s*-\s*28px\)\s*\/\s*8\),\s*var\(--call-control-height\)\)[^}]*flex-wrap\s*:\s*nowrap[^}]*gap\s*:\s*4px/s);
+  assert.match(callsCss, /@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*\.call-controls \.call-control-btn,\s*\.call-controls \.call-icon-toggle,\s*\.call-controls \.call-tool-btn\s*\{[^}]*flex\s*:\s*0 0 var\(--call-mobile-control-size\)[^}]*width\s*:\s*var\(--call-mobile-control-size\)[^}]*height\s*:\s*var\(--call-mobile-control-size\)[^}]*min-width\s*:\s*0[^}]*min-height\s*:\s*var\(--call-mobile-control-size\)[^}]*padding\s*:\s*0/s);
+  assert.match(callsCss, /@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*\.call-controls \.call-icon\s*\{[^}]*width\s*:\s*clamp\(17px,\s*calc\(var\(--call-mobile-control-size\) \* \.52\),\s*22px\)[^}]*height\s*:\s*clamp\(17px,\s*calc\(var\(--call-mobile-control-size\) \* \.52\),\s*22px\)/s);
 });
 
 test('style.css clamps New Chat folder selection rows to compact previews', () => {
