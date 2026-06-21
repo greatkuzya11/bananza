@@ -161,6 +161,34 @@
     return Number(bridge()?.getCurrentChatId?.() || 0);
   }
 
+  async function openHostChatForCall(call) {
+    if (state.externalMode) return false;
+    const chatId = Number(call?.chat_id || call?.chatId || 0);
+    if (!chatId || chatId === currentChatId()) return false;
+    const app = bridge();
+    const openFromPush = app?.openChatFromPush;
+    const openDirect = app?.openChat;
+    let firstError = null;
+    try {
+      if (typeof openFromPush === 'function') {
+        await openFromPush(chatId);
+        return true;
+      }
+    } catch (error) {
+      firstError = error;
+    }
+    try {
+      if (typeof openDirect === 'function') {
+        await openDirect(chatId);
+        return true;
+      }
+    } catch (error) {
+      firstError = error;
+    }
+    if (firstError) console.warn('[calls] could not open host chat:', firstError?.message || firstError);
+    return false;
+  }
+
   function currentUser() {
     if (state.externalMode) {
       return {
@@ -1035,6 +1063,8 @@
   async function joinVoiceCallDirectly(call) {
     if (!call?.id) return;
     ensureUi();
+    await openHostChatForCall(call);
+    recoverHostChatViewport('call_prejoin_open');
     if (isCurrentCall(call) && state.room) return revealCurrentCallSurface();
     state.pendingJoinCall = normalizeClientCall(call, {
       forceVoice: true,
@@ -1518,6 +1548,7 @@
   async function openPrejoin(call, options = {}) {
     if (!call?.id) return;
     ensureUi();
+    if (options.mode !== 'devices') await openHostChatForCall(call);
     recoverHostChatViewport('call_prejoin_open');
     state.pendingJoinCall = call;
     state.prejoinMode = options.mode || 'join';

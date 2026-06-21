@@ -1194,6 +1194,8 @@ test('final boot loads runtime scripts, keeps bridge helpers, dispatches ready o
   assert.ok(dom.window.BananzaAppBridge);
   assert.equal(typeof dom.window.BananzaAppBridge.api, 'function');
   assert.equal(typeof dom.window.BananzaAppBridge.getCurrentUser, 'function');
+  assert.equal(typeof dom.window.BananzaAppBridge.openChat, 'function');
+  assert.equal(typeof dom.window.BananzaAppBridge.openChatFromPush, 'function');
   assert.equal(typeof dom.window.BananzaAppBridge.openAiBotSettingsModal, 'function');
   assert.equal(typeof dom.window.BananzaAppBridge.__testing.openChat, 'function');
   assert.equal(typeof dom.window.BananzaAppBridge.__testing.normalizeContextConvertAvailability, 'function');

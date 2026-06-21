@@ -39,20 +39,36 @@ function installCallBridge(dom, state) {
   const { document, window } = dom.window;
   state.requests = [];
   state.viewportRecoveries = [];
+  state.openedChats = [];
+  state.chats = Array.isArray(state.chats) && state.chats.length ? state.chats : [state.chat];
+  const chatById = (chatId) => state.chats.find((chat) => Number(chat.id || 0) === Number(chatId || 0)) || null;
+  const setCurrentChat = (chatId) => {
+    const chat = chatById(chatId) || state.chat;
+    state.currentChat = chat;
+    state.currentChatId = Number(chat?.id || chatId || 0) || state.chat.id;
+    return chat;
+  };
+  setCurrentChat(state.currentChatId || state.currentChat?.id || state.chat.id);
   window.BananzaAppBridge = {
     api: async (url, opts = {}) => {
       state.requests.push({ url, opts });
       if (url === '/api/features') return state.features;
       if (url === '/api/calls/active') return { settings: state.features, calls: state.activeCalls || [] };
-      if (url === `/api/chats/${state.chat.id}/calls/active`) return { call: state.chatCall || null };
-      if (url === `/api/chats/${state.chat.id}/calls` && opts.method === 'POST') {
+      if (/^\/api\/chats\/\d+\/calls\/active$/.test(url)) {
+        const chatId = Number(url.match(/^\/api\/chats\/(\d+)\/calls\/active$/)?.[1] || 0);
+        const call = Number(state.chatCall?.chat_id || state.chatCall?.chatId || 0) === chatId ? state.chatCall : null;
+        return { call };
+      }
+      if (/^\/api\/chats\/\d+\/calls$/.test(url) && opts.method === 'POST') {
+        const chatId = Number(url.match(/^\/api\/chats\/(\d+)\/calls$/)?.[1] || 0);
+        const chat = chatById(chatId) || state.chat;
         state.startedCallPayload = opts.body || {};
         const mediaKind = state.startedCallPayload.media_kind || 'video';
-        const roomMode = mediaKind === 'voice' && state.chat.type === 'group' ? 'room' : 'ringing';
+        const roomMode = mediaKind === 'voice' && chat.type === 'group' ? 'room' : 'ringing';
         state.chatCall = state.createdCall || {
           id: 120,
-          chat_id: state.chat.id,
-          chat_name: state.chat.name,
+          chat_id: chat.id,
+          chat_name: chat.name,
           media_kind: mediaKind,
           room_mode: roomMode,
           participant_count: 0,
@@ -121,7 +137,7 @@ function installCallBridge(dom, state) {
         const endedCall = {
           ...(state.chatCall || {}),
           id: endedCallId || state.chatCall?.id,
-          chat_id: state.chat.id,
+          chat_id: state.chatCall?.chat_id || state.chat.id,
           status: 'ended',
         };
         if (Number(state.chatCall?.id || 0) === Number(endedCall.id || 0)) state.chatCall = endedCall;
@@ -133,9 +149,17 @@ function installCallBridge(dom, state) {
     },
     applyLocalizedDom: () => {},
     closeManagedModal: (id) => document.getElementById(id)?.classList.add('hidden'),
-    getCurrentChat: () => state.chat,
-    getCurrentChatId: () => state.chat.id,
+    getCurrentChat: () => state.currentChat || state.chat,
+    getCurrentChatId: () => state.currentChatId || state.chat.id,
     getCurrentUser: () => state.user,
+    openChat: async (chatId, options = {}) => {
+      state.openedChats.push({ method: 'openChat', chatId: Number(chatId || 0), options });
+      setCurrentChat(chatId);
+    },
+    openChatFromPush: async (chatId) => {
+      state.openedChats.push({ method: 'openChatFromPush', chatId: Number(chatId || 0) });
+      setCurrentChat(chatId);
+    },
     openManagedModal: (id) => document.getElementById(id)?.classList.remove('hidden'),
     registerManagedModal: () => {},
     recoverChatViewportLayout: (options = {}) => {
@@ -489,6 +513,105 @@ test('CallFeature shows and declines incoming call overlay', async (t) => {
   await waitForCondition(dom.window, () => state.requests.some((request) => request.url === '/api/calls/91/decline'));
   await waitForCondition(dom.window, () => incoming.classList.contains('hidden'));
   assert.equal(incoming.classList.contains('hidden'), true);
+});
+
+test('CallFeature opens the host chat before accepting an incoming video call', async (t) => {
+  const callChat = {
+    id: 52,
+    type: 'private',
+    name: 'Carol',
+    is_notes: 0,
+    private_user: { id: 3, display_name: 'Carol', is_ai_bot: 0 },
+  };
+  const state = defaultState({
+    chats: [
+      defaultState().chat,
+      callChat,
+    ],
+    features: {
+      calls_enabled: true,
+      livekit_ready: true,
+      allow_private_calls: true,
+      allow_group_calls: true,
+      ring_timeout_ms: 60000,
+    },
+  });
+  const dom = await bootCallFeature(state);
+  t.after(() => dom.window.close());
+
+  const call = {
+    id: 191,
+    chat_id: callChat.id,
+    chat_name: callChat.name,
+    media_kind: 'video',
+    room_mode: 'ringing',
+    started_by: 3,
+    started_by_name: 'Carol',
+    status: 'active',
+  };
+  dom.window.BananzaCallHooks.handleWSMessage({ type: 'call_invite', call });
+  dom.window.document.getElementById('callAcceptBtn').click();
+
+  await waitForCondition(dom.window, () => state.openedChats.length > 0);
+  await waitForCondition(dom.window, () => !dom.window.document.getElementById('callPrejoin').classList.contains('hidden'));
+
+  assert.deepEqual(state.openedChats[0], { method: 'openChatFromPush', chatId: callChat.id });
+  assert.equal(state.currentChatId, callChat.id);
+  assert.equal(dom.window.document.getElementById('callPrejoinTitle').textContent, callChat.name);
+});
+
+test('CallFeature opens the host chat before accepting an incoming voice call', async (t) => {
+  const callChat = {
+    id: 53,
+    type: 'private',
+    name: 'Dima',
+    is_notes: 0,
+    private_user: { id: 4, display_name: 'Dima', is_ai_bot: 0 },
+  };
+  const call = {
+    id: 192,
+    chat_id: callChat.id,
+    chat_name: callChat.name,
+    media_kind: 'voice',
+    room_mode: 'ringing',
+    participant_count: 1,
+    started_by: 4,
+    started_by_name: 'Dima',
+    status: 'active',
+    participants: [
+      { user_id: 1, display_name: 'Alice', username: 'alice', state: 'invited' },
+      { user_id: 4, display_name: 'Dima', username: 'dima', state: 'joined' },
+    ],
+  };
+  const state = defaultState({
+    chats: [
+      defaultState().chat,
+      callChat,
+    ],
+    chatCall: call,
+    features: {
+      calls_enabled: true,
+      livekit_ready: true,
+      allow_private_calls: true,
+      allow_group_calls: true,
+      ring_timeout_ms: 60000,
+    },
+  });
+  const dom = await bootCallFeature(state);
+  t.after(() => dom.window.close());
+  const roomState = installMockLiveKitRoom(dom);
+
+  dom.window.BananzaCallHooks.handleWSMessage({ type: 'call_invite', call });
+  dom.window.document.getElementById('callAcceptBtn').click();
+
+  await waitForCondition(dom.window, () => state.openedChats.length > 0);
+  await waitForCondition(dom.window, () => roomState.isConnected());
+  await waitForCondition(dom.window, () => state.requests.some((request) => request.url === '/api/calls/192/joined'));
+
+  assert.deepEqual(state.openedChats[0], { method: 'openChatFromPush', chatId: callChat.id });
+  assert.equal(state.currentChatId, callChat.id);
+  assert.equal(dom.window.document.getElementById('callSurface').classList.contains('hidden'), false);
+  assert.ok(state.viewportRecoveries.some((item) => item.reason === 'call_prejoin_open'));
 });
 
 test('CallFeature lets the call initiator end a call from video prejoin', async (t) => {

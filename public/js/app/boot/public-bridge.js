@@ -10,6 +10,8 @@
       getToken: () => ctx?.services?.auth?.getToken?.() || '',
       getCurrentUser: () => ctx?.services?.auth?.getCurrentUser?.() || null,
       getCurrentChatId: () => ctx?.state?.getCurrentChatId?.() || ctx?.state?.currentChatId || null,
+      openChat: (chatId, options = {}) => ctx?.services?.openChat?.openChat?.(chatId, options),
+      openChatFromPush: (chatId) => ctx?.services?.openChat?.openChatFromPush?.(chatId),
       recoverChatViewportLayout: (options) => ctx?.actions?.recoverChatViewportLayout?.(options) || false,
     };
     return root.createBridge
@@ -51,6 +53,8 @@
         getCurrentUser: () => currentUser,
         getCurrentChatId: () => currentChatId,
         getCurrentChat: () => getChatById(currentChatId) ? { ...getChatById(currentChatId) } : null,
+        openChat: (chatId, options = {}) => openChat(chatId, options),
+        openChatFromPush: (chatId) => openChatFromPush(chatId),
         isIosWebkit: () => isIosViewportFixTarget,
         getCurrentModalAnimation: () => currentModalAnimation,
         getCurrentModalAnimationSpeed: () => currentModalAnimationSpeed,

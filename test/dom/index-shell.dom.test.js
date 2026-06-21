@@ -25,7 +25,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
   const scripts = [...document.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
 
   assert.deepEqual(styles, [
-    '/css/style.css?v=20260620-doc-image-handles1',
+    '/css/style.css?v=20260621-ios-keyboard1',
     '/css/calls.css?v=20260621-call-mobile-controls',
     '/css/voice.css',
     '/css/video-notes.css',
@@ -54,7 +54,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/android-bridge.js?v=20260531-dom-mobile-shell',
     '/js/app/mobile-viewport.js?v=20260531-dom-mobile-shell',
     '/js/app/chat-header-actions.js?v=20260531-dom-mobile-shell',
-    '/js/app/shell/mobile-composer-guard.js?v=20260601-shell-events',
+    '/js/app/shell/mobile-composer-guard.js?v=20260621-ios-keyboard1',
     '/js/app/shell/events.js?v=20260614-doc-settings1',
     '/js/app/shell/ui-runtime.js?v=20260614-doc-bugfix1',
     '/js/app/shell/shell-runtime.js?v=20260614-doc-settings1',
@@ -127,7 +127,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/boot/composition/interactions-composition.js?v=20260601-feature-composition-final',
     '/js/app/boot/feature-composition.js?v=20260601-runtime-final',
     '/js/app/boot/events.js?v=20260531-runtime-split',
-    '/js/app/boot/public-bridge.js?v=20260601-runtime-final',
+    '/js/app/boot/public-bridge.js?v=20260621-call-nav',
     '/js/app/boot/chat-list-service.js?v=20260531-runtime-split',
     '/js/app/boot/open-chat-service.js?v=20260601-open-chat-service',
     '/js/app/boot/messages-service.js?v=20260601-messages-service',
@@ -139,7 +139,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/calls/CallStore.js?v=20260509-call-modal-surface',
     '/js/calls/CallMedia.js?v=20260509-call-modal-surface',
     '/js/calls/CallNotifications.js?v=20260509-call-modal-surface',
-    '/js/calls/CallFeature.js?v=20260614-doc-settings1',
+    '/js/calls/CallFeature.js?v=20260621-call-nav',
     '/js/video-notes/video-note-shapes.js',
     '/js/video-notes/VideoShapeRegistry.js',
     '/js/video-notes/AudioNoteRecorderAdapter.js',
