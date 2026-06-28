@@ -4,6 +4,70 @@ const {
   normalizeReactionKey,
 } = require('./reactionKeys');
 
+const POLL_STYLES = new Set(['pulse', 'stack', 'orbit']);
+const POLL_CLOSE_PRESET_MINUTES = [
+  ['1h', 60],
+  ['4h', 4 * 60],
+  ['24h', 24 * 60],
+  ['3d', 3 * 24 * 60],
+  ['7d', 7 * 24 * 60],
+];
+
+function hasOwn(value, key) {
+  return Object.prototype.hasOwnProperty.call(value || {}, key);
+}
+
+function boolArg(args, key, fallback = false) {
+  return hasOwn(args, key) ? Boolean(args[key]) : fallback;
+}
+
+function normalizePollStyle(value) {
+  const style = String(value || '').trim().toLowerCase();
+  return POLL_STYLES.has(style) ? style : 'pulse';
+}
+
+function stylePatchFromText(text = '') {
+  const source = String(text || '');
+  const match = source.match(/(?:\bstyle\b|\bdesign\b|\bview\b|\u0441\u0442\u0438\u043b\u044c?|\u0434\u0438\u0437\u0430\u0439\u043d|\u0432\u0438\u0434)\s*[:=\-\u2013\u2014]?\s*(pulse|stack|orbit)\b/i);
+  const style = normalizePollStyle(match?.[1] || '');
+  return style === 'pulse' ? {} : { style };
+}
+
+function textHasNonAnonymousVisibility(text = '') {
+  const source = String(text || '');
+  return /(?:\bnot\s+anonymous\b|\bnon[-\s]?anonymous\b|\u043d\u0435\s+\u0430\u043d\u043e\u043d\u0438\u043c|\u043d\u0435\u0430\u043d\u043e\u043d\u0438\u043c)/i.test(source);
+}
+
+function textHasAnonymousVisibility(text = '') {
+  const source = String(text || '');
+  return [
+    /\b(?:anonymous|anonymously|private\s+voters?|private\s+votes?|hidden\s+voters?)\b/i,
+    /\b(?:hide|hidden|do\s+not\s+show|don't\s+show|dont\s+show)\s+(?:who\s+voted|voters?|votes?)\b/i,
+    /(?:\u0430\u043d\u043e\u043d\u0438\u043c|\u0430\u043d\u043e\u043d\u0438\u043c\u043d)/i,
+    /(?:\u043d\u0435\s+\u043f\u043e\u043a\u0430\u0437[\u0430-\u044f\u0451]*|\u0441\u043a\u0440\u044b[\u0430-\u044f\u0451]*)\s+(?:\u043a\u0442\u043e\s+\u0433\u043e\u043b\u043e\u0441[\u0430-\u044f\u0451]*|\u0433\u043e\u043b\u043e\u0441\u043e\u0432\u0430\u0432[\u0430-\u044f\u0451]*|\u0433\u043e\u043b\u043e\u0441\u0430)/i,
+  ].some((pattern) => pattern.test(source));
+}
+
+function detectShowVotersFromText(text = '') {
+  if (textHasNonAnonymousVisibility(text)) return true;
+  if (textHasAnonymousVisibility(text)) return false;
+  return true;
+}
+
+function detectAllowsMultipleFromText(text = '') {
+  return /(?:multiple|multi[- ]?choice|multi|\u043d\u0435\u0441\u043a\u043e\u043b\u044c\u043a|\u043c\u043d\u043e\u0436\u0435\u0441\u0442\u0432|\u043c\u0443\u043b\u044c\u0442\u0438|\u0431\u043e\u043b\u044c\u0448\u0435\s+\u043e\u0434\u043d\u043e\u0433\u043e)/i.test(String(text || ''));
+}
+
+function detectPinAfterCreateFromText(text = '') {
+  return /(?:\bpin\b|\u0437\u0430\u043a\u0440\u0435\u043f|\u0437\u0430\u043f\u0438\u043d)/i.test(String(text || ''));
+}
+
+function stripPollOptionParameterTail(value = '') {
+  return String(value || '')
+    .replace(/\s*(?:[.;]|\s)(?:\u043f\u0430\u0440\u0430\u043c\u0435\u0442\u0440[\u0430-\u044f\u0451]*|anonymous|anonymously|\u0430\u043d\u043e\u043d\u0438\u043c[\u0430-\u044f\u0451]*|public\s+voters?|visible\s+voters?|\u043f\u043e\u043a\u0430\u0437[\u0430-\u044f\u0451]*\s+\u043a\u0442\u043e|\u043d\u0435\s+\u043f\u043e\u043a\u0430\u0437[\u0430-\u044f\u0451]*|timer|\u0442\u0430\u0439\u043c\u0435\u0440|\u0437\u0430\u043a\u0440\u044b[\u0430-\u044f\u0451]*\s+\u0447\u0435\u0440\u0435\u0437|auto[- ]?close|\u0430\u0432\u0442\u043e\u0437\u0430\u043a\u0440[\u0430-\u044f\u0451]*|style|\u0441\u0442\u0438\u043b\u044c?|design|\u0434\u0438\u0437\u0430\u0439\u043d)(?=$|\s|[:=,\-\u2013\u2014])[\s\S]*$/i, '')
+    .trim();
+}
+
 function tryParseJsonObject(text, fallback = null) {
   if (!text) return fallback;
   try {
@@ -147,7 +211,26 @@ function normalizeClosePreset(value) {
   if (!text || text === 'null' || text === 'none' || text === 'open-ended' || text === 'open_ended' || text === 'openended' || text === 'open') {
     return null;
   }
+  const presetMatch = text.match(/^(1h|4h|24h|3d|7d)$/i);
+  if (presetMatch) return presetMatch[1].toLowerCase();
   return text;
+}
+
+function closePresetForMinutes(minutes) {
+  const total = Number(minutes);
+  if (!Number.isFinite(total) || total <= 0) return null;
+  const preset = POLL_CLOSE_PRESET_MINUTES.find((entry) => total <= entry[1]);
+  return preset ? preset[0] : '7d';
+}
+
+function durationMinutesFromMatch(match) {
+  const amount = Number(String(match?.[1] || '').replace(',', '.'));
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const unit = String(match?.[2] || '').toLowerCase();
+  if (/^(?:m|min|mins|minute|minutes|\u043c|\u043c\u0438\u043d|\u043c\u0438\u043d\u0443\u0442)/i.test(unit)) return amount;
+  if (/^(?:h|hr|hrs|hour|hours|\u0447|\u0447\u0430\u0441)/i.test(unit)) return amount * 60;
+  if (/^(?:d|day|days|\u0434|\u0434\u043d|\u0434\u0435\u043d\u044c)/i.test(unit)) return amount * 24 * 60;
+  return null;
 }
 
 function parseActionCall(name, args = {}) {
@@ -157,9 +240,10 @@ function parseActionCall(name, args = {}) {
       type,
       question: String(args.question || args.text || '').trim(),
       options: Array.isArray(args.options) ? args.options.map((item) => String(item || '').trim()).filter(Boolean) : [],
-      allows_multiple: Boolean(args.allows_multiple),
-      show_voters: Boolean(args.show_voters),
+      allows_multiple: boolArg(args, 'allows_multiple', false),
+      show_voters: boolArg(args, 'show_voters', true),
       close_preset: normalizeClosePreset(args.close_preset),
+      ...(hasOwn(args, 'style') ? { style: normalizePollStyle(args.style) } : {}),
       pin_after_create: Boolean(args.pin_after_create),
     };
   }
@@ -221,17 +305,20 @@ function parsePollSummaryAction(text = '') {
   const typeMatch = metadata.match(/\btype\s*=\s*([^;]+)/i);
   const visibilityMatch = metadata.match(/\bvisibility\s*=\s*([^;]+)/i);
   const deadlineMatch = metadata.match(/\bdeadline\s*=\s*([^;]+)/i);
+  const styleMatch = metadata.match(/\bstyle\s*=\s*([^;]+)/i);
   const typeText = String(typeMatch?.[1] || '').trim().toLowerCase();
   const visibilityText = String(visibilityMatch?.[1] || '').trim().toLowerCase();
   const deadlineText = String(deadlineMatch?.[1] || '').trim().toLowerCase();
+  const styleText = String(styleMatch?.[1] || '').trim().toLowerCase();
 
   return {
     type: 'create_poll',
     question,
     options: uniqueOptions,
     allows_multiple: typeText.includes('multiple'),
-    show_voters: visibilityText.includes('public'),
+    show_voters: detectShowVotersFromText(visibilityText),
     close_preset: normalizeClosePreset(deadlineText),
+    ...(normalizePollStyle(styleText) === 'pulse' ? {} : { style: normalizePollStyle(styleText) }),
     pin_after_create: false,
   };
 }
@@ -276,11 +363,15 @@ function containsVoteIntent(text = '') {
 function detectClosePresetFromText(text = '') {
   const source = String(text || '').toLowerCase();
   if (!source) return null;
-  if (/(?:open-ended|open ended|без\s+дедлайна|без\s+срока|без\s+сроков|no\s+deadline|no\s+due\s+date|no\s+closing)/i.test(source)) {
+  if (/(?:open-ended|open ended|no\s+deadline|no\s+due\s+date|no\s+closing|\u0431\u0435\u0437\s+\u0434\u0435\u0434\u043b\u0430\u0439\u043d\u0430|\u0431\u0435\u0437\s+\u0441\u0440\u043e\u043a\u0430|\u0431\u0435\u0437\s+\u0441\u0440\u043e\u043a\u043e\u0432|\u0431\u0435\u0437\s+\u0442\u0430\u0439\u043c\u0435\u0440\u0430)/i.test(source)) {
     return null;
   }
   const presetMatch = source.match(/\b(1h|4h|24h|3d|7d)\b/i);
-  return normalizeClosePreset(presetMatch?.[1] || null);
+  if (presetMatch?.[1]) return normalizeClosePreset(presetMatch[1]);
+  const hasTimerCue = /(?:close|closing|deadline|timer|auto[- ]?close|\u0447\u0435\u0440\u0435\u0437|\u0442\u0430\u0439\u043c\u0435\u0440|\u0437\u0430\u043a\u0440\u044b|\u0430\u0432\u0442\u043e\u0437\u0430\u043a\u0440)/i.test(source);
+  if (!hasTimerCue) return null;
+  const durationMatch = source.match(/(\d+(?:[.,]\d+)?)\s*(minutes?|mins?|min|m|hours?|hrs?|hr|h|days?|d|\u043c\u0438\u043d\u0443\u0442[\u0430-\u044f\u0451]*|\u043c\u0438\u043d|\u043c|\u0447\u0430\u0441[\u0430-\u044f\u0451]*|\u0447|\u0434\u043d[\u0430-\u044f\u0451]*|\u0434\u0435\u043d\u044c|\u0434\u043d\u0435\u0439|\u0434)/i);
+  return closePresetForMinutes(durationMinutesFromMatch(durationMatch));
 }
 
 function parseQuotedVoteAction(text = '') {
@@ -324,32 +415,33 @@ function parseQuotedPollAction(text = '') {
     type: 'create_poll',
     question,
     options,
-    allows_multiple: /(?:multiple|multi[- ]?choice|нескольк|мульти)/i.test(source),
-    show_voters: /(?:public\s+voters|public\s+votes|visible\s+voters|публичн(?:ые|ых)?\s+голос|видн(?:ы|ые)\s+голос)/i.test(source),
+    allows_multiple: detectAllowsMultipleFromText(source),
+    show_voters: detectShowVotersFromText(source),
     close_preset: detectClosePresetFromText(source),
-    pin_after_create: /(?:pin|закреп)/i.test(source),
+    ...stylePatchFromText(source),
+    pin_after_create: detectPinAfterCreateFromText(source),
   };
 }
 
 function cleanLooseOption(value = '') {
-  return String(value || '')
-    .replace(/^[\s,;:.\-–—]+/, '')
-    .replace(/[\s,;:.\-–—]+$/, '')
-    .replace(/^(?:варианты?|options?|choices?)\s*[:\-–—]?\s*/i, '')
+  return stripPollOptionParameterTail(value)
+    .replace(/^[\s,;:.\-\u2013\u2014/]+/, '')
+    .replace(/[\s,;:.\-\u2013\u2014/]+$/, '')
+    .replace(/^(?:\u0432\u0430\u0440\u0438\u0430\u043d\u0442[\u0430-\u044f\u0451]*|options?|choices?)\s*[:\-\u2013\u2014]?\s*/i, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
 function splitLooseOptions(value = '') {
-  const source = cleanLooseOption(value);
+  const source = stripPollOptionParameterTail(value).trim();
   if (!source) return [];
   let parts = [];
-  if (/[;,]/.test(source)) {
-    parts = source.split(/\s*[,;]\s*/);
-  } else if (/\s+(?:или|or)\s+/i.test(source)) {
-    parts = source.split(/\s+(?:или|or)\s+/i);
-  } else if (/\s+(?:и|and)\s+/i.test(source)) {
-    parts = source.split(/\s+(?:и|and)\s+/i);
+  if (/[;,/\n]/.test(source)) {
+    parts = source.split(/\s*[,;/\n]\s*/);
+  } else if (/\s+(?:\u0438\u043b\u0438|or)\s+/i.test(source)) {
+    parts = source.split(/\s+(?:\u0438\u043b\u0438|or)\s+/i);
+  } else if (/\s+(?:\u0438|and)\s+/i.test(source)) {
+    parts = source.split(/\s+(?:\u0438|and)\s+/i);
   } else {
     parts = [source];
   }
@@ -437,10 +529,19 @@ function parseDirectCreatePollRequest(text = '') {
   const source = String(text || '').trim();
   if (!source || !containsCreatePollIntent(source)) return null;
   const normalized = source.replace(/\s+/g, ' ').trim();
-  const optionsMatch = normalized.match(/(?:\u0432\u0430\u0440\u0438\u0430\u043d\u0442[\u0430-\u044f\u0451]*|options?|choices?)\s*[:\-–—]?\s*([^\n]{3,220})/i);
-  if (!optionsMatch?.[1]) return null;
-  const optionText = String(optionsMatch[1] || '');
-  const questionText = cleanQuestionText(normalized.slice(0, optionsMatch.index));
+  let optionText = '';
+  let questionText = '';
+  const optionsMatch = source.match(/(?:\u0432\u0430\u0440\u0438\u0430\u043d\u0442[\u0430-\u044f\u0451]*|options?|choices?)\s*[:\-\u2013\u2014]?\s*([\s\S]{3,220})/i);
+  if (optionsMatch?.[1]) {
+    optionText = optionsMatch[1];
+    questionText = cleanQuestionText(source.slice(0, optionsMatch.index).replace(/\s+/g, ' '));
+  } else {
+    const questionMatch = normalized.match(/^([\s\S]*?\?)[\s:,\-\u2013\u2014]*([\s\S]{3,220})$/);
+    if (questionMatch?.[1] && questionMatch?.[2]) {
+      questionText = cleanQuestionText(questionMatch[1]);
+      optionText = questionMatch[2];
+    }
+  }
   const options = splitLooseOptions(optionText);
   if (!questionText || options.length < 2) return null;
   return {
@@ -450,10 +551,11 @@ function parseDirectCreatePollRequest(text = '') {
       type: 'create_poll',
       question: questionText,
       options,
-      allows_multiple: /(?:multiple|multi[- ]?choice|\u043d\u0435\u0441\u043a\u043e\u043b\u044c\u043a|\u043c\u0443\u043b\u044c\u0442\u0438)/i.test(source),
-      show_voters: /(?:public\s+voters|public\s+votes|visible\s+voters|\u043f\u0443\u0431\u043b\u0438\u0447\u043d(?:\u044b\u0435|\u044b\u0445)?\s+\u0433\u043e\u043b\u043e\u0441|\u0432\u0438\u0434\u043d(?:\u044b|\u044b\u0435)\s+\u0433\u043e\u043b\u043e\u0441)/i.test(source),
+      allows_multiple: detectAllowsMultipleFromText(source),
+      show_voters: detectShowVotersFromText(source),
       close_preset: detectClosePresetFromText(source),
-      pin_after_create: /(?:\bpin\b|\u0437\u0430\u043a\u0440\u0435\u043f)/i.test(source),
+      ...stylePatchFromText(source),
+      pin_after_create: detectPinAfterCreateFromText(source),
     }],
   };
 }
@@ -587,11 +689,11 @@ function parseQuotedQuestionWithTrailingOptions(text = '') {
   if (!question) return null;
   const tail = String(match[4] || '');
   let optionText = '';
-  const labeledMatch = tail.match(/(?:варианты?|options?|choices?)\s*[:\-–—]?\s*([^\n.!?]{3,180})/i);
+  const labeledMatch = tail.match(/(?:\u0432\u0430\u0440\u0438\u0430\u043d\u0442[\u0430-\u044f\u0451]*|options?|choices?)\s*[:\-\u2013\u2014]?\s*([^\n.!?]{3,180})/i);
   if (labeledMatch?.[1]) {
     optionText = labeledMatch[1];
   } else {
-    const dashMatch = tail.match(/[\-–—]\s*([^\n.!?]{3,180})/);
+    const dashMatch = tail.match(/[\-\u2013\u2014]\s*([^\n.!?]{3,180})/);
     if (dashMatch?.[1]) optionText = dashMatch[1];
   }
   const options = splitLooseOptions(optionText);
@@ -600,10 +702,11 @@ function parseQuotedQuestionWithTrailingOptions(text = '') {
     type: 'create_poll',
     question,
     options,
-    allows_multiple: /(?:multiple|multi[- ]?choice|РЅРµСЃРєРѕР»СЊРє|РјСѓР»СЊС‚Рё)/i.test(source),
-    show_voters: /(?:public\s+voters|public\s+votes|visible\s+voters|РїСѓР±Р»РёС‡РЅ(?:С‹Рµ|С‹С…)?\s+РіРѕР»РѕСЃ|РІРёРґРЅ(?:С‹|С‹Рµ)\s+РіРѕР»РѕСЃ)/i.test(source),
+    allows_multiple: detectAllowsMultipleFromText(source),
+    show_voters: detectShowVotersFromText(source),
     close_preset: detectClosePresetFromText(source),
-    pin_after_create: /(?:pin|Р·Р°РєСЂРµРї)/i.test(source),
+    ...stylePatchFromText(source),
+    pin_after_create: detectPinAfterCreateFromText(source),
   };
 }
 

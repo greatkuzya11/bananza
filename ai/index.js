@@ -112,6 +112,7 @@ const FACT_TYPES = new Set([
   'open_question',
 ]);
 const BOT_ACTION_CLOSE_PRESETS = new Set(['1h', '4h', '24h', '3d', '7d']);
+const BOT_ACTION_POLL_STYLES = new Set(['pulse', 'stack', 'orbit']);
 const BOT_ACTION_REPLY_MODES = new Set(['none', 'status', 'clarify']);
 const BOT_ACTION_TYPES = new Set(['create_poll', 'vote_poll', 'react_message', 'pin_message']);
 const BOT_ACTION_REACTION_TARGETS = new Set(['reply_to', 'source_message', 'self_latest_message']);
@@ -6211,13 +6212,16 @@ function createAiBotFeature({
         originalOptions.push(normalized);
       });
       if (!question || originalOptions.length < 2 || originalOptions.length > 10) return null;
+      const style = String(rawAction.style || '').trim().toLowerCase();
+      const closePreset = String(rawAction.close_preset || '').trim().toLowerCase();
       return {
         type,
         question,
         options: originalOptions,
         allows_multiple: boolValue(rawAction.allows_multiple, false),
-        show_voters: boolValue(rawAction.show_voters, false),
-        close_preset: BOT_ACTION_CLOSE_PRESETS.has(String(rawAction.close_preset || '').trim()) ? String(rawAction.close_preset).trim() : null,
+        show_voters: boolValue(rawAction.show_voters, true),
+        close_preset: BOT_ACTION_CLOSE_PRESETS.has(closePreset) ? closePreset : null,
+        style: BOT_ACTION_POLL_STYLES.has(style) ? style : 'pulse',
         pin_after_create: boolValue(rawAction.pin_after_create, false),
       };
     }
@@ -6329,8 +6333,10 @@ function createAiBotFeature({
         'Never answer with pseudo-code or function-like calls such as create_poll(...).',
         `Allowed reaction keys: ${summarizeBotReactionPalette()}.`,
         `Meme reactions ${summarizeBotMemeReactionPolicy()} are allowed only when the user explicitly asks for them or the context is clearly playful/teasing.`,
+        'Poll defaults for create_poll: allows_multiple=false unless multiple choice is explicit; show_voters=true unless anonymous/private/hidden voters is explicit; close_preset=null unless a timer/deadline is explicit; style="pulse" unless style "stack" or "orbit" is explicit.',
+        'Allowed poll styles are "pulse", "stack", and "orbit". Allowed close_preset values are null, "1h", "4h", "24h", "3d", and "7d"; round user durations upward to the nearest preset.',
         'Supported actions:',
-        '- create_poll(question, options, allows_multiple, show_voters, close_preset, pin_after_create)',
+        '- create_poll(question, options, allows_multiple, show_voters, close_preset, style, pin_after_create)',
         '- vote_poll(target, option_texts) where target is "reply_to" or "latest_open_poll"',
         '- react_message(target, reaction_key, emoji?, mode) where target is "reply_to", "source_message", or "self_latest_message", reaction_key is one of the allowed keys or "custom", and mode is "add", "replace", or "remove"',
         '- pin_message(target) where target is "reply_to", "created_poll", or "self_latest_message"',
@@ -6485,6 +6491,7 @@ function createAiBotFeature({
             text: action.question,
             replyToId: sourceMessage.id,
             poll: {
+              style: action.style,
               options: action.options,
               allows_multiple: action.allows_multiple,
               show_voters: action.show_voters,

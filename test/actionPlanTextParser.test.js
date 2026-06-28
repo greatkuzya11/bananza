@@ -101,7 +101,7 @@ test('parseLooseActionPlanText recovers natural language success text with quote
       question: '\u043a\u0442\u043e \u0442\u0443\u0442 \u0441\u0430\u043c\u044b\u0439 \u043a\u0440\u0443\u0442\u043e\u0439?',
       options: ['\u0433\u0440\u043e\u043a', '\u0430\u0434\u043c\u0438\u043d'],
       allows_multiple: false,
-      show_voters: false,
+      show_voters: true,
       close_preset: null,
       pin_after_create: false,
     },
@@ -131,11 +131,65 @@ test('parseDirectCreatePollRequest extracts question and options from direct use
       question: '\u043a\u0442\u043e \u043a\u0440\u0443\u0447\u0435?',
       options: ['\u0433\u0440\u043e\u043a', '\u0447\u0430\u0442\u0433\u043f\u0442'],
       allows_multiple: false,
-      show_voters: false,
+      show_voters: true,
       close_preset: null,
       pin_after_create: false,
     },
   ]);
+});
+
+test('parseLooseActionPlanText defaults omitted poll visibility to public voters', () => {
+  const plan = parseLooseActionPlanText('create_poll(question="\u041a\u0443\u0434\u0430 \u0438\u0434\u0435\u043c?", options=["\u0411\u0430\u0440", "\u0414\u043e\u043c"])');
+
+  assert.ok(plan);
+  assert.equal(plan.actions[0].show_voters, true);
+});
+
+test('parseDirectCreatePollRequest keeps explicit anonymous polls private', () => {
+  const plan = parseDirectCreatePollRequest('\u0441\u043e\u0437\u0434\u0430\u0439 \u043e\u043f\u0440\u043e\u0441 \u043a\u0442\u043e \u043a\u0440\u0443\u0447\u0435? \u0432\u0430\u0440\u0438\u0430\u043d\u0442\u044b: \u0433\u0440\u043e\u043a, \u0447\u0430\u0442\u0433\u043f\u0442. \u0430\u043d\u043e\u043d\u0438\u043c\u043d\u043e');
+
+  assert.ok(plan);
+  assert.equal(plan.actions[0].show_voters, false);
+});
+
+test('parseDirectCreatePollRequest parses style, slash options and rounded timers', () => {
+  const plan = parseDirectCreatePollRequest('\u0441\u043e\u0437\u0434\u0430\u0439 \u043e\u043f\u0440\u043e\u0441 \u043a\u0442\u043e \u043a\u0440\u0443\u0447\u0435? \u0432\u0430\u0440\u0438\u0430\u043d\u0442\u044b: \u0433\u0440\u043e\u043a / \u0447\u0430\u0442\u0433\u043f\u0442. \u0441\u0442\u0438\u043b\u044c orbit, \u0442\u0430\u0439\u043c\u0435\u0440 \u0447\u0435\u0440\u0435\u0437 2 \u0447\u0430\u0441\u0430');
+
+  assert.ok(plan);
+  assert.deepEqual(plan.actions[0], {
+    type: 'create_poll',
+    question: '\u043a\u0442\u043e \u043a\u0440\u0443\u0447\u0435?',
+    options: ['\u0433\u0440\u043e\u043a', '\u0447\u0430\u0442\u0433\u043f\u0442'],
+    allows_multiple: false,
+    show_voters: true,
+    close_preset: '4h',
+    style: 'orbit',
+    pin_after_create: false,
+  });
+});
+
+test('parseDirectCreatePollRequest does not treat style names in options as style', () => {
+  const plan = parseDirectCreatePollRequest('create poll favorite layout? options: orbit, stack');
+
+  assert.ok(plan);
+  assert.deepEqual(plan.actions[0].options, ['orbit', 'stack']);
+  assert.equal(Object.hasOwn(plan.actions[0], 'style'), false);
+});
+
+test('parseDirectCreatePollRequest parses newline options and rounds short timer up', () => {
+  const plan = parseDirectCreatePollRequest('\u0441\u0434\u0435\u043b\u0430\u0439 \u043e\u043f\u0440\u043e\u0441 \u043a\u0443\u0434\u0430 \u0438\u0434\u0435\u043c? \u0412\u0430\u0440\u0438\u0430\u043d\u0442\u044b:\n\u0431\u0430\u0440\n\u0434\u043e\u043c\n\u0442\u0430\u0439\u043c\u0435\u0440 15 \u043c\u0438\u043d\u0443\u0442');
+
+  assert.ok(plan);
+  assert.deepEqual(plan.actions[0].options, ['\u0431\u0430\u0440', '\u0434\u043e\u043c']);
+  assert.equal(plan.actions[0].close_preset, '1h');
+  assert.equal(plan.actions[0].show_voters, true);
+});
+
+test('parseDirectCreatePollRequest rounds day timers upward to presets', () => {
+  const plan = parseDirectCreatePollRequest('\u0441\u043e\u0437\u0434\u0430\u0439 \u043e\u043f\u0440\u043e\u0441 \u0447\u0442\u043e \u0435\u0434\u0438\u043c? \u0432\u0430\u0440\u0438\u0430\u043d\u0442\u044b: \u043f\u0438\u0446\u0446\u0430, \u0441\u0443\u0448\u0438. \u0437\u0430\u043a\u0440\u044b\u0442\u044c \u0447\u0435\u0440\u0435\u0437 5 \u0434\u043d\u0435\u0439');
+
+  assert.ok(plan);
+  assert.equal(plan.actions[0].close_preset, '7d');
 });
 
 test('parseDirectVoteRequest extracts explicit vote choice from user request', () => {
