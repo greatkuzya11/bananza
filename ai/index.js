@@ -62,6 +62,11 @@ const {
   normalizeReactionKey,
   resolveReactionEmoji,
 } = require('./reactionKeys');
+const {
+  hasMentionToken,
+  normalizeMentionToken,
+  removeMentionTokens,
+} = require('../mentionTokens');
 const { analyzeAiImageRisk } = require('../public/js/ai-image-risk');
 
 const BOT_COLORS = ['#65aadd', '#7bc862', '#a695e7', '#ee7aae', '#6ec9cb', '#faa774'];
@@ -4243,15 +4248,20 @@ function createAiBotFeature({
 
   function messageMentionsBot(bot, message) {
     if (!message || !bot) return false;
+    const botMention = normalizeMentionToken(bot.mention);
     if (Array.isArray(message.mentions) && message.mentions.some((mention) => (
       Number(mention.user_id) === Number(bot.user_id) ||
-      (mention.is_ai_bot && String(mention.token || mention.mention || '').toLowerCase() === String(bot.mention || '').toLowerCase())
+      (mention.is_ai_bot && botMention && normalizeMentionToken(mention.token || mention.mention) === botMention)
     ))) return true;
-    const text = String(message.text || message.transcription_text || '').toLowerCase();
-    const mention = `@${String(bot.mention || '').toLowerCase()}`;
-    const nameMention = `@${String(bot.name || '').toLowerCase()}`;
-    if (text && (text.includes(mention) || text.includes(nameMention))) return true;
-    return false;
+    const text = String(message.text || message.transcription_text || '');
+    const botNameMention = normalizeMentionToken(bot.name);
+    return Boolean(
+      text
+      && (
+        (botMention && hasMentionToken(text, botMention))
+        || (botNameMention && hasMentionToken(text, botNameMention))
+      )
+    );
   }
 
   function messageRepliesToBot(bot, message) {
@@ -5624,14 +5634,7 @@ function createAiBotFeature({
   function extractBotPromptText(bot, message) {
     const original = String(message?.text || message?.transcription_text || '').trim();
     if (!original) return '';
-    const patterns = [
-      bot?.mention ? new RegExp(`@${escapeRegExp(bot.mention)}\\b`, 'ig') : null,
-      bot?.name ? new RegExp(`@${escapeRegExp(bot.name)}\\b`, 'ig') : null,
-    ].filter(Boolean);
-    let text = original;
-    for (const pattern of patterns) {
-      text = text.replace(pattern, ' ');
-    }
+    let text = removeMentionTokens(original, [bot?.mention, bot?.name]);
     text = text.replace(/\s+/g, ' ').replace(/^[\s,.:;!?-]+/, '').trim();
     return text || original;
   }

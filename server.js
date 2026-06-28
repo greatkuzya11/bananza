@@ -55,6 +55,7 @@ const { createPollService, POLL_CLOSE_PRESETS, toDbDate } = require('./polls');
 const { createMessageActionsService } = require('./messageActions');
 const { createVideoNoteFeature } = require('./videoNotes');
 const { createVideoNoteStorage } = require('./videoNotes/storage');
+const { extractMentionTokens } = require('./mentionTokens');
 
 // JWT Secret
 const SECRET_PATH = path.join(__dirname, '.secret');
@@ -998,19 +999,6 @@ function privatePeerPayload(chatId, viewerUserId) {
     ai_bot_model: peer.ai_bot_model || '',
     ai_bot_image_risk_filter_enabled: Number(peer.ai_bot_image_risk_filter_enabled) !== 0,
   };
-}
-
-function extractMentionTokens(text) {
-  const source = String(text || '');
-  const tokens = [];
-  const re = /@([a-zA-Z0-9_][a-zA-Z0-9_-]{0,31})/g;
-  let match;
-  while ((match = re.exec(source))) {
-    const prev = match.index > 0 ? source[match.index - 1] : '';
-    if (prev && /[A-Za-z0-9_.-]/.test(prev)) continue;
-    tokens.push(match[1].toLowerCase());
-  }
-  return [...new Set(tokens)];
 }
 
 function resolveMessageMentions(chatId, text) {

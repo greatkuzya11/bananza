@@ -6,7 +6,7 @@ const Database = require('better-sqlite3');
 
 const { createSession, makeUser } = require('../support/api');
 const { createSandbox } = require('../support/runtimeSandbox');
-const { createBasicChatScenario, waitFor } = require('../support/scenario');
+const { createBasicChatScenario, sleep, waitFor } = require('../support/scenario');
 
 let sandbox;
 let scenario;
@@ -1256,6 +1256,81 @@ test('bot discovery, private chats, defaults and audit respect user and bot flag
     assert.equal(blockedGroupCreate.data.error, 'Selected users are unavailable');
   } finally {
     db.close();
+  }
+});
+
+test('AI bot mention trigger uses exact token matching for overlapping mentions', async () => {
+  const { admin, bob, carol } = scenario;
+  await enableOpenAiForTests(admin);
+
+  try {
+    const suffix = `${Date.now().toString(36).slice(-5)}${Math.random().toString(36).slice(2, 5)}`;
+    const shortMention = `ai_${suffix}`;
+    const longMention = `${shortMention}_2`;
+    const shortBot = await createOpenAiBot(admin, {
+      name: `Short ${suffix}`.slice(0, 30),
+      mention: shortMention,
+      visibleToUsers: true,
+    });
+    const longBot = await createOpenAiBot(admin, {
+      name: `Long ${suffix}`.slice(0, 30),
+      mention: longMention,
+      visibleToUsers: true,
+    });
+
+    const chat = await admin.request('/api/chats', {
+      method: 'POST',
+      json: {
+        name: `Exact mention ${suffix}`,
+        type: 'group',
+        memberIds: [bob.user.id, carol.user.id],
+      },
+    });
+    const chatId = Number(chat.data.id);
+
+    await admin.request(`/api/chats/${chatId}/members`, {
+      method: 'POST',
+      json: { userId: Number(shortBot.user_id) },
+    });
+    await admin.request(`/api/chats/${chatId}/members`, {
+      method: 'POST',
+      json: { userId: Number(longBot.user_id) },
+    });
+
+    const sent = await bob.request(`/api/chats/${chatId}/messages`, {
+      method: 'POST',
+      json: { text: `@${longMention} exact mention check` },
+    });
+
+    await waitFor(async () => {
+      const response = await admin.request(`/api/chats/${chatId}/messages`, {
+        searchParams: { anchor: sent.data.id, meta: 1 },
+      });
+      const replies = response.data.messages.filter((message) => (
+        Number(message.reply_to_id || 0) === Number(sent.data.id)
+        && Number(message.ai_generated || 0) === 1
+      ));
+      assert.equal(replies.some((message) => Number(message.ai_bot_id || 0) === Number(longBot.id)), true);
+      return replies;
+    });
+
+    await sleep(800);
+    const finalResponse = await admin.request(`/api/chats/${chatId}/messages`, {
+      searchParams: { anchor: sent.data.id, meta: 1 },
+    });
+    const replies = finalResponse.data.messages.filter((message) => (
+      Number(message.reply_to_id || 0) === Number(sent.data.id)
+      && Number(message.ai_generated || 0) === 1
+    ));
+
+    assert.equal(replies.length, 1);
+    assert.equal(Number(replies[0].ai_bot_id || 0), Number(longBot.id));
+    assert.equal(Number(replies[0].user_id || 0), Number(longBot.user_id));
+  } finally {
+    await admin.request('/api/admin/ai-bots/settings', {
+      method: 'PUT',
+      json: { enabled: false },
+    });
   }
 });
 

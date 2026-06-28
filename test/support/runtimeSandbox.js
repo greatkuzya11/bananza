@@ -16,6 +16,7 @@ const ROOT_FILES = [
   'linkPreview.js',
   'messageActions.js',
   'messageCopy.js',
+  'mentionTokens.js',
   'polls.js',
   'push.js',
   'soundSettings.js',
