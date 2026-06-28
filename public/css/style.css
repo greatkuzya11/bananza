@@ -7866,11 +7866,11 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
     overscroll-behavior: contain;
   }
   html.is-ios-chat-keyboard-layout #chatView {
-    padding-top: calc(var(--ios-visual-viewport-top) + var(--ios-chat-header-height));
+    padding-top: var(--ios-chat-header-height);
     padding-bottom: var(--ios-chat-input-area-height);
   }
   html.is-ios-chat-keyboard-layout #chatView .chat-header {
-    top: var(--ios-visual-viewport-top);
+    top: 0;
   }
   html.is-ios-chat-keyboard-layout #chatView .input-area {
     top: calc(var(--ios-visual-viewport-bottom) - var(--ios-chat-input-area-height));

@@ -25,7 +25,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
   const scripts = [...document.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
 
   assert.deepEqual(styles, [
-    '/css/style.css?v=20260621-ios-keyboard1',
+    '/css/style.css?v=20260624-ios-header-pin1',
     '/css/calls.css?v=20260621-call-mobile-controls',
     '/css/voice.css',
     '/css/video-notes.css',
@@ -56,7 +56,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/chat-header-actions.js?v=20260531-dom-mobile-shell',
     '/js/app/shell/mobile-composer-guard.js?v=20260621-ios-keyboard1',
     '/js/app/shell/events.js?v=20260614-doc-settings1',
-    '/js/app/shell/ui-runtime.js?v=20260614-doc-bugfix1',
+    '/js/app/shell/ui-runtime.js?v=20260624-ios-bottom-stabilizer3',
     '/js/app/shell/shell-runtime.js?v=20260614-doc-settings1',
     '/js/app/shell/mobile-runtime-adapters.js?v=20260601-runtime-final',
     '/js/app/modal-manager.js?v=20260531-modal-manager',
@@ -569,6 +569,14 @@ test('style.css clamps New Chat folder selection rows to compact previews', () =
 test('style.css opts mobile composer controls out of native browser panning', () => {
   assert.match(styleCss, /@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*\.input-area #msgInput,\s*\.input-area \.mention-open-btn\s*\{[^}]*touch-action\s*:\s*none\s*;/s);
   assert.match(styleCss, /html\.is-mobile-chat-keyboard-layout \.emoji-picker,[\s\S]*\.mention-picker-list\s*\{[^}]*touch-action\s*:\s*none\s*;/s);
+});
+
+test('style.css pins iOS keyboard chat header to the top of web content', () => {
+  assert.match(styleCss, /html\.is-ios-chat-keyboard-layout #chatView\s*\{\s*padding-top:\s*var\(--ios-chat-header-height\);\s*padding-bottom:\s*var\(--ios-chat-input-area-height\);/s);
+  assert.match(styleCss, /html\.is-ios-chat-keyboard-layout #chatView \.chat-header\s*\{\s*top:\s*0;\s*\}/s);
+  assert.match(styleCss, /html\.is-ios-chat-keyboard-layout #chatView \.input-area\s*\{\s*top:\s*calc\(var\(--ios-visual-viewport-bottom\) - var\(--ios-chat-input-area-height\)\);\s*\}/s);
+  assert.doesNotMatch(styleCss, /html\.is-ios-chat-keyboard-layout #chatView\s*\{[^}]*--ios-visual-viewport-top/s);
+  assert.doesNotMatch(styleCss, /html\.is-ios-chat-keyboard-layout #chatView \.chat-header\s*\{[^}]*--ios-visual-viewport-top/s);
 });
 
 test('style.css does not include the old forced portrait web fallback', () => {

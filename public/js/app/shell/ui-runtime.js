@@ -515,6 +515,137 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         if (!currentUser) return;
         localStorage.setItem('user', JSON.stringify(currentUser));
       }
+
+      let iosKeyboardBottomStabilizeSeq = 0;
+      let iosKeyboardBottomStabilizeFrame = 0;
+      let iosKeyboardBottomGapNearBottom = 0;
+      let iosKeyboardBottomGapNearBottomAt = 0;
+      let iosKeyboardMessageListFrame = 0;
+      let iosKeyboardMessageMutationObserver = null;
+      let iosKeyboardMessageResizeObserver = null;
+      const iosKeyboardBottomStabilizeTimers = new Set();
+      const iosKeyboardMessageResizeTargets = new Set();
+
+      function clearIosKeyboardBottomStabilizeTimers() {
+        if (iosKeyboardBottomStabilizeFrame) cancelAnimationFrame(iosKeyboardBottomStabilizeFrame);
+        iosKeyboardBottomStabilizeFrame = 0;
+        iosKeyboardBottomStabilizeTimers.forEach((timer) => clearTimeout(timer));
+        iosKeyboardBottomStabilizeTimers.clear();
+      }
+
+      function cancelIosKeyboardBottomStabilization() {
+        iosKeyboardBottomStabilizeSeq += 1;
+        clearIosKeyboardBottomStabilizeTimers();
+      }
+
+      function readMessagesBottomGap() {
+        if (!messagesEl) return 0;
+        return Math.max(0, messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight);
+      }
+
+      function rememberIosKeyboardBottomGap(bottomGap = readMessagesBottomGap()) {
+        if (!messagesEl || !isIosChatKeyboardLayoutActive()) return false;
+        const gap = Math.max(0, Number(bottomGap) || 0);
+        if (gap > 96) return false;
+        iosKeyboardBottomGapNearBottom = gap;
+        iosKeyboardBottomGapNearBottomAt = Date.now();
+        return true;
+      }
+
+      function restoreMessagesBottomGap(bottomGap = 0) {
+        if (!messagesEl) return false;
+        const gap = Math.max(0, Number(bottomGap) || 0);
+        const maxScrollTop = Math.max(0, messagesEl.scrollHeight - messagesEl.clientHeight);
+        const targetScrollTop = Math.max(0, Math.min(maxScrollTop, messagesEl.scrollHeight - messagesEl.clientHeight - gap));
+        if (Math.abs((messagesEl.scrollTop || 0) - targetScrollTop) > 1) {
+          messagesEl.scrollTop = targetScrollTop;
+        }
+        if (typeof updateScrollBottomButton === 'function') updateScrollBottomButton();
+        return true;
+      }
+
+      function scheduleIosKeyboardBottomStabilization(bottomGap, options = {}) {
+        const gap = Math.max(0, Number(bottomGap) || 0);
+        if (!messagesEl || gap > 96 || !isIosChatKeyboardLayoutActive()) return false;
+        rememberIosKeyboardBottomGap(gap);
+        iosKeyboardBottomStabilizeSeq += 1;
+        const seq = iosKeyboardBottomStabilizeSeq;
+        clearIosKeyboardBottomStabilizeTimers();
+        const force = Boolean(options.force);
+        const mentionPickerDismissed = Boolean(options.mentionPickerDismissed);
+        const run = () => {
+          if (seq !== iosKeyboardBottomStabilizeSeq) return;
+          if (!messagesEl || !isIosChatKeyboardLayoutActive()) return;
+          const viewportHeight = Math.max(0, window.visualViewport?.height || 0);
+          if (!shouldBypassLockedMobileViewportSync(viewportHeight, { force, mentionPickerDismissed })) return;
+          restoreMessagesBottomGap(gap);
+        };
+        run();
+        iosKeyboardBottomStabilizeFrame = requestAnimationFrame(() => {
+          iosKeyboardBottomStabilizeFrame = 0;
+          run();
+          requestAnimationFrame(run);
+        });
+        [80, 180, 320].forEach((delay) => {
+          const timer = setTimeout(() => {
+            iosKeyboardBottomStabilizeTimers.delete(timer);
+            run();
+          }, delay);
+          iosKeyboardBottomStabilizeTimers.add(timer);
+        });
+        return true;
+      }
+
+      function refreshIosKeyboardMessageResizeTargets() {
+        if (!messagesEl || !iosKeyboardMessageResizeObserver) return;
+        const rows = Array.from(messagesEl.querySelectorAll('.msg-row[data-msg-id]')).slice(-12);
+        const nextTargets = new Set(rows);
+        iosKeyboardMessageResizeTargets.forEach((target) => {
+          if (nextTargets.has(target) && target.isConnected) return;
+          iosKeyboardMessageResizeObserver.unobserve(target);
+          iosKeyboardMessageResizeTargets.delete(target);
+        });
+        rows.forEach((row) => {
+          if (iosKeyboardMessageResizeTargets.has(row)) return;
+          iosKeyboardMessageResizeTargets.add(row);
+          iosKeyboardMessageResizeObserver.observe(row);
+        });
+      }
+
+      function scheduleIosKeyboardMessageListStabilization() {
+        if (iosKeyboardMessageListFrame) cancelAnimationFrame(iosKeyboardMessageListFrame);
+        iosKeyboardMessageListFrame = requestAnimationFrame(() => {
+          iosKeyboardMessageListFrame = 0;
+          refreshIosKeyboardMessageResizeTargets();
+          if (!messagesEl || !isIosChatKeyboardLayoutActive()) return;
+          const currentGap = readMessagesBottomGap();
+          const recentGapAge = Date.now() - iosKeyboardBottomGapNearBottomAt;
+          const hasRecentNearBottomGap = recentGapAge >= 0 && recentGapAge <= 1200 && iosKeyboardBottomGapNearBottom <= 96;
+          if (currentGap > 96 && !hasRecentNearBottomGap) return;
+          const targetGap = hasRecentNearBottomGap ? iosKeyboardBottomGapNearBottom : 0;
+          scheduleIosKeyboardBottomStabilization(targetGap, { force: true });
+        });
+      }
+
+      function setupIosKeyboardMessageListStabilizer() {
+        if (!messagesEl || messagesEl.__iosKeyboardMessageListStabilizerBound) return;
+        messagesEl.__iosKeyboardMessageListStabilizerBound = '1';
+        messagesEl.addEventListener('scroll', () => {
+          rememberIosKeyboardBottomGap();
+        }, { passive: true });
+        if ('MutationObserver' in window) {
+          iosKeyboardMessageMutationObserver = new MutationObserver(() => {
+            scheduleIosKeyboardMessageListStabilization();
+          });
+          iosKeyboardMessageMutationObserver.observe(messagesEl, { childList: true, subtree: true });
+        }
+        if ('ResizeObserver' in window) {
+          iosKeyboardMessageResizeObserver = new ResizeObserver(() => {
+            scheduleIosKeyboardMessageListStabilization();
+          });
+          refreshIosKeyboardMessageResizeTargets();
+        }
+      }
     
       function syncChatAreaMetrics(options = {}) {
         if (!chatArea) return;
@@ -551,15 +682,24 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
           queueMobileViewportLayoutSync();
           return;
         }
+        const viewportShrank = newViewportHeight < mobileViewportPrevHeight;
+        const iosKeyboardLayoutActive = Boolean(messagesEl && isIosChatKeyboardLayoutActive());
+        const iosKeyboardBottomGap = iosKeyboardLayoutActive ? readMessagesBottomGap() : 0;
         app.style.height = `${Math.round(newAppHeight)}px`;
         app.style.paddingTop = '0px';
         syncChatAreaMetrics();
         queueMobileViewportLayoutSync();
-        if (newViewportHeight < mobileViewportPrevHeight && messagesEl) {
-          requestAnimationFrame(() => {
-            if (!shouldBypassLockedMobileViewportSync(newViewportHeight, { force, mentionPickerDismissed })) return;
-            messagesEl.scrollTop = messagesEl.scrollHeight;
-          });
+        if (!isIosChatKeyboardLayoutActive()) cancelIosKeyboardBottomStabilization();
+        if (messagesEl) {
+          if (iosKeyboardLayoutActive && iosKeyboardBottomGap <= 96) {
+            scheduleIosKeyboardBottomStabilization(iosKeyboardBottomGap, { force, mentionPickerDismissed });
+            scheduleIosKeyboardMessageListStabilization();
+          } else if (viewportShrank && !iosKeyboardLayoutActive) {
+            requestAnimationFrame(() => {
+              if (!shouldBypassLockedMobileViewportSync(newViewportHeight, { force, mentionPickerDismissed })) return;
+              messagesEl.scrollTop = messagesEl.scrollHeight;
+            });
+          }
         }
         mobileViewportPrevHeight = newViewportHeight;
       }
@@ -616,6 +756,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
           if (chatHeader) mobileViewportElementResizeObserver.observe(chatHeader);
           if (inputArea) mobileViewportElementResizeObserver.observe(inputArea);
         }
+        setupIosKeyboardMessageListStabilizer();
       }
     
       function setupChatAreaMetricsSync() {
