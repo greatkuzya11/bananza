@@ -291,6 +291,20 @@
       bound = true;
       scope.__bananzaShellEventScope = scope;
       with (scope) {
+        const syncComposerHistoryNavigationEffects = () => {
+          saveComposerDraft(currentChatId);
+          autoResize();
+          syncMentionOpenButton();
+          window.BananzaVoiceHooks?.refreshComposerState?.();
+          updateComposerAiOverrideState().catch(() => {});
+          updateMentionPicker();
+        };
+        const handleComposerHistorySwipe = (direction) => {
+          if (!composerTextController?.navigateComposerHistory?.(currentChatId, direction)) return false;
+          syncComposerHistoryNavigationEffects();
+          return true;
+        };
+        mobileComposerGuard?.setComposerHistorySwipeHandler?.(handleComposerHistorySwipe);
         setupPasswordPreviewToggles();
         setupMessageSwipeGestures();
         setupMobileComposerGestureGuard();
@@ -361,12 +375,7 @@
           if (handleMentionPickerKeydown(e)) return;
           if (handleComposerCustomEmojiKeydown(e)) return;
           if (handleComposerHistoryKeydown(e, currentChatId)) {
-            saveComposerDraft(currentChatId);
-            autoResize();
-            syncMentionOpenButton();
-            window.BananzaVoiceHooks?.refreshComposerState?.();
-            updateComposerAiOverrideState().catch(() => {});
-            updateMentionPicker();
+            syncComposerHistoryNavigationEffects();
             return;
           }
           if (e.key === 'Enter') {

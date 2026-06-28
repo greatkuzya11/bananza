@@ -1706,6 +1706,81 @@ test('mobile composer vertical drag is swallowed while the keyboard is open', as
   assert.equal(app.style.height, '420px');
 });
 
+test('mobile composer textarea swipe navigates sent message history without input events', async (t) => {
+  const dom = await openSingleChatDom({
+    beforeLoad: ({ window }) => {
+      window.localStorage.setItem('bananza:composerHistory:v1:1', JSON.stringify({
+        1: ['older sent text', 'newer sent text'],
+      }));
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document, BananzaAppBridge } = dom.window;
+  const msgInput = document.getElementById('msgInput');
+  let inputEvents = 0;
+
+  msgInput.addEventListener('input', () => {
+    inputEvents += 1;
+  });
+
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+  await openMobileKeyboard(dom, msgInput);
+
+  let swipe = dispatchTouchDrag(dom.window, msgInput, {
+    identifier: 81,
+    startX: 180,
+    startY: 380,
+    moveX: 180,
+    moveY: 300,
+    endX: 180,
+    endY: 300,
+  });
+  assert.equal(swipe.moveEvent.defaultPrevented, true);
+  assert.equal(msgInput.value, 'newer sent text');
+  assert.equal(inputEvents, 0);
+
+  swipe = dispatchTouchDrag(dom.window, msgInput, {
+    identifier: 82,
+    startX: 180,
+    startY: 380,
+    moveX: 180,
+    moveY: 300,
+    endX: 180,
+    endY: 300,
+  });
+  assert.equal(swipe.moveEvent.defaultPrevented, true);
+  assert.equal(msgInput.value, 'older sent text');
+  assert.equal(inputEvents, 0);
+
+  swipe = dispatchTouchDrag(dom.window, msgInput, {
+    identifier: 83,
+    startX: 180,
+    startY: 300,
+    moveX: 180,
+    moveY: 380,
+    endX: 180,
+    endY: 380,
+  });
+  assert.equal(swipe.moveEvent.defaultPrevented, true);
+  assert.equal(msgInput.value, 'newer sent text');
+
+  swipe = dispatchTouchDrag(dom.window, msgInput, {
+    identifier: 84,
+    startX: 180,
+    startY: 300,
+    moveX: 180,
+    moveY: 380,
+    endX: 180,
+    endY: 380,
+  });
+  assert.equal(swipe.moveEvent.defaultPrevented, true);
+  assert.equal(msgInput.value, '');
+  assert.equal(inputEvents, 0);
+});
+
 test('mobile composer toolbar button drags are swallowed while the keyboard is open', async (t) => {
   const dom = await openSingleChatDom();
   t.after(() => {
@@ -1807,6 +1882,9 @@ test('mobile composer allows textarea internal scroll instead of swallowing it',
   BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
   await wait(dom, 40);
   await openMobileKeyboard(dom, msgInput);
+  dom.window.localStorage.setItem('bananza:composerHistory:v1:1', JSON.stringify({
+    1: ['should not replace textarea scroll'],
+  }));
 
   Object.defineProperty(msgInput, 'clientHeight', {
     configurable: true,
@@ -1832,6 +1910,7 @@ test('mobile composer allows textarea internal scroll instead of swallowing it',
 
   assert.equal(move.defaultPrevented, true);
   assert.equal(msgInput.scrollTop, 100);
+  assert.equal(msgInput.value, '');
 });
 
 test('emoji picker keeps the mobile composer attached when the keyboard is already open', async (t) => {

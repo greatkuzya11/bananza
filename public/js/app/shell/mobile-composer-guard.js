@@ -11,6 +11,7 @@
     const mobileViewport = options.mobileViewport || {};
     const actions = options.actions || {};
     const controllers = options.controllers || {};
+    const COMPOSER_HISTORY_SWIPE_THRESHOLD = 42;
     const state = {
       viewportFrame: 0,
       dockTop: 0,
@@ -28,6 +29,9 @@
       composerGesture: emptyComposerGesture(),
       messageGesture: emptyMessageGesture(),
     };
+    let composerHistorySwipeHandler = typeof actions.onComposerHistorySwipe === 'function'
+      ? actions.onComposerHistorySwipe
+      : null;
 
     const get = (name) => (typeof options[name] === 'function' ? options[name]() : options[name]);
     const call = (name, fallback, ...args) => {
@@ -43,7 +47,7 @@
     const isHtmlElement = (value) => value instanceof (win.HTMLElement || HTMLElement);
 
     function emptyComposerGesture() {
-      return { source: '', pointerId: null, touchId: null, startX: 0, startY: 0, lastX: 0, lastY: 0, moved: false, target: null };
+      return { source: '', pointerId: null, touchId: null, startX: 0, startY: 0, lastX: 0, lastY: 0, moved: false, historySwipeCommitted: false, target: null };
     }
 
     function emptyMessageGesture() {
@@ -357,6 +361,20 @@
       return true;
     }
 
+    function setComposerHistorySwipeHandler(handler) {
+      composerHistorySwipeHandler = typeof handler === 'function' ? handler : null;
+      return composerHistorySwipeHandler;
+    }
+
+    function maybeStepComposerHistoryFromSwipe(target, dy) {
+      const gesture = state.composerGesture;
+      if (gesture.historySwipeCommitted || Math.abs(dy) < COMPOSER_HISTORY_SWIPE_THRESHOLD) return false;
+      const textarea = getComposerGuardTextarea(target);
+      if (!textarea || target !== textarea || typeof composerHistorySwipeHandler !== 'function') return false;
+      gesture.historySwipeCommitted = true;
+      return Boolean(composerHistorySwipeHandler(dy < 0 ? -1 : 1));
+    }
+
     function isMobileKeyboardDockGestureSurface(target) {
       if (!isElement(target)) return false;
       const inputArea = element('inputArea');
@@ -374,6 +392,7 @@
       const dy = clientY - gesture.startY;
       if (Math.abs(dy) < 4 || Math.abs(dy) <= Math.abs(dx) || !event?.cancelable) return false;
       const consumedByScrollSurface = scrollMobileKeyboardDockSurface(getMobileKeyboardDockScrollSurface(target), clientY, dy);
+      if (!consumedByScrollSurface) maybeStepComposerHistoryFromSwipe(target, dy);
       gesture.moved = true;
       event.preventDefault();
       event.stopPropagation?.();
@@ -833,6 +852,7 @@
       scheduleIosComposerBlur,
       suppressMobileComposerDismissClick,
       isMobileComposerDismissClickSuppressed,
+      setComposerHistorySwipeHandler,
       setupMobileComposerGestureGuard,
       preserveMobileComposerOnPointerDown,
       dismissMobileComposer,

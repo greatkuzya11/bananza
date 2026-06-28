@@ -170,20 +170,26 @@
       return false;
     }
 
-    function handleComposerHistoryKeydown(e, chatId) {
+    function navigateComposerHistory(chatId, direction) {
       const msgInput = getMsgInput();
-      if (!msgInput || !e || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return false;
-      if (e.shiftKey || e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return false;
+      if (!msgInput) return false;
       const normalizeChatId = state.normalizeComposerDraftChatId || ((value) => Number(value || 0) || 0);
       const id = normalizeChatId(chatId);
       if (!id || typeof state.stepComposerHistory !== 'function') return false;
       const navigation = state.composerHistoryNavigation || {};
       const historyActive = navigation.chatId === id && Number.isInteger(navigation.index);
       if (!historyActive && getComposerTextValue({ trim: true })) return false;
-      const result = state.stepComposerHistory(id, e.key === 'ArrowUp' ? -1 : 1);
+      const result = state.stepComposerHistory(id, Number(direction || 0) < 0 ? -1 : 1);
       if (!result?.handled) return false;
-      e.preventDefault();
       setComposerTextValue(result.value || '');
+      return true;
+    }
+
+    function handleComposerHistoryKeydown(e, chatId) {
+      if (!e || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return false;
+      if (e.shiftKey || e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return false;
+      if (!navigateComposerHistory(chatId, e.key === 'ArrowUp' ? -1 : 1)) return false;
+      e.preventDefault();
       return true;
     }
 
@@ -417,6 +423,7 @@
       insertDictatedText,
       deleteComposerCustomEmojiCluster,
       handleComposerCustomEmojiKeydown,
+      navigateComposerHistory,
       handleComposerHistoryKeydown,
       handleComposerCustomEmojiBeforeInput,
       snapComposerSelectionToCustomEmojiBoundary,

@@ -367,6 +367,7 @@ test('composer history APIs are exposed on state and text controllers', (t) => {
   assert.equal(typeof h.state.stepComposerHistory, 'function');
   assert.equal(typeof h.state.resetComposerHistoryNavigation, 'function');
   assert.equal(typeof h.state.resetComposerHistoryForCurrentUser, 'function');
+  assert.equal(typeof h.text.navigateComposerHistory, 'function');
   assert.equal(typeof h.text.handleComposerHistoryKeydown, 'function');
 });
 
@@ -536,6 +537,7 @@ test('composer history arrows navigate only from an empty input or active histor
   h.text.setComposerTextValue('manual');
   const manualUp = composerKey(h.window, 'ArrowUp');
   assert.equal(h.text.handleComposerHistoryKeydown(manualUp, 1), false);
+  assert.equal(h.text.navigateComposerHistory(1, -1), false);
   assert.equal(h.text.getComposerTextValue(), 'manual');
   assert.equal(manualUp.defaultPrevented, false);
 
@@ -545,22 +547,22 @@ test('composer history arrows navigate only from an empty input or active histor
   assert.equal(h.text.getComposerTextValue(), 'two');
   assert.equal(firstUp.defaultPrevented, true);
 
-  assert.equal(h.text.handleComposerHistoryKeydown(composerKey(h.window, 'ArrowUp'), 1), true);
+  assert.equal(h.text.navigateComposerHistory(1, -1), true);
   assert.equal(h.text.getComposerTextValue(), 'one');
 
-  assert.equal(h.text.handleComposerHistoryKeydown(composerKey(h.window, 'ArrowUp'), 1), true);
+  assert.equal(h.text.navigateComposerHistory(1, -1), true);
   assert.equal(h.text.getComposerTextValue(), 'one');
 
-  assert.equal(h.text.handleComposerHistoryKeydown(composerKey(h.window, 'ArrowDown'), 1), true);
+  assert.equal(h.text.navigateComposerHistory(1, 1), true);
   assert.equal(h.text.getComposerTextValue(), 'two');
 
-  assert.equal(h.text.handleComposerHistoryKeydown(composerKey(h.window, 'ArrowDown'), 1), true);
+  assert.equal(h.text.navigateComposerHistory(1, 1), true);
   assert.equal(h.text.getComposerTextValue(), '');
   assert.equal(h.state.composerHistoryNavigation.index, null);
 
-  assert.equal(h.text.handleComposerHistoryKeydown(composerKey(h.window, 'ArrowDown'), 1), false);
+  assert.equal(h.text.navigateComposerHistory(1, 1), false);
 
-  assert.equal(h.text.handleComposerHistoryKeydown(composerKey(h.window, 'ArrowUp'), 2), true);
+  assert.equal(h.text.navigateComposerHistory(2, -1), true);
   assert.equal(h.text.getComposerTextValue(), 'other chat');
 
   h.text.setComposerTextValue('');
