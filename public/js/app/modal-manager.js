@@ -203,6 +203,19 @@
       return entries.reduce((max, entry) => Math.max(max, getModalTransitionFallbackMs(entry)), modalTransitionBufferMs);
     }
 
+    function cancelScheduledModalHistoryRewind(steps = 1) {
+      const count = Math.max(0, Number(steps) || 0);
+      if (!count || !pendingModalHistoryRewind) return 0;
+      const cancelled = Math.min(count, pendingModalHistoryRewind);
+      pendingModalHistoryRewind -= cancelled;
+      if (!pendingModalHistoryRewind) {
+        win?.clearTimeout?.(modalHistorySyncTimer);
+        modalHistorySyncTimer = null;
+        modalHistorySyncDueAt = 0;
+      }
+      return cancelled;
+    }
+
     function flushPendingModalHistoryRewind() {
       win?.clearTimeout?.(modalHistorySyncTimer);
       modalHistorySyncTimer = null;
@@ -237,10 +250,49 @@
       return Boolean(immediate || prefersReducedMotion() || currentModalAnimation() === 'none');
     }
 
-    function finalizeModalClose(entry) {
-      if (!entry?.el) return false;
+    function cancelModalClose(entry) {
+      if (!entry) return;
       win?.clearTimeout?.(entry.closeTimer);
       entry.closeTimer = null;
+      if (entry.closeTransitionTarget && entry.closeTransitionEnd) {
+        entry.closeTransitionTarget.removeEventListener('transitionend', entry.closeTransitionEnd);
+      }
+      entry.closeTransitionTarget = null;
+      entry.closeTransitionEnd = null;
+    }
+
+    function cancelModalOpenFrame(entry) {
+      if (!entry?.openFrame) return;
+      win?.cancelAnimationFrame?.(entry.openFrame);
+      entry.openFrame = null;
+    }
+
+    function scheduleModalOpenFrame(entry) {
+      cancelModalOpenFrame(entry);
+      entry.openFrame = win?.requestAnimationFrame?.(() => {
+        entry.openFrame = win?.requestAnimationFrame?.(() => {
+          entry.el.classList.add('is-open');
+          entry.openFrame = null;
+        }) || null;
+      }) || null;
+    }
+
+    function prepareModalForOpen(entry, opener = null) {
+      entry.returnFocusEl = isHTMLElement(opener)
+        ? opener
+        : callAction('getMobileComposerSafeReturnFocusEl', null);
+      cancelModalClose(entry);
+      cancelModalOpenFrame(entry);
+      entry.isClosing = false;
+      entry.el.classList.remove('hidden', 'is-closing', 'is-underlay');
+      entry.el.classList.remove('is-open');
+      callAction('forceIosAnimationMount', false, entry.el, entry.el.querySelector('.modal-content'));
+    }
+
+    function finalizeModalClose(entry) {
+      if (!entry?.el) return false;
+      cancelModalClose(entry);
+      cancelModalOpenFrame(entry);
       entry.isClosing = false;
       entry.el.classList.add('hidden');
       entry.el.classList.remove('is-open', 'is-underlay', 'is-closing');
@@ -264,12 +316,13 @@
     }
 
     function beginModalClose(entry, { immediate = false } = {}) {
-      if (!entry?.el || entry.isClosing) return false;
-      entry.isClosing = true;
-      if (entry.openFrame) {
-        win?.cancelAnimationFrame?.(entry.openFrame);
-        entry.openFrame = null;
+      if (!entry?.el) return false;
+      if (entry.isClosing) {
+        if (shouldCloseImmediately(immediate)) return finalizeModalClose(entry);
+        return false;
       }
+      entry.isClosing = true;
+      cancelModalOpenFrame(entry);
       entry.el.classList.remove('is-open', 'is-underlay');
       entry.el.classList.add('is-closing');
       setModalInertState(entry, true);
@@ -282,12 +335,18 @@
       const onTransitionEnd = (event) => {
         if (event.target !== transitionTarget || !['opacity', 'transform'].includes(event.propertyName)) return;
         transitionTarget.removeEventListener('transitionend', onTransitionEnd);
+        entry.closeTransitionTarget = null;
+        entry.closeTransitionEnd = null;
         finalizeModalClose(entry);
       };
+      entry.closeTransitionTarget = transitionTarget;
+      entry.closeTransitionEnd = onTransitionEnd;
       transitionTarget.addEventListener('transitionend', onTransitionEnd);
       win?.clearTimeout?.(entry.closeTimer);
       entry.closeTimer = win?.setTimeout?.(() => {
         transitionTarget.removeEventListener('transitionend', onTransitionEnd);
+        entry.closeTransitionTarget = null;
+        entry.closeTransitionEnd = null;
         finalizeModalClose(entry);
       }, getModalTransitionFallbackMs(entry)) || null;
       return true;
@@ -305,6 +364,8 @@
         onAfterClose,
         isClosing: current.isClosing || false,
         closeTimer: current.closeTimer || null,
+        closeTransitionTarget: current.closeTransitionTarget || null,
+        closeTransitionEnd: current.closeTransitionEnd || null,
         openFrame: current.openFrame || null,
         returnFocusEl: current.returnFocusEl || null,
       };
@@ -325,11 +386,19 @@
     }
 
     function open(modalOrId, { replaceStack = false, opener = null } = {}) {
+      const currentEntry = modalEntryOf(modalOrId);
+      const currentIndex = modalStack.indexOf(currentEntry);
+      const isReopeningClosingEntry = !replaceStack && currentIndex !== -1 && Boolean(currentEntry?.isClosing);
+      let pushHistoryForRestoredEntry = false;
+      if (isReopeningClosingEntry) {
+        pushHistoryForRestoredEntry = cancelScheduledModalHistoryRewind(1) === 0;
+      } else {
+        flushPendingModalHistoryRewind();
+      }
       const entry = register(modalOrId);
       if (!entry?.el) return null;
       callAction('closeMobileComposerTransientUi', false, { immediate: true });
       callAction('dismissMobileComposer', false, { forceRecovery: true, reason: `modal:${entry.id}` });
-      flushPendingModalHistoryRewind();
       const reuseHistoryEntry = replaceStack && modalHistoryDepth === 1;
       if (replaceStack && modalStack.length) {
         closeAll({ immediate: true, includeMedia: false, syncHistory: !reuseHistoryEntry });
@@ -341,19 +410,21 @@
           removable.forEach((item) => beginModalClose(item, { immediate: true }));
         }
         entry.returnFocusEl = isHTMLElement(opener) ? opener : entry.returnFocusEl;
+        if (entry.isClosing || entry.el.classList.contains('hidden') || entry.el.classList.contains('is-closing')) {
+          prepareModalForOpen(entry, opener);
+          updateModalStackState();
+          if (pushHistoryForRestoredEntry) pushModalHistoryState(entry.id);
+          scheduleModalOpenFrame(entry);
+          try {
+            opts.onModalOpened?.(entry);
+          } catch {}
+          return entry;
+        }
         updateModalStackState();
         return entry;
       }
 
-      entry.returnFocusEl = isHTMLElement(opener)
-        ? opener
-        : callAction('getMobileComposerSafeReturnFocusEl', null);
-      entry.isClosing = false;
-      win?.clearTimeout?.(entry.closeTimer);
-      if (entry.openFrame) win?.cancelAnimationFrame?.(entry.openFrame);
-      entry.el.classList.remove('hidden', 'is-closing', 'is-underlay');
-      entry.el.classList.remove('is-open');
-      callAction('forceIosAnimationMount', false, entry.el, entry.el.querySelector('.modal-content'));
+      prepareModalForOpen(entry, opener);
       modalStack.push(entry);
       updateModalStackState();
       if (reuseHistoryEntry) {
@@ -362,12 +433,7 @@
       } else {
         pushModalHistoryState(entry.id);
       }
-      entry.openFrame = win?.requestAnimationFrame?.(() => {
-        entry.openFrame = win?.requestAnimationFrame?.(() => {
-          entry.el.classList.add('is-open');
-          entry.openFrame = null;
-        }) || null;
-      }) || null;
+      scheduleModalOpenFrame(entry);
       try {
         opts.onModalOpened?.(entry);
       } catch {}
@@ -385,14 +451,16 @@
         return false;
       }
       const toClose = modalStack.slice(index).reverse();
-      toClose.forEach((item) => beginModalClose(item, { immediate }));
+      const closeCount = toClose.reduce((count, item) => (
+        beginModalClose(item, { immediate }) ? count + 1 : count
+      ), 0);
       if (!fromHistory) {
-        if (shouldCloseImmediately(immediate)) rewindModalHistory(toClose.length);
-        else scheduleModalHistoryRewind(toClose.length, getModalEntriesTransitionFallbackMs(toClose));
+        if (shouldCloseImmediately(immediate)) rewindModalHistory(closeCount);
+        else scheduleModalHistoryRewind(closeCount, getModalEntriesTransitionFallbackMs(toClose));
       } else {
-        modalHistoryDepth = Math.max(0, modalHistoryDepth - toClose.length);
+        modalHistoryDepth = Math.max(0, modalHistoryDepth - closeCount);
       }
-      return true;
+      return closeCount > 0 || toClose.some((item) => item.isClosing);
     }
 
     function closeTop(options = {}) {
@@ -404,10 +472,12 @@
     function closeAll({ immediate = false, includeMedia = true, syncHistory = true } = {}) {
       if (modalStack.length) {
         const toClose = [...modalStack].reverse();
-        toClose.forEach((entry) => beginModalClose(entry, { immediate }));
+        const closeCount = toClose.reduce((count, entry) => (
+          beginModalClose(entry, { immediate }) ? count + 1 : count
+        ), 0);
         if (syncHistory) {
           if (shouldCloseImmediately(immediate)) rewindModalHistory(modalHistoryDepth);
-          else scheduleModalHistoryRewind(modalHistoryDepth, getModalEntriesTransitionFallbackMs(toClose));
+          else scheduleModalHistoryRewind(closeCount, getModalEntriesTransitionFallbackMs(toClose));
         }
         modalHistoryDepth = 0;
       }

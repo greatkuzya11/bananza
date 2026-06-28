@@ -143,6 +143,41 @@ test('modal manager closes with transition fallback and onClose callback', async
   assert.equal(closed, 1);
 });
 
+test('modal manager restores a closing audit modal when it is reopened before transition cleanup', async () => {
+  const { dom, manager } = createManagerHarness({ reducedMotion: false, transitionBufferMs: 20 });
+  const { document } = dom.window;
+  const adminModal = document.getElementById('adminModal');
+  const auditModal = document.getElementById('adminBotAuditModal');
+
+  manager.open('adminModal');
+  manager.open('adminBotAuditModal');
+  await wait(dom, 80);
+
+  assert.equal(manager.close('adminBotAuditModal'), true);
+  assert.equal(auditModal.classList.contains('is-closing'), true);
+
+  manager.open('adminBotAuditModal');
+  await wait(dom, 100);
+
+  assert.deepEqual(Array.from(manager.getStack(), (entry) => entry.id), ['adminModal', 'adminBotAuditModal']);
+  assert.equal(manager.getTop().id, 'adminBotAuditModal');
+  assert.equal(adminModal.classList.contains('hidden'), false);
+  assert.equal(auditModal.classList.contains('hidden'), false);
+  assert.equal(auditModal.classList.contains('is-closing'), false);
+  assert.equal(auditModal.getAttribute('aria-hidden'), 'false');
+  assert.equal(auditModal.getAttribute('aria-modal'), 'true');
+
+  manager.open('adminModal', { replaceStack: manager.getTop()?.id !== 'settingsModal' });
+  manager.open('adminBotAuditModal');
+  await wait(dom, 100);
+
+  assert.deepEqual(Array.from(manager.getStack(), (entry) => entry.id), ['adminModal', 'adminBotAuditModal']);
+  assert.equal(manager.getTop().id, 'adminBotAuditModal');
+  assert.equal(adminModal.classList.contains('hidden'), false);
+  assert.equal(auditModal.classList.contains('hidden'), false);
+  assert.equal(auditModal.classList.contains('is-closing'), false);
+});
+
 test('modal manager handles nested stack, closeTop, closeAll, popstate, and inert state', async () => {
   const { dom, manager, modalA, modalB } = createManagerHarness({ reducedMotion: true });
 
