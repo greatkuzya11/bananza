@@ -663,8 +663,8 @@ function bindEvents() {
           suppressNextMessageActionTap();
           if (lpStart?.startedOnLocationCard) suppressLocationCardClick(row);
           safeVibrate(30);  
-          showReactionPicker(row, null, {
-            source: 'long-press',
+          showReactionPicker(row, null, {  
+            source: lpStart?.startedOnLocationCard ? 'actions' : 'long-press',
             keepComposerFocus: reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen(),  
           });  
         }, 500);  

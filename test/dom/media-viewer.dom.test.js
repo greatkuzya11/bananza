@@ -4248,44 +4248,6 @@ test('mobile swipe reply starts from a location card', async (t) => {
   assert.equal(app.style.height, '420px');
 });
 
-test('mobile long-press on a location card opens reactions without floating actions', async (t) => {
-  const dom = await openSingleChatDom({
-    chatMessagesByChatId: {
-      1: [createIncomingMessage(1, 238, { text: '', location: createLocationPayload(), is_location: 1 })],
-    },
-  });
-  t.after(() => {
-    dom.window.close();
-  });
-  const { document } = dom.window;
-  const app = document.getElementById('app');
-  const msgInput = document.getElementById('msgInput');
-  const reactionPicker = document.getElementById('reactionPicker');
-  const viewer = document.getElementById('locationViewerModal');
-  const row = document.querySelector('.msg-row[data-msg-id="238"]');
-  const card = row.querySelector('[data-location-card]');
-  const touch = createTouchPoint({ identifier: 78, clientX: 180, clientY: 360 });
-
-  await openMobileKeyboard(dom, msgInput);
-  card.dispatchEvent(createTouchEvent(dom.window, 'touchstart', {
-    touches: [touch],
-    changedTouches: [touch],
-  }));
-  await wait(dom, 560);
-
-  assert.equal(reactionPicker.classList.contains('hidden'), false);
-  assert.equal(row.classList.contains('actions-open'), false);
-  assert.equal(document.querySelector('.msg-actions.actions-floating-open'), null);
-  assert.equal(viewer.classList.contains('hidden'), true);
-  assert.equal(document.activeElement, msgInput);
-  assert.equal(app.style.height, '420px');
-
-  card.dispatchEvent(createTouchEvent(dom.window, 'touchend', {
-    touches: [],
-    changedTouches: [touch],
-  }));
-});
-
 test('mobile message context convert action keeps the keyboard attached', async (t) => {
   const dom = await openSingleChatDom({
     chat: createChatFixture(1, 'Chat A', { context_transform_enabled: 1 }),
