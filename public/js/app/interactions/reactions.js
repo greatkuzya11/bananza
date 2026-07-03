@@ -72,6 +72,22 @@ let reactionPickerIdleTimer = null;
 let reactionUiGeneration = 0;
 let reactionEmojiPopoverCategory = getEmojiPickerCategories()[0] || '';
 let reactionMorePointerHandledUntil = 0;
+const MESSAGE_INTERACTIVE_TARGET_SELECTOR = '.msg-actions, button, a, input, textarea, select, label, audio, video, .video-note-stage, .msg-reply, .reaction-badge, .msg-image, .msg-video, .msg-file, .link-preview, .msg-group-avatar';
+function isLocationCardGestureTarget(target) {
+  return Boolean(
+    target?.closest?.('[data-location-card]')
+    && !target.closest('[data-location-card] a, [data-location-card] .leaflet-control, [data-location-card] .leaflet-interactive, [data-location-card] input, [data-location-card] textarea, [data-location-card] select, [data-location-card] label')
+  );
+}
+function isMessageInteractiveTarget(target) {
+  if (!target?.closest) return false;
+  if (isLocationCardGestureTarget(target)) return false;
+  return Boolean(target.closest(MESSAGE_INTERACTIVE_TARGET_SELECTOR));
+}
+function suppressLocationCardClick(row, ms = 900) {
+  if (!row?.querySelector?.('[data-location-card]')) return;
+  row.__suppressLocationClickUntil = Date.now() + ms;
+}
 function renderReactions(reactions) {
   if (!reactions || reactions.length === 0) return '';
   const grouped = {};
@@ -584,7 +600,7 @@ function bindEvents() {
     }, true);  
     const getMessageActionTapRow = (e) => {  
       if (e.defaultPrevented || Date.now() < suppressNextMessageActionTapUntil) return null;  
-      if (e.target.closest(  
+      if (isMessageInteractiveTarget(e.target) && e.target.closest(
         '.msg-actions, button, a, input, textarea, select, label, audio, video, .video-note-stage, .msg-reply, .reaction-badge, .msg-image, .msg-video, .msg-file, .link-preview, .msg-group-avatar'  
       )) return null;  
       const row = e.target.closest('.msg-row');  
@@ -636,18 +652,19 @@ function bindEvents() {
       messagesEl.addEventListener('touchstart', (e) => {  
         if (e.touches.length !== 1) return;  
         const row = e.target.closest('.msg-row');  
-        if (!row || e.target.closest(  
+        if (!row || (isMessageInteractiveTarget(e.target) && e.target.closest(
           '.msg-actions, button, a, input, textarea, select, label, audio, video, .video-note-stage, .msg-reply, .reaction-badge, .msg-image, .msg-video, .msg-file, .link-preview, .msg-group-avatar'  
-        )) return;  
+        ))) return;
         if (getSelectedMessageFragment(row) || isSelectableMessageTextTarget(e.target)) return;  
         const touch = e.touches && e.touches[0] ? e.touches[0] : null;  
-        lpStart = { row, x: touch?.clientX || 0, y: touch?.clientY || 0 };  
+        lpStart = { row, x: touch?.clientX || 0, y: touch?.clientY || 0, startedOnLocationCard: isLocationCardGestureTarget(e.target) };
         lpTimer = setTimeout(() => {  
           lpTimer = null;  
-          suppressNextMessageActionTap();  
+          suppressNextMessageActionTap();
+          if (lpStart?.startedOnLocationCard) suppressLocationCardClick(row);
           safeVibrate(30);  
           showReactionPicker(row, null, {  
-            source: 'long-press',  
+            source: lpStart?.startedOnLocationCard ? 'actions' : 'long-press',
             keepComposerFocus: reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen(),  
           });  
         }, 500);  
@@ -663,13 +680,15 @@ function bindEvents() {
       messagesEl.addEventListener('contextmenu', (e) => {  
         const row = e.target.closest('.msg-row');  
         if (row && getSelectedMessageFragment(row)) return;  
-        if (e.target.closest(  
+        const startedOnLocationCard = isLocationCardGestureTarget(e.target);
+        if (isMessageInteractiveTarget(e.target) && e.target.closest(
           '.msg-actions, button, a, input, textarea, select, label, audio, video, .video-note-stage, .msg-reply, .reaction-badge, .msg-image, .msg-video, .msg-file, .link-preview, .msg-group-avatar'  
         )) return;  
         if (!row) return;  
         e.preventDefault();  
-        showReactionPicker(row, null, {  
-          source: 'long-press',  
+        if (startedOnLocationCard) suppressLocationCardClick(row);
+        showReactionPicker(row, null, {
+          source: startedOnLocationCard ? 'actions' : 'long-press',
           keepComposerFocus: reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen(),  
         });  
       });  

@@ -127,6 +127,23 @@ test('location messages create, hydrate, copy, preview and delete cleanly', asyn
   assert.equal(Boolean(chatPreview.last_location), true);
   assert.match(chatPreview.last_text, /Геометка|Location/i);
 
+  const reply = await admin.request(`/api/chats/${groupChat.id}/messages`, {
+    method: 'POST',
+    json: {
+      text: 'Replying to location',
+      replyToId: created.data.id,
+    },
+  });
+  assert.equal(Number(reply.data.reply_is_location || 0), 1);
+  assert.match(reply.data.reply_text || '', /Геометка|Р“РµРѕРјРµС‚РєР°|Location/i);
+
+  const replyMessages = await bob.request(`/api/chats/${groupChat.id}/messages`, {
+    searchParams: { anchor: reply.data.id, limit: 5 },
+  });
+  const hydratedReply = replyMessages.data.messages.find((message) => message.id === reply.data.id);
+  assert.equal(Number(hydratedReply.reply_is_location || 0), 1);
+  assert.match(hydratedReply.reply_text || '', /Геометка|Р“РµРѕРјРµС‚РєР°|Location/i);
+
   const forwarded = await bob.request(`/api/messages/${created.data.id}/forward`, {
     method: 'POST',
     json: { targetChatId: privateChat.id },

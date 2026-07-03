@@ -20,10 +20,11 @@
     const actions = objectOrDefault(opts.actions);
     const getCurrentUser = typeof opts.getCurrentUser === 'function' ? opts.getCurrentUser : () => null;
     const getCurrentChatId = typeof opts.getCurrentChatId === 'function' ? opts.getCurrentChatId : () => null;
+    const tr = typeof actions.t === 'function' ? actions.t : (key) => String(key || '');
 
     function getReplyPreviewText(msg) {
       if (msg?.text) return msg.text.substring(0, 100);
-      if (msg?.location || msg?.is_location) return 'Location';
+      if (msg?.location || msg?.is_location) return tr('Location');
       if (msg?.is_voice_note) {
         const transcript = (msg.transcription_text || '').trim();
         return transcript ? transcript.substring(0, 100) : (actions.getMediaNoteFallbackLabel || (() => 'Attachment'))(msg);
@@ -42,7 +43,7 @@
       const sourceText = (sourceRow?.__replyPayload?.text || '').trim();
       if (sourceText && sourceText !== 'Attachment') return sourceText.substring(0, 100);
       if (msg?.reply_is_location || sourceRow?.__replyPayload?.is_location || sourceRow?.__messageData?.location) {
-        return 'Location';
+        return tr('Location');
       }
 
       const isVoiceReply = Boolean(
@@ -141,7 +142,7 @@
         const latitude = Number(location.latitude ?? location.lat);
         const longitude = Number(location.longitude ?? location.lon ?? location.lng);
         const zoom = Math.min(19, Math.max(1, Number(location.zoom) || 16));
-        const label = String(location.title || location.address || 'Location').trim();
+        const label = String(location.title || location.address || tr('Location')).trim();
         const coords = Number.isFinite(latitude) && Number.isFinite(longitude)
           ? `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`
           : '';
@@ -166,7 +167,7 @@
       const copyData = getMessageCopyTextData(row);
       if (copyData.text) return copyData.text;
       const copyMsg = row?.__messageData || {};
-      if (copyMsg.location) return 'Location';
+      if (copyMsg.location) return tr('Location');
       if (copyMsg.file_id) return 'Attachment';
       return '';
     }
@@ -310,12 +311,22 @@
       const mediaClickSuppressMs = 700;
       let swipe = null;
 
-      const isInteractiveTarget = (target) => Boolean(target.closest(
-        'button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-file, .link-preview, .msg-group-avatar'
-      ));
+      const isLocationCardGestureTarget = (target) => Boolean(
+        target?.closest?.('[data-location-card]')
+        && !target.closest('[data-location-card] a, [data-location-card] .leaflet-control, [data-location-card] .leaflet-interactive, [data-location-card] input, [data-location-card] textarea, [data-location-card] select, [data-location-card] label')
+      );
+      const isInteractiveTarget = (target) => {
+        if (!target?.closest) return false;
+        if (isLocationCardGestureTarget(target)) return false;
+        return Boolean(target.closest(
+          'button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-file, .link-preview, .msg-group-avatar'
+        ));
+      };
       const suppressMediaClickAfterSwipe = (row) => {
-        if (!row?.querySelector?.('.msg-image')) return;
-        row.__suppressMediaClickUntil = Date.now() + mediaClickSuppressMs;
+        if (!row?.querySelector?.('.msg-image, [data-location-card]')) return;
+        const until = Date.now() + mediaClickSuppressMs;
+        row.__suppressMediaClickUntil = until;
+        if (row.querySelector('[data-location-card]')) row.__suppressLocationClickUntil = until;
       };
       const isSwipeGestureActive = (inputType) => Boolean(swipe && swipe.inputType === inputType);
       const canReplyFromRow = (row) => Boolean(
@@ -361,6 +372,7 @@
           if (absX < lockStartPx || absX < absY * 0.75) return;
           const kind = rawDx < 0 ? 'reply' : 'edit';
           if ((kind === 'reply' && !canReplyFromRow(swipe.row)) || (kind === 'edit' && !canEditMessage(swipe.row.__messageData))) {
+            if (swipe.startedOnMedia) suppressMediaClickAfterSwipe(swipe.row);
             finishSwipe(false);
             return;
           }
@@ -405,7 +417,7 @@
           row,
           startX: touch.clientX,
           startY: touch.clientY,
-          startedOnMedia: Boolean(e.target.closest('.msg-image')),
+          startedOnMedia: Boolean(e.target.closest('.msg-image, [data-location-card]')),
           inputType: 'touch',
         });
       }, { passive: true });
@@ -433,7 +445,7 @@
           row,
           startX: e.clientX,
           startY: e.clientY,
-          startedOnMedia: Boolean(e.target.closest('.msg-image')),
+          startedOnMedia: Boolean(e.target.closest('.msg-image, [data-location-card]')),
           inputType: 'pointer',
           pointerId: e.pointerId,
         });

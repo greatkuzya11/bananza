@@ -45,6 +45,7 @@
         getCurrentChatId: () => currentChatId,
         actions: {
           alert: (message) => alert(message),
+          t: (key, params) => t(key, params),
           isClientSideMessage: (msg) => isClientSideMessage(msg),
           isPollMessage: (msg) => isPollMessage(msg),
           isCurrentNotesChat: () => isCurrentNotesChat(),
