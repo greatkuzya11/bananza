@@ -187,17 +187,9 @@
       const card = row.querySelector('[data-location-card]');
       if (!card) return;
       win.requestAnimationFrame(() => hydrateCardMap(card, location));
-      card.addEventListener('contextmenu', () => {
-        row.__suppressLocationClickUntil = Date.now() + 900;
-      });
       card.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
-        const suppressUntil = Math.max(
-          Number(row.__suppressLocationClickUntil || 0),
-          Number(row.__suppressMediaClickUntil || 0)
-        );
-        if (Date.now() < suppressUntil) return;
         openLocationViewer(location);
       });
     }

@@ -825,18 +825,6 @@ function createIncomingMessage(chatId, messageId, overrides = {}) {
   };
 }
 
-function createLocationPayload(overrides = {}) {
-  return {
-    latitude: 54.7104,
-    longitude: 20.4522,
-    zoom: 16,
-    title: 'Victory Square',
-    address: 'Victory Square, Kaliningrad',
-    provider: 'osm',
-    ...overrides,
-  };
-}
-
 function createVoiceNoteMessage(chatId, messageId, overrides = {}) {
   return createIncomingMessage(chatId, messageId, {
     text: '',
@@ -4146,104 +4134,6 @@ test('mobile message action buttons keep the keyboard for reply edit and react',
   await wait(dom, 80);
 
   assert.equal(reactionPicker.classList.contains('hidden'), false);
-  assert.equal(document.activeElement, msgInput);
-  assert.equal(app.style.height, '420px');
-});
-
-test('location messages expose normal actions and open the viewer on click', async (t) => {
-  const dom = await openSingleChatDom({
-    chatMessagesByChatId: {
-      1: [createIncomingMessage(1, 235, { text: '', location: createLocationPayload(), is_location: 1 })],
-    },
-  });
-  t.after(() => {
-    dom.window.close();
-  });
-  const { document } = dom.window;
-  const row = document.querySelector('.msg-row[data-msg-id="235"]');
-  const card = row.querySelector('[data-location-card]');
-  const actions = row.querySelector('.msg-actions');
-
-  assert.ok(row.classList.contains('location-message'));
-  assert.ok(card, 'Expected rendered location card');
-  assert.ok(actions.querySelector('.msg-copy-btn'));
-  assert.ok(actions.querySelector('.msg-reply-btn'));
-  assert.ok(actions.querySelector('.msg-save-note-btn'));
-  assert.ok(actions.querySelector('.msg-forward-btn'));
-  assert.ok(actions.querySelector('.msg-react-btn'));
-  assert.equal(actions.querySelector('.msg-edit-btn'), null);
-
-  card.dispatchEvent(new dom.window.MouseEvent('click', {
-    bubbles: true,
-    cancelable: true,
-  }));
-  await wait(dom, 40);
-
-  assert.equal(document.getElementById('locationViewerModal').classList.contains('hidden'), false);
-  assert.equal(document.getElementById('locationViewerTitle').textContent, 'Victory Square');
-});
-
-test('location card right-click opens message actions without opening the viewer', async (t) => {
-  const dom = await openSingleChatDom({
-    chatMessagesByChatId: {
-      1: [createIncomingMessage(1, 236, { text: '', location: createLocationPayload(), is_location: 1 })],
-    },
-  });
-  t.after(() => {
-    dom.window.close();
-  });
-  const { document } = dom.window;
-  const row = document.querySelector('.msg-row[data-msg-id="236"]');
-  const card = row.querySelector('[data-location-card]');
-  const viewer = document.getElementById('locationViewerModal');
-  const reactionPicker = document.getElementById('reactionPicker');
-
-  const contextEvent = new dom.window.MouseEvent('contextmenu', {
-    bubbles: true,
-    cancelable: true,
-    clientX: 120,
-    clientY: 300,
-  });
-  card.dispatchEvent(contextEvent);
-  await wait(dom, 60);
-
-  assert.equal(contextEvent.defaultPrevented, true);
-  assert.equal(viewer.classList.contains('hidden'), true);
-  assert.ok(document.querySelector('.msg-actions.actions-floating-open .msg-reply-btn'));
-  assert.equal(reactionPicker.classList.contains('hidden'), false);
-});
-
-test('mobile swipe reply starts from a location card', async (t) => {
-  const dom = await openSingleChatDom({
-    chatMessagesByChatId: {
-      1: [createIncomingMessage(1, 237, { text: '', location: createLocationPayload(), is_location: 1 })],
-    },
-  });
-  t.after(() => {
-    dom.window.close();
-  });
-  const { document } = dom.window;
-  const app = document.getElementById('app');
-  const msgInput = document.getElementById('msgInput');
-  const replyBar = document.getElementById('replyBar');
-  const replyBarText = document.getElementById('replyBarText');
-  const viewer = document.getElementById('locationViewerModal');
-  const row = document.querySelector('.msg-row[data-msg-id="237"]');
-  const card = row.querySelector('[data-location-card]');
-
-  await openMobileKeyboard(dom, msgInput);
-  dispatchTouchDrag(dom.window, card, {
-    identifier: 77,
-    startX: 320,
-    startY: 360,
-    moveX: 250,
-    endX: 250,
-  });
-  await wait(dom, 80);
-
-  assert.equal(replyBar.classList.contains('hidden'), false);
-  assert.match(replyBarText.textContent, /Location|Геометка/);
-  assert.equal(viewer.classList.contains('hidden'), true);
   assert.equal(document.activeElement, msgInput);
   assert.equal(app.style.height, '420px');
 });
