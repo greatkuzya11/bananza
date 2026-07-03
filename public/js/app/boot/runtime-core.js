@@ -348,7 +348,7 @@
         renderOutboxItem, renderOutboxForChat, scheduleRetryLayout, layoutRetryButtons, persistOutboxItem,
         setOutboxSending, uploadOutboxAttachment, sendOutboxMessageItem, sendOutboxVoiceItem,
         sendOutboxVideoNoteItem, completeOutboxSend, trySendOutboxItem, queueOutboxItem,
-        createMessageOutboxItem, queueVoiceOutbox, queueVideoNoteOutbox, deleteMessage, markMessageDeleted,
+        createMessageOutboxItem, queueLocationOutbox, queueVoiceOutbox, queueVideoNoteOutbox, deleteMessage, markMessageDeleted,
         updateVisibleReplyQuotesFromMessage, applyMessageUpdate,
       } = messageServiceDelegates;
       let checkAuth = () => false;
@@ -361,6 +361,7 @@
       });
       let messageStateController = null;
       let messageAttachmentRenderer = null;
+      let messageLocationRenderer = null;
       let messagePollRenderer = null;
       let messageCallCardRenderer = null;
       let messageRenderer = null;

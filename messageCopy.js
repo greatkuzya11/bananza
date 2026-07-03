@@ -37,12 +37,20 @@ function createMessageCopyService({
       vm.transcription_file_id as voice_transcription_file_id,
       vm.shape_id as voice_shape_id,
       vm.shape_snapshot as voice_shape_snapshot,
+      ml.message_id as location_message_id,
+      ml.latitude as location_latitude,
+      ml.longitude as location_longitude,
+      ml.zoom as location_zoom,
+      ml.title as location_title,
+      ml.address as location_address,
+      ml.provider as location_provider,
       EXISTS(SELECT 1 FROM polls p WHERE p.message_id=m.id) as is_poll_message,
       EXISTS(SELECT 1 FROM call_messages cm WHERE cm.message_id=m.id) as is_call_message
     FROM messages m
     JOIN users u ON u.id = m.user_id
     LEFT JOIN files f ON f.id = m.file_id
     LEFT JOIN voice_messages vm ON vm.message_id = m.id
+    LEFT JOIN message_locations ml ON ml.message_id = m.id
     WHERE m.id = ? AND m.is_deleted = 0
   `);
   const sourcePreviewsStmt = db.prepare(`
@@ -96,6 +104,10 @@ function createMessageCopyService({
       shape_snapshot
     )
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `);
+  const insertLocationStmt = db.prepare(`
+    INSERT INTO message_locations(message_id, latitude, longitude, zoom, title, address, provider)
+    VALUES(?,?,?,?,?,?,?)
   `);
 
   function getSourceMessage(messageId) {
@@ -228,6 +240,18 @@ function createMessageCopyService({
             duplicatedTranscriptionFileId,
             source.voice_shape_id ?? null,
             source.voice_shape_snapshot ?? null
+          );
+        }
+
+        if (source.location_message_id) {
+          insertLocationStmt.run(
+            newMessageId,
+            Number(source.location_latitude),
+            Number(source.location_longitude),
+            Number(source.location_zoom) || 16,
+            source.location_title ?? null,
+            source.location_address ?? null,
+            source.location_provider || 'osm'
           );
         }
 

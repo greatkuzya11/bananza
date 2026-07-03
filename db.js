@@ -150,6 +150,29 @@ db.exec(`
     hostname TEXT
   );
 
+  CREATE TABLE IF NOT EXISTS map_provider_settings (
+    id INTEGER PRIMARY KEY CHECK(id=1),
+    enabled INTEGER DEFAULT 0,
+    provider TEXT DEFAULT 'osm',
+    tile_url_template TEXT NOT NULL DEFAULT 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    tile_attribution TEXT NOT NULL DEFAULT '\u00A9 OpenStreetMap contributors',
+    search_url TEXT NOT NULL DEFAULT 'https://nominatim.openstreetmap.org/search',
+    reverse_url TEXT NOT NULL DEFAULT 'https://nominatim.openstreetmap.org/reverse',
+    max_zoom INTEGER DEFAULT 19,
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS message_locations (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    zoom INTEGER DEFAULT 16,
+    title TEXT DEFAULT NULL,
+    address TEXT DEFAULT NULL,
+    provider TEXT DEFAULT 'osm',
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS user_weather_settings (
     user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     enabled INTEGER DEFAULT 0,
@@ -870,6 +893,18 @@ try {
   db.exec("ALTER TABLE polls ADD COLUMN style TEXT NOT NULL DEFAULT 'pulse'");
 }
 db.prepare("UPDATE polls SET style='pulse' WHERE style IS NULL OR TRIM(style)='' OR style NOT IN ('pulse','stack','orbit')").run();
+db.prepare(`
+  INSERT OR IGNORE INTO map_provider_settings(
+    id,
+    enabled,
+    provider,
+    tile_url_template,
+    tile_attribution,
+    search_url,
+    reverse_url,
+    max_zoom
+  ) VALUES(1,0,'osm','https://tile.openstreetmap.org/{z}/{x}/{y}.png','\u00A9 OpenStreetMap contributors','https://nominatim.openstreetmap.org/search','https://nominatim.openstreetmap.org/reverse',19)
+`).run();
 // Migration: reactions table
 try {
   db.prepare("SELECT 1 FROM reactions LIMIT 1").get();

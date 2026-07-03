@@ -57,7 +57,7 @@ function createForwardingFeature({
       .get(targetChatId, req.user.id);
     if (!isTargetMember) return res.status(403).json({ error: 'Not a member of target chat' });
 
-    if (!source.text && !source.file_id && !source.voice_message_id) {
+    if (!source.text && !source.file_id && !source.voice_message_id && !source.location_message_id) {
       return res.status(400).json({ error: 'Nothing to forward' });
     }
     if (source.voice_message_id && !source.file_id) {

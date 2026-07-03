@@ -126,15 +126,17 @@
     
     function buildLocalMessageFromOutbox(item) {
       const attachment = (item.attachments && item.attachments[0]) || null;
+      const location = item.location && typeof item.location === 'object' ? item.location : null;
       const serverMeta = item.serverFileMeta || null;
       const isVoice = item.kind === 'voice';
       const isVideoNote = item.kind === 'video_note';
+      const hasFileLikePayload = Boolean(attachment || isVoice || isVideoNote || serverMeta);
       const mediaNote = isVideoNote ? (item.videoNote || {}) : (item.voice || {});
-      const fileBlob = (isVoice || isVideoNote) ? mediaNote.blob : attachment?.file;
+      const fileBlob = attachment || isVoice || isVideoNote ? ((isVoice || isVideoNote) ? mediaNote.blob : attachment?.file) : null;
       const posterBlob = isVideoNote ? (mediaNote.posterBlob || attachment?.posterBlob || null) : (attachment?.posterBlob || null);
-      const localUrl = serverMeta?.stored_name ? '' : getOutboxObjectUrl(item.clientId, fileBlob, attachment?.localId || (isVideoNote ? 'video-note' : 'file'));
+      const localUrl = fileBlob && !serverMeta?.stored_name ? getOutboxObjectUrl(item.clientId, fileBlob, attachment?.localId || (isVideoNote ? 'video-note' : 'file')) : '';
       const localPosterUrl = posterBlob ? getOutboxObjectUrl(item.clientId, posterBlob, `${attachment?.localId || (isVideoNote ? 'video-note' : 'file')}-poster`) : '';
-      const fileName = serverMeta?.original_name || attachment?.name || mediaNote.name || (isVideoNote ? 'video-note.webm' : 'voice-note.wav');
+      const fileName = hasFileLikePayload ? (serverMeta?.original_name || attachment?.name || mediaNote.name || (isVideoNote ? 'video-note.webm' : 'voice-note.wav')) : null;
       const fileSize = serverMeta?.size || attachment?.size || fileBlob?.size || 0;
       const fileMime = serverMeta?.mime_type || attachment?.mime || mediaNote.mime || (isVideoNote ? 'video/webm' : 'audio/wav');
       const fileType = serverMeta?.type || attachment?.type || (isVideoNote ? 'video' : (isVoice ? 'audio' : null));
@@ -158,7 +160,7 @@
         avatar_color: getCurrentUser().avatar_color,
         avatar_url: getCurrentUser().avatar_url,
         text: item.text || null,
-        file_id: (attachment || isVoice || isVideoNote || serverMeta) ? (item.serverFileId || item.clientId) : null,
+        file_id: hasFileLikePayload ? (item.serverFileId || item.clientId) : null,
         file_name: fileName,
         file_stored: serverMeta?.stored_name || null,
         client_file_url: localUrl,
@@ -167,6 +169,8 @@
         file_size: fileSize,
         file_type: fileType,
         file_poster_available: hasPoster,
+        location,
+        is_location: Boolean(location),
         reply_to_id: item.replyToId || null,
         reply_display_name: reply?.display_name || null,
         reply_text: reply?.text || null,
@@ -320,6 +324,7 @@
         body: {
           text: item.text || null,
           fileId: fileId || null,
+          location: item.location || null,
           replyToId: item.replyToId || null,
           client_id: item.clientId,
           aiImageRiskAccepted: Boolean(item.aiImageRiskAccepted),
@@ -439,16 +444,19 @@
       aiImageRiskAccepted = false,
       aiResponseModeHint = null,
       aiDocumentFormatHint = null,
+      location = null,
     } = {}) {
       const clientId = actions.makeClientId('c');
+      const hasLocation = Boolean(location && typeof location === 'object');
       return {
         clientId,
         chatId: getCurrentChatId(),
         userId: getCurrentUser().id,
         status: 'queued',
-        kind: 'message',
+        kind: hasLocation ? 'location' : 'message',
         createdAt: createdAt || new Date().toISOString(),
         text: text || null,
+        location: hasLocation ? { ...location } : null,
         aiImageRiskAccepted: Boolean(aiImageRiskAccepted),
         aiResponseModeHint: aiResponseModeHint || null,
         aiDocumentFormatHint: aiDocumentFormatHint || null,
@@ -458,6 +466,22 @@
         serverFileId: null,
         serverFileMeta: null,
       };
+    }
+
+    async function queueLocationOutbox({ location, replyTo: suppliedReply } = {}) {
+      if (!getCurrentChatId() || !location) return null;
+      const reply = suppliedReply ? actions.getReplySnapshot(suppliedReply) : actions.getReplySnapshot();
+      const item = createMessageOutboxItem({
+        text: null,
+        location,
+        reply,
+      });
+      actions.clearReply();
+      await queueOutboxItem(item, { attempt: false });
+      actions.playAppSound('send');
+      actions.scrollToBottom();
+      trySendOutboxItem(item);
+      return item;
     }
     
     
@@ -596,6 +620,7 @@
       retrySend,
       queueOutboxItem,
       createMessageOutboxItem,
+      queueLocationOutbox,
       queueVoiceOutbox,
       queueVideoNoteOutbox,
     };

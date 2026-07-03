@@ -85,6 +85,12 @@ Object.assign(PUSH_TEXT.en, {
   callInvitePrivate: '{name} is calling',
   callInviteInChat: '{name} is calling in {chat}',
 });
+Object.assign(PUSH_TEXT.ru, {
+  location: '\u0413\u0435\u043e\u043c\u0435\u0442\u043a\u0430',
+});
+Object.assign(PUSH_TEXT.en, {
+  location: 'Location',
+});
 
 function boolValue(value, fallback = false) {
   if (typeof value === 'boolean') return value;
@@ -117,6 +123,7 @@ function messagePreviewForLanguage(message, language) {
   const text = message?.text || message?.transcription_text || '';
   if (String(text).trim()) return truncate(text);
   if (message?.is_voice_note) return pushText(language, 'voiceMessage');
+  if (message?.location || message?.is_location || message?.location_message_id) return pushText(language, 'location');
   if (message?.file_type === 'image') return pushText(language, 'photo');
   if (message?.file_type === 'video') return pushText(language, 'video');
   if (message?.file_type === 'audio') return pushText(language, 'audio');
@@ -128,6 +135,7 @@ function pinPreviewForLanguage(message, language) {
   const text = String(message?.text || message?.transcription_text || '').trim();
   if (text) return truncate(text, 160);
   if (message?.is_voice_note || message?.voice_message_id) return pushText(language, 'voiceMessage');
+  if (message?.location || message?.is_location || message?.location_message_id) return pushText(language, 'location');
   if (message?.file_name) return truncate(message.file_name, 160);
   if (message?.file_type || message?.file_id) return pushText(language, 'attachment');
   return pushText(language, 'pinnedMessage');

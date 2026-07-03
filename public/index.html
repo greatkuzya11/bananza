@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
   <title>🍌 BananZa</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍌</text></svg>">
-  <link rel="stylesheet" href="/css/style.css?v=20260624-ios-header-pin1">
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css?v=1.9.4">
+  <link rel="stylesheet" href="/css/style.css?v=20260703-location-picker3">
   <link rel="stylesheet" href="/css/calls.css?v=20260621-call-mobile-controls">
   <link rel="stylesheet" href="/css/voice.css">
   <link rel="stylesheet" href="/css/video-notes.css">
@@ -317,7 +318,7 @@
       </div>
       <div class="modal-body">
         <div class="settings-hint">This archive contains chat history, uploaded files, and server secrets. Store it somewhere private.</div>
-        <div class="settings-hint">.env is not included. Keep deployment environment variables separately.</div>
+        <div class="settings-hint">.env is not included. Keep deployment environment variables such as BANANZA_MAP_CONTACT separately.</div>
         <div class="settings-item settings-toggle-item">
           <span data-i18n="Stream archive directly">Stream archive directly</span>
           <label class="toggle-switch">
@@ -400,6 +401,7 @@
         <button id="settingsAnimationPanel" class="settings-item">✨ Animation</button>
         <button id="settingsMobileFontPanel" class="settings-item">&#128288; Font Size (mobile)</button>
         <button id="settingsWeatherPanel" class="settings-item">⛅ Weather</button>
+        <button id="settingsMapsPanel" class="settings-item hidden">&#128205; Maps</button>
         <button id="settingsNotificationsPanel" class="settings-item">🔔 Уведомления</button>
         <button id="settingsSoundsPanel" class="settings-item">🔊 Звуки</button>
         <button id="settingsLanguagePanel" class="settings-item">🌐 Язык интерфейса: русский</button>
@@ -578,6 +580,51 @@
               <button id="settingsWeatherRefreshNow" type="button" class="weather-action-btn">Update now</button>
             </div>
             <div id="settingsWeatherStatus" class="weather-settings-status"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Map Settings Modal -->
+  <div id="mapSettingsModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 data-i18n="Maps">Maps</h3>
+        <button class="modal-close" type="button" aria-label="Close" data-i18n-aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="settingsMapsBlock" class="map-settings-block">
+          <div class="settings-item settings-toggle-item">
+            <span data-i18n="Enable maps and geotags">Enable maps and geotags</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="settingsMapsEnabled">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div id="settingsMapsControls" class="map-settings-controls hidden">
+            <label class="map-field-label" for="settingsMapsProvider" data-i18n="Provider">Provider</label>
+            <input type="text" id="settingsMapsProvider" class="modal-input" autocomplete="off">
+            <label class="map-field-label" for="settingsMapsTileUrl" data-i18n="Tile URL template">Tile URL template</label>
+            <input type="url" id="settingsMapsTileUrl" class="modal-input" autocomplete="off">
+            <label class="map-field-label" for="settingsMapsAttribution" data-i18n="Tile attribution">Tile attribution</label>
+            <input type="text" id="settingsMapsAttribution" class="modal-input" autocomplete="off">
+            <label class="map-field-label" for="settingsMapsMaxZoom" data-i18n="Max zoom">Max zoom</label>
+            <input type="number" id="settingsMapsMaxZoom" class="modal-input" min="1" max="22" step="1">
+            <label class="map-field-label" for="settingsMapsSearchUrl" data-i18n="Search API URL">Search API URL</label>
+            <input type="url" id="settingsMapsSearchUrl" class="modal-input" autocomplete="off">
+            <label class="map-field-label" for="settingsMapsReverseUrl" data-i18n="Reverse API URL">Reverse API URL</label>
+            <input type="url" id="settingsMapsReverseUrl" class="modal-input" autocomplete="off">
+            <label class="map-field-label" for="settingsMapsTestQuery" data-i18n="Test search query">Test search query</label>
+            <div class="map-search-row">
+              <input type="text" id="settingsMapsTestQuery" class="modal-input" placeholder="Kaliningrad" data-i18n-placeholder="Kaliningrad" autocomplete="off">
+              <button id="settingsMapsTestBtn" type="button" class="weather-action-btn" data-i18n="Test search">Test search</button>
+            </div>
+            <div id="settingsMapsUserAgent" class="settings-hint"></div>
+            <div class="map-settings-actions">
+              <button id="settingsMapsSaveBtn" type="button" class="btn-primary map-save-btn" data-i18n="Save maps">Save maps</button>
+            </div>
+            <div id="settingsMapsStatus" class="weather-settings-status"></div>
           </div>
         </div>
       </div>
@@ -2657,6 +2704,53 @@
   </div>
 
   <input type="file" id="fileInput" class="hidden" multiple>
+  <!-- Location Picker Modal -->
+  <div id="locationPickerModal" class="modal hidden">
+    <div class="modal-content wide location-picker-modal">
+      <div class="modal-header">
+        <h3 data-i18n="Choose location">Choose location</h3>
+        <button class="modal-close" type="button" aria-label="Close" data-i18n-aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body location-picker-body">
+        <div class="location-picker-toolbar">
+          <div class="location-search-row">
+            <input id="locationPickerSearch" class="modal-input" type="search" placeholder="Search place..." data-i18n-placeholder="Search place..." autocomplete="off">
+            <button id="locationPickerSearchBtn" type="button" class="weather-action-btn" data-i18n="Search place">Search place</button>
+          </div>
+          <button id="locationPickerUseCurrentBtn" type="button" class="weather-action-btn" data-i18n="Use my location">Use my location</button>
+        </div>
+        <div id="locationPickerResults" class="weather-search-results location-search-results hidden"></div>
+        <div id="locationPickerMap" class="location-picker-map" aria-label="Map" data-i18n-aria-label="Map"></div>
+        <div class="location-picker-footer">
+          <div id="locationPickerSelected" class="location-selected-label" data-i18n="No location selected">No location selected</div>
+          <button id="locationPickerSendBtn" type="button" class="btn-primary" disabled data-i18n="Send location">Send location</button>
+        </div>
+        <div id="locationPickerStatus" class="weather-settings-status"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Location Viewer Modal -->
+  <div id="locationViewerModal" class="modal hidden">
+    <div class="modal-content wide location-viewer-modal">
+      <div class="modal-header">
+        <h3 id="locationViewerTitle" data-i18n="Location">Location</h3>
+        <button class="modal-close" type="button" aria-label="Close" data-i18n-aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body location-viewer-body">
+        <div id="locationViewerMap" class="location-viewer-map" aria-label="Map" data-i18n-aria-label="Map"></div>
+        <div class="location-viewer-details">
+          <div id="locationViewerDetails"></div>
+          <div class="location-viewer-actions">
+            <a id="locationViewerOpenLink" class="weather-action-btn location-open-link" href="https://www.openstreetmap.org/" target="_blank" rel="noopener noreferrer" data-i18n="Open in OpenStreetMap">Open in OpenStreetMap</a>
+            <button id="locationViewerCopyBtn" type="button" class="weather-action-btn" data-i18n="Copy location">Copy location</button>
+          </div>
+          <div id="locationViewerStatus" class="weather-settings-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <input type="file" id="fileInputGallery" class="hidden" multiple accept="image/*,video/*">
   <input type="file" id="fileInputCamera" class="hidden" accept="image/*" capture="environment">
   <input type="file" id="fileInputDocs" class="hidden" multiple>
@@ -2679,6 +2773,10 @@
       <span class="attach-menu-icon">📊</span>
       <span>Poll</span>
     </button>
+    <button id="attachMenuLocation" class="attach-menu-item hidden" hidden>
+      <span class="attach-menu-icon">&#128205;</span>
+      <span data-i18n="Geotag">Geotag</span>
+    </button>
   </div>
   <div id="attachMenuOverlay" class="attach-menu-overlay hidden"></div>
 
@@ -2686,6 +2784,7 @@
   <script src="/js/messageCache.js"></script>
   <script src="/js/ai-image-risk.js"></script>
   <script src="/js/i18n.js?v=20260615-doc-chatshot2"></script>
+  <script src="/vendor/leaflet/leaflet.js?v=1.9.4"></script>
   <script src="/js/document-editor.bundle.js?v=20260620-doc-image-handles1"></script>
   <script src="/js/qip-infium-original.js?v=20260523-qip-infium-original"></script>
   <script src="/js/qip-hd.js?v=20260523-qip-hd"></script>
@@ -2707,14 +2806,15 @@
     <script src="/js/app/shell/mobile-composer-guard.js?v=20260621-ios-keyboard1"></script>
     <script src="/js/app/shell/events.js?v=20260614-doc-settings1"></script>
     <script src="/js/app/shell/ui-runtime.js?v=20260624-ios-bottom-stabilizer3"></script>
-    <script src="/js/app/shell/shell-runtime.js?v=20260614-doc-settings1"></script>
+    <script src="/js/app/shell/shell-runtime.js?v=20260702-maps2"></script>
     <script src="/js/app/shell/mobile-runtime-adapters.js?v=20260601-runtime-final"></script>
     <script src="/js/app/modal-manager.js?v=20260531-modal-manager"></script>
   <script src="/js/app/settings/ui-settings.js?v=20260531-settings"></script>
   <script src="/js/app/settings/weather-settings.js?v=20260531-settings"></script>
+  <script src="/js/app/settings/map-settings.js?v=20260702-maps4"></script>
   <script src="/js/app/settings/notification-settings.js?v=20260531-settings"></script>
   <script src="/js/app/settings/sound-settings.js?v=20260531-settings"></script>
-  <script src="/js/app/settings/settings-modal.js?v=20260531-settings"></script>
+  <script src="/js/app/settings/settings-modal.js?v=20260702-maps2"></script>
   <script src="/js/app/folders/store.js?v=20260531-folders"></script>
   <script src="/js/app/folders/ui.js?v=20260531-folders"></script>
   <script src="/js/app/folders/actions.js?v=20260531-folders"></script>
@@ -2734,6 +2834,7 @@
   <script src="/js/app/documents.js?v=20260617-doc-keyboard-intent1"></script>
   <script src="/js/app/messages/state.js?v=20260531-messages"></script>
   <script src="/js/app/messages/attachments.js?v=20260531-messages"></script>
+  <script src="/js/app/messages/locations.js?v=20260702-maps1"></script>
   <script src="/js/app/messages/polls.js?v=20260531-messages"></script>
   <script src="/js/app/messages/call-cards.js?v=20260531-messages"></script>
   <script src="/js/app/messages/outbox.js?v=20260531-messages"></script>
@@ -2743,6 +2844,7 @@
   <script src="/js/app/composer/text.js?v=20260531-composer"></script>
   <script src="/js/app/composer/reply-edit.js?v=20260531-composer"></script>
   <script src="/js/app/composer/files.js?v=20260531-composer"></script>
+  <script src="/js/app/composer/location.js?v=20260702-maps1"></script>
   <script src="/js/app/composer/send.js?v=20260531-composer"></script>
   <script src="/js/app/composer/emoji-picker.js?v=20260531-composer"></script>
   <script src="/js/app/composer/mentions.js?v=20260531-composer"></script>

@@ -98,6 +98,7 @@ test('settings modules are published on BananzaApp.settings', () => {
   const settings = dom.window.BananzaApp.settings;
   assert.equal(typeof settings.ui.createUiSettings, 'function');
   assert.equal(typeof settings.weather.createWeatherSettings, 'function');
+  assert.equal(typeof settings.maps.createMapSettings, 'function');
   assert.equal(typeof settings.notifications.createNotificationSettings, 'function');
   assert.equal(typeof settings.sound.createSoundSettings, 'function');
   assert.equal(typeof settings.modal.createSettingsModal, 'function');
@@ -195,6 +196,73 @@ test('weather controller renders state and uses settings/current endpoints', asy
   await controller.saveWeatherSettings();
   assert.ok(calls.some((entry) => entry.url === '/api/weather/settings' && entry.opts.method === 'PUT'));
   assert.ok(calls.some((entry) => entry.url === '/api/weather/current?force=1'));
+});
+
+test('settings modal loads saved map enabled state before rendering Maps admin panel', async () => {
+  const dom = createAppDom();
+  loadAppRuntimeScripts(dom);
+  const { window } = dom;
+  const calls = [];
+  const maps = window.BananzaApp.settings.maps.createMapSettings({
+    document: window.document,
+    window,
+    api: async (url, opts = {}) => {
+      calls.push({ url, opts });
+      if (url === '/api/admin/maps/settings' && opts.method === 'PUT') {
+        return { settings: opts.body, user_agent: 'Bananza test agent' };
+      }
+      if (url === '/api/admin/maps/settings') {
+        return {
+          settings: {
+            enabled: true,
+            provider: 'osm',
+            tile_url_template: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+            tile_attribution: '\u00A9 OpenStreetMap contributors',
+            search_url: 'https://nominatim.openstreetmap.org/search',
+            reverse_url: 'https://nominatim.openstreetmap.org/reverse',
+            max_zoom: 19,
+          },
+          user_agent: 'Bananza test agent',
+        };
+      }
+      throw new Error(`Unexpected maps endpoint ${url}`);
+    },
+  });
+  const modal = window.BananzaApp.settings.modal.createSettingsModal({
+    document: window.document,
+    window,
+    dom: window.BananzaApp.dom.createDomRefs(),
+    modals: {
+      open(id) {
+        window.document.getElementById(id)?.classList.remove('hidden');
+      },
+      getTop() {
+        return { id: 'settingsModal' };
+      },
+    },
+    ui: {},
+    weather: {},
+    maps,
+    notifications: {},
+    sound: {},
+    getCurrentUser: () => ({ id: 1, is_admin: 1 }),
+  });
+  maps.bindEvents();
+
+  modal.openMapSettingsModal();
+  await wait(window, 20);
+  assert.ok(calls.some((entry) => entry.url === '/api/admin/maps/settings' && !entry.opts.method));
+  assert.equal(window.document.getElementById('settingsMapsEnabled').checked, true);
+  assert.equal(window.document.getElementById('settingsMapsControls').classList.contains('hidden'), false);
+
+  window.document.getElementById('settingsMapsEnabled').checked = false;
+  window.document.getElementById('settingsMapsEnabled').dispatchEvent(new window.Event('change', { bubbles: true }));
+  assert.equal(window.document.getElementById('settingsMapsControls').classList.contains('hidden'), false);
+  assert.equal(window.document.getElementById('settingsMapsSaveBtn').offsetParent !== null || !window.document.getElementById('settingsMapsSaveBtn').closest('.hidden'), true);
+  window.document.getElementById('settingsMapsSaveBtn').click();
+  await wait(window, 20);
+  const saveCall = calls.find((entry) => entry.url === '/api/admin/maps/settings' && entry.opts.method === 'PUT');
+  assert.equal(saveCall.opts.body.enabled, false);
 });
 
 test('notification controller renders support and fake push subscription path', async () => {
@@ -338,8 +406,10 @@ test('full app bridge keeps settings modal and AI settings boundary intact', asy
   };
   window.localStorage.setItem('token', 'test-token');
   window.localStorage.setItem('user', JSON.stringify(currentUser));
-  window.fetch = async (input) => {
+  const fetchCalls = [];
+  window.fetch = async (input, opts = {}) => {
     const url = new URL(String(input), window.location.origin);
+    fetchCalls.push({ url: url.pathname + url.search, opts });
     switch (url.pathname) {
       case '/api/auth/me':
         return createJsonResponse(dom, { user: currentUser });
@@ -351,6 +421,27 @@ test('full app bridge keeps settings modal and AI settings boundary intact', asy
         return createJsonResponse(dom, { settings: { sounds_enabled: true, volume: 55, play_send: true, play_incoming: true, play_notifications: true, play_reactions: true, play_pins: true, play_invites: true, play_voice: true, play_mentions: true } });
       case '/api/notification-settings':
         return createJsonResponse(dom, { settings: { push_enabled: false, notify_messages: true, notify_chat_invites: true, notify_reactions: true, notify_pins: true, notify_mentions: true } });
+      case '/api/admin/maps/settings':
+        if (opts.method === 'PUT') {
+          return createJsonResponse(dom, {
+            settings: JSON.parse(opts.body),
+            user_agent: 'Bananza test agent',
+          });
+        }
+        return createJsonResponse(dom, {
+          settings: {
+            enabled: false,
+            provider: 'osm',
+            tile_url_template: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+            tile_attribution: '\u00A9 OpenStreetMap contributors',
+            search_url: 'https://nominatim.openstreetmap.org/search',
+            reverse_url: 'https://nominatim.openstreetmap.org/reverse',
+            max_zoom: 19,
+          },
+          user_agent: 'Bananza test agent',
+        });
+      case '/api/maps/config':
+        return createJsonResponse(dom, { config: { enabled: true, provider: 'osm', max_zoom: 19 } });
       case '/api/chats':
       case '/api/users':
         return createJsonResponse(dom, []);
@@ -373,4 +464,16 @@ test('full app bridge keeps settings modal and AI settings boundary intact', asy
   assert.equal(window.document.getElementById('settingsModal').classList.contains('hidden'), false);
   assert.ok(window.document.getElementById('settingsAiBotsPanel'));
   assert.equal(window.document.getElementById('settingsAiBotsPanel').classList.contains('hidden'), false);
+
+  window.document.getElementById('settingsMapsPanel').click();
+  await wait(window, 40);
+  assert.equal(window.document.getElementById('mapSettingsModal').classList.contains('hidden'), false);
+  assert.equal(window.document.getElementById('settingsMapsEnabled').checked, false);
+  window.document.getElementById('settingsMapsEnabled').checked = true;
+  window.document.getElementById('settingsMapsSaveBtn').click();
+  await wait(window, 40);
+  const mapSaveCall = fetchCalls.find((entry) => entry.url === '/api/admin/maps/settings' && entry.opts.method === 'PUT');
+  assert.ok(mapSaveCall);
+  assert.equal(JSON.parse(mapSaveCall.opts.body).enabled, true);
+  assert.match(window.document.getElementById('settingsMapsStatus').textContent, /Saved|Сохранено/);
 });

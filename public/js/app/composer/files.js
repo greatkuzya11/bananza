@@ -141,7 +141,7 @@
       const viewportWidth = vv ? vv.width : win.innerWidth;
       const viewportHeight = vv ? vv.height : win.innerHeight;
       const menuWidth = attachMenu.offsetWidth || 160;
-      const menuHeight = attachMenu.offsetHeight || 145;
+      const menuHeight = attachMenu.offsetHeight || 190;
       let left = rect.left + viewportLeft;
       left = Math.max(viewportLeft + 8, Math.min(left, viewportLeft + viewportWidth - menuWidth - 8));
       const preferredTop = rect.top + viewportTop - menuHeight - 8;
@@ -181,7 +181,11 @@
       });
     }
 
-    function bindAttachMenuEvents({ openPollComposer = noop } = {}) {
+    function shouldUseAttachMenu() {
+      return isMobileAttachMenu() || Boolean((actions.shouldUseAttachMenu || (() => false))());
+    }
+
+    function bindAttachMenuEvents({ openPollComposer = noop, openLocationPicker = noop } = {}) {
       if (!dom.attachBtn || dom.attachBtn.__composerAttachMenuBound) return;
       const attachMenu = getAttachMenu();
       const attachMenuOverlay = doc.getElementById('attachMenuOverlay');
@@ -192,7 +196,7 @@
       dom.attachBtn.__composerAttachMenuBound = true;
       bindButtonActivation(dom.attachBtn, ({ keepKeyboardOpen }) => {
         if (state.editTo) return;
-        if (isMobileAttachMenu()) {
+        if (shouldUseAttachMenu()) {
           if ((actions.isFloatingSurfaceVisible || ((el) => !el?.classList.contains('hidden')))(attachMenu)) {
             hideAttachMenu();
             return;
@@ -225,6 +229,7 @@
       doc.getElementById('attachMenuCamera')?.addEventListener('click', () => { hideAttachMenu(); fileInputCamera?.click(); });
       doc.getElementById('attachMenuFile')?.addEventListener('click', () => { hideAttachMenu(); fileInputDocs?.click(); });
       doc.getElementById('attachMenuPoll')?.addEventListener('click', () => { hideAttachMenu(); openPollComposer(); });
+      doc.getElementById('attachMenuLocation')?.addEventListener('click', () => { hideAttachMenu(); openLocationPicker(); });
 
       bindFileInput(dom.fileInput);
       bindFileInput(fileInputGallery, { resetValue: true });

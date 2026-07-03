@@ -1934,6 +1934,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
           file_type: raw.file_type || raw.fileType || null,
           is_voice_note: Boolean(raw.is_voice_note || raw.isVoiceNote),
           is_video_note: Boolean(raw.is_video_note || raw.isVideoNote),
+          is_location: Boolean(raw.is_location || raw.isLocation),
         };
       }
     
@@ -1949,7 +1950,9 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
       }
     
       function getPinPreviewText(pin) {
-        const fallback = pin?.is_voice_note ? t(pin?.is_video_note ? 'Video note' : 'Voice message') : t('Pinned message');
+        const fallback = pin?.is_location
+          ? t('Location')
+          : (pin?.is_voice_note ? t(pin?.is_video_note ? 'Video note' : 'Voice message') : t('Pinned message'));
         return String(
           pin?.preview_text
           || pin?.file_name
@@ -2441,6 +2444,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         chat.last_time = null;
         chat.last_user = null;
         chat.last_file_id = null;
+        chat.last_location = 0;
         chat.last_message_id = 0;
         chat.first_unread_id = null;
         chat.unread_count = 0;
@@ -2705,6 +2709,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
           animationSettingsModal,
           mobileFontSettingsModal,
           weatherSettingsModal,
+          'mapSettingsModal',
           notificationSettingsModal,
           soundSettingsModal,
           aiBotSettingsModal,
@@ -2727,6 +2732,8 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
           { modal: chatFolderManageModal, onAfterClose: resetChatFolderManageModal },
           { modal: forwardMessageModal, onAfterClose: resetForwardMessageModal },
           { modal: pollComposerModal, onAfterClose: resetPollComposer },
+          { modal: 'locationPickerModal' },
+          { modal: 'locationViewerModal', onAfterClose: () => messageLocationRenderer?.resetViewerMap?.() },
           { modal: pollVotersModal, onAfterClose: resetPollVotersModal },
         ]);
       }

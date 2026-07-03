@@ -466,7 +466,11 @@
         // File attach and poll composer
         syncMentionOpenButton();
         renderComposerAiOverride();
-        composerFilesController?.bindAttachMenuEvents?.({ openPollComposer: () => openPollComposer() });
+        composerFilesController?.bindAttachMenuEvents?.({
+          openPollComposer: () => openPollComposer(),
+          openLocationPicker: () => composerLocationController?.openLocationPicker?.(),
+        });
+        composerLocationController?.bindEvents?.({ bindAsyncActionButtons, withActionButtons });
         pollComposerController?.bindPollComposerEvents?.();
     
         // Emoji
@@ -750,6 +754,7 @@
         // Settings controllers
         settingsModalController.bindEvents({ bindTouchSafeButtonActivation });
         weatherSettingsController.bindEvents({ bindAsyncActionButtons, withActionButtons });
+        mapSettingsController?.bindEvents?.({ bindAsyncActionButtons, withActionButtons });
         notificationSettingsController.bindEvents({ bindAsyncActionButtons });
         soundSettingsController.bindEvents();
     

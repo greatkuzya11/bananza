@@ -200,6 +200,7 @@
         scheduleMeasuredIdleTask('sound-settings-load', () => loadSoundSettings(), 0);
         scheduleMeasuredIdleTask('notification-settings-load', () => loadNotificationSettings(), 50);
         scheduleMeasuredIdleTask('weather-settings-load', () => loadWeatherSettings().then(() => loadCurrentWeather(false)), 100);
+        scheduleMeasuredIdleTask('maps-config-load', () => composerLocationController?.loadMapConfig?.({ force: true }), 150);
         scheduleMeasuredIdleTask('emoji-recent-load', () => loadRecentEmojis(), 0);
         scheduleMeasuredIdleTask('users-background-load', () => loadAllUsers(), 200);
         if ('serviceWorker' in navigator) {

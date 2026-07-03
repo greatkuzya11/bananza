@@ -88,6 +88,22 @@
           isFloatingSurfaceVisible: (el) => isFloatingSurfaceVisible(el),
           openFloatingSurface: (el) => openFloatingSurface(el),
           closeFloatingSurface: (el, options = {}) => closeFloatingSurface(el, options),
+          shouldUseAttachMenu: () => Boolean(composerLocationController?.isMapsEnabled?.()),
+        },
+      });
+
+      composerLocationController = composerLocationFactory({
+        window,
+        document,
+        state: composerStateController,
+        services: { messages: messageServices },
+        storage: localStorage,
+        api: (url, opts) => api(url, opts),
+        actions: {
+          alert: (message) => alert(message),
+          openModal: (id, options = {}) => openModal(id, options),
+          closeModal: (id, options = {}) => closeModal(id, options),
+          queueLocationOutbox: (payload) => messageOutbox?.queueLocationOutbox?.(payload),
         },
       });
     

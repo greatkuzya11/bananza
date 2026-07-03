@@ -17,6 +17,7 @@
     const formatters = objectOrDefault(opts.formatters || root.formatters);
     const attachmentHelpers = objectOrDefault(opts.attachmentHelpers || root.attachments);
     const attachmentRenderer = objectOrDefault(opts.attachmentRenderer);
+    const locationRenderer = objectOrDefault(opts.locationRenderer);
     const pollRenderer = objectOrDefault(opts.pollRenderer);
     const callCardRenderer = objectOrDefault(opts.callCardRenderer);
     const messageState = objectOrDefault(opts.messageState);
@@ -92,6 +93,11 @@
 
     function resetReusableMessageRow(row) {
       if (!row) return;
+      row.querySelectorAll('.location-card-map').forEach((mapEl) => {
+        if (!mapEl.__leafletMap) return;
+        try { mapEl.__leafletMap.remove(); } catch (e) {}
+        delete mapEl.__leafletMap;
+      });
       row.querySelectorAll('audio, video').forEach((media) => {
         try { media.pause?.(); } catch (e) {}
       });
@@ -727,6 +733,7 @@
       const isOwn = msg.user_id === getCurrentUser().id;
       const isClientMessage = isClientSideMessage(msg);
       const normalizedPoll = pollRenderer.normalizePoll(msg?.poll);
+      const isLocationMessage = Boolean(!msg.is_deleted && msg.location);
       const isPulsePollMessage = Boolean(!msg.is_deleted && normalizedPoll && pollRenderer.isPulsePoll(normalizedPoll));
       const isMediaMessage = Boolean(
         !msg.is_deleted &&
@@ -738,6 +745,7 @@
         !msg.poll &&
         !msg.is_voice_note &&
         !msg.file_id &&
+        !msg.location &&
         !msg.forwarded_from_display_name &&
         !msg.reply_to_id &&
         msg.text &&
@@ -752,7 +760,7 @@
         ? options.reuseRow
         : document.createElement('div');
       if (options.reuseRow === row) resetReusableMessageRow(row);
-      row.className = `msg-row ${isOwn ? 'own' : 'other'}${isEmojiOnly ? ' emoji-only-message' : ''}${isMediaMessage ? ' media-message' : ''}${isPollMessage ? ' poll-message' : ''}${isCallMessage ? ' call-message' : ''}${isCallTranscriptMessage ? ' call-transcript-message' : ''}${isCallArtifactMessage ? ' call-artifact-message' : ''}`;
+      row.className = `msg-row ${isOwn ? 'own' : 'other'}${isEmojiOnly ? ' emoji-only-message' : ''}${isMediaMessage ? ' media-message' : ''}${isLocationMessage ? ' location-message' : ''}${isPollMessage ? ' poll-message' : ''}${isCallMessage ? ' call-message' : ''}${isCallTranscriptMessage ? ' call-transcript-message' : ''}${isCallArtifactMessage ? ' call-artifact-message' : ''}`;
       if (options.entering) {
         row.classList.add('entering');
         row.addEventListener('animationend', () => row.classList.remove('entering'), { once: true });
@@ -771,6 +779,8 @@
         text: getReplyPreviewText(msg),
         is_voice_note: Boolean(msg.is_voice_note),
         is_video_note: Boolean(msg.is_video_note),
+        is_location: Boolean(msg.location),
+        location: msg.location || null,
         ai_bot_id: Number(msg.ai_bot_id) || 0,
         ai_bot_mention: msg.ai_bot_mention || '',
         ai_bot_provider: msg.ai_bot_provider || '',
@@ -828,6 +838,10 @@
         // File attachment
         if (msg.file_id && (msg.file_stored || msg.client_file_url)) {
           html += attachmentRenderer.renderFileAttachment(msg);
+        }
+
+        if (msg.location) {
+          html += locationRenderer.renderLocationCard?.(msg) || '';
         }
     
         if (isCallMessage) {
@@ -981,6 +995,7 @@
       }
     
       pollRenderer.bindPollControls(row);
+      locationRenderer.bindLocationCards?.(row, msg);
       callCardRenderer.bindCallMessageControls(row);
       callCardRenderer.bindCallTranscriptMessageControls(row);
       callCardRenderer.bindCallArtifactMessageControls(row);

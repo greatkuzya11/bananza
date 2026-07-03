@@ -727,9 +727,9 @@ function installFullAppStubs(dom, { fetchHandler = null } = {}) {
   };
 }
 
-async function bootFullApp() {
+async function bootFullApp(options = {}) {
   const dom = createAppDom();
-  installFullAppStubs(dom);
+  installFullAppStubs(dom, options);
   installVisualViewportMock(dom.window, { width: 390, height: 844, offsetTop: 0, offsetLeft: 0 });
   const ready = new Promise((resolve) => dom.window.addEventListener('bananza:ready', resolve, { once: true }));
   loadBrowserScript(dom, 'public/js/ai-image-risk.js');
@@ -761,4 +761,37 @@ test('app bridge exposes composer state and dictation hooks after app boot', asy
   BananzaAppBridge.__testing.setReply(9, 'Bob', 'reply source', { id: 9, display_name: 'Bob', text: 'reply source' });
   BananzaAppBridge.updateReplyPreview(9, 'updated reply');
   assert.equal(BananzaAppBridge.getReplyTo().text, 'updated reply');
+});
+
+test('full app attach menu opens location picker when maps are enabled', async (t) => {
+  const dom = await bootFullApp({
+    fetchHandler: async ({ url, dom }) => {
+      if (url.pathname === '/api/maps/config') {
+        return createJsonResponse(dom, {
+          settings: {
+            enabled: true,
+            provider: 'osm',
+            tile_url_template: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+            tile_attribution: '\u00A9 OpenStreetMap contributors',
+            max_zoom: 19,
+          },
+        });
+      }
+      return null;
+    },
+  });
+  t.after(() => dom.window.close());
+  const { document, BananzaApp } = dom.window;
+
+  await BananzaApp.maps.loadConfig({ force: true });
+  await wait(dom.window);
+  assert.equal(document.getElementById('attachMenuLocation').hidden, false);
+
+  document.getElementById('attachBtn').click();
+  await wait(dom.window);
+  assert.equal(document.getElementById('attachMenu').classList.contains('hidden'), false);
+
+  document.getElementById('attachMenuLocation').click();
+  await wait(dom.window, 20);
+  assert.equal(document.getElementById('locationPickerModal').classList.contains('hidden'), false);
 });

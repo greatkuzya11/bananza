@@ -20,6 +20,7 @@
       const composerTextFactory = composerFactories.text?.createComposerTextController;
       const composerReplyEditFactory = composerFactories.replyEdit?.createReplyEditController;
       const composerFilesFactory = composerFactories.files?.createComposerFilesController;
+      const composerLocationFactory = composerFactories.location?.createComposerLocationController;
       const composerSendFactory = composerFactories.send?.createComposerSendController;
       const composerEmojiPickerFactory = composerFactories.emojiPicker?.createEmojiPickerController;
       const composerMentionsFactory = composerFactories.mentions?.createMentionPickerController;
@@ -36,6 +37,7 @@
         || typeof composerTextFactory !== 'function'
         || typeof composerReplyEditFactory !== 'function'
         || typeof composerFilesFactory !== 'function'
+        || typeof composerLocationFactory !== 'function'
         || typeof composerSendFactory !== 'function'
         || typeof composerEmojiPickerFactory !== 'function'
         || typeof composerMentionsFactory !== 'function'
@@ -59,6 +61,7 @@
       let composerTextController = null;
       let composerReplyEditController = null;
       let composerFilesController = null;
+      let composerLocationController = null;
       let composerSendController = null;
       let composerEmojiPickerController = null;
       let composerMentionsController = null;
@@ -74,7 +77,7 @@
       function clamp(value, min, max) {
         return floatingMessageActionsController?.clamp?.(value, min, max) ?? Math.max(min, Math.min(value, max));
       }
-      return window.BananzaApp.boot.composition.createEvalExports(["publishRuntimeApi","composerFactories","composerStateFactory","composerTextFactory","composerReplyEditFactory","composerFilesFactory","composerSendFactory","composerEmojiPickerFactory","composerMentionsFactory","composerTypingDragDropFactory","pollComposerFactory","interactionFactories","searchControllerFactory","reactionControllerFactory","floatingMessageActionsFactory","mediaViewerFactory","contextMenusFactory","forwardingControllerFactory","composerStateController","composerTextController","composerReplyEditController","composerFilesController","composerSendController","composerEmojiPickerController","composerMentionsController","composerTypingDragDropController","pollComposerController","searchController","reactionController","floatingMessageActionsController","mediaViewerController","contextMenusController","forwardingController","clamp"], {
+      return window.BananzaApp.boot.composition.createEvalExports(["publishRuntimeApi","composerFactories","composerStateFactory","composerTextFactory","composerReplyEditFactory","composerFilesFactory","composerLocationFactory","composerSendFactory","composerEmojiPickerFactory","composerMentionsFactory","composerTypingDragDropFactory","pollComposerFactory","interactionFactories","searchControllerFactory","reactionControllerFactory","floatingMessageActionsFactory","mediaViewerFactory","contextMenusFactory","forwardingControllerFactory","composerStateController","composerTextController","composerReplyEditController","composerFilesController","composerLocationController","composerSendController","composerEmojiPickerController","composerMentionsController","composerTypingDragDropController","pollComposerController","searchController","reactionController","floatingMessageActionsController","mediaViewerController","contextMenusController","forwardingController","clamp"], {
         get: (name) => eval(name),
         set: (name, value) => {
           const __bananzaRuntimeExportValue = value;

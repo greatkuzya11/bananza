@@ -7,6 +7,7 @@
     with (scope) {
       const messageStateFactory = window.BananzaApp?.messages?.state?.createMessageState;
       const messageAttachmentFactory = window.BananzaApp?.messages?.attachments?.createMessageAttachmentRenderer;
+      const messageLocationFactory = window.BananzaApp?.messages?.locations?.createLocationMessageRenderer;
       const messagePollFactory = window.BananzaApp?.messages?.polls?.createPollMessageRenderer;
       const messageCallCardFactory = window.BananzaApp?.messages?.callCards?.createCallCardRenderer;
       const messageOutboxFactory = window.BananzaApp?.messages?.outbox?.createMessageOutbox;
@@ -14,6 +15,7 @@
       const messageRendererFactory = window.BananzaApp?.messages?.render?.createMessageRenderer;
       if (typeof messageStateFactory !== 'function'
         || typeof messageAttachmentFactory !== 'function'
+        || typeof messageLocationFactory !== 'function'
         || typeof messagePollFactory !== 'function'
         || typeof messageCallCardFactory !== 'function'
         || typeof messageOutboxFactory !== 'function'
@@ -37,6 +39,17 @@
         actions: {
           isClientSideMessage: (msg) => isClientSideMessage(msg),
           applyMessageUpdate: (msg, options = {}) => applyMessageUpdate(msg, options),
+        },
+      });
+      messageLocationRenderer = messageLocationFactory({
+        window,
+        document,
+        formatters,
+        esc,
+        actions: {
+          getMapConfig: () => composerLocationController?.getMapConfig?.() || window.BananzaApp?.maps?.getConfig?.() || {},
+          openModal: (id, options = {}) => openModal(id, options),
+          copyTextToClipboard: (text) => copyTextToClipboard(text),
         },
       });
       messageCallCardRenderer = messageCallCardFactory({
@@ -112,6 +125,7 @@
         formatters,
         attachmentHelpers,
         attachmentRenderer: messageAttachmentRenderer,
+        locationRenderer: messageLocationRenderer,
         pollRenderer: messagePollRenderer,
         callCardRenderer: messageCallCardRenderer,
         messageState: messageStateController,
@@ -260,6 +274,7 @@
       messagesService.configure?.({
         state: messageStateController,
         attachments: messageAttachmentRenderer,
+        locations: messageLocationRenderer,
         polls: messagePollRenderer,
         callCards: messageCallCardRenderer,
         renderer: messageRenderer,
@@ -268,7 +283,7 @@
       });
       const messageServices = messagesService;
       if (appContext) appContext.services.messages = messageServices;
-      return window.BananzaApp.boot.composition.createEvalExports(["messageStateFactory","messageAttachmentFactory","messagePollFactory","messageCallCardFactory","messageOutboxFactory","messageUpdatesFactory","messageRendererFactory","messageServices"], {
+      return window.BananzaApp.boot.composition.createEvalExports(["messageStateFactory","messageAttachmentFactory","messageLocationFactory","messagePollFactory","messageCallCardFactory","messageOutboxFactory","messageUpdatesFactory","messageRendererFactory","messageLocationRenderer","messageServices"], {
         get: (name) => eval(name),
         set: (name, value) => {
           const __bananzaRuntimeExportValue = value;

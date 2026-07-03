@@ -23,6 +23,7 @@
 
     function getReplyPreviewText(msg) {
       if (msg?.text) return msg.text.substring(0, 100);
+      if (msg?.location || msg?.is_location) return 'Location';
       if (msg?.is_voice_note) {
         const transcript = (msg.transcription_text || '').trim();
         return transcript ? transcript.substring(0, 100) : (actions.getMediaNoteFallbackLabel || (() => 'Attachment'))(msg);
@@ -40,6 +41,9 @@
         : null;
       const sourceText = (sourceRow?.__replyPayload?.text || '').trim();
       if (sourceText && sourceText !== 'Attachment') return sourceText.substring(0, 100);
+      if (msg?.reply_is_location || sourceRow?.__replyPayload?.is_location || sourceRow?.__messageData?.location) {
+        return 'Location';
+      }
 
       const isVoiceReply = Boolean(
         msg?.reply_is_voice_note ||
@@ -73,7 +77,7 @@
       if (msg.call || msg.call_message || msg.is_call_message) return false;
       if (msg.call_transcript_run || msg.is_call_transcript_message) return false;
       if (msg.call_artifact_batch || msg.is_call_artifact_message) return false;
-      return Boolean(msg.is_voice_note || msg.file_id || msg.text);
+      return Boolean(msg.is_voice_note || msg.file_id || msg.location || msg.is_location || msg.text);
     }
 
     function canSaveMessageToNotes(msg) {
@@ -132,6 +136,21 @@
         parts.push(msg.file_name);
         hasMeaningfulContent = true;
       }
+      if (msg.location) {
+        const location = msg.location || {};
+        const latitude = Number(location.latitude ?? location.lat);
+        const longitude = Number(location.longitude ?? location.lon ?? location.lng);
+        const zoom = Math.min(19, Math.max(1, Number(location.zoom) || 16));
+        const label = String(location.title || location.address || 'Location').trim();
+        const coords = Number.isFinite(latitude) && Number.isFinite(longitude)
+          ? `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`
+          : '';
+        const link = Number.isFinite(latitude) && Number.isFinite(longitude)
+          ? `https://www.openstreetmap.org/?mlat=${encodeURIComponent(latitude)}&mlon=${encodeURIComponent(longitude)}#map=${zoom}/${encodeURIComponent(latitude)}/${encodeURIComponent(longitude)}`
+          : '';
+        parts.push([label, coords, link].filter(Boolean).join('\n'));
+        hasMeaningfulContent = true;
+      }
       const mainText = getEditableText(row).trim();
       if (mainText) {
         parts.push(mainText);
@@ -147,6 +166,7 @@
       const copyData = getMessageCopyTextData(row);
       if (copyData.text) return copyData.text;
       const copyMsg = row?.__messageData || {};
+      if (copyMsg.location) return 'Location';
       if (copyMsg.file_id) return 'Attachment';
       return '';
     }
@@ -171,6 +191,8 @@
         text: source.text || '',
         is_voice_note: Boolean(source.is_voice_note),
         is_video_note: Boolean(source.is_video_note),
+        is_location: Boolean(source.is_location || source.location),
+        location: source.location || null,
         ai_bot_id: Number(source.ai_bot_id) || 0,
         ai_bot_mention: source.ai_bot_mention || '',
         ai_bot_provider: source.ai_bot_provider || '',
@@ -194,6 +216,8 @@
         text: replyText,
         is_voice_note: Boolean(meta?.is_voice_note),
         is_video_note: Boolean(meta?.is_video_note),
+        is_location: Boolean(meta?.is_location || meta?.location),
+        location: meta?.location || null,
         ai_bot_id: Number(meta?.ai_bot_id) || 0,
         ai_bot_mention: meta?.ai_bot_mention || '',
         ai_bot_provider: meta?.ai_bot_provider || '',

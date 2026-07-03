@@ -126,11 +126,13 @@
     
       const uiSettingsFactory = window.BananzaApp?.settings?.ui?.createUiSettings;
       const weatherSettingsFactory = window.BananzaApp?.settings?.weather?.createWeatherSettings;
+      const mapSettingsFactory = window.BananzaApp?.settings?.maps?.createMapSettings;
       const notificationSettingsFactory = window.BananzaApp?.settings?.notifications?.createNotificationSettings;
       const soundSettingsFactory = window.BananzaApp?.settings?.sound?.createSoundSettings;
       const settingsModalFactory = window.BananzaApp?.settings?.modal?.createSettingsModal;
       if (typeof uiSettingsFactory !== 'function'
         || typeof weatherSettingsFactory !== 'function'
+        || typeof mapSettingsFactory !== 'function'
         || typeof notificationSettingsFactory !== 'function'
         || typeof soundSettingsFactory !== 'function'
         || typeof settingsModalFactory !== 'function') {
@@ -218,6 +220,15 @@
           setInlineStatus: (...args) => setInlineStatus(...args),
         },
       });
+      const mapSettingsController = mapSettingsFactory({
+        document,
+        window,
+        api: (url, opts) => api(url, opts),
+        actions: {
+          setInlineStatus: (...args) => setInlineStatus(...args),
+          onSettingsSaved: () => composerLocationController?.loadMapConfig?.({ force: true }),
+        },
+      });
       const notificationSettingsController = notificationSettingsFactory({
         document,
         window,
@@ -245,6 +256,7 @@
         modals: modalManager,
         ui: uiSettings,
         weather: weatherSettingsController,
+        maps: mapSettingsController,
         notifications: notificationSettingsController,
         sound: soundSettingsController,
         getCurrentUser: () => currentUser,
@@ -252,12 +264,13 @@
       const settingsControllers = {
         ui: uiSettings,
         weather: weatherSettingsController,
+        maps: mapSettingsController,
         notifications: notificationSettingsController,
         sound: soundSettingsController,
         modal: settingsModalController,
       };
       if (appContext) appContext.services.settings = settingsControllers;
-      return window.BananzaApp.boot.composition.createEvalExports(["adminBotAuditFactory","adminBackupFactory","adminUsersFactory","adminBotAuditController","adminBackupController","adminUsersController","uiSettingsFactory","weatherSettingsFactory","notificationSettingsFactory","soundSettingsFactory","settingsModalFactory","setCurrentUserFromSettings","uiSettings","weatherSettingsController","notificationSettingsController","soundSettingsController","settingsModalController","settingsControllers"], {
+      return window.BananzaApp.boot.composition.createEvalExports(["adminBotAuditFactory","adminBackupFactory","adminUsersFactory","adminBotAuditController","adminBackupController","adminUsersController","uiSettingsFactory","weatherSettingsFactory","mapSettingsFactory","notificationSettingsFactory","soundSettingsFactory","settingsModalFactory","setCurrentUserFromSettings","uiSettings","weatherSettingsController","mapSettingsController","notificationSettingsController","soundSettingsController","settingsModalController","settingsControllers"], {
         get: (name) => eval(name),
         set: (name, value) => {
           const __bananzaRuntimeExportValue = value;

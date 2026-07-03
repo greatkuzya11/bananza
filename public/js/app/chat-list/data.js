@@ -293,12 +293,14 @@
       const chatId = Number(msg && msg.chat_id || 0);
       const chat = store.getChatById(chatId);
       if (!chat) return null;
-      const lastText = msg.text || (msg.is_voice_note ? msg.transcription_text || actions.getMediaNoteFallbackLabel?.(msg) || null : null);
+      const isLocation = Boolean(msg.location || msg.is_location);
+      const lastText = msg.text || (isLocation ? '\uD83D\uDCCD Location' : (msg.is_voice_note ? msg.transcription_text || actions.getMediaNoteFallbackLabel?.(msg) || null : null));
       const updated = store.patchChat(chatId, {
         last_text: lastText,
         last_time: msg.created_at,
         last_user: msg.display_name,
         last_file_id: msg.file_id,
+        last_location: isLocation ? 1 : 0,
         last_message_id: Math.max(Number(chat.last_message_id || 0), Number(msg.id || 0)),
       });
       renderer?.renderChatList?.(getChatSearchValue());

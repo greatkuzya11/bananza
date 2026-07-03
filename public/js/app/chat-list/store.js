@@ -87,6 +87,9 @@
     if (chat && chat.last_text) {
       return (chat.last_user ? `${chat.last_user}: ` : '') + chat.last_text;
     }
+    if (chat && chat.last_location) {
+      return (chat.last_user ? `${chat.last_user}: ` : '') + '\uD83D\uDCCD Location';
+    }
     if (chat && chat.last_file_id) {
       return (chat.last_user ? `${chat.last_user}: ` : '') + '\uD83D\uDCCE File';
     }

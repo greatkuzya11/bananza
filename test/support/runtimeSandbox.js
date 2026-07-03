@@ -14,6 +14,7 @@ const ROOT_FILES = [
   'documents.js',
   'forwarding.js',
   'linkPreview.js',
+  'maps.js',
   'messageActions.js',
   'messageCopy.js',
   'mentionTokens.js',

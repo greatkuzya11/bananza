@@ -298,7 +298,7 @@ function buildBackupManifest({
     excluded: [...excluded],
     uploads,
     notes: [
-      '.env is not included. Keep deployment environment variables separately.',
+      '.env is not included. Keep deployment environment variables such as BANANZA_MAP_CONTACT separately.',
       'This archive contains chat history, uploaded files, and server secrets.',
     ],
   };

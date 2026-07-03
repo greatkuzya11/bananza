@@ -38,6 +38,7 @@ const appModalManagerScriptPaths = Object.freeze([
 const appSettingsScriptPaths = Object.freeze([
   'public/js/app/settings/ui-settings.js',
   'public/js/app/settings/weather-settings.js',
+  'public/js/app/settings/map-settings.js',
   'public/js/app/settings/notification-settings.js',
   'public/js/app/settings/sound-settings.js',
   'public/js/app/settings/settings-modal.js',
@@ -68,6 +69,7 @@ const appOpenChatScriptPaths = Object.freeze([
 const appMessageScriptPaths = Object.freeze([
   'public/js/app/messages/state.js',
   'public/js/app/messages/attachments.js',
+  'public/js/app/messages/locations.js',
   'public/js/app/messages/polls.js',
   'public/js/app/messages/call-cards.js',
   'public/js/app/messages/outbox.js',
@@ -79,6 +81,7 @@ const appComposerScriptPaths = Object.freeze([
   'public/js/app/composer/text.js',
   'public/js/app/composer/reply-edit.js',
   'public/js/app/composer/files.js',
+  'public/js/app/composer/location.js',
   'public/js/app/composer/send.js',
   'public/js/app/composer/emoji-picker.js',
   'public/js/app/composer/mentions.js',

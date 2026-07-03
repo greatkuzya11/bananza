@@ -9,6 +9,7 @@
     const refs = {
       state: null,
       attachments: null,
+      locations: null,
       polls: null,
       callCards: null,
       renderer: null,
@@ -64,6 +65,8 @@
           file_name: null,
           file_stored: null,
           file_type: null,
+          location: null,
+          is_location: false,
           reactions: [],
           poll: null,
         };
@@ -144,6 +147,7 @@
       configure,
       get state() { return refs.state; },
       get attachments() { return refs.attachments; },
+      get locations() { return refs.locations; },
       get polls() { return refs.polls; },
       get callCards() { return refs.callCards; },
       get render() { return refs.renderer; },
@@ -171,7 +175,7 @@
       ['attachments', ['renderResolvedFileAttachment', 'renderFileAttachment', 'renderLinkPreview', 'formatDuration', 'ensureAttachmentPoster', 'applyPosterToVideoElement', 'markAttachmentPosterAvailable']],
       ['polls', ['normalizePoll', 'isPollMessage', 'isPulsePoll', 'pulseInlineVotersCacheKey', 'getPulseInlineVotersRevision', 'invalidatePulseInlineVotersForMessage', 'getPulseVoterDisplayName', 'isPulseVoterOptionExpanded', 'getPulseVoterPopoverElement', 'schedulePulseVoterPopoverAutoHide', 'mountPulseVoterPopover', 'bindPollControls', 'bindPulseInlineVoterControls', 'togglePulseVoterOptionExpanded', 'togglePulseVoterPopover', 'getPollCompactFooterMeta', 'canClosePollMessage', 'buildOptimisticPollState', 'nextPollVoteSelection', 'hydratePulseInlineVoters', 'clearActivePulseVoterPopover', 'clearActivePulseVoterPopoverForMessage', 'resetPollVotersModal', 'openPollVotersModal', 'renderPollCard', 'pollAccentVar', 'buildPollRenderState', 'buildPollOrbitGradient', 'renderPollCloseButton', 'renderPollCompactFooter', 'renderPollVotersButton', 'renderPulseInlineVoterAvatar', 'renderPulseInlineVoterStack', 'buildPulsePreviewVoters', 'renderPulseInlineVoterSummaryContent', 'renderPulseInlineVoterSummary', 'refreshPulseInlineVoterSlots', 'ensurePulseInlineVoters', 'renderPulsePollCard', 'renderStackPollCard', 'renderOrbitPollCard', 'applyPollUpdate', 'replaceRenderedPollCard', 'togglePollVote', 'closePollMessage']],
       ['callCards', ['resolveCallMessageMediaKind', 'resolveCallMessageRoomMode', 'normalizeCallMessageData', 'latestCallTranscriptRun', 'latestCallArtifactBatch', 'callArtifactProgress', 'pushCallMessageMeta', 'renderCallMessageMeta', 'normalizeCallMixedRecording', 'callRecordingPlaybackUrl', 'callRecordingDurationSeconds', 'parseCallRecordingRadiusValue', 'callRecordingRoundedRectPath', 'ensureCallRecordingFooterButton', 'ensureCallRecordingProgress', 'refreshCallRecordingProgressShape', 'updateCallRecordingProgress', 'syncCallRecordingPlayButton', 'pointToCallRecordingHit', 'shouldIgnoreCallRecordingPointer', 'isPointerNearCallRecordingProgressRect', 'getCallRecordingSeekRows', 'seekCallRecordingProgress', 'resolveNearestCallRecordingHit', 'installCallRecordingProgressCapture', 'renderCallMessageCard', 'renderCallTranscriptRunCard', 'callArtifactStatusLabel', 'callArtifactStatusKind', 'callArtifactKey', 'callArtifactLabel', 'renderCallArtifactStatus', 'callArtifactTextShouldCollapse', 'renderCallArtifactTextLine', 'renderCallArtifactText', 'callArtifactImageUrl', 'callArtifactImageMime', 'callArtifactImageFilename', 'callArtifactImageContext', 'renderCallArtifactImage', 'renderCallArtifactRun', 'renderCallArtifactBatchCard', 'bindCallMessageControls', 'openCallArtifactsModal', 'bindCallArtifactMessageControls', 'bindCallTranscriptMessageControls']],
-      ['outbox', ['outboxUrlKey', 'getOutboxObjectUrl', 'revokeOutboxObjectUrls', 'findOutboxRow', 'removeDuplicatePromotedRows', 'promoteOutboxRow', 'cleanupEmptyMessageGroups', 'removeOutboxRows', 'buildLocalMessageFromOutbox', 'renderOutboxItem', 'renderOutboxForChat', 'scheduleRetryLayout', 'layoutRetryButtons', 'persistOutboxItem', 'setOutboxSending', 'uploadOutboxAttachment', 'sendOutboxMessageItem', 'sendOutboxVoiceItem', 'sendOutboxVideoNoteItem', 'trySendOutboxItem', 'retrySend', 'queueOutboxItem', 'createMessageOutboxItem', 'queueVoiceOutbox', 'queueVideoNoteOutbox']],
+      ['outbox', ['outboxUrlKey', 'getOutboxObjectUrl', 'revokeOutboxObjectUrls', 'findOutboxRow', 'removeDuplicatePromotedRows', 'promoteOutboxRow', 'cleanupEmptyMessageGroups', 'removeOutboxRows', 'buildLocalMessageFromOutbox', 'renderOutboxItem', 'renderOutboxForChat', 'scheduleRetryLayout', 'layoutRetryButtons', 'persistOutboxItem', 'setOutboxSending', 'uploadOutboxAttachment', 'sendOutboxMessageItem', 'sendOutboxVoiceItem', 'sendOutboxVideoNoteItem', 'trySendOutboxItem', 'retrySend', 'queueOutboxItem', 'createMessageOutboxItem', 'queueLocationOutbox', 'queueVoiceOutbox', 'queueVideoNoteOutbox']],
       ['updates', ['updateVisibleReplyQuotesFromMessage']],
     ].forEach(([refName, methods]) => {
       methods.forEach((method) => {

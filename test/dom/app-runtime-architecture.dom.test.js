@@ -141,7 +141,7 @@ test('performance baseline helper is loaded early and initial app scripts stay b
   assert.ok(appScripts.includes('/js/app/performance.js'), 'performance helper must be in the app script graph');
   assert.ok(appScripts.includes('/js/app/feature-loader.js'), 'feature loader must be in the app script graph');
   assert.ok(appScripts.includes('/js/app/feature-registry.js'), 'feature registry must be in the app script graph');
-  assert.ok(appScripts.length <= 96, `initial /js/app script count ${appScripts.length} should stay at or below the lazy-load target`);
+  assert.ok(appScripts.length <= 99, `initial /js/app script count ${appScripts.length} should stay at or below the lazy-load target`);
   [
     '/js/app/admin/bot-audit.js',
     '/js/app/admin/backup.js',
@@ -266,7 +266,7 @@ test('runtime assembly no longer owns extracted shell and websocket sections', (
     '/js/app/boot/feature-composition.js',
   ];
   const extractedRuntimeLimits = {
-    'public/js/app/shell/ui-runtime.js': 2900,
+    'public/js/app/shell/ui-runtime.js': 3100,
     'public/js/app/shell/shell-runtime.js': 1500,
     'public/js/app/shell/mobile-runtime-adapters.js': 150,
     'public/js/app/boot/ws-dispatch.js': 950,

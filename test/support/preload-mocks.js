@@ -163,6 +163,39 @@ https.get = function mockedHttpsGet(url, options, callback) {
     return request;
   }
 
+  if (parsed.hostname === 'nominatim.openstreetmap.org') {
+    const isSearch = parsed.pathname.includes('/search');
+    const isReverse = parsed.pathname.includes('/reverse');
+    if (isSearch || isReverse) {
+      const query = String(parsed.searchParams.get('q') || '').trim() || 'Mock place';
+      const payload = isSearch
+        ? [{
+            place_id: 12345,
+            lat: '54.7104',
+            lon: '20.4522',
+            name: query,
+            display_name: `${query}, Kaliningrad, Russia`,
+            type: 'city',
+          }]
+        : {
+            place_id: 54321,
+            lat: parsed.searchParams.get('lat') || '54.7104',
+            lon: parsed.searchParams.get('lon') || '20.4522',
+            name: 'Mock reverse place',
+            display_name: 'Mock reverse place, Kaliningrad, Russia',
+            type: 'address',
+          };
+      const response = createMockHttpsResponse(200, payload);
+      const request = new EventEmitter();
+      request.setTimeout = () => request;
+      request.destroy = (error) => {
+        if (error) request.emit('error', error);
+      };
+      if (cb) process.nextTick(() => cb(response));
+      return request;
+    }
+  }
+
   if (parsed.hostname === 'api.open-meteo.com') {
     const response = createMockHttpsResponse(200, {
       current: {

@@ -15,6 +15,7 @@
     const dom = objectOrDefault(opts.dom);
     const ui = objectOrDefault(opts.ui);
     const weather = objectOrDefault(opts.weather);
+    const maps = objectOrDefault(opts.maps);
     const notifications = objectOrDefault(opts.notifications);
     const sound = objectOrDefault(opts.sound);
     const modals = objectOrDefault(opts.modals);
@@ -49,6 +50,9 @@
       const backupItem = byId('settingsBackupPanel');
       if (currentUser.is_admin) backupItem?.classList.remove('hidden');
       else backupItem?.classList.add('hidden');
+      const mapsItem = byId('settingsMapsPanel');
+      if (currentUser.is_admin) mapsItem?.classList.remove('hidden');
+      else mapsItem?.classList.add('hidden');
       const aiBotsItem = byId('settingsAiBotsPanel');
       if (currentUser.is_admin) aiBotsItem?.classList.remove('hidden');
       else aiBotsItem?.classList.add('hidden');
@@ -122,6 +126,15 @@
       if (!weather.isWeatherSettingsLoaded?.()) weather.loadWeatherSettings?.().then(weather.renderWeatherSettingsForm);
     }
 
+    function openMapSettingsModal() {
+      openModal('mapSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
+      maps.renderMapSettingsForm?.();
+      if (!maps.isLoaded?.()) {
+        const loadMaps = maps.loadMapSettings || maps.loadSettings;
+        loadMaps?.call(maps).then(maps.renderMapSettingsForm).catch(() => {});
+      }
+    }
+
     function openNotificationSettingsModal() {
       openModal('notificationSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
       notifications.renderNotificationSettingsForm?.();
@@ -160,6 +173,7 @@
       byId('settingsAnimationPanel')?.addEventListener('click', openAnimationSettingsModal);
       byId('settingsMobileFontPanel')?.addEventListener('click', openMobileFontSettingsModal);
       byId('settingsWeatherPanel')?.addEventListener('click', openWeatherSettingsModal);
+      byId('settingsMapsPanel')?.addEventListener('click', openMapSettingsModal);
       byId('settingsNotificationsPanel')?.addEventListener('click', openNotificationSettingsModal);
       byId('settingsSoundsPanel')?.addEventListener('click', openSoundSettingsModal);
       byId('settingsLanguagePanel')?.addEventListener('click', openLanguageSettingsModal);
@@ -234,6 +248,7 @@
       openAnimationSettingsModal,
       openMobileFontSettingsModal,
       openWeatherSettingsModal,
+      openMapSettingsModal,
       openNotificationSettingsModal,
       openSoundSettingsModal,
       resetManagedModalScroll,

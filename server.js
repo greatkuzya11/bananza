@@ -42,6 +42,7 @@ const { setupWebSocket, broadcastToChatAll, sendToUser, clients } = require('./w
 const { extractUrls, fetchPreview } = require('./linkPreview');
 const { createVoiceFeature } = require('./voice');
 const { createWeatherFeature } = require('./weather');
+const { createMapFeature, locationPayload, normalizeMessageLocation } = require('./maps');
 const { createForwardingFeature } = require('./forwarding');
 const { createMessageCopyService } = require('./messageCopy');
 const { createPushFeature } = require('./push');
@@ -396,6 +397,7 @@ let chatFoldersFeature = null;
 let callFeature = null;
 let videoNoteFeature = null;
 let documentsFeature = null;
+let mapFeature = null;
 const videoNoteStorage = createVideoNoteStorage({
   db,
   uploadsDir: UPLOADS_DIR,
@@ -483,6 +485,14 @@ createWeatherFeature({
   rateLimit,
 });
 
+mapFeature = createMapFeature({
+  app,
+  db,
+  auth,
+  adminOnly,
+  rateLimit,
+});
+
 createSoundSettingsFeature({
   app,
   db,
@@ -554,11 +564,12 @@ const messageByIdStmt = db.prepare(`
     ab.image_risk_filter_enabled as ai_bot_image_risk_filter_enabled,
     f.original_name as file_name, f.stored_name as file_stored,
     f.mime_type as file_mime, f.size as file_size, f.type as file_type,
-    COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435' END) as reply_text,
+    COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435' END, CASE WHEN rloc.message_id IS NOT NULL THEN '\u0413\u0435\u043e\u043c\u0435\u0442\u043a\u0430' END) as reply_text,
     CASE WHEN rvm.message_id IS NOT NULL THEN 1 ELSE 0 END as reply_is_voice_note,
+    CASE WHEN rloc.message_id IS NOT NULL THEN 1 ELSE 0 END as reply_is_location,
     COALESCE(rvm.note_kind, 'voice') as reply_note_kind,
     CASE
-      WHEN NULLIF(rm.text, '') IS NULL AND NULLIF(rvm.transcription_text, '') IS NULL AND rvm.message_id IS NOT NULL
+      WHEN NULLIF(rm.text, '') IS NULL AND NULLIF(rvm.transcription_text, '') IS NULL AND (rvm.message_id IS NOT NULL OR rloc.message_id IS NOT NULL)
       THEN 1
       ELSE 0
     END as reply_text_is_fallback,
@@ -569,6 +580,7 @@ const messageByIdStmt = db.prepare(`
   LEFT JOIN files f ON f.id=m.file_id
   LEFT JOIN messages rm ON rm.id=m.reply_to_id
   LEFT JOIN voice_messages rvm ON rvm.message_id=rm.id
+  LEFT JOIN message_locations rloc ON rloc.message_id=rm.id
   LEFT JOIN users ru ON ru.id=rm.user_id
   WHERE m.id=?
 `);
@@ -586,6 +598,16 @@ const messagePosterTargetStmt = db.prepare(`
 `);
 const messagePreviewsStmt = db.prepare('SELECT * FROM link_previews WHERE message_id=?');
 const messageReactionsStmt = db.prepare('SELECT user_id, emoji FROM reactions WHERE message_id=?');
+const messageLocationStmt = db.prepare(`
+  SELECT message_id, latitude, longitude, zoom, title, address, provider, created_at
+  FROM message_locations
+  WHERE message_id=?
+`);
+const insertMessageLocationStmt = db.prepare(`
+  INSERT INTO message_locations(message_id, latitude, longitude, zoom, title, address, provider)
+  VALUES(?,?,?,?,?,?,?)
+`);
+const deleteMessageLocationStmt = db.prepare('DELETE FROM message_locations WHERE message_id=?');
 const messageMentionsStmt = db.prepare(`
   SELECT
     mm.mentioned_user_id as user_id,
@@ -767,13 +789,15 @@ const chatPinsStmt = db.prepare(`
     f.type as file_type,
     vm.message_id as voice_message_id,
     vm.transcription_text,
-    vm.note_kind as voice_note_kind
+    vm.note_kind as voice_note_kind,
+    ml.message_id as location_message_id
   FROM message_pins p
   JOIN messages m ON m.id=p.message_id
   JOIN users u ON u.id=m.user_id
   JOIN users pu ON pu.id=p.pinned_by
   LEFT JOIN files f ON f.id=m.file_id
   LEFT JOIN voice_messages vm ON vm.message_id=m.id
+  LEFT JOIN message_locations ml ON ml.message_id=m.id
   WHERE p.chat_id=? AND m.is_deleted=0
   ORDER BY p.id ASC
 `);
@@ -788,11 +812,13 @@ const pinEventMessageStmt = db.prepare(`
     f.type as file_type,
     vm.message_id as voice_message_id,
     vm.transcription_text,
-    vm.note_kind as voice_note_kind
+    vm.note_kind as voice_note_kind,
+    ml.message_id as location_message_id
   FROM messages m
   JOIN users u ON u.id=m.user_id
   LEFT JOIN files f ON f.id=m.file_id
   LEFT JOIN voice_messages vm ON vm.message_id=m.id
+  LEFT JOIN message_locations ml ON ml.message_id=m.id
   WHERE m.id=?
 `);
 const insertPinEventStmt = db.prepare(`
@@ -929,6 +955,10 @@ const chatSystemEventsBetweenStmt = db.prepare(`
 
 function applyReplyTextFallback(row) {
   if (!row || Number(row.reply_text_is_fallback || 0) !== 1) return row;
+  if (Number(row.reply_is_location || 0) !== 0) {
+    row.reply_text = '\u0413\u0435\u043e\u043c\u0435\u0442\u043a\u0430';
+    return row;
+  }
   const noteKind = String(row.reply_note_kind || 'voice');
   row.reply_text = noteKind === 'video_note' ? '\u0412\u0438\u0434\u0435\u043e-\u0437\u0430\u043c\u0435\u0442\u043a\u0430' : '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435';
   return row;
@@ -1030,6 +1060,20 @@ function attachMessageMentions(row) {
   return row;
 }
 
+function attachMessageLocation(row) {
+  if (!row?.id || row.is_deleted) {
+    if (row) {
+      row.location = null;
+      row.is_location = 0;
+    }
+    return row;
+  }
+  const payload = locationPayload(messageLocationStmt.get(row.id));
+  row.location = payload;
+  row.is_location = payload ? 1 : 0;
+  return row;
+}
+
 function attachContextTransformOriginalAvailability(row) {
   if (!row?.id) return row;
   row.context_transform_original_available = messageContextTransformOriginalAvailableStmt.get(row.id) ? 1 : 0;
@@ -1079,7 +1123,7 @@ function hydrateMessageById(messageId, viewerUserId = null) {
   const withVoice = voiceFeature.attachVoiceMetadata([row])[0];
   const withPoll = pollFeature.attachPollMetadata([withVoice], viewerUserId, { ensureClosed: false, broadcastOnClose: false })[0];
   const withCall = callFeature?.attachCallMetadata?.([withPoll])?.[0] || withPoll;
-  return attachContextTransformOriginalAvailability(decorateMessageFilePayload(withCall));
+  return attachContextTransformOriginalAvailability(decorateMessageFilePayload(attachMessageLocation(withCall)));
 }
 
 function isChatMember(chatId, userId) {
@@ -1181,6 +1225,7 @@ function pinPreviewText(row) {
   const text = String(row?.text || row?.transcription_text || '').trim();
   if (text) return text.substring(0, 160);
   if (row?.voice_message_id) return row?.voice_note_kind === 'video_note' ? '\u0412\u0438\u0434\u0435\u043e-\u0437\u0430\u043c\u0435\u0442\u043a\u0430' : '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435';
+  if (row?.location_message_id || row?.is_location || row?.location) return '\u0413\u0435\u043e\u043c\u0435\u0442\u043a\u0430';
   if (row?.file_name) return String(row.file_name).substring(0, 160);
   return 'Attachment';
 }
@@ -1437,6 +1482,7 @@ function getChatPins(chatId) {
     file_type: row.file_type || null,
     is_voice_note: !!row.voice_message_id,
     is_video_note: row.voice_note_kind === 'video_note',
+    is_location: !!row.location_message_id,
   }));
 }
 
@@ -2093,6 +2139,9 @@ function decorateChatListRows(rows, viewerUserId) {
     if (!String(chat.last_text || '').trim() && Number(chat.last_voice_message_id || 0) > 0) {
       chat.last_text = chat.last_note_kind === 'video_note' ? 'Видео-заметка' : 'Голосовое сообщение';
     }
+    if (!String(chat.last_text || '').trim() && Number(chat.last_location || 0) > 0) {
+      chat.last_text = '\u0413\u0435\u043e\u043c\u0435\u0442\u043a\u0430';
+    }
   }
   return rows;
 }
@@ -2127,6 +2176,11 @@ app.get('/api/chats', auth, (req, res) => {
       CASE WHEN COALESCE(c.is_document,0)=1 THEN d.updated_at ELSE (SELECT m.created_at FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) END as last_time,
       CASE WHEN COALESCE(c.is_document,0)=1 THEN NULL ELSE (SELECT u.display_name FROM messages m JOIN users u ON u.id=m.user_id WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) END as last_user,
       CASE WHEN COALESCE(c.is_document,0)=1 THEN NULL ELSE (SELECT m.file_id FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) END as last_file_id,
+      CASE WHEN COALESCE(c.is_document,0)=1 THEN 0 ELSE (SELECT CASE WHEN ml.message_id IS NOT NULL THEN 1 ELSE 0 END
+        FROM messages m
+        LEFT JOIN message_locations ml ON ml.message_id=m.id
+        WHERE m.chat_id=c.id AND m.is_deleted=0
+        ORDER BY m.id DESC LIMIT 1) END as last_location,
       CASE WHEN COALESCE(c.is_document,0)=1 THEN 0 ELSE (SELECT MAX(m.id) FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0) END as last_message_id,
       CASE WHEN COALESCE(c.is_document,0)=1 THEN NULL ELSE (SELECT MIN(m.id) FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 AND m.id>COALESCE(cm.last_read_id,0) AND m.user_id!=cm.user_id) END as first_unread_id,
       cm.last_read_id
@@ -2183,6 +2237,11 @@ app.get('/api/chats/hidden', auth, (req, res) => {
       CASE WHEN COALESCE(c.is_document,0)=1 THEN d.updated_at ELSE (SELECT m.created_at FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) END as last_time,
       CASE WHEN COALESCE(c.is_document,0)=1 THEN NULL ELSE (SELECT u.display_name FROM messages m JOIN users u ON u.id=m.user_id WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) END as last_user,
       CASE WHEN COALESCE(c.is_document,0)=1 THEN NULL ELSE (SELECT m.file_id FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 ORDER BY m.id DESC LIMIT 1) END as last_file_id,
+      CASE WHEN COALESCE(c.is_document,0)=1 THEN 0 ELSE (SELECT CASE WHEN ml.message_id IS NOT NULL THEN 1 ELSE 0 END
+        FROM messages m
+        LEFT JOIN message_locations ml ON ml.message_id=m.id
+        WHERE m.chat_id=c.id AND m.is_deleted=0
+        ORDER BY m.id DESC LIMIT 1) END as last_location,
       CASE WHEN COALESCE(c.is_document,0)=1 THEN 0 ELSE (SELECT MAX(m.id) FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0) END as last_message_id,
       CASE WHEN COALESCE(c.is_document,0)=1 THEN NULL ELSE (SELECT MIN(m.id) FROM messages m WHERE m.chat_id=c.id AND m.is_deleted=0 AND m.id>COALESCE(cm.last_read_id,0) AND m.user_id!=cm.user_id) END as first_unread_id,
       cm.last_read_id
@@ -2903,11 +2962,12 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
       ab.image_risk_filter_enabled as ai_bot_image_risk_filter_enabled,
       f.original_name as file_name, f.stored_name as file_stored,
       f.mime_type as file_mime, f.size as file_size, f.type as file_type,
-      COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435' END) as reply_text,
+      COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435' END, CASE WHEN rloc.message_id IS NOT NULL THEN '\u0413\u0435\u043e\u043c\u0435\u0442\u043a\u0430' END) as reply_text,
       CASE WHEN rvm.message_id IS NOT NULL THEN 1 ELSE 0 END as reply_is_voice_note,
+      CASE WHEN rloc.message_id IS NOT NULL THEN 1 ELSE 0 END as reply_is_location,
       COALESCE(rvm.note_kind, 'voice') as reply_note_kind,
       CASE
-        WHEN NULLIF(rm.text, '') IS NULL AND NULLIF(rvm.transcription_text, '') IS NULL AND rvm.message_id IS NOT NULL
+        WHEN NULLIF(rm.text, '') IS NULL AND NULLIF(rvm.transcription_text, '') IS NULL AND (rvm.message_id IS NOT NULL OR rloc.message_id IS NOT NULL)
         THEN 1
         ELSE 0
       END as reply_text_is_fallback,
@@ -2917,6 +2977,7 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
     LEFT JOIN files f ON f.id=m.file_id
     LEFT JOIN messages rm ON rm.id=m.reply_to_id
     LEFT JOIN voice_messages rvm ON rvm.message_id=rm.id
+    LEFT JOIN message_locations rloc ON rloc.message_id=rm.id
     LEFT JOIN users ru ON ru.id=rm.user_id
   `;
 
@@ -2983,6 +3044,7 @@ app.get('/api/chats/:chatId/messages', auth, (req, res) => {
     { ensureClosed: true, broadcastOnClose: true }
   );
   const result = (callFeature?.attachCallMetadata?.(decoratedMessages) || decoratedMessages)
+    .map(attachMessageLocation)
     .map(decorateMessageFilePayload)
     .map(attachContextTransformOriginalAvailability);
   const pinEvents = getPinEventsForWindow(chatId, result, {
@@ -3038,6 +3100,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
     replyToId,
     client_id,
     poll: rawPoll,
+    location: rawLocation,
     aiImageRiskAccepted,
     ai_response_mode_hint,
     ai_document_format_hint,
@@ -3062,8 +3125,20 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   if (fileId && !db.prepare('SELECT 1 FROM files WHERE id=?').get(fileId))
     return res.status(400).json({ error: 'File not found' });
   const hasPoll = rawPoll != null;
-  if (!cleanText && !fileId && !hasPoll) return res.status(400).json({ error: 'Empty message' });
+  const hasLocation = rawLocation != null;
+  let cleanLocation = null;
+  if (hasLocation) {
+    if (!mapFeature?.isEnabled?.()) return res.status(403).json({ error: 'Maps are disabled' });
+    try {
+      cleanLocation = normalizeMessageLocation(rawLocation);
+    } catch (error) {
+      return res.status(error.status || 400).json({ error: error.message || 'Invalid location payload' });
+    }
+  }
+  if (!cleanText && !fileId && !hasPoll && !cleanLocation) return res.status(400).json({ error: 'Empty message' });
   if (hasPoll && fileId) return res.status(400).json({ error: 'Poll message cannot include files' });
+  if (hasPoll && cleanLocation) return res.status(400).json({ error: 'Poll message cannot include location' });
+  if (fileId && cleanLocation) return res.status(400).json({ error: 'Location message cannot include files' });
 
   if (hasPoll) {
     try {
@@ -3117,6 +3192,17 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
       aiDocumentFormatHint
     );
     const messageId = Number(inserted.lastInsertRowid);
+    if (cleanLocation) {
+      insertMessageLocationStmt.run(
+        messageId,
+        cleanLocation.latitude,
+        cleanLocation.longitude,
+        cleanLocation.zoom,
+        cleanLocation.title,
+        cleanLocation.address,
+        cleanLocation.provider
+      );
+    }
     return messageId;
   });
   const messageId = createMessageTx();
@@ -3131,11 +3217,12 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
       ab.image_risk_filter_enabled as ai_bot_image_risk_filter_enabled,
       f.original_name as file_name, f.stored_name as file_stored,
       f.mime_type as file_mime, f.size as file_size, f.type as file_type,
-      COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435' END) as reply_text,
+      COALESCE(NULLIF(rm.text, ''), NULLIF(rvm.transcription_text, ''), CASE WHEN rvm.message_id IS NOT NULL THEN '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435' END, CASE WHEN rloc.message_id IS NOT NULL THEN '\u0413\u0435\u043e\u043c\u0435\u0442\u043a\u0430' END) as reply_text,
       CASE WHEN rvm.message_id IS NOT NULL THEN 1 ELSE 0 END as reply_is_voice_note,
+      CASE WHEN rloc.message_id IS NOT NULL THEN 1 ELSE 0 END as reply_is_location,
       COALESCE(rvm.note_kind, 'voice') as reply_note_kind,
       CASE
-        WHEN NULLIF(rm.text, '') IS NULL AND NULLIF(rvm.transcription_text, '') IS NULL AND rvm.message_id IS NOT NULL
+        WHEN NULLIF(rm.text, '') IS NULL AND NULLIF(rvm.transcription_text, '') IS NULL AND (rvm.message_id IS NOT NULL OR rloc.message_id IS NOT NULL)
         THEN 1
         ELSE 0
       END as reply_text_is_fallback,
@@ -3145,6 +3232,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
     LEFT JOIN files f ON f.id=m.file_id
     LEFT JOIN messages rm ON rm.id=m.reply_to_id
     LEFT JOIN voice_messages rvm ON rvm.message_id=rm.id
+    LEFT JOIN message_locations rloc ON rloc.message_id=rm.id
     LEFT JOIN users ru ON ru.id=rm.user_id
     WHERE m.id=?
   `).get(messageId);
@@ -3156,7 +3244,8 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
     voiceFeature.attachVoiceMetadata([msg]),
     req.user.id,
     { ensureClosed: false, broadcastOnClose: false }
-  ).map(decorateMessageFilePayload)
+  ).map(attachMessageLocation)
+    .map(decorateMessageFilePayload)
     .map(attachContextTransformOriginalAvailability)[0];
   // Echo client_id back to clients so optimistic messages can be matched
   if (clientId) hydratedMsg.client_id = clientId;
@@ -3292,7 +3381,7 @@ app.post('/api/messages/:id/save-to-notes', auth, msgLimiter, (req, res) => {
   if (isNotesChatRow(sourceChat)) {
     return res.status(400).json({ error: 'Message is already in notes' });
   }
-  if (!source.text && !source.file_id && !source.voice_message_id) {
+  if (!source.text && !source.file_id && !source.voice_message_id && !source.location_message_id) {
     return res.status(400).json({ error: 'Nothing to save' });
   }
   if (source.voice_message_id && !source.file_id) {
@@ -4258,6 +4347,7 @@ app.delete('/api/messages/:id', auth, (req, res) => {
   videoNoteStorage.deleteMessageAssets(mid);
   voiceFeature.deleteVoiceMetadata(mid);
   db.prepare('DELETE FROM link_previews WHERE message_id=?').run(mid);
+  deleteMessageLocationStmt.run(mid);
   pollFeature.deletePollData(mid);
   broadcastToChatAll(m.chat_id, { type: 'message_deleted', messageId: mid, chatId: m.chat_id });
   if (removedPins.changes > 0) {

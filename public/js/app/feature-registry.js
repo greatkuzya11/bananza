@@ -86,6 +86,7 @@
   loader.registerFeature('settings', [
     '/js/app/settings/ui-settings.js',
     '/js/app/settings/weather-settings.js',
+    '/js/app/settings/map-settings.js',
     '/js/app/settings/notification-settings.js',
     '/js/app/settings/sound-settings.js',
     '/js/app/settings/settings-modal.js',
