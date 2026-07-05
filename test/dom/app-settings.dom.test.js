@@ -265,6 +265,75 @@ test('settings modal loads saved map enabled state before rendering Maps admin p
   assert.equal(saveCall.opts.body.enabled, false);
 });
 
+test('settings modal exposes personal API token generation to regular users', async () => {
+  const dom = createAppDom();
+  loadAppRuntimeScripts(dom);
+  const { window } = dom;
+  const calls = [];
+  const copied = [];
+  const tx = (text, params = {}) => String(text || '').replace(/\{([^}]+)\}/g, (_match, key) => String(params[key] ?? ''));
+  const modal = window.BananzaApp.settings.modal.createSettingsModal({
+    document: window.document,
+    window,
+    dom: window.BananzaApp.dom.createDomRefs(),
+    modals: {
+      open(id) {
+        window.document.getElementById(id)?.classList.remove('hidden');
+      },
+      getTop() {
+        return { id: 'settingsModal' };
+      },
+    },
+    api: async (url, opts = {}) => {
+      calls.push({ url, opts });
+      if (url === '/api/auth/tokens') {
+        return {
+          token: 'self-api-token',
+          token_type: 'Bearer',
+          expires_in_seconds: opts.body.expiresInSeconds,
+          expires_at: '2026-07-05T12:00:00.000Z',
+          never_expires: false,
+          user: { id: 2, username: 'bob' },
+        };
+      }
+      throw new Error(`Unexpected settings endpoint ${url}`);
+    },
+    i18nHelpers: { tx },
+    ui: {},
+    weather: {},
+    maps: {},
+    notifications: {},
+    sound: {},
+    getCurrentUser: () => ({ id: 2, is_admin: 0 }),
+    actions: {
+      copyTextToClipboard: async (value) => {
+        copied.push(value);
+        return true;
+      },
+    },
+  });
+  modal.bindEvents();
+
+  modal.openSettingsModal();
+  assert.equal(window.document.getElementById('settingsAdminPanel').classList.contains('hidden'), true);
+  const apiTokensButton = window.document.getElementById('settingsApiTokensPanel');
+  assert.ok(apiTokensButton);
+  apiTokensButton.click();
+  assert.equal(window.document.getElementById('apiTokensModal').classList.contains('hidden'), false);
+
+  window.document.getElementById('apiTokenGenerateBtn').click();
+  await wait(window, 20);
+  const tokenCall = calls.find((entry) => entry.url === '/api/auth/tokens');
+  assert.ok(tokenCall);
+  assert.equal(tokenCall.opts.method, 'POST');
+  assert.equal(tokenCall.opts.body.expiresInSeconds, 2592000);
+  assert.equal(window.document.getElementById('apiTokenOutput').value, 'self-api-token');
+
+  window.document.getElementById('apiTokenCopyBtn').click();
+  await wait(window, 20);
+  assert.deepEqual(copied, ['self-api-token']);
+});
+
 test('notification controller renders support and fake push subscription path', async () => {
   const dom = createAppDom();
   loadAppRuntimeScripts(dom);

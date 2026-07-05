@@ -2702,6 +2702,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
           chatInfoModal,
           menuDrawer,
           settingsModal,
+          'apiTokensModal',
           languageSettingsModal,
           themeSettingsModal,
           visualModeSettingsModal,

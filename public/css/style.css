@@ -4683,6 +4683,93 @@ html[data-visual-mode="rich"] .poll-card {
   color: var(--text-primary);
   white-space: nowrap;
 }
+.api-token-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.api-token-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.api-token-custom-row,
+.api-token-compact-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+.api-token-custom-amount {
+  min-width: 0;
+}
+.api-token-custom-unit {
+  width: 140px;
+}
+.api-token-output,
+.admin-token-output {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  resize: vertical;
+  overflow-wrap: anywhere;
+}
+.api-token-copy-btn:disabled,
+.admin-token-copy-btn:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+.admin-user-token-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-input) 72%, var(--bg-hover));
+}
+.admin-token-hint {
+  margin: 0;
+}
+.admin-user-token-panel .api-token-compact-grid {
+  grid-template-columns: minmax(150px, 1fr) minmax(170px, 1fr) auto;
+}
+.api-token-field,
+.admin-token-never-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.api-token-field {
+  flex-direction: column;
+  align-items: stretch;
+}
+.admin-token-never-row {
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+.admin-token-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.admin-token-generate-btn,
+.admin-token-copy-btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.admin-token-generate-btn {
+  background: var(--accent);
+  color: #fff;
+}
 .admin-user-row .reset-btn,
 .admin-user-row .block-btn { white-space: nowrap; }
 .audit-entry-copy {
@@ -4728,6 +4815,9 @@ html[data-visual-mode="rich"] .poll-card {
   justify-self: end;
   align-self: start;
 }
+#adminUserList .admin-user-row .admin-user-token-panel {
+  grid-column: 2 / -1;
+}
 @media (max-width: 720px) {
   #adminUserList .admin-user-row {
     grid-template-columns: auto minmax(0, 1fr);
@@ -4754,6 +4844,20 @@ html[data-visual-mode="rich"] .poll-card {
   #adminUserList .admin-user-row .admin-user-actions {
     justify-content: flex-start;
     flex-wrap: wrap;
+  }
+  #adminUserList .admin-user-row .admin-user-token-panel {
+    grid-column: 2;
+    width: 100%;
+  }
+  .admin-user-token-panel .api-token-compact-grid,
+  .api-token-custom-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .admin-token-never-row {
+    justify-content: flex-start;
+  }
+  .api-token-custom-unit {
+    width: 100%;
   }
 }
 

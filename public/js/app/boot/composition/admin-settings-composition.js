@@ -80,12 +80,14 @@
             getTopModal: () => getTopModal(),
             getOnlineUsers: () => onlineUsers,
             avatarHtml,
-            esc,
-            formatDate,
-            formatTime,
-            alert: (message) => alert(message),
-            confirm: (message) => confirm(message),
-            openAdminBotAuditModal: (userId, displayName) => openAdminBotAuditModal(userId, displayName),
+          esc,
+          formatDate,
+          formatTime,
+          tx: (textValue, params = {}) => tx(textValue, params),
+          copyTextToClipboard: (textValue) => copyTextToClipboard(textValue),
+          alert: (message) => alert(message),
+          confirm: (message) => confirm(message),
+          openAdminBotAuditModal: (userId, displayName) => openAdminBotAuditModal(userId, displayName),
           });
           resolvedAdminControllers = {
             users: adminUsersController,
@@ -254,12 +256,17 @@
         window,
         dom: appDom,
         modals: modalManager,
+        api: (url, opts) => api(url, opts),
+        i18nHelpers,
         ui: uiSettings,
         weather: weatherSettingsController,
         maps: mapSettingsController,
         notifications: notificationSettingsController,
         sound: soundSettingsController,
         getCurrentUser: () => currentUser,
+        actions: {
+          copyTextToClipboard: (textValue) => copyTextToClipboard(textValue),
+        },
       });
       const settingsControllers = {
         ui: uiSettings,

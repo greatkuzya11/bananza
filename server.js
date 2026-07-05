@@ -166,6 +166,9 @@ const UI_LANGUAGE_DEFAULT = 'ru';
 const PROFILE_STATUS_KEYS = new Set(['', 'available', 'busy', 'dnd', 'away', 'working', 'resting', 'custom']);
 const PROFILE_STATUS_CUSTOM_MAX = 48;
 const RECENT_EMOJI_LIMIT = 32;
+const API_TOKEN_DEFAULT_SECONDS = 30 * 24 * 60 * 60;
+const API_TOKEN_MIN_SECONDS = 60;
+const API_TOKEN_MAX_SECONDS = 10 * 365 * 24 * 60 * 60;
 const USER_PUBLIC_FIELDS = 'id,username,display_name,is_admin,is_blocked,avatar_color,avatar_url,profile_status_key,profile_status_text,ui_theme,ui_visual_mode,ui_modal_animation,ui_modal_animation_speed,ui_mobile_font_size,ui_language,ui_show_chat_folder_strip_in_all_chats';
 const USER_REALTIME_FIELDS = `${USER_PUBLIC_FIELDS},is_ai_bot`;
 const POLL_MAX_OPTIONS = 10;
@@ -303,6 +306,40 @@ function publicUser(u) {
     ui_mobile_font_size: normalizeMobileFontSize(u.ui_mobile_font_size),
     ui_language: normalizeUiLanguage(u.ui_language),
     ui_show_chat_folder_strip_in_all_chats: boolValue(u.ui_show_chat_folder_strip_in_all_chats, false),
+  };
+}
+
+function apiTokenError(message = 'Invalid token lifetime') {
+  const error = new Error(message);
+  error.status = 400;
+  return error;
+}
+
+function normalizeApiTokenLifetime(input = {}) {
+  const neverExpires = boolValue(input?.neverExpires, false);
+  if (neverExpires) return { neverExpires: true, expiresInSeconds: null };
+  if (!Object.prototype.hasOwnProperty.call(input || {}, 'expiresInSeconds')
+    || input.expiresInSeconds === null
+    || input.expiresInSeconds === '') {
+    return { neverExpires: false, expiresInSeconds: API_TOKEN_DEFAULT_SECONDS };
+  }
+  const seconds = Number(input.expiresInSeconds);
+  if (!Number.isInteger(seconds)) throw apiTokenError();
+  if (seconds < API_TOKEN_MIN_SECONDS || seconds > API_TOKEN_MAX_SECONDS) throw apiTokenError();
+  return { neverExpires: false, expiresInSeconds: seconds };
+}
+
+function issueApiTokenForUser(user, lifetime) {
+  const options = lifetime.neverExpires ? {} : { expiresIn: lifetime.expiresInSeconds };
+  const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, options);
+  const decoded = jwt.decode(token) || {};
+  return {
+    token,
+    token_type: 'Bearer',
+    expires_in_seconds: lifetime.neverExpires ? null : lifetime.expiresInSeconds,
+    expires_at: decoded.exp ? new Date(decoded.exp * 1000).toISOString() : null,
+    never_expires: Boolean(lifetime.neverExpires),
+    user: publicUser(user),
   };
 }
 
@@ -1618,6 +1655,18 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     try { db.prepare("UPDATE users SET last_activity = datetime('now') WHERE id = ?").run(u.id); } catch (e) {}
     res.json({ token, user: publicUser(u) });
   } catch (e) { console.error(e); res.status(500).json({ error: 'Server error' }); }
+});
+
+app.post('/api/auth/tokens', auth, (req, res) => {
+  try {
+    const user = db.prepare(`SELECT ${USER_PUBLIC_FIELDS}, COALESCE(is_ai_bot,0) as is_ai_bot FROM users WHERE id=?`).get(req.user.id);
+    if (!user) return res.status(404).json({ error: 'Not found' });
+    if (user.is_ai_bot) return res.status(400).json({ error: 'API tokens are available for human users only' });
+    const lifetime = normalizeApiTokenLifetime(req.body || {});
+    res.json(issueApiTokenForUser(user, lifetime));
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Server error' });
+  }
 });
 
 app.get('/api/auth/me', auth, (req, res) => {
@@ -4255,6 +4304,19 @@ app.get('/api/admin/users', auth, adminOnly, (req, res) => {
     FROM users
     WHERE COALESCE(is_ai_bot,0)=0
   `).all());
+});
+
+app.post('/api/admin/users/:id/tokens', auth, adminOnly, (req, res) => {
+  try {
+    const uid = +req.params.id;
+    const user = db.prepare(`SELECT ${USER_PUBLIC_FIELDS}, COALESCE(is_ai_bot,0) as is_ai_bot FROM users WHERE id=?`).get(uid);
+    if (!user) return res.status(404).json({ error: 'Not found' });
+    if (user.is_ai_bot) return res.status(400).json({ error: 'AI bots are managed from the AI bot settings' });
+    const lifetime = normalizeApiTokenLifetime(req.body || {});
+    res.json(issueApiTokenForUser(user, lifetime));
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Server error' });
+  }
 });
 
 app.put('/api/admin/users/:id/bot-access', auth, adminOnly, (req, res) => {

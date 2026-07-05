@@ -9,11 +9,13 @@
 
   const AI_ADMIN_SCRIPT_VERSION = '20260615-doc-chatshot1';
   const aiAdminScript = (file) => `/js/app/ai-admin/${file}.js?v=${AI_ADMIN_SCRIPT_VERSION}`;
+  const ADMIN_SCRIPT_VERSION = '20260705-api-tokens';
+  const adminScript = (file) => `/js/app/admin/${file}.js?v=${ADMIN_SCRIPT_VERSION}`;
 
   loader.registerFeature('admin', [
-    '/js/app/admin/bot-audit.js',
-    '/js/app/admin/backup.js',
-    '/js/app/admin/users.js',
+    adminScript('bot-audit'),
+    adminScript('backup'),
+    adminScript('users'),
   ], { preload: 'admin-idle' });
 
   loader.registerFeature('ai-admin', [

@@ -6,7 +6,7 @@
   <title>🍌 BananZa</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍌</text></svg>">
   <link rel="stylesheet" href="/vendor/leaflet/leaflet.css?v=1.9.4">
-  <link rel="stylesheet" href="/css/style.css?v=20260703-location-picker3">
+  <link rel="stylesheet" href="/css/style.css?v=20260705-api-tokens">
   <link rel="stylesheet" href="/css/calls.css?v=20260621-call-mobile-controls">
   <link rel="stylesheet" href="/css/voice.css">
   <link rel="stylesheet" href="/css/video-notes.css">
@@ -406,6 +406,7 @@
         <button id="settingsSoundsPanel" class="settings-item">🔊 Звуки</button>
         <button id="settingsLanguagePanel" class="settings-item">🌐 Язык интерфейса: русский</button>
         <button id="settingsChangePassword" class="settings-item">🔑 Change Password</button>
+        <button id="settingsApiTokensPanel" class="settings-item" data-i18n="🔑 API tokens">🔑 API tokens</button>
         <button id="settingsAdminPanel" class="settings-item hidden">🛡 Admin Panel</button>
         <button id="settingsBackupPanel" class="settings-item hidden">🧰 Backup / Export / Restore</button>
         <button id="settingsAiBotsPanel" class="settings-item hidden">🤖 OpenAI AI</button>
@@ -414,6 +415,47 @@
         <button id="settingsQwenAiPanel" class="settings-item hidden">&#129504; Qwen AI</button>
         <button id="settingsGrokAiPanel" class="settings-item hidden">&#10006;&#65039; Grok AI</button>
         <button id="settingsAiInitiativesPanel" class="settings-item hidden">💬 Bot initiatives</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="apiTokensModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 data-i18n="API tokens">API tokens</h3>
+        <button class="modal-close">✕</button>
+      </div>
+      <div class="modal-body api-token-modal-body">
+        <div class="settings-hint" data-i18n="Create Bearer tokens for external API clients. Tokens are shown once and are not stored by BananZa.">Create Bearer tokens for external API clients. Tokens are shown once and are not stored by BananZa.</div>
+        <section class="api-token-section">
+          <label for="apiTokenLifetimePreset" class="profile-section-title" data-i18n="Token lifetime">Token lifetime</label>
+          <select id="apiTokenLifetimePreset" class="modal-input api-token-preset">
+            <option value="3600" data-i18n="1 hour">1 hour</option>
+            <option value="86400" data-i18n="1 day">1 day</option>
+            <option value="604800" data-i18n="7 days">7 days</option>
+            <option value="2592000" selected data-i18n="30 days">30 days</option>
+            <option value="custom" data-i18n="Custom">Custom</option>
+          </select>
+          <div id="apiTokenCustomLifetime" class="api-token-custom-row hidden">
+            <input id="apiTokenCustomAmount" class="modal-input api-token-custom-amount" type="number" min="1" step="1" value="1" aria-label="Custom token lifetime amount" data-i18n-aria-label="Custom token lifetime amount">
+            <select id="apiTokenCustomUnit" class="modal-input api-token-custom-unit" aria-label="Custom token lifetime unit" data-i18n-aria-label="Custom token lifetime unit">
+              <option value="minutes" data-i18n="minutes">minutes</option>
+              <option value="hours" data-i18n="hours">hours</option>
+              <option value="days" data-i18n="days">days</option>
+            </select>
+          </div>
+          <div class="settings-item settings-toggle-item api-token-never-row">
+            <span data-i18n="Never expires">Never expires</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="apiTokenNeverExpires">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </section>
+        <button id="apiTokenGenerateBtn" class="settings-item api-token-generate-btn" type="button" data-i18n="Generate token">Generate token</button>
+        <textarea id="apiTokenOutput" class="modal-input api-token-output" readonly spellcheck="false" rows="5" placeholder="Generated token appears here once" data-i18n-placeholder="Generated token appears here once"></textarea>
+        <button id="apiTokenCopyBtn" class="settings-item api-token-copy-btn" type="button" disabled data-i18n="Copy token">Copy token</button>
+        <div id="apiTokenStatus" class="theme-settings-status" role="status" aria-live="polite"></div>
       </div>
     </div>
   </div>
@@ -2793,7 +2835,7 @@
   <script src="/js/app/bridge.js?v=20260530-app-shell"></script>
   <script src="/js/app/performance.js?v=20260602-performance-baseline"></script>
   <script src="/js/app/feature-loader.js?v=20260602-feature-loader"></script>
-  <script src="/js/app/feature-registry.js?v=20260615-doc-chatshot1"></script>
+  <script src="/js/app/feature-registry.js?v=20260705-api-tokens"></script>
   <script src="/js/app/config.js?v=20260531-core-helpers"></script>
   <script src="/js/app/i18n-helpers.js?v=20260531-core-helpers"></script>
   <script src="/js/app/formatters.js?v=20260531-core-helpers"></script>
@@ -2805,7 +2847,7 @@
     <script src="/js/app/chat-header-actions.js?v=20260531-dom-mobile-shell"></script>
     <script src="/js/app/shell/mobile-composer-guard.js?v=20260621-ios-keyboard1"></script>
     <script src="/js/app/shell/events.js?v=20260614-doc-settings1"></script>
-    <script src="/js/app/shell/ui-runtime.js?v=20260624-ios-bottom-stabilizer3"></script>
+    <script src="/js/app/shell/ui-runtime.js?v=20260705-api-tokens"></script>
     <script src="/js/app/shell/shell-runtime.js?v=20260702-maps2"></script>
     <script src="/js/app/shell/mobile-runtime-adapters.js?v=20260601-runtime-final"></script>
     <script src="/js/app/modal-manager.js?v=20260531-modal-manager"></script>
@@ -2814,7 +2856,7 @@
   <script src="/js/app/settings/map-settings.js?v=20260702-maps4"></script>
   <script src="/js/app/settings/notification-settings.js?v=20260531-settings"></script>
   <script src="/js/app/settings/sound-settings.js?v=20260531-settings"></script>
-  <script src="/js/app/settings/settings-modal.js?v=20260702-maps2"></script>
+  <script src="/js/app/settings/settings-modal.js?v=20260705-api-tokens"></script>
   <script src="/js/app/folders/store.js?v=20260531-folders"></script>
   <script src="/js/app/folders/ui.js?v=20260531-folders"></script>
   <script src="/js/app/folders/actions.js?v=20260531-folders"></script>
@@ -2869,7 +2911,7 @@
   <script src="/js/app/boot/composition/runtime-proxy-scope.js?v=20260601-feature-composition-final"></script>
   <script src="/js/app/boot/composition/ai-admin-composition.js?v=20260614-doc-ai1"></script>
   <script src="/js/app/boot/composition/ui-shell-adapters.js?v=20260601-feature-composition-final"></script>
-  <script src="/js/app/boot/composition/admin-settings-composition.js?v=20260601-feature-composition-final"></script>
+  <script src="/js/app/boot/composition/admin-settings-composition.js?v=20260705-api-tokens"></script>
   <script src="/js/app/boot/composition/folders-composition.js?v=20260601-feature-composition-final"></script>
   <script src="/js/app/boot/composition/chat-list-composition.js?v=20260614-doc-bugfix1"></script>
   <script src="/js/app/boot/composition/open-chat-composition.js?v=20260614-doc-ai1"></script>

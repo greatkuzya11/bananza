@@ -761,6 +761,7 @@ test('generic admin bot audit and backup controllers call expected endpoints', a
   const dom = loadAiAdminRuntime();
   const calls = [];
   const fetchCalls = [];
+  const copied = [];
   let openedModal = '';
   const api = async (url, options = {}) => {
     calls.push({ url, options });
@@ -790,6 +791,16 @@ test('generic admin bot audit and backup controllers call expected endpoints', a
         created_at: '2026-05-31T00:00:00',
         last_activity: '2026-05-31T12:00:00Z',
       }];
+    }
+    if (url === '/api/admin/users/6/tokens') {
+      return {
+        token: 'admin-issued-token',
+        token_type: 'Bearer',
+        expires_in_seconds: options.body.expiresInSeconds,
+        expires_at: '2026-07-05T12:00:00.000Z',
+        never_expires: false,
+        user: { id: 6, username: 'bob' },
+      };
     }
     if (url === '/api/admin/backup/restore/preview') {
       return {
@@ -828,11 +839,28 @@ test('generic admin bot audit and backup controllers call expected endpoints', a
     formatTime: () => '12:00',
     alert: () => {},
     confirm: () => true,
+    tx: (text, params = {}) => String(text || '').replace(/\{([^}]+)\}/g, (_match, key) => String(params[key] ?? '')),
+    copyTextToClipboard: async (value) => {
+      copied.push(value);
+      return true;
+    },
     openAdminBotAuditModal: () => Promise.resolve(),
   });
   await usersController.openAdminModal();
   assert.equal(openedModal, 'adminModal');
   assert.match(dom.window.document.getElementById('adminUserList').textContent, /Bob/);
+
+  const tokenBtn = dom.window.document.querySelector('.admin-user-token-btn');
+  tokenBtn.click();
+  const tokenPanel = dom.window.document.querySelector('.admin-user-token-panel');
+  assert.equal(tokenPanel.classList.contains('hidden'), false);
+  tokenPanel.querySelector('.admin-token-generate-btn').click();
+  await waitForAsyncAction();
+  assert.ok(calls.some((call) => call.url === '/api/admin/users/6/tokens' && call.options.method === 'POST'));
+  assert.equal(tokenPanel.querySelector('.admin-token-output').value, 'admin-issued-token');
+  tokenPanel.querySelector('.admin-token-copy-btn').click();
+  await waitForAsyncAction();
+  assert.deepEqual(copied, ['admin-issued-token']);
 
   const backupFile = new Blob(['backup'], { type: 'application/gzip' });
   Object.defineProperty(backupFile, 'name', { value: 'backup.tar.gz' });

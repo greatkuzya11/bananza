@@ -134,6 +134,10 @@ test('i18n translates media menu labels and chat date chips', () => {
     'Could not copy text',
     'Could not copy link',
     'Download started',
+    'API tokens',
+    'Generate token',
+    'Copy token',
+    'Token generated. Expires at {time}',
   ];
 
   i18n.setLanguage('ru');
@@ -153,6 +157,8 @@ test('i18n translates media menu labels and chat date chips', () => {
   assert.equal(i18n.t('Pinned by {name}', { name: 'Kuzya' }), '\u0417\u0430\u043a\u0440\u0435\u043f\u0438\u043b(\u0430): Kuzya');
   assert.equal(i18n.t('Pin message'), '\u0417\u0430\u043a\u0440\u0435\u043f\u0438\u0442\u044c \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435');
   assert.equal(i18n.t('Unpin message'), '\u041e\u0442\u043a\u0440\u0435\u043f\u0438\u0442\u044c \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435');
+  assert.equal(i18n.t('API tokens'), 'API-\u0442\u043e\u043a\u0435\u043d\u044b');
+  assert.equal(i18n.t('Token generated. Expires at {time}', { time: '12:00' }), '\u0422\u043e\u043a\u0435\u043d \u0441\u043e\u0437\u0434\u0430\u043d. \u0418\u0441\u0442\u0435\u043a\u0430\u0435\u0442: 12:00');
   for (const key of keys) {
     assert.ok(i18n.t(key).trim(), `Missing ru text for ${key}`);
   }
