@@ -128,6 +128,7 @@ test('folder ui renders the active strip, picker, and context menu without ownin
       renderChatLastPreviewHtml: (chat) => chat.last_text || '',
     },
   });
+  ui.bindEvents();
 
   assert.equal(ui.renderActiveChatFolderBar(), true);
   assert.equal(window.document.getElementById('activeChatFolderBar').classList.contains('hidden'), false);
@@ -144,7 +145,7 @@ test('folder ui renders the active strip, picker, and context menu without ownin
   assert.equal(picker.querySelector('[data-chat-folder-strip-toggle]')?.getAttribute('aria-pressed'), 'true');
 
   const menuAnchor = picker.querySelector('[data-folder-menu="9"]');
-  ui.showChatFolderContextMenu(9, menuAnchor);
+  menuAnchor.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
   const menu = window.document.getElementById('chatFolderContextMenu');
   assert.equal(menu.classList.contains('hidden'), false);
   assert.equal(menu.getAttribute('role'), 'menu');
@@ -152,6 +153,16 @@ test('folder ui renders the active strip, picker, and context menu without ownin
     [...menu.querySelectorAll('[data-folder-action]')].map((node) => node.dataset.folderAction),
     ['move-up-folder', 'move-down-folder', 'rename-folder', 'delete-folder']
   );
+  menuAnchor.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.equal(menu.classList.contains('hidden'), true);
+  assert.equal(menu.getAttribute('aria-hidden'), 'true');
+  assert.equal(picker.classList.contains('hidden'), false);
+
+  menuAnchor.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  const secondaryMenuAnchor = picker.querySelector('[data-folder-menu="10"]');
+  secondaryMenuAnchor.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.equal(menu.classList.contains('hidden'), false);
+  assert.equal(menu.dataset.folderId, '10');
 
   await ui.hideChatFolderPicker({ immediate: true });
   assert.equal(picker.getAttribute('aria-hidden'), 'true');

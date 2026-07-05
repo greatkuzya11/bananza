@@ -662,9 +662,14 @@
       const chatFolderContextMenu = getEl('chatFolderContextMenu', 'chatFolderContextMenu');
       const chatFolderContextMenuBackdrop = getEl('chatFolderContextMenuBackdrop', 'chatFolderContextMenuBackdrop');
       if (!folder || !chatFolderContextMenu || !chatFolderContextMenuBackdrop) return;
+      const normalizedFolderId = Number(folder.id || 0);
+      if (isFloatingSurfaceVisible(chatFolderContextMenu) && Number(chatFolderContextMenuState?.folderId || 0) === normalizedFolderId) {
+        hideChatFolderContextMenu();
+        return;
+      }
       hideChatFolderContextMenu({ immediate: true });
       chatFolderContextMenuState = {
-        folderId: Number(folder.id || 0),
+        folderId: normalizedFolderId,
         anchor,
       };
       renderChatFolderContextMenu(folder);
