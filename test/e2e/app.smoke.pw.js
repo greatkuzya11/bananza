@@ -88,11 +88,30 @@ test('UI flow covers register, private chat creation, sending, search and poll c
       await page.locator('#profileCustomStatus').fill('Writing profile layout check');
       const profileModalBox = await page.locator('#menuDrawer .profile-settings-modal').boundingBox();
       expect(profileModalBox?.y || 0).toBeLessThanOrEqual(90);
-      const profileBodyOverflow = await page.locator('#menuDrawer .profile-settings-body').evaluate((el) => ({
-        clientHeight: el.clientHeight,
-        scrollHeight: el.scrollHeight,
-      }));
-      expect(profileBodyOverflow.scrollHeight).toBeLessThanOrEqual(profileBodyOverflow.clientHeight + 2);
+      const profileLayout = await page.locator('#menuDrawer .profile-settings-body').evaluate((el) => {
+        const modal = el.closest('.profile-settings-modal');
+        const logout = document.getElementById('profileLogoutBtn');
+        const modalRect = modal.getBoundingClientRect();
+        const logoutRect = logout.getBoundingClientRect();
+        const initialScrollTop = el.scrollTop;
+        el.scrollTop = 1;
+        const canScrollBody = el.scrollTop > 0;
+        el.scrollTop = initialScrollTop;
+        return {
+          bodyClientHeight: el.clientHeight,
+          bodyScrollHeight: el.scrollHeight,
+          canScrollBody,
+          bodyOverflowY: getComputedStyle(el).overflowY,
+          modalTop: modalRect.top,
+          modalBottom: modalRect.bottom,
+          logoutTop: logoutRect.top,
+          logoutBottom: logoutRect.bottom,
+        };
+      });
+      expect(profileLayout.logoutTop).toBeGreaterThanOrEqual(profileLayout.modalTop - 1);
+      expect(profileLayout.logoutBottom).toBeLessThanOrEqual(profileLayout.modalBottom + 1);
+      expect(profileLayout.bodyOverflowY).toBe('auto');
+      expect(profileLayout.canScrollBody).toBe(profileLayout.bodyScrollHeight > profileLayout.bodyClientHeight);
       await page.locator('#colorPicker .color-swatch').nth(1).click();
       await expect(page.locator('#colorPicker input[name="profileAvatarColor"]').nth(1)).toBeChecked();
       await expectMobileScene(page, 'sidebar');

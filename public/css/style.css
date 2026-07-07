@@ -7376,12 +7376,21 @@ html[data-visual-mode="rich"] .poll-card {
 }
 #menuDrawer .profile-settings-modal {
   max-width: 456px;
-  max-height: min(720px, 88vh);
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
   border: 1px solid color-mix(in srgb, var(--border-light) 82%, var(--accent) 18%);
   background: linear-gradient(180deg, color-mix(in srgb, var(--bg-modal) 96%, var(--accent) 4%), var(--profile-panel-bg));
 }
 #menuDrawer .profile-settings-body {
-  overflow: visible;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+#menuDrawer .profile-settings-body::-webkit-scrollbar {
+  display: none;
 }
 #menuDrawer .modal-header {
   padding: 14px 18px 10px;
@@ -8122,7 +8131,7 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
     border-radius: 14px;
   }
   .profile-settings-body {
-    flex: 0 0 auto;
+    flex: 1 1 auto;
     padding: 12px 14px 14px;
     gap: 9px;
   }

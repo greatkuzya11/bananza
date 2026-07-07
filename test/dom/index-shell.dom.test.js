@@ -347,6 +347,25 @@ test('profile settings modal exposes accessible profile controls', () => {
   assert.equal(document.getElementById('profileCameraCaptureBtn').textContent.trim(), 'Take photo');
 });
 
+test('style.css keeps profile settings content scrollable without visible scrollbar', () => {
+  const modalRule = styleCss.match(/#menuDrawer\s+\.profile-settings-modal\s*\{([^}]*)\}/s);
+  assert.ok(modalRule, 'Expected #menuDrawer .profile-settings-modal rule in style.css');
+  assert.match(modalRule[1], /max-height\s*:\s*calc\(100vh\s*-\s*40px\)/);
+  assert.match(modalRule[1], /max-height\s*:\s*calc\(100dvh\s*-\s*40px\)/);
+
+  const bodyRule = styleCss.match(/#menuDrawer\s+\.profile-settings-body\s*\{([^}]*)\}/s);
+  assert.ok(bodyRule, 'Expected #menuDrawer .profile-settings-body rule in style.css');
+  assert.match(bodyRule[1], /flex\s*:\s*1 1 auto/);
+  assert.match(bodyRule[1], /min-height\s*:\s*0/);
+  assert.match(bodyRule[1], /overflow-y\s*:\s*auto/);
+  assert.match(bodyRule[1], /overflow-x\s*:\s*hidden/);
+  assert.match(bodyRule[1], /scrollbar-width\s*:\s*none/);
+  assert.match(bodyRule[1], /-ms-overflow-style\s*:\s*none/);
+  assert.match(styleCss, /#menuDrawer\s+\.profile-settings-body::-webkit-scrollbar\s*\{[^}]*display\s*:\s*none/s);
+  assert.match(styleCss, /@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*#menuDrawer\s+\.profile-settings-modal\s*\{[^}]*max-height\s*:\s*calc\(100dvh\s*-\s*84px\)/);
+  assert.match(styleCss, /@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*\.profile-settings-body\s*\{[^}]*flex\s*:\s*1 1 auto/s);
+});
+
 test('style.css keeps a dedicated unread badge contrast override for active chats', () => {
   const activeBadgeRuleMatch = styleCss.match(/\.unread-badge--active-chat\s*\{([^}]*)\}/s);
   assert.ok(activeBadgeRuleMatch, 'Expected .unread-badge--active-chat rule in style.css');
