@@ -31,6 +31,7 @@
         tracking: false,
         dragging: false,
         switching: false,
+        inputType: '',
         touchId: null,
         startX: 0,
         startY: 0,
@@ -40,6 +41,7 @@
       const clearTracking = () => {
         state.tracking = false;
         state.dragging = false;
+        state.inputType = '';
         state.touchId = null;
         state.startX = 0;
         state.startY = 0;
@@ -52,21 +54,27 @@
         return Array.from(touches).find((touch) => Number(touch.identifier) === Number(state.touchId)) || null;
       };
 
-      const isAllowedStartTarget = (target) => {
-        if (!target || !chatFolderListSurface.contains(target)) return false;
-        return !target.closest('button, a, input, textarea, select, label, [contenteditable="true"], .chat-context-menu, .modal');
+      const isBlockedStartTarget = (target) => {
+        const blocked = target?.closest?.('button, a, input, textarea, select, label, [contenteditable="true"], .chat-context-menu, .modal');
+        return Boolean(blocked);
       };
 
-      const isSwipeAvailable = () => (
-        actions.isMobileLayoutViewport?.()
+      const isAllowedStartTarget = (target) => {
+        if (!target || !chatFolderListSurface.contains(target)) return false;
+        return !isBlockedStartTarget(target);
+      };
+
+      const isSwipeAvailable = (inputType = state.inputType || 'touch') => {
+        const mobileLayout = Boolean(actions.isMobileLayoutViewport?.());
+        return (inputType === 'mouse' || mobileLayout)
         && !sidebar.classList.contains('sidebar-hidden')
-        && !sidebar.classList.contains('mobile-scene-hidden')
+        && (!mobileLayout || !sidebar.classList.contains('mobile-scene-hidden'))
         && !actions.isMobileViewportLayoutLocked?.()
         && !state.switching
         && !String(chatSearch?.value || '').trim()
         && actions.getFolders?.().length > 0
-        && actions.getChatFolderPageRows?.().length > 1
-      );
+        && actions.getChatFolderPageRows?.().length > 1;
+      };
 
       const dampEdgeOffset = (dx) => actions.clamp?.(
         Math.round(dx * getNumber('CHAT_FOLDER_SWIPE_EDGE_DAMPING')),
@@ -88,23 +96,21 @@
         }
       };
 
-      chatFolderListSurface.addEventListener('touchstart', (e) => {
-        if (e.touches.length !== 1 || !isSwipeAvailable() || !isAllowedStartTarget(e.target)) return;
-        const touch = e.touches[0];
+      const beginGesture = ({ inputType, clientX, clientY, touchId = null }) => {
         state.tracking = true;
         state.dragging = false;
-        state.touchId = Number(touch.identifier);
-        state.startX = touch.clientX;
-        state.startY = touch.clientY;
+        state.inputType = inputType;
+        state.touchId = touchId == null ? null : Number(touchId);
+        state.startX = clientX;
+        state.startY = clientY;
         state.dx = 0;
-      }, { passive: true });
+      };
 
-      chatFolderListSurface.addEventListener('touchmove', (e) => {
-        if (!state.tracking || state.switching || e.touches.length !== 1) return;
-        const touch = getTrackedTouch(e.touches);
-        if (!touch) return;
-        const dx = touch.clientX - state.startX;
-        const dy = touch.clientY - state.startY;
+      const moveGesture = (clientX, clientY, e) => {
+        if (!state.tracking || state.switching) return;
+        const inputType = state.inputType || 'touch';
+        const dx = clientX - state.startX;
+        const dy = clientY - state.startY;
         const absX = Math.abs(dx);
         const absY = Math.abs(dy);
         const swipeStartPx = getNumber('CHAT_FOLDER_SWIPE_START_PX');
@@ -120,7 +126,7 @@
           actions.resetChatFolderSwipeSurface?.();
         }
 
-        if (!isSwipeAvailable()) {
+        if (!isSwipeAvailable(inputType)) {
           clearTracking();
           actions.resetChatFolderSwipeSurface?.();
           return;
@@ -139,11 +145,20 @@
           }
         }
         if (e.cancelable) e.preventDefault();
-      }, { passive: false });
+      };
+
+      const suppressFollowupTap = (inputType) => {
+        if (inputType === 'mouse') {
+          actions.suppressNextChatItemTap?.({ pointerType: 'mouse' });
+          return;
+        }
+        actions.suppressNextChatItemTap?.();
+      };
 
       const finishGesture = (e) => {
         if (!state.tracking) return;
         const wasDragging = state.dragging;
+        const inputType = state.inputType || 'touch';
         const dx = state.dx;
         clearTracking();
 
@@ -152,7 +167,7 @@
           return;
         }
 
-        actions.suppressNextChatItemTap?.();
+        suppressFollowupTap(inputType);
         if (e?.cancelable) e.preventDefault();
 
         const direction = dx < 0 ? 1 : -1;
@@ -164,18 +179,62 @@
         finishSwipeAsync(swipePromise);
       };
 
+      chatFolderListSurface.addEventListener('touchstart', (e) => {
+        if (e.touches.length !== 1 || !isSwipeAvailable('touch') || !isAllowedStartTarget(e.target)) return;
+        const touch = e.touches[0];
+        beginGesture({
+          inputType: 'touch',
+          touchId: touch.identifier,
+          clientX: touch.clientX,
+          clientY: touch.clientY,
+        });
+      }, { passive: true });
+
+      chatFolderListSurface.addEventListener('touchmove', (e) => {
+        if (!state.tracking || state.inputType !== 'touch' || state.switching || e.touches.length !== 1) return;
+        const touch = getTrackedTouch(e.touches);
+        if (!touch) return;
+        moveGesture(touch.clientX, touch.clientY, e);
+      }, { passive: false });
+
       chatFolderListSurface.addEventListener('touchend', finishGesture, { passive: false });
       chatFolderListSurface.addEventListener('touchcancel', () => {
-        if (!state.tracking) return;
+        if (!state.tracking || state.inputType !== 'touch') return;
         const wasDragging = state.dragging;
         clearTracking();
         if (!wasDragging) {
           actions.resetChatFolderSwipeSurface?.();
           return;
         }
-        actions.suppressNextChatItemTap?.();
+        suppressFollowupTap('touch');
         finishSwipeAsync(actions.snapChatFolderSwipeBack?.());
       }, { passive: true });
+
+      const beginMouseGesture = (e) => {
+        if (e.button !== 0 || state.tracking || !isSwipeAvailable('mouse') || !isAllowedStartTarget(e.target)) return;
+        beginGesture({
+          inputType: 'mouse',
+          clientX: e.clientX,
+          clientY: e.clientY,
+        });
+        if (e.cancelable) e.preventDefault();
+      };
+
+      chatFolderListSurface.addEventListener('mousedown', beginMouseGesture, { passive: false });
+
+      windowRef.addEventListener('mousemove', (e) => {
+        if (!state.tracking || state.inputType !== 'mouse' || state.switching) return;
+        if (typeof e.buttons === 'number' && e.buttons === 0) {
+          finishGesture(e);
+          return;
+        }
+        moveGesture(e.clientX, e.clientY, e);
+      }, { passive: false });
+
+      windowRef.addEventListener('mouseup', (e) => {
+        if (!state.tracking || state.inputType !== 'mouse' || e.button !== 0) return;
+        finishGesture(e);
+      }, { passive: false });
 
       windowRef.addEventListener('resize', () => {
         if (!state.tracking && !state.switching) return;

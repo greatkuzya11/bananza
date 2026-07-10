@@ -281,6 +281,81 @@ function startTouchSwipe(window, target, {
   };
 }
 
+function createMouseDragEvent(window, type, {
+  clientX = 0,
+  clientY = 0,
+  button = 0,
+  buttons = type === 'mouseup' ? 0 : 1,
+} = {}) {
+  return new window.MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    clientX,
+    clientY,
+    button,
+    buttons,
+  });
+}
+
+function dispatchMouseSwipe(window, target, {
+  startX = 320,
+  startY = 420,
+  moveX = 180,
+  moveY = startY,
+  endX = moveX,
+  endY = moveY,
+} = {}) {
+  target.dispatchEvent(createMouseDragEvent(window, 'mousedown', {
+    clientX: startX,
+    clientY: startY,
+    buttons: 1,
+  }));
+  const moveEvent = createMouseDragEvent(window, 'mousemove', {
+    clientX: moveX,
+    clientY: moveY,
+    buttons: 1,
+  });
+  window.dispatchEvent(moveEvent);
+  const endEvent = createMouseDragEvent(window, 'mouseup', {
+    clientX: endX,
+    clientY: endY,
+    buttons: 0,
+  });
+  window.dispatchEvent(endEvent);
+  return { moveEvent, endEvent };
+}
+
+function startMouseSwipe(window, target, {
+  startX = 320,
+  startY = 420,
+  moveX = 180,
+  moveY = startY,
+} = {}) {
+  target.dispatchEvent(createMouseDragEvent(window, 'mousedown', {
+    clientX: startX,
+    clientY: startY,
+    buttons: 1,
+  }));
+  const moveEvent = createMouseDragEvent(window, 'mousemove', {
+    clientX: moveX,
+    clientY: moveY,
+    buttons: 1,
+  });
+  window.dispatchEvent(moveEvent);
+  return {
+    moveEvent,
+    end(endX = moveX, endY = moveY) {
+      const endEvent = createMouseDragEvent(window, 'mouseup', {
+        clientX: endX,
+        clientY: endY,
+        buttons: 0,
+      });
+      window.dispatchEvent(endEvent);
+      return endEvent;
+    },
+  };
+}
+
 function chatNameText(document, chatId) {
   const node = document.querySelector(`.chat-item[data-chat-id="${chatId}"] .chat-item-name`);
   return node ? node.textContent.trim() : '';
@@ -1679,7 +1754,264 @@ test('mobile folder swipe ignores vertical and short drags, snaps at edges, and 
   assert.equal(BananzaAppBridge.__testing.getActiveChatFolder().id, 9);
 });
 
-test('desktop width does not enable chat folder page swiping', async (t) => {
+test('desktop mouse folder swipe switches pages and renders the adjacent chat list', async (t) => {
+  const initialChats = [
+    makeFolderSwipeChat(101, 'All chat'),
+    makeFolderSwipeChat(102, 'Launch chat'),
+    makeFolderSwipeChat(103, 'Ops chat'),
+  ];
+  const dom = await bootAppDom({ fetchHandler: createChatListFetchHandler(initialChats) });
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  Object.defineProperty(dom.window, 'innerWidth', {
+    configurable: true,
+    value: 1024,
+  });
+
+  BananzaAppBridge.__testing.setChats(initialChats);
+  const folderRows = [
+    { id: 9, name: 'Launch', kind: 'custom', sort_order: 1, chat_ids: [102], pins: [] },
+    { id: 10, name: 'Ops', kind: 'custom', sort_order: 2, chat_ids: [103], pins: [] },
+  ];
+  BananzaAppBridge.__testing.setChatFolders(folderRows, { activeFolderId: 0 });
+  await waitForAnimationFrames(dom.window, 2);
+
+  const nextGesture = startMouseSwipe(dom.window, document.getElementById('chatList'), {
+    startX: 800,
+    moveX: 520,
+  });
+
+  const swipeStage = document.querySelector('.chat-folder-swipe-stage');
+  assert.ok(swipeStage, 'swipe stage is visible while the mouse is still dragging');
+  assert.deepEqual(
+    [...swipeStage.querySelectorAll('[data-folder-swipe-role="adjacent"] .chat-item[data-chat-id]')]
+      .map((node) => Number(node.dataset.chatId)),
+    [102]
+  );
+  assert.match(
+    document.querySelector('.chat-folder-swipe-track').style.transform,
+    /translate3d\(-280px, 0, 0\)/
+  );
+  nextGesture.end();
+  await waitForMs(dom.window, 560);
+
+  assert.equal(BananzaAppBridge.__testing.getActiveChatFolder().id, 9);
+  assert.equal(document.querySelector('.chat-folder-swipe-stage'), null);
+  assert.deepEqual(
+    [...document.querySelectorAll('#chatList .chat-item[data-chat-id]')].map((node) => Number(node.dataset.chatId)),
+    [102]
+  );
+
+  dispatchMouseSwipe(dom.window, document.getElementById('chatList'), {
+    startX: 240,
+    moveX: 520,
+    endX: 520,
+  });
+  await waitForMs(dom.window, 560);
+
+  assert.equal(BananzaAppBridge.__testing.getActiveChatFolder(), null);
+  assert.deepEqual(
+    [...document.querySelectorAll('#chatList .chat-item[data-chat-id]')].map((node) => Number(node.dataset.chatId)),
+    [103, 102, 101]
+  );
+});
+
+test('desktop folder strip scrolls horizontally with mouse drag and wheel', async (t) => {
+  const initialChats = [
+    makeFolderSwipeChat(101, 'All chat'),
+    makeFolderSwipeChat(102, 'Launch chat'),
+    makeFolderSwipeChat(103, 'Ops chat'),
+  ];
+  const dom = await bootAppDom({ fetchHandler: createChatListFetchHandler(initialChats) });
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  Object.defineProperty(dom.window, 'innerWidth', {
+    configurable: true,
+    value: 1024,
+  });
+  installFolderStripMetrics(dom);
+
+  BananzaAppBridge.__testing.setCurrentUser({
+    ui_show_chat_folder_strip_in_all_chats: true,
+  });
+  BananzaAppBridge.__testing.setChats(initialChats);
+  const folderRows = [
+    { id: 9, name: 'Launch', kind: 'custom', sort_order: 1, chat_ids: [102], pins: [] },
+    { id: 10, name: 'Ops', kind: 'custom', sort_order: 2, chat_ids: [103], pins: [] },
+  ];
+  BananzaAppBridge.__testing.setChatFolders(folderRows, { activeFolderId: 0 });
+  await waitForAnimationFrames(dom.window, 2);
+
+  const bar = document.getElementById('activeChatFolderBar');
+  const strip = document.getElementById('activeChatFolderStrip');
+  assert.equal(bar.classList.contains('hidden'), false);
+  assert.equal(BananzaAppBridge.__testing.getActiveChatFolder(), null);
+
+  strip.scrollLeft = 0;
+  const wheelEvent = new dom.window.Event('wheel', {
+    bubbles: true,
+    cancelable: true,
+  });
+  Object.defineProperties(wheelEvent, {
+    deltaX: { value: 0 },
+    deltaY: { value: 96 },
+  });
+  strip.dispatchEvent(wheelEvent);
+
+  assert.equal(strip.scrollLeft, 96);
+  assert.equal(wheelEvent.defaultPrevented, true);
+
+  BananzaAppBridge.__testing.setChatFolders(folderRows, { activeFolderId: 0 });
+  await waitForAnimationFrames(dom.window, 3);
+  assert.equal(strip.scrollLeft, 96);
+
+  strip.scrollLeft = 40;
+  const chip = document.querySelector('[data-folder-chip="9"]');
+  chip.dispatchEvent(createMouseDragEvent(dom.window, 'mousedown', {
+    clientX: 220,
+    clientY: 72,
+    buttons: 1,
+  }));
+  dom.window.dispatchEvent(createMouseDragEvent(dom.window, 'mousemove', {
+    clientX: 140,
+    clientY: 72,
+    buttons: 1,
+  }));
+
+  assert.equal(strip.scrollLeft, 120);
+  assert.equal(strip.classList.contains('is-folder-strip-dragging'), true);
+  assert.equal(document.querySelector('.chat-folder-swipe-stage'), null);
+
+  dom.window.dispatchEvent(createMouseDragEvent(dom.window, 'mouseup', {
+    clientX: 140,
+    clientY: 72,
+    buttons: 0,
+  }));
+  chip.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await waitForMs(dom.window, 80);
+
+  assert.equal(strip.classList.contains('is-folder-strip-dragging'), false);
+  assert.equal(BananzaAppBridge.__testing.getActiveChatFolder(), null);
+
+  await waitForMs(dom.window, 420);
+  chip.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await waitForMs(dom.window, 560);
+
+  assert.equal(BananzaAppBridge.__testing.getActiveChatFolder().id, 9);
+});
+
+test('desktop mouse folder swipe ignores vertical and short drags and suppresses row clicks after dragging', async (t) => {
+  const initialChats = [
+    makeFolderSwipeChat(101, 'All chat'),
+    makeFolderSwipeChat(102, 'Launch chat'),
+    makeFolderSwipeChat(103, 'Current chat'),
+  ];
+  const dom = await bootAppDom({
+    fetchHandler: ({ url, dom: testDom }) => {
+      if (url.pathname === '/api/chats') return createJsonResponse(testDom, initialChats);
+      if (/^\/api\/chats\/\d+\/messages$/.test(url.pathname)) {
+        return createJsonResponse(testDom, {
+          messages: [],
+          pin_events: [],
+          system_events: [],
+          has_more_before: false,
+          has_more_after: false,
+          member_last_reads: [],
+        });
+      }
+      return null;
+    },
+  });
+  t.after(() => {
+    dom.window.close();
+  });
+
+  const { document, BananzaAppBridge } = dom.window;
+  Object.defineProperty(dom.window, 'innerWidth', {
+    configurable: true,
+    value: 1024,
+  });
+
+  BananzaAppBridge.__testing.setChats(initialChats);
+  BananzaAppBridge.__testing.setChatFolders([
+    { id: 9, name: 'Launch', kind: 'custom', sort_order: 1, chat_ids: [102], pins: [] },
+    { id: 10, name: 'Current', kind: 'custom', sort_order: 2, chat_ids: [103], pins: [] },
+  ], { activeFolderId: 9 });
+  await waitForAnimationFrames(dom.window, 2);
+
+  const chatList = document.getElementById('chatList');
+  const content = document.getElementById('chatFolderListSurface');
+
+  dispatchMouseSwipe(dom.window, chatList, {
+    startX: 760,
+    moveX: 732,
+    endX: 732,
+  });
+  await waitForMs(dom.window, 260);
+  assert.equal(BananzaAppBridge.__testing.getActiveChatFolder().id, 9);
+  assert.equal(content.style.transform, '');
+
+  dispatchMouseSwipe(dom.window, chatList, {
+    startX: 760,
+    startY: 410,
+    moveX: 630,
+    moveY: 220,
+    endX: 630,
+    endY: 220,
+  });
+  await waitForMs(dom.window, 260);
+  assert.equal(BananzaAppBridge.__testing.getActiveChatFolder().id, 9);
+  assert.equal(content.style.transform, '');
+
+  const firstRow = document.querySelector('.chat-item[data-chat-id="102"]');
+  dispatchMouseSwipe(dom.window, firstRow, {
+    startX: 800,
+    moveX: 520,
+    endX: 520,
+  });
+  firstRow.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await waitForMs(dom.window, 560);
+
+  assert.equal(BananzaAppBridge.getCurrentChatId(), null);
+  assert.equal(BananzaAppBridge.__testing.getActiveChatFolder().id, 10);
+
+  const visibleRow = document.querySelector('.chat-item[data-chat-id="103"]');
+  visibleRow.dispatchEvent(createMouseDragEvent(dom.window, 'mousedown', {
+    clientX: 760,
+    clientY: 420,
+    buttons: 1,
+  }));
+  dom.window.dispatchEvent(createMouseDragEvent(dom.window, 'mouseup', {
+    clientX: 760,
+    clientY: 420,
+    buttons: 0,
+  }));
+  visibleRow.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  }));
+  await waitForCondition(dom.window, () => BananzaAppBridge.getCurrentChatId() === 103, {
+    attempts: 40,
+    delayMs: 10,
+  });
+});
+
+test('desktop width keeps touch chat folder page swiping disabled', async (t) => {
   const initialChats = [
     makeFolderSwipeChat(101, 'All chat'),
     makeFolderSwipeChat(102, 'Launch chat'),

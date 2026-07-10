@@ -39,6 +39,7 @@
     let chatFolderStripPreviewFolderId = null;
     let chatFolderBarForceVisible = false;
     let chatFolderStripVisibilitySaveInFlight = false;
+    let chatFolderStripManualScrollUntil = 0;
 
     function $(selector, rootEl = doc) {
       if (typeof dom.$ === 'function') return dom.$(selector, rootEl);
@@ -312,10 +313,119 @@
       return true;
     }
 
+    function getFolderStripMaxScrollLeft(strip) {
+      if (!isHTMLElement(strip)) return 0;
+      return Math.max(0, Number(strip.scrollWidth || 0) - Number(strip.clientWidth || 0));
+    }
+
+    function setFolderStripScrollLeft(strip, value) {
+      if (!isHTMLElement(strip)) return false;
+      const maxScrollLeft = getFolderStripMaxScrollLeft(strip);
+      const nextLeft = clamp(Number(value || 0), 0, maxScrollLeft);
+      if (Math.abs(Number(strip.scrollLeft || 0) - nextLeft) < 1) return false;
+      strip.scrollLeft = nextLeft;
+      return true;
+    }
+
+    function markManualFolderStripScroll() {
+      chatFolderStripManualScrollUntil = Date.now() + 1500;
+      cancelScheduledActiveChatFolderChipCenter();
+    }
+
+    function clearManualFolderStripScroll() {
+      chatFolderStripManualScrollUntil = 0;
+    }
+
+    function bindActiveChatFolderStripMouseScroll(activeChatFolderStrip) {
+      if (!isHTMLElement(activeChatFolderStrip) || activeChatFolderStrip.__folderStripMouseScrollBound) return false;
+      activeChatFolderStrip.__folderStripMouseScrollBound = true;
+      const dragState = {
+        tracking: false,
+        dragging: false,
+        startX: 0,
+        startY: 0,
+        startScrollLeft: 0,
+        suppressClickUntil: 0,
+      };
+
+      const clearDragState = () => {
+        dragState.tracking = false;
+        dragState.dragging = false;
+        dragState.startX = 0;
+        dragState.startY = 0;
+        dragState.startScrollLeft = 0;
+        activeChatFolderStrip.classList.remove('is-folder-strip-dragging');
+      };
+
+      const isScrollable = () => getFolderStripMaxScrollLeft(activeChatFolderStrip) > 0;
+
+      activeChatFolderStrip.addEventListener('mousedown', (e) => {
+        if (e.button !== 0 || !isScrollable()) return;
+        markManualFolderStripScroll();
+        dragState.tracking = true;
+        dragState.dragging = false;
+        dragState.startX = Number(e.clientX || 0);
+        dragState.startY = Number(e.clientY || 0);
+        dragState.startScrollLeft = Number(activeChatFolderStrip.scrollLeft || 0);
+      }, { passive: true });
+
+      win.addEventListener('mousemove', (e) => {
+        if (!dragState.tracking) return;
+        if (typeof e.buttons === 'number' && e.buttons === 0) {
+          clearDragState();
+          return;
+        }
+        const dx = Number(e.clientX || 0) - dragState.startX;
+        const dy = Number(e.clientY || 0) - dragState.startY;
+        const absX = Math.abs(dx);
+        const absY = Math.abs(dy);
+        if (!dragState.dragging) {
+          if (absY > 8 && absY > absX) {
+            clearDragState();
+            return;
+          }
+          if (absX <= 4) return;
+          dragState.dragging = true;
+          activeChatFolderStrip.classList.add('is-folder-strip-dragging');
+        }
+        setFolderStripScrollLeft(activeChatFolderStrip, dragState.startScrollLeft - dx);
+        if (e.cancelable) e.preventDefault();
+      }, { passive: false });
+
+      win.addEventListener('mouseup', (e) => {
+        if (!dragState.tracking || e.button !== 0) return;
+        const wasDragging = dragState.dragging;
+        clearDragState();
+        if (!wasDragging) return;
+        dragState.suppressClickUntil = Date.now() + 400;
+        if (e.cancelable) e.preventDefault();
+      }, { passive: false });
+
+      activeChatFolderStrip.addEventListener('click', (e) => {
+        if (Date.now() > dragState.suppressClickUntil) return;
+        e.preventDefault();
+        e.stopPropagation();
+      });
+
+      activeChatFolderStrip.addEventListener('wheel', (e) => {
+        if (!isScrollable()) return;
+        const deltaX = Number(e.deltaX || 0);
+        const deltaY = Number(e.deltaY || 0);
+        const delta = Math.abs(deltaX) > Math.abs(deltaY) ? deltaX : deltaY;
+        if (!delta) return;
+        markManualFolderStripScroll();
+        const changed = setFolderStripScrollLeft(activeChatFolderStrip, Number(activeChatFolderStrip.scrollLeft || 0) + delta);
+        if (changed && e.cancelable) e.preventDefault();
+      }, { passive: false });
+
+      return true;
+    }
+
     function scheduleActiveChatFolderChipCenter({ behavior } = {}) {
       const activeChatFolderStrip = getEl('activeChatFolderStrip', 'activeChatFolderStrip');
       if (!isHTMLElement(activeChatFolderStrip)) return false;
       cancelScheduledActiveChatFolderChipCenter();
+      if (behavior !== 'smooth' && Date.now() < chatFolderStripManualScrollUntil) return false;
       const nextBehavior = behavior === 'smooth' ? 'smooth' : consumePendingChatFolderChipCenterBehavior();
       activeChatFolderStrip.__centerChipRafPrimary = win.requestAnimationFrame(() => {
         activeChatFolderStrip.__centerChipRafPrimary = 0;
@@ -743,6 +853,7 @@
     function bindEvents({ bindTouchSafeButtonActivation } = {}) {
       const chatFoldersBtn = getEl('chatFoldersBtn', 'chatFoldersBtn');
       const activeChatFolderBar = getEl('activeChatFolderBar', 'activeChatFolderBar');
+      const activeChatFolderStrip = getEl('activeChatFolderStrip', 'activeChatFolderStrip');
       const chatFolderPicker = getEl('chatFolderPicker', 'chatFolderPicker');
       const chatFolderPickerBackdrop = getEl('chatFolderPickerBackdrop', 'chatFolderPickerBackdrop');
       const chatFolderContextMenu = getEl('chatFolderContextMenu', 'chatFolderContextMenu');
@@ -757,9 +868,12 @@
         showChatFolderPicker(chatFoldersBtn);
       });
 
+      bindActiveChatFolderStripMouseScroll(activeChatFolderStrip);
+
       activeChatFolderBar?.addEventListener('click', (e) => {
         const chip = e.target.closest('[data-folder-chip]');
         if (!chip) return;
+        clearManualFolderStripScroll();
         const folderId = Number(chip.dataset.folderChip || 0);
         Promise.resolve(actions.transitionToChatFolder?.(folderId, { persist: true })).catch((error) => {
           console.warn('Failed to switch chat folder', error);

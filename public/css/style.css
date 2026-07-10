@@ -647,6 +647,14 @@ a:hover { text-decoration: underline; }
   touch-action: pan-x;
   scrollbar-width: none;
   -ms-overflow-style: none;
+  cursor: grab;
+}
+.active-chat-folder-strip.is-folder-strip-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+.active-chat-folder-strip.is-folder-strip-dragging .active-chat-folder-chip {
+  cursor: grabbing;
 }
 .active-chat-folder-strip::-webkit-scrollbar {
   width: 0;
