@@ -176,6 +176,36 @@ test('hidden chat search renders sidebar extras and delegates opening through ca
   dom.window.close();
 });
 
+test('chat list renders a compact semantic preview for Markdown messages', () => {
+  const dom = createAppDom();
+  const { window } = dom;
+  const chatList = loadChatListRuntime(dom);
+  const store = chatList.store.createChatListStore();
+  store.setChats([{
+    id: 1,
+    type: 'group',
+    name: 'Markdown',
+    last_user: 'Bob',
+    last_text: '- **Bold** [Go](https://example.com/post)\n- *Second*',
+  }]);
+  const renderer = chatList.render.createChatListRenderer({
+    document: window.document,
+    window,
+    dom: window.BananzaApp.dom.createDomRefs(),
+    store,
+    folders: { store: createFolderStore(dom) },
+    config: window.BananzaApp.config,
+    formatters: window.BananzaApp.formatters,
+    actions: { getCurrentChatId: () => 0, openChat() {} },
+  });
+
+  renderer.renderChatList();
+  const preview = window.document.querySelector('#chatList .chat-item-last > span');
+  assert.equal(preview.textContent, 'Bob: Bold Go · Second');
+  assert.equal(preview.querySelector('a'), null);
+  dom.window.close();
+});
+
 test('chat list data controller loads chats, aborts slow requests, loads users, and opens hidden chats by callback', async () => {
   const dom = createAppDom();
   const { window } = dom;

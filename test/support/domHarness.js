@@ -17,6 +17,7 @@ const appCoreHelperScriptPaths = Object.freeze([
   'public/js/app/config.js',
   'public/js/app/i18n-helpers.js',
   'public/js/app/formatters.js',
+  'public/js/app/markdown.js',
   'public/js/app/attachments.js',
   'public/js/app/custom-emoji.js',
 ]);

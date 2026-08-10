@@ -111,14 +111,14 @@
         }
       }
 
-      function renderLinkAnchor(url) {
+      function renderLinkAnchor(url, label = url, { labelIsHtml = false } = {}) {
         const href = esc(url);
-        const label = esc(url);
+        const safeLabel = labelIsHtml ? String(label || '') : esc(label);
         const inviteToken = chatInviteTokenFromUrl(url);
         if (inviteToken) {
-          return `<a href="${href}" rel="noopener noreferrer" data-chat-invite-token="${esc(inviteToken)}">${label}</a>`;
+          return `<a href="${href}" rel="noopener noreferrer" data-chat-invite-token="${esc(inviteToken)}">${safeLabel}</a>`;
         }
-        return `<a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+        return `<a href="${href}" target="_blank" rel="noopener noreferrer">${safeLabel}</a>`;
       }
 
       function isInviteCapableGroupChat(chat) {

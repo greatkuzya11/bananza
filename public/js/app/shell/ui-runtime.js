@@ -185,33 +185,38 @@
           const token = mentionKey(mention.token || mention.mention || mention.username);
           if (token && !mentionMap.has(token)) mentionMap.set(token, mention);
         });
-        const re = /(:qip-infium-\d{3}:|:qip-hd-[a-z0-9][a-z0-9-]{0,63}:)|(https?:\/\/[^\s<>"')\]]+|\/join\/[A-Za-z0-9_-]{32,128})|@([a-zA-Z0-9_][a-zA-Z0-9_-]{0,31})/gi;
-        let html = '';
-        let lastIndex = 0;
-        let match;
-        while ((match = re.exec(source))) {
-          html += esc(source.slice(lastIndex, match.index));
-          if (match[1]) {
-            html += isCustomEmojiToken(match[1])
-              ? renderCustomEmojiHtml(match[1])
-              : esc(match[1]);
-          } else if (match[2]) {
-            const url = match[2];
-            html += renderLinkAnchor(url);
-          } else {
-            const prev = match.index > 0 ? source[match.index - 1] : '';
-            const token = mentionKey(match[3]);
-            const mention = !prev || !/[A-Za-z0-9_.-]/.test(prev) ? mentionMap.get(token) : null;
-            if (mention) {
-              html += `<button type="button" class="mention-link${mention.is_ai_bot ? ' is-bot' : ''}" data-mention-user-id="${Number(mention.user_id) || 0}" data-mention-token="${esc(mention.token || mention.mention || mention.username || token)}" data-mention-bot="${mention.is_ai_bot ? '1' : '0'}">@${esc(match[3])}</button>`;
+        const renderPlain = (plainText) => {
+          const re = /(:qip-infium-\d{3}:|:qip-hd-[a-z0-9][a-z0-9-]{0,63}:)|(https?:\/\/[^\s<>"')\]]+|\/join\/[A-Za-z0-9_-]{32,128})|@([a-zA-Z0-9_][a-zA-Z0-9_-]{0,31})/gi;
+          let html = '';
+          let lastIndex = 0;
+          let match;
+          while ((match = re.exec(plainText))) {
+            html += esc(plainText.slice(lastIndex, match.index));
+            if (match[1]) {
+              html += isCustomEmojiToken(match[1])
+                ? renderCustomEmojiHtml(match[1])
+                : esc(match[1]);
+            } else if (match[2]) {
+              html += renderLinkAnchor(match[2]);
             } else {
-              html += esc(match[0]);
+              const prev = match.index > 0 ? plainText[match.index - 1] : '';
+              const token = mentionKey(match[3]);
+              const mention = !prev || !/[A-Za-z0-9_.-]/.test(prev) ? mentionMap.get(token) : null;
+              if (mention) {
+                html += `<button type="button" class="mention-link${mention.is_ai_bot ? ' is-bot' : ''}" data-mention-user-id="${Number(mention.user_id) || 0}" data-mention-token="${esc(mention.token || mention.mention || mention.username || token)}" data-mention-bot="${mention.is_ai_bot ? '1' : '0'}">@${esc(match[3])}</button>`;
+              } else {
+                html += esc(match[0]);
+              }
             }
+            lastIndex = re.lastIndex;
           }
-          lastIndex = re.lastIndex;
-        }
-        html += esc(source.slice(lastIndex));
-        return html;
+          html += esc(plainText.slice(lastIndex));
+          return html;
+        };
+        return window.BananzaApp?.markdown?.render?.(source, {
+          renderPlain,
+          renderLink: (url, labelHtml) => renderLinkAnchor(url, labelHtml, { labelIsHtml: true }),
+        }).html || renderPlain(source);
       }
     
       function normalizeUiTheme(theme) { return uiSettings.normalizeUiTheme(theme); }

@@ -1902,6 +1902,12 @@ html[data-modal-animation="none"] .scroll-date-indicator {
 
 .msg-text { white-space: pre-wrap; }
 .msg-text a { color: var(--link); }
+.msg-text.markdown-content { white-space: normal; }
+.msg-text.markdown-content ul,
+.msg-text.markdown-content ol { margin: 6px 0; padding-left: 22px; }
+.msg-text.markdown-content li + li { margin-top: 3px; }
+.msg-text.markdown-content blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--border); color: var(--text-secondary); }
+.msg-text code { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--text) 10%, transparent); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
 .grok-risk-notice-actions {
   display: flex;

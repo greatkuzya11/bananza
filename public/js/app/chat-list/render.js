@@ -4,6 +4,7 @@
   const root = window.BananzaApp = window.BananzaApp || {};
   const chatListRoot = root.chatList = root.chatList || {};
   const storeApi = chatListRoot.store || {};
+  const markdown = root.markdown || {};
 
   function objectOrDefault(value) {
     return value && typeof value === 'object' ? value : {};
@@ -137,7 +138,10 @@
     }
 
     function renderChatLastPreviewHtml(chat, { emptyText = '' } = {}) {
-      const preview = getChatLastPreviewText(chat);
+      const rawPreview = getChatLastPreviewText(chat);
+      const preview = chat && chat.last_text && typeof markdown.toPlainText === 'function'
+        ? `${chat.last_user ? `${chat.last_user}: ` : ''}${markdown.toPlainText(chat.last_text)}`
+        : (typeof markdown.toPlainText === 'function' ? markdown.toPlainText(rawPreview) : rawPreview);
       return preview ? renderCustomEmojiPreviewHtml(preview) : esc(emptyText);
     }
 

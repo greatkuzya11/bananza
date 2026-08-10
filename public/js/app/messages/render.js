@@ -21,6 +21,7 @@
     const pollRenderer = objectOrDefault(opts.pollRenderer);
     const callCardRenderer = objectOrDefault(opts.callCardRenderer);
     const messageState = objectOrDefault(opts.messageState);
+    const markdown = objectOrDefault(root.markdown);
     const t = typeof opts.t === 'function' ? opts.t : (key) => String(key || '');
     const esc = typeof opts.esc === 'function' ? opts.esc : (typeof formatters.esc === 'function' ? formatters.esc : (value) => String(value ?? ''));
     const formatDate = typeof opts.formatDate === 'function' ? opts.formatDate : (typeof formatters.formatDate === 'function' ? formatters.formatDate : (value) => String(value || ''));
@@ -858,7 +859,9 @@
     
         // Text
         if (msg.text && !isCallMessage && !isCallTranscriptMessage && !isCallArtifactMessage) {
-          const textClasses = isPulsePollMessage ? 'msg-text poll-question-block' : 'msg-text';
+          const hasBlockFormatting = Boolean(markdown.render?.(msg.text).hasBlockFormatting);
+          const textClasses = (isPulsePollMessage ? 'msg-text poll-question-block' : 'msg-text')
+            + (hasBlockFormatting ? ' markdown-content' : '');
           const textHtml = isEmojiOnly && isSingleCustomEmojiMessage(msg.text)
             ? renderCustomEmojiHtml(msg.text.trim(), { large: true })
             : (isEmojiOnly ? esc(msg.text.trim()) : renderMessageText(msg.text, msg.mentions));

@@ -350,6 +350,39 @@ test('bridge renderer appends rows, groups senders, preserves data, and skips du
   assert.equal(dom.window.__bananzaBootContext.state.getMessages().map((msg) => msg.id).join(','), '1,2,3');
 });
 
+test('message renderer formats Markdown safely and preserves the stored source text', async (t) => {
+  const dom = await bootFullApp();
+  t.after(() => dom.window.close());
+  const { document, BananzaAppBridge } = dom.window;
+  BananzaAppBridge.__testing.setChats([{ id: 1, type: 'group', name: 'One', last_message_id: 1, unread_count: 0 }], { currentChatId: 1 });
+  const text = '- **Bold** [Go](https://example.com/post)\n- *Second* ~~old~~ `code`\n> quote\n<img src=x onerror=alert(1)> [bad](javascript:alert(1)) @bob :qip-infium-001:';
+  BananzaAppBridge.__testing.appendMessage({
+    id: 1,
+    chat_id: 1,
+    user_id: 2,
+    display_name: 'Bob',
+    text,
+    mentions: [{ user_id: 3, token: 'bob', username: 'bob' }],
+    created_at: '2026-05-31T10:00:00.000Z',
+  });
+
+  const row = document.querySelector('[data-msg-id="1"]');
+  const messageText = row.querySelector('.msg-text');
+  assert.ok(messageText.classList.contains('markdown-content'));
+  assert.equal(messageText.querySelectorAll('ul > li').length, 2);
+  assert.equal(messageText.querySelector('strong').textContent, 'Bold');
+  assert.equal(messageText.querySelector('a[href="https://example.com/post"]')?.textContent, 'Go');
+  assert.equal(messageText.querySelector('a[href="https://example.com/post"]')?.target, '_blank');
+  assert.equal(messageText.querySelector('code').textContent, 'code');
+  assert.equal(messageText.querySelector('blockquote').textContent, 'quote');
+  assert.equal(messageText.querySelector('img[onerror]'), null);
+  assert.match(messageText.textContent, /<img src=x onerror=alert\(1\)>/);
+  assert.equal(messageText.querySelector('a[href^="javascript:"]'), null);
+  assert.ok(messageText.querySelector('.mention-link[data-mention-user-id="3"]'));
+  assert.ok(messageText.querySelector('.qip-infium-emoji'));
+  assert.equal(row.__messageData.text, text);
+});
+
 test('invite URLs render as in-app links and clicking joins and opens target chat', async (t) => {
   const inviteToken = 'abcdefghijklmnopqrstuvwxyzABCDEF123456';
   const fetchCalls = [];
@@ -748,7 +781,7 @@ test('full app bridge keeps message methods and open-chat rendering path', async
     fetchHandler: ({ url, dom: testDom }) => {
       if (url.pathname === '/api/chats') return createJsonResponse(testDom, [{ id: 1, type: 'group', name: 'One', last_message_id: 7, unread_count: 0 }]);
       if (url.pathname === '/api/chats/1/messages') {
-        return createJsonResponse(testDom, { messages: [{ id: 7, chat_id: 1, user_id: 2, display_name: 'Bob', text: 'Hydrated', created_at: '2026-05-31T10:00:00.000Z' }], has_more_before: false, has_more_after: false, member_last_reads: { 1: 7 } });
+        return createJsonResponse(testDom, { messages: [{ id: 7, chat_id: 1, user_id: 2, display_name: 'Bob', text: '- **Hydrated** [link](https://example.com)', created_at: '2026-05-31T10:00:00.000Z' }], has_more_before: false, has_more_after: false, member_last_reads: { 1: 7 } });
       }
       return null;
     },
@@ -757,7 +790,10 @@ test('full app bridge keeps message methods and open-chat rendering path', async
   const { document, BananzaAppBridge } = dom.window;
   BananzaAppBridge.__testing.setChats([{ id: 1, type: 'group', name: 'One', last_message_id: 7, unread_count: 0 }]);
   await BananzaAppBridge.__testing.openChat(1);
-  assert.equal(document.querySelector('[data-msg-id="7"]').__messageData.text, 'Hydrated');
+  const hydrated = document.querySelector('[data-msg-id="7"]');
+  assert.equal(hydrated.__messageData.text, '- **Hydrated** [link](https://example.com)');
+  assert.equal(hydrated.querySelector('.msg-text strong')?.textContent, 'Hydrated');
+  assert.equal(hydrated.querySelector('.msg-text a')?.textContent, 'link');
   assert.equal(typeof BananzaAppBridge.queueVoiceMessage, 'function');
   assert.equal(typeof BananzaAppBridge.queueVideoNote, 'function');
   assert.equal(typeof BananzaAppBridge.__testing.renderOutboxItem, 'function');
