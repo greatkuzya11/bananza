@@ -46,6 +46,15 @@ function composerKey(window, key, options = {}) {
   });
 }
 
+function touchEvent(window, type, { touches = [], changedTouches = touches } = {}) {
+  const event = new window.Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperties(event, {
+    touches: { configurable: true, value: touches },
+    changedTouches: { configurable: true, value: changedTouches },
+  });
+  return event;
+}
+
 function loadComposerRuntime(dom) {
   loadBrowserScript(dom, 'public/js/qip-infium-original.js');
   loadBrowserScript(dom, 'public/js/qip-hd.js');
@@ -426,6 +435,36 @@ test('reply/edit controller updates bars and copies selected message text', asyn
   assert.deepEqual(plain(h.replyEdit.getMessageCopyTextData(row)), { text: 'hello', hasMeaningfulContent: true });
   await h.replyEdit.copyMessageFromRow(row);
   assert.equal(h.replyEdit.__copied, 'hello');
+});
+
+test('reply/edit swipes leave Markdown tables to their native horizontal scroll', (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+  const addRow = (id, html) => {
+    const row = h.document.createElement('div');
+    row.className = 'msg-row';
+    row.dataset.msgId = String(id);
+    row.__messageData = { id, user_id: 2, text: 'source', display_name: 'Bob' };
+    row.__replyPayload = { id, display_name: 'Bob', text: 'source' };
+    row.innerHTML = `<div class="msg-content"><div class="msg-text">${html}</div></div>`;
+    h.appDom.messagesEl.appendChild(row);
+    return row;
+  };
+  const swipeLeft = (target) => {
+    target.dispatchEvent(touchEvent(h.window, 'touchstart', { touches: [{ clientX: 120, clientY: 20 }] }));
+    target.dispatchEvent(touchEvent(h.window, 'touchmove', { touches: [{ clientX: 48, clientY: 20 }] }));
+    target.dispatchEvent(touchEvent(h.window, 'touchend', { touches: [], changedTouches: [{ clientX: 48, clientY: 20 }] }));
+  };
+
+  const tableRow = addRow(31, '<div class="markdown-table-wrap"><table><tbody><tr><td>Wide table</td></tr></tbody></table></div>');
+  const textRow = addRow(32, 'Regular message');
+  h.replyEdit.setupMessageSwipeGestures();
+
+  swipeLeft(tableRow.querySelector('td'));
+  assert.equal(h.state.getReplyTo(), null);
+
+  swipeLeft(textRow.querySelector('.msg-text'));
+  assert.equal(h.state.getReplyTo()?.id, 32);
 });
 
 test('file controller validates uploads and renders pending files', async (t) => {

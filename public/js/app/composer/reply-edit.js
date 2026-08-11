@@ -311,7 +311,7 @@
       let swipe = null;
 
       const isInteractiveTarget = (target) => Boolean(target.closest(
-        'button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-file, .link-preview, .msg-group-avatar'
+        'button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-file, .link-preview, .msg-group-avatar, .markdown-table-wrap'
       ));
       const suppressMediaClickAfterSwipe = (row) => {
         if (!row?.querySelector?.('.msg-image')) return;

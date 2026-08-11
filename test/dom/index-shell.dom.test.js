@@ -26,7 +26,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
 
   assert.deepEqual(styles, [
     '/vendor/leaflet/leaflet.css?v=1.9.4',
-    '/css/style.css?v=20260710-folder-strip-scroll2',
+    '/css/style.css?v=20260811-markdown-mobile-scroll1',
     '/css/calls.css?v=20260621-call-mobile-controls',
     '/css/voice.css',
     '/css/video-notes.css',
@@ -595,6 +595,12 @@ test('style.css clamps New Chat folder selection rows to compact previews', () =
 test('style.css opts mobile composer controls out of native browser panning', () => {
   assert.match(styleCss, /@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*\.input-area #msgInput,\s*\.input-area \.mention-open-btn\s*\{[^}]*touch-action\s*:\s*none\s*;/s);
   assert.match(styleCss, /html\.is-mobile-chat-keyboard-layout \.emoji-picker,[\s\S]*\.mention-picker-list\s*\{[^}]*touch-action\s*:\s*none\s*;/s);
+});
+
+test('style.css wraps Markdown code only on mobile while tables remain scrollable', () => {
+  assert.match(styleCss, /\.msg-text \.markdown-code-block\s*\{[^}]*overflow-x\s*:\s*auto[^}]*white-space\s*:\s*pre/s);
+  assert.match(styleCss, /@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*\.msg-text \.markdown-code-block\s*\{[^}]*overflow-x\s*:\s*hidden[^}]*white-space\s*:\s*pre-wrap[^}]*overflow-wrap\s*:\s*anywhere/s);
+  assert.match(styleCss, /\.msg-text \.markdown-table-wrap\s*\{[^}]*overflow-x\s*:\s*auto/s);
 });
 
 test('style.css pins iOS keyboard chat header to the top of web content', () => {

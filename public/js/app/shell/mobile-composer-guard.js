@@ -677,7 +677,7 @@
       if (!isElement(target)) return false;
       const row = target.closest('.msg-row');
       if (!row || !messagesEl?.contains(row) || row.dataset.outbox === '1' || row.querySelector('.msg-deleted')) return false;
-      if (target.closest('.msg-actions, button, a, input, textarea, select, label, audio, video, .video-note-stage, .msg-reply, .reaction-badge, .msg-image, .msg-video, .msg-file, .link-preview, .msg-group-avatar')) return false;
+      if (target.closest('.msg-actions, button, a, input, textarea, select, label, audio, video, .video-note-stage, .msg-reply, .reaction-badge, .msg-image, .msg-video, .msg-file, .link-preview, .msg-group-avatar, .markdown-table-wrap')) return false;
       return true;
     }
 
