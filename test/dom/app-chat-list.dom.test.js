@@ -186,7 +186,7 @@ test('chat list renders a compact semantic preview for Markdown messages', () =>
     type: 'group',
     name: 'Markdown',
     last_user: 'Bob',
-    last_text: '- **Bold** [Go](https://example.com/post)\n- *Second*',
+    last_text: '## Heading\n- **Bold** [Go](https://example.com/post)\n- *Second*',
   }]);
   const renderer = chatList.render.createChatListRenderer({
     document: window.document,
@@ -201,7 +201,7 @@ test('chat list renders a compact semantic preview for Markdown messages', () =>
 
   renderer.renderChatList();
   const preview = window.document.querySelector('#chatList .chat-item-last > span');
-  assert.equal(preview.textContent, 'Bob: Bold Go · Second');
+  assert.equal(preview.textContent, 'Bob: Heading · Bold Go · Second');
   assert.equal(preview.querySelector('a'), null);
   dom.window.close();
 });

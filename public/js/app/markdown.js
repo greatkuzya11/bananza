@@ -109,9 +109,19 @@
 
     for (let index = 0; index < lines.length;) {
       const line = lines[index];
+      const heading = line.match(/^\s*(#{2,4})\s+(.+?)\s*#*\s*$/);
       const unordered = line.match(/^\s*[-+*]\s+(.+)$/);
       const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
       const quote = line.match(/^\s*>\s?(.*)$/);
+
+      if (heading) {
+        flushText();
+        const level = heading[1].length;
+        chunks.push(`<h${level}>${renderInline(heading[2])}</h${level}>`);
+        hasBlockFormatting = true;
+        index += 1;
+        continue;
+      }
 
       if (unordered || ordered) {
         flushText();
@@ -156,6 +166,7 @@
     if (!text) return '';
     const lines = text.split('\n').map((line) => line
       .replace(/^\s*>\s?/, '')
+      .replace(/^\s*#{2,4}\s+/, '')
       .replace(/^\s*(?:[-+*]|\d+[.)])\s+/, ''));
     const withoutLinks = lines.join(' · ')
       .replace(/\[([^\]\n]+)\]\((?:https?:\/\/)[^)\s]+\)/gi, '$1')

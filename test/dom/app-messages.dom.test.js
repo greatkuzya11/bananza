@@ -355,7 +355,7 @@ test('message renderer formats Markdown safely and preserves the stored source t
   t.after(() => dom.window.close());
   const { document, BananzaAppBridge } = dom.window;
   BananzaAppBridge.__testing.setChats([{ id: 1, type: 'group', name: 'One', last_message_id: 1, unread_count: 0 }], { currentChatId: 1 });
-  const text = '- **Bold** [Go](https://example.com/post)\n- *Second* ~~old~~ `code`\n> quote\n<img src=x onerror=alert(1)> [bad](javascript:alert(1)) @bob :qip-infium-001:';
+  const text = '## Heading\n### Subheading\n#### Minor heading\n- **Bold** [Go](https://example.com/post)\n- *Second* ~~old~~ `code`\n> quote\n<img src=x onerror=alert(1)> [bad](javascript:alert(1)) @bob :qip-infium-001:';
   BananzaAppBridge.__testing.appendMessage({
     id: 1,
     chat_id: 1,
@@ -369,6 +369,9 @@ test('message renderer formats Markdown safely and preserves the stored source t
   const row = document.querySelector('[data-msg-id="1"]');
   const messageText = row.querySelector('.msg-text');
   assert.ok(messageText.classList.contains('markdown-content'));
+  assert.equal(messageText.querySelector('h2').textContent, 'Heading');
+  assert.equal(messageText.querySelector('h3').textContent, 'Subheading');
+  assert.equal(messageText.querySelector('h4').textContent, 'Minor heading');
   assert.equal(messageText.querySelectorAll('ul > li').length, 2);
   assert.equal(messageText.querySelector('strong').textContent, 'Bold');
   assert.equal(messageText.querySelector('a[href="https://example.com/post"]')?.textContent, 'Go');

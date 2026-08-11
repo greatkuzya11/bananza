@@ -50,6 +50,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/config.js?v=20260531-core-helpers',
     '/js/app/i18n-helpers.js?v=20260531-core-helpers',
     '/js/app/formatters.js?v=20260531-core-helpers',
+    '/js/app/markdown.js?v=20260810-markdown1',
     '/js/app/attachments.js?v=20260531-core-helpers',
     '/js/app/custom-emoji.js?v=20260531-core-helpers',
     '/js/app/dom.js?v=20260531-dom-mobile-shell',

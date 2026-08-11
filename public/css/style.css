@@ -1907,6 +1907,12 @@ html[data-modal-animation="none"] .scroll-date-indicator {
 .msg-text.markdown-content ol { margin: 6px 0; padding-left: 22px; }
 .msg-text.markdown-content li + li { margin-top: 3px; }
 .msg-text.markdown-content blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--border); color: var(--text-secondary); }
+.msg-text.markdown-content h2,
+.msg-text.markdown-content h3,
+.msg-text.markdown-content h4 { margin: 8px 0 5px; line-height: 1.25; }
+.msg-text.markdown-content h2 { font-size: 1.25em; }
+.msg-text.markdown-content h3 { font-size: 1.12em; }
+.msg-text.markdown-content h4 { font-size: 1em; }
 .msg-text code { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--text) 10%, transparent); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
 .grok-risk-notice-actions {
