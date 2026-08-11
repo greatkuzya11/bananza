@@ -426,6 +426,60 @@ test('message renderer formats GitHub-style Markdown tables safely', async (t) =
   assert.equal(document.querySelector('[data-msg-id="2"] table'), null);
 });
 
+test('message renderer formats fenced code, nested task lists, and spoilers', async (t) => {
+  const dom = await bootFullApp();
+  t.after(() => dom.window.close());
+  const { document, BananzaAppBridge } = dom.window;
+  BananzaAppBridge.__testing.setChats([{ id: 1, type: 'group', name: 'One', last_message_id: 2, unread_count: 0 }], { currentChatId: 1 });
+  const text = '```js\nconst url = "https://example.com";\n@bob <img src=x onerror=alert(1)>\n```\n- [ ] Parent task\n  - [x] Nested **complete** task\n- [x] Done task\n||Secret **spoiler** [link](https://example.com/)||';
+  BananzaAppBridge.__testing.appendMessage({
+    id: 1,
+    chat_id: 1,
+    user_id: 2,
+    display_name: 'Bob',
+    text,
+    mentions: [{ user_id: 3, token: 'bob', username: 'bob' }],
+    created_at: '2026-05-31T10:00:00.000Z',
+  });
+  BananzaAppBridge.__testing.appendMessage({
+    id: 2,
+    chat_id: 1,
+    user_id: 2,
+    display_name: 'Bob',
+    text: '```html\n<strong>Unclosed</strong>\n@bob',
+    created_at: '2026-05-31T10:01:00.000Z',
+  });
+
+  const messageText = document.querySelector('[data-msg-id="1"] .msg-text');
+  const code = messageText.querySelector('pre.markdown-code-block');
+  assert.equal(code.getAttribute('data-language'), 'js');
+  assert.match(code.textContent, /https:\/\/example\.com/);
+  assert.equal(code.querySelector('a, .mention-link, img'), null);
+  assert.equal(messageText.querySelectorAll('.markdown-task-checkbox').length, 3);
+  assert.equal(messageText.querySelectorAll('.markdown-task-checkbox')[0].checked, false);
+  assert.equal(messageText.querySelectorAll('.markdown-task-checkbox')[1].checked, true);
+  assert.equal(messageText.querySelectorAll('.markdown-task-checkbox')[2].checked, true);
+  assert.equal(messageText.querySelectorAll('.markdown-task-checkbox')[0].disabled, true);
+  assert.equal(messageText.querySelector('ul ul .markdown-task-text strong')?.textContent, 'complete');
+  const spoiler = messageText.querySelector('.markdown-spoiler');
+  assert.equal(spoiler.getAttribute('aria-expanded'), 'false');
+  assert.equal(spoiler.classList.contains('is-revealed'), false);
+  const spoilerLink = spoiler.querySelector('a[href="https://example.com/"]');
+  const firstLinkTap = new dom.window.MouseEvent('click', { bubbles: true, cancelable: true });
+  spoilerLink.dispatchEvent(firstLinkTap);
+  assert.equal(firstLinkTap.defaultPrevented, true);
+  assert.equal(spoiler.getAttribute('aria-expanded'), 'true');
+  assert.equal(spoiler.classList.contains('is-revealed'), true);
+  const secondLinkTap = new dom.window.MouseEvent('click', { bubbles: true, cancelable: true });
+  spoilerLink.dispatchEvent(secondLinkTap);
+  assert.equal(secondLinkTap.defaultPrevented, false);
+  assert.equal(document.querySelector('[data-msg-id="1"]').__messageData.text, text);
+  const unclosedCode = document.querySelector('[data-msg-id="2"] pre.markdown-code-block');
+  assert.equal(unclosedCode.getAttribute('data-language'), 'html');
+  assert.equal(unclosedCode.querySelector('strong, .mention-link'), null);
+  assert.match(unclosedCode.textContent, /<strong>Unclosed<\/strong>/);
+});
+
 test('invite URLs render as in-app links and clicking joins and opens target chat', async (t) => {
   const inviteToken = 'abcdefghijklmnopqrstuvwxyzABCDEF123456';
   const fetchCalls = [];

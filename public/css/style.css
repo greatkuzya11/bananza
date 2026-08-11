@@ -1906,6 +1906,10 @@ html[data-modal-animation="none"] .scroll-date-indicator {
 .msg-text.markdown-content ul,
 .msg-text.markdown-content ol { margin: 6px 0; padding-left: 22px; }
 .msg-text.markdown-content li + li { margin-top: 3px; }
+.msg-text.markdown-content ul ul,
+.msg-text.markdown-content ul ol,
+.msg-text.markdown-content ol ul,
+.msg-text.markdown-content ol ol { margin: 4px 0 0; }
 .msg-text.markdown-content blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--border); color: var(--text-secondary); }
 .msg-text.markdown-content h2,
 .msg-text.markdown-content h3,
@@ -1921,6 +1925,25 @@ html[data-modal-animation="none"] .scroll-date-indicator {
 .msg-text .markdown-table-align-left { text-align: left; }
 .msg-text .markdown-table-align-center { text-align: center; }
 .msg-text .markdown-table-align-right { text-align: right; }
+.msg-text .markdown-code-block { max-width: 100%; margin: 8px 0; padding: 10px; overflow-x: auto; border-radius: 8px; background: color-mix(in srgb, var(--text) 9%, transparent); white-space: pre; }
+.msg-text .markdown-code-block code { padding: 0; background: transparent; }
+.msg-text .markdown-task-label { display: inline-flex; align-items: flex-start; gap: 7px; }
+.msg-text .markdown-task-checkbox { flex: 0 0 auto; margin: .25em 0 0; accent-color: var(--accent); opacity: 1; }
+.msg-text .markdown-task-checkbox:disabled { cursor: default; }
+.msg-text .markdown-spoiler { display: inline; cursor: pointer; border-radius: 4px; outline: none; }
+.msg-text .markdown-spoiler:not(.is-revealed) .markdown-spoiler-content {
+  padding: 0 3px;
+  color: transparent;
+  /* Keep the mask visible in older Android WebViews without color-mix(). */
+  background-color: rgba(117, 117, 117, .78);
+  background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, .16) 0 4px, rgba(0, 0, 0, .10) 4px 8px);
+  border-radius: 4px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  user-select: none;
+}
+.msg-text .markdown-spoiler:not(.is-revealed) .markdown-spoiler-content * { color: transparent !important; text-shadow: none; }
+.msg-text .markdown-spoiler:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .msg-text code { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--text) 10%, transparent); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
 .grok-risk-notice-actions {

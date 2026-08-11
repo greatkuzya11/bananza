@@ -1028,7 +1028,47 @@
       row.querySelectorAll('.mention-link').forEach((btn) => {
         btn.addEventListener('click', (e) => handleMentionClick(e, btn));
       });
-    
+
+      row.querySelectorAll('.markdown-spoiler').forEach((spoiler) => {
+        const setSpoilerRevealed = (revealed) => {
+          spoiler.classList.toggle('is-revealed', revealed);
+          spoiler.setAttribute('aria-expanded', revealed ? 'true' : 'false');
+          spoiler.setAttribute('aria-label', t(revealed ? 'Hide spoiler' : 'Show spoiler'));
+        };
+        const toggleSpoiler = (event) => {
+          event?.stopPropagation?.();
+          setSpoilerRevealed(!spoiler.classList.contains('is-revealed'));
+        };
+        const getSpoilerLink = (target) => {
+          const link = target?.closest?.('a');
+          return link && spoiler.contains(link) ? link : null;
+        };
+        spoiler.addEventListener('click', (event) => {
+          if (getSpoilerLink(event.target)) {
+            if (!spoiler.classList.contains('is-revealed')) {
+              event.preventDefault();
+              event.stopPropagation();
+              setSpoilerRevealed(true);
+            }
+            return;
+          }
+          toggleSpoiler(event);
+        });
+        spoiler.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          if (getSpoilerLink(event.target)) {
+            if (!spoiler.classList.contains('is-revealed')) {
+              event.preventDefault();
+              event.stopPropagation();
+              setSpoilerRevealed(true);
+            }
+            return;
+          }
+          event.preventDefault();
+          toggleSpoiler(event);
+        });
+      });
+
       // (react button handled via delegation on messagesEl)
     
       // Click reply quote to scroll to original message

@@ -216,6 +216,7 @@
         return window.BananzaApp?.markdown?.render?.(source, {
           renderPlain,
           renderLink: (url, labelHtml) => renderLinkAnchor(url, labelHtml, { labelIsHtml: true }),
+          renderSpoiler: (contentHtml) => `<span class="markdown-spoiler" role="button" tabindex="0" aria-expanded="false" aria-label="${esc(t('Show spoiler'))}"><span class="markdown-spoiler-content">${contentHtml}</span></span>`,
         }).html || renderPlain(source);
       }
     

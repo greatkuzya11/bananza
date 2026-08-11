@@ -140,8 +140,8 @@
     function renderChatLastPreviewHtml(chat, { emptyText = '' } = {}) {
       const rawPreview = getChatLastPreviewText(chat);
       const preview = chat && chat.last_text && typeof markdown.toPlainText === 'function'
-        ? `${chat.last_user ? `${chat.last_user}: ` : ''}${markdown.toPlainText(chat.last_text)}`
-        : (typeof markdown.toPlainText === 'function' ? markdown.toPlainText(rawPreview) : rawPreview);
+        ? `${chat.last_user ? `${chat.last_user}: ` : ''}${markdown.toPlainText(chat.last_text, { spoilerText: t('Spoiler') })}`
+        : (typeof markdown.toPlainText === 'function' ? markdown.toPlainText(rawPreview, { spoilerText: t('Spoiler') }) : rawPreview);
       return preview ? renderCustomEmojiPreviewHtml(preview) : esc(emptyText);
     }
 
