@@ -1913,6 +1913,14 @@ html[data-modal-animation="none"] .scroll-date-indicator {
 .msg-text.markdown-content h2 { font-size: 1.25em; }
 .msg-text.markdown-content h3 { font-size: 1.12em; }
 .msg-text.markdown-content h4 { font-size: 1em; }
+.msg-text .markdown-table-wrap { max-width: 100%; margin: 8px 0; overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
+.msg-text .markdown-table { width: max-content; min-width: 100%; border-collapse: collapse; }
+.msg-text .markdown-table th,
+.msg-text .markdown-table td { padding: 6px 9px; border: 1px solid var(--border); vertical-align: top; }
+.msg-text .markdown-table th { font-weight: 700; background: color-mix(in srgb, var(--text) 8%, transparent); }
+.msg-text .markdown-table-align-left { text-align: left; }
+.msg-text .markdown-table-align-center { text-align: center; }
+.msg-text .markdown-table-align-right { text-align: right; }
 .msg-text code { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--text) 10%, transparent); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
 .grok-risk-notice-actions {

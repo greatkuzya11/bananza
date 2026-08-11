@@ -92,6 +92,44 @@
     return render;
   }
 
+  function splitTableCells(line) {
+    const source = String(line || '').trim();
+    if (!source.includes('|')) return null;
+    const withoutOuterPipes = source
+      .replace(/^\|\s?/, '')
+      .replace(/\s?\|$/, '');
+    const cells = withoutOuterPipes.split('|').map((cell) => cell.trim());
+    return cells.length >= 2 ? cells : null;
+  }
+
+  function parseTableDivider(line, columnCount) {
+    const cells = splitTableCells(line);
+    if (!cells || cells.length !== columnCount) return null;
+    const alignments = cells.map((cell) => {
+      if (!/^:?-{3,}:?$/.test(cell)) return null;
+      if (cell.startsWith(':') && cell.endsWith(':')) return 'center';
+      if (cell.endsWith(':')) return 'right';
+      return 'left';
+    });
+    return alignments.includes(null) ? null : alignments;
+  }
+
+  function parseTable(lines, startIndex) {
+    const headers = splitTableCells(lines[startIndex]);
+    if (!headers) return null;
+    const alignments = parseTableDivider(lines[startIndex + 1], headers.length);
+    if (!alignments) return null;
+    const rows = [];
+    let index = startIndex + 2;
+    while (index < lines.length) {
+      const row = splitTableCells(lines[index]);
+      if (!row || row.length !== headers.length) break;
+      rows.push(row);
+      index += 1;
+    }
+    return rows.length ? { headers, alignments, rows, nextIndex: index } : null;
+  }
+
   function render(source, options = {}) {
     const text = String(source || '').replace(/\r\n?/g, '\n');
     if (!text) return { html: '', hasBlockFormatting: false };
@@ -109,10 +147,24 @@
 
     for (let index = 0; index < lines.length;) {
       const line = lines[index];
+      const table = parseTable(lines, index);
       const heading = line.match(/^\s*(#{2,4})\s+(.+?)\s*#*\s*$/);
       const unordered = line.match(/^\s*[-+*]\s+(.+)$/);
       const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
       const quote = line.match(/^\s*>\s?(.*)$/);
+
+      if (table) {
+        flushText();
+        const renderCells = (cells, tag) => cells.map((cell, cellIndex) => (
+          `<${tag} class="markdown-table-align-${table.alignments[cellIndex]}">${renderInline(cell)}</${tag}>`
+        )).join('');
+        const headerHtml = renderCells(table.headers, 'th');
+        const rowsHtml = table.rows.map((row) => `<tr>${renderCells(row, 'td')}</tr>`).join('');
+        chunks.push(`<div class="markdown-table-wrap"><table class="markdown-table"><thead><tr>${headerHtml}</tr></thead><tbody>${rowsHtml}</tbody></table></div>`);
+        hasBlockFormatting = true;
+        index = table.nextIndex;
+        continue;
+      }
 
       if (heading) {
         flushText();
@@ -164,7 +216,20 @@
   function toPlainText(source) {
     const text = String(source || '').replace(/\r\n?/g, '\n');
     if (!text) return '';
-    const lines = text.split('\n').map((line) => line
+    const sourceLines = text.split('\n');
+    const tableNormalizedLines = [];
+    for (let index = 0; index < sourceLines.length;) {
+      const table = parseTable(sourceLines, index);
+      if (table) {
+        tableNormalizedLines.push(table.headers.join(' · '));
+        table.rows.forEach((row) => tableNormalizedLines.push(row.join(' · ')));
+        index = table.nextIndex;
+        continue;
+      }
+      tableNormalizedLines.push(sourceLines[index]);
+      index += 1;
+    }
+    const lines = tableNormalizedLines.map((line) => line
       .replace(/^\s*>\s?/, '')
       .replace(/^\s*#{2,4}\s+/, '')
       .replace(/^\s*(?:[-+*]|\d+[.)])\s+/, ''));

@@ -386,6 +386,46 @@ test('message renderer formats Markdown safely and preserves the stored source t
   assert.equal(row.__messageData.text, text);
 });
 
+test('message renderer formats GitHub-style Markdown tables safely', async (t) => {
+  const dom = await bootFullApp();
+  t.after(() => dom.window.close());
+  const { document, BananzaAppBridge } = dom.window;
+  BananzaAppBridge.__testing.setChats([{ id: 1, type: 'group', name: 'One', last_message_id: 2, unread_count: 0 }], { currentChatId: 1 });
+  const text = '| Player | Score | Source |\n| :--- | :---: | ---: |\n| **Alice** | 10 | [Site](https://example.com) |\n| <img src=x onerror=alert(1)> | 20 | [bad](javascript:alert(1)) |';
+  BananzaAppBridge.__testing.appendMessage({
+    id: 1,
+    chat_id: 1,
+    user_id: 2,
+    display_name: 'Bob',
+    text,
+    created_at: '2026-05-31T10:00:00.000Z',
+  });
+  BananzaAppBridge.__testing.appendMessage({
+    id: 2,
+    chat_id: 1,
+    user_id: 2,
+    display_name: 'Bob',
+    text: '| Broken | Table |\n| --- | --- |\n| only one cell |',
+    created_at: '2026-05-31T10:01:00.000Z',
+  });
+
+  const messageText = document.querySelector('[data-msg-id="1"] .msg-text');
+  const table = messageText.querySelector('table.markdown-table');
+  assert.ok(messageText.classList.contains('markdown-content'));
+  assert.ok(messageText.querySelector('.markdown-table-wrap'));
+  assert.equal(table.querySelectorAll('thead th').length, 3);
+  assert.equal(table.querySelectorAll('tbody tr').length, 2);
+  assert.ok(table.querySelector('th.markdown-table-align-left'));
+  assert.ok(table.querySelector('th.markdown-table-align-center'));
+  assert.ok(table.querySelector('th.markdown-table-align-right'));
+  assert.equal(table.querySelector('strong')?.textContent, 'Alice');
+  assert.equal(table.querySelector('a[href="https://example.com"]')?.textContent, 'Site');
+  assert.equal(table.querySelector('img[onerror]'), null);
+  assert.equal(table.querySelector('a[href^="javascript:"]'), null);
+  assert.equal(document.querySelector('[data-msg-id="1"]').__messageData.text, text);
+  assert.equal(document.querySelector('[data-msg-id="2"] table'), null);
+});
+
 test('invite URLs render as in-app links and clicking joins and opens target chat', async (t) => {
   const inviteToken = 'abcdefghijklmnopqrstuvwxyzABCDEF123456';
   const fetchCalls = [];
@@ -784,7 +824,7 @@ test('full app bridge keeps message methods and open-chat rendering path', async
     fetchHandler: ({ url, dom: testDom }) => {
       if (url.pathname === '/api/chats') return createJsonResponse(testDom, [{ id: 1, type: 'group', name: 'One', last_message_id: 7, unread_count: 0 }]);
       if (url.pathname === '/api/chats/1/messages') {
-        return createJsonResponse(testDom, { messages: [{ id: 7, chat_id: 1, user_id: 2, display_name: 'Bob', text: '- **Hydrated** [link](https://example.com)', created_at: '2026-05-31T10:00:00.000Z' }], has_more_before: false, has_more_after: false, member_last_reads: { 1: 7 } });
+        return createJsonResponse(testDom, { messages: [{ id: 7, chat_id: 1, user_id: 2, display_name: 'Bob', text: '| Name | Value |\n| --- | ---: |\n| Hydrated | **42** |', created_at: '2026-05-31T10:00:00.000Z' }], has_more_before: false, has_more_after: false, member_last_reads: { 1: 7 } });
       }
       return null;
     },
@@ -794,9 +834,9 @@ test('full app bridge keeps message methods and open-chat rendering path', async
   BananzaAppBridge.__testing.setChats([{ id: 1, type: 'group', name: 'One', last_message_id: 7, unread_count: 0 }]);
   await BananzaAppBridge.__testing.openChat(1);
   const hydrated = document.querySelector('[data-msg-id="7"]');
-  assert.equal(hydrated.__messageData.text, '- **Hydrated** [link](https://example.com)');
-  assert.equal(hydrated.querySelector('.msg-text strong')?.textContent, 'Hydrated');
-  assert.equal(hydrated.querySelector('.msg-text a')?.textContent, 'link');
+  assert.equal(hydrated.__messageData.text, '| Name | Value |\n| --- | ---: |\n| Hydrated | **42** |');
+  assert.equal(hydrated.querySelector('.msg-text table')?.querySelectorAll('tbody tr').length, 1);
+  assert.equal(hydrated.querySelector('.msg-text table strong')?.textContent, '42');
   assert.equal(typeof BananzaAppBridge.queueVoiceMessage, 'function');
   assert.equal(typeof BananzaAppBridge.queueVideoNote, 'function');
   assert.equal(typeof BananzaAppBridge.__testing.renderOutboxItem, 'function');

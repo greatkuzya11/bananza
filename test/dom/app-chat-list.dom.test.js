@@ -186,7 +186,7 @@ test('chat list renders a compact semantic preview for Markdown messages', () =>
     type: 'group',
     name: 'Markdown',
     last_user: 'Bob',
-    last_text: '## Heading\n- **Bold** [Go](https://example.com/post)\n- *Second*',
+    last_text: '## Heading\n| Metric | Value |\n| --- | ---: |\n| **Users** | [10](https://example.com/metrics) |',
   }]);
   const renderer = chatList.render.createChatListRenderer({
     document: window.document,
@@ -201,7 +201,9 @@ test('chat list renders a compact semantic preview for Markdown messages', () =>
 
   renderer.renderChatList();
   const preview = window.document.querySelector('#chatList .chat-item-last > span');
-  assert.equal(preview.textContent, 'Bob: Heading · Bold Go · Second');
+  assert.equal(preview.textContent, 'Bob: Heading · Metric · Value · Users · 10');
+  assert.equal(preview.textContent.includes('|'), false);
+  assert.equal(preview.textContent.includes('---'), false);
   assert.equal(preview.querySelector('a'), null);
   dom.window.close();
 });
