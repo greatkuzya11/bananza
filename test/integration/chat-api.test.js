@@ -459,6 +459,26 @@ test('chat system events are persisted for membership, bots, profile changes and
   });
   await admin.request(`/api/chats/${chatId}/members/${bot.user_id}`, { method: 'DELETE' });
 
+  const { data: botCreatedGroup } = await admin.request('/api/chats', {
+    method: 'POST',
+    json: {
+      name: `System bot ${suffix}`,
+      type: 'group',
+      memberIds: [Number(bot.user_id)],
+    },
+  });
+  const botCreatedGroupEvents = await admin.request(`/api/chats/${botCreatedGroup.id}/messages`, {
+    searchParams: { meta: 1 },
+  });
+  const groupCreateBotEvent = botCreatedGroupEvents.data.system_events.find((event) => (
+    event.event_type === 'member_added'
+    && Number(event.target_user_id) === Number(bot.user_id)
+  ));
+  assert.ok(groupCreateBotEvent);
+  assert.equal(Number(groupCreateBotEvent.actor_id), Number(admin.user.id));
+  assert.equal(groupCreateBotEvent.actor_name, admin.user.display_name);
+  assert.equal(groupCreateBotEvent.metadata?.source, 'group_chat_create');
+
   await admin.request(`/api/chats/${chatId}`, {
     method: 'PUT',
     json: { name: `System renamed ${suffix}` },
@@ -494,6 +514,14 @@ test('chat system events are persisted for membership, bots, profile changes and
   ].forEach((type) => assert.ok(beforeClearTypes.includes(type), `missing ${type}`));
   assert.ok(beforeClearEvents.data.system_events.some((event) => event.event_type === 'member_added' && Number(event.target_user_id) === Number(bot.user_id) && Number(event.target_is_ai_bot) === 1));
   assert.ok(beforeClearEvents.data.system_events.some((event) => event.event_type === 'member_removed' && Number(event.target_user_id) === Number(bot.user_id) && Number(event.target_is_ai_bot) === 1));
+  const groupMemberAddBotEvent = beforeClearEvents.data.system_events.find((event) => (
+    event.event_type === 'member_added'
+    && Number(event.target_user_id) === Number(bot.user_id)
+  ));
+  assert.ok(groupMemberAddBotEvent);
+  assert.equal(Number(groupMemberAddBotEvent.actor_id), Number(admin.user.id));
+  assert.equal(groupMemberAddBotEvent.actor_name, admin.user.display_name);
+  assert.equal(groupMemberAddBotEvent.metadata?.source, 'group_member_add');
 
   const beforeClearList = await bob.request('/api/chats');
   const beforeClearEntry = beforeClearList.data.find((item) => Number(item.id) === chatId);
@@ -527,7 +555,15 @@ test('chat system events are persisted for membership, bots, profile changes and
   });
   const privateBotEvents = await admin.request(`/api/chats/${privateBotChat.data.id}/messages`);
   assert.ok(privateBotEvents.data.system_events.some((event) => event.event_type === 'chat_created'));
-  assert.ok(privateBotEvents.data.system_events.some((event) => event.event_type === 'member_added' && Number(event.target_user_id) === Number(bot.user_id) && Number(event.target_is_ai_bot) === 1));
+  const privateCreateBotEvent = privateBotEvents.data.system_events.find((event) => (
+    event.event_type === 'member_added'
+    && Number(event.target_user_id) === Number(bot.user_id)
+    && Number(event.target_is_ai_bot) === 1
+  ));
+  assert.ok(privateCreateBotEvent);
+  assert.equal(Number(privateCreateBotEvent.actor_id), Number(admin.user.id));
+  assert.equal(privateCreateBotEvent.actor_name, admin.user.display_name);
+  assert.equal(privateCreateBotEvent.metadata?.source, 'private_chat_create');
 });
 
 test('group invite links enforce permissions, rotate tokens and join users once', async () => {

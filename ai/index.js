@@ -3122,6 +3122,8 @@ function createAiBotFeature({
       hotContextLimit: 50,
       triggerMode: 'mention_reply',
       autoReactOnMention: false,
+      actorUserId,
+      source,
     });
     const auditActorId = Number(actorUserId || 0);
     if (!wasEnabled && auditActorId > 0) {

@@ -851,6 +851,52 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_chat_system_events_chat_created ON chat_system_events(chat_id, created_at, id);
   CREATE INDEX IF NOT EXISTS idx_chat_system_events_target ON chat_system_events(target_user_id, chat_id);
 `);
+db.prepare(`
+  UPDATE chat_system_events
+  SET
+    actor_id = (
+      SELECT created.actor_id
+      FROM chat_system_events created
+      WHERE created.chat_id=chat_system_events.chat_id
+        AND created.event_type='chat_created'
+        AND created.created_at=chat_system_events.created_at
+        AND TRIM(COALESCE(created.actor_name,''))!=''
+      ORDER BY created.id ASC
+      LIMIT 1
+    ),
+    actor_name = (
+      SELECT created.actor_name
+      FROM chat_system_events created
+      WHERE created.chat_id=chat_system_events.chat_id
+        AND created.event_type='chat_created'
+        AND created.created_at=chat_system_events.created_at
+        AND TRIM(COALESCE(created.actor_name,''))!=''
+      ORDER BY created.id ASC
+      LIMIT 1
+    ),
+    metadata_json = REPLACE(
+      metadata_json,
+      '"source":"chat_bot_setting"',
+      CASE
+        WHEN (SELECT type FROM chats WHERE id=chat_system_events.chat_id)='private'
+          THEN '"source":"private_chat_create"'
+        ELSE '"source":"group_chat_create"'
+      END
+    )
+  WHERE event_type='member_added'
+    AND target_is_ai_bot=1
+    AND actor_id IS NULL
+    AND TRIM(COALESCE(actor_name,''))=''
+    AND INSTR(COALESCE(metadata_json,''), '"source":"chat_bot_setting"')>0
+    AND EXISTS (
+      SELECT 1
+      FROM chat_system_events created
+      WHERE created.chat_id=chat_system_events.chat_id
+        AND created.event_type='chat_created'
+        AND created.created_at=chat_system_events.created_at
+        AND TRIM(COALESCE(created.actor_name,''))!=''
+    )
+`).run();
 db.exec(`
   CREATE TABLE IF NOT EXISTS polls (
     message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
