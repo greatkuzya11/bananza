@@ -31,6 +31,7 @@ const ROOT_DIRS = [
   'ai',
   'calls',
   'public',
+  'telegramTranscription',
   'videoNotes',
   'voice',
   'uploads',

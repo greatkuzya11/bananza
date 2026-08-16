@@ -76,6 +76,7 @@ test('db startup migrates legacy document_assets rows into file-backed assets', 
     writeSchemaStub(appDir, path.join('videoNotes', 'schema.js'), 'initVideoNoteSchema');
     writeSchemaStub(appDir, path.join('calls', 'schema.js'), 'initCallSchema');
     writeSchemaStub(appDir, path.join('ai', 'schema.js'), 'initAiSchema');
+    writeSchemaStub(appDir, path.join('telegramTranscription', 'schema.js'), 'initTelegramTranscriptionSchema');
     seedLegacyDocumentAssetsDatabase(path.join(appDir, 'bananza.db'));
 
     const child = spawnSync(process.execPath, ['-e', `

@@ -55,6 +55,7 @@ test('db startup repairs only legacy bot-add events created with their chat', ()
     writeSchemaStub(appDir, path.join('videoNotes', 'schema.js'), 'initVideoNoteSchema');
     writeSchemaStub(appDir, path.join('calls', 'schema.js'), 'initCallSchema');
     writeSchemaStub(appDir, path.join('ai', 'schema.js'), 'initAiSchema');
+    writeSchemaStub(appDir, path.join('telegramTranscription', 'schema.js'), 'initTelegramTranscriptionSchema');
 
     runDbScript(appDir, `
       const db = require('./db');

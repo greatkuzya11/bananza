@@ -4,6 +4,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const { ensureLocalVoskHelper, isLocalVoskHelperUrl } = require('./voskRuntime');
 const { ensureLocalWhisperHelper, isLocalWhisperHelperUrl } = require('./whisperRuntime');
+const { resolveFfmpegCommand } = require('./ffmpeg');
 
 const whisperOperationChains = new Map();
 
@@ -186,7 +187,8 @@ async function preparePcmWav(filePath, providerName = 'Local transcription') {
   const prefix = String(providerName || 'local').toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'local';
   const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), `bananza-${prefix}-`));
   const wavPath = path.join(dir, 'audio.wav');
-  const result = spawnSync('ffmpeg', [
+  const ffmpegCommand = resolveFfmpegCommand();
+  const result = spawnSync(ffmpegCommand, [
     '-hide_banner',
     '-loglevel',
     'error',
@@ -203,7 +205,9 @@ async function preparePcmWav(filePath, providerName = 'Local transcription') {
   ], { encoding: 'utf8' });
   if (result.error) {
     await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
-    throw new Error(`ffmpeg is required for ${providerName} transcription: ${result.error.message}`);
+    throw new Error(
+      `ffmpeg is required for ${providerName} transcription. Run "npm install" or set BANANZA_FFMPEG_PATH: ${result.error.message}`
+    );
   }
   if (result.status !== 0) {
     await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});

@@ -29,6 +29,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/css/style.css?v=20260811-markdown-mobile-scroll1',
     '/css/calls.css?v=20260621-call-mobile-controls',
     '/css/voice.css',
+    '/css/telegram-transcription.css?v=20260816-telegram-stt4',
     '/css/video-notes.css',
   ]);
 
@@ -36,7 +37,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/sounds.js',
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
-    '/js/i18n.js?v=20260615-doc-chatshot2',
+    '/js/i18n.js?v=20260816-telegram-stt3',
     '/vendor/leaflet/leaflet.js?v=1.9.4',
     '/js/document-editor.bundle.js?v=20260620-doc-image-handles1',
     '/js/qip-infium-original.js?v=20260523-qip-infium-original',
@@ -155,6 +156,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/video-notes/VideoNoteAdminSettings.js',
     '/js/video-notes/VideoNoteFeature.js',
     '/js/voice.js',
+    '/js/telegram-transcription.js?v=20260816-telegram-stt4',
   ]);
 });
 

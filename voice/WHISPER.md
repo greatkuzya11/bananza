@@ -17,6 +17,10 @@ Use the same command on Windows, Linux, and macOS:
 npm run whisper:install
 ```
 
+On supported npm platforms, BananZa uses the optional project-local `ffmpeg-static`
+binary automatically. A system FFmpeg remains supported. Set `BANANZA_FFMPEG_PATH`
+only when the executable lives outside `PATH` or you need to force a specific build.
+
 The dispatcher detects the operating system:
 
 - Windows x64 downloads the official pinned `whisper.cpp` v1.8.1 CPU release.
@@ -53,4 +57,4 @@ The helper listens on `127.0.0.1:2701`. Do not expose it to the public network. 
 
 The admin voice settings contain the helper URL, selected model, model directory, and language. With the project-local installer, the model directory and `BANANZA_WHISPER_SERVER_BIN` may stay empty: the runtime discovers both platform-specific paths. Set them explicitly only when BananZa and `whisper-server` use different directories or machines.
 
-The GGML weights, `whisper.cpp` binary, and service definition are external deployment dependencies and are not included in BananZa backups. Reinstall them before restoring a server backup.
+The GGML weights, `whisper.cpp` binary, optional project-local FFmpeg binary, and service definition are external deployment dependencies and are not included in BananZa backups. Run `npm install` and reinstall Whisper before restoring a server backup.

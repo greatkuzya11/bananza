@@ -56,6 +56,7 @@ const { createPollService, POLL_CLOSE_PRESETS, toDbDate } = require('./polls');
 const { createMessageActionsService } = require('./messageActions');
 const { createVideoNoteFeature } = require('./videoNotes');
 const { createVideoNoteStorage } = require('./videoNotes/storage');
+const { createTelegramTranscriptionFeature } = require('./telegramTranscription');
 const { extractMentionTokens } = require('./mentionTokens');
 
 // JWT Secret
@@ -574,6 +575,16 @@ aiBotFeature = createAiBotFeature({
   messageActions,
   onBotMembershipChanged: (event) => handleBotMembershipSystemEvent(event),
   getDocumentPlainText: (chatId) => documentsFeature?.getDocumentPlainText?.(chatId) || '',
+});
+
+createTelegramTranscriptionFeature({
+  app,
+  db,
+  auth,
+  adminOnly,
+  secret: JWT_SECRET,
+  server,
+  getAiBotFeature: () => aiBotFeature,
 });
 
 aiInitiativeFeature = createAiInitiativeFeature({

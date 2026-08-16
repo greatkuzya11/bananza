@@ -300,7 +300,8 @@ function buildBackupManifest({
     uploads,
     notes: [
       '.env is not included. Keep deployment environment variables such as BANANZA_MAP_CONTACT separately.',
-      'Whisper GGML models, the whisper.cpp binary, and its service configuration are external dependencies and are not included.',
+      'Whisper GGML models, the whisper.cpp binary, project-local FFmpeg, and service configuration are external dependencies and are not included. Run npm install and reinstall Whisper after restore.',
+      'Encrypted integration settings, including Telegram bot tokens, require the included .secret file after restore.',
       'This archive contains chat history, uploaded files, and server secrets.',
     ],
   };

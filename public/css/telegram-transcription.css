@@ -1,0 +1,98 @@
+.telegram-transcription-modal {
+  width: min(760px, calc(100vw - 24px));
+}
+
+.telegram-setup-card,
+.telegram-bot-identity,
+.telegram-warning,
+.telegram-provider-readiness,
+.telegram-runtime {
+  border: 1px solid var(--border-color, rgba(127, 127, 127, 0.25));
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: var(--surface-muted, rgba(127, 127, 127, 0.08));
+}
+
+.telegram-setup-card .voice-form-hint {
+  margin: 6px 0 8px;
+}
+
+.telegram-action-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  text-decoration: none;
+}
+
+.telegram-action-link:hover {
+  text-decoration: none;
+}
+
+.telegram-bot-identity,
+.telegram-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.telegram-warning,
+.telegram-provider-readiness.error,
+.telegram-runtime-error {
+  color: var(--danger-color, #c43d3d);
+}
+
+.telegram-provider-readiness.ready {
+  color: var(--success-color, #2d8a50);
+}
+
+.telegram-allowlist {
+  resize: vertical;
+  min-height: 88px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.telegram-runtime {
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.telegram-runtime-error {
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+
+.telegram-bot-test-status {
+  margin: -4px 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color, rgba(127, 127, 127, 0.25));
+  border-radius: 10px;
+  background: var(--surface-muted, rgba(127, 127, 127, 0.08));
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.telegram-bot-test-status.pending {
+  color: var(--text-muted, #8b8b8b);
+}
+
+.telegram-bot-test-status.success {
+  color: var(--success-color, #2d8a50);
+  border-color: color-mix(in srgb, currentColor 45%, transparent);
+}
+
+.telegram-bot-test-status.warning,
+.telegram-bot-test-status.error {
+  color: var(--danger-color, #c43d3d);
+  border-color: color-mix(in srgb, currentColor 45%, transparent);
+}
+
+@media (max-width: 640px) {
+  .telegram-transcription-modal {
+    width: calc(100vw - 12px);
+    max-height: calc(100dvh - 12px);
+  }
+}
