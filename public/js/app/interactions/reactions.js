@@ -624,29 +624,40 @@ function bindEvents() {
     });
     
   
-    // Long press/right-click on a message opens reactions directly.  
-    (() => {  
-      let lpTimer = null;  
-      let lpStart = null;  
-      const clearLongPress = () => {  
-        clearTimeout(lpTimer);  
-        lpTimer = null;  
-        lpStart = null;  
-      };  
-      messagesEl.addEventListener('touchstart', (e) => {  
-        if (e.touches.length !== 1) return;  
-        const row = e.target.closest('.msg-row');  
-        if (!row || e.target.closest(  
-          '.msg-actions, button, a, input, textarea, select, label, audio, video, .video-note-stage, .msg-reply, .reaction-badge, .msg-image, .msg-video, .msg-file, .link-preview, .msg-group-avatar'  
-        )) return;  
-        if (getSelectedMessageFragment(row) || isSelectableMessageTextTarget(e.target)) return;  
-        const touch = e.touches && e.touches[0] ? e.touches[0] : null;  
-        lpStart = { row, x: touch?.clientX || 0, y: touch?.clientY || 0 };  
-        lpTimer = setTimeout(() => {  
-          lpTimer = null;  
-          suppressNextMessageActionTap();  
-          safeVibrate(30);  
-          showReactionPicker(row, null, {  
+    // Long press/right-click on a message opens reactions directly.
+    (() => {
+      const longPressPendingClass = 'reaction-long-press-pending';
+      let lpTimer = null;
+      let lpStart = null;
+      const clearNativeSelection = () => {
+        const selection = window.getSelection?.();
+        if (selection && typeof selection.removeAllRanges === 'function') selection.removeAllRanges();
+      };
+      const clearLongPress = () => {
+        clearTimeout(lpTimer);
+        lpStart?.row?.classList.remove(longPressPendingClass);
+        lpTimer = null;
+        lpStart = null;
+      };
+      messagesEl.addEventListener('touchstart', (e) => {
+        clearLongPress();
+        if (e.touches.length !== 1) return;
+        const row = e.target.closest('.msg-row');
+        if (!row || e.target.closest(
+          '.msg-actions, button, a, input, textarea, select, label, audio, video, .video-note-stage, .msg-reply, .reaction-badge, .msg-image, .msg-video, .msg-file, .link-preview, .msg-group-avatar'
+        )) return;
+        if (getSelectedMessageFragment(row) || isSelectableMessageTextTarget(e.target)) return;
+        const touch = e.touches && e.touches[0] ? e.touches[0] : null;
+        lpStart = { row, x: touch?.clientX || 0, y: touch?.clientY || 0 };
+        row.classList.add(longPressPendingClass);
+        lpTimer = setTimeout(() => {
+          lpTimer = null;
+          clearNativeSelection();
+          row.classList.remove(longPressPendingClass);
+          lpStart = null;
+          suppressNextMessageActionTap();
+          safeVibrate(30);
+          showReactionPicker(row, null, {
             source: 'long-press',  
             keepComposerFocus: reactionPickerKeepKeyboard || isMobileComposerKeyboardOpen(),  
           });  

@@ -4232,15 +4232,33 @@ test('mobile long-press reaction picker keeps the keyboard attached', async (t) 
   const row = appendMessageRow(dom, { id: 241, userId: 2, text: 'Long press me' });
   const bubble = row.querySelector('.msg-bubble');
   const touch = createTouchPoint({ identifier: 74, clientX: 180, clientY: 360 });
+  const dateSeparator = document.createElement('div');
+  dateSeparator.className = 'date-separator';
+  dateSeparator.innerHTML = '<span>28 April 2026</span>';
+  row.before(dateSeparator);
 
   await openMobileKeyboard(dom, msgInput);
-  bubble.dispatchEvent(createTouchEvent(dom.window, 'touchstart', {
+  const dateRange = document.createRange();
+  dateRange.selectNodeContents(dateSeparator.querySelector('span'));
+  const selection = dom.window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(dateRange);
+
+  const touchStart = createTouchEvent(dom.window, 'touchstart', {
     touches: [touch],
     changedTouches: [touch],
-  }));
+  });
+  bubble.dispatchEvent(touchStart);
+
+  assert.equal(touchStart.defaultPrevented, false);
+  assert.equal(row.classList.contains('reaction-long-press-pending'), true);
+  assert.equal(selection.toString(), '28 April 2026');
   await wait(dom, 560);
 
   assert.equal(reactionPicker.classList.contains('hidden'), false);
+  assert.equal(row.classList.contains('reaction-long-press-pending'), false);
+  assert.equal(selection.rangeCount, 0);
+  assert.equal(selection.toString(), '');
   assert.equal(document.activeElement, msgInput);
   assert.equal(app.style.height, '420px');
 
@@ -4252,6 +4270,84 @@ test('mobile long-press reaction picker keeps the keyboard attached', async (t) 
 
   assert.equal(row.classList.contains('actions-open'), false);
   assert.equal(document.activeElement, msgInput);
+});
+
+test('mobile long-press pending state clears when the gesture ends, cancels, or moves', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const reactionPicker = document.getElementById('reactionPicker');
+  const row = appendMessageRow(dom, { id: 242, userId: 2, text: 'Cancel long press' });
+  const bubble = row.querySelector('.msg-bubble');
+  const startTouch = createTouchPoint({ identifier: 75, clientX: 180, clientY: 360 });
+
+  bubble.dispatchEvent(createTouchEvent(dom.window, 'touchstart', {
+    touches: [startTouch],
+    changedTouches: [startTouch],
+  }));
+  assert.equal(row.classList.contains('reaction-long-press-pending'), true);
+  bubble.dispatchEvent(createTouchEvent(dom.window, 'touchend', {
+    touches: [],
+    changedTouches: [startTouch],
+  }));
+  assert.equal(row.classList.contains('reaction-long-press-pending'), false);
+
+  bubble.dispatchEvent(createTouchEvent(dom.window, 'touchstart', {
+    touches: [startTouch],
+    changedTouches: [startTouch],
+  }));
+  assert.equal(row.classList.contains('reaction-long-press-pending'), true);
+  bubble.dispatchEvent(createTouchEvent(dom.window, 'touchcancel', {
+    touches: [],
+    changedTouches: [startTouch],
+  }));
+  assert.equal(row.classList.contains('reaction-long-press-pending'), false);
+
+  bubble.dispatchEvent(createTouchEvent(dom.window, 'touchstart', {
+    touches: [startTouch],
+    changedTouches: [startTouch],
+  }));
+  assert.equal(row.classList.contains('reaction-long-press-pending'), true);
+  const movedTouch = createTouchPoint({ identifier: 75, clientX: 195, clientY: 360 });
+  bubble.dispatchEvent(createTouchEvent(dom.window, 'touchmove', {
+    touches: [movedTouch],
+    changedTouches: [movedTouch],
+  }));
+  assert.equal(row.classList.contains('reaction-long-press-pending'), false);
+
+  await wait(dom, 540);
+  assert.equal(reactionPicker.classList.contains('hidden'), true);
+});
+
+test('mobile text selection does not start the long-press reaction picker', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => {
+    dom.window.close();
+  });
+  const { document } = dom.window;
+  const reactionPicker = document.getElementById('reactionPicker');
+  const row = appendMessageRow(dom, { id: 243, userId: 2, text: 'Keep this selection' });
+  const text = row.querySelector('.msg-text');
+  const range = document.createRange();
+  range.selectNodeContents(text);
+  const selection = dom.window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  const touch = createTouchPoint({ identifier: 76, clientX: 180, clientY: 360 });
+  const touchStart = createTouchEvent(dom.window, 'touchstart', {
+    touches: [touch],
+    changedTouches: [touch],
+  });
+
+  text.dispatchEvent(touchStart);
+  await wait(dom, 540);
+
+  assert.equal(touchStart.defaultPrevented, false);
+  assert.equal(row.classList.contains('reaction-long-press-pending'), false);
+  assert.equal(reactionPicker.classList.contains('hidden'), true);
+  assert.equal(selection.toString(), 'Keep this selection');
 });
 
 test('mobile pending attachment removal keeps the keyboard attached', async (t) => {

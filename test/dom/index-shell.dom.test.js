@@ -375,6 +375,14 @@ test('style.css keeps a dedicated unread badge contrast override for active chat
   assert.match(ruleBody, /color\s*:\s*#fff\s*;/);
 });
 
+test('style.css suppresses native selection for date separators and pending message long-press', () => {
+  const ruleMatch = styleCss.match(/\.date-separator\s*,\s*\.msg-row\.reaction-long-press-pending\s*\{([^}]*)\}/s);
+  assert.ok(ruleMatch, 'Expected shared native-selection suppression rule');
+  assert.match(ruleMatch[1], /user-select\s*:\s*none\s*;/);
+  assert.match(ruleMatch[1], /-webkit-user-select\s*:\s*none\s*;/);
+  assert.match(ruleMatch[1], /-webkit-touch-callout\s*:\s*none\s*;/);
+});
+
 test('style.css keeps New Chat modal scrollable tabs aligned', () => {
   assert.match(styleCss, /#newChatModal\s+\.modal-content\s*\{[^}]*height\s*:\s*min\(620px,\s*80vh\)/s);
   assert.match(styleCss, /#newChatModal\s+\.modal-body\s*\{[^}]*display\s*:\s*flex[^}]*overflow\s*:\s*hidden/s);

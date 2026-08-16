@@ -3248,6 +3248,12 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
 .date-separator {
   text-align: center; padding: 12px 0; color: var(--text-secondary); font-size: 13px;
 }
+.date-separator,
+.msg-row.reaction-long-press-pending {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
 .date-separator span {
   background: var(--bg-input); padding: 4px 14px; border-radius: 12px;
 }
