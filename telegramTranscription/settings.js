@@ -16,6 +16,8 @@ const DEFAULT_SETTINGS = {
   fallback_to_openai: false,
   context_bot_enabled: false,
   context_bot_id: null,
+  image_generation_enabled: false,
+  image_bot_id: null,
   transcription_timeout_ms: 120000,
   max_file_size_bytes: 20 * 1024 * 1024,
   vosk_model: DEFAULT_VOICE_SETTINGS.vosk_model,
@@ -73,6 +75,8 @@ function normalizeSettings(raw = {}) {
   next.fallback_to_openai = normalizeBoolean(next.fallback_to_openai);
   next.context_bot_enabled = normalizeBoolean(next.context_bot_enabled);
   next.context_bot_id = normalizeNullableId(next.context_bot_id);
+  next.image_generation_enabled = normalizeBoolean(next.image_generation_enabled);
+  next.image_bot_id = normalizeNullableId(next.image_bot_id);
   next.allowed_user_ids = normalizeAllowedUserIds(next.allowed_user_ids);
   next.active_provider = PROVIDERS.has(String(next.active_provider))
     ? String(next.active_provider)
@@ -159,6 +163,7 @@ function clearBotToken(db) {
   return writeSettings(db, {
     ...current,
     enabled: false,
+    image_generation_enabled: false,
     bot_token_encrypted: '',
     bot_token_masked: '',
     bot_id: '',

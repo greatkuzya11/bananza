@@ -54,6 +54,8 @@ test('Telegram settings encrypt token, normalize allowlist, and keep provider pr
     openai_language: 'en',
     context_bot_enabled: true,
     context_bot_id: '42',
+    image_generation_enabled: true,
+    image_bot_id: '77',
     max_file_size_bytes: 100 * 1024 * 1024,
   }, 'server-secret');
 
@@ -62,6 +64,8 @@ test('Telegram settings encrypt token, normalize allowlist, and keep provider pr
   assert.equal(sanitizeSettings(saved).has_bot_token, true);
   assert.equal(Object.hasOwn(sanitizeSettings(saved), 'bot_token_encrypted'), false);
   assert.equal(saved.max_file_size_bytes, 20 * 1024 * 1024);
+  assert.equal(saved.image_generation_enabled, true);
+  assert.equal(saved.image_bot_id, 77);
 
   const provider = buildProviderSettings(saved, {
     active_provider: 'whisper',
@@ -126,10 +130,34 @@ test('Telegram client enforces actual streamed download size', async (t) => {
   assert.doesNotMatch(safeErrorMessage(new Error(`failed https://api.telegram.org/bot${token}/getMe`)), new RegExp(token));
 });
 
+test('Telegram client uploads generated images with multipart form data', async () => {
+  const requests = [];
+  const client = createTelegramClient('secret-token', {
+    fetchImpl: async (url, options) => {
+      requests.push({ url: String(url), options });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 15 } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  await client.sendPhoto('777', Buffer.from('image-bytes'), {
+    fileName: 'result.png',
+    mimeType: 'image/png',
+    replyToMessageId: 9,
+  });
+  assert.match(requests[0].url, /\/sendPhoto$/);
+  assert.ok(requests[0].options.body instanceof FormData);
+  assert.equal(requests[0].options.body.get('chat_id'), '777');
+  assert.deepEqual(JSON.parse(requests[0].options.body.get('reply_parameters')), { message_id: 9 });
+  assert.equal(requests[0].options.body.get('photo').name, 'result.png');
+});
+
 test('Telegram update is persisted with cursor before worker execution and duplicate is ignored', async () => {
   const db = createDb();
   setSettings(db, {
     ...DEFAULT_SETTINGS,
+    enabled: true,
     allowed_user_ids: ['777'],
     active_provider: 'whisper',
   }, 'server-secret');
@@ -169,6 +197,180 @@ test('Telegram update is persisted with cursor before worker execution and dupli
   assert.equal(job.status, 'queued');
   assert.equal(job.telegram_user_id, '777');
   assert.equal(sent.length, 0);
+  db.close();
+});
+
+test('Telegram text prompt is persisted once for the selected image bot before worker execution', async () => {
+  const db = createDb();
+  setSettings(db, {
+    ...DEFAULT_SETTINGS,
+    image_generation_enabled: true,
+    image_bot_id: 91,
+    allowed_user_ids: ['777'],
+  }, 'server-secret');
+  const app = fakeApp();
+  const feature = createTelegramTranscriptionFeature({
+    app,
+    db,
+    auth: (_req, _res, next) => next(),
+    adminOnly: (_req, _res, next) => next(),
+    secret: 'server-secret',
+    getAiBotFeature: () => ({
+      listTelegramImageBots: () => [{
+        id: 91,
+        name: 'Painter',
+        provider: 'openai',
+        image_model: 'gpt-image-2',
+        enabled: true,
+        provider_enabled: true,
+        allow_image_generate: true,
+      }],
+    }),
+  });
+  feature.stop();
+  const update = {
+    update_id: 90,
+    message: {
+      message_id: 12,
+      text: 'Нарисуй банан на синем фоне',
+      chat: { id: 777, type: 'private' },
+      from: { id: 777, language_code: 'ru' },
+    },
+  };
+  const client = { async sendMessage() { return { message_id: 13 }; } };
+  await feature.handleUpdate(update, client);
+  await feature.handleUpdate(update, client);
+
+  const rows = db.prepare('SELECT * FROM telegram_image_generation_jobs').all();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].prompt_text, 'Нарисуй банан на синем фоне');
+  assert.equal(rows[0].image_bot_id, 91);
+  assert.equal(rows[0].status, 'queued');
+  assert.equal(db.prepare('SELECT next_update_id FROM telegram_transcription_state WHERE id=1').get().next_update_id, 91);
+  db.close();
+});
+
+test('Telegram image worker persists delivery bytes, sends photo, and clears transient payloads', async () => {
+  const db = createDb();
+  setSettings(db, {
+    ...DEFAULT_SETTINGS,
+    bot_token: '123456:image-worker-token',
+    image_generation_enabled: true,
+    image_bot_id: 91,
+    allowed_user_ids: ['777'],
+  }, 'server-secret');
+  const telegramCalls = [];
+  let generationCalls = 0;
+  const imageBot = {
+    id: 91,
+    name: 'Painter',
+    provider: 'openai',
+    image_model: 'gpt-image-2',
+    enabled: true,
+    provider_enabled: true,
+    allow_image_generate: true,
+  };
+  const feature = createTelegramTranscriptionFeature({
+    app: fakeApp(),
+    db,
+    auth: (_req, _res, next) => next(),
+    adminOnly: (_req, _res, next) => next(),
+    secret: 'server-secret',
+    getAiBotFeature: () => ({
+      listTelegramImageBots: () => [imageBot],
+      async generateTelegramImage() {
+        generationCalls += 1;
+        return {
+          buffer: Buffer.from('generated-png'),
+          mimeType: 'image/png',
+          filename: 'generated.png',
+          provider: 'openai',
+          model: 'gpt-image-2',
+        };
+      },
+    }),
+    fetchImpl: async (url, options) => {
+      telegramCalls.push({ url: String(url), options });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 200 } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  feature.stop();
+  await feature.handleUpdate({
+    update_id: 101,
+    message: {
+      message_id: 22,
+      text: 'banana poster',
+      chat: { id: 777, type: 'private' },
+      from: { id: 777, language_code: 'en' },
+    },
+  }, { async sendMessage() { return { message_id: 23 }; } });
+
+  const queued = db.prepare('SELECT * FROM telegram_image_generation_jobs WHERE update_id=101').get();
+  await feature.processImageJob(queued);
+
+  const completed = db.prepare('SELECT * FROM telegram_image_generation_jobs WHERE update_id=101').get();
+  assert.equal(generationCalls, 1);
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.prompt_text, null);
+  assert.equal(completed.image_data, null);
+  assert.equal(completed.generation_provider, 'openai');
+  assert.equal(completed.generation_model, 'gpt-image-2');
+  assert.ok(telegramCalls.some((call) => /\/sendMessage$/.test(call.url)));
+  assert.ok(telegramCalls.some((call) => /\/sendPhoto$/.test(call.url)));
+  assert.ok(telegramCalls.some((call) => /\/deleteMessage$/.test(call.url)));
+  db.close();
+});
+
+test('Telegram image delivery resumes from persisted bytes without regenerating and falls back to document', async () => {
+  const db = createDb();
+  setSettings(db, {
+    ...DEFAULT_SETTINGS,
+    bot_token: '123456:restart-token',
+    image_generation_enabled: true,
+    image_bot_id: 91,
+    allowed_user_ids: ['777'],
+  }, 'server-secret');
+  db.prepare(`
+    INSERT INTO telegram_image_generation_jobs(
+      update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
+      language_code, prompt_text, image_bot_id, image_bot_name, status,
+      status_message_id, image_data, image_mime_type, image_file_name
+    ) VALUES(202, '777', '777', 33, 'en', 'persisted prompt', 91, 'Painter',
+      'delivering', 34, ?, 'image/webp', 'persisted.webp')
+  `).run(Buffer.from('persisted-image'));
+  let generationCalls = 0;
+  const telegramCalls = [];
+  const feature = createTelegramTranscriptionFeature({
+    app: fakeApp(),
+    db,
+    auth: (_req, _res, next) => next(),
+    adminOnly: (_req, _res, next) => next(),
+    secret: 'server-secret',
+    getAiBotFeature: () => ({
+      listTelegramImageBots: () => [],
+      async generateTelegramImage() { generationCalls += 1; },
+    }),
+    fetchImpl: async (url, options) => {
+      telegramCalls.push({ url: String(url), options });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 203 } }), { status: 200 });
+    },
+  });
+  feature.stop();
+
+  const recovered = db.prepare('SELECT * FROM telegram_image_generation_jobs WHERE update_id=202').get();
+  assert.equal(recovered.status, 'queued');
+  await feature.processImageJob(recovered);
+
+  const completed = db.prepare('SELECT * FROM telegram_image_generation_jobs WHERE update_id=202').get();
+  assert.equal(generationCalls, 0);
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.prompt_text, null);
+  assert.equal(completed.image_data, null);
+  assert.ok(telegramCalls.some((call) => /\/sendDocument$/.test(call.url)));
+  assert.ok(telegramCalls.every((call) => !/\/sendPhoto$/.test(call.url)));
   db.close();
 });
 

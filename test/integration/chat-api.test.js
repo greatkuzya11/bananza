@@ -155,6 +155,23 @@ async function createAdminBot(admin, { route, provider = 'openai', kind = 'text'
   return response.data.bot;
 }
 
+test('Grok image bot update persists image generation permission', async () => {
+  const { admin } = scenario;
+  const payload = buildBotPayload({ provider: 'grok', kind: 'image', label: 'Grok image permission' });
+  payload.allow_image_generate = false;
+  const created = await admin.request('/api/admin/grok-ai-bots', {
+    method: 'POST',
+    json: payload,
+  });
+  assert.equal(created.data.bot.allow_image_generate, false);
+
+  const updated = await admin.request(`/api/admin/grok-ai-bots/${created.data.bot.id}`, {
+    method: 'PUT',
+    json: { ...payload, allow_image_generate: true },
+  });
+  assert.equal(updated.data.bot.allow_image_generate, true);
+});
+
 test('admin bot behavior rules preserve 8000 chars and truncate longer input', async () => {
   const { admin } = scenario;
   const exactRules = 'r'.repeat(8000);

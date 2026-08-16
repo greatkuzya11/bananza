@@ -88,6 +88,34 @@ function createTelegramClient(token, { fetchImpl = global.fetch } = {}) {
     return written;
   }
 
+  async function upload(method, fieldName, chatId, buffer, {
+    fileName = 'image.png',
+    mimeType = 'image/png',
+    replyToMessageId = null,
+    signal,
+  } = {}) {
+    const bytes = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
+    if (!bytes.length) throw new TelegramApiError('Telegram upload file is empty');
+    const form = new FormData();
+    form.append('chat_id', String(chatId));
+    form.append(fieldName, new Blob([bytes], { type: String(mimeType || 'application/octet-stream') }), String(fileName || 'image'));
+    if (replyToMessageId) {
+      form.append('reply_parameters', JSON.stringify({ message_id: Number(replyToMessageId) }));
+    }
+    let response;
+    try {
+      response = await fetchImpl(`${apiBase}/${method}`, {
+        method: 'POST',
+        body: form,
+        signal,
+      });
+    } catch (error) {
+      if (error?.name === 'AbortError') throw error;
+      throw new TelegramApiError('Telegram API is unavailable');
+    }
+    return parseTelegramResponse(response);
+  }
+
   return {
     request,
     getMe: (options) => request('getMe', {}, options),
@@ -112,6 +140,12 @@ function createTelegramClient(token, { fetchImpl = global.fetch } = {}) {
       message_id: messageId,
       text,
     }, options),
+    deleteMessage: (chatId, messageId, options) => request('deleteMessage', {
+      chat_id: chatId,
+      message_id: messageId,
+    }, options),
+    sendPhoto: (chatId, buffer, options) => upload('sendPhoto', 'photo', chatId, buffer, options),
+    sendDocument: (chatId, buffer, options) => upload('sendDocument', 'document', chatId, buffer, options),
     downloadFile,
   };
 }

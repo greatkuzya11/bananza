@@ -12,6 +12,7 @@ const callsCss = fs.readFileSync(path.join(repoRoot, 'public', 'css', 'calls.css
 const documentEditorBundleJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'document-editor.bundle.js'), 'utf8');
 const documentsJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'app', 'documents.js'), 'utf8');
 const contextChatShotRuntimeJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'app', 'ai-admin', 'context-chatshot-runtime.js'), 'utf8');
+const grokRuntimeJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'app', 'ai-admin', 'grok-runtime.js'), 'utf8');
 const shellEventsJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'app', 'shell', 'events.js'), 'utf8');
 const shellUiRuntimeJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'app', 'shell', 'ui-runtime.js'), 'utf8');
 const shellRuntimeJs = fs.readFileSync(path.join(repoRoot, 'public', 'js', 'app', 'shell', 'shell-runtime.js'), 'utf8');
@@ -29,7 +30,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/css/style.css?v=20260811-markdown-mobile-scroll1',
     '/css/calls.css?v=20260621-call-mobile-controls',
     '/css/voice.css',
-    '/css/telegram-transcription.css?v=20260816-telegram-stt4',
+    '/css/telegram-transcription.css?v=20260816-telegram-image1',
     '/css/video-notes.css',
   ]);
 
@@ -37,7 +38,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/sounds.js',
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
-    '/js/i18n.js?v=20260816-telegram-stt3',
+    '/js/i18n.js?v=20260816-telegram-image1',
     '/vendor/leaflet/leaflet.js?v=1.9.4',
     '/js/document-editor.bundle.js?v=20260620-doc-image-handles1',
     '/js/qip-infium-original.js?v=20260523-qip-infium-original',
@@ -156,7 +157,8 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/video-notes/VideoNoteAdminSettings.js',
     '/js/video-notes/VideoNoteFeature.js',
     '/js/voice.js',
-    '/js/telegram-transcription.js?v=20260816-telegram-stt4',
+    '/js/telegram-transcription.js?v=20260816-telegram-image1',
+    '/js/telegram-image-generation.js?v=20260816-telegram-image1',
   ]);
 });
 
@@ -375,6 +377,15 @@ test('style.css keeps a dedicated unread badge contrast override for active chat
   const ruleBody = activeBadgeRuleMatch[1];
   assert.match(ruleBody, /background\s*:/);
   assert.match(ruleBody, /color\s*:\s*#fff\s*;/);
+});
+
+test('Grok image bot editor exposes and persists image generation permission', () => {
+  const dom = new JSDOM(indexHtml);
+  const toggle = dom.window.document.getElementById('grokAiImageBotAllowImageGenerate');
+  assert.ok(toggle);
+  assert.equal(toggle.checked, true);
+  assert.match(grokRuntimeJs, /grokAiImageBotAllowImageGenerate'\)\.checked = bot\?\.allow_image_generate \?\? true/);
+  assert.match(grokRuntimeJs, /allow_image_generate: \$\('#grokAiImageBotAllowImageGenerate'\)\?\.checked/);
 });
 
 test('style.css suppresses native selection for date separators and pending message long-press', () => {

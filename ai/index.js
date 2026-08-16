@@ -4994,6 +4994,36 @@ function createAiBotFeature({
     ].map(sanitizeBot);
   }
 
+  function serializeTelegramImageBot(bot) {
+    return {
+      id: Number(bot?.id || 0),
+      name: bot?.name || '',
+      mention: bot?.mention || '',
+      provider: bot?.provider || 'openai',
+      kind: bot?.kind || 'image',
+      image_model: bot?.image_model || '',
+      enabled: Boolean(bot?.enabled),
+      provider_enabled: providerEnabled(bot?.provider),
+      allow_image_generate: Boolean(bot?.allow_image_generate),
+    };
+  }
+
+  function listTelegramImageBots() {
+    return [
+      ...allOpenAiImageBotsStmt.all(),
+      ...allGrokImageBotsStmt.all(),
+    ]
+      .map(sanitizeBot)
+      .filter((bot) => (
+        bot
+        && bot.kind === 'image'
+        && bot.enabled
+        && providerEnabled(bot.provider)
+        && bot.allow_image_generate
+      ))
+      .map(serializeTelegramImageBot);
+  }
+
   async function generateCallArtifactText(bot, { system, user, maxOutputTokens = 1800 }) {
     const settings = getGlobalSettings();
     if (!providerEnabled(bot.provider, settings)) throw new Error('Provider is disabled');
@@ -5730,6 +5760,81 @@ function createAiBotFeature({
       fallbackMimeType: mimeTypeForOpenAiImageOutput(outputFormat),
       providerLabel: 'OpenAI',
     });
+  }
+
+  async function generateTelegramImage({ botId, prompt } = {}) {
+    const bot = sanitizeBot(botByIdStmt.get(Number(botId || 0)));
+    if (!bot || bot.kind !== 'image' || !['openai', 'grok'].includes(bot.provider)) {
+      const error = new Error('Image bot not found');
+      error.status = 404;
+      throw error;
+    }
+    if (!bot.enabled || !providerEnabled(bot.provider) || !bot.allow_image_generate) {
+      const error = new Error('Image bot is unavailable');
+      error.status = 400;
+      throw error;
+    }
+
+    const settings = getGlobalSettings();
+    const safePrompt = cleanText(prompt, bot.provider === 'grok' ? 4000 : 8000);
+    if (!safePrompt) {
+      const error = new Error('Image prompt is empty');
+      error.status = 400;
+      throw error;
+    }
+
+    if (bot.provider === 'grok') {
+      const risk = analyzeAiImageRisk(safePrompt);
+      if (isGrokImageRiskFilterEnabled(bot) && risk.risky) {
+        const error = new Error('Image prompt rejected by safety filter');
+        error.status = 400;
+        error.userMessageKey = 'imageRiskRejected';
+        throw error;
+      }
+      const apiKey = getGrokApiKey();
+      if (!apiKey) throw new Error('Grok AI is not configured');
+      const result = await grokAi.generateImage({
+        apiKey,
+        baseUrl: grokBaseUrl(),
+        model: bot.image_model || settings.grok_default_image_model,
+        prompt: safePrompt,
+        n: 1,
+        aspectRatio: cleanGrokAspectRatio(bot.image_aspect_ratio, settings.grok_default_image_aspect_ratio),
+        resolution: cleanGrokResolution(bot.image_resolution, settings.grok_default_image_resolution),
+        responseFormat: 'b64_json',
+      });
+      const image = await loadGrokImageBytes(result);
+      const ext = imageExtensionForMime(image.mimeType);
+      return {
+        ...image,
+        filename: `grok-${safeFilenamePart(bot.mention || bot.name, 'image')}-${Date.now()}${ext}`,
+        provider: 'grok',
+        model: result.model || bot.image_model || settings.grok_default_image_model,
+      };
+    }
+
+    const apiKey = getApiKey();
+    if (!apiKey) throw new Error('OpenAI AI is not configured');
+    const outputFormat = cleanOpenAiImageOutputFormat(bot.image_output_format, settings.openai_default_image_output_format);
+    const result = await generateOpenAiImage({
+      apiKey,
+      model: bot.image_model || settings.openai_default_image_model,
+      prompt: safePrompt,
+      n: 1,
+      size: cleanOpenAiImageSize(bot.image_resolution, settings.openai_default_image_size),
+      quality: cleanOpenAiImageQuality(bot.image_quality, settings.openai_default_image_quality),
+      background: cleanOpenAiImageBackground(bot.image_background, settings.openai_default_image_background),
+      outputFormat,
+      responseFormat: 'b64_json',
+    });
+    const image = await loadOpenAiImageBytes(result, outputFormat);
+    const ext = imageExtensionForMime(image.mimeType);
+    return {
+      ...image,
+      filename: `openai-${safeFilenamePart(bot.mention || bot.name, 'image')}-${Date.now()}${ext}`,
+      provider: 'openai',
+      model: result.model || bot.image_model || settings.openai_default_image_model,
+    };
   }
 
   async function createBotFileMessage(bot, sourceMessage, { buffer, mimeType, fileType, originalName, text = null }) {
@@ -9904,7 +10009,7 @@ function createAiBotFeature({
       SET name=?, mention=?, style=?, tone=?, behavior_rules=?, speech_patterns=?,
           enabled=?, provider='grok', kind=?, response_model=?, summary_model=?, embedding_model=?,
           image_model=?, image_aspect_ratio=?, image_resolution=?,
-          image_risk_filter_enabled=?,
+          image_risk_filter_enabled=?, allow_text=?, allow_image_generate=?, allow_image_edit=?,
           allow_poll_create=?, allow_poll_vote=?, allow_react=?, allow_pin=?, visible_to_users=?,
           temperature=?, max_tokens=?,
           updated_at=datetime('now')
@@ -9925,6 +10030,9 @@ function createAiBotFeature({
       input.image_aspect_ratio,
       input.image_resolution,
       input.image_risk_filter_enabled ? 1 : 0,
+      input.allow_text ? 1 : 0,
+      input.allow_image_generate ? 1 : 0,
+      input.allow_image_edit ? 1 : 0,
       input.allow_poll_create ? 1 : 0,
       input.allow_poll_vote ? 1 : 0,
       input.allow_react ? 1 : 0,
@@ -10585,6 +10693,8 @@ function createAiBotFeature({
     transformText,
     transformTextWithContextBot,
     listVoiceContextConvertBots,
+    listTelegramImageBots,
+    generateTelegramImage,
     getChatShotState,
     generateChatShotForChat,
     generateChatShotImageForContext,

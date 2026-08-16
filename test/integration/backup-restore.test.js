@@ -7,6 +7,7 @@ const Database = require('better-sqlite3');
 
 const { createSandbox } = require('../support/runtimeSandbox');
 const { createBasicChatScenario } = require('../support/scenario');
+const { setSettings: setTelegramSettings, readSettings: readTelegramSettings, getBotToken } = require('../../telegramTranscription/settings');
 
 let sandbox;
 
@@ -30,6 +31,7 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
     const { admin, bob } = scenario;
     const liveDb = new Database(path.join(sandbox.appDir, 'bananza.db'));
     let initiativeRuleId;
+    const telegramImageUpdateId = 987654;
     try {
       const chat = liveDb.prepare('SELECT id FROM chats ORDER BY id ASC LIMIT 1').get();
       const bot = liveDb.prepare(`
@@ -40,6 +42,21 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
         INSERT INTO ai_bot_initiative_rules(name, chat_id, bot_id, prompt_mode)
         VALUES('Backup initiative rule', ?, ?, 'idle_ping')
       `).run(chat.id, bot.lastInsertRowid).lastInsertRowid);
+      const sandboxSecret = fs.readFileSync(path.join(sandbox.appDir, '.secret'), 'utf8').trim();
+      setTelegramSettings(liveDb, {
+        image_generation_enabled: true,
+        image_bot_id: Number(bot.lastInsertRowid),
+        bot_token: '123456:backup-telegram-token',
+        allowed_user_ids: ['777'],
+      }, sandboxSecret);
+      liveDb.prepare(`
+        INSERT INTO telegram_image_generation_jobs(
+          update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
+          language_code, prompt_text, image_bot_id, image_bot_name, status,
+          image_data, image_mime_type, image_file_name
+        ) VALUES(?, '777', '777', 42, 'ru', 'backup image prompt', ?, 'Backup image bot',
+          'delivering', ?, 'image/png', 'backup-image.png')
+      `).run(telegramImageUpdateId, bot.lastInsertRowid, tinyPngBuffer());
     } finally {
       liveDb.close();
     }
@@ -151,6 +168,9 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
       `).get(documentImage.data.asset.id);
       const newsSource = restoredDb.prepare('SELECT name, url FROM ai_news_sources WHERE url=?').get('https://lenta.ru/rss/top7');
       const initiativeRule = restoredDb.prepare('SELECT name FROM ai_bot_initiative_rules WHERE id=?').get(initiativeRuleId);
+      const telegramImageJob = restoredDb.prepare('SELECT * FROM telegram_image_generation_jobs WHERE update_id=?').get(telegramImageUpdateId);
+      const telegramSettings = readTelegramSettings(restoredDb);
+      const restoredSecret = fs.readFileSync(path.join(sandbox.appDir, '.secret'), 'utf8').trim();
       assert.ok(fileRow);
       assert.equal(fs.existsSync(path.join(sandbox.appDir, 'uploads', fileRow.stored_name)), true);
       assert.ok(documentAssetRow);
@@ -161,6 +181,12 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
       assert.equal(fs.existsSync(path.join(sandbox.appDir, 'uploads', documentImage.data.asset.stored_name)), true);
       assert.equal(newsSource.name, 'Lenta.ru top7');
       assert.equal(initiativeRule.name, 'Backup initiative rule');
+      assert.equal(telegramSettings.image_generation_enabled, true);
+      assert.equal(telegramSettings.image_bot_id, telegramImageJob.image_bot_id);
+      assert.equal(getBotToken(restoredDb, restoredSecret), '123456:backup-telegram-token');
+      assert.equal(telegramImageJob.status, 'delivering');
+      assert.equal(telegramImageJob.prompt_text, 'backup image prompt');
+      assert.deepEqual(telegramImageJob.image_data, tinyPngBuffer());
       assert.equal(restoredDb.pragma('integrity_check', { simple: true }), 'ok');
     } finally {
       restoredDb.close();

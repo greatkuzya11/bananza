@@ -399,6 +399,7 @@
         $('#grokAiImageBotName').value = bot?.name || 'Grok Images';
         $('#grokAiImageBotMention').value = bot?.mention || 'grok_image';
         $('#grokAiImageBotEnabled').checked = bot ? !!bot.enabled : true;
+        $('#grokAiImageBotAllowImageGenerate').checked = bot?.allow_image_generate ?? true;
         $('#grokAiImageBotRiskFilter').checked = bot?.image_risk_filter_enabled ?? true;
         setBotVisibilityToggle('grokAiImageBotVisibleToUsers', !!bot?.visible_to_users);
         $('#grokAiImageBotStyle').value = bot?.style || 'Visual prompt specialist for chat';
@@ -506,6 +507,7 @@
           name: $('#grokAiImageBotName')?.value.trim(),
           mention: $('#grokAiImageBotMention')?.value.trim(),
           enabled: $('#grokAiImageBotEnabled')?.checked,
+          allow_image_generate: $('#grokAiImageBotAllowImageGenerate')?.checked,
           image_risk_filter_enabled: $('#grokAiImageBotRiskFilter')?.checked,
           visible_to_users: getBotVisibilityToggle('grokAiImageBotVisibleToUsers'),
           image_model: $('#grokAiImageBotModel')?.value.trim(),
