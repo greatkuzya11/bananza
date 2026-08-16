@@ -27,6 +27,13 @@ function textResponse(body, status = 200, headers = {}) {
   });
 }
 
+function testDelay(ms) {
+  const delayMs = Math.max(0, Number(ms || 0));
+  return delayMs > 0
+    ? new Promise((resolve) => setTimeout(resolve, delayMs))
+    : Promise.resolve();
+}
+
 function createPreviewHtml(url) {
   return `<!doctype html>
   <html>
@@ -62,16 +69,23 @@ globalThis.fetch = async function mockedFetch(input, init = {}) {
 
   if (url.hostname === 'api.openai.com') {
     if (url.pathname.endsWith('/audio/transcriptions')) {
+      await testDelay(process.env.BANANZA_TEST_OPENAI_TRANSCRIPTION_DELAY_MS);
       return jsonResponse({ text: 'Mock OpenAI transcript' });
     }
     if (url.pathname.endsWith('/models')) {
       return jsonResponse({ data: [{ id: 'gpt-4o-mini-transcribe' }] });
     }
+    const requestBody = typeof init.body === 'string' ? init.body : '';
+    const responseText = process.env.BANANZA_TEST_OPENAI_ECHO_TRANSCRIPT_CONTEXT === '1'
+      ? (requestBody.includes('Mock OpenAI transcript')
+          ? 'Mock OpenAI transcript-aware response'
+          : 'Mock OpenAI response without transcript')
+      : 'Mock OpenAI response';
     return jsonResponse({
       id: 'mock-openai-response',
       model: 'gpt-4o-mini',
-      output_text: 'Mock OpenAI response',
-      choices: [{ message: { content: 'Mock OpenAI response' } }],
+      output_text: responseText,
+      choices: [{ message: { content: responseText } }],
       data: [{ url: 'https://preview.test/generated/mock-image.png' }],
     });
   }

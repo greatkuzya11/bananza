@@ -511,7 +511,7 @@ videoNoteFeature = createVideoNoteFeature({
   broadcastToChatAll,
   clients,
   notifyMessageCreated: (message) => pushFeature.notifyMessageCreated(message),
-  onMessageCreated: (message) => handleUserMessageCreated(message),
+  onMessageCreated: (message) => handleChatListMessageCreated(message),
   voiceFeature,
 });
 
