@@ -1,4 +1,8 @@
 const { DateTime } = require('luxon');
+const {
+  cleanInitiativeRuleName,
+  buildInitiativeRuleName,
+} = require('./initiativeRuleName');
 
 let XMLParser = null;
 try {
@@ -132,6 +136,7 @@ function normalizeRuleInput(input = {}, current = {}, now = DateTime.utc()) {
   const rawPromptMode = input.prompt_mode ?? current.prompt_mode ?? '';
   const rule = {
     id: Number(current.id || input.id || 0) || null,
+    name: cleanInitiativeRuleName(input.name ?? current.name),
     chat_id: Number(input.chat_id ?? current.chat_id ?? 0),
     bot_id: Number(input.bot_id ?? current.bot_id ?? 0),
     enabled: boolValue(input.enabled ?? current.enabled, false),
@@ -492,6 +497,7 @@ function parseNewsFeedXml(xml, feedUrl = '') {
 function serializeRule(row = {}) {
   return {
     id: Number(row.id || 0),
+    name: cleanInitiativeRuleName(row.name),
     chat_id: Number(row.chat_id || 0),
     bot_id: Number(row.bot_id || 0),
     enabled: row.enabled !== 0,
@@ -578,6 +584,7 @@ function createAiInitiativeFeature({
 } = {}) {
   const isChatMemberStmt = db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?');
   const chatStmt = db.prepare('SELECT id, name, type FROM chats WHERE id=?');
+  const initiativeBotStmt = db.prepare('SELECT id, name FROM ai_bots WHERE id=?');
   const userTimezoneStmt = db.prepare('SELECT timezone FROM users WHERE id=?');
   const userMentionStmt = db.prepare('SELECT username, display_name FROM users WHERE id=?');
   const activeBotsStmt = db.prepare(`
@@ -619,16 +626,16 @@ function createAiInitiativeFeature({
   `);
   const insertRuleStmt = db.prepare(`
     INSERT INTO ai_bot_initiative_rules(
-      chat_id, bot_id, enabled, schedule_type, fixed_time, window_start, window_end, timezone,
+      name, chat_id, bot_id, enabled, schedule_type, fixed_time, window_start, window_end, timezone,
       idle_threshold_minutes, min_gap_minutes, same_context_limit_enabled, same_context_max_runs,
       prompt_mode, custom_prompt, holiday_country, news_source_id, news_max_age_hours,
       news_item_count, news_use_chat_context, news_prompt, next_run_at
     )
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `);
   const updateRuleStmt = db.prepare(`
     UPDATE ai_bot_initiative_rules
-    SET chat_id=?, bot_id=?, enabled=?, schedule_type=?, fixed_time=?, window_start=?, window_end=?,
+    SET name=?, chat_id=?, bot_id=?, enabled=?, schedule_type=?, fixed_time=?, window_start=?, window_end=?,
       timezone=?, idle_threshold_minutes=?, min_gap_minutes=?, same_context_limit_enabled=?,
       same_context_max_runs=?, prompt_mode=?, custom_prompt=?,
       holiday_country=?, news_source_id=?, news_max_age_hours=?, news_item_count=?,
@@ -808,6 +815,23 @@ function createAiInitiativeFeature({
     return defaultNewsSourceId();
   }
 
+  function defaultRuleName(rule) {
+    const chat = chatStmt.get(rule.chat_id) || {};
+    const bot = initiativeBotStmt.get(rule.bot_id) || {};
+    const source = rule.prompt_mode === 'news_hook' && rule.news_source_id
+      ? (newsSourceByIdStmt.get(rule.news_source_id) || {})
+      : {};
+    return buildInitiativeRuleName({
+      promptMode: rule.prompt_mode,
+      sourceName: source.name,
+      sourceId: rule.news_source_id,
+      chatName: chat.name,
+      chatId: rule.chat_id,
+      botName: bot.name,
+      botId: rule.bot_id,
+    });
+  }
+
   function saveRule(input, current = null) {
     const rule = normalizeRuleInput(input, current || {}, currentUtc());
     if (!rule.chat_id || !rule.bot_id) {
@@ -817,9 +841,11 @@ function createAiInitiativeFeature({
     }
     ensureRuntime(rule.chat_id, rule.bot_id);
     rule.news_source_id = resolveRuleNewsSourceId(rule);
+    if (!rule.name) rule.name = defaultRuleName(rule);
     rule.next_run_at = computeNextRunAt(rule, currentUtc());
     if (current?.id) {
       updateRuleStmt.run(
+        rule.name,
         rule.chat_id,
         rule.bot_id,
         rule.enabled ? 1 : 0,
@@ -846,6 +872,7 @@ function createAiInitiativeFeature({
       return serializeRule(ruleByIdStmt.get(current.id));
     }
     const result = insertRuleStmt.run(
+      rule.name,
       rule.chat_id,
       rule.bot_id,
       rule.enabled ? 1 : 0,

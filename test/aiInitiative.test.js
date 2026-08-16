@@ -50,6 +50,7 @@ function createInitiativeDb() {
     );
     CREATE TABLE ai_bot_initiative_rules (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL DEFAULT '',
       chat_id INTEGER NOT NULL,
       bot_id INTEGER NOT NULL,
       enabled INTEGER DEFAULT 0,
@@ -140,6 +141,37 @@ function fakeApp() {
     put() {},
     delete() {},
   };
+}
+
+function routeApp() {
+  const routes = new Map();
+  const register = (method) => (path, ...handlers) => {
+    routes.set(`${method} ${path}`, handlers.at(-1));
+  };
+  return {
+    routes,
+    get: register('GET'),
+    post: register('POST'),
+    put: register('PUT'),
+    delete: register('DELETE'),
+  };
+}
+
+function invokeRoute(handler, { body = {}, params = {}, user = { id: 1 } } = {}) {
+  let statusCode = 200;
+  let payload;
+  const res = {
+    status(code) {
+      statusCode = code;
+      return this;
+    },
+    json(value) {
+      payload = value;
+      return this;
+    },
+  };
+  const result = handler({ body, params, user }, res);
+  return Promise.resolve(result).then(() => ({ statusCode, payload }));
 }
 
 const rssXml = `
@@ -311,7 +343,59 @@ test('initiative normalizes legacy date_holiday rules to news_hook', () => {
   assert.equal(rule.prompt_mode, 'news_hook');
   assert.equal(rule.news_max_age_hours, 336);
   assert.equal(__private.normalizeRuleInput({ chat_id: 1, bot_id: 2, prompt_mode: 'news_hook', news_item_count: 99 }).news_item_count, 10);
+  assert.equal(__private.normalizeRuleInput({ name: `  ${'x'.repeat(300)}  ` }).name.length, 240);
   assert.equal(rule.news_use_chat_context, true);
+});
+
+test('initiative rule API generates, preserves, trims, and resets rule names', async (t) => {
+  const db = createInitiativeDb();
+  t.after(() => db.close());
+  db.prepare('INSERT INTO ai_news_sources(id, name, type, url, enabled, cache_ttl_minutes) VALUES(1,?,?,?,?,30)').run(
+    'Test RSS',
+    'rss',
+    'https://example.com/rss',
+    1
+  );
+  const app = routeApp();
+  createAiInitiativeFeature({
+    app,
+    db,
+    auth: (_req, _res, next) => next?.(),
+    adminOnly: (_req, _res, next) => next?.(),
+    startScheduler: false,
+    nowProvider: () => DateTime.fromISO('2026-05-27T10:00:00Z'),
+    aiBotFeature: { resolveChatBotRuntime() { return true; } },
+  });
+
+  const createHandler = app.routes.get('POST /api/admin/ai-bot-initiatives/rules');
+  const updateHandler = app.routes.get('PUT /api/admin/ai-bot-initiatives/rules/:id(\\d+)');
+  const generated = await invokeRoute(createHandler, {
+    body: { chat_id: 1, bot_id: 1, prompt_mode: 'news_hook', news_source_id: 1, name: '   ' },
+  });
+  assert.equal(generated.statusCode, 200);
+  assert.equal(generated.payload.rule.name, 'Test RSS — General — Bot');
+  const generatedId = generated.payload.rule.id;
+
+  db.prepare('UPDATE chats SET name=? WHERE id=1').run('Renamed chat');
+  db.prepare('UPDATE ai_bots SET name=? WHERE id=1').run('Renamed bot');
+  db.prepare('UPDATE ai_news_sources SET name=? WHERE id=1').run('Renamed RSS');
+  const preserved = await invokeRoute(updateHandler, {
+    params: { id: String(generatedId) },
+    body: { enabled: true },
+  });
+  assert.equal(preserved.payload.rule.name, 'Test RSS — General — Bot');
+
+  const regenerated = await invokeRoute(updateHandler, {
+    params: { id: String(generatedId) },
+    body: { name: '' },
+  });
+  assert.equal(regenerated.payload.rule.name, 'Renamed RSS — Renamed chat — Renamed bot');
+
+  const custom = await invokeRoute(createHandler, {
+    body: { chat_id: 1, bot_id: 1, prompt_mode: 'idle_ping', name: '  Morning ping  ' },
+  });
+  assert.equal(custom.payload.rule.name, 'Morning ping');
+  assert.equal(db.prepare('SELECT name FROM ai_bot_initiative_rules WHERE id=?').get(custom.payload.rule.id).name, 'Morning ping');
 });
 
 test('initiative news hook sends a fresh news item and records history', async (t) => {

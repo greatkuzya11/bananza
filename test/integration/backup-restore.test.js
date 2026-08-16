@@ -28,6 +28,21 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
   try {
     const scenario = await createBasicChatScenario(sandbox.baseUrl);
     const { admin, bob } = scenario;
+    const liveDb = new Database(path.join(sandbox.appDir, 'bananza.db'));
+    let initiativeRuleId;
+    try {
+      const chat = liveDb.prepare('SELECT id FROM chats ORDER BY id ASC LIMIT 1').get();
+      const bot = liveDb.prepare(`
+        INSERT INTO ai_bots(name, mention, enabled)
+        VALUES('Backup initiative bot', 'backup_initiative_bot', 1)
+      `).run();
+      initiativeRuleId = Number(liveDb.prepare(`
+        INSERT INTO ai_bot_initiative_rules(name, chat_id, bot_id, prompt_mode)
+        VALUES('Backup initiative rule', ?, ?, 'idle_ping')
+      `).run(chat.id, bot.lastInsertRowid).lastInsertRowid);
+    } finally {
+      liveDb.close();
+    }
     const uploaded = await admin.uploadTextFile('restore-note.txt', 'restore payload');
     const documentChat = await admin.request('/api/documents', {
       method: 'POST',
@@ -135,6 +150,7 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
         WHERE da.id=?
       `).get(documentImage.data.asset.id);
       const newsSource = restoredDb.prepare('SELECT name, url FROM ai_news_sources WHERE url=?').get('https://lenta.ru/rss/top7');
+      const initiativeRule = restoredDb.prepare('SELECT name FROM ai_bot_initiative_rules WHERE id=?').get(initiativeRuleId);
       assert.ok(fileRow);
       assert.equal(fs.existsSync(path.join(sandbox.appDir, 'uploads', fileRow.stored_name)), true);
       assert.ok(documentAssetRow);
@@ -144,6 +160,8 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
       assert.equal(documentAssetRow.stored_name, documentImage.data.asset.stored_name);
       assert.equal(fs.existsSync(path.join(sandbox.appDir, 'uploads', documentImage.data.asset.stored_name)), true);
       assert.equal(newsSource.name, 'Lenta.ru top7');
+      assert.equal(initiativeRule.name, 'Backup initiative rule');
+      assert.equal(restoredDb.pragma('integrity_check', { simple: true }), 'ok');
     } finally {
       restoredDb.close();
     }

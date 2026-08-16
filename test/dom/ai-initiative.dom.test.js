@@ -75,6 +75,7 @@ test('AI initiative modal renders admin state and saves a rule', async () => {
   assert.ok(enabledToggle.compareDocumentPosition(chatField) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
   assert.equal(dom.window.document.getElementById('aiInitiativeChatSelect').value, '1');
   assert.equal(dom.window.document.getElementById('aiInitiativeBotSelect').value, '2');
+  assert.equal(dom.window.document.getElementById('aiInitiativeRuleName').maxLength, 240);
   assert.equal(dom.window.document.getElementById('aiInitiativeTimezone').tagName, 'SELECT');
   assert.ok(dom.window.document.getElementById('aiInitiativeTimezone').querySelector('option[value="UTC"]'));
   assert.match(dom.window.document.getElementById('aiInitiativeTimezone').textContent, /UTC[+-]\d\d:\d\d/);
@@ -99,6 +100,7 @@ test('AI initiative modal renders admin state and saves a rule', async () => {
   assert.equal(dom.window.document.getElementById('aiInitiativePromptMode').textContent.includes('Date and holidays'), false);
   assert.match(dom.window.document.getElementById('aiInitiativeNewsSource').textContent, /Lenta\.ru top7/);
 
+  dom.window.document.getElementById('aiInitiativeRuleName').value = 'Morning headlines';
   dom.window.document.getElementById('aiInitiativeEnabled').checked = true;
   dom.window.document.getElementById('aiInitiativeSameContextMaxRuns').value = '3';
   dom.window.document.getElementById('aiInitiativePromptMode').value = 'news_hook';
@@ -111,6 +113,7 @@ test('AI initiative modal renders admin state and saves a rule', async () => {
 
   const saveCall = calls.find((call) => call.url === '/api/admin/ai-bot-initiatives/rules');
   assert.equal(saveCall.options.method, 'POST');
+  assert.equal(saveCall.options.body.name, 'Morning headlines');
   assert.equal(saveCall.options.body.chat_id, 1);
   assert.equal(saveCall.options.body.bot_id, 2);
   assert.equal(saveCall.options.body.enabled, true);
@@ -121,6 +124,7 @@ test('AI initiative modal renders admin state and saves a rule', async () => {
   assert.equal(saveCall.options.body.news_source_id, 3);
   assert.equal(saveCall.options.body.news_item_count, 4);
   assert.equal(saveCall.options.body.news_prompt, 'Make it sharp.');
+  assert.match(dom.window.document.getElementById('aiInitiativeRuleList').textContent, /Morning headlines/);
   assert.match(dom.window.document.getElementById('aiInitiativeRuleList').textContent, /Bananza AI/);
   assert.match(dom.window.document.getElementById('aiInitiativeRuleList').textContent, /Idea chat - Private chat #1/);
   assert.doesNotMatch(dom.window.document.getElementById('aiInitiativeRuleList').textContent, /Alice/);

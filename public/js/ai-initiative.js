@@ -297,8 +297,8 @@
       return `
         <button type="button" class="ai-bot-list-item${active ? ' active' : ''}" data-ai-initiative-rule-id="${Number(rule.id)}">
           <div class="ai-bot-list-main">
-            <strong>${escapeHtml(bot?.name || `#${rule.bot_id}`)}</strong>
-            <small>${escapeHtml([chat ? compactChatLabel(chat) : `#${rule.chat_id}`, t(rule.prompt_mode || 'context_question'), schedule, rule.enabled ? t('Enabled') : t('Disabled')].filter(Boolean).join(' / '))}</small>
+            <strong>${escapeHtml(rule.name || bot?.name || `#${rule.id}`)}</strong>
+            <small>${escapeHtml([bot?.name || `#${rule.bot_id}`, chat ? compactChatLabel(chat) : `#${rule.chat_id}`, t(rule.prompt_mode || 'context_question'), schedule, rule.enabled ? t('Enabled') : t('Disabled')].filter(Boolean).join(' / '))}</small>
           </div>
         </button>
       `;
@@ -321,6 +321,7 @@
     setTimezoneOptions(rule?.timezone || currentTimezone());
     const promptMode = rule?.prompt_mode === 'date_holiday' ? 'news_hook' : (rule?.prompt_mode || 'context_question');
     const fields = {
+      aiInitiativeRuleName: rule?.name || '',
       aiInitiativeScheduleType: rule?.schedule_type || 'fixed',
       aiInitiativeFixedTime: rule?.fixed_time || '09:00',
       aiInitiativeWindowStart: rule?.window_start || '09:00',
@@ -389,6 +390,7 @@
 
   function collectPayload() {
     return {
+      name: $('#aiInitiativeRuleName')?.value || '',
       chat_id: Number($('#aiInitiativeChatSelect')?.value || 0),
       bot_id: Number($('#aiInitiativeBotSelect')?.value || 0),
       enabled: !!$('#aiInitiativeEnabled')?.checked,

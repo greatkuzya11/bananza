@@ -1,3 +1,5 @@
+const { buildInitiativeRuleName } = require('./initiativeRuleName');
+
 function addColumnIfMissing(db, table, column, ddl) {
   try {
     db.prepare(`SELECT ${column} FROM ${table} LIMIT 1`).get();
@@ -16,6 +18,7 @@ function ensureInitiativeRulesPromptModeSupportsNews(db) {
     db.exec(`
       CREATE TABLE ai_bot_initiative_rules_new (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL DEFAULT '',
         chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
         bot_id INTEGER NOT NULL REFERENCES ai_bots(id) ON DELETE CASCADE,
         enabled INTEGER DEFAULT 0,
@@ -45,14 +48,14 @@ function ensureInitiativeRulesPromptModeSupportsNews(db) {
       );
 
       INSERT INTO ai_bot_initiative_rules_new(
-        id, chat_id, bot_id, enabled, schedule_type, fixed_time, window_start, window_end, timezone,
+        id, name, chat_id, bot_id, enabled, schedule_type, fixed_time, window_start, window_end, timezone,
         idle_threshold_minutes, min_gap_minutes, same_context_limit_enabled, same_context_max_runs,
         same_context_run_count, prompt_mode, custom_prompt, holiday_country, news_source_id,
         news_max_age_hours, news_item_count, news_use_chat_context, news_prompt, next_run_at, last_run_at,
         last_message_id, created_at, updated_at
       )
       SELECT
-        id, chat_id, bot_id, enabled, schedule_type, fixed_time, window_start, window_end, timezone,
+        id, name, chat_id, bot_id, enabled, schedule_type, fixed_time, window_start, window_end, timezone,
         idle_threshold_minutes, min_gap_minutes, same_context_limit_enabled, same_context_max_runs,
         same_context_run_count,
         CASE WHEN prompt_mode='date_holiday' THEN 'news_hook' ELSE COALESCE(prompt_mode, 'context_question') END,
@@ -66,6 +69,58 @@ function ensureInitiativeRulesPromptModeSupportsNews(db) {
   } finally {
     db.pragma(`foreign_keys = ${foreignKeys ? 'ON' : 'OFF'}`);
   }
+}
+
+function backfillInitiativeRuleNames(db) {
+  const fallbackSource = db.prepare(`
+    SELECT id, name
+    FROM ai_news_sources
+    ORDER BY CASE WHEN enabled=1 THEN 0 ELSE 1 END, name COLLATE NOCASE ASC, id ASC
+    LIMIT 1
+  `).get() || {};
+  const rows = db.prepare(`
+    SELECT
+      r.id,
+      r.chat_id,
+      r.bot_id,
+      r.prompt_mode,
+      r.news_source_id,
+      c.name AS chat_name,
+      b.name AS bot_name,
+      s.name AS source_name
+    FROM ai_bot_initiative_rules r
+    LEFT JOIN chats c ON c.id=r.chat_id
+    LEFT JOIN ai_bots b ON b.id=r.bot_id
+    LEFT JOIN ai_news_sources s ON s.id=r.news_source_id
+    WHERE TRIM(COALESCE(r.name, ''))=''
+    ORDER BY r.id ASC
+  `).all();
+  if (!rows.length) return 0;
+
+  const updateName = db.prepare(`
+    UPDATE ai_bot_initiative_rules
+    SET name=?
+    WHERE id=? AND TRIM(COALESCE(name, ''))=''
+  `);
+  return db.transaction((pendingRows) => {
+    let changed = 0;
+    for (const row of pendingRows) {
+      const usesNews = row.prompt_mode === 'news_hook';
+      const sourceId = Number(row.news_source_id || fallbackSource.id || 0) || null;
+      const sourceName = row.source_name || (usesNews ? fallbackSource.name : '');
+      const name = buildInitiativeRuleName({
+        promptMode: row.prompt_mode,
+        sourceName,
+        sourceId,
+        chatName: row.chat_name,
+        chatId: row.chat_id,
+        botName: row.bot_name,
+        botId: row.bot_id,
+      });
+      changed += updateName.run(name, row.id).changes;
+    }
+    return changed;
+  })(rows);
 }
 
 function initAiSchema(db) {
@@ -222,6 +277,7 @@ function initAiSchema(db) {
 
     CREATE TABLE IF NOT EXISTS ai_bot_initiative_rules (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL DEFAULT '',
       chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
       bot_id INTEGER NOT NULL REFERENCES ai_bots(id) ON DELETE CASCADE,
       enabled INTEGER DEFAULT 0,
@@ -482,6 +538,7 @@ function initAiSchema(db) {
   addColumnIfMissing(db, 'ai_chat_bots', 'auto_react_on_mention', 'auto_react_on_mention INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'users', 'is_ai_bot', 'is_ai_bot INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'users', 'timezone', "timezone TEXT DEFAULT NULL");
+  addColumnIfMissing(db, 'ai_bot_initiative_rules', 'name', "name TEXT NOT NULL DEFAULT ''");
   addColumnIfMissing(db, 'ai_bot_initiative_rules', 'same_context_limit_enabled', 'same_context_limit_enabled INTEGER DEFAULT 1');
   addColumnIfMissing(db, 'ai_bot_initiative_rules', 'same_context_max_runs', 'same_context_max_runs INTEGER DEFAULT 1');
   addColumnIfMissing(db, 'ai_bot_initiative_rules', 'same_context_run_count', 'same_context_run_count INTEGER DEFAULT 0');
@@ -511,9 +568,13 @@ function initAiSchema(db) {
     WHERE NOT EXISTS (SELECT 1 FROM ai_news_sources)
   `).run();
   db.prepare("UPDATE ai_bot_initiative_rules SET prompt_mode='news_hook' WHERE prompt_mode='date_holiday'").run();
+  backfillInitiativeRuleNames(db);
   db.prepare("UPDATE chats SET chatshot_enabled=0 WHERE chatshot_enabled IS NULL").run();
   db.prepare("UPDATE chats SET chatshot_style='comic' WHERE chatshot_style IS NULL OR chatshot_style NOT IN ('comic','illustration','photo')").run();
   db.prepare("UPDATE chats SET chatshot_banana_filter_enabled=1 WHERE chatshot_banana_filter_enabled IS NULL").run();
 }
 
-module.exports = { initAiSchema };
+module.exports = {
+  initAiSchema,
+  __private: { backfillInitiativeRuleNames },
+};
