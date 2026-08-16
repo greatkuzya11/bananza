@@ -14,6 +14,7 @@ const {
   deleteGrokKey,
   updateLastModelTest,
   buildDraftSettings,
+  getProviderModel,
   VOICE_SETTINGS_OPTIONS,
 } = require('./settings');
 const {
@@ -266,9 +267,7 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
         'error',
         null,
         settings.active_provider,
-        settings.active_provider === 'openai'
-          ? settings.openai_model
-          : (settings.active_provider === 'grok' ? 'speech-to-text' : settings.vosk_model),
+        getProviderModel(settings),
         error.message || 'Transcription failed',
         null,
         voiceJob.requested_by || null,
@@ -398,9 +397,7 @@ function createVoiceFeature({ app, db, auth, adminOnly, msgLimiter, upLimiter, u
         last_model_test_status: 'error',
         last_model_test_at: new Date().toISOString(),
         last_model_test_provider: draftSettings.active_provider,
-        last_model_test_model: draftSettings.active_provider === 'openai'
-          ? draftSettings.openai_model
-          : (draftSettings.active_provider === 'grok' ? 'speech-to-text' : draftSettings.vosk_model),
+        last_model_test_model: getProviderModel(draftSettings),
         last_model_test_latency_ms: latencyMs,
         last_model_test_excerpt: '',
         last_model_test_error: error.message || 'Model test failed',

@@ -77,6 +77,18 @@ test('voice settings encrypt keys and expose admin/public views safely', () => {
   const draftWithoutBot = buildDraftSettings(db, { context_bot_enabled: 'false', context_bot_id: 'bad' }, secret);
   assert.equal(draftWithoutBot.context_bot_enabled, false);
   assert.equal(draftWithoutBot.context_bot_id, null);
+  const whisperDraft = buildDraftSettings(db, {
+    active_provider: 'whisper',
+    whisper_model: 'ggml-base-q5_1.bin',
+    whisper_models_dir: '/opt/bananza/voice/models',
+    whisper_language: 'ru',
+  }, secret);
+  assert.equal(whisperDraft.active_provider, 'whisper');
+  assert.equal(whisperDraft.whisper_model, 'ggml-base-q5_1.bin');
+  assert.equal(whisperDraft.whisper_models_dir, '/opt/bananza/voice/models');
+
+  const invalidWhisperDraft = buildDraftSettings(db, { whisper_model: '../../large.bin' }, secret);
+  assert.equal(invalidWhisperDraft.whisper_model, DEFAULT_VOICE_SETTINGS.whisper_model);
 
   db.close();
 });
@@ -229,6 +241,107 @@ test('Vosk provider uploads audio bytes for remote helpers', async (t) => {
 
   assert.equal(result.provider, 'vosk');
   assert.equal(result.text, 'Remote transcript');
+});
+
+test('Whisper provider loads the selected local model and returns timed segments', async (t) => {
+  const tempFile = path.join(os.tmpdir(), `bananza-whisper-${Date.now()}.wav`);
+  fs.writeFileSync(tempFile, 'voice');
+  t.after(() => {
+    fs.rmSync(tempFile, { force: true });
+  });
+
+  const requests = [];
+  const originalFetch = global.fetch;
+  global.fetch = async (url, options = {}) => {
+    const href = String(url);
+    requests.push(href);
+    assert.equal(options.method, 'POST');
+    assert.ok(options.body instanceof FormData);
+    if (href.endsWith('/load')) {
+      assert.equal(options.body.get('model'), '/opt/bananza/voice/models/ggml-base.bin');
+      return new Response('Load was successful!', { status: 200 });
+    }
+    if (href.endsWith('/inference')) {
+      assert.equal(options.body.get('language'), 'ru');
+      assert.equal(options.body.get('translate'), 'false');
+      assert.equal(options.body.get('response_format'), 'verbose_json');
+      assert.ok(options.body.get('file') instanceof Blob);
+      return new Response(JSON.stringify({
+        text: ' Whisper trans\ncript\n continues. ',
+        segments: [{ text: 'Whisper transcript', start: 0.25, end: 1.5 }],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    throw new Error(`Unexpected fetch ${href}`);
+  };
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  const result = await transcribeAudio({
+    filePath: tempFile,
+    settings: {
+      active_provider: 'whisper',
+      fallback_to_openai: false,
+      whisper_helper_url: 'http://whisper.example.test:2701',
+      whisper_model: 'ggml-base.bin',
+      whisper_models_dir: '/opt/bananza/voice/models',
+      whisper_language: 'ru',
+      transcription_timeout_ms: 5000,
+    },
+    apiKey: '',
+    grokApiKey: '',
+  });
+
+  assert.deepEqual(requests, [
+    'http://whisper.example.test:2701/load',
+    'http://whisper.example.test:2701/inference',
+  ]);
+  assert.equal(result.provider, 'whisper');
+  assert.equal(result.model, 'ggml-base.bin');
+  assert.equal(result.text, 'Whisper transcript continues.');
+  assert.deepEqual(result.segments, [{
+    text: 'Whisper transcript',
+    start_ms: 250,
+    end_ms: 1500,
+  }]);
+});
+
+test('Whisper provider rejects a model-load error returned with HTTP 200', async (t) => {
+  const tempFile = path.join(os.tmpdir(), `bananza-whisper-load-error-${Date.now()}.wav`);
+  fs.writeFileSync(tempFile, 'voice');
+  t.after(() => {
+    fs.rmSync(tempFile, { force: true });
+  });
+
+  const originalFetch = global.fetch;
+  global.fetch = async (url) => {
+    assert.match(String(url), /\/load$/);
+    return new Response(JSON.stringify({ error: 'model not found!' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  await assert.rejects(() => transcribeAudio({
+    filePath: tempFile,
+    settings: {
+      active_provider: 'whisper',
+      fallback_to_openai: false,
+      whisper_helper_url: 'http://whisper.example.test:2701',
+      whisper_model: 'ggml-tiny.bin',
+      whisper_models_dir: '/missing',
+      whisper_language: 'ru',
+      transcription_timeout_ms: 5000,
+    },
+    apiKey: '',
+    grokApiKey: '',
+  }), /model not found/i);
 });
 
 test('testProviderModel returns Grok transcription payload', async (t) => {

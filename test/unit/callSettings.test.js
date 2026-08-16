@@ -54,10 +54,12 @@ test('call settings persist through app_settings', () => {
       calls_enabled: true,
       ring_timeout_ms: 45000,
       allow_group_calls: false,
+      call_transcription_provider: 'whisper',
     });
     assert.equal(saved.calls_enabled, true);
     assert.equal(saved.ring_timeout_ms, 45000);
     assert.equal(saved.allow_group_calls, false);
+    assert.equal(saved.call_transcription_provider, 'whisper');
     assert.deepEqual(getCallSettings(db), saved);
   } finally {
     db.close();

@@ -10,6 +10,10 @@
     "test:all": "npm test && npm run test:e2e",
     "test:coverage": "c8 --config .c8rc.json node scripts/run-node-tests.js",
     "test:e2e": "playwright test",
+    "vosk:install": "python -m pip install -r voice/requirements.txt",
+    "vosk:start": "python voice/vosk_helper.py",
+    "whisper:install": "node voice/whisperCli.js install",
+    "whisper:start": "node voice/whisperCli.js start",
     "import:qip-emojis": "node scripts/import-qip-infium-original.js",
     "import:qip-hd-emojis": "node scripts/import-qip-hd-emojis.js"
   },

@@ -883,6 +883,7 @@
               <select id="callTranscriptionPreset" class="modal-input">
                 <option value="voice:hybrid">${escapeHtml(t('Same as voice messages'))} / hybrid</option>
                 <option value="vosk:hybrid">Vosk / hybrid</option>
+                <option value="whisper:hybrid">${escapeHtml(t('Whisper / hybrid'))}</option>
                 <option value="grok:hybrid">Grok / hybrid</option>
                 <option value="openai:hybrid">OpenAI / hybrid</option>
                 <option value="openai:openai_diarization">OpenAI diarization</option>

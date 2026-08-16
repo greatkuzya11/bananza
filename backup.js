@@ -26,6 +26,7 @@ const DEFAULT_EXCLUDED = [
   '.git/',
   'bananza.db-wal',
   'bananza.db-shm',
+  'voice/models/*.bin',
 ];
 const RESTORE_ALLOWED_TOP_LEVEL = new Set([
   'bananza.db',
@@ -299,6 +300,7 @@ function buildBackupManifest({
     uploads,
     notes: [
       '.env is not included. Keep deployment environment variables such as BANANZA_MAP_CONTACT separately.',
+      'Whisper GGML models, the whisper.cpp binary, and its service configuration are external dependencies and are not included.',
       'This archive contains chat history, uploaded files, and server secrets.',
     ],
   };

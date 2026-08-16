@@ -2,6 +2,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { ensureLocalVoskHelper, isLocalVoskHelperUrl } = require('./voskRuntime');
+const { ensureLocalWhisperHelper, isLocalWhisperHelperUrl } = require('./whisperRuntime');
+
+const whisperOperationChains = new Map();
 
 function mimeForAudioFile(filePath) {
   const ext = path.extname(String(filePath || '')).toLowerCase();
@@ -38,6 +42,27 @@ function normalizeProviderSegments(data = {}) {
   }).filter((segment) => segment.text);
 }
 
+function normalizeWhisperTranscriptText(value) {
+  const lines = String(value || '').replace(/\r\n?/g, '\n').split('\n');
+  let text = '';
+
+  for (const line of lines) {
+    // whisper.cpp separates decoded segments with newlines. A leading space is
+    // part of the tokenizer output and means that this segment starts a word;
+    // without it the segment can be a continuation of the previous word.
+    const startsNewWord = /^\s/.test(line);
+    const fragment = line.replace(/\s+/g, ' ').trim();
+    if (!fragment) continue;
+    if (!text) {
+      text = fragment;
+    } else {
+      text += startsNewWord ? ` ${fragment}` : fragment;
+    }
+  }
+
+  return text.trim();
+}
+
 function normalizeDiarizedSegments(data = {}) {
   return (Array.isArray(data.segments) ? data.segments : []).map((segment) => {
     const text = String(segment?.text || '').trim();
@@ -56,7 +81,7 @@ function normalizeDiarizedSegments(data = {}) {
 async function transcribeWithVosk({ filePath, settings }) {
   const helperUrl = String(settings.vosk_helper_url || '').replace(/\/+$/, '');
   if (!helperUrl) throw new Error('Vosk helper URL is not configured');
-  const wavPath = await prepareVoskWav(filePath);
+  const wavPath = await preparePcmWav(filePath, 'Vosk');
 
   let res;
   try {
@@ -64,10 +89,21 @@ async function transcribeWithVosk({ filePath, settings }) {
       ? await requestVoskByPath({ helperUrl, wavPath, settings })
       : await requestVoskByUpload({ helperUrl, wavPath, settings });
   } catch (error) {
-    if (error?.name === 'TimeoutError') {
-      throw new Error(`Vosk helper did not respond in time: ${helperUrl}`);
+    if (isLocalVoskHelper(helperUrl) && isVoskConnectionFailure(error)) {
+      try {
+        await ensureLocalVoskHelper(helperUrl);
+        res = await requestVoskByPath({ helperUrl, wavPath, settings });
+      } catch (startupError) {
+        throw new Error(`Vosk helper is unavailable at ${helperUrl}: ${startupError.message}`);
+      }
     }
-    throw new Error(`Vosk helper is unavailable at ${helperUrl}`);
+    if (!res) {
+      if (error?.name === 'TimeoutError') {
+        throw new Error(`Vosk helper did not respond in time: ${helperUrl}`);
+      }
+      const detail = String(error?.cause?.message || error?.message || '').trim();
+      throw new Error(`Vosk helper is unavailable at ${helperUrl}${detail ? `: ${detail}` : ''}`);
+    }
   } finally {
     if (wavPath !== filePath) {
       fs.promises.rm(path.dirname(wavPath), { recursive: true, force: true }).catch(() => {});
@@ -92,12 +128,13 @@ async function transcribeWithVosk({ filePath, settings }) {
 }
 
 function isLocalVoskHelper(helperUrl) {
-  try {
-    const { hostname } = new URL(helperUrl);
-    return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
-  } catch {
-    return false;
-  }
+  return isLocalVoskHelperUrl(helperUrl);
+}
+
+function isVoskConnectionFailure(error) {
+  const code = String(error?.cause?.code || error?.code || '').toUpperCase();
+  if (['ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND'].includes(code)) return true;
+  return error?.name === 'TypeError' && /fetch failed/i.test(String(error?.message || ''));
 }
 
 function voskPayload(settings) {
@@ -143,10 +180,11 @@ function buildVoskUploadForm(fileBuffer, wavPath, settings) {
   return formData;
 }
 
-async function prepareVoskWav(filePath) {
+async function preparePcmWav(filePath, providerName = 'Local transcription') {
   const ext = path.extname(String(filePath || '')).toLowerCase();
   if (ext === '.wav') return filePath;
-  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bananza-vosk-'));
+  const prefix = String(providerName || 'local').toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'local';
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), `bananza-${prefix}-`));
   const wavPath = path.join(dir, 'audio.wav');
   const result = spawnSync('ffmpeg', [
     '-hide_banner',
@@ -165,13 +203,136 @@ async function prepareVoskWav(filePath) {
   ], { encoding: 'utf8' });
   if (result.error) {
     await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
-    throw new Error(`ffmpeg is required for Vosk transcription: ${result.error.message}`);
+    throw new Error(`ffmpeg is required for ${providerName} transcription: ${result.error.message}`);
   }
   if (result.status !== 0) {
     await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
     throw new Error(`ffmpeg audio conversion failed: ${result.stderr || result.stdout || 'unknown error'}`);
   }
   return wavPath;
+}
+
+function whisperModelPath(settings) {
+  const model = String(settings.whisper_model || 'ggml-tiny.bin').trim();
+  if (!/^[a-zA-Z0-9._-]+\.bin$/.test(model)) {
+    throw new Error('Whisper model name is invalid');
+  }
+  const modelsDir = String(settings.whisper_models_dir || '').trim().replace(/[\\/]+$/, '');
+  if (!modelsDir) return model;
+  const separator = modelsDir.includes('\\') && !modelsDir.includes('/') ? '\\' : '/';
+  return `${modelsDir}${separator}${model}`;
+}
+
+function queueWhisperOperation(helperUrl, operation) {
+  const previous = whisperOperationChains.get(helperUrl) || Promise.resolve();
+  const current = previous.catch(() => {}).then(operation);
+  whisperOperationChains.set(helperUrl, current);
+  current.then(
+    () => {
+      if (whisperOperationChains.get(helperUrl) === current) whisperOperationChains.delete(helperUrl);
+    },
+    () => {
+      if (whisperOperationChains.get(helperUrl) === current) whisperOperationChains.delete(helperUrl);
+    }
+  );
+  return current;
+}
+
+async function requestWhisper(helperUrl, endpoint, options, timeoutMs) {
+  try {
+    return await fetch(`${helperUrl}${endpoint}`, {
+      ...options,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    if (error?.name === 'TimeoutError') {
+      throw new Error(`Whisper helper did not respond in time: ${helperUrl}`);
+    }
+    throw new Error(`Whisper helper is unavailable at ${helperUrl}`);
+  }
+}
+
+async function loadWhisperModel({ helperUrl, settings }) {
+  const formData = new FormData();
+  const modelPath = whisperModelPath(settings);
+  formData.append('model', modelPath);
+  const res = await requestWhisper(helperUrl, '/load', {
+    method: 'POST',
+    body: formData,
+  }, settings.transcription_timeout_ms);
+  const responseText = await res.text();
+  let responseData = {};
+  try {
+    responseData = JSON.parse(responseText || '{}');
+  } catch {
+    responseData = { raw: responseText };
+  }
+  const explicitlySuccessful = /load was successful/i.test(responseText)
+    || responseData.success === true
+    || responseData.status === 'ok';
+  if (!res.ok || !explicitlySuccessful) {
+    const detail = String(responseData.error || responseData.raw || '').trim();
+    if (/model not found/i.test(detail)) {
+      throw new Error(`Whisper model not found: ${modelPath}. Run "npm run whisper:install -- all".`);
+    }
+    throw new Error(detail || `Whisper could not load model: ${modelPath}`);
+  }
+  return modelPath;
+}
+
+async function transcribeWithWhisper({ filePath, settings }) {
+  const helperUrl = String(settings.whisper_helper_url || '').replace(/\/+$/, '');
+  if (!helperUrl) throw new Error('Whisper helper URL is not configured');
+  const wavPath = await preparePcmWav(filePath, 'Whisper');
+
+  try {
+    return await queueWhisperOperation(helperUrl, async () => {
+      let helperState = null;
+      if (isLocalWhisperHelperUrl(helperUrl)) {
+        try {
+          helperState = await ensureLocalWhisperHelper(helperUrl, settings);
+        } catch (error) {
+          throw new Error(`Whisper helper is unavailable at ${helperUrl}: ${error.message}`);
+        }
+      }
+      if (!helperState?.started) {
+        await loadWhisperModel({ helperUrl, settings });
+      }
+      const fileBuffer = await fs.promises.readFile(wavPath);
+      const formData = new FormData();
+      formData.append('file', new Blob([fileBuffer], { type: 'audio/wav' }), path.basename(wavPath) || 'audio.wav');
+      formData.append('language', String(settings.whisper_language || 'ru'));
+      formData.append('translate', 'false');
+      formData.append('temperature', '0.0');
+      formData.append('temperature_inc', '0.2');
+      formData.append('no_speech_thold', '0.6');
+      formData.append('suppress_nst', 'true');
+      formData.append('response_format', 'verbose_json');
+
+      const res = await requestWhisper(helperUrl, '/inference', {
+        method: 'POST',
+        body: formData,
+      }, settings.transcription_timeout_ms);
+      const data = await parseJsonResponse(res);
+      if (!res.ok) {
+        throw new Error(data.error || data.raw || 'Whisper helper request failed');
+      }
+      const text = normalizeWhisperTranscriptText(data.text);
+      if (!text) {
+        throw new Error('Whisper returned empty transcription');
+      }
+      return {
+        text,
+        segments: normalizeProviderSegments(data),
+        provider: 'whisper',
+        model: settings.whisper_model || 'ggml-tiny.bin',
+      };
+    });
+  } finally {
+    if (wavPath !== filePath) {
+      fs.promises.rm(path.dirname(wavPath), { recursive: true, force: true }).catch(() => {});
+    }
+  }
 }
 
 async function transcribeWithOpenAI({ filePath, settings, apiKey }) {
@@ -281,6 +442,7 @@ async function runProvider(provider, ctx) {
   if (provider === 'openai') return transcribeWithOpenAI(ctx);
   if (provider === 'grok') return transcribeWithGrok(ctx);
   if (provider === 'vosk') return transcribeWithVosk(ctx);
+  if (provider === 'whisper') return transcribeWithWhisper(ctx);
   throw new Error(`Unsupported provider: ${provider}`);
 }
 

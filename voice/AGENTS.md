@@ -8,19 +8,26 @@
 - `index.js` — voice feature module, регистрирует voice routes и orchestration.
 - `settings.js` — admin/public voice settings и options.
 - `schema.js` — schema для `voice_messages` и связанных данных.
-- `providers.js` — transcription transport для `vosk`, `openai`, `grok`, плюс fallback logic.
+- `providers.js` — transcription transport для `vosk`, `whisper`, `openai`, `grok`, плюс fallback logic.
 - `queue.js` — async job queue для transcription.
 - `messageMeta.js` — hydration voice metadata в message payload.
 - `crypto.js` — шифрование/дешифрование секретов.
 - Runtime helpers:
   - `vosk_helper.py`
   - `start_vosk_helper.ps1`
+  - `whisperRuntime.js`
+  - `whisperCli.js`
+  - `install_whisper.ps1`
+  - `install_whisper.sh`
+  - `start_whisper_helper.ps1`
+  - `start_whisper_helper.sh`
 - Клиентская связка живет не здесь, а в `public/js/voice.js`.
 
 ## Where to look for bugs
 - Загрузка voice note ломается: смотри `voice/index.js` и multer/file validation.
 - Сообщение отправляется, но transcription не стартует или зависает: смотри `queue.js`, `index.js`, `providers.js`.
 - Проблема только с локальным Vosk: смотри `providers.js`, `vosk_helper.py`, `start_vosk_helper.ps1` и настройки helper URL/model path.
+- Проблема только с локальным Whisper: смотри `providers.js`, `whisperRuntime.js`, `WHISPER.md` и настройки helper URL/models directory.
 - Metadata не отображается в сообщении: смотри `messageMeta.js` и клиентский `public/js/voice.js`.
 - Admin UI не совпадает с серверными настройками: проверь `voice/settings.js` и `public/js/voice.js`.
 

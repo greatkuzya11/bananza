@@ -10,6 +10,7 @@ from vosk import KaldiRecognizer, Model
 
 
 MODEL_CACHE = {}
+DEFAULT_MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 
 
 def resolve_model_path(model_name: str, model_path: str) -> str:
@@ -25,6 +26,9 @@ def resolve_model_path(model_name: str, model_path: str) -> str:
         return os.path.join(models_dir, model_name)
 
     if model_name:
+        bundled_model = os.path.join(DEFAULT_MODELS_DIR, model_name)
+        if os.path.isdir(bundled_model):
+            return bundled_model
         return model_name
 
     raise RuntimeError("Vosk model path is not configured")

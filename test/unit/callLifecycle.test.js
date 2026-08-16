@@ -306,6 +306,38 @@ test('call transcript run creates a new run after provider or strategy changes',
   }
 });
 
+test('call transcript run accepts Whisper as an explicit video-call provider', () => {
+  const db = createDb();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bananza-call-whisper-'));
+  const feature = createFeature(db);
+  try {
+    seedUsersAndChat(db, 'private');
+    setVoiceSettings(db, {
+      whisper_model: 'ggml-base.bin',
+      whisper_helper_url: 'http://127.0.0.1:2701',
+    }, '');
+    setCallSettings(db, {
+      call_transcription_provider: 'whisper',
+      call_transcription_strategy: 'hybrid',
+      call_transcription_max_chunk_mb: 100,
+    });
+    const { callId } = seedCall(db);
+    const filePath = path.join(root, 'mixed.ogg');
+    fs.writeFileSync(filePath, Buffer.from('audio'));
+    seedCompletedMixedRecording(db, callId, filePath, { duration_ms: 12000, size_bytes: 5 });
+
+    const result = feature._private.createOrReusePrimaryTranscriptRun(callId, 1, { enqueue: false });
+
+    assert.equal(result.created, true);
+    assert.equal(result.rawRun.provider, 'whisper');
+    assert.equal(result.rawRun.strategy, 'hybrid');
+  } finally {
+    feature.stopWorkers();
+    db.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('call transcript voice provider always inherits voice settings, not later call settings', async () => {
   const db = createDb();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bananza-call-provider-'));

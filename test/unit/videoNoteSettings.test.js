@@ -76,4 +76,9 @@ test('video note provider resolution inherits voice settings or overrides active
       active_provider: 'grok',
     }
   );
+
+  assert.equal(
+    normalizeVideoNoteSettings({ video_note_transcription_provider: 'whisper' }).video_note_transcription_provider,
+    'whisper'
+  );
 });

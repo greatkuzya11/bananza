@@ -843,6 +843,26 @@
                 </div>
               </div>
 
+              <div id="voiceProviderWhisper" class="voice-provider-panel hidden">
+                <div class="field-group">
+                  <label>${t('Whisper helper URL')}</label>
+                  <input type="text" id="voiceWhisperHelperUrl" class="modal-input" placeholder="http://127.0.0.1:2701">
+                </div>
+                <div class="field-group">
+                  <label>${t('Whisper model')}</label>
+                  <select id="voiceWhisperModel" class="modal-input"></select>
+                </div>
+                <div class="field-group">
+                  <label>${t('Whisper models directory')}</label>
+                  <input type="text" id="voiceWhisperModelsDir" class="modal-input" placeholder="/opt/bananza/whisper-models">
+                  <div class="voice-form-hint">${t('The path must exist on the machine running whisper-server.')}</div>
+                </div>
+                <div class="field-group">
+                  <label>${t('Language')}</label>
+                  <input type="text" id="voiceWhisperLanguage" class="modal-input" placeholder="ru">
+                </div>
+              </div>
+
               <div id="voiceProviderOpenAI" class="voice-provider-panel">
                 <div class="field-group">
                   <label>${t('OpenAI model')}</label>
@@ -934,6 +954,7 @@
 
     document.getElementById('voiceActiveProvider')?.addEventListener('change', syncProviderPanels);
     document.getElementById('voiceVoskModel')?.addEventListener('change', syncProviderPanels);
+    document.getElementById('voiceWhisperModel')?.addEventListener('change', syncProviderPanels);
     document.getElementById('voiceOpenAIModel')?.addEventListener('change', syncProviderPanels);
     document.getElementById('voiceGrokModel')?.addEventListener('change', syncProviderPanels);
     document.getElementById('voiceContextBotToggle')?.addEventListener('change', syncVoiceContextBotSelect);
@@ -1277,11 +1298,15 @@
 
     fillSelect('voiceActiveProvider', options.providers, settings.active_provider);
     fillSelect('voiceVoskModel', options.models?.vosk || [], settings.vosk_model);
+    fillSelect('voiceWhisperModel', options.models?.whisper || [], settings.whisper_model);
     fillSelect('voiceOpenAIModel', options.models?.openai || [], settings.openai_model);
     fillSelect('voiceGrokModel', options.models?.grok || [], 'speech-to-text');
 
     document.getElementById('voiceVoskHelperUrl').value = settings.vosk_helper_url || '';
     document.getElementById('voiceVoskModelPath').value = settings.vosk_model_path || '';
+    document.getElementById('voiceWhisperHelperUrl').value = settings.whisper_helper_url || '';
+    document.getElementById('voiceWhisperModelsDir').value = settings.whisper_models_dir || '';
+    document.getElementById('voiceWhisperLanguage').value = settings.whisper_language || 'ru';
     document.getElementById('voiceOpenAILanguage').value = settings.openai_language || 'ru';
     document.getElementById('voiceOpenAIKey').value = '';
     document.getElementById('voiceOpenAIKey').placeholder = settings.masked_openai_key
@@ -1313,9 +1338,15 @@
       ? (document.getElementById('voiceOpenAIModel')?.value || t('not selected'))
       : provider === 'grok'
         ? (document.getElementById('voiceGrokModel')?.value || 'speech-to-text')
-        : (document.getElementById('voiceVoskModel')?.value || t('not selected'));
+        : provider === 'whisper'
+          ? (document.getElementById('voiceWhisperModel')?.value || t('not selected'))
+          : (document.getElementById('voiceVoskModel')?.value || t('not selected'));
+    const providerLabel = provider === 'openai'
+      ? 'OpenAI'
+      : (provider === 'grok' ? 'Grok' : (provider === 'whisper' ? 'Whisper' : 'Vosk'));
 
     document.getElementById('voiceProviderVosk')?.classList.toggle('hidden', provider !== 'vosk');
+    document.getElementById('voiceProviderWhisper')?.classList.toggle('hidden', provider !== 'whisper');
     document.getElementById('voiceProviderOpenAI')?.classList.toggle('hidden', provider !== 'openai');
     document.getElementById('voiceProviderGrok')?.classList.toggle('hidden', provider !== 'grok');
     if (providerHint) {
@@ -1323,17 +1354,19 @@
         ? t('Choose an OpenAI model below. A saved API key is required for testing.')
         : provider === 'grok'
           ? t('Choose a Grok STT profile below. A saved Grok API key is required for testing.')
-          : t('Choose a Vosk model below, then press Test model.');
+          : provider === 'whisper'
+            ? t('Choose a local Whisper model below, then press Test model.')
+            : t('Choose a Vosk model below, then press Test model.');
     }
     if (selectedMeta) {
       selectedMeta.textContent = t('Selected now: {provider} / {model}', {
-        provider: provider === 'openai' ? 'OpenAI' : (provider === 'grok' ? 'Grok' : 'Vosk'),
+        provider: providerLabel,
         model: selectedModel,
       });
     }
     if (testBtn) {
       testBtn.title = t('Test {provider}: {model}', {
-        provider: provider === 'openai' ? 'OpenAI' : (provider === 'grok' ? 'Grok' : 'Vosk'),
+        provider: providerLabel,
         model: selectedModel,
       });
     }
@@ -1355,6 +1388,10 @@
       vosk_helper_url: document.getElementById('voiceVoskHelperUrl')?.value || '',
       vosk_model: document.getElementById('voiceVoskModel')?.value || '',
       vosk_model_path: document.getElementById('voiceVoskModelPath')?.value || '',
+      whisper_helper_url: document.getElementById('voiceWhisperHelperUrl')?.value || '',
+      whisper_model: document.getElementById('voiceWhisperModel')?.value || '',
+      whisper_models_dir: document.getElementById('voiceWhisperModelsDir')?.value || '',
+      whisper_language: document.getElementById('voiceWhisperLanguage')?.value || 'ru',
       openai_model: document.getElementById('voiceOpenAIModel')?.value || '',
       openai_language: document.getElementById('voiceOpenAILanguage')?.value || 'ru',
       openai_api_key: document.getElementById('voiceOpenAIKey')?.value || '',

@@ -1,0 +1,26 @@
+[Unit]
+Description=BananZa local Whisper transcription helper
+After=network.target
+
+[Service]
+Type=simple
+User=bananza
+Group=bananza
+WorkingDirectory=/opt/bananza
+Environment=BANANZA_WHISPER_MODELS_DIR=/opt/bananza/voice/models
+Environment=BANANZA_WHISPER_START_MODEL=ggml-tiny.bin
+Environment=BANANZA_WHISPER_THREADS=1
+ExecStart=/usr/bin/env bash /opt/bananza/voice/start_whisper_helper.sh
+Restart=on-failure
+RestartSec=3
+Nice=10
+CPUQuota=100%
+MemoryMax=700M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/bananza
+
+[Install]
+WantedBy=multi-user.target

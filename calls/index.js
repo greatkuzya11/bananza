@@ -7,7 +7,12 @@ const { AccessToken, EgressClient, RoomServiceClient, WebhookReceiver } = requir
 const { DirectFileOutput, EncodedFileOutput, EncodedFileType, TrackSource } = require('@livekit/protocol');
 const { AsyncJobQueue } = require('../voice/queue');
 const { transcribeAudio, transcribeWithOpenAIDiarization } = require('../voice/providers');
-const { getVoiceSettings, getOpenAIKey: getVoiceOpenAIKey, getGrokKey: getVoiceGrokKey } = require('../voice/settings');
+const {
+  getVoiceSettings,
+  getOpenAIKey: getVoiceOpenAIKey,
+  getGrokKey: getVoiceGrokKey,
+  getProviderModel,
+} = require('../voice/settings');
 const {
   getCallSettings,
   setCallSettings,
@@ -30,8 +35,10 @@ const CALL_TRANSCRIPT_MERGE_GAP_MS = 2500;
 const CALL_EXTERNAL_INVITE_TOKEN_BYTES = 24;
 const CALL_GUEST_SESSION_TOKEN_BYTES = 24;
 const CALL_VOSK_CHUNK_SECONDS = 2 * 60;
+const CALL_WHISPER_CHUNK_SECONDS = 2 * 60;
 const CALL_OPENAI_CHUNK_SECONDS = 5 * 60;
 const CALL_VOSK_TRANSCRIPTION_TIMEOUT_MS = 20 * 60 * 1000;
+const CALL_WHISPER_TRANSCRIPTION_TIMEOUT_MS = 20 * 60 * 1000;
 const CALL_REMOTE_TRANSCRIPTION_TIMEOUT_MS = 15 * 60 * 1000;
 const CALL_DIARIZATION_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -922,13 +929,13 @@ function createCallFeature({
       ? 'openai'
       : String(settings.call_transcription_provider || 'voice').trim();
     return {
-      provider: ['voice', 'vosk', 'openai', 'grok'].includes(provider) ? provider : 'voice',
+      provider: ['voice', 'vosk', 'whisper', 'openai', 'grok'].includes(provider) ? provider : 'voice',
       strategy: ['per_user', 'mixed', 'hybrid', 'openai_diarization'].includes(strategy) ? strategy : 'hybrid',
     };
   }
 
   function validateTranscriptRunInput(callId, provider, strategy) {
-    if (!['voice', 'vosk', 'openai', 'grok'].includes(provider)) {
+    if (!['voice', 'vosk', 'whisper', 'openai', 'grok'].includes(provider)) {
       return { ok: false, status: 400, message: 'Unsupported transcription provider', code: 'unsupported_provider' };
     }
     if (!['per_user', 'mixed', 'hybrid', 'openai_diarization'].includes(strategy)) {
@@ -1814,11 +1821,18 @@ function createCallFeature({
     const callSettings = getCallSettings(db);
     const voiceSettings = getVoiceSettings(db);
     const inheritVoiceContext = callSettings.call_transcription_provider === 'voice';
+    const activeProvider = inheritVoiceContext
+      ? voiceSettings.active_provider
+      : callSettings.call_transcription_provider;
     const settings = {
       ...voiceSettings,
-      active_provider: inheritVoiceContext
-        ? voiceSettings.active_provider
-        : callSettings.call_transcription_provider,
+      active_provider: activeProvider,
+      transcription_timeout_ms: Math.max(
+        Number(voiceSettings.transcription_timeout_ms || 0),
+        activeProvider === 'whisper'
+          ? CALL_WHISPER_TRANSCRIPTION_TIMEOUT_MS
+          : (activeProvider === 'vosk' ? CALL_VOSK_TRANSCRIPTION_TIMEOUT_MS : 0)
+      ),
     };
     console.info('[calls] transcript started:', {
       recordingId: recording.id,
@@ -1829,7 +1843,11 @@ function createCallFeature({
     });
     try {
       deleteSegmentsForRecordingStmt.run(recording.id);
-      const chunks = splitRecordingIntoChunks(filepath, recording.id);
+      const chunks = splitRecordingIntoChunks(filepath, recording.id, {
+        forceChunkSeconds: settings.active_provider === 'whisper'
+          ? CALL_WHISPER_CHUNK_SECONDS
+          : (settings.active_provider === 'vosk' ? CALL_VOSK_CHUNK_SECONDS : 0),
+      });
       const speakerRef = recordingSpeaker(recording);
       const speaker = speakerRef.name;
       const callRow = callByIdStmt.get(recording.call_id);
@@ -1900,7 +1918,7 @@ function createCallFeature({
         'error',
         '',
         settings.active_provider,
-        settings.active_provider === 'openai' ? settings.openai_model : (settings.active_provider === 'grok' ? 'speech-to-text' : settings.vosk_model),
+        getProviderModel(settings),
         error.message || 'Transcription failed',
         recording.id
       );
@@ -1917,12 +1935,12 @@ function createCallFeature({
     const voiceSettings = getVoiceSettings(db);
     const requested = String(provider || 'voice').trim();
     const activeProvider = requested === 'voice' ? voiceSettings.active_provider : requested;
-    const resolvedProvider = ['vosk', 'openai', 'grok'].includes(activeProvider) ? activeProvider : voiceSettings.active_provider;
-    const minTimeout = options.diarize
-      ? CALL_DIARIZATION_TIMEOUT_MS
-      : (resolvedProvider === 'vosk'
-        ? CALL_VOSK_TRANSCRIPTION_TIMEOUT_MS
-        : (['openai', 'grok'].includes(resolvedProvider) ? CALL_REMOTE_TRANSCRIPTION_TIMEOUT_MS : voiceSettings.transcription_timeout_ms));
+    const resolvedProvider = ['vosk', 'whisper', 'openai', 'grok'].includes(activeProvider) ? activeProvider : voiceSettings.active_provider;
+    let minTimeout = Number(voiceSettings.transcription_timeout_ms || 0);
+    if (options.diarize) minTimeout = CALL_DIARIZATION_TIMEOUT_MS;
+    else if (resolvedProvider === 'vosk') minTimeout = CALL_VOSK_TRANSCRIPTION_TIMEOUT_MS;
+    else if (resolvedProvider === 'whisper') minTimeout = CALL_WHISPER_TRANSCRIPTION_TIMEOUT_MS;
+    else if (['openai', 'grok'].includes(resolvedProvider)) minTimeout = CALL_REMOTE_TRANSCRIPTION_TIMEOUT_MS;
     return {
       ...voiceSettings,
       active_provider: resolvedProvider,
@@ -1968,7 +1986,9 @@ function createCallFeature({
     const baseStartMs = callStart && recordingStart ? Math.max(0, recordingStart - callStart) : 0;
     const forcedChunkSeconds = diarize || settings.active_provider === 'openai'
       ? CALL_OPENAI_CHUNK_SECONDS
-      : (settings.active_provider === 'vosk' ? CALL_VOSK_CHUNK_SECONDS : 0);
+      : (settings.active_provider === 'vosk'
+        ? CALL_VOSK_CHUNK_SECONDS
+        : (settings.active_provider === 'whisper' ? CALL_WHISPER_CHUNK_SECONDS : 0));
     const chunks = splitRecordingIntoChunks(filepath, `${recording.id}-${diarize ? 'diarized' : settings.active_provider}`, {
       forceChunkSeconds: forcedChunkSeconds,
     });

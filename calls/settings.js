@@ -74,7 +74,7 @@ function normalizeCallSettings(raw = {}) {
     next.call_transcription_mode = DEFAULT_CALL_SETTINGS.call_transcription_mode;
   }
   next.call_transcription_provider = String(next.call_transcription_provider || DEFAULT_CALL_SETTINGS.call_transcription_provider).trim();
-  if (!['voice', 'vosk', 'openai', 'grok'].includes(next.call_transcription_provider)) {
+  if (!['voice', 'vosk', 'whisper', 'openai', 'grok'].includes(next.call_transcription_provider)) {
     next.call_transcription_provider = DEFAULT_CALL_SETTINGS.call_transcription_provider;
   }
   next.call_transcription_strategy = String(next.call_transcription_strategy || DEFAULT_CALL_SETTINGS.call_transcription_strategy).trim();

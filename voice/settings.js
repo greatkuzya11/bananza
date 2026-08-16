@@ -5,6 +5,7 @@ const VOICE_SETTINGS_KEY = 'voice_settings';
 const VOICE_SETTINGS_OPTIONS = {
   providers: [
     { value: 'vosk', label: 'Vosk (local/free)' },
+    { value: 'whisper', label: 'Whisper (local/free)' },
     { value: 'openai', label: 'OpenAI' },
     { value: 'grok', label: 'Grok' },
   ],
@@ -17,6 +18,12 @@ const VOICE_SETTINGS_OPTIONS = {
       { value: 'vosk-model-small-ru-0.22', label: 'vosk-model-small-ru-0.22' },
       { value: 'vosk-model-ru-0.42', label: 'vosk-model-ru-0.42' },
       { value: 'vosk-model-ru-0.10', label: 'vosk-model-ru-0.10' },
+    ],
+    whisper: [
+      { value: 'ggml-tiny.bin', label: 'Whisper Tiny (multilingual)' },
+      { value: 'ggml-tiny-q5_1.bin', label: 'Whisper Tiny Q5 (multilingual)' },
+      { value: 'ggml-base.bin', label: 'Whisper Base (multilingual)' },
+      { value: 'ggml-base-q5_1.bin', label: 'Whisper Base Q5 (multilingual)' },
     ],
     openai: [
       { value: 'gpt-4o-mini-transcribe', label: 'gpt-4o-mini-transcribe' },
@@ -50,6 +57,10 @@ const DEFAULT_VOICE_SETTINGS = {
   vosk_helper_url: 'http://127.0.0.1:2700',
   vosk_model: 'vosk-model-small-ru-0.22',
   vosk_model_path: '',
+  whisper_helper_url: 'http://127.0.0.1:2701',
+  whisper_model: 'ggml-tiny.bin',
+  whisper_models_dir: process.env.BANANZA_WHISPER_MODELS_DIR || '',
+  whisper_language: 'ru',
   last_model_test_status: '',
   last_model_test_at: '',
   last_model_test_provider: '',
@@ -117,7 +128,14 @@ function normalizeSettings(raw = {}) {
   next.vosk_helper_url = String(next.vosk_helper_url || DEFAULT_VOICE_SETTINGS.vosk_helper_url).trim() || DEFAULT_VOICE_SETTINGS.vosk_helper_url;
   next.vosk_model = String(next.vosk_model || DEFAULT_VOICE_SETTINGS.vosk_model).trim() || DEFAULT_VOICE_SETTINGS.vosk_model;
   next.vosk_model_path = String(next.vosk_model_path || '').trim();
-  if (!['vosk', 'openai', 'grok'].includes(next.active_provider)) {
+  next.whisper_helper_url = String(next.whisper_helper_url || DEFAULT_VOICE_SETTINGS.whisper_helper_url).trim() || DEFAULT_VOICE_SETTINGS.whisper_helper_url;
+  next.whisper_model = String(next.whisper_model || DEFAULT_VOICE_SETTINGS.whisper_model).trim() || DEFAULT_VOICE_SETTINGS.whisper_model;
+  if (!VOICE_SETTINGS_OPTIONS.models.whisper.some((item) => item.value === next.whisper_model)) {
+    next.whisper_model = DEFAULT_VOICE_SETTINGS.whisper_model;
+  }
+  next.whisper_models_dir = String(next.whisper_models_dir || '').trim();
+  next.whisper_language = String(next.whisper_language || DEFAULT_VOICE_SETTINGS.whisper_language).trim() || DEFAULT_VOICE_SETTINGS.whisper_language;
+  if (!['vosk', 'whisper', 'openai', 'grok'].includes(next.active_provider)) {
     next.active_provider = DEFAULT_VOICE_SETTINGS.active_provider;
   }
   next.openai_key_encrypted = String(next.openai_key_encrypted || '');
@@ -286,6 +304,13 @@ function buildDraftSettings(db, incoming, secret) {
   return merged;
 }
 
+function getProviderModel(settings = {}, provider = settings.active_provider) {
+  if (provider === 'openai') return settings.openai_model || DEFAULT_VOICE_SETTINGS.openai_model;
+  if (provider === 'grok') return 'speech-to-text';
+  if (provider === 'whisper') return settings.whisper_model || DEFAULT_VOICE_SETTINGS.whisper_model;
+  return settings.vosk_model || DEFAULT_VOICE_SETTINGS.vosk_model;
+}
+
 module.exports = {
   DEFAULT_VOICE_SETTINGS,
   VOICE_SETTINGS_OPTIONS,
@@ -299,4 +324,5 @@ module.exports = {
   deleteGrokKey,
   updateLastModelTest,
   buildDraftSettings,
+  getProviderModel,
 };

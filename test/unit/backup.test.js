@@ -133,6 +133,8 @@ test('buildBackupManifest records included and excluded backup parts', () => {
   assert.ok(manifest.excluded.includes('.git/'));
   assert.ok(manifest.excluded.includes('bananza.db-wal'));
   assert.ok(manifest.excluded.includes('bananza.db-shm'));
+  assert.ok(manifest.excluded.includes('voice/models/*.bin'));
+  assert.ok(manifest.notes.some((note) => note.includes('Whisper GGML models')));
 });
 
 test('restore archive entry validation rejects unsafe and excluded paths', () => {

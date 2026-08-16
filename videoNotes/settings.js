@@ -20,6 +20,7 @@ const VIDEO_NOTE_SETTINGS_OPTIONS = {
   providers: [
     { value: 'voice', label: 'Use voice provider' },
     { value: 'vosk', label: 'Vosk (local/free)' },
+    { value: 'whisper', label: 'Whisper (local/free)' },
     { value: 'openai', label: 'OpenAI' },
     { value: 'grok', label: 'Grok' },
   ],
