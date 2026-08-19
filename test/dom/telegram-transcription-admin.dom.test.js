@@ -1,48 +1,50 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const {
-  createAppDom,
-  installAppBridge,
-  loadBrowserScript,
-} = require('../support/domHarness');
+const { createAppDom, installAppBridge, loadBrowserScript } = require('../support/domHarness');
 
-function waitTick() {
-  return new Promise((resolve) => setTimeout(resolve, 0));
+function tick(ms = 0) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function payload(overrides = {}) {
+function bot(id, overrides = {}) {
   return {
-    settings: {
-      enabled: false,
-      has_bot_token: false,
-      masked_bot_token: '',
-      bot_id: '',
-      bot_name: '',
-      bot_username: '',
-      allowed_user_ids: [],
-      active_provider: 'whisper',
-      fallback_to_openai: false,
-      context_bot_enabled: false,
-      context_bot_id: null,
-      transcription_timeout_ms: 120000,
-      max_file_size_bytes: 20 * 1024 * 1024,
-      vosk_model: 'vosk-model-small-ru-0.22',
-      vosk_model_path: '',
-      whisper_model: 'ggml-tiny.bin',
-      whisper_language: 'ru',
-      openai_model: 'gpt-4o-mini-transcribe',
-      openai_language: 'ru',
-      grok_language: 'ru',
-      ...(overrides.settings || {}),
-    },
+    id,
+    name: `Telegram bot ${id}`,
+    has_bot_token: true,
+    masked_bot_token: '123...oken',
+    telegram_api_bot_id: String(900 + id),
+    telegram_bot_name: `Remote ${id}`,
+    telegram_bot_username: `remote_${id}`,
+    allowed_user_ids: ['777'],
+    transcription_enabled: true,
+    image_generation_enabled: false,
+    active_provider: 'whisper',
+    fallback_to_openai: false,
+    context_bot_enabled: false,
+    context_bot_id: null,
+    image_bot_id: null,
+    transcription_timeout_ms: 120000,
+    max_file_size_bytes: 20 * 1024 * 1024,
+    vosk_model: 'vosk-model-small-ru-0.22',
+    vosk_model_path: '',
+    whisper_model: 'ggml-tiny.bin',
+    whisper_language: 'ru',
+    openai_model: 'gpt-4o-mini-transcribe',
+    openai_language: 'ru',
+    grok_language: 'ru',
+    providerReadiness: { vosk: true, whisper: true, openai: true, grok: true, fallback_openai: true },
+    runtime: { state: 'polling', queue: { total: 0, transcription: 0, images: 0 } },
+    ...overrides,
+  };
+}
+
+function payload(bots = [bot(1)], selectedBotId = null) {
+  return {
+    bots,
+    selected_bot_id: selectedBotId,
     options: {
-      providers: [
-        { value: 'vosk', label: 'Vosk' },
-        { value: 'whisper', label: 'Whisper' },
-        { value: 'openai', label: 'OpenAI' },
-        { value: 'grok', label: 'Grok' },
-      ],
+      providers: ['vosk', 'whisper', 'openai', 'grok'].map((value) => ({ value, label: value })),
       models: {
         vosk: [{ value: 'vosk-model-small-ru-0.22', label: 'Vosk small' }],
         whisper: [{ value: 'ggml-tiny.bin', label: 'Whisper tiny' }],
@@ -51,111 +53,88 @@ function payload(overrides = {}) {
       },
     },
     contextConvertBots: [{ id: 42, name: 'Cleanup', provider: 'openai', enabled: true, provider_enabled: true }],
-    providerReadiness: { vosk: true, whisper: true, openai: true, grok: true, fallback_openai: true, ffmpeg: true },
-    runtime: { state: 'stopped', running: false, webhook_conflict: false, queue: { total: 0 } },
-    ...overrides,
+    imageBots: [{ id: 17, name: 'Painter', provider: 'openai', image_model: 'gpt-image-2', enabled: true, provider_enabled: true, allow_image_generate: true }],
   };
 }
 
-test('Telegram transcription admin connects bot and saves independent provider settings', async (t) => {
+test('Telegram bots admin edits capabilities and creates a second independent bot', async (t) => {
   const dom = createAppDom();
   t.after(() => dom.window.close());
   let current = payload();
-  let savedBody = null;
-  let testedBody = null;
+  const calls = [];
 
   installAppBridge(dom, {
     t: (key, params = {}) => Object.entries(params).reduce(
-      (text, [name, value]) => text.replaceAll(`{${name}}`, String(value)),
-      String(key)
+      (text, [name, value]) => text.replaceAll(`{${name}}`, String(value)), String(key)
     ),
     async api(url, options = {}) {
-      if (url === '/api/admin/telegram-transcription' && options.method === 'PUT') {
-        savedBody = options.body;
-        current = payload({
-          settings: {
-            ...current.settings,
-            ...options.body,
-            allowed_user_ids: String(options.body.allowed_user_ids || '').split(/\s+/).filter(Boolean),
-            enabled: true,
-            has_bot_token: true,
-            masked_bot_token: '123...oken',
-            bot_id: '99',
-            bot_name: 'BananZa STT',
-            bot_username: 'bananza_stt_bot',
-          },
-          runtime: { state: 'polling', running: true, webhook_conflict: false, queue: { total: 0 } },
-        });
+      calls.push({ url, options });
+      if (url === '/api/admin/telegram-bots' && !options.method) return current;
+      if (url === '/api/admin/telegram-bots/test-token') {
+        return { ok: true, bot: { id: '902', name: 'Remote 2', username: 'remote_2' }, webhook: { active: false } };
+      }
+      if (url === '/api/admin/telegram-bots/1' && options.method === 'PUT') {
+        current = payload([bot(1, {
+          ...options.body,
+          allowed_user_ids: ['777', '888'],
+          image_generation_enabled: true,
+          image_bot_id: 17,
+        })], 1);
         return current;
       }
-      if (url === '/api/admin/telegram-transcription') return current;
-      if (url === '/api/admin/telegram-transcription/test-bot') {
-        testedBody = options.body;
-        return {
-          ok: true,
-          bot: { id: '99', name: 'BananZa STT', username: 'bananza_stt_bot' },
-          webhook: { active: false, pending_update_count: 0, last_error_message: '' },
-        };
+      if (url === '/api/admin/telegram-bots' && options.method === 'POST') {
+        current = payload([bot(1), bot(2, {
+          name: options.body.name,
+          transcription_enabled: options.body.transcription_enabled,
+          image_generation_enabled: options.body.image_generation_enabled,
+        })], 2);
+        return current;
       }
-      return {};
+      return current;
     },
   });
 
   loadBrowserScript(dom, 'public/js/telegram-transcription.js');
   dom.window.document.dispatchEvent(new dom.window.Event('DOMContentLoaded'));
-  await waitTick();
+  await tick();
 
-  const entry = dom.window.document.getElementById('settingsTelegramTranscription');
+  const entry = dom.window.document.getElementById('settingsTelegramBots');
   assert.ok(entry);
   assert.equal(entry.classList.contains('hidden'), false);
   entry.click();
-  await waitTick();
-  await waitTick();
+  await tick();
+  await tick();
 
-  const ordinaryActions = [
-    dom.window.document.querySelector('a[href="https://t.me/BotFather"]'),
-    dom.window.document.getElementById('telegramTranscriptionDeleteToken'),
-    dom.window.document.getElementById('telegramTranscriptionClaim'),
-    dom.window.document.getElementById('telegramTranscriptionOpenVoice'),
-  ];
-  assert.ok(ordinaryActions.every((node) => node?.classList.contains('weather-action-btn')));
-  assert.ok(ordinaryActions.every((node) => !node?.classList.contains('btn-text')));
+  assert.equal(dom.window.document.querySelectorAll('[data-telegram-bot-id]').length, 1);
+  assert.equal(dom.window.document.getElementById('telegramBotName').value, 'Telegram bot 1');
+  dom.window.document.getElementById('telegramBotAllowlist').value = '777\n888';
+  dom.window.document.getElementById('telegramBotImageEnabled').checked = true;
+  dom.window.document.getElementById('telegramBotImageEnabled').dispatchEvent(new dom.window.Event('change'));
+  dom.window.document.getElementById('telegramBotImageBot').value = '17';
+  dom.window.document.getElementById('telegramBotsSave').click();
+  await tick(20);
 
-  dom.window.document.getElementById('telegramTranscriptionToken').value = '123:new-token';
-  dom.window.document.getElementById('telegramTranscriptionTestBot').click();
-  await waitTick();
-  await waitTick();
+  const update = calls.find((call) => call.url === '/api/admin/telegram-bots/1' && call.options.method === 'PUT');
+  assert.ok(update);
+  assert.equal(update.options.body.image_generation_enabled, true);
+  assert.equal(update.options.body.image_bot_id, 17);
+  assert.match(update.options.body.allowed_user_ids, /888/);
 
-  assert.equal(testedBody.bot_token, '123:new-token');
-  const botTestStatus = dom.window.document.getElementById('telegramTranscriptionBotTestStatus');
-  assert.equal(botTestStatus.classList.contains('success'), true);
-  assert.match(botTestStatus.textContent, /BananZa STT @bananza_stt_bot/);
-  assert.match(dom.window.document.getElementById('telegramTranscriptionBotIdentity').textContent, /bananza_stt_bot/);
+  dom.window.document.getElementById('telegramBotsNew').click();
+  dom.window.document.getElementById('telegramBotName').value = 'Second bot';
+  dom.window.document.getElementById('telegramBotToken').value = '456:new-token';
+  dom.window.document.getElementById('telegramBotTestToken').click();
+  await tick(10);
+  assert.match(dom.window.document.getElementById('telegramBotIdentity').textContent, /remote_2/);
+  dom.window.document.getElementById('telegramBotImageEnabled').checked = true;
+  dom.window.document.getElementById('telegramBotImageEnabled').dispatchEvent(new dom.window.Event('change'));
+  dom.window.document.getElementById('telegramBotsSave').click();
+  await tick(20);
 
-  dom.window.document.getElementById('telegramTranscriptionAllowlist').value = '777\n888';
-  const provider = dom.window.document.getElementById('telegramTranscriptionProvider');
-  provider.value = 'openai';
-  provider.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
-  dom.window.document.getElementById('telegramTranscriptionModel').value = 'gpt-4o-mini-transcribe';
-  dom.window.document.getElementById('telegramTranscriptionLanguage').value = 'en';
-  dom.window.document.getElementById('telegramTranscriptionContextEnabled').checked = true;
-  dom.window.document.getElementById('telegramTranscriptionContextBot').value = '42';
-  dom.window.document.getElementById('telegramTranscriptionConnect').click();
-  await waitTick();
-  await waitTick();
-  await new Promise((resolve) => setTimeout(resolve, 25));
-
-  assert.equal(savedBody.enabled, true);
-  assert.equal(savedBody.bot_token, '123:new-token');
-  assert.equal(savedBody.active_provider, 'openai');
-  assert.equal(savedBody.openai_model, 'gpt-4o-mini-transcribe');
-  assert.equal(savedBody.openai_language, 'en');
-  assert.equal(savedBody.context_bot_id, 42);
-  assert.equal(current.settings.bot_username, 'bananza_stt_bot');
-  const adminStatus = dom.window.document.getElementById('telegramTranscriptionAdminStatus');
-  assert.equal(adminStatus.classList.contains('error'), false, adminStatus.textContent);
-  assert.match(dom.window.document.getElementById('telegramTranscriptionBotIdentity').textContent, /bananza_stt_bot/);
-  assert.match(dom.window.document.getElementById('telegramTranscriptionTokenState').textContent, /123\.\.\.oken/);
-
-  dom.window.document.getElementById('telegramTranscriptionClose').click();
+  const create = calls.find((call) => call.url === '/api/admin/telegram-bots' && call.options.method === 'POST');
+  assert.ok(create);
+  assert.equal(create.options.body.name, 'Second bot');
+  assert.equal(create.options.body.bot_token, '456:new-token');
+  assert.equal(dom.window.document.querySelectorAll('[data-telegram-bot-id]').length, 2);
+  dom.window.document.getElementById('telegramBotsClose').click();
 });

@@ -9,9 +9,11 @@ const { initTelegramTranscriptionSchema } = require('../../telegramTranscription
 const {
   DEFAULT_SETTINGS,
   normalizeAllowedUserIds,
-  setSettings,
+  createBot,
+  listBots,
+  readBot,
   getBotToken,
-  sanitizeSettings,
+  sanitizeBot,
   buildProviderSettings,
   providerReadiness,
 } = require('../../telegramTranscription/settings');
@@ -43,6 +45,14 @@ function fakeApp() {
   };
 }
 
+function setSettings(db, incoming, secret) {
+  return createBot(db, {
+    ...incoming,
+    name: incoming.name || 'Test Telegram bot',
+    transcription_enabled: incoming.enabled ?? incoming.transcription_enabled ?? false,
+  }, secret);
+}
+
 test('Telegram settings encrypt token, normalize allowlist, and keep provider profile independent', () => {
   const db = createDb();
   const saved = setSettings(db, {
@@ -61,8 +71,8 @@ test('Telegram settings encrypt token, normalize allowlist, and keep provider pr
 
   assert.deepEqual(saved.allowed_user_ids, ['100', '900']);
   assert.equal(getBotToken(db, 'server-secret'), '123456:telegram-secret');
-  assert.equal(sanitizeSettings(saved).has_bot_token, true);
-  assert.equal(Object.hasOwn(sanitizeSettings(saved), 'bot_token_encrypted'), false);
+  assert.equal(sanitizeBot(saved).has_bot_token, true);
+  assert.equal(Object.hasOwn(sanitizeBot(saved), 'bot_token_encrypted'), false);
   assert.equal(saved.max_file_size_bytes, 20 * 1024 * 1024);
   assert.equal(saved.image_generation_enabled, true);
   assert.equal(saved.image_bot_id, 77);
@@ -192,8 +202,8 @@ test('Telegram update is persisted with cursor before worker execution and dupli
   await feature.handleUpdate(update, client);
 
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM telegram_transcription_jobs').get().count, 1);
-  assert.equal(db.prepare('SELECT next_update_id FROM telegram_transcription_state WHERE id=1').get().next_update_id, 56);
   const job = db.prepare('SELECT * FROM telegram_transcription_jobs').get();
+  assert.equal(db.prepare('SELECT next_update_id FROM telegram_bot_state WHERE telegram_bot_id=?').get(job.telegram_bot_id).next_update_id, 56);
   assert.equal(job.status, 'queued');
   assert.equal(job.telegram_user_id, '777');
   assert.equal(sent.length, 0);
@@ -245,8 +255,9 @@ test('Telegram text prompt is persisted once for the selected image bot before w
   assert.equal(rows.length, 1);
   assert.equal(rows[0].prompt_text, 'Нарисуй банан на синем фоне');
   assert.equal(rows[0].image_bot_id, 91);
+  assert.equal(JSON.parse(rows[0].image_bot_profile_json).image_model, 'gpt-image-2');
   assert.equal(rows[0].status, 'queued');
-  assert.equal(db.prepare('SELECT next_update_id FROM telegram_transcription_state WHERE id=1').get().next_update_id, 91);
+  assert.equal(db.prepare('SELECT next_update_id FROM telegram_bot_state WHERE telegram_bot_id=?').get(rows[0].telegram_bot_id).next_update_id, 91);
   db.close();
 });
 
@@ -261,6 +272,7 @@ test('Telegram image worker persists delivery bytes, sends photo, and clears tra
   }, 'server-secret');
   const telegramCalls = [];
   let generationCalls = 0;
+  let generationArgs = null;
   const imageBot = {
     id: 91,
     name: 'Painter',
@@ -278,8 +290,9 @@ test('Telegram image worker persists delivery bytes, sends photo, and clears tra
     secret: 'server-secret',
     getAiBotFeature: () => ({
       listTelegramImageBots: () => [imageBot],
-      async generateTelegramImage() {
+      async generateTelegramImage(args) {
         generationCalls += 1;
+        generationArgs = args;
         return {
           buffer: Buffer.from('generated-png'),
           mimeType: 'image/png',
@@ -313,6 +326,7 @@ test('Telegram image worker persists delivery bytes, sends photo, and clears tra
 
   const completed = db.prepare('SELECT * FROM telegram_image_generation_jobs WHERE update_id=101').get();
   assert.equal(generationCalls, 1);
+  assert.equal(generationArgs.botSnapshot.image_model, 'gpt-image-2');
   assert.equal(completed.status, 'completed');
   assert.equal(completed.prompt_text, null);
   assert.equal(completed.image_data, null);
@@ -335,10 +349,10 @@ test('Telegram image delivery resumes from persisted bytes without regenerating 
   }, 'server-secret');
   db.prepare(`
     INSERT INTO telegram_image_generation_jobs(
-      update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
+      telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
       language_code, prompt_text, image_bot_id, image_bot_name, status,
       status_message_id, image_data, image_mime_type, image_file_name
-    ) VALUES(202, '777', '777', 33, 'en', 'persisted prompt', 91, 'Painter',
+    ) VALUES((SELECT id FROM telegram_bots LIMIT 1), 202, '777', '777', 33, 'en', 'persisted prompt', 91, 'Painter',
       'delivering', 34, ?, 'image/webp', 'persisted.webp')
   `).run(Buffer.from('persisted-image'));
   let generationCalls = 0;
@@ -376,6 +390,7 @@ test('Telegram image delivery resumes from persisted bytes without regenerating 
 
 test('Telegram /start returns numeric ID before allowlist authorization', async () => {
   const db = createDb();
+  setSettings(db, { name: 'Start bot' }, 'server-secret');
   const app = fakeApp();
   const feature = createTelegramTranscriptionFeature({
     app,
@@ -402,6 +417,136 @@ test('Telegram /start returns numeric ID before allowlist authorization', async 
   });
   assert.equal(sent.length, 1);
   assert.match(sent[0].text, /555/);
-  assert.equal(db.prepare('SELECT next_update_id FROM telegram_transcription_state WHERE id=1').get().next_update_id, 81);
+  assert.equal(db.prepare('SELECT next_update_id FROM telegram_bot_state LIMIT 1').get().next_update_id, 81);
+  db.close();
+});
+
+test('legacy singleton settings, cursor, and jobs migrate once into the first Telegram bot', () => {
+  const db = new Database(':memory:');
+  db.pragma('foreign_keys = ON');
+  db.exec(`
+    CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT);
+    CREATE TABLE telegram_transcription_state(
+      id INTEGER PRIMARY KEY, next_update_id INTEGER, last_poll_at TEXT, last_update_at TEXT,
+      last_error TEXT, updated_at TEXT
+    );
+    INSERT INTO telegram_transcription_state VALUES(1, 73, NULL, NULL, NULL, datetime('now'));
+    CREATE TABLE telegram_image_generation_jobs(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, update_id INTEGER NOT NULL UNIQUE,
+      telegram_chat_id TEXT NOT NULL, telegram_user_id TEXT NOT NULL, telegram_message_id INTEGER NOT NULL,
+      language_code TEXT, prompt_text TEXT, image_bot_id INTEGER NOT NULL, image_bot_name TEXT,
+      status TEXT NOT NULL, status_message_id INTEGER, image_data BLOB, image_mime_type TEXT,
+      image_file_name TEXT, generation_provider TEXT, generation_model TEXT, error TEXT,
+      created_at TEXT, updated_at TEXT, completed_at TEXT,
+      UNIQUE(telegram_chat_id, telegram_message_id)
+    );
+    INSERT INTO telegram_image_generation_jobs(
+      update_id, telegram_chat_id, telegram_user_id, telegram_message_id, prompt_text,
+      image_bot_id, status, created_at, updated_at
+    ) VALUES(72, '777', '777', 4, 'legacy banana', 9, 'queued', datetime('now'), datetime('now'));
+  `);
+  db.prepare('INSERT INTO app_settings(key,value) VALUES(?,?)').run(
+    'telegram_transcription_settings',
+    JSON.stringify({
+      bot_name: 'Legacy Telegram', bot_username: 'legacy_bot', bot_id: '991',
+      bot_token_encrypted: 'legacy-ciphertext', bot_token_masked: '123...oken',
+      allowed_user_ids: ['777'], enabled: true, image_generation_enabled: true, image_bot_id: 9,
+    })
+  );
+
+  initTelegramTranscriptionSchema(db);
+  initTelegramTranscriptionSchema(db);
+
+  const bots = listBots(db);
+  assert.equal(bots.length, 1);
+  assert.equal(bots[0].name, 'Legacy Telegram');
+  assert.equal(bots[0].telegram_bot_username, 'legacy_bot');
+  assert.equal(bots[0].transcription_enabled, true);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM app_settings WHERE key=?').get('telegram_transcription_settings').count, 0);
+  const job = db.prepare('SELECT * FROM telegram_image_generation_jobs').get();
+  assert.equal(job.telegram_bot_id, bots[0].id);
+  assert.equal(db.prepare('SELECT next_update_id FROM telegram_bot_state WHERE telegram_bot_id=?').get(bots[0].id).next_update_id, 73);
+  assert.equal(db.pragma('integrity_check', { simple: true }), 'ok');
+  db.close();
+});
+
+test('two Telegram bots accept the same update and message IDs with isolated cursors and allowlists', async () => {
+  const db = createDb();
+  const first = setSettings(db, { name: 'First', enabled: true, allowed_user_ids: ['777'] }, 'server-secret');
+  const second = setSettings(db, { name: 'Second', enabled: true, allowed_user_ids: ['888'] }, 'server-secret');
+  const feature = createTelegramTranscriptionFeature({
+    app: fakeApp(), db, auth: (_req, _res, next) => next(), adminOnly: (_req, _res, next) => next(),
+    secret: 'server-secret', getAiBotFeature: () => null,
+  });
+  feature.stop();
+  const updateFor = (userId) => ({
+    update_id: 11,
+    message: {
+      message_id: 5,
+      chat: { id: 500, type: 'private' },
+      from: { id: userId, language_code: 'en' },
+      voice: { file_id: `voice-${userId}`, file_size: 100, duration: 1 },
+    },
+  });
+  const client = { async sendMessage() { return { message_id: 6 }; } };
+  await feature.handleUpdate(updateFor(777), client, first.id);
+  await feature.handleUpdate(updateFor(888), client, second.id);
+
+  const jobs = db.prepare('SELECT telegram_bot_id, update_id FROM telegram_transcription_jobs ORDER BY telegram_bot_id').all();
+  assert.deepEqual(jobs, [
+    { telegram_bot_id: first.id, update_id: 11 },
+    { telegram_bot_id: second.id, update_id: 11 },
+  ]);
+  assert.equal(db.prepare('SELECT next_update_id FROM telegram_bot_state WHERE telegram_bot_id=?').get(first.id).next_update_id, 12);
+  assert.equal(db.prepare('SELECT next_update_id FROM telegram_bot_state WHERE telegram_bot_id=?').get(second.id).next_update_id, 12);
+  db.close();
+});
+
+test('Telegram bot admin API sanitizes tokens and guards deletion per owning bot only', () => {
+  const db = createDb();
+  db.pragma('foreign_keys = ON');
+  const first = setSettings(db, {
+    name: 'Busy bot', bot_token: '111111:first-secret', enabled: false,
+  }, 'server-secret');
+  const second = setSettings(db, {
+    name: 'Idle bot', bot_token: '222222:second-secret', enabled: false,
+  }, 'server-secret');
+  db.prepare(`
+    INSERT INTO telegram_transcription_jobs(
+      telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id, file_id
+    ) VALUES(?, 1, '1', '1', 1, 'voice')
+  `).run(first.id);
+  const app = fakeApp();
+  const feature = createTelegramTranscriptionFeature({
+    app, db, auth: (_req, _res, next) => next(), adminOnly: (_req, _res, next) => next(),
+    secret: 'server-secret', getAiBotFeature: () => null,
+  });
+  feature.stop();
+  function response() {
+    return {
+      statusCode: 200,
+      body: null,
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.body = body; return this; },
+    };
+  }
+
+  const getResponse = response();
+  app.routes.get('GET /api/admin/telegram-bots')({}, getResponse);
+  assert.equal(getResponse.body.bots.length, 2);
+  assert.equal(getResponse.body.bots[0].has_bot_token, true);
+  assert.equal(Object.hasOwn(getResponse.body.bots[0], 'bot_token_encrypted'), false);
+  assert.doesNotMatch(JSON.stringify(getResponse.body), /first-secret|second-secret/);
+
+  const deleteRoute = app.routes.get('DELETE /api/admin/telegram-bots/:id(\\d+)');
+  const idleDelete = response();
+  deleteRoute({ params: { id: String(second.id) } }, idleDelete);
+  assert.equal(idleDelete.statusCode, 200);
+  assert.equal(readBot(db, second.id), null);
+
+  const busyDelete = response();
+  deleteRoute({ params: { id: String(first.id) } }, busyDelete);
+  assert.equal(busyDelete.statusCode, 409);
+  assert.ok(readBot(db, first.id));
   db.close();
 });

@@ -5024,6 +5024,33 @@ function createAiBotFeature({
       .map(serializeTelegramImageBot);
   }
 
+  function getTelegramImageBotSnapshot(botId) {
+    const bot = sanitizeBot(botByIdStmt.get(Number(botId || 0)));
+    if (!bot || bot.kind !== 'image' || !['openai', 'grok'].includes(bot.provider)) return null;
+    if (!bot.enabled || !providerEnabled(bot.provider) || !bot.allow_image_generate) return null;
+    const settings = getGlobalSettings();
+    const isGrok = bot.provider === 'grok';
+    return {
+      id: Number(bot.id),
+      name: bot.name || '',
+      mention: bot.mention || '',
+      provider: bot.provider,
+      kind: 'image',
+      image_model: bot.image_model || (isGrok ? settings.grok_default_image_model : settings.openai_default_image_model),
+      image_aspect_ratio: isGrok
+        ? cleanGrokAspectRatio(bot.image_aspect_ratio, settings.grok_default_image_aspect_ratio) : '',
+      image_resolution: isGrok
+        ? cleanGrokResolution(bot.image_resolution, settings.grok_default_image_resolution)
+        : cleanOpenAiImageSize(bot.image_resolution, settings.openai_default_image_size),
+      image_quality: isGrok ? '' : cleanOpenAiImageQuality(bot.image_quality, settings.openai_default_image_quality),
+      image_background: isGrok ? '' : cleanOpenAiImageBackground(bot.image_background, settings.openai_default_image_background),
+      image_output_format: isGrok ? 'png' : cleanOpenAiImageOutputFormat(bot.image_output_format, settings.openai_default_image_output_format),
+      image_risk_filter_enabled: bot.image_risk_filter_enabled !== false,
+      enabled: true,
+      allow_image_generate: true,
+    };
+  }
+
   async function generateCallArtifactText(bot, { system, user, maxOutputTokens = 1800 }) {
     const settings = getGlobalSettings();
     if (!providerEnabled(bot.provider, settings)) throw new Error('Provider is disabled');
@@ -5762,8 +5789,10 @@ function createAiBotFeature({
     });
   }
 
-  async function generateTelegramImage({ botId, prompt } = {}) {
-    const bot = sanitizeBot(botByIdStmt.get(Number(botId || 0)));
+  async function generateTelegramImage({ botId, botSnapshot, prompt } = {}) {
+    const bot = botSnapshot && typeof botSnapshot === 'object' && botSnapshot.provider
+      ? { ...botSnapshot }
+      : sanitizeBot(botByIdStmt.get(Number(botId || 0)));
     if (!bot || bot.kind !== 'image' || !['openai', 'grok'].includes(bot.provider)) {
       const error = new Error('Image bot not found');
       error.status = 404;
@@ -10694,6 +10723,7 @@ function createAiBotFeature({
     transformTextWithContextBot,
     listVoiceContextConvertBots,
     listTelegramImageBots,
+    getTelegramImageBotSnapshot,
     generateTelegramImage,
     getChatShotState,
     generateChatShotForChat,

@@ -8,12 +8,15 @@ const { extractTelegramAudio, safeAudioExtension, splitUnicodeText } = require('
 const { telegramText } = require('./messages');
 const {
   DEFAULT_SETTINGS,
-  readSettings,
-  writeSettings,
-  buildDraftSettings,
+  listBots,
+  readBot,
+  buildDraftBot,
+  createBot,
+  updateBot,
+  deleteBot,
   getBotToken,
   clearBotToken,
-  sanitizeSettings,
+  sanitizeBot,
   buildProviderSettings,
   providerReadiness,
 } = require('./settings');
@@ -29,7 +32,7 @@ const { isFfmpegAvailable } = require('../voice/ffmpeg');
 const { TEST_AUDIO_PATH } = require('../voice');
 
 const ACTIVE_STATUSES = "('queued','processing','delivering')";
-const MAX_GLOBAL_ACTIVE = 20;
+const MAX_BOT_ACTIVE = 20;
 const MAX_USER_ACTIVE = 3;
 const MAX_TELEGRAM_PHOTO_BYTES = 10 * 1024 * 1024;
 const MAX_TELEGRAM_DOCUMENT_BYTES = 50 * 1024 * 1024;
@@ -71,68 +74,77 @@ function createTelegramTranscriptionFeature({
   getAiBotFeature,
   fetchImpl = global.fetch,
 } = {}) {
-  const runtime = {
-    state: 'stopped',
-    running: false,
-    webhook_conflict: false,
-    last_error: '',
-    last_poll_at: '',
-    last_update_at: '',
-    retry_in_ms: 0,
-  };
-  let pollController = null;
-  let pollGeneration = 0;
-  let workerRunning = false;
-  let imageWorkerRunning = false;
+  const runtimes = new Map();
+  const pollControllers = new Map();
+  const pollGenerations = new Map();
+  const transcriptionWorkers = new Set();
+  const imageWorkers = new Set();
   let stopped = false;
 
-  const stateStmt = db.prepare('SELECT * FROM telegram_transcription_state WHERE id=1');
+  function runtimeFor(botId) {
+    const id = positiveInteger(botId);
+    if (!runtimes.has(id)) {
+      runtimes.set(id, {
+        state: 'stopped',
+        running: false,
+        webhook_conflict: false,
+        last_error: '',
+        last_poll_at: '',
+        last_update_at: '',
+        retry_in_ms: 0,
+      });
+    }
+    return runtimes.get(id);
+  }
+
+  const stateStmt = db.prepare('SELECT * FROM telegram_bot_state WHERE telegram_bot_id=?');
   const updateCursorStmt = db.prepare(`
-    UPDATE telegram_transcription_state
+    UPDATE telegram_bot_state
     SET next_update_id=MAX(next_update_id, ?), last_update_at=datetime('now'), updated_at=datetime('now')
-    WHERE id=1
+    WHERE telegram_bot_id=?
   `);
   const updatePollStateStmt = db.prepare(`
-    UPDATE telegram_transcription_state
+    UPDATE telegram_bot_state
     SET last_poll_at=datetime('now'), last_error=?, updated_at=datetime('now')
-    WHERE id=1
+    WHERE telegram_bot_id=?
   `);
   const resetCursorStmt = db.prepare(`
-    UPDATE telegram_transcription_state
+    UPDATE telegram_bot_state
     SET next_update_id=0, last_error=NULL, updated_at=datetime('now')
-    WHERE id=1
+    WHERE telegram_bot_id=?
   `);
-  const activeCountStmt = db.prepare(`SELECT COUNT(*) AS count FROM telegram_transcription_jobs WHERE status IN ${ACTIVE_STATUSES}`);
+  const activeCountStmt = db.prepare(`SELECT COUNT(*) AS count FROM telegram_transcription_jobs WHERE telegram_bot_id=? AND status IN ${ACTIVE_STATUSES}`);
   const userActiveCountStmt = db.prepare(`
     SELECT COUNT(*) AS count FROM telegram_transcription_jobs
-    WHERE telegram_user_id=? AND status IN ${ACTIVE_STATUSES}
+    WHERE telegram_bot_id=? AND telegram_user_id=? AND status IN ${ACTIVE_STATUSES}
   `);
   const nextJobStmt = db.prepare(`
     SELECT * FROM telegram_transcription_jobs
-    WHERE status='queued'
+    WHERE telegram_bot_id=? AND status='queued'
     ORDER BY id ASC
     LIMIT 1
   `);
-  const imageActiveCountStmt = db.prepare(`SELECT COUNT(*) AS count FROM telegram_image_generation_jobs WHERE status IN ${ACTIVE_STATUSES}`);
+  const imageActiveCountStmt = db.prepare(`SELECT COUNT(*) AS count FROM telegram_image_generation_jobs WHERE telegram_bot_id=? AND status IN ${ACTIVE_STATUSES}`);
   const imageUserActiveCountStmt = db.prepare(`
     SELECT COUNT(*) AS count FROM telegram_image_generation_jobs
-    WHERE telegram_user_id=? AND status IN ${ACTIVE_STATUSES}
+    WHERE telegram_bot_id=? AND telegram_user_id=? AND status IN ${ACTIVE_STATUSES}
   `);
   const nextImageJobStmt = db.prepare(`
     SELECT * FROM telegram_image_generation_jobs
-    WHERE status='queued'
+    WHERE telegram_bot_id=? AND status='queued'
     ORDER BY id ASC
     LIMIT 1
   `);
   const insertJobStmt = db.prepare(`
     INSERT OR IGNORE INTO telegram_transcription_jobs(
-      update_id, telegram_chat_id, telegram_user_id, telegram_message_id, language_code,
+      telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id, language_code,
       file_id, file_unique_id, file_name, mime_type, file_size, duration_seconds,
       profile_json, status, transcription_provider, transcription_model
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?, 'queued', ?, ?)
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?, 'queued', ?, ?)
   `);
-  const acceptJobTx = db.transaction((updateId, message, media, profile, provider, model) => {
+  const acceptJobTx = db.transaction((botId, updateId, message, media, profile, provider, model) => {
     const result = insertJobStmt.run(
+      botId,
       updateId,
       String(message.chat.id),
       String(message.from.id),
@@ -148,17 +160,18 @@ function createTelegramTranscriptionFeature({
       provider,
       model
     );
-    updateCursorStmt.run(updateId + 1);
+    updateCursorStmt.run(updateId + 1, botId);
     return result.changes > 0;
   });
   const insertImageJobStmt = db.prepare(`
     INSERT OR IGNORE INTO telegram_image_generation_jobs(
-      update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
-      language_code, prompt_text, image_bot_id, image_bot_name, status
-    ) VALUES(?,?,?,?,?,?,?,?, 'queued')
+      telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
+      language_code, prompt_text, image_bot_id, image_bot_name, image_bot_profile_json, status
+    ) VALUES(?,?,?,?,?,?,?,?,?,?, 'queued')
   `);
-  const acceptImageJobTx = db.transaction((updateId, message, prompt, bot) => {
+  const acceptImageJobTx = db.transaction((telegramBotId, updateId, message, prompt, bot) => {
     const result = insertImageJobStmt.run(
+      telegramBotId,
       updateId,
       String(message.chat.id),
       String(message.from.id),
@@ -167,8 +180,9 @@ function createTelegramTranscriptionFeature({
       prompt,
       Number(bot.id),
       String(bot.name || ''),
+      JSON.stringify(imageBotSnapshot(bot)),
     );
-    updateCursorStmt.run(updateId + 1);
+    updateCursorStmt.run(updateId + 1, telegramBotId);
     return result.changes > 0;
   });
 
@@ -191,11 +205,11 @@ function createTelegramTranscriptionFeature({
     WHERE status IN ('completed','error') AND datetime(updated_at) < datetime('now','-30 days')
   `).run();
 
-  function currentToken() {
-    return getBotToken(db, secret);
+  function currentToken(botId) {
+    return getBotToken(db, botId, secret);
   }
 
-  function createClient(token = currentToken()) {
+  function createClient(token) {
     return createTelegramClient(token, { fetchImpl });
   }
 
@@ -225,13 +239,21 @@ function createTelegramTranscriptionFeature({
     )) || null;
   }
 
-  function totalActiveCount() {
-    return Number(activeCountStmt.get()?.count || 0) + Number(imageActiveCountStmt.get()?.count || 0);
+  function imageBotSnapshot(bot) {
+    try {
+      return getAiBotFeature?.()?.getTelegramImageBotSnapshot?.(bot?.id) || { ...bot };
+    } catch {
+      return { ...bot };
+    }
   }
 
-  function userTotalActiveCount(userId) {
-    return Number(userActiveCountStmt.get(userId)?.count || 0)
-      + Number(imageUserActiveCountStmt.get(userId)?.count || 0);
+  function totalActiveCount(botId) {
+    return Number(activeCountStmt.get(botId)?.count || 0) + Number(imageActiveCountStmt.get(botId)?.count || 0);
+  }
+
+  function userTotalActiveCount(botId, userId) {
+    return Number(userActiveCountStmt.get(botId, userId)?.count || 0)
+      + Number(imageUserActiveCountStmt.get(botId, userId)?.count || 0);
   }
 
   function selectableContextBot(botId) {
@@ -241,7 +263,7 @@ function createTelegramTranscriptionFeature({
     )) || null;
   }
 
-  function readiness(settings = readSettings(db)) {
+  function readiness(settings) {
     return providerReadiness(settings, getVoiceSettings(db), {
       hasOpenAIKey: Boolean(getOpenAIKey(db, secret)),
       hasGrokKey: Boolean(getGrokKey(db, secret)),
@@ -250,7 +272,7 @@ function createTelegramTranscriptionFeature({
   }
 
   function validateConfiguration(settings) {
-    if (!settings.enabled) return;
+    if (!settings.transcription_enabled) return;
     const availability = readiness(settings);
     if (!availability[settings.active_provider]) {
       const error = new Error(`Provider ${settings.active_provider} is not configured in voice settings`);
@@ -295,21 +317,21 @@ function createTelegramTranscriptionFeature({
     };
   }
 
-  function queueStats() {
+  function queueStats(botId) {
     const transcriptionByStatus = Object.fromEntries(db.prepare(`
       SELECT status, COUNT(*) AS count
       FROM telegram_transcription_jobs
-      WHERE status IN ${ACTIVE_STATUSES}
+      WHERE telegram_bot_id=? AND status IN ${ACTIVE_STATUSES}
       GROUP BY status
-    `).all().map((row) => [row.status, Number(row.count || 0)]));
+    `).all(botId).map((row) => [row.status, Number(row.count || 0)]));
     const imageByStatus = Object.fromEntries(db.prepare(`
       SELECT status, COUNT(*) AS count
       FROM telegram_image_generation_jobs
-      WHERE status IN ${ACTIVE_STATUSES}
+      WHERE telegram_bot_id=? AND status IN ${ACTIVE_STATUSES}
       GROUP BY status
-    `).all().map((row) => [row.status, Number(row.count || 0)]));
-    const transcription = Number(activeCountStmt.get()?.count || 0);
-    const images = Number(imageActiveCountStmt.get()?.count || 0);
+    `).all(botId).map((row) => [row.status, Number(row.count || 0)]));
+    const transcription = Number(activeCountStmt.get(botId)?.count || 0);
+    const images = Number(imageActiveCountStmt.get(botId)?.count || 0);
     return {
       total: transcription + images,
       transcription,
@@ -326,57 +348,44 @@ function createTelegramTranscriptionFeature({
     };
   }
 
-  function serializedState() {
-    const stored = stateStmt.get() || {};
+  function serializedState(botId) {
+    const runtime = runtimeFor(botId);
+    const stored = stateStmt.get(botId) || {};
     return {
       ...runtime,
       last_poll_at: runtime.last_poll_at || stored.last_poll_at || '',
       last_update_at: runtime.last_update_at || stored.last_update_at || '',
       last_error: runtime.last_error || stored.last_error || '',
       next_update_id: Number(stored.next_update_id || 0),
-      queue: queueStats(),
+      queue: queueStats(botId),
     };
   }
 
-  function adminPayload(settings = readSettings(db)) {
+  function adminPayload() {
     return {
-      settings: sanitizeSettings(settings),
+      bots: listBots(db).map((bot) => ({
+        ...sanitizeBot(bot),
+        runtime: serializedState(bot.id),
+        providerReadiness: readiness(bot),
+      })),
       options: VOICE_SETTINGS_OPTIONS,
       contextConvertBots: listContextBots(),
-      providerReadiness: readiness(settings),
-      runtime: serializedState(),
-    };
-  }
-
-  function imageAdminPayload(settings = readSettings(db)) {
-    return {
-      settings: {
-        enabled: Boolean(settings.image_generation_enabled),
-        image_bot_id: settings.image_bot_id || null,
-      },
-      telegram: {
-        configured: Boolean(settings.bot_token_encrypted),
-        bot_id: settings.bot_id || '',
-        bot_name: settings.bot_name || '',
-        bot_username: settings.bot_username || '',
-        allowed_user_count: settings.allowed_user_ids.length,
-      },
       imageBots: listImageBots(),
-      runtime: serializedState(),
     };
   }
 
   function capabilityMessageKey(settings, base) {
-    if (settings.enabled && settings.image_generation_enabled) return `${base}Combined`;
+    if (settings.transcription_enabled && settings.image_generation_enabled) return `${base}Combined`;
     if (settings.image_generation_enabled) return `${base}Image`;
     return base;
   }
 
-  function rememberPoll(error = '') {
+  function rememberPoll(botId, error = '') {
+    const runtime = runtimeFor(botId);
     const now = new Date().toISOString();
     runtime.last_poll_at = now;
     runtime.last_error = String(error || '');
-    updatePollStateStmt.run(runtime.last_error || null);
+    updatePollStateStmt.run(runtime.last_error || null, botId);
   }
 
   async function sendReply(client, message, text) {
@@ -408,30 +417,33 @@ function createTelegramTranscriptionFeature({
     throw lastError;
   }
 
-  function recordCursor(updateId) {
-    updateCursorStmt.run(Number(updateId || 0) + 1);
+  function recordCursor(botId, updateId) {
+    updateCursorStmt.run(Number(updateId || 0) + 1, botId);
+    const runtime = runtimeFor(botId);
     runtime.last_update_at = new Date().toISOString();
   }
 
-  async function handleUpdate(update, client) {
+  async function handleUpdate(update, client, botOrId) {
+    const settings = typeof botOrId === 'object' && botOrId ? botOrId : readBot(db, botOrId);
+    if (!settings) return;
+    const botId = settings.id;
     const updateId = Number(update?.update_id || 0);
     const message = update?.message;
     if (!updateId) return;
     if (!message?.chat || !message?.from || !message?.message_id) {
-      recordCursor(updateId);
+      recordCursor(botId, updateId);
       return;
     }
 
     const language = message.from.language_code || '';
     const userId = String(message.from.id || '');
     const text = String(message.text || '').trim();
-    const settings = readSettings(db);
     const isKnownCommand = /^\/(?:start|help)(?:@\w+)?(?:\s|$)/i.test(text);
     const isAnyCommand = /^\/\S+/u.test(text);
     const media = extractTelegramAudio(message);
 
     if (message.chat.type !== 'private') {
-      recordCursor(updateId);
+      recordCursor(botId, updateId);
       if (isKnownCommand || media || text) {
         await sendReply(client, message, telegramText(language, 'privateOnly')).catch(() => {});
       }
@@ -439,7 +451,7 @@ function createTelegramTranscriptionFeature({
     }
 
     if (isKnownCommand) {
-      recordCursor(updateId);
+      recordCursor(botId, updateId);
       const base = /^\/start/i.test(text) ? 'start' : 'help';
       const key = capabilityMessageKey(settings, base);
       await sendReply(client, message, telegramText(language, key, userId));
@@ -447,24 +459,24 @@ function createTelegramTranscriptionFeature({
     }
 
     if (!settings.allowed_user_ids.includes(userId)) {
-      recordCursor(updateId);
+      recordCursor(botId, updateId);
       if (media || text) await sendReply(client, message, telegramText(language, 'denied', userId));
       return;
     }
 
     if (media) {
-      if (!settings.enabled) {
-        recordCursor(updateId);
+      if (!settings.transcription_enabled) {
+        recordCursor(botId, updateId);
         await sendReply(client, message, telegramText(language, 'transcriptionDisabled'));
         return;
       }
       if (media.file_size && media.file_size > settings.max_file_size_bytes) {
-        recordCursor(updateId);
+        recordCursor(botId, updateId);
         await sendReply(client, message, telegramText(language, 'tooLarge'));
         return;
       }
-      if (totalActiveCount() >= MAX_GLOBAL_ACTIVE || userTotalActiveCount(userId) >= MAX_USER_ACTIVE) {
-        recordCursor(updateId);
+      if (totalActiveCount(botId) >= MAX_BOT_ACTIVE || userTotalActiveCount(botId, userId) >= MAX_USER_ACTIVE) {
+        recordCursor(botId, updateId);
         await sendReply(client, message, telegramText(language, 'busy'));
         return;
       }
@@ -472,6 +484,7 @@ function createTelegramTranscriptionFeature({
       const profile = jobProfile(settings);
       const providerSettings = buildProviderSettings(profile, getVoiceSettings(db));
       const inserted = acceptJobTx(
+        botId,
         updateId,
         message,
         media,
@@ -479,45 +492,45 @@ function createTelegramTranscriptionFeature({
         providerSettings.active_provider,
         getProviderModel(providerSettings)
       );
-      runtime.last_update_at = new Date().toISOString();
-      if (inserted) pumpWorker();
+      runtimeFor(botId).last_update_at = new Date().toISOString();
+      if (inserted) pumpWorker(botId);
       return;
     }
 
     if (text) {
       if (isAnyCommand) {
-        recordCursor(updateId);
+        recordCursor(botId, updateId);
         await sendReply(client, message, telegramText(language, capabilityMessageKey(settings, 'help'), userId));
         return;
       }
       if (!settings.image_generation_enabled) {
-        recordCursor(updateId);
+        recordCursor(botId, updateId);
         await sendReply(client, message, telegramText(language, 'imageGenerationDisabled'));
         return;
       }
       if (Array.from(text).length > 4000) {
-        recordCursor(updateId);
+        recordCursor(botId, updateId);
         await sendReply(client, message, telegramText(language, 'promptTooLong'));
         return;
       }
       const imageBot = selectableImageBot(settings.image_bot_id);
       if (!imageBot) {
-        recordCursor(updateId);
+        recordCursor(botId, updateId);
         await sendReply(client, message, telegramText(language, 'imageBotUnavailable'));
         return;
       }
-      if (totalActiveCount() >= MAX_GLOBAL_ACTIVE || userTotalActiveCount(userId) >= MAX_USER_ACTIVE) {
-        recordCursor(updateId);
+      if (totalActiveCount(botId) >= MAX_BOT_ACTIVE || userTotalActiveCount(botId, userId) >= MAX_USER_ACTIVE) {
+        recordCursor(botId, updateId);
         await sendReply(client, message, telegramText(language, 'busy'));
         return;
       }
-      const inserted = acceptImageJobTx(updateId, message, text, imageBot);
-      runtime.last_update_at = new Date().toISOString();
-      if (inserted) pumpImageWorker();
+      const inserted = acceptImageJobTx(botId, updateId, message, text, imageBot);
+      runtimeFor(botId).last_update_at = new Date().toISOString();
+      if (inserted) pumpImageWorker(botId);
       return;
     }
 
-    recordCursor(updateId);
+    recordCursor(botId, updateId);
     await sendReply(client, message, telegramText(language, capabilityMessageKey(settings, 'unsupported')));
   }
 
@@ -587,7 +600,7 @@ function createTelegramTranscriptionFeature({
   }
 
   async function processJob(job) {
-    const token = currentToken();
+    const token = currentToken(job.telegram_bot_id);
     if (!token) throw new Error('Telegram bot token is not configured');
     const client = createClient(token);
     const profile = { ...DEFAULT_SETTINGS, ...JSON.parse(job.profile_json || '{}') };
@@ -649,18 +662,19 @@ function createTelegramTranscriptionFeature({
       WHERE id=?
     `).run(message, job.id);
     try {
-      const client = createClient();
+      const client = createClient(currentToken(job.telegram_bot_id));
       await updateStatusMessage(client, job, telegramText(job.language_code, error?.userMessageKey || 'failed'));
     } catch {}
     console.warn('[telegram-transcription] job failed:', message);
   }
 
-  function pumpWorker() {
-    if (workerRunning || stopped) return;
-    workerRunning = true;
+  function pumpWorker(botId) {
+    const id = positiveInteger(botId);
+    if (!id || transcriptionWorkers.has(id) || stopped) return;
+    transcriptionWorkers.add(id);
     Promise.resolve().then(async () => {
       while (!stopped) {
-        const job = nextJobStmt.get();
+        const job = nextJobStmt.get(id);
         if (!job) break;
         const claimed = db.prepare(`
           UPDATE telegram_transcription_jobs
@@ -676,8 +690,8 @@ function createTelegramTranscriptionFeature({
         }
       }
     }).finally(() => {
-      workerRunning = false;
-      if (!stopped && nextJobStmt.get()) pumpWorker();
+      transcriptionWorkers.delete(id);
+      if (!stopped && nextJobStmt.get(id)) pumpWorker(id);
     });
   }
 
@@ -745,7 +759,7 @@ function createTelegramTranscriptionFeature({
   }
 
   async function processImageJob(job) {
-    const token = currentToken();
+    const token = currentToken(job.telegram_bot_id);
     if (!token) throw new Error('Telegram bot token is not configured');
     const client = createClient(token);
     await updateImageStatusMessage(client, job, telegramText(job.language_code, 'imageAccepted'));
@@ -759,6 +773,7 @@ function createTelegramTranscriptionFeature({
     if (!feature?.generateTelegramImage) throw new Error('Image generation runtime is unavailable');
     const result = await feature.generateTelegramImage({
       botId: job.image_bot_id,
+      botSnapshot: JSON.parse(job.image_bot_profile_json || '{}'),
       prompt: String(job.prompt_text || '').trim(),
     });
     const buffer = Buffer.isBuffer(result?.buffer) ? result.buffer : Buffer.from(result?.buffer || []);
@@ -797,18 +812,19 @@ function createTelegramTranscriptionFeature({
       WHERE id=?
     `).run(message, job.id);
     try {
-      const client = createClient();
+      const client = createClient(currentToken(job.telegram_bot_id));
       await updateImageStatusMessage(client, job, telegramText(job.language_code, error?.userMessageKey || 'imageFailed'));
     } catch {}
     console.warn('[telegram-image-generation] job failed:', message);
   }
 
-  function pumpImageWorker() {
-    if (imageWorkerRunning || stopped) return;
-    imageWorkerRunning = true;
+  function pumpImageWorker(botId) {
+    const id = positiveInteger(botId);
+    if (!id || imageWorkers.has(id) || stopped) return;
+    imageWorkers.add(id);
     Promise.resolve().then(async () => {
       while (!stopped) {
-        const job = nextImageJobStmt.get();
+        const job = nextImageJobStmt.get(id);
         if (!job) break;
         const claimed = db.prepare(`
           UPDATE telegram_image_generation_jobs
@@ -824,33 +840,33 @@ function createTelegramTranscriptionFeature({
         }
       }
     }).finally(() => {
-      imageWorkerRunning = false;
-      if (!stopped && nextImageJobStmt.get()) pumpImageWorker();
+      imageWorkers.delete(id);
+      if (!stopped && nextImageJobStmt.get(id)) pumpImageWorker(id);
     });
   }
 
-  async function runPollLoop(generation, controller) {
+  async function runPollLoop(botId, generation, controller) {
+    const runtime = runtimeFor(botId);
     let retryMs = 1000;
-    while (!stopped && generation === pollGeneration && !controller.signal.aborted) {
-      const settings = readSettings(db);
-      const token = currentToken();
-      if ((!settings.enabled && !settings.image_generation_enabled) || !token) break;
+    while (!stopped && generation === pollGenerations.get(botId) && !controller.signal.aborted) {
+      const settings = readBot(db, botId);
+      const token = currentToken(botId);
+      if (!settings || (!settings.transcription_enabled && !settings.image_generation_enabled) || !token) break;
       const client = createClient(token);
       try {
-        const offset = Number(stateStmt.get()?.next_update_id || 0);
+        const offset = Number(stateStmt.get(botId)?.next_update_id || 0);
         const updates = await client.getUpdates({ offset, timeout: 25, signal: controller.signal });
-        rememberPoll('');
+        rememberPoll(botId, '');
         runtime.state = 'polling';
         runtime.retry_in_ms = 0;
         retryMs = 1000;
         for (const update of Array.isArray(updates) ? updates : []) {
-          await handleUpdate(update, client);
+          await handleUpdate(update, client, settings);
         }
       } catch (error) {
         if (error?.name === 'AbortError' || controller.signal.aborted) break;
         const code = Number(error?.errorCode || error?.status || 0);
-        const message = safeErrorMessage(error, 'Telegram polling failed');
-        rememberPoll(message);
+        rememberPoll(botId, safeErrorMessage(error, 'Telegram polling failed'));
         if (code === 401) {
           runtime.state = 'auth_error';
           break;
@@ -864,26 +880,25 @@ function createTelegramTranscriptionFeature({
         const waitMs = retryAfter > 0 ? retryAfter * 1000 : retryMs;
         runtime.state = 'backoff';
         runtime.retry_in_ms = waitMs;
-        try {
-          await delay(waitMs, controller.signal);
-        } catch {
-          break;
-        }
+        try { await delay(waitMs, controller.signal); } catch { break; }
         retryMs = Math.min(30000, Math.max(1000, retryMs * 2));
       }
     }
-    if (generation === pollGeneration) {
+    if (generation === pollGenerations.get(botId)) {
       runtime.running = false;
       if (runtime.state === 'polling' || runtime.state === 'starting') runtime.state = 'stopped';
     }
   }
 
-  async function startPolling() {
-    const settings = readSettings(db);
-    const token = currentToken();
-    pumpWorker();
-    pumpImageWorker();
-    if (stopped || runtime.running || (!settings.enabled && !settings.image_generation_enabled) || !token) return;
+  async function startPolling(botId) {
+    const id = positiveInteger(botId);
+    const settings = readBot(db, id);
+    const runtime = runtimeFor(id);
+    const token = currentToken(id);
+    pumpWorker(id);
+    pumpImageWorker(id);
+    if (stopped || !settings || runtime.running
+      || (!settings.transcription_enabled && !settings.image_generation_enabled) || !token) return;
     runtime.state = 'starting';
     runtime.webhook_conflict = false;
     runtime.last_error = '';
@@ -893,118 +908,194 @@ function createTelegramTranscriptionFeature({
         runtime.state = 'conflict';
         runtime.webhook_conflict = true;
         runtime.last_error = 'Telegram bot has an active webhook';
-        rememberPoll(runtime.last_error);
+        rememberPoll(id, runtime.last_error);
         return;
       }
     } catch (error) {
       const code = Number(error?.errorCode || error?.status || 0);
       runtime.last_error = safeErrorMessage(error);
-      rememberPoll(runtime.last_error);
+      rememberPoll(id, runtime.last_error);
       if (code === 401) {
         runtime.state = 'auth_error';
         return;
       }
     }
-    pollController = new AbortController();
-    const generation = ++pollGeneration;
+    const controller = new AbortController();
+    pollControllers.set(id, controller);
+    const generation = Number(pollGenerations.get(id) || 0) + 1;
+    pollGenerations.set(id, generation);
     runtime.running = true;
     runtime.state = 'polling';
-    runPollLoop(generation, pollController).catch((error) => {
+    runPollLoop(id, generation, controller).catch((error) => {
       runtime.running = false;
       runtime.state = 'error';
       runtime.last_error = safeErrorMessage(error);
     });
   }
 
-  function stopPolling() {
-    pollGeneration += 1;
-    pollController?.abort();
-    pollController = null;
+  function stopPolling(botId) {
+    const id = positiveInteger(botId);
+    pollGenerations.set(id, Number(pollGenerations.get(id) || 0) + 1);
+    pollControllers.get(id)?.abort();
+    pollControllers.delete(id);
+    const runtime = runtimeFor(id);
     runtime.running = false;
     runtime.retry_in_ms = 0;
     if (!['auth_error', 'conflict', 'error'].includes(runtime.state)) runtime.state = 'stopped';
   }
 
-  async function resyncRuntime() {
-    stopPolling();
+  async function resyncRuntime(botId) {
+    const id = positiveInteger(botId);
+    stopPolling(id);
+    const runtime = runtimeFor(id);
     runtime.webhook_conflict = false;
     runtime.last_error = '';
-    await startPolling();
+    await startPolling(id);
   }
 
-  app.get('/api/admin/telegram-transcription', auth, adminOnly, (_req, res) => {
-    res.json(adminPayload());
+  function requireName(draft) {
+    if (!draft.name) {
+      const error = new Error('Telegram bot name is required');
+      error.status = 400;
+      throw error;
+    }
+  }
+
+  function ensureUniqueTelegramIdentity(telegramApiBotId, exceptId = 0) {
+    if (!telegramApiBotId) return;
+    const duplicate = db.prepare('SELECT id FROM telegram_bots WHERE telegram_api_bot_id=? AND id!=?')
+      .get(String(telegramApiBotId), Number(exceptId || 0));
+    if (duplicate) {
+      const error = new Error('This Telegram bot is already connected');
+      error.status = 409;
+      throw error;
+    }
+  }
+
+  async function inspectToken(token) {
+    const client = createClient(token);
+    const [bot, webhook] = await Promise.all([client.getMe(), client.getWebhookInfo()]);
+    return {
+      bot: {
+        id: String(bot?.id || ''),
+        name: [bot?.first_name, bot?.last_name].filter(Boolean).join(' ').trim(),
+        username: String(bot?.username || ''),
+      },
+      webhook: {
+        active: Boolean(String(webhook?.url || '').trim()),
+        pending_update_count: Number(webhook?.pending_update_count || 0),
+        last_error_message: String(webhook?.last_error_message || ''),
+      },
+    };
+  }
+
+  function applyIdentity(draft, identity) {
+    draft.telegram_api_bot_id = identity.bot.id;
+    draft.telegram_bot_name = identity.bot.name;
+    draft.telegram_bot_username = identity.bot.username;
+  }
+
+  function validateDraft(draft, token) {
+    requireName(draft);
+    validateConfiguration(draft);
+    validateImageConfiguration(draft);
+    if ((draft.transcription_enabled || draft.image_generation_enabled) && !token) {
+      const error = new Error('Telegram bot token is required');
+      error.status = 400;
+      throw error;
+    }
+  }
+
+  app.get('/api/admin/telegram-bots', auth, adminOnly, (_req, res) => res.json(adminPayload()));
+
+  app.post('/api/admin/telegram-bots', auth, adminOnly, async (req, res) => {
+    const incoming = req.body || {};
+    const submittedToken = String(incoming.bot_token || '').trim();
+    if (!submittedToken) return res.status(400).json({ error: 'Telegram bot token is required' });
+    try {
+      const draft = buildDraftBot({}, incoming, secret);
+      validateDraft(draft, submittedToken);
+      const identity = await inspectToken(submittedToken);
+      applyIdentity(draft, identity);
+      ensureUniqueTelegramIdentity(draft.telegram_api_bot_id);
+      const saved = createBot(db, draft, secret);
+      await startPolling(saved.id);
+      return res.status(201).json({ ...adminPayload(), selected_bot_id: saved.id });
+    } catch (error) {
+      return res.status(error.status || error.errorCode || 400).json({ error: safeErrorMessage(error, 'Could not create Telegram bot') });
+    }
   });
 
-  app.put('/api/admin/telegram-transcription', auth, adminOnly, async (req, res) => {
+  app.put('/api/admin/telegram-bots/:id(\\d+)', auth, adminOnly, async (req, res) => {
+    const id = Number(req.params.id);
+    const current = readBot(db, id);
+    if (!current) return res.status(404).json({ error: 'Telegram bot not found' });
     const incoming = req.body || {};
-    const current = readSettings(db);
-    const oldToken = currentToken();
+    const oldToken = currentToken(id);
     const submittedToken = String(incoming.bot_token || '').trim();
-    if (submittedToken && oldToken && submittedToken !== oldToken && totalActiveCount() > 0) {
+    if (submittedToken && current.bot_token_encrypted
+      && (!oldToken || submittedToken !== oldToken) && totalActiveCount(id) > 0) {
       return res.status(409).json({ error: 'Wait for active Telegram jobs before replacing the token' });
     }
-    const draft = buildDraftSettings(db, incoming, secret);
-    const effectiveToken = submittedToken || oldToken;
     try {
-      validateConfiguration(draft);
-      if ((draft.enabled || draft.image_generation_enabled) && !effectiveToken) {
-        const error = new Error('Telegram bot token is required');
-        error.status = 400;
-        throw error;
-      }
-      if (submittedToken || draft.enabled || draft.image_generation_enabled) {
-        const me = await createClient(effectiveToken).getMe();
-        draft.bot_id = String(me?.id || '');
-        draft.bot_name = [me?.first_name, me?.last_name].filter(Boolean).join(' ').trim();
-        draft.bot_username = String(me?.username || '');
+      const draft = buildDraftBot(current, incoming, secret);
+      const effectiveToken = submittedToken || oldToken;
+      validateDraft(draft, effectiveToken);
+      if (submittedToken) {
+        const identity = await inspectToken(submittedToken);
+        applyIdentity(draft, identity);
+        ensureUniqueTelegramIdentity(draft.telegram_api_bot_id, id);
       }
       const tokenChanged = Boolean(submittedToken && submittedToken !== oldToken);
-      const saved = writeSettings(db, draft);
-      if (tokenChanged) resetCursorStmt.run();
-      await resyncRuntime();
-      return res.json(adminPayload(saved));
+      updateBot(db, id, draft, secret);
+      if (tokenChanged) resetCursorStmt.run(id);
+      await resyncRuntime(id);
+      return res.json({ ...adminPayload(), selected_bot_id: id });
     } catch (error) {
-      return res.status(error.status || error.errorCode || 400).json({ error: safeErrorMessage(error, 'Could not save Telegram settings') });
+      return res.status(error.status || error.errorCode || 400).json({ error: safeErrorMessage(error, 'Could not save Telegram bot') });
     }
   });
 
-  app.delete('/api/admin/telegram-transcription/token', auth, adminOnly, async (_req, res) => {
-    if (totalActiveCount() > 0) {
+  app.delete('/api/admin/telegram-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const id = Number(req.params.id);
+    if (!readBot(db, id)) return res.status(404).json({ error: 'Telegram bot not found' });
+    if (totalActiveCount(id) > 0) {
+      return res.status(409).json({ error: 'Wait for active Telegram jobs before deleting the bot' });
+    }
+    stopPolling(id);
+    deleteBot(db, id);
+    runtimes.delete(id);
+    return res.json(adminPayload());
+  });
+
+  app.delete('/api/admin/telegram-bots/:id(\\d+)/token', auth, adminOnly, (req, res) => {
+    const id = Number(req.params.id);
+    if (!readBot(db, id)) return res.status(404).json({ error: 'Telegram bot not found' });
+    if (totalActiveCount(id) > 0) {
       return res.status(409).json({ error: 'Wait for active Telegram jobs before deleting the token' });
     }
-    stopPolling();
-    const saved = clearBotToken(db);
-    resetCursorStmt.run();
-    return res.json(adminPayload(saved));
+    stopPolling(id);
+    clearBotToken(db, id);
+    resetCursorStmt.run(id);
+    return res.json({ ...adminPayload(), selected_bot_id: id });
   });
 
-  app.post('/api/admin/telegram-transcription/test-bot', auth, adminOnly, async (req, res) => {
-    const token = String(req.body?.bot_token || '').trim() || currentToken();
+  app.post('/api/admin/telegram-bots/test-token', auth, adminOnly, async (req, res) => {
+    const id = Number(req.body?.telegram_bot_id || 0);
+    const token = String(req.body?.bot_token || '').trim() || currentToken(id);
     if (!token) return res.status(400).json({ error: 'Telegram bot token is required' });
     try {
-      const client = createClient(token);
-      const [bot, webhook] = await Promise.all([client.getMe(), client.getWebhookInfo()]);
-      return res.json({
-        ok: true,
-        bot: {
-          id: String(bot?.id || ''),
-          name: [bot?.first_name, bot?.last_name].filter(Boolean).join(' ').trim(),
-          username: String(bot?.username || ''),
-        },
-        webhook: {
-          active: Boolean(String(webhook?.url || '').trim()),
-          pending_update_count: Number(webhook?.pending_update_count || 0),
-          last_error_message: String(webhook?.last_error_message || ''),
-        },
-      });
+      const identity = await inspectToken(token);
+      ensureUniqueTelegramIdentity(identity.bot.id, id);
+      return res.json({ ok: true, ...identity });
     } catch (error) {
-      return res.status(error.errorCode || 400).json({ error: safeErrorMessage(error, 'Telegram bot test failed') });
+      return res.status(error.status || error.errorCode || 400).json({ error: safeErrorMessage(error, 'Telegram bot test failed') });
     }
   });
 
-  app.post('/api/admin/telegram-transcription/test-model', auth, adminOnly, async (req, res) => {
-    const draft = buildDraftSettings(db, req.body || {}, secret);
+  app.post('/api/admin/telegram-bots/test-transcription', auth, adminOnly, async (req, res) => {
+    const current = readBot(db, req.body?.telegram_bot_id) || {};
+    const draft = buildDraftBot(current, { ...req.body, transcription_enabled: true }, secret);
     try {
       validateConfiguration(draft);
       if (!fs.existsSync(TEST_AUDIO_PATH)) throw new Error('Model test audio is missing');
@@ -1028,31 +1119,7 @@ function createTelegramTranscriptionFeature({
     }
   });
 
-  app.get('/api/admin/telegram-image-generation', auth, adminOnly, (_req, res) => {
-    res.json(imageAdminPayload());
-  });
-
-  app.put('/api/admin/telegram-image-generation', auth, adminOnly, async (req, res) => {
-    const draft = buildDraftSettings(db, {
-      image_generation_enabled: req.body?.enabled,
-      image_bot_id: req.body?.image_bot_id,
-    }, secret);
-    try {
-      validateImageConfiguration(draft);
-      if (draft.image_generation_enabled && !currentToken()) {
-        const error = new Error('Configure the shared Telegram bot token first');
-        error.status = 400;
-        throw error;
-      }
-      const saved = writeSettings(db, draft);
-      await resyncRuntime();
-      return res.json(imageAdminPayload(saved));
-    } catch (error) {
-      return res.status(error.status || 400).json({ error: safeErrorMessage(error, 'Could not save Telegram image settings') });
-    }
-  });
-
-  app.post('/api/admin/telegram-image-generation/test', auth, adminOnly, async (req, res) => {
+  app.post('/api/admin/telegram-bots/test-image', auth, adminOnly, async (req, res) => {
     const bot = selectableImageBot(req.body?.image_bot_id);
     if (!bot) return res.status(400).json({ error: 'Select an enabled image bot with image generation permission' });
     try {
@@ -1076,14 +1143,16 @@ function createTelegramTranscriptionFeature({
     }
   });
 
-  app.post('/api/admin/telegram-transcription/claim', auth, adminOnly, async (_req, res) => {
-    const token = currentToken();
+  app.post('/api/admin/telegram-bots/:id(\\d+)/claim', auth, adminOnly, async (req, res) => {
+    const id = Number(req.params.id);
+    const token = currentToken(id);
+    if (!readBot(db, id)) return res.status(404).json({ error: 'Telegram bot not found' });
     if (!token) return res.status(400).json({ error: 'Telegram bot token is required' });
     try {
       await createClient(token).deleteWebhook(true);
-      resetCursorStmt.run();
-      await resyncRuntime();
-      return res.json(adminPayload());
+      resetCursorStmt.run(id);
+      await resyncRuntime(id);
+      return res.json({ ...adminPayload(), selected_bot_id: id });
     } catch (error) {
       return res.status(error.errorCode || 400).json({ error: safeErrorMessage(error, 'Could not remove Telegram webhook') });
     }
@@ -1091,26 +1160,28 @@ function createTelegramTranscriptionFeature({
 
   const startup = setImmediate(() => {
     if (!stopped) {
-      pumpWorker();
-      pumpImageWorker();
-      startPolling().catch(() => {});
+      for (const bot of listBots(db)) startPolling(bot.id).catch(() => {});
     }
   });
   startup.unref?.();
 
   function stop() {
     stopped = true;
-    stopPolling();
+    for (const botId of [...pollControllers.keys()]) stopPolling(botId);
   }
   server?.once?.('close', stop);
 
   return {
     stop,
-    start: startPolling,
+    start(botId) {
+      if (botId) return startPolling(botId);
+      return Promise.all(listBots(db).map((bot) => startPolling(bot.id)));
+    },
     getRuntimeState: serializedState,
-    handleUpdate,
+    handleUpdate: (update, client, botOrId) => handleUpdate(update, client, botOrId || listBots(db)[0]),
     pumpWorker,
     pumpImageWorker,
+    processJob,
     processImageJob,
   };
 }
@@ -1118,6 +1189,6 @@ function createTelegramTranscriptionFeature({
 module.exports = {
   createTelegramTranscriptionFeature,
   safeErrorMessage,
-  MAX_GLOBAL_ACTIVE,
+  MAX_GLOBAL_ACTIVE: MAX_BOT_ACTIVE,
   MAX_USER_ACTIVE,
 };
