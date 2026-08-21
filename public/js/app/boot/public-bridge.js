@@ -157,6 +157,7 @@
         getAttachmentPosterUrl: (source) => getAttachmentPosterUrl(source),
         ensureAttachmentPoster: (source, options = {}) => ensureAttachmentPoster(source, options),
         createAttachmentPosterBlob: (source) => createAttachmentPosterBlob(source),
+        openMediaViewer: (src, type = 'image', options = {}) => openMediaViewer(src, type, options),
         getDom: () => ({
           sendBtn,
           msgInput,

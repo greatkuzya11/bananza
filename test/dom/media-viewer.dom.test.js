@@ -1369,7 +1369,7 @@ test('media viewer opens supplied gallery items and navigates them without chat 
   const firstSrc = 'https://example.com/telegram-history-1.jpg';
   const secondSrc = 'https://example.com/telegram-history-2.jpg';
 
-  BananzaAppBridge.__testing.openMediaViewer(secondSrc, 'image', {
+  BananzaAppBridge.openMediaViewer(secondSrc, 'image', {
     items: [
       { id: 'history-1', src: firstSrc, type: 'image', fileName: 'history-1.jpg' },
       { id: 'history-2', src: secondSrc, type: 'image', fileName: 'history-2.jpg' },
