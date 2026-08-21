@@ -5789,7 +5789,7 @@ function createAiBotFeature({
     });
   }
 
-  async function generateTelegramImage({ botId, botSnapshot, prompt } = {}) {
+  async function generateTelegramImage({ botId, botSnapshot, prompt, allowLongPrompt = false } = {}) {
     const bot = botSnapshot && typeof botSnapshot === 'object' && botSnapshot.provider
       ? { ...botSnapshot }
       : sanitizeBot(botByIdStmt.get(Number(botId || 0)));
@@ -5805,7 +5805,10 @@ function createAiBotFeature({
     }
 
     const settings = getGlobalSettings();
-    const safePrompt = cleanText(prompt, bot.provider === 'grok' ? 4000 : 8000);
+    const safePrompt = cleanText(
+      prompt,
+      allowLongPrompt ? Number.MAX_SAFE_INTEGER : (bot.provider === 'grok' ? 4000 : 8000),
+    );
     if (!safePrompt) {
       const error = new Error('Image prompt is empty');
       error.status = 400;

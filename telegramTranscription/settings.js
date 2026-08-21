@@ -13,6 +13,7 @@ const DEFAULT_BOT_SETTINGS = {
   allowed_user_ids: [],
   transcription_enabled: false,
   image_generation_enabled: false,
+  generate_image_from_transcription: false,
   active_provider: 'whisper',
   fallback_to_openai: false,
   context_bot_enabled: false,
@@ -82,6 +83,9 @@ function normalizeBot(raw = {}) {
     false
   );
   next.image_generation_enabled = normalizeBoolean(next.image_generation_enabled);
+  next.generate_image_from_transcription = normalizeBoolean(next.generate_image_from_transcription)
+    && next.transcription_enabled
+    && next.image_generation_enabled;
   next.active_provider = PROVIDERS.has(String(next.active_provider))
     ? String(next.active_provider) : DEFAULT_BOT_SETTINGS.active_provider;
   next.fallback_to_openai = normalizeBoolean(next.fallback_to_openai);
@@ -142,7 +146,7 @@ function buildDraftBot(current = {}, incoming = {}, secret) {
 const BOT_COLUMNS = [
   'name', 'bot_token_encrypted', 'bot_token_masked', 'telegram_api_bot_id',
   'telegram_bot_name', 'telegram_bot_username', 'allowed_user_ids_json',
-  'transcription_enabled', 'image_generation_enabled', 'active_provider',
+  'transcription_enabled', 'image_generation_enabled', 'generate_image_from_transcription', 'active_provider',
   'fallback_to_openai', 'context_bot_enabled', 'context_bot_id', 'image_bot_id',
   'transcription_timeout_ms', 'max_file_size_bytes', 'vosk_model', 'vosk_model_path',
   'whisper_model', 'whisper_language', 'openai_model', 'openai_language', 'grok_language',
@@ -160,6 +164,7 @@ function botSqlValues(bot) {
     JSON.stringify(normalized.allowed_user_ids),
     normalized.transcription_enabled ? 1 : 0,
     normalized.image_generation_enabled ? 1 : 0,
+    normalized.generate_image_from_transcription ? 1 : 0,
     normalized.active_provider,
     normalized.fallback_to_openai ? 1 : 0,
     normalized.context_bot_enabled ? 1 : 0,
@@ -222,6 +227,7 @@ function clearBotToken(db, id) {
   return updateBot(db, id, {
     transcription_enabled: false,
     image_generation_enabled: false,
+    generate_image_from_transcription: false,
     bot_token_encrypted: '',
     bot_token_masked: '',
     telegram_api_bot_id: '',

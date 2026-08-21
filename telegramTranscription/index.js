@@ -185,6 +185,44 @@ function createTelegramTranscriptionFeature({
     updateCursorStmt.run(updateId + 1, telegramBotId);
     return result.changes > 0;
   });
+  const handoffTranscriptionToImageTx = db.transaction((job, transcript, provider, model, contextWarning, profile) => {
+    const existing = db.prepare(`
+      SELECT id FROM telegram_image_generation_jobs
+      WHERE source_transcription_job_id=?
+    `).get(job.id);
+    let imageJobId = Number(existing?.id || 0);
+    if (!imageJobId) {
+      const result = db.prepare(`
+        INSERT INTO telegram_image_generation_jobs(
+          telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
+          language_code, prompt_text, image_bot_id, image_bot_name, image_bot_profile_json,
+          source_transcription_job_id, context_warning, status, status_message_id
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?, 'queued', ?)
+      `).run(
+        job.telegram_bot_id,
+        job.update_id,
+        job.telegram_chat_id,
+        job.telegram_user_id,
+        job.telegram_message_id,
+        job.language_code,
+        transcript,
+        profile.image_bot_id,
+        profile.image_bot_name,
+        JSON.stringify(profile.image_bot_profile || {}),
+        job.id,
+        contextWarning ? 1 : 0,
+        job.status_message_id || null,
+      );
+      imageJobId = Number(result.lastInsertRowid || 0);
+    }
+    db.prepare(`
+      UPDATE telegram_transcription_jobs
+      SET status='completed', transcript_text=NULL, transcription_provider=?, transcription_model=?,
+        error=NULL, completed_at=datetime('now'), updated_at=datetime('now')
+      WHERE id=?
+    `).run(provider || '', model || '', job.id);
+    return imageJobId;
+  });
 
   db.prepare(`
     UPDATE telegram_transcription_jobs
@@ -299,7 +337,7 @@ function createTelegramTranscriptionFeature({
     }
   }
 
-  function jobProfile(settings) {
+  function jobProfile(settings, imageBot = null) {
     return {
       active_provider: settings.active_provider,
       fallback_to_openai: settings.fallback_to_openai,
@@ -314,6 +352,10 @@ function createTelegramTranscriptionFeature({
       openai_model: settings.openai_model,
       openai_language: settings.openai_language,
       grok_language: settings.grok_language,
+      generate_image_from_transcription: Boolean(settings.generate_image_from_transcription),
+      image_bot_id: imageBot ? Number(imageBot.id) : null,
+      image_bot_name: imageBot ? String(imageBot.name || '') : '',
+      image_bot_profile: imageBot ? imageBotSnapshot(imageBot) : null,
     };
   }
 
@@ -481,7 +523,13 @@ function createTelegramTranscriptionFeature({
         return;
       }
 
-      const profile = jobProfile(settings);
+      const imageBot = settings.generate_image_from_transcription ? selectableImageBot(settings.image_bot_id) : null;
+      if (settings.generate_image_from_transcription && !imageBot) {
+        recordCursor(botId, updateId);
+        await sendReply(client, message, telegramText(language, 'imageBotUnavailable'));
+        return;
+      }
+      const profile = jobProfile(settings, imageBot);
       const providerSettings = buildProviderSettings(profile, getVoiceSettings(db));
       const inserted = acceptJobTx(
         botId,
@@ -599,6 +647,27 @@ function createTelegramTranscriptionFeature({
     `).run(job.id);
   }
 
+  function shouldGenerateImageFromTranscript(profile) {
+    return Boolean(
+      profile?.generate_image_from_transcription
+      && positiveInteger(profile?.image_bot_id)
+      && profile?.image_bot_profile
+    );
+  }
+
+  function handoffTranscriptToImage(job, finalText, provider, model, contextWarning, profile) {
+    const imageJobId = handoffTranscriptionToImageTx(
+      job,
+      finalText,
+      provider,
+      model,
+      contextWarning,
+      profile,
+    );
+    if (!imageJobId) throw new Error('Could not queue image generation from transcription');
+    pumpImageWorker(job.telegram_bot_id);
+  }
+
   async function processJob(job) {
     const token = currentToken(job.telegram_bot_id);
     if (!token) throw new Error('Telegram bot token is not configured');
@@ -608,7 +677,12 @@ function createTelegramTranscriptionFeature({
     await updateStatusMessage(client, job, telegramText(language, 'accepted'));
 
     if (String(job.transcript_text || '').trim()) {
-      await deliverTranscript(client, job, String(job.transcript_text).trim());
+      const transcript = String(job.transcript_text).trim();
+      if (shouldGenerateImageFromTranscript(profile)) {
+        handoffTranscriptToImage(job, transcript, job.transcription_provider, job.transcription_model, false, profile);
+      } else {
+        await deliverTranscript(client, job, transcript);
+      }
       return;
     }
 
@@ -648,7 +722,18 @@ function createTelegramTranscriptionFeature({
         WHERE id=?
       `).run(finalText, result.provider || profile.active_provider, result.model || '', job.id);
 
-      await deliverTranscript(client, job, finalText, converted.warning);
+      if (shouldGenerateImageFromTranscript(profile)) {
+        handoffTranscriptToImage(
+          job,
+          finalText,
+          result.provider || profile.active_provider,
+          result.model || '',
+          converted.warning,
+          profile,
+        );
+      } else {
+        await deliverTranscript(client, job, finalText, converted.warning);
+      }
     } finally {
       await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
     }
@@ -723,10 +808,14 @@ function createTelegramTranscriptionFeature({
       error.userMessageKey = 'imageTooLarge';
       throw error;
     }
+    const transcript = Number(job.source_transcription_job_id || 0) > 0
+      ? String(job.prompt_text || '').trim() : '';
+    const transcriptParts = transcript ? splitUnicodeText(transcript, 1024) : [];
     const options = {
       fileName: job.image_file_name || 'bananza-image.png',
       mimeType: job.image_mime_type || 'image/png',
       replyToMessageId: job.telegram_message_id,
+      caption: transcriptParts[0] || '',
     };
     const photoMime = ['image/png', 'image/jpeg', 'image/jpg'].includes(String(options.mimeType).toLowerCase());
     if (photoMime && buffer.length <= MAX_TELEGRAM_PHOTO_BYTES) {
@@ -738,6 +827,17 @@ function createTelegramTranscriptionFeature({
       }
     } else {
       await retryTelegram(() => client.sendDocument(job.telegram_chat_id, buffer, options));
+    }
+
+    for (let index = 1; index < transcriptParts.length; index += 1) {
+      await retryTelegram(() => client.sendMessage(job.telegram_chat_id, transcriptParts[index], job.telegram_message_id));
+    }
+    if (Number(job.source_transcription_job_id || 0) > 0 && job.context_warning) {
+      await retryTelegram(() => client.sendMessage(
+        job.telegram_chat_id,
+        telegramText(job.language_code, 'contextWarning'),
+        job.telegram_message_id,
+      ));
     }
 
     if (job.status_message_id && typeof client.deleteMessage === 'function') {
@@ -758,11 +858,30 @@ function createTelegramTranscriptionFeature({
     `).run(job.id);
   }
 
+  async function deliverTranscriptFromImageJob(client, job) {
+    const parts = splitUnicodeText(String(job.prompt_text || '').trim(), 4000);
+    if (!parts.length) throw new Error('Transcription returned empty text');
+    await updateImageStatusMessage(client, job, parts[0]);
+    for (let index = 1; index < parts.length; index += 1) {
+      await retryTelegram(() => client.sendMessage(job.telegram_chat_id, parts[index], job.telegram_message_id));
+    }
+    if (job.context_warning) {
+      await retryTelegram(() => client.sendMessage(
+        job.telegram_chat_id,
+        telegramText(job.language_code, 'contextWarning'),
+        job.telegram_message_id,
+      ));
+    }
+  }
+
   async function processImageJob(job) {
     const token = currentToken(job.telegram_bot_id);
     if (!token) throw new Error('Telegram bot token is not configured');
     const client = createClient(token);
-    await updateImageStatusMessage(client, job, telegramText(job.language_code, 'imageAccepted'));
+    await updateImageStatusMessage(client, job, telegramText(
+      job.language_code,
+      Number(job.source_transcription_job_id || 0) > 0 ? 'imageFromTranscriptAccepted' : 'imageAccepted',
+    ));
 
     if (job.image_data) {
       await sendGeneratedImage(client, job);
@@ -775,6 +894,7 @@ function createTelegramTranscriptionFeature({
       botId: job.image_bot_id,
       botSnapshot: JSON.parse(job.image_bot_profile_json || '{}'),
       prompt: String(job.prompt_text || '').trim(),
+      allowLongPrompt: Number(job.source_transcription_job_id || 0) > 0,
     });
     const buffer = Buffer.isBuffer(result?.buffer) ? result.buffer : Buffer.from(result?.buffer || []);
     if (!buffer.length) throw new Error('Image generation returned empty data');
@@ -805,6 +925,7 @@ function createTelegramTranscriptionFeature({
 
   async function failImageJob(job, error) {
     const message = safeErrorMessage(error, 'Telegram image generation failed');
+    const fromTranscription = Number(job.source_transcription_job_id || 0) > 0;
     db.prepare(`
       UPDATE telegram_image_generation_jobs
       SET status='error', prompt_text=NULL, image_data=NULL, error=?,
@@ -813,7 +934,16 @@ function createTelegramTranscriptionFeature({
     `).run(message, job.id);
     try {
       const client = createClient(currentToken(job.telegram_bot_id));
-      await updateImageStatusMessage(client, job, telegramText(job.language_code, error?.userMessageKey || 'imageFailed'));
+      if (fromTranscription) {
+        await deliverTranscriptFromImageJob(client, job);
+        await retryTelegram(() => client.sendMessage(
+          job.telegram_chat_id,
+          telegramText(job.language_code, error?.userMessageKey || 'imageFailed'),
+          job.telegram_message_id,
+        ));
+      } else {
+        await updateImageStatusMessage(client, job, telegramText(job.language_code, error?.userMessageKey || 'imageFailed'));
+      }
     } catch {}
     console.warn('[telegram-image-generation] job failed:', message);
   }
@@ -1183,6 +1313,7 @@ function createTelegramTranscriptionFeature({
     pumpImageWorker,
     processJob,
     processImageJob,
+    failImageJob,
   };
 }
 

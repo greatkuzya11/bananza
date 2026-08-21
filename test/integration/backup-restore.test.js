@@ -46,7 +46,9 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
       const sandboxSecret = fs.readFileSync(path.join(sandbox.appDir, '.secret'), 'utf8').trim();
       const telegramBot = createTelegramBot(liveDb, {
         name: 'Backup Telegram bot',
+        transcription_enabled: true,
         image_generation_enabled: true,
+        generate_image_from_transcription: true,
         image_bot_id: Number(bot.lastInsertRowid),
         bot_token: '123456:backup-telegram-token',
         allowed_user_ids: ['777'],
@@ -185,6 +187,7 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
       assert.equal(newsSource.name, 'Lenta.ru top7');
       assert.equal(initiativeRule.name, 'Backup initiative rule');
       assert.equal(telegramSettings.image_generation_enabled, true);
+      assert.equal(telegramSettings.generate_image_from_transcription, true);
       assert.equal(telegramSettings.image_bot_id, telegramImageJob.image_bot_id);
       assert.equal(getBotToken(restoredDb, telegramBotId, restoredSecret), '123456:backup-telegram-token');
       assert.equal(telegramImageJob.status, 'delivering');

@@ -76,6 +76,20 @@ test('Telegram settings encrypt token, normalize allowlist, and keep provider pr
   assert.equal(saved.max_file_size_bytes, 20 * 1024 * 1024);
   assert.equal(saved.image_generation_enabled, true);
   assert.equal(saved.image_bot_id, 77);
+  assert.equal(saved.generate_image_from_transcription, false);
+
+  const chained = setSettings(db, {
+    enabled: true,
+    image_generation_enabled: true,
+    generate_image_from_transcription: true,
+  }, 'server-secret');
+  assert.equal(chained.generate_image_from_transcription, true);
+  const disabledPrerequisite = setSettings(db, {
+    enabled: true,
+    image_generation_enabled: false,
+    generate_image_from_transcription: true,
+  }, 'server-secret');
+  assert.equal(disabledPrerequisite.generate_image_from_transcription, false);
 
   const provider = buildProviderSettings(saved, {
     active_provider: 'whisper',
@@ -155,12 +169,14 @@ test('Telegram client uploads generated images with multipart form data', async 
     fileName: 'result.png',
     mimeType: 'image/png',
     replyToMessageId: 9,
+    caption: 'Transcript text',
   });
   assert.match(requests[0].url, /\/sendPhoto$/);
   assert.ok(requests[0].options.body instanceof FormData);
   assert.equal(requests[0].options.body.get('chat_id'), '777');
   assert.deepEqual(JSON.parse(requests[0].options.body.get('reply_parameters')), { message_id: 9 });
   assert.equal(requests[0].options.body.get('photo').name, 'result.png');
+  assert.equal(requests[0].options.body.get('caption'), 'Transcript text');
 });
 
 test('Telegram update is persisted with cursor before worker execution and duplicate is ignored', async () => {
@@ -335,6 +351,106 @@ test('Telegram image worker persists delivery bytes, sends photo, and clears tra
   assert.ok(telegramCalls.some((call) => /\/sendMessage$/.test(call.url)));
   assert.ok(telegramCalls.some((call) => /\/sendPhoto$/.test(call.url)));
   assert.ok(telegramCalls.some((call) => /\/deleteMessage$/.test(call.url)));
+  db.close();
+});
+
+test('Telegram transcription hands off to image generation and sends transcript as photo caption', async () => {
+  const db = createDb();
+  const bot = setSettings(db, {
+    ...DEFAULT_SETTINGS,
+    bot_token: '123456:combined-worker-token',
+    enabled: true,
+    image_generation_enabled: true,
+    generate_image_from_transcription: true,
+    image_bot_id: 91,
+    allowed_user_ids: ['777'],
+  }, 'server-secret');
+  const imageBot = { id: 91, name: 'Painter', provider: 'openai', image_model: 'gpt-image-2' };
+  const transcript = 'A banana in a blue room '.repeat(70).trim();
+  db.prepare(`
+    INSERT INTO telegram_transcription_jobs(
+      telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
+      file_id, profile_json, status, transcript_text, transcription_provider, transcription_model
+    ) VALUES(?, 303, '777', '777', 44, 'audio-file', ?, 'queued', ?, 'openai', 'gpt-4o-mini-transcribe')
+  `).run(bot.id, JSON.stringify({
+    generate_image_from_transcription: true,
+    image_bot_id: imageBot.id,
+    image_bot_name: imageBot.name,
+    image_bot_profile: imageBot,
+  }), transcript);
+  const telegramCalls = [];
+  const feature = createTelegramTranscriptionFeature({
+    app: fakeApp(), db,
+    auth: (_req, _res, next) => next(), adminOnly: (_req, _res, next) => next(),
+    secret: 'server-secret',
+    getAiBotFeature: () => ({
+      async generateTelegramImage(args) {
+        assert.equal(args.prompt, transcript);
+        assert.equal(args.botSnapshot.image_model, 'gpt-image-2');
+        assert.equal(args.allowLongPrompt, true);
+        return { buffer: Buffer.from('combined-image'), mimeType: 'image/png', filename: 'combined.png' };
+      },
+    }),
+    fetchImpl: async (url, options) => {
+      telegramCalls.push({ url: String(url), options });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 304 } }), { status: 200 });
+    },
+  });
+  feature.stop();
+
+  await feature.processJob(db.prepare('SELECT * FROM telegram_transcription_jobs').get());
+  const imageJob = db.prepare('SELECT * FROM telegram_image_generation_jobs').get();
+  assert.equal(imageJob.source_transcription_job_id, 1);
+  assert.equal(imageJob.prompt_text, transcript);
+  assert.equal(db.prepare('SELECT status FROM telegram_transcription_jobs WHERE id=1').get().status, 'completed');
+
+  await feature.processImageJob(imageJob);
+  const photo = telegramCalls.find((call) => /\/sendPhoto$/.test(call.url));
+  assert.ok(photo);
+  assert.ok(Array.from(photo.options.body.get('caption')).length <= 1024);
+  const sentText = telegramCalls.filter((call) => /\/sendMessage$/.test(call.url))
+    .map((call) => JSON.parse(call.options.body).text);
+  const deliveredTranscript = [photo.options.body.get('caption'), ...sentText.slice(1)].join(' ')
+    .replace(/\s+/g, ' ').trim();
+  assert.equal(deliveredTranscript, transcript.replace(/\s+/g, ' ').trim());
+  const completed = db.prepare('SELECT * FROM telegram_image_generation_jobs').get();
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.prompt_text, null);
+  assert.equal(completed.image_data, null);
+  db.close();
+});
+
+test('Telegram image failure returns the linked transcript and image error', async () => {
+  const db = createDb();
+  const bot = setSettings(db, { bot_token: '123456:combined-failure-token' }, 'server-secret');
+  db.prepare(`
+    INSERT INTO telegram_transcription_jobs(
+      telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id, file_id, status
+    ) VALUES(?, 401, '777', '777', 45, 'audio-file', 'completed')
+  `).run(bot.id);
+  db.prepare(`
+    INSERT INTO telegram_image_generation_jobs(
+      telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
+      prompt_text, image_bot_id, source_transcription_job_id, status
+    ) VALUES(?, 401, '777', '777', 45, 'Recovered transcript', 91, 1, 'processing')
+  `).run(bot.id);
+  const telegramCalls = [];
+  const feature = createTelegramTranscriptionFeature({
+    app: fakeApp(), db,
+    auth: (_req, _res, next) => next(), adminOnly: (_req, _res, next) => next(),
+    secret: 'server-secret',
+    fetchImpl: async (url, options) => {
+      telegramCalls.push({ url: String(url), options });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 402 } }), { status: 200 });
+    },
+  });
+  feature.stop();
+  await feature.failImageJob(db.prepare('SELECT * FROM telegram_image_generation_jobs').get(), new Error('provider unavailable'));
+
+  const messages = telegramCalls.filter((call) => /\/sendMessage$/.test(call.url))
+    .map((call) => JSON.parse(call.options.body).text);
+  assert.deepEqual(messages, ['Recovered transcript', 'Could not create or send the image. Try again.']);
+  assert.equal(db.prepare('SELECT prompt_text FROM telegram_image_generation_jobs').get().prompt_text, null);
   db.close();
 });
 

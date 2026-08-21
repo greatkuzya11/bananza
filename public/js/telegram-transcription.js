@@ -117,6 +117,10 @@
                       <span>${esc(t('Enable Telegram image generation'))}</span>
                       <label class="toggle-switch"><input type="checkbox" id="telegramBotImageEnabled"><span class="toggle-slider"></span></label>
                     </div>
+                    <div id="telegramBotTranscriptImageToggle" class="settings-item settings-toggle-item hidden">
+                      <span>${esc(t('Generate image from transcription'))}</span>
+                      <label class="toggle-switch"><input type="checkbox" id="telegramBotGenerateImageFromTranscription"><span class="toggle-slider"></span></label>
+                    </div>
                   </div>
                   <section id="telegramBotTranscriptionSection" class="telegram-feature-section">
                     <h4>${esc(t('Transcription'))}</h4>
@@ -262,6 +266,7 @@
   function defaultDraft() {
     return {
       name: '', allowed_user_ids: [], transcription_enabled: false, image_generation_enabled: false,
+      generate_image_from_transcription: false,
       active_provider: 'whisper', fallback_to_openai: false, context_bot_enabled: false,
       context_bot_id: null, image_bot_id: null, transcription_timeout_ms: 120000,
       max_file_size_bytes: 20 * 1024 * 1024, vosk_model: 'vosk-model-small-ru-0.22',
@@ -283,6 +288,7 @@
     $('#telegramBotAllowlist').value = (value.allowed_user_ids || []).join('\n');
     $('#telegramBotTranscriptionEnabled').checked = Boolean(value.transcription_enabled);
     $('#telegramBotImageEnabled').checked = Boolean(value.image_generation_enabled);
+    $('#telegramBotGenerateImageFromTranscription').checked = Boolean(value.generate_image_from_transcription);
     $('#telegramBotTimeout').value = Number(value.transcription_timeout_ms || 120000);
     $('#telegramBotMaxSize').value = Math.round(Number(value.max_file_size_bytes || 20971520) / 1048576);
     $('#telegramBotFallback').checked = Boolean(value.fallback_to_openai);
@@ -352,6 +358,12 @@
   function syncFeatureSections() {
     const transcription = $('#telegramBotTranscriptionEnabled').checked;
     const images = $('#telegramBotImageEnabled').checked;
+    const chainedImageToggle = $('#telegramBotTranscriptImageToggle');
+    const chainedImage = $('#telegramBotGenerateImageFromTranscription');
+    const canGenerateFromTranscript = transcription && images;
+    chainedImageToggle.classList.toggle('hidden', !canGenerateFromTranscript);
+    chainedImage.disabled = !canGenerateFromTranscript;
+    if (!canGenerateFromTranscript) chainedImage.checked = false;
     $('#telegramBotTranscriptionSection').classList.toggle('is-disabled', !transcription);
     $('#telegramBotImageSection').classList.toggle('is-disabled', !images);
     $('#telegramBotTranscriptionSection').querySelectorAll('input,select,button').forEach((node) => { node.disabled = !transcription; });
@@ -404,6 +416,7 @@
       allowed_user_ids: $('#telegramBotAllowlist').value,
       transcription_enabled: $('#telegramBotTranscriptionEnabled').checked,
       image_generation_enabled: $('#telegramBotImageEnabled').checked,
+      generate_image_from_transcription: $('#telegramBotGenerateImageFromTranscription').checked,
       active_provider: provider,
       fallback_to_openai: $('#telegramBotFallback').checked,
       context_bot_enabled: $('#telegramBotContextEnabled').checked,

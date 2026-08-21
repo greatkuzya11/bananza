@@ -92,6 +92,7 @@ function createTelegramClient(token, { fetchImpl = global.fetch } = {}) {
     fileName = 'image.png',
     mimeType = 'image/png',
     replyToMessageId = null,
+    caption = '',
     signal,
   } = {}) {
     const bytes = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
@@ -99,6 +100,7 @@ function createTelegramClient(token, { fetchImpl = global.fetch } = {}) {
     const form = new FormData();
     form.append('chat_id', String(chatId));
     form.append(fieldName, new Blob([bytes], { type: String(mimeType || 'application/octet-stream') }), String(fileName || 'image'));
+    if (caption) form.append('caption', String(caption));
     if (replyToMessageId) {
       form.append('reply_parameters', JSON.stringify({ message_id: Number(replyToMessageId) }));
     }

@@ -110,6 +110,9 @@ test('Telegram bots admin edits capabilities and creates a second independent bo
   dom.window.document.getElementById('telegramBotAllowlist').value = '777\n888';
   dom.window.document.getElementById('telegramBotImageEnabled').checked = true;
   dom.window.document.getElementById('telegramBotImageEnabled').dispatchEvent(new dom.window.Event('change'));
+  const chainedToggle = dom.window.document.getElementById('telegramBotTranscriptImageToggle');
+  assert.equal(chainedToggle.classList.contains('hidden'), false);
+  dom.window.document.getElementById('telegramBotGenerateImageFromTranscription').checked = true;
   dom.window.document.getElementById('telegramBotImageBot').value = '17';
   dom.window.document.getElementById('telegramBotsSave').click();
   await tick(20);
@@ -117,6 +120,7 @@ test('Telegram bots admin edits capabilities and creates a second independent bo
   const update = calls.find((call) => call.url === '/api/admin/telegram-bots/1' && call.options.method === 'PUT');
   assert.ok(update);
   assert.equal(update.options.body.image_generation_enabled, true);
+  assert.equal(update.options.body.generate_image_from_transcription, true);
   assert.equal(update.options.body.image_bot_id, 17);
   assert.match(update.options.body.allowed_user_ids, /888/);
 

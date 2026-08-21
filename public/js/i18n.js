@@ -505,6 +505,7 @@
     'Shared Telegram bot': 'Общий Telegram-бот',
     'Open Telegram bot settings': 'Открыть настройки Telegram-бота',
     'Enable Telegram image generation': 'Включить генерацию изображений в Telegram',
+    'Generate image from transcription': 'Создавать изображение из расшифровки',
     'Image bot': 'Image-бот',
     'Only enabled OpenAI and Grok image bots with image generation permission are available.': 'Доступны только включённые OpenAI и Grok image-боты с разрешённой генерацией изображений.',
     'No image bots available': 'Нет доступных image-ботов',
