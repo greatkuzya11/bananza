@@ -328,11 +328,14 @@
         : item.kind === 'image' ? t('Prompt and image') : t('Transcription');
       const transcript = String(item.transcript_text || '').trim();
       const prompt = String(item.prompt_text || '').trim();
+      const combinedText = item.kind === 'combined' ? (prompt || transcript) : '';
+      const resultText = combinedText || transcript || prompt;
+      const resultTitle = item.kind === 'combined' ? t('Transcription result / Image prompt')
+        : transcript ? t('Transcription result') : t('Image prompt');
       return `<article class="telegram-history-item">
         <div class="telegram-history-item-head"><strong>${esc(type)}</strong><span>${esc(identity)} · ${esc(formatHistoryDate(item.completed_at || item.created_at))}</span></div>
         <div class="telegram-history-meta">${status}${item.provider || item.model ? ` · ${esc([item.provider, item.model].filter(Boolean).join(' / '))}` : ''}</div>
-        ${transcript ? `<details><summary>${esc(t('Transcription result'))}</summary><pre>${esc(transcript)}</pre></details>` : ''}
-        ${prompt ? `<details${item.kind === 'image' ? ' open' : ''}><summary>${esc(t('Image prompt'))}</summary><pre>${esc(prompt)}</pre></details>` : ''}
+        ${resultText ? `<details${item.kind === 'image' ? ' open' : ''}><summary>${esc(resultTitle)}</summary><pre>${esc(resultText)}</pre></details>` : ''}
         ${item.image_job_id && item.has_image ? `<div class="telegram-history-image" data-telegram-history-image="${Number(item.image_job_id)}"><span>${esc(t('Generated image'))}</span></div>` : ''}
         ${item.image_job_id && !item.has_image && item.image_status === 'completed' ? `<div class="telegram-history-missing-image">${esc(t('Image file is unavailable'))}</div>` : ''}
         ${item.error ? `<div class="telegram-runtime-error">${esc(item.error)}</div>` : ''}

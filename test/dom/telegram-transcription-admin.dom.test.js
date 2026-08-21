@@ -151,7 +151,7 @@ test('Telegram bot history opens from settings, filters user operations, and cle
     items: [{
       kind: 'combined', record_id: 9, image_job_id: 9,
       telegram_user_id: '777', telegram_user_username: 'alice', telegram_user_display_name: 'Alice',
-      transcript_text: 'Voice transcript', prompt_text: 'Image prompt', has_image: false,
+      transcript_text: 'Voice transcript', prompt_text: 'Voice transcript', has_image: false,
       status: 'completed', transcription_status: 'completed', image_status: 'completed',
       provider: 'openai', model: 'gpt-image-2', created_at: '2026-08-21 12:00:00', completed_at: '2026-08-21 12:01:00', error: null,
     }],
@@ -185,7 +185,8 @@ test('Telegram bot history opens from settings, filters user operations, and cle
   const historyModal = dom.window.document.getElementById('telegramBotHistoryModal');
   assert.equal(historyModal.classList.contains('hidden'), false);
   assert.match(dom.window.document.getElementById('telegramHistoryList').textContent, /Voice transcript/);
-  assert.match(dom.window.document.getElementById('telegramHistoryList').textContent, /Image prompt/);
+  assert.match(dom.window.document.getElementById('telegramHistoryList').textContent, /Transcription result \/ Image prompt/);
+  assert.equal(dom.window.document.querySelectorAll('#telegramHistoryList details').length, 1);
   assert.equal(dom.window.document.getElementById('telegramHistoryUser').value, '');
   dom.window.document.getElementById('telegramHistoryUser').value = '777';
   dom.window.document.getElementById('telegramHistoryUser').dispatchEvent(new dom.window.Event('change'));

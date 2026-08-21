@@ -493,6 +493,7 @@
     'Prompt and image': 'Prompt и изображение',
     'Transcription result': 'Результат расшифровки',
     'Image prompt': 'Prompt для изображения',
+    'Transcription result / Image prompt': 'Результат расшифровки / Prompt для изображения',
     'Generated image': 'Сгенерированное изображение',
     'Image file is unavailable': 'Файл изображения недоступен',
     'Previous page': 'Предыдущая страница',
