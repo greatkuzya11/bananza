@@ -875,8 +875,8 @@ function updateVisibleOwnReadState(chatId = currentChatId) {
       function hideReactionUi(options = {}) { return reactionController?.hideReactionUi?.(options); }
       async function toggleReaction(msgId, emoji, options = {}) { return reactionController?.toggleReaction?.(msgId, emoji, options); }
     
-      function openMediaViewer(src, type = 'image') { return mediaViewerController?.openMediaViewer?.(src, type); }
-      function openImageViewer(src) { return mediaViewerController?.openImageViewer?.(src); }
+      function openMediaViewer(src, type = 'image', options = {}) { return mediaViewerController?.openMediaViewer?.(src, type, options); }
+      function openImageViewer(src, options = {}) { return mediaViewerController?.openImageViewer?.(src, options); }
       function closeMediaViewer() { return mediaViewerController?.closeMediaViewer?.(); }
       function handleMediaViewerControlActivation(event) { return Boolean(mediaViewerController?.handleMediaViewerControlActivation?.(event)); }
       function updateGalleryArrows() { return mediaViewerController?.updateGalleryArrows?.(); }

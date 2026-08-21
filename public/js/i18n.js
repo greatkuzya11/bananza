@@ -495,6 +495,7 @@
     'Image prompt': 'Prompt для изображения',
     'Transcription result / Image prompt': 'Результат расшифровки / Prompt для изображения',
     'Generated image': 'Сгенерированное изображение',
+    'Open image fullscreen': 'Открыть изображение на весь экран',
     'Image file is unavailable': 'Файл изображения недоступен',
     'Previous page': 'Предыдущая страница',
     'Next page': 'Следующая страница',

@@ -30,7 +30,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/css/style.css?v=20260811-markdown-mobile-scroll1',
     '/css/calls.css?v=20260621-call-mobile-controls',
     '/css/voice.css',
-    '/css/telegram-transcription.css?v=20260821-telegram-history1',
+    '/css/telegram-transcription.css?v=20260821-telegram-history2',
     '/css/video-notes.css',
   ]);
 
@@ -38,7 +38,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/sounds.js',
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
-    '/js/i18n.js?v=20260821-telegram-history1',
+    '/js/i18n.js?v=20260821-telegram-history2',
     '/vendor/leaflet/leaflet.js?v=1.9.4',
     '/js/document-editor.bundle.js?v=20260620-doc-image-handles1',
     '/js/qip-infium-original.js?v=20260523-qip-infium-original',
@@ -109,7 +109,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/interactions/search.js?v=20260531-interactions',
     '/js/app/interactions/reactions.js?v=20260531-interactions',
     '/js/app/interactions/floating-actions.js?v=20260531-interactions',
-    '/js/app/interactions/media-viewer.js?v=20260531-interactions',
+    '/js/app/interactions/media-viewer.js?v=20260821-history-gallery1',
     '/js/app/interactions/context-menus.js?v=20260614-doc-bugfix1',
     '/js/app/interactions/forwarding.js?v=20260531-interactions',
     '/js/app/boot/state.js?v=20260531-runtime-split',
@@ -117,7 +117,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/boot/api.js?v=20260531-runtime-split',
     '/js/app/boot/auth.js?v=20260531-runtime-split',
     '/js/app/boot/websocket.js?v=20260531-runtime-split',
-    '/js/app/boot/ws-dispatch.js?v=20260614-doc-ai1',
+    '/js/app/boot/ws-dispatch.js?v=20260821-history-gallery1',
     '/js/app/boot/runtime-core.js?v=20260601-runtime-final',
     '/js/app/boot/composition/export-utils.js?v=20260601-feature-composition-final',
     '/js/app/boot/composition/feature-primitives.js?v=20260601-feature-composition-final',
@@ -135,7 +135,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/boot/composition/interactions-composition.js?v=20260601-feature-composition-final',
     '/js/app/boot/feature-composition.js?v=20260601-runtime-final',
     '/js/app/boot/events.js?v=20260531-runtime-split',
-    '/js/app/boot/public-bridge.js?v=20260621-call-nav',
+    '/js/app/boot/public-bridge.js?v=20260821-history-gallery1',
     '/js/app/boot/chat-list-service.js?v=20260531-runtime-split',
     '/js/app/boot/open-chat-service.js?v=20260601-open-chat-service',
     '/js/app/boot/messages-service.js?v=20260601-messages-service',
@@ -157,7 +157,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/video-notes/VideoNoteAdminSettings.js',
     '/js/video-notes/VideoNoteFeature.js',
     '/js/voice.js',
-    '/js/telegram-transcription.js?v=20260821-telegram-history1',
+    '/js/telegram-transcription.js?v=20260821-telegram-history2',
   ]);
 });
 

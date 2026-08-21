@@ -147,13 +147,26 @@ test('Telegram bot history opens from settings, filters user operations, and cle
   const dom = createAppDom();
   t.after(() => dom.window.close());
   const calls = [];
+  let openedMedia = null;
+  dom.window.URL.createObjectURL = (blob) => `blob:${blob.jobId}`;
+  dom.window.URL.revokeObjectURL = () => {};
+  dom.window.fetch = async (url) => ({
+    ok: true,
+    async blob() { return { jobId: String(url).match(/images\/(\d+)$/)?.[1] || 'unknown' }; },
+  });
   const history = {
     items: [{
       kind: 'combined', record_id: 9, image_job_id: 9,
       telegram_user_id: '777', telegram_user_username: 'alice', telegram_user_display_name: 'Alice',
-      transcript_text: 'Voice transcript', prompt_text: 'Voice transcript', has_image: false,
+      transcript_text: 'Voice transcript', prompt_text: 'Voice transcript', has_image: true,
       status: 'completed', transcription_status: 'completed', image_status: 'completed',
       provider: 'openai', model: 'gpt-image-2', created_at: '2026-08-21 12:00:00', completed_at: '2026-08-21 12:01:00', error: null,
+    }, {
+      kind: 'image', record_id: 10, image_job_id: 10,
+      telegram_user_id: '777', telegram_user_username: 'alice', telegram_user_display_name: 'Alice',
+      transcript_text: null, prompt_text: 'Second image prompt', has_image: true,
+      status: 'completed', transcription_status: null, image_status: 'completed',
+      provider: 'openai', model: 'gpt-image-2', created_at: '2026-08-21 12:02:00', completed_at: '2026-08-21 12:03:00', error: null,
     }],
     users: [{ telegram_user_id: '777', telegram_user_username: 'alice', telegram_user_display_name: 'Alice', count: 1 }],
     page: 1, limit: 25, total: 1, total_pages: 1,
@@ -163,6 +176,8 @@ test('Telegram bot history opens from settings, filters user operations, and cle
     t: (key, params = {}) => Object.entries(params).reduce(
       (text, [name, value]) => text.replaceAll(`{${name}}`, String(value)), String(key)
     ),
+    getToken: () => 'test-token',
+    openMediaViewer(...args) { openedMedia = args; },
     async api(url, options = {}) {
       calls.push({ url, options });
       if (url === '/api/admin/telegram-bots' && !options.method) return payload();
@@ -186,7 +201,13 @@ test('Telegram bot history opens from settings, filters user operations, and cle
   assert.equal(historyModal.classList.contains('hidden'), false);
   assert.match(dom.window.document.getElementById('telegramHistoryList').textContent, /Voice transcript/);
   assert.match(dom.window.document.getElementById('telegramHistoryList').textContent, /Transcription result \/ Image prompt/);
-  assert.equal(dom.window.document.querySelectorAll('#telegramHistoryList details').length, 1);
+  assert.equal(dom.window.document.querySelectorAll('#telegramHistoryList details').length, 2);
+  dom.window.document.querySelector('[data-telegram-history-image="9"]').click();
+  assert.ok(openedMedia);
+  assert.equal(openedMedia[0], 'blob:9');
+  assert.equal(openedMedia[1], 'image');
+  assert.equal(openedMedia[2].items.length, 2);
+  assert.equal(openedMedia[2].initialIndex, 0);
   assert.equal(dom.window.document.getElementById('telegramHistoryUser').value, '');
   dom.window.document.getElementById('telegramHistoryUser').value = '777';
   dom.window.document.getElementById('telegramHistoryUser').dispatchEvent(new dom.window.Event('change'));

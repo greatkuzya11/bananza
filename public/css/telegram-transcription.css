@@ -205,6 +205,14 @@
   margin-top: 10px;
 }
 
+.telegram-history-image {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
 .telegram-history-image img {
   display: block;
   max-width: min(100%, 420px);

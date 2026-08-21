@@ -668,7 +668,30 @@ function moveGalleryToIndex(newIdx) {
   return true;
 }
 
-function openMediaViewer(src, type = 'image') {
+function customGalleryItems(items = []) {
+  if (!Array.isArray(items)) return [];
+  const seen = new Set();
+  return items.reduce((result, item, index) => {
+    const source = normalizeGallerySrc(item?.src || '');
+    const mediaType = item?.type === 'video' ? 'video' : 'image';
+    if (!source || seen.has(`${mediaType}:${source}`)) return result;
+    seen.add(`${mediaType}:${source}`);
+    result.push({
+      id: 0,
+      chatId: 0,
+      src: source,
+      type: mediaType,
+      posterSrc: normalizeGallerySrc(item?.posterSrc || ''),
+      fileName: String(item?.fileName || item?.name || `media-${index + 1}`),
+      fileMime: String(item?.fileMime || ''),
+      fileSize: 0,
+      message: null,
+    });
+    return result;
+  }, []);
+}
+
+function openMediaViewer(src, type = 'image', options = {}) {
   gallerySessionId += 1;
   closeMobileComposerTransientUi({ immediate: true });
   dismissMobileComposer({ forceRecovery: true, reason: 'media-viewer-open', recoveryDelayMs: 280 });
@@ -676,7 +699,9 @@ function openMediaViewer(src, type = 'image') {
   mediaViewerSuppressClickUntil = 0;
   mediaViewerFollowupClickSuppressUntil = 0;
   resetImageViewerTouchState();
-  gallerySourceChatId = currentChatId;
+  const suppliedItems = customGalleryItems(options?.items);
+  const usesCustomGallery = suppliedItems.length > 0;
+  gallerySourceChatId = usesCustomGallery ? 0 : currentChatId;
   galleryLoadPromises = { before: null, after: null };
   galleryLoadErrors = { before: false, after: false };
   galleryLoadingBefore = false;
@@ -685,16 +710,20 @@ function openMediaViewer(src, type = 'image') {
   clearTimeout(galleryEdgeBounceTimer);
   imageViewer.querySelector('.iv-edge-hint')?.classList.remove('visible');
   cleanupGalleryPreloads();
-  collectGalleryItems();
+  if (usesCustomGallery) galleryItems = suppliedItems;
+  else collectGalleryItems();
   const targetSrc = normalizeGallerySrc(src);
-  galleryIndex = galleryItems.findIndex(item => normalizeGallerySrc(item.src) === targetSrc && item.type === type);
+  const requestedIndex = Number(options?.initialIndex);
+  galleryIndex = Number.isInteger(requestedIndex) && requestedIndex >= 0 && requestedIndex < galleryItems.length
+    ? requestedIndex
+    : galleryItems.findIndex(item => normalizeGallerySrc(item.src) === targetSrc && item.type === type);
   if (galleryIndex < 0 && targetSrc) {
     galleryItems.push({ id: 0, chatId: currentChatId || 0, src: targetSrc, type, fileName: '', fileMime: '', fileSize: 0 });
     galleryIndex = galleryItems.length - 1;
   }
   if (galleryIndex < 0) galleryIndex = 0;
-  galleryHasMoreBefore = Boolean(galleryEdgeCursor('before'));
-  galleryHasMoreAfter = Boolean(galleryEdgeCursor('after'));
+  galleryHasMoreBefore = !usesCustomGallery && Boolean(galleryEdgeCursor('before'));
+  galleryHasMoreAfter = !usesCustomGallery && Boolean(galleryEdgeCursor('after'));
   renderGalleryStrip();
   ivScale = 1; ivPanX = 0; ivPanY = 0;
   setGalleryStripPosition(false);
@@ -718,7 +747,7 @@ function openMediaViewer(src, type = 'image') {
   ensureGalleryBuffered('after');
 }
 // Backward-compat alias used by existing image click handlers
-function openImageViewer(src) { openMediaViewer(src, 'image'); }
+function openImageViewer(src, options = {}) { openMediaViewer(src, 'image', options); }
 
 function closeMediaViewer() {
   if (imageViewer.classList.contains('hidden')) return;

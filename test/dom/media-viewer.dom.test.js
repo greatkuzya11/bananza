@@ -1362,6 +1362,33 @@ test('media viewer gallery swipe does not reveal the hidden close button', async
   assert.equal(imageViewer.classList.contains('iv-close-hidden'), true);
 });
 
+test('media viewer opens supplied gallery items and navigates them without chat media requests', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => dom.window.close());
+  const { document, BananzaAppBridge } = dom.window;
+  const firstSrc = 'https://example.com/telegram-history-1.jpg';
+  const secondSrc = 'https://example.com/telegram-history-2.jpg';
+
+  BananzaAppBridge.__testing.openMediaViewer(secondSrc, 'image', {
+    items: [
+      { id: 'history-1', src: firstSrc, type: 'image', fileName: 'history-1.jpg' },
+      { id: 'history-2', src: secondSrc, type: 'image', fileName: 'history-2.jpg' },
+    ],
+    initialIndex: 1,
+  });
+  await wait(dom, 0);
+
+  let state = getMediaViewerState(dom);
+  assert.equal(state.galleryItems.length, 2);
+  assert.equal(state.galleryIndex, 1);
+  assert.equal(document.querySelector('.iv-next').style.display, 'none');
+
+  document.querySelector('.iv-prev').click();
+  await wait(dom, 0);
+  state = getMediaViewerState(dom);
+  assert.equal(state.galleryIndex, 0);
+});
+
 test('off-center pinch keeps the fullscreen image anchored under the fingers', async (t) => {
   const dom = await bootAppDom();
   t.after(() => {

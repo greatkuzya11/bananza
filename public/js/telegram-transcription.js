@@ -16,6 +16,7 @@
       page: 1,
       data: null,
       objectUrls: [],
+      previewUrls: new Map(),
     },
   };
 
@@ -247,6 +248,10 @@
       }
     });
     $('#telegramHistoryClear')?.addEventListener('click', clearHistory);
+    $('#telegramHistoryList')?.addEventListener('click', (event) => {
+      const image = event.target.closest('[data-telegram-history-image]');
+      if (image) openHistoryImage(image.dataset.telegramHistoryImage);
+    });
   }
 
   async function openModal() {
@@ -274,6 +279,7 @@
   function revokeHistoryObjectUrls() {
     state.history.objectUrls.forEach((url) => URL.revokeObjectURL?.(url));
     state.history.objectUrls = [];
+    state.history.previewUrls.clear();
   }
 
   async function openHistory() {
@@ -336,7 +342,7 @@
         <div class="telegram-history-item-head"><strong>${esc(type)}</strong><span>${esc(identity)} · ${esc(formatHistoryDate(item.completed_at || item.created_at))}</span></div>
         <div class="telegram-history-meta">${status}${item.provider || item.model ? ` · ${esc([item.provider, item.model].filter(Boolean).join(' / '))}` : ''}</div>
         ${resultText ? `<details${item.kind === 'image' ? ' open' : ''}><summary>${esc(resultTitle)}</summary><pre>${esc(resultText)}</pre></details>` : ''}
-        ${item.image_job_id && item.has_image ? `<div class="telegram-history-image" data-telegram-history-image="${Number(item.image_job_id)}"><span>${esc(t('Generated image'))}</span></div>` : ''}
+        ${item.image_job_id && item.has_image ? `<button type="button" class="telegram-history-image" data-telegram-history-image="${Number(item.image_job_id)}" aria-label="${esc(t('Open image fullscreen'))}"><span>${esc(t('Generated image'))}</span></button>` : ''}
         ${item.image_job_id && !item.has_image && item.image_status === 'completed' ? `<div class="telegram-history-missing-image">${esc(t('Image file is unavailable'))}</div>` : ''}
         ${item.error ? `<div class="telegram-runtime-error">${esc(item.error)}</div>` : ''}
       </article>`;
@@ -366,11 +372,26 @@
           return;
         }
         state.history.objectUrls.push(url);
+        state.history.previewUrls.set(Number(item.image_job_id), url);
         container.innerHTML = `<img src="${url}" alt="${esc(t('Generated image'))}">`;
       } catch {
         container.textContent = t('Image file is unavailable');
       }
     }));
+  }
+
+  function openHistoryImage(imageJobId) {
+    const source = state.history.previewUrls.get(Number(imageJobId));
+    if (!source) return;
+    const items = (state.history.data?.items || []).map((item) => {
+      const id = Number(item.image_job_id || 0);
+      const src = state.history.previewUrls.get(id);
+      return src ? { id: String(id), src, type: 'image', fileName: `telegram-image-${id}` } : null;
+    }).filter(Boolean);
+    bridge().openMediaViewer?.(source, 'image', {
+      items,
+      initialIndex: items.findIndex((item) => item.src === source),
+    });
   }
 
   async function loadHistory({ preserveStatus = false } = {}) {

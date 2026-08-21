@@ -250,7 +250,7 @@
         getActiveChatFolder: () => getActiveChatFolder(),
         applyChatUpdate: (nextChat = {}) => applyChatUpdate(nextChat),
         dismissMobileComposer: (options = {}) => dismissMobileComposer(options),
-        openMediaViewer: (src, type = 'image') => openMediaViewer(src, type),
+        openMediaViewer: (src, type = 'image', options = {}) => openMediaViewer(src, type, options),
         closeMediaViewer: () => closeMediaViewer(),
         getMediaViewerState: () => mediaViewerController?.getMediaViewerState?.() || {
           scale: 1,
