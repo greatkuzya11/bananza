@@ -10,6 +10,13 @@
     draftIdentity: null,
     refreshTimer: null,
     loading: false,
+    history: {
+      botId: null,
+      userId: '',
+      page: 1,
+      data: null,
+      objectUrls: [],
+    },
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -74,6 +81,7 @@
                   <div class="ai-bot-actions">
                     <button id="telegramBotsNew" type="button" class="weather-action-btn">${esc(t('New bot'))}</button>
                     <button id="telegramBotsSave" type="button" class="btn-primary">${esc(t('Save bot'))}</button>
+                    <button id="telegramBotsHistory" type="button" class="weather-action-btn">${esc(t('History'))}</button>
                     <button id="telegramBotsDelete" type="button" class="weather-action-btn">${esc(t('Delete bot'))}</button>
                   </div>
                   <div id="telegramBotsStatus" class="voice-admin-status hidden" role="status" aria-live="polite"></div>
@@ -154,6 +162,37 @@
       bindEvents();
       bridge().registerManagedModal?.('telegramBotsModal');
     }
+    if (!$('#telegramBotHistoryModal')) {
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = `
+        <div id="telegramBotHistoryModal" class="modal hidden">
+          <div class="modal-content wide voice-admin-modal telegram-history-modal">
+            <div class="modal-header">
+              <h3>${esc(t('Telegram bot history'))}</h3>
+              <button type="button" class="modal-close" id="telegramBotHistoryClose" aria-label="${esc(t('Close'))}">×</button>
+            </div>
+            <div class="modal-body">
+              <div class="telegram-history-toolbar">
+                <div class="field-group">
+                  <label for="telegramHistoryUser">${esc(t('User'))}</label>
+                  <select id="telegramHistoryUser" class="modal-input"></select>
+                </div>
+                <button id="telegramHistoryClear" type="button" class="weather-action-btn">${esc(t('Clear bot history'))}</button>
+              </div>
+              <div id="telegramHistoryStatus" class="voice-admin-status hidden" role="status" aria-live="polite"></div>
+              <div id="telegramHistoryList" class="telegram-history-list"></div>
+              <div class="telegram-history-pager">
+                <button id="telegramHistoryPrevious" type="button" class="weather-action-btn">${esc(t('Previous page'))}</button>
+                <span id="telegramHistoryPage" class="settings-hint"></span>
+                <button id="telegramHistoryNext" type="button" class="weather-action-btn">${esc(t('Next page'))}</button>
+              </div>
+            </div>
+          </div>
+        </div>`;
+      document.body.appendChild(wrapper.firstElementChild);
+      bindHistoryEvents();
+      bridge().registerManagedModal?.('telegramBotHistoryModal');
+    }
     $('#settingsTelegramBots')?.classList.toggle('hidden', !isAdmin());
   }
 
@@ -162,6 +201,7 @@
     $('#telegramBotsModal')?.addEventListener('click', (event) => { if (event.target === $('#telegramBotsModal')) closeModal(); });
     $('#telegramBotsNew')?.addEventListener('click', newBot);
     $('#telegramBotsSave')?.addEventListener('click', saveBot);
+    $('#telegramBotsHistory')?.addEventListener('click', openHistory);
     $('#telegramBotsDelete')?.addEventListener('click', deleteSelectedBot);
     $('#telegramBotTestToken')?.addEventListener('click', testToken);
     $('#telegramBotDeleteToken')?.addEventListener('click', deleteToken);
@@ -183,6 +223,32 @@
     });
   }
 
+  function bindHistoryEvents() {
+    $('#telegramBotHistoryClose')?.addEventListener('click', closeHistory);
+    $('#telegramBotHistoryModal')?.addEventListener('click', (event) => {
+      if (event.target === $('#telegramBotHistoryModal')) closeHistory();
+    });
+    $('#telegramHistoryUser')?.addEventListener('change', () => {
+      state.history.userId = $('#telegramHistoryUser').value || '';
+      state.history.page = 1;
+      loadHistory();
+    });
+    $('#telegramHistoryPrevious')?.addEventListener('click', () => {
+      if (state.history.page > 1) {
+        state.history.page -= 1;
+        loadHistory();
+      }
+    });
+    $('#telegramHistoryNext')?.addEventListener('click', () => {
+      const totalPages = Number(state.history.data?.total_pages || 1);
+      if (state.history.page < totalPages) {
+        state.history.page += 1;
+        loadHistory();
+      }
+    });
+    $('#telegramHistoryClear')?.addEventListener('click', clearHistory);
+  }
+
   async function openModal() {
     if (!isAdmin()) return;
     ensureUi();
@@ -196,6 +262,149 @@
     window.clearInterval(state.refreshTimer);
     state.refreshTimer = null;
     bridge().closeManagedModal?.('telegramBotsModal') || $('#telegramBotsModal')?.classList.add('hidden');
+  }
+
+  function setHistoryStatus(message = '', kind = '') {
+    const node = $('#telegramHistoryStatus');
+    if (!node) return;
+    node.textContent = message ? t(message) : '';
+    node.className = `voice-admin-status${kind ? ` ${kind}` : ''}${message ? '' : ' hidden'}`;
+  }
+
+  function revokeHistoryObjectUrls() {
+    state.history.objectUrls.forEach((url) => URL.revokeObjectURL?.(url));
+    state.history.objectUrls = [];
+  }
+
+  async function openHistory() {
+    const bot = selectedBot();
+    if (!bot) return;
+    state.history.botId = Number(bot.id);
+    state.history.userId = '';
+    state.history.page = 1;
+    state.history.data = null;
+    bridge().openManagedModal?.('telegramBotHistoryModal');
+    await loadHistory();
+  }
+
+  function closeHistory() {
+    revokeHistoryObjectUrls();
+    bridge().closeManagedModal?.('telegramBotHistoryModal') || $('#telegramBotHistoryModal')?.classList.add('hidden');
+  }
+
+  function historyUserLabel(user) {
+    const username = String(user.telegram_user_username || '').trim();
+    const displayName = String(user.telegram_user_display_name || '').trim();
+    return [displayName, username ? `@${username}` : '', user.telegram_user_id ? `#${user.telegram_user_id}` : ''].filter(Boolean).join(' · ');
+  }
+
+  function historyStatusLabel(status) {
+    const labels = {
+      queued: 'Queued', processing: 'Processing', delivering: 'Delivering', completed: 'Completed', error: 'Failed',
+    };
+    return t(labels[status] || status || '');
+  }
+
+  function formatHistoryDate(value) {
+    const date = value ? new Date(`${String(value).replace(' ', 'T')}Z`) : null;
+    return date && !Number.isNaN(date.valueOf()) ? date.toLocaleString() : '';
+  }
+
+  function renderHistory() {
+    const data = state.history.data || { items: [], users: [], page: 1, total_pages: 1 };
+    const select = $('#telegramHistoryUser');
+    const items = Array.isArray(data.items) ? data.items : [];
+    if (!select) return;
+    select.innerHTML = `<option value="">${esc(t('All users'))}</option>${(data.users || []).map((user) => `<option value="${esc(user.telegram_user_id)}">${esc(historyUserLabel(user))}</option>`).join('')}`;
+    select.value = state.history.userId;
+    const list = $('#telegramHistoryList');
+    revokeHistoryObjectUrls();
+    list.innerHTML = items.length ? items.map((item) => {
+      const identity = historyUserLabel(item) || t('User');
+      const status = item.kind === 'combined'
+        ? `${esc(historyStatusLabel(item.transcription_status))} · ${esc(historyStatusLabel(item.image_status))}`
+        : esc(historyStatusLabel(item.status));
+      const type = item.kind === 'combined' ? t('Transcription and image')
+        : item.kind === 'image' ? t('Prompt and image') : t('Transcription');
+      const transcript = String(item.transcript_text || '').trim();
+      const prompt = String(item.prompt_text || '').trim();
+      return `<article class="telegram-history-item">
+        <div class="telegram-history-item-head"><strong>${esc(type)}</strong><span>${esc(identity)} · ${esc(formatHistoryDate(item.completed_at || item.created_at))}</span></div>
+        <div class="telegram-history-meta">${status}${item.provider || item.model ? ` · ${esc([item.provider, item.model].filter(Boolean).join(' / '))}` : ''}</div>
+        ${transcript ? `<details><summary>${esc(t('Transcription result'))}</summary><pre>${esc(transcript)}</pre></details>` : ''}
+        ${prompt ? `<details${item.kind === 'image' ? ' open' : ''}><summary>${esc(t('Image prompt'))}</summary><pre>${esc(prompt)}</pre></details>` : ''}
+        ${item.image_job_id && item.has_image ? `<div class="telegram-history-image" data-telegram-history-image="${Number(item.image_job_id)}"><span>${esc(t('Generated image'))}</span></div>` : ''}
+        ${item.image_job_id && !item.has_image && item.image_status === 'completed' ? `<div class="telegram-history-missing-image">${esc(t('Image file is unavailable'))}</div>` : ''}
+        ${item.error ? `<div class="telegram-runtime-error">${esc(item.error)}</div>` : ''}
+      </article>`;
+    }).join('') : `<div class="settings-hint">${esc(t('No Telegram history yet.'))}</div>`;
+    $('#telegramHistoryPage').textContent = t('Page {page} of {pages}', { page: data.page || 1, pages: data.total_pages || 1 });
+    $('#telegramHistoryPrevious').disabled = Number(data.page || 1) <= 1;
+    $('#telegramHistoryNext').disabled = Number(data.page || 1) >= Number(data.total_pages || 1);
+    loadHistoryPreviews(items).catch(() => {});
+  }
+
+  async function loadHistoryPreviews(items) {
+    const botId = Number(state.history.botId || 0);
+    const token = bridge().getToken?.();
+    if (!botId || !token || !$('#telegramBotHistoryModal') || $('#telegramBotHistoryModal').classList.contains('hidden')) return;
+    await Promise.all(items.filter((item) => item.image_job_id && item.has_image).map(async (item) => {
+      const selector = `[data-telegram-history-image="${Number(item.image_job_id)}"]`;
+      const container = $(selector);
+      if (!container) return;
+      try {
+        const response = await fetch(`/api/admin/telegram-bots/${botId}/history/images/${Number(item.image_job_id)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!response.ok) throw new Error('Image file is unavailable');
+        const url = URL.createObjectURL(await response.blob());
+        if (state.history.botId !== botId || !container.isConnected) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        state.history.objectUrls.push(url);
+        container.innerHTML = `<img src="${url}" alt="${esc(t('Generated image'))}">`;
+      } catch {
+        container.textContent = t('Image file is unavailable');
+      }
+    }));
+  }
+
+  async function loadHistory({ preserveStatus = false } = {}) {
+    const botId = Number(state.history.botId || 0);
+    if (!botId) return;
+    if (!preserveStatus) setHistoryStatus('Loading settings...', 'pending');
+    try {
+      const query = new URLSearchParams({ page: String(state.history.page), limit: '25' });
+      if (state.history.userId) query.set('user_id', state.history.userId);
+      const data = await bridge().api(`/api/admin/telegram-bots/${botId}/history?${query.toString()}`);
+      if (state.history.botId !== botId) return;
+      state.history.data = data;
+      state.history.page = Number(data.page || 1);
+      renderHistory();
+      if (!preserveStatus) setHistoryStatus();
+    } catch (error) {
+      setHistoryStatus(error.message || 'Could not load Telegram bot history', 'error');
+    }
+  }
+
+  async function clearHistory(event) {
+    const botId = Number(state.history.botId || 0);
+    if (!botId || !confirm(t('Clear all completed and failed Telegram operations for this bot? Active tasks will continue.'))) return;
+    setBusy(event.currentTarget, true, 'Deleting...');
+    try {
+      const data = await bridge().api(`/api/admin/telegram-bots/${botId}/history`, { method: 'DELETE' });
+      const cleared = data.cleared || {};
+      const successMessage = t('Telegram history cleared: {records} records, {files} images', {
+        records: Number(cleared.images || 0) + Number(cleared.transcriptions || 0),
+        files: Number(cleared.files || 0),
+      });
+      state.history.page = 1;
+      await loadHistory({ preserveStatus: true });
+      setHistoryStatus(successMessage, 'success');
+    } catch (error) {
+      setHistoryStatus(error.message || 'Could not clear Telegram bot history', 'error');
+    } finally { setBusy(event.currentTarget, false); }
   }
 
   async function loadBots() {
@@ -304,6 +513,7 @@
     renderRuntime(value);
     syncFeatureSections();
     $('#telegramBotsDelete').disabled = !bot;
+    $('#telegramBotsHistory').disabled = !bot;
   }
 
   function providerModelKey(provider) {
@@ -535,7 +745,9 @@
   window.addEventListener('bananza:ready', bootstrap);
   window.addEventListener('bananza:languagechange', () => {
     window.BananzaI18n?.applyStaticDom?.($('#telegramBotsModal') || document);
+    window.BananzaI18n?.applyStaticDom?.($('#telegramBotHistoryModal') || document);
     if ($('#telegramBotsModal')) render();
+    if (!$('#telegramBotHistoryModal')?.classList.contains('hidden') && state.history.data) renderHistory();
   });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bootstrap, { once: true });
   else bootstrap();

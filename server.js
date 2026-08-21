@@ -584,6 +584,7 @@ createTelegramTranscriptionFeature({
   adminOnly,
   secret: JWT_SECRET,
   server,
+  uploadsDir: UPLOADS_DIR,
   getAiBotFeature: () => aiBotFeature,
 });
 

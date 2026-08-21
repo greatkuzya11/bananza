@@ -71,6 +71,8 @@ function createTranscriptionJobsTable(db) {
       telegram_user_id TEXT NOT NULL,
       telegram_message_id INTEGER NOT NULL,
       language_code TEXT DEFAULT NULL,
+      telegram_user_username TEXT NOT NULL DEFAULT '',
+      telegram_user_display_name TEXT NOT NULL DEFAULT '',
       file_id TEXT NOT NULL,
       file_unique_id TEXT DEFAULT NULL,
       file_name TEXT DEFAULT NULL,
@@ -104,6 +106,8 @@ function createImageJobsTable(db) {
       telegram_user_id TEXT NOT NULL,
       telegram_message_id INTEGER NOT NULL,
       language_code TEXT DEFAULT NULL,
+      telegram_user_username TEXT NOT NULL DEFAULT '',
+      telegram_user_display_name TEXT NOT NULL DEFAULT '',
       prompt_text TEXT DEFAULT NULL,
       image_bot_id INTEGER NOT NULL,
       image_bot_name TEXT DEFAULT NULL,
@@ -116,6 +120,7 @@ function createImageJobsTable(db) {
       image_data BLOB DEFAULT NULL,
       image_mime_type TEXT DEFAULT NULL,
       image_file_name TEXT DEFAULT NULL,
+      stored_image_path TEXT DEFAULT NULL,
       generation_provider TEXT DEFAULT NULL,
       generation_model TEXT DEFAULT NULL,
       error TEXT DEFAULT NULL,
@@ -297,6 +302,17 @@ function initTelegramTranscriptionSchema(db) {
     }
     if (!columnExists(db, 'telegram_image_generation_jobs', 'context_warning')) {
       db.exec('ALTER TABLE telegram_image_generation_jobs ADD COLUMN context_warning INTEGER NOT NULL DEFAULT 0;');
+    }
+    for (const table of ['telegram_transcription_jobs', 'telegram_image_generation_jobs']) {
+      if (!columnExists(db, table, 'telegram_user_username')) {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN telegram_user_username TEXT NOT NULL DEFAULT '';`);
+      }
+      if (!columnExists(db, table, 'telegram_user_display_name')) {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN telegram_user_display_name TEXT NOT NULL DEFAULT '';`);
+      }
+    }
+    if (!columnExists(db, 'telegram_image_generation_jobs', 'stored_image_path')) {
+      db.exec('ALTER TABLE telegram_image_generation_jobs ADD COLUMN stored_image_path TEXT DEFAULT NULL;');
     }
     createIndexes(db);
 

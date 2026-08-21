@@ -142,3 +142,57 @@ test('Telegram bots admin edits capabilities and creates a second independent bo
   assert.equal(dom.window.document.querySelectorAll('[data-telegram-bot-id]').length, 2);
   dom.window.document.getElementById('telegramBotsClose').click();
 });
+
+test('Telegram bot history opens from settings, filters user operations, and clears terminal history', async (t) => {
+  const dom = createAppDom();
+  t.after(() => dom.window.close());
+  const calls = [];
+  const history = {
+    items: [{
+      kind: 'combined', record_id: 9, image_job_id: 9,
+      telegram_user_id: '777', telegram_user_username: 'alice', telegram_user_display_name: 'Alice',
+      transcript_text: 'Voice transcript', prompt_text: 'Image prompt', has_image: false,
+      status: 'completed', transcription_status: 'completed', image_status: 'completed',
+      provider: 'openai', model: 'gpt-image-2', created_at: '2026-08-21 12:00:00', completed_at: '2026-08-21 12:01:00', error: null,
+    }],
+    users: [{ telegram_user_id: '777', telegram_user_username: 'alice', telegram_user_display_name: 'Alice', count: 1 }],
+    page: 1, limit: 25, total: 1, total_pages: 1,
+  };
+  dom.window.confirm = () => true;
+  installAppBridge(dom, {
+    t: (key, params = {}) => Object.entries(params).reduce(
+      (text, [name, value]) => text.replaceAll(`{${name}}`, String(value)), String(key)
+    ),
+    async api(url, options = {}) {
+      calls.push({ url, options });
+      if (url === '/api/admin/telegram-bots' && !options.method) return payload();
+      if (url.startsWith('/api/admin/telegram-bots/1/history?')) return history;
+      if (url === '/api/admin/telegram-bots/1/history' && options.method === 'DELETE') {
+        return { ok: true, cleared: { images: 1, transcriptions: 1, files: 1 } };
+      }
+      return payload();
+    },
+  });
+  loadBrowserScript(dom, 'public/js/telegram-transcription.js');
+  dom.window.document.dispatchEvent(new dom.window.Event('DOMContentLoaded'));
+  await tick();
+  dom.window.document.getElementById('settingsTelegramBots').click();
+  await tick();
+  dom.window.document.getElementById('telegramBotsHistory').click();
+  await tick();
+  await tick();
+
+  const historyModal = dom.window.document.getElementById('telegramBotHistoryModal');
+  assert.equal(historyModal.classList.contains('hidden'), false);
+  assert.match(dom.window.document.getElementById('telegramHistoryList').textContent, /Voice transcript/);
+  assert.match(dom.window.document.getElementById('telegramHistoryList').textContent, /Image prompt/);
+  assert.equal(dom.window.document.getElementById('telegramHistoryUser').value, '');
+  dom.window.document.getElementById('telegramHistoryUser').value = '777';
+  dom.window.document.getElementById('telegramHistoryUser').dispatchEvent(new dom.window.Event('change'));
+  await tick();
+  assert.ok(calls.some((call) => call.url.includes('history?page=1&limit=25&user_id=777')));
+
+  dom.window.document.getElementById('telegramHistoryClear').click();
+  await tick();
+  assert.ok(calls.some((call) => call.url === '/api/admin/telegram-bots/1/history' && call.options.method === 'DELETE'));
+});

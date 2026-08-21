@@ -210,7 +210,7 @@ test('Telegram update is persisted with cursor before worker execution and dupli
     message: {
       message_id: 9,
       chat: { id: 777, type: 'private' },
-      from: { id: 777, language_code: 'ru' },
+      from: { id: 777, username: 'voice_user', first_name: 'Voice', last_name: 'User', language_code: 'ru' },
       voice: { file_id: 'voice-file', file_unique_id: 'unique', file_size: 1024, duration: 2 },
     },
   };
@@ -222,6 +222,8 @@ test('Telegram update is persisted with cursor before worker execution and dupli
   assert.equal(db.prepare('SELECT next_update_id FROM telegram_bot_state WHERE telegram_bot_id=?').get(job.telegram_bot_id).next_update_id, 56);
   assert.equal(job.status, 'queued');
   assert.equal(job.telegram_user_id, '777');
+  assert.equal(job.telegram_user_username, 'voice_user');
+  assert.equal(job.telegram_user_display_name, 'Voice User');
   assert.equal(sent.length, 0);
   db.close();
 });
@@ -260,7 +262,7 @@ test('Telegram text prompt is persisted once for the selected image bot before w
       message_id: 12,
       text: 'Нарисуй банан на синем фоне',
       chat: { id: 777, type: 'private' },
-      from: { id: 777, language_code: 'ru' },
+      from: { id: 777, username: 'prompt_user', first_name: 'Prompt', last_name: 'User', language_code: 'ru' },
     },
   };
   const client = { async sendMessage() { return { message_id: 13 }; } };
@@ -270,6 +272,8 @@ test('Telegram text prompt is persisted once for the selected image bot before w
   const rows = db.prepare('SELECT * FROM telegram_image_generation_jobs').all();
   assert.equal(rows.length, 1);
   assert.equal(rows[0].prompt_text, 'Нарисуй банан на синем фоне');
+  assert.equal(rows[0].telegram_user_username, 'prompt_user');
+  assert.equal(rows[0].telegram_user_display_name, 'Prompt User');
   assert.equal(rows[0].image_bot_id, 91);
   assert.equal(JSON.parse(rows[0].image_bot_profile_json).image_model, 'gpt-image-2');
   assert.equal(rows[0].status, 'queued');
@@ -277,8 +281,10 @@ test('Telegram text prompt is persisted once for the selected image bot before w
   db.close();
 });
 
-test('Telegram image worker persists delivery bytes, sends photo, and clears transient payloads', async () => {
+test('Telegram image worker stores the completed image, sends photo, and clears only transient payloads', async (t) => {
   const db = createDb();
+  const uploadsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bananza-telegram-history-'));
+  t.after(() => fs.rmSync(uploadsDir, { recursive: true, force: true }));
   setSettings(db, {
     ...DEFAULT_SETTINGS,
     bot_token: '123456:image-worker-token',
@@ -304,6 +310,7 @@ test('Telegram image worker persists delivery bytes, sends photo, and clears tra
     auth: (_req, _res, next) => next(),
     adminOnly: (_req, _res, next) => next(),
     secret: 'server-secret',
+    uploadsDir,
     getAiBotFeature: () => ({
       listTelegramImageBots: () => [imageBot],
       async generateTelegramImage(args) {
@@ -344,8 +351,10 @@ test('Telegram image worker persists delivery bytes, sends photo, and clears tra
   assert.equal(generationCalls, 1);
   assert.equal(generationArgs.botSnapshot.image_model, 'gpt-image-2');
   assert.equal(completed.status, 'completed');
-  assert.equal(completed.prompt_text, null);
+  assert.equal(completed.prompt_text, 'banana poster');
   assert.equal(completed.image_data, null);
+  assert.match(completed.stored_image_path, new RegExp(`^telegram/${completed.telegram_bot_id}/[a-f0-9-]+\\.png$`));
+  assert.equal(fs.existsSync(path.join(uploadsDir, completed.stored_image_path)), true);
   assert.equal(completed.generation_provider, 'openai');
   assert.equal(completed.generation_model, 'gpt-image-2');
   assert.ok(telegramCalls.some((call) => /\/sendMessage$/.test(call.url)));
@@ -354,8 +363,10 @@ test('Telegram image worker persists delivery bytes, sends photo, and clears tra
   db.close();
 });
 
-test('Telegram transcription hands off to image generation and sends transcript as photo caption', async () => {
+test('Telegram transcription hands off to image generation and sends transcript as photo caption', async (t) => {
   const db = createDb();
+  const uploadsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bananza-telegram-history-'));
+  t.after(() => fs.rmSync(uploadsDir, { recursive: true, force: true }));
   const bot = setSettings(db, {
     ...DEFAULT_SETTINGS,
     bot_token: '123456:combined-worker-token',
@@ -383,6 +394,7 @@ test('Telegram transcription hands off to image generation and sends transcript 
     app: fakeApp(), db,
     auth: (_req, _res, next) => next(), adminOnly: (_req, _res, next) => next(),
     secret: 'server-secret',
+    uploadsDir,
     getAiBotFeature: () => ({
       async generateTelegramImage(args) {
         assert.equal(args.prompt, transcript);
@@ -415,8 +427,10 @@ test('Telegram transcription hands off to image generation and sends transcript 
   assert.equal(deliveredTranscript, transcript.replace(/\s+/g, ' ').trim());
   const completed = db.prepare('SELECT * FROM telegram_image_generation_jobs').get();
   assert.equal(completed.status, 'completed');
-  assert.equal(completed.prompt_text, null);
+  assert.equal(completed.prompt_text, transcript);
   assert.equal(completed.image_data, null);
+  assert.equal(db.prepare('SELECT transcript_text FROM telegram_transcription_jobs WHERE id=1').get().transcript_text, transcript);
+  assert.equal(fs.existsSync(path.join(uploadsDir, completed.stored_image_path)), true);
   db.close();
 });
 
@@ -450,12 +464,14 @@ test('Telegram image failure returns the linked transcript and image error', asy
   const messages = telegramCalls.filter((call) => /\/sendMessage$/.test(call.url))
     .map((call) => JSON.parse(call.options.body).text);
   assert.deepEqual(messages, ['Recovered transcript', 'Could not create or send the image. Try again.']);
-  assert.equal(db.prepare('SELECT prompt_text FROM telegram_image_generation_jobs').get().prompt_text, null);
+  assert.equal(db.prepare('SELECT prompt_text FROM telegram_image_generation_jobs').get().prompt_text, 'Recovered transcript');
   db.close();
 });
 
-test('Telegram image delivery resumes from persisted bytes without regenerating and falls back to document', async () => {
+test('Telegram image delivery resumes from stored image without regenerating and falls back to document', async (t) => {
   const db = createDb();
+  const uploadsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bananza-telegram-history-'));
+  t.after(() => fs.rmSync(uploadsDir, { recursive: true, force: true }));
   setSettings(db, {
     ...DEFAULT_SETTINGS,
     bot_token: '123456:restart-token',
@@ -463,14 +479,19 @@ test('Telegram image delivery resumes from persisted bytes without regenerating 
     image_bot_id: 91,
     allowed_user_ids: ['777'],
   }, 'server-secret');
+  const botId = db.prepare('SELECT id FROM telegram_bots LIMIT 1').get().id;
+  const storedImagePath = path.posix.join('telegram', String(botId), 'persisted.webp');
+  const storedImageFile = path.join(uploadsDir, ...storedImagePath.split('/'));
+  fs.mkdirSync(path.dirname(storedImageFile), { recursive: true });
+  fs.writeFileSync(storedImageFile, 'persisted-image');
   db.prepare(`
     INSERT INTO telegram_image_generation_jobs(
       telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
       language_code, prompt_text, image_bot_id, image_bot_name, status,
-      status_message_id, image_data, image_mime_type, image_file_name
+      status_message_id, image_mime_type, image_file_name, stored_image_path
     ) VALUES((SELECT id FROM telegram_bots LIMIT 1), 202, '777', '777', 33, 'en', 'persisted prompt', 91, 'Painter',
-      'delivering', 34, ?, 'image/webp', 'persisted.webp')
-  `).run(Buffer.from('persisted-image'));
+      'delivering', 34, 'image/webp', 'persisted.webp', ?)
+  `).run(storedImagePath);
   let generationCalls = 0;
   const telegramCalls = [];
   const feature = createTelegramTranscriptionFeature({
@@ -479,6 +500,7 @@ test('Telegram image delivery resumes from persisted bytes without regenerating 
     auth: (_req, _res, next) => next(),
     adminOnly: (_req, _res, next) => next(),
     secret: 'server-secret',
+    uploadsDir,
     getAiBotFeature: () => ({
       listTelegramImageBots: () => [],
       async generateTelegramImage() { generationCalls += 1; },
@@ -497,8 +519,10 @@ test('Telegram image delivery resumes from persisted bytes without regenerating 
   const completed = db.prepare('SELECT * FROM telegram_image_generation_jobs WHERE update_id=202').get();
   assert.equal(generationCalls, 0);
   assert.equal(completed.status, 'completed');
-  assert.equal(completed.prompt_text, null);
+  assert.equal(completed.prompt_text, 'persisted prompt');
   assert.equal(completed.image_data, null);
+  assert.equal(completed.stored_image_path, storedImagePath);
+  assert.equal(fs.existsSync(storedImageFile), true);
   assert.ok(telegramCalls.some((call) => /\/sendDocument$/.test(call.url)));
   assert.ok(telegramCalls.every((call) => !/\/sendPhoto$/.test(call.url)));
   db.close();
@@ -581,6 +605,9 @@ test('legacy singleton settings, cursor, and jobs migrate once into the first Te
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM app_settings WHERE key=?').get('telegram_transcription_settings').count, 0);
   const job = db.prepare('SELECT * FROM telegram_image_generation_jobs').get();
   assert.equal(job.telegram_bot_id, bots[0].id);
+  assert.equal(job.telegram_user_username, '');
+  assert.equal(job.telegram_user_display_name, '');
+  assert.equal(job.stored_image_path, null);
   assert.equal(db.prepare('SELECT next_update_id FROM telegram_bot_state WHERE telegram_bot_id=?').get(bots[0].id).next_update_id, 73);
   assert.equal(db.pragma('integrity_check', { simple: true }), 'ok');
   db.close();
@@ -618,8 +645,10 @@ test('two Telegram bots accept the same update and message IDs with isolated cur
   db.close();
 });
 
-test('Telegram bot admin API sanitizes tokens and guards deletion per owning bot only', () => {
+test('Telegram bot admin API sanitizes tokens and guards deletion per owning bot only', async (t) => {
   const db = createDb();
+  const uploadsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bananza-telegram-bot-delete-'));
+  t.after(() => fs.rmSync(uploadsDir, { recursive: true, force: true }));
   db.pragma('foreign_keys = ON');
   const first = setSettings(db, {
     name: 'Busy bot', bot_token: '111111:first-secret', enabled: false,
@@ -632,10 +661,20 @@ test('Telegram bot admin API sanitizes tokens and guards deletion per owning bot
       telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id, file_id
     ) VALUES(?, 1, '1', '1', 1, 'voice')
   `).run(first.id);
+  const storedImagePath = path.posix.join('telegram', String(second.id), 'delete-me.png');
+  const storedImageFile = path.join(uploadsDir, ...storedImagePath.split('/'));
+  fs.mkdirSync(path.dirname(storedImageFile), { recursive: true });
+  fs.writeFileSync(storedImageFile, 'image');
+  db.prepare(`
+    INSERT INTO telegram_image_generation_jobs(
+      telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
+      prompt_text, image_bot_id, status, stored_image_path
+    ) VALUES(?, 8, '8', '8', 8, 'delete history', 9, 'completed', ?)
+  `).run(second.id, storedImagePath);
   const app = fakeApp();
   const feature = createTelegramTranscriptionFeature({
     app, db, auth: (_req, _res, next) => next(), adminOnly: (_req, _res, next) => next(),
-    secret: 'server-secret', getAiBotFeature: () => null,
+    secret: 'server-secret', uploadsDir, getAiBotFeature: () => null,
   });
   feature.stop();
   function response() {
@@ -656,13 +695,80 @@ test('Telegram bot admin API sanitizes tokens and guards deletion per owning bot
 
   const deleteRoute = app.routes.get('DELETE /api/admin/telegram-bots/:id(\\d+)');
   const idleDelete = response();
-  deleteRoute({ params: { id: String(second.id) } }, idleDelete);
+  await deleteRoute({ params: { id: String(second.id) } }, idleDelete);
   assert.equal(idleDelete.statusCode, 200);
   assert.equal(readBot(db, second.id), null);
+  assert.equal(fs.existsSync(storedImageFile), false);
 
   const busyDelete = response();
-  deleteRoute({ params: { id: String(first.id) } }, busyDelete);
+  await deleteRoute({ params: { id: String(first.id) } }, busyDelete);
   assert.equal(busyDelete.statusCode, 409);
   assert.ok(readBot(db, first.id));
+  db.close();
+});
+
+test('Telegram bot history groups combined jobs, filters users, and clears only terminal jobs and files', async (t) => {
+  const db = createDb();
+  const uploadsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bananza-telegram-history-api-'));
+  t.after(() => fs.rmSync(uploadsDir, { recursive: true, force: true }));
+  const bot = setSettings(db, { name: 'History bot', enabled: false }, 'server-secret');
+  const imagePath = path.join(uploadsDir, 'telegram', String(bot.id), 'history.png');
+  fs.mkdirSync(path.dirname(imagePath), { recursive: true });
+  fs.writeFileSync(imagePath, 'history-image');
+  db.prepare(`
+    INSERT INTO telegram_transcription_jobs(
+      telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
+      telegram_user_username, telegram_user_display_name, file_id, status, transcript_text
+    ) VALUES(?, 701, '1', '100', 1, 'alice', 'Alice Example', 'voice', 'completed', 'combined transcript')
+  `).run(bot.id);
+  db.prepare(`
+    INSERT INTO telegram_image_generation_jobs(
+      telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
+      telegram_user_username, telegram_user_display_name, prompt_text, image_bot_id,
+      source_transcription_job_id, status, stored_image_path, image_mime_type
+    ) VALUES(?, 702, '1', '100', 1, 'alice', 'Alice Example', 'combined prompt', 9, 1,
+      'completed', ?, 'image/png')
+  `).run(bot.id, path.posix.join('telegram', String(bot.id), 'history.png'));
+  db.prepare(`
+    INSERT INTO telegram_image_generation_jobs(
+      telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
+      telegram_user_username, telegram_user_display_name, prompt_text, image_bot_id, status
+    ) VALUES(?, 703, '2', '200', 2, 'bob', 'Bob Example', 'active prompt', 9, 'processing')
+  `).run(bot.id);
+  const app = fakeApp();
+  const feature = createTelegramTranscriptionFeature({
+    app, db, uploadsDir, auth: (_req, _res, next) => next(), adminOnly: (_req, _res, next) => next(),
+    secret: 'server-secret', getAiBotFeature: () => null,
+  });
+  feature.stop();
+  const response = () => ({
+    statusCode: 200,
+    body: null,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; },
+  });
+  const historyRoute = app.routes.get('GET /api/admin/telegram-bots/:id(\\d+)/history');
+  const history = response();
+  historyRoute({ params: { id: String(bot.id) }, query: { user_id: '100', limit: '1', page: '1' } }, history);
+  assert.equal(history.statusCode, 200);
+  assert.equal(history.body.total, 1);
+  assert.equal(history.body.items[0].kind, 'combined');
+  assert.equal(history.body.items[0].transcript_text, 'combined transcript');
+  assert.equal(history.body.items[0].prompt_text, 'combined prompt');
+  assert.equal(history.body.items[0].has_image, true);
+  assert.equal(Object.hasOwn(history.body.items[0], 'stored_image_path'), false);
+  assert.deepEqual(history.body.users, [{
+    telegram_user_id: '100', telegram_user_username: 'alice', telegram_user_display_name: 'Alice Example', count: 1,
+  }, {
+    telegram_user_id: '200', telegram_user_username: 'bob', telegram_user_display_name: 'Bob Example', count: 1,
+  }]);
+
+  const clearRoute = app.routes.get('DELETE /api/admin/telegram-bots/:id(\\d+)/history');
+  const cleared = response();
+  await clearRoute({ params: { id: String(bot.id) } }, cleared);
+  assert.deepEqual(cleared.body.cleared, { images: 1, transcriptions: 1, files: 1 });
+  assert.equal(fs.existsSync(imagePath), false);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM telegram_image_generation_jobs WHERE status IN (\'queued\', \'processing\')').get().count, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM telegram_transcription_jobs').get().count, 0);
   db.close();
 });

@@ -133,6 +133,95 @@
   border-color: color-mix(in srgb, currentColor 45%, transparent);
 }
 
+.telegram-history-modal {
+  width: min(940px, calc(100vw - 24px));
+}
+
+.telegram-history-toolbar,
+.telegram-history-pager,
+.telegram-history-item-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.telegram-history-toolbar {
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.telegram-history-toolbar .field-group {
+  flex: 1 1 260px;
+  margin: 0;
+}
+
+.telegram-history-list {
+  display: grid;
+  gap: 12px;
+  max-height: min(60vh, 620px);
+  overflow: auto;
+}
+
+.telegram-history-item {
+  border: 1px solid var(--border-color, rgba(127, 127, 127, 0.25));
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--surface-muted, rgba(127, 127, 127, 0.08));
+}
+
+.telegram-history-item-head {
+  justify-content: space-between;
+}
+
+.telegram-history-item-head span,
+.telegram-history-meta {
+  color: var(--text-muted, #8b8b8b);
+  font-size: 12px;
+}
+
+.telegram-history-meta {
+  margin-top: 4px;
+}
+
+.telegram-history-item details {
+  margin-top: 10px;
+}
+
+.telegram-history-item summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.telegram-history-item pre {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+
+.telegram-history-image,
+.telegram-history-missing-image {
+  margin-top: 10px;
+}
+
+.telegram-history-image img {
+  display: block;
+  max-width: min(100%, 420px);
+  max-height: 360px;
+  margin-top: 6px;
+  border-radius: 8px;
+}
+
+.telegram-history-missing-image {
+  color: var(--danger-color, #c43d3d);
+}
+
+.telegram-history-pager {
+  justify-content: center;
+  margin-top: 14px;
+}
+
 @media (max-width: 900px) {
   .telegram-bots-layout {
     grid-template-columns: 1fr;
@@ -141,6 +230,11 @@
 
 @media (max-width: 640px) {
   .telegram-transcription-modal {
+    width: calc(100vw - 12px);
+    max-height: calc(100dvh - 12px);
+  }
+
+  .telegram-history-modal {
     width: calc(100vw - 12px);
     max-height: calc(100dvh - 12px);
   }

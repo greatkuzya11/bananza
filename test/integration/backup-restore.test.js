@@ -54,14 +54,18 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
         allowed_user_ids: ['777'],
       }, sandboxSecret);
       telegramBotId = telegramBot.id;
+      const telegramStoredImagePath = path.posix.join('telegram', String(telegramBotId), 'backup-image.png');
+      const telegramStoredImageFile = path.join(sandbox.appDir, 'uploads', ...telegramStoredImagePath.split('/'));
+      fs.mkdirSync(path.dirname(telegramStoredImageFile), { recursive: true });
+      fs.writeFileSync(telegramStoredImageFile, tinyPngBuffer());
       liveDb.prepare(`
         INSERT INTO telegram_image_generation_jobs(
           telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
           language_code, prompt_text, image_bot_id, image_bot_name, status,
-          image_data, image_mime_type, image_file_name
+          image_data, image_mime_type, image_file_name, stored_image_path
         ) VALUES(?, ?, '777', '777', 42, 'ru', 'backup image prompt', ?, 'Backup image bot',
-          'delivering', ?, 'image/png', 'backup-image.png')
-      `).run(telegramBotId, telegramImageUpdateId, bot.lastInsertRowid, tinyPngBuffer());
+          'delivering', ?, 'image/png', 'backup-image.png', ?)
+      `).run(telegramBotId, telegramImageUpdateId, bot.lastInsertRowid, tinyPngBuffer(), telegramStoredImagePath);
     } finally {
       liveDb.close();
     }
@@ -193,6 +197,8 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
       assert.equal(telegramImageJob.status, 'delivering');
       assert.equal(telegramImageJob.prompt_text, 'backup image prompt');
       assert.deepEqual(telegramImageJob.image_data, tinyPngBuffer());
+      assert.equal(telegramImageJob.stored_image_path, path.posix.join('telegram', String(telegramBotId), 'backup-image.png'));
+      assert.equal(fs.existsSync(path.join(sandbox.appDir, 'uploads', ...telegramImageJob.stored_image_path.split('/'))), true);
       assert.equal(restoredDb.pragma('integrity_check', { simple: true }), 'ok');
     } finally {
       restoredDb.close();

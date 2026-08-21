@@ -42,6 +42,32 @@ function positiveInteger(value) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
 }
 
+function telegramUsername(user = {}) {
+  return String(user?.username || '').trim().replace(/^@/, '').slice(0, 64);
+}
+
+function telegramDisplayName(user = {}) {
+  return [user?.first_name, user?.last_name]
+    .map((part) => String(part || '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join(' ')
+    .slice(0, 256);
+}
+
+function imageExtension(mimeType, filename) {
+  const byMime = {
+    'image/jpeg': '.jpg',
+    'image/jpg': '.jpg',
+    'image/png': '.png',
+    'image/webp': '.webp',
+    'image/gif': '.gif',
+  };
+  const normalized = String(mimeType || '').toLowerCase();
+  if (byMime[normalized]) return byMime[normalized];
+  const extension = path.extname(String(filename || '')).toLowerCase();
+  return ['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(extension) ? extension : '.png';
+}
+
 function safeErrorMessage(error, fallback = 'Telegram transcription failed') {
   const message = String(error?.message || fallback)
     .replace(/https:\/\/api\.telegram\.org\/(?:file\/)?bot[^\s/]+/gi, 'Telegram API')
@@ -71,6 +97,7 @@ function createTelegramTranscriptionFeature({
   adminOnly,
   secret,
   server,
+  uploadsDir = path.join(process.cwd(), 'uploads'),
   getAiBotFeature,
   fetchImpl = global.fetch,
 } = {}) {
@@ -79,6 +106,7 @@ function createTelegramTranscriptionFeature({
   const pollGenerations = new Map();
   const transcriptionWorkers = new Set();
   const imageWorkers = new Set();
+  const telegramUploadsDir = path.join(uploadsDir, 'telegram');
   let stopped = false;
 
   function runtimeFor(botId) {
@@ -138,9 +166,10 @@ function createTelegramTranscriptionFeature({
   const insertJobStmt = db.prepare(`
     INSERT OR IGNORE INTO telegram_transcription_jobs(
       telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id, language_code,
+      telegram_user_username, telegram_user_display_name,
       file_id, file_unique_id, file_name, mime_type, file_size, duration_seconds,
       profile_json, status, transcription_provider, transcription_model
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?, 'queued', ?, ?)
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'queued', ?, ?)
   `);
   const acceptJobTx = db.transaction((botId, updateId, message, media, profile, provider, model) => {
     const result = insertJobStmt.run(
@@ -150,6 +179,8 @@ function createTelegramTranscriptionFeature({
       String(message.from.id),
       message.message_id,
       message.from.language_code || '',
+      telegramUsername(message.from),
+      telegramDisplayName(message.from),
       media.file_id,
       media.file_unique_id || '',
       media.file_name || '',
@@ -166,8 +197,9 @@ function createTelegramTranscriptionFeature({
   const insertImageJobStmt = db.prepare(`
     INSERT OR IGNORE INTO telegram_image_generation_jobs(
       telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
-      language_code, prompt_text, image_bot_id, image_bot_name, image_bot_profile_json, status
-    ) VALUES(?,?,?,?,?,?,?,?,?,?, 'queued')
+      language_code, telegram_user_username, telegram_user_display_name,
+      prompt_text, image_bot_id, image_bot_name, image_bot_profile_json, status
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?, 'queued')
   `);
   const acceptImageJobTx = db.transaction((telegramBotId, updateId, message, prompt, bot) => {
     const result = insertImageJobStmt.run(
@@ -177,6 +209,8 @@ function createTelegramTranscriptionFeature({
       String(message.from.id),
       message.message_id,
       message.from.language_code || '',
+      telegramUsername(message.from),
+      telegramDisplayName(message.from),
       prompt,
       Number(bot.id),
       String(bot.name || ''),
@@ -195,9 +229,10 @@ function createTelegramTranscriptionFeature({
       const result = db.prepare(`
         INSERT INTO telegram_image_generation_jobs(
           telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
-          language_code, prompt_text, image_bot_id, image_bot_name, image_bot_profile_json,
+          language_code, telegram_user_username, telegram_user_display_name,
+          prompt_text, image_bot_id, image_bot_name, image_bot_profile_json,
           source_transcription_job_id, context_warning, status, status_message_id
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?, 'queued', ?)
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'queued', ?)
       `).run(
         job.telegram_bot_id,
         job.update_id,
@@ -205,6 +240,8 @@ function createTelegramTranscriptionFeature({
         job.telegram_user_id,
         job.telegram_message_id,
         job.language_code,
+        job.telegram_user_username || '',
+        job.telegram_user_display_name || '',
         transcript,
         profile.image_bot_id,
         profile.image_bot_name,
@@ -217,7 +254,7 @@ function createTelegramTranscriptionFeature({
     }
     db.prepare(`
       UPDATE telegram_transcription_jobs
-      SET status='completed', transcript_text=NULL, transcription_provider=?, transcription_model=?,
+      SET status='completed', transcription_provider=?, transcription_model=?,
         error=NULL, completed_at=datetime('now'), updated_at=datetime('now')
       WHERE id=?
     `).run(provider || '', model || '', job.id);
@@ -234,17 +271,47 @@ function createTelegramTranscriptionFeature({
     SET status='queued', updated_at=datetime('now')
     WHERE status IN ('processing','delivering')
   `).run();
-  db.prepare(`
-    DELETE FROM telegram_transcription_jobs
-    WHERE status IN ('completed','error') AND datetime(updated_at) < datetime('now','-30 days')
-  `).run();
-  db.prepare(`
-    DELETE FROM telegram_image_generation_jobs
-    WHERE status IN ('completed','error') AND datetime(updated_at) < datetime('now','-30 days')
-  `).run();
-
   function currentToken(botId) {
     return getBotToken(db, botId, secret);
+  }
+
+  function storedImageAbsolutePath(relativePath) {
+    const root = path.resolve(telegramUploadsDir);
+    const candidate = path.resolve(uploadsDir, String(relativePath || ''));
+    return candidate.startsWith(`${root}${path.sep}`) ? candidate : '';
+  }
+
+  async function persistGeneratedImage(job, buffer) {
+    const existing = storedImageAbsolutePath(job.stored_image_path);
+    if (existing && fs.existsSync(existing)) return job.stored_image_path;
+    const botId = positiveInteger(job.telegram_bot_id);
+    if (!botId) throw new Error('Telegram bot is not configured');
+    const relativePath = path.posix.join(
+      'telegram',
+      String(botId),
+      `${uuidv4()}${imageExtension(job.image_mime_type, job.image_file_name)}`,
+    );
+    const absolutePath = storedImageAbsolutePath(relativePath);
+    await fs.promises.mkdir(path.dirname(absolutePath), { recursive: true });
+    await fs.promises.writeFile(absolutePath, buffer, { flag: 'wx' });
+    db.prepare(`
+      UPDATE telegram_image_generation_jobs
+      SET stored_image_path=?, updated_at=datetime('now')
+      WHERE id=?
+    `).run(relativePath, job.id);
+    job.stored_image_path = relativePath;
+    return relativePath;
+  }
+
+  async function removeStoredImage(relativePath) {
+    const absolutePath = storedImageAbsolutePath(relativePath);
+    if (absolutePath) await fs.promises.rm(absolutePath, { force: true }).catch(() => {});
+  }
+
+  async function removeBotImages(botId) {
+    const id = positiveInteger(botId);
+    if (!id) return;
+    await fs.promises.rm(path.join(telegramUploadsDir, String(id)), { recursive: true, force: true }).catch(() => {});
   }
 
   function createClient(token) {
@@ -414,6 +481,99 @@ function createTelegramTranscriptionFeature({
       contextConvertBots: listContextBots(),
       imageBots: listImageBots(),
     };
+  }
+
+  const historyCte = `
+    WITH history AS (
+      SELECT
+        'transcription' AS kind, t.id AS record_id, NULL AS image_job_id,
+        t.telegram_user_id, t.telegram_user_username, t.telegram_user_display_name,
+        t.transcript_text, NULL AS prompt_text, NULL AS stored_image_path,
+        NULL AS image_mime_type, NULL AS image_file_name,
+        t.status AS status, t.status AS transcription_status, NULL AS image_status,
+        t.transcription_provider AS provider, t.transcription_model AS model, t.error,
+        t.created_at, t.completed_at
+      FROM telegram_transcription_jobs t
+      WHERE t.telegram_bot_id=?
+        AND NOT EXISTS (
+          SELECT 1 FROM telegram_image_generation_jobs linked
+          WHERE linked.source_transcription_job_id=t.id
+        )
+      UNION ALL
+      SELECT
+        CASE WHEN i.source_transcription_job_id IS NULL THEN 'image' ELSE 'combined' END AS kind,
+        i.id AS record_id, i.id AS image_job_id,
+        COALESCE(NULLIF(t.telegram_user_id, ''), i.telegram_user_id) AS telegram_user_id,
+        COALESCE(NULLIF(t.telegram_user_username, ''), i.telegram_user_username) AS telegram_user_username,
+        COALESCE(NULLIF(t.telegram_user_display_name, ''), i.telegram_user_display_name) AS telegram_user_display_name,
+        t.transcript_text, i.prompt_text, i.stored_image_path,
+        i.image_mime_type, i.image_file_name,
+        i.status AS status, t.status AS transcription_status, i.status AS image_status,
+        i.generation_provider AS provider, i.generation_model AS model, i.error,
+        i.created_at, i.completed_at
+      FROM telegram_image_generation_jobs i
+      LEFT JOIN telegram_transcription_jobs t ON t.id=i.source_transcription_job_id
+      WHERE i.telegram_bot_id=?
+    )
+  `;
+
+  function historyPayload(botId, { userId = '', page = 1, limit = 50 } = {}) {
+    const id = positiveInteger(botId);
+    const safeUserId = String(userId || '').trim().slice(0, 20);
+    const safeLimit = Math.min(100, Math.max(1, Number(limit) || 50));
+    const safePage = Math.max(1, Number(page) || 1);
+    const filter = `WHERE (?='' OR telegram_user_id=?)`;
+    const count = Number(db.prepare(`${historyCte} SELECT COUNT(*) AS count FROM history ${filter}`)
+      .get(id, id, safeUserId, safeUserId)?.count || 0);
+    const items = db.prepare(`${historyCte}
+      SELECT * FROM history ${filter}
+      ORDER BY datetime(COALESCE(completed_at, created_at)) DESC, record_id DESC
+      LIMIT ? OFFSET ?
+    `).all(id, id, safeUserId, safeUserId, safeLimit, (safePage - 1) * safeLimit);
+    const users = db.prepare(`${historyCte}
+      SELECT telegram_user_id, MAX(telegram_user_username) AS telegram_user_username,
+        MAX(telegram_user_display_name) AS telegram_user_display_name, COUNT(*) AS count
+      FROM history
+      GROUP BY telegram_user_id
+      ORDER BY datetime(MAX(created_at)) DESC, telegram_user_id ASC
+    `).all(id, id).map((row) => ({ ...row, count: Number(row.count || 0) }));
+    return {
+      items: items.map(({ stored_image_path, ...item }) => ({
+        ...item,
+        has_image: Boolean(stored_image_path),
+      })),
+      users,
+      page: safePage,
+      limit: safeLimit,
+      total: count,
+      total_pages: Math.max(1, Math.ceil(count / safeLimit)),
+    };
+  }
+
+  async function clearTerminalHistory(botId) {
+    const id = positiveInteger(botId);
+    const imagePaths = db.prepare(`
+      SELECT stored_image_path FROM telegram_image_generation_jobs
+      WHERE telegram_bot_id=? AND status IN ('completed','error') AND stored_image_path IS NOT NULL
+    `).all(id).map((row) => row.stored_image_path);
+    const result = db.transaction(() => {
+      const images = db.prepare(`
+        DELETE FROM telegram_image_generation_jobs
+        WHERE telegram_bot_id=? AND status IN ('completed','error')
+      `).run(id).changes;
+      const transcriptions = db.prepare(`
+        DELETE FROM telegram_transcription_jobs
+        WHERE telegram_bot_id=? AND status IN ('completed','error')
+          AND NOT EXISTS (
+            SELECT 1 FROM telegram_image_generation_jobs linked
+            WHERE linked.source_transcription_job_id=telegram_transcription_jobs.id
+              AND linked.status IN ${ACTIVE_STATUSES}
+          )
+      `).run(id).changes;
+      return { images, transcriptions };
+    })();
+    await Promise.all(imagePaths.map((storedImagePath) => removeStoredImage(storedImagePath)));
+    return { ...result, files: imagePaths.length };
   }
 
   function capabilityMessageKey(settings, base) {
@@ -641,7 +801,7 @@ function createTelegramTranscriptionFeature({
     }
     db.prepare(`
       UPDATE telegram_transcription_jobs
-      SET status='completed', transcript_text=NULL, error=NULL,
+      SET status='completed', error=NULL,
         completed_at=datetime('now'), updated_at=datetime('now')
       WHERE id=?
     `).run(job.id);
@@ -743,7 +903,7 @@ function createTelegramTranscriptionFeature({
     const message = safeErrorMessage(error);
     db.prepare(`
       UPDATE telegram_transcription_jobs
-      SET status='error', transcript_text=NULL, error=?, completed_at=datetime('now'), updated_at=datetime('now')
+      SET status='error', error=?, completed_at=datetime('now'), updated_at=datetime('now')
       WHERE id=?
     `).run(message, job.id);
     try {
@@ -801,7 +961,11 @@ function createTelegramTranscriptionFeature({
   }
 
   async function sendGeneratedImage(client, job) {
-    const buffer = Buffer.isBuffer(job.image_data) ? job.image_data : Buffer.from(job.image_data || []);
+    let buffer = Buffer.isBuffer(job.image_data) ? job.image_data : Buffer.from(job.image_data || []);
+    if (!buffer.length) {
+      const imagePath = storedImageAbsolutePath(job.stored_image_path);
+      if (imagePath && fs.existsSync(imagePath)) buffer = await fs.promises.readFile(imagePath);
+    }
     if (!buffer.length) throw new Error('Generated image is empty');
     if (buffer.length > MAX_TELEGRAM_DOCUMENT_BYTES) {
       const error = new Error('Generated image exceeds Telegram file size limit');
@@ -852,7 +1016,7 @@ function createTelegramTranscriptionFeature({
 
     db.prepare(`
       UPDATE telegram_image_generation_jobs
-      SET status='completed', prompt_text=NULL, image_data=NULL, error=NULL,
+      SET status='completed', image_data=NULL, error=NULL,
         completed_at=datetime('now'), updated_at=datetime('now')
       WHERE id=?
     `).run(job.id);
@@ -884,6 +1048,11 @@ function createTelegramTranscriptionFeature({
     ));
 
     if (job.image_data) {
+      await persistGeneratedImage(job, Buffer.isBuffer(job.image_data) ? job.image_data : Buffer.from(job.image_data));
+      await sendGeneratedImage(client, job);
+      return;
+    }
+    if (storedImageAbsolutePath(job.stored_image_path) && fs.existsSync(storedImageAbsolutePath(job.stored_image_path))) {
       await sendGeneratedImage(client, job);
       return;
     }
@@ -903,32 +1072,35 @@ function createTelegramTranscriptionFeature({
       error.userMessageKey = 'imageTooLarge';
       throw error;
     }
+    job.image_mime_type = String(result.mimeType || 'image/png');
+    job.image_file_name = String(result.filename || 'bananza-image.png');
+    const storedImagePath = await persistGeneratedImage(job, buffer);
     db.prepare(`
       UPDATE telegram_image_generation_jobs
       SET status='delivering', image_data=?, image_mime_type=?, image_file_name=?,
-        generation_provider=?, generation_model=?, error=NULL, updated_at=datetime('now')
+        stored_image_path=?, generation_provider=?, generation_model=?, error=NULL, updated_at=datetime('now')
       WHERE id=?
     `).run(
       buffer,
-      String(result.mimeType || 'image/png'),
-      String(result.filename || 'bananza-image.png'),
+      job.image_mime_type,
+      job.image_file_name,
+      storedImagePath,
       String(result.provider || ''),
       String(result.model || ''),
       job.id,
     );
     job.status = 'delivering';
     job.image_data = buffer;
-    job.image_mime_type = String(result.mimeType || 'image/png');
-    job.image_file_name = String(result.filename || 'bananza-image.png');
     await sendGeneratedImage(client, job);
   }
 
   async function failImageJob(job, error) {
     const message = safeErrorMessage(error, 'Telegram image generation failed');
     const fromTranscription = Number(job.source_transcription_job_id || 0) > 0;
+    await removeStoredImage(job.stored_image_path);
     db.prepare(`
       UPDATE telegram_image_generation_jobs
-      SET status='error', prompt_text=NULL, image_data=NULL, error=?,
+      SET status='error', image_data=NULL, stored_image_path=NULL, error=?,
         completed_at=datetime('now'), updated_at=datetime('now')
       WHERE id=?
     `).run(message, job.id);
@@ -1138,6 +1310,38 @@ function createTelegramTranscriptionFeature({
 
   app.get('/api/admin/telegram-bots', auth, adminOnly, (_req, res) => res.json(adminPayload()));
 
+  app.get('/api/admin/telegram-bots/:id(\\d+)/history', auth, adminOnly, (req, res) => {
+    const id = Number(req.params.id);
+    if (!readBot(db, id)) return res.status(404).json({ error: 'Telegram bot not found' });
+    return res.json(historyPayload(id, {
+      userId: req.query?.user_id,
+      page: req.query?.page,
+      limit: req.query?.limit,
+    }));
+  });
+
+  app.get('/api/admin/telegram-bots/:id(\\d+)/history/images/:jobId(\\d+)', auth, adminOnly, (req, res) => {
+    const botId = Number(req.params.id);
+    const job = db.prepare(`
+      SELECT stored_image_path, image_mime_type, image_file_name
+      FROM telegram_image_generation_jobs
+      WHERE id=? AND telegram_bot_id=?
+    `).get(Number(req.params.jobId), botId);
+    const imagePath = storedImageAbsolutePath(job?.stored_image_path);
+    if (!imagePath || !fs.existsSync(imagePath)) return res.status(404).json({ error: 'Telegram image not found' });
+    res.setHeader('Cache-Control', 'no-store');
+    res.type(String(job.image_mime_type || 'image/png'));
+    res.setHeader('Content-Disposition', `inline; filename="${String(job.image_file_name || 'telegram-image.png').replace(/["\\r\\n]/g, '')}"`);
+    return res.sendFile(imagePath);
+  });
+
+  app.delete('/api/admin/telegram-bots/:id(\\d+)/history', auth, adminOnly, async (req, res) => {
+    const id = Number(req.params.id);
+    if (!readBot(db, id)) return res.status(404).json({ error: 'Telegram bot not found' });
+    const cleared = await clearTerminalHistory(id);
+    return res.json({ ok: true, cleared });
+  });
+
   app.post('/api/admin/telegram-bots', auth, adminOnly, async (req, res) => {
     const incoming = req.body || {};
     const submittedToken = String(incoming.bot_token || '').trim();
@@ -1186,13 +1390,14 @@ function createTelegramTranscriptionFeature({
     }
   });
 
-  app.delete('/api/admin/telegram-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+  app.delete('/api/admin/telegram-bots/:id(\\d+)', auth, adminOnly, async (req, res) => {
     const id = Number(req.params.id);
     if (!readBot(db, id)) return res.status(404).json({ error: 'Telegram bot not found' });
     if (totalActiveCount(id) > 0) {
       return res.status(409).json({ error: 'Wait for active Telegram jobs before deleting the bot' });
     }
     stopPolling(id);
+    await removeBotImages(id);
     deleteBot(db, id);
     runtimes.delete(id);
     return res.json(adminPayload());
