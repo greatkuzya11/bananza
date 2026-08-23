@@ -4,7 +4,7 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
 const { createTelegramClient, TelegramApiError } = require('./client');
-const { extractTelegramAudio, safeAudioExtension, splitUnicodeText } = require('./helpers');
+const { extractTelegramAudio, extractTelegramImage, safeAudioExtension, splitUnicodeText } = require('./helpers');
 const { telegramText } = require('./messages');
 const {
   DEFAULT_SETTINGS,
@@ -36,6 +36,7 @@ const MAX_BOT_ACTIVE = 20;
 const MAX_USER_ACTIVE = 3;
 const MAX_TELEGRAM_PHOTO_BYTES = 10 * 1024 * 1024;
 const MAX_TELEGRAM_DOCUMENT_BYTES = 50 * 1024 * 1024;
+const MAX_TELEGRAM_DOWNLOAD_BYTES = 20 * 1024 * 1024;
 
 function positiveInteger(value) {
   const parsed = Number(value || 0);
@@ -198,10 +199,13 @@ function createTelegramTranscriptionFeature({
     INSERT OR IGNORE INTO telegram_image_generation_jobs(
       telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
       language_code, telegram_user_username, telegram_user_display_name,
-      prompt_text, image_bot_id, image_bot_name, image_bot_profile_json, status
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?, 'queued')
+      prompt_text, operation_kind, image_bot_id, image_bot_name, image_bot_profile_json,
+      source_file_id, source_file_unique_id, source_file_name, source_mime_type, source_file_size, status
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'queued')
   `);
-  const acceptImageJobTx = db.transaction((telegramBotId, updateId, message, prompt, bot) => {
+  const acceptImageJobTx = db.transaction((telegramBotId, updateId, message, prompt, bot, {
+    operationKind = 'image_generate', sourceImage = null, botSnapshot = null,
+  } = {}) => {
     const result = insertImageJobStmt.run(
       telegramBotId,
       updateId,
@@ -212,9 +216,15 @@ function createTelegramTranscriptionFeature({
       telegramUsername(message.from),
       telegramDisplayName(message.from),
       prompt,
+      operationKind,
       Number(bot.id),
       String(bot.name || ''),
-      JSON.stringify(imageBotSnapshot(bot)),
+      JSON.stringify(botSnapshot || imageBotSnapshot(bot)),
+      sourceImage?.file_id || null,
+      sourceImage?.file_unique_id || null,
+      sourceImage?.file_name || null,
+      sourceImage?.mime_type || null,
+      sourceImage?.file_size == null ? null : Number(sourceImage.file_size),
     );
     updateCursorStmt.run(updateId + 1, telegramBotId);
     return result.changes > 0;
@@ -334,6 +344,14 @@ function createTelegramTranscriptionFeature({
     }
   }
 
+  function listUniversalBots() {
+    try {
+      return getAiBotFeature?.()?.listTelegramUniversalBots?.() || [];
+    } catch {
+      return [];
+    }
+  }
+
   function selectableImageBot(botId) {
     const id = positiveInteger(botId);
     return listImageBots().find((bot) => (
@@ -347,6 +365,25 @@ function createTelegramTranscriptionFeature({
   function imageBotSnapshot(bot) {
     try {
       return getAiBotFeature?.()?.getTelegramImageBotSnapshot?.(bot?.id) || { ...bot };
+    } catch {
+      return { ...bot };
+    }
+  }
+
+  function selectableUniversalBot(botId) {
+    const id = positiveInteger(botId);
+    return listUniversalBots().find((bot) => (
+      positiveInteger(bot?.id) === id
+      && bot.enabled !== false
+      && bot.provider_enabled !== false
+      && bot.allow_image_generate !== false
+      && bot.allow_image_edit !== false
+    )) || null;
+  }
+
+  function universalBotSnapshot(bot) {
+    try {
+      return getAiBotFeature?.()?.getTelegramUniversalBotSnapshot?.(bot?.id) || { ...bot };
     } catch {
       return { ...bot };
     }
@@ -399,6 +436,14 @@ function createTelegramTranscriptionFeature({
   function validateImageConfiguration(settings) {
     if (settings.image_generation_enabled && !selectableImageBot(settings.image_bot_id)) {
       const error = new Error('Select an enabled image bot with image generation permission');
+      error.status = 400;
+      throw error;
+    }
+  }
+
+  function validateUniversalConfiguration(settings) {
+    if (settings.universal_enabled && !selectableUniversalBot(settings.universal_bot_id)) {
+      const error = new Error('Select an enabled universal bot with image generation and editing permissions');
       error.status = 400;
       throw error;
     }
@@ -480,13 +525,14 @@ function createTelegramTranscriptionFeature({
       options: VOICE_SETTINGS_OPTIONS,
       contextConvertBots: listContextBots(),
       imageBots: listImageBots(),
+      universalBots: listUniversalBots(),
     };
   }
 
   const historyCte = `
     WITH history AS (
       SELECT
-        'transcription' AS kind, t.id AS record_id, NULL AS image_job_id,
+        'transcription' AS kind, 'transcription' AS operation_kind, t.id AS record_id, NULL AS image_job_id,
         t.telegram_user_id, t.telegram_user_username, t.telegram_user_display_name,
         t.transcript_text, NULL AS prompt_text, NULL AS stored_image_path,
         NULL AS image_mime_type, NULL AS image_file_name,
@@ -501,7 +547,13 @@ function createTelegramTranscriptionFeature({
         )
       UNION ALL
       SELECT
-        CASE WHEN i.source_transcription_job_id IS NULL THEN 'image' ELSE 'combined' END AS kind,
+        CASE
+          WHEN i.operation_kind='universal_edit' THEN 'universal_edit'
+          WHEN i.operation_kind='universal_generate' THEN 'universal_generate'
+          WHEN i.source_transcription_job_id IS NULL THEN 'image'
+          ELSE 'combined'
+        END AS kind,
+        COALESCE(i.operation_kind, 'image_generate') AS operation_kind,
         i.id AS record_id, i.id AS image_job_id,
         COALESCE(NULLIF(t.telegram_user_id, ''), i.telegram_user_id) AS telegram_user_id,
         COALESCE(NULLIF(t.telegram_user_username, ''), i.telegram_user_username) AS telegram_user_username,
@@ -577,6 +629,12 @@ function createTelegramTranscriptionFeature({
   }
 
   function capabilityMessageKey(settings, base) {
+    if (settings.universal_enabled) {
+      if (settings.transcription_enabled && settings.image_generation_enabled) return `${base}UniversalAll`;
+      if (settings.transcription_enabled) return `${base}UniversalCombined`;
+      if (settings.image_generation_enabled) return `${base}UniversalImage`;
+      return `${base}Universal`;
+    }
     if (settings.transcription_enabled && settings.image_generation_enabled) return `${base}Combined`;
     if (settings.image_generation_enabled) return `${base}Image`;
     return base;
@@ -640,13 +698,18 @@ function createTelegramTranscriptionFeature({
     const language = message.from.language_code || '';
     const userId = String(message.from.id || '');
     const text = String(message.text || '').trim();
+    const caption = String(message.caption || '').trim();
     const isKnownCommand = /^\/(?:start|help)(?:@\w+)?(?:\s|$)/i.test(text);
     const isAnyCommand = /^\/\S+/u.test(text);
     const media = extractTelegramAudio(message);
+    const directImage = extractTelegramImage(message);
+    const replyImage = directImage ? null : extractTelegramImage(message.reply_to_message || {});
+    const sourceImage = directImage || replyImage;
+    const imagePrompt = directImage ? caption : (replyImage ? text : '');
 
     if (message.chat.type !== 'private') {
       recordCursor(botId, updateId);
-      if (isKnownCommand || media || text) {
+      if (isKnownCommand || media || sourceImage || text || caption) {
         await sendReply(client, message, telegramText(language, 'privateOnly')).catch(() => {});
       }
       return;
@@ -662,7 +725,7 @@ function createTelegramTranscriptionFeature({
 
     if (!settings.allowed_user_ids.includes(userId)) {
       recordCursor(botId, updateId);
-      if (media || text) await sendReply(client, message, telegramText(language, 'denied', userId));
+      if (media || sourceImage || text || caption) await sendReply(client, message, telegramText(language, 'denied', userId));
       return;
     }
 
@@ -705,6 +768,53 @@ function createTelegramTranscriptionFeature({
       return;
     }
 
+    if (sourceImage) {
+      if (!settings.universal_enabled) {
+        recordCursor(botId, updateId);
+        await sendReply(client, message, telegramText(language, 'universalDisabled'));
+        return;
+      }
+      if (!imagePrompt) {
+        recordCursor(botId, updateId);
+        await sendReply(client, message, telegramText(language, 'imageInstructionRequired'));
+        return;
+      }
+      if (Array.from(imagePrompt).length > 4000) {
+        recordCursor(botId, updateId);
+        await sendReply(client, message, telegramText(language, 'promptTooLong'));
+        return;
+      }
+      if (sourceImage.file_size && sourceImage.file_size > MAX_TELEGRAM_DOWNLOAD_BYTES) {
+        recordCursor(botId, updateId);
+        await sendReply(client, message, telegramText(language, 'sourceImageTooLarge'));
+        return;
+      }
+      const universalBot = selectableUniversalBot(settings.universal_bot_id);
+      if (!universalBot) {
+        recordCursor(botId, updateId);
+        await sendReply(client, message, telegramText(language, 'universalBotUnavailable'));
+        return;
+      }
+      if (String(sourceImage.mime_type || '').toLowerCase() === 'image/webp' && universalBot.provider === 'grok') {
+        recordCursor(botId, updateId);
+        await sendReply(client, message, telegramText(language, 'sourceImageFormatUnsupported'));
+        return;
+      }
+      if (totalActiveCount(botId) >= MAX_BOT_ACTIVE || userTotalActiveCount(botId, userId) >= MAX_USER_ACTIVE) {
+        recordCursor(botId, updateId);
+        await sendReply(client, message, telegramText(language, 'busy'));
+        return;
+      }
+      const inserted = acceptImageJobTx(botId, updateId, message, imagePrompt, universalBot, {
+        operationKind: 'universal_edit',
+        sourceImage,
+        botSnapshot: universalBotSnapshot(universalBot),
+      });
+      runtimeFor(botId).last_update_at = new Date().toISOString();
+      if (inserted) pumpImageWorker(botId);
+      return;
+    }
+
     if (text) {
       if (isAnyCommand) {
         recordCursor(botId, updateId);
@@ -721,8 +831,8 @@ function createTelegramTranscriptionFeature({
         await sendReply(client, message, telegramText(language, 'promptTooLong'));
         return;
       }
-      const imageBot = selectableImageBot(settings.image_bot_id);
-      if (!imageBot) {
+      const targetBot = selectableImageBot(settings.image_bot_id);
+      if (!targetBot) {
         recordCursor(botId, updateId);
         await sendReply(client, message, telegramText(language, 'imageBotUnavailable'));
         return;
@@ -732,7 +842,7 @@ function createTelegramTranscriptionFeature({
         await sendReply(client, message, telegramText(language, 'busy'));
         return;
       }
-      const inserted = acceptImageJobTx(botId, updateId, message, text, imageBot);
+      const inserted = acceptImageJobTx(botId, updateId, message, text, targetBot);
       runtimeFor(botId).last_update_at = new Date().toISOString();
       if (inserted) pumpImageWorker(botId);
       return;
@@ -1042,9 +1152,14 @@ function createTelegramTranscriptionFeature({
     const token = currentToken(job.telegram_bot_id);
     if (!token) throw new Error('Telegram bot token is not configured');
     const client = createClient(token);
+    const operationKind = String(job.operation_kind || 'image_generate');
+    const acceptedKey = operationKind === 'universal_edit'
+      ? 'universalEditAccepted'
+      : operationKind === 'universal_generate' ? 'universalGenerateAccepted'
+        : (Number(job.source_transcription_job_id || 0) > 0 ? 'imageFromTranscriptAccepted' : 'imageAccepted');
     await updateImageStatusMessage(client, job, telegramText(
       job.language_code,
-      Number(job.source_transcription_job_id || 0) > 0 ? 'imageFromTranscriptAccepted' : 'imageAccepted',
+      acceptedKey,
     ));
 
     if (job.image_data) {
@@ -1058,13 +1173,57 @@ function createTelegramTranscriptionFeature({
     }
 
     const feature = getAiBotFeature?.();
-    if (!feature?.generateTelegramImage) throw new Error('Image generation runtime is unavailable');
-    const result = await feature.generateTelegramImage({
-      botId: job.image_bot_id,
-      botSnapshot: JSON.parse(job.image_bot_profile_json || '{}'),
-      prompt: String(job.prompt_text || '').trim(),
-      allowLongPrompt: Number(job.source_transcription_job_id || 0) > 0,
-    });
+    let sourceWorkspace = '';
+    let result;
+    try {
+      if (operationKind === 'universal_generate' || operationKind === 'universal_edit') {
+        if (!feature?.runTelegramUniversalImage) throw new Error('Universal image runtime is unavailable');
+        let sourceImage = null;
+        if (operationKind === 'universal_edit') {
+          if (!job.source_file_id) {
+            const error = new Error('Source image is missing');
+            error.userMessageKey = 'imageInstructionRequired';
+            throw error;
+          }
+          if (Number(job.source_file_size || 0) > MAX_TELEGRAM_DOWNLOAD_BYTES) {
+            const error = new Error('Source image exceeds Telegram download limit');
+            error.userMessageKey = 'sourceImageTooLarge';
+            throw error;
+          }
+          sourceWorkspace = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bananza-telegram-image-'));
+          const sourcePath = path.join(sourceWorkspace, `source${imageExtension(job.source_mime_type, job.source_file_name)}`);
+          const file = await retryTelegram(() => client.getFile(job.source_file_id));
+          if (!file?.file_path) throw new Error('Telegram did not return an image file path');
+          await retryTelegram(() => client.downloadFile(
+            file.file_path,
+            sourcePath,
+            MAX_TELEGRAM_DOWNLOAD_BYTES,
+          ));
+          const buffer = await fs.promises.readFile(sourcePath);
+          sourceImage = {
+            buffer,
+            mimeType: String(job.source_mime_type || 'image/jpeg'),
+            filename: String(job.source_file_name || path.basename(sourcePath)),
+          };
+        }
+        result = await feature.runTelegramUniversalImage({
+          botId: job.image_bot_id,
+          botSnapshot: JSON.parse(job.image_bot_profile_json || '{}'),
+          prompt: String(job.prompt_text || '').trim(),
+          sourceImage,
+        });
+      } else {
+        if (!feature?.generateTelegramImage) throw new Error('Image generation runtime is unavailable');
+        result = await feature.generateTelegramImage({
+          botId: job.image_bot_id,
+          botSnapshot: JSON.parse(job.image_bot_profile_json || '{}'),
+          prompt: String(job.prompt_text || '').trim(),
+          allowLongPrompt: Number(job.source_transcription_job_id || 0) > 0,
+        });
+      }
+    } finally {
+      if (sourceWorkspace) await fs.promises.rm(sourceWorkspace, { recursive: true, force: true }).catch(() => {});
+    }
     const buffer = Buffer.isBuffer(result?.buffer) ? result.buffer : Buffer.from(result?.buffer || []);
     if (!buffer.length) throw new Error('Image generation returned empty data');
     if (buffer.length > MAX_TELEGRAM_DOCUMENT_BYTES) {
@@ -1153,7 +1312,7 @@ function createTelegramTranscriptionFeature({
     while (!stopped && generation === pollGenerations.get(botId) && !controller.signal.aborted) {
       const settings = readBot(db, botId);
       const token = currentToken(botId);
-      if (!settings || (!settings.transcription_enabled && !settings.image_generation_enabled) || !token) break;
+      if (!settings || (!settings.transcription_enabled && !settings.image_generation_enabled && !settings.universal_enabled) || !token) break;
       const client = createClient(token);
       try {
         const offset = Number(stateStmt.get(botId)?.next_update_id || 0);
@@ -1200,7 +1359,7 @@ function createTelegramTranscriptionFeature({
     pumpWorker(id);
     pumpImageWorker(id);
     if (stopped || !settings || runtime.running
-      || (!settings.transcription_enabled && !settings.image_generation_enabled) || !token) return;
+      || (!settings.transcription_enabled && !settings.image_generation_enabled && !settings.universal_enabled) || !token) return;
     runtime.state = 'starting';
     runtime.webhook_conflict = false;
     runtime.last_error = '';
@@ -1301,7 +1460,8 @@ function createTelegramTranscriptionFeature({
     requireName(draft);
     validateConfiguration(draft);
     validateImageConfiguration(draft);
-    if ((draft.transcription_enabled || draft.image_generation_enabled) && !token) {
+    validateUniversalConfiguration(draft);
+    if ((draft.transcription_enabled || draft.image_generation_enabled || draft.universal_enabled) && !token) {
       const error = new Error('Telegram bot token is required');
       error.status = 400;
       throw error;
@@ -1475,6 +1635,32 @@ function createTelegramTranscriptionFeature({
       });
     } catch (error) {
       return res.status(error.status || 400).json({ error: safeErrorMessage(error, 'Telegram image bot test failed') });
+    }
+  });
+
+  app.post('/api/admin/telegram-bots/test-universal', auth, adminOnly, async (req, res) => {
+    const bot = selectableUniversalBot(req.body?.universal_bot_id);
+    if (!bot) {
+      return res.status(400).json({ error: 'Select an enabled universal bot with image generation and editing permissions' });
+    }
+    try {
+      const feature = getAiBotFeature?.();
+      if (!feature?.runTelegramUniversalImage) throw new Error('Universal image runtime is unavailable');
+      const startedAt = Date.now();
+      const result = await feature.runTelegramUniversalImage({
+        botId: bot.id,
+        prompt: 'A cheerful yellow banana on a clean blue background, friendly modern digital illustration, no text.',
+      });
+      return res.json({
+        ok: true,
+        provider: result.provider || bot.provider || '',
+        model: result.model || bot.image_model || '',
+        latency_ms: Date.now() - startedAt,
+        mime_type: result.mimeType || 'image/png',
+        bytes: Number(result.buffer?.length || 0),
+      });
+    } catch (error) {
+      return res.status(error.status || 400).json({ error: safeErrorMessage(error, 'Telegram universal bot test failed') });
     }
   });
 

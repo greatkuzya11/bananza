@@ -7,6 +7,7 @@
     options: { providers: [], models: {} },
     contextBots: [],
     imageBots: [],
+    universalBots: [],
     draftIdentity: null,
     refreshTimer: null,
     loading: false,
@@ -126,6 +127,10 @@
                       <span>${esc(t('Enable Telegram image generation'))}</span>
                       <label class="toggle-switch"><input type="checkbox" id="telegramBotImageEnabled"><span class="toggle-slider"></span></label>
                     </div>
+                    <div class="settings-item settings-toggle-item">
+                      <span>${esc(t('Enable Telegram universal editing'))}</span>
+                      <label class="toggle-switch"><input type="checkbox" id="telegramBotUniversalEnabled"><span class="toggle-slider"></span></label>
+                    </div>
                     <div id="telegramBotTranscriptImageToggle" class="settings-item settings-toggle-item hidden">
                       <span>${esc(t('Generate image from transcription'))}</span>
                       <label class="toggle-switch"><input type="checkbox" id="telegramBotGenerateImageFromTranscription"><span class="toggle-slider"></span></label>
@@ -152,6 +157,13 @@
                     <div class="field-group"><label>${esc(t('Image bot'))}</label><select id="telegramBotImageBot" class="modal-input"></select></div>
                     <div id="telegramBotImageReadiness" class="telegram-provider-readiness"></div>
                     <button id="telegramBotTestImage" type="button" class="btn-sm voice-inline-btn">${esc(t('Test image bot'))}</button>
+                  </section>
+                  <section id="telegramBotUniversalSection" class="telegram-feature-section">
+                    <h4>${esc(t('Universal image editing'))}</h4>
+                    <div class="field-group"><label>${esc(t('Universal bot'))}</label><select id="telegramBotUniversalBot" class="modal-input"></select></div>
+                    <div class="voice-form-hint">${esc(t('The universal bot is used only for an image with an editing instruction. Plain text and transcription-to-image use the classic image bot.'))}</div>
+                    <div id="telegramBotUniversalReadiness" class="telegram-provider-readiness"></div>
+                    <button id="telegramBotTestUniversal" type="button" class="btn-sm voice-inline-btn">${esc(t('Test universal bot'))}</button>
                   </section>
                   <div id="telegramBotRuntime" class="telegram-runtime"></div>
                 </div>
@@ -209,11 +221,14 @@
     $('#telegramBotClaim')?.addEventListener('click', claimBot);
     $('#telegramBotTestTranscription')?.addEventListener('click', testTranscription);
     $('#telegramBotTestImage')?.addEventListener('click', testImage);
+    $('#telegramBotTestUniversal')?.addEventListener('click', testUniversal);
     $('#telegramBotProvider')?.addEventListener('change', renderProviderFields);
     $('#telegramBotContextEnabled')?.addEventListener('change', syncContextBot);
     $('#telegramBotTranscriptionEnabled')?.addEventListener('change', syncFeatureSections);
     $('#telegramBotImageEnabled')?.addEventListener('change', syncFeatureSections);
+    $('#telegramBotUniversalEnabled')?.addEventListener('change', syncFeatureSections);
     $('#telegramBotImageBot')?.addEventListener('change', renderImageReadiness);
+    $('#telegramBotUniversalBot')?.addEventListener('change', renderUniversalReadiness);
     $('#telegramBotOpenVoice')?.addEventListener('click', () => { closeModal(); $('#settingsVoicePanel')?.click(); });
     $('#telegramBotsList')?.addEventListener('click', (event) => {
       const item = event.target.closest('[data-telegram-bot-id]');
@@ -331,7 +346,9 @@
         ? `${esc(historyStatusLabel(item.transcription_status))} · ${esc(historyStatusLabel(item.image_status))}`
         : esc(historyStatusLabel(item.status));
       const type = item.kind === 'combined' ? t('Transcription and image')
-        : item.kind === 'image' ? t('Prompt and image') : t('Transcription');
+        : item.kind === 'universal_edit' ? t('Universal image edit')
+          : item.kind === 'universal_generate' ? t('Universal image generation')
+            : item.kind === 'image' ? t('Prompt and image') : t('Transcription');
       const transcript = String(item.transcript_text || '').trim();
       const prompt = String(item.prompt_text || '').trim();
       const combinedText = item.kind === 'combined' ? (prompt || transcript) : '';
@@ -452,6 +469,7 @@
       state.options = data.options || state.options;
       state.contextBots = Array.isArray(data.contextConvertBots) ? data.contextConvertBots : state.contextBots;
       state.imageBots = Array.isArray(data.imageBots) ? data.imageBots : state.imageBots;
+      state.universalBots = Array.isArray(data.universalBots) ? data.universalBots : state.universalBots;
       renderList();
       const bot = selectedBot();
       if (bot) {
@@ -466,6 +484,7 @@
     state.options = data.options || state.options;
     state.contextBots = Array.isArray(data.contextConvertBots) ? data.contextConvertBots : state.contextBots;
     state.imageBots = Array.isArray(data.imageBots) ? data.imageBots : state.imageBots;
+    state.universalBots = Array.isArray(data.universalBots) ? data.universalBots : state.universalBots;
     if (data.selected_bot_id) state.selectedBotId = Number(data.selected_bot_id);
     if (state.selectedBotId && !state.bots.some((bot) => Number(bot.id) === Number(state.selectedBotId))) state.selectedBotId = null;
     if (!state.selectedBotId && state.bots[0] && !(preserveDraft && state.draftIdentity)) state.selectedBotId = Number(state.bots[0].id);
@@ -485,9 +504,11 @@
       return;
     }
     list.innerHTML = state.bots.map((bot) => {
-      const capabilities = bot.transcription_enabled && bot.image_generation_enabled
-        ? t('Transcription and images') : bot.transcription_enabled ? t('Transcription only')
-          : bot.image_generation_enabled ? t('Images only') : t('All features disabled');
+      const enabledCapabilities = [];
+      if (bot.transcription_enabled) enabledCapabilities.push(t('Transcription'));
+      if (bot.image_generation_enabled) enabledCapabilities.push(t('Classic images'));
+      if (bot.universal_enabled) enabledCapabilities.push(t('Universal images'));
+      const capabilities = enabledCapabilities.length ? enabledCapabilities.join(' + ') : t('All features disabled');
       const identity = bot.telegram_bot_username ? `@${bot.telegram_bot_username}` : t('Not connected');
       const runtime = t(bot.runtime?.state || 'stopped');
       return `<button type="button" class="ai-bot-list-item${Number(bot.id) === Number(state.selectedBotId) ? ' active' : ''}" data-telegram-bot-id="${Number(bot.id)}">
@@ -499,9 +520,10 @@
   function defaultDraft() {
     return {
       name: '', allowed_user_ids: [], transcription_enabled: false, image_generation_enabled: false,
+      universal_enabled: false,
       generate_image_from_transcription: false,
       active_provider: 'whisper', fallback_to_openai: false, context_bot_enabled: false,
-      context_bot_id: null, image_bot_id: null, transcription_timeout_ms: 120000,
+      context_bot_id: null, image_bot_id: null, universal_bot_id: null, transcription_timeout_ms: 120000,
       max_file_size_bytes: 20 * 1024 * 1024, vosk_model: 'vosk-model-small-ru-0.22',
       vosk_model_path: '', whisper_model: 'base', whisper_language: 'ru',
       openai_model: 'gpt-4o-mini-transcribe', openai_language: 'ru', grok_language: 'ru',
@@ -521,6 +543,7 @@
     $('#telegramBotAllowlist').value = (value.allowed_user_ids || []).join('\n');
     $('#telegramBotTranscriptionEnabled').checked = Boolean(value.transcription_enabled);
     $('#telegramBotImageEnabled').checked = Boolean(value.image_generation_enabled);
+    $('#telegramBotUniversalEnabled').checked = Boolean(value.universal_enabled);
     $('#telegramBotGenerateImageFromTranscription').checked = Boolean(value.generate_image_from_transcription);
     $('#telegramBotTimeout').value = Number(value.transcription_timeout_ms || 120000);
     $('#telegramBotMaxSize').value = Math.round(Number(value.max_file_size_bytes || 20971520) / 1048576);
@@ -532,6 +555,7 @@
     provider.value = value.active_provider || 'whisper';
     fillContextBots(value);
     fillImageBots(value);
+    fillUniversalBots(value);
     renderProviderFields(value);
     renderIdentity(value);
     renderRuntime(value);
@@ -585,6 +609,20 @@
     renderImageReadiness();
   }
 
+  function fillUniversalBots(bot) {
+    const rows = state.universalBots.filter((item) => (
+      item.enabled !== false
+      && item.provider_enabled !== false
+      && item.allow_image_generate !== false
+      && item.allow_image_edit !== false
+    ));
+    $('#telegramBotUniversalBot').innerHTML = rows.length
+      ? rows.map((item) => `<option value="${Number(item.id)}">${esc(`${item.name || t('Unnamed bot')} (${item.provider || ''} · ${item.image_model || t('Default model')})`)}</option>`).join('')
+      : `<option value="">${esc(t('No universal bots available'))}</option>`;
+    $('#telegramBotUniversalBot').value = bot.universal_bot_id ? String(bot.universal_bot_id) : String(rows[0]?.id || '');
+    renderUniversalReadiness();
+  }
+
   function syncContextBot() {
     $('#telegramBotContextBot').disabled = !$('#telegramBotContextEnabled').checked || !state.contextBots.length;
   }
@@ -592,6 +630,7 @@
   function syncFeatureSections() {
     const transcription = $('#telegramBotTranscriptionEnabled').checked;
     const images = $('#telegramBotImageEnabled').checked;
+    const universal = $('#telegramBotUniversalEnabled').checked;
     const chainedImageToggle = $('#telegramBotTranscriptImageToggle');
     const chainedImage = $('#telegramBotGenerateImageFromTranscription');
     const canGenerateFromTranscript = transcription && images;
@@ -600,10 +639,13 @@
     if (!canGenerateFromTranscript) chainedImage.checked = false;
     $('#telegramBotTranscriptionSection').classList.toggle('is-disabled', !transcription);
     $('#telegramBotImageSection').classList.toggle('is-disabled', !images);
+    $('#telegramBotUniversalSection').classList.toggle('is-disabled', !universal);
     $('#telegramBotTranscriptionSection').querySelectorAll('input,select,button').forEach((node) => { node.disabled = !transcription; });
     $('#telegramBotImageSection').querySelectorAll('input,select,button').forEach((node) => { node.disabled = !images; });
+    $('#telegramBotUniversalSection').querySelectorAll('input,select,button').forEach((node) => { node.disabled = !universal; });
     if (transcription) { renderProviderFields(); syncContextBot(); }
     if (images) renderImageReadiness();
+    if (universal) renderUniversalReadiness();
   }
 
   function renderProviderReadiness() {
@@ -623,6 +665,15 @@
     node.textContent = imageBot
       ? t('Image bot is ready: {provider} / {model}', { provider: imageBot.provider, model: imageBot.image_model || t('Default model') })
       : t('Select an enabled image bot with image generation permission');
+  }
+
+  function renderUniversalReadiness() {
+    const universalBot = state.universalBots.find((item) => Number(item.id) === Number($('#telegramBotUniversalBot').value));
+    const node = $('#telegramBotUniversalReadiness');
+    node.className = `telegram-provider-readiness ${universalBot ? 'ready' : 'error'}`;
+    node.textContent = universalBot
+      ? t('Universal bot is ready: {provider} / {model}', { provider: universalBot.provider, model: universalBot.image_model || t('Default model') })
+      : t('Select an enabled universal bot with image generation and editing permissions');
   }
 
   function renderIdentity(bot) {
@@ -650,12 +701,14 @@
       allowed_user_ids: $('#telegramBotAllowlist').value,
       transcription_enabled: $('#telegramBotTranscriptionEnabled').checked,
       image_generation_enabled: $('#telegramBotImageEnabled').checked,
+      universal_enabled: $('#telegramBotUniversalEnabled').checked,
       generate_image_from_transcription: $('#telegramBotGenerateImageFromTranscription').checked,
       active_provider: provider,
       fallback_to_openai: $('#telegramBotFallback').checked,
       context_bot_enabled: $('#telegramBotContextEnabled').checked,
       context_bot_id: Number($('#telegramBotContextBot').value || 0) || null,
       image_bot_id: Number($('#telegramBotImageBot').value || 0) || null,
+      universal_bot_id: Number($('#telegramBotUniversalBot').value || 0) || null,
       transcription_timeout_ms: Number($('#telegramBotTimeout').value || 120000),
       max_file_size_bytes: Number($('#telegramBotMaxSize').value || 20) * 1048576,
       vosk_model_path: $('#telegramBotVoskPath').value,
@@ -760,8 +813,24 @@
       const data = await bridge().api('/api/admin/telegram-bots/test-image', {
         method: 'POST', body: { image_bot_id: Number($('#telegramBotImageBot').value || 0) || null },
       });
-      setStatus(t('Image bot works: {provider} / {model}, {latency} ms, {bytes} bytes', data), 'success');
+      setStatus(t('Image bot works: {provider} / {model}, {latency} ms, {bytes} bytes', {
+        ...data, latency: data.latency_ms,
+      }), 'success');
     } catch (error) { setStatus(error.message || 'Image bot test failed', 'error'); }
+    finally { setBusy(event.currentTarget, false); }
+  }
+
+  async function testUniversal(event) {
+    setBusy(event.currentTarget, true, 'Testing universal bot...');
+    setStatus('Testing universal bot...', 'pending');
+    try {
+      const data = await bridge().api('/api/admin/telegram-bots/test-universal', {
+        method: 'POST', body: { universal_bot_id: Number($('#telegramBotUniversalBot').value || 0) || null },
+      });
+      setStatus(t('Universal bot works: {provider} / {model}, {latency} ms, {bytes} bytes', {
+        ...data, latency: data.latency_ms,
+      }), 'success');
+    } catch (error) { setStatus(error.message || 'Universal bot test failed', 'error'); }
     finally { setBusy(event.currentTarget, false); }
   }
 

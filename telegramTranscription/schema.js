@@ -27,12 +27,14 @@ function createBotsTable(db) {
       allowed_user_ids_json TEXT NOT NULL DEFAULT '[]',
       transcription_enabled INTEGER NOT NULL DEFAULT 0,
       image_generation_enabled INTEGER NOT NULL DEFAULT 0,
+      universal_enabled INTEGER NOT NULL DEFAULT 0,
       generate_image_from_transcription INTEGER NOT NULL DEFAULT 0,
       active_provider TEXT NOT NULL DEFAULT 'whisper',
       fallback_to_openai INTEGER NOT NULL DEFAULT 0,
       context_bot_enabled INTEGER NOT NULL DEFAULT 0,
       context_bot_id INTEGER DEFAULT NULL,
       image_bot_id INTEGER DEFAULT NULL,
+      universal_bot_id INTEGER DEFAULT NULL,
       transcription_timeout_ms INTEGER NOT NULL DEFAULT 120000,
       max_file_size_bytes INTEGER NOT NULL DEFAULT 20971520,
       vosk_model TEXT NOT NULL DEFAULT 'vosk-model-small-ru-0.22',
@@ -109,11 +111,17 @@ function createImageJobsTable(db) {
       telegram_user_username TEXT NOT NULL DEFAULT '',
       telegram_user_display_name TEXT NOT NULL DEFAULT '',
       prompt_text TEXT DEFAULT NULL,
+      operation_kind TEXT NOT NULL DEFAULT 'image_generate',
       image_bot_id INTEGER NOT NULL,
       image_bot_name TEXT DEFAULT NULL,
       image_bot_profile_json TEXT NOT NULL DEFAULT '{}',
       source_transcription_job_id INTEGER UNIQUE REFERENCES telegram_transcription_jobs(id) ON DELETE CASCADE,
       context_warning INTEGER NOT NULL DEFAULT 0,
+      source_file_id TEXT DEFAULT NULL,
+      source_file_unique_id TEXT DEFAULT NULL,
+      source_file_name TEXT DEFAULT NULL,
+      source_mime_type TEXT DEFAULT NULL,
+      source_file_size INTEGER DEFAULT NULL,
       status TEXT NOT NULL DEFAULT 'queued'
         CHECK(status IN ('queued','processing','delivering','completed','error')),
       status_message_id INTEGER DEFAULT NULL,
@@ -169,11 +177,11 @@ function insertLegacyBot(db, settings = {}) {
     INSERT INTO telegram_bots(
       name, bot_token_encrypted, bot_token_masked, telegram_api_bot_id,
       telegram_bot_name, telegram_bot_username, allowed_user_ids_json,
-      transcription_enabled, image_generation_enabled, generate_image_from_transcription, active_provider,
-      fallback_to_openai, context_bot_enabled, context_bot_id, image_bot_id,
+      transcription_enabled, image_generation_enabled, universal_enabled, generate_image_from_transcription, active_provider,
+      fallback_to_openai, context_bot_enabled, context_bot_id, image_bot_id, universal_bot_id,
       transcription_timeout_ms, max_file_size_bytes, vosk_model, vosk_model_path,
       whisper_model, whisper_language, openai_model, openai_language, grok_language
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     legacyName(settings),
     String(settings.bot_token_encrypted || ''),
@@ -184,12 +192,14 @@ function insertLegacyBot(db, settings = {}) {
     JSON.stringify(Array.isArray(settings.allowed_user_ids) ? settings.allowed_user_ids : []),
     settings.enabled ? 1 : 0,
     settings.image_generation_enabled ? 1 : 0,
+    0,
     settings.generate_image_from_transcription && settings.enabled && settings.image_generation_enabled ? 1 : 0,
     String(settings.active_provider || 'whisper'),
     settings.fallback_to_openai ? 1 : 0,
     settings.context_bot_enabled ? 1 : 0,
     Number(settings.context_bot_id || 0) || null,
     Number(settings.image_bot_id || 0) || null,
+    null,
     Number(settings.transcription_timeout_ms || 120000),
     Number(settings.max_file_size_bytes || 20 * 1024 * 1024),
     String(settings.vosk_model || 'vosk-model-small-ru-0.22'),
@@ -297,11 +307,31 @@ function initTelegramTranscriptionSchema(db) {
     if (!columnExists(db, 'telegram_bots', 'generate_image_from_transcription')) {
       db.exec('ALTER TABLE telegram_bots ADD COLUMN generate_image_from_transcription INTEGER NOT NULL DEFAULT 0;');
     }
+    if (!columnExists(db, 'telegram_bots', 'universal_enabled')) {
+      db.exec('ALTER TABLE telegram_bots ADD COLUMN universal_enabled INTEGER NOT NULL DEFAULT 0;');
+    }
+    if (!columnExists(db, 'telegram_bots', 'universal_bot_id')) {
+      db.exec('ALTER TABLE telegram_bots ADD COLUMN universal_bot_id INTEGER DEFAULT NULL;');
+    }
     if (!columnExists(db, 'telegram_image_generation_jobs', 'source_transcription_job_id')) {
       db.exec('ALTER TABLE telegram_image_generation_jobs ADD COLUMN source_transcription_job_id INTEGER DEFAULT NULL REFERENCES telegram_transcription_jobs(id) ON DELETE CASCADE;');
     }
     if (!columnExists(db, 'telegram_image_generation_jobs', 'context_warning')) {
       db.exec('ALTER TABLE telegram_image_generation_jobs ADD COLUMN context_warning INTEGER NOT NULL DEFAULT 0;');
+    }
+    if (!columnExists(db, 'telegram_image_generation_jobs', 'operation_kind')) {
+      db.exec("ALTER TABLE telegram_image_generation_jobs ADD COLUMN operation_kind TEXT NOT NULL DEFAULT 'image_generate';");
+    }
+    for (const [column, definition] of [
+      ['source_file_id', 'TEXT DEFAULT NULL'],
+      ['source_file_unique_id', 'TEXT DEFAULT NULL'],
+      ['source_file_name', 'TEXT DEFAULT NULL'],
+      ['source_mime_type', 'TEXT DEFAULT NULL'],
+      ['source_file_size', 'INTEGER DEFAULT NULL'],
+    ]) {
+      if (!columnExists(db, 'telegram_image_generation_jobs', column)) {
+        db.exec(`ALTER TABLE telegram_image_generation_jobs ADD COLUMN ${column} ${definition};`);
+      }
     }
     for (const table of ['telegram_transcription_jobs', 'telegram_image_generation_jobs']) {
       if (!columnExists(db, table, 'telegram_user_username')) {

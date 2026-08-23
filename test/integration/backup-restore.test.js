@@ -50,6 +50,8 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
         image_generation_enabled: true,
         generate_image_from_transcription: true,
         image_bot_id: Number(bot.lastInsertRowid),
+        universal_enabled: true,
+        universal_bot_id: Number(bot.lastInsertRowid),
         bot_token: '123456:backup-telegram-token',
         allowed_user_ids: ['777'],
       }, sandboxSecret);
@@ -61,10 +63,12 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
       liveDb.prepare(`
         INSERT INTO telegram_image_generation_jobs(
           telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
-          language_code, prompt_text, image_bot_id, image_bot_name, status,
+          language_code, prompt_text, image_bot_id, image_bot_name, operation_kind, status,
+          source_file_id, source_file_unique_id, source_file_name, source_mime_type, source_file_size,
           image_data, image_mime_type, image_file_name, stored_image_path
         ) VALUES(?, ?, '777', '777', 42, 'ru', 'backup image prompt', ?, 'Backup image bot',
-          'delivering', ?, 'image/png', 'backup-image.png', ?)
+          'universal_edit', 'delivering', 'telegram-source-id', 'telegram-source-unique', 'source.png',
+          'image/png', 1234, ?, 'image/png', 'backup-image.png', ?)
       `).run(telegramBotId, telegramImageUpdateId, bot.lastInsertRowid, tinyPngBuffer(), telegramStoredImagePath);
     } finally {
       liveDb.close();
@@ -193,9 +197,17 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
       assert.equal(telegramSettings.image_generation_enabled, true);
       assert.equal(telegramSettings.generate_image_from_transcription, true);
       assert.equal(telegramSettings.image_bot_id, telegramImageJob.image_bot_id);
+      assert.equal(telegramSettings.universal_enabled, true);
+      assert.equal(telegramSettings.universal_bot_id, telegramImageJob.image_bot_id);
       assert.equal(getBotToken(restoredDb, telegramBotId, restoredSecret), '123456:backup-telegram-token');
       assert.equal(telegramImageJob.status, 'delivering');
       assert.equal(telegramImageJob.prompt_text, 'backup image prompt');
+      assert.equal(telegramImageJob.operation_kind, 'universal_edit');
+      assert.equal(telegramImageJob.source_file_id, 'telegram-source-id');
+      assert.equal(telegramImageJob.source_file_unique_id, 'telegram-source-unique');
+      assert.equal(telegramImageJob.source_file_name, 'source.png');
+      assert.equal(telegramImageJob.source_mime_type, 'image/png');
+      assert.equal(telegramImageJob.source_file_size, 1234);
       assert.deepEqual(telegramImageJob.image_data, tinyPngBuffer());
       assert.equal(telegramImageJob.stored_image_path, path.posix.join('telegram', String(telegramBotId), 'backup-image.png'));
       assert.equal(fs.existsSync(path.join(sandbox.appDir, 'uploads', ...telegramImageJob.stored_image_path.split('/'))), true);

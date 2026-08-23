@@ -13,12 +13,14 @@ const DEFAULT_BOT_SETTINGS = {
   allowed_user_ids: [],
   transcription_enabled: false,
   image_generation_enabled: false,
+  universal_enabled: false,
   generate_image_from_transcription: false,
   active_provider: 'whisper',
   fallback_to_openai: false,
   context_bot_enabled: false,
   context_bot_id: null,
   image_bot_id: null,
+  universal_bot_id: null,
   transcription_timeout_ms: 120000,
   max_file_size_bytes: 20 * 1024 * 1024,
   vosk_model: DEFAULT_VOICE_SETTINGS.vosk_model,
@@ -83,6 +85,7 @@ function normalizeBot(raw = {}) {
     false
   );
   next.image_generation_enabled = normalizeBoolean(next.image_generation_enabled);
+  next.universal_enabled = normalizeBoolean(next.universal_enabled);
   next.generate_image_from_transcription = normalizeBoolean(next.generate_image_from_transcription)
     && next.transcription_enabled
     && next.image_generation_enabled;
@@ -92,6 +95,7 @@ function normalizeBot(raw = {}) {
   next.context_bot_enabled = normalizeBoolean(next.context_bot_enabled);
   next.context_bot_id = normalizeNullableId(next.context_bot_id);
   next.image_bot_id = normalizeNullableId(next.image_bot_id);
+  next.universal_bot_id = normalizeNullableId(next.universal_bot_id);
   next.transcription_timeout_ms = clampInteger(
     next.transcription_timeout_ms, DEFAULT_BOT_SETTINGS.transcription_timeout_ms, 5000, 300000
   );
@@ -146,8 +150,8 @@ function buildDraftBot(current = {}, incoming = {}, secret) {
 const BOT_COLUMNS = [
   'name', 'bot_token_encrypted', 'bot_token_masked', 'telegram_api_bot_id',
   'telegram_bot_name', 'telegram_bot_username', 'allowed_user_ids_json',
-  'transcription_enabled', 'image_generation_enabled', 'generate_image_from_transcription', 'active_provider',
-  'fallback_to_openai', 'context_bot_enabled', 'context_bot_id', 'image_bot_id',
+  'transcription_enabled', 'image_generation_enabled', 'universal_enabled', 'generate_image_from_transcription', 'active_provider',
+  'fallback_to_openai', 'context_bot_enabled', 'context_bot_id', 'image_bot_id', 'universal_bot_id',
   'transcription_timeout_ms', 'max_file_size_bytes', 'vosk_model', 'vosk_model_path',
   'whisper_model', 'whisper_language', 'openai_model', 'openai_language', 'grok_language',
 ];
@@ -164,12 +168,14 @@ function botSqlValues(bot) {
     JSON.stringify(normalized.allowed_user_ids),
     normalized.transcription_enabled ? 1 : 0,
     normalized.image_generation_enabled ? 1 : 0,
+    normalized.universal_enabled ? 1 : 0,
     normalized.generate_image_from_transcription ? 1 : 0,
     normalized.active_provider,
     normalized.fallback_to_openai ? 1 : 0,
     normalized.context_bot_enabled ? 1 : 0,
     normalized.context_bot_id,
     normalized.image_bot_id,
+    normalized.universal_bot_id,
     normalized.transcription_timeout_ms,
     normalized.max_file_size_bytes,
     normalized.vosk_model,
@@ -227,6 +233,7 @@ function clearBotToken(db, id) {
   return updateBot(db, id, {
     transcription_enabled: false,
     image_generation_enabled: false,
+    universal_enabled: false,
     generate_image_from_transcription: false,
     bot_token_encrypted: '',
     bot_token_masked: '',

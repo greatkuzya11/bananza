@@ -38,7 +38,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/sounds.js',
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
-    '/js/i18n.js?v=20260821-telegram-history2',
+    '/js/i18n.js?v=20260823-telegram-universal',
     '/vendor/leaflet/leaflet.js?v=1.9.4',
     '/js/document-editor.bundle.js?v=20260620-doc-image-handles1',
     '/js/qip-infium-original.js?v=20260523-qip-infium-original',
@@ -157,7 +157,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/video-notes/VideoNoteAdminSettings.js',
     '/js/video-notes/VideoNoteFeature.js',
     '/js/voice.js',
-    '/js/telegram-transcription.js?v=20260821-telegram-history2',
+    '/js/telegram-transcription.js?v=20260823-telegram-universal',
   ]);
 });
 

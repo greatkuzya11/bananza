@@ -68,6 +68,7 @@ const {
   removeMentionTokens,
 } = require('../mentionTokens');
 const { analyzeAiImageRisk } = require('../public/js/ai-image-risk');
+const { buildOpenAIImageRequest: buildTelegramUniversalOpenAIImageRequest } = require('./telegramUniversal');
 
 const BOT_COLORS = ['#65aadd', '#7bc862', '#a695e7', '#ee7aae', '#6ec9cb', '#faa774'];
 const AI_BOT_EXPORT_VERSION = 5;
@@ -5024,6 +5025,39 @@ function createAiBotFeature({
       .map(serializeTelegramImageBot);
   }
 
+  function serializeTelegramUniversalBot(bot) {
+    return {
+      id: Number(bot?.id || 0),
+      name: bot?.name || '',
+      mention: bot?.mention || '',
+      provider: bot?.provider || 'openai',
+      kind: 'universal',
+      response_model: bot?.response_model || '',
+      image_model: bot?.image_model || '',
+      enabled: Boolean(bot?.enabled),
+      provider_enabled: providerEnabled(bot?.provider),
+      allow_image_generate: Boolean(bot?.allow_image_generate),
+      allow_image_edit: Boolean(bot?.allow_image_edit),
+    };
+  }
+
+  function listTelegramUniversalBots() {
+    return [
+      ...allOpenAiUniversalBotsStmt.all(),
+      ...allGrokUniversalBotsStmt.all(),
+    ]
+      .map(sanitizeBot)
+      .filter((bot) => (
+        bot
+        && bot.kind === 'universal'
+        && bot.enabled
+        && providerEnabled(bot.provider)
+        && bot.allow_image_generate
+        && bot.allow_image_edit
+      ))
+      .map(serializeTelegramUniversalBot);
+  }
+
   function getTelegramImageBotSnapshot(botId) {
     const bot = sanitizeBot(botByIdStmt.get(Number(botId || 0)));
     if (!bot || bot.kind !== 'image' || !['openai', 'grok'].includes(bot.provider)) return null;
@@ -5048,6 +5082,41 @@ function createAiBotFeature({
       image_risk_filter_enabled: bot.image_risk_filter_enabled !== false,
       enabled: true,
       allow_image_generate: true,
+    };
+  }
+
+  function getTelegramUniversalBotSnapshot(botId) {
+    const bot = sanitizeBot(botByIdStmt.get(Number(botId || 0)));
+    if (!bot || bot.kind !== 'universal' || !['openai', 'grok'].includes(bot.provider)) return null;
+    if (!bot.enabled || !providerEnabled(bot.provider) || !bot.allow_image_generate || !bot.allow_image_edit) return null;
+    const settings = getGlobalSettings();
+    const isGrok = bot.provider === 'grok';
+    return {
+      id: Number(bot.id),
+      name: bot.name || '',
+      mention: bot.mention || '',
+      provider: bot.provider,
+      kind: 'universal',
+      response_model: bot.response_model || (isGrok ? settings.grok_default_response_model : settings.default_response_model),
+      image_model: bot.image_model || (isGrok ? settings.grok_default_image_model : settings.openai_default_image_model),
+      image_aspect_ratio: isGrok
+        ? cleanGrokAspectRatio(bot.image_aspect_ratio, settings.grok_default_image_aspect_ratio) : '',
+      image_resolution: isGrok
+        ? cleanGrokResolution(bot.image_resolution, settings.grok_default_image_resolution)
+        : cleanOpenAiImageSize(bot.image_resolution, settings.openai_default_image_size),
+      image_quality: isGrok ? '' : cleanOpenAiImageQuality(bot.image_quality, settings.openai_default_image_quality),
+      image_background: isGrok ? '' : cleanOpenAiImageBackground(bot.image_background, settings.openai_default_image_background),
+      image_output_format: isGrok ? 'png' : cleanOpenAiImageOutputFormat(bot.image_output_format, settings.openai_default_image_output_format),
+      image_risk_filter_enabled: bot.image_risk_filter_enabled !== false,
+      style: bot.style || '',
+      tone: bot.tone || '',
+      behavior_rules: bot.behavior_rules || '',
+      speech_patterns: bot.speech_patterns || '',
+      temperature: bot.temperature,
+      max_tokens: bot.max_tokens,
+      enabled: true,
+      allow_image_generate: true,
+      allow_image_edit: true,
     };
   }
 
@@ -5866,6 +5935,142 @@ function createAiBotFeature({
       filename: `openai-${safeFilenamePart(bot.mention || bot.name, 'image')}-${Date.now()}${ext}`,
       provider: 'openai',
       model: result.model || bot.image_model || settings.openai_default_image_model,
+    };
+  }
+
+  async function runTelegramUniversalImage({ botId, botSnapshot, prompt, sourceImage = null } = {}) {
+    const bot = botSnapshot && typeof botSnapshot === 'object' && botSnapshot.provider
+      ? { ...botSnapshot }
+      : sanitizeBot(botByIdStmt.get(Number(botId || 0)));
+    if (!bot || bot.kind !== 'universal' || !['openai', 'grok'].includes(bot.provider)) {
+      const error = new Error('Universal bot not found');
+      error.status = 404;
+      throw error;
+    }
+    if (!bot.enabled || !providerEnabled(bot.provider) || !bot.allow_image_generate || !bot.allow_image_edit) {
+      const error = new Error('Universal bot is unavailable');
+      error.status = 400;
+      throw error;
+    }
+
+    const safePrompt = cleanText(prompt, 4000);
+    if (!safePrompt) {
+      const error = new Error('Image prompt is empty');
+      error.status = 400;
+      throw error;
+    }
+
+    const sourceBuffer = Buffer.isBuffer(sourceImage?.buffer)
+      ? sourceImage.buffer : Buffer.from(sourceImage?.buffer || []);
+    const hasSource = sourceBuffer.length > 0;
+    const sourceMime = String(sourceImage?.mimeType || '').toLowerCase().split(';')[0].trim();
+    const settings = getGlobalSettings();
+
+    if (bot.provider === 'grok') {
+      const risk = analyzeAiImageRisk(safePrompt);
+      if (isGrokImageRiskFilterEnabled(bot) && risk.risky) {
+        const error = new Error('Image prompt rejected by safety filter');
+        error.status = 400;
+        error.userMessageKey = 'universalRiskRejected';
+        throw error;
+      }
+      if (hasSource && !['image/jpeg', 'image/jpg', 'image/png'].includes(sourceMime)) {
+        const error = new Error('Grok image edit supports only JPG and PNG source images');
+        error.status = 400;
+        error.userMessageKey = 'sourceImageFormatUnsupported';
+        throw error;
+      }
+      if (hasSource && sourceBuffer.length > 20 * 1024 * 1024) {
+        const error = new Error('The source image is too large for Grok image edit');
+        error.status = 400;
+        error.userMessageKey = 'sourceImageTooLarge';
+        throw error;
+      }
+      const apiKey = getGrokApiKey();
+      if (!apiKey) throw new Error('Grok AI is not configured');
+      const options = {
+        apiKey,
+        baseUrl: grokBaseUrl(),
+        model: bot.image_model || settings.grok_default_image_model,
+        prompt: safePrompt,
+        resolution: cleanGrokResolution(bot.image_resolution, settings.grok_default_image_resolution),
+        responseFormat: 'b64_json',
+      };
+      const result = hasSource
+        ? await grokAi.generateImageEdit({
+            ...options,
+            imageUrl: buildDataUri(sourceBuffer, sourceMime || 'image/jpeg'),
+          })
+        : await grokAi.generateImage({
+            ...options,
+            n: 1,
+            aspectRatio: cleanGrokAspectRatio(bot.image_aspect_ratio, settings.grok_default_image_aspect_ratio),
+          });
+      const image = await loadGrokImageBytes(result);
+      return {
+        ...image,
+        filename: `grok-${safeFilenamePart(bot.mention || bot.name, 'universal')}-${Date.now()}${imageExtensionForMime(image.mimeType)}`,
+        provider: 'grok',
+        model: result.model || bot.image_model || settings.grok_default_image_model,
+        operation: hasSource ? 'edit' : 'generate',
+      };
+    }
+
+    if (hasSource && !['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(sourceMime)) {
+      const error = new Error('OpenAI image edit supports JPG, PNG, and WEBP source images');
+      error.status = 400;
+      error.userMessageKey = 'sourceImageFormatUnsupported';
+      throw error;
+    }
+    if (hasSource && sourceBuffer.length > 50 * 1024 * 1024) {
+      const error = new Error('The source image is too large for OpenAI image edit');
+      error.status = 400;
+      error.userMessageKey = 'sourceImageTooLarge';
+      throw error;
+    }
+    const apiKey = getApiKey();
+    if (!apiKey) throw new Error('OpenAI AI is not configured');
+    const outputFormat = cleanOpenAiImageOutputFormat(bot.image_output_format, settings.openai_default_image_output_format);
+    const imageInput = hasSource ? {
+      buffer: sourceBuffer,
+      mimeType: sourceMime,
+      dataUri: buildDataUri(sourceBuffer, sourceMime),
+      originalName: sourceImage?.filename || `source${imageExtensionForMime(sourceMime)}`,
+    } : null;
+    const forcedImageRequest = buildTelegramUniversalOpenAIImageRequest({
+      hasSource,
+      model: bot.image_model || settings.openai_default_image_model,
+      size: cleanOpenAiImageSize(bot.image_resolution, settings.openai_default_image_size),
+      quality: cleanOpenAiImageQuality(bot.image_quality, settings.openai_default_image_quality),
+      background: cleanOpenAiImageBackground(bot.image_background, settings.openai_default_image_background),
+      outputFormat,
+    });
+    const response = await createOpenAIResponse({
+      apiKey,
+      model: bot.response_model || settings.default_response_model,
+      input: [
+        {
+          role: 'system',
+          content: `${botSystemPrompt(bot)}\n\nUse the image_generation tool and return exactly one final ${hasSource ? 'edited' : 'generated'} image. Do not answer with text instead of the image.`,
+        },
+        { role: 'user', content: buildMessageContentParts(safePrompt, imageInput) },
+      ],
+      ...forcedImageRequest,
+      maxOutputTokens: openAiMaxOutputTokens(bot.max_tokens, 1000),
+      temperature: floatValue(bot.temperature, 0.55, 0, 1),
+    });
+    const generatedImage = findOpenAiGeneratedImage(response);
+    if (!generatedImage?.result) {
+      throw new Error(`OpenAI universal image operation returned no image; response=${summarizeOpenAiImageGenerationResponse(response)}`);
+    }
+    const mimeType = mimeTypeForOpenAiImageOutput(outputFormat);
+    return {
+      buffer: Buffer.from(generatedImage.result, 'base64'),
+      mimeType,
+      filename: `openai-${safeFilenamePart(bot.mention || bot.name, 'universal')}-${Date.now()}${imageExtensionForMime(mimeType)}`,
+      provider: 'openai',
+      model: bot.image_model || settings.openai_default_image_model,
+      operation: hasSource ? 'edit' : 'generate',
     };
   }
 
@@ -10726,8 +10931,11 @@ function createAiBotFeature({
     transformTextWithContextBot,
     listVoiceContextConvertBots,
     listTelegramImageBots,
+    listTelegramUniversalBots,
     getTelegramImageBotSnapshot,
+    getTelegramUniversalBotSnapshot,
     generateTelegramImage,
+    runTelegramUniversalImage,
     getChatShotState,
     generateChatShotForChat,
     generateChatShotImageForContext,

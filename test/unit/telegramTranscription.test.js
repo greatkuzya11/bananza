@@ -17,7 +17,7 @@ const {
   buildProviderSettings,
   providerReadiness,
 } = require('../../telegramTranscription/settings');
-const { extractTelegramAudio, splitUnicodeText } = require('../../telegramTranscription/helpers');
+const { extractTelegramAudio, extractTelegramImage, splitUnicodeText } = require('../../telegramTranscription/helpers');
 const { createTelegramClient } = require('../../telegramTranscription/client');
 const { createTelegramTranscriptionFeature, safeErrorMessage } = require('../../telegramTranscription');
 
@@ -66,6 +66,8 @@ test('Telegram settings encrypt token, normalize allowlist, and keep provider pr
     context_bot_id: '42',
     image_generation_enabled: true,
     image_bot_id: '77',
+    universal_enabled: true,
+    universal_bot_id: '88',
     max_file_size_bytes: 100 * 1024 * 1024,
   }, 'server-secret');
 
@@ -76,6 +78,8 @@ test('Telegram settings encrypt token, normalize allowlist, and keep provider pr
   assert.equal(saved.max_file_size_bytes, 20 * 1024 * 1024);
   assert.equal(saved.image_generation_enabled, true);
   assert.equal(saved.image_bot_id, 77);
+  assert.equal(saved.universal_enabled, true);
+  assert.equal(saved.universal_bot_id, 88);
   assert.equal(saved.generate_image_from_transcription, false);
 
   const chained = setSettings(db, {
@@ -126,6 +130,28 @@ test('Telegram allowlist and media helpers accept intended audio only', () => {
   assert.equal(audioDocument.extension, '.m4a');
   assert.equal(extractTelegramAudio({ document: { file_id: 'pdf', file_name: 'x.pdf', mime_type: 'application/pdf' } }), null);
   assert.equal(extractTelegramAudio({ video_note: { file_id: 'video' } }), null);
+
+  const largestPhoto = extractTelegramImage({
+    photo: [
+      { file_id: 'small-photo', file_unique_id: 'small', file_size: 50, width: 100, height: 100 },
+      { file_id: 'large-photo', file_unique_id: 'large', file_size: 500, width: 1000, height: 1000 },
+    ],
+  });
+  assert.equal(largestPhoto.file_id, 'large-photo');
+  assert.equal(largestPhoto.mime_type, 'image/jpeg');
+  assert.equal(largestPhoto.file_size, 500);
+
+  const webpDocument = extractTelegramImage({
+    document: {
+      file_id: 'webp-doc', file_unique_id: 'webp', file_name: 'source.WEBP',
+      mime_type: 'application/octet-stream', file_size: 700,
+    },
+  });
+  assert.equal(webpDocument.mime_type, 'image/webp');
+  assert.equal(webpDocument.file_name, 'source.WEBP');
+  assert.equal(extractTelegramImage({
+    document: { file_id: 'pdf', file_name: 'source.pdf', mime_type: 'application/pdf' },
+  }), null);
 });
 
 test('Telegram text splitter preserves Unicode and stays within limits', () => {
@@ -278,6 +304,224 @@ test('Telegram text prompt is persisted once for the selected image bot before w
   assert.equal(JSON.parse(rows[0].image_bot_profile_json).image_model, 'gpt-image-2');
   assert.equal(rows[0].status, 'queued');
   assert.equal(db.prepare('SELECT next_update_id FROM telegram_bot_state WHERE telegram_bot_id=?').get(rows[0].telegram_bot_id).next_update_id, 91);
+  db.close();
+});
+
+test('Telegram classic image bot owns plain text while universal accepts caption and reply edits', async () => {
+  const db = createDb();
+  setSettings(db, {
+    ...DEFAULT_SETTINGS,
+    image_generation_enabled: true,
+    image_bot_id: 91,
+    universal_enabled: true,
+    universal_bot_id: 92,
+    allowed_user_ids: ['777'],
+  }, 'server-secret');
+  const universalBot = {
+    id: 92,
+    name: 'Universal Painter',
+    provider: 'openai',
+    image_model: 'gpt-image-2',
+    enabled: true,
+    provider_enabled: true,
+    allow_image_generate: true,
+    allow_image_edit: true,
+  };
+  const feature = createTelegramTranscriptionFeature({
+    app: fakeApp(), db,
+    auth: (_req, _res, next) => next(), adminOnly: (_req, _res, next) => next(),
+    secret: 'server-secret',
+    getAiBotFeature: () => ({
+      listTelegramImageBots: () => [{ id: 91, name: 'Classic Painter', allow_image_generate: true }],
+      listTelegramUniversalBots: () => [universalBot],
+      getTelegramUniversalBotSnapshot: () => ({ ...universalBot, snapshot_marker: 'accepted-now' }),
+    }),
+  });
+  feature.stop();
+  const client = { async sendMessage() { return { message_id: 500 }; } };
+  const baseMessage = {
+    chat: { id: 777, type: 'private' },
+    from: { id: 777, username: 'universal_user', language_code: 'en' },
+  };
+
+  await feature.handleUpdate({
+    update_id: 501,
+    message: { ...baseMessage, message_id: 51, text: 'generate a banana city' },
+  }, client);
+  await feature.handleUpdate({
+    update_id: 502,
+    message: {
+      ...baseMessage,
+      message_id: 52,
+      caption: 'make the background blue',
+      photo: [
+        { file_id: 'small', file_unique_id: 'small-u', file_size: 100, width: 100, height: 100 },
+        { file_id: 'large', file_unique_id: 'large-u', file_size: 1000, width: 1000, height: 1000 },
+      ],
+    },
+  }, client);
+  await feature.handleUpdate({
+    update_id: 503,
+    message: {
+      ...baseMessage,
+      message_id: 53,
+      text: 'add sunglasses',
+      reply_to_message: {
+        message_id: 49,
+        document: {
+          file_id: 'reply-png', file_unique_id: 'reply-u', file_name: 'previous.png',
+          mime_type: 'image/png', file_size: 2000,
+        },
+      },
+    },
+  }, client);
+
+  const jobs = db.prepare('SELECT * FROM telegram_image_generation_jobs ORDER BY update_id').all();
+  assert.equal(jobs.length, 3);
+  assert.equal(jobs[0].operation_kind, 'image_generate');
+  assert.equal(jobs[0].image_bot_id, 91);
+  assert.equal(jobs[0].source_file_id, null);
+  assert.equal(jobs[1].operation_kind, 'universal_edit');
+  assert.equal(JSON.parse(jobs[1].image_bot_profile_json).snapshot_marker, 'accepted-now');
+  assert.equal(jobs[1].prompt_text, 'make the background blue');
+  assert.equal(jobs[1].source_file_id, 'large');
+  assert.equal(jobs[1].source_file_unique_id, 'large-u');
+  assert.equal(jobs[1].source_mime_type, 'image/jpeg');
+  assert.equal(jobs[2].operation_kind, 'universal_edit');
+  assert.equal(jobs[2].prompt_text, 'add sunglasses');
+  assert.equal(jobs[2].source_file_id, 'reply-png');
+  assert.equal(jobs[2].source_file_name, 'previous.png');
+  assert.equal(db.prepare('SELECT next_update_id FROM telegram_bot_state LIMIT 1').get().next_update_id, 504);
+  db.close();
+});
+
+test('Telegram universal edit rejects missing instructions, oversized sources, and Grok WEBP', async () => {
+  const db = createDb();
+  setSettings(db, {
+    ...DEFAULT_SETTINGS,
+    universal_enabled: true,
+    universal_bot_id: 93,
+    allowed_user_ids: ['777'],
+  }, 'server-secret');
+  const grokBot = {
+    id: 93, name: 'Grok Editor', provider: 'grok', image_model: 'grok-imagine-image',
+    enabled: true, provider_enabled: true, allow_image_generate: true, allow_image_edit: true,
+  };
+  const feature = createTelegramTranscriptionFeature({
+    app: fakeApp(), db,
+    auth: (_req, _res, next) => next(), adminOnly: (_req, _res, next) => next(),
+    secret: 'server-secret',
+    getAiBotFeature: () => ({ listTelegramUniversalBots: () => [grokBot] }),
+  });
+  feature.stop();
+  const sent = [];
+  const client = {
+    async sendMessage(_chatId, text) { sent.push(text); return { message_id: 700 }; },
+  };
+  const base = {
+    chat: { id: 777, type: 'private' }, from: { id: 777, language_code: 'en' },
+  };
+  await feature.handleUpdate({
+    update_id: 700,
+    message: { ...base, message_id: 70, text: 'generate without classic bot' },
+  }, client);
+  await feature.handleUpdate({
+    update_id: 701,
+    message: { ...base, message_id: 71, photo: [{ file_id: 'no-instruction', file_size: 100 }] },
+  }, client);
+  await feature.handleUpdate({
+    update_id: 702,
+    message: {
+      ...base, message_id: 72, caption: 'edit it',
+      document: { file_id: 'large-png', file_name: 'large.png', mime_type: 'image/png', file_size: 20 * 1024 * 1024 + 1 },
+    },
+  }, client);
+  await feature.handleUpdate({
+    update_id: 703,
+    message: {
+      ...base, message_id: 73, caption: 'edit it',
+      document: { file_id: 'webp', file_name: 'source.webp', mime_type: 'image/webp', file_size: 100 },
+    },
+  }, client);
+
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM telegram_image_generation_jobs').get().count, 0);
+  assert.match(sent[0], /generation is currently disabled/i);
+  assert.match(sent[1], /instruction/i);
+  assert.match(sent[2], /20 MB/i);
+  assert.match(sent[3], /does not support/i);
+  db.close();
+});
+
+test('Telegram universal edit downloads the queued source and invokes AI from its snapshot', async (t) => {
+  const db = createDb();
+  const uploadsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bananza-telegram-universal-'));
+  t.after(() => fs.rmSync(uploadsDir, { recursive: true, force: true }));
+  setSettings(db, {
+    ...DEFAULT_SETTINGS,
+    bot_token: '123456:universal-worker-token',
+    universal_enabled: true,
+    universal_bot_id: 92,
+    allowed_user_ids: ['777'],
+  }, 'server-secret');
+  const universalBot = {
+    id: 92, name: 'Universal Painter', provider: 'openai', image_model: 'gpt-image-2',
+    enabled: true, provider_enabled: true, allow_image_generate: true, allow_image_edit: true,
+  };
+  const sourceBytes = Buffer.from('queued-source-image');
+  let universalArgs = null;
+  const telegramCalls = [];
+  const feature = createTelegramTranscriptionFeature({
+    app: fakeApp(), db,
+    auth: (_req, _res, next) => next(), adminOnly: (_req, _res, next) => next(),
+    secret: 'server-secret', uploadsDir,
+    getAiBotFeature: () => ({
+      listTelegramUniversalBots: () => [universalBot],
+      getTelegramUniversalBotSnapshot: () => ({ ...universalBot, snapshot_marker: 'stable' }),
+      async runTelegramUniversalImage(args) {
+        universalArgs = args;
+        return {
+          buffer: Buffer.from('edited-image'), mimeType: 'image/png', filename: 'edited.png',
+          provider: 'openai', model: 'gpt-image-2',
+        };
+      },
+    }),
+    fetchImpl: async (url, options) => {
+      const requestUrl = String(url);
+      telegramCalls.push({ url: requestUrl, options });
+      if (/\/getFile$/.test(requestUrl)) {
+        return new Response(JSON.stringify({ ok: true, result: { file_path: 'photos/source.jpg' } }), { status: 200 });
+      }
+      if (/\/file\/bot/.test(requestUrl)) return new Response(sourceBytes, { status: 200 });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 600 } }), { status: 200 });
+    },
+  });
+  feature.stop();
+  await feature.handleUpdate({
+    update_id: 601,
+    message: {
+      message_id: 61,
+      caption: 'turn it into a poster',
+      chat: { id: 777, type: 'private' },
+      from: { id: 777, language_code: 'en' },
+      photo: [{ file_id: 'source-file', file_unique_id: 'source-unique', file_size: sourceBytes.length }],
+    },
+  }, { async sendMessage() { return { message_id: 62 }; } });
+
+  const queued = db.prepare('SELECT * FROM telegram_image_generation_jobs WHERE update_id=601').get();
+  await feature.processImageJob(queued);
+
+  const completed = db.prepare('SELECT * FROM telegram_image_generation_jobs WHERE update_id=601').get();
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.operation_kind, 'universal_edit');
+  assert.equal(universalArgs.botId, 92);
+  assert.equal(universalArgs.prompt, 'turn it into a poster');
+  assert.equal(universalArgs.botSnapshot.snapshot_marker, 'stable');
+  assert.equal(universalArgs.sourceImage.mimeType, 'image/jpeg');
+  assert.deepEqual(universalArgs.sourceImage.buffer, sourceBytes);
+  assert.equal(fs.existsSync(path.join(uploadsDir, completed.stored_image_path)), true);
+  assert.ok(telegramCalls.some((call) => /\/getFile$/.test(call.url)));
+  assert.ok(telegramCalls.some((call) => /\/file\/bot/.test(call.url)));
+  assert.ok(telegramCalls.some((call) => /\/sendPhoto$/.test(call.url)));
   db.close();
 });
 

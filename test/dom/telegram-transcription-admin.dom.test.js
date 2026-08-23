@@ -19,11 +19,13 @@ function bot(id, overrides = {}) {
     allowed_user_ids: ['777'],
     transcription_enabled: true,
     image_generation_enabled: false,
+    universal_enabled: false,
     active_provider: 'whisper',
     fallback_to_openai: false,
     context_bot_enabled: false,
     context_bot_id: null,
     image_bot_id: null,
+    universal_bot_id: null,
     transcription_timeout_ms: 120000,
     max_file_size_bytes: 20 * 1024 * 1024,
     vosk_model: 'vosk-model-small-ru-0.22',
@@ -54,6 +56,10 @@ function payload(bots = [bot(1)], selectedBotId = null) {
     },
     contextConvertBots: [{ id: 42, name: 'Cleanup', provider: 'openai', enabled: true, provider_enabled: true }],
     imageBots: [{ id: 17, name: 'Painter', provider: 'openai', image_model: 'gpt-image-2', enabled: true, provider_enabled: true, allow_image_generate: true }],
+    universalBots: [{
+      id: 27, name: 'Universal Painter', provider: 'openai', image_model: 'gpt-image-2',
+      enabled: true, provider_enabled: true, allow_image_generate: true, allow_image_edit: true,
+    }],
   };
 }
 
@@ -73,12 +79,17 @@ test('Telegram bots admin edits capabilities and creates a second independent bo
       if (url === '/api/admin/telegram-bots/test-token') {
         return { ok: true, bot: { id: '902', name: 'Remote 2', username: 'remote_2' }, webhook: { active: false } };
       }
+      if (url === '/api/admin/telegram-bots/test-universal') {
+        return { ok: true, provider: 'openai', model: 'gpt-image-2', latency_ms: 12, bytes: 100 };
+      }
       if (url === '/api/admin/telegram-bots/1' && options.method === 'PUT') {
         current = payload([bot(1, {
           ...options.body,
           allowed_user_ids: ['777', '888'],
           image_generation_enabled: true,
           image_bot_id: 17,
+          universal_enabled: true,
+          universal_bot_id: 27,
         })], 1);
         return current;
       }
@@ -114,6 +125,12 @@ test('Telegram bots admin edits capabilities and creates a second independent bo
   assert.equal(chainedToggle.classList.contains('hidden'), false);
   dom.window.document.getElementById('telegramBotGenerateImageFromTranscription').checked = true;
   dom.window.document.getElementById('telegramBotImageBot').value = '17';
+  dom.window.document.getElementById('telegramBotUniversalEnabled').checked = true;
+  dom.window.document.getElementById('telegramBotUniversalEnabled').dispatchEvent(new dom.window.Event('change'));
+  dom.window.document.getElementById('telegramBotUniversalBot').value = '27';
+  assert.match(dom.window.document.getElementById('telegramBotUniversalReadiness').textContent, /openai/i);
+  dom.window.document.getElementById('telegramBotTestUniversal').click();
+  await tick(10);
   dom.window.document.getElementById('telegramBotsSave').click();
   await tick(20);
 
@@ -122,7 +139,10 @@ test('Telegram bots admin edits capabilities and creates a second independent bo
   assert.equal(update.options.body.image_generation_enabled, true);
   assert.equal(update.options.body.generate_image_from_transcription, true);
   assert.equal(update.options.body.image_bot_id, 17);
+  assert.equal(update.options.body.universal_enabled, true);
+  assert.equal(update.options.body.universal_bot_id, 27);
   assert.match(update.options.body.allowed_user_ids, /888/);
+  assert.ok(calls.some((call) => call.url === '/api/admin/telegram-bots/test-universal'));
 
   dom.window.document.getElementById('telegramBotsNew').click();
   dom.window.document.getElementById('telegramBotName').value = 'Second bot';
@@ -167,6 +187,12 @@ test('Telegram bot history opens from settings, filters user operations, and cle
       transcript_text: null, prompt_text: 'Second image prompt', has_image: true,
       status: 'completed', transcription_status: null, image_status: 'completed',
       provider: 'openai', model: 'gpt-image-2', created_at: '2026-08-21 12:02:00', completed_at: '2026-08-21 12:03:00', error: null,
+    }, {
+      kind: 'universal_edit', record_id: 11, image_job_id: 11,
+      telegram_user_id: '777', telegram_user_username: 'alice', telegram_user_display_name: 'Alice',
+      transcript_text: null, prompt_text: 'Add sunglasses', has_image: true,
+      status: 'completed', transcription_status: null, image_status: 'completed',
+      provider: 'openai', model: 'gpt-image-2', created_at: '2026-08-21 12:04:00', completed_at: '2026-08-21 12:05:00', error: null,
     }],
     users: [{ telegram_user_id: '777', telegram_user_username: 'alice', telegram_user_display_name: 'Alice', count: 1 }],
     page: 1, limit: 25, total: 1, total_pages: 1,
@@ -201,12 +227,13 @@ test('Telegram bot history opens from settings, filters user operations, and cle
   assert.equal(historyModal.classList.contains('hidden'), false);
   assert.match(dom.window.document.getElementById('telegramHistoryList').textContent, /Voice transcript/);
   assert.match(dom.window.document.getElementById('telegramHistoryList').textContent, /Transcription result \/ Image prompt/);
-  assert.equal(dom.window.document.querySelectorAll('#telegramHistoryList details').length, 2);
+  assert.match(dom.window.document.getElementById('telegramHistoryList').textContent, /Universal image edit/);
+  assert.equal(dom.window.document.querySelectorAll('#telegramHistoryList details').length, 3);
   dom.window.document.querySelector('[data-telegram-history-image="9"]').click();
   assert.ok(openedMedia);
   assert.equal(openedMedia[0], 'blob:9');
   assert.equal(openedMedia[1], 'image');
-  assert.equal(openedMedia[2].items.length, 2);
+  assert.equal(openedMedia[2].items.length, 3);
   assert.equal(openedMedia[2].initialIndex, 0);
   assert.equal(dom.window.document.getElementById('telegramHistoryUser').value, '');
   dom.window.document.getElementById('telegramHistoryUser').value = '777';
