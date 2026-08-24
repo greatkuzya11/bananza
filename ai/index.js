@@ -7738,6 +7738,21 @@ function createAiBotFeature({
     return token ? `@${token}` : '';
   }
 
+  function publishSyntheticBotNotice({ chatId, botId, text, noticeType = 'initiative_failure' } = {}) {
+    const resolvedChatId = positiveId(chatId);
+    const resolvedBotId = positiveId(botId);
+    const row = resolvedChatId && resolvedBotId
+      ? activeChatBotsStmt.all(resolvedChatId).find((item) => Number(item.id || 0) === resolvedBotId)
+      : null;
+    const bot = row ? sanitizeBot(row) : null;
+    const body = cleanText(text, 4000);
+    if (!bot || isContextTransformBot(bot) || isChatShotBot(bot) || bot.kind === 'image' || !bot.user_id || bot.enabled === false || !body) return null;
+    return publishBotTextMessage(bot, {
+      id: null,
+      chat_id: resolvedChatId,
+    }, body, { noticeType });
+  }
+
   async function runSyntheticBotTurn({
     chatId,
     botId,
@@ -10946,6 +10961,7 @@ function createAiBotFeature({
     getActiveChatBotsForViewer,
     resolveChatBotRuntime,
     generateJsonForBot,
+    publishSyntheticBotNotice,
     runSyntheticBotTurn,
     attachBotToChatWithDefaults(chatId, bot, options = {}) {
       return attachBotToChatWithDefaultsTx({

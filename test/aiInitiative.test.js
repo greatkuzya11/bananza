@@ -487,6 +487,7 @@ test('initiative news hook skips disabled news sources without hallucinating', a
   );
 
   const calls = [];
+  const notices = [];
   const feature = createAiInitiativeFeature({
     app: fakeApp(),
     db,
@@ -501,6 +502,10 @@ test('initiative news hook skips disabled news sources without hallucinating', a
         calls.push(payload);
         return { message: { id: 100 } };
       },
+      publishSyntheticBotNotice(payload) {
+        notices.push(payload);
+        return { id: 101, chat_id: payload.chatId };
+      },
     },
   });
 
@@ -508,6 +513,50 @@ test('initiative news hook skips disabled news sources without hallucinating', a
 
   assert.equal(calls.length, 0);
   assert.equal(db.prepare('SELECT COUNT(*) as count FROM ai_news_history').get().count, 0);
+  assert.deepEqual(notices, [{
+    chatId: 1,
+    botId: 1,
+    text: 'Инициатива не отправлена: источник новостей не найден или отключён.',
+  }]);
+});
+
+test('initiative posts a diagnostic notice when the AI provider returns no message', async (t) => {
+  const db = createInitiativeDb();
+  t.after(() => db.close());
+  db.prepare(`
+    INSERT INTO ai_bot_initiative_rules(
+      id, chat_id, bot_id, enabled, next_run_at, prompt_mode,
+      idle_threshold_minutes, min_gap_minutes
+    )
+    VALUES(1,1,1,1,?,?,?,?)
+  `).run('2026-05-27T09:59:00Z', 'idle_ping', 0, 1);
+
+  const notices = [];
+  const feature = createAiInitiativeFeature({
+    app: fakeApp(),
+    db,
+    auth: (_req, _res, next) => next?.(),
+    adminOnly: (_req, _res, next) => next?.(),
+    startScheduler: false,
+    nowProvider: () => DateTime.fromISO('2026-05-27T10:00:00Z'),
+    aiBotFeature: {
+      resolveChatBotRuntime() { return true; },
+      async runSyntheticBotTurn() { return null; },
+      publishSyntheticBotNotice(payload) {
+        notices.push(payload);
+        return { id: 102, chat_id: payload.chatId };
+      },
+    },
+  });
+
+  await feature.runSchedulerTick();
+
+  assert.deepEqual(notices, [{
+    chatId: 1,
+    botId: 1,
+    text: 'Инициатива не отправлена: AI-провайдер не вернул текст сообщения.',
+  }]);
+  assert.equal(db.prepare('SELECT last_run_at FROM ai_bot_initiative_rules WHERE id=1').get().last_run_at, null);
 });
 
 test('initiative idle threshold 0 ignores recent chat activity', async (t) => {

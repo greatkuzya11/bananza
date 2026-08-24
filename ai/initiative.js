@@ -26,6 +26,25 @@ const PROMPT_MODES = new Set(['context_question', 'news_hook', 'date_holiday', '
 const REMINDER_STATUSES = new Set(['pending', 'processing', 'sent', 'canceled', 'error']);
 const NEWS_SOURCE_TYPES = new Set(['rss']);
 
+function initiativeFailureText(reason) {
+  const detail = {
+    missed_schedule: 'сервер не успел обработать время запуска',
+    no_human_messages: 'в чате ещё нет сообщений от пользователей',
+    same_context_limit: 'для текущего контекста уже достигнут лимит инициатив',
+    not_idle: 'в чате ещё не истёк заданный период без активности',
+    min_gap: 'ещё не истёк минимальный интервал между инициативами',
+    bot_unavailable: 'бот сейчас недоступен в этом чате',
+    news_source_unavailable: 'источник новостей не найден или отключён',
+    no_news_source: 'не выбран источник новостей',
+    news_source_disabled: 'источник новостей отключён',
+    no_recent_news: 'в источнике нет свежих новостей за заданный период',
+    news_source_failed: 'источник новостей временно недоступен',
+    bot_no_message: 'AI-провайдер не вернул текст сообщения',
+    provider_failed: 'не удалось получить ответ от AI-провайдера',
+  }[reason] || 'не удалось выполнить правило';
+  return `Инициатива не отправлена: ${detail}.`;
+}
+
 function boolValue(value, fallback = false) {
   if (typeof value === 'boolean') return value;
   if (value === 0 || value === 1) return !!value;
@@ -1122,8 +1141,8 @@ function createAiInitiativeFeature({
     if (!source || source.enabled === 0) return { items: [], source: source ? serializeNewsSource(source) : null, reason: 'news_source_disabled' };
     try {
       await refreshNewsSource(source);
-    } catch (error) {
-      return { items: [], source: serializeNewsSource(source), reason: cleanText(error?.message || 'news_source_failed', 500) };
+    } catch {
+      return { items: [], source: serializeNewsSource(source), reason: 'news_source_failed' };
     }
     const maxAgeHours = intValue(rule.news_max_age_hours, DEFAULT_NEWS_MAX_AGE_HOURS, 1, 24 * 14);
     const requestedCount = intValue(rule.news_item_count, DEFAULT_NEWS_ITEM_COUNT, 1, MAX_NEWS_ITEM_COUNT);
@@ -1170,6 +1189,7 @@ function createAiInitiativeFeature({
       if (!items.length) {
         const error = new Error(reason || 'No recent news item is available');
         error.code = 'NO_NEWS_ITEM';
+        error.initiativeReason = reason || 'no_recent_news';
         throw error;
       }
       base.push(newsInstructionBlock(items, source));
@@ -1232,6 +1252,21 @@ function createAiInitiativeFeature({
     return sameContext ? intValue(rule.same_context_run_count, 0, 0, 20) + 1 : 1;
   }
 
+  function publishRuleFailureNotice(rule, reason) {
+    try {
+      const message = aiBotFeature?.publishSyntheticBotNotice?.({
+        chatId: rule.chat_id,
+        botId: rule.bot_id,
+        text: initiativeFailureText(reason),
+      });
+      if (!message) {
+        console.warn('[ai-initiative] failure notice was not published:', reason);
+      }
+    } catch (error) {
+      console.warn('[ai-initiative] failed to publish failure notice:', error?.message || error);
+    }
+  }
+
   async function processDueReminder(row) {
     const changed = updateReminderProcessingStmt.run(row.id);
     if (!changed.changes) return;
@@ -1264,11 +1299,13 @@ function createAiInitiativeFeature({
     const nextRunAt = computeNextRunAfterDueAttempt(rule, now);
     if (isMissedRuleRun(rule, now)) {
       updateRuleNextStmt.run(nextRunAt, rule.id);
+      publishRuleFailureNotice(rule, 'missed_schedule');
       return;
     }
     const check = shouldRunRule(rule);
     if (!check.ok) {
       updateRuleNextStmt.run(nextRunAt, rule.id);
+      publishRuleFailureNotice(rule, check.reason);
       return;
     }
     try {
@@ -1279,6 +1316,11 @@ function createAiInitiativeFeature({
         instruction: built.instruction,
         purpose: `initiative_${rule.prompt_mode || 'context_question'}`,
       });
+      if (!result?.message?.id) {
+        const error = new Error('Bot did not publish initiative');
+        error.code = 'BOT_NO_MESSAGE';
+        throw error;
+      }
       if (built.newsSource?.id && Array.isArray(built.newsItems)) {
         for (const item of built.newsItems) {
           if (item?.guid) insertNewsHistoryStmt.run(rule.id, built.newsSource.id, item.guid);
@@ -1295,6 +1337,10 @@ function createAiInitiativeFeature({
       if (result?.message && typeof onMessageCreated === 'function') onMessageCreated(result.message);
     } catch (error) {
       updateRuleNextStmt.run(nextRunAt, rule.id);
+      const reason = error?.code === 'NO_NEWS_ITEM'
+        ? error.initiativeReason || 'no_recent_news'
+        : (error?.code === 'BOT_NO_MESSAGE' ? 'bot_no_message' : 'provider_failed');
+      publishRuleFailureNotice(rule, reason);
       if (error?.code !== 'NO_NEWS_ITEM') {
         console.warn('[ai-initiative] rule failed:', error?.message || error);
       }
@@ -1478,6 +1524,7 @@ module.exports = {
     looksLikeReminderRequest,
     looksLikeRecurrence,
     dbDateToUtc,
+    initiativeFailureText,
     shouldRunRule: null,
   },
 };
