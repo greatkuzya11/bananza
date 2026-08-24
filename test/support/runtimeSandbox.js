@@ -18,6 +18,7 @@ const ROOT_FILES = [
   'messageActions.js',
   'messageCopy.js',
   'mentionTokens.js',
+  'networkSafety.js',
   'polls.js',
   'push.js',
   'soundSettings.js',

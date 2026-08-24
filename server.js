@@ -1,4 +1,5 @@
 require('dotenv').config();
+require('./networkSafety').installNetworkSafety();
 
 const express = require('express');
 const http = require('http');
