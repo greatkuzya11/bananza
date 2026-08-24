@@ -53,6 +53,11 @@
         previewEl.classList.add('hidden');
         previewEl.innerHTML = '';
       }
+      const optionalEl = select('#backupRestoreOptionalComponents');
+      if (optionalEl) {
+        optionalEl.classList.add('hidden');
+        optionalEl.innerHTML = '';
+      }
       if (clearFile && select('#backupRestoreFile')) select('#backupRestoreFile').value = '';
       if (select('#backupRestoreConfirm')) select('#backupRestoreConfirm').value = '';
       if (select('#backupRestorePassword')) select('#backupRestorePassword').value = '';
@@ -80,6 +85,8 @@
         includes.vapid ? '.vapid.json' : null,
       ].filter(Boolean).join(', ') || tx('missing');
       const warnings = Array.isArray(data.warnings) ? data.warnings.filter(Boolean) : [];
+      const optional = data.optional_components || manifest.optional_components || {};
+      const targets = data.optional_targets || {};
       previewEl.innerHTML = `
         <div><strong>${esc(tx('Archive looks valid'))}</strong></div>
         <div>${esc(tx('Created'))}: ${esc(createdAt)}</div>
@@ -91,12 +98,40 @@
         <div>${esc(tx('Backup archive is ready. Enter recovery admin credentials and RESTORE to continue.'))}</div>
       `;
       previewEl.classList.remove('hidden');
+
+      const optionalEl = select('#backupRestoreOptionalComponents');
+      if (optionalEl) {
+        const labels = {
+          env: '.env',
+          env_local: '.env.local',
+          call_recordings: tx('Completed call recordings'),
+          voice_models: tx('Speech recognition models'),
+        };
+        const rows = Object.entries(optional)
+          .filter(([key, component]) => labels[key] && ['included', 'empty'].includes(component?.status))
+          .map(([key, component]) => {
+            const paths = Array.isArray(targets[key]) ? targets[key] : [];
+            const details = `${Number(component.files || 0)} ${tx('Files')}, ${esc(formatSize(Number(component.bytes || 0)))}`;
+            const destination = paths.length ? `<div>${esc(tx('Restore destination'))}: ${esc(paths.join(', '))}</div>` : '';
+            const unavailable = ['call_recordings', 'voice_models'].includes(key) && !paths.length;
+            return `<label class="settings-item settings-toggle-item"><span><input type="checkbox" data-backup-restore-component="${esc(key)}"${unavailable ? ' disabled' : ''}> ${esc(labels[key])}<small>${details}</small>${destination}</span></label>`;
+          });
+        if (rows.length) {
+          optionalEl.innerHTML = `<div>${esc(tx('Optional components to restore'))}</div>${rows.join('')}`;
+          optionalEl.classList.remove('hidden');
+        } else {
+          optionalEl.classList.add('hidden');
+          optionalEl.innerHTML = '';
+        }
+      }
     }
 
     function openBackupExportModal() {
       openModal('backupExportModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
       setBackupExportStatus('');
       if (select('#backupExportStreamMode')) select('#backupExportStreamMode').checked = false;
+      ['#backupExportEnv', '#backupExportEnvLocal', '#backupExportCallRecordings', '#backupExportVoiceModels']
+        .forEach((selector) => { if (select(selector)) select(selector).checked = false; });
       resetBackupRestoreState({ clearFile: true });
     }
 
@@ -107,7 +142,16 @@
         const token = getToken();
         if (token) headers.Authorization = 'Bearer ' + token;
         const streamMode = Boolean(select('#backupExportStreamMode')?.checked);
-        const exportUrl = streamMode ? '/api/admin/backup/export?mode=stream' : '/api/admin/backup/export';
+        const components = [
+          select('#backupExportEnv')?.checked ? 'env' : '',
+          select('#backupExportEnvLocal')?.checked ? 'env_local' : '',
+          select('#backupExportCallRecordings')?.checked ? 'call_recordings' : '',
+          select('#backupExportVoiceModels')?.checked ? 'voice_models' : '',
+        ].filter(Boolean);
+        const params = new URLSearchParams();
+        if (streamMode) params.set('mode', 'stream');
+        if (components.length) params.set('components', components.join(','));
+        const exportUrl = `/api/admin/backup/export${params.toString() ? `?${params}` : ''}`;
         const res = await fetchImpl(exportUrl, { headers });
         if (!res.ok) {
           let data = {};
@@ -163,6 +207,9 @@
       const password = select('#backupRestorePassword')?.value || '';
       const confirmPassword = select('#backupRestorePasswordConfirm')?.value || '';
       const confirm = (select('#backupRestoreConfirm')?.value || '').trim();
+      const restoreComponents = [...documentRef.querySelectorAll('[data-backup-restore-component]:checked')]
+        .map((element) => element.getAttribute('data-backup-restore-component'))
+        .filter(Boolean);
       if (password !== confirmPassword) {
         setBackupRestoreStatus('Passwords do not match', 'error');
         return;
@@ -178,6 +225,7 @@
               username,
               password,
             },
+            restore_components: restoreComponents,
           },
         });
         setBackupRestoreStatus('Restore staged. You will be signed out while the server restarts.', 'success');

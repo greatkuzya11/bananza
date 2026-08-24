@@ -11,8 +11,11 @@ const tar = require('tar');
 const tarStream = require('tar-stream');
 const { pipeline } = require('stream/promises');
 const packageJson = require('./package.json');
+const { getVoiceSettings } = require('./voice/settings');
+const { getCallSettings } = require('./calls/settings');
 
-const BACKUP_FORMAT_VERSION = 1;
+const BACKUP_FORMAT_VERSION = 2;
+const SUPPORTED_BACKUP_FORMAT_VERSIONS = new Set([1, BACKUP_FORMAT_VERSION]);
 const RESTORE_CONFIRM_TEXT = 'RESTORE';
 const RESTORE_SESSION_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_RESTORE_LIMIT_BYTES = 5 * 1024 * 1024 * 1024;
@@ -31,18 +34,20 @@ const DEFAULT_EXCLUDED = [
 const RESTORE_ALLOWED_TOP_LEVEL = new Set([
   'bananza.db',
   'uploads',
+  'external',
+  '.env',
+  '.env.local',
   '.secret',
   '.vapid.json',
   'backup-manifest.json',
 ]);
 const RESTORE_FORBIDDEN_TOP_LEVEL = new Set([
-  '.env',
-  '.env.local',
   '.git',
   'node_modules',
   'bananza.db-wal',
   'bananza.db-shm',
 ]);
+const OPTIONAL_COMPONENTS = new Set(['env', 'env_local', 'call_recordings', 'voice_models']);
 const RESTORE_REQUIRED_TABLES = ['users', 'chats', 'chat_members', 'messages', 'files'];
 const RESTORE_REQUIRED_USER_COLUMNS = [
   'username',
@@ -107,6 +112,37 @@ function normalizeRestoreId(value) {
   return /^[a-f0-9]{32}$/i.test(restoreId) ? restoreId.toLowerCase() : '';
 }
 
+function normalizeOptionalComponents(value) {
+  const raw = Array.isArray(value)
+    ? value
+    : String(value || '').split(',');
+  return [...new Set(raw
+    .map((item) => String(item || '').trim().toLowerCase())
+    .filter((item) => OPTIONAL_COMPONENTS.has(item)))];
+}
+
+function hasTable(db, table) {
+  try {
+    return Boolean(db?.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table));
+  } catch {
+    return false;
+  }
+}
+
+function isPathInside(parentPath, childPath) {
+  const relative = path.relative(path.resolve(parentPath), path.resolve(childPath));
+  return relative === '' || (relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function assertSafeExternalRestoreTarget(targetPath, rootDir) {
+  const target = path.resolve(String(targetPath || ''));
+  const root = path.resolve(rootDir);
+  if (!target || target === path.parse(target).root || target === root || isPathInside(target, root)) {
+    throw createRestoreError('Unsafe external restore destination');
+  }
+  return target;
+}
+
 function normalizeArchiveEntryPath(entryPath) {
   const raw = String(entryPath || '').replace(/\0/g, '');
   if (!raw) return '';
@@ -141,7 +177,10 @@ function validateArchiveEntryPath(entryPath, entryType = 'File') {
   if (!RESTORE_ALLOWED_TOP_LEVEL.has(topLevel)) {
     throw createRestoreError('Archive contains unexpected files');
   }
-  if (normalized !== topLevel && topLevel !== 'uploads') {
+  if (normalized !== topLevel && !['uploads', 'external'].includes(topLevel)) {
+    throw createRestoreError('Archive contains unexpected nested files');
+  }
+  if (['.env', '.env.local'].includes(topLevel) && normalized !== topLevel) {
     throw createRestoreError('Archive contains unexpected nested files');
   }
   return normalized;
@@ -270,6 +309,203 @@ async function collectDirectoryStats(dirPath) {
   return totals;
 }
 
+async function collectDirectoryFiles(sourceDir, archiveDir) {
+  const files = [];
+  let rootStats;
+  try {
+    rootStats = await fsp.lstat(sourceDir);
+  } catch (error) {
+    if (error.code === 'ENOENT') return { status: 'missing', files, stats: { files: 0, bytes: 0 } };
+    throw error;
+  }
+  if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
+    throw new Error(`Backup source is not a directory: ${sourceDir}`);
+  }
+
+  async function walk(currentPath) {
+    const entries = await fsp.readdir(currentPath, { withFileTypes: true });
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      const absolutePath = path.join(currentPath, entry.name);
+      let stats;
+      try {
+        stats = await fsp.lstat(absolutePath);
+      } catch (error) {
+        if (error.code === 'ENOENT') continue;
+        throw error;
+      }
+      if (stats.isSymbolicLink()) continue;
+      if (stats.isDirectory()) {
+        await walk(absolutePath);
+        continue;
+      }
+      if (!stats.isFile()) continue;
+      const relative = path.relative(sourceDir, absolutePath).replace(/\\/g, '/');
+      files.push({
+        sourcePath: absolutePath,
+        archivePath: normalizeBackupArchivePath(path.posix.join(archiveDir, relative)),
+        stats,
+      });
+    }
+  }
+
+  await walk(sourceDir);
+  return {
+    status: files.length ? 'included' : 'empty',
+    files,
+    stats: {
+      files: files.length,
+      bytes: files.reduce((total, item) => total + Number(item.stats?.size || 0), 0),
+    },
+  };
+}
+
+function readVoiceModelSources(db, rootDir) {
+  const defaultModelsDir = path.join(rootDir, 'voice', 'models');
+  let settings = {};
+  if (hasTable(db, 'app_settings')) {
+    try { settings = getVoiceSettings(db) || {}; } catch {}
+  }
+  const sources = [
+    {
+      id: 'voice_whisper',
+      path: path.resolve(String(settings.whisper_models_dir || defaultModelsDir)),
+      label: 'Voice / Whisper',
+    },
+    {
+      id: 'voice_vosk',
+      path: path.resolve(String(settings.vosk_model_path || defaultModelsDir)),
+      label: 'Voice / Vosk',
+    },
+  ];
+  if (hasTable(db, 'telegram_bots')) {
+    const bots = db.prepare('SELECT id, name, vosk_model_path FROM telegram_bots ORDER BY id ASC').all();
+    for (const bot of bots) {
+      sources.push({
+        id: `telegram_vosk_${Number(bot.id)}`,
+        path: path.resolve(String(bot.vosk_model_path || defaultModelsDir)),
+        label: `Telegram bot ${Number(bot.id)}${bot.name ? ` (${bot.name})` : ''}`,
+      });
+    }
+  }
+  return sources;
+}
+
+function readCallRecordingRoot(db) {
+  if (!hasTable(db, 'app_settings')) return '';
+  try {
+    return path.resolve(String(getCallSettings(db).call_recording_path || ''));
+  } catch {
+    return '';
+  }
+}
+
+async function collectOptionalBackupComponents({ db, rootDir, selected = [] } = {}) {
+  const enabled = new Set(normalizeOptionalComponents(selected));
+  const result = {
+    selected: [...enabled],
+    entries: [],
+    manifest: {},
+  };
+  const addFileComponent = async (component, name) => {
+    const sourcePath = path.join(rootDir, name);
+    let stats;
+    try {
+      stats = await fsp.lstat(sourcePath);
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        result.manifest[component] = { selected: true, status: 'missing', archive_path: name, files: 0, bytes: 0 };
+        return;
+      }
+      throw error;
+    }
+    if (stats.isSymbolicLink() || !stats.isFile()) throw new Error(`Backup source is not a file: ${name}`);
+    result.entries.push({ sourcePath, archivePath: name, stats });
+    result.manifest[component] = { selected: true, status: 'included', archive_path: name, files: 1, bytes: stats.size };
+  };
+
+  if (enabled.has('env')) await addFileComponent('env', '.env');
+  if (enabled.has('env_local')) await addFileComponent('env_local', '.env.local');
+
+  if (enabled.has('call_recordings')) {
+    const recordingRoot = readCallRecordingRoot(db);
+    const component = {
+      selected: true,
+      status: recordingRoot ? 'included' : 'missing',
+      archive_path: 'external/call-recordings',
+      files: 0,
+      bytes: 0,
+      active_or_processing: 0,
+      missing_files: 0,
+      root_configured: Boolean(recordingRoot),
+    };
+    if (recordingRoot && hasTable(db, 'call_recordings')) {
+      const rows = db.prepare("SELECT id, file_path, status FROM call_recordings WHERE status IN ('completed','recording','processing')").all();
+      const completed = rows.filter((row) => row.status === 'completed');
+      component.active_or_processing = rows.length - completed.length;
+      for (const row of completed) {
+        const sourcePath = path.resolve(String(row.file_path || ''));
+        if (!sourcePath || !isPathInside(recordingRoot, sourcePath)) {
+          component.missing_files += 1;
+          continue;
+        }
+        let stats;
+        try { stats = await fsp.lstat(sourcePath); } catch (error) {
+          if (error.code === 'ENOENT') { component.missing_files += 1; continue; }
+          throw error;
+        }
+        if (stats.isSymbolicLink() || !stats.isFile()) { component.missing_files += 1; continue; }
+        const relative = path.relative(recordingRoot, sourcePath).replace(/\\/g, '/');
+        result.entries.push({
+          sourcePath,
+          archivePath: normalizeBackupArchivePath(path.posix.join('external/call-recordings', relative)),
+          stats,
+        });
+        component.files += 1;
+        component.bytes += stats.size;
+      }
+    }
+    if (!component.files && component.status === 'included') component.status = 'empty';
+    result.manifest.call_recordings = component;
+  }
+
+  if (enabled.has('voice_models')) {
+    const groups = new Map();
+    for (const source of readVoiceModelSources(db, rootDir)) {
+      const key = source.path;
+      if (!groups.has(key)) groups.set(key, { path: key, sources: [] });
+      groups.get(key).sources.push({ id: source.id, label: source.label });
+    }
+    const paths = [];
+    let totalFiles = 0;
+    let totalBytes = 0;
+    let index = 0;
+    for (const group of groups.values()) {
+      const archivePath = `external/models/${index++}`;
+      const collected = await collectDirectoryFiles(group.path, archivePath);
+      paths.push({
+        archive_path: archivePath,
+        status: collected.status,
+        files: collected.stats.files,
+        bytes: collected.stats.bytes,
+        sources: group.sources,
+      });
+      result.entries.push(...collected.files);
+      totalFiles += collected.stats.files;
+      totalBytes += collected.stats.bytes;
+    }
+    result.manifest.voice_models = {
+      selected: true,
+      status: paths.some((item) => item.status === 'included') ? 'included' : 'missing',
+      archive_path: 'external/models',
+      files: totalFiles,
+      bytes: totalBytes,
+      paths,
+    };
+  }
+  return result;
+}
+
 function buildBackupManifest({
   createdAt = new Date(),
   included = {},
@@ -277,6 +513,7 @@ function buildBackupManifest({
   uploads = { files: 0, bytes: 0 },
   mode = 'file',
   app = packageJson,
+  optionalComponents = {},
 } = {}) {
   const created = createdAt instanceof Date ? createdAt : new Date(createdAt);
   const archiveMode = mode === 'stream' ? 'stream' : 'file';
@@ -296,11 +533,12 @@ function buildBackupManifest({
       secrets: Array.isArray(included.secrets) ? included.secrets : [],
       manifest: 'backup-manifest.json',
     },
+    optional_components: optionalComponents,
     excluded: [...excluded],
     uploads,
     notes: [
-      '.env is not included. Keep deployment environment variables such as BANANZA_MAP_CONTACT separately.',
-      'Whisper GGML models, the whisper.cpp binary, project-local FFmpeg, and service configuration are external dependencies and are not included. Run npm install and reinstall Whisper after restore.',
+      '.env, .env.local, call recordings, and speech recognition models are opt-in backup components.',
+      'Whisper runtime/binaries, FFmpeg, node_modules, and deployment service configuration are external dependencies and are not included. Run npm install and reinstall runtime dependencies after restore.',
       'Encrypted integration settings, including Telegram bot tokens, require the included .secret file after restore.',
       'This archive contains chat history, uploaded files, and server secrets.',
     ],
@@ -322,6 +560,14 @@ async function copyUploads(sourceDir, targetDir) {
       return !stats.isSymbolicLink();
     },
   });
+}
+
+async function copyOptionalEntriesToWorkspace(entries, workspaceDir) {
+  for (const entry of entries || []) {
+    const targetPath = path.join(workspaceDir, ...String(entry.archivePath).split('/'));
+    await fsp.mkdir(path.dirname(targetPath), { recursive: true });
+    await fsp.copyFile(entry.sourcePath, targetPath);
+  }
 }
 
 function createBackupStreamAbortError() {
@@ -563,11 +809,15 @@ async function readBackupManifest(extractDir) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     throw createRestoreError('Backup manifest is invalid');
   }
-  if (Number(manifest.format_version) !== BACKUP_FORMAT_VERSION) {
+  if (!SUPPORTED_BACKUP_FORMAT_VERSIONS.has(Number(manifest.format_version))) {
     throw createRestoreError('Unsupported backup format version');
   }
   if (manifest.included?.database !== 'bananza.db') {
     throw createRestoreError('Backup manifest database entry is invalid');
+  }
+  if (Number(manifest.format_version) === 1) manifest.optional_components = {};
+  if (!manifest.optional_components || typeof manifest.optional_components !== 'object' || Array.isArray(manifest.optional_components)) {
+    throw createRestoreError('Backup manifest optional components are invalid');
   }
   return manifest;
 }
@@ -614,6 +864,7 @@ async function createRestorePreview({
   archivePath,
   tempDir = os.tmpdir(),
   restoreId = createRestoreId(),
+  rootDir = __dirname,
 } = {}) {
   if (!archivePath) throw new TypeError('createRestorePreview requires archivePath');
 
@@ -631,6 +882,7 @@ async function createRestorePreview({
       uploads: hasUploads,
       secret: await exists(path.join(extractDir, '.secret')),
       vapid: await exists(path.join(extractDir, '.vapid.json')),
+      optional_components: manifest.optional_components || {},
     };
     const warnings = [];
     if (!includes.uploads) warnings.push('Backup archive does not include uploads/. An empty uploads folder will be restored.');
@@ -638,6 +890,28 @@ async function createRestorePreview({
     if (!includes.vapid) warnings.push('Backup archive does not include .vapid.json. Current push keys will be kept.');
     if (!Array.isArray(manifest.excluded) || !manifest.excluded.includes('.env')) {
       warnings.push('.env is not included by restore. Keep deployment environment variables separately.');
+    }
+    const optionalComponents = manifest.optional_components || {};
+    if (Number(optionalComponents.call_recordings?.active_or_processing || 0) > 0) {
+      warnings.push('Backup skipped active call recordings.');
+    }
+    if (Number(optionalComponents.call_recordings?.missing_files || 0) > 0) {
+      warnings.push('Backup skipped missing call recording files.');
+    }
+    const optionalTargets = {};
+    for (const component of Object.keys(optionalComponents)) {
+      if (!OPTIONAL_COMPONENTS.has(component) || !optionalComponentIsPresent(optionalComponents[component])) continue;
+      try {
+        optionalTargets[component] = (await resolveOptionalRestorePlan({
+          extractDir,
+          manifest,
+          requested: [component],
+          rootDir,
+        })).map((item) => item.target);
+      } catch (error) {
+        optionalTargets[component] = [];
+        warnings.push('Optional backup component cannot be restored on this server.');
+      }
     }
 
     return {
@@ -651,6 +925,8 @@ async function createRestorePreview({
         database,
         uploads,
         includes,
+        optional_components: optionalComponents,
+        optional_targets: optionalTargets,
         warnings,
       },
     };
@@ -658,6 +934,86 @@ async function createRestorePreview({
     await fsp.rm(sessionRoot, { recursive: true, force: true });
     throw error;
   }
+}
+
+function optionalComponentIsPresent(component) {
+  return Boolean(component && component.selected && ['included', 'empty'].includes(component.status));
+}
+
+async function resolveOptionalRestorePlan({
+  extractDir,
+  manifest,
+  requested = [],
+  rootDir = __dirname,
+} = {}) {
+  const selected = new Set(normalizeOptionalComponents(requested));
+  const optional = manifest?.optional_components || {};
+  const plan = [];
+  const requirePresent = (name) => {
+    if (!optionalComponentIsPresent(optional[name])) {
+      throw createRestoreError('Backup archive does not include selected optional component');
+    }
+  };
+  if (selected.has('env')) {
+    requirePresent('env');
+    plan.push({ id: 'env', type: 'file', source: '.env', target: path.join(rootDir, '.env') });
+  }
+  if (selected.has('env_local')) {
+    requirePresent('env_local');
+    plan.push({ id: 'env_local', type: 'file', source: '.env.local', target: path.join(rootDir, '.env.local') });
+  }
+  if (selected.has('call_recordings') || selected.has('voice_models')) {
+    const stagedDb = new Database(path.join(extractDir, 'bananza.db'), { readonly: true, fileMustExist: true });
+    try {
+    if (selected.has('call_recordings')) {
+      requirePresent('call_recordings');
+      const target = assertSafeExternalRestoreTarget(readCallRecordingRoot(stagedDb), rootDir);
+      plan.push({
+        id: 'call_recordings',
+        type: 'directory',
+        source: 'external/call-recordings',
+        target,
+      });
+    }
+    if (selected.has('voice_models')) {
+      requirePresent('voice_models');
+      const currentSources = new Map(readVoiceModelSources(stagedDb, rootDir).map((item) => [item.id, item.path]));
+      const seenTargets = new Set();
+      for (const modelPath of optional.voice_models?.paths || []) {
+        if (modelPath.status !== 'included') continue;
+        for (const sourceInfo of modelPath.sources || []) {
+          const targetPath = currentSources.get(sourceInfo.id);
+          if (!targetPath || seenTargets.has(targetPath)) continue;
+          const target = assertSafeExternalRestoreTarget(targetPath, rootDir);
+          seenTargets.add(target);
+          plan.push({
+            id: `voice_models:${sourceInfo.id}`,
+            component: 'voice_models',
+            type: 'directory',
+            source: String(modelPath.archive_path || ''),
+            target,
+          });
+        }
+      }
+      if (!plan.some((item) => item.component === 'voice_models')) {
+        throw createRestoreError('Backup archive has no restorable speech recognition models');
+      }
+    }
+    } finally {
+      stagedDb.close();
+    }
+  }
+  for (const item of plan) {
+    if ((item.type === 'directory' && !String(item.source).startsWith('external/'))
+      || (item.type === 'file' && !['.env', '.env.local'].includes(item.source))) {
+      throw createRestoreError('Backup archive optional component path is invalid');
+    }
+    const sourcePath = path.join(extractDir, ...String(item.source || '').split('/'));
+    if (!isPathInside(extractDir, sourcePath) || !(await exists(sourcePath))) {
+      throw createRestoreError('Backup archive is missing selected optional component data');
+    }
+  }
+  return plan;
 }
 
 function normalizeRecoveryAdmin(input = {}) {
@@ -739,6 +1095,7 @@ async function createRestoreRollback({
   rootDir = __dirname,
   uploadsDir = path.join(rootDir, 'uploads'),
   now = new Date(),
+  externalRestores = [],
 } = {}) {
   if (!db || typeof db.backup !== 'function') {
     throw new TypeError('createRestoreRollback requires a better-sqlite3 database');
@@ -753,12 +1110,24 @@ async function createRestoreRollback({
   await copyUploads(uploadsDir, path.join(rollbackDir, 'uploads'));
   await copyIfExists(path.join(rootDir, '.secret'), path.join(rollbackDir, '.secret'));
   await copyIfExists(path.join(rootDir, '.vapid.json'), path.join(rollbackDir, '.vapid.json'));
+  const external = [];
+  for (let index = 0; index < externalRestores.length; index += 1) {
+    const item = externalRestores[index];
+    const rollbackPath = path.join(rollbackDir, 'external', String(index));
+    const present = await exists(item.target);
+    if (present) {
+      if (item.type === 'file') await copyIfExists(item.target, rollbackPath);
+      else await copyUploads(item.target, rollbackPath);
+    }
+    external.push({ id: item.id, type: item.type, target: item.target, rollback_path: present ? `external/${index}` : '', present });
+  }
   await fsp.writeFile(
     path.join(rollbackDir, 'restore-rollback-manifest.json'),
     `${JSON.stringify({
       created_at: now.toISOString(),
       reason: 'automatic pre-restore rollback',
       included: ['bananza.db', 'uploads/', '.secret', '.vapid.json'],
+      external,
     }, null, 2)}\n`,
     'utf8'
   );
@@ -769,6 +1138,7 @@ async function replaceRuntimeFiles({
   extractDir,
   rootDir = __dirname,
   uploadsDir = path.join(rootDir, 'uploads'),
+  externalRestores = [],
 } = {}) {
   if (!extractDir) throw new TypeError('replaceRuntimeFiles requires extractDir');
   const stagedDbPath = path.join(extractDir, 'bananza.db');
@@ -788,6 +1158,18 @@ async function replaceRuntimeFiles({
   if (await exists(path.join(extractDir, '.vapid.json'))) {
     await fsp.copyFile(path.join(extractDir, '.vapid.json'), path.join(rootDir, '.vapid.json'));
   }
+  for (const item of externalRestores) {
+    const sourcePath = path.join(extractDir, ...String(item.source || '').split('/'));
+    const target = assertSafeExternalRestoreTarget(item.target, rootDir);
+    if (item.type === 'file') {
+      await fsp.mkdir(path.dirname(target), { recursive: true });
+      await rmWithBusyRetry(target);
+      await fsp.copyFile(sourcePath, target);
+    } else {
+      await rmWithBusyRetry(target, { recursive: true });
+      await copyUploads(sourcePath, target);
+    }
+  }
 }
 
 async function stagePendingRestore({
@@ -796,6 +1178,7 @@ async function stagePendingRestore({
   rollbackDir = '',
   recovery = null,
   now = new Date(),
+  externalRestores = [],
 } = {}) {
   if (!session?.extractDir) throw createRestoreError('Restore session expired or not found', 404);
   const pendingRoot = pendingRestoreRoot(rootDir);
@@ -819,6 +1202,12 @@ async function stagePendingRestore({
         created: recovery.created,
       } : null,
       workspace: 'workspace',
+      external_restores: externalRestores.map((item) => ({
+        id: item.id,
+        type: item.type,
+        source: item.source,
+        target: item.target,
+      })),
       note: 'Applied on next startup before SQLite is opened.',
     }, null, 2)}\n`,
     'utf8'
@@ -865,6 +1254,22 @@ function applyPendingRestoreOnStartup({
     copyFileSyncWithBusyRetry(path.join(workspaceDir, '.vapid.json'), path.join(rootDir, '.vapid.json'));
   }
 
+  for (const item of Array.isArray(manifest?.external_restores) ? manifest.external_restores : []) {
+    const source = String(item?.source || '');
+    const sourcePath = path.join(workspaceDir, ...source.split('/'));
+    const target = assertSafeExternalRestoreTarget(item?.target, rootDir);
+    if (!source || !isPathInside(workspaceDir, sourcePath) || !fs.existsSync(sourcePath)) {
+      throw new Error(`Pending backup restore is missing optional component: ${item?.id || 'unknown'}`);
+    }
+    rmSyncWithBusyRetry(target, { recursive: item.type !== 'file' });
+    if (item.type === 'file') {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      copyFileSyncWithBusyRetry(sourcePath, target);
+    } else {
+      copyDirectorySyncSkippingSymlinks(sourcePath, target);
+    }
+  }
+
   rmSyncWithBusyRetry(pendingRoot, { recursive: true });
   console.warn('[backup] pending restore applied');
   return {
@@ -882,15 +1287,22 @@ async function applyRestoreSession({
   now = new Date(),
   closeDatabase = true,
   deferRuntimeReplace = false,
+  restoreComponents = [],
 } = {}) {
   if (!db) throw new TypeError('applyRestoreSession requires db');
   if (!session?.extractDir) throw createRestoreError('Restore session expired or not found', 404);
 
+  const externalRestores = await resolveOptionalRestorePlan({
+    extractDir: session.extractDir,
+    manifest: session.preview?.manifest,
+    requested: restoreComponents,
+    rootDir,
+  });
   const recovery = await patchRecoveryAdmin({
     dbPath: path.join(session.extractDir, 'bananza.db'),
     recoveryAdmin,
   });
-  const rollbackDir = await createRestoreRollback({ db, rootDir, uploadsDir, now });
+  const rollbackDir = await createRestoreRollback({ db, rootDir, uploadsDir, now, externalRestores });
 
   if (deferRuntimeReplace) {
     const pending_restore_dir = await stagePendingRestore({
@@ -899,6 +1311,7 @@ async function applyRestoreSession({
       rollbackDir,
       recovery,
       now,
+      externalRestores,
     });
     return {
       ok: true,
@@ -929,6 +1342,7 @@ async function applyRestoreSession({
     extractDir: session.extractDir,
     rootDir,
     uploadsDir,
+    externalRestores,
   });
 
   return {
@@ -950,6 +1364,7 @@ async function createBackupArchive({
   uploadsDir = path.join(rootDir, 'uploads'),
   tempDir = os.tmpdir(),
   now = new Date(),
+  optionalComponents = [],
 } = {}) {
   if (!db || typeof db.backup !== 'function') {
     throw new TypeError('A better-sqlite3 database with backup() is required');
@@ -967,6 +1382,18 @@ async function createBackupArchive({
     await fsp.mkdir(workspaceDir, { recursive: true });
     await db.backup(path.join(workspaceDir, 'bananza.db'));
     await copyUploads(uploadsDir, path.join(workspaceDir, 'uploads'));
+    const optional = await collectOptionalBackupComponents({
+      db,
+      rootDir,
+      selected: optionalComponents,
+    });
+    await copyOptionalEntriesToWorkspace(optional.entries, workspaceDir);
+    if (optional.manifest.call_recordings?.selected) {
+      await fsp.mkdir(path.join(workspaceDir, 'external', 'call-recordings'), { recursive: true });
+    }
+    if (optional.manifest.voice_models?.selected) {
+      await fsp.mkdir(path.join(workspaceDir, 'external', 'models'), { recursive: true });
+    }
 
     const secrets = [];
     if (await copyIfExists(path.join(rootDir, '.secret'), path.join(workspaceDir, '.secret'))) {
@@ -981,6 +1408,7 @@ async function createBackupArchive({
       createdAt: now,
       included: { secrets },
       uploads,
+      optionalComponents: optional.manifest,
     });
     await fsp.writeFile(
       path.join(workspaceDir, 'backup-manifest.json'),
@@ -989,6 +1417,12 @@ async function createBackupArchive({
     );
 
     const entries = ['bananza.db', 'uploads', 'backup-manifest.json', ...secrets];
+    if (optional.entries.some((entry) => entry.archivePath === '.env')) entries.push('.env');
+    if (optional.entries.some((entry) => entry.archivePath === '.env.local')) entries.push('.env.local');
+    if (optional.entries.some((entry) => entry.archivePath.startsWith('external/'))
+      || optional.manifest.call_recordings?.selected
+      || optional.manifest.voice_models?.selected) entries.push('external');
+    const optionalArchivePaths = new Set(optional.entries.map((entry) => entry.archivePath));
     await tar.create({
       cwd: workspaceDir,
       file: archivePath,
@@ -997,7 +1431,7 @@ async function createBackupArchive({
       noMtime: true,
       filter: (entryPath, stat) => {
         const normalized = String(entryPath || '').replace(/\\/g, '/');
-        if (DEFAULT_EXCLUDED.includes(normalized)) return false;
+        if (DEFAULT_EXCLUDED.includes(normalized) && !optionalArchivePaths.has(normalized)) return false;
         if (normalized.startsWith('node_modules/') || normalized.startsWith('.git/')) return false;
         return !stat?.isSymbolicLink?.();
       },
@@ -1021,6 +1455,7 @@ async function createStreamingBackupArchive({
   uploadsDir = path.join(rootDir, 'uploads'),
   tempDir = os.tmpdir(),
   now = new Date(),
+  optionalComponents = [],
 } = {}) {
   if (!db || typeof db.backup !== 'function') {
     throw new TypeError('A better-sqlite3 database with backup() is required');
@@ -1040,11 +1475,17 @@ async function createStreamingBackupArchive({
 
     const secrets = await collectSecretEntries(rootDir);
     const uploads = await collectDirectoryStats(uploadsDir);
+    const optional = await collectOptionalBackupComponents({
+      db,
+      rootDir,
+      selected: optionalComponents,
+    });
     const manifest = buildBackupManifest({
       createdAt: now,
       included: { secrets },
       uploads,
       mode: 'stream',
+      optionalComponents: optional.manifest,
     });
 
     const pack = tarStream.pack();
@@ -1073,6 +1514,30 @@ async function createStreamingBackupArchive({
           await addTarFileEntry(pack, uploadFile.absolutePath, uploadFile.archivePath, {
             signal,
             stats: uploadFile.stats,
+          });
+        }
+        const optionalDirectories = new Set();
+        for (const entry of optional.entries) {
+          const segments = String(entry.archivePath).split('/');
+          for (let index = 1; index < segments.length; index += 1) {
+            optionalDirectories.add(segments.slice(0, index).join('/'));
+          }
+        }
+        if (optional.manifest.call_recordings?.selected) {
+          optionalDirectories.add('external');
+          optionalDirectories.add('external/call-recordings');
+        }
+        if (optional.manifest.voice_models?.selected) {
+          optionalDirectories.add('external');
+          optionalDirectories.add('external/models');
+        }
+        for (const directory of [...optionalDirectories].sort()) {
+          await addTarDirectoryEntry(pack, directory, { signal });
+        }
+        for (const entry of optional.entries) {
+          await addTarFileEntry(pack, entry.sourcePath, entry.archivePath, {
+            signal,
+            stats: entry.stats,
           });
         }
         await addTarBufferEntry(
@@ -1191,10 +1656,11 @@ function createBackupFeature({
   });
 
   app.get('/api/admin/backup/export', auth, adminOnly, async (req, res, next) => {
+    const optionalComponents = normalizeOptionalComponents(req.query?.components || req.query?.include);
     if (String(req.query?.mode || '').toLowerCase() === 'stream') {
       let backup = null;
       try {
-        backup = await createStreamingBackupArchive({ db, rootDir, uploadsDir, tempDir });
+        backup = await createStreamingBackupArchive({ db, rootDir, uploadsDir, tempDir, optionalComponents });
         res.setHeader('Cache-Control', 'no-store');
         res.setHeader('Content-Type', 'application/gzip');
         res.setHeader('Content-Disposition', `attachment; filename="${backup.filename}"`);
@@ -1222,7 +1688,7 @@ function createBackupFeature({
 
     let backup = null;
     try {
-      backup = await createBackupArchive({ db, rootDir, uploadsDir });
+      backup = await createBackupArchive({ db, rootDir, uploadsDir, optionalComponents });
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('Content-Type', 'application/gzip');
       res.download(backup.archivePath, backup.filename, async (error) => {
@@ -1249,6 +1715,7 @@ function createBackupFeature({
       const session = await createRestorePreview({
         archivePath: uploadedPath,
         tempDir,
+        rootDir,
       });
       restoreSessions.set(session.restoreId, session);
       res.json(session.preview);
@@ -1281,6 +1748,7 @@ function createBackupFeature({
         rootDir,
         uploadsDir,
         recoveryAdmin: req.body?.recovery_admin || req.body?.recoveryAdmin,
+        restoreComponents: normalizeOptionalComponents(req.body?.restore_components || req.body?.restoreComponents),
         deferRuntimeReplace: process.env.BANANZA_TEST_RESTORE_NO_EXIT !== '1',
       });
       await cleanupRestoreSession(restoreId).catch(() => {});
@@ -1304,7 +1772,9 @@ function createBackupFeature({
 
 module.exports = {
   BACKUP_FORMAT_VERSION,
+  SUPPORTED_BACKUP_FORMAT_VERSIONS,
   DEFAULT_EXCLUDED,
+  OPTIONAL_COMPONENTS,
   RESTORE_CONFIRM_TEXT,
   backupTimestamp,
   buildBackupManifest,
@@ -1315,6 +1785,9 @@ module.exports = {
   applyRestoreSession,
   applyPendingRestoreOnStartup,
   patchRecoveryAdmin,
+  normalizeOptionalComponents,
+  resolveOptionalRestorePlan,
+  assertSafeExternalRestoreTarget,
   validateArchiveEntryPath,
   validateBackupArchiveEntries,
 };

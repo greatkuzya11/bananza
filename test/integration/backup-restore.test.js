@@ -33,6 +33,10 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
     let initiativeRuleId;
     let telegramBotId;
     const telegramImageUpdateId = 987654;
+    const callRecordingsDir = path.join(sandbox.appDir, 'external-call-recordings');
+    const modelsDir = path.join(sandbox.appDir, 'external-speech-models');
+    const completedRecordingPath = path.join(callRecordingsDir, 'call-1', 'mixed.ogg');
+    const modelPath = path.join(modelsDir, 'ggml-backup-test.bin');
     try {
       const chat = liveDb.prepare('SELECT id FROM chats ORDER BY id ASC LIMIT 1').get();
       const bot = liveDb.prepare(`
@@ -70,6 +74,27 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
           'universal_edit', 'delivering', 'telegram-source-id', 'telegram-source-unique', 'source.png',
           'image/png', 1234, ?, 'image/png', 'backup-image.png', ?)
       `).run(telegramBotId, telegramImageUpdateId, bot.lastInsertRowid, tinyPngBuffer(), telegramStoredImagePath);
+      const adminRow = liveDb.prepare('SELECT id FROM users WHERE is_admin=1 ORDER BY id ASC LIMIT 1').get();
+      const call = liveDb.prepare(`
+        INSERT INTO call_sessions(chat_id, livekit_room_name, started_by)
+        VALUES(?, 'backup-restore-call-room', ?)
+      `).run(chat.id, adminRow.id);
+      fs.mkdirSync(path.dirname(completedRecordingPath), { recursive: true });
+      fs.mkdirSync(modelsDir, { recursive: true });
+      fs.writeFileSync(completedRecordingPath, 'completed call recording');
+      fs.writeFileSync(modelPath, 'speech model');
+      liveDb.prepare(`
+        INSERT INTO call_recordings(call_id, user_id, scope, file_path, status)
+        VALUES(?, ?, 'mixed', ?, 'completed')
+      `).run(call.lastInsertRowid, adminRow.id, completedRecordingPath);
+      liveDb.prepare(`
+        INSERT INTO app_settings(key, value, updated_at) VALUES(?, ?, datetime('now'))
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+      `).run('call_settings', JSON.stringify({ call_recording_path: callRecordingsDir }));
+      liveDb.prepare(`
+        INSERT INTO app_settings(key, value, updated_at) VALUES(?, ?, datetime('now'))
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+      `).run('voice_settings', JSON.stringify({ whisper_models_dir: modelsDir, vosk_model_path: modelsDir }));
     } finally {
       liveDb.close();
     }
@@ -85,13 +110,17 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
       formData: documentImageForm,
     });
 
-    const exportResponse = await fetch(`${sandbox.baseUrl}/api/admin/backup/export`, {
+    fs.writeFileSync(path.join(sandbox.appDir, '.env'), 'BACKUP_ENV=1\n');
+    const exportResponse = await fetch(`${sandbox.baseUrl}/api/admin/backup/export?components=env,call_recordings,voice_models`, {
       headers: {
         Authorization: `Bearer ${admin.token}`,
       },
     });
     assert.equal(exportResponse.status, 200);
     const archiveBuffer = Buffer.from(await exportResponse.arrayBuffer());
+    fs.writeFileSync(path.join(sandbox.appDir, '.env'), 'CURRENT_ENV=1\n');
+    fs.writeFileSync(completedRecordingPath, 'current recording');
+    fs.writeFileSync(modelPath, 'current model');
 
     function archiveForm() {
       const form = new FormData();
@@ -116,6 +145,9 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
     assert.equal(preview.data.includes.uploads, true);
     assert.equal(preview.data.database.users >= 2, true);
     assert.equal(preview.data.uploads.files >= 1, true);
+    assert.equal(preview.data.optional_components.env.status, 'included');
+    assert.equal(preview.data.optional_components.call_recordings.files, 1);
+    assert.equal(preview.data.optional_components.voice_models.files >= 1, true);
 
     const wrongConfirm = await admin.request('/api/admin/backup/restore/apply', {
       method: 'POST',
@@ -154,6 +186,7 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
           username: 'restore_admin',
           password: 'restore-password',
         },
+        restore_components: ['env', 'call_recordings', 'voice_models'],
       },
     });
     assert.equal(applied.data.ok, true);
@@ -164,6 +197,9 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
     const rollbackDir = applied.data.rollback_dir;
     assert.equal(fs.existsSync(path.join(rollbackDir, 'bananza.db')), true);
     assert.equal(fs.existsSync(path.join(rollbackDir, 'uploads')), true);
+    assert.equal(fs.readFileSync(path.join(sandbox.appDir, '.env'), 'utf8'), 'BACKUP_ENV=1\n');
+    assert.equal(fs.readFileSync(completedRecordingPath, 'utf8'), 'completed call recording');
+    assert.equal(fs.readFileSync(modelPath, 'utf8'), 'speech model');
 
     const restoredDb = new Database(path.join(sandbox.appDir, 'bananza.db'), { readonly: true });
     try {

@@ -320,6 +320,23 @@
       <div class="modal-body">
         <div class="settings-hint">This archive contains chat history, uploaded files, and server secrets. Store it somewhere private.</div>
         <div class="settings-hint">.env is not included. Keep deployment environment variables such as BANANZA_MAP_CONTACT separately.</div>
+        <div class="settings-hint" data-i18n="Optional backup components are off by default.">Optional backup components are off by default.</div>
+        <div class="settings-item settings-toggle-item">
+          <span data-i18n="Include .env">Include .env</span>
+          <label class="toggle-switch"><input type="checkbox" id="backupExportEnv"><span class="toggle-slider"></span></label>
+        </div>
+        <div class="settings-item settings-toggle-item">
+          <span data-i18n="Include .env.local">Include .env.local</span>
+          <label class="toggle-switch"><input type="checkbox" id="backupExportEnvLocal"><span class="toggle-slider"></span></label>
+        </div>
+        <div class="settings-item settings-toggle-item">
+          <span data-i18n="Include completed call recordings">Include completed call recordings</span>
+          <label class="toggle-switch"><input type="checkbox" id="backupExportCallRecordings"><span class="toggle-slider"></span></label>
+        </div>
+        <div class="settings-item settings-toggle-item">
+          <span data-i18n="Include speech recognition models">Include speech recognition models</span>
+          <label class="toggle-switch"><input type="checkbox" id="backupExportVoiceModels"><span class="toggle-slider"></span></label>
+        </div>
         <div class="settings-item settings-toggle-item">
           <span data-i18n="Stream archive directly">Stream archive directly</span>
           <label class="toggle-switch">
@@ -338,6 +355,7 @@
         <div id="backupRestoreFileName" class="settings-hint backup-file-name">No backup archive selected</div>
         <button id="backupRestorePreviewBtn" class="settings-item" type="button">Validate archive</button>
         <div id="backupRestorePreview" class="settings-hint hidden"></div>
+        <div id="backupRestoreOptionalComponents" class="settings-hint hidden"></div>
         <input id="backupRestoreUsername" class="modal-input" type="text" autocomplete="username" placeholder="Recovery admin username">
         <input id="backupRestorePassword" class="modal-input" type="password" autocomplete="new-password" placeholder="Recovery admin password">
         <input id="backupRestorePasswordConfirm" class="modal-input" type="password" autocomplete="new-password" placeholder="Confirm recovery password">

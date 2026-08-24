@@ -14,7 +14,10 @@ const {
   buildBackupManifest,
   applyPendingRestoreOnStartup,
   createStreamingBackupArchive,
+  createBackupArchive,
   createRestorePreview,
+  applyRestoreSession,
+  assertSafeExternalRestoreTarget,
   patchRecoveryAdmin,
   validateArchiveEntryPath,
 } = require('../../backup');
@@ -134,19 +137,28 @@ test('buildBackupManifest records included and excluded backup parts', () => {
   assert.ok(manifest.excluded.includes('bananza.db-wal'));
   assert.ok(manifest.excluded.includes('bananza.db-shm'));
   assert.ok(manifest.excluded.includes('voice/models/*.bin'));
-  assert.ok(manifest.notes.some((note) => note.includes('Whisper GGML models')));
+  assert.deepEqual(manifest.optional_components, {});
+  assert.ok(manifest.notes.some((note) => note.includes('Whisper runtime')));
   assert.ok(manifest.notes.some((note) => note.includes('Telegram bot tokens') && note.includes('.secret')));
 });
 
 test('restore archive entry validation rejects unsafe and excluded paths', () => {
   assert.throws(() => validateArchiveEntryPath('../bananza.db', 'File'), /Invalid archive path/);
   assert.throws(() => validateArchiveEntryPath('/bananza.db', 'File'), /Invalid archive path/);
-  assert.throws(() => validateArchiveEntryPath('.env', 'File'), /excluded files/);
+  assert.equal(validateArchiveEntryPath('.env', 'File'), '.env');
+  assert.equal(validateArchiveEntryPath('external/call-recordings/mixed.ogg', 'File'), 'external/call-recordings/mixed.ogg');
   assert.throws(() => validateArchiveEntryPath('bananza.db-wal', 'File'), /excluded files/);
   assert.throws(() => validateArchiveEntryPath('node_modules/pkg/index.js', 'File'), /excluded files/);
   assert.throws(() => validateArchiveEntryPath('uploads/link', 'SymbolicLink'), /links are not allowed/);
   assert.equal(validateArchiveEntryPath('uploads/file.txt', 'File'), 'uploads/file.txt');
   assert.equal(validateArchiveEntryPath('./backup-manifest.json', 'File'), 'backup-manifest.json');
+});
+
+test('external restore destinations reject filesystem and project roots', () => {
+  const rootDir = path.resolve('/tmp/bananza-backup-target-test');
+  assert.throws(() => assertSafeExternalRestoreTarget(path.parse(rootDir).root, rootDir), /Unsafe external restore destination/);
+  assert.throws(() => assertSafeExternalRestoreTarget(rootDir, rootDir), /Unsafe external restore destination/);
+  assert.equal(assertSafeExternalRestoreTarget(path.join(rootDir, 'external-data'), rootDir), path.join(rootDir, 'external-data'));
 });
 
 test('createStreamingBackupArchive streams safe entries without copying excluded runtime files', async () => {
@@ -238,6 +250,103 @@ test('createStreamingBackupArchive streams safe entries without copying excluded
   }
 });
 
+test('optional export components include env, completed recordings, and configured model files only', async () => {
+  const tempDir = makeTempDir();
+  const uploadsDir = path.join(tempDir, 'uploads');
+  const archivePath = path.join(tempDir, 'optional.tar.gz');
+  const recordingsDir = path.join(tempDir, 'call-recordings');
+  const modelsDir = path.join(tempDir, 'speech-models');
+  let db = null;
+  let backup = null;
+  try {
+    createRestoreDatabase(path.join(tempDir, 'bananza.db'));
+    db = new Database(path.join(tempDir, 'bananza.db'));
+    db.exec(`
+      CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT);
+      CREATE TABLE call_recordings (id INTEGER PRIMARY KEY, file_path TEXT NOT NULL, status TEXT NOT NULL);
+    `);
+    db.prepare('INSERT INTO app_settings(key,value) VALUES(?,?)').run('call_settings', JSON.stringify({ call_recording_path: recordingsDir }));
+    db.prepare('INSERT INTO app_settings(key,value) VALUES(?,?)').run('voice_settings', JSON.stringify({ whisper_models_dir: modelsDir, vosk_model_path: modelsDir }));
+    fs.mkdirSync(path.join(recordingsDir, 'call-1'), { recursive: true });
+    fs.mkdirSync(modelsDir, { recursive: true });
+    fs.writeFileSync(path.join(recordingsDir, 'call-1', 'completed.ogg'), 'completed');
+    fs.writeFileSync(path.join(recordingsDir, 'call-1', 'active.ogg'), 'active');
+    fs.writeFileSync(path.join(modelsDir, 'ggml-test.bin'), 'model');
+    fs.writeFileSync(path.join(tempDir, '.env'), 'ARCHIVED=1');
+    db.prepare('INSERT INTO call_recordings(id,file_path,status) VALUES(?,?,?)').run(1, path.join(recordingsDir, 'call-1', 'completed.ogg'), 'completed');
+    db.prepare('INSERT INTO call_recordings(id,file_path,status) VALUES(?,?,?)').run(2, path.join(recordingsDir, 'call-1', 'active.ogg'), 'recording');
+
+    backup = await createStreamingBackupArchive({
+      db,
+      rootDir: tempDir,
+      uploadsDir,
+      tempDir,
+      optionalComponents: ['env', 'call_recordings', 'voice_models'],
+    });
+    await Promise.all([backup.start(), pipeline(backup.stream, fs.createWriteStream(archivePath))]);
+    const entries = [];
+    await tar.list({ file: archivePath, onentry: (entry) => entries.push(entry.path.replace(/\\/g, '/').replace(/\/+$/, '')) });
+    assert.ok(entries.includes('.env'));
+    assert.ok(entries.includes('external/call-recordings/call-1/completed.ogg'));
+    assert.equal(entries.includes('external/call-recordings/call-1/active.ogg'), false);
+    assert.ok(entries.some((item) => item.startsWith('external/models/') && item.endsWith('ggml-test.bin')));
+    const extractDir = fs.mkdtempSync(path.join(tempDir, 'optional-extract-'));
+    try {
+      await tar.extract({ file: archivePath, cwd: extractDir });
+      const manifest = JSON.parse(fs.readFileSync(path.join(extractDir, 'backup-manifest.json'), 'utf8'));
+      assert.equal(manifest.format_version, BACKUP_FORMAT_VERSION);
+      assert.equal(manifest.optional_components.env.status, 'included');
+      assert.equal(manifest.optional_components.call_recordings.active_or_processing, 1);
+      assert.equal(manifest.optional_components.call_recordings.files, 1);
+      assert.equal(manifest.optional_components.voice_models.files, 1);
+    } finally {
+      fs.rmSync(extractDir, { recursive: true, force: true });
+    }
+  } finally {
+    if (backup) await backup.cleanup().catch(() => {});
+    if (db) db.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('selected optional env restore replaces only the explicitly selected file', async () => {
+  const tempDir = makeTempDir();
+  const uploadsDir = path.join(tempDir, 'uploads');
+  let db = null;
+  let backup = null;
+  let session = null;
+  try {
+    createRestoreDatabase(path.join(tempDir, 'bananza.db'));
+    fs.mkdirSync(uploadsDir, { recursive: true });
+    fs.writeFileSync(path.join(tempDir, '.env'), 'ARCHIVED=1');
+    fs.writeFileSync(path.join(tempDir, '.env.local'), 'LOCAL_CURRENT=1');
+    db = new Database(path.join(tempDir, 'bananza.db'));
+    backup = await createBackupArchive({ db, rootDir: tempDir, uploadsDir, tempDir, optionalComponents: ['env'] });
+    fs.writeFileSync(path.join(tempDir, '.env'), 'CURRENT=1');
+    session = await createRestorePreview({ archivePath: backup.archivePath, tempDir, rootDir: tempDir });
+    const result = await applyRestoreSession({
+      db,
+      session,
+      rootDir: tempDir,
+      uploadsDir,
+      recoveryAdmin: { username: 'restore_admin', password: 'restore-password' },
+      deferRuntimeReplace: true,
+      restoreComponents: ['env'],
+    });
+    assert.equal(result.pending_restart, true);
+    db.close();
+    db = null;
+    applyPendingRestoreOnStartup({ rootDir: tempDir, uploadsDir });
+    assert.equal(fs.readFileSync(path.join(tempDir, '.env'), 'utf8'), 'ARCHIVED=1');
+    assert.equal(fs.readFileSync(path.join(tempDir, '.env.local'), 'utf8'), 'LOCAL_CURRENT=1');
+  } finally {
+    if (db) db.close();
+    if (session) fs.rmSync(session.sessionRoot, { recursive: true, force: true });
+    if (backup) await backup.cleanup().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('createRestorePreview validates archive manifest and database summary', async () => {
   const tempDir = makeTempDir();
   try {
@@ -257,6 +366,32 @@ test('createRestorePreview validates archive manifest and database summary', asy
       assert.equal(session.preview.includes.secret, true);
       assert.equal(session.preview.includes.vapid, true);
       assert.ok(fs.existsSync(path.join(session.extractDir, 'bananza.db')));
+    } finally {
+      fs.rmSync(session.sessionRoot, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('createRestorePreview keeps backward compatibility with a v1 manifest', async () => {
+  const tempDir = makeTempDir();
+  try {
+    const archivePath = await createRestoreArchive(tempDir);
+    const workspace = path.join(tempDir, 'legacy-workspace');
+    fs.mkdirSync(workspace, { recursive: true });
+    await tar.extract({ file: archivePath, cwd: workspace });
+    const manifestPath = path.join(workspace, 'backup-manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.format_version = 1;
+    delete manifest.optional_components;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    const legacyArchivePath = path.join(tempDir, 'legacy.tar.gz');
+    await tar.create({ cwd: workspace, file: legacyArchivePath, gzip: true }, ['bananza.db', 'uploads', '.secret', '.vapid.json', 'backup-manifest.json']);
+    const session = await createRestorePreview({ archivePath: legacyArchivePath, tempDir });
+    try {
+      assert.equal(session.preview.manifest.format_version, 1);
+      assert.deepEqual(session.preview.optional_components, {});
     } finally {
       fs.rmSync(session.sessionRoot, { recursive: true, force: true });
     }
