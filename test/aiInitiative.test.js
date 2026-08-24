@@ -559,6 +559,57 @@ test('initiative posts a diagnostic notice when the AI provider returns no messa
   assert.equal(db.prepare('SELECT last_run_at FROM ai_bot_initiative_rules WHERE id=1').get().last_run_at, null);
 });
 
+test('initiative scheduler runs independent due rules without waiting for a slow rule', async (t) => {
+  const db = createInitiativeDb();
+  t.after(() => db.close());
+  for (const [id, prompt] of [[1, 'slow rule'], [2, 'fast rule']]) {
+    db.prepare(`
+      INSERT INTO ai_bot_initiative_rules(
+        id, chat_id, bot_id, enabled, next_run_at, prompt_mode, custom_prompt,
+        idle_threshold_minutes, min_gap_minutes
+      )
+      VALUES(?,?,?,?,?,?,?,?,?)
+    `).run(id, 1, 1, 1, '2026-05-27T09:59:00Z', 'custom', prompt, 0, 1);
+  }
+
+  let releaseSlowRule;
+  const slowRuleFinished = new Promise((resolve) => { releaseSlowRule = resolve; });
+  let fastRuleStarted;
+  const fastRuleStartedPromise = new Promise((resolve) => { fastRuleStarted = resolve; });
+  const calls = [];
+  const feature = createAiInitiativeFeature({
+    app: fakeApp(),
+    db,
+    auth: (_req, _res, next) => next?.(),
+    adminOnly: (_req, _res, next) => next?.(),
+    startScheduler: false,
+    runRulesInBackground: true,
+    maxConcurrentRuleRuns: 2,
+    nowProvider: () => DateTime.fromISO('2026-05-27T10:00:00Z'),
+    aiBotFeature: {
+      resolveChatBotRuntime() { return true; },
+      async runSyntheticBotTurn(payload) {
+        calls.push(payload);
+        if (payload.instruction.includes('slow rule')) {
+          await slowRuleFinished;
+          return { message: { id: 111, chat_id: payload.chatId, ai_generated: 1, ai_bot_id: payload.botId } };
+        }
+        fastRuleStarted();
+        return { message: { id: 112, chat_id: payload.chatId, ai_generated: 1, ai_bot_id: payload.botId } };
+      },
+    },
+  });
+
+  await feature.runSchedulerTick();
+  await fastRuleStartedPromise;
+  await feature.runSchedulerTick();
+  assert.equal(calls.length, 2);
+
+  releaseSlowRule();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM ai_bot_initiative_rules WHERE last_run_at IS NOT NULL').get().count, 2);
+});
+
 test('initiative idle threshold 0 ignores recent chat activity', async (t) => {
   const db = createInitiativeDb();
   t.after(() => db.close());

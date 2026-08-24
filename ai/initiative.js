@@ -597,6 +597,8 @@ function createAiInitiativeFeature({
   onMessageCreated,
   schedulerIntervalMs = 60_000,
   startScheduler = true,
+  runRulesInBackground = startScheduler,
+  maxConcurrentRuleRuns = 3,
   nowProvider = () => DateTime.utc(),
   fetchImpl = globalThis.fetch,
   rng = Math.random,
@@ -753,6 +755,10 @@ function createAiInitiativeFeature({
 
   let schedulerTimer = null;
   let tickRunning = false;
+  const inFlightRuleIds = new Set();
+  const ruleConcurrency = intValue(maxConcurrentRuleRuns, 3, 1, 20);
+  const pendingRuleRuns = [];
+  let activeRuleRunCount = 0;
 
   function currentUtc() {
     const value = nowProvider();
@@ -1347,6 +1353,36 @@ function createAiInitiativeFeature({
     }
   }
 
+  async function processDueRulesIndependently(rules) {
+    const tasks = (Array.isArray(rules) ? rules : []).flatMap((rule) => {
+      const ruleId = Number(rule?.id || 0);
+      if (!ruleId || inFlightRuleIds.has(ruleId)) return [];
+      inFlightRuleIds.add(ruleId);
+      let resolveTask;
+      const task = new Promise((resolve) => { resolveTask = resolve; });
+      pendingRuleRuns.push({ rule, resolveTask });
+      return [task];
+    });
+    drainRuleRunQueue();
+    await Promise.all(tasks);
+  }
+
+  function drainRuleRunQueue() {
+    while (activeRuleRunCount < ruleConcurrency && pendingRuleRuns.length) {
+      const entry = pendingRuleRuns.shift();
+      activeRuleRunCount += 1;
+      Promise.resolve()
+        .then(() => processDueRule(entry.rule))
+        .catch((error) => console.warn('[ai-initiative] rule worker failed:', error?.message || error))
+        .finally(() => {
+          activeRuleRunCount -= 1;
+          inFlightRuleIds.delete(Number(entry.rule?.id || 0));
+          entry.resolveTask();
+          drainRuleRunQueue();
+        });
+    }
+  }
+
   async function runSchedulerTick() {
     if (tickRunning) return;
     tickRunning = true;
@@ -1355,9 +1391,9 @@ function createAiInitiativeFeature({
       for (const reminder of dueRemindersStmt.all(nowSql)) {
         await processDueReminder(reminder);
       }
-      for (const rule of dueRulesStmt.all(nowSql)) {
-        await processDueRule(rule);
-      }
+      const ruleTask = processDueRulesIndependently(dueRulesStmt.all(nowSql));
+      if (!runRulesInBackground) await ruleTask;
+      else ruleTask.catch((error) => console.warn('[ai-initiative] rule batch failed:', error?.message || error));
     } finally {
       tickRunning = false;
     }
