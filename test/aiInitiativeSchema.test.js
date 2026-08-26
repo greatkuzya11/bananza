@@ -47,7 +47,16 @@ test('AI schema adds and backfills names on a legacy initiative rules table', (t
 
   initAiSchema(db);
 
-  assert.ok(db.prepare("PRAGMA table_info(ai_bot_initiative_rules)").all().some((column) => column.name === 'name'));
+  const ruleColumns = new Set(db.prepare("PRAGMA table_info(ai_bot_initiative_rules)").all().map((column) => column.name));
+  assert.ok(ruleColumns.has('name'));
+  for (const column of [
+    'last_attempt_at',
+    'last_attempt_status',
+    'last_attempt_reason',
+    'last_attempt_stage',
+    'last_attempt_detail',
+    'last_attempt_tries',
+  ]) assert.ok(ruleColumns.has(column), `Expected migrated initiative column ${column}`);
   assert.deepEqual(db.prepare(`
     SELECT name, prompt_mode, fixed_time, updated_at
     FROM ai_bot_initiative_rules

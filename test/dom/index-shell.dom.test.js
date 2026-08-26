@@ -27,7 +27,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
 
   assert.deepEqual(styles, [
     '/vendor/leaflet/leaflet.css?v=1.9.4',
-    '/css/style.css?v=20260811-markdown-mobile-scroll1',
+    '/css/style.css?v=20260826-initiative-resilience',
     '/css/calls.css?v=20260621-call-mobile-controls',
     '/css/voice.css',
     '/css/telegram-transcription.css?v=20260821-telegram-history2',
@@ -143,7 +143,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/boot/init.js?v=20260601-runtime-final',
     '/js/app/runtime.js?v=20260531-runtime-split',
     '/js/app.js?v=20260531-ai-final',
-    '/js/ai-initiative.js?v=20260816-initiative-rule-name',
+    '/js/ai-initiative.js?v=20260826-initiative-resilience',
     '/js/calls/CallStore.js?v=20260509-call-modal-surface',
     '/js/calls/CallMedia.js?v=20260509-call-modal-surface',
     '/js/calls/CallNotifications.js?v=20260509-call-modal-surface',

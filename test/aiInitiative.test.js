@@ -75,6 +75,12 @@ function createInitiativeDb() {
       next_run_at TEXT DEFAULT NULL,
       last_run_at TEXT DEFAULT NULL,
       last_message_id INTEGER DEFAULT NULL,
+      last_attempt_at TEXT DEFAULT NULL,
+      last_attempt_status TEXT DEFAULT '',
+      last_attempt_reason TEXT DEFAULT '',
+      last_attempt_stage TEXT DEFAULT '',
+      last_attempt_detail TEXT DEFAULT '',
+      last_attempt_tries INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -379,11 +385,16 @@ test('initiative rule API generates, preserves, trims, and resets rule names', a
   db.prepare('UPDATE chats SET name=? WHERE id=1').run('Renamed chat');
   db.prepare('UPDATE ai_bots SET name=? WHERE id=1').run('Renamed bot');
   db.prepare('UPDATE ai_news_sources SET name=? WHERE id=1').run('Renamed RSS');
+  db.prepare('UPDATE ai_bot_initiative_rules SET same_context_run_count=5, last_message_id=1 WHERE id=?').run(generatedId);
   const preserved = await invokeRoute(updateHandler, {
     params: { id: String(generatedId) },
     body: { enabled: true },
   });
   assert.equal(preserved.payload.rule.name, 'Test RSS — General — Bot');
+  assert.deepEqual(db.prepare('SELECT same_context_run_count, last_message_id FROM ai_bot_initiative_rules WHERE id=?').get(generatedId), {
+    same_context_run_count: 0,
+    last_message_id: null,
+  });
 
   const regenerated = await invokeRoute(updateHandler, {
     params: { id: String(generatedId) },
@@ -396,6 +407,55 @@ test('initiative rule API generates, preserves, trims, and resets rule names', a
   });
   assert.equal(custom.payload.rule.name, 'Morning ping');
   assert.equal(db.prepare('SELECT name FROM ai_bot_initiative_rules WHERE id=?').get(custom.payload.rule.id).name, 'Morning ping');
+  db.prepare('UPDATE ai_bot_initiative_rules SET same_context_limit_enabled=0, same_context_run_count=4, last_message_id=1 WHERE id=?').run(custom.payload.rule.id);
+  await invokeRoute(updateHandler, {
+    params: { id: String(custom.payload.rule.id) },
+    body: { same_context_limit_enabled: true },
+  });
+  assert.deepEqual(db.prepare('SELECT same_context_run_count, last_message_id FROM ai_bot_initiative_rules WHERE id=?').get(custom.payload.rule.id), {
+    same_context_run_count: 0,
+    last_message_id: null,
+  });
+});
+
+test('initiative test endpoint returns structured provider diagnostics without changing rule state', async (t) => {
+  const db = createInitiativeDb();
+  t.after(() => db.close());
+  db.prepare(`
+    INSERT INTO ai_bot_initiative_rules(id, chat_id, bot_id, prompt_mode, next_run_at)
+    VALUES(1,1,1,'idle_ping','2026-05-28T09:00:00Z')
+  `).run();
+  const app = routeApp();
+  createAiInitiativeFeature({
+    app, db,
+    auth: (_req, _res, next) => next?.(),
+    adminOnly: (_req, _res, next) => next?.(),
+    startScheduler: false,
+    nowProvider: () => DateTime.fromISO('2026-05-27T10:00:00Z'),
+    aiBotFeature: {
+      resolveChatBotRuntime() { return true; },
+      async runSyntheticBotTurn() {
+        const error = new Error('provider busy');
+        error.code = 'RATE_LIMITED';
+        error.status = 429;
+        error.stage = 'provider';
+        throw error;
+      },
+    },
+  });
+
+  const response = await invokeRoute(app.routes.get('POST /api/admin/ai-bot-initiatives/rules/:id(\\d+)/test'), {
+    params: { id: '1' },
+  });
+
+  assert.equal(response.statusCode, 429);
+  assert.deepEqual(response.payload, {
+    error: 'provider busy',
+    code: 'RATE_LIMITED',
+    stage: 'provider',
+    retryable: true,
+  });
+  assert.equal(db.prepare('SELECT last_attempt_at FROM ai_bot_initiative_rules WHERE id=1').get().last_attempt_at, null);
 });
 
 test('initiative news hook sends a fresh news item and records history', async (t) => {
@@ -460,6 +520,75 @@ test('initiative news hook sends a fresh news item and records history', async (
   assert.match(calls[0].instruction, /Admin news instruction:\nMake it sharp\./);
   assert.doesNotMatch(calls[0].instruction, /Holiday|Nager/);
   assert.equal(db.prepare('SELECT COUNT(*) as count FROM ai_news_history').get().count, 2);
+  assert.deepEqual(db.prepare(`
+    SELECT same_context_run_count, last_message_id, last_attempt_status, last_attempt_tries
+    FROM ai_bot_initiative_rules WHERE id=1
+  `).get(), {
+    same_context_run_count: 0,
+    last_message_id: null,
+    last_attempt_status: 'sent',
+    last_attempt_tries: 1,
+  });
+});
+
+test('news initiatives keep running without human activity and never reuse RSS GUIDs', async (t) => {
+  const db = createInitiativeDb();
+  t.after(() => db.close());
+  db.prepare('INSERT INTO ai_news_sources(id, name, type, url, enabled, cache_ttl_minutes) VALUES(1,?,?,?,?,1)').run(
+    'Test RSS', 'rss', 'https://example.com/rss', 1
+  );
+  db.prepare(`
+    INSERT INTO ai_bot_initiative_rules(
+      id, chat_id, bot_id, enabled, fixed_time, next_run_at, prompt_mode,
+      idle_threshold_minutes, min_gap_minutes, same_context_limit_enabled,
+      same_context_max_runs, same_context_run_count, last_message_id,
+      news_source_id, news_max_age_hours, news_item_count
+    ) VALUES(1,1,1,1,'09:00',?,'news_hook',1,1,1,1,20,1,1,24,5)
+  `).run('2026-05-27T10:00:00Z');
+
+  let now = DateTime.fromISO('2026-05-27T10:00:00Z');
+  let feed = rssXml;
+  const instructions = [];
+  const feature = createAiInitiativeFeature({
+    app: fakeApp(), db,
+    auth: (_req, _res, next) => next?.(),
+    adminOnly: (_req, _res, next) => next?.(),
+    startScheduler: false,
+    nowProvider: () => now,
+    rng: () => 0,
+    fetchImpl: async () => ({ ok: true, status: 200, async text() { return feed; } }),
+    aiBotFeature: {
+      resolveChatBotRuntime() { return true; },
+      async runSyntheticBotTurn(payload) {
+        instructions.push(payload.instruction);
+        return { message: { id: 200 + instructions.length, chat_id: payload.chatId } };
+      },
+    },
+  });
+
+  await feature.runSchedulerTick();
+  assert.equal(instructions.length, 1);
+  assert.match(instructions[0], /News items provided: 2/);
+
+  now = DateTime.fromISO('2026-05-28T09:00:00Z');
+  feed = rssXml.replace('</channel>', `
+    <item><guid>news-3</guid><title>Third item</title><description>Fresh third summary</description>
+      <link>https://example.com/news-3</link><pubDate>Thu, 28 May 2026 08:55:00 GMT</pubDate></item>
+  </channel>`);
+  await feature.runSchedulerTick();
+  assert.equal(instructions.length, 2);
+  assert.match(instructions[1], /News items provided: 1/);
+  assert.match(instructions[1], /Third item/);
+  assert.doesNotMatch(instructions[1], /First & fresh|Second item/);
+
+  now = DateTime.fromISO('2026-05-28T09:01:00Z');
+  db.prepare('UPDATE ai_bot_initiative_rules SET next_run_at=? WHERE id=1').run('2026-05-28T09:01:00Z');
+  await feature.runSchedulerTick();
+  assert.equal(instructions.length, 2);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM ai_news_history').get().count, 3);
+  assert.deepEqual(db.prepare(`
+    SELECT last_attempt_status, last_attempt_reason FROM ai_bot_initiative_rules WHERE id=1
+  `).get(), { last_attempt_status: 'skipped', last_attempt_reason: 'no_new_news' });
 });
 
 test('initiative news hook skips disabled news sources without hallucinating', async (t) => {
@@ -487,7 +616,6 @@ test('initiative news hook skips disabled news sources without hallucinating', a
   );
 
   const calls = [];
-  const notices = [];
   const feature = createAiInitiativeFeature({
     app: fakeApp(),
     db,
@@ -502,10 +630,6 @@ test('initiative news hook skips disabled news sources without hallucinating', a
         calls.push(payload);
         return { message: { id: 100 } };
       },
-      publishSyntheticBotNotice(payload) {
-        notices.push(payload);
-        return { id: 101, chat_id: payload.chatId };
-      },
     },
   });
 
@@ -513,14 +637,18 @@ test('initiative news hook skips disabled news sources without hallucinating', a
 
   assert.equal(calls.length, 0);
   assert.equal(db.prepare('SELECT COUNT(*) as count FROM ai_news_history').get().count, 0);
-  assert.deepEqual(notices, [{
-    chatId: 1,
-    botId: 1,
-    text: 'Инициатива не отправлена: источник новостей не найден или отключён.',
-  }]);
+  assert.deepEqual(db.prepare(`
+    SELECT last_attempt_status, last_attempt_reason, last_attempt_stage, last_attempt_tries
+    FROM ai_bot_initiative_rules WHERE id=1
+  `).get(), {
+    last_attempt_status: 'skipped',
+    last_attempt_reason: 'news_source_unavailable',
+    last_attempt_stage: 'gate',
+    last_attempt_tries: 0,
+  });
 });
 
-test('initiative posts a diagnostic notice when the AI provider returns no message', async (t) => {
+test('initiative retries an empty AI response and stores diagnostics without posting a chat notice', async (t) => {
   const db = createInitiativeDb();
   t.after(() => db.close());
   db.prepare(`
@@ -531,7 +659,8 @@ test('initiative posts a diagnostic notice when the AI provider returns no messa
     VALUES(1,1,1,1,?,?,?,?)
   `).run('2026-05-27T09:59:00Z', 'idle_ping', 0, 1);
 
-  const notices = [];
+  let calls = 0;
+  const delays = [];
   const feature = createAiInitiativeFeature({
     app: fakeApp(),
     db,
@@ -539,37 +668,133 @@ test('initiative posts a diagnostic notice when the AI provider returns no messa
     adminOnly: (_req, _res, next) => next?.(),
     startScheduler: false,
     nowProvider: () => DateTime.fromISO('2026-05-27T10:00:00Z'),
+    rng: () => 0.5,
+    sleepImpl: async (delayMs) => { delays.push(delayMs); },
     aiBotFeature: {
       resolveChatBotRuntime() { return true; },
-      async runSyntheticBotTurn() { return null; },
-      publishSyntheticBotNotice(payload) {
-        notices.push(payload);
-        return { id: 102, chat_id: payload.chatId };
+      async runSyntheticBotTurn() { calls += 1; return null; },
+    },
+  });
+
+  await feature.runSchedulerTick();
+
+  assert.equal(calls, 3);
+  assert.deepEqual(delays, [5000, 30000]);
+  assert.equal(db.prepare('SELECT last_run_at FROM ai_bot_initiative_rules WHERE id=1').get().last_run_at, null);
+  assert.deepEqual(db.prepare(`
+    SELECT last_attempt_status, last_attempt_reason, last_attempt_stage, last_attempt_tries
+    FROM ai_bot_initiative_rules WHERE id=1
+  `).get(), {
+    last_attempt_status: 'failed',
+    last_attempt_reason: 'empty_provider_response',
+    last_attempt_stage: 'provider',
+    last_attempt_tries: 3,
+  });
+});
+
+test('initiative retries transient provider failures and publishes once after recovery', async (t) => {
+  const db = createInitiativeDb();
+  t.after(() => db.close());
+  db.prepare(`
+    INSERT INTO ai_bot_initiative_rules(
+      id, chat_id, bot_id, enabled, next_run_at, prompt_mode, idle_threshold_minutes, min_gap_minutes
+    ) VALUES(1,1,1,1,?,'idle_ping',0,1)
+  `).run('2026-05-27T10:00:00Z');
+
+  let calls = 0;
+  const delays = [];
+  const feature = createAiInitiativeFeature({
+    app: fakeApp(), db,
+    auth: (_req, _res, next) => next?.(),
+    adminOnly: (_req, _res, next) => next?.(),
+    startScheduler: false,
+    nowProvider: () => DateTime.fromISO('2026-05-27T10:00:00Z'),
+    rng: () => 0.5,
+    sleepImpl: async (delayMs) => { delays.push(delayMs); },
+    aiBotFeature: {
+      resolveChatBotRuntime() { return true; },
+      async runSyntheticBotTurn(payload) {
+        calls += 1;
+        if (calls < 3) {
+          const error = new Error('rate limited');
+          error.status = 429;
+          error.stage = 'provider';
+          throw error;
+        }
+        return { message: { id: 301, chat_id: payload.chatId } };
       },
     },
   });
 
   await feature.runSchedulerTick();
 
-  assert.deepEqual(notices, [{
-    chatId: 1,
-    botId: 1,
-    text: 'Инициатива не отправлена: AI-провайдер не вернул текст сообщения.',
-  }]);
-  assert.equal(db.prepare('SELECT last_run_at FROM ai_bot_initiative_rules WHERE id=1').get().last_run_at, null);
+  assert.equal(calls, 3);
+  assert.deepEqual(delays, [5000, 30000]);
+  assert.deepEqual(db.prepare(`
+    SELECT last_attempt_status, last_attempt_reason, last_attempt_tries
+    FROM ai_bot_initiative_rules WHERE id=1
+  `).get(), { last_attempt_status: 'sent', last_attempt_reason: 'sent', last_attempt_tries: 3 });
+});
+
+test('initiative does not retry a non-transient provider failure', async (t) => {
+  const db = createInitiativeDb();
+  t.after(() => db.close());
+  db.prepare(`
+    INSERT INTO ai_bot_initiative_rules(
+      id, chat_id, bot_id, enabled, next_run_at, prompt_mode, idle_threshold_minutes, min_gap_minutes
+    ) VALUES(1,1,1,1,?,'idle_ping',0,1)
+  `).run('2026-05-27T10:00:00Z');
+
+  let calls = 0;
+  const delays = [];
+  const feature = createAiInitiativeFeature({
+    app: fakeApp(), db,
+    auth: (_req, _res, next) => next?.(),
+    adminOnly: (_req, _res, next) => next?.(),
+    startScheduler: false,
+    nowProvider: () => DateTime.fromISO('2026-05-27T10:00:00Z'),
+    sleepImpl: async (delayMs) => { delays.push(delayMs); },
+    aiBotFeature: {
+      resolveChatBotRuntime() { return true; },
+      async runSyntheticBotTurn() {
+        calls += 1;
+        const error = new Error('invalid API key: sk-secret123456');
+        error.status = 401;
+        error.stage = 'provider';
+        throw error;
+      },
+    },
+  });
+
+  await feature.runSchedulerTick();
+
+  assert.equal(calls, 1);
+  assert.deepEqual(delays, []);
+  assert.deepEqual(db.prepare(`
+    SELECT last_attempt_status, last_attempt_reason, last_attempt_tries, last_attempt_detail
+    FROM ai_bot_initiative_rules WHERE id=1
+  `).get(), {
+    last_attempt_status: 'failed',
+    last_attempt_reason: 'provider_failed',
+    last_attempt_tries: 1,
+    last_attempt_detail: 'invalid API key: [redacted]',
+  });
 });
 
 test('initiative scheduler runs independent due rules without waiting for a slow rule', async (t) => {
   const db = createInitiativeDb();
   t.after(() => db.close());
-  for (const [id, prompt] of [[1, 'slow rule'], [2, 'fast rule']]) {
+  db.prepare('INSERT INTO users(id, username, display_name, is_ai_bot) VALUES(3,?,?,1)').run('deepseek', 'DeepSeek');
+  db.prepare('INSERT INTO chat_members(chat_id, user_id) VALUES(1,3)').run();
+  db.prepare('INSERT INTO ai_bots(id, user_id, name, mention, provider, kind, enabled) VALUES(2,3,?,?,?,?,1)').run('DeepSeek', 'deepseek', 'deepseek', 'text');
+  for (const [id, botId, prompt] of [[1, 1, 'slow rule'], [2, 2, 'fast rule']]) {
     db.prepare(`
       INSERT INTO ai_bot_initiative_rules(
         id, chat_id, bot_id, enabled, next_run_at, prompt_mode, custom_prompt,
         idle_threshold_minutes, min_gap_minutes
       )
       VALUES(?,?,?,?,?,?,?,?,?)
-    `).run(id, 1, 1, 1, '2026-05-27T09:59:00Z', 'custom', prompt, 0, 1);
+    `).run(id, 1, botId, 1, '2026-05-27T09:59:00Z', 'custom', prompt, 0, 1);
   }
 
   let releaseSlowRule;
@@ -608,6 +833,57 @@ test('initiative scheduler runs independent due rules without waiting for a slow
   releaseSlowRule();
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM ai_bot_initiative_rules WHERE last_run_at IS NOT NULL').get().count, 2);
+});
+
+test('initiative scheduler serializes one provider without marking queued rules as missed', async (t) => {
+  const db = createInitiativeDb();
+  t.after(() => db.close());
+  for (const [id, prompt] of [[1, 'slow rule'], [2, 'queued rule']]) {
+    db.prepare(`
+      INSERT INTO ai_bot_initiative_rules(
+        id, chat_id, bot_id, enabled, next_run_at, prompt_mode, custom_prompt,
+        idle_threshold_minutes, min_gap_minutes
+      ) VALUES(?,?,?,?,?,?,?,?,?)
+    `).run(id, 1, 1, 1, '2026-05-27T10:00:00Z', 'custom', prompt, 0, 1);
+  }
+
+  let now = DateTime.fromISO('2026-05-27T10:00:00Z');
+  let releaseSlow;
+  const slowFinished = new Promise((resolve) => { releaseSlow = resolve; });
+  let slowStarted;
+  const slowStartedPromise = new Promise((resolve) => { slowStarted = resolve; });
+  const calls = [];
+  const feature = createAiInitiativeFeature({
+    app: fakeApp(), db,
+    auth: (_req, _res, next) => next?.(),
+    adminOnly: (_req, _res, next) => next?.(),
+    startScheduler: false,
+    runRulesInBackground: true,
+    maxConcurrentRuleRuns: 3,
+    nowProvider: () => now,
+    aiBotFeature: {
+      resolveChatBotRuntime() { return true; },
+      async runSyntheticBotTurn(payload) {
+        calls.push(payload.instruction);
+        if (payload.instruction.includes('slow rule')) {
+          slowStarted();
+          await slowFinished;
+        }
+        return { message: { id: 400 + calls.length, chat_id: payload.chatId } };
+      },
+    },
+  });
+
+  await feature.runSchedulerTick();
+  await slowStartedPromise;
+  assert.equal(calls.length, 1);
+  now = DateTime.fromISO('2026-05-27T10:10:00Z');
+  releaseSlow();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(calls.length, 2);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM ai_bot_initiative_rules WHERE last_attempt_status='sent'").get().count, 2);
 });
 
 test('initiative idle threshold 0 ignores recent chat activity', async (t) => {

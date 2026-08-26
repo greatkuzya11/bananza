@@ -91,6 +91,21 @@ function extractChatResult(payload) {
   };
 }
 
+function apiRequestError(message, status) {
+  const error = new Error(message);
+  error.status = Number(status || 0);
+  error.code = error.status ? `HTTP_${error.status}` : 'API_REQUEST_FAILED';
+  error.retryable = [408, 409, 425, 429].includes(error.status) || error.status >= 500;
+  return error;
+}
+
+function timeoutError() {
+  const error = new Error('Qwen API request timed out');
+  error.code = 'ETIMEDOUT';
+  error.retryable = true;
+  return error;
+}
+
 async function postJson(url, body, { apiKey, timeoutMs = 60000 }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -102,10 +117,10 @@ async function postJson(url, body, { apiKey, timeoutMs = 60000 }) {
       signal: controller.signal,
     });
     const payload = await parseJsonResponse(res);
-    if (!res.ok) throw new Error(errorText(payload, `Qwen API request failed with HTTP ${res.status}`));
+    if (!res.ok) throw apiRequestError(errorText(payload, `Qwen API request failed with HTTP ${res.status}`), res.status);
     return payload || {};
   } catch (error) {
-    if (error?.name === 'AbortError') throw new Error('Qwen API request timed out');
+    if (error?.name === 'AbortError') throw timeoutError();
     throw error;
   } finally {
     clearTimeout(timer);
@@ -122,10 +137,10 @@ async function getJson(url, { apiKey, timeoutMs = 30000 }) {
       signal: controller.signal,
     });
     const payload = await parseJsonResponse(res);
-    if (!res.ok) throw new Error(errorText(payload, `Qwen API request failed with HTTP ${res.status}`));
+    if (!res.ok) throw apiRequestError(errorText(payload, `Qwen API request failed with HTTP ${res.status}`), res.status);
     return payload || {};
   } catch (error) {
-    if (error?.name === 'AbortError') throw new Error('Qwen API request timed out');
+    if (error?.name === 'AbortError') throw timeoutError();
     throw error;
   } finally {
     clearTimeout(timer);

@@ -7753,6 +7753,39 @@ function createAiBotFeature({
     }, body, { noticeType });
   }
 
+  function syntheticTurnError(message, {
+    code = 'SYNTHETIC_TURN_FAILED',
+    stage = 'provider',
+    provider = '',
+    status = 0,
+    retryable,
+    cause = null,
+  } = {}) {
+    const error = new Error(cleanText(message || cause?.message || 'Synthetic bot turn failed', 1000));
+    error.code = code || cause?.code || 'SYNTHETIC_TURN_FAILED';
+    error.stage = stage;
+    error.provider = provider;
+    const resolvedStatus = Number(status || cause?.status || cause?.statusCode || cause?.response?.status || 0);
+    if (resolvedStatus > 0) error.status = resolvedStatus;
+    if (typeof retryable === 'boolean') error.retryable = retryable;
+    if (cause) {
+      error.cause = cause;
+      if (cause.headers) error.headers = cause.headers;
+    }
+    return error;
+  }
+
+  function wrapSyntheticTurnError(error, { stage, provider, retryable } = {}) {
+    if (error?.stage && error?.provider) return error;
+    return syntheticTurnError(errorText(error, 'Synthetic bot turn failed'), {
+      code: error?.code || 'SYNTHETIC_TURN_FAILED',
+      stage,
+      provider,
+      retryable: typeof error?.retryable === 'boolean' ? error.retryable : retryable,
+      cause: error,
+    });
+  }
+
   async function runSyntheticBotTurn({
     chatId,
     botId,
@@ -7764,9 +7797,12 @@ function createAiBotFeature({
   } = {}) {
     const runtime = resolveChatBotRuntime(chatId, botId);
     if (!runtime) {
-      const error = new Error('Bot is not available in this chat');
-      error.status = 404;
-      throw error;
+      throw syntheticTurnError('Bot is not available in this chat', {
+        code: 'BOT_UNAVAILABLE',
+        stage: 'context',
+        status: 404,
+        retryable: false,
+      });
     }
     const { bot, chatConfig } = runtime;
     const settings = getGlobalSettings();
@@ -7777,11 +7813,32 @@ function createAiBotFeature({
     const apiKey = isYandex
       ? getYandexApiKey()
       : (isDeepSeek ? getDeepSeekApiKey() : (isQwen ? getQwenApiKey() : (isGrok ? getGrokApiKey() : getApiKey())));
-    if (!apiKey) return null;
-    if (isYandex && !settings.yandex_folder_id) return null;
+    if (!apiKey) {
+      throw syntheticTurnError(`${bot.provider || 'AI'} API key is not configured`, {
+        code: 'PROVIDER_NOT_CONFIGURED',
+        stage: 'provider',
+        provider: bot.provider,
+        retryable: false,
+      });
+    }
+    if (isYandex && !settings.yandex_folder_id) {
+      throw syntheticTurnError('Yandex folder id is not configured', {
+        code: 'PROVIDER_NOT_CONFIGURED',
+        stage: 'provider',
+        provider: bot.provider,
+        retryable: false,
+      });
+    }
 
     const bodyInstruction = cleanText(instruction || '', 6000);
-    if (!bodyInstruction) return null;
+    if (!bodyInstruction) {
+      throw syntheticTurnError('Synthetic turn instruction is empty', {
+        code: 'EMPTY_INSTRUCTION',
+        stage: 'context',
+        provider: bot.provider,
+        retryable: false,
+      });
+    }
     const syntheticSource = {
       id: positiveId(replyToId) || null,
       chat_id: positiveId(chatId),
@@ -7791,7 +7848,12 @@ function createAiBotFeature({
       ai_generated: 0,
       is_deleted: 0,
     };
-    const context = await assembleContext({ bot, chatConfig: chatConfigForBotMode(bot, chatConfig, 'text'), message: syntheticSource });
+    let context;
+    try {
+      context = await assembleContext({ bot, chatConfig: chatConfigForBotMode(bot, chatConfig, 'text'), message: syntheticSource });
+    } catch (error) {
+      throw wrapSyntheticTurnError(error, { stage: 'context', provider: bot.provider });
+    }
     const mentionPrefix = mentionPrefixForUser(mentionUserId);
     const purposeLine = purpose ? `Synthetic turn purpose: ${cleanText(purpose, 80)}.` : '';
     const mentionLine = mentionPrefix ? `If this is a reminder for that user, begin the visible message with "${mentionPrefix}".` : '';
@@ -7804,8 +7866,10 @@ function createAiBotFeature({
       mentionLine,
     ].filter(Boolean).join('\n\n');
 
-    const rawText = isYandex
-      ? await yandexAi.generateText(yandexClientOptions({
+    let rawText;
+    try {
+      rawText = isYandex
+        ? await yandexAi.generateText(yandexClientOptions({
           apiKey,
           model: bot.response_model || settings.yandex_default_response_model,
           system,
@@ -7852,34 +7916,62 @@ function createAiBotFeature({
           user: context.user,
           maxOutputTokens: openAiMaxOutputTokens(bot.max_tokens, 1000),
           temperature: floatValue(bot.temperature, 0.55, 0, 1),
-        });
+          });
+    } catch (error) {
+      throw wrapSyntheticTurnError(error, { stage: 'provider', provider: bot.provider });
+    }
 
     let responseText = cleanGeneratedBotText(rawText, bot, 5000);
     if (mentionPrefix && responseText && !new RegExp(`(^|\\s)${escapeRegExp(mentionPrefix)}(?=$|\\s|[,.:;!?])`, 'i').test(responseText)) {
       responseText = `${mentionPrefix} ${responseText}`;
     }
-    if (!responseText) return null;
+    if (!responseText) {
+      throw syntheticTurnError('AI provider returned an empty response', {
+        code: 'EMPTY_PROVIDER_RESPONSE',
+        stage: 'provider',
+        provider: bot.provider,
+        retryable: true,
+      });
+    }
     if (dryRun) return { text: responseText, bot, chatConfig };
 
-    const result = insertBotMessageStmt.run(
-      positiveId(chatId),
-      bot.user_id,
-      responseText,
-      null,
-      positiveId(replyToId) || null,
-      1,
-      bot.id
-    );
+    let result;
+    try {
+      result = insertBotMessageStmt.run(
+        positiveId(chatId),
+        bot.user_id,
+        responseText,
+        null,
+        positiveId(replyToId) || null,
+        1,
+        bot.id
+      );
+    } catch (error) {
+      throw wrapSyntheticTurnError(error, { stage: 'persist', provider: bot.provider, retryable: false });
+    }
     if (typeof saveMessageMentions === 'function') {
       try { saveMessageMentions(result.lastInsertRowid, positiveId(chatId), responseText); } catch {}
     }
     const message = hydrateMessageById(result.lastInsertRowid);
-    if (!message) return null;
-    finalizePublishedBotMessage(message, {
-      schedulePreview: true,
-      enqueueMemoryMessage: true,
-    });
-    return { message, text: responseText, bot, chatConfig };
+    if (!message) {
+      throw syntheticTurnError('Persisted synthetic message could not be hydrated', {
+        code: 'MESSAGE_PERSIST_FAILED',
+        stage: 'persist',
+        provider: bot.provider,
+        retryable: false,
+      });
+    }
+    let publishError = null;
+    try {
+      finalizePublishedBotMessage(message, {
+        schedulePreview: true,
+        enqueueMemoryMessage: true,
+      });
+    } catch (error) {
+      publishError = wrapSyntheticTurnError(error, { stage: 'publish', provider: bot.provider, retryable: false });
+      console.warn('[ai-bot] synthetic publish finalization failed:', publishError.message);
+    }
+    return { message, text: responseText, bot, chatConfig, publishError };
   }
 
   function providerBotByRequestId(req, res, { provider = 'openai', kind = null } = {}) {

@@ -239,18 +239,101 @@
     return t('Ask one relevant follow-up question based on recent chat context.');
   }
 
+  function attemptStatusLabel(status) {
+    return {
+      sent: t('Sent'),
+      skipped: t('Skipped'),
+      failed: t('Failed'),
+    }[status] || cleanLabel(status);
+  }
+
+  function attemptReasonLabel(reason) {
+    const key = {
+      sent: 'Initiative sent',
+      missed_schedule: 'Scheduled time was missed',
+      no_human_messages: 'No human messages in chat',
+      same_context_limit: 'Same-context limit reached',
+      not_idle: 'Chat is not idle yet',
+      min_gap: 'Minimum gap has not elapsed',
+      bot_unavailable: 'Bot is unavailable in this chat',
+      news_source_unavailable: 'News source is unavailable',
+      no_news_source: 'No news source selected',
+      news_source_disabled: 'News source is disabled',
+      no_recent_news: 'No recent news available',
+      no_new_news: 'No unused news available',
+      news_source_failed: 'News source request failed',
+      provider_not_configured: 'AI provider is not configured',
+      empty_provider_response: 'AI provider returned an empty response',
+      context_failed: 'AI context assembly failed',
+      persist_failed: 'Initiative message persistence failed',
+      publish_failed: 'Initiative message publishing failed',
+      provider_failed: 'AI provider request failed',
+    }[reason];
+    return key ? t(key) : cleanLabel(reason);
+  }
+
+  function attemptStageLabel(stage) {
+    const key = {
+      scheduler: 'Scheduler',
+      gate: 'Rule conditions',
+      news: 'News loading',
+      context: 'Context assembly',
+      provider: 'AI provider',
+      persist: 'Message persistence',
+      publish: 'Message publishing',
+      complete: 'Completed',
+    }[stage];
+    return key ? t(key) : cleanLabel(stage);
+  }
+
+  function formatAttemptTime(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? cleanLabel(value) : date.toLocaleString();
+  }
+
+  function renderLastAttempt(rule) {
+    const el = $('#aiInitiativeLastAttempt');
+    if (!el) return;
+    el.classList.remove('is-sent', 'is-skipped', 'is-failed');
+    if (!rule?.last_attempt_at || !rule?.last_attempt_status) {
+      el.textContent = t('No initiative attempts recorded yet.');
+      return;
+    }
+    const status = cleanLabel(rule.last_attempt_status);
+    el.classList.add(`is-${status}`);
+    const parts = [
+      t('Last attempt: {time}', { time: formatAttemptTime(rule.last_attempt_at) }),
+      attemptStatusLabel(status),
+      attemptReasonLabel(rule.last_attempt_reason),
+    ];
+    if (rule.last_attempt_stage) parts.push(t('Stage: {stage}', { stage: attemptStageLabel(rule.last_attempt_stage) }));
+    if (Number(rule.last_attempt_tries || 0)) parts.push(t('AI attempts: {count}', { count: Number(rule.last_attempt_tries) }));
+    if (rule.last_attempt_detail) parts.push(rule.last_attempt_detail);
+    if (rule.prompt_mode !== 'news_hook' && rule.same_context_limit_enabled) {
+      parts.push(t('Context usage: {current}/{max}', {
+        current: Number(rule.same_context_run_count || 0),
+        max: Number(rule.same_context_max_runs || 1),
+      }));
+    }
+    el.textContent = parts.filter(Boolean).join(' / ');
+  }
+
   function updateExplanations() {
     const mode = $('#aiInitiativePromptMode')?.value || 'context_question';
     const scheduleType = $('#aiInitiativeScheduleType')?.value || 'fixed';
     const newsCount = Number($('#aiInitiativeNewsItemCount')?.value || 1);
     const sameContextEnabled = !!$('#aiInitiativeSameContextLimitEnabled')?.checked;
     const maxRuns = $('#aiInitiativeSameContextMaxRuns');
-    if (maxRuns) maxRuns.disabled = !sameContextEnabled;
     const isRandomWindow = scheduleType === 'random_window';
     $('#aiInitiativeFixedTimeField')?.classList.toggle('hidden', isRandomWindow);
     $('#aiInitiativeWindowStartField')?.classList.toggle('hidden', !isRandomWindow);
     $('#aiInitiativeWindowEndField')?.classList.toggle('hidden', !isRandomWindow);
     const isNews = mode === 'news_hook';
+    ['aiInitiativeSameContextLimitField', 'aiInitiativeSameContextMaxRunsField'].forEach((id) => {
+      document.getElementById(id)?.classList.toggle('hidden', isNews);
+    });
+    if (maxRuns) maxRuns.disabled = isNews || !sameContextEnabled;
     [
       'aiInitiativeNewsSourceField',
       'aiInitiativeNewsMaxAgeField',
@@ -298,7 +381,7 @@
         <button type="button" class="ai-bot-list-item${active ? ' active' : ''}" data-ai-initiative-rule-id="${Number(rule.id)}">
           <div class="ai-bot-list-main">
             <strong>${escapeHtml(rule.name || bot?.name || `#${rule.id}`)}</strong>
-            <small>${escapeHtml([bot?.name || `#${rule.bot_id}`, chat ? compactChatLabel(chat) : `#${rule.chat_id}`, t(rule.prompt_mode || 'context_question'), schedule, rule.enabled ? t('Enabled') : t('Disabled')].filter(Boolean).join(' / '))}</small>
+            <small>${escapeHtml([bot?.name || `#${rule.bot_id}`, chat ? compactChatLabel(chat) : `#${rule.chat_id}`, t(rule.prompt_mode || 'context_question'), schedule, rule.enabled ? t('Enabled') : t('Disabled'), rule.last_attempt_status ? attemptStatusLabel(rule.last_attempt_status) : ''].filter(Boolean).join(' / '))}</small>
           </div>
         </button>
       `;
@@ -346,6 +429,7 @@
     const newsUseContext = $('#aiInitiativeNewsUseContext');
     if (newsUseContext) newsUseContext.checked = rule?.news_use_chat_context !== false;
     updateExplanations();
+    renderLastAttempt(rule);
     renderRuleList();
   }
 

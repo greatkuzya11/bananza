@@ -105,6 +105,8 @@ test('AI initiative modal renders admin state and saves a rule', async () => {
   dom.window.document.getElementById('aiInitiativeSameContextMaxRuns').value = '3';
   dom.window.document.getElementById('aiInitiativePromptMode').value = 'news_hook';
   dom.window.document.getElementById('aiInitiativePromptMode').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.equal(dom.window.document.getElementById('aiInitiativeSameContextLimitField').classList.contains('hidden'), true);
+  assert.equal(dom.window.document.getElementById('aiInitiativeSameContextMaxRunsField').classList.contains('hidden'), true);
   dom.window.document.getElementById('aiInitiativeNewsItemCount').value = '4';
   dom.window.document.getElementById('aiInitiativeNewsPrompt').value = 'Make it sharp.';
   dom.window.document.getElementById('aiInitiativeSaveRule').click();
@@ -128,6 +130,59 @@ test('AI initiative modal renders admin state and saves a rule', async () => {
   assert.match(dom.window.document.getElementById('aiInitiativeRuleList').textContent, /Bananza AI/);
   assert.match(dom.window.document.getElementById('aiInitiativeRuleList').textContent, /Idea chat - Private chat #1/);
   assert.doesNotMatch(dom.window.document.getElementById('aiInitiativeRuleList').textContent, /Alice/);
+});
+
+test('AI initiative modal renders persisted attempt diagnostics', async () => {
+  const dom = createAppDom();
+  installAppBridge(dom, {
+    t: (key, params = {}) => String(key).replace(/\{(\w+)\}/g, (_match, name) => params[name] ?? ''),
+    applyLocalizedDom() {},
+    getCurrentChatId: () => 1,
+    async api(url) {
+      if (url === '/api/user/timezone') return { ok: true };
+      if (url === '/api/admin/ai-bot-initiatives') {
+        return {
+          chats: [{ id: 1, name: 'General', type: 'group', members: [] }],
+          bots: [{ id: 2, name: 'Bot', mention: 'bot', provider: 'openai' }],
+          news_sources: [],
+          rules: [{
+            id: 7,
+            name: 'Morning ping',
+            chat_id: 1,
+            bot_id: 2,
+            enabled: true,
+            prompt_mode: 'idle_ping',
+            schedule_type: 'fixed',
+            fixed_time: '09:00',
+            same_context_limit_enabled: true,
+            same_context_run_count: 1,
+            same_context_max_runs: 2,
+            last_attempt_at: '2026-08-26T10:00:00Z',
+            last_attempt_status: 'failed',
+            last_attempt_reason: 'provider_failed',
+            last_attempt_stage: 'provider',
+            last_attempt_detail: 'rate limited',
+            last_attempt_tries: 3,
+          }],
+        };
+      }
+      return {};
+    },
+  });
+  loadBrowserScript(dom, 'public/js/ai-initiative.js');
+  dom.window.document.dispatchEvent(new dom.window.Event('DOMContentLoaded'));
+
+  dom.window.document.getElementById('settingsAiInitiativesPanel').click();
+  await waitTick();
+  await waitTick();
+
+  const text = dom.window.document.getElementById('aiInitiativeLastAttempt').textContent;
+  assert.match(text, /Failed/);
+  assert.match(text, /AI provider request failed/);
+  assert.match(text, /Stage: AI provider/);
+  assert.match(text, /AI attempts: 3/);
+  assert.match(text, /rate limited/);
+  assert.match(text, /Context usage: 1\/2/);
 });
 
 test('AI initiative news source modal saves and tests RSS source', async () => {

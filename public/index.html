@@ -6,7 +6,7 @@
   <title>🍌 BananZa</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍌</text></svg>">
   <link rel="stylesheet" href="/vendor/leaflet/leaflet.css?v=1.9.4">
-  <link rel="stylesheet" href="/css/style.css?v=20260811-markdown-mobile-scroll1">
+  <link rel="stylesheet" href="/css/style.css?v=20260826-initiative-resilience">
   <link rel="stylesheet" href="/css/calls.css?v=20260621-call-mobile-controls">
   <link rel="stylesheet" href="/css/voice.css">
   <link rel="stylesheet" href="/css/telegram-transcription.css?v=20260821-telegram-history2">
@@ -968,13 +968,13 @@
               </label>
               <label>Idle minutes<input id="aiInitiativeIdleMinutes" class="modal-input" type="number" min="0" max="43200" value="1440"></label>
               <label>Minimum gap<input id="aiInitiativeGapMinutes" class="modal-input" type="number" min="1" max="43200" value="1440"></label>
-              <div class="ai-bot-toggle-label"><span>Limit repeats for same context</span>
+              <div id="aiInitiativeSameContextLimitField" class="ai-bot-toggle-label"><span>Limit repeats for same context</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="aiInitiativeSameContextLimitEnabled" checked>
                   <span class="toggle-slider"></span>
                 </label>
               </div>
-              <label>Max messages for same context<input id="aiInitiativeSameContextMaxRuns" class="modal-input" type="number" min="1" max="20" value="1"></label>
+              <label id="aiInitiativeSameContextMaxRunsField">Max messages for same context<input id="aiInitiativeSameContextMaxRuns" class="modal-input" type="number" min="1" max="20" value="1"></label>
               <label>Prompt mode<select id="aiInitiativePromptMode" class="modal-input">
                 <option value="context_question">Context question</option>
                 <option value="news_hook">News hook</option>
@@ -996,7 +996,9 @@
               <div class="settings-hint ai-initiative-wide-hint">Timezone is selected from IANA zones and shows the current UTC offset. Default is your browser timezone.</div>
               <div class="settings-hint ai-initiative-wide-hint">Set idle minutes to 0 to run regardless of recent chat activity.</div>
               <div class="settings-hint ai-initiative-wide-hint">When enabled, this rule can send only this many initiative messages after the same latest human message. New human activity resets the counter.</div>
+              <div class="settings-hint ai-initiative-wide-hint">News initiatives ignore the human-context limit and send each RSS item only once.</div>
               <div id="aiInitiativeNewsSourceHint" class="settings-hint ai-initiative-wide-hint"></div>
+              <div id="aiInitiativeLastAttempt" class="ai-initiative-attempt ai-initiative-wide-hint"></div>
             </div>
             <label id="aiInitiativeNewsPromptField" class="ai-bot-field">News prompt<textarea id="aiInitiativeNewsPrompt" class="modal-input" rows="4"></textarea></label>
             <label class="ai-bot-field">Custom prompt<textarea id="aiInitiativeCustomPrompt" class="modal-input" rows="4"></textarea></label>
@@ -2955,7 +2957,7 @@
   <script src="/js/app/boot/init.js?v=20260601-runtime-final"></script>
   <script src="/js/app/runtime.js?v=20260531-runtime-split"></script>
   <script src="/js/app.js?v=20260531-ai-final"></script>
-  <script src="/js/ai-initiative.js?v=20260816-initiative-rule-name"></script>
+  <script src="/js/ai-initiative.js?v=20260826-initiative-resilience"></script>
   <script src="/js/calls/CallStore.js?v=20260509-call-modal-surface"></script>
   <script src="/js/calls/CallMedia.js?v=20260509-call-modal-surface"></script>
   <script src="/js/calls/CallNotifications.js?v=20260509-call-modal-surface"></script>

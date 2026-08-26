@@ -6095,6 +6095,15 @@ html[data-visual-mode="rich"] .poll-card {
 .ai-initiative-enabled-toggle {
   grid-column: 1 / -1;
 }
+.ai-initiative-attempt {
+  padding: 9px 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: rgba(255,255,255,.04);
+}
+.ai-initiative-attempt.is-sent { color: var(--success-color, #65c78c); }
+.ai-initiative-attempt.is-skipped { color: var(--text-secondary); }
+.ai-initiative-attempt.is-failed { color: var(--danger-color, #ef6b73); }
 .ai-initiative-news-test-result {
   display: flex;
   flex-direction: column;

@@ -44,8 +44,12 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
         VALUES('Backup initiative bot', 'backup_initiative_bot', 1)
       `).run();
       initiativeRuleId = Number(liveDb.prepare(`
-        INSERT INTO ai_bot_initiative_rules(name, chat_id, bot_id, prompt_mode)
-        VALUES('Backup initiative rule', ?, ?, 'idle_ping')
+        INSERT INTO ai_bot_initiative_rules(
+          name, chat_id, bot_id, prompt_mode, last_attempt_at, last_attempt_status,
+          last_attempt_reason, last_attempt_stage, last_attempt_detail, last_attempt_tries
+        )
+        VALUES('Backup initiative rule', ?, ?, 'idle_ping', '2026-08-26T10:00:00Z',
+          'failed', 'provider_failed', 'provider', 'temporary upstream failure', 3)
       `).run(chat.id, bot.lastInsertRowid).lastInsertRowid);
       const sandboxSecret = fs.readFileSync(path.join(sandbox.appDir, '.secret'), 'utf8').trim();
       const telegramBot = createTelegramBot(liveDb, {
@@ -216,7 +220,11 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
         WHERE da.id=?
       `).get(documentImage.data.asset.id);
       const newsSource = restoredDb.prepare('SELECT name, url FROM ai_news_sources WHERE url=?').get('https://lenta.ru/rss/top7');
-      const initiativeRule = restoredDb.prepare('SELECT name FROM ai_bot_initiative_rules WHERE id=?').get(initiativeRuleId);
+      const initiativeRule = restoredDb.prepare(`
+        SELECT name, last_attempt_at, last_attempt_status, last_attempt_reason,
+          last_attempt_stage, last_attempt_detail, last_attempt_tries
+        FROM ai_bot_initiative_rules WHERE id=?
+      `).get(initiativeRuleId);
       const telegramImageJob = restoredDb.prepare('SELECT * FROM telegram_image_generation_jobs WHERE update_id=?').get(telegramImageUpdateId);
       const telegramSettings = readTelegramBot(restoredDb, telegramBotId);
       const restoredSecret = fs.readFileSync(path.join(sandbox.appDir, '.secret'), 'utf8').trim();
@@ -230,6 +238,12 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
       assert.equal(fs.existsSync(path.join(sandbox.appDir, 'uploads', documentImage.data.asset.stored_name)), true);
       assert.equal(newsSource.name, 'Lenta.ru top7');
       assert.equal(initiativeRule.name, 'Backup initiative rule');
+      assert.equal(initiativeRule.last_attempt_at, '2026-08-26T10:00:00Z');
+      assert.equal(initiativeRule.last_attempt_status, 'failed');
+      assert.equal(initiativeRule.last_attempt_reason, 'provider_failed');
+      assert.equal(initiativeRule.last_attempt_stage, 'provider');
+      assert.equal(initiativeRule.last_attempt_detail, 'temporary upstream failure');
+      assert.equal(initiativeRule.last_attempt_tries, 3);
       assert.equal(telegramSettings.image_generation_enabled, true);
       assert.equal(telegramSettings.generate_image_from_transcription, true);
       assert.equal(telegramSettings.image_bot_id, telegramImageJob.image_bot_id);

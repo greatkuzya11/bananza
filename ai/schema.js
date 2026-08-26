@@ -302,6 +302,12 @@ function initAiSchema(db) {
       next_run_at TEXT DEFAULT NULL,
       last_run_at TEXT DEFAULT NULL,
       last_message_id INTEGER DEFAULT NULL REFERENCES messages(id) ON DELETE SET NULL,
+      last_attempt_at TEXT DEFAULT NULL,
+      last_attempt_status TEXT DEFAULT '',
+      last_attempt_reason TEXT DEFAULT '',
+      last_attempt_stage TEXT DEFAULT '',
+      last_attempt_detail TEXT DEFAULT '',
+      last_attempt_tries INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -490,6 +496,7 @@ function initAiSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_ai_news_sources_enabled ON ai_news_sources(enabled, type);
     CREATE INDEX IF NOT EXISTS idx_ai_news_items_source_published ON ai_news_items(source_id, published_at);
     CREATE INDEX IF NOT EXISTS idx_ai_news_history_rule ON ai_news_history(rule_id, sent_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_news_history_rule_source_guid ON ai_news_history(rule_id, source_id, item_guid);
     CREATE INDEX IF NOT EXISTS idx_message_embeddings_chat ON message_embeddings(chat_id, is_stale);
     CREATE INDEX IF NOT EXISTS idx_memory_chunks_chat ON memory_chunks(chat_id, source_to_message_id);
     CREATE INDEX IF NOT EXISTS idx_memory_facts_chat ON memory_facts(chat_id, is_active, type);
@@ -547,6 +554,12 @@ function initAiSchema(db) {
   addColumnIfMissing(db, 'ai_bot_initiative_rules', 'news_item_count', 'news_item_count INTEGER DEFAULT 1');
   addColumnIfMissing(db, 'ai_bot_initiative_rules', 'news_use_chat_context', 'news_use_chat_context INTEGER DEFAULT 1');
   addColumnIfMissing(db, 'ai_bot_initiative_rules', 'news_prompt', "news_prompt TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'ai_bot_initiative_rules', 'last_attempt_at', 'last_attempt_at TEXT DEFAULT NULL');
+  addColumnIfMissing(db, 'ai_bot_initiative_rules', 'last_attempt_status', "last_attempt_status TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'ai_bot_initiative_rules', 'last_attempt_reason', "last_attempt_reason TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'ai_bot_initiative_rules', 'last_attempt_stage', "last_attempt_stage TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'ai_bot_initiative_rules', 'last_attempt_detail', "last_attempt_detail TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'ai_bot_initiative_rules', 'last_attempt_tries', 'last_attempt_tries INTEGER DEFAULT 0');
   ensureInitiativeRulesPromptModeSupportsNews(db);
   addColumnIfMissing(db, 'messages', 'ai_generated', 'ai_generated INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'messages', 'ai_bot_id', 'ai_bot_id INTEGER DEFAULT NULL');

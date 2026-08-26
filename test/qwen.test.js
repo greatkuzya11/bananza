@@ -87,8 +87,31 @@ test('generateText reports Qwen timeout aborts with stable error text', async ()
         user: 'Hello',
         timeoutMs: 30000,
       }),
-      /Qwen API request timed out/
+      (error) => {
+        assert.match(error.message, /Qwen API request timed out/);
+        assert.equal(error.code, 'ETIMEDOUT');
+        assert.equal(error.retryable, true);
+        return true;
+      }
     );
+  });
+});
+
+test('generateText preserves retryable Qwen HTTP metadata', async () => {
+  await withPatchedGlobals({
+    fetch: async () => ({
+      ok: false,
+      status: 429,
+      text: async () => JSON.stringify({ error: { message: 'Too many requests' } }),
+    }),
+  }, async () => {
+    await assert.rejects(() => qwen.generateText({ apiKey: 'local-qwen', user: 'Hello' }), (error) => {
+      assert.match(error.message, /Too many requests/);
+      assert.equal(error.status, 429);
+      assert.equal(error.code, 'HTTP_429');
+      assert.equal(error.retryable, true);
+      return true;
+    });
   });
 });
 

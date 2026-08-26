@@ -21,6 +21,9 @@ const DEFAULT_NEWS_MAX_AGE_HOURS = 24;
 const DEFAULT_NEWS_ITEM_COUNT = 1;
 const MAX_NEWS_ITEM_COUNT = 10;
 const DEFAULT_NEWS_CACHE_TTL_MINUTES = 30;
+const PROVIDER_MAX_ATTEMPTS = 3;
+const PROVIDER_RETRY_DELAYS_MS = [5_000, 30_000];
+const MAX_RETRY_DELAY_MS = 60_000;
 const SCHEDULE_TYPES = new Set(['fixed', 'random_window']);
 const PROMPT_MODES = new Set(['context_question', 'news_hook', 'date_holiday', 'idle_ping', 'custom']);
 const REMINDER_STATUSES = new Set(['pending', 'processing', 'sent', 'canceled', 'error']);
@@ -38,6 +41,7 @@ function initiativeFailureText(reason) {
     no_news_source: 'не выбран источник новостей',
     news_source_disabled: 'источник новостей отключён',
     no_recent_news: 'в источнике нет свежих новостей за заданный период',
+    no_new_news: 'в источнике нет новых неиспользованных новостей',
     news_source_failed: 'источник новостей временно недоступен',
     bot_no_message: 'AI-провайдер не вернул текст сообщения',
     provider_failed: 'не удалось получить ответ от AI-провайдера',
@@ -62,6 +66,56 @@ function intValue(value, fallback, min, max) {
 
 function cleanText(value, limit = 4000) {
   return String(value || '').trim().slice(0, limit);
+}
+
+function errorStatus(error) {
+  const value = Number(error?.status ?? error?.statusCode ?? error?.response?.status ?? 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function errorCode(error) {
+  return cleanText(error?.code || error?.cause?.code || '', 120).toUpperCase();
+}
+
+function errorDetail(error, fallback = 'Unexpected initiative error') {
+  return cleanText(error?.message || error?.cause?.message || fallback, 1000)
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, 'Bearer [redacted]')
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}/giu, '[redacted-key]')
+    .replace(/((?:api[_ -]?key|token)\s*[:=]\s*)[^\s,;]+/giu, '$1[redacted]')
+    .replace(/[\r\n\t]+/g, ' ')
+    .slice(0, 500);
+}
+
+function retryAfterMs(error) {
+  const headers = error?.headers || error?.response?.headers;
+  const raw = typeof headers?.get === 'function'
+    ? headers.get('retry-after')
+    : (headers?.['retry-after'] ?? headers?.['Retry-After']);
+  if (raw == null || raw === '') return 0;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds)) return Math.max(0, Math.round(seconds * 1000));
+  const dateMs = Date.parse(String(raw));
+  return Number.isFinite(dateMs) ? Math.max(0, dateMs - Date.now()) : 0;
+}
+
+function isRetryableInitiativeError(error) {
+  if (typeof error?.retryable === 'boolean') return error.retryable;
+  const status = errorStatus(error);
+  if ([408, 409, 425, 429].includes(status) || status >= 500) return true;
+  if (status >= 400) return false;
+  const code = errorCode(error);
+  if (['BOT_NO_MESSAGE', 'EMPTY_PROVIDER_RESPONSE', 'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EAI_AGAIN', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_SOCKET'].includes(code)) return true;
+  return /(?:timed?\s*out|timeout|network|socket|connection reset|fetch failed|temporarily unavailable)/iu.test(errorDetail(error, ''));
+}
+
+function initiativeErrorReason(error) {
+  const code = errorCode(error);
+  if (code === 'PROVIDER_NOT_CONFIGURED') return 'provider_not_configured';
+  if (code === 'EMPTY_PROVIDER_RESPONSE' || code === 'BOT_NO_MESSAGE') return 'empty_provider_response';
+  if (code === 'MESSAGE_PERSIST_FAILED' || error?.stage === 'persist') return 'persist_failed';
+  if (error?.stage === 'publish') return 'publish_failed';
+  if (error?.stage === 'context') return 'context_failed';
+  return 'provider_failed';
 }
 
 function cleanTimezone(value, fallback = DEFAULT_TIMEZONE) {
@@ -541,6 +595,12 @@ function serializeRule(row = {}) {
     next_run_at: row.next_run_at || null,
     last_run_at: row.last_run_at || null,
     last_message_id: Number(row.last_message_id || 0) || null,
+    last_attempt_at: row.last_attempt_at || null,
+    last_attempt_status: row.last_attempt_status || '',
+    last_attempt_reason: row.last_attempt_reason || '',
+    last_attempt_stage: row.last_attempt_stage || '',
+    last_attempt_detail: row.last_attempt_detail || '',
+    last_attempt_tries: Number(row.last_attempt_tries || 0),
   };
 }
 
@@ -602,10 +662,11 @@ function createAiInitiativeFeature({
   nowProvider = () => DateTime.utc(),
   fetchImpl = globalThis.fetch,
   rng = Math.random,
+  sleepImpl = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
 } = {}) {
   const isChatMemberStmt = db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?');
   const chatStmt = db.prepare('SELECT id, name, type FROM chats WHERE id=?');
-  const initiativeBotStmt = db.prepare('SELECT id, name FROM ai_bots WHERE id=?');
+  const initiativeBotStmt = db.prepare('SELECT id, name, provider FROM ai_bots WHERE id=?');
   const userTimezoneStmt = db.prepare('SELECT timezone FROM users WHERE id=?');
   const userMentionStmt = db.prepare('SELECT username, display_name FROM users WHERE id=?');
   const activeBotsStmt = db.prepare(`
@@ -670,6 +731,17 @@ function createAiInitiativeFeature({
     WHERE id=?
   `);
   const updateRuleNextStmt = db.prepare('UPDATE ai_bot_initiative_rules SET next_run_at=?, updated_at=datetime(\'now\') WHERE id=?');
+  const updateRuleAttemptStmt = db.prepare(`
+    UPDATE ai_bot_initiative_rules
+    SET last_attempt_at=?, last_attempt_status=?, last_attempt_reason=?, last_attempt_stage=?,
+      last_attempt_detail=?, last_attempt_tries=?, updated_at=datetime('now')
+    WHERE id=?
+  `);
+  const resetRuleContextStmt = db.prepare(`
+    UPDATE ai_bot_initiative_rules
+    SET last_message_id=NULL, same_context_run_count=0, updated_at=datetime('now')
+    WHERE id=?
+  `);
   const dueRemindersStmt = db.prepare(`
     SELECT * FROM ai_bot_reminders
     WHERE status='pending' AND datetime(due_at) <= datetime(?)
@@ -733,22 +805,11 @@ function createAiInitiativeFeature({
   const historyForRuleSourceStmt = db.prepare(`
     SELECT item_guid FROM ai_news_history
     WHERE rule_id=? AND source_id=?
-    ORDER BY datetime(sent_at) DESC
-    LIMIT 50
+    ORDER BY id DESC
   `);
   const insertNewsHistoryStmt = db.prepare(`
     INSERT OR IGNORE INTO ai_news_history(rule_id, source_id, item_guid, sent_at)
     VALUES(?,?,?,datetime('now'))
-  `);
-  const pruneNewsHistoryStmt = db.prepare(`
-    DELETE FROM ai_news_history
-    WHERE rule_id=?
-      AND id NOT IN (
-        SELECT id FROM ai_news_history
-        WHERE rule_id=?
-        ORDER BY datetime(sent_at) DESC
-        LIMIT 50
-      )
   `);
   const replyBotStmt = db.prepare('SELECT ai_bot_id FROM messages WHERE id=? AND ai_generated=1 AND ai_bot_id IS NOT NULL');
   const botByUserStmt = db.prepare('SELECT id FROM ai_bots WHERE user_id=? AND enabled=1');
@@ -756,6 +817,7 @@ function createAiInitiativeFeature({
   let schedulerTimer = null;
   let tickRunning = false;
   const inFlightRuleIds = new Set();
+  const activeRuleProviders = new Set();
   const ruleConcurrency = intValue(maxConcurrentRuleRuns, 3, 1, 20);
   const pendingRuleRuns = [];
   let activeRuleRunCount = 0;
@@ -869,6 +931,10 @@ function createAiInitiativeFeature({
     if (!rule.name) rule.name = defaultRuleName(rule);
     rule.next_run_at = computeNextRunAt(rule, currentUtc());
     if (current?.id) {
+      const resetContext = Number(current.chat_id || 0) !== rule.chat_id
+        || Number(current.bot_id || 0) !== rule.bot_id
+        || normalizePromptMode(current.prompt_mode) !== rule.prompt_mode
+        || (!boolValue(current.same_context_limit_enabled, true) && rule.same_context_limit_enabled);
       updateRuleStmt.run(
         rule.name,
         rule.chat_id,
@@ -894,6 +960,7 @@ function createAiInitiativeFeature({
         rule.next_run_at,
         current.id
       );
+      if (resetContext || rule.prompt_mode === 'news_hook') resetRuleContextStmt.run(current.id);
       return serializeRule(ruleByIdStmt.get(current.id));
     }
     const result = insertRuleStmt.run(
@@ -1147,8 +1214,8 @@ function createAiInitiativeFeature({
     if (!source || source.enabled === 0) return { items: [], source: source ? serializeNewsSource(source) : null, reason: 'news_source_disabled' };
     try {
       await refreshNewsSource(source);
-    } catch {
-      return { items: [], source: serializeNewsSource(source), reason: 'news_source_failed' };
+    } catch (error) {
+      return { items: [], source: serializeNewsSource(source), reason: 'news_source_failed', error };
     }
     const maxAgeHours = intValue(rule.news_max_age_hours, DEFAULT_NEWS_MAX_AGE_HOURS, 1, 24 * 14);
     const requestedCount = intValue(rule.news_item_count, DEFAULT_NEWS_ITEM_COUNT, 1, MAX_NEWS_ITEM_COUNT);
@@ -1158,12 +1225,7 @@ function createAiInitiativeFeature({
     const used = new Set(historyForRuleSourceStmt.all(rule.id, source.id).map((row) => row.item_guid));
     const fresh = items.filter((item) => !used.has(item.guid));
     const selected = pickRandomItems(fresh, requestedCount);
-    if (selected.length < Math.min(requestedCount, items.length)) {
-      const selectedGuids = new Set(selected.map((item) => item.guid));
-      const fallback = items.filter((item) => !selectedGuids.has(item.guid));
-      selected.push(...pickRandomItems(fallback, requestedCount - selected.length));
-    }
-    return { items: selected, source: serializeNewsSource(source), reason: selected.length ? '' : 'no_recent_news' };
+    return { items: selected, source: serializeNewsSource(source), reason: selected.length ? '' : 'no_new_news' };
   }
 
   function newsInstructionLine(item, index) {
@@ -1191,10 +1253,12 @@ function createAiInitiativeFeature({
       'Use the recent chat context you are given. Do not mention hidden scheduler mechanics.',
     ];
     if (rule.prompt_mode === 'news_hook') {
-      const { items, source, reason } = await pickNewsItemsForRule(rule);
+      const { items, source, reason, error: newsError } = await pickNewsItemsForRule(rule);
       if (!items.length) {
-        const error = new Error(reason || 'No recent news item is available');
+        const error = new Error(newsError?.message || reason || 'No recent news item is available');
         error.code = 'NO_NEWS_ITEM';
+        error.stage = 'news';
+        if (newsError) error.cause = newsError;
         error.initiativeReason = reason || 'no_recent_news';
         throw error;
       }
@@ -1228,7 +1292,7 @@ function createAiInitiativeFeature({
     if (!latestHuman && idleThreshold > 0) return { ok: false, reason: 'no_human_messages' };
     const latestHumanId = Number(latestHuman?.id || 0);
     const sameContext = Number(rule.last_message_id || 0) && latestHumanId <= Number(rule.last_message_id || 0);
-    if (sameContext && boolValue(rule.same_context_limit_enabled, true)) {
+    if (normalizePromptMode(rule.prompt_mode) !== 'news_hook' && sameContext && boolValue(rule.same_context_limit_enabled, true)) {
       const maxRuns = intValue(rule.same_context_max_runs, 1, 1, 20);
       const currentRuns = intValue(rule.same_context_run_count, 0, 0, 20);
       if (currentRuns >= maxRuns) return { ok: false, reason: 'same_context_limit' };
@@ -1252,25 +1316,99 @@ function createAiInitiativeFeature({
   }
 
   function nextSameContextRunCount(rule, latestHuman = {}) {
+    if (normalizePromptMode(rule.prompt_mode) === 'news_hook') return 0;
     const latestHumanId = Number(latestHuman.id || 0);
     if (!latestHumanId) return 0;
     const sameContext = Number(rule.last_message_id || 0) && latestHumanId <= Number(rule.last_message_id || 0);
-    return sameContext ? intValue(rule.same_context_run_count, 0, 0, 20) + 1 : 1;
+    return sameContext ? Math.min(20, intValue(rule.same_context_run_count, 0, 0, 20) + 1) : 1;
   }
 
-  function publishRuleFailureNotice(rule, reason) {
-    try {
-      const message = aiBotFeature?.publishSyntheticBotNotice?.({
-        chatId: rule.chat_id,
-        botId: rule.bot_id,
-        text: initiativeFailureText(reason),
-      });
-      if (!message) {
-        console.warn('[ai-initiative] failure notice was not published:', reason);
+  function ruleProvider(rule) {
+    return cleanText(initiativeBotStmt.get(Number(rule?.bot_id || 0))?.provider || 'unknown', 40).toLowerCase() || 'unknown';
+  }
+
+  function logRuleEvent(level, rule, event = {}) {
+    const payload = {
+      rule_id: Number(rule?.id || 0),
+      chat_id: Number(rule?.chat_id || 0),
+      bot_id: Number(rule?.bot_id || 0),
+      provider: ruleProvider(rule),
+      ...event,
+    };
+    const logger = level === 'error' ? console.warn : console.info;
+    logger('[ai-initiative]', JSON.stringify(payload));
+  }
+
+  function recordRuleOutcome(rule, {
+    status,
+    reason = '',
+    stage = '',
+    detail = '',
+    tries = 0,
+  } = {}) {
+    const safeDetail = detail ? errorDetail({ message: detail }, '') : '';
+    updateRuleAttemptStmt.run(
+      isoUtc(currentUtc()),
+      cleanText(status, 40),
+      cleanText(reason, 120),
+      cleanText(stage, 80),
+      safeDetail,
+      intValue(tries, 0, 0, PROVIDER_MAX_ATTEMPTS),
+      rule.id
+    );
+    logRuleEvent(status === 'failed' ? 'error' : 'info', rule, {
+      status,
+      reason,
+      stage,
+      tries,
+      detail: safeDetail,
+    });
+  }
+
+  function providerRetryDelay(error, retryIndex) {
+    const base = PROVIDER_RETRY_DELAYS_MS[Math.max(0, Math.min(PROVIDER_RETRY_DELAYS_MS.length - 1, retryIndex))];
+    const jittered = Math.round(base * (0.8 + (Math.max(0, Math.min(1, Number(rng()) || 0)) * 0.4)));
+    return Math.min(MAX_RETRY_DELAY_MS, Math.max(jittered, retryAfterMs(error)));
+  }
+
+  async function runRuleSyntheticTurn(rule, instruction) {
+    let lastError = null;
+    for (let attempt = 1; attempt <= PROVIDER_MAX_ATTEMPTS; attempt++) {
+      try {
+        const result = await aiBotFeature?.runSyntheticBotTurn?.({
+          chatId: rule.chat_id,
+          botId: rule.bot_id,
+          instruction,
+          purpose: `initiative_${rule.prompt_mode || 'context_question'}`,
+        });
+        if (!result?.message?.id) {
+          const error = new Error('AI provider returned no initiative message');
+          error.code = 'BOT_NO_MESSAGE';
+          error.stage = 'provider';
+          error.retryable = true;
+          throw error;
+        }
+        return { result, tries: attempt };
+      } catch (error) {
+        lastError = error;
+        const retryable = isRetryableInitiativeError(error);
+        if (!retryable || attempt >= PROVIDER_MAX_ATTEMPTS) {
+          try { error.initiativeTries = attempt; } catch {}
+          throw error;
+        }
+        const delayMs = providerRetryDelay(error, attempt - 1);
+        logRuleEvent('error', rule, {
+          status: 'retrying',
+          reason: initiativeErrorReason(error),
+          stage: cleanText(error?.stage || 'provider', 80),
+          tries: attempt,
+          retry_in_ms: delayMs,
+          detail: errorDetail(error),
+        });
+        await sleepImpl(delayMs);
       }
-    } catch (error) {
-      console.warn('[ai-initiative] failed to publish failure notice:', error?.message || error);
     }
+    throw lastError || new Error('Initiative provider failed');
   }
 
   async function processDueReminder(row) {
@@ -1303,64 +1441,66 @@ function createAiInitiativeFeature({
   async function processDueRule(rule) {
     const now = currentUtc();
     const nextRunAt = computeNextRunAfterDueAttempt(rule, now);
-    if (isMissedRuleRun(rule, now)) {
-      updateRuleNextStmt.run(nextRunAt, rule.id);
-      publishRuleFailureNotice(rule, 'missed_schedule');
-      return;
-    }
     const check = shouldRunRule(rule);
     if (!check.ok) {
       updateRuleNextStmt.run(nextRunAt, rule.id);
-      publishRuleFailureNotice(rule, check.reason);
+      recordRuleOutcome(rule, { status: 'skipped', reason: check.reason, stage: 'gate' });
       return;
     }
     try {
       const built = await buildRuleInstruction(rule);
-      const result = await aiBotFeature?.runSyntheticBotTurn?.({
-        chatId: rule.chat_id,
-        botId: rule.bot_id,
-        instruction: built.instruction,
-        purpose: `initiative_${rule.prompt_mode || 'context_question'}`,
-      });
-      if (!result?.message?.id) {
-        const error = new Error('Bot did not publish initiative');
-        error.code = 'BOT_NO_MESSAGE';
-        throw error;
-      }
-      if (built.newsSource?.id && Array.isArray(built.newsItems)) {
-        for (const item of built.newsItems) {
-          if (item?.guid) insertNewsHistoryStmt.run(rule.id, built.newsSource.id, item.guid);
+      const { result, tries } = await runRuleSyntheticTurn(rule, built.instruction);
+      db.transaction(() => {
+        if (built.newsSource?.id && Array.isArray(built.newsItems)) {
+          for (const item of built.newsItems) {
+            if (item?.guid) insertNewsHistoryStmt.run(rule.id, built.newsSource.id, item.guid);
+          }
         }
-        if (built.newsItems.length) pruneNewsHistoryStmt.run(rule.id, rule.id);
+        const isNews = normalizePromptMode(rule.prompt_mode) === 'news_hook';
+        updateRuleRunStmt.run(
+          nextRunAt,
+          isoUtc(currentUtc()),
+          isNews ? null : (check.latestHuman?.id || null),
+          nextSameContextRunCount(rule, check.latestHuman),
+          rule.id
+        );
+      })();
+      recordRuleOutcome(rule, { status: 'sent', reason: 'sent', stage: 'complete', tries });
+      if (result?.message && typeof onMessageCreated === 'function') {
+        try { onMessageCreated(result.message); } catch (error) {
+          logRuleEvent('error', rule, { status: 'publish_hook_failed', stage: 'publish', detail: errorDetail(error) });
+        }
       }
-      updateRuleRunStmt.run(
-        nextRunAt,
-        isoUtc(currentUtc()),
-        check.latestHuman?.id || null,
-        nextSameContextRunCount(rule, check.latestHuman),
-        rule.id
-      );
-      if (result?.message && typeof onMessageCreated === 'function') onMessageCreated(result.message);
     } catch (error) {
       updateRuleNextStmt.run(nextRunAt, rule.id);
-      const reason = error?.code === 'NO_NEWS_ITEM'
+      const isNewsSkip = errorCode(error) === 'NO_NEWS_ITEM';
+      const reason = isNewsSkip
         ? error.initiativeReason || 'no_recent_news'
-        : (error?.code === 'BOT_NO_MESSAGE' ? 'bot_no_message' : 'provider_failed');
-      publishRuleFailureNotice(rule, reason);
-      if (error?.code !== 'NO_NEWS_ITEM') {
-        console.warn('[ai-initiative] rule failed:', error?.message || error);
-      }
+        : initiativeErrorReason(error);
+      const failedNewsSource = reason === 'news_source_failed';
+      recordRuleOutcome(rule, {
+        status: isNewsSkip && !failedNewsSource ? 'skipped' : 'failed',
+        reason,
+        stage: cleanText(error?.stage || (isNewsSkip ? 'news' : 'provider'), 80),
+        detail: isNewsSkip && !failedNewsSource ? '' : errorDetail(error),
+        tries: Number(error?.initiativeTries || 0),
+      });
     }
   }
 
-  async function processDueRulesIndependently(rules) {
+  async function processDueRulesIndependently(rules, admittedAt = currentUtc()) {
     const tasks = (Array.isArray(rules) ? rules : []).flatMap((rule) => {
       const ruleId = Number(rule?.id || 0);
       if (!ruleId || inFlightRuleIds.has(ruleId)) return [];
+      if (isMissedRuleRun(rule, admittedAt)) {
+        updateRuleNextStmt.run(computeNextRunAfterDueAttempt(rule, admittedAt), rule.id);
+        recordRuleOutcome(rule, { status: 'skipped', reason: 'missed_schedule', stage: 'scheduler' });
+        return [];
+      }
       inFlightRuleIds.add(ruleId);
       let resolveTask;
       const task = new Promise((resolve) => { resolveTask = resolve; });
-      pendingRuleRuns.push({ rule, resolveTask });
+      pendingRuleRuns.push({ rule, provider: ruleProvider(rule), resolveTask });
       return [task];
     });
     drainRuleRunQueue();
@@ -1369,13 +1509,17 @@ function createAiInitiativeFeature({
 
   function drainRuleRunQueue() {
     while (activeRuleRunCount < ruleConcurrency && pendingRuleRuns.length) {
-      const entry = pendingRuleRuns.shift();
+      const entryIndex = pendingRuleRuns.findIndex((item) => !activeRuleProviders.has(item.provider));
+      if (entryIndex < 0) break;
+      const [entry] = pendingRuleRuns.splice(entryIndex, 1);
       activeRuleRunCount += 1;
+      activeRuleProviders.add(entry.provider);
       Promise.resolve()
         .then(() => processDueRule(entry.rule))
         .catch((error) => console.warn('[ai-initiative] rule worker failed:', error?.message || error))
         .finally(() => {
           activeRuleRunCount -= 1;
+          activeRuleProviders.delete(entry.provider);
           inFlightRuleIds.delete(Number(entry.rule?.id || 0));
           entry.resolveTask();
           drainRuleRunQueue();
@@ -1388,10 +1532,12 @@ function createAiInitiativeFeature({
     tickRunning = true;
     try {
       const nowSql = isoUtc(currentUtc());
+      const admittedAt = currentUtc();
+      const dueRules = dueRulesStmt.all(nowSql);
       for (const reminder of dueRemindersStmt.all(nowSql)) {
         await processDueReminder(reminder);
       }
-      const ruleTask = processDueRulesIndependently(dueRulesStmt.all(nowSql));
+      const ruleTask = processDueRulesIndependently(dueRules, admittedAt);
       if (!runRulesInBackground) await ruleTask;
       else ruleTask.catch((error) => console.warn('[ai-initiative] rule batch failed:', error?.message || error));
     } finally {
@@ -1501,7 +1647,12 @@ function createAiInitiativeFeature({
         },
       });
     } catch (error) {
-      res.status(error.status || 400).json({ error: error.message || 'Initiative test failed' });
+      res.status(error.status || 400).json({
+        error: errorDetail(error, 'Initiative test failed'),
+        code: errorCode(error) || 'INITIATIVE_TEST_FAILED',
+        stage: cleanText(error?.stage || 'provider', 80),
+        retryable: isRetryableInitiativeError(error),
+      });
     }
   });
 
@@ -1561,6 +1712,10 @@ module.exports = {
     looksLikeRecurrence,
     dbDateToUtc,
     initiativeFailureText,
+    errorStatus,
+    errorCode,
+    retryAfterMs,
+    isRetryableInitiativeError,
     shouldRunRule: null,
   },
 };

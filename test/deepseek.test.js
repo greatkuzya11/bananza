@@ -72,7 +72,12 @@ test('generateText reports DeepSeek timeout aborts with stable error text', asyn
         user: 'Hello',
         timeoutMs: 30000,
       }),
-      /DeepSeek API request timed out/
+      (error) => {
+        assert.match(error.message, /DeepSeek API request timed out/);
+        assert.equal(error.code, 'ETIMEDOUT');
+        assert.equal(error.retryable, true);
+        return true;
+      }
     );
   });
 });
@@ -142,10 +147,13 @@ test('getUserBalance reports DeepSeek HTTP errors', async () => {
       text: async () => JSON.stringify({ error: { message: 'Invalid API key' } }),
     }),
   }, async () => {
-    await assert.rejects(
-      () => deepseek.getUserBalance({ apiKey: 'bad-key' }),
-      /Invalid API key/
-    );
+    await assert.rejects(() => deepseek.getUserBalance({ apiKey: 'bad-key' }), (error) => {
+      assert.match(error.message, /Invalid API key/);
+      assert.equal(error.status, 401);
+      assert.equal(error.code, 'HTTP_401');
+      assert.equal(error.retryable, false);
+      return true;
+    });
   });
 });
 
