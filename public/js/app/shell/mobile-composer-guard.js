@@ -556,7 +556,7 @@
     }
 
     function isPickerDismissPassThroughTarget(target) {
-      return Boolean(isElement(target) && target.closest('#menuBtn, #settingsBtn, #searchBtn, #chatShotBtn, #chatSettingsActionBtn, #callStartBtn, #callVoiceStartBtn, #chatInfoBtn, #backBtn, #emojiBtn, #attachBtn, #mentionOpenBtn, #composerContextConvertBtn, #msgInput'));
+      return Boolean(isElement(target) && target.closest('#currentUserInfo, #settingsBtn, #searchBtn, #chatShotBtn, #chatSettingsActionBtn, #callStartBtn, #callVoiceStartBtn, #chatInfoBtn, #backBtn, #emojiBtn, #attachBtn, #mentionOpenBtn, #composerContextConvertBtn, #msgInput'));
     }
 
     function isFollowupClickSuppressPassThroughTarget(target) {

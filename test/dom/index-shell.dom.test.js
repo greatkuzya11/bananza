@@ -328,7 +328,13 @@ test('profile settings modal exposes accessible profile controls', () => {
   const dom = new JSDOM(indexHtml);
   const document = dom.window.document;
   const menuDrawer = document.getElementById('menuDrawer');
+  const currentUserInfo = document.getElementById('currentUserInfo');
 
+  assert.equal(document.getElementById('menuBtn'), null);
+  assert.equal(currentUserInfo.tagName, 'BUTTON');
+  assert.equal(currentUserInfo.getAttribute('type'), 'button');
+  assert.equal(currentUserInfo.getAttribute('title'), 'Profile');
+  assert.equal(currentUserInfo.getAttribute('aria-label'), 'Profile');
   assert.ok(menuDrawer.querySelector('.profile-settings-modal'));
   assert.ok(menuDrawer.querySelector('.profile-hero'));
   assert.ok(document.getElementById('profileForm'));

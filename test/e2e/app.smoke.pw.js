@@ -57,6 +57,23 @@ test('UI flow covers register, private chat creation, sending, search and poll c
   await page.locator('#pollSubmitBtn').click();
   await expect(page.locator('#messages')).toContainText('Which banana day works best?');
 
+  if (!testInfo.project.name.includes('mobile')) {
+    const currentUserInfo = page.locator('#currentUserInfo');
+    await currentUserInfo.focus();
+    await currentUserInfo.press('Enter');
+    await expect(page.locator('#menuDrawer')).toBeVisible();
+    await page.locator('#menuDrawer .modal-close').click();
+    await expect(page.locator('#menuDrawer')).toBeHidden();
+    await currentUserInfo.focus();
+    await currentUserInfo.press('Space');
+    await expect(page.locator('#menuDrawer')).toBeVisible();
+    await expect(page.locator('#profileForm')).toBeVisible();
+    await expect(page.locator('#profileName')).toHaveValue(member.displayName);
+    await expect(page.locator('#profileUsername')).toContainText(`@${member.username}`);
+    await page.locator('#menuDrawer .modal-close').click();
+    await expect(page.locator('#menuDrawer')).toBeHidden();
+  }
+
   if (testInfo.project.name.includes('mobile')) {
     await expectMobileScene(page, 'chat');
 
@@ -78,7 +95,7 @@ test('UI flow covers register, private chat creation, sending, search and poll c
       await expect(page.locator('#settingsModal')).toBeHidden();
       await expectMobileScene(page, 'sidebar');
 
-      await page.locator('#menuBtn').click();
+      await page.locator(index === 0 ? '#currentUserInfo .avatar' : '#currentUserInfo .current-user-name').click();
       await expect(page.locator('#menuDrawer')).toBeVisible();
       await expect(page.locator('#profileForm')).toBeVisible();
       await expect(page.locator('#profileName')).toHaveValue(member.displayName);

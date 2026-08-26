@@ -64,6 +64,8 @@ test('i18n translates static index and login shell text and attributes', () => {
   assert.equal(document.getElementById('chatSearch').getAttribute('placeholder'), 'Искать чаты...');
   assert.equal(document.getElementById('msgInput').getAttribute('placeholder'), '\u0421\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435...');
   assert.equal(document.getElementById('settingsBtn').getAttribute('aria-label'), 'Настройки');
+  assert.equal(document.getElementById('currentUserInfo').getAttribute('title'), 'Профиль');
+  assert.equal(document.getElementById('currentUserInfo').getAttribute('aria-label'), 'Профиль');
   assert.equal(
     document.getElementById('settingsScreenRotationAllowed')?.closest('.settings-item')?.querySelector('span')?.textContent,
     '📱 Разрешить поворот экрана',
@@ -78,6 +80,8 @@ test('i18n translates static index and login shell text and attributes', () => {
   assert.equal(document.getElementById('chatSearch').getAttribute('placeholder'), 'Search chats...');
   assert.equal(document.getElementById('msgInput').getAttribute('placeholder'), 'Message...');
   assert.equal(document.getElementById('settingsBtn').getAttribute('aria-label'), 'Settings');
+  assert.equal(document.getElementById('currentUserInfo').getAttribute('title'), 'Profile');
+  assert.equal(document.getElementById('currentUserInfo').getAttribute('aria-label'), 'Profile');
   assert.equal(
     document.getElementById('settingsScreenRotationAllowed')?.closest('.settings-item')?.querySelector('span')?.textContent,
     '📱 Allow screen rotation',

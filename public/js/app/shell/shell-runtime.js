@@ -942,7 +942,7 @@
         if (!preserveStatus) setProfileStatus('');
       }
     
-      function openMenuDrawer(opener = $('#menuBtn')) {
+      function openMenuDrawer(opener = currentUserInfo) {
         hideFloatingMessageActions({ immediate: true });
         renderProfileEditor();
         openModal('menuDrawer', { replaceStack: true, opener });

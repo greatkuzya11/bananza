@@ -819,8 +819,8 @@
           });
         });
     
-        // Menu button
-        bindTouchSafeButtonActivation($('#menuBtn'), () => openMenuDrawer($('#menuBtn')));
+        // Profile button
+        bindTouchSafeButtonActivation(currentUserInfo, () => openMenuDrawer(currentUserInfo));
     
         // Chat header actions
         bindTouchSafeButtonActivation(chatInfoBtn, () => {

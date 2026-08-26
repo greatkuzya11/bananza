@@ -1139,6 +1139,27 @@ html[data-modal-animation="none"] .chat-folder-list-surface {
 .current-user {
   flex: 1; display: flex; align-items: center; gap: 8px;
   min-width: 0;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  appearance: none;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .15s ease, transform .12s ease;
+}
+.current-user:hover {
+  background: var(--bg-hover);
+}
+.current-user:active {
+  transform: scale(.98);
+}
+.current-user:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .current-user .avatar {
   width: 28px; height: 28px; font-size: 11px; flex-shrink: 0;

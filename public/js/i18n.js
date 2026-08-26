@@ -1759,7 +1759,8 @@
 
   function applyElementAttributes(el) {
     if (!el || el.nodeType !== 1) return;
-    if (isSkippedSubtree(el)) return;
+    const hasExplicitI18n = el.matches?.('[data-i18n], [data-i18n-title], [data-i18n-placeholder], [data-i18n-aria-label], [data-i18n-value]');
+    if (isSkippedSubtree(el) && !hasExplicitI18n) return;
     const tag = el.tagName;
     if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') return;
     const attrMap = [
