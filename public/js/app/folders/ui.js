@@ -626,7 +626,7 @@
                   </span>
                 </button>
               ` : ''}
-              ${row.menu ? `<button type="button" class="chat-folder-picker-menu-btn" data-folder-menu="${Number(row.id || 0)}" aria-label="Folder actions">&#8942;</button>` : ''}
+              ${row.menu ? `<button type="button" class="chat-folder-picker-menu-btn" data-folder-menu="${Number(row.id || 0)}" aria-label="${esc(t('Folder actions'))}">&#8942;</button>` : ''}
             </div>
           `).join('') || '<div class="chat-folder-picker-empty">\u041F\u0430\u043F\u043E\u043A \u043F\u043E\u043A\u0430 \u043D\u0435\u0442</div>'}
         </div>
@@ -688,7 +688,7 @@
       ];
       chatFolderContextMenu.innerHTML = `
       <div class="chat-context-menu-sheet">
-        <div class="chat-context-menu-header">${esc(folder.name || 'Folder')}</div>
+        <div class="chat-context-menu-header">${esc(folder.name || t('Folder'))}</div>
         ${menuActions.filter((item) => !item.hidden).map((item) => `
           <button
             type="button"

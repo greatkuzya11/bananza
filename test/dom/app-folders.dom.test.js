@@ -96,7 +96,10 @@ test('folder store normalizes folders, persists active ids, resets missing ids, 
 test('folder ui renders the active strip, picker, and context menu without owning chats', async () => {
   const dom = createAppDom();
   loadFolderRuntime(dom);
+  loadBrowserScript(dom, 'public/js/i18n.js');
   const { window } = dom;
+  const i18n = window.BananzaI18n;
+  i18n.setLanguage('ru', { persist: false });
   const store = makeStore(dom);
   let currentUser = { id: 42, ui_show_chat_folder_strip_in_all_chats: true };
   const chats = [
@@ -116,6 +119,7 @@ test('folder ui renders the active strip, picker, and context menu without ownin
     store,
     config: window.BananzaApp.config,
     formatters: window.BananzaApp.formatters,
+    t: (key, params) => i18n.t(key, params),
     state: {
       getCurrentUser: () => currentUser,
       setCurrentUser: (next) => { currentUser = next; },
@@ -145,6 +149,7 @@ test('folder ui renders the active strip, picker, and context menu without ownin
   assert.equal(picker.querySelector('[data-chat-folder-strip-toggle]')?.getAttribute('aria-pressed'), 'true');
 
   const menuAnchor = picker.querySelector('[data-folder-menu="9"]');
+  assert.equal(menuAnchor.getAttribute('aria-label'), 'Действия с папкой');
   menuAnchor.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
   const menu = window.document.getElementById('chatFolderContextMenu');
   assert.equal(menu.classList.contains('hidden'), false);
@@ -153,12 +158,29 @@ test('folder ui renders the active strip, picker, and context menu without ownin
     [...menu.querySelectorAll('[data-folder-action]')].map((node) => node.dataset.folderAction),
     ['move-up-folder', 'move-down-folder', 'rename-folder', 'delete-folder']
   );
-  menuAnchor.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.deepEqual(
+    [...menu.querySelectorAll('.chat-context-menu-label')].map((node) => node.textContent.trim()),
+    ['Переместить выше', 'Переместить ниже', 'Переименовать', 'Удалить']
+  );
+  assert.equal(menu.querySelector('[data-folder-action="move-up-folder"]').disabled, true);
+  assert.equal(menu.querySelector('[data-folder-action="move-down-folder"]').disabled, false);
+  assert.equal(menu.querySelector('[data-folder-action="delete-folder"]').classList.contains('is-danger'), true);
+
+  i18n.setLanguage('en', { persist: false });
+  ui.renderChatFolderPicker();
+  const englishMenuAnchor = picker.querySelector('[data-folder-menu="9"]');
+  assert.equal(englishMenuAnchor.getAttribute('aria-label'), 'Folder actions');
+  assert.equal(ui.refreshVisibleContextMenu(), true);
+  assert.deepEqual(
+    [...menu.querySelectorAll('.chat-context-menu-label')].map((node) => node.textContent.trim()),
+    ['Move up', 'Move down', 'Rename', 'Delete']
+  );
+  englishMenuAnchor.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
   assert.equal(menu.classList.contains('hidden'), true);
   assert.equal(menu.getAttribute('aria-hidden'), 'true');
   assert.equal(picker.classList.contains('hidden'), false);
 
-  menuAnchor.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  englishMenuAnchor.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
   const secondaryMenuAnchor = picker.querySelector('[data-folder-menu="10"]');
   secondaryMenuAnchor.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
   assert.equal(menu.classList.contains('hidden'), false);
