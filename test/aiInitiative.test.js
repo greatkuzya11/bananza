@@ -418,6 +418,18 @@ test('initiative rule API generates, preserves, trims, and resets rule names', a
   });
 });
 
+test('initiative diagnostics append safe request sizes without provider input content', () => {
+  const error = new Error('Failed to parse request body as JSON');
+  error.requestBytes = 19_950;
+  error.requestOriginalBytes = 41_200;
+  error.requestInputTruncated = true;
+
+  assert.equal(
+    __private.errorDetail(error),
+    'Failed to parse request body as JSON [request_bytes=19950, original_bytes=41200, trimmed=true]'
+  );
+});
+
 test('initiative test endpoint returns structured provider diagnostics without changing rule state', async (t) => {
   const db = createInitiativeDb();
   t.after(() => db.close());

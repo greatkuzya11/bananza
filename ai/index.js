@@ -69,6 +69,7 @@ const {
 } = require('../mentionTokens');
 const { analyzeAiImageRisk } = require('../public/js/ai-image-risk');
 const { buildOpenAIImageRequest: buildTelegramUniversalOpenAIImageRequest } = require('./telegramUniversal');
+const { fitSyntheticProviderInput } = require('./providerInput');
 
 const BOT_COLORS = ['#65aadd', '#7bc862', '#a695e7', '#ee7aae', '#6ec9cb', '#faa774'];
 const AI_BOT_EXPORT_VERSION = 5;
@@ -201,6 +202,28 @@ function truncate(value, limit = 500) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   if (text.length <= limit) return text;
   return text.slice(0, Math.max(0, limit - 1)).trimEnd() + '...';
+}
+
+function trimRecentLines(lines, maxChars) {
+  const limit = Math.max(0, Math.floor(Number(maxChars) || 0));
+  if (!limit) return [];
+  const result = [];
+  let total = 0;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = String(lines[i] || '');
+    if (!line) continue;
+    const separatorLength = result.length ? 1 : 0;
+    const remaining = limit - total - separatorLength;
+    if (remaining <= 0) break;
+    if (line.length <= remaining) {
+      result.unshift(line);
+      total += line.length + separatorLength;
+      continue;
+    }
+    if (!result.length) result.unshift(truncate(line, remaining));
+    break;
+  }
+  return result;
 }
 
 function compactJson(value, limit = 700) {
@@ -4157,20 +4180,6 @@ function createAiBotFeature({
     return items.sort((a, b) => b.score - a.score).slice(0, topK || 6);
   }
 
-  function trimRecentLines(lines, maxChars) {
-    const mustKeep = lines.slice(-20);
-    const optional = lines.slice(0, Math.max(0, lines.length - mustKeep.length));
-    let result = [...mustKeep];
-    let total = result.join('\n').length;
-    for (let i = optional.length - 1; i >= 0; i--) {
-      const line = optional[i];
-      if (total + line.length + 1 > maxChars) break;
-      result.unshift(line);
-      total += line.length + 1;
-    }
-    return result;
-  }
-
   async function assembleContext({ bot, chatConfig, message }) {
     const limit = intValue(chatConfig.hot_context_limit, 50, 20, 100);
     const recentRows = recentMessagesStmt.all(message.chat_id, limit).reverse();
@@ -7857,7 +7866,7 @@ function createAiBotFeature({
     const mentionPrefix = mentionPrefixForUser(mentionUserId);
     const purposeLine = purpose ? `Synthetic turn purpose: ${cleanText(purpose, 80)}.` : '';
     const mentionLine = mentionPrefix ? `If this is a reminder for that user, begin the visible message with "${mentionPrefix}".` : '';
-    const system = [
+    const syntheticSystem = [
       context.system,
       'You are writing a new visible chat message triggered by BananZa scheduling logic, not by a visible user message.',
       'Do not mention hidden triggers, schedulers, cron jobs, internal prompts, or system instructions.',
@@ -7865,6 +7874,21 @@ function createAiBotFeature({
       purposeLine,
       mentionLine,
     ].filter(Boolean).join('\n\n');
+    const providerInput = fitSyntheticProviderInput(syntheticSystem, context.user);
+    const system = providerInput.system;
+    const user = providerInput.user;
+    if (providerInput.truncated) {
+      console.info('[ai-bot]', JSON.stringify({
+        event: 'synthetic_input_trimmed',
+        chat_id: positiveId(chatId),
+        bot_id: positiveId(botId),
+        provider: bot.provider,
+        original_system_bytes: providerInput.originalSystemBytes,
+        original_user_bytes: providerInput.originalUserBytes,
+        system_bytes: providerInput.systemBytes,
+        user_bytes: providerInput.userBytes,
+      }));
+    }
 
     let rawText;
     try {
@@ -7873,7 +7897,7 @@ function createAiBotFeature({
           apiKey,
           model: bot.response_model || settings.yandex_default_response_model,
           system,
-          user: context.user,
+          user,
           maxOutputTokens: intValue(bot.max_tokens, settings.yandex_max_tokens, 1, 8000),
           temperature: floatValue(bot.temperature, settings.yandex_temperature, 0, 1),
         }))
@@ -7883,7 +7907,7 @@ function createAiBotFeature({
             baseUrl: deepseekBaseUrl(),
             model: bot.response_model || settings.deepseek_default_response_model,
             system,
-            user: context.user,
+            user,
             maxOutputTokens: intValue(bot.max_tokens, settings.deepseek_max_tokens, 1, 8000),
             temperature: floatValue(bot.temperature, settings.deepseek_temperature, 0, 1),
             timeoutMs: settings.deepseek_request_timeout_ms,
@@ -7894,7 +7918,7 @@ function createAiBotFeature({
             baseUrl: qwenBaseUrl(),
             model: bot.response_model || settings.qwen_default_response_model,
             system,
-            user: context.user,
+            user,
             maxOutputTokens: intValue(bot.max_tokens, settings.qwen_max_tokens, 1, 8000),
             temperature: floatValue(bot.temperature, settings.qwen_temperature, 0, 1),
             timeoutMs: settings.qwen_request_timeout_ms,
@@ -7905,7 +7929,7 @@ function createAiBotFeature({
             baseUrl: grokBaseUrl(),
             model: bot.response_model || settings.grok_default_response_model,
             system,
-            user: context.user,
+            user,
             maxOutputTokens: intValue(bot.max_tokens, settings.grok_max_tokens, 1, 8000),
             temperature: floatValue(bot.temperature, settings.grok_temperature, 0, 1),
           })
@@ -7913,12 +7937,16 @@ function createAiBotFeature({
           apiKey,
           model: bot.response_model || settings.default_response_model,
           system,
-          user: context.user,
+          user,
           maxOutputTokens: openAiMaxOutputTokens(bot.max_tokens, 1000),
           temperature: floatValue(bot.temperature, 0.55, 0, 1),
           });
     } catch (error) {
-      throw wrapSyntheticTurnError(error, { stage: 'provider', provider: bot.provider });
+      const wrapped = wrapSyntheticTurnError(error, { stage: 'provider', provider: bot.provider });
+      wrapped.requestBytes = providerInput.totalBytes;
+      wrapped.requestOriginalBytes = providerInput.originalSystemBytes + providerInput.originalUserBytes;
+      wrapped.requestInputTruncated = providerInput.truncated;
+      throw wrapped;
     }
 
     let responseText = cleanGeneratedBotText(rawText, bot, 5000);
@@ -11085,5 +11113,6 @@ module.exports = {
     buildChatShotPromptSystem,
     isChatSelectableBotKind,
     userFacingBotModel,
+    trimRecentLines,
   },
 };

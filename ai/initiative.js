@@ -78,12 +78,17 @@ function errorCode(error) {
 }
 
 function errorDetail(error, fallback = 'Unexpected initiative error') {
-  return cleanText(error?.message || error?.cause?.message || fallback, 1000)
+  const detail = cleanText(error?.message || error?.cause?.message || fallback, 1000)
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, 'Bearer [redacted]')
     .replace(/\bsk-[A-Za-z0-9_-]{8,}/giu, '[redacted-key]')
     .replace(/((?:api[_ -]?key|token)\s*[:=]\s*)[^\s,;]+/giu, '$1[redacted]')
-    .replace(/[\r\n\t]+/g, ' ')
-    .slice(0, 500);
+    .replace(/[\r\n\t]+/g, ' ');
+  const requestBytes = Number(error?.requestBytes || 0);
+  const originalBytes = Number(error?.requestOriginalBytes || 0);
+  const requestMeta = requestBytes > 0
+    ? ` [request_bytes=${Math.round(requestBytes)}${originalBytes > requestBytes ? `, original_bytes=${Math.round(originalBytes)}, trimmed=true` : ''}]`
+    : '';
+  return `${detail}${requestMeta}`.slice(0, 500);
 }
 
 function retryAfterMs(error) {
@@ -1714,6 +1719,7 @@ module.exports = {
     initiativeFailureText,
     errorStatus,
     errorCode,
+    errorDetail,
     retryAfterMs,
     isRetryableInitiativeError,
     shouldRunRule: null,
