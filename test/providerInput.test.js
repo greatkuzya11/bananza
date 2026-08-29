@@ -7,7 +7,9 @@ const {
   normalizeProviderText,
   truncateUtf8End,
   truncateUtf8Middle,
+  fitSyntheticInstruction,
   fitSyntheticProviderInput,
+  SYNTHETIC_INSTRUCTION_MAX_BYTES,
 } = require('../ai/providerInput');
 const { __private: aiPrivate } = require('../ai');
 
@@ -48,6 +50,26 @@ test('synthetic provider input stays below the byte ceiling and keeps news instr
   }), 'utf8') < 22_000, true);
 });
 
+test('synthetic instruction uses a JSON-byte ceiling instead of the old 6000 character slice', () => {
+  const instruction = `NEWS-START\n${'item detail '.repeat(800)}\nNEWS-END`;
+  const fitted = fitSyntheticInstruction(instruction);
+
+  assert.ok(fitted.length > 6_000);
+  assert.ok(jsonContentByteLength(fitted) <= SYNTHETIC_INSTRUCTION_MAX_BYTES);
+  assert.ok(fitted.startsWith('NEWS-START'));
+});
+
+test('provider input drops old chat context before dropping a maximum-size news instruction', () => {
+  const instruction = fitSyntheticInstruction(`NEWS-ITEM-1\n${'digest detail '.repeat(700)}\nNEWS-ITEM-10\nCOVER-ALL`);
+  const user = `${'old context '.repeat(5_000)}\nCurrent user message:\n${instruction}\n\nReturn only the message body.`;
+  const fitted = fitSyntheticProviderInput('system rules '.repeat(2_000), user);
+
+  assert.equal(fitted.truncated, true);
+  assert.match(fitted.user, /Current user message:\nNEWS-ITEM-1/);
+  assert.match(fitted.user, /NEWS-ITEM-10\nCOVER-ALL/);
+  assert.doesNotMatch(fitted.user, /^old context/);
+});
+
 test('recent chat lines obey the hard character ceiling even when the newest 20 are long', () => {
   const lines = Array.from({ length: 20 }, (_, index) => `message-${index}-${'x'.repeat(1_590)}`);
   const trimmed = aiPrivate.trimRecentLines(lines, 10_000);
@@ -57,4 +79,23 @@ test('recent chat lines obey the hard character ceiling even when the newest 20 
   assert.ok(trimmed.length < 20);
   assert.ok(trimmed.at(-1).startsWith('message-19-'));
   assert.equal(trimmed.some((line) => line.startsWith('message-0-')), false);
+});
+
+test('synthetic recent context limit shrinks with the real system and instruction budget', () => {
+  assert.equal(aiPrivate.syntheticRecentContextCharLimit({
+    system: 'short system',
+    instruction: 'short instruction',
+    requestedMaxChars: 3_000,
+  }), 3_000);
+  assert.equal(aiPrivate.syntheticRecentContextCharLimit({
+    system: 's'.repeat(8_000),
+    instruction: 'i'.repeat(10_500),
+    requestedMaxChars: 3_000,
+  }), 250);
+  assert.equal(aiPrivate.syntheticRecentContextCharLimit({
+    system: 'short system',
+    instruction: 'short instruction',
+    requestedMaxChars: 6_000,
+    includeChatContext: false,
+  }), 0);
 });

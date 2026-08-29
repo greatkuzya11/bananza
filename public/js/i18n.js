@@ -1489,6 +1489,7 @@
     'RSS source is fetched on the server and cached. If no recent item is available, the bot does not invent news.': 'RSS-источник забирается сервером и кэшируется. Если свежей новости нет, бот не выдумывает новости.',
     'Use a random recent news item from the selected RSS source and let the bot play it through its persona.': 'Взять случайную свежую новость из выбранного RSS-источника и дать боту обыграть ее через свой характер.',
     'Use up to {count} random recent news items from the selected RSS source and let the bot play them through its persona.': 'Взять до {count} случайных свежих новостей из выбранного RSS-источника и дать боту обыграть их через свой характер.',
+    'Use up to {count} fresh unused RSS items. The bot must cover every selected item; if fewer new items exist, it sends fewer.': 'Взять до {count} свежих неиспользованных RSS-новостей. Бот должен упомянуть каждую выбранную новость; меньше будет только тогда, когда новых материалов недостаточно.',
     'News source: {source}': 'Источник новостей: {source}',
     'No news sources yet. Create the first one.': 'Источников новостей пока нет. Создайте первый.',
     'News source saved': 'Источник новостей сохранен',

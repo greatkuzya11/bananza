@@ -1,5 +1,6 @@
 const SYNTHETIC_INPUT_MAX_BYTES = 20_000;
 const SYNTHETIC_SYSTEM_MAX_BYTES = 8_000;
+const SYNTHETIC_INSTRUCTION_MAX_BYTES = 10_500;
 
 function utf8ByteLength(value) {
   return Buffer.byteLength(String(value || ''), 'utf8');
@@ -128,6 +129,11 @@ function truncateJsonMiddle(value, maxBytes, marker = '\n[Middle of system promp
   return `${takeJsonStart(text, startBudget)}${safeMarker}${takeJsonEnd(text, endBudget)}`;
 }
 
+function fitSyntheticInstruction(value, maxBytes = SYNTHETIC_INSTRUCTION_MAX_BYTES) {
+  const text = normalizeProviderText(value).trim();
+  return takeJsonStart(text, maxBytes).trimEnd();
+}
+
 function fitSyntheticProviderInput(system, user, {
   maxBytes = SYNTHETIC_INPUT_MAX_BYTES,
   systemMaxBytes = SYNTHETIC_SYSTEM_MAX_BYTES,
@@ -171,6 +177,7 @@ function fitSyntheticProviderInput(system, user, {
 module.exports = {
   SYNTHETIC_INPUT_MAX_BYTES,
   SYNTHETIC_SYSTEM_MAX_BYTES,
+  SYNTHETIC_INSTRUCTION_MAX_BYTES,
   utf8ByteLength,
   jsonContentByteLength,
   normalizeProviderText,
@@ -182,5 +189,6 @@ module.exports = {
   takeJsonEnd,
   truncateJsonEnd,
   truncateJsonMiddle,
+  fitSyntheticInstruction,
   fitSyntheticProviderInput,
 };

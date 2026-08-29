@@ -4,6 +4,11 @@ const Database = require('better-sqlite3');
 const { DateTime } = require('luxon');
 
 const { createAiInitiativeFeature, __private } = require('../ai/initiative');
+const {
+  fitSyntheticInstruction,
+  jsonContentByteLength,
+  SYNTHETIC_INSTRUCTION_MAX_BYTES,
+} = require('../ai/providerInput');
 
 function createInitiativeDb() {
   const db = new Database(':memory:');
@@ -483,9 +488,10 @@ test('initiative news hook sends a fresh news item and records history', async (
     INSERT INTO ai_bot_initiative_rules(
       id, chat_id, bot_id, enabled, next_run_at, last_run_at, prompt_mode,
       idle_threshold_minutes, min_gap_minutes, same_context_limit_enabled,
-      same_context_max_runs, news_source_id, news_max_age_hours, news_item_count, news_prompt
+      same_context_max_runs, news_source_id, news_max_age_hours, news_item_count,
+      news_use_chat_context, news_prompt
     )
-    VALUES(1,1,1,1,?,?,?,?,?,?,?,?,?,?,?)
+    VALUES(1,1,1,1,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     '2026-05-27T09:59:00Z',
     null,
@@ -497,6 +503,7 @@ test('initiative news hook sends a fresh news item and records history', async (
     1,
     24,
     5,
+    0,
     'Make it sharp.'
   );
 
@@ -530,6 +537,8 @@ test('initiative news hook sends a fresh news item and records history', async (
   assert.match(calls[0].instruction, /News item 1 title: First & fresh/);
   assert.match(calls[0].instruction, /News item 2 title: Second item/);
   assert.match(calls[0].instruction, /Admin news instruction:\nMake it sharp\./);
+  assert.equal(calls[0].includeChatContext, false);
+  assert.equal(calls[0].recentContextMaxChars, 0);
   assert.doesNotMatch(calls[0].instruction, /Holiday|Nager/);
   assert.equal(db.prepare('SELECT COUNT(*) as count FROM ai_news_history').get().count, 2);
   assert.deepEqual(db.prepare(`
@@ -541,6 +550,70 @@ test('initiative news hook sends a fresh news item and records history', async (
     last_attempt_status: 'sent',
     last_attempt_tries: 1,
   });
+});
+
+test('news initiative fits all ten selected items into the provider instruction and records all ten', async (t) => {
+  const db = createInitiativeDb();
+  t.after(() => db.close());
+  db.prepare('INSERT INTO ai_news_sources(id, name, type, url, enabled, cache_ttl_minutes) VALUES(1,?,?,?,?,30)').run(
+    'Large Test RSS', 'rss', 'https://example.com/rss', 1
+  );
+  const insertItem = db.prepare(`
+    INSERT INTO ai_news_items(source_id, guid, title, summary, url, published_at, fetched_at, raw_json)
+    VALUES(1,?,?,?,?,?,?,'{}')
+  `);
+  for (let index = 1; index <= 10; index += 1) {
+    insertItem.run(
+      `news-${index}`,
+      `Story ${index} ${'title '.repeat(100)}`,
+      `Summary ${index} ${'detail '.repeat(300)}`,
+      `https://example.com/news-${index}/${'path/'.repeat(100)}`,
+      `2026-05-27T09:${String(50 - index).padStart(2, '0')}:00Z`,
+      '2026-05-27T09:59:00Z'
+    );
+  }
+  db.prepare(`
+    INSERT INTO ai_bot_initiative_rules(
+      id, chat_id, bot_id, enabled, next_run_at, prompt_mode,
+      idle_threshold_minutes, min_gap_minutes, news_source_id, news_max_age_hours,
+      news_item_count, news_prompt
+    ) VALUES(1,1,1,1,?,'news_hook',0,1,1,24,10,?)
+  `).run('2026-05-27T10:00:00Z', `ADMIN-START ${'instruction '.repeat(1000)}`);
+
+  const calls = [];
+  const feature = createAiInitiativeFeature({
+    app: fakeApp(), db,
+    auth: (_req, _res, next) => next?.(),
+    adminOnly: (_req, _res, next) => next?.(),
+    startScheduler: false,
+    nowProvider: () => DateTime.fromISO('2026-05-27T10:00:00Z'),
+    rng: () => 0,
+    fetchImpl: async () => { throw new Error('fresh cache should be used'); },
+    aiBotFeature: {
+      resolveChatBotRuntime() { return true; },
+      async runSyntheticBotTurn(payload) {
+        calls.push(payload);
+        return { message: { id: 300, chat_id: payload.chatId, ai_generated: 1, ai_bot_id: payload.botId } };
+      },
+    },
+  });
+
+  await feature.runSchedulerTick();
+
+  assert.equal(calls.length, 1);
+  const instruction = calls[0].instruction;
+  assert.match(instruction, /News items provided: 10/);
+  assert.match(instruction, /Cover every one of the 10 numbered news items/);
+  assert.match(instruction, /Admin news instruction:\nADMIN-START/);
+  assert.equal(calls[0].includeChatContext, true);
+  assert.equal(calls[0].recentContextMaxChars, 3_000);
+  for (let index = 1; index <= 10; index += 1) {
+    assert.match(instruction, new RegExp(`News item ${index} title: Story ${index} `));
+  }
+  assert.ok(instruction.length > 6_000);
+  assert.ok(jsonContentByteLength(instruction) <= SYNTHETIC_INSTRUCTION_MAX_BYTES);
+  assert.equal(fitSyntheticInstruction(instruction), instruction);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM ai_news_history WHERE rule_id=1').get().count, 10);
 });
 
 test('news initiatives keep running without human activity and never reuse RSS GUIDs', async (t) => {
@@ -935,6 +1008,8 @@ test('initiative idle threshold 0 ignores recent chat activity', async (t) => {
   await feature.runSchedulerTick();
 
   assert.equal(calls.length, 1);
+  assert.equal(calls[0].includeChatContext, true);
+  assert.equal(calls[0].recentContextMaxChars, 6_000);
 });
 
 test('initiative idle threshold 0 can run without previous human messages', async (t) => {

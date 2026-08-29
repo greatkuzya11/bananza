@@ -3,6 +3,12 @@ const {
   cleanInitiativeRuleName,
   buildInitiativeRuleName,
 } = require('./initiativeRuleName');
+const {
+  jsonContentByteLength,
+  normalizeProviderText,
+  SYNTHETIC_INSTRUCTION_MAX_BYTES,
+  takeJsonStart,
+} = require('./providerInput');
 
 let XMLParser = null;
 try {
@@ -20,6 +26,14 @@ const DEFAULT_GAP_MINUTES = 1440;
 const DEFAULT_NEWS_MAX_AGE_HOURS = 24;
 const DEFAULT_NEWS_ITEM_COUNT = 1;
 const MAX_NEWS_ITEM_COUNT = 10;
+const NEWS_INSTRUCTION_MAX_BYTES = SYNTHETIC_INSTRUCTION_MAX_BYTES;
+const NEWS_ADMIN_PROMPT_MAX_BYTES = 1_500;
+const NEWS_TITLE_MAX_BYTES = 280;
+const NEWS_URL_MAX_BYTES = 220;
+const NEWS_PUBLISHED_MAX_BYTES = 80;
+const NEWS_SUMMARY_MAX_BYTES = 500;
+const NEWS_RECENT_CONTEXT_MAX_CHARS = 3_000;
+const INITIATIVE_RECENT_CONTEXT_MAX_CHARS = 6_000;
 const DEFAULT_NEWS_CACHE_TTL_MINUTES = 30;
 const PROVIDER_MAX_ATTEMPTS = 3;
 const PROVIDER_RETRY_DELAYS_MS = [5_000, 30_000];
@@ -1233,21 +1247,77 @@ function createAiInitiativeFeature({
     return { items: selected, source: serializeNewsSource(source), reason: selected.length ? '' : 'no_new_news' };
   }
 
-  function newsInstructionLine(item, index) {
+  function compactNewsPromptText(value, maxBytes) {
+    const text = normalizeProviderText(value).replace(/\s+/g, ' ').trim();
+    const limit = Math.max(0, Math.floor(Number(maxBytes) || 0));
+    if (!text || !limit) return '';
+    if (jsonContentByteLength(text) <= limit) return text;
+    const marker = '...';
+    const contentBudget = Math.max(0, limit - jsonContentByteLength(marker));
+    return `${takeJsonStart(text, contentBudget).trimEnd()}${marker}`;
+  }
+
+  function newsInstructionLine(item, index, summaryMaxBytes = NEWS_SUMMARY_MAX_BYTES) {
+    const title = compactNewsPromptText(item.title, NEWS_TITLE_MAX_BYTES) || 'Untitled';
+    const summary = compactNewsPromptText(item.summary, summaryMaxBytes);
+    const url = compactNewsPromptText(item.url, NEWS_URL_MAX_BYTES);
+    const publishedAt = compactNewsPromptText(item.published_at, NEWS_PUBLISHED_MAX_BYTES);
     return [
-      `News item ${index + 1} title: ${item.title}`,
-      item.summary ? `News item ${index + 1} summary: ${item.summary}` : `News item ${index + 1} summary: not provided.`,
-      item.url ? `News item ${index + 1} URL: ${item.url}` : `News item ${index + 1} URL: not provided.`,
-      item.published_at ? `News item ${index + 1} published at: ${item.published_at}` : `News item ${index + 1} published at: not provided.`,
+      `News item ${index + 1} title: ${title}`,
+      summary ? `News item ${index + 1} summary: ${summary}` : `News item ${index + 1} summary: omitted or not provided.`,
+      url ? `News item ${index + 1} URL: ${url}` : `News item ${index + 1} URL: not provided.`,
+      publishedAt ? `News item ${index + 1} published at: ${publishedAt}` : `News item ${index + 1} published at: not provided.`,
     ].join('\n');
   }
 
-  function newsInstructionBlock(items, source) {
+  function newsInstructionBlock(items, source, summaryMaxBytes = NEWS_SUMMARY_MAX_BYTES) {
+    const sourceName = compactNewsPromptText(source?.name || 'RSS', 160) || 'RSS';
+    const sourceUrl = compactNewsPromptText(source?.url || 'unknown', 320) || 'unknown';
     return [
-      `News source: ${source?.name || 'RSS'} (${source?.url || 'unknown'}).`,
+      `News source: ${sourceName} (${sourceUrl}).`,
       `News items provided: ${items.length}.`,
-      ...items.map(newsInstructionLine),
+      ...items.map((item, index) => newsInstructionLine(item, index, summaryMaxBytes)),
     ].join('\n');
+  }
+
+  function buildNewsRuleInstruction(base, items, source, rule) {
+    const coverageInstruction = [
+      `Cover every one of the ${items.length} numbered news items in the visible message; do not silently omit any item.`,
+      'Combine them into one concise digest instead of writing unrelated separate messages.',
+      'Stay in your bot persona.',
+      rule.news_use_chat_context === 0
+        ? 'Do not force a connection to recent chat context unless it is obviously relevant.'
+        : 'You may connect the news to recent chat context if it is naturally relevant.',
+      'Do not invent details beyond the supplied title, summary, URL, source, and published time.',
+      'Make each numbered news item recognizable from its title or central fact.',
+      'The requirement to cover every selected item takes priority over stylistic admin instructions.',
+    ].join('\n');
+    const extraPrompt = compactNewsPromptText(rule.news_prompt, NEWS_ADMIN_PROMPT_MAX_BYTES);
+
+    let summaryMaxBytes = NEWS_SUMMARY_MAX_BYTES;
+    let instruction = '';
+    while (summaryMaxBytes >= 0) {
+      instruction = [
+        ...base,
+        newsInstructionBlock(items, source, summaryMaxBytes),
+        extraPrompt ? `Admin news instruction:\n${extraPrompt}` : '',
+        coverageInstruction,
+      ].filter(Boolean).join('\n\n');
+      if (jsonContentByteLength(instruction) <= NEWS_INSTRUCTION_MAX_BYTES) return instruction;
+      summaryMaxBytes -= 25;
+    }
+
+    const error = new Error(`News instruction cannot fit ${items.length} selected items into the provider budget`);
+    error.code = 'NEWS_PROMPT_TOO_LARGE';
+    error.stage = 'context';
+    error.retryable = false;
+    error.instructionBytes = jsonContentByteLength([
+      ...base,
+      newsInstructionBlock(items, source, 0),
+      extraPrompt ? `Admin news instruction:\n${extraPrompt}` : '',
+      coverageInstruction,
+    ].join('\n\n'));
+    throw error;
   }
 
   async function buildRuleInstruction(rule) {
@@ -1267,19 +1337,8 @@ function createAiInitiativeFeature({
         error.initiativeReason = reason || 'no_recent_news';
         throw error;
       }
-      base.push(newsInstructionBlock(items, source));
-      base.push([
-        'Use one or several news items above as the reason to start the conversation.',
-        'Stay in your bot persona.',
-        rule.news_use_chat_context === 0
-          ? 'Do not force a connection to recent chat context unless it is obviously relevant.'
-          : 'You may connect the news to recent chat context if it is naturally relevant.',
-        'Do not invent details beyond the supplied title, summary, URL, source, and published time.',
-        'Write a short message that feels like you noticed this and decided to bring it up.',
-      ].join('\n'));
-      const extraPrompt = cleanText(rule.news_prompt, 8000);
-      if (extraPrompt) base.push(`Admin news instruction:\n${extraPrompt}`);
-      return { instruction: base.join('\n\n'), newsItems: items, newsItem: items[0] || null, newsSource: source };
+      const instruction = buildNewsRuleInstruction(base, items, source, rule);
+      return { instruction, newsItems: items, newsItem: items[0] || null, newsSource: source };
     } else if (rule.prompt_mode === 'idle_ping') {
       base.push('The user has been quiet. Write a short warm check-in in your persona.');
     } else if (rule.prompt_mode === 'custom') {
@@ -1376,6 +1435,17 @@ function createAiInitiativeFeature({
     return Math.min(MAX_RETRY_DELAY_MS, Math.max(jittered, retryAfterMs(error)));
   }
 
+  function syntheticContextOptionsForRule(rule) {
+    const isNews = normalizePromptMode(rule.prompt_mode) === 'news_hook';
+    const includeChatContext = !isNews || boolValue(rule.news_use_chat_context, true);
+    return {
+      includeChatContext,
+      recentContextMaxChars: isNews
+        ? (includeChatContext ? NEWS_RECENT_CONTEXT_MAX_CHARS : 0)
+        : INITIATIVE_RECENT_CONTEXT_MAX_CHARS,
+    };
+  }
+
   async function runRuleSyntheticTurn(rule, instruction) {
     let lastError = null;
     for (let attempt = 1; attempt <= PROVIDER_MAX_ATTEMPTS; attempt++) {
@@ -1385,6 +1455,7 @@ function createAiInitiativeFeature({
           botId: rule.bot_id,
           instruction,
           purpose: `initiative_${rule.prompt_mode || 'context_question'}`,
+          ...syntheticContextOptionsForRule(rule),
         });
         if (!result?.message?.id) {
           const error = new Error('AI provider returned no initiative message');
@@ -1641,6 +1712,7 @@ function createAiInitiativeFeature({
         instruction: built.instruction,
         purpose: `initiative_test_${rule.prompt_mode || 'context_question'}`,
         dryRun: true,
+        ...syntheticContextOptionsForRule(rule),
       });
       res.json({
         ok: true,

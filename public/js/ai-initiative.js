@@ -230,7 +230,7 @@
 
   function promptPreviewLine(mode, newsCount = 1) {
     if (mode === 'news_hook') {
-      return t('Use up to {count} random recent news items from the selected RSS source and let the bot play them through its persona.', {
+      return t('Use up to {count} fresh unused RSS items. The bot must cover every selected item; if fewer new items exist, it sends fewer.', {
         count: newsCount,
       });
     }

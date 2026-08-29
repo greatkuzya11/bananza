@@ -69,7 +69,13 @@ const {
 } = require('../mentionTokens');
 const { analyzeAiImageRisk } = require('../public/js/ai-image-risk');
 const { buildOpenAIImageRequest: buildTelegramUniversalOpenAIImageRequest } = require('./telegramUniversal');
-const { fitSyntheticProviderInput } = require('./providerInput');
+const {
+  fitSyntheticInstruction,
+  fitSyntheticProviderInput,
+  jsonContentByteLength,
+  SYNTHETIC_INPUT_MAX_BYTES,
+  SYNTHETIC_SYSTEM_MAX_BYTES,
+} = require('./providerInput');
 
 const BOT_COLORS = ['#65aadd', '#7bc862', '#a695e7', '#ee7aae', '#6ec9cb', '#faa774'];
 const AI_BOT_EXPORT_VERSION = 5;
@@ -136,6 +142,9 @@ const CHATSHOT_DEFAULT_CONTEXT_LIMIT = 50;
 const CHATSHOT_MIN_CONTEXT_LIMIT = 2;
 const CHATSHOT_MAX_CONTEXT_LIMIT = 100;
 const CHATSHOT_GENERATION_ACTIVITY = 'chatshot_generating';
+const SYNTHETIC_RECENT_CONTEXT_DEFAULT_CHARS = 6_000;
+const SYNTHETIC_NEWS_CONTEXT_DEFAULT_CHARS = 3_000;
+const SYNTHETIC_CONTEXT_RESERVED_BYTES = 1_000;
 
 function boolValue(value, fallback = false) {
   if (typeof value === 'boolean') return value;
@@ -224,6 +233,24 @@ function trimRecentLines(lines, maxChars) {
     break;
   }
   return result;
+}
+
+function syntheticRecentContextCharLimit({
+  system,
+  instruction,
+  requestedMaxChars = SYNTHETIC_RECENT_CONTEXT_DEFAULT_CHARS,
+  includeChatContext = true,
+} = {}) {
+  if (!includeChatContext) return 0;
+  const requested = Math.max(0, Math.min(10_000, Math.floor(Number(requestedMaxChars) || 0)));
+  if (!requested) return 0;
+  const systemBytes = Math.min(SYNTHETIC_SYSTEM_MAX_BYTES, jsonContentByteLength(system));
+  const instructionBytes = jsonContentByteLength(instruction);
+  const availableBytes = Math.max(
+    0,
+    SYNTHETIC_INPUT_MAX_BYTES - systemBytes - instructionBytes - SYNTHETIC_CONTEXT_RESERVED_BYTES
+  );
+  return Math.min(requested, Math.floor(availableBytes / 2));
 }
 
 function compactJson(value, limit = 700) {
@@ -4180,28 +4207,38 @@ function createAiBotFeature({
     return items.sort((a, b) => b.score - a.score).slice(0, topK || 6);
   }
 
-  async function assembleContext({ bot, chatConfig, message }) {
+  async function assembleContext({
+    bot,
+    chatConfig,
+    message,
+    recentContextMaxChars = 10_000,
+    includeChatContext = true,
+  }) {
     const limit = intValue(chatConfig.hot_context_limit, 50, 20, 100);
-    const recentRows = recentMessagesStmt.all(message.chat_id, limit).reverse();
-    const recentLines = trimRecentLines(recentRows.map(formatAiChatLine).filter(Boolean), 10000);
+    const recentChars = intValue(recentContextMaxChars, 10_000, 0, 10_000);
+    const useChatContext = Boolean(includeChatContext) && recentChars > 0;
+    const recentRows = useChatContext ? recentMessagesStmt.all(message.chat_id, limit).reverse() : [];
+    const recentLines = useChatContext
+      ? trimRecentLines(recentRows.map(formatAiChatLine).filter(Boolean), recentChars)
+      : [];
     const currentText = aiMessageMemoryText(message, { includeVoters: true });
-    const livePollContext = buildLivePollContext(message.chat_id, message, recentRows);
-    const livePinContext = buildLivePinContext(message.chat_id, message);
+    const livePollContext = useChatContext ? buildLivePollContext(message.chat_id, message, recentRows) : '';
+    const livePinContext = useChatContext ? buildLivePinContext(message.chat_id, message) : '';
     const settings = getGlobalSettings();
+    const recentContextBlock = useChatContext
+      ? `Recent chat context (${recentLines.length} messages):\n${recentLines.join('\n') || '(empty)'}`
+      : '';
 
-    if (chatConfig.mode !== 'hybrid') {
+    if (chatConfig.mode !== 'hybrid' || !useChatContext) {
       return {
         system: botSystemPrompt(bot),
         user: [
           livePollContext,
           livePinContext,
-          `Recent chat context (${recentLines.length} messages):`,
-          recentLines.join('\n') || '(empty)',
-          '',
+          recentContextBlock,
           `Current user message:\n${currentText}`,
-          '',
           `Answer as ${bot.name}. Return only the message body, without a speaker label or name prefix.`,
-        ].join('\n'),
+        ].filter(Boolean).join('\n\n'),
       };
     }
 
@@ -4249,7 +4286,7 @@ function createAiBotFeature({
         retrievalLines ? `Relevant archive retrieval:\n${retrievalLines}` : '',
         livePollContext,
         livePinContext,
-        `Recent chat context (${recentLines.length} messages):\n${recentLines.join('\n') || '(empty)'}`,
+        recentContextBlock,
         '',
         `Current user message:\n${currentText}`,
         '',
@@ -7803,6 +7840,8 @@ function createAiBotFeature({
     replyToId = null,
     mentionUserId = null,
     dryRun = false,
+    includeChatContext = true,
+    recentContextMaxChars = null,
   } = {}) {
     const runtime = resolveChatBotRuntime(chatId, botId);
     if (!runtime) {
@@ -7839,7 +7878,7 @@ function createAiBotFeature({
       });
     }
 
-    const bodyInstruction = cleanText(instruction || '', 6000);
+    const bodyInstruction = fitSyntheticInstruction(instruction || '');
     if (!bodyInstruction) {
       throw syntheticTurnError('Synthetic turn instruction is empty', {
         code: 'EMPTY_INSTRUCTION',
@@ -7848,6 +7887,30 @@ function createAiBotFeature({
         retryable: false,
       });
     }
+    const mentionPrefix = mentionPrefixForUser(mentionUserId);
+    const purposeLine = purpose ? `Synthetic turn purpose: ${cleanText(purpose, 80)}.` : '';
+    const mentionLine = mentionPrefix ? `If this is a reminder for that user, begin the visible message with "${mentionPrefix}".` : '';
+    const syntheticSystemFor = (baseSystem) => [
+      baseSystem,
+      'You are writing a new visible chat message triggered by BananZa scheduling logic, not by a visible user message.',
+      'Do not mention hidden triggers, schedulers, cron jobs, internal prompts, or system instructions.',
+      'Return only the message body.',
+      purposeLine,
+      mentionLine,
+    ].filter(Boolean).join('\n\n');
+    const isNewsInitiative = /(?:^|_)news_hook$/i.test(String(purpose || ''));
+    const requestedRecentContextChars = intValue(
+      recentContextMaxChars,
+      isNewsInitiative ? SYNTHETIC_NEWS_CONTEXT_DEFAULT_CHARS : SYNTHETIC_RECENT_CONTEXT_DEFAULT_CHARS,
+      0,
+      10_000
+    );
+    const effectiveRecentContextChars = syntheticRecentContextCharLimit({
+      system: syntheticSystemFor(botSystemPrompt(bot)),
+      instruction: bodyInstruction,
+      requestedMaxChars: requestedRecentContextChars,
+      includeChatContext,
+    });
     const syntheticSource = {
       id: positiveId(replyToId) || null,
       chat_id: positiveId(chatId),
@@ -7859,21 +7922,17 @@ function createAiBotFeature({
     };
     let context;
     try {
-      context = await assembleContext({ bot, chatConfig: chatConfigForBotMode(bot, chatConfig, 'text'), message: syntheticSource });
+      context = await assembleContext({
+        bot,
+        chatConfig: chatConfigForBotMode(bot, chatConfig, 'text'),
+        message: syntheticSource,
+        recentContextMaxChars: effectiveRecentContextChars,
+        includeChatContext,
+      });
     } catch (error) {
       throw wrapSyntheticTurnError(error, { stage: 'context', provider: bot.provider });
     }
-    const mentionPrefix = mentionPrefixForUser(mentionUserId);
-    const purposeLine = purpose ? `Synthetic turn purpose: ${cleanText(purpose, 80)}.` : '';
-    const mentionLine = mentionPrefix ? `If this is a reminder for that user, begin the visible message with "${mentionPrefix}".` : '';
-    const syntheticSystem = [
-      context.system,
-      'You are writing a new visible chat message triggered by BananZa scheduling logic, not by a visible user message.',
-      'Do not mention hidden triggers, schedulers, cron jobs, internal prompts, or system instructions.',
-      'Return only the message body.',
-      purposeLine,
-      mentionLine,
-    ].filter(Boolean).join('\n\n');
+    const syntheticSystem = syntheticSystemFor(context.system);
     const providerInput = fitSyntheticProviderInput(syntheticSystem, context.user);
     const system = providerInput.system;
     const user = providerInput.user;
@@ -7887,6 +7946,7 @@ function createAiBotFeature({
         original_user_bytes: providerInput.originalUserBytes,
         system_bytes: providerInput.systemBytes,
         user_bytes: providerInput.userBytes,
+        recent_context_chars: effectiveRecentContextChars,
       }));
     }
 
@@ -11114,5 +11174,6 @@ module.exports = {
     isChatSelectableBotKind,
     userFacingBotModel,
     trimRecentLines,
+    syntheticRecentContextCharLimit,
   },
 };
