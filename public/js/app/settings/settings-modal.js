@@ -222,12 +222,12 @@
       openModal('themeSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
       ui.renderThemePicker?.();
       ui.setThemeStatus?.('');
+      ui.renderVisualModePicker?.();
+      ui.setVisualModeStatus?.('');
     }
 
     function openVisualModeSettingsModal() {
-      openModal('visualModeSettingsModal', { replaceStack: getTopModal()?.id !== 'settingsModal' });
-      ui.renderVisualModePicker?.();
-      ui.setVisualModeStatus?.('');
+      openThemeSettingsModal();
     }
 
     function openPollStyleSettingsModal() {
@@ -302,7 +302,6 @@
 
       bindTouchSafe(byId('settingsBtn'), () => openSettingsModal(byId('settingsBtn')));
       byId('settingsThemePanel')?.addEventListener('click', openThemeSettingsModal);
-      byId('settingsVisualModePanel')?.addEventListener('click', openVisualModeSettingsModal);
       byId('settingsAnimationPanel')?.addEventListener('click', openAnimationSettingsModal);
       byId('settingsMobileFontPanel')?.addEventListener('click', openMobileFontSettingsModal);
       byId('settingsWeatherPanel')?.addEventListener('click', openWeatherSettingsModal);

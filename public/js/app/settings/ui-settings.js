@@ -345,8 +345,6 @@
       setCurrentVisualMode(nextMode);
       doc.documentElement.dataset.visualMode = nextMode;
       if (getCurrentUser()) updateCurrentUserPatch({ ui_visual_mode: nextMode }, persist);
-      const panelBtn = byId('settingsVisualModePanel');
-      if (panelBtn) panelBtn.textContent = `\uD83C\uDF4C ${t('Rich Banan UX')}: ${t(visualModeStateLabel(nextMode))}`;
       renderVisualModePicker();
       renderThemePicker();
     }
