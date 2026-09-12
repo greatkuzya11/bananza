@@ -51,6 +51,8 @@ test('db startup repairs only legacy bot-add events created with their chat', ()
 
   try {
     fs.copyFileSync(path.join(repoRoot, 'db.js'), path.join(appDir, 'db.js'));
+    fs.mkdirSync(path.join(appDir, 'public/js'), { recursive: true });
+    fs.copyFileSync(path.join(repoRoot, 'public/js/appearance.js'), path.join(appDir, 'public/js/appearance.js'));
     writeSchemaStub(appDir, path.join('voice', 'schema.js'), 'initVoiceSchema');
     writeSchemaStub(appDir, path.join('videoNotes', 'schema.js'), 'initVideoNoteSchema');
     writeSchemaStub(appDir, path.join('calls', 'schema.js'), 'initCallSchema');

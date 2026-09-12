@@ -714,3 +714,15 @@ html[data-modal-animation="none"] .send-btn.voice-enabled.is-mic-mode.is-mode-sw
 
 /* Hide any accidental horizontal overflow in messages container */
 .messages { overflow-x: hidden; }
+
+/* Appearance surfaces; keep media geometry owned by this feature. */
+html[data-visual-mode="glass"] :is(.voice-provider-panel, .voice-selected-model-meta) { background: var(--glass-dialog); color: var(--text-primary); border: 1px solid var(--glass-line); border-radius: 20px; box-shadow: var(--glass-shadow); }
+html[data-visual-mode="glass"] :is(.voice-inline-btn, .voice-transcribe-btn, .voice-footer-play) { border-radius: 16px; min-height: 44px; color: var(--text-primary); background-color: var(--glass-control); border-color: var(--border-light); }
+
+html[data-visual-mode="glass"] .send-btn.voice-enabled.is-mic-mode {
+  background: var(--glass-control) !important; color: var(--accent); border-radius: 50%; border: 1px solid var(--border-light);
+}
+html[data-visual-mode="glass"] .send-btn.voice-enabled.is-mic-mode::before {
+  -webkit-mask-image: url('/vendor/lucide/mic.svg'); mask-image: url('/vendor/lucide/mic.svg');
+}
+html[data-visual-mode="glass"] .send-btn.voice-enabled.is-recording { color: var(--danger); }

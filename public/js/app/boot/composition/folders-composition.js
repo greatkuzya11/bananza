@@ -115,7 +115,7 @@
           getChatSearchHaystack: (chat) => getChatSearchHaystack(chat),
           createChatFolder: (name, chatIds) => folderActionsController.createChatFolder(name, chatIds),
           closeAllModals: () => closeAllModals(),
-          alert: (message) => alert(message),
+          alert: async (message) => (await window.BananzaDialogs.alert(message)),
         },
       });
       const folderControllers = {

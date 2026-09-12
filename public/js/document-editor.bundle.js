@@ -1,4 +1,4 @@
-var BananzaDocumentEditorBundle = (() => {
+(() => {
   // node_modules/lib0/map.js
   var create = () => /* @__PURE__ */ new Map();
   var copy = (m) => {
@@ -27106,16 +27106,27 @@ ${reason}`);
     }
   };
   function promptText(options, key, initial = "") {
-    return window.prompt(t(options, key), initial);
+    return window.BananzaDialogs.prompt(t(options, key), initial);
   }
   function setLinkCommand(options, schema2) {
     return (state, dispatch, view) => {
       if (!schema2.marks.link) return false;
       if (!dispatch || !view) return true;
       const current = schema2.marks.link.isInSet(state.storedMarks || state.selection.$from.marks());
-      const href = promptText(options, "Link URL", current?.attrs?.href || "https://");
-      if (!href) return true;
-      return toggleMark(schema2.marks.link, { href, title: href })(state, dispatch, view);
+      const originalDoc = state.doc;
+      const selection = state.selection.toJSON();
+      promptText(options, "Link URL", current?.attrs?.href || "https://").then((href) => {
+        if (view.isDestroyed) return;
+        if (!href || !view.state.doc.eq(originalDoc)) {
+          focusDocumentEditorForEdit(view);
+          return;
+        }
+        const restored = view.state.selection.constructor.fromJSON(view.state.doc, selection);
+        view.dispatch(view.state.tr.setSelection(restored));
+        toggleMark(schema2.marks.link, { href, title: href })(view.state, view.dispatch, view);
+        focusDocumentEditorForEdit(view);
+      });
+      return true;
     };
   }
   function removeLinkCommand(schema2) {

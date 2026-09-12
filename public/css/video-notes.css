@@ -83,7 +83,10 @@
 .msg-row.video-note-row.other .msg-bubble,
 html[data-visual-mode="rich"] .msg-row.video-note-row .msg-bubble,
 html[data-visual-mode="rich"] .msg-row.video-note-row.own .msg-bubble,
-html[data-visual-mode="rich"] .msg-row.video-note-row.other .msg-bubble {
+html[data-visual-mode="rich"] .msg-row.video-note-row.other .msg-bubble,
+html[data-visual-mode="glass"] .msg-row.video-note-row .msg-bubble,
+html[data-visual-mode="glass"] .msg-row.video-note-row.own .msg-bubble,
+html[data-visual-mode="glass"] .msg-row.video-note-row.other .msg-bubble {
   background: transparent;
   box-shadow: none;
   border: 0;
@@ -699,4 +702,12 @@ html[data-modal-animation="none"] .video-note.is-shape-switching .video-note-sha
     width: 100%;
     max-height: 72vh;
   }
+}
+
+/* Appearance surfaces; keep media geometry owned by this feature. */
+html[data-visual-mode="glass"] :is(.video-note-toolbar) { background: var(--glass-dialog); color: var(--text-primary); border: 1px solid var(--glass-line); border-radius: 20px; box-shadow: var(--glass-shadow); }
+html[data-visual-mode="glass"] :is(.video-note-shape-toggle-btn, .video-note-transcript-btn) { border-radius: 16px; min-height: 44px; color: var(--text-primary); background-color: var(--glass-control); border-color: var(--border-light); }
+
+html[data-visual-mode="glass"] .send-btn.voice-enabled.is-mic-mode.is-video-note-mode::before {
+  -webkit-mask-image: url('/vendor/lucide/video.svg'); mask-image: url('/vendor/lucide/video.svg');
 }

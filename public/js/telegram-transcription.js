@@ -431,7 +431,7 @@
 
   async function clearHistory(event) {
     const botId = Number(state.history.botId || 0);
-    if (!botId || !confirm(t('Clear all completed and failed Telegram operations for this bot? Active tasks will continue.'))) return;
+    if (!botId || !(await window.BananzaDialogs.confirm(t('Clear all completed and failed Telegram operations for this bot? Active tasks will continue.')))) return;
     setBusy(event.currentTarget, true, 'Deleting...');
     try {
       const data = await bridge().api(`/api/admin/telegram-bots/${botId}/history`, { method: 'DELETE' });
@@ -745,7 +745,7 @@
 
   async function deleteSelectedBot(event) {
     const id = Number(state.selectedBotId || 0);
-    if (!id || !confirm(t('Delete this Telegram bot and its completed job history?'))) return;
+    if (!id || !(await window.BananzaDialogs.confirm(t('Delete this Telegram bot and its completed job history?')))) return;
     setBusy(event.currentTarget, true, 'Deleting...');
     try {
       state.selectedBotId = null;
@@ -773,7 +773,7 @@
 
   async function deleteToken(event) {
     const id = Number(state.selectedBotId || 0);
-    if (!id || !confirm(t('Delete the saved Telegram bot token?'))) return;
+    if (!id || !(await window.BananzaDialogs.confirm(t('Delete the saved Telegram bot token?')))) return;
     setBusy(event.currentTarget, true, 'Deleting...');
     try {
       applyPayload(await bridge().api(`/api/admin/telegram-bots/${id}/token`, { method: 'DELETE' }));
@@ -784,7 +784,7 @@
 
   async function claimBot(event) {
     const id = Number(state.selectedBotId || 0);
-    if (!id || !confirm(t('Remove the current Telegram webhook and drop pending updates?'))) return;
+    if (!id || !(await window.BananzaDialogs.confirm(t('Remove the current Telegram webhook and drop pending updates?')))) return;
     setBusy(event.currentTarget, true, 'Connecting bot...');
     try {
       state.draftIdentity = null;

@@ -675,7 +675,7 @@
                 : await api(`/api/chats/${currentChatId}`, { method: 'PUT', body: { name } });
               applyChatUpdate(isDocument ? (result.chat || {}) : (result || {}));
               closeAllModals();
-            } catch (e) { alert(e.message); }
+            } catch (e) { (await window.BananzaDialogs.alert(e.message)); }
           };
           // Upload chat avatar
           $('#chatAvatarInput').onchange = async (e) => {
@@ -687,7 +687,7 @@
               const updated = await api(`/api/chats/${currentChatId}/avatar`, { method: 'POST', body: fd });
               applyChatUpdate(updated || {});
               refreshChatInfoPresentation(updated || {});
-            } catch (e) { alert(e.message); }
+            } catch (e) { (await window.BananzaDialogs.alert(e.message)); }
           };
           // Remove chat avatar
           removeChatAvatarBtn.onclick = async () => {
@@ -695,7 +695,7 @@
               const updated = await api(`/api/chats/${currentChatId}/avatar`, { method: 'DELETE' });
               applyChatUpdate(updated || {});
               refreshChatInfoPresentation(updated || {});
-            } catch (e) { alert(e.message); }
+            } catch (e) { (await window.BananzaDialogs.alert(e.message)); }
           };
         } else {
           editSection.classList.add('hidden');
@@ -728,16 +728,16 @@
                 const updated = await api(`/api/chats/${currentChatId}/background`, { method: 'POST', body: fd });
                 applyChatUpdate(updated || {});
                 refreshChatInfoPresentation(updated || {});
-              } catch (err) { alert(err.message); }
+              } catch (err) { (await window.BananzaDialogs.alert(err.message)); }
             };
     
             removeBgBtn.onclick = async () => {
-              if (!confirm('Remove background?')) return;
+              if (!(await window.BananzaDialogs.confirm('Remove background?'))) return;
               try {
                 const updated = await api(`/api/chats/${currentChatId}/background`, { method: 'DELETE' });
                 applyChatUpdate(updated || {});
                 refreshChatInfoPresentation(updated || {});
-              } catch (err) { alert(err.message); }
+              } catch (err) { (await window.BananzaDialogs.alert(err.message)); }
             };
     
             bgStyleSelect.onchange = async () => {
@@ -746,7 +746,7 @@
                 const updated = await api(`/api/chats/${currentChatId}/background-style`, { method: 'PUT', body: { style } });
                 applyChatUpdate(updated || {});
                 refreshChatInfoPresentation(updated || {});
-              } catch (err) { alert(err.message); }
+              } catch (err) { (await window.BananzaDialogs.alert(err.message)); }
             };
           }
         } catch (e) {}
@@ -827,13 +827,13 @@
           memberList.querySelectorAll('.member-remove').forEach(btn => {
             btn.addEventListener('click', async (e) => {
               e.stopPropagation();
-              if (!confirm('Remove this member?')) return;
+              if (!(await window.BananzaDialogs.confirm('Remove this member?'))) return;
               try {
                 await api(`/api/chats/${currentChatId}/members/${btn.dataset.uid}`, { method: 'DELETE' });
                 // Invalidate cached members for this chat and refresh modal
                 try { chatMembersCache.delete(currentChatId); } catch (e) {}
                 openChatInfoModal();
-              } catch (e) { alert(e.message); }
+              } catch (e) { (await window.BananzaDialogs.alert(e.message)); }
             });
           });
     
@@ -1411,8 +1411,8 @@
         bindGlobal('history', window.history);
         bindGlobal('navigator', window.navigator);
         bindGlobal('location', window.location);
-        bindGlobal('confirm', window.confirm?.bind?.(window));
-        bindGlobal('alert', window.alert?.bind?.(window));
+        bindGlobal('confirm', window.BananzaDialogs?.confirm);
+        bindGlobal('alert', window.BananzaDialogs?.alert);
         bindGlobal('setTimeout', window.setTimeout?.bind?.(window) || setTimeout);
         bindGlobal('clearTimeout', window.clearTimeout?.bind?.(window) || clearTimeout);
         bindGlobal('setInterval', window.setInterval?.bind?.(window) || setInterval);

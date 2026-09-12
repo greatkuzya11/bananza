@@ -26,7 +26,7 @@
     }
 
     async function deleteMessage(id) {
-      if (!win.confirm('Delete this message?')) return;
+      if (!(await win.BananzaDialogs.confirm('Delete this message?'))) return;
       try {
         await api(`/api/messages/${id}`, { method: 'DELETE' });
         markMessageDeleted(id);

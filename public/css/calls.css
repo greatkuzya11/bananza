@@ -2384,3 +2384,31 @@ html[data-visual-mode="rich"] .call-admin-status {
     display: none;
   }
 }
+
+/* Appearance surfaces; keep media geometry owned by this feature. */
+html[data-visual-mode="glass"] :is(.call-surface-card, .call-prejoin-card, .call-incoming-card, .call-participants-panel, .call-prejoin-panel, .call-message-card, .call-artifact-card, .call-recording-card, .call-transcript-card, .call-external-ended-card) { background: var(--glass-dialog); color: var(--text-primary); border: 1px solid var(--glass-line); border-radius: 20px; box-shadow: var(--glass-shadow); }
+html[data-visual-mode="glass"] :is(.call-control-btn, .call-header-btn, .call-action-btn, .call-tool-btn, .call-window-btn, .call-admin-btn) { border-radius: 16px; min-height: 44px; color: var(--text-primary); background-color: var(--glass-control); border-color: var(--border-light); }
+html[data-color-scheme="light"] { --call-border-soft: var(--border-light); --call-surface: var(--bg-modal); --call-text: var(--text-primary); }
+html[data-color-scheme="light"] :is(.call-external-page, .call-prejoin, .call-surface) { background-color: var(--bg-dark); color: var(--text-primary); }
+html[data-visual-mode="glass"] :is(.call-control-btn.is-danger, .call-action-btn.is-danger, .call-control-btn[data-call-action="leave"]) { background: var(--danger); color: white; }
+
+html[data-visual-mode="glass"] .call-icon-mic { --call-icon-mask: url("/vendor/lucide/mic.svg"); }
+html[data-visual-mode="glass"] .call-icon-camera { --call-icon-mask: url("/vendor/lucide/video.svg"); }
+html[data-visual-mode="glass"] .call-icon-users { --call-icon-mask: url("/vendor/lucide/users.svg"); }
+html[data-visual-mode="glass"] .call-icon-devices { --call-icon-mask: url("/vendor/lucide/settings.svg"); }
+html[data-visual-mode="glass"] .call-icon-screen { --call-icon-mask: url("/vendor/lucide/monitor.svg"); }
+html[data-visual-mode="glass"] .call-icon-grid { --call-icon-mask: url("/vendor/lucide/monitor.svg"); }
+html[data-visual-mode="glass"] .call-icon-link { --call-icon-mask: url("/vendor/lucide/external-link.svg"); }
+html[data-visual-mode="glass"] .call-icon-phone-off { --call-icon-mask: url("/vendor/lucide/phone.svg"); }
+html[data-visual-mode="glass"] .call-icon-end { --call-icon-mask: url("/vendor/lucide/x.svg"); }
+html[data-visual-mode="glass"] .call-icon-expand { --call-icon-mask: url("/vendor/lucide/expand.svg"); }
+html[data-visual-mode="glass"] .call-icon-minimize { --call-icon-mask: url("/vendor/lucide/chevron-down.svg"); }
+html[data-visual-mode="glass"] .call-icon-toggle.is-off { color: var(--danger); }
+html[data-visual-mode="glass"] .call-controls { background: var(--glass-dialog); border-color: var(--border-light); }
+html[data-visual-mode="glass"] .call-control-btn.danger { color: var(--danger); background: var(--glass-control); }
+html[data-visual-mode="glass"] .call-icon-ai-badge .call-icon { border: 0; background: currentColor; width: 22px; height: 22px; -webkit-mask: url('/vendor/lucide/sparkles.svg') center / contain no-repeat; mask: url('/vendor/lucide/sparkles.svg') center / contain no-repeat; }
+html[data-visual-mode="glass"] .call-icon-ai-badge .call-icon::before { content: none; }
+@media (max-width: 768px) {
+  html[data-visual-mode="glass"] .call-controls { display: grid; grid-template-columns: repeat(4, minmax(44px, 1fr)); gap: 8px; padding: 10px; }
+  html[data-visual-mode="glass"] .call-controls .call-control-btn { width: 100%; min-width: 44px; min-height: 44px; height: 44px; }
+}

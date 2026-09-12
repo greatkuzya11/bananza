@@ -251,7 +251,7 @@
       async function disableContextConvertAdminBot() {
         const bot = currentContextConvertAdminBot();
         if (!bot) return;
-        if (!confirm('Disable this convert bot in all chats?')) return;
+        if (!(await window.BananzaDialogs.confirm('Disable this convert bot in all chats?'))) return;
         try {
           const data = await api(`${contextConvertRouteBase(activeContextConvertProvider)}/${bot.id}`, { method: 'DELETE' });
           mergeContextConvertAdminState(activeContextConvertProvider, data);
@@ -268,7 +268,7 @@
           setContextConvertBotStatus('Save a convert bot first', 'error');
           return;
         }
-        const sample = window.prompt('Source text for test transform:', 'Can you rewrite this text to sound clearer and more concise?');
+        const sample = (await window.BananzaDialogs.prompt('Source text for test transform:', 'Can you rewrite this text to sound clearer and more concise?'));
         if (sample == null) return;
         setContextConvertBotStatus('Testing...');
         try {
@@ -664,7 +664,7 @@
       async function disableChatShotAdminBot() {
         const bot = currentChatShotAdminBot();
         if (!bot) return;
-        if (!confirm('Disable this ChatShot bot in all chats?')) return;
+        if (!(await window.BananzaDialogs.confirm('Disable this ChatShot bot in all chats?'))) return;
         try {
           const data = await api(`${chatShotRouteBase(activeChatShotProvider)}/${bot.id}`, { method: 'DELETE' });
           mergeChatShotAdminState(activeChatShotProvider, data);
@@ -681,7 +681,7 @@
           setChatShotBotStatus('Save a ChatShot bot first', 'error');
           return;
         }
-        const sample = window.prompt('Chat context for test prompt:', 'User: We planned a friendly weekend meetup. Friend: Bring something bright and funny.');
+        const sample = (await window.BananzaDialogs.prompt('Chat context for test prompt:', 'User: We planned a friendly weekend meetup. Friend: Bring something bright and funny.'));
         if (sample == null) return;
         setChatShotBotStatus('Testing...');
         try {
@@ -1372,7 +1372,7 @@
           if (keepKeyboardOpen) focusComposerKeepKeyboard(true);
           msgInput.dispatchEvent(new Event('input', { bubbles: true }));
         } catch (error) {
-          alert(error.message || 'Could not transform text');
+          (await window.BananzaDialogs.alert(error.message || 'Could not transform text'));
         } finally {
           clearContextConvertPickerFollowupClickSuppress();
           contextConvertComposerPending = false;

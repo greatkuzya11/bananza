@@ -38,20 +38,9 @@
     return Object.freeze(wrapper);
   }
 
-  const UI_THEMES = deepFreeze([
-    { id: 'bananza', name: 'BananZa', note: 'Classic blue', colors: ['#17212b', '#5eb5f7'], own: '#2b5278', other: '#182533' },
-    { id: 'banan-hero', name: 'Banan Hero', note: 'Grass + signal', colors: ['#15171a', '#ffd33f'], own: '#496436', other: '#202228' },
-    { id: 'midnight-ocean', name: 'Midnight Ocean', note: 'Navy + teal', colors: ['#071823', '#2dd4bf'], own: '#14506a', other: '#102434' },
-    { id: 'nord-aurora', name: 'Nord Aurora', note: 'Graphite + aurora', colors: ['#2e3440', '#88c0d0'], own: '#3b5f75', other: '#293340' },
-    { id: 'rose-pine', name: 'Rose Pine', note: 'Plum + rose', colors: ['#191724', '#eb6f92'], own: '#3a2a4a', other: '#221f33' },
-    { id: 'dracula-neon', name: 'Dracula Neon', note: 'Violet + pink', colors: ['#282a36', '#ff79c6'], own: '#4b3a69', other: '#242636' },
-    { id: 'tokyo-night', name: 'Tokyo Night', note: 'Ink + electric blue', colors: ['#1a1b26', '#7aa2f7'], own: '#2b4d7d', other: '#202437' },
-  ]);
+  const UI_THEMES = window.BananzaAppearance.themes;
 
-  const UI_VISUAL_MODES = deepFreeze([
-    { id: 'classic', name: 'Off', note: 'Classic flat theme surfaces.' },
-    { id: 'rich', name: 'On', note: 'Layered gradients, glass cards and theme-colored glow.' },
-  ]);
+  const UI_VISUAL_MODES = window.BananzaAppearance.modes;
 
   const POLL_STYLES = deepFreeze([
     { id: 'pulse', name: 'Pulse', note: 'Hero gradients and bold result cards', accent: ['var(--accent)', 'var(--link)'] },

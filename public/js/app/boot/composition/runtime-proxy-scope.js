@@ -16,7 +16,7 @@
           FormData: window.FormData, Blob: window.Blob, File: window.File, FileReader: window.FileReader,
           localStorage: window.localStorage, sessionStorage: window.sessionStorage, navigator: window.navigator,
           location: window.location, history: window.history,
-          alert: window.alert?.bind?.(window), confirm: window.confirm?.bind?.(window),
+          alert: window.BananzaDialogs?.alert, confirm: window.BananzaDialogs?.confirm,
           fetch: window.fetch?.bind?.(window),
           setTimeout: window.setTimeout?.bind?.(window), clearTimeout: window.clearTimeout?.bind?.(window),
           requestAnimationFrame: window.requestAnimationFrame?.bind?.(window) || ((callback) => window.setTimeout(callback, 16)),

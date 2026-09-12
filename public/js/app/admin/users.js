@@ -37,8 +37,8 @@
     const copyTextToClipboard = typeof options.copyTextToClipboard === 'function'
       ? options.copyTextToClipboard
       : () => Promise.resolve(false);
-    const alertFn = typeof options.alert === 'function' ? options.alert : (message) => alert(message);
-    const confirmFn = typeof options.confirm === 'function' ? options.confirm : (message) => confirm(message);
+    const alertFn = typeof options.alert === 'function' ? options.alert : async (message) => (await window.BananzaDialogs.alert(message));
+    const confirmFn = typeof options.confirm === 'function' ? options.confirm : async (message) => (await window.BananzaDialogs.confirm(message));
     const openAdminBotAuditModal = typeof options.openAdminBotAuditModal === 'function'
       ? options.openAdminBotAuditModal
       : () => Promise.resolve();
@@ -236,14 +236,14 @@
               });
             } catch (e) {
               input.checked = !input.checked;
-              alertFn(e.message);
+              (await alertFn(e.message));
             }
           });
         });
         list.querySelectorAll('.bot-audit-btn').forEach(btn => {
           btn.addEventListener('click', () => {
-            openAdminBotAuditModal(Number(btn.dataset.uid || 0), btn.dataset.name || 'User').catch((error) => {
-              alertFn(error.message || 'Could not load bot audit');
+            openAdminBotAuditModal(Number(btn.dataset.uid || 0), btn.dataset.name || 'User').catch(async (error) => {
+              (await alertFn(error.message || 'Could not load bot audit'));
             });
           });
         });
@@ -292,11 +292,11 @@
         });
         list.querySelectorAll('.reset-btn').forEach(btn => {
           btn.addEventListener('click', async () => {
-            if (!confirmFn('Reset password to 123456?')) return;
+            if (!(await confirmFn('Reset password to 123456?'))) return;
             try {
               await api(`/api/admin/users/${btn.dataset.uid}/reset-password`, { method: 'POST' });
-              alertFn('Password has been reset to 123456');
-            } catch (e) { alertFn(e.message); }
+              (await alertFn('Password has been reset to 123456'));
+            } catch (e) { (await alertFn(e.message)); }
           });
         });
       } catch {}

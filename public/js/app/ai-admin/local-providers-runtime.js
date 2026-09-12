@@ -334,7 +334,7 @@
       }
     
       async function deleteDeepseekAiKey() {
-        if (!confirm('Delete DeepSeek API key for AI bots?')) return;
+        if (!(await window.BananzaDialogs.confirm('Delete DeepSeek API key for AI bots?'))) return;
         try {
           const data = await api('/api/admin/deepseek-ai-bots/key', { method: 'DELETE' });
           mergeDeepseekAiState(data);
@@ -438,7 +438,7 @@
     
       async function disableDeepseekBot() {
         if (!selectedDeepseekBotId) return;
-        if (!confirm('Disable this DeepSeek bot in all chats?')) return;
+        if (!(await window.BananzaDialogs.confirm('Disable this DeepSeek bot in all chats?'))) return;
         try {
           const data = await api(`/api/admin/deepseek-ai-bots/${selectedDeepseekBotId}`, { method: 'DELETE' });
           mergeDeepseekAiState(data);
@@ -819,7 +819,7 @@
       }
     
       async function deleteQwenAiKey() {
-        if (!confirm('Delete Qwen API key for AI bots?')) return;
+        if (!(await window.BananzaDialogs.confirm('Delete Qwen API key for AI bots?'))) return;
         try {
           const data = await api('/api/admin/qwen-ai-bots/key', { method: 'DELETE' });
           mergeQwenAiState(data);
@@ -923,7 +923,7 @@
     
       async function disableQwenBot() {
         if (!selectedQwenBotId) return;
-        if (!confirm('Disable this Qwen bot in all chats?')) return;
+        if (!(await window.BananzaDialogs.confirm('Disable this Qwen bot in all chats?'))) return;
         try {
           const data = await api(`/api/admin/qwen-ai-bots/${selectedQwenBotId}`, { method: 'DELETE' });
           mergeQwenAiState(data);
@@ -1372,7 +1372,7 @@
       }
     
       async function deleteYandexAiKey() {
-        if (!confirm('Delete Yandex API key for AI bots?')) return;
+        if (!(await window.BananzaDialogs.confirm('Delete Yandex API key for AI bots?'))) return;
         try {
           const data = await api('/api/admin/yandex-ai-bots/key', { method: 'DELETE' });
           mergeYandexAiState(data);
@@ -1476,7 +1476,7 @@
     
       async function disableYandexBot() {
         if (!selectedYandexBotId) return;
-        if (!confirm('Disable this Yandex bot in all chats?')) return;
+        if (!(await window.BananzaDialogs.confirm('Disable this Yandex bot in all chats?'))) return;
         try {
           const data = await api(`/api/admin/yandex-ai-bots/${selectedYandexBotId}`, { method: 'DELETE' });
           mergeYandexAiState(data);

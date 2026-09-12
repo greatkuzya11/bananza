@@ -176,7 +176,18 @@ async function setFakeVisualViewport(page, next, eventType = 'resize') {
   }, { nextViewport: next, type: eventType });
 }
 
-async function registerViaUi(page, user) {
+async function applyTestAppearance(page) {
+  if (process.env.BANANZA_E2E_VISUAL_MODE !== 'glass') return;
+  await page.evaluate(async () => {
+    await window.BananzaAppBridge.api('/api/user/visual-mode', { method: 'PATCH', body: { mode: 'glass' } });
+    const response = await window.BananzaAppBridge.api('/api/user/theme', { method: 'PATCH', body: { theme: 'pearl' } });
+    localStorage.setItem('user', JSON.stringify(response.user));
+  });
+  await page.reload();
+  await expect(page.locator('#chatList')).toBeVisible();
+}
+
+async function registerViaUi(page, user, { appearance = true } = {}) {
   const { baseUrl } = getContext();
   await page.goto(`${baseUrl}/login.html`);
   await page.locator('.tab[data-tab="register"]').click();
@@ -187,6 +198,7 @@ async function registerViaUi(page, user) {
   await page.locator('#registerForm .btn').click();
   await page.waitForURL(`${baseUrl}/`);
   await expect(page.locator('#chatList')).toBeVisible();
+  if (appearance) await applyTestAppearance(page);
 }
 
 async function loginViaUi(page, user) {
@@ -197,6 +209,7 @@ async function loginViaUi(page, user) {
   await page.locator('#loginForm .btn').click();
   await page.waitForURL(`${baseUrl}/`);
   await expect(page.locator('#chatList')).toBeVisible();
+  await applyTestAppearance(page);
 }
 
 async function openPrivateChat(page, displayName) {

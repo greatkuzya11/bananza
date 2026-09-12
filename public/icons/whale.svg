@@ -1,0 +1,6 @@
+<!-- BananZa original icon, matching the 24px / 2px outline control set. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M8 12a7 7 0 0 1 14 0v2a6 6 0 0 1-6 6h-4a8 8 0 0 1-8-8V9C2 9 1 7 2 5c2 0 3 1 3 3 1-2 2-3 4-3 1 2 0 4-2 5v2c0 2 1 3 3 3"/>
+  <path d="M16 7V4m0 0c0-2-3-2-3 0m3 0c0-2 3-2 3 0M18 16h3"/>
+  <circle cx="18" cy="11" r=".75" fill="currentColor" stroke="none"/>
+</svg>

@@ -228,7 +228,7 @@
       async function refreshCurrentChatInviteLink() {
         const chat = getChatById(currentChatId);
         if (!canManageInviteLink(chat)) return null;
-        if (!confirm('Refresh invite link? Old link will stop working.')) return null;
+        if (!(await window.BananzaDialogs.confirm('Refresh invite link? Old link will stop working.'))) return null;
         setChatInviteLinkStatus('Refreshing...', 'pending');
         try {
           const payload = await api(`/api/chats/${currentChatId}/invite-link/rotate`, { method: 'POST' });
@@ -688,25 +688,25 @@
         // Create group
         $('#createGroupBtn').addEventListener('click', async () => {
           const name = $('#groupName').value.trim();
-          if (!name) { alert('Enter group name'); return; }
+          if (!name) { (await window.BananzaDialogs.alert('Enter group name')); return; }
           const selected = [...$$('#userListGroup .user-list-item.selected')].map(el => +el.dataset.uid);
           try {
             const chat = await api('/api/chats', { method: 'POST', body: { name, type: 'group', memberIds: selected } });
             closeAllModals();
             await loadChats();
             openChat(chat.id);
-          } catch (e) { alert(e.message); }
+          } catch (e) { (await window.BananzaDialogs.alert(e.message)); }
         });
         $('#createDocumentBtn')?.addEventListener('click', async () => {
           const name = ($('#documentName')?.value || '').trim();
-          if (!name) { alert(t('Enter document title')); return; }
+          if (!name) { (await window.BananzaDialogs.alert(t('Enter document title'))); return; }
           const selected = [...$$('#userListDocument .user-list-item.selected')].map(el => +el.dataset.uid);
           try {
             const chat = await api('/api/documents', { method: 'POST', body: { title: name, memberIds: selected } });
             closeAllModals();
             await loadChats();
             openChat(chat.id);
-          } catch (e) { alert(e.message); }
+          } catch (e) { (await window.BananzaDialogs.alert(e.message)); }
         });
         newFolderTabController.bindEvents();
         folderManageModalController.bindEvents();
@@ -752,7 +752,7 @@
         forwardingController?.bindEvents?.();
     
         // Settings controllers
-        settingsModalController.bindEvents({ bindTouchSafeButtonActivation });
+        settingsModalController.bindEvents({ bindTouchSafeButtonActivation, animateChatHeaderActionButton });
         weatherSettingsController.bindEvents({ bindAsyncActionButtons, withActionButtons });
         mapSettingsController?.bindEvents?.({ bindAsyncActionButtons, withActionButtons });
         notificationSettingsController.bindEvents({ bindAsyncActionButtons });
@@ -857,7 +857,7 @@
         $('#refreshChatInviteLinkBtn')?.addEventListener('click', () => refreshCurrentChatInviteLink());
     
         // Logout
-        $('#profileLogoutBtn')?.addEventListener('click', () => { if (confirm('Logout?')) logout(); });
+        $('#profileLogoutBtn')?.addEventListener('click', async () => { if ((await window.BananzaDialogs.confirm('Logout?'))) logout(); });
     
         // Load more
         loadMoreBtn.addEventListener('click', loadMore);

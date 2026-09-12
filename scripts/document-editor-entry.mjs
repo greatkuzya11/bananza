@@ -1141,7 +1141,7 @@ class DocumentImageNodeView {
 }
 
 function promptText(options, key, initial = '') {
-  return window.prompt(t(options, key), initial);
+  return window.BananzaDialogs.prompt(t(options, key), initial);
 }
 
 function setLinkCommand(options, schema) {
@@ -1149,9 +1149,22 @@ function setLinkCommand(options, schema) {
     if (!schema.marks.link) return false;
     if (!dispatch || !view) return true;
     const current = schema.marks.link.isInSet(state.storedMarks || state.selection.$from.marks());
-    const href = promptText(options, 'Link URL', current?.attrs?.href || 'https://');
-    if (!href) return true;
-    return toggleMark(schema.marks.link, { href, title: href })(state, dispatch, view);
+    const originalDoc = state.doc;
+    const selection = state.selection.toJSON();
+    promptText(options, 'Link URL', current?.attrs?.href || 'https://').then(href => {
+      if (view.isDestroyed) return;
+      if (!href || !view.state.doc.eq(originalDoc)) {
+        focusDocumentEditorForEdit(view);
+        return;
+      }
+      // Keep the ProseMirror command synchronous; apply to the captured selection only
+      // if collaborative edits have not changed the document while the dialog was open.
+      const restored = view.state.selection.constructor.fromJSON(view.state.doc, selection);
+      view.dispatch(view.state.tr.setSelection(restored));
+      toggleMark(schema.marks.link, { href, title: href })(view.state, view.dispatch, view);
+      focusDocumentEditorForEdit(view);
+    });
+    return true;
   };
 }
 

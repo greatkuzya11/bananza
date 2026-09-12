@@ -295,12 +295,16 @@
       });
     }
 
-    function bindEvents({ bindTouchSafeButtonActivation } = {}) {
+    function bindEvents({ bindTouchSafeButtonActivation, animateChatHeaderActionButton } = {}) {
       const bindTouchSafe = typeof bindTouchSafeButtonActivation === 'function'
         ? bindTouchSafeButtonActivation
         : (button, onActivate) => button?.addEventListener('click', onActivate);
 
-      bindTouchSafe(byId('settingsBtn'), () => openSettingsModal(byId('settingsBtn')));
+      bindTouchSafe(byId('settingsBtn'), () => {
+        const button = byId('settingsBtn');
+        if (doc.documentElement.dataset.visualMode === 'glass') animateChatHeaderActionButton?.(button);
+        openSettingsModal(button);
+      });
       byId('settingsThemePanel')?.addEventListener('click', openThemeSettingsModal);
       byId('settingsAnimationPanel')?.addEventListener('click', openAnimationSettingsModal);
       byId('settingsMobileFontPanel')?.addEventListener('click', openMobileFontSettingsModal);

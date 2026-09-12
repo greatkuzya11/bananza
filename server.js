@@ -153,8 +153,9 @@ const upLimiter   = rateLimit({ windowMs: 60_000, max: 20, message: { error: 'To
 
 // Auth middleware
 const AVATAR_COLORS = ['#e17076','#7bc862','#e5ca77','#65aadd','#a695e7','#ee7aae','#6ec9cb','#faa774','#9b2f4a','#7f8f2f','#2f5d9b','#5f3f8f','#9a5a2f','#6f7b8a','#2fae8f','#4b5563'];
-const UI_THEMES = new Set(['bananza', 'banan-hero', 'midnight-ocean', 'nord-aurora', 'rose-pine', 'dracula-neon', 'tokyo-night']);
-const UI_VISUAL_MODES = new Set(['classic', 'rich']);
+const appearanceCatalog = require('./public/js/appearance');
+const UI_THEMES = new Set(appearanceCatalog.themeIds);
+const UI_VISUAL_MODES = new Set(appearanceCatalog.modeIds);
 const POLL_STYLES = new Set(['pulse', 'stack', 'orbit']);
 const UI_MODAL_ANIMATIONS = new Set(['soft', 'lift', 'zoom', 'slide', 'fade', 'none']);
 const UI_MODAL_ANIMATION_SPEED_DEFAULT = 8;

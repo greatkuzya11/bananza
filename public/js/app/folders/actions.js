@@ -97,7 +97,7 @@
       const folder = store?.getFolderById?.(folderId);
       if (!folder || folder.kind !== 'custom') return null;
       const promptText = '\u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u043F\u0430\u043F\u043A\u0438';
-      const targetName = String(nextName || win.prompt?.(tx(promptText), folder.name || '') || '').trim();
+      const targetName = String(nextName || (await win.BananzaDialogs.prompt?.(tx(promptText), folder.name || '')) || '').trim();
       if (!targetName || targetName === folder.name) return folder;
       const data = await api(`/api/chat-folders/${folderId}`, {
         method: 'PUT',
@@ -111,7 +111,7 @@
     async function deleteChatFolder(folderId) {
       const folder = store?.getFolderById?.(folderId);
       if (!folder || folder.kind !== 'custom') return false;
-      const confirmed = win.confirm?.(`${tx('\u0423\u0434\u0430\u043B\u0438\u0442\u044C \u043F\u0430\u043F\u043A\u0443')} \u00AB${folder.name}\u00BB?`);
+      const confirmed = (await win.BananzaDialogs.confirm?.(`${tx('\u0423\u0434\u0430\u043B\u0438\u0442\u044C \u043F\u0430\u043F\u043A\u0443')} \u00AB${folder.name}\u00BB?`));
       if (!confirmed) return false;
       await api(`/api/chat-folders/${folderId}`, { method: 'DELETE' });
       await loadChatFolders({ silent: true });

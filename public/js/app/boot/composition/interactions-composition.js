@@ -170,7 +170,7 @@
         esc,
         t,
         tx,
-        confirm: (message) => confirm(message),
+        confirm: async (message) => (await window.BananzaDialogs.confirm(message)),
         getFloatingActions: () => floatingMessageActionsController,
         getReactions: () => reactionController,
         getForwarding: () => forwardingController,

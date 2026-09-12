@@ -135,7 +135,7 @@ test('performance baseline helper is loaded early and initial app scripts stay b
   const indexHtml = readRelative('public/index.html');
   const scripts = [...indexHtml.matchAll(/<script\s+src="([^"]+)"/g)].map((match) => match[1]);
   const appScripts = scripts
-    .filter((src) => src.startsWith('/js/app'))
+    .filter((src) => (src.startsWith('/js/app/') || src.split('?')[0] === '/js/app.js'))
     .map((src) => src.split('?')[0]);
 
   assert.ok(appScripts.includes('/js/app/performance.js'), 'performance helper must be in the app script graph');

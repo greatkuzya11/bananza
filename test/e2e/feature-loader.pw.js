@@ -49,6 +49,7 @@ test('feature loader bridge exposes registered packs and avoids duplicate static
     'local-providers-runtime',
     'media-viewer',
     'openai-runtime',
+    'profile-avatar-camera',
     'search',
     'settings',
   ]);
@@ -60,7 +61,8 @@ test('feature loader bridge exposes registered packs and avoids duplicate static
   expect(preloadByFeature['openai-runtime']).toBe('interaction');
 
   const initialAppScriptCount = await page.locator('script[src*="/js/app/"]').count();
-  expect(initialAppScriptCount).toBeLessThanOrEqual(95);
+  // The shell has 99 app scripts; the idle profile-camera pack can add one.
+  expect(initialAppScriptCount).toBeLessThanOrEqual(100);
   await expect(page.locator('script[src*="/js/app/admin/"]')).toHaveCount(0);
   await expect(page.locator('script[src*="/js/app/ai-admin/shared.js"]')).toHaveCount(0);
   await expect(page.locator('script[src*="/js/app/ai-admin/events.js"]')).toHaveCount(0);

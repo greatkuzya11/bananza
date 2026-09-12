@@ -537,6 +537,7 @@ function buildBackupManifest({
     excluded: [...excluded],
     uploads,
     notes: [
+      'User appearance preferences are stored in SQLite. The bananzaAppearance browser cache is device-local, contains only theme/mode IDs, and is not included in server backups.',
       '.env, .env.local, call recordings, and speech recognition models are opt-in backup components.',
       'Whisper runtime/binaries, FFmpeg, node_modules, and deployment service configuration are external dependencies and are not included. Run npm install and reinstall runtime dependencies after restore.',
       'Encrypted integration settings, including Telegram bot tokens, require the included .secret file after restore.',

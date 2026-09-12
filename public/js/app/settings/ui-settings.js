@@ -182,14 +182,14 @@
       if (!picker) return;
       const mode = visualModeMeta(currentVisualMode());
       picker.innerHTML = UI_THEMES.map(theme => `
-      <button type="button" class="theme-card${theme.id === currentUiTheme() ? ' active' : ''}" data-theme="${theme.id}">
+      <button type="button" class="theme-card${theme.id === currentUiTheme() ? ' active' : ''}" data-theme="${theme.id}" aria-pressed="${theme.id === currentUiTheme()}">
         <span class="theme-card-swatches">
           <span style="background:${theme.colors[0]}"></span>
           <span style="background:${theme.colors[1]}"></span>
         </span>
         <span class="theme-card-copy">
-          <strong>${esc(theme.name)}</strong>
-          <small>${esc(theme.note)} &middot; Rich Banan UX ${visualModeStateLabel(mode.id)}</small>
+          <strong>${esc(t(theme.name))}</strong>
+          <small>${esc(t(theme.note))} &middot; ${esc(t(mode.name))}</small>
         </span>
         <span class="theme-card-preview theme-card-preview--${mode.id}" aria-hidden="true">
           <i style="background:${theme.other}"></i>
@@ -203,28 +203,54 @@
       const nextTheme = normalizeUiTheme(theme);
       setCurrentUiTheme(nextTheme);
       doc.documentElement.dataset.uiTheme = nextTheme;
+      win.BananzaAppearance?.apply(doc, { theme: nextTheme, mode: currentVisualMode() });
       if (getCurrentUser()) updateCurrentUserPatch({ ui_theme: nextTheme }, persist);
       renderThemePicker();
     }
 
-    async function selectUiTheme(theme) {
-      const nextTheme = normalizeUiTheme(theme);
-      if (nextTheme === currentUiTheme()) return;
-      const prevTheme = currentUiTheme();
-      applyUiTheme(nextTheme);
-      setThemeStatus('Saving...');
-      try {
-        const res = await api('/api/user/theme', { method: 'PATCH', body: { theme: nextTheme } });
-        setCurrentUser({ ...getCurrentUser(), ...res.user });
-        applyUiTheme(getCurrentUser()?.ui_theme);
-        setThemeStatus('Saved', 'success');
-        win.setTimeout(() => {
-          if (byId('settingsThemeStatus')?.textContent === tx('Saved')) setThemeStatus('');
-        }, 1200);
-      } catch (e) {
-        applyUiTheme(prevTheme);
-        setThemeStatus(e.message || 'Theme save failed', 'error');
-      }
+    let appearanceSaveQueue = Promise.resolve();
+    const appearanceRevisions = { theme: 0, mode: 0 };
+    let confirmedAppearance = null;
+
+    function saveAppearance(kind, value) {
+      if (!confirmedAppearance) confirmedAppearance = { theme: currentUiTheme(), mode: currentVisualMode() };
+      const isTheme = kind === 'theme';
+      const apply = isTheme ? applyUiTheme : applyVisualMode;
+      const status = isTheme ? setThemeStatus : setVisualModeStatus;
+      const revision = ++appearanceRevisions[kind];
+      apply(value);
+      status('Saving...');
+      const save = async () => {
+        try {
+          const field = isTheme ? 'ui_theme' : 'ui_visual_mode';
+          const res = await api(isTheme ? '/api/user/theme' : '/api/user/visual-mode', {
+            method: 'PATCH', body: { [kind]: value },
+          });
+          const normalize = isTheme ? normalizeUiTheme : normalizeVisualMode;
+          confirmedAppearance[kind] = normalize(res.user?.[field] ?? value);
+          // Responses contain the whole user. Only merge the field this request owns.
+          if (appearanceRevisions[kind] === revision) {
+            apply(confirmedAppearance[kind]);
+            status('Saved', 'success');
+            win.setTimeout(() => {
+              if (appearanceRevisions[kind] === revision) status('');
+            }, 1200);
+          }
+        } catch (error) {
+          if (appearanceRevisions[kind] === revision) {
+            apply(confirmedAppearance[kind]);
+            status(isTheme ? 'Theme save failed' : 'Visual mode save failed', 'error');
+          }
+        }
+      };
+      appearanceSaveQueue = appearanceSaveQueue.then(save, save);
+      return appearanceSaveQueue;
+    }
+
+    function selectUiTheme(theme) {
+      const next = normalizeUiTheme(theme);
+      if (next === currentUiTheme()) return Promise.resolve();
+      return saveAppearance('theme', next);
     }
 
     function setThemeStatus(message, type = '') {
@@ -328,13 +354,13 @@
       const picker = byId('settingsVisualModePicker');
       if (!picker) return;
       picker.innerHTML = UI_VISUAL_MODES.map(mode => `
-      <button type="button" class="visual-mode-card${mode.id === currentVisualMode() ? ' active' : ''}" data-visual-mode-option="${mode.id}">
+      <button type="button" class="visual-mode-card${mode.id === currentVisualMode() ? ' active' : ''}" data-visual-mode-option="${mode.id}" aria-pressed="${mode.id === currentVisualMode()}">
         <span class="visual-mode-card-preview visual-mode-card-preview--${mode.id}" aria-hidden="true">
           <i></i><i></i><i></i>
         </span>
         <span class="visual-mode-card-copy">
-          <strong>${esc(mode.name)}</strong>
-          <small>${esc(mode.note)}</small>
+          <strong>${esc(t(mode.name))}</strong>
+          <small>${esc(t(mode.note))}</small>
         </span>
       </button>
     `).join('');
@@ -344,29 +370,16 @@
       const nextMode = normalizeVisualMode(mode);
       setCurrentVisualMode(nextMode);
       doc.documentElement.dataset.visualMode = nextMode;
+      win.BananzaAppearance?.apply(doc, { theme: currentUiTheme(), mode: nextMode });
       if (getCurrentUser()) updateCurrentUserPatch({ ui_visual_mode: nextMode }, persist);
       renderVisualModePicker();
       renderThemePicker();
     }
 
-    async function selectVisualMode(mode) {
-      const nextMode = normalizeVisualMode(mode);
-      if (nextMode === currentVisualMode()) return;
-      const prevMode = currentVisualMode();
-      applyVisualMode(nextMode);
-      setVisualModeStatus('Saving...');
-      try {
-        const res = await api('/api/user/visual-mode', { method: 'PATCH', body: { mode: nextMode } });
-        setCurrentUser({ ...getCurrentUser(), ...res.user });
-        applyVisualMode(getCurrentUser()?.ui_visual_mode);
-        setVisualModeStatus('Saved', 'success');
-        win.setTimeout(() => {
-          if (byId('settingsVisualModeStatus')?.textContent === tx('Saved')) setVisualModeStatus('');
-        }, 1200);
-      } catch (e) {
-        applyVisualMode(prevMode);
-        setVisualModeStatus(e.message || 'Visual mode save failed', 'error');
-      }
+    function selectVisualMode(mode) {
+      const next = normalizeVisualMode(mode);
+      if (next === currentVisualMode()) return Promise.resolve();
+      return saveAppearance('mode', next);
     }
 
     function setVisualModeStatus(message, type = '') {

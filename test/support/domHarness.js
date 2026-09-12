@@ -14,6 +14,7 @@ const appShellScriptPaths = Object.freeze([
   'public/js/app/feature-registry.js',
 ]);
 const appCoreHelperScriptPaths = Object.freeze([
+  'public/js/appearance.js',
   'public/js/app/config.js',
   'public/js/app/i18n-helpers.js',
   'public/js/app/formatters.js',
@@ -439,6 +440,11 @@ function createAppDom() {
     runScripts: 'outside-only',
   });
   installCommonStubs(dom.window);
+  dom.window.BananzaDialogs = {
+    alert: (...args) => Promise.resolve(dom.window.alert(...args)),
+    confirm: (...args) => Promise.resolve(dom.window.confirm(...args)),
+    prompt: (...args) => Promise.resolve(dom.window.prompt(...args)),
+  };
   return dom;
 }
 

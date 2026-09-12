@@ -1423,7 +1423,7 @@
   }
 
   async function deleteOpenAIKey() {
-    if (!confirm(t('Delete saved OpenAI API key?'))) return;
+    if (!(await window.BananzaDialogs.confirm(t('Delete saved OpenAI API key?')))) return;
     setAdminStatus('Deleting key...', 'pending');
     try {
       const data = await getBridge().api('/api/admin/voice-settings/openai-key', {
@@ -1439,7 +1439,7 @@
   }
 
   async function deleteGrokKey() {
-    if (!confirm(t('Delete saved Grok API key?'))) return;
+    if (!(await window.BananzaDialogs.confirm(t('Delete saved Grok API key?')))) return;
     setAdminStatus('Deleting key...', 'pending');
     try {
       const data = await getBridge().api('/api/admin/voice-settings/grok-key', {

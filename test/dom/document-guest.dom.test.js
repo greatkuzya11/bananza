@@ -17,6 +17,7 @@ function createGuestDom(storedUser) {
   });
   if (storedUser) dom.window.localStorage.setItem('user', JSON.stringify(storedUser));
   dom.window.fetch = () => new Promise(() => {});
+  dom.window.eval(fs.readFileSync(path.join(rootDir, 'public/js/appearance.js'), 'utf8'));
   dom.window.eval(guestScript);
   return dom;
 }
@@ -36,7 +37,7 @@ test('document guest page falls back to the default theme for invalid stored val
 test('document guest page uses cache-busted document assets', () => {
   const dom = new JSDOM(documentHtml);
   const document = dom.window.document;
-  assert.equal(document.querySelector('link[rel="stylesheet"]')?.getAttribute('href'), '/css/style.css?v=20260620-doc-image-handles1');
+  assert.equal(document.querySelector('link[rel="stylesheet"]')?.getAttribute('href'), '/css/style.css?v=banan-glass-15');
   assert.ok([...document.querySelectorAll('script')].some((script) => script.getAttribute('src') === '/js/i18n.js?v=20260615-doc-chatshot2'));
   assert.ok([...document.querySelectorAll('script')].some((script) => script.getAttribute('src') === '/js/document-editor.bundle.js?v=20260620-doc-image-handles1'));
   assert.ok([...document.querySelectorAll('script')].some((script) => script.getAttribute('src') === '/js/document-guest.js?v=20260614-doc-v2'));

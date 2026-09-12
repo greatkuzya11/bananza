@@ -2537,7 +2537,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         const chat = getChatById(chatId);
         if (!canLeaveChat(chat)) return;
         const isDocument = isDocumentChat(chat);
-        if (!confirm(t(isDocument ? 'Leave this document?' : 'Leave this chat?'))) return;
+        if (!(await window.BananzaDialogs.confirm(t(isDocument ? 'Leave this document?' : 'Leave this chat?')))) return;
         try {
           await api(`/api/chats/${chatId}/members/me`, { method: 'DELETE' });
           await removeChatLocally(chatId, { clearCache: true }); closeAllModals({ immediate: true });
@@ -2550,7 +2550,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         const chat = getChatById(chatId);
         if (!canManageDestructiveChat(chat)) return;
         const isDocument = isDocumentChat(chat);
-        if (!confirm(t(isDocument ? 'Delete document permanently?' : 'Delete chat permanently?'))) return;
+        if (!(await window.BananzaDialogs.confirm(t(isDocument ? 'Delete document permanently?' : 'Delete chat permanently?')))) return;
         try {
           await api(`/api/chats/${chatId}`, { method: 'DELETE' });
           await removeChatLocally(chatId, { clearCache: true }); closeAllModals({ immediate: true });
@@ -2563,7 +2563,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         const chat = getChatById(chatId);
         if (!canManageDestructiveChat(chat)) return;
         const isDocument = isDocumentChat(chat);
-        if (!confirm(t(isDocument ? 'Clear document content for everyone?' : 'Clear chat history for everyone?'))) return;
+        if (!(await window.BananzaDialogs.confirm(t(isDocument ? 'Clear document content for everyone?' : 'Clear chat history for everyone?')))) return;
         try {
           if (isDocument) {
             const data = await api(`/api/documents/${chatId}/content`, { method: 'DELETE' }); if (data?.chat) applyChatUpdate(data.chat);

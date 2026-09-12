@@ -3,24 +3,8 @@
 
   const i18n = window.BananzaI18n || {};
   const t = typeof i18n.t === 'function' ? i18n.t : (key) => String(key || '');
-  const THEME_IDS = new Set(['bananza', 'banan-hero', 'midnight-ocean', 'nord-aurora', 'rose-pine', 'dracula-neon', 'tokyo-night']);
-  const VISUAL_MODE_IDS = new Set(['classic', 'rich']);
-
-  function readStoredUser() {
-    try {
-      const raw = window.localStorage?.getItem?.('user');
-      return raw ? JSON.parse(raw) : null;
-    } catch (e) {
-      return null;
-    }
-  }
-
   function applySavedTheme() {
-    const user = readStoredUser();
-    const theme = THEME_IDS.has(user?.ui_theme) ? user.ui_theme : 'bananza';
-    const visualMode = VISUAL_MODE_IDS.has(user?.ui_visual_mode) ? user.ui_visual_mode : 'classic';
-    document.documentElement.dataset.uiTheme = theme;
-    document.documentElement.dataset.visualMode = visualMode;
+    window.BananzaAppearance.apply(document, window.BananzaAppearance.read(window.localStorage));
   }
 
   function tokenFromPath() {

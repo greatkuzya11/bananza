@@ -12,6 +12,7 @@ const {
 function loadCoreBase(dom) {
   loadAppShellScripts(dom);
   loadBrowserScripts(dom, [
+    'public/js/appearance.js',
     'public/js/app/config.js',
     'public/js/app/i18n-helpers.js',
     'public/js/app/formatters.js',
@@ -23,6 +24,7 @@ test('BananzaApp.config exposes immutable core constants', () => {
   const dom = createAppDom();
   loadBrowserScripts(dom, [
     'public/js/app/namespace.js',
+    'public/js/appearance.js',
     'public/js/app/config.js',
   ]);
 
@@ -86,6 +88,7 @@ test('attachment URL helpers preserve preview download poster and client URLs', 
   const dom = createAppDom();
   loadBrowserScripts(dom, [
     'public/js/app/namespace.js',
+    'public/js/appearance.js',
     'public/js/app/config.js',
     'public/js/app/attachments.js',
   ]);

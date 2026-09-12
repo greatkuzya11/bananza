@@ -742,7 +742,7 @@
       }
     
       async function deleteGrokAiKey() {
-        if (!confirm('Delete Grok API key for AI bots?')) return;
+        if (!(await window.BananzaDialogs.confirm('Delete Grok API key for AI bots?'))) return;
         try {
           const data = await api('/api/admin/grok-ai-bots/key', { method: 'DELETE' });
           mergeGrokAiState(data);
@@ -841,7 +841,7 @@
       async function disableGrokBot(kind = 'text') {
         const botId = kind === 'text' ? selectedGrokBotId : selectedGrokImageBotId;
         if (!botId) return;
-        if (!confirm(`Disable this Grok ${kind === 'text' ? 'text' : 'image'} bot in all chats?`)) return;
+        if (!(await window.BananzaDialogs.confirm(`Disable this Grok ${kind === 'text' ? 'text' : 'image'} bot in all chats?`))) return;
         try {
           const data = await api(`/api/admin/grok-ai-bots/${botId}`, { method: 'DELETE' });
           mergeGrokAiState(data);
@@ -1054,7 +1054,7 @@
     
       async function disableGrokUniversalBot() {
         if (!selectedGrokUniversalBotId) return;
-        if (!confirm('Disable this Grok universal bot in all chats?')) return;
+        if (!(await window.BananzaDialogs.confirm('Disable this Grok universal bot in all chats?'))) return;
         try {
           const data = await api(`/api/admin/grok-universal-bots/${selectedGrokUniversalBotId}`, { method: 'DELETE' });
           mergeGrokUniversalState(data);

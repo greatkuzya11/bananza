@@ -27,14 +27,17 @@ test('public/index.html keeps expected stylesheet and script order', () => {
 
   assert.deepEqual(styles, [
     '/vendor/leaflet/leaflet.css?v=1.9.4',
-    '/css/style.css?v=20260826-initiative-resilience',
+    '/css/style.css?v=banan-glass-15',
     '/css/calls.css?v=20260621-call-mobile-controls',
     '/css/voice.css',
     '/css/telegram-transcription.css?v=20260821-telegram-history2',
-    '/css/video-notes.css',
+    '/css/video-notes.css?v=glass-bubbles-1',
   ]);
 
   assert.deepEqual(scripts, [
+    '/js/appearance.js',
+    '/js/ui-icons.js?v=6',
+    '/js/dialogs.js',
     '/js/sounds.js',
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
@@ -60,7 +63,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/mobile-viewport.js?v=20260531-dom-mobile-shell',
     '/js/app/chat-header-actions.js?v=20260531-dom-mobile-shell',
     '/js/app/shell/mobile-composer-guard.js?v=20260621-ios-keyboard1',
-    '/js/app/shell/events.js?v=20260708-folder-mouse-swipe',
+    '/js/app/shell/events.js?v=20260708-folder-mouse-swipe-glass-spin',
     '/js/app/shell/ui-runtime.js?v=20260705-api-tokens',
     '/js/app/shell/shell-runtime.js?v=20260702-maps2',
     '/js/app/shell/mobile-runtime-adapters.js?v=20260601-runtime-final',
@@ -70,7 +73,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/settings/map-settings.js?v=20260702-maps4',
     '/js/app/settings/notification-settings.js?v=20260531-settings',
     '/js/app/settings/sound-settings.js?v=20260531-settings',
-    '/js/app/settings/settings-modal.js?v=20260705-api-tokens',
+    '/js/app/settings/settings-modal.js?v=20260705-api-tokens-glass-spin',
     '/js/app/folders/store.js?v=20260531-folders',
     '/js/app/folders/ui.js?v=20260826-folder-context-i18n',
     '/js/app/folders/actions.js?v=20260531-folders',

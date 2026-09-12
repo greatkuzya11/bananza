@@ -713,7 +713,7 @@
       }
     
       async function deleteAiBotKey() {
-        if (!confirm('\u0423\u0434\u0430\u043b\u0438\u0442\u044c OpenAI API key \u0434\u043b\u044f AI-\u0431\u043e\u0442\u043e\u0432?')) return;
+        if (!(await window.BananzaDialogs.confirm('\u0423\u0434\u0430\u043b\u0438\u0442\u044c OpenAI API key \u0434\u043b\u044f AI-\u0431\u043e\u0442\u043e\u0432?'))) return;
         try {
           const data = await api('/api/admin/ai-bots/openai-key', { method: 'DELETE' });
           mergeAiBotState(data);
@@ -820,7 +820,7 @@
     
       async function disableAiBot() {
         if (!selectedAiBotId) return;
-        if (!confirm('\u041e\u0442\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u044d\u0442\u043e\u0433\u043e \u0431\u043e\u0442\u0430 \u0432\u043e \u0432\u0441\u0435\u0445 \u0447\u0430\u0442\u0430\u0445?')) return;
+        if (!(await window.BananzaDialogs.confirm('\u041e\u0442\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u044d\u0442\u043e\u0433\u043e \u0431\u043e\u0442\u0430 \u0432\u043e \u0432\u0441\u0435\u0445 \u0447\u0430\u0442\u0430\u0445?'))) return;
         try {
           const data = await api(`/api/admin/ai-bots/${selectedAiBotId}`, { method: 'DELETE' });
           mergeAiBotState(data);
@@ -1008,7 +1008,7 @@
     
       async function disableOpenAiUniversalBot() {
         if (!selectedOpenAiUniversalBotId) return;
-        if (!confirm('Disable this OpenAI universal bot in all chats?')) return;
+        if (!(await window.BananzaDialogs.confirm('Disable this OpenAI universal bot in all chats?'))) return;
         try {
           const data = await api(`/api/admin/openai-universal-bots/${selectedOpenAiUniversalBotId}`, { method: 'DELETE' });
           mergeOpenAiUniversalState(data);
@@ -1349,7 +1349,7 @@
     
       async function disableOpenAiImageBot() {
         if (!selectedOpenAiImageBotId) return;
-        if (!confirm('Disable this OpenAI image bot in all chats?')) return;
+        if (!(await window.BananzaDialogs.confirm('Disable this OpenAI image bot in all chats?'))) return;
         try {
           const data = await api(`/api/admin/openai-image-bots/${selectedOpenAiImageBotId}`, { method: 'DELETE' });
           mergeOpenAiImageState(data);

@@ -30,6 +30,7 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
     const scenario = await createBasicChatScenario(sandbox.baseUrl);
     const { admin, bob } = scenario;
     const liveDb = new Database(path.join(sandbox.appDir, 'bananza.db'));
+    liveDb.prepare("UPDATE users SET ui_theme='pearl', ui_visual_mode='glass'").run();
     let initiativeRuleId;
     let telegramBotId;
     const telegramImageUpdateId = 987654;
@@ -261,6 +262,8 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
       assert.deepEqual(telegramImageJob.image_data, tinyPngBuffer());
       assert.equal(telegramImageJob.stored_image_path, path.posix.join('telegram', String(telegramBotId), 'backup-image.png'));
       assert.equal(fs.existsSync(path.join(sandbox.appDir, 'uploads', ...telegramImageJob.stored_image_path.split('/'))), true);
+      const appearance = restoredDb.prepare("SELECT ui_theme,ui_visual_mode FROM users WHERE ui_visual_mode='glass' LIMIT 1").get();
+      assert.deepEqual(appearance, { ui_theme: 'pearl', ui_visual_mode: 'glass' });
       assert.equal(restoredDb.pragma('integrity_check', { simple: true }), 'ok');
     } finally {
       restoredDb.close();

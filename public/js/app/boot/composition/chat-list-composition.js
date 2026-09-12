@@ -61,7 +61,7 @@
           },
         },
         actions: {
-          alert: (message) => alert(message),
+          alert: async (message) => (await window.BananzaDialogs.alert(message)),
           compareChatsForFolder: (folderId, a, b) => compareChatsForFolder(folderId, a, b),
           getCurrentChatId: () => currentChatId,
           hideChatContextMenu: (options = {}) => hideChatContextMenu(options),

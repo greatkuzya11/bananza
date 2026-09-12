@@ -85,8 +85,8 @@
           formatTime,
           tx: (textValue, params = {}) => tx(textValue, params),
           copyTextToClipboard: (textValue) => copyTextToClipboard(textValue),
-          alert: (message) => alert(message),
-          confirm: (message) => confirm(message),
+          alert: async (message) => (await window.BananzaDialogs.alert(message)),
+          confirm: async (message) => (await window.BananzaDialogs.confirm(message)),
           openAdminBotAuditModal: (userId, displayName) => openAdminBotAuditModal(userId, displayName),
           });
           resolvedAdminControllers = {

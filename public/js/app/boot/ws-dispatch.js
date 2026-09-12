@@ -12,8 +12,8 @@
         onOpen: () => {
           if (chatListStore.isInitialChatLoadFinished()) scheduleRecoverySync('ws-open');
         },
-        onBlocked: () => {
-          alert('Your account has been blocked by an administrator.');
+        onBlocked: async () => {
+          (await window.BananzaDialogs.alert('Your account has been blocked by an administrator.'));
           logout();
         },
         onStateChange: () => syncCoreStateFromRuntime(),

@@ -44,7 +44,7 @@
         getCurrentUser: () => currentUser,
         getCurrentChatId: () => currentChatId,
         actions: {
-          alert: (message) => alert(message),
+          alert: async (message) => (await window.BananzaDialogs.alert(message)),
           isClientSideMessage: (msg) => isClientSideMessage(msg),
           isPollMessage: (msg) => isPollMessage(msg),
           isCurrentNotesChat: () => isCurrentNotesChat(),
@@ -75,7 +75,7 @@
         esc,
         formatSize,
         actions: {
-          alert: (message) => alert(message),
+          alert: async (message) => (await window.BananzaDialogs.alert(message)),
           localAttachmentFromFile: (file) => localAttachmentFromFile(file),
           updateComposerAiOverrideState: () => updateComposerAiOverrideState().catch(() => {}),
           refreshPollComposerActionState: () => refreshPollComposerActionState(),
@@ -100,7 +100,7 @@
         storage: localStorage,
         api: (url, opts) => api(url, opts),
         actions: {
-          alert: (message) => alert(message),
+          alert: async (message) => (await window.BananzaDialogs.alert(message)),
           openModal: (id, options = {}) => openModal(id, options),
           closeModal: (id, options = {}) => closeModal(id, options),
           queueLocationOutbox: (payload) => messageOutbox?.queueLocationOutbox?.(payload),
@@ -119,7 +119,7 @@
         config: { MAX_MSG },
         getCurrentChatId: () => currentChatId,
         actions: {
-          alert: (message) => alert(message),
+          alert: async (message) => (await window.BananzaDialogs.alert(message)),
           captureScrollAnchor: () => captureScrollAnchor(),
           applyMessageUpdate: (message, options = {}) => applyMessageUpdate(message, options),
           restoreScrollAnchor: (anchor, attempts) => restoreScrollAnchor(anchor, attempts),
@@ -223,7 +223,7 @@
         getCurrentChatId: () => currentChatId,
         getCurrentUser: () => currentUser,
         actions: {
-          alert: (message) => alert(message),
+          alert: async (message) => (await window.BananzaDialogs.alert(message)),
           normalizePollStyle: (style) => normalizePollStyle(style),
           getPollComposerStyle: () => pollComposerStyle,
           setPollComposerStyle: (value) => { pollComposerStyle = value; },

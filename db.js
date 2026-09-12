@@ -1,3 +1,4 @@
+const appearanceCatalog = require('./public/js/appearance');
 const Database = require('better-sqlite3');
 const path = require('path');
 const { initVoiceSchema } = require('./voice/schema');
@@ -475,7 +476,7 @@ try {
 } catch {
   db.exec("ALTER TABLE users ADD COLUMN ui_visual_mode TEXT DEFAULT 'classic'");
 }
-db.prepare("UPDATE users SET ui_visual_mode='classic' WHERE ui_visual_mode IS NULL OR TRIM(ui_visual_mode)='' OR ui_visual_mode NOT IN ('classic','rich')").run();
+db.prepare(`UPDATE users SET ui_visual_mode='classic' WHERE ui_visual_mode IS NULL OR ui_visual_mode NOT IN (${appearanceCatalog.modeIds.map(() => '?').join(',')})`).run(...appearanceCatalog.modeIds);
 try {
   db.prepare("SELECT ui_modal_animation FROM users LIMIT 1").get();
 } catch {

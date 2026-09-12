@@ -2,15 +2,18 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
+  <script src="/js/appearance.js"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
   <title>🍌 BananZa</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍌</text></svg>">
   <link rel="stylesheet" href="/vendor/leaflet/leaflet.css?v=1.9.4">
-  <link rel="stylesheet" href="/css/style.css?v=20260826-initiative-resilience">
+  <link rel="stylesheet" href="/css/style.css?v=banan-glass-15">
   <link rel="stylesheet" href="/css/calls.css?v=20260621-call-mobile-controls">
   <link rel="stylesheet" href="/css/voice.css">
   <link rel="stylesheet" href="/css/telegram-transcription.css?v=20260821-telegram-history2">
-  <link rel="stylesheet" href="/css/video-notes.css">
+  <link rel="stylesheet" href="/css/video-notes.css?v=glass-bubbles-1">
+  <script defer src="/js/ui-icons.js?v=6"></script>
+  <script src="/js/dialogs.js"></script>
 </head>
 <body>
   <div id="app">
@@ -508,17 +511,17 @@
         <button class="modal-close">✕</button>
       </div>
       <div class="modal-body">
-        <div id="settingsThemeBlock" class="theme-settings-block">
-          <div id="settingsThemePicker" class="theme-picker"></div>
-          <div id="settingsThemeStatus" class="theme-settings-status"></div>
-        </div>
-        <hr class="settings-divider">
-        <div id="settingsVisualModeBlock" class="theme-settings-block">
-          <h4 class="settings-section-title" data-i18n="🍌 Rich Banan UX">&#127820; Rich Banan UX</h4>
-          <div class="settings-hint visual-mode-hint">Keeps your selected theme colors, but changes the depth, gradients and surfaces.</div>
+        <section id="settingsVisualModeBlock" class="theme-settings-block" aria-labelledby="settingsDesignTitle">
+          <h4 id="settingsDesignTitle" class="settings-section-title" data-i18n="Interface design">Interface design</h4>
           <div id="settingsVisualModePicker" class="visual-mode-picker"></div>
-          <div id="settingsVisualModeStatus" class="theme-settings-status"></div>
-        </div>
+          <div id="settingsVisualModeStatus" class="theme-settings-status" role="status"></div>
+        </section>
+        <hr class="settings-divider">
+        <section id="settingsThemeBlock" class="theme-settings-block" aria-labelledby="settingsColorTitle">
+          <h4 id="settingsColorTitle" class="settings-section-title" data-i18n="Color theme">Color theme</h4>
+          <div id="settingsThemePicker" class="theme-picker"></div>
+          <div id="settingsThemeStatus" class="theme-settings-status" role="status"></div>
+        </section>
       </div>
     </div>
   </div>
@@ -2638,10 +2641,10 @@
           </div>
         </div>
 
-        <h4 style="margin-bottom:12px;color:#7e8b99">Members</h4>
+        <h4 style="margin-bottom:12px;color:var(--text-secondary)">Members</h4>
         <div id="chatMemberList" class="user-list"></div>
         <div id="addMemberWrap" class="hidden" style="margin-top:16px">
-          <h4 style="margin-bottom:12px;color:#7e8b99">Add Member</h4>
+          <h4 style="margin-bottom:12px;color:var(--text-secondary)">Add Member</h4>
           <div id="addMemberList" class="user-list"></div>
         </div>
       </div>
@@ -2863,7 +2866,7 @@
     <script src="/js/app/mobile-viewport.js?v=20260531-dom-mobile-shell"></script>
     <script src="/js/app/chat-header-actions.js?v=20260531-dom-mobile-shell"></script>
     <script src="/js/app/shell/mobile-composer-guard.js?v=20260621-ios-keyboard1"></script>
-    <script src="/js/app/shell/events.js?v=20260708-folder-mouse-swipe"></script>
+    <script src="/js/app/shell/events.js?v=20260708-folder-mouse-swipe-glass-spin"></script>
     <script src="/js/app/shell/ui-runtime.js?v=20260705-api-tokens"></script>
     <script src="/js/app/shell/shell-runtime.js?v=20260702-maps2"></script>
     <script src="/js/app/shell/mobile-runtime-adapters.js?v=20260601-runtime-final"></script>
@@ -2873,7 +2876,7 @@
   <script src="/js/app/settings/map-settings.js?v=20260702-maps4"></script>
   <script src="/js/app/settings/notification-settings.js?v=20260531-settings"></script>
   <script src="/js/app/settings/sound-settings.js?v=20260531-settings"></script>
-  <script src="/js/app/settings/settings-modal.js?v=20260705-api-tokens"></script>
+  <script src="/js/app/settings/settings-modal.js?v=20260705-api-tokens-glass-spin"></script>
   <script src="/js/app/folders/store.js?v=20260531-folders"></script>
   <script src="/js/app/folders/ui.js?v=20260826-folder-context-i18n"></script>
   <script src="/js/app/folders/actions.js?v=20260531-folders"></script>

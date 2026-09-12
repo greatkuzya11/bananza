@@ -56,7 +56,12 @@ test('desktop message actions cover reply, edit, react, pin, unpin and delete', 
   await expect(editedRow.locator('.msg-pin-btn.active')).toHaveCount(0);
 
   const editedMessageId = await editedRow.getAttribute('data-msg-id');
-  await editedRow.hover();
-  await editedRow.locator('.msg-delete-btn').click({ force: true });
+  await clickMessageAction(page, editedRow, '.msg-delete-btn', testInfo);
+  await expect(page.locator('#appDialog')).toBeVisible();
+  await page.locator('#appDialog .app-dialog-cancel').click();
+  await expect(editedRow.locator('.msg-text')).toContainText(editedText);
+  await expect(page.locator('#appDialog')).toBeHidden();
+  await clickMessageAction(page, editedRow, '.msg-delete-btn', testInfo);
+  await page.locator('#appDialog [type="submit"]').click();
   await expect(page.locator(`.msg-row[data-msg-id="${editedMessageId}"] .msg-deleted`)).toBeVisible();
 });

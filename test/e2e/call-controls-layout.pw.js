@@ -6,10 +6,10 @@ const { repoRoot } = require('../support/paths');
 
 const callsCss = fs.readFileSync(path.join(repoRoot, 'public', 'css', 'calls.css'), 'utf8');
 
-function renderCallControlsHtml() {
+function renderCallControlsHtml(glass = false) {
   return `
     <!doctype html>
-    <html>
+    <html ${glass ? 'data-visual-mode="glass" data-color-scheme="light" data-ui-theme="pearl"' : ''}>
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
@@ -29,6 +29,7 @@ function renderCallControlsHtml() {
             margin: 0;
             background: #0e1621;
           }
+          ${glass ? fs.readFileSync(path.join(repoRoot, 'public/css/style.css'), 'utf8') : ''}
           ${callsCss}
         </style>
       </head>
@@ -74,4 +75,19 @@ test('mobile call controls keep eight active buttons in one row', async ({ page 
     expect(result.lineCount, `line count at ${width}px`).toBe(1);
     expect(result.scrollWidth, `scroll width at ${width}px`).toBeLessThanOrEqual(result.clientWidth + 1);
   }
+});
+
+test('glass mobile call controls keep accessible targets without horizontal overflow', async ({ page }, testInfo) => {
+  test.skip(!String(testInfo.project.name).includes('mobile'));
+  for (const width of [320, 360, 414]) {
+    await page.setViewportSize({ width, height: 720 });
+    await page.setContent(renderCallControlsHtml(true));
+    const sizes = await page.locator('.call-controls').evaluate(el => ({
+      overflow: el.scrollWidth - el.clientWidth,
+      buttons: [...el.querySelectorAll('button')].map(button => ({ width: button.getBoundingClientRect().width, height: button.getBoundingClientRect().height })),
+    }));
+    expect(sizes.overflow).toBeLessThanOrEqual(1);
+    for (const size of sizes.buttons) { expect(size.width).toBeGreaterThanOrEqual(44); expect(size.height).toBeGreaterThanOrEqual(44); }
+  }
+  await page.screenshot({ path: testInfo.outputPath('glass-call-controls.png') });
 });
