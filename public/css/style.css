@@ -10039,7 +10039,8 @@ html[data-visual-mode="glass"] :is(#sidebar, .chat-header, .input-area, .pinned-
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
   backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
 }
-html[data-visual-mode="glass"] #sidebar { border-right: 1px solid var(--glass-line); }
+/* Lists own scrolling; rotating footer controls must not create a sidebar scrollbar. */
+html[data-visual-mode="glass"] #sidebar { border-right: 1px solid var(--glass-line); overflow-y: hidden; }
 html[data-visual-mode="glass"] #pinnedBar {
   --glass-pin-height: 56px;
   background: var(--glass-sheen), var(--glass-dialog);
@@ -10279,6 +10280,8 @@ html[data-visual-mode="glass"] .login-body .language-switch button.active { back
 @media (max-width: 768px) {
   html[data-visual-mode="glass"] { --glass-blur: 12px; }
   html[data-visual-mode="glass"] #sidebar { border-right: 0; }
+  /* Keep the inactive welcome/chat scene from showing through the mobile glass sidebar, even before boot. */
+  html[data-visual-mode="glass"] #sidebar:not(.sidebar-hidden) ~ #chatArea { visibility: hidden; }
   html[data-visual-mode="glass"] .chat-header { padding: 2px 10px; gap: 8px; }
   html[data-visual-mode="glass"] .input-area { padding: 4px 10px; }
   html[data-visual-mode="glass"] .modal-header { padding: 14px 16px; }

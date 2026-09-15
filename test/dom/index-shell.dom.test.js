@@ -27,7 +27,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
 
   assert.deepEqual(styles, [
     '/vendor/leaflet/leaflet.css?v=1.9.4',
-    '/css/style.css?v=banan-glass-20',
+    '/css/style.css?v=banan-glass-22',
     '/css/calls.css?v=20260621-call-mobile-controls',
     '/css/voice.css?v=glass-composer-1',
     '/css/telegram-transcription.css?v=20260915-settings-spacing',
@@ -36,8 +36,8 @@ test('public/index.html keeps expected stylesheet and script order', () => {
 
   assert.deepEqual(scripts, [
     '/js/appearance.js',
-    '/js/ui-icons.js?v=6',
     '/js/dialogs.js',
+    '/js/ui-icons.js?v=7',
     '/js/sounds.js',
     '/js/messageCache.js',
     '/js/ai-image-risk.js',

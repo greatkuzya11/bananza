@@ -104,7 +104,8 @@
       });
       if (!pending.size || scheduled) return;
       scheduled = true;
-      requestAnimationFrame(() => {
+      // Decorate mutations before paint, including cached UI rendered during startup.
+      queueMicrotask(() => {
         scheduled = false;
         const nodes = [...pending]; pending.clear();
         nodes.forEach(node => { if (node.isConnected) scan(node); });
@@ -112,6 +113,6 @@
     });
     observer.observe(document.body, { childList: true, subtree: true, characterData: true });
   }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
+  if (!document.body) document.addEventListener('DOMContentLoaded', start, { once: true });
   else start();
 })();

@@ -4,6 +4,24 @@ const { createAppDom, loadAppRuntimeScripts, loadBrowserScript } = require('../s
 const catalog = require('../../public/js/appearance');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
+test('UI icons initialize before DOMContentLoaded and decorate mutations without waiting for a frame', async () => {
+  const dom = createAppDom();
+  const win = dom.window;
+  try {
+    Object.defineProperty(win.document, 'readyState', { configurable: true, value: 'loading' });
+    win.requestAnimationFrame = () => { throw new Error('Icon replacement must not wait for another frame'); };
+    const button = win.document.createElement('button');
+    button.textContent = '\u2699 Settings';
+    win.document.body.append(button);
+    loadBrowserScript(dom, 'public/js/ui-icons.js');
+    assert.equal(button.querySelector('.ui-glyph')?.dataset.icon, 'settings');
+    button.textContent = '\ud83d\udd0d Search';
+    await tick();
+    assert.equal(button.querySelector('.ui-glyph')?.dataset.icon, 'search');
+    assert.equal(button.querySelectorAll('.ui-icon-legacy').length, 1);
+  } finally { win.close(); }
+});
+
 test('appearance catalog applies all 33 combinations and restores a safe local preference', () => {
   const dom = createAppDom();
   try {
