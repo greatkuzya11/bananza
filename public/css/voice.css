@@ -720,9 +720,16 @@ html[data-visual-mode="glass"] :is(.voice-provider-panel, .voice-selected-model-
 html[data-visual-mode="glass"] :is(.voice-inline-btn, .voice-transcribe-btn, .voice-footer-play) { border-radius: 16px; min-height: 44px; color: var(--text-primary); background-color: var(--glass-control); border-color: var(--border-light); }
 
 html[data-visual-mode="glass"] .send-btn.voice-enabled.is-mic-mode {
-  background: var(--glass-control) !important; color: var(--accent); border-radius: 50%; border: 1px solid var(--border-light);
+  background: transparent !important; color: var(--accent); border-radius: 50%; border: 0; box-shadow: none;
 }
 html[data-visual-mode="glass"] .send-btn.voice-enabled.is-mic-mode::before {
+  width: 20px; height: 20px;
   -webkit-mask-image: url('/vendor/lucide/mic.svg'); mask-image: url('/vendor/lucide/mic.svg');
+}
+/* Keep the recording hit target inside its own composer column. */
+html[data-visual-mode="glass"] .send-btn.voice-enabled.is-mic-mode::after { width: 44px; height: 44px; }
+html[data-visual-mode="glass"] .send-btn.voice-enabled.is-mic-mode:active:not(:disabled) { background: var(--bg-hover) !important; }
+@media (hover: hover) {
+  html[data-visual-mode="glass"] .send-btn.voice-enabled.is-mic-mode:hover:not(:disabled) { background: var(--bg-hover) !important; }
 }
 html[data-visual-mode="glass"] .send-btn.voice-enabled.is-recording { color: var(--danger); }

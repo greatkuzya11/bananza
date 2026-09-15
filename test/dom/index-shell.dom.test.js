@@ -27,10 +27,10 @@ test('public/index.html keeps expected stylesheet and script order', () => {
 
   assert.deepEqual(styles, [
     '/vendor/leaflet/leaflet.css?v=1.9.4',
-    '/css/style.css?v=banan-glass-15',
+    '/css/style.css?v=banan-glass-20',
     '/css/calls.css?v=20260621-call-mobile-controls',
-    '/css/voice.css',
-    '/css/telegram-transcription.css?v=20260821-telegram-history2',
+    '/css/voice.css?v=glass-composer-1',
+    '/css/telegram-transcription.css?v=20260915-settings-spacing',
     '/css/video-notes.css?v=glass-bubbles-1',
   ]);
 

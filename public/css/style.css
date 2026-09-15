@@ -10062,11 +10062,34 @@ html[data-visual-mode="glass"] .pinned-bar .pinned-bar-close { width: 32px; heig
 }
 /* The sidebar is already one glass surface; its children must not stack opaque coats. */
 html[data-visual-mode="glass"] :is(.sidebar-header, .sidebar-footer) { background: transparent; }
-html[data-visual-mode="glass"] .sidebar-header { padding: 5px 14px; gap: 8px; }
-html[data-visual-mode="glass"] .sidebar-footer { padding: 12px; }
-html[data-visual-mode="glass"] .chat-header { padding: 12px 16px; gap: 12px; }
-html[data-visual-mode="glass"] .input-area { padding: 12px 16px; border-top: 1px solid var(--glass-line); }
-html[data-visual-mode="glass"] :is(.input-row, .composer-input-wrap) { border-radius: 24px; }
+html[data-visual-mode="glass"] .sidebar-header { padding: 2px 14px; gap: 8px; }
+html[data-visual-mode="glass"] .sidebar-footer { padding: 2px 12px; }
+html[data-visual-mode="glass"] :is(.sidebar-header, .sidebar-footer) > .icon-btn {
+  width: 44px; height: 44px; background: transparent; border: 0; box-shadow: none;
+}
+html[data-visual-mode="glass"] :is(.sidebar-header, .sidebar-footer) > .icon-btn :is(.ui-glyph, svg) {
+  width: 20px; height: 20px;
+}
+/* The search toggle's legacy transparent background is important too. */
+html[data-visual-mode="glass"] :is(.sidebar-header, .sidebar-footer) > .icon-btn:active:not(:disabled) {
+  background: var(--bg-hover) !important;
+}
+@media (hover: hover) {
+  html[data-visual-mode="glass"] :is(.sidebar-header, .sidebar-footer) > .icon-btn:hover:not(:disabled) {
+    background: var(--bg-hover) !important;
+  }
+}
+html[data-visual-mode="glass"] :is(.sidebar-header, .sidebar-footer) > .icon-btn:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: -2px;
+}
+html[data-visual-mode="glass"] #currentUserInfo {
+  flex: 0 1 auto; margin-right: auto;
+  background: transparent; outline: none; box-shadow: none;
+}
+html[data-visual-mode="glass"] #currentUserInfo:active { background: var(--bg-hover); }
+html[data-visual-mode="glass"] .chat-header { padding: 2px 16px; min-height: 49px; gap: 12px; }
+html[data-visual-mode="glass"] .input-area { padding: 4px 16px; border-top: 1px solid var(--glass-line); }
+html[data-visual-mode="glass"] :is(.input-row, .composer-input-wrap) { border-radius: 16px; }
 html[data-visual-mode="glass"] .chat-item { border-radius: 16px; margin: 3px 8px; padding: 12px; border: 1px solid transparent; }
 html[data-visual-mode="glass"] .chat-item:hover { background: var(--bg-hover); }
 html[data-visual-mode="glass"] .chat-item.active {
@@ -10255,8 +10278,9 @@ html[data-visual-mode="glass"] .login-body .language-switch button.active { back
 .app-dialog-cancel { background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border-light); border-radius: 12px; }
 @media (max-width: 768px) {
   html[data-visual-mode="glass"] { --glass-blur: 12px; }
-  html[data-visual-mode="glass"] .chat-header { padding: 8px 10px; gap: 8px; }
-  html[data-visual-mode="glass"] .input-area { padding: 8px 10px; }
+  html[data-visual-mode="glass"] #sidebar { border-right: 0; }
+  html[data-visual-mode="glass"] .chat-header { padding: 2px 10px; gap: 8px; }
+  html[data-visual-mode="glass"] .input-area { padding: 4px 10px; }
   html[data-visual-mode="glass"] .modal-header { padding: 14px 16px; }
   html[data-visual-mode="glass"] .modal-body { padding: 14px 16px 18px; }
   html[data-visual-mode="glass"] .chat-item { margin-inline: 6px; padding: 10px; }
@@ -10378,11 +10402,36 @@ html[data-visual-mode="glass"] :is(.icon-btn, .modal-close) .ui-glyph { width: 2
 .ui-glyph[data-icon="x"] { --ui-icon: url("/vendor/lucide/x.svg"); }
 
 /* Match the composer's existing positioned tool stack to the glass hit targets. */
-html[data-visual-mode="glass"] .input-row { --composer-tool-size: 44px; --composer-tool-gap: 6px; gap: 6px; }
+html[data-visual-mode="glass"] .input-row { --composer-tool-size: 44px; --composer-tool-gap: 4px; gap: 4px; }
+html[data-visual-mode="glass"] :is(.chat-header, .input-row) .icon-btn {
+  width: 44px; height: 44px;
+}
+html[data-visual-mode="glass"] :is(.chat-header, .input-row) .icon-btn:not(.send-btn) {
+  background: transparent; border: 0; box-shadow: none;
+}
+html[data-visual-mode="glass"] :is(.chat-header, .input-row) .icon-btn :is(.ui-glyph, svg) {
+  width: 20px; height: 20px;
+}
+html[data-visual-mode="glass"] :is(.chat-header, .input-row) .icon-btn:not(.send-btn):active:not(:disabled) {
+  background: var(--bg-hover) !important;
+}
+@media (hover: hover) {
+  html[data-visual-mode="glass"] :is(.chat-header, .input-row) .icon-btn:not(.send-btn):hover:not(:disabled) {
+    background: var(--bg-hover) !important;
+  }
+}
+html[data-visual-mode="glass"] :is(.chat-header, .input-row) .icon-btn:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: -2px;
+}
+html[data-visual-mode="glass"] .input-area #msgInput {
+  padding-block: 12px; padding-right: 44px; border: 0; border-radius: 16px; box-shadow: none;
+}
+html[data-visual-mode="glass"] .input-area .composer-rich-preview { padding-block: 12px; padding-right: 44px; }
+html[data-visual-mode="glass"] .input-area .has-rich-preview #msgInput { color: transparent; }
 html[data-visual-mode="glass"] .send-btn:not(.is-mic-mode)::before { display: none; }
 html[data-visual-mode="glass"] .send-btn.is-mic-mode > .ui-glyph { display: none; }
 html[data-visual-mode="glass"] .send-btn.send-fly > .ui-glyph { animation: sendBtnFly 300ms cubic-bezier(.24,.88,.33,1); }
-html[data-visual-mode="glass"] #msgInput { min-height: 44px; }
+html[data-visual-mode="glass"] .input-row:not(.is-multiline) #msgInput { min-height: 44px; }
 html[data-visual-mode="glass"] .mention-picker { background: var(--glass-dialog); border: 1px solid var(--glass-line); border-radius: 20px; box-shadow: var(--glass-shadow); }
 #themeSettingsModal .modal-content { max-width: 640px; }
 #themeSettingsModal .theme-card-copy :is(strong, small) { white-space: normal; overflow: visible; text-overflow: clip; }
@@ -10427,9 +10476,9 @@ html[data-visual-mode="glass"] .toggle-slider::before { left: 2px; bottom: 2px; 
 .login-body { height: auto; min-height: 100dvh; overflow-y: auto; }
 
 html[data-visual-mode="glass"] #menuDrawer .profile-danger-section {
-  position: sticky; bottom: 0; z-index: 1; flex-shrink: 0; background: var(--glass-dialog);
-  box-shadow: 0 -6px 18px color-mix(in srgb, var(--bg-modal) 90%, transparent);
+  flex-shrink: 0; background: var(--glass-dialog);
 }
+html[data-visual-mode="glass"] #menuDrawer .profile-form { flex-shrink: 0; }
 html[data-visual-mode="glass"] #menuDrawer .profile-settings-modal { background: var(--glass-dialog); border-color: var(--glass-line); }
 html[data-visual-mode="glass"] #profileCameraCaptureBtn { border-radius: 16px; }
 html[data-visual-mode="glass"] #adminBotAuditModal .modal-close::before { content: none; }

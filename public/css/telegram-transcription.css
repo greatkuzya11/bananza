@@ -253,5 +253,19 @@
 }
 
 /* Appearance surfaces; keep media geometry owned by this feature. */
+html[data-visual-mode="glass"] .telegram-bot-editor .voice-inline-actions {
+  gap: 10px; margin: 10px 0 12px;
+}
+html[data-visual-mode="glass"] .telegram-bot-editor .voice-inline-actions > button {
+  min-height: 44px; margin: 0;
+}
 html[data-visual-mode="glass"] :is(.telegram-setup-card, .telegram-bots-list-panel, .telegram-history-toolbar) { background: var(--glass-dialog); color: var(--text-primary); border: 1px solid var(--glass-line); border-radius: 20px; box-shadow: var(--glass-shadow); }
+html[data-visual-mode="glass"] .telegram-history-toolbar { padding: 12px; align-items: flex-end; gap: 10px; }
+html[data-visual-mode="glass"] .telegram-history-toolbar .field-group { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+html[data-visual-mode="glass"] .telegram-history-toolbar label { margin: 0; font-size: 13px; line-height: 1.3; }
+html[data-visual-mode="glass"] .telegram-history-toolbar .modal-input { min-width: 0; min-height: 44px; margin: 0; }
 html[data-visual-mode="glass"] :is(.telegram-history-toolbar button) { border-radius: 16px; min-height: 44px; color: var(--text-primary); background-color: var(--glass-control); border-color: var(--border-light); }
+@media (max-width: 640px) {
+  html[data-visual-mode="glass"] .telegram-history-toolbar { flex-direction: column; align-items: stretch; }
+  html[data-visual-mode="glass"] .telegram-history-toolbar .field-group { flex: 0 0 auto; }
+}
