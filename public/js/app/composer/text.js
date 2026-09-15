@@ -237,12 +237,13 @@
       if (!dom.inputRow || !msgInput) return msgInput?.clientWidth || 1;
       const rowStyles = win.getComputedStyle(dom.inputRow);
       const toolSize = parseFloat(rowStyles.getPropertyValue('--composer-tool-size')) || 36;
+      const toolInlineSize = parseFloat(rowStyles.getPropertyValue('--composer-tool-width')) || toolSize;
       const toolGap = parseFloat(rowStyles.getPropertyValue('--composer-tool-gap')) || 4;
       const rowGap = parseFloat(rowStyles.columnGap || rowStyles.gap) || 4;
       const toolCount = getVisibleComposerToolCount();
       const toolWidth = multiline
-        ? toolSize
-        : (toolCount * toolSize) + (Math.max(0, toolCount - 1) * toolGap);
+        ? toolInlineSize
+        : (toolCount * toolInlineSize) + (Math.max(0, toolCount - 1) * toolGap);
       const sendWidth = dom.sendBtn?.getBoundingClientRect?.().width || 44;
       const rowWidth = dom.inputRow.getBoundingClientRect().width || msgInput.clientWidth || 1;
       return Math.max(1, rowWidth - toolWidth - sendWidth - (rowGap * 2));

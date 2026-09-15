@@ -27,7 +27,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
 
   assert.deepEqual(styles, [
     '/vendor/leaflet/leaflet.css?v=1.9.4',
-    '/css/style.css?v=banan-glass-22',
+    '/css/style.css?v=banan-glass-26',
     '/css/calls.css?v=20260621-call-mobile-controls',
     '/css/voice.css?v=glass-composer-1',
     '/css/telegram-transcription.css?v=20260915-settings-spacing',
@@ -100,7 +100,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/messages/updates.js?v=20260531-messages',
     '/js/app/messages/render.js?v=20260531-messages',
     '/js/app/composer/state.js?v=20260531-composer',
-    '/js/app/composer/text.js?v=20260531-composer',
+    '/js/app/composer/text.js?v=20260915-compact-tools',
     '/js/app/composer/reply-edit.js?v=20260531-composer',
     '/js/app/composer/files.js?v=20260531-composer',
     '/js/app/composer/location.js?v=20260702-maps1',

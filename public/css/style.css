@@ -3522,8 +3522,10 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
 
 .input-row {
   --composer-tool-size: 36px;
+  --composer-tool-width: var(--composer-tool-size);
   --composer-tool-gap: 4px;
   --composer-tool-step: calc(var(--composer-tool-size) + var(--composer-tool-gap));
+  --composer-tool-inline-step: calc(var(--composer-tool-width) + var(--composer-tool-gap));
   display: flex;
   align-items: flex-end;
   gap: 4px;
@@ -3531,8 +3533,8 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
 
 .composer-tool-stack {
   position: relative;
-  flex: 0 0 calc(var(--composer-tool-size) + var(--composer-tool-step) + var(--composer-tool-step));
-  width: calc(var(--composer-tool-size) + var(--composer-tool-step) + var(--composer-tool-step));
+  flex: 0 0 calc(var(--composer-tool-width) + var(--composer-tool-inline-step) + var(--composer-tool-inline-step));
+  width: calc(var(--composer-tool-width) + var(--composer-tool-inline-step) + var(--composer-tool-inline-step));
   height: var(--composer-tool-size);
   transition:
     flex-basis .24s cubic-bezier(.2, .8, .2, 1),
@@ -3552,12 +3554,12 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
 }
 
 #attachBtn { transform: translate3d(0, 0, 0); }
-#pollBtn { transform: translate3d(var(--composer-tool-step), 0, 0); }
-#emojiBtn { transform: translate3d(calc(var(--composer-tool-step) + var(--composer-tool-step)), 0, 0); }
+#pollBtn { transform: translate3d(var(--composer-tool-inline-step), 0, 0); }
+#emojiBtn { transform: translate3d(calc(var(--composer-tool-inline-step) + var(--composer-tool-inline-step)), 0, 0); }
 
 .input-row.is-multiline .composer-tool-stack {
-  flex-basis: var(--composer-tool-size);
-  width: var(--composer-tool-size);
+  flex-basis: var(--composer-tool-width);
+  width: var(--composer-tool-width);
   height: calc(var(--composer-tool-size) + var(--composer-tool-step) + var(--composer-tool-step));
 }
 
@@ -3607,15 +3609,15 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
 
 @media (max-width: 768px) {
   .composer-tool-stack {
-    flex-basis: calc(var(--composer-tool-size) + var(--composer-tool-step));
-    width: calc(var(--composer-tool-size) + var(--composer-tool-step));
+    flex-basis: calc(var(--composer-tool-width) + var(--composer-tool-inline-step));
+    width: calc(var(--composer-tool-width) + var(--composer-tool-inline-step));
   }
 
-  #emojiBtn { transform: translate3d(var(--composer-tool-step), 0, 0); }
+  #emojiBtn { transform: translate3d(var(--composer-tool-inline-step), 0, 0); }
 
   .input-row.is-multiline .composer-tool-stack {
-    flex-basis: var(--composer-tool-size);
-    width: var(--composer-tool-size);
+    flex-basis: var(--composer-tool-width);
+    width: var(--composer-tool-width);
     height: calc(var(--composer-tool-size) + var(--composer-tool-step));
   }
 
@@ -10062,7 +10064,7 @@ html[data-visual-mode="glass"] .pinned-bar .pinned-bar-close { width: 32px; heig
   html[data-visual-mode="glass"] #pinnedBar { --glass-pin-height: 54px; }
 }
 /* The sidebar is already one glass surface; its children must not stack opaque coats. */
-html[data-visual-mode="glass"] :is(.sidebar-header, .sidebar-footer) { background: transparent; }
+html[data-visual-mode="glass"] :is(.sidebar-header, .sidebar-footer) { background: transparent; box-shadow: none; }
 html[data-visual-mode="glass"] .sidebar-header { padding: 2px 14px; gap: 8px; }
 html[data-visual-mode="glass"] .sidebar-footer { padding: 2px 12px; }
 html[data-visual-mode="glass"] :is(.sidebar-header, .sidebar-footer) > .icon-btn {
@@ -10089,7 +10091,7 @@ html[data-visual-mode="glass"] #currentUserInfo {
 }
 html[data-visual-mode="glass"] #currentUserInfo:active { background: var(--bg-hover); }
 html[data-visual-mode="glass"] .chat-header { padding: 2px 16px; min-height: 49px; gap: 12px; }
-html[data-visual-mode="glass"] .input-area { padding: 4px 16px; border-top: 1px solid var(--glass-line); }
+html[data-visual-mode="glass"] .input-area { padding: 4px 8px; border-top: 1px solid var(--glass-line); }
 html[data-visual-mode="glass"] :is(.input-row, .composer-input-wrap) { border-radius: 16px; }
 html[data-visual-mode="glass"] .chat-item { border-radius: 16px; margin: 3px 8px; padding: 12px; border: 1px solid transparent; }
 html[data-visual-mode="glass"] .chat-item:hover { background: var(--bg-hover); }
@@ -10100,7 +10102,7 @@ html[data-visual-mode="glass"] .chat-item.active {
 html[data-visual-mode="glass"] .chat-item.active :is(.chat-item-last, .chat-item-time) { color: var(--text-secondary); }
 html[data-visual-mode="glass"] :is(.chat-item-avatar, .chat-header-avatar, .avatar) { box-shadow: 0 2px 8px #00000012; }
 html[data-visual-mode="glass"] :is(.active-chat-folder-bar, .chat-list-group--pinned) { background: transparent; border-color: var(--glass-line); }
-html[data-visual-mode="glass"] .active-chat-folder-bar { padding-block: 3px; }
+html[data-visual-mode="glass"] .active-chat-folder-bar { padding-block: 6px 8px; }
 html[data-visual-mode="glass"] :is(.chat-folder-strip-chip, .chat-folder-tab, .modal-tab, .language-card) { border-radius: 12px; }
 /* Glass tabs use a complete selected surface, not the classic bottom underline. */
 html[data-visual-mode="glass"] :is(.modal-tabs, .login-body .tabs) {
@@ -10283,7 +10285,7 @@ html[data-visual-mode="glass"] .login-body .language-switch button.active { back
   /* Keep the inactive welcome/chat scene from showing through the mobile glass sidebar, even before boot. */
   html[data-visual-mode="glass"] #sidebar:not(.sidebar-hidden) ~ #chatArea { visibility: hidden; }
   html[data-visual-mode="glass"] .chat-header { padding: 2px 10px; gap: 8px; }
-  html[data-visual-mode="glass"] .input-area { padding: 4px 10px; }
+  html[data-visual-mode="glass"] .input-area { padding: 4px; }
   html[data-visual-mode="glass"] .modal-header { padding: 14px 16px; }
   html[data-visual-mode="glass"] .modal-body { padding: 14px 16px 18px; }
   html[data-visual-mode="glass"] .chat-item { margin-inline: 6px; padding: 10px; }
@@ -10405,21 +10407,22 @@ html[data-visual-mode="glass"] :is(.icon-btn, .modal-close) .ui-glyph { width: 2
 .ui-glyph[data-icon="x"] { --ui-icon: url("/vendor/lucide/x.svg"); }
 
 /* Match the composer's existing positioned tool stack to the glass hit targets. */
-html[data-visual-mode="glass"] .input-row { --composer-tool-size: 44px; --composer-tool-gap: 4px; gap: 4px; }
+html[data-visual-mode="glass"] .input-row { --composer-tool-size: 44px; --composer-tool-width: 36px; --composer-tool-gap: 2px; gap: 2px; }
 html[data-visual-mode="glass"] :is(.chat-header, .input-row) .icon-btn {
   width: 44px; height: 44px;
-}
-html[data-visual-mode="glass"] :is(.chat-header, .input-row) .icon-btn:not(.send-btn) {
   background: transparent; border: 0; box-shadow: none;
+}
+html[data-visual-mode="glass"] .composer-tool-stack .icon-btn {
+  width: var(--composer-tool-width); min-width: var(--composer-tool-width);
 }
 html[data-visual-mode="glass"] :is(.chat-header, .input-row) .icon-btn :is(.ui-glyph, svg) {
   width: 20px; height: 20px;
 }
-html[data-visual-mode="glass"] :is(.chat-header, .input-row) .icon-btn:not(.send-btn):active:not(:disabled) {
+html[data-visual-mode="glass"] :is(.chat-header, .input-row) .icon-btn:active:not(:disabled) {
   background: var(--bg-hover) !important;
 }
 @media (hover: hover) {
-  html[data-visual-mode="glass"] :is(.chat-header, .input-row) .icon-btn:not(.send-btn):hover:not(:disabled) {
+  html[data-visual-mode="glass"] :is(.chat-header, .input-row) .icon-btn:hover:not(:disabled) {
     background: var(--bg-hover) !important;
   }
 }
@@ -10431,6 +10434,7 @@ html[data-visual-mode="glass"] .input-area #msgInput {
 }
 html[data-visual-mode="glass"] .input-area .composer-rich-preview { padding-block: 12px; padding-right: 44px; }
 html[data-visual-mode="glass"] .input-area .has-rich-preview #msgInput { color: transparent; }
+html[data-visual-mode="glass"] .input-row .send-btn > .ui-glyph { color: var(--ui-icon-ink); }
 html[data-visual-mode="glass"] .send-btn:not(.is-mic-mode)::before { display: none; }
 html[data-visual-mode="glass"] .send-btn.is-mic-mode > .ui-glyph { display: none; }
 html[data-visual-mode="glass"] .send-btn.send-fly > .ui-glyph { animation: sendBtnFly 300ms cubic-bezier(.24,.88,.33,1); }
