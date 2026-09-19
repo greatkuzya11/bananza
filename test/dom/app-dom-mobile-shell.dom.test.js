@@ -327,7 +327,10 @@ test('chat header actions shell preserves aria, class and focus state', () => {
     },
   });
 
+  const scrollCalls = [];
+  refs.searchBtn.scrollIntoView = (options) => scrollCalls.push({ ...options });
   refs.searchBtn.focus();
+  assert.equal(scrollCalls.length, 0);
   shell.syncChatHeaderActionsAccessibility();
   assert.equal(refs.chatHeaderActions.classList.contains('is-open'), false);
   assert.equal(refs.chatHeaderActions.getAttribute('aria-hidden'), 'true');
@@ -342,7 +345,11 @@ test('chat header actions shell preserves aria, class and focus state', () => {
   assert.equal(refs.chatInfoBtn.classList.contains('is-active'), true);
   assert.equal(refs.searchBtn.getAttribute('tabindex'), null);
 
+  refs.searchBtn.focus();
+  assert.deepEqual(scrollCalls, [{ block: 'nearest', inline: 'nearest' }]);
+
   assert.equal(shell.closeChatHeaderActions(), false);
+  assert.equal(window.document.activeElement, refs.chatInfoBtn);
   assert.equal(refs.chatHeaderActions.classList.contains('is-open'), false);
   assert.equal(refs.chatInfoBtn.getAttribute('aria-expanded'), 'false');
 });

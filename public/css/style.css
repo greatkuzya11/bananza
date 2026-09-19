@@ -604,6 +604,7 @@ a:hover { text-decoration: underline; }
 
 .chat-folder-content {
   position: relative;
+  overflow: hidden;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -611,6 +612,7 @@ a:hover { text-decoration: underline; }
 }
 .chat-folder-list-surface {
   position: relative;
+  z-index: 0;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -622,11 +624,15 @@ a:hover { text-decoration: underline; }
   transform-origin: center top;
 }
 .active-chat-folder-bar {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 6px 12px 8px;
   min-width: 0;
+  background: transparent;
 }
 .active-chat-folder-bar.hidden {
   display: none;
@@ -663,8 +669,10 @@ a:hover { text-decoration: underline; }
 .active-chat-folder-chip {
   border: 0;
   border-radius: 999px;
-  background: var(--bg-input);
-  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-input) 88%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  color: var(--text-primary);
   font-size: 12px;
   font-weight: 700;
   padding: 6px 10px;
@@ -677,14 +685,14 @@ a:hover { text-decoration: underline; }
 }
 .active-chat-folder-chip:hover,
 .active-chat-folder-chip:focus-visible {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--bg-hover) 96%, transparent);
   color: var(--text-primary);
 }
 .active-chat-folder-chip:active {
   transform: translateY(1px);
 }
 .active-chat-folder-chip.is-active {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: color-mix(in srgb, color-mix(in srgb, var(--accent) 16%, var(--bg-input)) 92%, transparent);
   color: var(--accent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent);
 }
@@ -944,6 +952,18 @@ html[data-modal-animation="none"] .chat-folder-list-surface {
 .chat-list::-webkit-scrollbar {
   width: 0;
   height: 0;
+}
+
+/* Scroll the initial clearance away with the rows, including folder swipe pages.
+   Keep padding-top available for the pull-to-refresh gesture. */
+.chat-folder-list-surface .chat-list {
+  scroll-padding-top: var(--chat-folder-bar-height, 0px);
+}
+.chat-folder-list-surface .chat-list::before {
+  content: '';
+  display: block;
+  height: var(--chat-folder-bar-height, 0px);
+  pointer-events: none;
 }
 
 .chat-list-group {
@@ -1234,8 +1254,9 @@ html[data-visual-mode="glass"] #settingsBtn.is-spinning {
 .chat-header-actions {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
+  gap: 2px;
+  flex-shrink: 1;
+  min-width: 0;
   max-width: 0;
   margin-left: -6px;
   opacity: 0;
@@ -1249,8 +1270,11 @@ html[data-visual-mode="glass"] #settingsBtn.is-spinning {
     visibility 0s linear .24s;
 }
 .chat-header-actions.is-open {
-  max-width: min(260px, calc(100vw - 132px));
+  max-width: 260px;
   margin-left: 0;
+  /* Let actions scroll within the header without pushing its toggle off-screen. */
+  overflow-x: auto;
+  scrollbar-width: none;
   opacity: 1;
   pointer-events: auto;
   visibility: visible;
@@ -1259,6 +1283,10 @@ html[data-visual-mode="glass"] #settingsBtn.is-spinning {
     margin-left .28s cubic-bezier(.2, .8, .2, 1),
     opacity .18s ease,
     visibility 0s;
+}
+
+.chat-header-actions::-webkit-scrollbar {
+  display: none;
 }
 .chat-header-actions .chat-header-action-btn {
   opacity: 0;
@@ -4297,6 +4325,30 @@ html[data-modal-animation="none"] .search-panel {
   padding: 16px 20px; border-bottom: 1px solid var(--border-light);
 }
 .modal-header h3 { font-size: 17px; }
+#chatInfoModal .modal-header {
+  align-items: flex-start;
+  gap: 12px;
+  flex-shrink: 0;
+}
+#chatInfoModal .chat-info-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+#chatInfoTitle,
+#chatInfoStatus,
+#chatInfoStatus .admin-user-status-label {
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+}
+#chatInfoModal .modal-close {
+  flex-shrink: 0;
+  align-self: flex-start;
+}
 .modal-close {
   font-size: 20px; color: var(--text-secondary); width: 32px; height: 32px;
   display: flex; align-items: center; justify-content: center; border-radius: 50%;
@@ -5148,16 +5200,6 @@ html[data-visual-mode="rich"] .poll-card {
   background: var(--accent);
   color: #fff;
   font-size: 13px;
-  font-weight: 800;
-}
-.animation-selected-mark {
-  display: inline-flex;
-  margin-top: 9px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: #fff;
-  font-size: 11px;
   font-weight: 800;
 }
 .forward-message-status {
@@ -10010,6 +10052,10 @@ html[data-visual-mode="glass"] {
   --glass-sheen: linear-gradient(135deg, #ffffff12, transparent 36%, transparent 68%, #ffffff06);
   --glass-selected: color-mix(in srgb, var(--accent) 16%, var(--bg-sidebar));
   --glass-chat-selected: #0000002e;
+  --glass-chat-margin: 8px;
+  --glass-chat-padding: 12px;
+  --glass-pinned-fill: color-mix(in srgb, var(--accent) 14%, transparent);
+  --glass-pinned-line: color-mix(in srgb, var(--accent) 40%, transparent);
   --glass-selected-text: var(--text-primary);
   --bg-main: var(--bg-dark);
   --glass-ambient: #a894d9;
@@ -10020,6 +10066,8 @@ html[data-visual-mode="glass"] {
 }
 html[data-color-scheme="light"][data-visual-mode="glass"] {
   --glass-chat-selected: #00000014;
+  --glass-pinned-fill: color-mix(in srgb, var(--accent) 10%, transparent);
+  --glass-pinned-line: color-mix(in srgb, var(--accent) 30%, transparent);
   --glass-fill: #ffffff66; --glass-dialog: #ffffff9e; --glass-control: #ffffff4d; --glass-input: #ffffffd1;
   --glass-sheen: linear-gradient(135deg, #ffffff38, transparent 36%, transparent 68%, #ffffff14);
   --text-secondary: #253347; --text-time: #253347;
@@ -10034,8 +10082,16 @@ html[data-visual-mode="glass"] #chatArea,
 html[data-visual-mode="glass"] .messages:not(.has-bg) { background-image: none; }
 html[data-visual-mode="glass"] :is(#sidebar, .sidebar-header, .sidebar-footer, .chat-header, .input-area, .pinned-bar,
   .document-topbar, .document-toolbar, .document-guest-header) {
-  background: var(--glass-sheen), var(--glass-fill); border-color: var(--glass-line);
+  background: var(--glass-sheen), var(--glass-fill);
+}
+html[data-visual-mode="glass"] :is(#sidebar,
+  .document-topbar, .document-toolbar, .document-guest-header) {
+  border-color: var(--glass-line);
   box-shadow: inset 0 1px 0 var(--glass-highlight);
+}
+/* Keep panel geometry while separating chat surfaces with glass instead of bright lines. */
+html[data-visual-mode="glass"] :is(.chat-header, .input-area, .pinned-bar) {
+  border-color: transparent; box-shadow: none;
 }
 html[data-visual-mode="glass"] :is(#sidebar, .chat-header, .input-area, .pinned-bar, .document-guest-header) {
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
@@ -10064,7 +10120,7 @@ html[data-visual-mode="glass"] .pinned-bar .pinned-bar-close { width: 32px; heig
   html[data-visual-mode="glass"] #pinnedBar { --glass-pin-height: 54px; }
 }
 /* The sidebar is already one glass surface; its children must not stack opaque coats. */
-html[data-visual-mode="glass"] :is(.sidebar-header, .sidebar-footer) { background: transparent; box-shadow: none; }
+html[data-visual-mode="glass"] :is(.sidebar-header, .sidebar-footer) { background: transparent; border-color: transparent; box-shadow: none; }
 html[data-visual-mode="glass"] .sidebar-header { padding: 2px 14px; gap: 8px; }
 html[data-visual-mode="glass"] .sidebar-footer { padding: 2px 12px; }
 html[data-visual-mode="glass"] :is(.sidebar-header, .sidebar-footer) > .icon-btn {
@@ -10091,9 +10147,9 @@ html[data-visual-mode="glass"] #currentUserInfo {
 }
 html[data-visual-mode="glass"] #currentUserInfo:active { background: var(--bg-hover); }
 html[data-visual-mode="glass"] .chat-header { padding: 2px 16px; min-height: 49px; gap: 12px; }
-html[data-visual-mode="glass"] .input-area { padding: 4px 8px; border-top: 1px solid var(--glass-line); }
+html[data-visual-mode="glass"] .input-area { padding: 4px 8px; border-top: 1px solid transparent; }
 html[data-visual-mode="glass"] :is(.input-row, .composer-input-wrap) { border-radius: 16px; }
-html[data-visual-mode="glass"] .chat-item { border-radius: 16px; margin: 3px 8px; padding: 12px; border: 1px solid transparent; }
+html[data-visual-mode="glass"] .chat-item { border-radius: 16px; margin: 3px var(--glass-chat-margin); padding: var(--glass-chat-padding); border: 1px solid transparent; }
 html[data-visual-mode="glass"] .chat-item:hover { background: var(--bg-hover); }
 html[data-visual-mode="glass"] .chat-item.active {
   background: var(--glass-chat-selected); color: var(--glass-selected-text);
@@ -10101,8 +10157,34 @@ html[data-visual-mode="glass"] .chat-item.active {
 }
 html[data-visual-mode="glass"] .chat-item.active :is(.chat-item-last, .chat-item-time) { color: var(--text-secondary); }
 html[data-visual-mode="glass"] :is(.chat-item-avatar, .chat-header-avatar, .avatar) { box-shadow: 0 2px 8px #00000012; }
-html[data-visual-mode="glass"] :is(.active-chat-folder-bar, .chat-list-group--pinned) { background: transparent; border-color: var(--glass-line); }
-html[data-visual-mode="glass"] .active-chat-folder-bar { padding-block: 6px 8px; }
+html[data-visual-mode="glass"] .active-chat-folder-bar { border-color: var(--glass-line); }
+html[data-visual-mode="glass"] .chat-list-group--pinned {
+  margin-inline: var(--glass-chat-margin);
+  background: var(--glass-pinned-fill);
+  border-color: var(--glass-pinned-line);
+  border-radius: 16px;
+}
+/* The group owns the outline; keep its rows aligned with ordinary chat cards. */
+html[data-visual-mode="glass"] .chat-list-group--pinned .chat-item {
+  position: relative;
+  margin: 0;
+  padding: calc(var(--glass-chat-padding) + 1px) var(--glass-chat-padding);
+  border: 0;
+  border-radius: 0;
+}
+html[data-visual-mode="glass"] .chat-list-group--pinned .chat-item + .chat-item::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  inset-inline: var(--glass-chat-padding);
+  height: 1px;
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  pointer-events: none;
+}
+html[data-visual-mode="glass"] .active-chat-folder-bar { padding-block: 8px; }
+html[data-visual-mode="glass"] .active-chat-folder-strip { padding-bottom: 0; }
+/* The folder bar owns the gap to the first chat, including a pinned group. */
+html[data-visual-mode="glass"] .active-chat-folder-bar:not(.hidden) + .chat-folder-list-surface .chat-list > :is(.chat-item, .chat-list-group):first-child { margin-top: 0; }
 html[data-visual-mode="glass"] :is(.chat-folder-strip-chip, .chat-folder-tab, .modal-tab, .language-card) { border-radius: 12px; }
 /* Glass tabs use a complete selected surface, not the classic bottom underline. */
 html[data-visual-mode="glass"] :is(.modal-tabs, .login-body .tabs) {
@@ -10207,7 +10289,40 @@ html[data-visual-mode="glass"] button:disabled { opacity: .48; cursor: not-allow
   }
   html[data-visual-mode="glass"] :is(.btn-primary, .send-btn):hover:not(:disabled) { background: var(--accent-hover); }
 }
-html[data-visual-mode="glass"] :is(.profile-action-btn-danger, .profile-logout-btn, .block-btn) { color: var(--danger); }
+html[data-visual-mode="glass"] :is(.profile-action-btn-danger, .profile-logout-btn) { color: var(--danger); }
+html[data-visual-mode="glass"] #adminUserList .admin-user-row {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  row-gap: 8px;
+}
+html[data-visual-mode="glass"] #adminUserList .admin-user-row .avatar { grid-row: 1 / span 5; }
+html[data-visual-mode="glass"] #adminUserList .admin-user-row :is(.info, .admin-user-badges, .admin-user-controls, .admin-user-actions) {
+  grid-column: 2;
+  justify-self: start;
+}
+html[data-visual-mode="glass"] #adminUserList .admin-user-row :is(.admin-user-controls, .admin-user-actions) {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  gap: 8px;
+  justify-content: flex-start;
+}
+html[data-visual-mode="glass"] #adminUserList .admin-user-row .admin-user-controls { flex-wrap: wrap; }
+html[data-visual-mode="glass"] #adminUserList .admin-user-row .admin-user-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+html[data-visual-mode="glass"] #adminUserList .admin-user-row :is(.admin-user-controls, .admin-user-actions) > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 44px;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  padding: 6px 10px;
+}
 html[data-visual-mode="glass"] .document-workspace { min-width: 0; gap: 6px; padding: 6px 10px 10px; background: transparent; }
 html[data-visual-mode="glass"] :is(.document-toolbar, .document-topbar) {
   flex-shrink: 0; min-width: 0; padding: 3px 6px;
@@ -10280,7 +10395,7 @@ html[data-visual-mode="glass"] .login-body .language-switch button.active { back
 .app-dialog-actions button { width: auto; min-width: 92px; min-height: 44px; margin: 0; padding: 10px 18px; }
 .app-dialog-cancel { background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border-light); border-radius: 12px; }
 @media (max-width: 768px) {
-  html[data-visual-mode="glass"] { --glass-blur: 12px; }
+  html[data-visual-mode="glass"] { --glass-blur: 12px; --glass-chat-margin: 6px; --glass-chat-padding: 10px; }
   html[data-visual-mode="glass"] #sidebar { border-right: 0; }
   /* Keep the inactive welcome/chat scene from showing through the mobile glass sidebar, even before boot. */
   html[data-visual-mode="glass"] #sidebar:not(.sidebar-hidden) ~ #chatArea { visibility: hidden; }
@@ -10288,7 +10403,6 @@ html[data-visual-mode="glass"] .login-body .language-switch button.active { back
   html[data-visual-mode="glass"] .input-area { padding: 4px; }
   html[data-visual-mode="glass"] .modal-header { padding: 14px 16px; }
   html[data-visual-mode="glass"] .modal-body { padding: 14px 16px 18px; }
-  html[data-visual-mode="glass"] .chat-item { margin-inline: 6px; padding: 10px; }
   html[data-visual-mode="glass"] .modal-content { border-radius: 24px; }
   html[data-visual-mode="glass"] .document-toolbar-dropdown-option { min-height: 44px; }
 }

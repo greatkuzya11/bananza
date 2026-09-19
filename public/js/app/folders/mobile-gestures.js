@@ -298,7 +298,8 @@
         const chipHeight = Math.max(28, Math.round(chipRect?.height || 34));
         const anchorHeight = Math.max(0, Math.round(anchor.clientHeight || anchorRect.height || 0));
         const minTop = 6;
-        const listTop = Math.max(0, Math.round(listRect.top - anchorRect.top));
+        const barHeight = parseFloat(windowRef.getComputedStyle(chatList).getPropertyValue('--chat-folder-bar-height')) || 0;
+        const listTop = Math.max(0, Math.round(listRect.top - anchorRect.top + barHeight));
         const gap = Math.max(0, state.offset);
         const centeredInGap = listTop + Math.max(minTop, Math.round((gap - chipHeight) / 2));
         const maxTop = anchorHeight > 0 ? Math.max(minTop, anchorHeight - chipHeight - minTop) : centeredInGap;

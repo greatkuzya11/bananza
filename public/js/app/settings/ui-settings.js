@@ -558,7 +558,6 @@
       >
         <strong>${esc(style.name)}</strong>
         <small>${esc(style.note)}</small>
-        ${style.id === currentModalAnimation() ? '<span class="animation-selected-mark">Selected</span>' : ''}
       </button>
     `).join('');
     }

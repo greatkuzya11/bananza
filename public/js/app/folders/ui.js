@@ -40,6 +40,29 @@
     let chatFolderBarForceVisible = false;
     let chatFolderStripVisibilitySaveInFlight = false;
     let chatFolderStripManualScrollUntil = 0;
+    let chatFolderBarResizeObserver = null;
+    let chatFolderBarSizeBound = false;
+
+    function syncChatFolderBarHeight() {
+      const bar = getEl('activeChatFolderBar', 'activeChatFolderBar');
+      const content = getEl('chatFolderContent', 'chatFolderContent');
+      if (!bar || !content) return;
+      const height = bar.classList.contains('hidden') ? 0 : bar.offsetHeight;
+      content.style.setProperty('--chat-folder-bar-height', `${height}px`);
+    }
+
+    function bindChatFolderBarSize() {
+      const bar = getEl('activeChatFolderBar', 'activeChatFolderBar');
+      if (!bar || chatFolderBarSizeBound) return;
+      chatFolderBarSizeBound = true;
+      if (typeof win.ResizeObserver === 'function') {
+        chatFolderBarResizeObserver = new win.ResizeObserver(syncChatFolderBarHeight);
+        chatFolderBarResizeObserver.observe(bar);
+      } else {
+        win.addEventListener('resize', syncChatFolderBarHeight);
+      }
+      syncChatFolderBarHeight();
+    }
 
     function $(selector, rootEl = doc) {
       if (typeof dom.$ === 'function') return dom.$(selector, rootEl);
@@ -463,6 +486,7 @@
         activeChatFolderStrip.dataset.structureSignature = signature;
       }
       activeChatFolderBar.classList.toggle('hidden', !shouldShow);
+      syncChatFolderBarHeight();
       if (!shouldShow) {
         cancelScheduledActiveChatFolderChipCenter();
         return false;
@@ -869,6 +893,7 @@
       });
 
       bindActiveChatFolderStripMouseScroll(activeChatFolderStrip);
+      bindChatFolderBarSize();
 
       activeChatFolderBar?.addEventListener('click', (e) => {
         const chip = e.target.closest('[data-folder-chip]');

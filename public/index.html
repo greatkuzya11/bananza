@@ -7,7 +7,7 @@
   <title>🍌 BananZa</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍌</text></svg>">
   <link rel="stylesheet" href="/vendor/leaflet/leaflet.css?v=1.9.4">
-  <link rel="stylesheet" href="/css/style.css?v=banan-glass-26">
+  <link rel="stylesheet" href="/css/style.css?v=banan-glass-36">
   <link rel="stylesheet" href="/css/calls.css?v=20260621-call-mobile-controls">
   <link rel="stylesheet" href="/css/voice.css?v=glass-composer-1">
   <link rel="stylesheet" href="/css/telegram-transcription.css?v=20260915-settings-spacing">
@@ -564,7 +564,6 @@
             step="1"
             value="8"
           >
-          <div class="animation-speed-hint">1 = slower, 10 = faster, 8 = current</div>
         </div>
         <div id="settingsAnimationStatus" class="theme-settings-status"></div>
       </div>
@@ -2486,9 +2485,11 @@
   <div id="chatInfoModal" class="modal hidden">
     <div class="modal-content">
       <div class="modal-header">
-        <h3 id="chatInfoTitle">Chat Info</h3>
-        <div id="chatInfoStatus" class="admin-user-status offline" style="margin-left:8px">
-          <span class="status-dot"></span>offline
+        <div class="chat-info-heading">
+          <h3 id="chatInfoTitle">Chat Info</h3>
+          <div id="chatInfoStatus" class="admin-user-status offline">
+            <span class="status-dot"></span>offline
+          </div>
         </div>
         <button class="modal-close">✕</button>
       </div>
@@ -2864,10 +2865,10 @@
   <script src="/js/app/dom.js?v=20260531-dom-mobile-shell"></script>
   <script src="/js/app/android-bridge.js?v=20260531-dom-mobile-shell"></script>
     <script src="/js/app/mobile-viewport.js?v=20260531-dom-mobile-shell"></script>
-    <script src="/js/app/chat-header-actions.js?v=20260531-dom-mobile-shell"></script>
+    <script src="/js/app/chat-header-actions.js?v=20260919-header-scroll"></script>
     <script src="/js/app/shell/mobile-composer-guard.js?v=20260621-ios-keyboard1"></script>
     <script src="/js/app/shell/events.js?v=20260708-folder-mouse-swipe-glass-spin"></script>
-    <script src="/js/app/shell/ui-runtime.js?v=20260705-api-tokens"></script>
+    <script src="/js/app/shell/ui-runtime.js?v=20260919-folder-overlay"></script>
     <script src="/js/app/shell/shell-runtime.js?v=20260702-maps2"></script>
     <script src="/js/app/shell/mobile-runtime-adapters.js?v=20260601-runtime-final"></script>
     <script src="/js/app/modal-manager.js?v=20260531-modal-manager"></script>
@@ -2878,11 +2879,11 @@
   <script src="/js/app/settings/sound-settings.js?v=20260531-settings"></script>
   <script src="/js/app/settings/settings-modal.js?v=20260705-api-tokens-glass-spin"></script>
   <script src="/js/app/folders/store.js?v=20260531-folders"></script>
-  <script src="/js/app/folders/ui.js?v=20260826-folder-context-i18n"></script>
+  <script src="/js/app/folders/ui.js?v=20260919-folder-overlay"></script>
   <script src="/js/app/folders/actions.js?v=20260531-folders"></script>
   <script src="/js/app/folders/manage-modal.js?v=20260531-folders"></script>
   <script src="/js/app/folders/new-folder-tab.js?v=20260531-folders"></script>
-  <script src="/js/app/folders/mobile-gestures.js?v=20260708-folder-mouse-swipe"></script>
+  <script src="/js/app/folders/mobile-gestures.js?v=20260919-folder-overlay"></script>
   <script src="/js/app/chat-list/store.js?v=20260531-chat-list"></script>
   <script src="/js/app/chat-list/render.js?v=20260614-doc-bugfix1"></script>
   <script src="/js/app/chat-list/data.js?v=20260531-chat-list"></script>

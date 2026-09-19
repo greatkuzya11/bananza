@@ -1116,7 +1116,6 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
     
         const currentPage = createChatFolderSwipePage(currentFolderId, 'current');
         const adjacentPage = createChatFolderSwipePage(nextFolderId, 'adjacent');
-        currentPage.scrollTop = chatList.scrollTop;
     
         if (swipeDirection > 0) {
           track.append(currentPage, adjacentPage);
@@ -1125,6 +1124,8 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         }
         stage.appendChild(track);
         chatFolderListSurface.appendChild(stage);
+        // A detached page has no scroll range yet; restore only after layout exists.
+        currentPage.scrollTop = chatList.scrollTop;
     
         chatFolderSwipePagerState = {
           stage,

@@ -111,6 +111,13 @@
       return setChatHeaderActionsOpen(false);
     }
 
+    getRef('chatHeaderActions')?.addEventListener('focusin', (event) => {
+      if (!getOpen()) return;
+      const button = event.target?.closest?.('button');
+      if (!button || !getRef('chatHeaderActions').contains(button)) return;
+      button.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    });
+
     return {
       getChatSettingsActionOpener,
       moveFocusOutOfChatHeaderActions,
