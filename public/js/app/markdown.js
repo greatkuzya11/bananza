@@ -12,13 +12,46 @@
       .replace(/'/g, '&#39;');
   }
 
-  function isSafeHttpUrl(value) {
+  function isSafeLinkUrl(value) {
+    // Resolve relative Markdown destinations without admitting executable schemes.
+    if (!value || /[\u0000-\u001f\u007f]/.test(value)) return false;
     try {
-      const url = new URL(String(value || ''));
+      const url = new URL(value, 'https://markdown.invalid/');
       return url.protocol === 'http:' || url.protocol === 'https:';
     } catch (e) {
       return false;
     }
+  }
+
+  function parseInlineLink(text, index) {
+    if (text[index] !== '[') return null;
+    const labelEnd = text.indexOf(']', index + 1);
+    if (labelEnd <= index + 1 || text[labelEnd + 1] !== '(') return null;
+    const urlStart = labelEnd + 2;
+    let urlEnd = urlStart;
+    let end;
+    let url;
+    if (text[urlStart] === '<') {
+      urlEnd = text.indexOf('>', urlStart + 1);
+      if (urlEnd < 0 || text[urlEnd + 1] !== ')') return null;
+      url = text.slice(urlStart + 1, urlEnd);
+      end = urlEnd + 2;
+    } else {
+      let depth = 0;
+      for (; urlEnd < text.length; urlEnd += 1) {
+        const char = text[urlEnd];
+        if (/\s/.test(char)) return null;
+        if (char === '(') depth += 1;
+        if (char === ')') {
+          if (depth === 0) break;
+          depth -= 1;
+        }
+      }
+      if (urlEnd === text.length) return null;
+      url = text.slice(urlStart, urlEnd);
+      end = urlEnd + 1;
+    }
+    return isSafeLinkUrl(url) ? { url, label: text.slice(index + 1, labelEnd), end } : null;
   }
 
   function findClosingMarker(source, marker, fromIndex) {
@@ -51,18 +84,13 @@
 
       while (index < text.length) {
         if (allowLinks && text[index] === '[') {
-          const labelEnd = text.indexOf(']', index + 1);
-          const urlStart = labelEnd >= 0 && text[labelEnd + 1] === '(' ? labelEnd + 2 : -1;
-          const urlEnd = urlStart >= 0 ? text.indexOf(')', urlStart) : -1;
-          if (labelEnd > index + 1 && urlEnd > urlStart && !/\s/.test(text.slice(urlStart, urlEnd))) {
-            const url = text.slice(urlStart, urlEnd);
-            if (isSafeHttpUrl(url)) {
-              flushPlain(index);
-              html += renderLink(url, render(text.slice(index + 1, labelEnd), { allowLinks: false }));
-              index = urlEnd + 1;
-              plainStart = index;
-              continue;
-            }
+          const link = parseInlineLink(text, index);
+          if (link) {
+            flushPlain(index);
+            html += renderLink(link.url, render(link.label, { allowLinks: false }));
+            index = link.end;
+            plainStart = index;
+            continue;
           }
         }
 
@@ -326,9 +354,18 @@
         block.lines.forEach((line) => pushText(line));
       }
     });
-    const stripInlineMarkup = (text) => String(text || '')
+    const stripLinks = (text) => {
+      let result = '';
+      for (let index = 0; index < text.length;) {
+        const link = parseInlineLink(text, index);
+        result += link ? link.label : text[index];
+        index = link ? link.end : index + 1;
+      }
+      return result;
+    };
+    const stripInlineMarkup = (text) => stripLinks(String(text || '')
       .replace(/\|\|[^|\n]+?\|\|/g, spoilerText)
-      .replace(/\[([^\]\n]+)\]\((?:https?:\/\/)[^)\s]+\)/gi, '$1')
+    )
       .replace(/`([^`]+)`/g, '$1')
       .replace(/\*\*([^*]+)\*\*/g, '$1')
       .replace(/~~([^~]+)~~/g, '$1')

@@ -355,7 +355,7 @@ test('message renderer formats Markdown safely and preserves the stored source t
   t.after(() => dom.window.close());
   const { document, BananzaAppBridge } = dom.window;
   BananzaAppBridge.__testing.setChats([{ id: 1, type: 'group', name: 'One', last_message_id: 1, unread_count: 0 }], { currentChatId: 1 });
-  const text = '## Heading\n### Subheading\n#### Minor heading\n- **Bold** [Go](https://example.com/post)\n- *Second* ~~old~~ `code`\n> quote\n<img src=x onerror=alert(1)> [bad](javascript:alert(1)) @bob :qip-infium-001:';
+  const text = '## Heading\n### Subheading\n#### Minor heading\n- **Bold** [Go](https://example.com/post)\n- *Second* ~~old~~ `code` [TypeScript-сценарий](/Users/example/service-smoke.spec.ts:523)\n> quote\n<img src=x onerror=alert(1)> [bad](javascript:alert(1)) @bob :qip-infium-001:';
   BananzaAppBridge.__testing.appendMessage({
     id: 1,
     chat_id: 1,
@@ -376,6 +376,7 @@ test('message renderer formats Markdown safely and preserves the stored source t
   assert.equal(messageText.querySelector('strong').textContent, 'Bold');
   assert.equal(messageText.querySelector('a[href="https://example.com/post"]')?.textContent, 'Go');
   assert.equal(messageText.querySelector('a[href="https://example.com/post"]')?.target, '_blank');
+  assert.equal(messageText.querySelector('a[href="/Users/example/service-smoke.spec.ts:523"]')?.textContent, 'TypeScript-сценарий');
   assert.equal(messageText.querySelector('code').textContent, 'code');
   assert.equal(messageText.querySelector('blockquote').textContent, 'quote');
   assert.equal(messageText.querySelector('img[onerror]'), null);
