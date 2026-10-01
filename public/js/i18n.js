@@ -6,6 +6,9 @@
   const DEFAULT_LANGUAGE = 'ru';
 
   const RU = {
+    '{names} is typing': '{names} печатает',
+    '{names} are typing': '{names} печатают',
+    'chatShot is generating': 'chatShot генерируется',
     'BananZa Login': 'BananZa - вход',
     'Self-hosted messenger': 'Локальный мессенджер',
     'Sign In': 'Войти',

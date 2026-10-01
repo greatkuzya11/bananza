@@ -214,6 +214,79 @@
     };
   }
 
+  function createChatActivityController(options = {}) {
+    const chats = new Map();
+    const getCurrentUserId = options.getCurrentUserId || (() => null);
+    const onChange = options.onChange || (() => {});
+    const now = options.now || (() => Date.now());
+    const schedule = options.setTimeout || ((callback, delay) => window.setTimeout(callback, delay));
+    const cancel = options.clearTimeout || ((timer) => window.clearTimeout(timer));
+
+    function remove(chatId, userId) {
+      const id = Number(chatId);
+      const key = Number(userId);
+      const entries = chats.get(id);
+      const entry = entries?.get(key);
+      if (!entry) return;
+      cancel(entry.timer);
+      entries.delete(key);
+      if (!entries.size) chats.delete(id);
+      onChange(id);
+    }
+
+    function handleTyping(event = {}) {
+      const chatId = Number(event.chatId);
+      const userId = Number(event.userId);
+      if (!Number.isInteger(chatId) || chatId <= 0
+        || !Number.isInteger(userId) || userId <= 0
+        || userId === Number(getCurrentUserId())) return;
+      if (event.isTyping === false) {
+        remove(chatId, userId);
+        return;
+      }
+      let entries = chats.get(chatId);
+      if (!entries) {
+        entries = new Map();
+        chats.set(chatId, entries);
+      }
+      const previous = entries.get(userId);
+      if (previous) cancel(previous.timer);
+      const entry = {
+        userId,
+        username: String(event.username || ''),
+        activity: event.activity || 'typing',
+        expiresAt: now() + 3000,
+      };
+      entry.timer = schedule(() => remove(chatId, userId), 3000);
+      entries.set(userId, entry);
+      if (!previous || previous.expiresAt <= now()
+        || previous.username !== entry.username || previous.activity !== entry.activity) onChange(chatId);
+    }
+
+    function getEntries(chatId) {
+      return [...(chats.get(Number(chatId))?.values() || [])]
+        .filter((entry) => entry.expiresAt > now())
+        .map(({ userId, username, activity }) => ({ userId, username, activity }));
+    }
+
+    function clearChat(chatId) {
+      const id = Number(chatId);
+      const entries = chats.get(id);
+      if (!entries) return;
+      entries.forEach((entry) => cancel(entry.timer));
+      chats.delete(id);
+      onChange(id);
+    }
+
+    function clear() {
+      [...chats.keys()].forEach(clearChat);
+    }
+
+    return { handleTyping, getEntries, remove, clearChat, clear };
+  }
+
+  chatListRoot.activity = { createChatActivityController };
+
   chatListRoot.presence = {
     createPresenceController,
   };

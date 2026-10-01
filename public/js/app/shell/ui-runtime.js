@@ -2958,6 +2958,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
           syncCoreStateToRuntime();
         },
         cleanup: () => {
+          chatListControllers.activity.clear();
           chatListService.clearCacheSyncTimer();
           openChatController.clearMessageBackgroundSyncTimer();
           websocketService.clearReconnectTimer?.();

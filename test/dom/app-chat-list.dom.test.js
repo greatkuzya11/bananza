@@ -329,6 +329,7 @@ function installAppRuntimeStubs(dom, { fetchHandler = null } = {}) {
     static CLOSING = 2;
     static CLOSED = 3;
     constructor() {
+      window.__chatListTestSocket = this;
       this.readyState = window.WebSocket.CONNECTING;
       window.setTimeout(() => {
         this.readyState = window.WebSocket.OPEN;
@@ -413,6 +414,7 @@ async function bootAppDom(options = {}) {
   const ready = new Promise((resolve) => {
     dom.window.addEventListener('bananza:ready', resolve, { once: true });
   });
+  loadBrowserScript(dom, 'public/js/i18n.js');
   loadBrowserScript(dom, 'public/js/ai-image-risk.js');
   loadBrowserScript(dom, 'public/js/qip-infium-original.js');
   loadBrowserScript(dom, 'public/js/qip-hd.js');
@@ -453,4 +455,190 @@ test('app integration keeps chat list bridge helpers and websocket updates wired
   await BananzaAppBridge.__testing.handleWSMessage({ type: 'chat_list_updated' });
   await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
   assert.ok(chatFetchCount > before);
+});
+
+function createActivityHarness(t) {
+  const dom = createAppDom();
+  t.after(() => dom.window.close());
+  loadBrowserScript(dom, 'public/js/i18n.js');
+  const api = loadChatListRuntime(dom);
+  const store = api.store.createChatListStore();
+  const folders = createFolderStore(dom, [{ id: 9, name: 'Work', chat_ids: [2] }]);
+  store.setChats([
+    { id: 1, name: 'First', type: 'group', last_text: 'Old first', last_time: '2026-01-01', unread_count: 3 },
+    { id: 2, name: 'Second', type: 'group', last_text: 'Old second' },
+  ]);
+  let time = 0;
+  let timerId = 0;
+  const timers = new Map();
+  const activity = api.activity.createChatActivityController({
+    getCurrentUserId: () => 42,
+    now: () => time,
+    setTimeout: (callback, delay) => {
+      const id = ++timerId;
+      timers.set(id, { at: time + delay, callback });
+      return id;
+    },
+    clearTimeout: (id) => timers.delete(id),
+    onChange: (id) => renderer.updateChatActivity(id),
+  });
+  const renderer = api.render.createChatListRenderer({
+    document: dom.window.document,
+    window: dom.window,
+    store,
+    folders: { store: folders },
+    activity,
+    t: dom.window.BananzaI18n.t,
+    actions: {
+      getCurrentChatId: () => 1,
+      getActiveCallForChatListItem: (id) => id === 1 ? { media_kind: 'voice' } : null,
+    },
+  });
+  renderer.renderChatList();
+  return {
+    dom, store, folders, activity, renderer, timers,
+    preview: (id) => dom.window.document.querySelector(`.chat-item[data-chat-id="${id}"] .chat-item-preview`),
+    advance: (ms) => {
+      time += ms;
+      for (const [id, timer] of [...timers]) {
+        if (timer.at <= time) {
+          timers.delete(id);
+          timer.callback();
+        }
+      }
+    },
+  };
+}
+
+test('chat activity updates only the preview and restores latest text after independent timeouts', (t) => {
+  const h = createActivityHarness(t);
+  const doc = h.dom.window.document;
+  const row = doc.querySelector('.chat-item[data-chat-id="1"]');
+  const badge = row.querySelector('.unread-badge');
+  const call = row.querySelector('.chat-item-call-chip');
+  const timestamp = row.querySelector('.chat-item-time');
+  const order = [...doc.querySelectorAll('.chat-item[data-chat-id]')];
+  h.activity.handleTyping({ chatId: '1', userId: '42', username: 'Self' });
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.preview(1).textContent, 'Old first');
+  h.activity.handleTyping({ chatId: '1', userId: '7', username: 'Bob' });
+  h.activity.handleTyping({ chatId: 2, userId: 7, username: 'Bob' });
+  assert.equal(h.preview(1).textContent, 'Bob печатает...');
+  assert.equal(h.preview(2).textContent, 'Bob печатает...');
+  const dots = h.preview(1).querySelector('.typing-bar-dots');
+  h.advance(2000);
+  h.activity.handleTyping({ chatId: 1, userId: 7, username: 'Bob' });
+  assert.equal(h.preview(1).querySelector('.typing-bar-dots'), dots);
+  assert.equal(row.querySelector('.unread-badge'), badge);
+  assert.equal(row.querySelector('.chat-item-call-chip'), call);
+  assert.equal(row.querySelector('.chat-item-time'), timestamp);
+  assert.deepEqual([...doc.querySelectorAll('.chat-item[data-chat-id]')], order);
+  assert.equal(h.store.getChatById(1).last_text, 'Old first');
+  h.store.patchChat(1, { last_text: 'Newest message' });
+  h.advance(1000);
+  assert.equal(h.preview(2).textContent, 'Old second');
+  assert.equal(h.preview(1).textContent, 'Bob печатает...');
+  h.advance(2000);
+  assert.equal(h.preview(1).textContent, 'Newest message');
+  assert.equal(h.timers.size, 0);
+});
+
+test('chat activity handles multiple identities, bots, safe names and translations', (t) => {
+  const h = createActivityHarness(t);
+  h.activity.handleTyping({ chatId: 1, userId: 7, username: '<img src=x>' });
+  assert.equal(h.preview(1).querySelector('img'), null);
+  assert.equal(h.preview(1).textContent, '<img src=x> печатает...');
+  h.activity.handleTyping({ chatId: 1, userId: 8, username: 'Bob' });
+  assert.equal(h.preview(1).textContent, '<img src=x>, Bob печатают...');
+  h.activity.handleTyping({ chatId: 1, userId: 9, username: 'Bot', activity: 'chatshot_generating' });
+  assert.equal(h.preview(1).textContent, 'chatShot генерируется...');
+  h.dom.window.BananzaI18n.setLanguage('en');
+  h.renderer.renderChatList();
+  assert.equal(h.preview(1).textContent, 'chatShot is generating...');
+  h.activity.handleTyping({ chatId: 1, userId: 9, isTyping: false });
+  assert.equal(h.preview(1).textContent, '<img src=x>, Bob are typing...');
+  h.activity.remove(1, 7);
+  assert.equal(h.preview(1).textContent, 'Bob is typing...');
+  h.activity.handleTyping({ chatId: 1, userId: 10, username: 'Bob' });
+  h.activity.remove(1, 8);
+  assert.equal(h.preview(1).textContent, 'Bob is typing...');
+  assert.equal(h.activity.getEntries(1)[0].userId, 10);
+  h.activity.clearChat(1);
+  assert.equal(h.preview(1).textContent, 'Old first');
+  assert.equal(h.timers.size, 0);
+});
+
+test('chat activity survives folder/search rerenders and clears all timers on reset', (t) => {
+  const h = createActivityHarness(t);
+  h.activity.handleTyping({ chatId: 1, userId: 7, username: 'Bob' });
+  h.activity.handleTyping({ chatId: 2, userId: 8, username: 'Ada' });
+  h.renderer.renderChatList('second');
+  assert.equal(h.preview(1), null);
+  assert.equal(h.preview(2).textContent, 'Ada печатает...');
+  h.folders.setActiveFolderId(9, { persist: false });
+  h.renderer.renderChatList();
+  assert.equal(h.preview(1), null);
+  assert.equal(h.preview(2).textContent, 'Ada печатает...');
+  h.folders.setActiveFolderId(0, { persist: false });
+  h.renderer.renderChatList();
+  assert.equal(h.preview(1).textContent, 'Bob печатает...');
+  h.activity.clear();
+  assert.equal(h.preview(1).textContent, 'Old first');
+  assert.equal(h.preview(2).textContent, 'Old second');
+  assert.equal(h.timers.size, 0);
+  h.advance(5000);
+  h.renderer.renderChatList();
+  assert.equal(h.preview(1).textContent, 'Old first');
+  h.store.setHiddenChatSearch('secret', [{ id: 5, name: 'Secret', type: 'group', last_text: 'Hidden message' }]);
+  h.activity.handleTyping({ chatId: 5, userId: 8, username: 'Ada' });
+  h.renderer.renderChatList('secret');
+  assert.equal(h.preview(5).textContent, 'Ada печатает...');
+  h.activity.remove(5, 8);
+  assert.equal(h.preview(5).textContent, 'Hidden message');
+});
+
+test('typing WS dispatch updates every chat and preserves the existing in-chat indicator', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => dom.window.close());
+  const { window } = dom;
+  const testing = window.BananzaAppBridge.__testing;
+  testing.setChats([
+    { id: 1, name: 'First', type: 'group', last_text: 'First message' },
+    { id: 2, name: 'Second', type: 'group', last_text: 'Second message' },
+  ], { currentChatId: 1 });
+  const preview = (id) => window.document.querySelector(`.chat-item[data-chat-id="${id}"] .chat-item-preview`);
+  const typingBar = window.document.getElementById('typingBar');
+  await testing.handleWSMessage({ type: 'typing', chatId: 2, userId: 7, username: 'Bob' });
+  assert.match(preview(2).textContent, /Bob/);
+  assert.equal(typingBar.classList.contains('hidden'), true);
+  await testing.handleWSMessage({ type: 'typing', chatId: 1, userId: 8, username: 'Ada' });
+  assert.match(preview(1).textContent, /Ada/);
+  assert.equal(typingBar.textContent, 'Ada печатает...');
+  await testing.handleWSMessage({ type: 'typing', chatId: 1, userId: 1, username: 'Self' });
+  assert.doesNotMatch(preview(1).textContent, /Self/);
+  await testing.handleWSMessage({ type: 'typing', chatId: 2, userId: 9, username: 'Bot', activity: 'chatshot_generating' });
+  assert.match(preview(2).textContent, /chatShot/);
+  await testing.handleWSMessage({ type: 'typing', chatId: 2, userId: 9, isTyping: false });
+  assert.match(preview(2).textContent, /Bob/);
+  await testing.handleWSMessage({ type: 'message', message: {
+    id: 100, chat_id: 2, user_id: 7, username: 'Bob', display_name: 'Bob', text: 'Fresh message', created_at: '2026-10-01T10:00:00Z',
+  } });
+  assert.match(preview(2).textContent, /Fresh message/);
+  assert.equal(preview(2).classList.contains('chat-item-activity'), false);
+  assert.equal(typingBar.textContent, 'Ada печатает...');
+  await testing.handleWSMessage({ type: 'typing', chatId: 1, userId: 8, username: 'Ada', isTyping: false });
+  assert.equal(typingBar.classList.contains('hidden'), true);
+  await testing.handleWSMessage({ type: 'typing', chatId: 2, userId: 7, username: 'Bob' });
+  window.__chatListTestSocket.close();
+  assert.equal(preview(2).classList.contains('chat-item-activity'), false);
+  await testing.handleWSMessage({ type: 'typing', chatId: 2, userId: 7, username: 'Bob' });
+  await testing.handleWSMessage({ type: 'chat_removed', chatId: 2 });
+  assert.equal(preview(2), null);
+  testing.setChats([{ id: 2, name: 'Second', type: 'group', last_text: 'Restored' }]);
+  assert.equal(preview(2).textContent, 'Restored');
+  await testing.handleWSMessage({ type: 'typing', chatId: 2, userId: 7, username: 'Bob' });
+  window.document.getElementById('profileLogoutBtn').click();
+  await new Promise((resolve) => window.setTimeout(resolve, 0));
+  assert.equal(window.localStorage.getItem('token'), null);
+  assert.equal(preview(2).textContent, 'Restored');
 });

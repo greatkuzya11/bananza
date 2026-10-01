@@ -150,6 +150,37 @@
       return `<span class="chat-item-document-preview">${esc(t('Document'))}${title ? ` &middot; ${esc(title)}` : ''}</span>`;
     }
 
+    function updateItemActivity(el, chat) {
+      const preview = el.querySelector('.chat-item-preview');
+      if (!preview) return;
+      const entries = opts.activity?.getEntries(chat.id) || [];
+      let html;
+      if (entries.length) {
+        const names = entries.map((entry) => entry.username || t('Someone'));
+        const label = entries.some((entry) => entry.activity === 'chatshot_generating')
+          ? t('chatShot is generating')
+          : t(entries.length === 1 ? '{names} is typing' : '{names} are typing', { names: names.join(', ') });
+        html = `<span class="typing-bar-label">${esc(label)}</span><span class="typing-bar-dots" aria-hidden="true"><span class="typing-bar-dot">.</span><span class="typing-bar-dot">.</span><span class="typing-bar-dot">.</span></span>`;
+      } else {
+        html = isDocumentChat(chat) ? renderDocumentPreviewHtml(chat) : renderChatLastPreviewHtml(chat);
+      }
+      preview.classList.toggle('chat-item-activity', entries.length > 0);
+      // Keep the dots alive when a heartbeat only extends the activity timeout.
+      if (preview.__previewHtml !== html) {
+        preview.innerHTML = html;
+        preview.__previewHtml = html;
+      }
+    }
+
+    function updateChatActivity(chatId) {
+      const id = Number(chatId);
+      if (!Number.isInteger(id) || id <= 0) return;
+      doc.querySelectorAll(`.chat-item[data-chat-id="${id}"]`).forEach((el) => {
+        const chat = store?.getChatById?.(id) || el.__chatListChat;
+        if (chat) updateItemActivity(el, chat);
+      });
+    }
+
     function chatItemAvatarHtml(chat) {
       if (typeof actions.chatItemAvatarHtml === 'function') return actions.chatItemAvatarHtml(chat);
       if (isDocumentChat(chat)) {
@@ -272,7 +303,7 @@
         </div>
         <div class="chat-item-last">
           ${callIndicator}
-          <span>${isDocumentChat(chat) ? renderDocumentPreviewHtml(chat) : renderChatLastPreviewHtml(chat)}</span>
+          <span class="chat-item-preview">${isDocumentChat(chat) ? renderDocumentPreviewHtml(chat) : renderChatLastPreviewHtml(chat)}</span>
           ${unread}
         </div>
       </div>
@@ -281,6 +312,8 @@
         el.innerHTML = nextHtml;
         el.__chatListHtml = nextHtml;
       }
+      el.__chatListChat = chat;
+      updateItemActivity(el, chat);
       el.onclick = (event) => {
         if (typeof state.shouldSuppressChatItemTap === 'function' && state.shouldSuppressChatItemTap(event)) return;
         const openAction = hiddenSearchResult
@@ -476,6 +509,7 @@
     }
 
     return {
+      updateChatActivity,
       appendChatListSeparator,
       appendChatListEmptyState,
       getActiveCallForChatListItem,

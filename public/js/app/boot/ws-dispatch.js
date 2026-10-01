@@ -16,7 +16,10 @@
           (await window.BananzaDialogs.alert('Your account has been blocked by an administrator.'));
           logout();
         },
-        onStateChange: () => syncCoreStateFromRuntime(),
+        onStateChange: () => {
+          syncCoreStateFromRuntime();
+          if (!websocketService.getSocket?.()) chatListControllers.activity.clear();
+        },
       });
       connectWS = (options = {}) => {
         syncCoreStateToRuntime();
@@ -49,6 +52,7 @@
             } catch (e) {}
             // Update chat list regardless
             updateChatListLastMessage(msg.message);
+            chatListControllers.activity.remove(msg.message.chat_id, msg.message.user_id);
             try { if (window.messageCache) window.messageCache.upsertMessage(msg.message).catch(()=>{}); } catch (e) {}
             try {
               if (msg.message.file_type === 'image' && msg.message.file_stored && window.cacheAssets) {
@@ -158,6 +162,7 @@
             break;
           }
           case 'typing': {
+            chatListControllers.activity.handleTyping(msg);
             if (msg.chatId === currentChatId && msg.userId !== currentUser.id) {
               if (msg.isTyping === false) hideTyping(msg.username);
               else showTyping(msg.username, msg);
@@ -186,19 +191,6 @@
               { [msg.userId]: msg.lastReadId },
               { updateVisible: isCurrentChatActivelyVisible(msg.chatId) }
             );
-            if (false && msg.chatId === currentChatId) {
-              // Update own messages UI (double-check) if applicable.
-              messagesEl.querySelectorAll('.msg-row.own').forEach(row => {
-                const msgId = +row.dataset.msgId;
-                if (msgId <= msg.lastReadId) {
-                  const statusEl = row.querySelector('.msg-status');
-                  if (statusEl && !statusEl.classList.contains('read')) {
-                    statusEl.classList.add('read');
-                    statusEl.textContent = '\u2713\u2713';
-                  }
-                }
-              });
-            }
             // Update cached chat object unread info if the event is about the current user
             if (false && msg.userId === currentUser.id) {
               const c = chats.find(c => c.id === msg.chatId);

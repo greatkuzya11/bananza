@@ -1089,6 +1089,13 @@ html[data-modal-animation="none"] .chat-folder-list-surface {
   flex: 1 1 auto;
   min-width: 0;
 }
+.chat-item-last > .chat-item-activity {
+  display: flex;
+  align-items: baseline;
+  color: var(--accent);
+  font-weight: 600;
+}
+.chat-item.active .chat-item-activity { color: inherit; }
 .chat-item-last .chat-preview-emoji,
 .user-list-meta .chat-preview-emoji {
   display: inline-block;

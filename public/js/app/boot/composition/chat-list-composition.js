@@ -28,7 +28,12 @@
       refreshChatListReferences();
       syncCoreStateToRuntime();
     
+      const chatListActivity = window.BananzaApp.chatList.activity.createChatActivityController({
+        getCurrentUserId: () => currentUser?.id,
+        onChange: (chatId) => chatListRenderer.updateChatActivity(chatId),
+      });
       const chatListRenderer = chatListRendererFactory({
+        activity: chatListActivity,
         document,
         window,
         dom: appDom,
@@ -105,6 +110,7 @@
           applyChatBackground: (chat) => applyChatBackground(chat),
           clearCachedChat: (chatId, options = {}) => clearCachedChat(chatId, options),
           clearChatLocalState: (chatId) => {
+            chatListActivity.clearChat(chatId);
             chatPinsByChat.delete(Number(chatId || 0));
             readReceiptController.clearChatMemberLastReads(Number(chatId || 0));
           },
@@ -198,6 +204,7 @@
       });
     
       const chatListControllers = {
+        activity: chatListActivity,
         store: chatListStore,
         renderer: chatListRenderer,
         data: chatListDataController,
