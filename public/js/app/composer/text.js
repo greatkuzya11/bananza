@@ -369,6 +369,9 @@
       const wasMultiline = Boolean(dom.inputRow?.classList.contains('is-multiline'));
       const previousHeight = parseFloat(msgInput.style.height) || 0;
       const previousInputAreaHeight = Math.max(0, dom.inputArea?.getBoundingClientRect?.().height || 0);
+      const messages = dom.messagesEl;
+      const previousMessagesHeight = messages?.clientHeight || 0;
+      const previousScrollTop = messages?.scrollTop || 0;
       const metrics = getComposerInputTextMetrics();
       const richPreviewHeight = syncComposerRichPreview(metrics);
       const normalInputWidth = getNormalComposerInputWidth();
@@ -392,10 +395,22 @@
         if ((previousInputAreaHeight > 0 || previousHeight > 0) && Math.abs(effectiveInputDelta) > 0.5) {
           (actions.noteMobileKeyboardInputDelta || noop)(effectiveInputDelta);
         }
+        const layoutChanged = changed || heightChanged || Math.abs(inputAreaDelta) > 0.5;
+        const mobileLayout = (actions.isMobileLayoutViewport || (() => false))();
+        if (layoutChanged) {
+          // Reserve the full composer height before measuring the message viewport.
+          if (mobileLayout) (actions.syncMobileViewportLayoutState || noop)();
+          if (messages && previousMessagesHeight > 0 && messages.clientHeight > 0) {
+            const heightDelta = previousMessagesHeight - messages.clientHeight;
+            const maxScrollTop = Math.max(0, messages.scrollHeight - messages.clientHeight);
+            messages.scrollTop = Math.max(0, Math.min(maxScrollTop, previousScrollTop + heightDelta));
+          }
+        }
         if ((changed || heightChanged) && state.emojiPickerOpen && (actions.isFloatingSurfaceVisible || (() => false))(dom.emojiPicker)) {
           win.requestAnimationFrame(() => (actions.positionEmojiPicker || noop)(dom.emojiBtn));
         }
-        if ((changed || heightChanged) && (actions.isMobileLayoutViewport || (() => false))()) {
+        if (layoutChanged && mobileLayout) {
+          // Keyboard recovery must capture the already compensated bottom gap.
           (actions.forceMobileViewportLayoutSync || noop)();
           (actions.scheduleMobileViewportRecovery || noop)(90);
         }

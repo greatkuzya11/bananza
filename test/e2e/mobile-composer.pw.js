@@ -264,6 +264,76 @@ async function expectIosKeyboardListAnchored(page) {
   return layout;
 }
 
+for (const mode of ['desktop', 'mobile-closed', 'android', 'android-glass', 'ios']) {
+  test(`composer resize moves messages with its top edge (${mode})`, async ({ page }, testInfo) => {
+    const mobile = mode !== 'desktop';
+    test.skip(mobile !== testInfo.project.name.includes('mobile'), 'viewport-specific regression');
+    await installFakeVisualViewport(page, { ios: mode === 'ios' });
+    await installMediaMocks(page);
+    await registerViaUi(page, makeUser('pwresize'));
+    await openPrivateChat(page, getContext().bobUser.displayName);
+    if (mode === 'android-glass') {
+      await page.evaluate(() => window.BananzaAppearance.apply(document, { theme: 'banan-hero', mode: 'glass' }));
+    }
+    const input = page.locator('#msgInput');
+    await input.focus();
+    if (mode.startsWith('android') || mode === 'ios') {
+      await setFakeVisualViewport(page, { height: 430, offsetTop: 0 });
+      await expect.poll(async () => (await readComposerLayout(page)).snapshot.chatKeyboardLayout).toBe(true);
+    }
+    // Let keyboard stabilization finish before selecting a position in history.
+    await page.waitForTimeout(400);
+    const empty = await readComposerLayout(page);
+    await input.fill('Short chat\nMultiline message');
+    const shortChat = await readComposerLayout(page);
+    expect(shortChat.inputHeight).toBeGreaterThan(empty.inputHeight);
+    expect(shortChat.messagesScrollTop).toBe(0);
+    expect(shortChat.messagesScrollHeight).toBeLessThanOrEqual(shortChat.messagesClientHeight + 1);
+    await page.locator('#sendBtn').click();
+    await expect(input).toHaveValue('');
+    await expect(page.locator('#messages')).toContainText('Multiline message');
+    await expect.poll(async () => Math.abs((await readComposerLayout(page)).inputHeight - empty.inputHeight)).toBeLessThanOrEqual(2);
+    const sent = await readComposerLayout(page);
+    expect(sent.lastMessageBottom).toBeLessThanOrEqual(sent.inputTop + 2);
+    expect(sent.messagesScrollTop).toBe(0);
+    expect(sent.messagesScrollHeight).toBeLessThanOrEqual(sent.messagesClientHeight + 1);
+    await appendSyntheticKeyboardMessages(page, 'text');
+    await page.waitForTimeout(400);
+
+    for (const history of [false, true]) {
+      await input.fill('');
+      await page.waitForTimeout(400);
+      await page.evaluate((inHistory) => {
+        const messages = document.getElementById('messages');
+        messages.scrollTop = messages.scrollHeight - messages.clientHeight - (inHistory ? 350 : 0);
+      }, history);
+
+      for (const value of ['First line\nSecond line', 'First line', 'Line\n'.repeat(20), 'Line\n'.repeat(24), '']) {
+        const before = await readComposerLayout(page);
+        await input.fill(value);
+        const after = await readComposerLayout(page);
+        const growth = after.inputHeight - before.inputHeight;
+        if (value === 'First line\nSecond line' || value === 'Line\n'.repeat(20)) expect(growth).toBeGreaterThan(0);
+        if (value === 'Line\n'.repeat(24)) {
+          expect(Math.abs(growth)).toBeLessThanOrEqual(2);
+          expect(after.msgHeight).toBe(150);
+        }
+        expect(Math.abs(after.inputBottom - before.inputBottom)).toBeLessThanOrEqual(2);
+        expect(Math.abs(before.lastMessageBottom - after.lastMessageBottom - growth)).toBeLessThanOrEqual(2);
+        expect(Math.abs(after.messagesBottomGap - before.messagesBottomGap)).toBeLessThanOrEqual(2);
+        expect(after.messagesBottom).toBeLessThanOrEqual(after.inputTop + 2);
+        if (!history) expect(after.lastMessageBottom).toBeLessThanOrEqual(after.inputTop + 2);
+        // Repeated input/layout events must not apply the same compensation twice.
+        await input.dispatchEvent('input');
+        await page.waitForTimeout(400);
+        const settled = await readComposerLayout(page);
+        expect(Math.abs(settled.lastMessageBottom - after.lastMessageBottom)).toBeLessThanOrEqual(2);
+        expect(Math.abs(settled.messagesBottomGap - after.messagesBottomGap)).toBeLessThanOrEqual(2);
+      }
+    }
+  });
+}
+
 test('mobile composer stays docked when multiline paste causes visual viewport drift', async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.includes('mobile'), 'mobile-only regression');
 

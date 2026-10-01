@@ -3571,10 +3571,10 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
   flex: 0 0 calc(var(--composer-tool-width) + var(--composer-tool-inline-step) + var(--composer-tool-inline-step));
   width: calc(var(--composer-tool-width) + var(--composer-tool-inline-step) + var(--composer-tool-inline-step));
   height: var(--composer-tool-size);
+  /* Keep vertical layout synchronous with composer scroll compensation. */
   transition:
     flex-basis .24s cubic-bezier(.2, .8, .2, 1),
-    width .24s cubic-bezier(.2, .8, .2, 1),
-    height .24s cubic-bezier(.2, .8, .2, 1);
+    width .24s cubic-bezier(.2, .8, .2, 1);
 }
 
 .composer-tool-stack .icon-btn {
