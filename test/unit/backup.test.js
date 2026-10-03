@@ -137,6 +137,7 @@ test('buildBackupManifest records included and excluded backup parts', () => {
   assert.ok(manifest.excluded.includes('bananza.db-wal'));
   assert.ok(manifest.excluded.includes('bananza.db-shm'));
   assert.ok(manifest.excluded.includes('voice/models/*.bin'));
+  assert.ok(manifest.excluded.includes('logs/'));
   assert.deepEqual(manifest.optional_components, {});
   assert.ok(manifest.notes.some((note) => note.includes('Whisper runtime')));
   assert.ok(manifest.notes.some((note) => note.includes('Telegram bot tokens') && note.includes('.secret')));
@@ -188,6 +189,8 @@ test('createStreamingBackupArchive streams safe entries without copying excluded
     fs.writeFileSync(path.join(tempDir, 'bananza.db-shm'), 'shm');
     fs.mkdirSync(path.join(tempDir, '.git'), { recursive: true });
     fs.mkdirSync(path.join(tempDir, 'node_modules'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'logs'), { recursive: true });
+    fs.writeFileSync(path.join(tempDir, 'logs', 'bananza.log'), 'runtime-log-marker');
 
     backup = await createStreamingBackupArchive({
       db,
@@ -222,6 +225,8 @@ test('createStreamingBackupArchive streams safe entries without copying excluded
     assert.equal(paths.has('bananza.db-shm'), false);
     assert.equal(paths.has('.git'), false);
     assert.equal(paths.has('node_modules'), false);
+    assert.ok(![...paths].some((entry) => entry === 'logs' || entry.startsWith('logs/')));
+    assert.ok(backup.manifest.excluded.includes('logs/'));
     if (symlinkCreated) assert.equal(paths.has('uploads/linked-note.txt'), false);
     for (const entry of paths) {
       assert.equal(path.posix.isAbsolute(entry), false);
@@ -320,10 +325,15 @@ test('selected optional env restore replaces only the explicitly selected file',
     fs.mkdirSync(uploadsDir, { recursive: true });
     fs.writeFileSync(path.join(tempDir, '.env'), 'ARCHIVED=1');
     fs.writeFileSync(path.join(tempDir, '.env.local'), 'LOCAL_CURRENT=1');
+    fs.mkdirSync(path.join(tempDir, 'logs'), { recursive: true });
+    fs.writeFileSync(path.join(tempDir, 'logs', 'bananza.log'), 'preserved-log');
     db = new Database(path.join(tempDir, 'bananza.db'));
     backup = await createBackupArchive({ db, rootDir: tempDir, uploadsDir, tempDir, optionalComponents: ['env'] });
+    assert.ok(backup.manifest.excluded.includes('logs/'));
+    await tar.list({ file: backup.archivePath, onentry: (entry) => assert.ok(!entry.path.startsWith('logs/')) });
     fs.writeFileSync(path.join(tempDir, '.env'), 'CURRENT=1');
     session = await createRestorePreview({ archivePath: backup.archivePath, tempDir, rootDir: tempDir });
+    assert.ok(session.preview.manifest.excluded.includes('logs/'));
     const result = await applyRestoreSession({
       db,
       session,
@@ -339,6 +349,7 @@ test('selected optional env restore replaces only the explicitly selected file',
     applyPendingRestoreOnStartup({ rootDir: tempDir, uploadsDir });
     assert.equal(fs.readFileSync(path.join(tempDir, '.env'), 'utf8'), 'ARCHIVED=1');
     assert.equal(fs.readFileSync(path.join(tempDir, '.env.local'), 'utf8'), 'LOCAL_CURRENT=1');
+    assert.equal(fs.readFileSync(path.join(tempDir, 'logs', 'bananza.log'), 'utf8'), 'preserved-log');
   } finally {
     if (db) db.close();
     if (session) fs.rmSync(session.sessionRoot, { recursive: true, force: true });

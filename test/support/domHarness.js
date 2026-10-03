@@ -101,6 +101,7 @@ const appInteractionScriptPaths = Object.freeze([
 const appAdminScriptPaths = Object.freeze([
   'public/js/app/admin/bot-audit.js',
   'public/js/app/admin/backup.js',
+  'public/js/app/admin/logs.js',
   'public/js/app/admin/users.js',
 ]);
 const appAiAdminScriptPaths = Object.freeze([

@@ -9,6 +9,8 @@ const ROOT_FILES = [
   'package-lock.json',
   'backup.js',
   'server.js',
+  'logging.js',
+  'adminLogs.js',
   'db.js',
   'chatFolders.js',
   'documents.js',

@@ -2,6 +2,19 @@
    BananZa — Telegram-like dark theme
    ═══════════════════════════════════════════════════════════════════════════ */
 
+.modal-content.admin-logs-modal { width: min(1100px, 96vw); max-width: 96vw; }
+.admin-logs-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
+.admin-logs-toolbar > label { display: flex; flex-direction: column; gap: 4px; }
+.admin-logs-toolbar > label:has(input[type="checkbox"]) { flex-direction: row; align-items: center; }
+.admin-logs-toolbar .modal-input { margin: 0; }
+.admin-logs-toolbar .settings-item { width: auto; margin: 0; }
+.admin-logs-search { flex: 1 1 180px; }
+.admin-logs-status { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 10px 0; color: var(--text-secondary); font-size: 12px; }
+#adminLogsEntries { height: min(55vh, 600px); min-height: 180px; overflow: auto; border: 1px solid var(--border-light); border-radius: 8px; padding: 8px; background: var(--bg-dark); font: 12px/1.5 monospace; }
+.admin-log-entry { white-space: pre-wrap; overflow-wrap: anywhere; padding: 3px 0; border-bottom: 1px solid var(--border-light); }
+.admin-log-entry[data-level="warn"] { color: color-mix(in srgb, var(--text-primary) 30%, #b87c12); }
+.admin-log-entry[data-level="error"] { color: var(--danger); }
+
 :root {
   color-scheme: dark;
   --modal-animation-speed-factor: 1;

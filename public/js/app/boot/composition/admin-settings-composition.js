@@ -13,10 +13,12 @@
         const factories = {
           botAudit: adminRoot.botAudit?.createBotAuditController,
           backup: adminRoot.backup?.createBackupController,
+          logs: adminRoot.logs?.createLogsController,
           users: adminRoot.users?.createAdminUsersController,
         };
         if (typeof factories.botAudit !== 'function'
           || typeof factories.backup !== 'function'
+          || typeof factories.logs !== 'function'
           || typeof factories.users !== 'function') {
           throw new Error('BananzaApp admin modules are not loaded');
         }
@@ -57,6 +59,7 @@
             getCurrentUser: () => currentUser,
             getToken: () => token,
             onRestoreApplied: () => {
+              resolvedAdminControllers?.logs?.close();
               websocketService.clearReconnectTimer?.();
               localStorage.removeItem('token');
               localStorage.removeItem('user');
@@ -90,6 +93,8 @@
           openAdminBotAuditModal: (userId, displayName) => openAdminBotAuditModal(userId, displayName),
           });
           resolvedAdminControllers = {
+            logs: factories.logs({ document, window, tx, getToken: () => token,
+              getCurrentUser: () => currentUser, openModal: (id, options) => openModal(id, options) }),
             users: adminUsersController,
             botAudit: adminBotAuditController,
             backup: adminBackupController,

@@ -1,5 +1,6 @@
 const path = require('path');
 const { spawn } = require('child_process');
+const { captureHelperStream } = require('../logging');
 
 const DEFAULT_HELPER_PATH = path.join(__dirname, 'vosk_helper.py');
 const DEFAULT_MODELS_DIR = path.join(__dirname, 'models');
@@ -103,6 +104,8 @@ async function launchCandidate({
   child.stderr.on('data', (chunk) => {
     stderr = appendDiagnostic(stderr, chunk);
   });
+  captureHelperStream(child.stdout, 'vosk', 'info');
+  captureHelperStream(child.stderr, 'vosk', 'warn');
   child.once('error', (error) => {
     spawnError = error;
   });

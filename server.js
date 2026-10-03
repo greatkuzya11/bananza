@@ -1,3 +1,5 @@
+const { installLogging, httpLogging } = require('./logging');
+const logger = installLogging();
 require('dotenv').config();
 require('./networkSafety').installNetworkSafety();
 
@@ -73,6 +75,7 @@ if (fs.existsSync(SECRET_PATH)) {
 // Express setup
 const app = express();
 app.set('trust proxy', 1);
+app.use(httpLogging(logger));
 const server = http.createServer(app);
 setupWebSocket(server, JWT_SECRET);
 
@@ -376,6 +379,15 @@ function adminOnly(req, res, next) {
   if (!req.user.is_admin) return res.status(403).json({ error: 'Admin only' });
   next();
 }
+
+require('./adminLogs').registerAdminLogs({
+  app, auth, adminOnly, logger,
+  canReadLogs: (req) => {
+    const payload = jwt.verify(req.headers.authorization.slice(7), JWT_SECRET);
+    const user = db.prepare('SELECT is_admin, is_blocked FROM users WHERE id=?').get(payload.id);
+    return Boolean(user?.is_admin && !user.is_blocked);
+  },
+});
 
 const sharedUserIdsStmt = db.prepare(`
   SELECT DISTINCT cm2.user_id

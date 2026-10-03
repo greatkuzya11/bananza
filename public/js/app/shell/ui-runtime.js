@@ -2706,6 +2706,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         modalManager.registerBuiltins([
           newChatModal,
           adminModal,
+          { modal: 'adminLogsModal', onAfterClose: () => appContext?.services?.admin?.logs?.close() },
           chatInfoModal,
           menuDrawer,
           settingsModal,
@@ -2958,6 +2959,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
           syncCoreStateToRuntime();
         },
         cleanup: () => {
+          appContext?.services?.admin?.logs?.close();
           chatListControllers.activity.clear();
           chatListService.clearCacheSyncTimer();
           openChatController.clearMessageBackgroundSyncTimer();

@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const { captureHelperStream } = require('../logging');
 
 const DEFAULT_MODELS_DIR = path.join(__dirname, 'models');
 const DEFAULT_STARTUP_TIMEOUT_MS = 120_000;
@@ -127,6 +128,8 @@ async function launchCandidate({ command, config, settings, timeoutMs, fetchImpl
   child.stderr.on('data', (chunk) => {
     stderr = appendDiagnostic(stderr, chunk);
   });
+  captureHelperStream(child.stdout, 'whisper', 'info');
+  captureHelperStream(child.stderr, 'whisper', 'warn');
   child.once('error', (error) => {
     spawnError = error;
   });

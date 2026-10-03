@@ -23,6 +23,7 @@ const RECOVERY_ADMIN_COLOR = '#65aadd';
 const PENDING_RESTORE_DIRNAME = 'restore-pending';
 const PENDING_RESTORE_MANIFEST = 'restore-pending.json';
 const DEFAULT_EXCLUDED = [
+  'logs/',
   '.env',
   '.env.local',
   'node_modules/',
@@ -537,6 +538,7 @@ function buildBackupManifest({
     excluded: [...excluded],
     uploads,
     notes: [
+      'Diagnostic logs in logs/ are excluded. Restore preserves the current server logs; new installations start a new log.',
       'User appearance preferences are stored in SQLite. The bananzaAppearance browser cache is device-local, contains only theme/mode IDs, and is not included in server backups.',
       '.env, .env.local, call recordings, and speech recognition models are opt-in backup components.',
       'Whisper runtime/binaries, FFmpeg, node_modules, and deployment service configuration are external dependencies and are not included. Run npm install and reinstall runtime dependencies after restore.',
