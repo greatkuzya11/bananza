@@ -2,6 +2,147 @@ const { test, expect } = require('@playwright/test');
 const { installMediaMocks, makeUser, registerViaUi, loginViaUi, getContext, createApiSession, openPrivateChat, sendComposerMessage } = require('./helpers');
 const catalog = require('../../public/js/appearance');
 
+test('light chat text and reply previews retain contrast on every surface', async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  await installMediaMocks(page);
+  await registerViaUi(page, makeUser('lightquotes'));
+  await page.setViewportSize({ width: testInfo.project.name.includes('mobile') ? 360 : 1280, height: 900 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await openPrivateChat(page, getContext().bobUser.displayName);
+  await sendComposerMessage(page, 'Original message with a long quotation that should stay readable and truncate inside the reply preview.');
+  const sourceId = Number(await page.locator('.msg-row.own').last().getAttribute('data-msg-id'));
+  // Exercise the production renderer with deterministic incoming/outgoing payloads.
+  await page.evaluate(({ sourceId, bobId }) => {
+    const bridge = window.BananzaAppBridge;
+    const user = bridge.getCurrentUser();
+    const base = { chat_id: bridge.getCurrentChatId(), created_at: new Date().toISOString().slice(0, 19),
+      text: 'Readable message with [a link](https://example.com).\n\n> Markdown quotation',
+      reply_to_id: sourceId, reply_display_name: 'Quote author', reply_text: 'A long quoted message. '.repeat(12),
+      forwarded_from_display_name: 'Forward author', avatar_color: '#c6d9ef' };
+    bridge.__testing.appendMessage({ ...base, id: 900001, user_id: bobId, display_name: 'Incoming author' });
+    bridge.__testing.appendMessage({ ...base, id: 900002, user_id: user.id, display_name: user.display_name });
+    bridge.__testing.appendMessage({ ...base, id: 900003, user_id: bobId, display_name: 'Incoming author',
+      text: '\u{1f642}', reply_to_id: null, forwarded_from_display_name: null });
+    bridge.__testing.setReply(sourceId, 'Quote author', base.reply_text);
+  }, { sourceId, bobId: getContext().bobUserId });
+  await expect(page.locator('.msg-reply')).toHaveCount(2);
+  await expect(page.locator('.msg-text blockquote')).toHaveCount(2);
+  await expect(page.locator('.msg-forwarded')).toHaveCount(2);
+
+  for (const theme of catalog.themes.filter(theme => theme.light)) {
+    for (const mode of catalog.modes) {
+      for (const wallpaper of ['none', '#000', '#fff', 'pattern']) {
+        await page.evaluate(({ theme, mode, wallpaper }) => {
+          window.BananzaAppearance.apply(document, { theme, mode });
+          const messages = document.querySelector('.messages');
+          messages.classList.toggle('has-bg', wallpaper !== 'none');
+          document.querySelector('#chatView').classList.toggle('has-chat-background', wallpaper !== 'none');
+          document.querySelector('#chatBackgroundLayer').style.backgroundImage = wallpaper === 'none' ? '' : wallpaper === 'pattern'
+            ? 'repeating-linear-gradient(35deg, #10262c 0 20px, #f9e4b7 20px 40px)'
+            : `linear-gradient(${wallpaper}, ${wallpaper})`;
+        }, { theme: theme.id, mode: mode.id, wallpaper });
+        const failures = await page.evaluate(() => {
+          const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1;
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          const rgba = color => {
+            ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = color; ctx.fillRect(0, 0, 1, 1);
+            return Array.from(ctx.getImageData(0, 0, 1, 1).data);
+          };
+          const over = (bg, fg) => bg.map((v, i) => i === 3 ? 255 : Math.round(fg[i] * fg[3] / 255 + v * (1 - fg[3] / 255)));
+          const lum = rgb => rgb.slice(0, 3).map(v => { v /= 255; return v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; })
+            .reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i], 0);
+          // Measure text on surfaces here. Wallpaper labels use shadows (checked below),
+          // which this foreground/background ratio does not model. Color emoji have no CSS ink.
+          const selectors = ['.msg-reply-text', '.msg-reply-name', '.msg-row:not(.emoji-only-message) .msg-text',
+            '.msg-text blockquote', '.msg-row:not(.emoji-only-message) .msg-time', '.reply-bar-name', '.reply-bar-text', '#msgInput'];
+          const failures = [];
+          for (const selector of selectors) for (const el of document.querySelectorAll(`#chatView ${selector}`)) {
+            const chain = [];
+            for (let parent = el; parent; parent = parent.parentElement) chain.unshift(parent);
+            // The real wallpaper is a sibling beneath header, messages and composer.
+            if (document.querySelector('#chatView').classList.contains('has-chat-background')) {
+              chain.splice(chain.findIndex(parent => parent.id === 'chatView') + 1, 0, document.querySelector('#chatBackgroundLayer'));
+            }
+            let backgrounds = [[255, 255, 255, 255]];
+            for (const parent of chain) {
+              const style = getComputedStyle(parent);
+              backgrounds = backgrounds.map(bg => over(bg, rgba(style.backgroundColor)));
+              // Check gradient extrema as well as transparent stops. This includes wallpaper,
+              // bubble tint, rich gradients and glass sheen, rather than comparing root tokens.
+              if (style.backgroundImage !== 'none') {
+                const stops = style.backgroundImage.match(/(?:rgba?|color)\([^)]*\)|\btransparent\b/g) || [];
+                if (stops.length) backgrounds = backgrounds.flatMap(bg => stops.map(stop => over(bg, rgba(stop))));
+              }
+              backgrounds = [...new Map(backgrounds.map(bg => [bg.join(','), bg])).values()];
+            }
+            const isReplyName = el.classList.contains('reply-bar-name');
+            for (const variant of isReplyName ? ['reply', 'edit'] : ['normal']) {
+              if (isReplyName) el.closest('.reply-bar').classList.toggle('edit-bar', variant === 'edit');
+              for (const pseudo of el.id === 'msgInput' ? [null, '::placeholder'] : [null]) {
+                const style = getComputedStyle(el, pseudo);
+                const fg = rgba(style.color);
+                fg[3] *= Number(style.opacity);
+                const ratio = Math.min(...backgrounds.map(bg => {
+                  const levels = [lum(bg), lum(over(bg, fg))].sort((a, b) => b - a);
+                  return (levels[0] + .05) / (levels[1] + .05);
+                }));
+                if (ratio < 4.5) failures.push({ selector, pseudo, variant, side: el.closest('.msg-row')?.className, color: style.color, ratio });
+              }
+            }
+            if (isReplyName) el.closest('.reply-bar').classList.remove('edit-bar');
+          }
+          return failures;
+        });
+        expect(failures, `${theme.id}/${mode.id}/${wallpaper}`).toEqual([]);
+      }
+      const labelStyles = await page.locator('#chatView :is(.msg-sender, .chat-title, .chat-status, .msg-forwarded, .msg-text a, .emoji-only-message .msg-time)')
+        .evaluateAll(labels => labels.map(el => {
+          const style = getComputedStyle(el);
+          return { selector: el.className, background: style.backgroundColor, shadow: style.textShadow };
+        }));
+      expect(labelStyles.length).toBeGreaterThanOrEqual(8);
+      expect(labelStyles.filter(style => style.background !== 'rgba(0, 0, 0, 0)' || style.shadow === 'none')).toEqual([]);
+      await page.screenshot({ path: testInfo.outputPath(`readable-${theme.id}-${mode.id}.png`), animations: 'disabled' });
+    }
+  }
+
+  // The same DOM must respond to theme switches without a reload.
+  await page.evaluate(bobId => window.BananzaAppBridge.__testing.handleWSMessage({
+    type: 'user_updated', user: { id: bobId, display_name: 'Updated author', avatar_color: '#fff0dd' },
+  }), getContext().bobUserId);
+  for (const theme of ['lavender', 'bananza', 'lavender']) {
+    await page.evaluate(theme => window.BananzaAppearance.apply(document, { theme, mode: 'glass' }), theme);
+    const colors = await page.locator('.msg-reply-text').last().evaluate(el => ({
+      actual: getComputedStyle(el).color,
+      light: getComputedStyle(document.body).color,
+    }));
+    if (theme === 'lavender') expect(colors.actual).toBe(colors.light);
+    else expect(colors.actual).toBe('rgba(255, 255, 255, 0.7)');
+    const sender = page.locator('.msg-sender').first();
+    await expect(sender).toHaveText('Updated author');
+    await expect(sender).toHaveCSS('color', 'rgb(255, 240, 221)');
+    await expect(sender).not.toHaveCSS('text-shadow', 'none');
+  }
+  const quoteLayout = await page.locator('.msg-reply-text').last().evaluate(el => ({
+    ellipsis: getComputedStyle(el).textOverflow,
+    clipped: el.scrollWidth > el.clientWidth,
+    overflow: el.closest('.msg-bubble').scrollWidth - el.closest('.msg-bubble').clientWidth,
+  }));
+  expect(quoteLayout.ellipsis).toBe('ellipsis');
+  expect(quoteLayout.overflow).toBeLessThanOrEqual(1);
+  if (testInfo.project.name.includes('mobile')) expect(quoteLayout.clipped).toBe(true);
+  await page.locator('.msg-reply').last().click();
+  await expect(page.locator(`.msg-row[data-msg-id="${sourceId}"]`)).toBeInViewport();
+  await page.evaluate(sourceId => window.BananzaAppBridge.__testing.setEditFromRow(document.querySelector(`.msg-row[data-msg-id="${sourceId}"]`)), sourceId);
+  await expect(page.locator('#replyBar')).toHaveClass(/edit-bar/);
+  const editColors = await page.locator('#replyBarName').evaluate(el => ({
+    edit: getComputedStyle(el).color,
+    quote: getComputedStyle(document.querySelector('.msg-reply-name')).color,
+  }));
+  expect(editColors.edit).toBe(editColors.quote);
+  await page.screenshot({ path: testInfo.outputPath('readable-edit-preview.png'), animations: 'disabled' });
+});
+
 test('glass pinned messages fit the panel and preserve scrolling and unpin actions', async ({ page }, testInfo) => {
   await installMediaMocks(page);
   const user = makeUser('glasspins');

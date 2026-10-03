@@ -1439,7 +1439,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
           const senderEl = group.querySelector('.msg-sender');
           if (senderEl) {
             senderEl.textContent = user.display_name || senderEl.textContent;
-            senderEl.style.color = user.avatar_color || senderEl.style.color;
+            if (user.avatar_color) senderEl.style.setProperty('--msg-sender-color', user.avatar_color);
           }
         });
     
@@ -1458,7 +1458,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
           const senderEl = row.querySelector('.msg-sender');
           if (senderEl) {
             senderEl.textContent = user.display_name || senderEl.textContent;
-            senderEl.style.color = user.avatar_color || senderEl.style.color;
+            if (user.avatar_color) senderEl.style.setProperty('--msg-sender-color', user.avatar_color);
           }
         });
       }

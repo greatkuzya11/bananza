@@ -807,7 +807,7 @@
       if (showName && (!isOwn || isCompactView())) {
         const nameColor = isOwn ? (getCurrentUser().avatar_color || '#65aadd') : (msg.avatar_color || '#65aadd');
         const nameText = isOwn ? getCurrentUser().display_name : msg.display_name;
-        html += `<div class="msg-sender" style="color:${nameColor}">${esc(nameText)}</div>`;
+        html += `<div class="msg-sender" style="--msg-sender-color:${nameColor}">${esc(nameText)}</div>`;
       }
     
       html += '<div class="msg-bubble">';

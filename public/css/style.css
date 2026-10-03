@@ -1873,6 +1873,7 @@ html[data-modal-animation="none"] .scroll-date-indicator {
 
 .msg-sender {
   font-size: 13px; font-weight: 600; margin-bottom: 2px; padding-left: 12px;
+  color: var(--msg-sender-color, var(--accent));
   text-shadow: var(--message-label-text-shadow);
 }
 
@@ -10066,6 +10067,29 @@ html[data-color-scheme="light"] :is(.msg-text pre, .msg-text code, .document-edi
   background-color: var(--bg-input); color: var(--text-primary); border-color: var(--border-light);
 }
 html[data-color-scheme="light"] :is(.poll-card, .poll-style-card) { color: var(--text-primary); }
+
+/* Chat text must follow the surface palette, including nested reply previews. */
+html[data-color-scheme="light"] #chatView {
+  --chat-readable-accent: color-mix(in srgb, var(--accent) 70%, var(--text-primary));
+  --chat-label-text-shadow:
+    -1px -1px 0 rgba(255,255,255,.95),
+    1px -1px 0 rgba(255,255,255,.95),
+    -1px 1px 0 rgba(255,255,255,.95),
+    1px 1px 0 rgba(255,255,255,.95),
+    0 2px 6px rgba(255,255,255,.85);
+}
+html[data-color-scheme="light"] #chatView .msg-reply-text { color: var(--text-primary); }
+html[data-color-scheme="light"] #chatView :is(.msg-reply-name, .msg-forwarded, .reply-bar-name, .msg-text a) {
+  color: var(--chat-readable-accent);
+}
+html[data-color-scheme="light"] #chatView .msg-text a { text-decoration: underline; }
+html[data-color-scheme="light"] #chatView :is(.msg-reply, .reply-bar) {
+  background-color: var(--bg-input);
+}
+html[data-color-scheme="light"] #chatView .reply-bar.edit-bar { border-left-color: var(--chat-readable-accent); }
+html[data-color-scheme="light"] #chatView :is(.chat-title, .chat-status, .msg-forwarded, .msg-text a, .emoji-only-message .msg-time) {
+  text-shadow: var(--chat-label-text-shadow);
+}
 
 html[data-visual-mode="glass"] {
   --radius: 16px; --radius-msg: 20px;
