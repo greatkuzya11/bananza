@@ -103,21 +103,23 @@
             </div>
           </div>
           ${badges ? `<div class="admin-user-badges">${badges}</div>` : ''}
-          <div class="admin-user-controls">
-            ${!u.is_admin ? `<div class="admin-user-toggle">
-              <span>Add bots</span>
-              <label class="toggle-switch">
-                <input type="checkbox" class="bot-access-toggle" data-uid="${u.id}" ${u.can_add_bots_to_chats ? 'checked' : ''}>
-                <span class="toggle-slider"></span>
-              </label>
+          <div class="admin-user-tools">
+            <div class="admin-user-controls">
+              ${!u.is_admin ? `<div class="admin-user-toggle">
+                <span>Add bots</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" class="bot-access-toggle" data-uid="${u.id}" ${u.can_add_bots_to_chats ? 'checked' : ''}>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>` : ''}
+              <button class="admin-user-audit-btn admin-user-token-btn" data-uid="${u.id}" type="button">${esc(tx('API token'))}</button>
+              <button class="admin-user-audit-btn bot-audit-btn" data-uid="${u.id}" data-name="${esc(u.display_name)}" type="button">Bot audit</button>
+            </div>
+            ${!u.is_admin ? `<div class="admin-user-actions">
+              <button class="reset-btn" data-uid="${u.id}" title="Reset password to 123456">\ud83d\udd11 Reset</button>
+              <button class="block-btn ${u.is_blocked ? 'is-blocked' : ''}" data-uid="${u.id}">${u.is_blocked ? 'Unblock' : 'Block'}</button>
             </div>` : ''}
-            <button class="admin-user-audit-btn admin-user-token-btn" data-uid="${u.id}" type="button">${esc(tx('API token'))}</button>
-            <button class="admin-user-audit-btn bot-audit-btn" data-uid="${u.id}" data-name="${esc(u.display_name)}" type="button">Bot audit</button>
           </div>
-          ${!u.is_admin ? `<div class="admin-user-actions">
-            <button class="reset-btn" data-uid="${u.id}" title="Reset password to 123456">\ud83d\udd11 Reset</button>
-            <button class="block-btn ${u.is_blocked ? 'is-blocked' : ''}" data-uid="${u.id}">${u.is_blocked ? 'Unblock' : 'Block'}</button>
-          </div>` : ''}
           ${renderTokenControls()}
         </div>
       `;

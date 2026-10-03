@@ -4934,69 +4934,91 @@ html[data-visual-mode="rich"] .poll-card {
 }
 #adminUserList .admin-user-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px 12px;
+  gap: 6px 8px;
+  padding: 8px;
 }
 #adminUserList .admin-user-row .avatar {
   grid-column: 1;
-  grid-row: 1 / span 4;
+  grid-row: 1;
   align-self: start;
+  width: 32px;
+  height: 32px;
 }
 #adminUserList .admin-user-row .info {
   grid-column: 2;
   align-self: start;
+}
+#adminUserList .admin-user-row .name {
+  overflow-wrap: anywhere;
+}
+#adminUserList .admin-user-row .meta {
+  gap: 1px;
+  font-size: 11px;
+  line-height: 1.35;
 }
 #adminUserList .admin-user-row .admin-user-badges {
   grid-column: 3;
   justify-self: end;
   align-self: start;
 }
+#adminUserList .admin-user-tools {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
 #adminUserList .admin-user-row .admin-user-controls {
-  grid-column: 4;
+  flex: 1;
   margin-left: 0;
-  justify-self: end;
-  justify-content: flex-end;
+  min-width: 0;
+  gap: 6px;
+  justify-content: flex-start;
   align-self: start;
 }
 #adminUserList .admin-user-row .admin-user-actions {
-  grid-column: 5;
-  justify-self: end;
-  align-self: start;
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+#adminUserList .admin-user-row :is(.admin-user-controls, .admin-user-actions) > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 32px;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+#adminUserList .admin-user-toggle {
+  gap: 6px;
 }
 #adminUserList .admin-user-row .admin-user-token-panel {
-  grid-column: 2 / -1;
+  grid-column: 1 / -1;
 }
 @media (max-width: 720px) {
   #adminUserList .admin-user-row {
     grid-template-columns: auto minmax(0, 1fr);
     align-items: start;
-    gap: 8px 12px;
-  }
-  #adminUserList .admin-user-row .avatar {
-    grid-row: 1 / span 5;
   }
   #adminUserList .admin-user-row .info,
-  #adminUserList .admin-user-row .admin-user-badges,
-  #adminUserList .admin-user-row .admin-user-controls,
-  #adminUserList .admin-user-row .admin-user-actions {
+  #adminUserList .admin-user-row .admin-user-badges {
     grid-column: 2;
     justify-self: start;
   }
-  #adminUserList .admin-user-row .admin-user-controls,
-  #adminUserList .admin-user-row .admin-user-actions {
-    width: 100%;
+  #adminUserList .admin-user-toggle {
+    flex-basis: 100%;
+    min-height: 32px;
   }
-  #adminUserList .admin-user-row .admin-user-controls {
-    justify-content: flex-start;
-  }
-  #adminUserList .admin-user-row .admin-user-actions {
-    justify-content: flex-start;
-    flex-wrap: wrap;
-  }
-  #adminUserList .admin-user-row .admin-user-token-panel {
-    grid-column: 2;
-    width: 100%;
+  #adminUserList .admin-user-actions {
+    flex-direction: column;
   }
   .admin-user-token-panel .api-token-compact-grid,
   .api-token-custom-row {
@@ -10297,39 +10319,6 @@ html[data-visual-mode="glass"] button:disabled { opacity: .48; cursor: not-allow
   html[data-visual-mode="glass"] :is(.btn-primary, .send-btn):hover:not(:disabled) { background: var(--accent-hover); }
 }
 html[data-visual-mode="glass"] :is(.profile-action-btn-danger, .profile-logout-btn) { color: var(--danger); }
-html[data-visual-mode="glass"] #adminUserList .admin-user-row {
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
-  row-gap: 8px;
-}
-html[data-visual-mode="glass"] #adminUserList .admin-user-row .avatar { grid-row: 1 / span 5; }
-html[data-visual-mode="glass"] #adminUserList .admin-user-row :is(.info, .admin-user-badges, .admin-user-controls, .admin-user-actions) {
-  grid-column: 2;
-  justify-self: start;
-}
-html[data-visual-mode="glass"] #adminUserList .admin-user-row :is(.admin-user-controls, .admin-user-actions) {
-  width: 100%;
-  min-width: 0;
-  margin: 0;
-  gap: 8px;
-  justify-content: flex-start;
-}
-html[data-visual-mode="glass"] #adminUserList .admin-user-row .admin-user-controls { flex-wrap: wrap; }
-html[data-visual-mode="glass"] #adminUserList .admin-user-row .admin-user-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-html[data-visual-mode="glass"] #adminUserList .admin-user-row :is(.admin-user-controls, .admin-user-actions) > button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 44px;
-  min-width: 0;
-  max-width: 100%;
-  margin: 0;
-  padding: 6px 10px;
-}
 html[data-visual-mode="glass"] .document-workspace { min-width: 0; gap: 6px; padding: 6px 10px 10px; background: transparent; }
 html[data-visual-mode="glass"] :is(.document-toolbar, .document-topbar) {
   flex-shrink: 0; min-width: 0; padding: 3px 6px;
