@@ -10319,6 +10319,14 @@ html[data-visual-mode="glass"] :is(input[type="checkbox"], input[type="radio"], 
 html[data-visual-mode="glass"] :is(button, [role="button"], a, input, textarea, select, [tabindex]):focus-visible {
   outline: 2px solid var(--accent); outline-offset: 3px;
 }
+/* Field focus rings sit on the border without an outer gap. */
+html[data-visual-mode="glass"] :is(
+  input:not(:is([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="hidden"], [type="button"], [type="submit"], [type="reset"], [type="image"])),
+  textarea,
+  select
+):focus-visible {
+  outline-offset: -2px;
+}
 html[data-visual-mode="glass"] :is(button, .btn-primary, .btn-sm) { border-radius: 16px; }
 html[data-visual-mode="glass"] :is(.icon-btn, .modal-close, .send-btn, .scroll-bottom-btn, .profile-camera-capture-btn) {
   border-radius: 50%; min-width: 44px; min-height: 44px; flex-shrink: 0;

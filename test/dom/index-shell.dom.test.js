@@ -27,7 +27,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
 
   assert.deepEqual(styles, [
     '/vendor/leaflet/leaflet.css?v=1.9.4',
-    '/css/style.css?v=20261001-chat-activity',
+    '/css/style.css?v=20261003-input-focus',
     '/css/calls.css?v=20260621-call-mobile-controls',
     '/css/voice.css?v=glass-composer-1',
     '/css/telegram-transcription.css?v=20260915-settings-spacing',
