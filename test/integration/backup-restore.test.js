@@ -264,6 +264,7 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
       assert.equal(fs.existsSync(path.join(sandbox.appDir, 'uploads', ...telegramImageJob.stored_image_path.split('/'))), true);
       const appearance = restoredDb.prepare("SELECT ui_theme,ui_visual_mode FROM users WHERE ui_visual_mode='glass' LIMIT 1").get();
       assert.deepEqual(appearance, { ui_theme: 'pearl', ui_visual_mode: 'glass' });
+      assert.ok(restoredDb.prepare('SELECT 1 FROM schema_migrations WHERE name=?').get('2026-10-04-glass-interface'));
       assert.equal(restoredDb.pragma('integrity_check', { simple: true }), 'ok');
     } finally {
       restoredDb.close();

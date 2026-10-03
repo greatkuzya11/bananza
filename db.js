@@ -477,6 +477,18 @@ try {
   db.exec("ALTER TABLE users ADD COLUMN ui_visual_mode TEXT DEFAULT 'classic'");
 }
 db.prepare(`UPDATE users SET ui_visual_mode='classic' WHERE ui_visual_mode IS NULL OR ui_visual_mode NOT IN (${appearanceCatalog.modeIds.map(() => '?').join(',')})`).run(...appearanceCatalog.modeIds);
+// Apply the glass rollout once per database, preserving themes and later user choices.
+// The migration marker travels with SQLite backups, including pending restores.
+db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+  name TEXT PRIMARY KEY,
+  applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+db.transaction(() => {
+  const migration = '2026-10-04-glass-interface';
+  if (db.prepare('SELECT 1 FROM schema_migrations WHERE name=?').get(migration)) return;
+  db.prepare("UPDATE users SET ui_visual_mode='glass'").run();
+  db.prepare('INSERT INTO schema_migrations(name) VALUES(?)').run(migration);
+})();
 try {
   db.prepare("SELECT ui_modal_animation FROM users LIMIT 1").get();
 } catch {
