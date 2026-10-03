@@ -3620,6 +3620,11 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
   min-height: calc(var(--composer-tool-size) + var(--composer-tool-step) + var(--composer-tool-step));
 }
 
+.input-row.is-multiline .composer-tool-stack,
+.input-row.is-multiline .send-btn {
+  align-self: center;
+}
+
 .composer-input-wrap {
   position: relative;
   flex: 1;
