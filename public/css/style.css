@@ -4399,7 +4399,8 @@ html[data-modal-animation="none"] .search-panel {
   height: min(620px, 80vh);
 }
 #newChatModal .modal-body {
-  --horizontal-swipe-page-background: var(--surface-elevated, var(--bg-modal));
+  /* Swipe previews share the modal background, just like the live panes. */
+  --horizontal-swipe-page-background: transparent;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -4514,7 +4515,6 @@ select.modal-input optgroup {
   visibility: hidden;
 }
 #newChatModal .horizontal-swipe-page > .tab-pane {
-  background: var(--horizontal-swipe-page-background, var(--bg-modal));
   display: flex;
   flex-direction: column;
   flex: 1;
