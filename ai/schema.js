@@ -149,6 +149,7 @@ function initAiSchema(db) {
       image_model TEXT DEFAULT '',
       image_aspect_ratio TEXT DEFAULT '',
       image_resolution TEXT DEFAULT '',
+      image_seed INTEGER NOT NULL DEFAULT -1,
       allow_text INTEGER DEFAULT 1,
       allow_image_generate INTEGER DEFAULT 0,
       allow_image_edit INTEGER DEFAULT 0,
@@ -521,6 +522,7 @@ function initAiSchema(db) {
   addColumnIfMissing(db, 'ai_bots', 'image_model', "image_model TEXT DEFAULT ''");
   addColumnIfMissing(db, 'ai_bots', 'image_aspect_ratio', "image_aspect_ratio TEXT DEFAULT ''");
   addColumnIfMissing(db, 'ai_bots', 'image_resolution', "image_resolution TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'ai_bots', 'image_seed', 'image_seed INTEGER NOT NULL DEFAULT -1');
   addColumnIfMissing(db, 'ai_bots', 'allow_text', 'allow_text INTEGER DEFAULT 1');
   addColumnIfMissing(db, 'ai_bots', 'allow_image_generate', 'allow_image_generate INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'ai_bots', 'allow_image_edit', 'allow_image_edit INTEGER DEFAULT 0');

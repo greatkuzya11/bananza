@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
-const { generateImage, editImage, testConnection, cleanBaseUrl, cleanSize, TURBO_SIGMAS } = require('../ai/localImage');
+const { generateImage, editImage, testConnection, cleanBaseUrl, cleanSize, cleanSeed, TURBO_SIGMAS } = require('../ai/localImage');
 
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6VZ0AAAAASUVORK5CYII=';
 
@@ -31,6 +31,7 @@ test('local image generation polls queued jobs and sends the Turbo schedule', as
   assert.equal(submitted.width, 768);
   assert.equal(submitted.height, 1024);
   assert.equal(submitted.batch_count, 1);
+  assert.equal(submitted.seed, -1);
   assert.equal(submitted.ref_images, undefined);
   assert.deepEqual(submitted.sample_params.custom_sigmas, TURBO_SIGMAS);
   assert.equal(submitted.sample_params.sample_steps, 8);
@@ -89,19 +90,47 @@ test('local image URL and size validation reject unsafe input', () => {
 });
 
 
-test('local image editing supplies the original image as a native reference', async (t) => {
+test('local image editing supplies the original image and fixed seed as a native reference', async (t) => {
   let submitted;
   const baseUrl = await serve(t, (url, body) => {
     if (url.endsWith('/img_gen')) { submitted = body; return { id: 'edit-job' }; }
     return { status: 'completed', result: { images: [{ b64_json: PNG }] } };
   });
-  const result = await editImage({ baseUrl, prompt: 'Make the cup green', imageBuffer: Buffer.from(PNG, 'base64'), imageMimeType: 'image/png', size: '1024x768' });
+  const result = await editImage({ baseUrl, prompt: 'Make the cup green', imageBuffer: Buffer.from(PNG, 'base64'), imageMimeType: 'image/png', size: '1024x768', seed: 42 });
   assert.equal(result.b64Json, PNG);
   assert.deepEqual(submitted.ref_images, [`data:image/png;base64,${PNG}`]);
   assert.equal(submitted.prompt, 'Make the cup green');
   assert.equal(submitted.width, 1024);
   assert.equal(submitted.height, 768);
   assert.equal(submitted.init_image, undefined);
+  assert.equal(submitted.seed, 42);
+});
+
+test('local image seed accepts zero and the uint32 range, and rejects invalid settings', () => {
+  for (const seed of [-1, 0, 42, 4294967295]) assert.equal(cleanSeed(seed, null), seed);
+  assert.equal(cleanSeed('0', null), 0);
+  assert.equal(cleanSeed(undefined), -1);
+  for (const seed of [-2, 1.5, 4294967296, Infinity, NaN, 'invalid', true, [], {}]) {
+    assert.equal(cleanSeed(seed, null), null);
+  }
+});
+
+test('legacy and restored AI schemas default to random seed and preserve saved seeds on migration', (t) => {
+  const Database = require('better-sqlite3');
+  const { initAiSchema } = require('../ai/schema');
+  const db = new Database(':memory:');
+  t.after(() => db.close());
+  db.exec(`CREATE TABLE users (id INTEGER PRIMARY KEY);
+    CREATE TABLE chats (id INTEGER PRIMARY KEY, name TEXT);
+    CREATE TABLE messages (id INTEGER PRIMARY KEY);
+    CREATE TABLE ai_bots (id INTEGER PRIMARY KEY, name TEXT, provider TEXT DEFAULT 'openai', enabled INTEGER DEFAULT 1);
+    INSERT INTO ai_bots(id, name, provider) VALUES(1, 'Existing Qwen', 'local-image');`);
+  initAiSchema(db);
+  assert.equal(db.prepare('SELECT image_seed FROM ai_bots WHERE id=1').get().image_seed, -1);
+  db.prepare('UPDATE ai_bots SET image_seed=4294967295 WHERE id=1').run();
+  initAiSchema(db);
+  assert.equal(db.prepare('SELECT image_seed FROM ai_bots WHERE id=1').get().image_seed, 4294967295);
+  assert.equal(db.pragma('integrity_check', { simple: true }), 'ok');
 });
 
 test('local image editing rejects missing, oversized and unsupported inputs before contacting the server', async () => {

@@ -506,6 +506,7 @@ test('applyPendingRestoreOnStartup swaps runtime files before the live database 
 
 test('backup restores local image settings and generated uploads while declaring model weights external', async () => {
   const { saveAiSettings, getAiSettings } = require('../../ai/settings');
+  const { initAiSchema } = require('../../ai/schema');
   const tempDir = makeTempDir();
   const uploadsDir = path.join(tempDir, 'uploads');
   let db;
@@ -516,12 +517,15 @@ test('backup restores local image settings and generated uploads while declaring
     fs.mkdirSync(uploadsDir);
     fs.writeFileSync(path.join(uploadsDir, 'ai-local-image.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
     db = new Database(path.join(tempDir, 'bananza.db'));
-    db.exec('CREATE TABLE ai_bot_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)');
+    initAiSchema(db);
+    db.prepare("INSERT INTO ai_bots(name, mention, provider, kind, image_seed) VALUES('Qwen fixed', 'qwenfixed', 'local-image', 'image', 42)").run();
+    db.prepare("INSERT INTO ai_bots(name, mention, provider, kind, image_seed) VALUES('Qwen zero', 'qwenzero', 'local-image', 'image', 0)").run();
     saveAiSettings(db, { local_image_enabled: true, local_image_base_url: 'http://127.0.0.1:1234', local_image_default_size: '768x1024' }, 'secret');
     backup = await createBackupArchive({ db, rootDir: tempDir, uploadsDir, tempDir });
     assert.equal(backup.manifest.external_dependencies.local_image_server.included, false);
     assert.equal(backup.manifest.external_dependencies.local_image_server.manual, true);
     saveAiSettings(db, { local_image_enabled: false }, 'secret');
+    db.prepare('UPDATE ai_bots SET image_seed=-1').run();
     fs.unlinkSync(path.join(uploadsDir, 'ai-local-image.png'));
     session = await createRestorePreview({ archivePath: backup.archivePath, tempDir, rootDir: tempDir });
     await applyRestoreSession({ db, session, rootDir: tempDir, uploadsDir,
@@ -530,6 +534,9 @@ test('backup restores local image settings and generated uploads while declaring
     db = null;
     applyPendingRestoreOnStartup({ rootDir: tempDir, uploadsDir });
     db = new Database(path.join(tempDir, 'bananza.db'));
+    initAiSchema(db);
+    assert.deepEqual(db.prepare('SELECT image_seed FROM ai_bots ORDER BY id').all(), [{ image_seed: 42 }, { image_seed: 0 }]);
+    assert.equal(db.prepare("SELECT is_admin FROM users WHERE username='restore_admin'").get().is_admin, 1);
     assert.equal(getAiSettings(db).local_image_enabled, true);
     assert.equal(getAiSettings(db).local_image_default_size, '768x1024');
     assert.equal(getAiSettings(db).local_image_base_url, 'http://127.0.0.1:1234');

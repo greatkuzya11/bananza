@@ -22,6 +22,10 @@
     byId('localImageBotName').value = bot?.name || 'Qwen Image';
     byId('localImageBotMention').value = bot?.mention || 'qwenimage';
     byId('localImageBotSize').value = bot?.image_resolution || state.settings.local_image_default_size || '1024x1024';
+    const seed = bot?.image_seed ?? -1;
+    byId('localImageBotSeedMode').value = seed === -1 ? 'random' : 'fixed';
+    byId('localImageBotSeed').value = seed === -1 ? 42 : seed;
+    syncSeed();
     byId('localImageBotEnabled').checked = bot?.enabled !== false;
     byId('localImageBotGenerate').checked = bot?.allow_image_generate !== false;
     byId('localImageBotEdit').checked = bot?.allow_image_edit !== false;
@@ -75,6 +79,9 @@
     const setting = state.chatSettings.find((row) => Number(row.bot_id) === Number(selectedId) && Number(row.chat_id) === Number(byId('localImageChat').value));
     byId('localImageChatEnabled').checked = setting?.enabled === true;
   }
+  function syncSeed() {
+    byId('localImageBotSeed').disabled = byId('localImageBotSeedMode').value !== 'fixed';
+  }
   async function action(button, task, pending = 'Saving...') {
     const oldDisabled = button.disabled;
     button.disabled = true;
@@ -113,6 +120,7 @@
       if (button) editBot(state.bots.find((bot) => bot.id === Number(button.dataset.botId)));
     });
     byId('localImageBotName').addEventListener('input', () => renderAvatar());
+    byId('localImageBotSeedMode').addEventListener('change', syncSeed);
     byId('localImageBotHistory').addEventListener('click', () => window.BananzaBotImages.open(selectedId));
     byId('localImageBotDisable').addEventListener('click', (event) => action(event.currentTarget, async () => {
       const data = await bridge().api(`${endpoint}/${selectedId}`, { method: 'PUT', body: { enabled: false } });
@@ -133,9 +141,11 @@
     }));
     byId('localImageNewBot').addEventListener('click', () => editBot(null));
     byId('localImageBotSave').addEventListener('click', (event) => action(event.currentTarget, async () => {
+      if (!byId('localImageBotSeed').reportValidity()) { status(''); return; }
       const data = await bridge().api(`${endpoint}${selectedId ? '/' + selectedId : ''}`, { method: selectedId ? 'PUT' : 'POST', body: {
         name: byId('localImageBotName').value, mention: byId('localImageBotMention').value,
         image_resolution: byId('localImageBotSize').value,
+        image_seed: byId('localImageBotSeedMode').value === 'fixed' ? Number(byId('localImageBotSeed').value) : -1,
         enabled: byId('localImageBotEnabled').checked, visible_to_users: byId('localImageBotVisible').checked,
         image_model: state.settings.local_image_default_model, allow_image_generate: byId('localImageBotGenerate').checked,
         allow_image_edit: byId('localImageBotEdit').checked,

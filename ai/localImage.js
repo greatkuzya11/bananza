@@ -5,6 +5,13 @@ const DEFAULT_MODEL = 'Qwen-Image-2.1-Turbo-Q8_0.gguf';
 const SIZES = ['512x512', '768x768', '1024x1024', '768x1024', '1024x768'];
 const TURBO_SIGMAS = [1, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0];
 
+function cleanSeed(value, fallback = -1) {
+  if (value == null || (typeof value === 'string' && !value.trim())) return -1;
+  if (!['number', 'string'].includes(typeof value)) return fallback;
+  const seed = Number(value);
+  return Number.isInteger(seed) && seed >= -1 && seed <= 4294967295 ? seed : fallback;
+}
+
 function cleanBaseUrl(value = DEFAULT_BASE_URL) {
   const url = new URL(String(value || DEFAULT_BASE_URL).trim());
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
@@ -40,7 +47,7 @@ async function testConnection({ baseUrl = DEFAULT_BASE_URL, signal } = {}) {
   return { model: capabilities.model?.name || DEFAULT_MODEL, sizes: [...SIZES] };
 }
 
-async function runImageJob({ refImages, baseUrl = DEFAULT_BASE_URL, model = DEFAULT_MODEL, prompt, size, timeoutMs = 600000, signal, pollIntervalMs = 1000 } = {}) {
+async function runImageJob({ refImages, baseUrl = DEFAULT_BASE_URL, model = DEFAULT_MODEL, prompt, size, seed = -1, timeoutMs = 600000, signal, pollIntervalMs = 1000 } = {}) {
   const text = String(prompt || '').trim();
   if (!text || text.length > 8000) throw new Error('Image prompt must contain 1–8000 characters');
   const server = cleanBaseUrl(baseUrl);
@@ -53,7 +60,7 @@ async function runImageJob({ refImages, baseUrl = DEFAULT_BASE_URL, model = DEFA
     const queued = await request(server, '/sdcpp/v1/img_gen', {
       signal: combined,
       body: {
-        prompt: text, width, height, batch_count: 1, seed: -1, output_format: 'png',
+        prompt: text, width, height, batch_count: 1, seed: cleanSeed(seed), output_format: 'png',
         ...(refImages ? { ref_images: refImages } : {}),
         sample_params: { sample_steps: 8, sample_method: 'euler', custom_sigmas: TURBO_SIGMAS, guidance: { txt_cfg: 1 } },
       },
@@ -103,4 +110,4 @@ async function editImage({ imageBuffer, imageMimeType, ...options } = {}) {
   return runImageJob({ ...options, refImages: [`data:${mime};base64,${imageBuffer.toString('base64')}`] });
 }
 
-module.exports = { DEFAULT_BASE_URL, DEFAULT_MODEL, SIZES, TURBO_SIGMAS, cleanBaseUrl, cleanSize, testConnection, generateImage, editImage };
+module.exports = { DEFAULT_BASE_URL, DEFAULT_MODEL, SIZES, TURBO_SIGMAS, cleanBaseUrl, cleanSize, cleanSeed, testConnection, generateImage, editImage };

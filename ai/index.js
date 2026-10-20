@@ -2370,6 +2370,7 @@ function createAiBotFeature({
       image_resolution: openAiImageCapable
         ? cleanOpenAiImageSize(row.image_resolution, settings.openai_default_image_size)
         : (localImageCapable ? localImageAi.cleanSize(row.image_resolution, settings.local_image_default_size) : (grokImageCapable ? cleanGrokResolution(row.image_resolution, settings.grok_default_image_resolution) : '')),
+      image_seed: localImageCapable ? localImageAi.cleanSeed(row.image_seed) : -1,
       allow_text: localImageCapable || isChatShot ? false : boolValue(row.allow_text, defaultAllowText),
       allow_image_generate: isChatShot ? true : boolValue(row.allow_image_generate, defaultAllowImageGenerate),
       allow_image_edit: isChatShot ? false : boolValue(row.allow_image_edit, defaultAllowImageEdit),
@@ -3323,6 +3324,7 @@ function createAiBotFeature({
         : (provider === 'grok' && isImageCapable
           ? cleanGrokResolution(input.image_resolution ?? current.image_resolution, settings.grok_default_image_resolution)
           : ''),
+      image_seed: isLocalImage ? localImageAi.cleanSeed(input.image_seed ?? current.image_seed) : -1,
       allow_text: isLocalImage || isChatShot ? false : boolValue(input.allow_text, current.allow_text == null ? (kind !== 'image' && !isConvertBot) : current.allow_text !== 0),
       allow_image_generate: isChatShot ? true : boolValue(input.allow_image_generate, current.allow_image_generate == null ? isImageCapable : current.allow_image_generate !== 0),
       allow_image_edit: isChatShot ? false : boolValue(input.allow_image_edit, current.allow_image_edit == null ? (isLocalImage || isOpenAiUniversal || isOpenAiImageBot || isGrokUniversal) : current.allow_image_edit !== 0),
@@ -3378,14 +3380,14 @@ function createAiBotFeature({
       INSERT INTO ai_bots(
         user_id, name, mention, style, tone, behavior_rules, speech_patterns,
         enabled, available_in_all_chats, provider, kind, response_model, summary_model, embedding_model,
-        image_model, image_aspect_ratio, image_resolution,
+        image_model, image_aspect_ratio, image_resolution, image_seed,
         allow_text, allow_image_generate, allow_image_edit, allow_document,
         image_risk_filter_enabled,
         allow_poll_create, allow_poll_vote, allow_react, allow_pin, visible_to_users,
         image_quality, image_background, image_output_format, document_default_format, transform_prompt,
         temperature, max_tokens, chatshot_context_limit
       )
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       userId,
       input.name,
@@ -3404,6 +3406,7 @@ function createAiBotFeature({
       input.image_model || '',
       input.image_aspect_ratio || '',
       input.image_resolution || '',
+      input.image_seed ?? -1,
       input.allow_text ? 1 : 0,
       input.allow_image_generate ? 1 : 0,
       input.allow_image_edit ? 1 : 0,
@@ -7497,7 +7500,7 @@ function createAiBotFeature({
           }
           const options = {
             baseUrl: settings.local_image_base_url, model: bot.image_model, prompt,
-            size: bot.image_resolution, timeoutMs: settings.local_image_timeout_ms,
+            size: bot.image_resolution, seed: bot.image_seed, timeoutMs: settings.local_image_timeout_ms,
           };
           const result = sourceImage
             ? await localImageAi.editImage({ ...options, imageBuffer: sourceImage.buffer, imageMimeType: sourceImage.mimeType })
@@ -9647,7 +9650,14 @@ function createAiBotFeature({
     }
   });
 
+  function validateLocalImageSeed(req, res) {
+    if (localImageAi.cleanSeed(req.body?.image_seed, null) !== null) return true;
+    res.status(400).json({ error: 'Image seed must be -1 or an integer from 0 to 4294967295' });
+    return false;
+  }
+
   app.post('/api/admin/local-image-bots', auth, adminOnly, (req, res) => {
+    if (!validateLocalImageSeed(req, res)) return;
     const input = normalizeBotInput({ ...(req.body || {}), provider: 'local-image', kind: 'image' });
     const bot = sanitizeBot(createBotTx(input));
     res.json({ bot, state: serializeLocalImageAdminState() });
@@ -9669,12 +9679,13 @@ function createAiBotFeature({
   app.put('/api/admin/local-image-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
     const current = providerBotByRequestId(req, res, { provider: 'local-image', kind: 'image' });
     if (!current) return;
+    if (!validateLocalImageSeed(req, res)) return;
     const input = normalizeBotInput({ ...(req.body || {}), provider: 'local-image', kind: 'image' }, current);
     db.transaction(() => {
       db.prepare(`UPDATE ai_bots SET name=?, mention=?, enabled=?, visible_to_users=?,
-        image_model=?, image_resolution=?, allow_image_generate=?, allow_image_edit=?, updated_at=datetime('now') WHERE id=?`)
+        image_model=?, image_resolution=?, image_seed=?, allow_image_generate=?, allow_image_edit=?, updated_at=datetime('now') WHERE id=?`)
         .run(input.name, input.mention, input.enabled ? 1 : 0, input.visible_to_users ? 1 : 0,
-          input.image_model, input.image_resolution, input.allow_image_generate ? 1 : 0, input.allow_image_edit ? 1 : 0, current.id);
+          input.image_model, input.image_resolution, input.image_seed, input.allow_image_generate ? 1 : 0, input.allow_image_edit ? 1 : 0, current.id);
       db.prepare('UPDATE users SET display_name=? WHERE id=?').run(input.name, current.user_id);
     })();
     const updated = botByIdStmt.get(current.id);
@@ -9697,7 +9708,7 @@ function createAiBotFeature({
       const image = await localImageAi.generateImage({
         baseUrl: settings.local_image_base_url, model: bot.image_model,
         prompt: req.body?.prompt || 'A cheerful yellow banana astronaut on the Moon, playful illustration',
-        size: bot.image_resolution, timeoutMs: settings.local_image_timeout_ms, signal: controller.signal,
+        size: bot.image_resolution, seed: bot.image_seed, timeoutMs: settings.local_image_timeout_ms, signal: controller.signal,
       });
       res.json({ ok: true, image });
     } catch (error) {
