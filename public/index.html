@@ -111,6 +111,7 @@
             <div id="chatStatus" class="chat-status"></div>
           </div>
           <div id="chatHeaderActions" class="chat-header-actions" aria-hidden="true">
+            <button id="botImageHistoryChat" class="icon-btn chat-header-action-btn" type="button" title="Image history" aria-label="Image history" data-i18n-title="Image history" data-i18n-aria-label="Image history">🖼️</button>
             <button id="searchBtn" class="icon-btn chat-header-action-btn" title="Search messages" aria-label="Search messages" type="button">🔍</button>
             <button id="chatShotBtn" class="icon-btn chat-header-action-btn chat-shot-btn hidden" title="ChatShot" aria-label="ChatShot" type="button">&#128247;</button>
             <button id="chatSettingsActionBtn" class="icon-btn chat-header-action-btn" title="Chat settings" aria-label="Chat settings" type="button">&#128736;&#65039;</button>
@@ -1698,7 +1699,92 @@
     </div>
   </div>
 
-  <!-- Qwen AI Settings Modal -->
+  <div id="botImageHistoryModal" class="modal hidden">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3 id="botImageHistoryTitle" data-i18n="Image history">Image history</h3>
+        <button id="botImageHistoryClose" class="modal-close" type="button" title="Close" data-i18n-title="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="settings-hint" data-i18n="Images created by this bot in chats you can access.">Images created by this bot in chats you can access.</p>
+        <div id="botImageHistoryBots" class="ai-bot-actions"></div>
+        <div id="botImageHistoryStatus" class="settings-hint" role="status" aria-live="polite"></div>
+        <div id="botImageHistoryGrid" class="bot-image-history-grid"></div>
+        <button id="botImageHistoryMore" class="weather-action-btn hidden" type="button" data-i18n="Load more">Load more</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Qwen Images Settings Modal -->
+  <div id="localImageModal" class="modal hidden">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h2 data-i18n="Qwen Images">Qwen Images</h2>
+        <button id="localImageClose" type="button" class="modal-close" data-i18n-title="Close" title="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="ai-bot-settings-block">
+        <p class="settings-hint" data-i18n="Generate images on your own computer. The image server must be running.">Generate images on your own computer. The image server must be running.</p>
+        <div class="ai-bot-panel">
+          <div class="settings-item settings-toggle-item"><span data-i18n="Enable local image generation">Enable local image generation</span><label class="toggle-switch"><input id="localImageEnabled" type="checkbox" aria-label="Enable local image generation" data-i18n-aria-label="Enable local image generation"><span class="toggle-slider"></span></label></div>
+          <label class="ai-bot-field"><span data-i18n="Image server URL">Image server URL</span><input id="localImageBaseUrl" type="url" class="modal-input" value="http://127.0.0.1:1234"></label>
+          <label class="ai-bot-field"><span data-i18n="Model loaded on image server">Model loaded on image server</span><input id="localImageModel" class="modal-input" readonly></label>
+          <label class="ai-bot-field"><span data-i18n="Default image size">Default image size</span><select id="localImageSize" class="modal-input"></select></label>
+          <label class="ai-bot-field"><span data-i18n="Request timeout, seconds">Request timeout, seconds</span><input id="localImageTimeout" type="number" min="30" max="1800" class="modal-input" value="600"></label>
+          <div class="ai-bot-actions">
+            <button id="localImageSaveSettings" class="btn-primary" data-i18n="Save settings">Save settings</button>
+            <button id="localImageConnection" class="weather-action-btn" data-i18n="Check image server">Check image server</button>
+          </div>
+        </div>
+        <div class="ai-bot-panel">
+          <h3 data-i18n="Image bots">Image bots</h3>
+          <div id="localImageBotList" class="ai-bot-list"></div>
+          <button id="localImageNewBot" class="weather-action-btn" data-i18n="New bot">New bot</button>
+          <div class="ai-bot-avatar-row">
+            <div class="avatar-upload-wrap ai-bot-avatar-wrap">
+              <div id="localImageBotAvatar" class="avatar-large"></div>
+              <label id="localImageBotAvatarLabel" class="avatar-upload-label" title="Change avatar" data-i18n-title="Change avatar">&#128247;
+                <input id="localImageBotAvatarInput" class="hidden" type="file" accept=".jpg,.jpeg,.png,.webp">
+              </label>
+            </div>
+            <div class="ai-bot-avatar-copy">
+              <strong data-i18n="Bot avatar">Bot avatar</strong>
+              <span data-i18n="The image is stored separately from JSON settings.">The image is stored separately from JSON settings.</span>
+              <button id="localImageBotAvatarRemove" class="btn-text hidden" type="button" data-i18n="Remove avatar">Remove avatar</button>
+            </div>
+          </div>
+          <label class="ai-bot-field"><span data-i18n="Name">Name</span><input id="localImageBotName" class="modal-input" maxlength="50"></label>
+          <label class="ai-bot-field"><span data-i18n="Mention">Mention</span><input id="localImageBotMention" class="modal-input" maxlength="24"></label>
+          <label class="ai-bot-field"><span data-i18n="Image size">Image size</span><select id="localImageBotSize" class="modal-input"></select></label>
+          <div class="settings-item settings-toggle-item"><span data-i18n="Bot enabled">Bot enabled</span><label class="toggle-switch"><input id="localImageBotEnabled" type="checkbox" checked aria-label="Bot enabled" data-i18n-aria-label="Bot enabled"><span class="toggle-slider"></span></label></div>
+          <div class="settings-item settings-toggle-item"><span data-i18n="Visible to users">Visible to users</span><label class="toggle-switch"><input id="localImageBotVisible" type="checkbox" checked aria-label="Visible to users" data-i18n-aria-label="Visible to users"><span class="toggle-slider"></span></label></div>
+          <div class="settings-item settings-toggle-item"><span data-i18n="Generate images">Generate images</span><label class="toggle-switch"><input id="localImageBotGenerate" type="checkbox" checked aria-label="Generate images" data-i18n-aria-label="Generate images"><span class="toggle-slider"></span></label></div>
+          <div class="settings-item settings-toggle-item"><span data-i18n="Allow image editing">Allow image editing</span><label class="toggle-switch"><input id="localImageBotEdit" type="checkbox" checked aria-label="Allow image editing" data-i18n-aria-label="Allow image editing"><span class="toggle-slider"></span></label></div>
+          <div class="ai-bot-actions">
+            <button id="localImageBotSave" class="btn-primary" data-i18n="Save bot">Save bot</button>
+            <button id="localImageBotDisable" class="weather-action-btn" data-i18n="Disable">Disable</button>
+            <button id="localImageBotHistory" class="weather-action-btn" data-i18n="Image history">Image history</button>
+          </div>
+          <p class="settings-hint" data-i18n="Start a private chat with this bot, or add it to a group and mention it. To edit, attach an image with instructions or reply to an image.">Start a private chat with this bot, or add it to a group and mention it. To edit, attach an image with instructions or reply to an image.</p>
+          <label class="ai-bot-field"><span data-i18n="Chat">Chat</span><select id="localImageChat" class="modal-input"></select></label>
+          <div class="settings-item settings-toggle-item"><span data-i18n="Enable bot in this chat">Enable bot in this chat</span><label class="toggle-switch"><input id="localImageChatEnabled" type="checkbox" aria-label="Enable bot in this chat" data-i18n-aria-label="Enable bot in this chat"><span class="toggle-slider"></span></label></div>
+          <button id="localImageChatSave" class="weather-action-btn" data-i18n="Save chat setting" disabled>Save chat setting</button>
+        </div>
+        <div class="ai-bot-panel">
+          <h3 data-i18n="Test image generation">Test image generation</h3>
+          <label class="ai-bot-field"><span data-i18n="Image description">Image description</span><textarea id="localImagePrompt" class="modal-input" rows="3" maxlength="8000"></textarea></label>
+          <div class="ai-bot-actions">
+            <button id="localImageTest" class="weather-action-btn" data-i18n="Generate test image" disabled>Generate test image</button>
+            <button id="localImageCancel" class="weather-action-btn hidden" data-i18n="Cancel">Cancel</button>
+          </div>
+          <img id="localImagePreview" class="hidden" alt="Generated image" style="display:block;max-width:100%;max-height:512px;margin-top:12px">
+        </div>
+        </div>
+        <div id="localImageStatus" class="ai-bot-status admin-action-status" role="status" aria-live="polite"></div>
+      </div>
+    </div>
+  </div>
+
   <div id="qwenAiSettingsModal" class="modal hidden">
     <div class="modal-content wide">
       <div class="modal-header">
@@ -1707,6 +1793,11 @@
       </div>
       <div class="modal-body">
         <div id="qwenAiSettingsBlock" class="ai-bot-settings-block">
+          <div class="ai-bot-panel provider-ai-nav">
+            <h4 data-i18n="Qwen Images">Qwen Images</h4>
+            <p class="settings-hint" data-i18n="Generate and edit images locally with Qwen Image.">Generate and edit images locally with Qwen Image.</p>
+            <button id="qwenAiOpenImageBots" type="button" class="weather-action-btn" data-i18n="Qwen Images">Qwen Images</button>
+          </div>
           <div class="ai-bot-panel">
             <h4>Global Qwen settings</h4>
             <div class="settings-item settings-toggle-item">
@@ -2986,6 +3077,8 @@
   <script src="/js/app/boot/init.js?v=20260601-runtime-final"></script>
   <script src="/js/app/runtime.js?v=20260531-runtime-split"></script>
   <script src="/js/app.js?v=20260531-ai-final"></script>
+  <script src="/js/bot-image-history.js?v=20261020"></script>
+  <script src="/js/local-image.js?v=20261020-panel2"></script>
   <script src="/js/ai-initiative.js?v=20260826-initiative-resilience"></script>
   <script src="/js/calls/CallStore.js?v=20260509-call-modal-surface"></script>
   <script src="/js/calls/CallMedia.js?v=20260509-call-modal-surface"></script>

@@ -140,7 +140,7 @@
           return;
         }
         list.innerHTML = deepseekBotState.bots.map(bot => `
-          <button type="button" class="ai-bot-list-item${Number(bot.id) === Number(selectedDeepseekBotId) ? ' active' : ''}" data-bot-id="${bot.id}">
+          <div class="ai-bot-list-row"><button type="button" class="ai-bot-list-item${Number(bot.id) === Number(selectedDeepseekBotId) ? ' active' : ''}" data-bot-id="${bot.id}">
             <span class="ai-bot-list-main">
               <span class="ai-bot-list-avatar" style="background:${esc(bot.avatar_color || '#65aadd')}">
                 ${bot.avatar_url ? `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">` : esc(initials(bot.name || '?'))}
@@ -151,7 +151,7 @@
               </span>
             </span>
             <span class="ai-bot-list-model">${bot.response_model ? esc(bot.response_model) : ''}</span>
-          </button>
+          </button>${window.BananzaApp.aiAdmin.shared?.renderBotHistoryButton?.(bot) || ''}</div>
         `).join('');
       }
     
@@ -667,7 +667,7 @@
           return;
         }
         list.innerHTML = qwenBotState.bots.map(bot => `
-          <button type="button" class="ai-bot-list-item${Number(bot.id) === Number(selectedQwenBotId) ? ' active' : ''}" data-bot-id="${bot.id}">
+          <div class="ai-bot-list-row"><button type="button" class="ai-bot-list-item${Number(bot.id) === Number(selectedQwenBotId) ? ' active' : ''}" data-bot-id="${bot.id}">
             <span class="ai-bot-list-main">
               <span class="ai-bot-list-avatar" style="background:${esc(bot.avatar_color || '#65aadd')}">
                 ${bot.avatar_url ? `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">` : esc(initials(bot.name || '?'))}
@@ -678,7 +678,7 @@
               </span>
             </span>
             <span class="ai-bot-list-model">${bot.response_model ? esc(bot.response_model) : ''}</span>
-          </button>
+          </button>${window.BananzaApp.aiAdmin.shared?.renderBotHistoryButton?.(bot) || ''}</div>
         `).join('');
       }
     
@@ -1184,7 +1184,7 @@
           return;
         }
         list.innerHTML = yandexBotState.bots.map(bot => `
-          <button type="button" class="ai-bot-list-item${Number(bot.id) === Number(selectedYandexBotId) ? ' active' : ''}" data-bot-id="${bot.id}">
+          <div class="ai-bot-list-row"><button type="button" class="ai-bot-list-item${Number(bot.id) === Number(selectedYandexBotId) ? ' active' : ''}" data-bot-id="${bot.id}">
             <span class="ai-bot-list-main">
               <span class="ai-bot-list-avatar" style="background:${esc(bot.avatar_color || '#65aadd')}">
                 ${bot.avatar_url ? `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">` : esc(initials(bot.name || '?'))}
@@ -1195,7 +1195,7 @@
               </span>
             </span>
             <span class="ai-bot-list-model">${bot.response_model ? esc(bot.response_model) : ''}</span>
-          </button>
+          </button>${window.BananzaApp.aiAdmin.shared?.renderBotHistoryButton?.(bot) || ''}</div>
         `).join('');
       }
     

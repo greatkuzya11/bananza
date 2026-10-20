@@ -1,8 +1,15 @@
 const { encryptText, decryptText, maskSecret } = require('../voice/crypto');
 
+const localImage = require('./localImage');
+
 const GLOBAL_SETTINGS_KEY = 'global';
 
 const DEFAULT_AI_SETTINGS = {
+  local_image_enabled: false,
+  local_image_base_url: 'http://127.0.0.1:1234',
+  local_image_default_model: 'Qwen-Image-2.1-Turbo-Q8_0.gguf',
+  local_image_default_size: '1024x1024',
+  local_image_timeout_ms: 600000,
   enabled: false,
   openai_interactive_enabled: false,
   default_response_model: 'gpt-5.4',
@@ -164,6 +171,11 @@ function cleanImageResolution(value, fallback) {
 
 function normalizeSettings(raw = {}) {
   const next = { ...DEFAULT_AI_SETTINGS, ...raw };
+  next.local_image_enabled = boolValue(next.local_image_enabled, false);
+  next.local_image_base_url = cleanBaseUrl(next.local_image_base_url, DEFAULT_AI_SETTINGS.local_image_base_url);
+  next.local_image_default_model = cleanModel(next.local_image_default_model, DEFAULT_AI_SETTINGS.local_image_default_model);
+  next.local_image_default_size = localImage.cleanSize(next.local_image_default_size);
+  next.local_image_timeout_ms = intValue(next.local_image_timeout_ms, 600000, 30000, 1800000);
   next.enabled = boolValue(next.enabled, DEFAULT_AI_SETTINGS.enabled);
   next.openai_interactive_enabled = boolValue(
     Object.prototype.hasOwnProperty.call(raw, 'openai_interactive_enabled')
@@ -344,6 +356,11 @@ function saveAiSettings(db, incoming = {}, secret) {
   const current = getAiSettings(db);
   const next = normalizeSettings({
     ...current,
+    local_image_enabled: incoming.local_image_enabled ?? current.local_image_enabled,
+    local_image_base_url: incoming.local_image_base_url ?? current.local_image_base_url,
+    local_image_default_model: incoming.local_image_default_model ?? current.local_image_default_model,
+    local_image_default_size: incoming.local_image_default_size ?? current.local_image_default_size,
+    local_image_timeout_ms: incoming.local_image_timeout_ms ?? current.local_image_timeout_ms,
     enabled: Object.prototype.hasOwnProperty.call(incoming, 'enabled') ? incoming.enabled : current.enabled,
     openai_interactive_enabled: Object.prototype.hasOwnProperty.call(incoming, 'openai_interactive_enabled')
       ? incoming.openai_interactive_enabled

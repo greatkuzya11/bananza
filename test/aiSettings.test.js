@@ -117,3 +117,25 @@ test('saveAiSettings clamps Qwen timeout and deleteQwenKey clears the stored sec
   assert.equal(deleted.has_qwen_key, false);
   assert.equal(deleted.masked_qwen_key, '');
 });
+
+test('local image settings persist independently of text Qwen and normalize limits', (t) => {
+  const db = createDb();
+  t.after(() => db.close());
+  saveAiSettings(db, { qwen_enabled: true, qwen_base_url: 'http://127.0.0.1:8000/v1' }, 'test-secret');
+  saveAiSettings(db, {
+    local_image_enabled: true,
+    local_image_base_url: 'http://127.0.0.1:1234/',
+    local_image_default_size: '768x1024',
+    local_image_timeout_ms: 900000,
+  }, 'test-secret');
+  const saved = getAiSettings(db);
+  assert.equal(saved.local_image_enabled, true);
+  assert.equal(saved.local_image_base_url, 'http://127.0.0.1:1234');
+  assert.equal(saved.local_image_default_size, '768x1024');
+  assert.equal(saved.local_image_timeout_ms, 900000);
+  assert.equal(saved.qwen_enabled, true);
+  assert.equal(saved.qwen_base_url, 'http://127.0.0.1:8000/v1');
+  const normalized = saveAiSettings(db, { local_image_timeout_ms: 1, local_image_default_size: '99999x99999' }, 'test-secret');
+  assert.equal(normalized.local_image_timeout_ms, 30000);
+  assert.equal(normalized.local_image_default_size, '1024x1024');
+});

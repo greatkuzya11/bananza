@@ -535,6 +535,14 @@ function buildBackupManifest({
       manifest: 'backup-manifest.json',
     },
     optional_components: optionalComponents,
+    external_dependencies: {
+      local_image_server: {
+        manual: true,
+        included: false,
+        settings: 'Local image provider settings and bots are stored in bananza.db.',
+        models: 'GGUF weights, VAE, vision projector and stable-diffusion.cpp runtime must be restored separately.',
+      },
+    },
     excluded: [...excluded],
     uploads,
     notes: [
@@ -543,6 +551,7 @@ function buildBackupManifest({
       'SQLite includes schema_migrations: the one-time glass interface rollout preserves color themes and will not repeat after restoring a migrated backup. Older backups receive the rollout on startup.',
       '.env, .env.local, call recordings, and speech recognition models are opt-in backup components.',
       'Whisper runtime/binaries, FFmpeg, node_modules, and deployment service configuration are external dependencies and are not included. Run npm install and reinstall runtime dependencies after restore.',
+      'Local image provider settings and generated uploads are included; the image server, model weights and its launch configuration are manual external dependencies.',
       'Encrypted integration settings, including Telegram bot tokens, require the included .secret file after restore.',
       'This archive contains chat history, uploaded files, and server secrets.',
     ],

@@ -503,3 +503,42 @@ test('applyPendingRestoreOnStartup swaps runtime files before the live database 
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+test('backup restores local image settings and generated uploads while declaring model weights external', async () => {
+  const { saveAiSettings, getAiSettings } = require('../../ai/settings');
+  const tempDir = makeTempDir();
+  const uploadsDir = path.join(tempDir, 'uploads');
+  let db;
+  let backup;
+  let session;
+  try {
+    createRestoreDatabase(path.join(tempDir, 'bananza.db'));
+    fs.mkdirSync(uploadsDir);
+    fs.writeFileSync(path.join(uploadsDir, 'ai-local-image.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
+    db = new Database(path.join(tempDir, 'bananza.db'));
+    db.exec('CREATE TABLE ai_bot_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)');
+    saveAiSettings(db, { local_image_enabled: true, local_image_base_url: 'http://127.0.0.1:1234', local_image_default_size: '768x1024' }, 'secret');
+    backup = await createBackupArchive({ db, rootDir: tempDir, uploadsDir, tempDir });
+    assert.equal(backup.manifest.external_dependencies.local_image_server.included, false);
+    assert.equal(backup.manifest.external_dependencies.local_image_server.manual, true);
+    saveAiSettings(db, { local_image_enabled: false }, 'secret');
+    fs.unlinkSync(path.join(uploadsDir, 'ai-local-image.png'));
+    session = await createRestorePreview({ archivePath: backup.archivePath, tempDir, rootDir: tempDir });
+    await applyRestoreSession({ db, session, rootDir: tempDir, uploadsDir,
+      recoveryAdmin: { username: 'restore_admin', password: 'restore-password' }, deferRuntimeReplace: true });
+    db.close();
+    db = null;
+    applyPendingRestoreOnStartup({ rootDir: tempDir, uploadsDir });
+    db = new Database(path.join(tempDir, 'bananza.db'));
+    assert.equal(getAiSettings(db).local_image_enabled, true);
+    assert.equal(getAiSettings(db).local_image_default_size, '768x1024');
+    assert.equal(getAiSettings(db).local_image_base_url, 'http://127.0.0.1:1234');
+    assert.deepEqual(db.pragma('integrity_check'), [{ integrity_check: 'ok' }]);
+    assert.equal(fs.readFileSync(path.join(uploadsDir, 'ai-local-image.png')).toString('hex'), '89504e470d0a1a0a');
+  } finally {
+    db?.close();
+    if (session) fs.rmSync(session.sessionRoot, { recursive: true, force: true });
+    if (backup) await backup.cleanup().catch(() => {});
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});

@@ -110,9 +110,9 @@
         const selectedId = Number(selectedBotIds[activeProvider] || 0);
         const bots = currentState().bots || [];
         list.innerHTML = bots.length ? bots.map((bot) => `
-          <button type="button" class="ai-bot-list-item${Number(bot.id) === selectedId ? ' active' : ''}" data-context-convert-bot-id="${bot.id}">
+          <div class="ai-bot-list-row"><button type="button" class="ai-bot-list-item${Number(bot.id) === selectedId ? ' active' : ''}" data-context-convert-bot-id="${bot.id}">
             <span class="ai-bot-list-main"><span class="ai-bot-list-copy"><strong>${shared.esc(bot.name || 'Convert bot')}</strong></span></span>
-          </button>
+          </button>${window.BananzaApp.aiAdmin.shared?.renderBotHistoryButton?.(bot) || ''}</div>
         `).join('') : '<div class="ai-bot-empty">No convert bots yet. Create the first one.</div>';
       }
       options.renderAdminSettings?.(currentState(), activeProvider);

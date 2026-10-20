@@ -546,6 +546,13 @@
   const uploadBotAvatarHelper = uploadBotAvatar;
   const removeBotAvatarHelper = removeBotAvatar;
 
+  function renderBotHistoryButton(bot) {
+    const id = Number(bot?.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return '';
+    const label = window.BananzaI18n?.text?.('Image history') || 'Image history';
+    return `<button type="button" class="weather-action-btn bot-image-history-button" data-bot-history-id="${id}" data-i18n="Image history">${esc(label)}</button>`;
+  }
+
   aiAdmin.shared = {
     bindAsyncActionButtons,
     buildVerifiedBotSaveStatus,
@@ -564,6 +571,7 @@
     openAdminBotAuditModal,
     removeBotAvatar,
     renderBotAvatar,
+    renderBotHistoryButton,
     renderChatOptions,
     setActionButtonsPending,
     setChecked,

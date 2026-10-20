@@ -111,14 +111,14 @@
           return;
         }
         list.innerHTML = state.bots.map((bot) => `
-          <button type="button" class="ai-bot-list-item${Number(bot.id) === selectedId ? ' active' : ''}" data-context-convert-bot-id="${bot.id}">
+          <div class="ai-bot-list-row"><button type="button" class="ai-bot-list-item${Number(bot.id) === selectedId ? ' active' : ''}" data-context-convert-bot-id="${bot.id}">
             <span class="ai-bot-list-main">
               <span class="ai-bot-list-copy">
                 <strong>${esc(bot.name || 'Convert bot')}</strong>
                 <small>${bot.enabled ? 'enabled' : 'disabled'}${bot.available_in_all_chats ? ' \u00b7 all chats' : ''}${bot.response_model ? ` \u00b7 ${esc(bot.response_model)}` : ''}</small>
               </span>
             </span>
-          </button>
+          </button>${window.BananzaApp.aiAdmin.shared?.renderBotHistoryButton?.(bot) || ''}</div>
         `).join('');
       }
     
@@ -522,14 +522,14 @@
           return;
         }
         list.innerHTML = state.bots.map((bot) => `
-          <button type="button" class="ai-bot-list-item${Number(bot.id) === selectedId ? ' active' : ''}" data-chat-shot-bot-id="${bot.id}">
+          <div class="ai-bot-list-row"><button type="button" class="ai-bot-list-item${Number(bot.id) === selectedId ? ' active' : ''}" data-chat-shot-bot-id="${bot.id}">
             <span class="ai-bot-list-main">
               <span class="ai-bot-list-copy">
                 <strong>${esc(bot.name || 'ChatShot')}</strong>
                 <small>${bot.enabled ? 'enabled' : 'disabled'}${bot.available_in_all_chats ? ' \u0412\u00b7 all chats' : ''}${bot.image_model ? ` \u0412\u00b7 ${esc(bot.image_model)}` : ''}</small>
               </span>
             </span>
-          </button>
+          </button>${window.BananzaApp.aiAdmin.shared?.renderBotHistoryButton?.(bot) || ''}</div>
         `).join('');
       }
     

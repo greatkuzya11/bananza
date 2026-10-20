@@ -37,6 +37,7 @@ const {
 const grokAi = require('./grok');
 const deepseekAi = require('./deepseek');
 const qwenAi = require('./qwen');
+const localImageAi = require('./localImage');
 const yandexAi = require('./yandex');
 const {
   shouldAttemptBotActionPlan,
@@ -397,11 +398,12 @@ function isLikelyDeepSeekTextModel(id) {
 
 function normalizeProvider(value, fallback = 'openai') {
   const provider = String(value || '').trim().toLowerCase();
-  if (provider === 'grok' || provider === 'deepseek' || provider === 'qwen' || provider === 'yandex' || provider === 'openai') return provider;
+  if (provider === 'local-image' || provider === 'grok' || provider === 'deepseek' || provider === 'qwen' || provider === 'yandex' || provider === 'openai') return provider;
   return fallback;
 }
 
 function normalizeBotKind(value, provider = 'openai', fallback = 'text') {
+  if (provider === 'local-image') return 'image';
   const kind = String(value || fallback).trim().toLowerCase();
   if (kind === 'convert') return 'convert';
   if ((provider === 'openai' || provider === 'grok') && kind === 'chatshot') return 'chatshot';
@@ -2337,9 +2339,10 @@ function createAiBotFeature({
     const openAiImageBot = provider === 'openai' && kind === 'image';
     const openAiImageCapable = provider === 'openai' && (kind === 'universal' || kind === 'image' || isChatShot);
     const grokImageCapable = provider === 'grok' && (kind === 'image' || kind === 'universal' || isChatShot);
+    const localImageCapable = provider === 'local-image';
     const defaultAllowText = kind !== 'image' && !isConvertBot && !isChatShot;
     const defaultAllowImageGenerate = kind === 'image' || kind === 'universal' || isChatShot;
-    const defaultAllowImageEdit = kind === 'universal' || openAiImageBot;
+    const defaultAllowImageEdit = localImageCapable || kind === 'universal' || openAiImageBot;
     const defaultAllowDocument = openAiUniversal;
     return {
       id: row.id,
@@ -2360,14 +2363,14 @@ function createAiBotFeature({
       embedding_model: isConvertBot || isChatShot || kind === 'image' ? '' : (row.embedding_model || defaultEmbeddingModel),
       image_model: openAiImageCapable
         ? (row.image_model || settings.openai_default_image_model)
-        : (grokImageCapable ? (row.image_model || settings.grok_default_image_model) : ''),
+        : (localImageCapable ? (row.image_model || settings.local_image_default_model) : (grokImageCapable ? (row.image_model || settings.grok_default_image_model) : '')),
       image_aspect_ratio: grokImageCapable
         ? cleanGrokAspectRatio(row.image_aspect_ratio, settings.grok_default_image_aspect_ratio)
         : '',
       image_resolution: openAiImageCapable
         ? cleanOpenAiImageSize(row.image_resolution, settings.openai_default_image_size)
-        : (grokImageCapable ? cleanGrokResolution(row.image_resolution, settings.grok_default_image_resolution) : ''),
-      allow_text: isChatShot ? false : boolValue(row.allow_text, defaultAllowText),
+        : (localImageCapable ? localImageAi.cleanSize(row.image_resolution, settings.local_image_default_size) : (grokImageCapable ? cleanGrokResolution(row.image_resolution, settings.grok_default_image_resolution) : '')),
+      allow_text: localImageCapable || isChatShot ? false : boolValue(row.allow_text, defaultAllowText),
       allow_image_generate: isChatShot ? true : boolValue(row.allow_image_generate, defaultAllowImageGenerate),
       allow_image_edit: isChatShot ? false : boolValue(row.allow_image_edit, defaultAllowImageEdit),
       allow_document: openAiUniversal ? boolValue(row.allow_document, defaultAllowDocument) : false,
@@ -2399,7 +2402,7 @@ function createAiBotFeature({
         response_model: row.response_model || defaultResponseModel,
         image_model: openAiImageCapable
           ? (row.image_model || settings.openai_default_image_model)
-          : (grokImageCapable ? (row.image_model || settings.grok_default_image_model) : ''),
+          : (localImageCapable ? (row.image_model || settings.local_image_default_model) : (grokImageCapable ? (row.image_model || settings.grok_default_image_model) : '')),
       }),
       created_at: row.created_at,
       updated_at: row.updated_at,
@@ -3117,7 +3120,7 @@ function createAiBotFeature({
     const botRow = directPrivateChatBotStmt.get(chatId);
     if (!botRow) return;
     const bot = sanitizeBot(botRow);
-    if (!bot?.user_id || !isDirectHumanBotPrivateChat(chatId, humanUserId, bot.user_id)) return;
+    if (bot?.provider === 'local-image' || !bot?.user_id || !isDirectHumanBotPrivateChat(chatId, humanUserId, bot.user_id)) return;
 
     const initialNameRow = privateChatCreateAuditNameStmt.get(chatId);
     const initialBotName = cleanText(initialNameRow?.bot_name || bot.name || chat.name || '', 80);
@@ -3198,6 +3201,7 @@ function createAiBotFeature({
   });
 
   function defaultBotName(provider, kind = 'text') {
+    if (provider === 'local-image') return 'Qwen Image';
     if (provider === 'openai' && kind === 'convert') return 'OpenAI Convert';
     if (provider === 'openai' && kind === 'chatshot') return 'OpenAI ChatShot';
     if (provider === 'openai' && kind === 'image') return 'OpenAI Images';
@@ -3217,6 +3221,7 @@ function createAiBotFeature({
   }
 
   function providerEnabled(provider, settings = getGlobalSettings()) {
+    if (provider === 'local-image') return boolValue(settings?.local_image_enabled, false);
     if (provider === 'yandex') return boolValue(settings?.yandex_enabled, false);
     if (provider === 'deepseek') return boolValue(settings?.deepseek_enabled, false);
     if (provider === 'qwen') return boolValue(settings?.qwen_enabled, false);
@@ -3225,6 +3230,7 @@ function createAiBotFeature({
   }
 
   function providerInteractiveEnabled(provider, settings = getGlobalSettings()) {
+    if (provider === 'local-image') return false;
     if (provider === 'yandex') return boolValue(settings?.yandex_interactive_enabled, false);
     if (provider === 'deepseek') return boolValue(settings?.deepseek_interactive_enabled, false);
     if (provider === 'qwen') return boolValue(settings?.qwen_interactive_enabled, false);
@@ -3280,7 +3286,8 @@ function createAiBotFeature({
     const isGrokUniversal = provider === 'grok' && kind === 'universal';
     const isGrokImageBot = provider === 'grok' && kind === 'image';
     const isGrokChatShot = provider === 'grok' && isChatShot;
-    const isImageCapable = isOpenAiUniversal || isOpenAiImageBot || isOpenAiChatShot || isGrokUniversal || isGrokImageBot || isGrokChatShot;
+    const isLocalImage = provider === 'local-image';
+    const isImageCapable = isLocalImage || isOpenAiUniversal || isOpenAiImageBot || isOpenAiChatShot || isGrokUniversal || isGrokImageBot || isGrokChatShot;
     return {
       name,
       mention,
@@ -3302,8 +3309,8 @@ function createAiBotFeature({
       summary_model: kind === 'image' || isConvertBot || isChatShot
         ? ''
         : cleanText(input.summary_model ?? current.summary_model ?? summaryFallback, 160),
-      embedding_model: isConvertBot || isChatShot ? '' : embeddingFallback,
-      image_model: (isOpenAiUniversal || isOpenAiImageBot || isOpenAiChatShot)
+      embedding_model: isLocalImage || kind === 'image' || isConvertBot || isChatShot ? '' : embeddingFallback,
+      image_model: isLocalImage ? cleanText(input.image_model ?? current.image_model ?? settings.local_image_default_model, 160) : (isOpenAiUniversal || isOpenAiImageBot || isOpenAiChatShot)
         ? cleanText(input.image_model ?? current.image_model ?? settings.openai_default_image_model, 160)
         : (provider === 'grok' && isImageCapable
           ? cleanText(input.image_model ?? current.image_model ?? settings.grok_default_image_model, 160)
@@ -3311,14 +3318,14 @@ function createAiBotFeature({
       image_aspect_ratio: provider === 'grok' && isImageCapable
         ? cleanGrokAspectRatio(input.image_aspect_ratio ?? current.image_aspect_ratio, settings.grok_default_image_aspect_ratio)
         : '',
-      image_resolution: (isOpenAiUniversal || isOpenAiImageBot || isOpenAiChatShot)
+      image_resolution: isLocalImage ? localImageAi.cleanSize(input.image_resolution ?? current.image_resolution, settings.local_image_default_size) : (isOpenAiUniversal || isOpenAiImageBot || isOpenAiChatShot)
         ? cleanOpenAiImageSize(input.image_resolution ?? current.image_resolution, settings.openai_default_image_size)
         : (provider === 'grok' && isImageCapable
           ? cleanGrokResolution(input.image_resolution ?? current.image_resolution, settings.grok_default_image_resolution)
           : ''),
-      allow_text: isChatShot ? false : boolValue(input.allow_text, current.allow_text == null ? (kind !== 'image' && !isConvertBot) : current.allow_text !== 0),
+      allow_text: isLocalImage || isChatShot ? false : boolValue(input.allow_text, current.allow_text == null ? (kind !== 'image' && !isConvertBot) : current.allow_text !== 0),
       allow_image_generate: isChatShot ? true : boolValue(input.allow_image_generate, current.allow_image_generate == null ? isImageCapable : current.allow_image_generate !== 0),
-      allow_image_edit: isChatShot ? false : boolValue(input.allow_image_edit, current.allow_image_edit == null ? (isOpenAiUniversal || isOpenAiImageBot || isGrokUniversal) : current.allow_image_edit !== 0),
+      allow_image_edit: isChatShot ? false : boolValue(input.allow_image_edit, current.allow_image_edit == null ? (isLocalImage || isOpenAiUniversal || isOpenAiImageBot || isGrokUniversal) : current.allow_image_edit !== 0),
       allow_document: isOpenAiUniversal
         ? boolValue(input.allow_document, current.allow_document == null ? true : current.allow_document !== 0)
         : false,
@@ -5853,7 +5860,7 @@ function createAiBotFeature({
     const replyId = Number(sourceMessage?.reply_to_id || 0);
     if (replyId) {
       const replyMessage = messageFileRefStmt.get(replyId);
-      if (replyMessage) candidates.push(replyMessage);
+      if (replyMessage && Number(replyMessage.chat_id) === Number(sourceMessage.chat_id)) candidates.push(replyMessage);
     }
 
     for (const candidate of candidates) {
@@ -7470,7 +7477,7 @@ function createAiBotFeature({
       const apiKey = isYandex
         ? getYandexApiKey()
         : (isDeepSeek ? getDeepSeekApiKey() : (isQwen ? getQwenApiKey() : (isGrok ? getGrokApiKey() : getApiKey())));
-      if (!apiKey) return;
+      if (bot.provider === 'local-image' ? !settings.local_image_enabled : !apiKey) return;
       if (isYandex && !settings.yandex_folder_id) return;
       if (isDeepSeek && !settings.deepseek_enabled) return;
       if (isQwen && !settings.qwen_enabled) return;
@@ -7481,6 +7488,27 @@ function createAiBotFeature({
       }, 2200);
 
       if (bot.kind === 'image') {
+        if (bot.provider === 'local-image') {
+          const prompt = cleanText(extractBotPromptText(bot, sourceMessage), 8000);
+          if (!prompt) return;
+          const sourceImage = await resolveSourceImageInput(sourceMessage);
+          if (sourceImage ? !bot.allow_image_edit : !bot.allow_image_generate) {
+            throw new Error(sourceImage ? 'Local image editing is disabled' : 'Local image generation is disabled');
+          }
+          const options = {
+            baseUrl: settings.local_image_base_url, model: bot.image_model, prompt,
+            size: bot.image_resolution, timeoutMs: settings.local_image_timeout_ms,
+          };
+          const result = sourceImage
+            ? await localImageAi.editImage({ ...options, imageBuffer: sourceImage.buffer, imageMimeType: sourceImage.mimeType })
+            : await localImageAi.generateImage(options);
+          const { buffer, mimeType } = await loadGeneratedImageBytes(result);
+          const message = await createBotFileMessage(bot, sourceMessage, {
+            buffer, mimeType, fileType: 'image', originalName: `qwen-image-${Date.now()}.png`,
+          });
+          if (message) finalizePublishedBotMessage(message);
+          return;
+        }
         if (isGrok) {
           const message = await createGrokImageMessage(bot, sourceMessage);
           if (!message) return;
@@ -7696,7 +7724,7 @@ function createAiBotFeature({
     }
     if (options.skipBotTrigger || message.ai_generated) return;
     const settings = getGlobalSettings();
-    if (!settings.enabled && !settings.yandex_enabled && !settings.deepseek_enabled && !settings.qwen_enabled && !settings.grok_enabled) return;
+    if (!settings.local_image_enabled && !settings.enabled && !settings.yandex_enabled && !settings.deepseek_enabled && !settings.qwen_enabled && !settings.grok_enabled) return;
     const text = aiMessageMemoryText(message, { includeVoters: true });
     if (!text) return;
     const rows = activeChatBotsStmt.all(message.chat_id);
@@ -7709,6 +7737,7 @@ function createAiBotFeature({
       if (bot.provider === 'qwen' && !settings.qwen_enabled) continue;
       if (bot.provider === 'grok' && !settings.grok_enabled) continue;
       if (bot.provider === 'openai' && !settings.enabled) continue;
+      if (bot.provider === 'local-image' && !settings.local_image_enabled) continue;
       const chatConfig = {
         mode: bot.kind === 'image' || bot.provider === 'deepseek' || bot.provider === 'qwen'
           ? 'simple'
@@ -9496,6 +9525,186 @@ function createAiBotFeature({
     const bot = sanitizeBot(createBotTx(input));
     broadcastContextConvertBotUpdatedForBot(bot.id, [bot]);
     res.json({ bot, warnings, state: serializeDeepSeekConvertAdminState() });
+  });
+
+  const allLocalImageBotsStmt = db.prepare(`
+    SELECT b.*, u.avatar_color, u.avatar_url FROM ai_bots b
+    LEFT JOIN users u ON u.id=b.user_id
+    WHERE b.provider='local-image' ORDER BY b.enabled DESC, b.id ASC
+  `);
+
+  function serializeLocalImageAdminState() {
+    const bots = allLocalImageBotsStmt.all().map(sanitizeBot);
+    const settings = getGlobalSettings();
+    return {
+      settings: Object.fromEntries(Object.entries(sanitizeSettings(settings)).filter(([key]) => key.startsWith('local_image_'))),
+      bots,
+      chats: serializeAdminState().chats,
+      chatSettings: serializeChatSettingsForBotIds(new Set(bots.map(bot => Number(bot.id))), { forceSimple: true }),
+      models: { image: [settings.local_image_default_model], size: [...localImageAi.SIZES] },
+    };
+  }
+
+
+  // Reuse message/file storage so historical generations and edits need no migration.
+  app.get('/api/ai-bots/:id(\\d+)/images', auth, (req, res) => {
+    const bot = sanitizeBot(botByIdStmt.get(Number(req.params.id)));
+    if (!bot) return res.status(404).json({ error: 'Bot not found' });
+    const participant = db.prepare(`SELECT 1 FROM chat_members viewer
+      WHERE viewer.user_id=? AND (
+        EXISTS (SELECT 1 FROM chat_members peer WHERE peer.chat_id=viewer.chat_id AND peer.user_id=?)
+        OR EXISTS (SELECT 1 FROM messages m WHERE m.chat_id=viewer.chat_id AND m.ai_bot_id=?)
+      ) LIMIT 1`).get(req.user.id, bot.user_id, bot.id);
+    if (!req.user.is_admin && !participant) return res.status(404).json({ error: 'Bot not found' });
+    const before = req.query.before == null ? Number.MAX_SAFE_INTEGER : Number(req.query.before);
+    const rawLimit = req.query.limit == null ? 24 : Number(req.query.limit);
+    if (!Number.isSafeInteger(before) || before <= 0 || !Number.isSafeInteger(rawLimit) || rawLimit <= 0) {
+      return res.status(400).json({ error: 'Invalid image history cursor' });
+    }
+    const limit = Math.min(rawLimit, 48);
+    const rows = db.prepare(`SELECT m.id, m.chat_id, m.created_at, f.stored_name,
+        COALESCE(source.text, '') AS prompt,
+        requester.id AS requester_id, requester.display_name AS requester_name,
+        requester.username AS requester_username
+      FROM messages m
+      JOIN files f ON f.id=m.file_id
+      JOIN chat_members viewer ON viewer.chat_id=m.chat_id AND viewer.user_id=?
+      LEFT JOIN messages source ON source.id=m.reply_to_id AND source.chat_id=m.chat_id AND source.is_deleted=0
+      LEFT JOIN users requester ON requester.id=source.user_id
+      WHERE m.ai_bot_id=? AND m.user_id=? AND m.ai_generated=1 AND m.is_deleted=0
+        AND f.type='image' AND m.id<?
+      ORDER BY m.id DESC LIMIT ?`).all(req.user.id, bot.id, bot.user_id, before, limit + 1);
+    const images = rows.slice(0, limit).map(({ stored_name, requester_id, requester_name, requester_username, ...row }) => ({
+      ...row, file_url: `/uploads/${encodeURIComponent(stored_name)}`,
+      requested_by: requester_id ? { id: requester_id, display_name: requester_name, username: requester_username } : null,
+    }));
+    res.json({
+      bot: { id: bot.id, name: bot.name, provider: bot.provider, avatar_url: bot.avatar_url },
+      images, next_before: rows.length > limit ? images[images.length - 1].id : null,
+    });
+  });
+
+  app.post('/api/admin/local-image-bots/:id(\\d+)/avatar', auth, adminOnly, botAvatarLimiter, (req, res) => {
+    if (!avatarUpload?.single) return res.status(500).json({ error: 'Avatar upload is not configured' });
+    const bot = providerBotByRequestId(req, res, { provider: 'local-image', kind: 'image' });
+    if (!bot) return;
+
+    avatarUpload.single('avatar')(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
+      if (!req.file) return res.status(400).json({ error: 'No file' });
+
+      const userId = ensureBackingUser(bot);
+      const old = db.prepare('SELECT avatar_url FROM users WHERE id=?').get(userId);
+      removeAvatarFile(old?.avatar_url);
+
+      const avatarUrl = '/uploads/avatars/' + req.file.filename;
+      db.prepare('UPDATE users SET avatar_url=?, display_name=? WHERE id=?').run(avatarUrl, bot.name, userId);
+      db.prepare('UPDATE ai_bots SET updated_at=datetime(\'now\') WHERE id=?').run(bot.id);
+      const updated = sanitizeBot(botByIdStmt.get(bot.id));
+      if (typeof notifyUserUpdated === 'function') notifyUserUpdated(userId);
+      res.json({ bot: updated, state: serializeLocalImageAdminState() });
+    });
+  });
+
+  app.delete('/api/admin/local-image-bots/:id(\\d+)/avatar', auth, adminOnly, (req, res) => {
+    const bot = providerBotByRequestId(req, res, { provider: 'local-image', kind: 'image' });
+    if (!bot) return;
+    const userId = ensureBackingUser(bot);
+    const old = db.prepare('SELECT avatar_url FROM users WHERE id=?').get(userId);
+    removeAvatarFile(old?.avatar_url);
+    db.prepare('UPDATE users SET avatar_url=NULL WHERE id=?').run(userId);
+    db.prepare('UPDATE ai_bots SET updated_at=datetime(\'now\') WHERE id=?').run(bot.id);
+    const updated = sanitizeBot(botByIdStmt.get(bot.id));
+    if (typeof notifyUserUpdated === 'function') notifyUserUpdated(userId);
+    res.json({ bot: updated, state: serializeLocalImageAdminState() });
+  });
+
+  app.get('/api/admin/local-image-bots', auth, adminOnly, (_req, res) => {
+    res.json(serializeLocalImageAdminState());
+  });
+
+  app.put('/api/admin/local-image-bots/settings', auth, adminOnly, (req, res) => {
+    try {
+      const input = Object.fromEntries(Object.entries(req.body || {}).filter(([key]) => [
+        'local_image_enabled', 'local_image_base_url', 'local_image_default_model',
+        'local_image_default_size', 'local_image_timeout_ms',
+      ].includes(key)));
+      if (input.local_image_base_url != null) input.local_image_base_url = localImageAi.cleanBaseUrl(input.local_image_base_url);
+      saveAiSettings(db, input, secret);
+      res.json({ state: serializeLocalImageAdminState() });
+    } catch (error) {
+      res.status(400).json({ error: errorText(error) });
+    }
+  });
+
+  app.post('/api/admin/local-image-bots/test-connection', auth, adminOnly, async (req, res) => {
+    try {
+      const settings = getGlobalSettings();
+      const result = await localImageAi.testConnection({ baseUrl: req.body?.local_image_base_url || settings.local_image_base_url });
+      res.json({ ok: true, result });
+    } catch (error) {
+      res.status(400).json({ error: errorText(error) });
+    }
+  });
+
+  app.post('/api/admin/local-image-bots', auth, adminOnly, (req, res) => {
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'local-image', kind: 'image' });
+    const bot = sanitizeBot(createBotTx(input));
+    res.json({ bot, state: serializeLocalImageAdminState() });
+  });
+
+  app.put('/api/admin/local-image-bots/chat-settings', auth, adminOnly, (req, res) => {
+    const chatId = Number(req.body?.chatId);
+    if (!db.prepare('SELECT 1 FROM chats WHERE id=?').get(chatId)) return res.status(404).json({ error: 'Chat not found' });
+    const bot = providerBotByRequestId({ params: { id: req.body?.botId } }, res, { provider: 'local-image', kind: 'image' });
+    if (!bot) return;
+    saveChatBotSettingTx({
+      chatId, bot, enabled: boolValue(req.body?.enabled, false), mode: 'simple',
+      hotContextLimit: 50, triggerMode: 'mention_reply', autoReactOnMention: false,
+      actorUserId: req.user.id, source: 'local_image_chat_setting',
+    });
+    res.json({ ok: true, state: serializeLocalImageAdminState() });
+  });
+
+  app.put('/api/admin/local-image-bots/:id(\\d+)', auth, adminOnly, (req, res) => {
+    const current = providerBotByRequestId(req, res, { provider: 'local-image', kind: 'image' });
+    if (!current) return;
+    const input = normalizeBotInput({ ...(req.body || {}), provider: 'local-image', kind: 'image' }, current);
+    db.transaction(() => {
+      db.prepare(`UPDATE ai_bots SET name=?, mention=?, enabled=?, visible_to_users=?,
+        image_model=?, image_resolution=?, allow_image_generate=?, allow_image_edit=?, updated_at=datetime('now') WHERE id=?`)
+        .run(input.name, input.mention, input.enabled ? 1 : 0, input.visible_to_users ? 1 : 0,
+          input.image_model, input.image_resolution, input.allow_image_generate ? 1 : 0, input.allow_image_edit ? 1 : 0, current.id);
+      db.prepare('UPDATE users SET display_name=? WHERE id=?').run(input.name, current.user_id);
+    })();
+    const updated = botByIdStmt.get(current.id);
+    syncBotMemberships(updated, updated.enabled !== 0, { actorUserId: req.user.id, source: 'local_image_bot_update' });
+    if (typeof notifyUserUpdated === 'function') notifyUserUpdated(current.user_id);
+    res.json({ bot: sanitizeBot(updated), state: serializeLocalImageAdminState() });
+  });
+
+  app.post('/api/admin/local-image-bots/:id(\\d+)/test', auth, adminOnly, async (req, res) => {
+    const bot = providerBotByRequestId(req, res, { provider: 'local-image', kind: 'image' });
+    if (!bot) return;
+    const settings = getGlobalSettings();
+    if (!settings.local_image_enabled || !bot.enabled || !bot.allow_image_generate) {
+      return res.status(400).json({ error: 'Local image generation is disabled' });
+    }
+    const controller = new AbortController();
+    const onClose = () => { if (!res.writableEnded) controller.abort(); };
+    res.on('close', onClose);
+    try {
+      const image = await localImageAi.generateImage({
+        baseUrl: settings.local_image_base_url, model: bot.image_model,
+        prompt: req.body?.prompt || 'A cheerful yellow banana astronaut on the Moon, playful illustration',
+        size: bot.image_resolution, timeoutMs: settings.local_image_timeout_ms, signal: controller.signal,
+      });
+      res.json({ ok: true, image });
+    } catch (error) {
+      if (!controller.signal.aborted) res.status(400).json({ error: errorText(error) });
+    } finally {
+      res.off('close', onClose);
+    }
   });
 
   function qwenBotByRequestId(req, res) {

@@ -311,7 +311,7 @@
           return;
         }
         list.innerHTML = grokBotState.bots.map(bot => `
-          <button type="button" class="ai-bot-list-item${Number(bot.id) === Number(selectedGrokBotId) ? ' active' : ''}" data-bot-id="${bot.id}">
+          <div class="ai-bot-list-row"><button type="button" class="ai-bot-list-item${Number(bot.id) === Number(selectedGrokBotId) ? ' active' : ''}" data-bot-id="${bot.id}">
             <span class="ai-bot-list-main">
               <span class="ai-bot-list-avatar" style="background:${esc(bot.avatar_color || '#65aadd')}">
                 ${bot.avatar_url ? `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">` : esc(initials(bot.name || '?'))}
@@ -322,7 +322,7 @@
               </span>
             </span>
             <span class="ai-bot-list-model">${bot.response_model ? esc(bot.response_model) : ''}</span>
-          </button>
+          </button>${window.BananzaApp.aiAdmin.shared?.renderBotHistoryButton?.(bot) || ''}</div>
         `).join('');
       }
     
@@ -334,7 +334,7 @@
           return;
         }
         list.innerHTML = grokBotState.imageBots.map(bot => `
-          <button type="button" class="ai-bot-list-item${Number(bot.id) === Number(selectedGrokImageBotId) ? ' active' : ''}" data-bot-id="${bot.id}">
+          <div class="ai-bot-list-row"><button type="button" class="ai-bot-list-item${Number(bot.id) === Number(selectedGrokImageBotId) ? ' active' : ''}" data-bot-id="${bot.id}">
             <span class="ai-bot-list-main">
               <span class="ai-bot-list-avatar" style="background:${esc(bot.avatar_color || '#65aadd')}">
                 ${bot.avatar_url ? `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">` : esc(initials(bot.name || '?'))}
@@ -345,7 +345,7 @@
               </span>
             </span>
             <span class="ai-bot-list-model">${bot.image_model ? esc(bot.image_model) : ''}</span>
-          </button>
+          </button>${window.BananzaApp.aiAdmin.shared?.renderBotHistoryButton?.(bot) || ''}</div>
         `).join('');
       }
     
@@ -357,7 +357,7 @@
           return;
         }
         list.innerHTML = grokUniversalState.bots.map(bot => `
-          <button type="button" class="ai-bot-list-item${Number(bot.id) === Number(selectedGrokUniversalBotId) ? ' active' : ''}" data-bot-id="${bot.id}">
+          <div class="ai-bot-list-row"><button type="button" class="ai-bot-list-item${Number(bot.id) === Number(selectedGrokUniversalBotId) ? ' active' : ''}" data-bot-id="${bot.id}">
             <span class="ai-bot-list-main">
               <span class="ai-bot-list-avatar" style="background:${esc(bot.avatar_color || '#65aadd')}">
                 ${bot.avatar_url ? `<img class="avatar-img" src="${esc(bot.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">` : esc(initials(bot.name || '?'))}
@@ -368,7 +368,7 @@
               </span>
             </span>
             <span class="ai-bot-list-model">${bot.response_model ? esc(bot.response_model) : ''}</span>
-          </button>
+          </button>${window.BananzaApp.aiAdmin.shared?.renderBotHistoryButton?.(bot) || ''}</div>
         `).join('');
       }
     
