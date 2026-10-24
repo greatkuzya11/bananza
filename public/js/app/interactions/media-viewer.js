@@ -874,14 +874,14 @@ function bindEvents() {
     
     messagesEl.addEventListener('pointerdown', (e) => {  
       const avatar = e.target.closest('.msg-group-avatar');  
-      if (!avatar || !messagesEl.contains(avatar) || !isGroupLikeCurrentChat()) return;  
+      if (!avatar || !messagesEl.contains(avatar)) return;
       e.preventDefault();  
       e.stopPropagation();  
       openAvatarUserMenu(avatar);  
     }, { passive: false });  
     messagesEl.addEventListener('keydown', (e) => {  
       const avatar = e.target.closest('.msg-group-avatar');  
-      if (!avatar || !isGroupLikeCurrentChat() || (e.key !== 'Enter' && e.key !== ' ')) return;  
+      if (!avatar || !messagesEl.contains(avatar) || (e.key !== 'Enter' && e.key !== ' ')) return;
       e.preventDefault();  
       openAvatarUserMenu(avatar);  
     });  
