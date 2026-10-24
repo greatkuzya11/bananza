@@ -300,6 +300,7 @@
         last_time: msg.created_at,
         last_user: msg.display_name,
         last_file_id: msg.file_id,
+        last_attachment_count: msg.attachments?.length || (msg.file_id ? 1 : 0),
         last_location: isLocation ? 1 : 0,
         last_message_id: Math.max(Number(chat.last_message_id || 0), Number(msg.id || 0)),
       });

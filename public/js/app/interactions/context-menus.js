@@ -101,7 +101,7 @@ function clearMediaContextLongPress() {
 }
 
 function getMessageMediaContextTarget(target) {
-  return target?.closest?.(MEDIA_CONTEXT_TARGET_SELECTOR) || null;
+  return target?.closest?.(MEDIA_CONTEXT_TARGET_SELECTOR + ', .msg-album-tile') || null;
 }
 
 function getMessageMediaKindLabel(kind) {
@@ -134,7 +134,10 @@ function getAbsoluteMessageMediaUrl(url) {
 }
 
 function getMessageMediaContext(row, target) {
-  const msg = row?.__messageData || {};
+  const message = row?.__messageData || {};
+  const index = target?.closest?.('[data-attachment-index]')?.dataset.attachmentIndex;
+  const msg = index != null && message.attachments?.[Number(index)]
+    ? { ...message, ...message.attachments[Number(index)] } : message;
   const mediaTarget = getMessageMediaContextTarget(target);
   if (!row || !mediaTarget || row.dataset.outbox === '1' || row.querySelector('.msg-deleted')) return null;
   let mediaKind = 'file';

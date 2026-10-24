@@ -223,7 +223,26 @@
     return null;
   }
 
+  function getMessageAttachments(message) {
+    if (!message || message.is_deleted) return [];
+    return Array.isArray(message.attachments) ? message.attachments : (message.file_id ? [message] : []);
+  }
+
+  function renderAttachmentThumbnails(files = []) {
+    if (!files.length) return '';
+    const esc = root.formatters.esc;
+    return `<span class="quote-attachments">${files.slice(0, 4).map((file, index) => {
+      const name = file.file_name || file.name || '';
+      const src = file.file_type === 'image' ? getAttachmentPreviewUrl(file)
+        : file.file_type === 'video' ? getAttachmentPosterUrl(file) : '';
+      const label = (name.split('.').pop() || window.BananzaI18n?.t('File') || '').slice(0, 5).toUpperCase();
+      return `<span class="quote-attachment" title="${esc(name)}"><span>${esc(label)}</span>${src ? `<img src="${esc(src)}" alt="${esc(name)}" loading="lazy" onerror="this.remove()">` : ''}${index === 3 && files.length > 4 ? `<span class="quote-attachment-count">+${files.length - 4}</span>` : ''}</span>`;
+    }).join('')}</span>`;
+  }
+
   root.attachments = Object.freeze({
+    getMessageAttachments,
+    renderAttachmentThumbnails,
     getStoredAttachmentUrl,
     getStoredAttachmentPosterUrl,
     resolveAttachmentUrl,

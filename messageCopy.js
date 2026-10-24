@@ -13,6 +13,7 @@ function createMessageCopyService({
   broadcastToChatAll,
   saveMessageMentions,
 }) {
+  const attachments = require('./messageAttachments').createMessageAttachments(db, uploadsDir);
   const sourceMessageStmt = db.prepare(`
     SELECT
       m.*,
@@ -177,6 +178,8 @@ function createMessageCopyService({
     shouldAutoTranscribe = false,
   }) {
     let duplicatedFile = null;
+    const duplicatedFiles = [];
+    const sourceFiles = attachments.get(source.id);
     try {
       if (Number(source?.is_poll_message) !== 0) {
         throw new Error('Poll messages cannot be copied');
@@ -184,19 +187,14 @@ function createMessageCopyService({
       if (Number(source?.is_call_message) !== 0) {
         throw new Error('Call messages cannot be copied');
       }
-      duplicatedFile = duplicateMessageFile(source, actorUserId);
+      for (const file of sourceFiles) duplicatedFiles.push(duplicateMessageFile(file, actorUserId));
+      duplicatedFile = duplicatedFiles[0] || null;
 
       const messageId = db.transaction(() => {
-        const duplicatedFileId = duplicatedFile
-          ? insertFileStmt.run(
-              duplicatedFile.original_name,
-              duplicatedFile.stored_name,
-              duplicatedFile.mime_type,
-              duplicatedFile.size,
-              duplicatedFile.type,
-              duplicatedFile.insertedBy
-            ).lastInsertRowid
-          : null;
+        const duplicatedIds = duplicatedFiles.map(file => Number(insertFileStmt.run(
+          file.original_name, file.stored_name, file.mime_type, file.size, file.type, file.insertedBy
+        ).lastInsertRowid));
+        const duplicatedFileId = duplicatedIds[0] || null;
 
         const insertedMessage = insertMessageStmt.run(
           targetChatId,
@@ -214,6 +212,7 @@ function createMessageCopyService({
           savedFrom?.createdAt || null
         );
         const newMessageId = insertedMessage.lastInsertRowid;
+        attachments.save(newMessageId, duplicatedIds);
 
         if (source.text && typeof saveMessageMentions === 'function') {
           saveMessageMentions(newMessageId, targetChatId, source.text);
@@ -271,23 +270,17 @@ function createMessageCopyService({
         return newMessageId;
       })();
 
-      if (duplicatedFile?.stored_name && source?.file_type === 'video') {
-        try {
-          duplicateVideoPoster({
-            uploadsDir,
-            sourceStoredName: source.file_stored,
-            targetStoredName: duplicatedFile.stored_name,
-          });
-        } catch (error) {}
-      }
+      duplicatedFiles.forEach((file, index) => {
+        if (file.type !== 'video') return;
+        try { duplicateVideoPoster({ uploadsDir, sourceStoredName: sourceFiles[index].file_stored,
+          targetStoredName: file.stored_name }); } catch (error) {}
+      });
 
       return { messageId, duplicatedFile };
     } catch (error) {
-      if (duplicatedFile?.path) {
-        fs.unlink(duplicatedFile.path, () => {});
-      }
-      if (duplicatedFile?.stored_name) {
-        deleteVideoPoster(uploadsDir, duplicatedFile.stored_name);
+      for (const file of duplicatedFiles) {
+        if (file.path) fs.unlink(file.path, () => {});
+        if (file.stored_name) deleteVideoPoster(uploadsDir, file.stored_name);
       }
       throw error;
     }

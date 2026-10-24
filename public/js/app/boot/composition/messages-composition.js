@@ -258,7 +258,7 @@
           },
           clearEdit: (options = {}) => clearEdit(options),
           getReplyPreviewText: (msg) => getReplyPreviewText(msg),
-          updateReplyBarFromMessage: (msg, text) => composerReplyEditController?.updateReplyPreview?.(msg.id, text),
+          updateReplyBarFromMessage: (msg, text) => composerReplyEditController?.updateReplyPreview?.(msg.id, text, msg),
           applyOwnReadStateToMessage: (msg, chatId) => applyOwnReadStateToMessage(msg, chatId),
           refreshReactionPickerForMessage: (msg) => {
             if (Number(getReactionPickerMsgId() || 0) === Number(msg.id || 0) && isFloatingSurfaceVisible(reactionPicker)) {

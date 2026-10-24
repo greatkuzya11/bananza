@@ -170,3 +170,20 @@ test('messageCache asset prefetch caches upload previews but skips non-image res
   assert.ok(await cache.match(`${dom.window.location.origin}/uploads/image-a/preview`));
   assert.equal(await cache.match(`${dom.window.location.origin}/uploads/voice-a/preview`), null);
 });
+
+
+test('media page cache preserves a mixed album whose first attachment is a document', async () => {
+  const dom = createAppDom();
+  try {
+    loadBrowserScript(dom, 'public/js/messageCache.js');
+    const cache = dom.window.messageCache;
+    await cache.init(43);
+    const message = { id: 40, chat_id: 9, file_type: 'document', attachments: [
+      { file_id: 3, file_type: 'document' }, { file_id: 4, file_type: 'image' },
+    ] };
+    await cache.writeMediaPage(9, { direction: 'before', cursor: 50, media: [message], hasMoreBefore: false });
+    const page = await cache.readMediaPage(9, 'before', 50);
+    assert.equal(page.media.length, 1);
+    assert.deepEqual(Array.from(page.media[0].attachments, file => file.file_id), [3, 4]);
+  } finally { dom.window.close(); }
+});

@@ -47,6 +47,8 @@
         actions: {
           alert: async (message) => (await window.BananzaDialogs.alert(message)),
           isClientSideMessage: (msg) => isClientSideMessage(msg),
+          renderPendingFiles: () => composerFilesController?.renderPendingFiles(),
+          clearPendingFile: () => composerFilesController?.clearPendingFile(),
           isPollMessage: (msg) => isPollMessage(msg),
           isCurrentNotesChat: () => isCurrentNotesChat(),
           getMediaNoteFallbackLabel: (msg) => getMediaNoteFallbackLabel(msg),
@@ -67,6 +69,7 @@
       });
     
       composerFilesController = composerFilesFactory({
+        getCurrentChatId: () => currentChatId,
         window,
         document,
         dom: appDom,

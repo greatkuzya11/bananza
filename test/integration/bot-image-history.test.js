@@ -9,7 +9,8 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR
 
 test('image history covers all providers, paginates and respects chat membership and deletion', async (t) => {
   const sandbox = await createSandbox({ name: 'bot-image-history' });
-  t.after(() => sandbox.stop());
+  let db;
+  t.after(async () => { if (db?.open) db.close(); await sandbox.stop(); });
   const { admin, bob, carol, groupChat, privateChat } = await createBasicChatScenario(sandbox.baseUrl);
   const bots = [];
   for (const [route, mention] of [
@@ -21,8 +22,7 @@ test('image history covers all providers, paginates and respects chat membership
     bots.push(result.data.bot);
   }
   const upload = await admin.uploadPngFile();
-  const db = new Database(path.join(sandbox.appDir, 'bananza.db'));
-  t.after(() => db.close());
+  db = new Database(path.join(sandbox.appDir, 'bananza.db'));
   const insert = db.prepare(`INSERT INTO messages(chat_id,user_id,text,file_id,reply_to_id,ai_generated,ai_bot_id,is_deleted) VALUES(?,?,?,?,?,?,?,?)`);
   const prompt = Number(insert.run(privateChat.id, admin.user.id, 'Make the cup green <script>alert(1)</script>', null, null, 0, null, 0).lastInsertRowid);
   function image(bot, chatId, { deleted = 0, generated = 1, userId = bot.user_id } = {}) {

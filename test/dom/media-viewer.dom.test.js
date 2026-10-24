@@ -1362,6 +1362,60 @@ test('media viewer gallery swipe does not reveal the hidden close button', async
   assert.equal(imageViewer.classList.contains('iv-close-hidden'), true);
 });
 
+test('media viewer downward swipe closes images and videos without click-through', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => dom.window.close());
+  const { document, BananzaAppBridge } = dom.window;
+  for (const type of ['image', 'video']) {
+    BananzaAppBridge.__testing.openMediaViewer(`https://example.com/dismiss.${type === 'image' ? 'jpg' : 'mp4'}`, type);
+    await wait(dom, 0);
+    const slide = document.querySelector('#ivStrip .iv-slide');
+    const start = createTouchPoint({ clientX: 200, clientY: 300 });
+    const end = createTouchPoint({ clientX: 210, clientY: 490 });
+    slide.dispatchEvent(createTouchEvent(dom.window, 'touchstart', { touches: [start] }));
+    const move = createTouchEvent(dom.window, 'touchmove', { touches: [end] });
+    slide.dispatchEvent(move);
+    assert.equal(move.defaultPrevented, true);
+    assert.match(document.getElementById('ivStrip').style.transform, /190px/);
+    const release = createTouchEvent(dom.window, 'touchend', { changedTouches: [end] });
+    slide.dispatchEvent(release);
+    assert.equal(release.defaultPrevented, true);
+    assert.equal(document.getElementById('imageViewer').classList.contains('hidden'), true);
+    document.getElementById('settingsBtn').click();
+    assert.equal(document.getElementById('settingsModal').classList.contains('hidden'), true);
+    await wait(dom, 20);
+  }
+});
+
+test('short, cancelled and zoomed vertical gestures keep the media viewer open', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => dom.window.close());
+  const { document, BananzaAppBridge } = dom.window;
+  BananzaAppBridge.__testing.openMediaViewer('https://example.com/dismiss-cancel.jpg', 'image');
+  await wait(dom, 0);
+  const slide = document.querySelector('#ivStrip .iv-slide');
+  const viewer = document.getElementById('imageViewer');
+  const strip = document.getElementById('ivStrip');
+  const start = createTouchPoint({ clientX: 200, clientY: 300 });
+  for (const [dy, eventType] of [[30, 'touchend'], [-180, 'touchend'], [190, 'touchcancel']]) {
+    const end = createTouchPoint({ clientX: 200, clientY: 300 + dy });
+    slide.dispatchEvent(createTouchEvent(dom.window, 'touchstart', { touches: [start] }));
+    slide.dispatchEvent(createTouchEvent(dom.window, 'touchmove', { touches: [end] }));
+    slide.dispatchEvent(createTouchEvent(dom.window, eventType, { changedTouches: [end] }));
+    assert.equal(viewer.classList.contains('hidden'), false);
+    assert.equal(strip.style.transform, 'translateX(0px)');
+  }
+  slide.dispatchEvent(new dom.window.MouseEvent('dblclick', { bubbles: true, cancelable: true, clientX: 200, clientY: 300 }));
+  assert.ok(getMediaViewerState(dom).scale > 1);
+  const end = createTouchPoint({ clientX: 200, clientY: 490 });
+  slide.dispatchEvent(createTouchEvent(dom.window, 'touchstart', { touches: [start] }));
+  slide.dispatchEvent(createTouchEvent(dom.window, 'touchmove', { touches: [end] }));
+  slide.dispatchEvent(createTouchEvent(dom.window, 'touchend', { changedTouches: [end] }));
+  assert.equal(viewer.classList.contains('hidden'), false);
+  assert.equal(strip.style.transform, 'translateX(0px)');
+  assert.ok(getMediaViewerState(dom).panY > 0);
+});
+
 test('media viewer opens supplied gallery items and navigates them without chat media requests', async (t) => {
   const dom = await bootAppDom();
   t.after(() => dom.window.close());
@@ -2791,6 +2845,43 @@ test('mention picker opens on pointerup without a synthetic click and keeps the 
   assert.equal(mentionPicker.classList.contains('hidden'), false);
   assert.equal(document.activeElement, msgInput);
   assert.equal(app.style.height, '420px');
+});
+
+test('mention button after text opens above the mobile keyboard and inserts the tapped target', async (t) => {
+  const dom = await openSingleChatDom({
+    mentionTargetsByChatId: {
+      1: [{ user_id: 2, username: 'bob', token: 'bob', display_name: 'Bob' }],
+    },
+  });
+  t.after(() => dom.window.close());
+  const { document, BananzaAppBridge } = dom.window;
+  const input = document.getElementById('msgInput');
+  BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
+  await wait(dom, 40);
+  await openMobileKeyboard(dom, input);
+  input.getBoundingClientRect = () => ({ left: 16, top: 360, width: 320, height: 40 });
+  input.value = '\u041c\u043c\u043c';
+  input.setSelectionRange(3, 3);
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+
+  dispatchPointerTap(dom.window, document.getElementById('mentionOpenBtn'));
+  await wait(dom, 80);
+  const picker = document.getElementById('mentionPicker');
+  assert.ok(picker);
+  assert.equal(picker.classList.contains('hidden'), false);
+  assert.equal(input.value, '\u041c\u043c\u043c @');
+  assert.equal(document.activeElement, input);
+  assert.equal(document.getElementById('app').style.height, '420px');
+  assert.ok(parseFloat(picker.style.top) < 360);
+
+  dispatchPointerTap(dom.window, picker.querySelector('.mention-picker-item'));
+  await wait(dom, 80);
+  assert.equal(input.value, '\u041c\u043c\u043c @bob ');
+  assert.equal(input.selectionStart, input.value.length);
+  assert.equal(input.selectionEnd, input.value.length);
+  assert.equal(picker.classList.contains('hidden'), true);
+  assert.equal(document.activeElement, input);
+  assert.equal(document.getElementById('app').style.height, '420px');
 });
 
 test('attach button opens on touchend without a synthetic click and keeps the mobile composer attached', async (t) => {

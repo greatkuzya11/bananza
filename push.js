@@ -38,6 +38,7 @@ const PUSH_TEXT = {
     audio: 'Аудио',
     file: 'Файл',
     attachment: 'Вложение',
+    attachments: 'Вложений: {count}',
     newMessage: 'Новое сообщение',
     pinnedMessage: 'Закрепленное сообщение',
     newChat: 'Новый чат',
@@ -59,6 +60,7 @@ const PUSH_TEXT = {
     audio: 'Audio',
     file: 'File',
     attachment: 'Attachment',
+    attachments: '{count} attachments',
     newMessage: 'New message',
     pinnedMessage: 'Pinned message',
     newChat: 'New chat',
@@ -124,6 +126,7 @@ function messagePreviewForLanguage(message, language) {
   if (String(text).trim()) return truncate(text);
   if (message?.is_voice_note) return pushText(language, 'voiceMessage');
   if (message?.location || message?.is_location || message?.location_message_id) return pushText(language, 'location');
+  if (message?.attachments?.length > 1) return pushText(language, 'attachments', { count: message.attachments.length });
   if (message?.file_type === 'image') return pushText(language, 'photo');
   if (message?.file_type === 'video') return pushText(language, 'video');
   if (message?.file_type === 'audio') return pushText(language, 'audio');

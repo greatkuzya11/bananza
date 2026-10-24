@@ -28,6 +28,7 @@
         const transcript = (msg.transcription_text || '').trim();
         return transcript ? transcript.substring(0, 100) : (actions.getMediaNoteFallbackLabel || (() => 'Attachment'))(msg);
       }
+      if (msg?.attachments?.length > 1) return msg.attachments.map(file => file.file_name).join(', ').substring(0, 100);
       if (msg?.file_name) return msg.file_name.substring(0, 100);
       return 'Attachment';
     }
@@ -65,7 +66,7 @@
       if (msg.call || msg.call_message || msg.is_call_message) return false;
       if (msg.call_transcript_run || msg.is_call_transcript_message) return false;
       if (msg.call_artifact_batch || msg.is_call_artifact_message) return false;
-      if (!currentUser.is_admin && msg.user_id !== currentUser.id) return false;
+      if (msg.user_id !== currentUser.id) return false;
       return Boolean(msg.is_voice_note || msg.file_id || msg.text);
     }
 
@@ -133,7 +134,7 @@
         }
       }
       if (msg.file_id && msg.file_name) {
-        parts.push(msg.file_name);
+        parts.push(msg.attachments?.length ? msg.attachments.map(file => file.file_name).join('\n') : msg.file_name);
         hasMeaningfulContent = true;
       }
       if (msg.location) {
@@ -189,6 +190,7 @@
         id: source.id,
         display_name: source.display_name || source.displayName || '',
         text: source.text || '',
+        attachments: source.attachments || [],
         is_voice_note: Boolean(source.is_voice_note),
         is_video_note: Boolean(source.is_video_note),
         is_location: Boolean(source.is_location || source.location),
@@ -214,6 +216,7 @@
         id,
         display_name: name,
         text: replyText,
+        attachments: meta?.attachments || [],
         is_voice_note: Boolean(meta?.is_voice_note),
         is_video_note: Boolean(meta?.is_video_note),
         is_location: Boolean(meta?.is_location || meta?.location),
@@ -225,6 +228,7 @@
       });
       if (dom.replyBarName) dom.replyBarName.textContent = name;
       if (dom.replyBarText) dom.replyBarText.textContent = replyText || 'Attachment';
+      renderReplyThumbnails(meta?.attachments || []);
       dom.replyBar?.classList.remove('edit-bar');
       dom.replyBar?.classList.remove('hidden');
       dom.msgInput?.focus();
@@ -232,6 +236,7 @@
 
     function clearReply() {
       state.clearReplyTo();
+      renderReplyThumbnails([]);
       if (!state.editTo) dom.replyBar?.classList.add('hidden');
       (actions.queueIosViewportLayoutSync || noop)();
       (actions.updateComposerAiOverrideState || noop)();
@@ -246,6 +251,8 @@
       }
 
       const editableText = getEditableText(row);
+      const attachments = root.attachments?.getMessageAttachments(msg) || (msg.attachments || []);
+      const attachmentsEditable = !msg.is_voice_note && !msg.is_video_note && !msg.location;
       (actions.hideFloatingMessageActions || noop)();
       state.clearReplyTo();
       state.setEditTo({
@@ -253,7 +260,17 @@
         text: editableText,
         is_voice_note: Boolean(msg.is_voice_note || row.__voiceMessage?.is_voice_note),
         allowEmpty: Boolean(msg.file_id && !(msg.is_voice_note || row.__voiceMessage?.is_voice_note)),
+        attachmentsEditable,
+        originalFileIds: attachments.map(file => file.file_id),
       });
+      renderReplyThumbnails([]);
+      if (attachmentsEditable) {
+        state.setPendingFiles(attachments.map(file => ({
+          serverFileId: file.file_id, serverFileMeta: file,
+          name: file.file_name, mime: file.file_mime, size: file.file_size, type: file.file_type,
+        })));
+        actions.renderPendingFiles?.();
+      }
       if (dom.replyBarName) dom.replyBarName.textContent = '\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0435';
       if (dom.replyBarText) {
         dom.replyBarText.textContent = state.editTo.is_voice_note
@@ -266,8 +283,8 @@
       text.autoResize?.();
       (actions.syncMentionOpenButton || noop)();
       if (dom.attachBtn) {
-        dom.attachBtn.disabled = true;
-        dom.attachBtn.classList.add('disabled');
+        dom.attachBtn.disabled = !attachmentsEditable;
+        dom.attachBtn.classList.toggle('disabled', !attachmentsEditable);
       }
       (actions.refreshPollComposerActionState || noop)();
       (actions.refreshVoiceComposerState || noop)();
@@ -275,7 +292,12 @@
     }
 
     function clearEdit({ clearInput = true, draftChatId = getCurrentChatId() } = {}) {
+      const editedAttachments = state.editTo?.attachmentsEditable;
       state.clearEditTo();
+      if (editedAttachments) actions.clearPendingFile?.();
+      if (dom.msgInput) dom.msgInput.readOnly = false;
+      if (dom.sendBtn) dom.sendBtn.disabled = false;
+      dom.replyBar?.removeAttribute('aria-busy');
       dom.replyBar?.classList.remove('edit-bar');
       dom.replyBar?.classList.add('hidden');
       if (dom.attachBtn) {
@@ -292,10 +314,19 @@
       (actions.refreshVoiceComposerState || noop)();
     }
 
-    function updateReplyPreview(messageId, nextText) {
+    function renderReplyThumbnails(attachments) {
+      dom.replyBar?.querySelector('.quote-attachments')?.remove();
+      dom.replyBar?.insertAdjacentHTML('afterbegin', root.attachments?.renderAttachmentThumbnails(attachments) || '');
+    }
+
+    function updateReplyPreview(messageId, nextText, message = null) {
       if (state.replyTo?.id === messageId && !state.editTo) {
         state.replyTo.text = nextText || 'Attachment';
         if (dom.replyBarText) dom.replyBarText.textContent = state.replyTo.text;
+        if (message) {
+          state.replyTo.attachments = root.attachments?.getMessageAttachments(message) || [];
+          renderReplyThumbnails(state.replyTo.attachments);
+        }
       }
     }
 
@@ -310,11 +341,17 @@
       const mediaClickSuppressMs = 700;
       let swipe = null;
 
-      const isInteractiveTarget = (target) => Boolean(target.closest(
+      const mediaSelector = '.msg-image, .msg-album-tile, .msg-video, .msg-audio, .msg-file';
+      const isInteractiveTarget = (target, clientY) => {
+        if (target.closest('audio, .msg-expand-btn')) return true;
+        const video = target.closest('video');
+        if (video?.controls && clientY >= video.getBoundingClientRect().bottom - 52) return true;
+        return !target.closest(mediaSelector) && Boolean(target.closest(
         'button, a, input, textarea, select, label, audio, video, .msg-reply, .reaction-badge, .msg-file, .link-preview, .msg-group-avatar, .markdown-table-wrap'
-      ));
+        ));
+      };
       const suppressMediaClickAfterSwipe = (row) => {
-        if (!row?.querySelector?.('.msg-image')) return;
+        if (!row?.querySelector?.(mediaSelector)) return;
         row.__suppressMediaClickUntil = Date.now() + mediaClickSuppressMs;
       };
       const isSwipeGestureActive = (inputType) => Boolean(swipe && swipe.inputType === inputType);
@@ -332,6 +369,7 @@
         return indicator;
       };
       const beginSwipe = ({ row, startX, startY, startedOnMedia = false, inputType = 'touch', pointerId = null }) => {
+        row.__suppressMediaClickUntil = 0;
         swipe = {
           row,
           content: row.querySelector('.msg-content'),
@@ -396,8 +434,18 @@
         swipe = null;
       };
 
+      messagesEl.addEventListener('click', (event) => {
+        const row = event.target.closest('.msg-row');
+        if (event.target.closest(mediaSelector) && Date.now() < (row?.__suppressMediaClickUntil || 0)) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      }, true);
+      messagesEl.addEventListener('dragstart', event => {
+        if (event.target.closest(mediaSelector)) event.preventDefault();
+      });
       messagesEl.addEventListener('touchstart', (e) => {
-        if (e.touches.length !== 1 || isInteractiveTarget(e.target)) return;
+        if (e.touches.length !== 1 || isInteractiveTarget(e.target, e.touches[0].clientY)) return;
         const row = e.target.closest('.msg-row');
         if (!row || row.dataset.outbox === '1' || row.querySelector('.msg-deleted')) return;
         const touch = e.touches[0];
@@ -405,7 +453,7 @@
           row,
           startX: touch.clientX,
           startY: touch.clientY,
-          startedOnMedia: Boolean(e.target.closest('.msg-image')),
+          startedOnMedia: Boolean(e.target.closest(mediaSelector)),
           inputType: 'touch',
         });
       }, { passive: true });
@@ -426,14 +474,14 @@
       }, { passive: true });
 
       messagesEl.addEventListener('pointerdown', (e) => {
-        if (e.pointerType === 'touch' || !e.isPrimary || e.button !== 0 || isInteractiveTarget(e.target)) return;
+        if (e.pointerType === 'touch' || !e.isPrimary || e.button !== 0 || isInteractiveTarget(e.target, e.clientY)) return;
         const row = e.target.closest('.msg-row');
         if (!row || row.dataset.outbox === '1' || row.querySelector('.msg-deleted')) return;
         beginSwipe({
           row,
           startX: e.clientX,
           startY: e.clientY,
-          startedOnMedia: Boolean(e.target.closest('.msg-image')),
+          startedOnMedia: Boolean(e.target.closest(mediaSelector)),
           inputType: 'pointer',
           pointerId: e.pointerId,
         });

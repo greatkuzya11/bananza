@@ -90,6 +90,9 @@
     if (chat && chat.last_location) {
       return (chat.last_user ? `${chat.last_user}: ` : '') + '\uD83D\uDCCD Location';
     }
+    if (chat?.last_attachment_count > 1) {
+      return (chat.last_user ? `${chat.last_user}: ` : '') + (window.BananzaI18n?.t('{count} attachments', { count: chat.last_attachment_count }) || `${chat.last_attachment_count} attachments`);
+    }
     if (chat && chat.last_file_id) {
       return (chat.last_user ? `${chat.last_user}: ` : '') + '\uD83D\uDCCE File';
     }

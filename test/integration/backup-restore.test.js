@@ -104,6 +104,17 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
       liveDb.close();
     }
     const uploaded = await admin.uploadTextFile('restore-note.txt', 'restore payload');
+    const albumFile = await admin.uploadTextFile('restore-second.txt', 'second attachment');
+    const removedFile = await admin.uploadTextFile('removed-before-backup.txt', 'removed');
+    const album = await admin.request(`/api/chats/${scenario.groupChat.id}/messages`, {
+      method: 'POST', json: { fileIds: [uploaded.id, removedFile.id], text: 'Backup album' },
+    });
+    const albumReply = await bob.request(`/api/chats/${scenario.groupChat.id}/messages`, {
+      method: 'POST', json: { replyToId: album.data.id, text: 'Backup album reply' },
+    });
+    await admin.request(`/api/messages/${album.data.id}`, {
+      method: 'PATCH', json: { fileIds: [uploaded.id, albumFile.id], text: 'Edited backup album' },
+    });
     const documentChat = await admin.request('/api/documents', {
       method: 'POST',
       json: { title: 'Restore Image Doc' },
@@ -214,6 +225,12 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
       assert.equal(recovery.is_blocked, 0);
       assert.equal(await bcrypt.compare('restore-password', recovery.password), true);
       const fileRow = restoredDb.prepare('SELECT stored_name FROM files WHERE id=?').get(uploaded.id);
+      assert.deepEqual(restoredDb.prepare('SELECT file_id FROM message_attachments WHERE message_id=? ORDER BY position').all(album.data.id).map(row => row.file_id), [uploaded.id, albumFile.id]);
+      assert.equal(restoredDb.prepare('SELECT text FROM messages WHERE id=?').get(album.data.id).text, 'Edited backup album');
+      assert.equal(restoredDb.prepare('SELECT reply_to_id FROM messages WHERE id=?').get(albumReply.data.id).reply_to_id, album.data.id);
+      assert.equal(restoredDb.prepare('SELECT id FROM files WHERE id=?').get(removedFile.id), undefined);
+      const secondFile = restoredDb.prepare('SELECT stored_name FROM files WHERE id=?').get(albumFile.id);
+      assert.equal(fs.readFileSync(path.join(sandbox.appDir, 'uploads', secondFile.stored_name), 'utf8'), 'second attachment');
       const documentAssetRow = restoredDb.prepare(`
         SELECT da.chat_id, da.file_id, da.kind, f.stored_name
         FROM document_assets da

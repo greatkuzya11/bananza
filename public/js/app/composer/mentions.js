@@ -195,12 +195,10 @@
       const value = dom.msgInput.value || '';
       const cursor = dom.msgInput.selectionStart ?? value.length;
       const left = value.slice(0, cursor);
-      const match = left.match(/(^|\s)@([a-zA-Z0-9_-]{0,32})$/);
+      const match = left.match(/@([a-zA-Z0-9_-]{0,32})$/);
       if (!match) return null;
-      const atIndex = cursor - match[2].length - 1;
-      const prev = atIndex > 0 ? value[atIndex - 1] : '';
-      if (prev && !/\s/.test(prev)) return null;
-      return { start: atIndex, end: cursor, query: match[2].toLowerCase() };
+      const atIndex = cursor - match[1].length - 1;
+      return { start: atIndex, end: cursor, query: match[1].toLowerCase() };
     }
 
     function positionMentionPicker() {
@@ -345,10 +343,11 @@
     function insertMentionTarget(target) {
       if (!target || !dom.msgInput) return;
       const keyboardAttached = Boolean(state.mentionPickerState.keyboardAttached);
-      const tokenValue = `@${String(target.token || target.mention || '').replace(/^@+/, '')} `;
       const value = dom.msgInput.value || '';
       const start = state.mentionPickerState.start ?? (dom.msgInput.selectionStart || 0);
       const end = state.mentionPickerState.end ?? (dom.msgInput.selectionEnd || start);
+      const prefix = start > 0 && !/\s/.test(value[start - 1]) ? ' ' : '';
+      const tokenValue = `${prefix}@${String(target.token || target.mention || '').replace(/^@+/, '')} `;
       dom.msgInput.value = value.slice(0, start) + tokenValue + value.slice(end);
       const cursor = start + tokenValue.length;
       dom.msgInput.setSelectionRange(cursor, cursor);
@@ -384,8 +383,10 @@
       const value = dom.msgInput.value || '';
       const start = Math.max(0, dom.msgInput.selectionStart ?? value.length);
       const end = Math.max(start, dom.msgInput.selectionEnd ?? start);
-      dom.msgInput.value = value.slice(0, start) + '@' + value.slice(end);
-      const nextCursor = start + 1;
+      const prefix = start > 0 && !/\s/.test(value[start - 1]) ? ' ' : '';
+      const insertion = `${prefix}@`;
+      dom.msgInput.value = value.slice(0, start) + insertion + value.slice(end);
+      const nextCursor = start + insertion.length;
       dom.msgInput.setSelectionRange(nextCursor, nextCursor);
       text.autoResize?.();
       syncMentionOpenButton();

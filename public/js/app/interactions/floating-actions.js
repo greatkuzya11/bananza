@@ -160,6 +160,8 @@ function measureFloatingSurface(el, fallbackWidth, fallbackHeight) {
 
 function openFloatingSurface(el) {
   if (!(el instanceof HTMLElement)) return;
+  if (el.__closeTransitionHandler) el.removeEventListener('transitionend', el.__closeTransitionHandler);
+  el.__closeTransitionHandler = null;
   clearTimeout(el.__closeTimer);
   el.__closeTimer = null;
   if (el.__openFrame) cancelAnimationFrame(el.__openFrame);
@@ -183,6 +185,8 @@ function closeFloatingSurface(el, { immediate = false, onAfterClose = null } = {
     onAfterClose?.();
     return false;
   }
+  if (el.__closeTransitionHandler) el.removeEventListener('transitionend', el.__closeTransitionHandler);
+  el.__closeTransitionHandler = null;
   clearTimeout(el.__closeTimer);
   el.__closeTimer = null;
   if (el.__openFrame) {
@@ -191,6 +195,8 @@ function closeFloatingSurface(el, { immediate = false, onAfterClose = null } = {
   }
 
   const finalize = () => {
+    if (el.__closeTransitionHandler) el.removeEventListener('transitionend', el.__closeTransitionHandler);
+    el.__closeTransitionHandler = null;
     clearTimeout(el.__closeTimer);
     el.__closeTimer = null;
     el.classList.add('hidden');
@@ -215,6 +221,7 @@ function closeFloatingSurface(el, { immediate = false, onAfterClose = null } = {
     el.removeEventListener('transitionend', onTransitionEnd);
     finalize();
   };
+  el.__closeTransitionHandler = onTransitionEnd;
   el.addEventListener('transitionend', onTransitionEnd);
   const closeFallbackMs = Math.max(MODAL_TRANSITION_BUFFER_MS, Math.ceil(getElementTransitionTotalMs(el) + MODAL_TRANSITION_BUFFER_MS));
   el.__closeTimer = setTimeout(() => {
