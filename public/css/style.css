@@ -10306,13 +10306,14 @@ html[data-visual-mode="glass"] :is(.modal-tab, .login-body .tab).active {
   }
 }
 html[data-visual-mode="glass"] :is(.messages, .chat-view, #chatArea) { background-color: transparent; }
-/* Wallpaper needs a little more tint to keep text readable over both bright and dark pixels. */
+/* Light themes need enough tint to keep secondary text readable on dark wallpaper. */
 html[data-visual-mode="glass"] .messages.has-bg {
   --glass-message-other: color-mix(in srgb, var(--bg-other-msg) 78%, transparent);
   --glass-message-own: color-mix(in srgb, color-mix(in srgb, var(--bg-own-msg) 50%, var(--bg-dark)) 78%, transparent);
 }
 html[data-color-scheme="dark"][data-visual-mode="glass"] .messages.has-bg {
-  --glass-message-own: color-mix(in srgb, color-mix(in srgb, var(--bg-own-msg) 50%, #000) 78%, transparent);
+  --glass-message-other: color-mix(in srgb, var(--bg-other-msg) 62%, transparent);
+  --glass-message-own: color-mix(in srgb, color-mix(in srgb, var(--bg-own-msg) 50%, #000) 62%, transparent);
   --text-primary: #f1f5f9; --text-time: #eaf0f6;
   color: var(--text-primary);
 }
@@ -10324,6 +10325,10 @@ html[data-visual-mode="glass"] .msg-bubble {
   border: 1px solid var(--glass-line); border-radius: 20px;
   box-shadow: 0 3px 12px #0000000d, inset 0 1px 0 var(--glass-highlight);
   background: var(--glass-sheen), var(--glass-message-other);
+}
+html[data-visual-mode="glass"] .msg-row:not(.emoji-only-message):not(.video-note-row) .msg-bubble {
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
 }
 html[data-visual-mode="glass"] .msg-row.other .msg-bubble { background: var(--glass-sheen), var(--glass-message-other); }
 html[data-visual-mode="glass"] .msg-row.own .msg-bubble { background: var(--glass-sheen), var(--glass-message-own); }
