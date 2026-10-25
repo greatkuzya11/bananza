@@ -459,7 +459,7 @@
           else clearPendingFile();
           if (startKeyboardOpen) (actions.focusComposerKeepKeyboard || noop)(true);
         });
-        bindButtonActivation(strip.querySelector('.pending-file-add'), () => dom.attachBtn?.click());
+        bindButtonActivation(strip.querySelector('.pending-file-add'), activateAttachments);
       }
       const closeLabel = t(state.editTo?.attachmentsEditable ? 'Cancel editing' : 'Remove all');
       const closeButton = pendingFileEl.querySelector('.pending-files-clear');
@@ -660,6 +660,20 @@
       return isMobileAttachMenu() || Boolean((actions.shouldUseAttachMenu || (() => false))());
     }
 
+    function activateAttachments({ keepKeyboardOpen } = {}) {
+      if (state.editTo && (!state.editTo.attachmentsEditable || state.editTo.saving)) return;
+      if (shouldUseAttachMenu()) {
+        const attachMenu = getAttachMenu();
+        if ((actions.isFloatingSurfaceVisible || ((el) => !el?.classList.contains('hidden')))(attachMenu)) {
+          hideAttachMenu();
+          return;
+        }
+        openAttachMenu({ keepKeyboardOpen });
+      } else {
+        dom.fileInput?.click();
+      }
+    }
+
     function bindAttachMenuEvents({ openPollComposer = noop, openLocationPicker = noop } = {}) {
       if (!dom.attachBtn || dom.attachBtn.__composerAttachMenuBound) return;
       const attachMenu = getAttachMenu();
@@ -669,18 +683,7 @@
       const fileInputDocs = doc.getElementById('fileInputDocs');
 
       dom.attachBtn.__composerAttachMenuBound = true;
-      bindButtonActivation(dom.attachBtn, ({ keepKeyboardOpen }) => {
-        if (state.editTo && (!state.editTo.attachmentsEditable || state.editTo.saving)) return;
-        if (shouldUseAttachMenu()) {
-          if ((actions.isFloatingSurfaceVisible || ((el) => !el?.classList.contains('hidden')))(attachMenu)) {
-            hideAttachMenu();
-            return;
-          }
-          openAttachMenu({ keepKeyboardOpen });
-        } else {
-          dom.fileInput?.click();
-        }
-      });
+      bindButtonActivation(dom.attachBtn, activateAttachments);
 
       win.visualViewport?.addEventListener('resize', () => {
         if (isMobileAttachMenu() && attachMenu && !attachMenu.classList.contains('hidden')) {
@@ -691,8 +694,11 @@
         if (!attachMenu || !(actions.isFloatingSurfaceVisible || ((el) => !el?.classList.contains('hidden')))(attachMenu)) return;
         if (event.type === 'pointerdown' && typeof event.button === 'number' && event.button !== 0) return;
         const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
-        if (path.includes(attachMenu) || path.includes(dom.attachBtn)) return;
-        if (event.target instanceof win.Node && (attachMenu.contains(event.target) || dom.attachBtn.contains(event.target))) return;
+        // The preview plus opens this menu on touch release too. Its follow-up
+        // click must not be treated as an outside click before suppression.
+        const addButton = dom.pendingFileEl?.querySelector('.pending-file-add');
+        if (path.includes(attachMenu) || path.includes(dom.attachBtn) || (addButton && path.includes(addButton))) return;
+        if (event.target instanceof win.Node && (attachMenu.contains(event.target) || dom.attachBtn.contains(event.target) || addButton?.contains(event.target))) return;
         hideAttachMenu();
       };
       // Touch controls can consume the follow-up click, so dismiss before activation.

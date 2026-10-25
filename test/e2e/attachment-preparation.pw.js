@@ -2,6 +2,36 @@ const { test, expect } = require('@playwright/test');
 const fs = require('fs');
 const { registerViaUi, openPrivateChat, makeUser, getContext } = require('./helpers');
 
+test('preview plus opens attachment choices and appends a file', async ({ page }, testInfo) => {
+  const mobile = testInfo.project.name.startsWith('mobile');
+  await registerViaUi(page, makeUser('pwpreviewadd'));
+  await openPrivateChat(page, getContext().bobUser.displayName);
+  await page.locator('#fileInputDocs').setInputFiles({ name: 'first.txt', mimeType: 'text/plain', buffer: Buffer.from('First') });
+  await expect(page.locator('#pendingFile')).toHaveAttribute('aria-busy', 'false');
+  const plus = page.locator('.pending-file-add');
+  const chooserPromise = page.waitForEvent('filechooser');
+  if (mobile) {
+    await plus.tap();
+    await expect(page.locator('#attachMenu')).toBeVisible();
+    await expect(page.locator('#attachMenu')).toHaveCSS('opacity', '1');
+    await page.locator('#attachMenuFile').tap();
+  } else {
+    await plus.click();
+  }
+  const chooser = await chooserPromise;
+  await chooser.setFiles({ name: 'second.txt', mimeType: 'text/plain', buffer: Buffer.from('Second') });
+  await expect(page.locator('#pendingFile')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.locator('.pending-file-name')).toHaveText(['first.txt', 'second.txt']);
+  if (mobile) {
+    // The plus is an opener too: a second tap closes the menu instead of
+    // dismissing it on pointerdown and immediately reopening it on pointerup.
+    await plus.tap();
+    await expect(page.locator('#attachMenu')).toHaveCSS('opacity', '1');
+    await plus.tap();
+    await expect(page.locator('#attachMenu')).toBeHidden();
+  }
+});
+
 test('closing previews consumes the retargeted touch click and centers the close icon', async ({ page }, testInfo) => {
   await registerViaUi(page, makeUser('pwpreviewclose'));
   await openPrivateChat(page, getContext().bobUser.displayName);
