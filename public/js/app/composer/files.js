@@ -687,16 +687,18 @@
           positionAttachMenu();
         }
       });
-      doc.addEventListener('click', (event) => {
-        if (
-          attachMenu
-          && (actions.isFloatingSurfaceVisible || ((el) => !el?.classList.contains('hidden')))(attachMenu)
-          && !attachMenu.contains(event.target)
-          && !event.target.closest('#attachBtn')
-        ) {
-          hideAttachMenu();
-        }
-      });
+      const dismissAttachMenuOutside = (event) => {
+        if (!attachMenu || !(actions.isFloatingSurfaceVisible || ((el) => !el?.classList.contains('hidden')))(attachMenu)) return;
+        if (event.type === 'pointerdown' && typeof event.button === 'number' && event.button !== 0) return;
+        const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+        if (path.includes(attachMenu) || path.includes(dom.attachBtn)) return;
+        if (event.target instanceof win.Node && (attachMenu.contains(event.target) || dom.attachBtn.contains(event.target))) return;
+        hideAttachMenu();
+      };
+      // Touch controls can consume the follow-up click, so dismiss before activation.
+      doc.addEventListener('pointerdown', dismissAttachMenuOutside, { passive: true, capture: true });
+      doc.addEventListener('touchstart', dismissAttachMenuOutside, { passive: true, capture: true });
+      doc.addEventListener('click', dismissAttachMenuOutside, { capture: true });
 
       attachMenuOverlay?.addEventListener('click', () => hideAttachMenu());
       doc.getElementById('attachMenuCancel')?.addEventListener('click', () => hideAttachMenu());
