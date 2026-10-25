@@ -53,6 +53,8 @@
 
       try {
         editTo.saving = true;
+        dom.sendBtn?.classList.add('is-saving-edit');
+        dom.sendBtn?.setAttribute('aria-busy', 'true');
         if (dom.sendBtn) dom.sendBtn.disabled = true;
         if (dom.attachBtn) dom.attachBtn.disabled = true;
         if (dom.msgInput) dom.msgInput.readOnly = true;
@@ -97,6 +99,8 @@
       } finally {
         if (state.editTo === editTo) {
           editTo.saving = false;
+          dom.sendBtn?.classList.remove('is-saving-edit');
+          dom.sendBtn?.removeAttribute('aria-busy');
           if (dom.sendBtn) dom.sendBtn.disabled = false;
           if (dom.attachBtn) dom.attachBtn.disabled = !editTo.attachmentsEditable;
           if (dom.msgInput) dom.msgInput.readOnly = false;

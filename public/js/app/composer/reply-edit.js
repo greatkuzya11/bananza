@@ -261,6 +261,7 @@
         is_voice_note: Boolean(msg.is_voice_note || row.__voiceMessage?.is_voice_note),
         allowEmpty: Boolean(msg.file_id && !(msg.is_voice_note || row.__voiceMessage?.is_voice_note)),
         attachmentsEditable,
+        usesAttachmentPanel: attachmentsEditable && attachments.length > 0,
         originalFileIds: attachments.map(file => file.file_id),
       });
       renderReplyThumbnails([]);
@@ -278,7 +279,7 @@
           : '\u0421\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435';
       }
       dom.replyBar?.classList.add('edit-bar');
-      dom.replyBar?.classList.remove('hidden');
+      syncEditBar();
       text.setComposerTextValue?.(editableText);
       text.autoResize?.();
       (actions.syncMentionOpenButton || noop)();
@@ -291,12 +292,20 @@
       dom.msgInput?.focus();
     }
 
+    function syncEditBar() {
+      if (!state.editTo) return;
+      if (state.editTo.attachmentsEditable && state.pendingFiles.length) state.editTo.usesAttachmentPanel = true;
+      dom.replyBar?.classList.toggle('hidden', Boolean(state.editTo.usesAttachmentPanel));
+    }
+
     function clearEdit({ clearInput = true, draftChatId = getCurrentChatId() } = {}) {
       const editedAttachments = state.editTo?.attachmentsEditable;
       state.clearEditTo();
       if (editedAttachments) actions.clearPendingFile?.();
       if (dom.msgInput) dom.msgInput.readOnly = false;
       if (dom.sendBtn) dom.sendBtn.disabled = false;
+      dom.sendBtn?.classList.remove('is-saving-edit');
+      dom.sendBtn?.removeAttribute('aria-busy');
       dom.replyBar?.removeAttribute('aria-busy');
       dom.replyBar?.classList.remove('edit-bar');
       dom.replyBar?.classList.add('hidden');
@@ -520,6 +529,7 @@
       clearReply,
       setEditFromRow,
       clearEdit,
+      syncEditBar,
       updateReplyPreview,
       setupMessageSwipeGestures,
     };

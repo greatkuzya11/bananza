@@ -4532,7 +4532,7 @@ test('mobile reply close keeps the keyboard attached', async (t) => {
   assert.equal(app.style.height, '420px');
 });
 
-test('mobile edit close keeps the keyboard attached', async (t) => {
+for (const withMedia of [false, true]) test(`mobile ${withMedia ? 'media' : 'text'} edit close keeps the keyboard attached`, async (t) => {
   const dom = await bootAppDom();
   t.after(() => {
     dom.window.close();
@@ -4544,18 +4544,23 @@ test('mobile edit close keeps the keyboard attached', async (t) => {
   const replyBar = document.getElementById('replyBar');
   const replyBarClose = document.getElementById('replyBarClose');
   const row = appendMessageRow(dom, { id: 251, userId: 1, text: 'Editable close target' });
+  if (withMedia) row.__messageData.attachments = [{
+    file_id: 51, file_name: 'photo.png', file_type: 'image', file_mime: 'image/png', file_size: 100,
+  }];
 
   BananzaAppBridge.__testing.setMobileBaseScene('chat', { hideInactive: true, syncChatMetrics: true });
   await wait(dom, 40);
   BananzaAppBridge.__testing.setEditFromRow(row);
+  assert.equal(replyBar.classList.contains('hidden'), withMedia);
   await openMobileKeyboard(dom, msgInput);
 
-  const { touchStart, touchEnd } = dispatchTouchTap(dom.window, replyBarClose);
+  const { touchStart, touchEnd } = dispatchTouchTap(dom.window, withMedia ? document.querySelector('.pending-files-clear') : replyBarClose);
   await wait(dom, 100);
 
   assert.equal(touchStart.defaultPrevented, true);
   assert.equal(touchEnd.defaultPrevented, true);
   assert.equal(BananzaAppBridge.getEditTo(), null);
+  assert.equal(BananzaAppBridge.getPendingFiles().length, 0);
   assert.equal(replyBar.classList.contains('hidden'), true);
   assert.equal(attachBtn.disabled, false);
   assert.equal(msgInput.value, '');

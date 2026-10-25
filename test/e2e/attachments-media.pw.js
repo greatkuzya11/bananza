@@ -208,7 +208,8 @@ test('media swipes quote thumbnails and let the author edit, retry and remove at
   reply = messageRowByText(page, 'Comment on the album');
   await expect(reply.locator('.msg-reply img')).toHaveCount(3);
   await swipe(1);
-  await expect(page.locator('#replyBar')).toHaveClass(/edit-bar/);
+  await expect(page.locator('#replyBar')).toBeHidden();
+  await expect(page.locator('.pending-files-clear')).toHaveAttribute('aria-label', /Cancel editing|Отменить редактирование/);
   await expect(page.locator('.pending-file-card')).toHaveCount(4);
   await expect(page.locator('.pending-file-thumb')).toHaveCount(3);
   await expect(page.locator('#attachBtn')).toBeEnabled();
@@ -245,10 +246,17 @@ test('media swipes quote thumbnails and let the author edit, retry and remove at
   await expect(reply.locator('.quote-attachment[title="replacement.png"]')).toHaveCount(1);
   await swipe(1);
   await page.locator('.pending-file-remove').first().click();
-  await page.locator('#replyBarClose').click();
+  await page.locator('.pending-files-clear').click();
+  await expect(page.locator('#pendingFile')).toBeHidden();
+  await expect(page.locator('#msgInput')).toHaveValue('');
   await expect(original.locator('.msg-album-tile')).toHaveCount(3);
   await swipe(1);
-  await page.locator('.pending-files-clear').click();
+  for (let remaining = 4; remaining > 0; remaining--) {
+    await page.locator('.pending-file-card:not(.is-removing) .pending-file-remove').first().click();
+    await expect(page.locator('.pending-file-card:not(.is-removing)')).toHaveCount(remaining - 1);
+  }
+  await expect(page.locator('#replyBar')).toBeHidden();
+  await expect(page.locator('.pending-files-clear')).toBeVisible();
   await page.locator('#sendBtn').click();
   await expect(original.locator('.msg-album, .msg-file')).toHaveCount(0);
   await expect(reply.locator('.quote-attachment')).toHaveCount(0);

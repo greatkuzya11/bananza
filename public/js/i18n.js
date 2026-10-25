@@ -7,6 +7,7 @@
 
   const RU = {
     "Saving changes...": "Сохранение изменений…",
+    "Cancel editing": "Отменить редактирование",
     "Replace attachment": "Заменить вложение",
     "Attachments cannot be changed for this message": "Вложения этого сообщения нельзя изменить",
     "Remove attachment": "Удалить вложение",

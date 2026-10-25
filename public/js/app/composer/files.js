@@ -418,7 +418,8 @@
       const pendingFileEl = dom.pendingFileEl || doc.getElementById('pendingFile');
       const pendingFiles = state.pendingFiles || [];
       const receiving = Boolean(pendingPicker?.returned);
-      if (!pendingFiles.length && !receiving) {
+      actions.syncEditBar?.();
+      if (!pendingFiles.length && !receiving && !state.editTo?.usesAttachmentPanel) {
         if (pendingPicker) {
           if (dom.sendBtn) dom.sendBtn.disabled = false;
           pendingFileEl?.setAttribute('aria-busy', 'false');
@@ -454,11 +455,16 @@
         }
         bindButtonActivation(pendingFileEl.querySelector('.pending-files-clear'), ({ event, startKeyboardOpen }) => {
           event?.stopPropagation?.();
-          clearPendingFile();
+          if (state.editTo?.attachmentsEditable) actions.cancelEdit?.();
+          else clearPendingFile();
           if (startKeyboardOpen) (actions.focusComposerKeepKeyboard || noop)(true);
         });
         bindButtonActivation(strip.querySelector('.pending-file-add'), () => dom.attachBtn?.click());
       }
+      const closeLabel = t(state.editTo?.attachmentsEditable ? 'Cancel editing' : 'Remove all');
+      const closeButton = pendingFileEl.querySelector('.pending-files-clear');
+      closeButton.title = closeLabel;
+      closeButton.setAttribute('aria-label', closeLabel);
       const scrollLeft = strip.scrollLeft;
       let receivingCard = strip.querySelector('.pending-file-receiving');
       if (receiving && !receivingCard) {

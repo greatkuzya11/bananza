@@ -10760,10 +10760,13 @@ html[data-visual-mode="glass"] .pending-file-card { background: var(--glass-cont
 .pending-file-thumb { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; flex-shrink: 0; }
 .pending-file-card.is-preparing .pending-file-thumb { opacity: .45; }
 .pending-file-spinner, .msg-transfer-spinner { flex-shrink: 0; width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: attachment-preparing-spin .8s linear infinite; }
+.send-btn.is-saving-edit { position: relative; color: transparent; }
+.send-btn.is-saving-edit > *, .send-btn.is-saving-edit::before { visibility: hidden; }
+.send-btn.is-saving-edit::after { content: ''; position: absolute; width: 20px; height: 20px; inset: 0; margin: auto; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: attachment-preparing-spin .8s linear infinite; }
 .pending-file-card.has-preview .pending-file-spinner { position: absolute; top: 24px; left: 28px; }
 .pending-file-details [role="status"] { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @keyframes attachment-preparing-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .pending-file-spinner, .msg-transfer-spinner { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .pending-file-spinner, .msg-transfer-spinner, .send-btn.is-saving-edit::after { animation: none; } }
 .msg-transfer-status { display: flex; align-items: center; gap: 8px; padding: 9px; margin-bottom: 6px; border-radius: 8px; background: var(--bg-hover); color: var(--text-primary); font-size: 12px; }
 .msg-transfer-label { flex: 1; min-width: 0; }
 .msg-transfer-progress { width: 48px; height: 6px; flex-shrink: 0; accent-color: var(--accent); }

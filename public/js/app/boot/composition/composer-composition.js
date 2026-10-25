@@ -81,6 +81,8 @@
         actions: {
           alert: async (message) => (await window.BananzaDialogs.alert(message)),
           localAttachmentFromFile: (file) => localAttachmentFromFile(file),
+          cancelEdit: () => composerReplyEditController.clearEdit({ clearInput: true }),
+          syncEditBar: () => composerReplyEditController.syncEditBar(),
           updateComposerAiOverrideState: () => updateComposerAiOverrideState().catch(() => {}),
           refreshPollComposerActionState: () => refreshPollComposerActionState(),
           refreshVoiceComposerState,
