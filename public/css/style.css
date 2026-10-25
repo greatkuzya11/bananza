@@ -10770,8 +10770,7 @@ html[data-visual-mode="glass"] .pending-file-card { background: var(--glass-cont
 .pending-file-scrollbar > span { position: absolute; height: 100%; left: 0; top: 0; border-radius: 3px; background: var(--text-secondary); }
 .pending-file-strip.has-many-attachments.is-scrollable.is-scrolling + .pending-file-scrollbar { opacity: 1; }
 .pending-file-card.is-removing { pointer-events: none; }
-.pending-file-card { position: relative; display: flex; align-items: center; gap: 6px; flex: 0 0 180px; min-width: 0; height: 80px; border-radius: 10px; background: var(--bg-hover); padding: 8px; box-sizing: border-box; }
-.pending-file-card.has-preview { flex-basis: 80px; height: 96px; padding: 4px 8px; flex-direction: column; gap: 2px; }
+.pending-file-card { position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px; flex: 0 0 80px; min-width: 0; height: 96px; border-radius: 10px; background: var(--bg-hover); padding: 4px 8px; box-sizing: border-box; }
 .pending-file-thumb { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; flex-shrink: 0; }
 .pending-file-card.is-preparing .pending-file-thumb { opacity: .45; }
 .pending-file-spinner, .msg-transfer-spinner { flex-shrink: 0; width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: attachment-preparing-spin .8s linear infinite; }
@@ -10779,6 +10778,7 @@ html[data-visual-mode="glass"] .pending-file-card { background: var(--glass-cont
 .send-btn.is-saving-edit > *, .send-btn.is-saving-edit::before { visibility: hidden; }
 .send-btn.is-saving-edit::after { content: ''; position: absolute; width: 20px; height: 20px; inset: 0; margin: auto; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: attachment-preparing-spin .8s linear infinite; }
 .pending-file-card.has-preview .pending-file-spinner { position: absolute; top: 24px; left: 28px; }
+.pending-file-card:not(.has-preview) .pending-file-spinner { position: absolute; top: 6px; left: 6px; width: 14px; height: 14px; }
 .pending-file-details [role="status"] { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @keyframes attachment-preparing-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .pending-file-spinner, .msg-transfer-spinner, .send-btn.is-saving-edit::after { animation: none; } }
@@ -10786,11 +10786,9 @@ html[data-visual-mode="glass"] .pending-file-card { background: var(--glass-cont
 .msg-transfer-label { flex: 1; min-width: 0; }
 .msg-transfer-progress { width: 48px; height: 6px; flex-shrink: 0; accent-color: var(--accent); }
 .msg-transfer-spinner[hidden], .msg-transfer-progress[hidden] { display: none; }
-.pending-file-format { font-size: 12px; font-weight: 700; color: var(--accent); max-width: 55px; overflow: hidden; }
-.pending-file-details { display: flex; flex-direction: column; min-width: 0; width: 100%; font-size: 11px; color: var(--text-secondary); }
-.pending-file-card .pending-file-name { display: block; width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; }
-.pending-file-card.has-preview .pending-file-details { font-size: 9px; }
-.pending-file-card.has-preview .pending-file-name { font-size: 10px; }
+.pending-file-format { display: flex; align-items: center; justify-content: center; flex: 0 0 64px; width: 64px; box-sizing: border-box; padding-top: 16px; font-size: 11px; font-weight: 700; line-height: 1.2; text-align: center; overflow-wrap: anywhere; color: var(--accent); }
+.pending-file-details { display: flex; flex-direction: column; min-width: 0; width: 100%; font-size: 9px; color: var(--text-secondary); }
+.pending-file-card .pending-file-name { display: block; width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10px; }
 .pending-file-card .pending-file-remove { position: absolute; right: 0; top: 0; width: 28px; height: 28px; border-radius: 50%; background: var(--bg-sidebar); color: var(--text-primary); opacity: 1; border: 1px solid var(--border); font-size: 20px; }
 .pending-file-replace { position: absolute; top: 0; left: 0; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 50%; background: var(--bg-sidebar); color: var(--text-primary); border: 1px solid var(--border); font-size: 21px; cursor: pointer; }
 .pending-file-add, .pending-files-clear { flex: 0 0 36px; min-height: 44px; border: 0; border-radius: 8px; background: transparent; color: var(--text-secondary); font-size: 24px; cursor: pointer; }
