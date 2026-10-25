@@ -4068,6 +4068,12 @@ html[data-modal-animation="none"] .composer-context-convert-btn {
   overflow-x: auto; flex-shrink: 0;
   scrollbar-width: none;
   -ms-overflow-style: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.emoji-tabs.is-dragging,
+.emoji-tabs.is-dragging .emoji-tab {
+  cursor: grabbing;
 }
 .emoji-tabs::-webkit-scrollbar {
   width: 0;
