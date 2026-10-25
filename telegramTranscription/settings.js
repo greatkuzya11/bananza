@@ -14,6 +14,9 @@ const DEFAULT_BOT_SETTINGS = {
   transcription_enabled: false,
   image_generation_enabled: false,
   universal_enabled: false,
+  memory_enabled: false,
+  memory_message_limit: 50,
+  ignore_unsupported_messages: false,
   generate_image_from_transcription: false,
   active_provider: 'whisper',
   fallback_to_openai: false,
@@ -86,6 +89,9 @@ function normalizeBot(raw = {}) {
   );
   next.image_generation_enabled = normalizeBoolean(next.image_generation_enabled);
   next.universal_enabled = normalizeBoolean(next.universal_enabled);
+  next.memory_enabled = normalizeBoolean(next.memory_enabled);
+  next.ignore_unsupported_messages = normalizeBoolean(next.ignore_unsupported_messages);
+  next.memory_message_limit = clampInteger(next.memory_message_limit, 50, 2, 200);
   next.generate_image_from_transcription = normalizeBoolean(next.generate_image_from_transcription)
     && next.transcription_enabled
     && next.image_generation_enabled;
@@ -154,6 +160,8 @@ const BOT_COLUMNS = [
   'fallback_to_openai', 'context_bot_enabled', 'context_bot_id', 'image_bot_id', 'universal_bot_id',
   'transcription_timeout_ms', 'max_file_size_bytes', 'vosk_model', 'vosk_model_path',
   'whisper_model', 'whisper_language', 'openai_model', 'openai_language', 'grok_language',
+  'memory_enabled', 'memory_message_limit',
+  'ignore_unsupported_messages',
 ];
 
 function botSqlValues(bot) {
@@ -185,6 +193,9 @@ function botSqlValues(bot) {
     normalized.openai_model,
     normalized.openai_language,
     normalized.grok_language,
+    normalized.memory_enabled ? 1 : 0,
+    normalized.memory_message_limit,
+    normalized.ignore_unsupported_messages ? 1 : 0,
   ];
 }
 
@@ -202,9 +213,24 @@ function updateBot(db, id, incoming, secret) {
   if (!current) return null;
   const draft = buildDraftBot(current, incoming, secret);
   const assignments = BOT_COLUMNS.map((column) => `${column}=?`).join(',');
-  db.prepare(`UPDATE telegram_bots SET ${assignments}, updated_at=datetime('now') WHERE id=?`)
-    .run(...botSqlValues(draft), Number(id));
-  db.prepare('INSERT OR IGNORE INTO telegram_bot_state(telegram_bot_id) VALUES(?)').run(Number(id));
+  db.transaction(() => {
+    db.prepare(`UPDATE telegram_bots SET ${assignments}, updated_at=datetime('now') WHERE id=?`)
+      .run(...botSqlValues(draft), Number(id));
+    db.prepare('INSERT OR IGNORE INTO telegram_bot_state(telegram_bot_id) VALUES(?)').run(Number(id));
+    if (current.memory_enabled !== draft.memory_enabled
+      || current.bot_token_encrypted !== draft.bot_token_encrypted
+      || current.universal_bot_id !== draft.universal_bot_id) {
+      db.prepare('DELETE FROM telegram_conversation_messages WHERE telegram_bot_id=?').run(Number(id));
+      db.prepare('UPDATE telegram_bots SET memory_revision=memory_revision+1 WHERE id=?').run(Number(id));
+    }
+    db.prepare(`DELETE FROM telegram_conversation_messages WHERE id IN (
+      SELECT id FROM (
+        SELECT id, ROW_NUMBER() OVER (
+          PARTITION BY telegram_chat_id, telegram_user_id ORDER BY update_id DESC, id DESC
+        ) AS position FROM telegram_conversation_messages WHERE telegram_bot_id=?
+      ) WHERE position>?
+    )`).run(Number(id), draft.memory_message_limit);
+  })();
   return readBot(db, id);
 }
 

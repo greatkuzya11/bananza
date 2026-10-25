@@ -5,11 +5,12 @@
 - Read the repository root `AGENTS.md` before this file.
 
 ## Boundaries
-- Telegram updates never create BananZa chats, users, messages, or upload records. Generated image bytes are temporary SQLite job payloads and are cleared after terminal delivery.
+- Telegram updates never create BananZa chats, users, messages, or upload records. Job image bytes are cleared after terminal delivery; optional conversation memory retains its own bounded image copies.
 - Bot tokens are encrypted at rest and must never be returned or logged.
 - Incoming audio is temporary runtime data and must be removed after each job.
 - Every saved Telegram bot owns its encrypted token, allowlist, capability switches, provider selections, update cursor, runtime state, and per-user queue limits.
 - Telegram update IDs and chat/message IDs are only unique inside a bot; all deduplication keys and jobs must include `telegram_bot_id`.
+- Optional conversation memory lives in `telegram_conversation_messages`, including image bytes. It is scoped by bot/chat/user, defaults to 50 messages (user and assistant), and uses the existing image queue with `operation_kind=conversation`. Answers are persisted before delivery. Clearing/disabling memory increments `memory_revision` so in-flight jobs cannot recreate cleared memory. SQLite backup includes these bytes; no additional runtime directory is needed.
 - Polling, webhook conflicts, authentication errors, queues, workers, token changes, and deletion guards are isolated by bot ID.
 - Transcription transport is reused from `voice/providers.js`; Telegram owns only its independent provider profile and delivery flow.
 

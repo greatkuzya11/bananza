@@ -554,6 +554,8 @@ function buildBackupManifest({
       'Message attachment order and metadata are included in SQLite; all attachment files and video posters are included in uploads/.',
       'Local image provider settings and generated uploads are included; the image server, model weights and its launch configuration are manual external dependencies.',
       'Encrypted integration settings, including Telegram bot tokens, require the included .secret file after restore.',
+      'Telegram conversation memory, including text and image bytes, is included in bananza.db. Generated image history is included in uploads/telegram/. Memory settings and pending replies survive restore.',
+      'Telegram per-bot settings, including ignore_unsupported_messages, are included in bananza.db.',
       'This archive contains chat history, uploaded files, and server secrets.',
     ],
   };

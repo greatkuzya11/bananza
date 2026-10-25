@@ -118,6 +118,8 @@
                     <textarea id="telegramBotAllowlist" class="modal-input telegram-allowlist" rows="4" placeholder="123456789"></textarea>
                     <div class="voice-form-hint">${esc(t('One numeric ID per line. Only private chats are accepted.'))}</div>
                   </div>
+                  <div class="settings-item settings-toggle-item"><label for="telegramBotIgnoreUnsupported">${esc(t('Ignore unsupported messages'))}</label><label class="toggle-switch"><input id="telegramBotIgnoreUnsupported" type="checkbox"><span class="toggle-slider"></span></label></div>
+                  <div class="voice-form-hint">${esc(t('Silently skip messages for disabled tools and unsupported formats. A transcription-only bot responds to audio; /start and /help remain available.'))}</div>
                   <div class="telegram-capability-grid">
                     <div class="settings-item settings-toggle-item">
                       <span>${esc(t('Enable Telegram transcription'))}</span>
@@ -161,7 +163,10 @@
                   <section id="telegramBotUniversalSection" class="telegram-feature-section">
                     <h4>${esc(t('Universal image editing'))}</h4>
                     <div class="field-group"><label>${esc(t('Universal bot'))}</label><select id="telegramBotUniversalBot" class="modal-input"></select></div>
-                    <div class="voice-form-hint">${esc(t('The universal bot is used only for an image with an editing instruction. Plain text and transcription-to-image use the classic image bot.'))}</div>
+                    <div class="voice-form-hint">${esc(t('With memory disabled, the universal bot edits images with instructions. Plain text and transcription-to-image use the classic image bot.'))}</div>
+                    <div class="settings-item settings-toggle-item"><label for="telegramBotMemoryEnabled">${esc(t('Remember Telegram conversation'))}</label><label class="toggle-switch"><input id="telegramBotMemoryEnabled" type="checkbox"><span class="toggle-slider"></span></label></div>
+                    <div class="field-group"><label for="telegramBotMemoryLimit">${esc(t('Conversation memory limit'))}</label><input id="telegramBotMemoryLimit" type="number" min="2" max="200" value="50" class="modal-input"></div>
+                    <div class="voice-form-hint">${esc(t('With memory enabled, text and images go to the universal bot. The limit counts user and bot messages. Memory is separate for each user and survives restarts. Disabling memory clears it.'))}</div>
                     <div id="telegramBotUniversalReadiness" class="telegram-provider-readiness"></div>
                     <button id="telegramBotTestUniversal" type="button" class="btn-sm voice-inline-btn">${esc(t('Test universal bot'))}</button>
                   </section>
@@ -227,6 +232,7 @@
     $('#telegramBotTranscriptionEnabled')?.addEventListener('change', syncFeatureSections);
     $('#telegramBotImageEnabled')?.addEventListener('change', syncFeatureSections);
     $('#telegramBotUniversalEnabled')?.addEventListener('change', syncFeatureSections);
+    $('#telegramBotMemoryEnabled')?.addEventListener('change', syncFeatureSections);
     $('#telegramBotImageBot')?.addEventListener('change', renderImageReadiness);
     $('#telegramBotUniversalBot')?.addEventListener('change', renderUniversalReadiness);
     $('#telegramBotOpenVoice')?.addEventListener('click', () => { closeModal(); $('#settingsVoicePanel')?.click(); });
@@ -345,7 +351,7 @@
       const status = item.kind === 'combined'
         ? `${esc(historyStatusLabel(item.transcription_status))} · ${esc(historyStatusLabel(item.image_status))}`
         : esc(historyStatusLabel(item.status));
-      const type = item.kind === 'combined' ? t('Transcription and image')
+      const type = item.kind === 'conversation' ? t('Telegram conversation') : item.kind === 'combined' ? t('Transcription and image')
         : item.kind === 'universal_edit' ? t('Universal image edit')
           : item.kind === 'universal_generate' ? t('Universal image generation')
             : item.kind === 'image' ? t('Prompt and image') : t('Transcription');
@@ -354,13 +360,14 @@
       const combinedText = item.kind === 'combined' ? (prompt || transcript) : '';
       const resultText = combinedText || transcript || prompt;
       const resultTitle = item.kind === 'combined' ? t('Transcription result / Image prompt')
-        : transcript ? t('Transcription result') : t('Image prompt');
+        : item.kind === 'conversation' ? t('Message') : transcript ? t('Transcription result') : t('Image prompt');
       return `<article class="telegram-history-item">
         <div class="telegram-history-item-head"><strong>${esc(type)}</strong><span>${esc(identity)} · ${esc(formatHistoryDate(item.completed_at || item.created_at))}</span></div>
         <div class="telegram-history-meta">${status}${item.provider || item.model ? ` · ${esc([item.provider, item.model].filter(Boolean).join(' / '))}` : ''}</div>
         ${resultText ? `<details${item.kind === 'image' ? ' open' : ''}><summary>${esc(resultTitle)}</summary><pre>${esc(resultText)}</pre></details>` : ''}
+        ${item.response_text ? `<details open><summary>${esc(t('Bot reply'))}</summary><pre>${esc(item.response_text)}</pre></details>` : ''}
         ${item.image_job_id && item.has_image ? `<button type="button" class="telegram-history-image" data-telegram-history-image="${Number(item.image_job_id)}" aria-label="${esc(t('Open image fullscreen'))}"><span>${esc(t('Generated image'))}</span></button>` : ''}
-        ${item.image_job_id && !item.has_image && item.image_status === 'completed' ? `<div class="telegram-history-missing-image">${esc(t('Image file is unavailable'))}</div>` : ''}
+        ${item.image_job_id && !item.has_image && !item.response_text && item.image_status === 'completed' ? `<div class="telegram-history-missing-image">${esc(t('Image file is unavailable'))}</div>` : ''}
         ${item.error ? `<div class="telegram-runtime-error">${esc(item.error)}</div>` : ''}
       </article>`;
     }).join('') : `<div class="settings-hint">${esc(t('No Telegram history yet.'))}</div>`;
@@ -544,6 +551,9 @@
     $('#telegramBotTranscriptionEnabled').checked = Boolean(value.transcription_enabled);
     $('#telegramBotImageEnabled').checked = Boolean(value.image_generation_enabled);
     $('#telegramBotUniversalEnabled').checked = Boolean(value.universal_enabled);
+    $('#telegramBotMemoryEnabled').checked = Boolean(value.memory_enabled);
+    $('#telegramBotIgnoreUnsupported').checked = Boolean(value.ignore_unsupported_messages);
+    $('#telegramBotMemoryLimit').value = value.memory_message_limit || 50;
     $('#telegramBotGenerateImageFromTranscription').checked = Boolean(value.generate_image_from_transcription);
     $('#telegramBotTimeout').value = Number(value.transcription_timeout_ms || 120000);
     $('#telegramBotMaxSize').value = Math.round(Number(value.max_file_size_bytes || 20971520) / 1048576);
@@ -643,6 +653,7 @@
     $('#telegramBotTranscriptionSection').querySelectorAll('input,select,button').forEach((node) => { node.disabled = !transcription; });
     $('#telegramBotImageSection').querySelectorAll('input,select,button').forEach((node) => { node.disabled = !images; });
     $('#telegramBotUniversalSection').querySelectorAll('input,select,button').forEach((node) => { node.disabled = !universal; });
+    $('#telegramBotMemoryLimit').disabled = !universal || !$('#telegramBotMemoryEnabled').checked;
     if (transcription) { renderProviderFields(); syncContextBot(); }
     if (images) renderImageReadiness();
     if (universal) renderUniversalReadiness();
@@ -702,6 +713,9 @@
       transcription_enabled: $('#telegramBotTranscriptionEnabled').checked,
       image_generation_enabled: $('#telegramBotImageEnabled').checked,
       universal_enabled: $('#telegramBotUniversalEnabled').checked,
+      memory_enabled: $('#telegramBotMemoryEnabled').checked,
+      ignore_unsupported_messages: $('#telegramBotIgnoreUnsupported').checked,
+      memory_message_limit: Number($('#telegramBotMemoryLimit').value || 50),
       generate_image_from_transcription: $('#telegramBotGenerateImageFromTranscription').checked,
       active_provider: provider,
       fallback_to_openai: $('#telegramBotFallback').checked,

@@ -142,6 +142,8 @@ test('buildBackupManifest records included and excluded backup parts', () => {
   assert.ok(manifest.notes.some((note) => note.includes('Whisper runtime')));
   assert.ok(manifest.notes.some((note) => note.includes('schema_migrations') && note.includes('color themes')));
   assert.ok(manifest.notes.some((note) => note.includes('Telegram bot tokens') && note.includes('.secret')));
+  assert.ok(manifest.notes.some((note) => note.includes('Telegram conversation memory') && note.includes('bananza.db')));
+  assert.ok(manifest.notes.some((note) => note.includes('ignore_unsupported_messages') && note.includes('bananza.db')));
 });
 
 test('restore archive entry validation rejects unsafe and excluded paths', () => {

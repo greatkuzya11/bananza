@@ -5991,6 +5991,32 @@ function createAiBotFeature({
     };
   }
 
+  async function runTelegramConversation({ botId, botSnapshot, prompt, history = [], sourceImage = null, loadImage } = {}) {
+    const bot = botSnapshot?.provider ? { ...botSnapshot } : sanitizeBot(botByIdStmt.get(Number(botId || 0)));
+    if (!bot || bot.kind !== 'universal' || !['openai', 'grok'].includes(bot.provider)
+      || !bot.enabled || !providerEnabled(bot.provider) || !bot.allow_image_generate || !bot.allow_image_edit) {
+      throw new Error('Universal bot is unavailable');
+    }
+    const settings = getGlobalSettings();
+    const isGrok = bot.provider === 'grok';
+    const model = bot.response_model || (isGrok ? settings.grok_default_response_model : settings.default_response_model);
+    const result = await require('./telegramConversation').runConversation({
+      prompt, history, sourceImage, loadImage, system: botSystemPrompt(bot),
+      respond: async (input) => {
+        const response = await (isGrok ? grokAi.createResponse : createOpenAIResponse)({
+          apiKey: isGrok ? getGrokApiKey() : getApiKey(),
+          ...(isGrok ? { baseUrl: grokBaseUrl() } : {}),
+          model, input,
+          maxOutputTokens: Math.max(1500, intValue(bot.max_tokens, 2000, 1, 8000)),
+          temperature: floatValue(bot.temperature, 0.55, 0, 1),
+        });
+        return (isGrok ? grokAi.extractResponseText : extractResponseText)(response);
+      },
+      generateImage: (request) => runTelegramUniversalImage({ botId, botSnapshot: bot, ...request }),
+    });
+    return { provider: bot.provider, model, ...result };
+  }
+
   async function runTelegramUniversalImage({ botId, botSnapshot, prompt, sourceImage = null } = {}) {
     const bot = botSnapshot && typeof botSnapshot === 'object' && botSnapshot.provider
       ? { ...botSnapshot }
@@ -11340,6 +11366,7 @@ function createAiBotFeature({
     getTelegramUniversalBotSnapshot,
     generateTelegramImage,
     runTelegramUniversalImage,
+    runTelegramConversation,
     getChatShotState,
     generateChatShotForChat,
     generateChatShotImageForContext,

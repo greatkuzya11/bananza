@@ -6,6 +6,16 @@
   const DEFAULT_LANGUAGE = 'ru';
 
   const RU = {
+    'Ignore unsupported messages': 'Игнорировать неподдерживаемые сообщения',
+    'Silently skip messages for disabled tools and unsupported formats. A transcription-only bot responds to audio; /start and /help remain available.': 'Молча пропускать сообщения для выключенных инструментов и неподдерживаемые форматы. Бот только для транскрибации отвечает на аудио; команды /start и /help остаются доступны.',
+    'Remember Telegram conversation': 'Запоминать контекст в Telegram',
+    'With memory disabled, the universal bot edits images with instructions. Plain text and transcription-to-image use the classic image bot.': 'При выключенной памяти универсальный бот редактирует изображения по инструкции. Обычный текст и цепочка расшифровка → изображение идут в обычный image-бот.',
+    'Conversation memory limit': 'Количество сообщений в контексте',
+    'With memory enabled, text and images go to the universal bot. The limit counts user and bot messages. Memory is separate for each user and survives restarts. Disabling memory clears it.': 'При включённой памяти текст и изображения обрабатывает универсальный бот. Лимит учитывает ваши сообщения и ответы бота. Память отдельная для каждого пользователя и сохраняется после перезапуска. Выключение памяти очищает её.',
+    'Telegram conversation': 'Диалог в Telegram',
+    'Bot reply': 'Ответ бота',
+    'Message received. Preparing a reply…': 'Сообщение принято, готовлю ответ…',
+    'Could not process the message. Please try again.': 'Не удалось обработать сообщение. Попробуйте ещё раз.',
     "Saving changes...": "Сохранение изменений…",
     "Cancel editing": "Отменить редактирование",
     "Replace attachment": "Заменить вложение",

@@ -60,11 +60,19 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
         generate_image_from_transcription: true,
         image_bot_id: Number(bot.lastInsertRowid),
         universal_enabled: true,
+        memory_enabled: true,
+        memory_message_limit: 50,
+        ignore_unsupported_messages: true,
         universal_bot_id: Number(bot.lastInsertRowid),
         bot_token: '123456:backup-telegram-token',
         allowed_user_ids: ['777'],
       }, sandboxSecret);
       telegramBotId = telegramBot.id;
+      liveDb.prepare(`INSERT INTO telegram_conversation_messages(
+        telegram_bot_id, telegram_chat_id, telegram_user_id, update_id, role, text,
+        image_data, image_mime_type, image_file_name
+      ) VALUES(?, '777', '777', 987650, 'user', 'remember this image', ?, 'image/png', 'memory.png')`)
+        .run(telegramBotId, tinyPngBuffer());
       const telegramStoredImagePath = path.posix.join('telegram', String(telegramBotId), 'backup-image.png');
       const telegramStoredImageFile = path.join(sandbox.appDir, 'uploads', ...telegramStoredImagePath.split('/'));
       fs.mkdirSync(path.dirname(telegramStoredImageFile), { recursive: true });
@@ -266,6 +274,13 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
       assert.equal(telegramSettings.generate_image_from_transcription, true);
       assert.equal(telegramSettings.image_bot_id, telegramImageJob.image_bot_id);
       assert.equal(telegramSettings.universal_enabled, true);
+      assert.equal(telegramSettings.memory_enabled, true);
+      assert.equal(telegramSettings.memory_message_limit, 50);
+      assert.equal(telegramSettings.ignore_unsupported_messages, true);
+      const memory = restoredDb.prepare('SELECT * FROM telegram_conversation_messages WHERE telegram_bot_id=?').get(telegramBotId);
+      assert.equal(memory.text, 'remember this image');
+      assert.deepEqual(memory.image_data, tinyPngBuffer());
+      assert.equal(memory.image_mime_type, 'image/png');
       assert.equal(telegramSettings.universal_bot_id, telegramImageJob.image_bot_id);
       assert.equal(getBotToken(restoredDb, telegramBotId, restoredSecret), '123456:backup-telegram-token');
       assert.equal(telegramImageJob.status, 'delivering');
