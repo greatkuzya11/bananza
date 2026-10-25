@@ -119,6 +119,10 @@ test('Telegram bots admin edits capabilities and creates a second independent bo
   assert.equal(dom.window.document.querySelectorAll('[data-telegram-bot-id]').length, 1);
   assert.equal(dom.window.document.getElementById('telegramBotName').value, 'Telegram bot 1');
   dom.window.document.getElementById('telegramBotAllowlist').value = '777\n888';
+  const groupToggle = dom.window.document.getElementById('telegramBotGroupTranscription');
+  assert.equal(groupToggle.checked, false);
+  assert.equal(groupToggle.disabled, false);
+  groupToggle.checked = true;
   const quietToggle = dom.window.document.getElementById('telegramBotIgnoreUnsupported');
   assert.equal(quietToggle.checked, false);
   assert.equal(quietToggle.disabled, false);
@@ -150,6 +154,8 @@ test('Telegram bots admin edits capabilities and creates a second independent bo
   const update = calls.find((call) => call.url === '/api/admin/telegram-bots/1' && call.options.method === 'PUT');
   assert.ok(update);
   assert.equal(update.options.body.image_generation_enabled, true);
+  assert.equal(update.options.body.group_transcription_enabled, true);
+  assert.equal(dom.window.document.getElementById('telegramBotGroupTranscription').checked, true);
   assert.equal(update.options.body.generate_image_from_transcription, true);
   assert.equal(update.options.body.image_bot_id, 17);
   assert.equal(update.options.body.universal_enabled, true);

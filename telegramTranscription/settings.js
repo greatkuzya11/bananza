@@ -12,6 +12,7 @@ const DEFAULT_BOT_SETTINGS = {
   telegram_bot_username: '',
   allowed_user_ids: [],
   transcription_enabled: false,
+  group_transcription_enabled: false,
   image_generation_enabled: false,
   universal_enabled: false,
   memory_enabled: false,
@@ -88,6 +89,7 @@ function normalizeBot(raw = {}) {
     false
   );
   next.image_generation_enabled = normalizeBoolean(next.image_generation_enabled);
+  next.group_transcription_enabled = normalizeBoolean(next.group_transcription_enabled);
   next.universal_enabled = normalizeBoolean(next.universal_enabled);
   next.memory_enabled = normalizeBoolean(next.memory_enabled);
   next.ignore_unsupported_messages = normalizeBoolean(next.ignore_unsupported_messages);
@@ -162,6 +164,7 @@ const BOT_COLUMNS = [
   'whisper_model', 'whisper_language', 'openai_model', 'openai_language', 'grok_language',
   'memory_enabled', 'memory_message_limit',
   'ignore_unsupported_messages',
+  'group_transcription_enabled',
 ];
 
 function botSqlValues(bot) {
@@ -196,6 +199,7 @@ function botSqlValues(bot) {
     normalized.memory_enabled ? 1 : 0,
     normalized.memory_message_limit,
     normalized.ignore_unsupported_messages ? 1 : 0,
+    normalized.group_transcription_enabled ? 1 : 0,
   ];
 }
 

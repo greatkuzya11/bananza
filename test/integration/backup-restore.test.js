@@ -63,11 +63,16 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
         memory_enabled: true,
         memory_message_limit: 50,
         ignore_unsupported_messages: true,
+        group_transcription_enabled: true,
         universal_bot_id: Number(bot.lastInsertRowid),
         bot_token: '123456:backup-telegram-token',
         allowed_user_ids: ['777'],
       }, sandboxSecret);
       telegramBotId = telegramBot.id;
+      liveDb.prepare(`INSERT INTO telegram_transcription_jobs(
+        telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
+        telegram_message_thread_id, file_id, status, transcript_text
+      ) VALUES(?, 987649, '-100777', '777', 123, 45, 'group-voice', 'delivering', 'group transcript')`).run(telegramBotId);
       liveDb.prepare(`INSERT INTO telegram_conversation_messages(
         telegram_bot_id, telegram_chat_id, telegram_user_id, update_id, role, text,
         image_data, image_mime_type, image_file_name
@@ -277,6 +282,11 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
       assert.equal(telegramSettings.memory_enabled, true);
       assert.equal(telegramSettings.memory_message_limit, 50);
       assert.equal(telegramSettings.ignore_unsupported_messages, true);
+      assert.equal(telegramSettings.group_transcription_enabled, true);
+      const groupJob = restoredDb.prepare('SELECT * FROM telegram_transcription_jobs WHERE telegram_bot_id=? AND update_id=987649').get(telegramBotId);
+      assert.equal(groupJob.telegram_chat_id, '-100777');
+      assert.equal(groupJob.telegram_message_thread_id, 45);
+      assert.equal(groupJob.transcript_text, 'group transcript');
       const memory = restoredDb.prepare('SELECT * FROM telegram_conversation_messages WHERE telegram_bot_id=?').get(telegramBotId);
       assert.equal(memory.text, 'remember this image');
       assert.deepEqual(memory.image_data, tinyPngBuffer());

@@ -170,8 +170,8 @@ function createTelegramTranscriptionFeature({
       telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id, language_code,
       telegram_user_username, telegram_user_display_name,
       file_id, file_unique_id, file_name, mime_type, file_size, duration_seconds,
-      profile_json, status, transcription_provider, transcription_model
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'queued', ?, ?)
+      profile_json, status, transcription_provider, transcription_model, telegram_message_thread_id
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'queued', ?, ?, ?)
   `);
   const acceptJobTx = db.transaction((botId, updateId, message, media, profile, provider, model) => {
     const result = insertJobStmt.run(
@@ -191,7 +191,8 @@ function createTelegramTranscriptionFeature({
       media.duration_seconds || 0,
       JSON.stringify(profile),
       provider,
-      model
+      model,
+      positiveInteger(message.message_thread_id) || null,
     );
     updateCursorStmt.run(updateId + 1, botId);
     return result.changes > 0;
@@ -655,11 +656,12 @@ function createTelegramTranscriptionFeature({
   }
 
   async function sendReply(client, message, text) {
+    const options = { messageThreadId: positiveInteger(message.message_thread_id) || undefined };
     try {
-      return await retryTelegram(() => client.sendMessage(String(message.chat.id), text, message.message_id));
+      return await retryTelegram(() => client.sendMessage(String(message.chat.id), text, message.message_id, options));
     } catch (error) {
       if (error instanceof TelegramApiError && error.errorCode === 400) {
-        return retryTelegram(() => client.sendMessage(String(message.chat.id), text, null));
+        return retryTelegram(() => client.sendMessage(String(message.chat.id), text, null, options));
       }
       throw error;
     }
@@ -712,6 +714,12 @@ function createTelegramTranscriptionFeature({
     const replyImage = directImage ? null : extractTelegramImage(message.reply_to_message || {});
     const sourceImage = directImage || replyImage;
     const imagePrompt = directImage ? caption : (replyImage ? text : '');
+    const isGroup = message.chat.type === 'group' || message.chat.type === 'supergroup';
+    if (isGroup && (!settings.group_transcription_enabled || !settings.transcription_enabled
+      || !media || message.from.is_bot || message.sender_chat || !settings.allowed_user_ids.includes(userId))) {
+      recordCursor(botId, updateId);
+      return;
+    }
 
     // Match the routing precedence below, but keep explicit help/start commands.
     // Skipped updates still advance the cursor and never enter a job queue.
@@ -726,7 +734,7 @@ function createTelegramTranscriptionFeature({
       }
     }
 
-    if (message.chat.type !== 'private') {
+    if (message.chat.type !== 'private' && !isGroup) {
       recordCursor(botId, updateId);
       if (isKnownCommand || media || sourceImage || text || caption) {
         await sendReply(client, message, telegramText(language, 'privateOnly')).catch(() => {});
@@ -734,7 +742,7 @@ function createTelegramTranscriptionFeature({
       return;
     }
 
-    if (isKnownCommand) {
+    if (isKnownCommand && !isGroup) {
       recordCursor(botId, updateId);
       const base = /^\/start/i.test(text) ? 'start' : 'help';
       const key = capabilityMessageKey(settings, base);
@@ -768,13 +776,15 @@ function createTelegramTranscriptionFeature({
         return;
       }
 
-      const imageBot = settings.generate_image_from_transcription ? selectableImageBot(settings.image_bot_id) : null;
-      if (settings.generate_image_from_transcription && !imageBot) {
+      const generateImage = !isGroup && settings.generate_image_from_transcription;
+      const imageBot = generateImage ? selectableImageBot(settings.image_bot_id) : null;
+      if (generateImage && !imageBot) {
         recordCursor(botId, updateId);
         await sendReply(client, message, telegramText(language, 'imageBotUnavailable'));
         return;
       }
       const profile = jobProfile(settings, imageBot);
+      profile.generate_image_from_transcription = Boolean(generateImage);
       const providerSettings = buildProviderSettings(profile, getVoiceSettings(db));
       const inserted = acceptJobTx(
         botId,
@@ -925,7 +935,8 @@ function createTelegramTranscriptionFeature({
         return Number(job.status_message_id);
       } catch {}
     }
-    const sent = await retryTelegram(() => client.sendMessage(job.telegram_chat_id, text, job.telegram_message_id));
+    const sent = await retryTelegram(() => client.sendMessage(job.telegram_chat_id, text, job.telegram_message_id,
+      { messageThreadId: job.telegram_message_thread_id || undefined }));
     const messageId = Number(sent?.message_id || 0) || null;
     if (messageId) {
       db.prepare(`
@@ -943,13 +954,15 @@ function createTelegramTranscriptionFeature({
     if (!parts.length) throw new Error('Transcription returned empty text');
     await updateStatusMessage(client, job, parts[0]);
     for (let index = 1; index < parts.length; index += 1) {
-      await retryTelegram(() => client.sendMessage(job.telegram_chat_id, parts[index], job.telegram_message_id));
+      await retryTelegram(() => client.sendMessage(job.telegram_chat_id, parts[index], job.telegram_message_id,
+        { messageThreadId: job.telegram_message_thread_id || undefined }));
     }
     if (contextWarning) {
       await retryTelegram(() => client.sendMessage(
         job.telegram_chat_id,
         telegramText(job.language_code, 'contextWarning'),
-        job.telegram_message_id
+        job.telegram_message_id,
+        { messageThreadId: job.telegram_message_thread_id || undefined }
       ));
     }
     db.prepare(`

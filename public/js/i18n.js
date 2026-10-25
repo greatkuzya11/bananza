@@ -6,6 +6,10 @@
   const DEFAULT_LANGUAGE = 'ru';
 
   const RU = {
+    'Automatically transcribe audio in groups': 'Автоматически расшифровывать аудио в группах',
+    'One numeric user ID per line. Applies to private chats and group transcription.': 'По одному числовому ID пользователя на строку. Список действует в личных чатах и при расшифровке в группах.',
+    'Transcribe voice messages and audio files from allowed users without a mention. Reply in the same group and topic. Other group messages are ignored; transcription-to-image is only available in private chats.': 'Расшифровывать голосовые и аудиофайлы разрешённых пользователей без упоминания бота. Ответ приходит в ту же группу и тему. Остальные сообщения группы игнорируются; генерация изображений из расшифровки работает только в личных чатах.',
+    'Telegram must deliver group messages: make the bot a group admin, or disable Group Privacy in BotFather and re-add the bot to the group. The bot also needs permission to send messages.': 'Чтобы Telegram доставлял сообщения группы, назначьте бота администратором или выключите Group Privacy в BotFather и заново добавьте бота в группу. Боту также нужно разрешение отправлять сообщения.',
     'Ignore unsupported messages': 'Игнорировать неподдерживаемые сообщения',
     'Silently skip messages for disabled tools and unsupported formats. A transcription-only bot responds to audio; /start and /help remain available.': 'Молча пропускать сообщения для выключенных инструментов и неподдерживаемые форматы. Бот только для транскрибации отвечает на аудио; команды /start и /help остаются доступны.',
     'Remember Telegram conversation': 'Запоминать контекст в Telegram',

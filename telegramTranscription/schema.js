@@ -289,6 +289,7 @@ function initTelegramTranscriptionSchema(db) {
     createBotsTable(db);
     createStateTable(db);
     for (const [column, definition] of [
+      ['group_transcription_enabled', 'INTEGER NOT NULL DEFAULT 0'],
       ['ignore_unsupported_messages', 'INTEGER NOT NULL DEFAULT 0'],
       ['memory_enabled', 'INTEGER NOT NULL DEFAULT 0'],
       ['memory_message_limit', 'INTEGER NOT NULL DEFAULT 50'],
@@ -328,6 +329,9 @@ function initTelegramTranscriptionSchema(db) {
     rebuildImageJobs(db, legacyBotId);
     createTranscriptionJobsTable(db);
     createImageJobsTable(db);
+    if (!columnExists(db, 'telegram_transcription_jobs', 'telegram_message_thread_id')) {
+      db.exec('ALTER TABLE telegram_transcription_jobs ADD COLUMN telegram_message_thread_id INTEGER DEFAULT NULL;');
+    }
     if (!columnExists(db, 'telegram_image_generation_jobs', 'response_text')) {
       db.exec('ALTER TABLE telegram_image_generation_jobs ADD COLUMN response_text TEXT DEFAULT NULL;');
     }

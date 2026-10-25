@@ -135,6 +135,7 @@ function createTelegramClient(token, { fetchImpl = global.fetch } = {}) {
     sendMessage: (chatId, text, replyToMessageId, options) => request('sendMessage', {
       chat_id: chatId,
       text,
+      ...(options?.messageThreadId ? { message_thread_id: Number(options.messageThreadId) } : {}),
       ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : {}),
     }, options),
     editMessageText: (chatId, messageId, text, options) => request('editMessageText', {

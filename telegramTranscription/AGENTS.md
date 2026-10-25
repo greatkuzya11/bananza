@@ -16,7 +16,7 @@
 
 ## Runtime contract
 - Each bot's polling offset and accepted work are persisted before Telegram updates are acknowledged.
-- Only private chats and explicitly allowed numeric Telegram user IDs may enqueue transcription or image-generation work.
+- Private chats and explicitly allowed numeric Telegram user IDs may enqueue transcription or image-generation work. When `group_transcription_enabled` is on, groups/supergroups may also enqueue incoming audio from allowed users. Group traffic is transcription-only, without image handoff; other group messages, bots and anonymous/chat senders are silently skipped. Persist `telegram_message_thread_id` on transcription jobs so delivery/recovery stays in the original topic. Channels remain unsupported.
 - Long polling is the only supported v1 transport. Existing webhooks may only be removed by the explicit claim action.
 - Keep Telegram API errors sanitized: URLs may contain the bot token.
 

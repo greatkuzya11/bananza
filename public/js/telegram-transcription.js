@@ -116,7 +116,7 @@
                   <div class="field-group">
                     <label>${esc(t('Allowed Telegram user IDs'))}</label>
                     <textarea id="telegramBotAllowlist" class="modal-input telegram-allowlist" rows="4" placeholder="123456789"></textarea>
-                    <div class="voice-form-hint">${esc(t('One numeric ID per line. Only private chats are accepted.'))}</div>
+                    <div class="voice-form-hint">${esc(t('One numeric user ID per line. Applies to private chats and group transcription.'))}</div>
                   </div>
                   <div class="settings-item settings-toggle-item"><label for="telegramBotIgnoreUnsupported">${esc(t('Ignore unsupported messages'))}</label><label class="toggle-switch"><input id="telegramBotIgnoreUnsupported" type="checkbox"><span class="toggle-slider"></span></label></div>
                   <div class="voice-form-hint">${esc(t('Silently skip messages for disabled tools and unsupported formats. A transcription-only bot responds to audio; /start and /help remain available.'))}</div>
@@ -140,6 +140,9 @@
                   </div>
                   <section id="telegramBotTranscriptionSection" class="telegram-feature-section">
                     <h4>${esc(t('Transcription'))}</h4>
+                    <div class="settings-item settings-toggle-item"><label for="telegramBotGroupTranscription">${esc(t('Automatically transcribe audio in groups'))}</label><label class="toggle-switch"><input id="telegramBotGroupTranscription" type="checkbox"><span class="toggle-slider"></span></label></div>
+                    <div class="voice-form-hint">${esc(t('Transcribe voice messages and audio files from allowed users without a mention. Reply in the same group and topic. Other group messages are ignored; transcription-to-image is only available in private chats.'))}</div>
+                    <div class="voice-form-hint">${esc(t('Telegram must deliver group messages: make the bot a group admin, or disable Group Privacy in BotFather and re-add the bot to the group. The bot also needs permission to send messages.'))}</div>
                     <div class="field-grid">
                       <div class="field-group"><label>${esc(t('Active provider'))}</label><select id="telegramBotProvider" class="modal-input"></select></div>
                       <div class="field-group"><label>${esc(t('Model'))}</label><select id="telegramBotModel" class="modal-input"></select></div>
@@ -549,6 +552,7 @@
     $('#telegramBotDeleteToken').classList.toggle('hidden', !value.has_bot_token);
     $('#telegramBotAllowlist').value = (value.allowed_user_ids || []).join('\n');
     $('#telegramBotTranscriptionEnabled').checked = Boolean(value.transcription_enabled);
+    $('#telegramBotGroupTranscription').checked = Boolean(value.group_transcription_enabled);
     $('#telegramBotImageEnabled').checked = Boolean(value.image_generation_enabled);
     $('#telegramBotUniversalEnabled').checked = Boolean(value.universal_enabled);
     $('#telegramBotMemoryEnabled').checked = Boolean(value.memory_enabled);
@@ -711,6 +715,7 @@
       bot_token: $('#telegramBotToken').value,
       allowed_user_ids: $('#telegramBotAllowlist').value,
       transcription_enabled: $('#telegramBotTranscriptionEnabled').checked,
+      group_transcription_enabled: $('#telegramBotGroupTranscription').checked,
       image_generation_enabled: $('#telegramBotImageEnabled').checked,
       universal_enabled: $('#telegramBotUniversalEnabled').checked,
       memory_enabled: $('#telegramBotMemoryEnabled').checked,
