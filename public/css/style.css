@@ -10374,13 +10374,16 @@ html[data-visual-mode="glass"] :is(
   outline-offset: -2px;
 }
 html[data-visual-mode="glass"] :is(button, .btn-primary, .btn-sm) { border-radius: 16px; }
-html[data-visual-mode="glass"] :is(.icon-btn, .modal-close, .send-btn, .scroll-bottom-btn, .profile-camera-capture-btn) {
+html[data-visual-mode="glass"] :is(.icon-btn, .modal-close, .send-btn, .scroll-bottom-btn, .composer-context-convert-btn, .profile-camera-capture-btn) {
   border-radius: 50%; min-width: 44px; min-height: 44px; flex-shrink: 0;
+}
+html[data-visual-mode="glass"] :is(.scroll-bottom-btn, .composer-context-convert-btn) {
+  --composer-fab-size: 44px;
 }
 html[data-visual-mode="glass"] :is(.icon-btn, .modal-close) {
   color: var(--text-primary); background: var(--glass-control); border: 1px solid var(--border-light);
 }
-html[data-visual-mode="glass"] :is(.btn-primary, .send-btn, .scroll-bottom-btn, .weather-save-btn, .profile-save-btn) {
+html[data-visual-mode="glass"] :is(.btn-primary, .send-btn, .scroll-bottom-btn, .composer-context-convert-btn, .weather-save-btn, .profile-save-btn) {
   background: var(--accent); color: #fff; min-height: 44px; border: 1px solid transparent;
   box-shadow: 0 5px 14px var(--accent-border), inset 0 1px 0 #ffffff30;
 }
@@ -10518,7 +10521,7 @@ html[data-visual-mode="glass"] .ui-glyph {
 }
 html[data-visual-mode="glass"] { --ui-icon-ink: #eee; --ui-icon-on-accent: #181818; }
 html[data-color-scheme="light"][data-visual-mode="glass"] { --ui-icon-ink: #242424; --ui-icon-on-accent: #fff; }
-html[data-visual-mode="glass"] :is(.btn-primary, .send-btn:not(.is-mic-mode), .scroll-bottom-btn, .login-body .btn) > .ui-glyph { color: var(--ui-icon-on-accent); }
+html[data-visual-mode="glass"] :is(.btn-primary, .send-btn:not(.is-mic-mode), .scroll-bottom-btn, .composer-context-convert-btn, .login-body .btn) > .ui-glyph { color: var(--ui-icon-on-accent); }
 html[data-visual-mode="glass"] .settings-item > .ui-glyph { margin-right: 0; }
 html[data-visual-mode="glass"] .empty-icon > .ui-glyph { width: 64px; height: 64px; }
 html[data-visual-mode="glass"] .login-body .logo h1 > .ui-glyph { width: 32px; height: 32px; }
@@ -10526,6 +10529,7 @@ html[data-visual-mode="glass"] .login-body .logo h1 > .ui-glyph { width: 32px; h
   html[data-visual-mode="glass"] .ui-glyph { color: ButtonText; }
 }
 .ui-glyph[data-icon="banana"] { --ui-icon: url("/vendor/lucide/banana.svg"); }
+.ui-glyph[data-icon="circle"] { --ui-icon: url("/vendor/lucide/circle.svg"); }
 .ui-glyph[data-icon="whale"] { --ui-icon: url("/icons/whale.svg"); }
 .ui-glyph[data-icon="bird"] { --ui-icon: url("/vendor/lucide/bird.svg"); }
 .ui-glyph[data-icon="brain"] { --ui-icon: url("/vendor/lucide/brain.svg"); }
@@ -10648,7 +10652,7 @@ html[data-visual-mode="glass"] .mention-picker { background: var(--glass-dialog)
 html[data-visual-mode="glass"] { --on-accent: #102030; }
 html[data-color-scheme="dark"][data-visual-mode="glass"] { --text-secondary: #d2dce8; --text-time: #e0e5eb; }
 html[data-color-scheme="light"] { --on-accent: #fff; }
-html[data-visual-mode="glass"] :is(.btn-primary, .send-btn:not(.is-mic-mode), .scroll-bottom-btn, .weather-save-btn, .profile-save-btn) { color: var(--on-accent); }
+html[data-visual-mode="glass"] :is(.btn-primary, .send-btn:not(.is-mic-mode), .scroll-bottom-btn, .composer-context-convert-btn, .weather-save-btn, .profile-save-btn) { color: var(--on-accent); }
 html[data-color-scheme="light"] .animation-speed-control { background: var(--bg-input); border-color: var(--border-light); }
 html[data-visual-mode="glass"] .animation-speed-control { background: var(--glass-control); border: 1px solid var(--border-light); border-radius: 16px; }
 html[data-color-scheme="light"] :is(#pollComposerModal, #pollStyleSettingsModal, #pollVotersModal, .poll-card) {

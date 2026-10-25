@@ -717,7 +717,8 @@ html[data-modal-animation="none"] .send-btn.voice-enabled.is-mic-mode.is-mode-sw
 
 /* Appearance surfaces; keep media geometry owned by this feature. */
 html[data-visual-mode="glass"] :is(.voice-provider-panel, .voice-selected-model-meta) { background: var(--glass-dialog); color: var(--text-primary); border: 1px solid var(--glass-line); border-radius: 20px; box-shadow: var(--glass-shadow); }
-html[data-visual-mode="glass"] :is(.voice-inline-btn, .voice-transcribe-btn, .voice-footer-play) { border-radius: 16px; min-height: 44px; color: var(--text-primary); background-color: var(--glass-control); border-color: var(--border-light); }
+html[data-visual-mode="glass"] :is(.voice-inline-btn, .voice-transcribe-btn, .voice-footer-play) { color: var(--text-primary); background-color: var(--glass-control); border-color: var(--border-light); }
+html[data-visual-mode="glass"] :is(.voice-inline-btn, .voice-transcribe-btn) { border-radius: 16px; min-height: 44px; }
 
 html[data-visual-mode="glass"] .send-btn.voice-enabled.is-mic-mode {
   background: transparent !important; color: var(--accent); border-radius: 50%; border: 0; box-shadow: none;
