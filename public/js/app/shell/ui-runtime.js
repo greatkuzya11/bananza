@@ -1315,6 +1315,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
       }
     
       function renderCurrentChatHeader(chat = chats.find(c => c.id === currentChatId)) {
+        window.BananzaBotImages?.syncChatButton?.(chat);
         if (!chat) {
           closeChatHeaderActions();
           chatTitle.textContent = 'Chat';

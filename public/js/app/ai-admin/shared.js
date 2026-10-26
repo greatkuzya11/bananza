@@ -548,7 +548,9 @@
 
   function renderBotHistoryButton(bot) {
     const id = Number(bot?.id);
-    if (!Number.isSafeInteger(id) || id <= 0) return '';
+    if (!window.BananzaAppBridge?.getCurrentUser?.()?.is_admin
+      || !['image', 'universal', 'chatshot'].includes(bot?.kind)
+      || !Number.isSafeInteger(id) || id <= 0) return '';
     const label = window.BananzaI18n?.text?.('Image history') || 'Image history';
     return `<button type="button" class="weather-action-btn bot-image-history-button" data-bot-history-id="${id}" data-i18n="Image history">${esc(label)}</button>`;
   }

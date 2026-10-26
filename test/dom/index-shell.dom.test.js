@@ -27,21 +27,21 @@ test('public/index.html keeps expected stylesheet and script order', () => {
 
   assert.deepEqual(styles, [
     '/vendor/leaflet/leaflet.css?v=1.9.4',
-    '/css/style.css?v=20261025-compact-media-edit',
+    '/css/style.css?v=20261025-glass-composer-fabs',
     '/css/calls.css?v=20260621-call-mobile-controls',
-    '/css/voice.css?v=glass-composer-1',
+    '/css/voice.css?v=glass-voice-play-2',
     '/css/telegram-transcription.css?v=20260915-settings-spacing',
-    '/css/video-notes.css?v=glass-bubbles-1',
+    '/css/video-notes.css?v=glass-video-controls-3',
   ]);
 
   assert.deepEqual(scripts, [
     '/js/appearance.js',
     '/js/dialogs.js',
-    '/js/ui-icons.js?v=7',
+    '/js/ui-icons.js?v=8',
     '/js/sounds.js',
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
-    '/js/i18n.js?v=20261025-compact-media-edit',
+    '/js/i18n.js?v=20261025-telegram-groups',
     '/vendor/leaflet/leaflet.js?v=1.9.4',
     '/js/document-editor.bundle.js?v=20260620-doc-image-handles1',
     '/js/qip-infium-original.js?v=20260523-qip-infium-original',
@@ -162,7 +162,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/video-notes/VideoNoteAdminSettings.js',
     '/js/video-notes/VideoNoteFeature.js',
     '/js/voice.js',
-    '/js/telegram-transcription.js?v=20260823-telegram-universal',
+    '/js/telegram-transcription.js?v=20261025-telegram-groups',
   ]);
 });
 

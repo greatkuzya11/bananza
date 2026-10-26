@@ -154,9 +154,9 @@
       }
     
       function renderNamedGrokAvatar({ bot, avatarId, nameId, fallbackName, inputId, labelId, removeId }) {
-        const avatarEl = $(avatarId);
+        const avatarEl = $(`#${avatarId}`);
         if (!avatarEl) return;
-        const name = bot?.name || $(nameId)?.value.trim() || fallbackName;
+        const name = bot?.name || $(`#${nameId}`)?.value.trim() || fallbackName;
         const color = bot?.avatar_color || '#65aadd';
         avatarEl.style.background = color;
         if (bot?.avatar_url) {
@@ -166,8 +166,8 @@
         }
     
         const hasSavedBot = Boolean(bot?.id);
-        const input = $(inputId);
-        const label = $(labelId);
+        const input = $(`#${inputId}`);
+        const label = $(`#${labelId}`);
         if (input) {
           input.disabled = !hasSavedBot;
           input.value = '';
@@ -176,7 +176,7 @@
           label.classList.toggle('ai-bot-avatar-label-disabled', !hasSavedBot);
           label.title = hasSavedBot ? 'Change avatar' : 'Save the bot first';
         }
-        $(removeId)?.classList.toggle('hidden', !hasSavedBot || !bot?.avatar_url);
+        $(`#${removeId}`)?.classList.toggle('hidden', !hasSavedBot || !bot?.avatar_url);
       }
     
       function renderGrokBotAvatar(bot = currentGrokBot()) {

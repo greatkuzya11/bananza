@@ -111,7 +111,7 @@
             <div id="chatStatus" class="chat-status"></div>
           </div>
           <div id="chatHeaderActions" class="chat-header-actions" aria-hidden="true">
-            <button id="botImageHistoryChat" class="icon-btn chat-header-action-btn" type="button" title="Image history" aria-label="Image history" data-i18n-title="Image history" data-i18n-aria-label="Image history">🖼️</button>
+            <button id="botImageHistoryChat" class="icon-btn chat-header-action-btn hidden" type="button" title="Image history" aria-label="Image history" data-i18n-title="Image history" data-i18n-aria-label="Image history">🖼️</button>
             <button id="searchBtn" class="icon-btn chat-header-action-btn" title="Search messages" aria-label="Search messages" type="button">🔍</button>
             <button id="chatShotBtn" class="icon-btn chat-header-action-btn chat-shot-btn hidden" title="ChatShot" aria-label="ChatShot" type="button">&#128247;</button>
             <button id="chatSettingsActionBtn" class="icon-btn chat-header-action-btn" title="Chat settings" aria-label="Chat settings" type="button">&#128736;&#65039;</button>
@@ -1706,11 +1706,20 @@
         <button id="botImageHistoryClose" class="modal-close" type="button" title="Close" data-i18n-title="Close">&times;</button>
       </div>
       <div class="modal-body">
-        <p class="settings-hint" data-i18n="Images created by this bot in chats you can access.">Images created by this bot in chats you can access.</p>
+        <p class="settings-hint" data-i18n="Images created by this bot for all users. Chat links are available only for chats you can access.">Images created by this bot for all users. Chat links are available only for chats you can access.</p>
         <div id="botImageHistoryBots" class="ai-bot-actions"></div>
+        <div id="botImageHistoryFilter" class="field-group hidden">
+          <label for="botImageHistoryUser" data-i18n="User">User</label>
+          <select id="botImageHistoryUser" class="modal-input"></select>
+        </div>
         <div id="botImageHistoryStatus" class="settings-hint" role="status" aria-live="polite"></div>
         <div id="botImageHistoryGrid" class="bot-image-history-grid"></div>
-        <button id="botImageHistoryMore" class="weather-action-btn hidden" type="button" data-i18n="Load more">Load more</button>
+        <button id="botImageHistoryRetry" class="weather-action-btn hidden" type="button" data-i18n="Retry">Retry</button>
+        <div id="botImageHistoryPager" class="bot-image-history-pager hidden">
+          <button id="botImageHistoryPrevious" class="weather-action-btn" type="button" data-i18n="Previous page">Previous page</button>
+          <span id="botImageHistoryPage" class="settings-hint"></span>
+          <button id="botImageHistoryNext" class="weather-action-btn" type="button" data-i18n="Next page">Next page</button>
+        </div>
       </div>
     </div>
   </div>
