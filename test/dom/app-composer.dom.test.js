@@ -46,6 +46,12 @@ function composerKey(window, key, options = {}) {
   });
 }
 
+function clipboardPaste(window, clipboardData) {
+  const event = new window.Event('paste', { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'clipboardData', { value: clipboardData });
+  return event;
+}
+
 function touchEvent(window, type, { touches = [], changedTouches = touches } = {}) {
   const event = new window.Event(type, { bubbles: true, cancelable: true });
   Object.defineProperties(event, {
@@ -489,6 +495,163 @@ test('file controller validates uploads and renders pending files', async (t) =>
   assert.equal(h.appDom.pendingFileEl.classList.contains('hidden'), true);
 });
 
+test('paste appends images and files once, preserves caption selection, and waits for send', async (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+  h.window.URL.createObjectURL = () => 'blob:clipboard-preview';
+  h.window.URL.revokeObjectURL = () => {};
+  h.window.OffscreenCanvas = class {};
+  h.window.Worker = class {
+    postMessage() { h.window.queueMicrotask(() => this.onmessage({ data: { blob: new h.window.Blob(['thumb']) } })); }
+    terminate() {}
+  };
+  await h.files.uploadFiles([new h.window.File(['a'], 'existing.txt')]);
+  h.text.setComposerTextValue('Keep this caption');
+  h.appDom.msgInput.focus();
+  h.appDom.msgInput.setSelectionRange(5, 9, 'backward');
+  const photo = new h.window.File(['png'], 'screenshot.png', { type: 'image/png' });
+  const doc = new h.window.File(['pdf'], 'document.pdf', { type: 'application/pdf' });
+  const event = clipboardPaste(h.window, {
+    files: [photo, doc],
+    items: [{ kind: 'file', getAsFile() { throw new Error('Must not read both lists'); } }],
+    getData: () => 'unwanted clipboard caption',
+  });
+  const task = h.files.handlePaste(event);
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(h.files.isPreparingFiles(), true);
+  await h.send.sendMessage();
+  assert.equal(h.outboxItems.length, 0);
+  await task;
+  assert.equal(h.appDom.msgInput.value, 'Keep this caption');
+  assert.equal(h.appDom.msgInput.selectionStart, 5);
+  assert.equal(h.appDom.msgInput.selectionEnd, 9);
+  assert.equal(h.appDom.msgInput.selectionDirection, 'backward');
+  assert.equal(h.document.activeElement, h.appDom.msgInput);
+  assert.deepEqual(Array.from(h.state.pendingFiles, file => file.name), ['existing.txt', 'screenshot.png', 'document.pdf']);
+  assert.equal(h.appDom.pendingFileEl.querySelectorAll('img').length, 1);
+  assert.equal(h.outboxItems.length, 0);
+  await h.send.sendMessage();
+  assert.equal(h.outboxItems.length, 1);
+  assert.equal(h.outboxItems[0].attachments.length, 3);
+  assert.equal(h.outboxItems[0].text, 'Keep this caption');
+});
+
+test('paste uses file items as fallback and leaves non-file pastes to the browser', async (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+  h.appDom.msgInput.focus();
+  for (const clipboard of [null, {}, { files: [], items: [] },
+    { items: [{ kind: 'string', type: 'text/plain' }] },
+    { items: [{ kind: 'string', type: 'text/html' }] },
+    { items: [{ kind: 'file', getAsFile: () => null }] }]) {
+    const event = clipboardPaste(h.window, clipboard);
+    assert.equal(await h.files.handlePaste(event), false);
+    assert.equal(event.defaultPrevented, false);
+  }
+  const file = new h.window.File(['a'], 'clipboard.txt');
+  const event = clipboardPaste(h.window, { files: [], items: [
+    { kind: 'string', type: 'text/plain' },
+    { kind: 'file', getAsFile: () => null },
+    { kind: 'file', getAsFile: () => file },
+  ] });
+  assert.equal(await h.files.handlePaste(event), true);
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(h.state.pendingFiles[0].file, file);
+});
+
+test('rejected file pastes suppress accompanying text and preserve existing attachments', async (t) => {
+  const h = createComposerHarness({ maxAttachments: 2, maxFileSize: 5 });
+  t.after(() => h.window.close());
+  await h.files.uploadFiles([new h.window.File(['a'], 'existing.txt')]);
+  const existing = h.state.pendingFiles[0];
+  h.appDom.msgInput.focus();
+  h.text.setComposerTextValue('Caption');
+  h.appDom.msgInput.setSelectionRange(1, 4);
+  const small = new h.window.File(['a'], 'small.txt');
+  for (const files of [[small, small], [new h.window.File(['123456'], 'large.txt')]]) {
+    const event = clipboardPaste(h.window, { files, getData: () => 'unwanted' });
+    assert.equal(await h.files.handlePaste(event), false);
+    assert.equal(event.defaultPrevented, true);
+  }
+  h.state.setEditTo({ id: 1, attachmentsEditable: false });
+  const blocked = clipboardPaste(h.window, { files: [small] });
+  assert.equal(await h.files.handlePaste(blocked), false);
+  assert.equal(blocked.defaultPrevented, true);
+  assert.equal(h.state.pendingFiles.length, 1);
+  assert.equal(h.state.pendingFiles[0], existing);
+  assert.equal(h.appDom.msgInput.value, 'Caption');
+  assert.equal(h.appDom.msgInput.selectionStart, 1);
+  assert.equal(h.appDom.msgInput.selectionEnd, 4);
+  assert.match(h.alerts[0], /Use up to 2 attachments/);
+  assert.match(h.alerts[1], /File too large/);
+  assert.match(h.alerts[2], /Finish editing/);
+
+  h.state.setEditTo({ id: 1, attachmentsEditable: true });
+  assert.equal(await h.files.handlePaste(clipboardPaste(h.window, { files: [small] })), true);
+  assert.equal(h.state.editTo.id, 1);
+  assert.equal(h.state.pendingFiles.length, 2);
+});
+
+test('paste ignores an unavailable composer and rejects file changes while saving', async (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+  const clipboard = { files: [new h.window.File(['a'], 'file.txt')] };
+  const ignored = async () => {
+    const event = clipboardPaste(h.window, clipboard);
+    assert.equal(await h.files.handlePaste(event), false);
+    assert.equal(event.defaultPrevented, false);
+    assert.equal(h.state.pendingFiles.length, 0);
+  };
+  await ignored(); // Unfocused composer.
+  h.appDom.msgInput.focus();
+  h.setCurrentChatId(null);
+  await ignored();
+  h.setCurrentChatId(1);
+  h.appDom.msgInput.disabled = true;
+  await ignored();
+  h.appDom.msgInput.disabled = false;
+  h.appDom.msgInput.focus();
+  h.appDom.msgInput.readOnly = true;
+  await ignored();
+  h.appDom.msgInput.readOnly = false;
+  const handled = clipboardPaste(h.window, clipboard);
+  handled.preventDefault();
+  assert.equal(await h.files.handlePaste(handled), false);
+  h.state.setEditTo({ id: 1, attachmentsEditable: true, saving: true });
+  const saving = clipboardPaste(h.window, clipboard);
+  assert.equal(await h.files.handlePaste(saving), false);
+  assert.equal(saving.defaultPrevented, true);
+  assert.equal(h.state.pendingFiles.length, 0);
+});
+
+test('pasted files cannot reappear after removal, clearing, or switching chats during preparation', async (t) => {
+  for (const action of ['remove', 'clear', 'switch']) {
+    await t.test(action, async (t) => {
+      let finish;
+      let started;
+      const preparing = new Promise(resolve => { started = resolve; });
+      const h = createComposerHarness({ localAttachmentFromFile: file => new Promise(resolve => {
+        finish = () => resolve({ file, name: file.name, size: file.size, type: 'document' });
+        started();
+      }) });
+      t.after(() => h.window.close());
+      h.appDom.msgInput.focus();
+      const task = h.files.handlePaste(clipboardPaste(h.window, { files: [new h.window.File(['a'], 'late.txt')] }));
+      await preparing;
+      if (action === 'remove') h.appDom.pendingFileEl.querySelector('.pending-file-remove').click();
+      else {
+        h.files.clearPendingFile();
+        if (action === 'switch') h.setCurrentChatId(2);
+      }
+      finish();
+      await task;
+      assert.equal(h.state.pendingFiles.length, 0);
+      assert.equal(h.files.isPreparingFiles(), false);
+      assert.equal(h.outboxItems.length, 0);
+    });
+  }
+});
+
 test('editing replaces an attachment in place at the limit and preserves the original on failure', async (t) => {
   const h = createComposerHarness({ maxAttachments: 2, maxFileSize: 5, localAttachmentFromFile: async file => {
     if (file.name === 'broken.txt') throw new Error('Could not read file');
@@ -909,6 +1072,31 @@ test('app bridge exposes composer state and dictation hooks after app boot', asy
   BananzaAppBridge.__testing.setReply(9, 'Bob', 'reply source', { id: 9, display_name: 'Bob', text: 'reply source' });
   BananzaAppBridge.updateReplyPreview(9, 'updated reply');
   assert.equal(BananzaAppBridge.getReplyTo().text, 'updated reply');
+});
+
+test('full app binds file paste only to the composer without automatically uploading or sending', async (t) => {
+  const writes = [];
+  const dom = await bootFullApp({ fetchHandler: ({ url, init }) => {
+    if (url.pathname === '/api/upload' || (url.pathname.endsWith('/messages') && init.method === 'POST')) writes.push(url.pathname);
+  } });
+  t.after(() => dom.window.close());
+  const { document, BananzaAppBridge } = dom.window;
+  await BananzaAppBridge.__testing.openChat(1);
+  const input = document.getElementById('msgInput');
+  input.focus();
+  const clipboard = { files: [new dom.window.File(['a'], 'pasted.txt', { type: 'text/plain' })] };
+  const unrelated = clipboardPaste(dom.window, clipboard);
+  document.dispatchEvent(unrelated);
+  assert.equal(unrelated.defaultPrevented, false);
+  assert.equal(BananzaAppBridge.getPendingFiles().length, 0);
+  const event = clipboardPaste(dom.window, clipboard);
+  input.dispatchEvent(event);
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(BananzaAppBridge.getPendingFiles().length, 1);
+  await wait(dom.window, 650);
+  assert.equal(BananzaAppBridge.getPendingFiles()[0].name, 'pasted.txt');
+  assert.equal(BananzaAppBridge.getPendingFiles()[0].preparing, false);
+  assert.deepEqual(writes, []);
 });
 
 test('full app attach menu opens location picker when maps are enabled', async (t) => {

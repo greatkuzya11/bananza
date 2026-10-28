@@ -371,6 +371,11 @@
         msgInput.addEventListener('beforeinput', (e) => {
           handleComposerCustomEmojiBeforeInput(e);
         });
+        msgInput.addEventListener('paste', (e) => {
+          composerFilesController?.handlePaste(e).catch((error) => {
+            console.warn('[composer] clipboard attachment failed:', error.message);
+          });
+        });
         msgInput.addEventListener('keydown', (e) => {
           if (handleMentionPickerKeydown(e)) return;
           if (handleComposerCustomEmojiKeydown(e)) return;

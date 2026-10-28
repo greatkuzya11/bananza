@@ -155,6 +155,27 @@
       return addFiles(incoming, epoch, chatId, replaceFile);
     }
 
+    async function handlePaste(event) {
+      const input = dom.msgInput;
+      if (event.defaultPrevented || !getCurrentChatId() || !input
+        || doc.activeElement !== input || input.disabled || input.readOnly) return false;
+
+      const clipboard = event.clipboardData;
+      let incoming = Array.from(clipboard?.files || []);
+      if (!incoming.length) {
+        incoming = Array.from(clipboard?.items || [])
+          .filter(item => item.kind === 'file')
+          .map(item => item.getAsFile())
+          .filter(Boolean);
+      }
+      if (!incoming.length) return false;
+
+      // Claim file pastes synchronously, including rejected selections: a URL or
+      // filename in the same clipboard must not replace the selected caption.
+      event.preventDefault();
+      return uploadFiles(incoming);
+    }
+
     function isPreparingFiles() {
       return Boolean(pendingPicker?.returned) || (state.pendingFiles || []).some(file => file.preparing);
     }
@@ -722,6 +743,7 @@
 
     return {
       uploadFiles,
+      handlePaste,
       isPreparingFiles,
       renderPendingFiles,
       clearPendingFile,
