@@ -7,7 +7,7 @@
   <title>🍌 BananZa</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍌</text></svg>">
   <link rel="stylesheet" href="/vendor/leaflet/leaflet.css?v=1.9.4">
-  <link rel="stylesheet" href="/css/style.css?v=20261025-glass-composer-fabs">
+  <link rel="stylesheet" href="/css/style.css?v=20261028-chat-tools">
   <link rel="stylesheet" href="/css/calls.css?v=20260621-call-mobile-controls">
   <link rel="stylesheet" href="/css/voice.css?v=glass-voice-play-2">
   <link rel="stylesheet" href="/css/telegram-transcription.css?v=20260915-settings-spacing">
@@ -111,7 +111,6 @@
             <div id="chatStatus" class="chat-status"></div>
           </div>
           <div id="chatHeaderActions" class="chat-header-actions" aria-hidden="true">
-            <button id="botImageHistoryChat" class="icon-btn chat-header-action-btn hidden" type="button" title="Image history" aria-label="Image history" data-i18n-title="Image history" data-i18n-aria-label="Image history">🖼️</button>
             <button id="searchBtn" class="icon-btn chat-header-action-btn" title="Search messages" aria-label="Search messages" type="button">🔍</button>
             <button id="chatShotBtn" class="icon-btn chat-header-action-btn chat-shot-btn hidden" title="ChatShot" aria-label="ChatShot" type="button">&#128247;</button>
             <button id="chatSettingsActionBtn" class="icon-btn chat-header-action-btn" title="Chat settings" aria-label="Chat settings" type="button">&#128736;&#65039;</button>
@@ -1707,7 +1706,6 @@
       </div>
       <div class="modal-body">
         <p class="settings-hint" data-i18n="Images created by this bot for all users. Chat links are available only for chats you can access.">Images created by this bot for all users. Chat links are available only for chats you can access.</p>
-        <div id="botImageHistoryBots" class="ai-bot-actions"></div>
         <div id="botImageHistoryFilter" class="field-group hidden">
           <label for="botImageHistoryUser" data-i18n="User">User</label>
           <select id="botImageHistoryUser" class="modal-input"></select>
@@ -2980,7 +2978,7 @@
   </div>
   <div id="attachMenuOverlay" class="attach-menu-overlay hidden"></div>
 
-  <script src="/js/ui-icons.js?v=8"></script>
+  <script src="/js/ui-icons.js?v=9"></script>
   <script src="/js/sounds.js"></script>
   <script src="/js/messageCache.js"></script>
   <script src="/js/ai-image-risk.js"></script>
@@ -3007,7 +3005,7 @@
     <script src="/js/app/chat-header-actions.js?v=20260919-header-scroll"></script>
     <script src="/js/app/shell/mobile-composer-guard.js?v=20260621-ios-keyboard1"></script>
     <script src="/js/app/shell/events.js?v=20260708-folder-mouse-swipe-glass-spin"></script>
-    <script src="/js/app/shell/ui-runtime.js?v=20261003-admin-logs"></script>
+    <script src="/js/app/shell/ui-runtime.js?v=20261028-remove-chat-image-history"></script>
     <script src="/js/app/shell/shell-runtime.js?v=20260702-maps2"></script>
     <script src="/js/app/shell/mobile-runtime-adapters.js?v=20260601-runtime-final"></script>
     <script src="/js/app/modal-manager.js?v=20260531-modal-manager"></script>
@@ -3089,7 +3087,7 @@
   <script src="/js/app/boot/init.js?v=20260601-runtime-final"></script>
   <script src="/js/app/runtime.js?v=20260531-runtime-split"></script>
   <script src="/js/app.js?v=20260531-ai-final"></script>
-  <script src="/js/bot-image-history.js?v=20261020"></script>
+  <script src="/js/bot-image-history.js?v=20261028-admin-only-entry"></script>
   <script src="/js/local-image.js?v=20261020-panel2"></script>
   <script src="/js/ai-initiative.js?v=20260826-initiative-resilience"></script>
   <script src="/js/calls/CallStore.js?v=20260509-call-modal-surface"></script>

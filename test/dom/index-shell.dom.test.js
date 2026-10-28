@@ -27,7 +27,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
 
   assert.deepEqual(styles, [
     '/vendor/leaflet/leaflet.css?v=1.9.4',
-    '/css/style.css?v=20261025-glass-composer-fabs',
+    '/css/style.css?v=20261028-chat-tools',
     '/css/calls.css?v=20260621-call-mobile-controls',
     '/css/voice.css?v=glass-voice-play-2',
     '/css/telegram-transcription.css?v=20260915-settings-spacing',
@@ -37,7 +37,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
   assert.deepEqual(scripts, [
     '/js/appearance.js',
     '/js/dialogs.js',
-    '/js/ui-icons.js?v=8',
+    '/js/ui-icons.js?v=9',
     '/js/sounds.js',
     '/js/messageCache.js',
     '/js/ai-image-risk.js',
@@ -64,7 +64,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/chat-header-actions.js?v=20260919-header-scroll',
     '/js/app/shell/mobile-composer-guard.js?v=20260621-ios-keyboard1',
     '/js/app/shell/events.js?v=20260708-folder-mouse-swipe-glass-spin',
-    '/js/app/shell/ui-runtime.js?v=20261003-admin-logs',
+    '/js/app/shell/ui-runtime.js?v=20261028-remove-chat-image-history',
     '/js/app/shell/shell-runtime.js?v=20260702-maps2',
     '/js/app/shell/mobile-runtime-adapters.js?v=20260601-runtime-final',
     '/js/app/modal-manager.js?v=20260531-modal-manager',
@@ -146,7 +146,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/boot/init.js?v=20260601-runtime-final',
     '/js/app/runtime.js?v=20260531-runtime-split',
     '/js/app.js?v=20260531-ai-final',
-    '/js/bot-image-history.js?v=20261020',
+    '/js/bot-image-history.js?v=20261028-admin-only-entry',
     '/js/local-image.js?v=20261020-panel2',
     '/js/ai-initiative.js?v=20260826-initiative-resilience',
     '/js/calls/CallStore.js?v=20260509-call-modal-surface',

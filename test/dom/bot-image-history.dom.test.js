@@ -108,22 +108,14 @@ test('switching bots and closing the modal ignore pending responses', async (t) 
   assert.equal(doc.querySelectorAll('#botImageHistoryGrid img').length, 0);
 });
 
-test('chat picker excludes text/convert bots, retains ChatShot and retries failed requests', async (t) => {
+test('history opened from bot settings retries failed requests', async (t) => {
   let attempts = 0;
   const { doc, history } = setup(t, async (url) => {
-    if (url.endsWith('/members')) return [
-      { is_ai_bot: 1, ai_bot_id: 1, ai_bot_kind: 'image', display_name: 'One' },
-      { is_ai_bot: 1, ai_bot_id: 2, ai_bot_kind: 'chatshot', display_name: 'Two' },
-      { is_ai_bot: 1, ai_bot_id: 3, ai_bot_kind: 'text', display_name: 'Three' },
-      { is_ai_bot: 1, ai_bot_id: 4, ai_bot_kind: 'convert', display_name: 'Four' },
-    ];
+    assert.match(url, /\/api\/ai-bots\/2\/images\?/);
     if (++attempts === 1) throw new Error('offline');
     return payload();
   });
-  await history.openForChat();
-  assert.equal(doc.querySelectorAll('#botImageHistoryBots button').length, 2);
-  doc.querySelectorAll('#botImageHistoryBots button')[1].click();
-  await tick();
+  await history.open(2);
   assert.equal(doc.getElementById('botImageHistoryStatus').textContent, 'Could not load image history');
   assert.equal(doc.getElementById('botImageHistoryRetry').classList.contains('hidden'), false);
   doc.getElementById('botImageHistoryRetry').click();
@@ -138,19 +130,14 @@ test('history entrypoints and list buttons are admin-only and type restricted', 
   const render = dom.window.BananzaApp.aiAdmin.shared.renderBotHistoryButton;
   for (const kind of ['image', 'universal', 'chatshot', 'text', 'convert']) assert.equal(render({ id: 1, kind }), '');
   await history.open(1);
-  await history.openForChat();
-  assert.equal(doc.getElementById('botImageHistoryChat').classList.contains('hidden'), true);
+  assert.equal(doc.getElementById('botImageHistoryChat'), null);
   assert.equal(doc.getElementById('botImageHistoryModal').classList.contains('hidden'), true);
   dom.window.BananzaAppBridge.getCurrentUser = () => ({ id: 1, is_admin: true });
   for (const kind of ['image', 'universal', 'chatshot']) {
     assert.match(render({ id: 1, kind }), /data-bot-history-id="1"/);
-    history.syncChatButton({ type: 'private', private_user: { ai_bot_kind: kind } });
-    assert.equal(doc.getElementById('botImageHistoryChat').classList.contains('hidden'), false);
   }
   for (const kind of ['text', 'convert', '', undefined]) {
     assert.equal(render({ id: 1, kind }), '');
-    history.syncChatButton({ type: 'private', private_user: { ai_bot_kind: kind } });
-    assert.equal(doc.getElementById('botImageHistoryChat').classList.contains('hidden'), true);
   }
 });
 

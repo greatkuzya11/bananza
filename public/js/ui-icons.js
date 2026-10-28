@@ -3,7 +3,7 @@
   'use strict';
   const byId = {
     settingsBtn: 'settings', newChatBtn: 'pencil', chatSearchToggle: 'search', searchBtn: 'search',
-    chatSearchClear: 'x', backBtn: 'arrow-left', chatShotBtn: 'camera', chatSettingsActionBtn: 'ellipsis',
+    chatSearchClear: 'x', backBtn: 'arrow-left', chatShotBtn: 'camera', chatSettingsActionBtn: 'wrench',
     chatFoldersBtn: 'folder', chatHeaderActionsToggle: 'ellipsis', chatInfoBtn: 'settings', attachBtn: 'paperclip', sendBtn: 'send',
     pollBtn: 'bar-chart-3', emojiBtn: 'smile', scrollBottomBtn: 'chevron-down', searchClose: 'x',
     composerContextConvertBtn: 'banana',

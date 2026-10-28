@@ -10558,6 +10558,7 @@ html[data-visual-mode="glass"] :is(.icon-btn, .modal-close) .ui-glyph { width: 2
 .ui-glyph[data-icon="copy"] { --ui-icon: url("/vendor/lucide/copy.svg"); }
 .ui-glyph[data-icon="download"] { --ui-icon: url("/vendor/lucide/download.svg"); }
 .ui-glyph[data-icon="ellipsis"] { --ui-icon: url("/vendor/lucide/ellipsis.svg"); }
+.ui-glyph[data-icon="wrench"] { --ui-icon: url("/vendor/lucide/wrench.svg"); }
 .ui-glyph[data-icon="expand"] { --ui-icon: url("/vendor/lucide/expand.svg"); }
 .ui-glyph[data-icon="external-link"] { --ui-icon: url("/vendor/lucide/external-link.svg"); }
 .ui-glyph[data-icon="eye-off"] { --ui-icon: url("/vendor/lucide/eye-off.svg"); }

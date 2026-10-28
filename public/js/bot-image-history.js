@@ -4,7 +4,6 @@
   const bridge = () => window.BananzaAppBridge;
   const tx = (key, params) => bridge()?.tx?.(key, params) || key;
   const isAdmin = () => Boolean(bridge()?.getCurrentUser?.()?.is_admin);
-  const supportsHistory = (kind) => ['image', 'universal', 'chatshot'].includes(kind);
   const modalId = 'botImageHistoryModal';
   let initialized = false;
   let botId = null;
@@ -15,12 +14,6 @@
   let controller;
   const unavailable = new Set();
 
-  function syncChatButton(chat = bridge()?.getCurrentChat?.()) {
-    const visible = isAdmin() && Boolean(chat) && !chat.is_notes && !chat.is_document && chat.type !== 'document'
-      && (chat.type !== 'private' || supportsHistory(chat.private_user?.ai_bot_kind));
-    byId('botImageHistoryChat')?.classList.toggle('hidden', !visible);
-    bridge()?.syncChatHeaderActions?.();
-  }
   function reset() {
     controller?.abort();
     requestId += 1;
@@ -30,7 +23,6 @@
     data = null;
     unavailable.clear();
     byId('botImageHistoryGrid').replaceChildren();
-    byId('botImageHistoryBots').replaceChildren();
     byId('botImageHistoryUser').replaceChildren();
     for (const id of ['botImageHistoryFilter', 'botImageHistoryPager', 'botImageHistoryRetry']) byId(id).classList.add('hidden');
     byId('botImageHistoryTitle').textContent = tx('Image history');
@@ -146,53 +138,18 @@
     show();
     await loadPage();
   }
-  async function openForChat() {
-    if (!isAdmin()) return;
-    reset();
-    const chatId = bridge().getCurrentChatId();
-    if (!chatId) return;
-    bridge().closeChatHeaderActions?.();
-    show();
-    const current = requestId;
-    controller = new AbortController();
-    try {
-      const members = await bridge().api('/api/chats/' + chatId + '/members', { signal: controller.signal });
-      if (current !== requestId || !isAdmin()) return;
-      const bots = members.filter((member) => member.is_ai_bot && member.ai_bot_id && supportsHistory(member.ai_bot_kind));
-      if (bots.length === 1) {
-        botId = bots[0].ai_bot_id;
-        await loadPage();
-        return;
-      }
-      byId('botImageHistoryStatus').textContent = tx(bots.length ? 'Choose a bot' : 'No image-capable bots in this chat');
-      for (const bot of bots) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'weather-action-btn';
-        button.textContent = bot.display_name;
-        button.addEventListener('click', () => open(bot.ai_bot_id));
-        byId('botImageHistoryBots').append(button);
-      }
-    } catch (error) {
-      if (current !== requestId || error.name === 'AbortError') return;
-      byId('botImageHistoryStatus').textContent = tx('Could not load image history');
-      byId('botImageHistoryRetry').classList.remove('hidden');
-    }
-  }
   function init() {
     if (initialized || !bridge()?.getCurrentUser?.()) return;
     initialized = true;
-    syncChatButton();
     bridge().registerManagedModal(modalId);
     byId('botImageHistoryClose').addEventListener('click', () => bridge().closeManagedModal(modalId));
     byId('botImageHistoryPrevious').addEventListener('click', () => loadPage(page - 1));
     byId('botImageHistoryNext').addEventListener('click', () => loadPage(page + 1));
-    byId('botImageHistoryRetry').addEventListener('click', () => botId ? loadPage() : openForChat());
+    byId('botImageHistoryRetry').addEventListener('click', () => loadPage());
     byId('botImageHistoryUser').addEventListener('change', () => {
       userId = byId('botImageHistoryUser').value;
       loadPage(1);
     });
-    byId('botImageHistoryChat').addEventListener('click', openForChat);
     document.addEventListener('click', (event) => {
       const button = event.target.closest('[data-bot-history-id]');
       if (button && isAdmin()) { event.preventDefault(); open(button.dataset.botHistoryId); }
@@ -202,7 +159,7 @@
       if (byId(modalId).classList.contains('hidden')) { controller?.abort(); requestId += 1; }
     }).observe(byId(modalId), { attributes: true, attributeFilter: ['class'] });
   }
-  window.BananzaBotImages = { open, openForChat, syncChatButton };
+  window.BananzaBotImages = { open };
   window.addEventListener('bananza:ready', init);
   init();
 })();
