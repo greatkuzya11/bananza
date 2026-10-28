@@ -24,7 +24,7 @@
     '\ud83d\udc64': 'user', '\ud83d\udc65': 'users', '\ud83e\udd16': 'bot',
     '\ud83d\uddd1': 'trash-2', '\ud83d\udccc': 'pin', '\ud83d\udcc1': 'folder',
     '\ud83d\udcc4': 'file-text', '\ud83d\udccb': 'copy', '\ud83d\udd17': 'external-link',
-    '\u2139': 'info', '\u25b6': 'play', '\u23f8': 'pause', '\u21bb': 'refresh-cw',
+    '\u2139': 'info', '\u25b6': 'play', '\u23f8': 'pause', '\u21bb': 'refresh-cw', '\u25ef': 'circle',
     '\ud83d\udee0': 'settings', '\ud83d\udcf1': 'monitor', '\ud83d\udd20': 'monitor',
     '\ud83d\udeaa': 'log-out', '\ud83d\uddbc': 'image', '\ud83d\udcde': 'phone',
     '\ud83d\udc41': 'eye', '\ud83d\ude48': 'eye-off',

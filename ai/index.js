@@ -5994,6 +5994,32 @@ function createAiBotFeature({
     };
   }
 
+  async function runTelegramConversation({ botId, botSnapshot, prompt, history = [], sourceImage = null, loadImage } = {}) {
+    const bot = botSnapshot?.provider ? { ...botSnapshot } : sanitizeBot(botByIdStmt.get(Number(botId || 0)));
+    if (!bot || bot.kind !== 'universal' || !['openai', 'grok'].includes(bot.provider)
+      || !bot.enabled || !providerEnabled(bot.provider) || !bot.allow_image_generate || !bot.allow_image_edit) {
+      throw new Error('Universal bot is unavailable');
+    }
+    const settings = getGlobalSettings();
+    const isGrok = bot.provider === 'grok';
+    const model = bot.response_model || (isGrok ? settings.grok_default_response_model : settings.default_response_model);
+    const result = await require('./telegramConversation').runConversation({
+      prompt, history, sourceImage, loadImage, system: botSystemPrompt(bot),
+      respond: async (input) => {
+        const response = await (isGrok ? grokAi.createResponse : createOpenAIResponse)({
+          apiKey: isGrok ? getGrokApiKey() : getApiKey(),
+          ...(isGrok ? { baseUrl: grokBaseUrl() } : {}),
+          model, input,
+          maxOutputTokens: Math.max(1500, intValue(bot.max_tokens, 2000, 1, 8000)),
+          temperature: floatValue(bot.temperature, 0.55, 0, 1),
+        });
+        return (isGrok ? grokAi.extractResponseText : extractResponseText)(response);
+      },
+      generateImage: (request) => runTelegramUniversalImage({ botId, botSnapshot: bot, ...request }),
+    });
+    return { provider: bot.provider, model, ...result };
+  }
+
   async function runTelegramUniversalImage({ botId, botSnapshot, prompt, sourceImage = null } = {}) {
     const bot = botSnapshot && typeof botSnapshot === 'object' && botSnapshot.provider
       ? { ...botSnapshot }
@@ -9550,40 +9576,53 @@ function createAiBotFeature({
 
 
   // Reuse message/file storage so historical generations and edits need no migration.
-  app.get('/api/ai-bots/:id(\\d+)/images', auth, (req, res) => {
+  app.get('/api/ai-bots/:id(\\d+)/images', auth, adminOnly, (req, res) => {
     const bot = sanitizeBot(botByIdStmt.get(Number(req.params.id)));
-    if (!bot) return res.status(404).json({ error: 'Bot not found' });
-    const participant = db.prepare(`SELECT 1 FROM chat_members viewer
-      WHERE viewer.user_id=? AND (
-        EXISTS (SELECT 1 FROM chat_members peer WHERE peer.chat_id=viewer.chat_id AND peer.user_id=?)
-        OR EXISTS (SELECT 1 FROM messages m WHERE m.chat_id=viewer.chat_id AND m.ai_bot_id=?)
-      ) LIMIT 1`).get(req.user.id, bot.user_id, bot.id);
-    if (!req.user.is_admin && !participant) return res.status(404).json({ error: 'Bot not found' });
-    const before = req.query.before == null ? Number.MAX_SAFE_INTEGER : Number(req.query.before);
-    const rawLimit = req.query.limit == null ? 24 : Number(req.query.limit);
-    if (!Number.isSafeInteger(before) || before <= 0 || !Number.isSafeInteger(rawLimit) || rawLimit <= 0) {
-      return res.status(400).json({ error: 'Invalid image history cursor' });
+    if (!bot || !['image', 'universal', 'chatshot'].includes(bot.kind)) {
+      return res.status(404).json({ error: 'Bot not found' });
     }
-    const limit = Math.min(rawLimit, 48);
-    const rows = db.prepare(`SELECT m.id, m.chat_id, m.created_at, f.stored_name,
-        COALESCE(source.text, '') AS prompt,
-        requester.id AS requester_id, requester.display_name AS requester_name,
-        requester.username AS requester_username
+    const positiveQueryInteger = (value, fallback) => value == null ? fallback
+      : typeof value === 'string' && /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : NaN;
+    const requestedPage = positiveQueryInteger(req.query.page, 1);
+    const rawLimit = positiveQueryInteger(req.query.limit, 25);
+    const userId = positiveQueryInteger(req.query.user_id, null);
+    if (!Number.isFinite(requestedPage) || !Number.isFinite(rawLimit)
+      || (userId !== null && !Number.isFinite(userId)) || req.query.before != null) {
+      return res.status(400).json({ error: 'Invalid image history pagination' });
+    }
+    const limit = Math.min(rawLimit, 100);
+    const historyFrom = `
       FROM messages m
       JOIN files f ON f.id=m.file_id
-      JOIN chat_members viewer ON viewer.chat_id=m.chat_id AND viewer.user_id=?
       LEFT JOIN messages source ON source.id=m.reply_to_id AND source.chat_id=m.chat_id AND source.is_deleted=0
+      LEFT JOIN voice_messages source_voice ON source_voice.message_id=source.id
       LEFT JOIN users requester ON requester.id=source.user_id
       WHERE m.ai_bot_id=? AND m.user_id=? AND m.ai_generated=1 AND m.is_deleted=0
-        AND f.type='image' AND m.id<?
-      ORDER BY m.id DESC LIMIT ?`).all(req.user.id, bot.id, bot.user_id, before, limit + 1);
-    const images = rows.slice(0, limit).map(({ stored_name, requester_id, requester_name, requester_username, ...row }) => ({
-      ...row, file_url: `/uploads/${encodeURIComponent(stored_name)}`,
+        AND m.forwarded_from_message_id IS NULL AND m.forwarded_from_user_id IS NULL
+        AND f.type='image'`;
+    const filter = ' AND (? IS NULL OR requester.id=?)';
+    const params = [bot.id, bot.user_id, userId, userId];
+    const total = db.prepare(`SELECT COUNT(*) AS count ${historyFrom}${filter}`).get(...params).count;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const page = Math.min(requestedPage, totalPages);
+    const rows = db.prepare(`SELECT m.id, m.chat_id, m.created_at, f.stored_name,
+        COALESCE(NULLIF(TRIM(source.text), ''), NULLIF(TRIM(source_voice.transcription_text), ''), '') AS prompt,
+        requester.id AS requester_id, requester.display_name AS requester_name,
+        requester.username AS requester_username,
+        EXISTS (SELECT 1 FROM chat_members viewer WHERE viewer.chat_id=m.chat_id AND viewer.user_id=?) AS can_open_chat
+      ${historyFrom}${filter}
+      ORDER BY m.id DESC LIMIT ? OFFSET ?`).all(req.user.id, ...params, limit, (page - 1) * limit);
+    const images = rows.map(({ stored_name, requester_id, requester_name, requester_username, ...row }) => ({
+      ...row, chat_id: row.can_open_chat ? row.chat_id : null, can_open_chat: Boolean(row.can_open_chat),
+      file_url: `/uploads/${encodeURIComponent(stored_name)}`,
       requested_by: requester_id ? { id: requester_id, display_name: requester_name, username: requester_username } : null,
     }));
+    const users = db.prepare(`SELECT requester.id, requester.display_name, requester.username, COUNT(*) AS count
+      ${historyFrom} AND requester.id IS NOT NULL
+      GROUP BY requester.id ORDER BY MAX(m.id) DESC`).all(bot.id, bot.user_id);
     res.json({
-      bot: { id: bot.id, name: bot.name, provider: bot.provider, avatar_url: bot.avatar_url },
-      images, next_before: rows.length > limit ? images[images.length - 1].id : null,
+      bot: { id: bot.id, name: bot.name, kind: bot.kind, provider: bot.provider, avatar_url: bot.avatar_url },
+      images, users, page, limit, total, total_pages: totalPages,
     });
   });
 
@@ -11351,6 +11390,7 @@ function createAiBotFeature({
     getTelegramUniversalBotSnapshot,
     generateTelegramImage,
     runTelegramUniversalImage,
+    runTelegramConversation,
     getChatShotState,
     generateChatShotForChat,
     generateChatShotImageForContext,

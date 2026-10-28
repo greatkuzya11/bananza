@@ -47,6 +47,8 @@
         actions: {
           alert: async (message) => (await window.BananzaDialogs.alert(message)),
           isClientSideMessage: (msg) => isClientSideMessage(msg),
+          renderPendingFiles: () => composerFilesController?.renderPendingFiles(),
+          clearPendingFile: () => composerFilesController?.clearPendingFile(),
           isPollMessage: (msg) => isPollMessage(msg),
           isCurrentNotesChat: () => isCurrentNotesChat(),
           getMediaNoteFallbackLabel: (msg) => getMediaNoteFallbackLabel(msg),
@@ -67,6 +69,7 @@
       });
     
       composerFilesController = composerFilesFactory({
+        getCurrentChatId: () => currentChatId,
         window,
         document,
         dom: appDom,
@@ -78,6 +81,8 @@
         actions: {
           alert: async (message) => (await window.BananzaDialogs.alert(message)),
           localAttachmentFromFile: (file) => localAttachmentFromFile(file),
+          cancelEdit: () => composerReplyEditController.clearEdit({ clearInput: true }),
+          syncEditBar: () => composerReplyEditController.syncEditBar(),
           updateComposerAiOverrideState: () => updateComposerAiOverrideState().catch(() => {}),
           refreshPollComposerActionState: () => refreshPollComposerActionState(),
           refreshVoiceComposerState,

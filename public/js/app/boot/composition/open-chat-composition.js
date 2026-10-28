@@ -114,7 +114,7 @@
             messageStateController?.clearDisplayedSystemEvents?.();
             clearRenderedMessages?.();
           },
-          clearPendingFile: () => clearPendingFile(),
+          clearPendingFile: () => clearPendingFile({ immediate: true }),
           clearReply: () => clearReply(),
           closeTransientUi: () => {
             hideMentionPicker();
@@ -186,7 +186,7 @@
             messageStateController?.clearDisplayedSystemEvents?.();
           },
           clearEdit: (options = {}) => clearEdit(options),
-          clearPendingFile: () => clearPendingFile(),
+          clearPendingFile: () => clearPendingFile({ immediate: true }),
           clearReply: () => clearReply(),
           closeDocumentMode: () => documentRuntime?.closeDocumentMode?.(),
           closeChatHeaderActions: () => closeChatHeaderActions(),

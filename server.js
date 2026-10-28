@@ -1159,8 +1159,11 @@ function rememberContextTransformOriginal(messageRow, actorUserId, sourceText) {
   upsertMessageContextTransformOriginalStmt.run(messageId, cleanSource, actorUserId || null);
 }
 
+const messageAttachments = require('./messageAttachments').createMessageAttachments(db, UPLOADS_DIR);
+
 function decorateMessageFilePayload(row) {
   if (!row) return row;
+  messageAttachments.attach(row);
   row.file_poster_available = Boolean(
     row.file_type === 'video'
     && row.file_stored
@@ -1224,7 +1227,7 @@ function scheduleEditedMessagePreview(messageRow, text) {
   }).catch(() => {});
 }
 
-function applyEditableMessageText(messageRow, { actorUserId, viewerUserId = null, text, beforeHydrate = null } = {}) {
+function applyEditableMessageText(messageRow, { actorUserId, viewerUserId = null, text, fileIds, beforeHydrate = null } = {}) {
   const messageId = Number(messageRow?.id || 0);
   if (!messageId) {
     const error = new Error('Message not found');
@@ -1232,6 +1235,13 @@ function applyEditableMessageText(messageRow, { actorUserId, viewerUserId = null
     throw error;
   }
   const clean = typeof text === 'string' ? text.trim() : '';
+  db.transaction(() => {
+  if (fileIds !== undefined) {
+    db.prepare('DELETE FROM message_attachments WHERE message_id=?').run(messageId);
+    messageAttachments.save(messageId, fileIds);
+    db.prepare('UPDATE messages SET file_id=? WHERE id=?').run(fileIds[0] || null, messageId);
+    messageRow = { ...messageRow, file_id: fileIds[0] || null };
+  }
   if (messageRow.voice_message_id) {
     if (!clean) {
       const error = new Error('Voice text cannot be empty');
@@ -1265,6 +1275,7 @@ function applyEditableMessageText(messageRow, { actorUserId, viewerUserId = null
   if (typeof beforeHydrate === 'function') {
     beforeHydrate({ messageId, cleanText: clean });
   }
+  })();
 
   const updated = hydrateMessageById(messageId, viewerUserId);
   if (!updated) {
@@ -1289,6 +1300,8 @@ function pinPreviewText(row) {
   if (text) return text.substring(0, 160);
   if (row?.voice_message_id) return row?.voice_note_kind === 'video_note' ? '\u0412\u0438\u0434\u0435\u043e-\u0437\u0430\u043c\u0435\u0442\u043a\u0430' : '\u0413\u043e\u043b\u043e\u0441\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435';
   if (row?.location_message_id || row?.is_location || row?.location) return '\u0413\u0435\u043e\u043c\u0435\u0442\u043a\u0430';
+  const files = row?.attachments || (row?.message_id || row?.id ? messageAttachments.get(row.message_id || row.id) : []);
+  if (files.length > 1) return files.map(file => file.file_name).join(', ').substring(0, 160);
   if (row?.file_name) return String(row.file_name).substring(0, 160);
   return 'Attachment';
 }
@@ -1541,6 +1554,7 @@ function getChatPins(chatId) {
     message_user_id: row.message_user_id,
     message_author_name: row.message_author_name,
     preview_text: pinPreviewText(row),
+    attachments: messageAttachments.get(row.message_id),
     file_name: row.file_name || null,
     file_type: row.file_type || null,
     is_voice_note: !!row.voice_message_id,
@@ -2103,12 +2117,14 @@ function collectChatFileRows(chatId) {
       FROM messages m
       WHERE m.chat_id=? AND m.file_id IS NOT NULL
       UNION
+      SELECT a.file_id FROM message_attachments a JOIN messages m ON m.id=a.message_id WHERE m.chat_id=?
+      UNION
       SELECT vm.transcription_file_id
       FROM voice_messages vm
       JOIN messages m ON m.id=vm.message_id
       WHERE m.chat_id=? AND vm.transcription_file_id IS NOT NULL
     )
-  `).all(chatId, chatId);
+  `).all(chatId, chatId, chatId);
 }
 
 function deleteAiMemoryForChat(chatId) {
@@ -2166,8 +2182,9 @@ const deleteChatMessageDataTx = db.transaction((chatId, { deleteChat = false } =
 function deleteChatMessageData(chatId, options = {}) {
   const cid = Number(chatId || 0);
   if (!cid) return { fileRows: [] };
-  const fileRows = collectChatFileRows(cid);
+  let fileRows = collectChatFileRows(cid);
   deleteChatMessageDataTx(cid, options);
+  fileRows = fileRows.filter(file => !messageAttachments.isReferenced(file.id));
   for (const file of fileRows) {
     db.prepare('DELETE FROM files WHERE id=?').run(file.id);
   }
@@ -2181,6 +2198,7 @@ function deleteChatMessageData(chatId, options = {}) {
 function decorateChatListRows(rows, viewerUserId) {
   const uid = Number(viewerUserId || 0);
   for (const chat of rows) {
+    chat.last_attachment_count = chat.last_message_id ? messageAttachments.get(chat.last_message_id).length : 0;
     delete chat.invite_token;
     delete chat.invite_token_created_at;
     Object.assign(chat, chatPreferencesPayload(chat));
@@ -2982,9 +3000,10 @@ app.get('/api/chats/:chatId/media', auth, (req, res) => {
 
   const mediaWhere = `
     FROM messages m
-    JOIN files f ON f.id=m.file_id
     LEFT JOIN voice_messages vm ON vm.message_id=m.id
-    WHERE m.chat_id=? AND m.is_deleted=0 AND f.type IN ('image','video')
+    WHERE m.chat_id=? AND m.is_deleted=0 AND EXISTS (
+      SELECT 1 FROM files f WHERE f.type IN ('image','video') AND (f.id=m.file_id OR f.id IN
+        (SELECT file_id FROM message_attachments WHERE message_id=m.id)))
       AND (vm.message_id IS NULL OR COALESCE(vm.note_kind, 'voice')!='video_note')
   `;
   let rows;
@@ -3000,7 +3019,7 @@ app.get('/api/chats/:chatId/media', auth, (req, res) => {
 
   const media = rows
     .map(row => hydrateMessageById(row.id, req.user.id))
-    .filter(row => row && (row.file_type === 'image' || row.file_type === 'video'));
+    .filter(row => row && row.attachments.some(f => f.file_type === 'image' || f.file_type === 'video'));
   const firstId = media.reduce((min, msg) => {
     const id = Number(msg.id) || 0;
     return id > 0 ? Math.min(min, id) : min;
@@ -3171,7 +3190,6 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   const chatId = +req.params.chatId;
   const {
     text,
-    fileId,
     replyToId,
     client_id,
     poll: rawPoll,
@@ -3197,8 +3215,10 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
   const cleanText = text ? text.trim() : null;
   if (text && (typeof text !== 'string' || text.length > 5000))
     return res.status(400).json({ error: 'Message too long' });
-  if (fileId && !db.prepare('SELECT 1 FROM files WHERE id=?').get(fileId))
-    return res.status(400).json({ error: 'File not found' });
+  let fileIds;
+  try { fileIds = messageAttachments.validate(req.body, req.user.id); }
+  catch (error) { return res.status(400).json({ error: error.message }); }
+  const fileId = fileIds[0] || null;
   const hasPoll = rawPoll != null;
   const hasLocation = rawLocation != null;
   let cleanLocation = null;
@@ -3267,6 +3287,7 @@ app.post('/api/chats/:chatId/messages', auth, msgLimiter, (req, res) => {
       aiDocumentFormatHint
     );
     const messageId = Number(inserted.lastInsertRowid);
+    messageAttachments.save(messageId, fileIds);
     if (cleanLocation) {
       insertMessageLocationStmt.run(
         messageId,
@@ -3402,6 +3423,7 @@ app.post('/api/messages/:id/grok-image-risk-retry', auth, msgLimiter, (req, res)
       source.ai_response_mode_hint || null,
       source.ai_document_format_hint || null
     );
+    messageAttachments.save(Number(inserted.lastInsertRowid), messageAttachments.get(source.id).map(f => f.file_id));
     return Number(inserted.lastInsertRowid);
   });
 
@@ -3553,6 +3575,11 @@ app.post('/api/messages/:id/poster', auth, upLimiter, (req, res) => {
     }
     if (!isChatMember(target.chat_id, req.user.id)) {
       return res.status(403).json({ error: 'Not a member' });
+    }
+    if (req.body.fileId) {
+      const file = messageAttachments.get(messageId).find(file => file.file_id === Number(req.body.fileId));
+      if (!file) return res.status(400).json({ error: 'Attachment not found' });
+      Object.assign(target, file);
     }
     if (target.file_type !== 'video' || !target.file_stored) {
       return res.status(400).json({ error: 'Video poster can only be attached to a video message' });
@@ -3723,7 +3750,7 @@ app.patch('/api/messages/:id', auth, msgLimiter, (req, res) => {
 
   const m = editableMessageForUpdateStmt.get(mid);
   if (!m) return res.status(404).json({ error: 'Not found' });
-  if (!req.user.is_admin && m.user_id !== req.user.id)
+  if (m.user_id !== req.user.id)
     return res.status(403).json({ error: 'Not allowed' });
   if (!req.user.is_admin && !db.prepare('SELECT 1 FROM chat_members WHERE chat_id=? AND user_id=?').get(m.chat_id, req.user.id))
     return res.status(403).json({ error: 'Not a member' });
@@ -3731,11 +3758,26 @@ app.patch('/api/messages/:id', auth, msgLimiter, (req, res) => {
   if (m.call_message_id) return res.status(400).json({ error: 'Call messages cannot be edited' });
 
   try {
+    const previousFiles = messageAttachments.get(mid);
+    let fileIds;
+    if (Object.hasOwn(req.body, 'fileIds') || Object.hasOwn(req.body, 'fileId')) {
+      if (m.voice_message_id || db.prepare('SELECT 1 FROM message_locations WHERE message_id=?').get(mid)) {
+        return res.status(400).json({ error: 'Attachments cannot be changed for this message' });
+      }
+      fileIds = messageAttachments.validate(req.body, req.user.id, { existingIds: previousFiles.map(file => file.file_id) });
+    }
     const updated = applyEditableMessageText(m, {
       actorUserId: req.user.id,
       viewerUserId: req.user.id,
       text,
+      fileIds,
     });
+    for (const file of previousFiles) {
+      if (fileIds === undefined || fileIds.includes(file.file_id) || messageAttachments.isReferenced(file.file_id)) continue;
+      db.prepare('DELETE FROM files WHERE id=?').run(file.file_id);
+      unlinkIfPresent(safeUploadPath(file.file_stored));
+      deleteVideoPoster(UPLOADS_DIR, file.file_stored);
+    }
     res.json(updated);
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message || 'Could not edit message' });
@@ -4405,15 +4447,7 @@ app.delete('/api/messages/:id', auth, (req, res) => {
     return res.status(400).json({ error: 'Call messages cannot be deleted' });
   }
 
-  // Delete attached file from disk and DB
-  if (m.file_id) {
-    const file = db.prepare('SELECT stored_name FROM files WHERE id=?').get(m.file_id);
-    if (file) {
-      const filePath = path.join(UPLOADS_DIR, file.stored_name);
-      fs.unlink(filePath, () => {});
-      deleteVideoPoster(UPLOADS_DIR, file.stored_name);
-    }
-  }
+  const attachedFiles = messageAttachments.get(mid);
 
   const wasPinned = db.prepare('SELECT 1 FROM message_pins WHERE message_id=?').get(mid);
   let pinEvent = null;
@@ -4431,7 +4465,13 @@ app.delete('/api/messages/:id', auth, (req, res) => {
   deleteMentionsStmt.run(mid);
   const removedPins = db.prepare('DELETE FROM message_pins WHERE message_id=?').run(mid);
   // Clean up related file and previews
-  if (m.file_id) db.prepare('DELETE FROM files WHERE id=?').run(m.file_id);
+  db.prepare('DELETE FROM message_attachments WHERE message_id=?').run(mid);
+  for (const file of attachedFiles) {
+    if (messageAttachments.isReferenced(file.file_id)) continue;
+    db.prepare('DELETE FROM files WHERE id=?').run(file.file_id);
+    unlinkIfPresent(safeUploadPath(file.file_stored));
+    deleteVideoPoster(UPLOADS_DIR, file.file_stored);
+  }
   videoNoteStorage.deleteMessageAssets(mid);
   voiceFeature.deleteVoiceMetadata(mid);
   db.prepare('DELETE FROM link_previews WHERE message_id=?').run(mid);
@@ -4463,9 +4503,12 @@ app.get('/api/messages/search', auth, (req, res) => {
       SELECT m.id, m.chat_id, m.text, m.created_at, u.display_name,
         c.name as chat_name, c.type as chat_type
       FROM messages m JOIN users u ON u.id=m.user_id JOIN chats c ON c.id=m.chat_id
-      WHERE m.chat_id=? AND m.text LIKE ? AND m.is_deleted=0
+      WHERE m.chat_id=? AND (m.text LIKE ? OR EXISTS (
+        SELECT 1 FROM files f WHERE f.original_name LIKE ? AND
+        (f.id=m.file_id OR f.id IN (SELECT file_id FROM message_attachments WHERE message_id=m.id)))
+      ) AND m.is_deleted=0
       ORDER BY m.id DESC LIMIT 50
-    `).all(cid, query);
+    `).all(cid, query, query);
   } else {
     // Search across all user's chats
     msgs = db.prepare(`
@@ -4473,12 +4516,15 @@ app.get('/api/messages/search', auth, (req, res) => {
         c.name as chat_name, c.type as chat_type
       FROM messages m JOIN users u ON u.id=m.user_id JOIN chats c ON c.id=m.chat_id
       JOIN chat_members cm ON cm.chat_id=m.chat_id AND cm.user_id=?
-      WHERE m.text LIKE ? AND m.is_deleted=0
+      WHERE (m.text LIKE ? OR EXISTS (
+        SELECT 1 FROM files f WHERE f.original_name LIKE ? AND
+        (f.id=m.file_id OR f.id IN (SELECT file_id FROM message_attachments WHERE message_id=m.id)))
+      ) AND m.is_deleted=0
       ORDER BY m.id DESC LIMIT 50
-    `).all(req.user.id, query);
+    `).all(req.user.id, query, query);
   }
 
-  res.json(msgs);
+  res.json(msgs.map(messageAttachments.attach));
 });
 
 app.post('/api/chats/:chatId/read', auth, (req, res) => {

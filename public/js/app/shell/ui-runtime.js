@@ -1315,6 +1315,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
       }
     
       function renderCurrentChatHeader(chat = chats.find(c => c.id === currentChatId)) {
+        window.BananzaBotImages?.syncChatButton?.(chat);
         if (!chat) {
           closeChatHeaderActions();
           chatTitle.textContent = 'Chat';
@@ -2919,12 +2920,13 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
       }
 
       function openAvatarUserMenu(avatarEl) {
-        if (!isGroupLikeCurrentChat()) return;
+        const chat = getChatById(currentChatId);
+        if (!chat || !['private', 'group', 'general'].includes(chat.type)) return;
         const target = avatarMenuTargetFromEl(avatarEl);
         if (!target) return;
         hideMentionPicker();
         const menu = ensureAvatarUserMenu();
-        const canOpenPrivate = !target.isSelf && !target.isAiBot;
+        const canOpenPrivate = isGroupLikeCurrentChat() && !target.isSelf;
         const sourceUser = findAvatarMenuUser(target) || {};
         const user = { id: target.userId, username: sourceUser.username || target.username || target.token, display_name: sourceUser.display_name || target.displayName || target.token, avatar_color: sourceUser.avatar_color || target.avatarColor || '#65aadd', avatar_url: sourceUser.avatar_url || target.avatarUrl || '', profile_status_key: sourceUser.profile_status_key || target.profile_status_key || '', profile_status_text: sourceUser.profile_status_text || target.profile_status_text || '', is_ai_bot: target.isAiBot ? 1 : 0 };
         const status = profileStatusLabel(user);

@@ -21,6 +21,14 @@
     const getCurrentUser = typeof state.getCurrentUser === 'function' ? state.getCurrentUser : () => null;
     const getCurrentChatId = typeof state.getCurrentChatId === 'function' ? state.getCurrentChatId : () => null;
 
+    function attachmentUploadState(item) {
+      const files = item.attachments || [];
+      return files.length ? {
+        total: files.length,
+        completed: files.filter((file, index) => file.serverFileId || (index === 0 && item.serverFileId)).length,
+      } : null;
+    }
+
     function outboxUrlKey(clientId, part = 'file') {
       return `${clientId}:${part}`;
     }
@@ -152,6 +160,7 @@
         id: item.clientId,
         client_id: item.clientId,
         client_status: item.status || 'queued',
+        client_upload: attachmentUploadState(item),
         is_outbox: true,
         chat_id: item.chatId,
         user_id: getCurrentUser().id,
@@ -160,6 +169,20 @@
         avatar_color: getCurrentUser().avatar_color,
         avatar_url: getCurrentUser().avatar_url,
         text: item.text || null,
+        attachments: !isVoice && !isVideoNote ? (item.attachments || []).map((file, index) => {
+          const meta = file.serverFileMeta || (index === 0 ? item.serverFileMeta : null);
+          return {
+            file_id: meta?.id || file.localId || `${item.clientId}-${index}`,
+            file_name: meta?.original_name || file.name,
+            file_size: meta?.size || file.size,
+            file_mime: meta?.mime_type || file.mime,
+            file_type: meta?.type || file.type,
+            file_stored: meta?.stored_name || null,
+            file_poster_available: Boolean(meta?.poster_available),
+            client_file_url: !meta?.stored_name && file.file ? getOutboxObjectUrl(item.clientId, file.file, file.localId || `file-${index}`) : '',
+            client_poster_url: file.posterBlob ? getOutboxObjectUrl(item.clientId, file.posterBlob, `${file.localId || index}-poster`) : '',
+          };
+        }) : [],
         file_id: hasFileLikePayload ? (item.serverFileId || item.clientId) : null,
         file_name: fileName,
         file_stored: serverMeta?.stored_name || null,
@@ -174,6 +197,7 @@
         reply_to_id: item.replyToId || null,
         reply_display_name: reply?.display_name || null,
         reply_text: reply?.text || null,
+        reply_attachments: reply?.attachments || [],
         reply_is_voice_note: reply?.is_voice_note ? 1 : 0,
         reply_note_kind: reply?.is_video_note ? 'video_note' : (reply?.is_voice_note ? 'voice' : null),
         created_at: item.createdAt,
@@ -279,9 +303,16 @@
     
     async function persistOutboxItem(item) {
       item.status = item.status || 'queued';
-      await window.messageCache?.upsertOutboxItem?.(item);
       const row = findOutboxRow(item.clientId);
-      if (row) row.__outboxItem = item;
+      if (row) {
+        row.__outboxItem = item;
+        if (row.__messageData) {
+          row.__messageData.client_status = item.status;
+          row.__messageData.client_upload = attachmentUploadState(item);
+        }
+        renderer.updateRowStatus(row);
+      }
+      await window.messageCache?.upsertOutboxItem?.(item);
       return item;
     }
     
@@ -297,9 +328,13 @@
     
     
     
-    async function uploadOutboxAttachment(item) {
-      if (item.serverFileId) return item.serverFileId;
-      const attachment = item.attachments && item.attachments[0];
+    async function uploadOutboxAttachment(item, index = 0) {
+      const attachment = item.attachments && item.attachments[index];
+      if (attachment?.serverFileId) return attachment.serverFileId;
+      if (index === 0 && item.serverFileId) {
+        if (attachment) { attachment.serverFileId = item.serverFileId; attachment.serverFileMeta = item.serverFileMeta; }
+        return item.serverFileId;
+      }
       if (!attachment?.file) throw new Error('Attachment is not available locally');
       const fd = new FormData();
       fd.append('file', attachment.file, attachment.name || 'attachment');
@@ -307,8 +342,9 @@
         fd.append('poster', attachment.posterBlob, 'video-poster.jpg');
       }
       const data = await api('/api/upload', { method: 'POST', body: fd });
-      item.serverFileId = data.id;
-      item.serverFileMeta = data;
+      attachment.serverFileId = data.id;
+      attachment.serverFileMeta = data;
+      if (index === 0) { item.serverFileId = data.id; item.serverFileMeta = data; }
       await persistOutboxItem(item);
       return data.id;
     }
@@ -316,14 +352,16 @@
     
     
     async function sendOutboxMessageItem(item) {
-      const attachment = item.attachments && item.attachments[0];
-      let fileId = item.serverFileId || null;
-      if (attachment && !fileId) fileId = await uploadOutboxAttachment(item);
+      const fileIds = [];
+      for (let index = 0; index < (item.attachments || []).length; index += 1) {
+        fileIds.push(await uploadOutboxAttachment(item, index));
+      }
+      if (!fileIds.length && item.serverFileId) fileIds.push(item.serverFileId);
       return api(`/api/chats/${item.chatId}/messages`, {
         method: 'POST',
         body: {
           text: item.text || null,
-          fileId: fileId || null,
+          fileIds,
           location: item.location || null,
           replyToId: item.replyToId || null,
           client_id: item.clientId,
@@ -428,8 +466,9 @@
     
     
     async function queueOutboxItem(item, { attempt = true } = {}) {
-      await persistOutboxItem(item);
       renderOutboxItem(item);
+      if (Number(item.chatId) === Number(getCurrentChatId())) actions.scrollToBottom?.();
+      await persistOutboxItem(item);
       if (attempt) await trySendOutboxItem(item);
       return item;
     }
@@ -439,6 +478,7 @@
     function createMessageOutboxItem({
       text = null,
       attachment = null,
+      attachments = null,
       reply = null,
       createdAt = null,
       aiImageRiskAccepted = false,
@@ -462,7 +502,7 @@
         aiDocumentFormatHint: aiDocumentFormatHint || null,
         replyToId: reply?.id || null,
         reply,
-        attachments: attachment ? [attachment] : [],
+        attachments: Array.isArray(attachments) ? attachments.slice() : (attachment ? [attachment] : []),
         serverFileId: null,
         serverFileMeta: null,
       };

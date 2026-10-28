@@ -10,6 +10,7 @@ const {
   DEFAULT_SETTINGS,
   normalizeAllowedUserIds,
   createBot,
+  updateBot,
   listBots,
   readBot,
   getBotToken,
@@ -52,6 +53,215 @@ function setSettings(db, incoming, secret) {
     transcription_enabled: incoming.enabled ?? incoming.transcription_enabled ?? false,
   }, secret);
 }
+
+test('Telegram groups automatically queue only authorized audio when the option is enabled', async (t) => {
+  const db = createDb();
+  t.after(() => db.close());
+  const bot = createBot(db, {
+    name: 'Group transcriber', transcription_enabled: true, allowed_user_ids: ['777'],
+    image_generation_enabled: true, generate_image_from_transcription: true, memory_enabled: true,
+    universal_enabled: true, ignore_unsupported_messages: false,
+  }, 'secret');
+  const feature = createTelegramTranscriptionFeature({ app: fakeApp(), db, secret: 'secret', getAiBotFeature: () => null });
+  feature.stop();
+  const replies = [];
+  const client = { sendMessage: async (...args) => { replies.push(args); return { message_id: 900 }; } };
+  let updateId = 0;
+  const send = async (content, chat = { id: -123, type: 'group' }) => {
+    const update = { update_id: ++updateId, message: {
+      message_id: 10, chat, from: { id: 777, language_code: 'en' }, ...content,
+    } };
+    await feature.handleUpdate(update, client, bot.id);
+    return update;
+  };
+  const voice = { voice: { file_id: 'group-voice', file_size: 100, duration: 6 } };
+  await send(voice);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM telegram_transcription_jobs').get().n, 0);
+  assert.deepEqual(replies, []);
+  updateBot(db, bot.id, { group_transcription_enabled: true }, 'secret');
+  const first = await send(voice);
+  await feature.handleUpdate(first, client, bot.id);
+  await send({ ...voice, message_thread_id: 45 }, { id: -100456, type: 'supergroup' });
+  await send({ audio: { file_id: 'group-audio', mime_type: 'audio/mpeg', file_size: 100 }, message_id: 11 });
+  const jobs = db.prepare('SELECT * FROM telegram_transcription_jobs ORDER BY id').all();
+  assert.equal(jobs.length, 3);
+  assert.deepEqual(jobs.map(job => job.telegram_chat_id), ['-123', '-100456', '-123']);
+  assert.equal(jobs[1].telegram_message_thread_id, 45);
+  assert.equal(jobs[0].telegram_message_thread_id, null);
+  assert.ok(jobs.every(job => JSON.parse(job.profile_json).generate_image_from_transcription === false));
+  for (const content of [
+    { text: 'hello' }, { text: '/help' }, { text: '@group_bot', reply_to_message: voice },
+    { photo: [{ file_id: 'photo' }] }, { sticker: { file_id: 'sticker' } },
+    { ...voice, from: { id: 888 } }, { ...voice, from: { id: 777, is_bot: true } },
+    { ...voice, sender_chat: { id: -123 } },
+  ]) await send(content);
+  assert.deepEqual(replies, []);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM telegram_image_generation_jobs').get().n, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM telegram_transcription_jobs').get().n, 3);
+  await send({ ...voice, message_id: 12 });
+  assert.match(replies.pop()[1], /queue is busy/i);
+  await send({ voice: { file_id: 'big', file_size: 30 * 1024 * 1024 }, message_thread_id: 45 }, { id: -100456, type: 'supergroup' });
+  const rejected = replies.pop();
+  assert.match(rejected[1], /too large/i);
+  assert.equal(rejected[3].messageThreadId, 45);
+  updateBot(db, bot.id, { transcription_enabled: false }, 'secret');
+  await send(voice);
+  assert.deepEqual(replies, []);
+  assert.equal(db.prepare('SELECT next_update_id FROM telegram_bot_state WHERE telegram_bot_id=?').get(bot.id).next_update_id, updateId + 1);
+});
+
+test('Telegram transcript recovery delivers every chunk in the original group topic', async (t) => {
+  const db = createDb();
+  t.after(() => db.close());
+  const bot = createBot(db, { name: 'Group bot', bot_token: '123456:test', transcription_enabled: true,
+    group_transcription_enabled: true, allowed_user_ids: ['777'] }, 'secret');
+  const transcript = 'Transcribed audio. '.repeat(300).trim();
+  db.prepare(`INSERT INTO telegram_transcription_jobs(
+    telegram_bot_id, update_id, telegram_chat_id, telegram_user_id, telegram_message_id,
+    telegram_message_thread_id, file_id, status, transcript_text
+  ) VALUES(?, 1, '-100123', '777', 10, 45, 'voice', 'delivering', ?)`).run(bot.id, transcript);
+  const requests = [];
+  const feature = createTelegramTranscriptionFeature({
+    app: fakeApp(), db, secret: 'secret', getAiBotFeature: () => null,
+    fetchImpl: async (url, options) => {
+      const method = String(url).split('/').at(-1);
+      assert.ok(['sendMessage', 'editMessageText'].includes(method));
+      requests.push({ method, body: JSON.parse(options.body) });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 900 } }));
+    },
+  });
+  feature.stop();
+  const queued = db.prepare('SELECT * FROM telegram_transcription_jobs').get();
+  assert.equal(queued.status, 'queued');
+  await feature.processJob(queued);
+  for (const { body } of requests.filter(request => request.method === 'sendMessage')) {
+    assert.equal(body.chat_id, '-100123');
+    assert.equal(body.message_thread_id, 45);
+    assert.equal(body.reply_parameters.message_id, 10);
+  }
+  const output = requests.filter(request => request.method === 'editMessageText' || request.body.text.startsWith('Transcribed'));
+  assert.equal(output.map(request => request.body.text).join(' '), transcript);
+  assert.equal(db.prepare('SELECT status FROM telegram_transcription_jobs').get().status, 'completed');
+});
+
+test('Telegram group settings and topic columns migrate idempotently with private-only defaults', (t) => {
+  const db = createDb();
+  t.after(() => db.close());
+  const bot = createBot(db, { name: 'Existing' }, 'secret');
+  db.exec('ALTER TABLE telegram_bots DROP COLUMN group_transcription_enabled');
+  db.exec('ALTER TABLE telegram_transcription_jobs DROP COLUMN telegram_message_thread_id');
+  initTelegramTranscriptionSchema(db);
+  assert.equal(readBot(db, bot.id).group_transcription_enabled, false);
+  assert.equal(updateBot(db, bot.id, { group_transcription_enabled: 'true' }, 'secret').group_transcription_enabled, true);
+  initTelegramTranscriptionSchema(db);
+  assert.equal(readBot(db, bot.id).group_transcription_enabled, true);
+  assert.equal(updateBot(db, bot.id, { group_transcription_enabled: 'false' }, 'secret').group_transcription_enabled, false);
+  assert.equal(db.pragma('integrity_check', { simple: true }), 'ok');
+});
+
+test('Telegram quiet mode ignores unrelated messages but keeps audio, commands, and useful errors', async (t) => {
+  const db = createDb();
+  t.after(() => db.close());
+  const bot = createBot(db, {
+    name: 'Audio only', transcription_enabled: true,
+    allowed_user_ids: ['777'], ignore_unsupported_messages: true,
+  }, 'secret');
+  const feature = createTelegramTranscriptionFeature({ app: fakeApp(), db, secret: 'secret', getAiBotFeature: () => null });
+  feature.stop();
+  const sent = [];
+  const client = { sendMessage: async (_id, text) => { sent.push(text); return { message_id: 99 }; } };
+  let updateId = 0;
+  const send = (content, userId = 777) => {
+    updateId += 1;
+    return feature.handleUpdate({ update_id: updateId, message: {
+      message_id: updateId, chat: { id: userId, type: 'private' }, from: { id: userId, language_code: 'en' }, ...content,
+    } }, client, bot.id);
+  };
+  for (const content of [
+    { text: 'hello' },
+    { photo: [{ file_id: 'photo' }], caption: 'edit this' },
+    { text: 'edit this', reply_to_message: { photo: [{ file_id: 'photo' }] } },
+    { sticker: { file_id: 'sticker' } },
+    { video: { file_id: 'video' } },
+    { document: { file_id: 'pdf', file_name: 'file.pdf', mime_type: 'application/pdf' } },
+    { text: '/unknown' },
+  ]) await send(content);
+  assert.deepEqual(sent, []);
+  assert.equal(db.prepare('SELECT next_update_id FROM telegram_bot_state WHERE telegram_bot_id=?').get(bot.id).next_update_id, updateId + 1);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM telegram_image_generation_jobs').get().n, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM telegram_transcription_jobs').get().n, 0);
+
+  await send({ voice: { file_id: 'voice', file_size: 100 } });
+  await send({ audio: { file_id: 'audio', mime_type: 'audio/mpeg', file_size: 100 } });
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM telegram_transcription_jobs').get().n, 2);
+  await send({ voice: { file_id: 'too-large', file_size: 30 * 1024 * 1024 } });
+  assert.match(sent.pop(), /too large/i);
+  await send({ voice: { file_id: 'unauthorized', file_size: 100 } }, 888);
+  assert.match(sent.pop(), /not allowed/i);
+  await send({ text: '/start' });
+  assert.match(sent.pop(), /Telegram ID: 777/);
+  await send({ text: '/help' });
+  assert.match(sent.pop(), /voice message/i);
+
+  updateBot(db, bot.id, { ignore_unsupported_messages: false }, 'secret');
+  await send({ text: 'hello' });
+  assert.match(sent.pop(), /Image generation is currently disabled/);
+  await send({ sticker: { file_id: 'sticker' } });
+  assert.match(sent.pop(), /supported audio file/);
+});
+
+test('Telegram quiet mode follows each bot capability including conversation memory', async (t) => {
+  const db = createDb();
+  t.after(() => db.close());
+  const universal = { id: 92, name: 'Universal', provider: 'openai', enabled: true,
+    provider_enabled: true, allow_image_generate: true, allow_image_edit: true };
+  const bot = createBot(db, {
+    name: 'Images', ignore_unsupported_messages: true, image_generation_enabled: true,
+    image_bot_id: 91, universal_bot_id: 92, allowed_user_ids: ['777'],
+  }, 'secret');
+  const feature = createTelegramTranscriptionFeature({
+    app: fakeApp(), db, secret: 'secret', getAiBotFeature: () => ({
+      listTelegramImageBots: () => [{ id: 91, name: 'Painter', allow_image_generate: true }],
+      listTelegramUniversalBots: () => [universal], getTelegramUniversalBotSnapshot: () => universal,
+    }),
+  });
+  feature.stop();
+  const sent = [];
+  let updateId = 0;
+  const send = (content) => feature.handleUpdate({ update_id: ++updateId, message: {
+    message_id: updateId, chat: { id: 777, type: 'private' }, from: { id: 777, language_code: 'en' }, ...content,
+  } }, { sendMessage: async (_id, text) => { sent.push(text); return { message_id: 99 }; } }, bot.id);
+  await send({ voice: { file_id: 'voice' } });
+  await send({ photo: [{ file_id: 'photo' }], caption: 'edit' });
+  assert.deepEqual(sent, []);
+  await send({ text: 'Draw a cat' });
+  assert.equal(db.prepare('SELECT operation_kind FROM telegram_image_generation_jobs').get().operation_kind, 'image_generate');
+  db.prepare('DELETE FROM telegram_image_generation_jobs').run();
+  updateBot(db, bot.id, { image_generation_enabled: false, universal_enabled: true }, 'secret');
+  await send({ text: 'no text capability yet' });
+  assert.deepEqual(sent, []);
+  await send({ photo: [{ file_id: 'photo' }] });
+  assert.match(sent.pop(), /instruction/);
+  await send({ photo: [{ file_id: 'photo' }], caption: 'make it blue' });
+  assert.equal(db.prepare('SELECT operation_kind FROM telegram_image_generation_jobs').get().operation_kind, 'universal_edit');
+  db.prepare('DELETE FROM telegram_image_generation_jobs').run();
+  updateBot(db, bot.id, { memory_enabled: true }, 'secret');
+  await send({ text: 'Remember my name' });
+  assert.equal(db.prepare('SELECT operation_kind FROM telegram_image_generation_jobs').get().operation_kind, 'conversation');
+});
+
+test('Telegram quiet setting migrates existing bots with legacy behavior and normalizes persisted values', (t) => {
+  const db = createDb();
+  t.after(() => db.close());
+  const bot = createBot(db, { name: 'Existing bot' }, 'secret');
+  db.exec('ALTER TABLE telegram_bots DROP COLUMN ignore_unsupported_messages');
+  initTelegramTranscriptionSchema(db);
+  assert.equal(readBot(db, bot.id).ignore_unsupported_messages, false);
+  assert.equal(updateBot(db, bot.id, { ignore_unsupported_messages: 'true' }, 'secret').ignore_unsupported_messages, true);
+  initTelegramTranscriptionSchema(db);
+  assert.equal(readBot(db, bot.id).ignore_unsupported_messages, true);
+  assert.equal(updateBot(db, bot.id, { ignore_unsupported_messages: 'false' }, 'secret').ignore_unsupported_messages, false);
+});
 
 test('Telegram settings encrypt token, normalize allowlist, and keep provider profile independent', () => {
   const db = createDb();

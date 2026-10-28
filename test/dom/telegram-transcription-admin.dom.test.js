@@ -119,6 +119,14 @@ test('Telegram bots admin edits capabilities and creates a second independent bo
   assert.equal(dom.window.document.querySelectorAll('[data-telegram-bot-id]').length, 1);
   assert.equal(dom.window.document.getElementById('telegramBotName').value, 'Telegram bot 1');
   dom.window.document.getElementById('telegramBotAllowlist').value = '777\n888';
+  const groupToggle = dom.window.document.getElementById('telegramBotGroupTranscription');
+  assert.equal(groupToggle.checked, false);
+  assert.equal(groupToggle.disabled, false);
+  groupToggle.checked = true;
+  const quietToggle = dom.window.document.getElementById('telegramBotIgnoreUnsupported');
+  assert.equal(quietToggle.checked, false);
+  assert.equal(quietToggle.disabled, false);
+  quietToggle.checked = true;
   dom.window.document.getElementById('telegramBotImageEnabled').checked = true;
   dom.window.document.getElementById('telegramBotImageEnabled').dispatchEvent(new dom.window.Event('change'));
   const chainedToggle = dom.window.document.getElementById('telegramBotTranscriptImageToggle');
@@ -128,6 +136,15 @@ test('Telegram bots admin edits capabilities and creates a second independent bo
   dom.window.document.getElementById('telegramBotUniversalEnabled').checked = true;
   dom.window.document.getElementById('telegramBotUniversalEnabled').dispatchEvent(new dom.window.Event('change'));
   dom.window.document.getElementById('telegramBotUniversalBot').value = '27';
+  const memoryToggle = dom.window.document.getElementById('telegramBotMemoryEnabled');
+  const memoryLimit = dom.window.document.getElementById('telegramBotMemoryLimit');
+  assert.equal(memoryToggle.checked, false);
+  assert.equal(memoryLimit.value, '50');
+  assert.equal(memoryLimit.disabled, true);
+  memoryToggle.checked = true;
+  memoryToggle.dispatchEvent(new dom.window.Event('change'));
+  assert.equal(memoryLimit.disabled, false);
+  memoryLimit.value = '60';
   assert.match(dom.window.document.getElementById('telegramBotUniversalReadiness').textContent, /openai/i);
   dom.window.document.getElementById('telegramBotTestUniversal').click();
   await tick(10);
@@ -137,10 +154,17 @@ test('Telegram bots admin edits capabilities and creates a second independent bo
   const update = calls.find((call) => call.url === '/api/admin/telegram-bots/1' && call.options.method === 'PUT');
   assert.ok(update);
   assert.equal(update.options.body.image_generation_enabled, true);
+  assert.equal(update.options.body.group_transcription_enabled, true);
+  assert.equal(dom.window.document.getElementById('telegramBotGroupTranscription').checked, true);
   assert.equal(update.options.body.generate_image_from_transcription, true);
   assert.equal(update.options.body.image_bot_id, 17);
   assert.equal(update.options.body.universal_enabled, true);
   assert.equal(update.options.body.universal_bot_id, 27);
+  assert.equal(update.options.body.memory_enabled, true);
+  assert.equal(update.options.body.ignore_unsupported_messages, true);
+  assert.equal(dom.window.document.getElementById('telegramBotIgnoreUnsupported').checked, true);
+  assert.equal(update.options.body.memory_message_limit, 60);
+  assert.equal(dom.window.document.getElementById('telegramBotMemoryLimit').value, '60');
   assert.match(update.options.body.allowed_user_ids, /888/);
   assert.ok(calls.some((call) => call.url === '/api/admin/telegram-bots/test-universal'));
 

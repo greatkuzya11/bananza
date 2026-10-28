@@ -47,6 +47,7 @@
       const preserveAnchor = isActiveChat ? actions.captureScrollAnchor?.() : null;
       const el = messagesEl?.querySelector?.(`[data-msg-id="${msgId}"]`);
       if (!el) {
+        updateVisibleReplyQuotesFromMessage({ id: msgId, chat_id: targetChatId, is_deleted: true, text: 'Message deleted' });
         if (deletedAnchorWasSaved && targetChatId) actions.deleteScrollAnchor?.(targetChatId);
         console.warn('[markDeleted] element not found for', msgId);
         return;
@@ -155,6 +156,16 @@
       actions.updateReplyBarFromMessage?.(msg, text);
       messagesEl?.querySelectorAll?.(`.msg-reply[data-reply-id="${msg.id}"] .msg-reply-text`).forEach((el) => {
         el.textContent = text;
+        const quote = el.closest('.msg-reply');
+        const files = root.attachments?.getMessageAttachments(msg) || [];
+        quote.querySelector('.quote-attachments')?.remove();
+        quote.insertAdjacentHTML('afterbegin', root.attachments?.renderAttachmentThumbnails(files) || '');
+        const row = quote.closest('.msg-row');
+        if (row?.__messageData) {
+          row.__messageData.reply_attachments = files;
+          row.__messageData.reply_text = text;
+          try { messageCache?.upsertMessage?.(row.__messageData).catch(() => {}); } catch (error) {}
+        }
       });
     }
 

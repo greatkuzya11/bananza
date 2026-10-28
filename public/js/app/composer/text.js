@@ -261,6 +261,9 @@
         msgInputMeasureMirror.setAttribute('aria-hidden', 'true');
         msgInputMeasureMirror.tabIndex = -1;
         msgInputMeasureMirror.rows = 1;
+        // Computed font metrics already include mobile text scaling.
+        msgInputMeasureMirror.style.setProperty('-webkit-text-size-adjust', '100%', 'important');
+        msgInputMeasureMirror.style.setProperty('text-size-adjust', '100%', 'important');
         Object.assign(msgInputMeasureMirror.style, {
           position: 'fixed',
           left: '-9999px',

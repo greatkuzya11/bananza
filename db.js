@@ -994,6 +994,7 @@ try {
   `);
 }
 
+require('./messageAttachments').initMessageAttachmentsSchema(db);
 initVoiceSchema(db);
 initVideoNoteSchema(db);
 initCallSchema(db);

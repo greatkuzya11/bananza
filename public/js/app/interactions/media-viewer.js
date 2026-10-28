@@ -97,6 +97,8 @@ const ivTouchState = {
   currentY: 0,
   dx: 0,
   dragging: false,
+  dismissDragging: false,
+  canDismiss: false,
   tapCandidate: false,
   canTapZoom: false,
   panBaseX: 0,
@@ -130,7 +132,7 @@ function normalizeGallerySrc(src) {
 
 function galleryItemKey(item) {
   const id = Number(item?.id || 0);
-  if (id) return `${Number(item.chatId || gallerySourceChatId || currentChatId || 0)}:${id}:${item.type}`;
+  if (id) return `${Number(item.chatId || gallerySourceChatId || currentChatId || 0)}:${id}:${item.fileId || item.type}`;
   return `${item?.type || ''}:${normalizeGallerySrc(item?.src || '')}`;
 }
 
@@ -144,6 +146,7 @@ function galleryItemFromMessage(msg, fallbackSrc = '', fallbackPoster = '') {
   if (!type || !src) return null;
   return {
     id: Number(msg.id || 0),
+    fileId: msg.file_id || null,
     chatId: Number(msg.chat_id || msg.chatId || currentChatId || 0),
     src,
     type,
@@ -155,11 +158,27 @@ function galleryItemFromMessage(msg, fallbackSrc = '', fallbackPoster = '') {
   };
 }
 
+function galleryMessages(msg) {
+  if (msg?.is_video_note || msg?.is_deleted) return [];
+  return msg?.attachments?.length ? msg.attachments.map(file => ({ ...msg, ...file })) : [msg];
+}
+
 function collectGalleryItems() {
   const items = [];
   const seen = new Set();
+  messagesEl.querySelectorAll('.msg-row').forEach(row => {
+    const message = row.__messageData;
+    if (!message?.attachments?.length) return;
+    for (const source of galleryMessages(message)) {
+      const item = galleryItemFromMessage(source);
+      if (!item) continue;
+      const key = galleryItemKey(item);
+      if (!seen.has(key)) { seen.add(key); items.push(item); }
+    }
+  });
   messagesEl.querySelectorAll('.msg-image, .msg-video video').forEach(el => {
     const row = el.closest('.msg-row');
+    if (row?.__messageData?.attachments?.length) return;
     const isImage = el.tagName === 'IMG';
     const source = isImage
       ? (el.currentSrc || el.src || el.getAttribute('src') || '')
@@ -179,7 +198,7 @@ function collectGalleryItems() {
     seen.add(key);
     items.push(item);
   });
-  galleryItems = items;
+  galleryItems = items.sort((a, b) => a.id && b.id ? a.id - b.id : 0);
 }
 
 function ivCurrentImg() {
@@ -210,6 +229,8 @@ function clearImageViewerActiveTouch() {
   ivTouchState.currentY = 0;
   ivTouchState.dx = 0;
   ivTouchState.dragging = false;
+  ivTouchState.dismissDragging = false;
+  ivTouchState.canDismiss = false;
   ivTouchState.tapCandidate = false;
   ivTouchState.canTapZoom = false;
   ivTouchState.panBaseX = 0;
@@ -482,7 +503,7 @@ function setGalleryLoading(direction, value) {
 function appendGalleryMedia(direction, media = []) {
   const existing = new Set(galleryItems.map(galleryItemKey));
   const nextItems = [];
-  for (const msg of media) {
+  for (const msg of media.flatMap(galleryMessages)) {
     const item = galleryItemFromMessage(msg);
     const key = galleryItemKey(item);
     if (!item || existing.has(key)) continue;
@@ -836,6 +857,12 @@ async function galleryNav(dir) {
 function bindEvents() {
   if (bindEvents.__bound) return;
   bindEvents.__bound = true;
+  // A fresh gesture after dismissal is intentional, not its compatibility click.
+  const allowNewGestureAfterClose = () => {
+    if (imageViewer.classList.contains('hidden')) mediaViewerFollowupClickSuppressUntil = 0;
+  };
+  document.addEventListener('pointerdown', allowNewGestureAfterClose, true);
+  document.addEventListener('touchstart', allowNewGestureAfterClose, { capture: true, passive: true });
     // Media viewer close  
     imageViewer.addEventListener('pointerup', (e) => {  
       handleMediaViewerControlActivation(e);  
@@ -874,14 +901,14 @@ function bindEvents() {
     
     messagesEl.addEventListener('pointerdown', (e) => {  
       const avatar = e.target.closest('.msg-group-avatar');  
-      if (!avatar || !messagesEl.contains(avatar) || !isGroupLikeCurrentChat()) return;  
+      if (!avatar || !messagesEl.contains(avatar)) return;
       e.preventDefault();  
       e.stopPropagation();  
       openAvatarUserMenu(avatar);  
     }, { passive: false });  
     messagesEl.addEventListener('keydown', (e) => {  
       const avatar = e.target.closest('.msg-group-avatar');  
-      if (!avatar || !isGroupLikeCurrentChat() || (e.key !== 'Enter' && e.key !== ' ')) return;  
+      if (!avatar || !messagesEl.contains(avatar) || (e.key !== 'Enter' && e.key !== ' ')) return;
       e.preventDefault();  
       openAvatarUserMenu(avatar);  
     });  
@@ -895,7 +922,8 @@ function bindEvents() {
         const isImageSlideTouch = Boolean(touchedSlide && !touchedSlide.classList.contains('iv-slide-video'));  
         const canImageZoomTouch = isImageSlideTouch && galleryItems[galleryIndex]?.type !== 'video';  
         if (e.touches.length === 2) {  
-          clearImageViewerActiveTouch();  
+          if (ivTouchState.dismissDragging) setGalleryStripPosition(false);
+          clearImageViewerActiveTouch();
           clearImageViewerLastTap();  
           if (canImageZoomTouch) {  
             ivClearZoomTransition();  
@@ -932,7 +960,13 @@ function bindEvents() {
         ivTouchState.dx = 0;  
         ivTouchState.dragging = false;  
         ivTouchState.tapCandidate = true;  
-        ivTouchState.canTapZoom = canImageZoomTouch;  
+        ivTouchState.canTapZoom = canImageZoomTouch;
+        ivTouchState.dismissDragging = false;
+        ivTouchState.canDismiss = ivScale === 1;
+        const touchedVideo = e.target.closest('video');
+        if (touchedVideo?.controls && ty >= touchedVideo.getBoundingClientRect().bottom - 52) {
+          ivTouchState.canDismiss = false;
+        }
         ivTouchState.panBaseX = ivPanX;  
         ivTouchState.panBaseY = ivPanY;  
         ivTouchState.pinching = false;  
@@ -980,7 +1014,17 @@ function bindEvents() {
           e.preventDefault();  
           return;  
         }  
-        ivTouchState.dx = moveX;  
+        ivTouchState.dx = moveX;
+        if (!ivTouchState.dragging && !ivTouchState.dismissDragging && ivTouchState.canDismiss
+          && moveY > IMAGE_VIEWER_SWIPE_START_PX && moveY > Math.abs(moveX) * 1.2) {
+          ivTouchState.dismissDragging = true;
+        }
+        if (ivTouchState.dismissDragging) {
+          ivTouchState.tapCandidate = false;
+          ivStrip.style.transform = `translate(${-galleryIndex * window.innerWidth}px, ${Math.max(0, moveY)}px)`;
+          e.preventDefault();
+          return;
+        }
         if (!ivTouchState.dragging && Math.abs(moveX) > Math.abs(moveY) && Math.abs(moveX) > IMAGE_VIEWER_SWIPE_START_PX) {  
           ivTouchState.dragging = true;  
         }  
@@ -1012,7 +1056,9 @@ function bindEvents() {
               ivTouchState.dx = 0;  
               ivTouchState.dragging = false;  
               ivTouchState.tapCandidate = false;  
-              ivTouchState.canTapZoom = false;  
+              ivTouchState.canTapZoom = false;
+              ivTouchState.dismissDragging = false;
+              ivTouchState.canDismiss = false;
               ivTouchState.panBaseX = ivPanX;  
               ivTouchState.panBaseY = ivPanY;  
               clearImageViewerLastTap();  
@@ -1030,14 +1076,29 @@ function bindEvents() {
         }  
         const endX = touch.clientX;  
         const endY = touch.clientY;  
-        const wasDragging = ivTouchState.dragging;  
+        const wasDragging = ivTouchState.dragging;
+        const wasDismissDragging = ivTouchState.dismissDragging;
         const wasTapCandidate = ivTouchState.tapCandidate;  
         const canTapZoom = ivTouchState.canTapZoom;  
         const travelX = endX - ivTouchState.startX;  
         const travelY = endY - ivTouchState.startY;  
         const dragDistance = Math.hypot(travelX, travelY);  
         const dragDx = ivTouchState.dx;  
-        clearImageViewerActiveTouch();  
+        clearImageViewerActiveTouch();
+        if (wasDismissDragging && ivScale === 1) {
+          e.preventDefault();
+          e.stopPropagation();
+          clearImageViewerLastTap();
+          mediaViewerSuppressClickUntil = Math.max(mediaViewerSuppressClickUntil, Date.now() + 450);
+          const threshold = Math.max(72, Math.min(120, window.innerHeight * 0.12));
+          if (travelY >= threshold && travelY > Math.abs(travelX) * 1.2) {
+            suppressMediaViewerFollowupClick();
+            closeMediaViewer();
+          } else {
+            setGalleryStripPosition(true);
+          }
+          return;
+        }
     
         if (wasTapCandidate && dragDistance <= IMAGE_VIEWER_TAP_MAX_DRIFT_PX) {
           showImageViewerClose();

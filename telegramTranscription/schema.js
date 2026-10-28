@@ -288,6 +288,34 @@ function initTelegramTranscriptionSchema(db) {
 
     createBotsTable(db);
     createStateTable(db);
+    for (const [column, definition] of [
+      ['group_transcription_enabled', 'INTEGER NOT NULL DEFAULT 0'],
+      ['ignore_unsupported_messages', 'INTEGER NOT NULL DEFAULT 0'],
+      ['memory_enabled', 'INTEGER NOT NULL DEFAULT 0'],
+      ['memory_message_limit', 'INTEGER NOT NULL DEFAULT 50'],
+      ['memory_revision', 'INTEGER NOT NULL DEFAULT 0'],
+    ]) {
+      if (!columnExists(db, 'telegram_bots', column)) {
+        db.exec(`ALTER TABLE telegram_bots ADD COLUMN ${column} ${definition};`);
+      }
+    }
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS telegram_conversation_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telegram_bot_id INTEGER NOT NULL REFERENCES telegram_bots(id) ON DELETE CASCADE,
+        telegram_chat_id TEXT NOT NULL,
+        telegram_user_id TEXT NOT NULL,
+        update_id INTEGER NOT NULL,
+        role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+        text TEXT NOT NULL DEFAULT '',
+        image_data BLOB,
+        image_mime_type TEXT,
+        image_file_name TEXT,
+        UNIQUE(telegram_bot_id, telegram_chat_id, telegram_user_id, update_id, role)
+      );
+      CREATE INDEX IF NOT EXISTS idx_telegram_conversation_scope
+        ON telegram_conversation_messages(telegram_bot_id, telegram_chat_id, telegram_user_id, update_id, id);
+    `);
 
     let legacyBotId = null;
     const existingBot = db.prepare('SELECT id FROM telegram_bots ORDER BY id ASC LIMIT 1').get();
@@ -301,6 +329,12 @@ function initTelegramTranscriptionSchema(db) {
     rebuildImageJobs(db, legacyBotId);
     createTranscriptionJobsTable(db);
     createImageJobsTable(db);
+    if (!columnExists(db, 'telegram_transcription_jobs', 'telegram_message_thread_id')) {
+      db.exec('ALTER TABLE telegram_transcription_jobs ADD COLUMN telegram_message_thread_id INTEGER DEFAULT NULL;');
+    }
+    if (!columnExists(db, 'telegram_image_generation_jobs', 'response_text')) {
+      db.exec('ALTER TABLE telegram_image_generation_jobs ADD COLUMN response_text TEXT DEFAULT NULL;');
+    }
     if (!columnExists(db, 'telegram_image_generation_jobs', 'image_bot_profile_json')) {
       db.exec("ALTER TABLE telegram_image_generation_jobs ADD COLUMN image_bot_profile_json TEXT NOT NULL DEFAULT '{}';");
     }

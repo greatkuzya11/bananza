@@ -73,7 +73,7 @@
     function getAttachmentPosterBackfillKey(source) {
       if (!source || typeof source !== 'object') return '';
       const messageId = Number(source.id || 0);
-      if (messageId > 0) return `message:${messageId}`;
+      if (messageId > 0) return `message:${messageId}:${source.file_id || 0}`;
       const storedName = String(source.file_stored || source.stored_name || source.storedName || '').trim();
       return storedName ? `file:${storedName}` : '';
     }
@@ -106,15 +106,17 @@
 
           const formData = new FormData();
           formData.append('poster', posterBlob, 'video-poster.jpg');
+          if (source.file_id) formData.append('fileId', String(source.file_id));
           const response = await api(`/api/messages/${Number(source.id || 0)}/poster`, {
             method: 'POST',
             body: formData,
           });
           const updatedMessage = response?.message || null;
           if (updatedMessage && typeof source === 'object') {
-            Object.assign(source, updatedMessage);
+            const updatedFile = updatedMessage.attachments?.find(file => file.file_id === source.file_id);
+            Object.assign(source, updatedMessage, updatedFile || {});
             actions.applyMessageUpdate?.(updatedMessage);
-            return getAttachmentPosterUrl(updatedMessage);
+            return getAttachmentPosterUrl(source);
           }
           markAttachmentPosterAvailable(source);
           return getStoredAttachmentPosterUrl(source.file_stored || source.stored_name || source.storedName || '');
@@ -136,7 +138,8 @@
       try {
         const chatId = Number(source.chat_id || source.chatId || 0);
         if (chatId && source.id && messageCache.patchMessage) {
-          messageCache.patchMessage(chatId, source.id, { file_poster_available: true }).catch(noop);
+          messageCache.patchMessage(chatId, source.id, source.attachments?.length
+            ? { attachments: source.attachments } : { file_poster_available: true }).catch(noop);
         }
       } catch (e) {}
       return posterUrl;
@@ -165,12 +168,13 @@
           <div style="font-size:11px;color:var(--text-secondary);margin-top:4px">${esc(msg.file_name)} &middot; ${formatSize(msg.file_size)} &middot; <a href="${downloadUrl}" download="${esc(msg.file_name)}">Download</a></div>
         </div>`;
         default:
-          return `<a class="msg-file" href="${downloadUrl}" download="${esc(msg.file_name)}">
-          <div class="msg-file-icon">&#128196;</div>
+          return `<a class="msg-file" href="${downloadUrl}" download="${esc(msg.file_name)}" title="${esc(window.BananzaI18n?.t('Download') || 'Download')}">
+          <div class="msg-file-icon">${esc((msg.file_name || '').split('.').pop().slice(0, 6).toUpperCase())}</div>
           <div class="msg-file-info">
             <div class="msg-file-name">${esc(msg.file_name)}</div>
             <div class="msg-file-size">${formatSize(msg.file_size)}</div>
           </div>
+          <span class="msg-file-download" aria-hidden="true">&#8595;</span>
         </a>`;
       }
     }
@@ -178,7 +182,29 @@
     function renderFileAttachment(msg) {
       const customVideoNoteAttachment = window.BananzaVideoNoteHooks?.renderAttachment?.(msg);
       if (customVideoNoteAttachment) return customVideoNoteAttachment;
-      return renderResolvedFileAttachment(msg);
+      const files = Array.isArray(msg.attachments) ? msg.attachments : [];
+      if (files.length <= 1) return renderResolvedFileAttachment(msg);
+      const t = (key, params) => window.BananzaI18n?.t(key, params) || key;
+      const media = files.map((file, index) => ({ file, index })).filter(({ file }) => ['image', 'video'].includes(file.file_type));
+      const documents = files.filter(file => !['image', 'video'].includes(file.file_type));
+      let html = '';
+      if (media.length) {
+        html += `<div class="msg-album msg-album-${Math.min(media.length, 4)}">`;
+        media.forEach(({ file, index }, tileIndex) => {
+          const src = file.file_type === 'video' ? getAttachmentPosterUrl(file) : getAttachmentPreviewUrl(file);
+          const remaining = tileIndex === 3 ? media.length - 4 : 0;
+          const label = remaining > 0 ? t('Show {count} more attachments', { count: remaining }) : file.file_name;
+          html += `<button type="button" class="msg-album-tile" data-attachment-index="${index}" aria-label="${esc(label)}"${tileIndex >= 4 ? ' hidden' : ''}${remaining > 0 ? ' aria-expanded="false"' : ''}>
+            ${src ? `<img class="msg-album-thumb" src="${esc(src)}" alt="${esc(file.file_name)}" loading="lazy">` : `<span class="msg-album-fallback">${esc(file.file_name)}</span>`}
+            ${file.file_type === 'video' ? '<span class="msg-album-play" aria-hidden="true">&#9654;</span>' : ''}
+            ${remaining > 0 ? `<span class="msg-album-more" aria-hidden="true"><span>+${remaining}</span><span class="msg-album-more-label">${esc(t('Show all'))}</span></span>` : ''}
+          </button>`;
+        });
+        html += '</div>';
+        if (media.length > 4) html += `<button type="button" class="msg-album-collapse" hidden>${esc(t('Collapse album'))}</button>`;
+      }
+      if (documents.length) html += `<div class="msg-file-list">${documents.map(file => `<div data-attachment-index="${files.indexOf(file)}">${renderResolvedFileAttachment(file)}</div>`).join('')}</div>`;
+      return html;
     }
 
     function renderLinkPreview(p) {

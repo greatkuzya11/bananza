@@ -49,6 +49,8 @@
     let recentEmojis = [];
     let recentEmojiLoadPromise = null;
     let emojiPickerInitialized = false;
+    let emojiTabsDrag = null;
+    let suppressEmojiTabsClick = false;
     const recentEmojiServerRejected = new Set();
     const recentEmojiServerSynced = new Set();
     const recentEmojiServerSyncing = new Set();
@@ -338,6 +340,16 @@
       return true;
     }
 
+    function finishEmojiTabsDrag() {
+      const drag = emojiTabsDrag;
+      if (!drag) return;
+      emojiTabsDrag = null;
+      drag.tabs.classList.remove('is-dragging');
+      if (drag.target.hasPointerCapture(drag.pointerId)) {
+        drag.target.releasePointerCapture(drag.pointerId);
+      }
+    }
+
     function initEmojiPicker(options = {}) {
       const force = Boolean(objectOrDefault(options).force);
       const emojiPicker = dom.emojiPicker;
@@ -346,6 +358,7 @@
         syncEmojiPickerButton();
         return true;
       }
+      finishEmojiTabsDrag();
       const cats = getEmojiPickerCategories();
       let html = '<div class="emoji-tabs">';
       cats.forEach((cat, index) => {
@@ -396,8 +409,43 @@
       };
 
       emojiPicker.addEventListener('pointerdown', (event) => {
+        finishEmojiTabsDrag();
+        suppressEmojiTabsClick = false;
         keepEmojiPickerInteractionFromBlurringInput(event);
         event.stopPropagation();
+        if (event.pointerType !== 'mouse' || event.button !== 0) return;
+        const tabs = event.target instanceof win.Element ? event.target.closest('.emoji-tabs') : null;
+        if (!tabs || tabs.scrollWidth <= tabs.clientWidth) return;
+        emojiTabsDrag = {
+          tabs,
+          target: event.target,
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          scrollLeft: tabs.scrollLeft,
+          moved: false,
+        };
+        event.target.setPointerCapture(event.pointerId);
+      });
+      emojiPicker.addEventListener('pointermove', (event) => {
+        const drag = emojiTabsDrag;
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        if (!(event.buttons & 1)) {
+          finishEmojiTabsDrag();
+          return;
+        }
+        const distance = event.clientX - drag.startX;
+        if (!drag.moved && Math.abs(distance) < 5) return;
+        drag.moved = true;
+        suppressEmojiTabsClick = true;
+        drag.tabs.classList.add('is-dragging');
+        drag.tabs.scrollLeft = drag.scrollLeft - distance;
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((type) => {
+        emojiPicker.addEventListener(type, (event) => {
+          if (emojiTabsDrag?.pointerId === event.pointerId) finishEmojiTabsDrag();
+        });
       });
       emojiPicker.addEventListener('touchstart', (event) => {
         event.stopPropagation();
@@ -411,8 +459,26 @@
         event.stopPropagation();
       });
 
+      emojiPicker.addEventListener('wheel', (event) => {
+        if (event.ctrlKey || event.defaultPrevented) return;
+        const tabs = event.target instanceof win.Element ? event.target.closest('.emoji-tabs') : null;
+        if (!tabs || tabs.scrollWidth <= tabs.clientWidth) return;
+        // Map a mouse wheel to the horizontal strip, preserving trackpad direction.
+        const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+        if (!delta) return;
+        const unit = event.deltaMode === 1 ? 16 : (event.deltaMode === 2 ? tabs.clientWidth : 1);
+        tabs.scrollLeft += delta * unit;
+        event.preventDefault();
+        event.stopPropagation();
+      }, { passive: false });
+
       emojiPicker.addEventListener('click', (event) => {
         event.stopPropagation();
+        if (suppressEmojiTabsClick && event.detail !== 0) {
+          suppressEmojiTabsClick = false;
+          event.preventDefault();
+          return;
+        }
         const tab = event.target.closest('.emoji-tab');
         if (tab) {
           setEmojiPickerCategory(tab.dataset.cat || '');
@@ -531,6 +597,7 @@
     }
 
     function closeEmojiPicker({ immediate = false } = {}) {
+      finishEmojiTabsDrag();
       state.emojiPickerOpen = false;
       clearEmojiPickerKeyboardOpenStabilizer();
       syncEmojiPickerButton();

@@ -775,6 +775,7 @@
       row.__messageData = { ...msg };
       markPendingMediaBottomScroll(row, msg, Boolean(options.mediaAutoScrollToBottom));
       row.__replyPayload = {
+        attachments: root.attachments?.getMessageAttachments(msg) || [],
         id: msg.id,
         display_name: isOwn ? getCurrentUser().display_name : msg.display_name,
         text: getReplyPreviewText(msg),
@@ -831,6 +832,7 @@
         if (msg.reply_to_id && msg.reply_display_name) {
           const replyText = getReplyQuoteText(msg);
           html += `<div class="msg-reply" data-reply-id="${msg.reply_to_id}">
+            ${root.attachments?.renderAttachmentThumbnails(msg.reply_attachments || []) || ''}
             <div class="msg-reply-name">${esc(msg.reply_display_name)}</div>
             <div class="msg-reply-text">${esc(replyText)}</div>
           </div>`;
@@ -1086,6 +1088,45 @@
         });
       }
     
+      const album = row.querySelector('.msg-album');
+      const albumTiles = [...row.querySelectorAll('.msg-album-tile')];
+      const albumMore = row.querySelector('.msg-album-more');
+      const albumMoreTile = albumMore?.closest('.msg-album-tile');
+      const albumMoreLabel = albumMoreTile?.getAttribute('aria-label');
+      const albumCollapse = row.querySelector('.msg-album-collapse');
+      function setAlbumExpanded(expanded) {
+        const anchor = captureScrollAnchor();
+        album?.classList.toggle('is-expanded', expanded);
+        albumTiles.forEach((tile, index) => { tile.hidden = !expanded && index >= 4; });
+        if (albumMore) albumMore.hidden = expanded;
+        if (albumCollapse) albumCollapse.hidden = !expanded;
+        if (albumMoreTile) {
+          const file = row.__messageData?.attachments?.[Number(albumMoreTile.dataset.attachmentIndex)];
+          albumMoreTile.setAttribute('aria-expanded', String(expanded));
+          albumMoreTile.setAttribute('aria-label', expanded ? file?.file_name || '' : albumMoreLabel);
+        }
+        if (anchor) requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
+      }
+      albumCollapse?.addEventListener('click', event => {
+        event.stopPropagation();
+        setAlbumExpanded(false);
+        albumMoreTile?.focus({ preventScroll: true });
+      });
+      albumTiles.forEach(tile => {
+        tile.addEventListener('click', event => {
+          event.stopPropagation();
+          if (Date.now() < (row.__suppressMediaClickUntil || 0)) return;
+          if (tile === albumMoreTile && !album?.classList.contains('is-expanded')) {
+            setAlbumExpanded(true);
+            return;
+          }
+          const file = row.__messageData?.attachments?.[Number(tile.dataset.attachmentIndex)];
+          if (file) openMediaViewer(attachmentHelpers.getAttachmentPreviewUrl(file), file.file_type);
+        });
+        if (tile.querySelector('img')) tile.querySelector('img').draggable = false;
+        tile.querySelector('img')?.addEventListener('error', event => { event.target.hidden = true; });
+      });
+      if (msg.attachments?.length > 1) row.classList.add('album-message');
       const img = row.querySelector('.msg-image');
       if (img) {
         img.draggable = false;
@@ -1225,6 +1266,31 @@
     function updateRowStatus(row) {
       try {
         const d = row.__messageData || {};
+        let transfer = row.querySelector('.msg-transfer-status');
+        if (d.client_status && d.client_upload?.total) {
+          if (!transfer) {
+            transfer = document.createElement('div');
+            transfer.className = 'msg-transfer-status';
+            transfer.setAttribute('role', 'status');
+            transfer.innerHTML = '<span class="msg-transfer-spinner" aria-hidden="true"></span><span class="msg-transfer-label"></span><progress class="msg-transfer-progress"></progress>';
+            row.querySelector('.msg-bubble')?.prepend(transfer);
+          }
+          const { completed, total } = d.client_upload;
+          const failed = d.client_status === 'failed';
+          const uploading = d.client_status === 'sending' && completed < total;
+          const label = failed ? t('Attachment upload failed')
+            : uploading ? t('Uploading file {current} of {total}', { current: completed + 1, total })
+            : d.client_status === 'queued' ? t('Preparing to send...') : t('Sending message...');
+          transfer.querySelector('.msg-transfer-label').textContent = label;
+          transfer.querySelector('.msg-transfer-spinner').hidden = failed;
+          const progress = transfer.querySelector('progress');
+          progress.hidden = failed;
+          progress.max = total;
+          progress.setAttribute('aria-label', label);
+          if (uploading) progress.value = completed;
+          else progress.removeAttribute('value');
+          transfer.classList.toggle('is-failed', failed);
+        } else if (transfer) transfer.remove();
         const statusEl = row.querySelector('.msg-status');
         if (!statusEl) return;
         if (d.client_status) {

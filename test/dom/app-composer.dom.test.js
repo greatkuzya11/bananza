@@ -135,6 +135,7 @@ function createComposerHarness(options = {}) {
     document: window.document,
     dom: appDom,
     state,
+    getCurrentChatId: () => currentChatId,
     config: {
       MAX_ATTACHMENTS: options.maxAttachments || 3,
       MAX_FILE_SIZE: options.maxFileSize || 1000,
@@ -144,14 +145,14 @@ function createComposerHarness(options = {}) {
     formatSize: root.formatters.formatSize,
     actions: {
       alert: (message) => alerts.push(message),
-      localAttachmentFromFile: async (file) => ({
+      localAttachmentFromFile: options.localAttachmentFromFile || (async (file) => ({
         localId: `local-${file.name}`,
         file,
         name: file.name,
         size: file.size,
         mime: file.type || 'application/octet-stream',
         type: file.type.startsWith('image/') ? 'image' : 'document',
-      }),
+      })),
       refreshPollComposerActionState() {},
       refreshVoiceComposerState() {},
       scheduleMobileViewportRecovery() {},
@@ -488,6 +489,27 @@ test('file controller validates uploads and renders pending files', async (t) =>
   assert.equal(h.appDom.pendingFileEl.classList.contains('hidden'), true);
 });
 
+test('editing replaces an attachment in place at the limit and preserves the original on failure', async (t) => {
+  const h = createComposerHarness({ maxAttachments: 2, maxFileSize: 5, localAttachmentFromFile: async file => {
+    if (file.name === 'broken.txt') throw new Error('Could not read file');
+    return { file, name: file.name, mime: file.type, size: file.size, type: 'document' };
+  } });
+  t.after(() => h.window.close());
+  const makeFile = (name, content = 'ok') => new h.window.File([content], name, { type: 'text/plain' });
+  await h.files.uploadFiles([makeFile('first.txt'), makeFile('second.txt')]);
+  h.state.setEditTo({ id: 1, attachmentsEditable: true });
+  const first = h.state.pendingFiles[0];
+  assert.equal(await h.files.uploadFiles([makeFile('large.txt', '123456')], { replaceFile: first }), false);
+  assert.equal(h.state.pendingFiles[0], first);
+  assert.equal(await h.files.uploadFiles([makeFile('broken.txt')], { replaceFile: first }), false);
+  assert.equal(h.state.pendingFiles[0], first);
+  assert.equal(await h.files.uploadFiles([makeFile('replacement.txt')], { replaceFile: first }), true);
+  assert.deepEqual(Array.from(h.state.pendingFiles, file => file.name), ['replacement.txt', 'second.txt']);
+  assert.deepEqual(Array.from(h.appDom.pendingFileEl.querySelectorAll('.pending-file-name'), el => el.textContent), ['replacement.txt', 'second.txt']);
+  assert.equal(await h.files.uploadFiles([makeFile('stale.txt')], { replaceFile: first }), false);
+  assert.deepEqual(Array.from(h.state.pendingFiles, file => file.name), ['replacement.txt', 'second.txt']);
+});
+
 test('attach menu routes gallery camera and file actions to separate inputs', (t) => {
   const h = createComposerHarness();
   t.after(() => h.window.close());
@@ -648,6 +670,93 @@ test('mention picker opens on @ and inserts mention text', async (t) => {
 
   h.mentions.insertMentionTarget({ token: 'assist', is_ai_bot: true }, h.state.mentionPickerState);
   assert.equal(h.text.getComposerTextValue(), 'hi @assist ');
+});
+
+test('mention picker accepts adjacent text and adds a separator only on selection', async (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+  const input = h.appDom.msgInput;
+
+  for (const prefix of ['', '\u041c\u043c\u043c', 'hello', '\u{1f642}', '(', 'hello ', 'hello\n']) {
+    const suffix = ' remaining text';
+    h.text.setComposerTextValue(`${prefix}@${suffix}`);
+    input.setSelectionRange(prefix.length + 1, prefix.length + 1);
+    await h.mentions.updateMentionPicker();
+    const picker = h.document.getElementById('mentionPicker');
+    assert.equal(isSurfaceOpen(picker), true, JSON.stringify(prefix));
+    assert.equal(picker.querySelectorAll('.mention-picker-item').length, 2);
+    assert.equal(input.value, `${prefix}@${suffix}`);
+
+    h.text.setComposerTextValue(`${prefix}@as${suffix}`);
+    input.setSelectionRange(prefix.length + 3, prefix.length + 3);
+    await h.mentions.updateMentionPicker();
+    assert.equal(isSurfaceOpen(picker), true);
+    assert.equal(picker.querySelectorAll('.mention-picker-item').length, 1);
+    assert.match(picker.textContent, /assist/);
+    assert.equal(input.value, `${prefix}@as${suffix}`);
+
+    h.mentions.handleMentionPickerKeydown(composerKey(h.window, 'Enter'));
+    const beforeCursor = `${prefix}${prefix && !/\s$/.test(prefix) ? ' ' : ''}@assist `;
+    assert.equal(input.value, beforeCursor + suffix);
+    assert.equal(input.selectionStart, beforeCursor.length);
+    assert.equal(input.selectionEnd, beforeCursor.length);
+    assert.equal(isSurfaceOpen(picker), false);
+  }
+});
+
+test('mention button separates the trigger and preserves text outside the selection', async (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+  const input = h.appDom.msgInput;
+  const cases = [
+    { value: 'hello', start: 5, end: 5, expected: 'hello @', cursor: 7 },
+    { value: 'hello world', start: 5, end: 5, expected: 'hello @ world', cursor: 7 },
+    { value: 'helloOLD world', start: 5, end: 8, expected: 'hello @ world', cursor: 7 },
+    { value: 'hello world', start: 6, end: 6, expected: 'hello @world', cursor: 7 },
+    { value: 'hello\nworld', start: 6, end: 6, expected: 'hello\n@world', cursor: 7 },
+    { value: 'world', start: 0, end: 0, expected: '@world', cursor: 1 },
+  ];
+  let inputEvents = 0;
+  input.addEventListener('input', () => { inputEvents += 1; });
+  for (const scenario of cases) {
+    h.mentions.hideMentionPicker();
+    h.text.setComposerTextValue(scenario.value);
+    input.setSelectionRange(scenario.start, scenario.end);
+    const previousEvents = inputEvents;
+    await h.mentions.openMentionPickerFromButton();
+    assert.equal(input.value, scenario.expected);
+    assert.equal(input.selectionStart, scenario.cursor);
+    assert.equal(input.selectionEnd, scenario.cursor);
+    assert.equal(inputEvents, previousEvents + 1);
+    await h.mentions.updateMentionPicker();
+    assert.equal(isSurfaceOpen(h.document.getElementById('mentionPicker')), true);
+  }
+});
+
+test('dismissing adjacent mentions and typing an email preserves the original text', async (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+  const input = h.appDom.msgInput;
+  h.text.setComposerTextValue('user@');
+  input.setSelectionRange(5, 5);
+  await h.mentions.updateMentionPicker();
+  const picker = h.document.getElementById('mentionPicker');
+  assert.equal(isSurfaceOpen(picker), true);
+  h.mentions.handleMentionPickerKeydown(composerKey(h.window, 'Escape'));
+  assert.equal(isSurfaceOpen(picker), false);
+  assert.equal(input.value, 'user@');
+  assert.equal(input.selectionStart, 5);
+
+  const email = 'user@example.com';
+  for (let length = 6; length <= email.length; length += 1) {
+    const value = email.slice(0, length);
+    h.text.setComposerTextValue(value);
+    input.setSelectionRange(length, length);
+    await h.mentions.updateMentionPicker();
+    assert.equal(input.value, value);
+    assert.equal(input.selectionStart, length);
+  }
+  assert.equal(isSurfaceOpen(picker), false);
 });
 
 test('typing sends websocket payload and drop delegates to upload', async (t) => {
@@ -833,4 +942,232 @@ test('full app attach menu opens location picker when maps are enabled', async (
   document.getElementById('attachMenuLocation').click();
   await wait(dom.window, 20);
   assert.equal(document.getElementById('locationPickerModal').classList.contains('hidden'), false);
+});
+
+
+test('attachment selection appends, removes individually and sends one outbox message', async (t) => {
+  const h = createComposerHarness({ maxAttachments: 10 });
+  t.after(() => h.window.close());
+  const revoked = [];
+  let nextUrl = 0;
+  h.window.URL.createObjectURL = () => `blob:preview-${++nextUrl}`;
+  h.window.URL.revokeObjectURL = url => revoked.push(url);
+  h.window.OffscreenCanvas = class {};
+  h.window.Worker = class {
+    postMessage() { h.window.queueMicrotask(() => this.onmessage({ data: { blob: new h.window.Blob(['thumb']) } })); }
+    terminate() {}
+  };
+  const photo = new h.window.File(['image'], 'photo.png', { type: 'image/png' });
+  const doc = new h.window.File(['text'], 'doc.txt', { type: 'text/plain' });
+  await h.files.uploadFiles([photo]);
+  await h.files.uploadFiles([doc]);
+  assert.equal(h.appDom.pendingFileEl.querySelectorAll('.pending-file-card').length, 2);
+  assert.equal(h.appDom.pendingFileEl.querySelectorAll('img').length, 1);
+  h.appDom.pendingFileEl.querySelector('.pending-file-remove').click();
+  assert.equal(h.state.pendingFiles.length, 1);
+  assert.deepEqual(revoked, ['blob:preview-1']);
+  await h.files.uploadFiles([photo]);
+  h.text.setComposerTextValue('Shared caption');
+  await h.send.sendMessage();
+  assert.equal(h.outboxItems.length, 1);
+  assert.equal(h.outboxItems[0].attachments.length, 2);
+  assert.equal(h.outboxItems[0].text, 'Shared caption');
+  assert.equal(h.state.pendingFiles.length, 0);
+  assert.equal(revoked.length, 2);
+});
+
+test('thumbnail workers are serialized and terminated when a selected photo is removed', async (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+  const workers = [];
+  const previewBlobs = [];
+  h.window.URL.createObjectURL = blob => { previewBlobs.push(blob); return 'blob:small-preview'; };
+  h.window.URL.revokeObjectURL = () => {};
+  h.window.OffscreenCanvas = class {};
+  h.window.Worker = class {
+    constructor() { workers.push(this); }
+    postMessage(data) { this.file = data.file; }
+    terminate() { this.terminated = true; }
+  };
+  const photos = ['first.png', 'second.png'].map(name => new h.window.File(['original'], name, { type: 'image/png' }));
+  const pending = h.files.uploadFiles(photos);
+  await wait(h.window, 120);
+  assert.equal(workers.length, 1);
+  assert.equal(workers[0].file, photos[0]);
+  assert.equal(previewBlobs.length, 0);
+  h.appDom.pendingFileEl.querySelector('.pending-file-remove').click();
+  await wait(h.window);
+  assert.equal(workers[0].terminated, true);
+  assert.equal(workers.length, 2);
+  assert.equal(workers[1].file, photos[1]);
+  const thumb = new h.window.Blob(['small']);
+  workers[1].onmessage({ data: { blob: thumb } });
+  await pending;
+  assert.equal(workers[1].terminated, true);
+  assert.deepEqual(previewBlobs, [thumb]);
+  assert.deepEqual(Array.from(h.state.pendingFiles, file => file.name), ['second.png']);
+  assert.equal(h.state.pendingFiles[0].file, photos[1]);
+});
+
+test('clearing pending attachments invalidates queued selection work', async (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+  const task = h.files.uploadFiles([new h.window.File(['x'], 'late.txt', { type: 'text/plain' })]);
+  h.files.clearPendingFile();
+  assert.equal(await task, false);
+  assert.equal(h.state.pendingFiles.length, 0);
+});
+
+test('attachment preparation is visible immediately and blocks sending until every file is ready', async (t) => {
+  const finish = [];
+  const h = createComposerHarness({ localAttachmentFromFile: file => new Promise(resolve => {
+    finish.push(() => resolve({ file, name: file.name, size: file.size, type: 'document' }));
+  }) });
+  t.after(() => h.window.close());
+  const first = h.files.uploadFiles([new h.window.File(['a'], 'first.mp4')]);
+  const second = h.files.uploadFiles([new h.window.File(['b'], 'second.mp4')]);
+  assert.equal(h.appDom.pendingFileEl.querySelectorAll('.pending-file-spinner').length, 2);
+  assert.equal(h.appDom.pendingFileEl.getAttribute('aria-busy'), 'true');
+  assert.equal(h.appDom.sendBtn.disabled, true);
+  h.text.setComposerTextValue('Caption');
+  await h.send.sendMessage();
+  assert.equal(h.outboxItems.length, 0);
+  await wait(h.window, 120);
+  finish[1]();
+  await second;
+  assert.equal(h.appDom.pendingFileEl.querySelectorAll('.pending-file-spinner').length, 1);
+  assert.equal(h.appDom.sendBtn.disabled, true);
+  finish[0]();
+  await first;
+  assert.equal(h.appDom.pendingFileEl.getAttribute('aria-busy'), 'false');
+  assert.equal(h.appDom.sendBtn.disabled, false);
+  await h.send.sendMessage();
+  assert.deepEqual(Array.from(h.outboxItems[0].attachments, file => file.name), ['first.mp4', 'second.mp4']);
+});
+
+test('removing a preparing attachment does not cancel other files or resurrect the removed one', async (t) => {
+  const finish = [];
+  const h = createComposerHarness({ localAttachmentFromFile: file => new Promise(resolve => {
+    finish.push(() => resolve({ file, name: file.name, size: file.size, type: 'document' }));
+  }) });
+  t.after(() => h.window.close());
+  const task = h.files.uploadFiles(['first.mp4', 'second.mp4'].map(name => new h.window.File(['a'], name)));
+  await wait(h.window, 120);
+  h.appDom.pendingFileEl.querySelector('.pending-file-remove').click();
+  finish.forEach(resolve => resolve());
+  await task;
+  assert.deepEqual(Array.from(h.state.pendingFiles, file => file.name), ['second.mp4']);
+  assert.equal(h.files.isPreparingFiles(), false);
+  assert.equal(h.appDom.sendBtn.disabled, false);
+});
+
+test('failed preparation clears the spinner and leaves successful attachments available', async (t) => {
+  const h = createComposerHarness({ localAttachmentFromFile: async file => {
+    if (file.name === 'bad.mp4') throw new Error('Cannot read file');
+    return { file, name: file.name, size: file.size, type: 'document' };
+  } });
+  t.after(() => h.window.close());
+  await h.files.uploadFiles(['good.txt', 'bad.mp4'].map(name => new h.window.File(['a'], name)));
+  assert.equal(h.appDom.pendingFileEl.querySelectorAll('.pending-file-spinner').length, 0);
+  assert.equal(h.appDom.sendBtn.disabled, false);
+  assert.deepEqual(Array.from(h.state.pendingFiles, file => file.name), ['good.txt']);
+  assert.ok(h.alerts.some(message => message.includes('bad.mp4')));
+});
+
+test('opening and cancelling the picker leaves the composer unchanged', async (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+  h.files.bindAttachMenuEvents();
+  await h.files.uploadFiles([new h.window.File(['a'], 'existing.txt')]);
+  const originalPreview = h.appDom.pendingFileEl.innerHTML;
+  const input = h.document.getElementById('fileInputDocs');
+  input.click();
+  assert.equal(h.appDom.pendingFileEl.innerHTML, originalPreview);
+  assert.equal(h.appDom.pendingFileEl.getAttribute('aria-busy'), 'false');
+  assert.equal(h.appDom.sendBtn.disabled, false);
+  assert.equal(h.files.isPreparingFiles(), false);
+  input.dispatchEvent(new h.window.Event('cancel'));
+  assert.equal(h.appDom.pendingFileEl.innerHTML, originalPreview);
+  assert.equal(h.appDom.sendBtn.disabled, false);
+  assert.equal(h.state.pendingFiles[0].name, 'existing.txt');
+});
+
+test('returning from gallery shows receiving feedback before files and change arrive', async (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+  h.files.bindAttachMenuEvents();
+  const input = h.document.getElementById('fileInputGallery');
+  input.click();
+  h.window.dispatchEvent(new h.window.Event('focus'));
+  assert.equal(h.appDom.pendingFileEl.querySelector('.pending-file-spinner'), null);
+  h.window.dispatchEvent(new h.window.Event('blur'));
+  assert.equal(h.appDom.pendingFileEl.querySelector('.pending-file-spinner'), null);
+  h.window.dispatchEvent(new h.window.Event('focus'));
+  assert.equal(input.files.length, 0);
+  assert.equal(h.state.pendingFiles.length, 0);
+  assert.ok(h.appDom.pendingFileEl.querySelector('.pending-file-receiving'));
+  assert.equal(h.files.isPreparingFiles(), true);
+  assert.equal(h.appDom.sendBtn.disabled, true);
+  h.text.setComposerTextValue('Caption');
+  await h.send.sendMessage();
+  assert.equal(h.outboxItems.length, 0);
+  Object.defineProperty(input, 'files', { configurable: true, value: [new h.window.File(['a'], 'arrived.txt')] });
+  input.dispatchEvent(new h.window.Event('change'));
+  await wait(h.window, 750);
+  assert.equal(h.appDom.pendingFileEl.querySelector('.pending-file-receiving'), null);
+  assert.deepEqual(Array.from(h.state.pendingFiles, file => file.name), ['arrived.txt']);
+  assert.equal(h.appDom.sendBtn.disabled, false);
+});
+
+test('returning to a visible page starts receipt and cancelling preserves existing attachments', async (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+  h.files.bindAttachMenuEvents();
+  await h.files.uploadFiles([new h.window.File(['a'], 'existing.txt')]);
+  const input = h.document.getElementById('fileInputDocs');
+  input.click();
+  Object.defineProperty(h.document, 'visibilityState', { configurable: true, value: 'hidden' });
+  h.document.dispatchEvent(new h.window.Event('visibilitychange'));
+  assert.equal(h.appDom.pendingFileEl.querySelector('.pending-file-receiving'), null);
+  Object.defineProperty(h.document, 'visibilityState', { configurable: true, value: 'visible' });
+  h.document.dispatchEvent(new h.window.Event('visibilitychange'));
+  assert.ok(h.appDom.pendingFileEl.querySelector('.pending-file-receiving'));
+  input.dispatchEvent(new h.window.Event('cancel'));
+  assert.equal(h.appDom.pendingFileEl.querySelector('.pending-file-receiving'), null);
+  assert.deepEqual(Array.from(h.state.pendingFiles, file => file.name), ['existing.txt']);
+  assert.equal(h.appDom.sendBtn.disabled, false);
+});
+
+test('cancelling file receipt rejects late file delivery and stale focus events', async (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+  h.files.bindAttachMenuEvents();
+  const input = h.document.getElementById('fileInputGallery');
+  input.click();
+  h.window.dispatchEvent(new h.window.Event('blur'));
+  h.window.dispatchEvent(new h.window.Event('focus'));
+  h.appDom.pendingFileEl.querySelector('.pending-picker-cancel').click();
+  Object.defineProperty(input, 'files', { configurable: true, value: [new h.window.File(['a'], 'late.txt')] });
+  input.dispatchEvent(new h.window.Event('change'));
+  h.window.dispatchEvent(new h.window.Event('focus'));
+  await wait(h.window, 120);
+  assert.equal(h.state.pendingFiles.length, 0);
+  assert.equal(h.appDom.pendingFileEl.classList.contains('hidden'), true);
+  assert.equal(h.appDom.sendBtn.disabled, false);
+});
+
+test('cancelled picker cannot add a late file or move it into another chat', async (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+  h.files.bindAttachMenuEvents();
+  const input = h.document.getElementById('fileInputGallery');
+  input.click();
+  h.files.clearPendingFile();
+  h.setCurrentChatId(2);
+  Object.defineProperty(input, 'files', { configurable: true, value: [new h.window.File(['a'], 'late.txt')] });
+  input.dispatchEvent(new h.window.Event('change'));
+  await wait(h.window, 120);
+  assert.equal(h.state.pendingFiles.length, 0);
+  assert.equal(h.appDom.pendingFileEl.classList.contains('hidden'), true);
+  assert.equal(h.appDom.sendBtn.disabled, false);
 });

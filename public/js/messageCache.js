@@ -634,7 +634,7 @@
     if (!Array.isArray(media) || !cid || !pageCursor || !currentUserId) return false;
     const rows = media
       .map((msg) => normalizeMessage(cid, msg))
-      .filter((msg) => msg && (msg.file_type === 'image' || msg.file_type === 'video'))
+      .filter((msg) => msg && (msg.file_type === 'image' || msg.file_type === 'video' || msg.attachments?.some(file => file.file_type === 'image' || file.file_type === 'video')))
       .sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
     const wroteMessages = rows.length ? await writeWindow(cid, rows, {
       limit,
@@ -678,7 +678,7 @@
         media = await readMessagesByIds(cid, page.messageIds);
       }
       media = media
-        .filter((msg) => msg && (msg.file_type === 'image' || msg.file_type === 'video'))
+        .filter((msg) => msg && (msg.file_type === 'image' || msg.file_type === 'video' || msg.attachments?.some(file => file.file_type === 'image' || file.file_type === 'video')))
         .sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
       return {
         media,

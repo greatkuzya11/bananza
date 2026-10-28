@@ -1,5 +1,8 @@
 const TEXT = {
   ru: {
+    conversationAccepted: 'Сообщение принято, готовлю ответ…',
+    conversationFailed: 'Не удалось обработать сообщение. Попробуйте ещё раз.',
+    memoryHelp: (limit) => `Память включена: последние ${limit} сообщений, включая ответы бота. Можно общаться текстом, присылать картинки и просить изменить изображение из контекста. Для выбора конкретной картинки ответьте на неё.`,
     start: (id) => `BananZa расшифровывает голосовые сообщения и аудиофайлы.\n\nВаш Telegram ID: ${id}\nПередайте его администратору BananZa для добавления в список доступа.`,
     startImage: (id) => `BananZa создаёт изображения по текстовому описанию.\n\nВаш Telegram ID: ${id}\nПередайте его администратору BananZa для добавления в список доступа.`,
     startCombined: (id) => `BananZa расшифровывает аудио и создаёт изображения по текстовому описанию.\n\nВаш Telegram ID: ${id}\nПередайте его администратору BananZa для добавления в список доступа.`,
@@ -48,6 +51,9 @@ const TEXT = {
     contextWarning: 'Контекстный бот не обработал текст, поэтому отправлена исходная расшифровка.',
   },
   en: {
+    conversationAccepted: 'Message received. Preparing a reply…',
+    conversationFailed: 'Could not process the message. Please try again.',
+    memoryHelp: (limit) => `Memory is enabled: the last ${limit} messages, including bot replies. Chat with text, send images and ask to edit an image from context. Reply to a specific image to select it.`,
     start: (id) => `BananZa transcribes voice messages and audio files.\n\nYour Telegram ID: ${id}\nSend it to the BananZa administrator to be added to the access list.`,
     startImage: (id) => `BananZa creates images from text descriptions.\n\nYour Telegram ID: ${id}\nSend it to the BananZa administrator to be added to the access list.`,
     startCombined: (id) => `BananZa transcribes audio and creates images from text descriptions.\n\nYour Telegram ID: ${id}\nSend it to the BananZa administrator to be added to the access list.`,

@@ -131,7 +131,7 @@ async function bootFullApp(options = {}) {
   return dom;
 }
 
-function createOutboxUnitHarness({ replySnapshot = null } = {}) {
+function createOutboxUnitHarness({ replySnapshot = null, apiHandler = null } = {}) {
   const dom = createAppDom();
   loadAppRuntimeScripts(dom);
   const { window } = dom;
@@ -191,7 +191,7 @@ function createOutboxUnitHarness({ replySnapshot = null } = {}) {
     dom: { messagesEl },
     api: async (url, opts = {}) => {
       apiCalls.push({ url, opts });
-      return null;
+      return apiHandler ? apiHandler(url, opts) : null;
     },
     renderer,
     messageState,
@@ -898,4 +898,95 @@ test('full app bridge keeps message methods and open-chat rendering path', async
   assert.equal(typeof BananzaAppBridge.__testing.completeOutboxSend, 'function');
   assert.equal(typeof BananzaAppBridge.__testing.appendMessage, 'function');
   assert.equal(typeof BananzaAppBridge.__testing.applyMessageUpdate, 'function');
+});
+
+
+test('album layout caps tiles while gallery retains every image', async (t) => {
+  const dom = await bootFullApp();
+  t.after(() => dom.window.close());
+  const { document, BananzaAppBridge } = dom.window;
+  BananzaAppBridge.__testing.setChats([{ id: 1, type: 'group', name: 'One' }], { currentChatId: 1 });
+  for (const count of [1, 2, 3, 4, 5, 8, 10]) {
+    const attachments = Array.from({ length: count }, (_, i) => ({ file_id: count * 100 + i,
+      file_type: 'image', file_name: `${count}-${i}.png`, file_stored: `${count}-${i}.png`, file_mime: 'image/png', file_size: 10 }));
+    BananzaAppBridge.__testing.appendMessage({ id: count, chat_id: 1, user_id: 2, display_name: 'Bob',
+      created_at: '2026-05-31T10:00:00Z', ...attachments[0], attachments });
+    const row = document.querySelector(`[data-msg-id="${count}"]`);
+    assert.equal(row.querySelectorAll('.msg-album-tile:not([hidden])').length, count === 1 ? 0 : Math.min(count, 4));
+    if (count > 4) assert.equal(row.querySelector('.msg-album-more > span').textContent, `+${count - 4}`);
+  }
+  const album = document.querySelector('[data-msg-id="8"]');
+  album.querySelector('.msg-album-more').click();
+  assert.equal(album.querySelectorAll('.msg-album-tile:not([hidden])').length, 8);
+  assert.equal(document.querySelector('#imageViewer').classList.contains('hidden'), true);
+  album.querySelectorAll('.msg-album-tile')[4].click();
+  const viewer = BananzaAppBridge.__testing.getMediaViewerState();
+  assert.equal(viewer.galleryItems[viewer.galleryIndex].fileId, 804);
+  document.querySelector('#imageViewer .iv-close').click();
+  album.querySelector('.msg-album-collapse').click();
+  assert.equal(album.querySelectorAll('.msg-album-tile:not([hidden])').length, 4);
+  assert.equal(album.querySelector('[aria-expanded]').getAttribute('aria-expanded'), 'false');
+  document.querySelector('[data-msg-id="10"] .msg-album-tile').click();
+  assert.equal(document.querySelectorAll('#ivStrip .iv-slide').length || document.querySelectorAll('.iv-slide').length, 33);
+});
+
+
+test('album outbox resumes after partial upload and keeps one client id after reload', async (t) => {
+  let uploads = 0;
+  let failSecond = true;
+  const h = createOutboxUnitHarness({ apiHandler: async (url, opts) => {
+    if (url === '/api/upload') {
+      uploads++;
+      if (uploads === 2 && failSecond) throw new Error('network interrupted');
+      return { id: uploads, original_name: `file-${uploads}.txt`, stored_name: `file-${uploads}.txt`, type: 'document' };
+    }
+    return { id: 50, client_id: opts.body.client_id };
+  } });
+  t.after(() => h.window.close());
+  const item = h.outbox.createMessageOutboxItem({ text: 'caption', attachments: [0, 1].map(i => ({
+    localId: `file-${i}`, file: new h.window.Blob(['data']), name: `file-${i}.txt`, type: 'document',
+  })) });
+  await assert.rejects(h.outbox.sendOutboxMessageItem(item), /network interrupted/);
+  assert.equal(item.attachments[0].serverFileId, 1);
+  assert.equal(h.apiCalls.filter(call => call.url.includes('/messages')).length, 0);
+  const restored = { ...item, attachments: item.attachments.map(file => ({ ...file })) };
+  failSecond = false;
+  const sent = await h.outbox.sendOutboxMessageItem(restored);
+  assert.equal(uploads, 3);
+  assert.equal(sent.client_id, item.clientId);
+  assert.deepEqual(Array.from(h.apiCalls.at(-1).opts.body.fileIds), [1, 3]);
+  const legacy = { ...item, attachments: [item.attachments[0]], serverFileId: 9, serverFileMeta: { id: 9 } };
+  delete legacy.attachments[0].serverFileId;
+  await h.outbox.sendOutboxMessageItem(legacy);
+  assert.equal(uploads, 3);
+  assert.deepEqual(Array.from(h.apiCalls.at(-1).opts.body.fileIds), [9]);
+});
+
+test('outbox renders attachment feedback before slow local storage finishes', async (t) => {
+  const h = createOutboxUnitHarness();
+  t.after(() => h.window.close());
+  let finishSaving;
+  h.window.messageCache.upsertOutboxItem = () => new Promise(resolve => { finishSaving = resolve; });
+  const item = h.outbox.createMessageOutboxItem({ attachments: [{
+    file: new h.window.Blob(['data']), name: 'slow.txt', size: 4, type: 'document',
+  }] });
+  const queued = h.outbox.queueOutboxItem(item, { attempt: false });
+  const row = h.messagesEl.querySelector('.msg-row');
+  assert.ok(row, 'the message must be visible while IndexedDB is still saving');
+  assert.equal(row.__messageData.client_upload.total, 1);
+  assert.equal(row.__messageData.client_upload.completed, 0);
+  finishSaving();
+  await queued;
+});
+
+
+test('outbox failure updates the rendered status so retry becomes available', async (t) => {
+  const h = createOutboxUnitHarness({ apiHandler: async () => { throw new Error('network interrupted'); } });
+  t.after(() => h.window.close());
+  const item = h.outbox.createMessageOutboxItem({ text: 'Retry this message' });
+  await h.outbox.queueOutboxItem(item);
+  const row = h.messagesEl.querySelector('.msg-row');
+  assert.equal(item.status, 'failed');
+  assert.equal(row.__messageData.client_status, 'failed');
+  assert.equal(row.__outboxItem.status, 'failed');
 });

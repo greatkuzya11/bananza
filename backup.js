@@ -551,8 +551,12 @@ function buildBackupManifest({
       'SQLite includes schema_migrations: the one-time glass interface rollout preserves color themes and will not repeat after restoring a migrated backup. Older backups receive the rollout on startup.',
       '.env, .env.local, call recordings, and speech recognition models are opt-in backup components.',
       'Whisper runtime/binaries, FFmpeg, node_modules, and deployment service configuration are external dependencies and are not included. Run npm install and reinstall runtime dependencies after restore.',
+      'Message attachment order and metadata are included in SQLite; all attachment files and video posters are included in uploads/.',
       'Local image provider settings and generated uploads are included; the image server, model weights and its launch configuration are manual external dependencies.',
       'Encrypted integration settings, including Telegram bot tokens, require the included .secret file after restore.',
+      'Telegram conversation memory, including text and image bytes, is included in bananza.db. Generated image history is included in uploads/telegram/. Memory settings and pending replies survive restore.',
+      'Telegram per-bot settings, including ignore_unsupported_messages, are included in bananza.db.',
+      'Telegram group transcription settings and pending transcription topic IDs are included in bananza.db.',
       'This archive contains chat history, uploaded files, and server secrets.',
     ],
   };
