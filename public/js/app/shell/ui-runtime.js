@@ -1170,7 +1170,7 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
           return false;
         }
         try {
-          await settleChatFolderSwipeOffset(0);
+          await settleChatFolderSwipeOffset(chatFolderSwipePagerState?.baseOffset ?? 0);
           return true;
         } finally {
           resetChatFolderSwipeSurface();

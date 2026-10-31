@@ -66,6 +66,70 @@ test('folder strip overlays scrolling chats and retains clicks, gestures and ada
   expect(await page.evaluate(() => window.BananzaAppBridge.getCurrentChatId())).toBeFalsy();
   await expect(list.locator('.chat-item')).toHaveCount(22);
 
+  const expectSwipeBack = async ({ dx, folderId, edge = false, cancel = false }) => {
+    await expect(page.locator('.chat-folder-list-surface')).not.toHaveClass(/is-folder-(switching|swipe-(dragging|settling|preparing|paging))/);
+    await list.evaluate(el => { el.scrollTop = 130; });
+    const motion = await list.evaluate(async (el, { dx, edge, cancel, touchInput }) => {
+      const surface = el.closest('.chat-folder-list-surface');
+      const rect = surface.getBoundingClientRect();
+      const x = rect.x + rect.width / 2;
+      const y = rect.y + 180;
+      const dispatch = (phase, offset) => {
+        if (touchInput) {
+          const touch = new Touch({ identifier: 42, target: el, clientX: x + offset, clientY: y });
+          el.dispatchEvent(new TouchEvent(`touch${phase}`, {
+            bubbles: true, cancelable: true,
+            touches: phase === 'start' || phase === 'move' ? [touch] : [],
+            changedTouches: [touch],
+          }));
+        } else {
+          const type = { start: 'mousedown', move: 'mousemove', end: 'mouseup' }[phase];
+          el.dispatchEvent(new MouseEvent(type, {
+            bubbles: true, cancelable: true, button: 0,
+            buttons: phase === 'end' ? 0 : 1, clientX: x + offset, clientY: y,
+          }));
+        }
+      };
+      dispatch('start', 0);
+      dispatch('move', dx);
+      const track = surface.querySelector('.chat-folder-swipe-track');
+      const currentPage = surface.querySelector('[data-folder-swipe-role="current"]');
+      const target = edge ? surface : track;
+      const visiblePage = edge ? surface : currentPage;
+      const dragged = visiblePage.getBoundingClientRect().left - rect.left;
+      // Commit the dragged position before releasing, then inspect the actual CSS transition.
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      dispatch(cancel ? 'cancel' : 'end', dx);
+      const animation = target.getAnimations().find(entry => entry.transitionProperty === 'transform');
+      if (!animation) throw new Error('Expected a swipe return transition');
+      animation.pause();
+      animation.currentTime = Number(animation.effect.getTiming().duration) / 2;
+      const halfway = visiblePage.getBoundingClientRect().left - rect.left;
+      const pageScroll = visiblePage.scrollTop;
+      animation.play();
+      return { dragged, halfway, pageScroll, hasPager: Boolean(track) };
+    }, { dx, edge, cancel, touchInput: testInfo.project.name.includes('mobile') });
+    expect(motion.hasPager).toBe(!edge);
+    expect(Math.sign(motion.dragged)).toBe(Math.sign(dx));
+    expect(Math.abs(motion.halfway)).toBeLessThan(Math.abs(motion.dragged));
+    expect(motion.halfway * Math.sign(dx)).toBeGreaterThanOrEqual(-1);
+    if (!edge) expect(motion.pageScroll).toBe(130);
+    await expect(page.locator('.chat-folder-list-surface')).not.toHaveClass(/is-folder-swipe-(dragging|settling|preparing|paging)/);
+    await expect(page.locator('.chat-folder-swipe-stage')).toHaveCount(0);
+    await expect(list).not.toHaveClass(/is-folder-swipe-source/);
+    await expect(page.locator(`#activeChatFolderStrip [data-folder-chip="${folderId}"]`)).toHaveAttribute('aria-selected', 'true');
+    expect(await list.evaluate(el => el.scrollTop)).toBe(130);
+    expect(await page.evaluate(() => window.BananzaAppBridge.getCurrentChatId())).toBeFalsy();
+  };
+
+  await page.evaluate(() => { document.documentElement.dataset.modalAnimation = 'soft'; });
+  await expectSwipeBack({ dx: 40, folderId: folder.id });
+  await expectSwipeBack({ dx: -40, folderId: folder.id, edge: true });
+  if (testInfo.project.name.includes('mobile')) {
+    // Cancellation must return even when the gesture has crossed the commit threshold.
+    await expectSwipeBack({ dx: 140, folderId: folder.id, cancel: true });
+  }
+
   // Drag a scrolled folder: the temporary page must preserve the same scroll position.
   await page.evaluate(() => { document.documentElement.dataset.modalAnimation = 'soft'; });
   await list.evaluate(el => { el.scrollTop = 130; });
@@ -81,13 +145,16 @@ test('folder strip overlays scrolling chats and retains clicks, gestures and ada
   await page.mouse.up();
   await expect(page.locator('#activeChatFolderStrip [data-folder-chip="0"]')).toHaveAttribute('aria-selected', 'true');
 
+  await expectSwipeBack({ dx: -40, folderId: 0 });
+  await expectSwipeBack({ dx: 40, folderId: 0, edge: true });
+
   // ResizeObserver must follow actual bar size, independently of refresh padding.
-  await bar.evaluate(el => { el.style.paddingBottom = '24px'; });
+  await bar.evaluate(el => { el.style.height = `${el.offsetHeight + 24}px`; });
   await expect.poll(() => page.evaluate(() => {
     const bar = document.getElementById('activeChatFolderBar');
     return parseFloat(getComputedStyle(document.getElementById('chatList'), '::before').height) === bar.offsetHeight;
   })).toBe(true);
-  await bar.evaluate(el => { el.style.paddingBottom = ''; });
+  await bar.evaluate(el => { el.style.height = ''; });
   await page.locator('#chatSearchToggle').click();
   await page.locator('#chatSearch').fill('Overlay chat 1');
   await expect(list.locator('.chat-item')).toHaveCount(11);
