@@ -1,6 +1,51 @@
 const { test, expect } = require('@playwright/test');
 const { installMediaMocks, makeUser, loginViaUi, createApiSession } = require('./helpers');
 
+test('selected chats can be deleted together after one confirmation', async ({ page }) => {
+  await installMediaMocks(page);
+  const user = makeUser('delete-bulk');
+  const api = createApiSession();
+  await api.register(user);
+  const ids = [];
+  for (const name of ['Delete batch Alpha', 'Delete batch Beta', 'Keep untouched']) {
+    const { data } = await api.request('/api/chats', { method: 'POST', json: { type: 'group', name, memberIds: [] } });
+    ids.push(data.id);
+  }
+  const errors = [];
+  const deletes = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('request', request => {
+    if (request.method() === 'DELETE') deletes.push(new URL(request.url()).pathname);
+  });
+  await loginViaUi(page, user);
+  await page.locator('#chatSearchToggle').click();
+  await page.locator('#chatSearch').fill('Delete batch');
+  const row = id => page.locator(`#chatList [data-chat-id="${id}"]`);
+  await expect(row(ids[0])).toBeVisible();
+  await row(ids[0]).click({ modifiers: ['Control'] });
+  await row(ids[1]).click();
+  const action = name => page.locator(`[data-selection-action="${name}"]`);
+  await action('actions').click();
+  await action('delete').click();
+  await expect(page.locator('#appDialog')).toBeVisible();
+  await expect(page.locator('#appDialogMessage')).toContainText('(2)');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#appDialog')).toBeHidden();
+  await expect(page.locator('#chatList input:checked')).toHaveCount(2);
+  expect(deletes).toEqual([]);
+  await action('actions').click();
+  await action('delete').click();
+  await page.locator('#appDialog button[type="submit"]').click();
+  await expect(page.locator('#chatSelectionPanel')).toBeHidden();
+  await expect(row(ids[0])).toHaveCount(0);
+  await expect(row(ids[1])).toHaveCount(0);
+  expect(deletes).toEqual(ids.slice(0, 2).map(id => `/api/chats/${id}`));
+  const { data: chats } = await api.request('/api/chats');
+  expect(chats.some(chat => chat.id === ids[2])).toBe(true);
+  expect(chats.some(chat => ids.slice(0, 2).includes(chat.id))).toBe(false);
+  expect(errors).toEqual([]);
+});
+
 test('bulk actions in a filtered folder persist, isolate unselected chats and recover from a partial failure', async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   await installMediaMocks(page);

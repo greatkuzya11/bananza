@@ -10890,6 +10890,7 @@ html[data-visual-mode="glass"] .pending-file-card { background: var(--glass-cont
   box-shadow: 0 8px 24px #0003;
 }
 .chat-selection-actions button { text-align: start; }
+.chat-selection-actions [data-selection-action="delete"] { color: var(--danger); border-top: 1px solid var(--border-light); border-radius: 0; margin-top: 4px; }
 .chat-selection-actions > span { padding: 10px; color: var(--text-secondary); font-size: 13px; }
 .chat-selection-actions [data-selection-action="none"] { border-bottom: 1px solid var(--border-light); border-radius: 0; margin-bottom: 4px; }
 

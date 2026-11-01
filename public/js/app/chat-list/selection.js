@@ -105,6 +105,7 @@
           button('Disable notifications', 'notify-off', sheet, !selection.ids.size);
           button('Enable sound', 'sound-on', sheet, !selection.ids.size);
           button('Disable sound', 'sound-off', sheet, !selection.ids.size);
+          button('Delete selected chats', 'delete', sheet, !Array.from(selection.ids).some(id => actions.canDeleteChat?.(store.getChatById(id))));
         }
         panel.append(sheet);
       }
@@ -174,14 +175,19 @@
       const targetFolder = action.startsWith('folder:') ? Number(action.slice(7)) : Number(folder()?.id || 0);
       if (action.startsWith('folder:') && !(actions.getFolders?.() || []).some(item => item.id === targetFolder && item.kind === 'custom')) return;
       if (action === 'remove' && folder()?.kind !== 'custom') return;
-      if (!['remove', 'notify-on', 'notify-off', 'sound-on', 'sound-off'].includes(action) && !action.startsWith('folder:')) return;
+      if (!['delete', 'remove', 'notify-on', 'notify-off', 'sound-on', 'sound-off'].includes(action) && !action.startsWith('folder:')) return;
       const ids = Array.from(selection.ids);
+      if (action === 'delete' && !ids.some(id => actions.canDeleteChat?.(store.getChatById(id)))) return;
       const failed = [];
       selection.busy = true;
       menu = '';
       sync();
       let refreshFailed = false;
       try {
+        if (action === 'delete' && !(await win.BananzaDialogs.confirm(t('Permanently delete selected chats ({count}) for everyone? This cannot be undone. Chats you cannot delete will remain selected.', { count: ids.length })))) {
+          failed.push(...ids);
+          return;
+        }
         if (action.startsWith('folder:')) {
           try {
             const data = await api(`/api/chat-folders/${targetFolder}/chats`, { method: 'POST', body: { chatIds: ids } });
@@ -191,7 +197,14 @@
         } else {
           for (const id of ids) {
             try {
-              if (action === 'remove') {
+              if (action === 'delete') {
+                if (!actions.canDeleteChat?.(store.getChatById(id))) {
+                  failed.push(id);
+                  continue;
+                }
+                await api(`/api/chats/${id}`, { method: 'DELETE' });
+                await actions.removeChatLocally(id, { clearCache: true });
+              } else if (action === 'remove') {
                 await api(`/api/chat-folders/${targetFolder}/chats/${id}`, { method: 'DELETE' });
               } else {
                 const field = action.startsWith('notify') ? 'notify_enabled' : 'sounds_enabled';
@@ -202,6 +215,9 @@
           }
         }
         try { await actions.refresh?.(); } catch { refreshFailed = true; }
+      } catch (error) {
+        failed.push(...ids.filter(id => !failed.includes(id)));
+        throw error;
       } finally {
         selection.busy = false;
         selection.ids.clear();
@@ -209,7 +225,7 @@
         selection.active = failed.length > 0;
         sync();
       }
-      actions.showToast?.(t('Updated chats: {success}. Failed: {failed}.', { success: ids.length - failed.length, failed: failed.length }));
+      actions.showToast?.(t(action === 'delete' ? 'Deleted chats: {success}. Failed: {failed}.' : 'Updated chats: {success}. Failed: {failed}.', { success: ids.length - failed.length, failed: failed.length }));
       if (refreshFailed) actions.showToast?.(t('Could not refresh chats. Reload the list.'));
     }
 
@@ -255,6 +271,8 @@
     }, true);
     doc.addEventListener('keydown', event => {
       if (event.key !== 'Escape' || !selection.active) return;
+      const dialog = doc.getElementById('appDialog');
+      if (dialog && !dialog.classList.contains('hidden')) return;
       if (!doc.getElementById('chatContextMenu')?.classList.contains('hidden')) return;
       event.preventDefault();
       event.stopImmediatePropagation();

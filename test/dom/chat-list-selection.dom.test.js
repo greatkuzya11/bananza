@@ -14,7 +14,8 @@ function setup(t, request = async () => ({})) {
     { id: 2, name: 'Beta', notify_enabled: false, sounds_enabled: true },
     { id: 3, name: 'Gamma' },
   ] });
-  const state = { filter: '', folder: null, refreshes: 0, opened: [], calls: [], toasts: [] };
+  const state = { filter: '', folder: null, refreshes: 0, opened: [], calls: [], toasts: [], confirmations: [], removed: [], canDelete: () => true, confirm: async () => true };
+  w.BananzaDialogs = { confirm: async message => { state.confirmations.push(message); return state.confirm(); } };
   const folders = [{ id: 9, name: 'Work', kind: 'custom', chat_ids: [1, 2] }, { id: 10, name: 'Bots', kind: 'bot_auto', chat_ids: [] }];
   const selection = root.createSelectionController({
     document: doc, window: w, store,
@@ -24,6 +25,8 @@ function setup(t, request = async () => ({})) {
       getActiveFolder: () => state.folder,
       getFolders: () => folders,
       getFilter: () => state.filter,
+      canDeleteChat: chat => Boolean(chat && state.canDelete(chat)),
+      removeChatLocally: async (id, options) => { state.removed.push({ id, ...options }); store.removeChat(id); render(); },
       refresh: async () => { state.refreshes++; render(); },
       showToast: text => state.toasts.push(text),
     },
@@ -162,6 +165,64 @@ test('folder batch add uses one request, checks returned membership, and removal
   await selection.run('remove');
   assert.deepEqual(state.calls.slice(1).map(call => call.method), ['DELETE', 'DELETE']);
   assert.equal(state.refreshes, 2);
+});
+
+test('bulk delete confirms once, isolates unselected chats, cleans up successes and retains failures', async t => {
+  const { state, store, selection, row, click, doc } = setup(t, async url => {
+    if (url === '/api/chats/2') throw new Error('Forbidden');
+    return { ok: true };
+  });
+  selection.start(1); click(row(2));
+  click(doc.querySelector('[data-selection-action="actions"]'));
+  assert.equal(doc.querySelector('[data-selection-action="delete"]').disabled, false);
+  await selection.run('delete');
+  assert.equal(state.confirmations.length, 1);
+  assert.match(state.confirmations[0], /\(2\) for everyone/);
+  assert.deepEqual(state.calls.map(({ url, method }) => ({ url, method })), [
+    { url: '/api/chats/1', method: 'DELETE' }, { url: '/api/chats/2', method: 'DELETE' },
+  ]);
+  assert.deepEqual(state.removed, [{ id: 1, clearCache: true }]);
+  assert.ok(store.getChatById(3));
+  assert.deepEqual([...store.getSelectionState().ids], [2]);
+  assert.equal(state.refreshes, 1);
+  assert.match(state.toasts[0], /Deleted chats: 1. Failed: 1/);
+});
+
+test('bulk delete locks selection during confirmation and cancellation makes no requests', async t => {
+  const { state, store, selection, row, click } = setup(t);
+  let resolve;
+  state.confirm = () => new Promise(done => { resolve = done; });
+  selection.start(1); click(row(2));
+  const pending = selection.run('delete');
+  await selection.run('delete');
+  click(row(3)); selection.cancel();
+  assert.equal(state.confirmations.length, 1);
+  assert.equal(state.calls.length, 0);
+  resolve(false);
+  await pending;
+  assert.deepEqual([...store.getSelectionState().ids], [1, 2]);
+  assert.equal(store.getSelectionState().busy, false);
+  assert.equal(state.calls.length, 0);
+  assert.equal(state.refreshes, 0);
+  assert.deepEqual(state.toasts, []);
+});
+
+test('bulk delete skips protected chats, disables unavailable deletion and exits after success', async t => {
+  const { state, store, selection, row, click, doc } = setup(t);
+  state.canDelete = chat => chat.id !== 2;
+  selection.start(1); click(row(2));
+  await selection.run('delete');
+  assert.deepEqual(state.calls.map(call => call.url), ['/api/chats/1']);
+  assert.deepEqual([...store.getSelectionState().ids], [2]);
+  click(doc.querySelector('[data-selection-action="actions"]'));
+  assert.equal(doc.querySelector('[data-selection-action="delete"]').disabled, true);
+  await selection.run('delete');
+  assert.equal(state.confirmations.length, 1);
+  selection.cancel(); selection.start(3);
+  await selection.run('delete');
+  assert.equal(store.getSelectionState().active, false);
+  assert.equal(store.getSelectionState().ids.size, 0);
+  assert.ok(store.getChatById(2));
 });
 
 function menus(h) {

@@ -35,6 +35,8 @@
           getActiveFolder: () => getActiveChatFolder(),
           getFolders: () => folderControllers.store.getFolders(),
           getFilter: () => chatSearch.value,
+          canDeleteChat: (chat) => canManageDestructiveChat(chat),
+          removeChatLocally: (chatId, options) => removeChatLocally(chatId, options),
           refresh: () => loadChats(),
           showToast: (message) => showCenterToast(message),
         },
