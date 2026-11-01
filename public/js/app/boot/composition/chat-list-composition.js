@@ -28,6 +28,17 @@
       refreshChatListReferences();
       syncCoreStateToRuntime();
     
+      const chatListTapGuard = window.BananzaApp.chatList.createTapGuard({ document, window });
+      const chatListSelection = window.BananzaApp.chatList.createSelectionController({
+        document, window, store: chatListStore, api: (url, options) => api(url, options), t,
+        actions: {
+          getActiveFolder: () => getActiveChatFolder(),
+          getFolders: () => folderControllers.store.getFolders(),
+          getFilter: () => chatSearch.value,
+          refresh: () => loadChats(),
+          showToast: (message) => showCenterToast(message),
+        },
+      });
       const chatListActivity = window.BananzaApp.chatList.activity.createChatActivityController({
         getCurrentUserId: () => currentUser?.id,
         onChange: (chatId) => chatListRenderer.updateChatActivity(chatId),
@@ -47,29 +58,17 @@
         state: {
           getChatSearchValue: () => chatSearch?.value || '',
           getCurrentChatId: () => currentChatId,
-          shouldSuppressChatItemTap: (event) => {
-            const state = suppressNextChatItemTapUntil;
-            const until = state && typeof state === 'object'
-              ? Number(state.until || 0)
-              : Number(state || 0);
-            if (!until || Date.now() >= until) {
-              suppressNextChatItemTapUntil = 0;
-              return false;
-            }
-            const expectedPointer = state && typeof state === 'object' ? state.pointerType || 'touch' : 'touch';
-            const sourcePointer = event?.pointerType
-              || (event?.sourceCapabilities?.firesTouchEvents ? 'touch' : '')
-              || ((typeof isMobileLayoutViewport === 'function' && isMobileLayoutViewport()) || window.innerWidth <= 768 ? 'touch' : 'mouse');
-            const shouldSuppress = expectedPointer === 'any' || sourcePointer === expectedPointer;
-            if (shouldSuppress) suppressNextChatItemTapUntil = 0;
-            return shouldSuppress;
-          },
+          shouldSuppressChatItemTap: (event) => chatListTapGuard.consume(event),
         },
         actions: {
           alert: async (message) => (await window.BananzaDialogs.alert(message)),
           compareChatsForFolder: (folderId, a, b) => compareChatsForFolder(folderId, a, b),
           getCurrentChatId: () => currentChatId,
           hideChatContextMenu: (options = {}) => hideChatContextMenu(options),
+          syncChatListInteractions: () => {
+            chatListSelection.sync();
+            contextMenusController?.syncChatContextMenu?.();
+          },
           isAiBotDirectoryUser: (user) => isAiBotDirectoryUser(user),
           isChatListWaitingForActiveFolder: (folderId) => isChatListWaitingForActiveFolder(folderId),
           isChatPinned: (chat) => isChatPinned(chat),
@@ -204,6 +203,8 @@
       });
     
       const chatListControllers = {
+        tapGuard: chatListTapGuard,
+        selection: chatListSelection,
         activity: chatListActivity,
         store: chatListStore,
         renderer: chatListRenderer,

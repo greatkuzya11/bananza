@@ -81,6 +81,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/folders/new-folder-tab.js?v=20260531-folders',
     '/js/app/folders/mobile-gestures.js?v=20260919-folder-overlay',
     '/js/app/chat-list/store.js?v=20260531-chat-list',
+    '/js/app/chat-list/selection.js?v=20261031',
     '/js/app/chat-list/render.js?v=20261001-chat-activity',
     '/js/app/chat-list/data.js?v=20260531-chat-list',
     '/js/app/chat-list/presence.js?v=20261001-chat-activity',

@@ -114,6 +114,7 @@
     let hiddenChatSearchSeq = 0;
     let hiddenChatSearchQuery = '';
     let hiddenChatSearchResults = [];
+    const selection = { active: false, busy: false, ids: new Set() };
 
     function normalizeList(nextChats) {
       return normalizeCachedChats(nextChats, { compareChatsForList: compare });
@@ -140,6 +141,7 @@
     }
 
     return {
+      getSelectionState: () => selection,
       getChats: () => chats,
       getMutableChats: () => chats,
       setChats(nextChats) {

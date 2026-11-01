@@ -182,6 +182,9 @@
           composer: composerServices,
         },
         actions: {
+          suppressNextChatItemTap: (options) => chatListControllers.tapGuard.suppress(options),
+          selectChat: (chatId) => chatListControllers.selection.start(chatId),
+          isChatSelectionBusy: () => chatListControllers.selection.isBusy(),
           getChatById: (chatId) => getChatById(chatId),
           getActiveChatFolder: () => getActiveChatFolder(),
           getPinnedChatMoveState: (chatId, list = chats) => getPinnedChatMoveState(chatId, list),

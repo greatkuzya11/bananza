@@ -55,6 +55,7 @@ const appFolderScriptPaths = Object.freeze([
 ]);
 const appChatListScriptPaths = Object.freeze([
   'public/js/app/chat-list/store.js',
+  'public/js/app/chat-list/selection.js',
   'public/js/app/chat-list/render.js',
   'public/js/app/chat-list/data.js',
   'public/js/app/chat-list/presence.js',

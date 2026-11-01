@@ -53,6 +53,7 @@ function createContextMenus(options = {}) {
   const state = objectOrDefault(opts.state);
   const actions = objectOrDefault(opts.actions);
   const config = objectOrDefault(opts.config || root.config);
+  const tapGuard = opts.tapGuard || (!actions.suppressNextChatItemTap && root.chatList?.createTapGuard?.({ document: doc, window: win }));
   const getFloating = () => objectOrDefault(typeof opts.getFloatingActions === 'function' ? opts.getFloatingActions() : opts.floatingActions);
   const getReactions = () => objectOrDefault(typeof opts.getReactions === 'function' ? opts.getReactions() : opts.reactions);
   const getForwarding = () => objectOrDefault(typeof opts.getForwarding === 'function' ? opts.getForwarding() : opts.forwarding);
@@ -61,6 +62,7 @@ function createContextMenus(options = {}) {
     chatList: dom.chatList, messagesEl: dom.messagesEl, chatContextMenuBackdrop: dom.chatContextMenuBackdrop, chatContextMenu: dom.chatContextMenu, mediaContextMenuBackdrop: dom.mediaContextMenuBackdrop, mediaContextMenu: dom.mediaContextMenu, currentChatId: getter(() => state.getCurrentChatId?.() || null), chatSearch: dom.chatSearch,
     MEDIA_CONTEXT_TARGET_SELECTOR: config.MEDIA_CONTEXT_TARGET_SELECTOR || '.msg-image, .msg-video video, .msg-audio audio, .msg-file, .video-note-stage', MEDIA_CONTEXT_LONG_PRESS_MS: config.MEDIA_CONTEXT_LONG_PRESS_MS ?? 500, CHAT_CONTEXT_LONG_PRESS_MS: config.CHAT_CONTEXT_LONG_PRESS_MS ?? 500,
     api: opts.api || actions.api || (() => Promise.resolve({})), esc: opts.esc || ((value) => String(value == null ? '' : value)), t: opts.t || ((key) => String(key || '')), tx: opts.tx || ((text) => String(text == null ? '' : text)), confirm: opts.confirm || win.BananzaDialogs?.confirm || (() => false),
+    suppressNextChatItemTap: actions.suppressNextChatItemTap || ((options) => tapGuard?.suppress(options)), selectChat: actions.selectChat || (() => {}), isChatSelectionBusy: actions.isChatSelectionBusy || (() => false),
     getChatById: actions.getChatById || (() => null), getActiveChatFolder: actions.getActiveChatFolder || (() => null), getPinnedChatMoveState: actions.getPinnedChatMoveState || (() => ({ canMoveUp: false, canMoveDown: false })), getFolderPinnedChatMoveState: actions.getFolderPinnedChatMoveState || (() => ({ canMoveUp: false, canMoveDown: false })), isChatPinned: actions.isChatPinned || (() => false), isChatPinnedInFolder: actions.isChatPinnedInFolder || (() => false), localChatPreferenceEnabled: actions.localChatPreferenceEnabled || ((value) => value !== false), canHideChat: actions.canHideChat || (() => false), canLeaveChat: actions.canLeaveChat || (() => false), canManageDestructiveChat: actions.canManageDestructiveChat || (() => false), setChatSidebarPin: actions.setChatSidebarPin || (() => Promise.resolve(false)), moveChatSidebarPin: actions.moveChatSidebarPin || (() => Promise.resolve(false)), setFolderChatPin: actions.setFolderChatPin || (() => Promise.resolve(false)), moveFolderChatPin: actions.moveFolderChatPin || (() => Promise.resolve(false)), removeChatFromFolder: actions.removeChatFromFolder || (() => Promise.resolve(false)), openChatFolderManageModal: actions.openChatFolderManageModal || (() => Promise.resolve(false)), hideChatFromList: actions.hideChatFromList || (() => Promise.resolve(false)), leaveChat: actions.leaveChat || (() => Promise.resolve(false)), deleteChatCompletely: actions.deleteChatCompletely || (() => Promise.resolve(false)), loadChats: actions.loadChats || (() => Promise.resolve([])), renderChatList: actions.renderChatList || function noop() {}, renderChatPreferencesForm: actions.renderChatPreferencesForm || function noop() {},
     getAttachmentPreviewUrl: actions.getAttachmentPreviewUrl || (() => ''), getAttachmentDownloadUrl: actions.getAttachmentDownloadUrl || (() => ''), getMediaNoteFallbackLabel: actions.getMediaNoteFallbackLabel || (() => ''), normalizeMimeType: actions.normalizeMimeType || ((value) => String(value || '')), filenameFromContentDisposition: actions.filenameFromContentDisposition || ((_header, fallback) => fallback), getMessageCopyTextData: actions.getMessageCopyTextData || (() => ({ text: '', hasMeaningfulContent: false })), canForwardMessage: actions.canForwardMessage || (() => false), canSaveMessageToNotes: actions.canSaveMessageToNotes || (() => false), canEditMessage: actions.canEditMessage || (() => false), getPinActionState: actions.getPinActionState || (() => ({ show: false, isPinned: false, disabled: false })), copyTextToClipboard: actions.copyTextToClipboard || (() => Promise.resolve(false)), showCenterToast: actions.showCenterToast || function noop() {}, setReplyFromRow: actions.setReplyFromRow || function noop() {}, setEditFromRow: actions.setEditFromRow || function noop() {}, togglePinFromRow: actions.togglePinFromRow || (() => Promise.resolve(false)), hasAndroidNativeBridge: actions.hasAndroidNativeBridge || (() => false), safeVibrate: actions.safeVibrate || function noop() {}, isMobileLayoutViewport: actions.isMobileLayoutViewport || (() => false), isMobileComposerKeyboardOpen: actions.isMobileComposerKeyboardOpen || (() => false), focusComposerKeepKeyboard: actions.focusComposerKeepKeyboard || function noop() {},
     isFloatingSurfaceVisible: (...args) => getFloating().isFloatingSurfaceVisible?.(...args), getFloatingViewportRect: (...args) => getFloating().getFloatingViewportRect?.(...args), clamp: (...args) => getFloating().clamp?.(...args), measureFloatingSurface: (...args) => getFloating().measureFloatingSurface?.(...args), positionFloatingElement: (...args) => getFloating().positionFloatingElement?.(...args), openFloatingSurface: (...args) => getFloating().openFloatingSurface?.(...args), closeFloatingSurface: (...args) => getFloating().closeFloatingSurface?.(...args), hideFloatingMessageActions: (...args) => getFloating().hideFloatingMessageActions?.(...args), suppressNextMessageActionTap: (...args) => getFloating().suppressNextMessageActionTap?.(...args), hideReactionUi: (...args) => getReactions().hideReactionUi?.(...args), showReactionPicker: (...args) => getReactions().showReactionPicker?.(...args), reactionPickerKeepKeyboard: getter(() => Boolean(getReactions().getReactionPickerKeepKeyboard?.())), openForwardMessageModal: (...args) => getForwarding().openForwardMessageModal?.(...args), saveMessageToNotes: (...args) => getForwarding().saveMessageToNotes?.(...args),
@@ -76,8 +78,9 @@ let mediaContextLongPressTimer = null;
 let mediaContextLongPressStart = null;
 let mediaContextLongPressRow = null;
 let mediaContextLongPressTarget = null;
-let suppressChatContextDismissUntil = 0;
+let chatContextPointerId = null;
 function clearChatContextLongPress() {
+  chatContextPointerId = null;
   clearTimeout(chatContextLongPressTimer);
   chatContextLongPressTimer = null;
   chatContextLongPressStart = null;
@@ -594,6 +597,10 @@ function renderChatContextMenu(chat) {
   const soundsEnabled = localChatPreferenceEnabled(chat.sounds_enabled);
   const actions = [
     {
+      action: 'select-chat', icon: '&#9745;', label: t('Select chat'),
+      hidden: !!chatContextMenuState?.row?.classList.contains('is-hidden-search-result'), disabled: isChatSelectionBusy(),
+    },
+    {
       action: 'manage-folders',
       icon: '&#128193;',
       label: 'Manage folders',
@@ -603,21 +610,21 @@ function renderChatContextMenu(chat) {
     {
       action: 'toggle-folder-pin',
       icon: '&#128204;',
-      label: folderPinned ? 'Unpin in this folder' : 'Pin in this folder',
+      label: folderPinned ? 'Unpin' : 'Pin',
       hidden: !activeFolder,
       disabled: false,
     },
     {
       action: 'move-folder-up',
       icon: '&#8593;',
-      label: 'Move up in this folder',
+      label: 'Move up',
       hidden: !activeFolder || !folderPinned,
       disabled: !folderMoveState.canMoveUp,
     },
     {
       action: 'move-folder-down',
       icon: '&#8595;',
-      label: 'Move down in this folder',
+      label: 'Move down',
       hidden: !activeFolder || !folderPinned,
       disabled: !folderMoveState.canMoveDown,
     },
@@ -632,24 +639,22 @@ function renderChatContextMenu(chat) {
     {
       action: 'toggle-pin',
       icon: '&#128204;',
-      label: activeFolder
-        ? (pinned ? 'Unpin in All chats' : 'Pin in All chats')
-        : (pinned ? 'Unpin' : 'Pin'),
-      hidden: false,
+      label: pinned ? 'Unpin' : 'Pin',
+      hidden: !!activeFolder,
       disabled: false,
     },
     {
       action: 'move-up',
       icon: '&#8593;',
-      label: activeFolder ? 'Move up in All chats' : 'Move up',
-      hidden: !pinned,
+      label: 'Move up',
+      hidden: !!activeFolder || !pinned,
       disabled: !moveState.canMoveUp,
     },
     {
       action: 'move-down',
       icon: '&#8595;',
-      label: activeFolder ? 'Move down in All chats' : 'Move down',
-      hidden: !pinned,
+      label: 'Move down',
+      hidden: !!activeFolder || !pinned,
       disabled: !moveState.canMoveDown,
     },
     {
@@ -669,7 +674,7 @@ function renderChatContextMenu(chat) {
     {
       action: 'hide-chat',
       icon: '&#128065;',
-      label: '\u0421\u043A\u0440\u044B\u0442\u044C',
+      label: 'Hide chat',
       hidden: !canHideChat(chat),
       disabled: false,
     },
@@ -692,7 +697,7 @@ function renderChatContextMenu(chat) {
   ];
   chatContextMenu.innerHTML = `
     <div class="chat-context-menu-sheet">
-      <div class="chat-context-menu-header">${esc(chat.name || 'Chat')}</div>
+      <div class="chat-context-menu-header">${esc(chat.name || t('Chat'))}</div>
       ${actions
         .filter((item) => !item.hidden)
         .map((item) => `
@@ -703,7 +708,7 @@ function renderChatContextMenu(chat) {
             ${item.disabled ? 'disabled' : ''}
           >
             <span class="chat-context-menu-icon" aria-hidden="true">${item.icon}</span>
-            <span class="chat-context-menu-label">${esc(item.label)}</span>
+            <span class="chat-context-menu-label">${esc(t(item.label))}</span>
           </button>
         `).join('')}
     </div>
@@ -716,7 +721,7 @@ function renderChatContextMenu(chat) {
 function positionChatContextMenu() {
   if (!chatContextMenuState || !chatContextMenu || chatContextMenu.classList.contains('hidden')) return;
   const row = chatList.querySelector(`.chat-item[data-chat-id="${chatContextMenuState.chatId}"]`) || chatContextMenuState.row;
-  if (!(row instanceof HTMLElement)) {
+  if (!(row instanceof HTMLElement) || !row.isConnected || !chatList.contains(row)) {
     hideChatContextMenu({ immediate: true });
     return;
   }
@@ -759,14 +764,29 @@ function hideChatContextMenu({ immediate = false } = {}) {
   });
 }
 
+function syncChatContextMenu() {
+  if (chatContextLongPressRow && !chatList.contains(chatContextLongPressRow)) clearChatContextLongPress();
+  if (!chatContextMenuState) return;
+  const row = chatList.querySelector(`.chat-item[data-chat-id="${chatContextMenuState.chatId}"]`);
+  if (!row) { hideChatContextMenu({ immediate: true }); return; }
+  chatContextMenuState.row = row;
+  const chat = getChatById(chatContextMenuState.chatId);
+  const focusedAction = chatContextMenu.contains(document.activeElement) ? document.activeElement.dataset.chatAction : null;
+  if (chat) renderChatContextMenu(chat);
+  if (focusedAction) Array.from(chatContextMenu.querySelectorAll('[data-chat-action]')).find(button => button.dataset.chatAction === focusedAction)?.focus({ preventScroll: true });
+  positionChatContextMenu();
+}
+
 function showChatContextMenuForRow(row, { x = null, y = null, source = 'contextmenu' } = {}) {
+  if (isChatSelectionBusy()) return;
   const chatId = Number(row?.dataset?.chatId || 0);
   if (!chatId) return;
   const chat = getChatById(chatId);
   if (!chat || !chatContextMenu || !chatContextMenuBackdrop) return;
   const isSameChatOpen = isFloatingSurfaceVisible(chatContextMenu) && Number(chatContextMenuState?.chatId || 0) === chatId;
   if (isSameChatOpen) {
-    hideChatContextMenu();
+    clearChatContextLongPress();
+    positionChatContextMenu();
     return;
   }
   hideMediaContextMenu({ immediate: true });
@@ -819,6 +839,7 @@ async function updateChatContextPreference(chatId, changes) {
 
 
 async function handleChatContextMenuAction(action, chatId) {
+  if (action === 'select-chat') { selectChat(chatId); return; }
   const chat = getChatById(chatId);
   if (!chat) return;
   if (action === 'manage-folders') {
@@ -959,15 +980,9 @@ function bindEvents() {
         hideChatContextMenu();  
         await handleChatContextMenuAction(action, chatId);  
       });  
-      chatContextMenuBackdrop?.addEventListener('click', () => {  
-        if (Date.now() < suppressChatContextDismissUntil) return;  
-        hideChatContextMenu();  
-      });  
-      chatContextMenuBackdrop?.addEventListener('contextmenu', (e) => {  
-        e.preventDefault();  
-        if (Date.now() < suppressChatContextDismissUntil) return;  
-        hideChatContextMenu();  
-      });  
+      chatContextMenuBackdrop?.addEventListener('click', () => hideChatContextMenu());
+      // Native touch contextmenu may target the backdrop created during the hold.
+      chatContextMenuBackdrop?.addEventListener('contextmenu', (e) => e.preventDefault());
       chatList.addEventListener('scroll', () => {  
         if (isFloatingSurfaceVisible(chatContextMenu)) hideChatContextMenu({ immediate: true });  
       }, { passive: true });  
@@ -978,57 +993,43 @@ function bindEvents() {
       window.addEventListener('resize', syncChatContextMenuLayout, { passive: true });  
       window.visualViewport?.addEventListener('resize', syncChatContextMenuLayout);  
       window.visualViewport?.addEventListener('scroll', syncChatContextMenuLayout);  
-      let startPoint = null;  
-      let startPointerId = null;  
-      const clearChatContextPointerPress = () => {  
-        clearChatContextLongPress();  
-        startPoint = null;  
-        startPointerId = null;  
-      };  
-      chatList.addEventListener('pointerdown', (e) => {  
-        if (e.button && e.button !== 0) return;  
-        if (startPointerId != null) return;  
-        const row = e.target.closest('.chat-item[data-chat-id]');  
-        if (!row || !chatList.contains(row) || e.target.closest('button, a, input, textarea, select, label')) return;  
-        startPointerId = e.pointerId;  
-        startPoint = { x: e.clientX, y: e.clientY };  
-        chatContextLongPressStart = startPoint;  
-        chatContextLongPressRow = row;  
-        clearTimeout(chatContextLongPressTimer);  
-        chatContextLongPressTimer = setTimeout(() => {  
-          chatContextLongPressTimer = null;  
-          suppressNextChatItemTap({ pointerType: e.pointerType === 'mouse' ? 'mouse' : 'touch' });
-          suppressChatContextDismissUntil = Date.now() + 550;  
-          safeVibrate(30);  
-          showChatContextMenuForRow(row, {  
-            x: startPoint?.x,  
-            y: startPoint?.y,  
-            source: 'long-press',  
-          });  
-        }, CHAT_CONTEXT_LONG_PRESS_MS);  
-      }, { passive: true });  
-      chatList.addEventListener('pointermove', (e) => {  
-        if (!startPoint || e.pointerId !== startPointerId) return;  
-        if (Math.hypot(e.clientX - startPoint.x, e.clientY - startPoint.y) > 10) {  
-          clearChatContextPointerPress();  
-        }  
-      }, { passive: true });  
-      ['pointerup', 'pointercancel', 'pointerleave'].forEach((type) => {  
-        chatList.addEventListener(type, (e) => {  
-          if (startPointerId != null && e.pointerId !== startPointerId) return;  
-          clearChatContextPointerPress();  
-        }, { passive: true });  
-      });  
-      chatList.addEventListener('contextmenu', (e) => {  
-        const row = e.target.closest('.chat-item[data-chat-id]');  
-        if (!row || !chatList.contains(row) || e.target.closest('button, a, input, textarea, select, label')) return;  
-        e.preventDefault();  
-        showChatContextMenuForRow(row, {  
-          x: e.clientX,  
-          y: e.clientY,  
-          source: 'contextmenu',  
-        });  
-      });  
+      chatList.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0 || e.ctrlKey || e.metaKey || isChatSelectionBusy()) return;
+        if (chatContextPointerId != null) { clearChatContextLongPress(); return; }
+        const row = e.target.closest('.chat-item[data-chat-id]');
+        if (!row || !chatList.contains(row) || e.target.closest('button, a, input, textarea, select, label')) return;
+        chatContextPointerId = e.pointerId;
+        chatContextLongPressStart = { x: e.clientX, y: e.clientY };
+        chatContextLongPressRow = row;
+        chatContextLongPressTimer = setTimeout(() => {
+          const point = chatContextLongPressStart;
+          chatContextLongPressTimer = null;
+          if (!row.isConnected || !chatList.contains(row)) { clearChatContextLongPress(); return; }
+          suppressNextChatItemTap({ pointerType: e.pointerType });
+          safeVibrate(30);
+          showChatContextMenuForRow(row, { x: point?.x, y: point?.y, source: 'long-press' });
+        }, CHAT_CONTEXT_LONG_PRESS_MS);
+      }, { passive: true });
+      document.addEventListener('pointermove', (e) => {
+        if (!chatContextLongPressStart || e.pointerId !== chatContextPointerId) return;
+        if (Math.hypot(e.clientX - chatContextLongPressStart.x, e.clientY - chatContextLongPressStart.y) > 10) clearChatContextLongPress();
+      }, { passive: true });
+      ['pointerup', 'pointercancel'].forEach(type => document.addEventListener(type, (e) => {
+        if (chatContextPointerId != null && e.pointerId !== chatContextPointerId) return;
+        clearChatContextLongPress();
+      }, { passive: true }));
+      chatList.addEventListener('pointerleave', clearChatContextLongPress, { passive: true });
+      chatList.addEventListener('scroll', clearChatContextLongPress, { passive: true });
+      window.addEventListener('blur', clearChatContextLongPress);
+      document.addEventListener('visibilitychange', () => { if (document.hidden) clearChatContextLongPress(); });
+      chatList.addEventListener('contextmenu', (e) => {
+        const row = e.target.closest('.chat-item[data-chat-id]');
+        if (!row || !chatList.contains(row) || e.target.closest('button, a, input, textarea, select, label')) return;
+        e.preventDefault();
+        clearChatContextLongPress();
+        suppressNextChatItemTap({ pointerType: e.pointerType });
+        showChatContextMenuForRow(row, { x: e.clientX, y: e.clientY, source: 'contextmenu' });
+      });
     })();  
     
   
@@ -1071,7 +1072,7 @@ function bindEvents() {
 }
 function getChatContextMenuState() { return chatContextMenuState; }
 function getMediaContextMenuState() { return mediaContextMenuState; }
-__exports = { clearChatContextLongPress, clearMediaContextLongPress, getMessageMediaContextTarget, getMessageMediaKindLabel, getDefaultMessageMediaMime, getAbsoluteMessageMediaUrl, getMessageMediaContext, canShareMediaFileContext, fetchMessageMediaBlob, copyImageFromMediaContext, shareMediaFromContext, renderMediaContextMenu, positionMediaContextMenu, hideMediaContextMenu, showMediaContextMenuForRow, showMediaContextMenuForContext, handleMediaContextMenuAction, renderChatContextMenu, positionChatContextMenu, hideChatContextMenu, showChatContextMenuForRow, updateChatContextPreference, handleChatContextMenuAction, bindEvents, getChatContextMenuState, getMediaContextMenuState };
+__exports = { syncChatContextMenu, clearChatContextLongPress, clearMediaContextLongPress, getMessageMediaContextTarget, getMessageMediaKindLabel, getDefaultMessageMediaMime, getAbsoluteMessageMediaUrl, getMessageMediaContext, canShareMediaFileContext, fetchMessageMediaBlob, copyImageFromMediaContext, shareMediaFromContext, renderMediaContextMenu, positionMediaContextMenu, hideMediaContextMenu, showMediaContextMenuForRow, showMediaContextMenuForContext, handleMediaContextMenuAction, renderChatContextMenu, positionChatContextMenu, hideChatContextMenu, showChatContextMenuForRow, updateChatContextPreference, handleChatContextMenuAction, bindEvents, getChatContextMenuState, getMediaContextMenuState };
   }
   return scope.__exports;
 }
