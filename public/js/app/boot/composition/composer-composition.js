@@ -203,6 +203,7 @@
           consumeOutsidePickerDismissGesture: (event, suppressFollowupClick) =>
             consumeOutsidePickerDismissGesture(event, suppressFollowupClick),
           isPickerDismissPassThroughTarget: (target) => isPickerDismissPassThroughTarget(target),
+          isMobileComposerBackgroundGesture: (event) => mobileComposerGuard?.isMobileComposerBackgroundGesture?.(event),
         },
       });
     

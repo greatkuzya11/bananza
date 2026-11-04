@@ -14,6 +14,7 @@
     const COMPOSER_HISTORY_SWIPE_THRESHOLD = 42;
     const state = {
       viewportFrame: 0,
+      focusGeneration: 0,
       dockTop: 0,
       dockHeight: 0,
       dockWidth: 0,
@@ -260,7 +261,9 @@
     function focusComposerKeepKeyboard(force = false) {
       const msgInput = element('msgInput');
       if (!msgInput || (!force && !isMobileComposerKeyboardOpen())) return;
+      const generation = state.focusGeneration;
       win.requestAnimationFrame(() => {
+        if (generation !== state.focusGeneration) return;
         try {
           msgInput.focus({ preventScroll: true });
         } catch {
@@ -342,7 +345,7 @@
 
     function getMobileKeyboardDockScrollSurface(target) {
       if (!isElement(target)) return null;
-      return getComposerGuardTextarea(target) || target.closest?.('.emoji-grid, .reaction-emoji-grid, .mention-picker-list');
+      return getComposerGuardTextarea(target) || target.closest?.('.emoji-grid, .reaction-emoji-grid');
     }
 
     function scrollMobileKeyboardDockSurface(surface, clientY, dy) {
@@ -377,6 +380,8 @@
 
     function isMobileKeyboardDockGestureSurface(target) {
       if (!isElement(target)) return false;
+      // Mention lists use native scrolling, including momentum after release.
+      if (target.closest('.mention-picker-list')) return false;
       const inputArea = element('inputArea');
       if (inputArea?.contains?.(target)) return true;
       const floatingSurface = target.closest?.('.emoji-picker, #mentionPicker, #contextConvertPicker, #attachMenu, #reactionPicker, #reactionEmojiPopover');
@@ -524,6 +529,7 @@
       const msgInput = element('msgInput');
       if (!call('isMobileLayoutViewport', false)) return false;
       const hadComposerSession = isMobileComposerSessionActive();
+      state.focusGeneration += 1;
       if (consumeTap) suppressMobileComposerDismissClick();
       if (doc.activeElement === msgInput) {
         try { msgInput.blur(); } catch {}
@@ -539,7 +545,7 @@
     }
 
     function closeMobileComposerTransientUi({ immediate = true, preserveEmoji = false } = {}) {
-      call('hideMentionPicker');
+      call('hideMentionPicker', undefined, { immediate });
       if (call('isContextConvertPickerActive', false)) call('hideContextConvertPicker');
       call('hideFloatingMessageActions', undefined, { immediate, keepComposerState: false });
       call('hideAvatarUserMenu');
@@ -689,6 +695,11 @@
       return true;
     }
 
+    function isMobileComposerBackgroundGesture(event) {
+      const touchGesture = event?.type === 'touchstart' || isTouchLikePointerEvent(event);
+      return Boolean(touchGesture && isMobileComposerSessionActive() && isMobileComposerDismissBackgroundTarget(event.target));
+    }
+
     function resetMobileMessageInteractionGuard(source = '') {
       if (source && state.messageGesture.source && state.messageGesture.source !== source) return;
       state.messageGesture = emptyMessageGesture();
@@ -722,7 +733,14 @@
       if (!gesture.source || (source && gesture.source !== source)) return;
       const { target, moved, keyboardOpenAtStart } = gesture;
       resetMobileMessageInteractionGuard(source);
-      if (!keyboardOpenAtStart || moved || !target || !isMobileMessageKeyboardPreserveTarget(target)) return;
+      if (moved || !target || !isMobileMessageKeyboardPreserveTarget(target)) return;
+      if (isMobileComposerDismissBackgroundTarget(target)) {
+        if (event?.cancelable) event.preventDefault();
+        closeMobileComposerTransientUi();
+        dismissMobileComposer({ consumeTap: true, reason: 'chat-background' });
+        return;
+      }
+      if (!keyboardOpenAtStart) return;
       if (controller('floatingActions')?.isMessageActionTapSuppressed?.() || call('isFloatingSurfaceVisible', false, element('reactionPicker'))) {
         focusComposerKeepKeyboard(true);
         return;
@@ -731,7 +749,6 @@
       suppressMobileComposerDismissClick();
       const row = isMobileComposerDismissMessageTarget(target) ? target.closest('.msg-row') : null;
       if (row) call('showMessageActions', undefined, row, { toggle: true, keepComposerFocus: true });
-      else call('hideFloatingMessageActions', undefined, { keepComposerState: true });
       focusComposerKeepKeyboard(true);
     }
 
@@ -739,6 +756,9 @@
       const messagesEl = element('messagesEl');
       if (!isHtmlElement(messagesEl) || messagesEl.__mobileMessageInteractionGuardBound) return;
       messagesEl.__mobileMessageInteractionGuardBound = true;
+      messagesEl.addEventListener('scroll', () => {
+        if (state.messageGesture.source) state.messageGesture.moved = true;
+      }, { passive: true });
       messagesEl.addEventListener('pointerdown', (event) => {
         if (!isTouchLikePointerEvent(event) || (typeof event.button === 'number' && event.button !== 0)) return;
         startMobileMessageInteractionGuard({ source: 'pointer', pointerId: Number.isFinite(Number(event.pointerId)) ? Number(event.pointerId) : null, clientX: event.clientX, clientY: event.clientY, target: event.target });
@@ -755,7 +775,10 @@
           if (gesture.source !== 'pointer') return;
           if (gesture.pointerId != null && Number(event.pointerId) !== gesture.pointerId) return;
           if (type === 'pointercancel') resetMobileMessageInteractionGuard('pointer');
-          else finishMobileMessageInteractionGuard(event, 'pointer');
+          else {
+            updateMobileMessageInteractionGuard(event.clientX, event.clientY);
+            finishMobileMessageInteractionGuard(event, 'pointer');
+          }
         }, { passive: false, capture: true });
       });
       messagesEl.addEventListener('touchstart', (event) => {
@@ -783,6 +806,8 @@
             const matchesTouch = Array.from(event.changedTouches || []).some((touch) => Number(touch.identifier) === gesture.touchId);
             if (!matchesTouch) return;
           }
+          const touch = trackedTouch(event.changedTouches, gesture.touchId);
+          if (touch) updateMobileMessageInteractionGuard(touch.clientX, touch.clientY);
           finishMobileMessageInteractionGuard(event, 'touch');
         }, { passive: false, capture: true });
       });
@@ -841,6 +866,7 @@
       queueMobileViewportLayoutSync,
       queueIosViewportLayoutSync: queueMobileViewportLayoutSync,
       isMobileComposerKeyboardOpen,
+      isMobileComposerBackgroundGesture,
       focusComposerKeepKeyboard,
       restoreComposerFocusAfterMentionPicker,
       dismissMentionPickerAfterKeyboardClose,

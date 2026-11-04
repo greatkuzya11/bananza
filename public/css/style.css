@@ -8485,8 +8485,7 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
   }
   html.is-mobile-chat-keyboard-layout .emoji-picker,
   html.is-mobile-chat-keyboard-layout .emoji-grid,
-  html.is-mobile-chat-keyboard-layout .reaction-emoji-grid,
-  html.is-mobile-chat-keyboard-layout .mention-picker-list {
+  html.is-mobile-chat-keyboard-layout .reaction-emoji-grid {
     overscroll-behavior: contain;
     touch-action: none;
   }

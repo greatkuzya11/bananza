@@ -626,7 +626,9 @@ test('style.css clamps New Chat folder selection rows to compact previews', () =
 
 test('style.css opts mobile composer controls out of native browser panning', () => {
   assert.match(styleCss, /@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*\.input-area #msgInput,\s*\.input-area \.mention-open-btn\s*\{[^}]*touch-action\s*:\s*none\s*;/s);
-  assert.match(styleCss, /html\.is-mobile-chat-keyboard-layout \.emoji-picker,[\s\S]*\.mention-picker-list\s*\{[^}]*touch-action\s*:\s*none\s*;/s);
+  assert.match(styleCss, /html\.is-mobile-chat-keyboard-layout \.emoji-picker,[^{]*\.reaction-emoji-grid\s*\{[^}]*touch-action\s*:\s*none\s*;/s);
+  assert.match(styleCss, /\.mention-picker-list\s*\{[^}]*overflow-y\s*:\s*auto[^}]*overscroll-behavior\s*:\s*contain[^}]*touch-action\s*:\s*pan-y/s);
+  assert.doesNotMatch(styleCss, /[^{}]*\.mention-picker-list[^{}]*\{[^}]*touch-action\s*:\s*none/s);
 });
 
 test('style.css wraps Markdown code only on mobile while tables remain scrollable', () => {

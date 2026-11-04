@@ -4117,7 +4117,7 @@ test('touch message taps clear long-press state while keeping the keyboard', asy
   assert.equal(app.style.height, '420px');
 });
 
-test('background taps keep the mobile keyboard and only clear floating message actions', async (t) => {
+for (const tap of [dispatchPointerTap, dispatchTouchTap]) test(`background taps dismiss the mobile keyboard and clear floating actions (${tap.name})`, async (t) => {
   const dom = await bootAppDom();
   t.after(() => {
     dom.window.close();
@@ -4136,13 +4136,121 @@ test('background taps keep the mobile keyboard and only clear floating message a
   await wait(dom, 80);
   assert.equal(row.classList.contains('actions-open'), true);
 
-  const { pointerUp } = dispatchPointerTap(dom.window, messagesEl);
+  const result = tap(dom.window, messagesEl, { emitClick: true });
   await wait(dom, 80);
 
-  assert.equal(pointerUp.defaultPrevented, true);
+  assert.equal((result.pointerUp || result.touchEnd).defaultPrevented, true);
   assert.equal(row.classList.contains('actions-open'), false);
-  assert.equal(app.style.height, '420px');
-  assert.equal(document.activeElement, msgInput);
+  assert.notEqual(document.activeElement, msgInput);
+  dom.visualViewportMock.setAndDispatch('resize', { height: 844 });
+  await waitForViewportRecovery(dom, 320);
+  assert.equal(app.style.height, '844px');
+  assert.equal(document.documentElement.classList.contains('is-mobile-chat-keyboard-layout'), false);
+});
+
+for (const tap of [dispatchPointerTap, dispatchTouchTap]) test(`one background tap dismisses mentions and keyboard (${tap.name})`, async (t) => {
+  const dom = await openSingleChatDom({
+    mentionTargetsByChatId: { 1: [{ user_id: 2, token: 'bob', display_name: 'Bob' }] },
+  });
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  const input = document.getElementById('msgInput');
+  await openMobileKeyboard(dom, input);
+  dispatchPointerTap(dom.window, document.getElementById('mentionOpenBtn'));
+  await wait(dom, 80);
+  const picker = document.getElementById('mentionPicker');
+  assert.equal(picker.classList.contains('hidden'), false);
+
+  tap(dom.window, document.getElementById('messages'), { emitClick: true });
+  await wait(dom, 80);
+  assert.equal(picker.classList.contains('hidden'), true);
+  assert.notEqual(document.activeElement, input);
+  assert.equal(input.value, '');
+});
+
+test('background dismiss invalidates queued composer focus', async (t) => {
+  const dom = await bootAppDom();
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  const input = document.getElementById('msgInput');
+  const row = appendMessageRow(dom, { id: 204, userId: 2, text: 'Queue focus' });
+  await openMobileKeyboard(dom, input);
+  dispatchPointerTap(dom.window, row.querySelector('.msg-bubble'));
+  // Dismiss before the focus requested by the message tap runs on the next frame.
+  dispatchPointerTap(dom.window, document.getElementById('messages'));
+  await wait(dom, 80);
+  assert.notEqual(document.activeElement, input);
+});
+
+for (const gesture of ['pointermove', 'pointercancel', 'touchmove', 'touchcancel', 'scroll']) test(`background ${gesture} preserves keyboard and mentions`, async (t) => {
+  const dom = await openSingleChatDom({
+    mentionTargetsByChatId: { 1: [{ user_id: 2, token: 'bob', display_name: 'Bob' }] },
+  });
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  const input = document.getElementById('msgInput');
+  const messages = document.getElementById('messages');
+  await openMobileKeyboard(dom, input);
+  dispatchPointerTap(dom.window, document.getElementById('mentionOpenBtn'));
+  await wait(dom, 80);
+  if (gesture === 'touchmove') {
+    const { moveEvent } = dispatchTouchDrag(dom.window, messages, { moveX: 320, moveY: 340 });
+    assert.equal(moveEvent.defaultPrevented, false);
+  } else if (gesture === 'touchcancel') {
+    messages.dispatchEvent(createTouchStartEvent(dom.window));
+    messages.dispatchEvent(createTouchEvent(dom.window, 'touchcancel'));
+    messages.dispatchEvent(createTouchEndEvent(dom.window));
+  } else {
+    messages.dispatchEvent(createPrimaryPointerEvent(dom.window, 'pointerdown', { clientX: 30, clientY: 200 }));
+    if (gesture === 'scroll') messages.dispatchEvent(new dom.window.Event('scroll'));
+    else messages.dispatchEvent(createPrimaryPointerEvent(dom.window, gesture, { clientX: 30, clientY: 120 }));
+    messages.dispatchEvent(createPrimaryPointerEvent(dom.window, 'pointerup', { clientX: 30, clientY: 200 }));
+  }
+  await wait(dom, 80);
+  assert.equal(document.activeElement, input);
+  assert.equal(document.getElementById('mentionPicker').classList.contains('hidden'), false);
+});
+
+for (const gesture of ['pointermove', 'pointercancel', 'touchmove', 'scroll']) test(`mention ${gesture} leaves native scrolling available without selecting a target`, async (t) => {
+  const dom = await openSingleChatDom({
+    mentionTargetsByChatId: { 1: [{ user_id: 2, token: 'bob', display_name: 'Bob' }] },
+  });
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  const input = document.getElementById('msgInput');
+  await openMobileKeyboard(dom, input);
+  dispatchPointerTap(dom.window, document.getElementById('mentionOpenBtn'));
+  await wait(dom, 80);
+  const picker = document.getElementById('mentionPicker');
+  const list = picker.querySelector('.mention-picker-list');
+  const item = picker.querySelector('.mention-picker-item');
+  Object.defineProperties(list, { scrollHeight: { value: 1000 }, clientHeight: { value: 200 } });
+  list.scrollTop = 20;
+  if (gesture === 'touchmove') {
+    const { moveEvent, endEvent } = dispatchTouchDrag(dom.window, item, { moveX: 320, moveY: 340 });
+    assert.equal(moveEvent.defaultPrevented, false);
+    assert.equal(endEvent.defaultPrevented, false);
+  } else {
+    item.dispatchEvent(createPrimaryPointerEvent(dom.window, 'pointerdown', { clientX: 30, clientY: 200 }));
+    if (gesture === 'scroll') list.dispatchEvent(new dom.window.Event('scroll'));
+    else {
+      const event = createPrimaryPointerEvent(dom.window, gesture, { clientX: 30, clientY: 120 });
+      item.dispatchEvent(event);
+      assert.equal(event.defaultPrevented, false);
+    }
+    item.dispatchEvent(createPrimaryPointerEvent(dom.window, 'pointerup', { clientX: 30, clientY: 120 }));
+  }
+  assert.equal(list.scrollTop, 20, 'The guard must not scroll a native mention list');
+  assert.equal(input.value, '');
+  assert.equal(picker.classList.contains('hidden'), false);
+  assert.equal(document.activeElement, input);
+  let inputEvents = 0;
+  input.addEventListener('input', () => { inputEvents += 1; });
+  dispatchPointerTap(dom.window, item, { emitClick: true });
+  await wait(dom, 80);
+  assert.equal(input.value, '@bob ');
+  assert.equal(inputEvents, 1);
+  assert.equal(document.activeElement, input);
 });
 
 test('mobile message swipe reply and edit keep the keyboard attached', async (t) => {

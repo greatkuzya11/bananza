@@ -456,6 +456,9 @@
       if (!picker || picker.classList.contains('hidden')) return;
       const target = event.target;
       if (picker.contains(target) || target === dom.msgInput || target?.closest?.('#mentionOpenBtn')) return;
+      // The chat guard distinguishes a background tap from a scroll before
+      // dismissing both the picker and the keyboard.
+      if (actions.isMobileComposerBackgroundGesture?.(event)) return;
       hideMentionPicker({ immediate: true });
       if ((actions.isPickerDismissPassThroughTarget || (() => false))(target)) return;
       (actions.consumeOutsidePickerDismissGesture || noop)(event, suppressMentionPickerFollowupClick);

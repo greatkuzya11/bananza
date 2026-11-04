@@ -334,6 +334,57 @@ for (const mode of ['desktop', 'mobile-closed', 'android', 'android-glass', 'ios
   });
 }
 
+for (const ios of [false, true]) test(`mentions scroll natively and one background tap dismisses the composer (${ios ? 'iOS viewport' : 'Android viewport'})`, async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.includes('mobile'), 'mobile-only regression');
+  await installFakeVisualViewport(page, { ios });
+  await installMediaMocks(page);
+  await page.route('**/api/chats/*/mention-targets', (route) => route.fulfill({
+    json: { targets: Array.from({ length: 40 }, (_, index) => ({
+      user_id: index + 100,
+      token: `member${index}`,
+      display_name: `Member ${index}`,
+    })) },
+  }));
+  await registerViaUi(page, makeUser('pwmentions'));
+  await openPrivateChat(page, getContext().bobUser.displayName);
+  const input = page.locator('#msgInput');
+  await input.focus();
+  const originalHeight = await page.evaluate(() => window.visualViewport.height);
+  await setFakeVisualViewport(page, { height: 430, offsetTop: 0 });
+  await expect.poll(async () => (await readComposerLayout(page)).snapshot.chatKeyboardLayout).toBe(true);
+  await input.fill('@');
+  const list = page.locator('.mention-picker-list');
+  await expect(list).toBeVisible();
+  await expect(list.locator('.mention-picker-item')).toHaveCount(40);
+  await expect(list).toHaveCSS('touch-action', 'pan-y');
+  await expect(list).toHaveCSS('overscroll-behavior', 'contain');
+  // Use browser input rather than DOM-dispatched events so native scrolling runs.
+  const box = await list.boundingBox();
+  const x = box.x + box.width / 2;
+  const startY = box.y + box.height - 24;
+  const distance = Math.min(150, box.height - 48);
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y: startY }] });
+  for (let step = 1; step <= 6; step += 1) {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: startY - distance * step / 6 }] });
+    await page.waitForTimeout(16);
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(20);
+  await expect(input).toHaveValue('@');
+  await expect(input).toBeFocused();
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+
+  const messages = await page.locator('#messages').boundingBox();
+  await page.touchscreen.tap(messages.x + 3, messages.y + 8);
+  await expect(page.locator('#mentionPicker')).toBeHidden();
+  await expect(input).not.toBeFocused();
+  await expect(input).toHaveValue('@');
+  await setFakeVisualViewport(page, { height: originalHeight });
+  await expect.poll(async () => (await readComposerLayout(page)).snapshot.chatKeyboardLayout).toBe(false);
+  await cdp.detach();
+});
+
 test('mobile composer stays docked when multiline paste causes visual viewport drift', async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.includes('mobile'), 'mobile-only regression');
 
