@@ -92,6 +92,47 @@
     const saveCurrentScrollAnchor = (...args) => actions.saveCurrentScrollAnchor?.(...args);
     const scrollToBottom = (...args) => actions.scrollToBottom?.(...args);
 
+    let imagePreviewResizeObserver = null;
+    let imagePreviewHeightSyncBound = false;
+    let imagePreviewAreaHeight = 0;
+    let imagePreviewChatId = null;
+
+    function syncImagePreviewHeight() {
+      const height = messagesEl?.clientHeight || 0;
+      if (!height) return;
+      const chatId = getCurrentChatId();
+      const previousHeight = imagePreviewChatId === chatId ? imagePreviewAreaHeight : height;
+      imagePreviewAreaHeight = height;
+      imagePreviewChatId = chatId;
+      const limit = `${Math.max(1, Math.floor(height * 0.8))}px`;
+      if (messagesEl.style.getPropertyValue('--image-preview-max-height') === limit) return;
+      const hasImage = Boolean(messagesEl.querySelector('.single-image-message'));
+      // A shrinking viewport moves the bottom before ResizeObserver runs.
+      const wasAtBottom = previousHeight > height
+        && messagesEl.scrollHeight - messagesEl.scrollTop - previousHeight <= 8;
+      const atBottom = hasImage && (isNearBottom(8) || wasAtBottom);
+      const anchor = hasImage && !atBottom ? captureScrollAnchor() : null;
+      messagesEl.style.setProperty('--image-preview-max-height', limit);
+      if (hasImage) requestAnimationFrame(() => {
+        if (getCurrentChatId() !== chatId) return;
+        if (atBottom) scrollToBottom(true);
+        else if (anchor) restoreScrollAnchor(anchor, 1);
+      });
+    }
+
+    function setupImagePreviewHeightSync() {
+      if (!messagesEl) return;
+      syncImagePreviewHeight();
+      if (imagePreviewHeightSyncBound) return;
+      imagePreviewHeightSyncBound = true;
+      if (typeof window.ResizeObserver === 'function') {
+        imagePreviewResizeObserver = new window.ResizeObserver(syncImagePreviewHeight);
+        imagePreviewResizeObserver.observe(messagesEl);
+      } else {
+        window.addEventListener('resize', syncImagePreviewHeight);
+      }
+    }
+
     function resetReusableMessageRow(row) {
       if (!row) return;
       row.querySelectorAll('.location-card-map').forEach((mapEl) => {
@@ -1132,11 +1173,15 @@
         img.draggable = false;
         let imageLayoutHandled = false;
         let imageLayoutRetryFrame = 0;
-        const markWideImage = () => {
+        const updateImageLayout = () => {
           if (!img.naturalWidth || !img.naturalHeight) return;
           row.classList.toggle('wide-media-message', img.naturalWidth >= img.naturalHeight);
+          const singleImage = !row.classList.contains('album-message');
+          if (singleImage) setupImagePreviewHeightSync();
+          row.classList.toggle('single-image-message', singleImage);
         };
         const finalizeImageLayout = () => {
+          if (row.querySelector('.msg-image') !== img) return;
           if (!row.isConnected) {
             if (imageLayoutRetryFrame) return;
             imageLayoutRetryFrame = requestAnimationFrame(() => {
@@ -1154,7 +1199,7 @@
           const rowChatId = Number(row.__messageData?.chat_id || row.__messageData?.chatId || getCurrentChatId() || 0);
           const shouldAutoScroll = Boolean(row.__autoScrollMediaToBottomOnLoad);
           const anchor = !shouldAutoScroll && !isNearBottom(8) ? captureScrollAnchor() : null;
-          markWideImage();
+          updateImageLayout();
           if (anchor) requestAnimationFrame(() => restoreScrollAnchor(anchor, 1));
           clearPendingMediaBottomScroll(row);
           if (shouldAutoScroll) settleDeferredMediaBottomScroll(rowChatId);

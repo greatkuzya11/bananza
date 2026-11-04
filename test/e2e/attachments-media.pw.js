@@ -3,6 +3,7 @@ const fs = require('fs');
 const { test, expect } = require('@playwright/test');
 
 const {
+  createApiSession,
   getContext,
   installMediaMocks,
   isDesktopProject,
@@ -408,4 +409,102 @@ test('file preparation starts only after confirming the native file selection', 
     await page.locator('.pending-files-clear').click();
     await expect(page.locator('#pendingFile')).toBeHidden();
   }
+});
+
+test('single image previews fill the bubble and stay within the visible message area', async ({ page }, testInfo) => {
+  await registerViaUi(page, makeUser('portrait'));
+  await openPrivateChat(page, getContext().bobUser.displayName);
+  const images = await page.evaluate(() => [500, 4000, 400, 250].map(height => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 400;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#387b93';
+    ctx.fillRect(0, 0, 400, height);
+    ctx.fillStyle = '#f4c65e';
+    ctx.fillRect(0, 0, 400, 80);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '28px sans-serif';
+    ctx.fillText('Top of the original', 12, 50);
+    return canvas.toDataURL('image/png').split(',')[1];
+  }));
+  const caption = 'Portrait with a caption that should not leave empty space next to the image';
+  for (const [index, data] of images.entries()) {
+    await page.locator('#fileInputGallery').setInputFiles({
+      name: `shape-${index}.png`, mimeType: 'image/png', buffer: Buffer.from(data, 'base64'),
+    });
+    await expect(page.locator('#pendingFile')).toHaveAttribute('aria-busy', 'false');
+    if (index === 0) await page.locator('#msgInput').fill(caption);
+    await page.locator('#sendBtn').click();
+    const row = page.locator('.msg-row').filter({ has: page.locator(`.msg-image[alt="shape-${index}.png"]`) });
+    await expect(row).not.toHaveAttribute('data-outbox', '1');
+    await expect(row.locator('.msg-image')).toBeVisible();
+  }
+  const bob = createApiSession();
+  await bob.login(getContext().bobUser);
+  const file = await bob.uploadFile({ filename: 'incoming-tall.png', mimeType: 'image/png', body: Buffer.from(images[1], 'base64') });
+  const chatId = await page.evaluate(() => window.BananzaAppBridge.getCurrentChatId());
+  await bob.request(`/api/chats/${chatId}/messages`, { method: 'POST', json: { text: 'Incoming portrait', fileIds: [file.id] } });
+  const square = await bob.uploadFile({ filename: 'square-with-quote.png', mimeType: 'image/png', body: Buffer.from(images[2], 'base64') });
+  const replyToId = Number(await messageRowByText(page, caption).getAttribute('data-msg-id'));
+  await bob.request(`/api/chats/${chatId}/messages`, {
+    method: 'POST', json: { fileIds: [square.id], replyToId },
+  });
+
+  async function checkLayout() {
+    await expect(page.locator('#messages .single-image-message')).toHaveCount(6);
+    await expect.poll(() => page.locator('#messages').evaluate(messages => {
+      return [...messages.querySelectorAll('.single-image-message')].map(row => {
+        const img = row.querySelector('.msg-image');
+        const bubble = row.querySelector('.msg-bubble');
+        const style = getComputedStyle(bubble);
+        const imageRect = img.getBoundingClientRect();
+        const innerWidth = bubble.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+        const expectedHeight = Math.min(imageRect.width * img.naturalHeight / img.naturalWidth, Math.floor(messages.clientHeight * 0.8));
+        const valid = imageRect.width > 150 && Math.abs(imageRect.width - innerWidth) <= 1
+          && Math.abs(imageRect.height - expectedHeight) <= 1
+          && imageRect.height <= messages.clientHeight * 0.8 + 1;
+        return valid ? null : { name: img.alt, width: imageRect.width, height: imageRect.height, innerWidth, expectedHeight,
+          rowWidth: row.getBoundingClientRect().width, contentWidth: row.querySelector('.msg-content').getBoundingClientRect().width,
+          availableHeight: messages.clientHeight };
+      }).filter(Boolean);
+    })).toEqual([]);
+  }
+
+  await checkLayout();
+  await page.reload();
+  await checkLayout();
+  await expect(page.locator(`.msg-row[data-msg-id="${replyToId}"] .msg-text`)).toHaveText(caption);
+  const squareRow = page.locator('.msg-row').filter({ has: page.locator('.msg-image[alt="square-with-quote.png"]') });
+  await expect(squareRow.locator('.msg-reply')).toContainText(caption);
+  await squareRow.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath('square-with-quote.png') });
+  const tall = page.locator('.msg-image[alt="shape-1.png"]');
+  await tall.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath('portrait-preview.png') });
+  const originalSrc = await tall.evaluate(img => img.src);
+  await tall.click();
+  await expect(page.locator('#imageViewer')).toBeVisible();
+  const fullImage = page.locator('#imageViewer img[alt="shape-1.png"]');
+  await expect(fullImage).toHaveAttribute('src', originalSrc);
+  await expect(fullImage).toBeInViewport();
+  expect(await fullImage.evaluate(img => img.naturalHeight)).toBe(4000);
+  await page.locator('#imageViewer .iv-close').click();
+  await page.locator('#messages').evaluate(el => el.classList.add('compact-view'));
+  await checkLayout();
+  await page.locator('#messages').evaluate(el => el.classList.remove('compact-view'));
+  const viewport = page.viewportSize();
+  await page.setViewportSize(isDesktopProject(testInfo)
+    ? { width: 1024, height: 500 }
+    : { width: 740, height: viewport.width });
+  await checkLayout();
+  // A reduced message area also exercises composer/keyboard-driven resizes.
+  await page.locator('#messages').evaluate(el => { el.scrollTop = el.scrollHeight; });
+  await page.locator('#messages').evaluate(el => {
+    el.style.flex = '0 0 180px';
+    el.style.height = '180px';
+    el.style.minHeight = '0';
+  });
+  await checkLayout();
+  await expect.poll(() => page.locator('#messages').evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThanOrEqual(2);
 });
