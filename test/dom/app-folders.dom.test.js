@@ -213,7 +213,7 @@ test('folder ui renders the active strip, picker, and context menu without ownin
   await closing;
   assert.equal(picker.getAttribute('aria-hidden'), 'true');
   assert.equal(ui.getPickerState(), null);
-  assert.equal(window.document.activeElement.id, 'chatFoldersBtn');
+  assert.equal(window.document.activeElement.id, 'sidebarActionsToggle');
 
   ui.showChatFolderPicker();
   modals.closeTop({ immediate: true, fromHistory: true });

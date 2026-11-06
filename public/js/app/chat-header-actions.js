@@ -16,6 +16,18 @@
     const dom = objectOrDefault(opts.dom);
     const state = objectOrDefault(opts.state);
     const doc = opts.document || getDefaultDocument();
+    const win = doc?.defaultView;
+    const panel = dom.chatHeaderActions;
+    const capsule = panel?.closest('.chat-actions-capsule');
+
+    function visibleButtons() {
+      return Array.from(panel?.querySelectorAll('button') || []).filter(button =>
+        !button.hidden && !button.classList.contains('hidden') && win?.getComputedStyle(button).display !== 'none');
+    }
+
+    function setStyleValue(element, name, value) {
+      if (element && element.style.getPropertyValue(name) !== value) element.style.setProperty(name, value);
+    }
 
     function getRef(name) {
       return dom[name] || null;
@@ -79,12 +91,20 @@
       chatHeaderActions.inert = !isOpen;
       chatHeaderActions.classList.toggle('is-open', isOpen);
       chatHeaderActions.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+      capsule?.classList.toggle('is-open', isOpen);
+      const visible = visibleButtons();
+      setStyleValue(capsule, '--chat-action-count', String(visible.length));
+      visible.forEach((button, index) => {
+        const distance = visible.length - index;
+        setStyleValue(button, '--chat-header-action-delay', `${(distance - 1) * 35}ms`);
+        setStyleValue(button, '--chat-header-action-offset', `${distance * 44}px`);
+      });
       if (chatInfoBtn) {
         chatInfoBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
         chatInfoBtn.classList.toggle('is-active', isOpen);
       }
       chatHeaderActions.querySelectorAll('button').forEach((button) => {
-        if (isOpen && !button.classList.contains('hidden') && !button.hidden) {
+        if (isOpen && visible.includes(button)) {
           button.removeAttribute('tabindex');
         } else {
           button.tabIndex = -1;
@@ -100,6 +120,7 @@
       }
       const current = setOpenValue(nextOpen);
       syncChatHeaderActionsAccessibility();
+      if (nextOpen && panel) panel.scrollLeft = 0;
       return current;
     }
 
@@ -117,6 +138,32 @@
       if (!button || !getRef('chatHeaderActions').contains(button)) return;
       button.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
     });
+
+    // Dynamic call/ChatShot controls can change while the capsule is open.
+    if (panel && win?.MutationObserver) {
+      new win.MutationObserver(records => {
+        if (records.some(record => record.type === 'childList'
+          || record.target.matches?.('button'))) syncChatHeaderActionsAccessibility();
+      }).observe(panel, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'hidden', 'style'] });
+    }
+    capsule?.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      const toggle = getRef('chatInfoBtn');
+      const buttons = [...visibleButtons().filter(button => !button.disabled), toggle].filter(Boolean);
+      const index = buttons.indexOf(doc.activeElement);
+      if (index < 0) return;
+      event.preventDefault();
+      setChatHeaderActionsOpen(true);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+        : (index + (event.key === 'ArrowLeft' ? -1 : 1) + buttons.length) % buttons.length;
+      buttons[next].focus({ preventScroll: true });
+    });
+    panel?.addEventListener('click', event => {
+      if (event.target.closest?.('button:not(:disabled)')) closeChatHeaderActions();
+    }, true);
+    doc?.addEventListener('pointerdown', event => {
+      if (getOpen() && capsule && !capsule.contains(event.target)) closeChatHeaderActions();
+    }, true);
 
     return {
       getChatSettingsActionOpener,

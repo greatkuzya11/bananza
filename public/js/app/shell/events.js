@@ -2,6 +2,238 @@
   const root = window.BananzaApp = window.BananzaApp || {};
   const shellRoot = root.shell = root.shell || {};
 
+  function bindActionHints(doc = document) {
+    if (doc.__bananzaActionHints) return;
+    doc.__bananzaActionHints = true;
+    const win = doc.defaultView;
+    const selector = '.sidebar-quick-action, #sidebarActionsToggle, .chat-actions-capsule button';
+    const tooltip = doc.createElement('div');
+    tooltip.id = 'actionHintTooltip';
+    tooltip.className = 'action-hint-tooltip';
+    tooltip.setAttribute('role', 'tooltip');
+    tooltip.setAttribute('data-i18n-skip', '');
+    tooltip.hidden = true;
+    doc.body.appendChild(tooltip);
+    let active = null;
+    let hold = null;
+    let blocked = null;
+    let timer = 0;
+    let dismissTimer = 0;
+    let internalCancel = false;
+    const buttonOf = target => target?.closest?.(selector);
+    const translate = text => win.BananzaI18n?.text?.(text) || text;
+    const available = button => button?.isConnected && !button.hidden
+      && !button.closest('[inert], [aria-hidden="true"]')
+      && win.getComputedStyle(button).display !== 'none'
+      && win.getComputedStyle(button).visibility !== 'hidden';
+
+    function prepare(button) {
+      if (!button?.matches?.(selector)) return;
+      // Preserve feature-specific titles, but avoid duplicate native tooltips.
+      if (button.title) button.dataset.actionHint = button.title;
+      button.removeAttribute('data-i18n-title');
+      button.removeAttribute('title');
+    }
+    function hide() {
+      win.clearTimeout(timer);
+      win.clearTimeout(dismissTimer);
+      if (active) {
+        const ids = (active.getAttribute('aria-describedby') || '').split(/\s+/).filter(id => id && id !== tooltip.id);
+        if (ids.length) active.setAttribute('aria-describedby', ids.join(' '));
+        else active.removeAttribute('aria-describedby');
+      }
+      active = null;
+      tooltip.hidden = true;
+    }
+    function label(button) {
+      const expanded = button.getAttribute('aria-expanded') === 'true';
+      if (button.id === 'sidebarActionsToggle') return translate(expanded ? 'Hide sidebar actions' : 'Show sidebar actions');
+      if (button.id === 'chatInfoBtn') return translate(expanded ? 'Hide chat actions' : 'Show chat actions');
+      return translate(button.dataset.actionHint || button.getAttribute('aria-label') || '');
+    }
+    function position() {
+      if (!available(active)) { hide(); return; }
+      tooltip.textContent = label(active);
+      const rect = active.getBoundingClientRect();
+      const hint = tooltip.getBoundingClientRect();
+      const viewport = win.visualViewport;
+      const left = viewport?.offsetLeft || 0;
+      const top = viewport?.offsetTop || 0;
+      const width = viewport?.width || win.innerWidth;
+      const height = viewport?.height || win.innerHeight;
+      tooltip.style.left = `${Math.max(left + 8, Math.min(rect.left + (rect.width - hint.width) / 2, left + width - hint.width - 8))}px`;
+      tooltip.style.top = `${Math.max(top + 8, rect.bottom + hint.height + 8 <= top + height ? rect.bottom + 8 : rect.top - hint.height - 8)}px`;
+    }
+    function show(button) {
+      hide();
+      if (!available(button)) return;
+      prepare(button);
+      active = button;
+      tooltip.textContent = label(button);
+      if (!tooltip.textContent) { hide(); return; }
+      const ids = new Set((button.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean));
+      ids.add(tooltip.id);
+      button.setAttribute('aria-describedby', Array.from(ids).join(' '));
+      tooltip.hidden = false;
+      position();
+    }
+    function cancelButtonGesture(button) {
+      // Existing touch-safe actions fire on pointerup/touchend, before click.
+      internalCancel = true;
+      button.dispatchEvent(new win.Event('pointercancel', { bubbles: true }));
+      button.dispatchEvent(new win.Event('touchcancel', { bubbles: true }));
+      internalCancel = false;
+    }
+    function start(event, point, touch) {
+      hide();
+      hold = null;
+      blocked = null;
+      const button = buttonOf(event.target);
+      if (!touch || !available(button)) return;
+      hold = { button, x: point.clientX, y: point.clientY };
+      timer = win.setTimeout(() => {
+        if (!hold || !available(button)) return;
+        blocked = button;
+        cancelButtonGesture(button);
+        show(button);
+      }, 500);
+    }
+    function move(point) {
+      if (!hold || Math.hypot(point.clientX - hold.x, point.clientY - hold.y) <= 10) return;
+      blocked = hold.button;
+      cancelButtonGesture(hold.button);
+      hold = null;
+      hide();
+    }
+    function release(event) {
+      win.clearTimeout(timer);
+      hold = null;
+      if (!blocked) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      win.clearTimeout(dismissTimer);
+      dismissTimer = win.setTimeout(hide, 1800);
+    }
+    function cancel() {
+      if (internalCancel) return;
+      hold = null;
+      hide();
+    }
+    doc.addEventListener('pointerover', event => {
+      if (event.pointerType !== 'mouse' || hold) return;
+      const button = buttonOf(event.target);
+      if (!button || button.contains(event.relatedTarget)) return;
+      hide();
+      timer = win.setTimeout(() => show(button), 400);
+    }, true);
+    doc.addEventListener('pointerout', event => {
+      const button = buttonOf(event.target);
+      if (event.pointerType === 'mouse' && button && !button.contains(event.relatedTarget)) hide();
+    }, true);
+    doc.addEventListener('pointerdown', event => start(event, event, event.pointerType !== 'mouse' && event.isPrimary !== false), true);
+    doc.addEventListener('pointermove', event => move(event), true);
+    doc.addEventListener('pointerup', release, { capture: true, passive: false });
+    doc.addEventListener('pointercancel', cancel, true);
+    if (!win.PointerEvent) {
+      doc.addEventListener('touchstart', event => start(event, event.touches[0], event.touches.length === 1), { capture: true, passive: true });
+      doc.addEventListener('touchmove', event => { if (event.touches[0]) move(event.touches[0]); }, { capture: true, passive: true });
+    }
+    doc.addEventListener('touchend', release, { capture: true, passive: false });
+    doc.addEventListener('touchcancel', cancel, true);
+    doc.addEventListener('click', event => {
+      if (blocked && buttonOf(event.target) === blocked) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
+      hide();
+    }, true);
+    doc.addEventListener('contextmenu', event => {
+      if (hold && buttonOf(event.target) === hold.button || blocked && buttonOf(event.target) === blocked) event.preventDefault();
+    }, true);
+    doc.addEventListener('focusin', event => {
+      const button = buttonOf(event.target);
+      if (button?.matches(':focus-visible') && !hold) show(button);
+    });
+    doc.addEventListener('focusout', () => { if (!hold) hide(); });
+    doc.addEventListener('keydown', () => { blocked = null; cancel(); }, true);
+    doc.addEventListener('scroll', cancel, true);
+    win.addEventListener('resize', cancel);
+    win.addEventListener('blur', cancel);
+    win.visualViewport?.addEventListener('resize', cancel);
+    win.visualViewport?.addEventListener('scroll', cancel);
+    win.addEventListener('bananza:languagechange', () => { if (active) position(); });
+    doc.querySelectorAll(selector).forEach(prepare);
+    const observer = new win.MutationObserver(records => {
+      records.forEach(record => {
+        if (record.type === 'childList') {
+          record.addedNodes.forEach(node => {
+            prepare(node);
+            node.querySelectorAll?.(selector).forEach(prepare);
+          });
+        } else if (record.attributeName === 'title') prepare(record.target);
+      });
+      if (active) position();
+    });
+    doc.querySelectorAll('.sidebar-header, .chat-actions-capsule').forEach(container => observer.observe(container, {
+      childList: true, subtree: true, attributes: true,
+      attributeFilter: ['title', 'aria-label', 'aria-expanded', 'aria-hidden', 'hidden', 'class', 'inert'],
+    }));
+  }
+  function bindSidebarActions(doc = document) {
+    const toggle = doc.getElementById('sidebarActionsToggle');
+    const header = toggle?.closest('.sidebar-header');
+    if (!header || toggle.__sidebarActionsBound) return;
+    toggle.__sidebarActionsBound = true;
+    const buttons = Array.from(header.querySelectorAll('.sidebar-quick-action'));
+    const isOpen = () => toggle.getAttribute('aria-expanded') === 'true';
+    function setOpen(open) {
+      if (header.classList.contains('is-selecting-chats')) open = false;
+      if (!open && buttons.includes(doc.activeElement)) toggle.focus({ preventScroll: true });
+      toggle.setAttribute('aria-expanded', String(open));
+      header.classList.toggle('sidebar-actions-open', open);
+      buttons.forEach(button => {
+        button.tabIndex = open ? 0 : -1;
+        button.setAttribute('aria-hidden', String(!open));
+      });
+    }
+    toggle.addEventListener('click', event => {
+      setOpen(!isOpen());
+      if (isOpen() && event.detail === 0) buttons[0]?.focus({ preventScroll: true });
+    });
+    header.addEventListener('keydown', event => {
+      const index = buttons.indexOf(doc.activeElement);
+      if (doc.activeElement !== toggle && index < 0) return;
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        event.preventDefault();
+        setOpen(true);
+        const items = [...buttons, toggle];
+        const current = index < 0 ? buttons.length : index;
+        items[(current + (event.key === 'ArrowLeft' ? -1 : 1) + items.length) % items.length].focus({ preventScroll: true });
+      }
+    });
+    // Close before the action runs, so modal focus returns to the visible toggle.
+    buttons.forEach(button => button.addEventListener('click', () => setOpen(false), true));
+    doc.addEventListener('pointerdown', event => {
+      if (isOpen() && !header.contains(event.target)) setOpen(false);
+    }, true);
+    doc.addEventListener('focusin', event => {
+      if (isOpen() && !header.contains(event.target)) setOpen(false);
+    });
+    doc.addEventListener('keydown', event => {
+      if (event.key !== 'Escape' || !isOpen()) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setOpen(false);
+      toggle.focus({ preventScroll: true });
+    }, true);
+    // Selection replaces the entire header; never reopen stale actions afterwards.
+    new MutationObserver(() => {
+      if (isOpen() && header.classList.contains('is-selecting-chats')) setOpen(false);
+    }).observe(header, { attributes: true, attributeFilter: ['class'] });
+    setOpen(false);
+  }
+
   const PROFILE_STATUS_OPTIONS = [
     { key: '', label: 'No status' },
     { key: 'available', label: 'Available' },
@@ -291,6 +523,7 @@
       bound = true;
       scope.__bananzaShellEventScope = scope;
       with (scope) {
+        window.BananzaApp.shell.bindActionHints();
         const syncComposerHistoryNavigationEffects = () => {
           saveComposerDraft(currentChatId);
           autoResize();
@@ -571,6 +804,7 @@
         bindFeaturePreload(composerContextConvertBtn, 'context-chatshot-runtime');
 
         // Sidebar search
+        window.BananzaApp.shell.bindSidebarActions();
         setChatSearchOpen(false, { clear: true, focus: false, render: false });
         chatSearchToggle?.addEventListener('click', () => {
           if (isChatSearchOpen()) {
@@ -826,7 +1060,6 @@
     
         // Chat header actions
         bindTouchSafeButtonActivation(chatInfoBtn, () => {
-          animateChatHeaderActionButton(chatInfoBtn);
           toggleChatHeaderActions();
         });
         bindTouchSafeButtonActivation(chatSettingsActionBtn, () => {
@@ -981,4 +1214,6 @@
 
   shellRoot.profileStatusEditor = { createProfileStatusEditor, PROFILE_STATUS_OPTIONS };
   shellRoot.createEventController = createEventController;
+  shellRoot.bindSidebarActions = bindSidebarActions;
+  shellRoot.bindActionHints = bindActionHints;
 })();

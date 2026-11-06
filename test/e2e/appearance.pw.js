@@ -1,5 +1,5 @@
 const { test, expect } = require('./fixtures');
-const { installMediaMocks, makeUser, registerViaUi, loginViaUi, getContext, createApiSession, openPrivateChat, sendComposerMessage } = require('./helpers');
+const { openSidebarActions, installMediaMocks, makeUser, registerViaUi, loginViaUi, getContext, createApiSession, openPrivateChat, sendComposerMessage } = require('./helpers');
 const catalog = require('../../public/js/appearance');
 
 test('light chat text and reply previews retain contrast on every surface', async ({ page }, testInfo) => {
@@ -300,6 +300,69 @@ test('chat header icons are distinct in glass and keep legacy symbols in older d
   }
   await page.locator('#chatSettingsActionBtn').click();
   await expect(page.locator('#chatInfoModal')).toBeVisible();
+  await page.locator('#chatInfoModal .modal-close').click();
+  await expect(page.locator('#chatInfoBtn')).toBeFocused();
+
+  const toggle = page.locator('#chatInfoBtn');
+  const capsule = page.locator('.chat-actions-capsule');
+  for (const mode of ['classic', 'glass']) {
+    await page.evaluate(mode => window.BananzaAppearance.apply(document, { theme: 'tokyo-night', mode }), mode);
+    for (const width of [320, 360, 584]) {
+      await page.setViewportSize({ width, height: 780 });
+      // Crossing the desktop/mobile breakpoint returns the app to the chat list.
+      if (!await toggle.isVisible()) {
+        await page.locator('#chatList .chat-item').filter({ hasText: getContext().bobUser.displayName }).first().click();
+      }
+      await toggle.click();
+      await expect(toggle).toHaveCSS('animation-name', 'none');
+      await expect(toggle.locator('.chat-actions-close')).toHaveCSS('opacity', '1');
+      await expect(toggle.locator('.chat-actions-gear').first()).toHaveCSS('opacity', '0');
+      if (mode === 'classic') await expect(toggle.locator('.ui-icon-legacy')).toHaveCSS('display', 'flex');
+      await expect.poll(() => capsule.evaluate(el => {
+        const rect = el.getBoundingClientRect();
+        const toggleRect = document.getElementById('chatInfoBtn').getBoundingClientRect();
+        const backRect = document.getElementById('backBtn').getBoundingClientRect();
+        return rect.left >= 0 && rect.right <= innerWidth && toggleRect.width === 44
+          && backRect.left >= 0 && backRect.right <= rect.left;
+      })).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`chat-capsule-${mode}-${width}.png`), animations: 'disabled' });
+      await toggle.press('ArrowLeft');
+      await expect(page.locator('#chatSettingsActionBtn')).toBeFocused();
+      await page.keyboard.press('Home');
+      await expect(page.locator('#searchBtn')).toBeFocused();
+      await page.keyboard.press('Escape');
+      await expect(toggle).toBeFocused();
+      await expect(page.locator('#chatHeaderActions')).toHaveAttribute('aria-hidden', 'true');
+    }
+  }
+  // Buttons added or hidden by feature modules must update the open capsule too.
+  await toggle.click();
+  await page.evaluate(() => {
+    document.getElementById('callStartBtn').hidden = true;
+    document.getElementById('callVoiceStartBtn').hidden = true;
+    document.getElementById('chatShotBtn').classList.add('hidden');
+  });
+  await expect.poll(() => capsule.evaluate(el => el.style.getPropertyValue('--chat-action-count'))).toBe('2');
+  await expect(capsule).toHaveCSS('width', '132px');
+  await page.evaluate(() => { document.getElementById('chatShotBtn').classList.remove('hidden'); });
+  await expect.poll(() => capsule.evaluate(el => el.style.getPropertyValue('--chat-action-count'))).toBe('3');
+  await expect(capsule).toHaveCSS('width', '176px');
+  await page.locator('#messages').click({ position: { x: 10, y: 10 } });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await toggle.click();
+  await page.locator('#searchBtn').click();
+  await expect(page.locator('#searchPanel')).toHaveAttribute('aria-hidden', 'false');
+  await page.locator('#searchClose').click();
+  await expect(toggle).toBeFocused();
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await toggle.click();
+  await expect(capsule).toHaveCSS('transition-duration', '0s');
+  await expect(toggle.locator('.chat-actions-close')).toHaveCSS('transition-duration', '0s');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.evaluate(() => { document.documentElement.dataset.modalAnimation = 'none'; });
+  await expect(capsule).toHaveCSS('transition-duration', '0s');
+  await toggle.evaluate(el => { el.click(); el.click(); el.click(); });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
 });
 
 test('active glass chat keeps row geometry and uses a soft fill without an outline', async ({ page }, testInfo) => {
@@ -364,6 +427,7 @@ test('glass tab selection outlines the whole control on modal and login pages', 
   await installMediaMocks(page);
   await registerViaUi(page, makeUser('glasstabs'));
   if (testInfo.project.name.includes('mobile')) await page.setViewportSize({ width: 360, height: 780 });
+  await openSidebarActions(page);
   await page.locator('#newChatBtn').click();
   await expect(page.locator('#newChatModal')).toBeVisible();
   async function checkSelected(tab) {

@@ -309,7 +309,7 @@ test('mobile viewport shell exposes helpers and reads mocked visualViewport metr
   assert.equal(shell.isMobileChatKeyboardLayoutActive(), true);
 });
 
-test('chat header actions shell preserves aria, class and focus state', () => {
+test('chat header actions shell preserves aria, dynamic actions and focus state', async () => {
   const dom = createAppDom();
   loadAppRuntimeScripts(dom);
   const { window } = dom;
@@ -352,6 +352,35 @@ test('chat header actions shell preserves aria, class and focus state', () => {
   assert.equal(window.document.activeElement, refs.chatInfoBtn);
   assert.equal(refs.chatHeaderActions.classList.contains('is-open'), false);
   assert.equal(refs.chatInfoBtn.getAttribute('aria-expanded'), 'false');
+
+  const capsule = refs.chatHeaderActions.closest('.chat-actions-capsule');
+  assert.equal(capsule.style.getPropertyValue('--chat-action-count'), '2');
+  const callButton = window.document.createElement('button');
+  callButton.textContent = 'Call';
+  callButton.className = 'chat-header-action-btn hidden';
+  refs.chatHeaderActions.appendChild(callButton);
+  await new Promise(resolve => window.setTimeout(resolve, 0));
+  assert.equal(callButton.tabIndex, -1);
+  shell.setChatHeaderActionsOpen(true);
+  callButton.classList.remove('hidden');
+  await new Promise(resolve => window.setTimeout(resolve, 0));
+  assert.equal(capsule.style.getPropertyValue('--chat-action-count'), '3');
+  assert.equal(callButton.tabIndex, 0);
+  callButton.hidden = true;
+  await new Promise(resolve => window.setTimeout(resolve, 0));
+  assert.equal(capsule.style.getPropertyValue('--chat-action-count'), '2');
+  assert.equal(callButton.tabIndex, -1);
+  let activated = false;
+  refs.searchBtn.addEventListener('click', () => { activated = true; });
+  refs.searchBtn.focus();
+  refs.searchBtn.click();
+  assert.equal(activated, true);
+  assert.equal(open, false);
+  assert.equal(window.document.activeElement, refs.chatInfoBtn);
+  shell.setChatHeaderActionsOpen(true);
+  window.document.body.dispatchEvent(new window.Event('pointerdown', { bubbles: true }));
+  assert.equal(open, false);
+  dom.window.close();
 });
 
 test('full app runtime still publishes bridge, testing API and bananza ready', async () => {

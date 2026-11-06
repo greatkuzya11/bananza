@@ -82,6 +82,12 @@
     }
 
     function focusElementIfPossible(el) {
+      if (el?.matches?.('.sidebar-quick-action[aria-hidden="true"]')) {
+        el = doc?.getElementById('sidebarActionsToggle');
+      }
+      if (el?.closest?.('#chatHeaderActions[aria-hidden="true"]')) {
+        el = doc?.getElementById('chatInfoBtn');
+      }
       if (!isHTMLElement(el) || !el.isConnected) return false;
       if (typeof el.matches === 'function' && el.matches('[disabled], [aria-hidden="true"]')) return false;
       if (typeof el.closest === 'function' && el.closest('[inert]')) return false;

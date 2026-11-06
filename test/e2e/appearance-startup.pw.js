@@ -21,9 +21,13 @@ test('saved glass appearance has no legacy icons or underlying welcome scene dur
       await page.reload({ waitUntil: 'commit' });
       await expect(page.locator('html')).toHaveAttribute('data-visual-mode', 'glass');
       await expect(page.locator('html')).toHaveAttribute('data-ui-theme', theme);
-      for (const selector of ['.sidebar-header h2', '#chatSearchToggle', '#chatFoldersBtn', '#newChatBtn', '#settingsBtn']) {
+      for (const selector of ['.sidebar-header h2', '#settingsBtn']) {
         await expect(page.locator(`${selector} > .ui-glyph`)).toBeVisible();
         await expect(page.locator(`${selector} > .ui-icon-legacy`)).toBeHidden();
+      }
+      await expect(page.locator('#sidebarActionsToggle')).toBeVisible();
+      for (const selector of ['#chatSearchToggle', '#chatFoldersBtn', '#newChatBtn']) {
+        await expect(page.locator(selector)).toBeHidden();
       }
       if (mobile) {
         await expect(page.locator('#chatArea')).toHaveCSS('visibility', 'hidden');

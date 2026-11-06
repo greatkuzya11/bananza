@@ -2610,6 +2610,12 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
       }
     
       function focusElementIfPossible(el) {
+        if (el?.matches?.('.sidebar-quick-action[aria-hidden="true"]')) {
+          el = document.getElementById('sidebarActionsToggle');
+        }
+        if (el?.closest?.('#chatHeaderActions[aria-hidden="true"]')) {
+          el = document.getElementById('chatInfoBtn');
+        }
         if (!(el instanceof HTMLElement) || !el.isConnected) return false;
         if (el.matches('[disabled], [aria-hidden="true"]')) return false;
         if (el.closest('[inert]')) return false;

@@ -1,5 +1,5 @@
 const { test, expect } = require('./fixtures');
-const { installMediaMocks, makeUser, loginViaUi, createApiSession } = require('./helpers');
+const { openSidebarActions, installMediaMocks, makeUser, loginViaUi, createApiSession } = require('./helpers');
 
 test('selected chats can be deleted together after one confirmation', async ({ page }) => {
   await installMediaMocks(page);
@@ -18,6 +18,7 @@ test('selected chats can be deleted together after one confirmation', async ({ p
     if (request.method() === 'DELETE') deletes.push(new URL(request.url()).pathname);
   });
   await loginViaUi(page, user);
+  await openSidebarActions(page);
   await page.locator('#chatSearchToggle').click();
   await page.locator('#chatSearch').fill('Delete batch');
   const row = id => page.locator(`#chatList [data-chat-id="${id}"]`);
@@ -76,6 +77,7 @@ test('bulk actions in a filtered folder persist, isolate unselected chats and re
   await loginViaUi(page, user);
   await page.locator(`[data-folder-chip="${source.id}"]`).click();
   await expect(page.locator('#chatList .chat-item')).toHaveCount(3);
+  await openSidebarActions(page);
   await page.locator('#chatSearchToggle').click();
   await page.locator('#chatSearch').fill('Batch Selected');
   await expect(page.locator('#chatList .chat-item')).toHaveCount(2);
@@ -284,6 +286,7 @@ test('selection keeps geometry and consistent paint across themes, with accessib
   await row(ids[0]).click();
   if (testInfo.project.name.includes('mobile')) await page.locator('#backBtn').click();
   await expect(row(ids[0])).toBeVisible();
+  await openSidebarActions(page);
   await page.locator('#chatSearchToggle').click();
   await page.locator('#chatSearch').fill('Layout');
   await expect(page.locator('#chatList .chat-item')).toHaveCount(3);

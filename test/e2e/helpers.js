@@ -213,7 +213,13 @@ async function loginViaUi(page, user) {
   await applyTestAppearance(page);
 }
 
+async function openSidebarActions(page) {
+  const toggle = page.locator('#sidebarActionsToggle');
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+}
+
 async function openPrivateChat(page, displayName) {
+  await openSidebarActions(page);
   await page.locator('#newChatBtn').click();
   await expect(page.locator('#newChatModal')).toBeVisible();
   await page.locator('#userListPrivate .user-list-item').filter({ hasText: displayName }).first().click();
@@ -328,6 +334,7 @@ async function expectMobileScene(page, scene) {
 }
 
 module.exports = {
+  openSidebarActions,
   createApiSession,
   clickMessageAction,
   expectMobileScene,

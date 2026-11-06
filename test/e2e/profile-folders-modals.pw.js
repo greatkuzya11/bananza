@@ -1,5 +1,5 @@
 const { test, expect } = require('./fixtures');
-const { installMediaMocks, makeUser, loginViaUi, createApiSession } = require('./helpers');
+const { openSidebarActions, installMediaMocks, makeUser, loginViaUi, createApiSession } = require('./helpers');
 
 async function surfaceStyle(page, selector) {
   return page.locator(`${selector} .modal-content`).evaluate(el => {
@@ -64,6 +64,7 @@ test('profile and folders share modal layout and preserve navigation and nested 
       await profile.locator('.modal-close').click();
       await expect(profile).toBeHidden();
 
+      await openSidebarActions(page);
       await page.locator('#chatFoldersBtn').click();
       await expect(picker).toHaveAttribute('role', 'dialog');
       await expect(picker).toHaveAttribute('aria-modal', 'true');
@@ -79,10 +80,11 @@ test('profile and folders share modal layout and preserve navigation and nested 
       await page.screenshot({ path: testInfo.outputPath(`folders-${mode}-${theme}.png`) });
       await picker.locator('.modal-close').click();
       await expect(picker).toBeHidden();
-      await expect(page.locator('#chatFoldersBtn')).toBeFocused();
+      await expect(page.locator('#sidebarActionsToggle')).toBeFocused();
     }
   }
 
+  await openSidebarActions(page);
   await page.locator('#chatFoldersBtn').click();
   const toggle = picker.locator('[data-chat-folder-strip-toggle]');
   const wasPressed = await toggle.getAttribute('aria-pressed');
@@ -106,10 +108,12 @@ test('profile and folders share modal layout and preserve navigation and nested 
 
   await page.keyboard.press('Escape');
   await expect(picker).toBeHidden();
-  await expect(page.locator('#chatFoldersBtn')).toBeFocused();
+  await expect(page.locator('#sidebarActionsToggle')).toBeFocused();
+  await openSidebarActions(page);
   await page.locator('#chatFoldersBtn').click();
   await picker.click({ position: { x: 2, y: 2 } });
   await expect(picker).toBeHidden();
+  await openSidebarActions(page);
   await page.locator('#chatFoldersBtn').click();
   await picker.locator(`[data-folder-menu="${folderIds[0]}"]`).click();
   await page.keyboard.press('Escape');
@@ -119,6 +123,7 @@ test('profile and folders share modal layout and preserve navigation and nested 
   await page.goBack();
   await expect(picker).toBeHidden();
   await expect(page.locator('#chatFolderContextMenu')).toBeHidden();
+  await openSidebarActions(page);
   await page.locator('#chatFoldersBtn').click();
   await picker.locator(`[data-folder-select="${folderIds[0]}"]`).click();
   await expect(picker).toBeHidden();

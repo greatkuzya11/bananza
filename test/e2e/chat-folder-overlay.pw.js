@@ -1,5 +1,5 @@
 const { test, expect } = require('./fixtures');
-const { installMediaMocks, makeUser, loginViaUi, createApiSession } = require('./helpers');
+const { openSidebarActions, installMediaMocks, makeUser, loginViaUi, createApiSession } = require('./helpers');
 
 test('folder strip overlays scrolling chats and retains clicks, gestures and adaptive clearance', async ({ page }, testInfo) => {
   await installMediaMocks(page);
@@ -155,6 +155,7 @@ test('folder strip overlays scrolling chats and retains clicks, gestures and ada
     return parseFloat(getComputedStyle(document.getElementById('chatList'), '::before').height) === bar.offsetHeight;
   })).toBe(true);
   await bar.evaluate(el => { el.style.height = ''; });
+  await openSidebarActions(page);
   await page.locator('#chatSearchToggle').click();
   await page.locator('#chatSearch').fill('Overlay chat 1');
   await expect(list.locator('.chat-item')).toHaveCount(11);
