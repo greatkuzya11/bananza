@@ -113,11 +113,12 @@
       const atBottom = hasImage && (isNearBottom(8) || wasAtBottom);
       const anchor = hasImage && !atBottom ? captureScrollAnchor() : null;
       messagesEl.style.setProperty('--image-preview-max-height', limit);
-      if (hasImage) requestAnimationFrame(() => {
-        if (getCurrentChatId() !== chatId) return;
-        if (atBottom) scrollToBottom(true);
-        else if (anchor) restoreScrollAnchor(anchor, 1);
-      });
+      // ResizeObserver runs before paint. Compensate the new image geometry in
+      // this turn so neither a displaced message nor the bottom button flashes.
+      if (hasImage && getCurrentChatId() === chatId) {
+        if (atBottom) scrollToBottom(true, false, { synchronous: true, chatId });
+        else if (anchor) restoreScrollAnchor(anchor, 1, { chatId });
+      }
     }
 
     function setupImagePreviewHeightSync() {

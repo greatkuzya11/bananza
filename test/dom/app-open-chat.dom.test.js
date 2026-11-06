@@ -259,6 +259,78 @@ test('scroll controller saves and restores anchors and manages date indicator', 
   dom.window.close();
 });
 
+test('synchronous bottom compensation preserves button, guards, and deferred scroll behavior', async () => {
+  const dom = createAppDom();
+  try {
+    const { window, document } = dom.window;
+    const openChat = loadOpenChatRuntime(dom);
+    const messagesEl = document.getElementById('messages');
+    const button = document.getElementById('scrollBottomBtn');
+    messagesEl.innerHTML = '<div class="msg-row" data-msg-id="10"></div>';
+    Object.defineProperty(messagesEl, 'clientHeight', { configurable: true, value: 100 });
+    Object.defineProperty(messagesEl, 'scrollHeight', { configurable: true, value: 500 });
+    const frames = [];
+    const calls = [];
+    let chatId = 7;
+    let openSeq = 1;
+    let hasMoreAfter = false;
+    window.requestAnimationFrame = callback => { frames.push(callback); return frames.length; };
+    messagesEl.scrollTo = ({ top, behavior }) => {
+      messagesEl.scrollTop = Math.min(top, 400);
+      calls.push(behavior);
+    };
+    const controller = openChat.scroll.createScrollController({
+      window, document, dom: { messagesEl, scrollBottomBtn: button },
+      state: { getCurrentChatId: () => chatId, getOpenSeq: () => openSeq },
+      actions: {
+        getHasMoreAfter: () => hasMoreAfter,
+        maybeLoadMoreAtBottom: () => calls.push('load'),
+        markCurrentChatReadIfAtBottom: () => calls.push('read'),
+      },
+    });
+    button.classList.add('visible');
+    controller.scrollToBottom(true, false, { synchronous: true, chatId: 7, openSeq: 1 });
+    assert.equal(messagesEl.scrollTop, 400);
+    assert.equal(button.classList.contains('visible'), false);
+    assert.equal(frames.length, 0);
+
+    hasMoreAfter = true;
+    controller.scrollToBottom(true, true, { synchronous: true });
+    assert.equal(button.classList.contains('visible'), true);
+    await wait(window, 10);
+    assert.deepEqual(calls, ['instant', 'instant', 'load', 'read']);
+
+    calls.length = 0;
+    messagesEl.scrollTop = 50;
+    controller.scrollToBottom(true, true, { synchronous: true, chatId: 8 });
+    controller.scrollToBottom(true, true, { synchronous: true, openSeq: 2 });
+    assert.equal(messagesEl.scrollTop, 50);
+    await wait(window, 10);
+    assert.deepEqual(calls, []);
+
+    controller.scrollToBottom(true, true, { synchronous: true });
+    chatId = 8;
+    await wait(window, 10);
+    assert.deepEqual(calls, ['instant']); // Pending load/read belongs to the old chat.
+    hasMoreAfter = false;
+    messagesEl.scrollTop = 50;
+    controller.scrollToBottom(true);
+    assert.equal(messagesEl.scrollTop, 50);
+    frames.shift()();
+    assert.equal(messagesEl.scrollTop, 400);
+    frames.shift()();
+
+    messagesEl.scrollTop = 50;
+    controller.scrollToBottom(false, false, { synchronous: true, openSeq });
+    assert.equal(messagesEl.scrollTop, 50); // Smooth calls retain their deferred behavior.
+    openSeq += 1;
+    frames.shift()();
+    assert.equal(messagesEl.scrollTop, 50);
+  } finally {
+    dom.window.close();
+  }
+});
+
 test('media playback controller persists resume and completed state', () => {
   const dom = createAppDom();
   const { window, document } = dom.window;

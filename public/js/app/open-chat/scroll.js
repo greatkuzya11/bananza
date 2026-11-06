@@ -504,18 +504,23 @@
         (!guardChatId || Number(getCurrentChatId() || 0) === guardChatId)
         && (!guardSeq || Number(getOpenSeq() || 0) === guardSeq)
       );
-      win.requestAnimationFrame(() => {
+      const synchronous = instant && Boolean(options.synchronous);
+      const apply = () => {
         if (!isGuardCurrent()) return;
         if (typeof messagesEl.scrollTo === 'function') {
           messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: instant ? 'instant' : 'smooth' });
         } else {
           messagesEl.scrollTop = messagesEl.scrollHeight;
         }
-        const scrollBottomBtn = getScrollBottomBtn();
-        if (scrollBottomBtn) scrollBottomBtn.classList.remove('visible');
-        win.requestAnimationFrame(() => {
-          if (isGuardCurrent()) updateScrollBottomButton();
-        });
+        if (synchronous) {
+          updateScrollBottomButton();
+        } else {
+          const scrollBottomBtn = getScrollBottomBtn();
+          if (scrollBottomBtn) scrollBottomBtn.classList.remove('visible');
+          win.requestAnimationFrame(() => {
+            if (isGuardCurrent()) updateScrollBottomButton();
+          });
+        }
         if (!instant) setTimeout(() => {
           if (isGuardCurrent()) updateScrollBottomButton();
         }, 260);
@@ -525,7 +530,9 @@
         if (markRead) setTimeout(() => {
           if (isGuardCurrent()) actions.markCurrentChatReadIfAtBottom?.(true);
         }, instant ? 0 : 320);
-      });
+      };
+      if (synchronous) apply();
+      else win.requestAnimationFrame(apply);
     }
 
     function setScrollAnchorSaveSuppressed(value) {

@@ -222,6 +222,131 @@ async function scrollMessagesToBottom(page) {
   });
 }
 
+async function appendKeyboardPreviewMessages(page, { images = 1, imageLast = false } = {}) {
+  await appendSyntheticKeyboardMessages(page, 'text');
+  await page.evaluate(({ images, imageLast }) => {
+    const bridge = window.BananzaAppBridge;
+    const canvas = document.createElement('canvas');
+    canvas.width = 300;
+    canvas.height = 1200;
+    canvas.getContext('2d').fillRect(0, 0, 300, 1200);
+    const url = canvas.toDataURL('image/png');
+    const common = {
+      chat_id: bridge.getCurrentChatId(), user_id: bridge.getCurrentUser().id,
+      display_name: 'Preview test', is_read: true,
+    };
+    let id = 910000;
+    const append = (data) => bridge.__testing.appendMessage({
+      ...common, ...data, id: ++id, created_at: new Date(Date.now() + id).toISOString(),
+    });
+    for (let index = 0; index < images; index += 1) {
+      append({ file_id: id + 1, file_type: 'image', file_name: `portrait-${index}.png`, client_file_url: url });
+    }
+    if (!imageLast) {
+      for (let index = 0; index < 24; index += 1) append({ text: `After portrait ${index}: message for scroll anchoring.` });
+    }
+  }, { images, imageLast });
+  await expect(page.locator('#messages .single-image-message')).toHaveCount(images);
+  await page.locator('#messages .msg-image').evaluateAll(imgs => Promise.all(imgs.map(img => img.decode())));
+  // Finish load-time media anchoring before observing only the resize behavior.
+  await page.waitForTimeout(400);
+  await scrollMessagesToBottom(page);
+}
+
+async function observePreviewResize(page, { heights, viewport = false, blur = false, history = false }) {
+  return page.evaluate(async ({ heights, viewport, blur, history }) => {
+    const messages = document.getElementById('messages');
+    const button = document.getElementById('scrollBottomBtn');
+    const frame = () => new Promise(requestAnimationFrame);
+    const anchor = history ? Array.from(messages.querySelectorAll('.msg-row[data-msg-id]'))
+      .find(row => row.getBoundingClientRect().bottom > messages.getBoundingClientRect().top + 6) : null;
+    const offset = () => anchor ? anchor.getBoundingClientRect().top - messages.getBoundingClientRect().top : 0;
+    const initialOffset = offset();
+    let sawVisible = button.classList.contains('visible');
+    const observer = new MutationObserver(records => {
+      sawVisible ||= button.classList.contains('visible')
+        || records.some(record => (record.oldValue || '').split(/\s+/).includes('visible'));
+    });
+    observer.observe(button, { attributes: true, attributeFilter: ['class'], attributeOldValue: true });
+    const samples = [];
+    const sample = () => samples.push({
+      gap: messages.scrollHeight - messages.clientHeight - messages.scrollTop,
+      anchorDrift: offset() - initialOffset,
+      imageHeight: messages.querySelector('.msg-image')?.getBoundingClientRect().height || 0,
+    });
+    sample();
+    if (blur) document.getElementById('msgInput').blur();
+    for (const height of heights) {
+      if (viewport) window.__bananzaSetVisualViewport({ height, offsetTop: 0 });
+      else messages.style.height = `${height}px`;
+      for (let index = 0; index < 6; index += 1) { await frame(); sample(); }
+    }
+    // Also observe the blur/recovery timers, without manually restoring scroll.
+    const until = performance.now() + 360;
+    while (performance.now() < until) { await frame(); sample(); }
+    observer.disconnect();
+    return { samples, sawVisible };
+  }, { heights, viewport, blur, history });
+}
+
+for (const imageLast of [false, true]) {
+  test(`image preview resize stays anchored on every frame (image last: ${imageLast})`, async ({ page }) => {
+    await installMediaMocks(page);
+    await registerViaUi(page, makeUser('pwpreview'));
+    await openPrivateChat(page, getContext().bobUser.displayName);
+    await appendKeyboardPreviewMessages(page, { images: imageLast ? 1 : 2, imageLast });
+    await page.locator('#messages').evaluate(el => {
+      el.style.flex = '0 0 auto';
+      el.style.minHeight = '0';
+      el.style.height = '300px';
+    });
+    await expect.poll(() => page.locator('#messages .msg-image').first().evaluate(el => el.clientHeight)).toBe(240);
+    await scrollMessagesToBottom(page);
+    const result = await observePreviewResize(page, { heights: [600] });
+    expect(result.samples.at(-1).imageHeight).toBe(480);
+    expect(Math.max(...result.samples.map(sample => Math.abs(sample.gap)))).toBeLessThanOrEqual(2);
+    expect(result.sawVisible).toBe(false);
+
+    if (!imageLast) {
+      await page.locator('#messages').evaluate(el => { el.style.height = '300px'; });
+      await expect.poll(() => page.locator('#messages .msg-image').first().evaluate(el => el.clientHeight)).toBe(240);
+      await page.locator('#messages').evaluate(el => {
+        const row = [...el.querySelectorAll('.msg-row')].find(row => row.textContent.includes('After portrait 2:'));
+        el.scrollTop += row.getBoundingClientRect().top - el.getBoundingClientRect().top - 10;
+      });
+      const history = await observePreviewResize(page, { heights: [600], history: true });
+      expect(Math.max(...history.samples.map(sample => Math.abs(sample.anchorDrift)))).toBeLessThanOrEqual(2);
+      expect(history.samples.at(-1).gap).toBeGreaterThan(8);
+    }
+  });
+}
+
+for (const ios of [false, true]) for (const images of [0, 2]) {
+  test(`keyboard close with ${images} image previews never flashes bottom button (${ios ? 'iOS' : 'Android'})`, async ({ page }, testInfo) => {
+    test.skip(!testInfo.project.name.includes('mobile'), 'mobile-only regression');
+    await installFakeVisualViewport(page, { ios });
+    await installMediaMocks(page);
+    await registerViaUi(page, makeUser('pwpreviewkb'));
+    await openPrivateChat(page, getContext().bobUser.displayName);
+    await appendKeyboardPreviewMessages(page, { images });
+    const fullHeight = await readFullVisualViewportHeight(page);
+    for (const blur of [false, true]) {
+      for (const stepped of [false, true]) {
+        await page.locator('#msgInput').focus();
+        await setFakeVisualViewport(page, { height: 430 });
+        await expect.poll(async () => (await readComposerLayout(page)).snapshot.chatKeyboardLayout).toBe(true);
+        await expect.poll(async () => (await readComposerLayout(page)).messagesBottomGap).toBeLessThanOrEqual(2);
+        await page.waitForTimeout(400);
+        const result = await observePreviewResize(page, {
+          heights: stepped ? [520, 640, fullHeight] : [fullHeight], viewport: true, blur,
+        });
+        expect(Math.max(...result.samples.map(sample => Math.abs(sample.gap)))).toBeLessThanOrEqual(2);
+        expect(result.sawVisible).toBe(false);
+      }
+    }
+  });
+}
+
 async function growLastMessageSoon(page, height = 64) {
   await page.evaluate((spacerHeight) => {
     const messages = document.getElementById('messages');
