@@ -249,6 +249,7 @@
       let cachedMsgs = [];
       let cachedRange = null;
       let committedWindow = false;
+      let revealedWindow = false;
       let postOpenScheduled = false;
       const openStartedAt = win.performance?.now?.() || Date.now();
       const isCurrentOpen = () => isCurrentChatOpenTransition(seq, targetChatId);
@@ -266,14 +267,14 @@
         }, 0);
       };
 
-      const applyOpenScroll = () => {
+      const applyOpenScroll = (anchor = restoreAnchor) => {
         const messagesEl = getMessagesEl();
         if (!messagesEl || !isCurrentOpen()) return;
-        if (restoreAnchor?.atBottom) {
+        if (anchor?.atBottom) {
           messagesEl.scrollTop = messagesEl.scrollHeight;
           scroll.updateScrollBottomButton();
-        } else if (restoreAnchor?.messageId) {
-          if (!scroll.restoreScrollAnchor(restoreAnchor, 1, { openSeq: seq, chatId: targetChatId })) {
+        } else if (anchor?.messageId) {
+          if (!scroll.restoreScrollAnchor(anchor, 1, { openSeq: seq, chatId: targetChatId })) {
             messagesEl.scrollTop = 0;
             scroll.updateScrollBottomButton();
           }
@@ -286,8 +287,12 @@
       const commitMessageWindow = async (msgs = [], page = null, { source = 'network', pinEvents = [], systemEvents = [] } = {}) => {
         if (!isCurrentOpen()) return false;
         const list = Array.isArray(msgs) ? msgs : [];
+        // A background response belongs to the current reading position, not
+        // the position captured when the user originally opened this chat.
+        const refreshAnchor = revealedWindow ? scroll.captureScrollAnchor() : null;
         perf?.mark?.('bananza:open-chat-data-ready');
-        const shouldAutoScrollRenderedMedia = Boolean(restoreAnchor?.atBottom || !restoreAnchor?.messageId);
+        const mediaAnchor = revealedWindow ? refreshAnchor : restoreAnchor;
+        const shouldAutoScrollRenderedMedia = Boolean(mediaAnchor?.atBottom || !mediaAnchor?.messageId);
         const firstId = pages.minMessageId(list);
         const lastId = pages.maxMessageId(list);
         const cacheHasMoreBefore = firstId !== Number.MAX_SAFE_INTEGER
@@ -307,18 +312,21 @@
           pinEvents,
           systemEvents,
           mediaAutoScrollToBottom: shouldAutoScrollRenderedMedia,
+          preserveUnchangedRows: revealedWindow,
         });
         perf?.mark?.('bananza:open-chat-first-render');
         perf?.measure?.('bananza:open-chat-render', 'bananza:open-chat-data-ready', 'bananza:open-chat-first-render');
         setStateMessages(list);
         if (!isCurrentOpen()) return false;
         committedWindow = true;
+        if (revealedWindow) applyOpenScroll(refreshAnchor);
         actions.renderOutboxForChat?.(targetChatId)?.catch?.(() => {});
         return true;
       };
 
       const revealCommittedWindow = () => {
-        if (!isCurrentOpen()) return;
+        if (!isCurrentOpen() || revealedWindow) return;
+        revealedWindow = true;
         actions.revealActiveMobileChatRoute?.({ suppressHistoryPush, chatId: targetChatId });
         applyOpenScroll();
         actions.revealChatHydration?.(seq, targetChatId);
@@ -412,14 +420,7 @@
         if (!isCurrentOpen()) return false;
         if (!await reconcileFetchedPage(result)) return false;
         if (!isCurrentOpen()) return false;
-        if (committedWindow && actions.renderedMessageIdsMatch?.(msgs) && !pinEvents.length && !systemEvents.length) {
-          setHasMoreBefore(page.hasMoreBefore ?? (restoreAnchor?.messageId ? msgs.length > 0 : msgs.length >= PAGE_SIZE));
-          setHasMoreAfter(page.hasMoreAfter ?? Boolean(restoreAnchor?.messageId && chat?.last_message_id && pages.maxMessageId(msgs) < Number(chat.last_message_id || 0)));
-          actions.renderOutboxForChat?.(targetChatId)?.catch?.(() => {});
-          if (!isCurrentOpen()) return false;
-        } else {
-          if (!await commitMessageWindow(msgs, page, { source: 'network', pinEvents, systemEvents })) return false;
-        }
+        if (!await commitMessageWindow(msgs, page, { source: 'network', pinEvents, systemEvents })) return false;
         revealCommittedWindow();
         scheduleMessageWindowWarmup(msgs);
         return true;

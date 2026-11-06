@@ -327,6 +327,62 @@ test('message renderer mixes chat system events into an empty timeline and dedup
   dom.window.close();
 });
 
+test('background window reconciliation retains unchanged media and renders changed or removed messages', () => {
+  const dom = createAppDom();
+  try {
+    loadAppRuntimeScripts(dom);
+    const { window } = dom;
+    const { document } = window;
+    const messagesEl = document.getElementById('messages');
+    const renderer = window.BananzaApp.messages.render.createMessageRenderer({
+      document, dom: { messagesEl },
+      messageState: window.BananzaApp.messages.state.createMessageState(),
+      state: { getCurrentUser: () => ({ id: 1, display_name: 'Alice' }), getCurrentChatId: () => 1 },
+      formatDate: () => 'Today', formatTime: () => '10:00',
+      attachmentRenderer: { renderFileAttachment: () => '<img class="msg-image" src="/test.png">' },
+      pollRenderer: { normalizePoll: () => null, bindPollControls() {}, hydratePulseInlineVoters() {} },
+      callCardRenderer: { bindCallMessageControls() {}, bindCallTranscriptMessageControls() {}, bindCallArtifactMessageControls() {} },
+      actions: {
+        buildMessagesRootChildren: fragment => [fragment],
+        renderMessageText: text => text || '',
+        isClientSideMessage: () => false,
+      },
+    });
+    const base = { chat_id: 1, user_id: 1, display_name: 'Alice', created_at: '2026-11-06T10:00:00Z' };
+    const photo = { ...base, id: 1, file_id: 1, file_type: 'image', file_stored: 'test.png' };
+    const text = { ...base, id: 2, text: 'Before' };
+    renderer.replaceRenderedMessages([{ ...photo, userId: 1, chatId: 1 }, text, { ...base, id: 3, text: 'Removed' }]);
+    const image = messagesEl.querySelector('.msg-image');
+    assert.ok(image);
+    Object.defineProperty(image, 'naturalWidth', { value: 300 });
+    Object.defineProperty(image, 'naturalHeight', { value: 900 });
+    image.dispatchEvent(new window.Event('load'));
+    assert.equal(image.closest('.msg-row').classList.contains('single-image-message'), true);
+    const oldText = messagesEl.querySelector('[data-msg-id="2"]');
+    // Property order and IndexedDB ownership keys do not invalidate media nodes.
+    renderer.replaceRenderedMessages([{ is_read: 1, ...photo }, { ...text, text: 'After' }], [], [], { preserveUnchangedRows: true });
+    assert.equal(messagesEl.querySelector('.msg-image'), image);
+    assert.notEqual(messagesEl.querySelector('[data-msg-id="2"]'), oldText);
+    assert.match(messagesEl.querySelector('[data-msg-id="2"]').textContent, /After/);
+    assert.equal(messagesEl.querySelector('[data-msg-id="3"]'), null);
+    // Changed attachments must still replace their media, even with the same ID.
+    renderer.replaceRenderedMessages([{ ...photo, file_stored: 'changed.png' }], [], [], { preserveUnchangedRows: true });
+    assert.notEqual(messagesEl.querySelector('.msg-image'), image);
+    // Reopening uses the already observed intrinsic ratio before another load.
+    renderer.replaceRenderedMessages([photo]);
+    const reopened = messagesEl.querySelector('.msg-image');
+    assert.equal(reopened.getAttribute('width'), '300');
+    assert.equal(reopened.getAttribute('height'), '900');
+    Object.defineProperty(reopened, 'naturalWidth', { value: 900 });
+    Object.defineProperty(reopened, 'naturalHeight', { value: 300 });
+    reopened.dispatchEvent(new window.Event('load'));
+    renderer.replaceRenderedMessages([photo]);
+    assert.equal(messagesEl.querySelector('.msg-row').classList.contains('wide-media-message'), true);
+  } finally {
+    dom.window.close();
+  }
+});
+
 test('bridge renderer appends rows, groups senders, preserves data, and skips duplicates', async (t) => {
   const dom = await bootFullApp();
   t.after(() => dom.window.close());

@@ -96,6 +96,32 @@
     let imagePreviewHeightSyncBound = false;
     let imagePreviewAreaHeight = 0;
     let imagePreviewChatId = null;
+    // Session-only intrinsic sizes avoid collapsing decoded previews on reopen.
+    const imageIntrinsicSizes = new Map();
+
+    function reserveKnownImageSizes(row) {
+      row.querySelectorAll('.msg-image, .lp-image').forEach(img => {
+        const source = img.getAttribute('src');
+        if (!source) return;
+        // Intrinsic attributes reserve the aspect ratio, not a fixed CSS height.
+        if (img.classList.contains('lp-image')) img.style.height = 'auto';
+        const remember = () => {
+          if (!img.naturalWidth || !img.naturalHeight) return;
+          imageIntrinsicSizes.delete(source);
+          imageIntrinsicSizes.set(source, { width: img.naturalWidth, height: img.naturalHeight });
+          if (imageIntrinsicSizes.size > 256) imageIntrinsicSizes.delete(imageIntrinsicSizes.keys().next().value);
+          img.setAttribute('width', String(img.naturalWidth));
+          img.setAttribute('height', String(img.naturalHeight));
+        };
+        const size = imageIntrinsicSizes.get(source);
+        if (size) {
+          img.setAttribute('width', String(size.width));
+          img.setAttribute('height', String(size.height));
+        }
+        img.addEventListener('load', remember, { once: true });
+        if (img.complete) remember();
+      });
+    }
 
     function syncImagePreviewHeight() {
       const height = messagesEl?.clientHeight || 0;
@@ -466,7 +492,19 @@
         }
     
         const showName = useGroup && startsGroup;
-        const el = createMessageEl(msg, showName, options);
+        const existing = options.reusableRows?.get(Number(msg.id));
+        const reuse = existing && Boolean(existing.querySelector('.msg-sender')) === Boolean(showName)
+          && messageRenderSignature(existing.__messageData) === messageRenderSignature(msg);
+        const el = reuse ? existing : createMessageEl(msg, showName, options);
+        if (reuse) {
+          el.__messageData = { ...msg };
+          updateRowStatus(el);
+          if (el.__autoScrollMediaToBottomOnLoad && options.mediaAutoScrollToBottom) {
+            messageState.markPendingMediaBottomScroll(el);
+          } else {
+            clearPendingMediaBottomScroll(el);
+          }
+        }
         if (useGroup) {
           currentGroupBody.appendChild(el);
         } else {
@@ -481,12 +519,25 @@
     
     
     
+    function messageRenderSignature(message) {
+      // IndexedDB adds these owner keys; read receipts are updated separately.
+      const { userId, chatId, is_read, ...content } = message || {};
+      return JSON.stringify(content, (_key, value) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+        return Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]]));
+      });
+    }
+
     function replaceRenderedMessages(msgs = [], pinEvents = [], systemEvents = [], options = {}) {
+      const reusableRows = options.preserveUnchangedRows
+        ? new Map(Array.from(messagesEl.querySelectorAll('.msg-row[data-msg-id]:not([data-outbox="1"])'))
+          .map(row => [Number(row.dataset.msgId), row]))
+        : null;
       messageState.clearDisplayedMessages();
       messageState.clearDisplayedPinEvents();
       messageState.clearDisplayedSystemEvents?.();
       messageState.clearPendingMediaBottomScrollRows();
-      const fragment = buildMessagesFragment(Array.isArray(msgs) ? msgs : [], pinEvents, systemEvents, options);
+      const fragment = buildMessagesFragment(Array.isArray(msgs) ? msgs : [], pinEvents, systemEvents, { ...options, reusableRows });
       messagesEl.replaceChildren(...buildMessagesRootChildren(fragment));
       updateScrollBottomButton();
       refreshScrollDateIndicator();
@@ -609,7 +660,7 @@
     function settleDeferredMediaBottomScroll(chatId = getCurrentChatId()) {
       const targetChatId = Number(chatId || getCurrentChatId() || 0);
       if (!targetChatId) return;
-      const guardOptions = { chatId: targetChatId };
+      const guardOptions = { chatId: targetChatId, synchronous: true };
       scrollToBottom(true, true, guardOptions);
       requestAnimationFrame(() => {
         scrollToBottom(true, true, guardOptions);
@@ -967,6 +1018,7 @@
       html += '</div>'; // msg-content
     
       row.innerHTML = html;
+      reserveKnownImageSizes(row);
       // Persist client_status on row for CSS/logic; apply class for failed state so retry button can be overlayed
       if (msg.client_status) row.dataset.clientStatus = msg.client_status;
       if (msg.client_status && String(msg.client_status || '').toLowerCase() === 'failed') row.classList.add('client-failed');
@@ -1175,12 +1227,18 @@
         let imageLayoutHandled = false;
         let imageLayoutRetryFrame = 0;
         const updateImageLayout = () => {
-          if (!img.naturalWidth || !img.naturalHeight) return;
-          row.classList.toggle('wide-media-message', img.naturalWidth >= img.naturalHeight);
           const singleImage = !row.classList.contains('album-message');
-          if (singleImage) setupImagePreviewHeightSync();
           row.classList.toggle('single-image-message', singleImage);
+          if (singleImage) setupImagePreviewHeightSync();
+          const width = img.naturalWidth || Number(img.getAttribute('width'));
+          const height = img.naturalHeight || Number(img.getAttribute('height'));
+          if (width && height) {
+            row.classList.toggle('wide-media-message', width >= height);
+          }
         };
+        // Apply preview sizing before mounting, including cached images whose
+        // load finalizer otherwise runs a frame after the chat becomes visible.
+        updateImageLayout();
         const finalizeImageLayout = () => {
           if (row.querySelector('.msg-image') !== img) return;
           if (!row.isConnected) {
