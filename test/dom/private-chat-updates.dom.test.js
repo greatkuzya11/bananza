@@ -2049,7 +2049,7 @@ test('desktop width keeps touch chat folder page swiping disabled', async (t) =>
   assert.equal(document.querySelector('.chat-folder-swipe-stage'), null);
 });
 
-test('chat folder strip visibility toggle lives on the All chats row and keeps the picker open', async (t) => {
+test('chat folder strip visibility toggle lives above the list and keeps the modal open', async (t) => {
   const dom = await bootAppDom({
     fetchHandler: async ({ url, init, dom: testDom, currentUser }) => {
       if (url.pathname !== '/api/user/chat-folder-strip-visibility') return null;
@@ -2107,6 +2107,7 @@ test('chat folder strip visibility toggle lives on the All chats row and keeps t
 
   const toggle = picker.querySelector('[data-chat-folder-strip-toggle]');
   assert.ok(toggle);
+  assert.equal(toggle.closest('[data-folder-id]'), null);
   assert.equal(toggle.getAttribute('aria-pressed'), 'false');
   assert.equal(picker.classList.contains('hidden'), false);
 

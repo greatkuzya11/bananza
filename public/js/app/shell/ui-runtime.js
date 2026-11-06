@@ -797,8 +797,6 @@ async function submitPollComposer(...args) { return pollComposerController?.subm
         if (searchPanel && searchPanel.getAttribute('aria-hidden') === 'false') return true;
         if (isFloatingSurfaceVisible(chatContextMenuBackdrop)
           || isFloatingSurfaceVisible(chatContextMenu)
-          || isFloatingSurfaceVisible(chatFolderPickerBackdrop)
-          || isFloatingSurfaceVisible(chatFolderPicker)
           || isFloatingSurfaceVisible(chatFolderContextMenuBackdrop)
           || isFloatingSurfaceVisible(chatFolderContextMenu)
           || isFloatingSurfaceVisible(mediaContextMenuBackdrop)

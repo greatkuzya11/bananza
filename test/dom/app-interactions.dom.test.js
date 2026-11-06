@@ -557,6 +557,70 @@ test('context menus resolve chat and media contexts and hide cleanly', async () 
   dom.window.close();
 });
 
+for (const action of ['copy-image', 'share-media']) {
+  test(`media context ${action} loads the image with the Window fetch receiver`, async (t) => {
+    const dom = createAppDom();
+    t.after(() => dom.window.close());
+    const { window } = dom;
+    // The harness uses Node's Blob; File must accept the same Blob implementation.
+    window.File = require('node:buffer').File;
+    const { contextMenus, toasts } = createControllers(dom);
+    const imageRow = createRow(dom, { id: 504, media: 'image' });
+    const image = imageRow.querySelector('.msg-image');
+    const png = new window.Blob(['image-bytes'], { type: 'image/png' });
+    const fetched = [];
+    const copied = [];
+    const shared = [];
+    // Native browser fetch rejects the Proxy used by the legacy scope as `this`.
+    window.fetch = async function fetch(url, options) {
+      if (this !== window) throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation");
+      fetched.push({ url, credentials: options.credentials });
+      return {
+        ok: true,
+        headers: new window.Headers(),
+        blob: async () => png,
+      };
+    };
+    Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
+    window.ClipboardItem = class ClipboardItem {
+      static supports(type) { return type === 'image/png'; }
+      constructor(items) { this.items = items; }
+    };
+    window.navigator.clipboard = {
+      async write(items) {
+        assert.equal(this, window.navigator.clipboard);
+        for (const item of items) copied.push(await item.items['image/png']);
+      },
+    };
+    window.navigator.canShare = () => true;
+    window.navigator.share = async function share(payload) {
+      assert.equal(this, window.navigator);
+      shared.push(payload);
+    };
+
+    contextMenus.showMediaContextMenuForRow(imageRow, image);
+    const menu = window.document.getElementById('mediaContextMenu');
+    assert.equal(menu.classList.contains('hidden'), false);
+    assert.ok(menu.querySelector(`[data-media-action="${action}"]`));
+    const context = contextMenus.getMessageMediaContext(imageRow, image);
+    await contextMenus.handleMediaContextMenuAction(action, context);
+
+    assert.deepEqual(toasts.filter((message) => message.includes('Illegal invocation')), []);
+    assert.deepEqual(fetched, [{ url: context.absoluteUrl, credentials: 'same-origin' }]);
+    if (action === 'copy-image') {
+      assert.deepEqual(copied, [png]);
+      assert.deepEqual(toasts, ['Image copied']);
+    } else {
+      assert.equal(shared.length, 1);
+      assert.equal(shared[0].files.length, 1);
+      assert.equal(shared[0].files[0].name, 'photo.png');
+      assert.equal(shared[0].files[0].type, 'image/png');
+      assert.equal(shared[0].files[0].size, png.size);
+      assert.deepEqual(toasts, []);
+    }
+  });
+}
+
 test('forwarding modal opens and forwarding/save-to-notes call expected APIs', async () => {
   const dom = createAppDom();
   const { document } = dom.window;

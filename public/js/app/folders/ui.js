@@ -27,6 +27,7 @@
     const formatters = objectOrDefault(opts.formatters);
     const state = objectOrDefault(opts.state);
     const actions = objectOrDefault(opts.actions);
+    const modals = opts.modals;
     const t = typeof opts.t === 'function' ? opts.t : (key) => String(key || '');
     const tx = typeof opts.tx === 'function' ? opts.tx : (text) => String(text == null ? '' : text);
     const esc = typeof formatters.esc === 'function' ? formatters.esc : defaultEsc;
@@ -34,6 +35,7 @@
     const CHAT_FOLDER_ICON_EMOJI = objectOrDefault(config.CHAT_FOLDER_ICON_EMOJI);
 
     let chatFolderPickerState = null;
+    let pickerCloseWaiters = [];
     let chatFolderContextMenuState = null;
     let pendingChatFolderChipCenterBehavior = 'auto';
     let chatFolderStripPreviewFolderId = null;
@@ -618,9 +620,15 @@
         menu: true,
       })));
 
-      chatFolderPicker.innerHTML = `
-      <div class="chat-context-menu-sheet">
-        <div class="chat-context-menu-header">\u041F\u0430\u043F\u043A\u0438 \u0447\u0430\u0442\u043E\u0432</div>
+      chatFolderPicker.querySelector('.modal-body').innerHTML = `
+        <button type="button" class="settings-item settings-toggle-item chat-folder-picker-strip-toggle${showStripInAllChats ? ' is-active' : ''}"
+          data-chat-folder-strip-toggle aria-pressed="${showStripInAllChats ? 'true' : 'false'}"
+          ${chatFolderStripVisibilitySaveInFlight ? 'disabled' : ''}>
+          <span class="chat-folder-picker-strip-toggle-label">${esc(t('Show folder strip'))}</span>
+          <span class="chat-folder-picker-strip-toggle-switch" aria-hidden="true">
+            <span class="chat-folder-picker-strip-toggle-knob"></span>
+          </span>
+        </button>
         <div class="chat-folder-picker-list">
           ${rows.map((row) => `
             <div class="chat-folder-picker-row${activeFolderId === Number(row.id || 0) ? ' is-active' : ''}" data-folder-id="${Number(row.id || 0)}">
@@ -632,46 +640,15 @@
                 </span>
                 ${row.unread > 0 ? `<span class="unread-badge">${row.unread > 99 ? '99+' : row.unread}</span>` : ''}
               </button>
-              ${Number(row.id || 0) === ALL_CHATS_FOLDER_ID ? `
-                <button
-                  type="button"
-                  class="chat-folder-picker-strip-toggle${showStripInAllChats ? ' is-active' : ''}"
-                  data-chat-folder-strip-toggle
-                  aria-pressed="${showStripInAllChats ? 'true' : 'false'}"
-                  aria-label="\u041F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0442\u044C \u043F\u043E\u043B\u043E\u0441\u0443 \u043F\u0430\u043F\u043E\u043A"
-                  ${chatFolderStripVisibilitySaveInFlight ? 'disabled' : ''}
-                >
-                  <span class="chat-folder-picker-strip-toggle-label">
-                    <span>\u041F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0442\u044C</span>
-                    <span>\u043F\u043E\u043B\u043E\u0441\u0443 \u043F\u0430\u043F\u043E\u043A</span>
-                  </span>
-                  <span class="chat-folder-picker-strip-toggle-switch" aria-hidden="true">
-                    <span class="chat-folder-picker-strip-toggle-knob"></span>
-                  </span>
-                </button>
-              ` : ''}
               ${row.menu ? `<button type="button" class="chat-folder-picker-menu-btn" data-folder-menu="${Number(row.id || 0)}" aria-label="${esc(t('Folder actions'))}">&#8942;</button>` : ''}
             </div>
           `).join('') || '<div class="chat-folder-picker-empty">\u041F\u0430\u043F\u043E\u043A \u043F\u043E\u043A\u0430 \u043D\u0435\u0442</div>'}
         </div>
-      </div>
     `;
-      chatFolderPicker.setAttribute('aria-hidden', 'false');
-      chatFolderPicker.setAttribute('role', 'menu');
     }
 
     function positionChatFolderPicker() {
-      const chatFolderPicker = getEl('chatFolderPicker', 'chatFolderPicker');
-      const chatFoldersBtn = getEl('chatFoldersBtn', 'chatFoldersBtn');
-      if (!chatFolderPicker || chatFolderPicker.classList.contains('hidden') || !chatFoldersBtn) return;
-      const buttonRect = chatFoldersBtn.getBoundingClientRect();
-      const viewport = getFloatingViewportRect();
-      const size = measureFloatingSurface(chatFolderPicker, 320, 420);
-      const left = clamp(buttonRect.right - size.width, viewport.left + 8, viewport.right - size.width - 8);
-      const top = clamp(buttonRect.bottom + 8, viewport.top + 8, viewport.bottom - size.height - 8);
-      chatFolderPicker.style.right = 'auto';
-      chatFolderPicker.style.bottom = 'auto';
-      positionFloatingElement(chatFolderPicker, left, top);
+      // Compatibility hook: the shared modal layout owns positioning.
     }
 
     function renderChatFolderContextMenu(folder) {
@@ -816,36 +793,33 @@
       });
     }
 
-    function hideChatFolderPicker({ immediate = false } = {}) {
-      const chatFolderPicker = getEl('chatFolderPicker', 'chatFolderPicker');
-      const chatFolderPickerBackdrop = getEl('chatFolderPickerBackdrop', 'chatFolderPickerBackdrop');
-      if (!chatFolderPicker) return Promise.resolve();
+    function resetChatFolderPicker() {
       hideChatFolderContextMenu({ immediate: true });
-      closeFloatingSurface(chatFolderPickerBackdrop, { immediate });
+      const body = getEl('chatFolderPicker')?.querySelector('.modal-body');
+      if (body) body.innerHTML = '';
+      chatFolderPickerState = null;
+      const waiters = pickerCloseWaiters;
+      pickerCloseWaiters = [];
+      waiters.forEach((resolve) => resolve());
+    }
+
+    function hideChatFolderPicker({ immediate = false } = {}) {
+      const picker = getEl('chatFolderPicker');
+      hideChatFolderContextMenu({ immediate: true });
+      if (!picker || picker.classList.contains('hidden')) {
+        resetChatFolderPicker();
+        return Promise.resolve();
+      }
       return new Promise((resolve) => {
-        closeFloatingSurface(chatFolderPicker, {
-          immediate,
-          onAfterClose: () => {
-            if (chatFolderPicker) {
-              chatFolderPicker.innerHTML = '';
-              chatFolderPicker.setAttribute('aria-hidden', 'true');
-              chatFolderPicker.style.left = '';
-              chatFolderPicker.style.top = '';
-              chatFolderPicker.style.right = '';
-              chatFolderPicker.style.bottom = '';
-            }
-            chatFolderPickerState = null;
-            resolve();
-          },
-        });
+        pickerCloseWaiters.push(resolve);
+        modals.close(picker, { immediate });
       });
     }
 
-    function showChatFolderPicker(opener = getEl('chatFoldersBtn', 'chatFoldersBtn')) {
-      const chatFolderPicker = getEl('chatFolderPicker', 'chatFolderPicker');
-      const chatFolderPickerBackdrop = getEl('chatFolderPickerBackdrop', 'chatFolderPickerBackdrop');
-      if (!chatFolderPicker || !chatFolderPickerBackdrop) return;
-      if (isFloatingSurfaceVisible(chatFolderPicker)) {
+    function showChatFolderPicker(opener = getEl('chatFoldersBtn')) {
+      const picker = getEl('chatFolderPicker');
+      if (!picker) return;
+      if (!picker.classList.contains('hidden') && !picker.classList.contains('is-closing')) {
         hideChatFolderPicker();
         return;
       }
@@ -857,12 +831,11 @@
       hideChatFolderPicker({ immediate: true });
       chatFolderPickerState = { opener };
       renderChatFolderPicker();
-      positionChatFolderPicker();
-      openFloatingSurface(chatFolderPickerBackdrop);
-      openFloatingSurface(chatFolderPicker);
+      modals.open(picker, { opener });
       win.requestAnimationFrame(() => {
-        positionChatFolderPicker();
-        chatFolderPicker.querySelector('.chat-folder-picker-button')?.focus({ preventScroll: true });
+        if (modals.getTop()?.el === picker && !picker.classList.contains('is-closing')) {
+          picker.querySelector('.modal-close')?.focus({ preventScroll: true });
+        }
       });
     }
 
@@ -879,10 +852,10 @@
       const activeChatFolderBar = getEl('activeChatFolderBar', 'activeChatFolderBar');
       const activeChatFolderStrip = getEl('activeChatFolderStrip', 'activeChatFolderStrip');
       const chatFolderPicker = getEl('chatFolderPicker', 'chatFolderPicker');
-      const chatFolderPickerBackdrop = getEl('chatFolderPickerBackdrop', 'chatFolderPickerBackdrop');
       const chatFolderContextMenu = getEl('chatFolderContextMenu', 'chatFolderContextMenu');
       const chatFolderContextMenuBackdrop = getEl('chatFolderContextMenuBackdrop', 'chatFolderContextMenuBackdrop');
       const chatList = getEl('chatList', 'chatList');
+      modals?.register(chatFolderPicker, { onAfterClose: resetChatFolderPicker });
       const bindTouchSafe = typeof bindTouchSafeButtonActivation === 'function'
         ? bindTouchSafeButtonActivation
         : (button, onActivate) => button?.addEventListener('click', onActivate);
@@ -940,13 +913,6 @@
           actions.showCenterToast?.(error?.message || 'Could not open folder');
         });
       });
-      chatFolderPickerBackdrop?.addEventListener('click', () => {
-        hideChatFolderPicker();
-      });
-      chatFolderPickerBackdrop?.addEventListener('contextmenu', (e) => {
-        e.preventDefault();
-        hideChatFolderPicker();
-      });
       chatFolderContextMenu?.addEventListener('pointerdown', (e) => {
         e.stopPropagation();
       });
@@ -963,7 +929,12 @@
         const folderId = Number(chatFolderContextMenuState.folderId || 0);
         const action = btn.dataset.folderAction || '';
         const keepOpen = action === 'move-up-folder' || action === 'move-down-folder';
-        if (!keepOpen) hideChatFolderContextMenu();
+        // Remove the menu before a nested dialog takes over Escape and Back.
+        if (!keepOpen) {
+          const opener = chatFolderContextMenuState.anchor;
+          hideChatFolderContextMenu({ immediate: true });
+          opener?.focus({ preventScroll: true });
+        }
         try {
           await actions.handleFolderContextAction?.(action, folderId);
         } catch (error) {
@@ -981,16 +952,25 @@
       });
 
       const syncChatFolderLayout = () => {
-        if (isFloatingSurfaceVisible(getEl('chatFolderPicker', 'chatFolderPicker'))) positionChatFolderPicker();
         if (isFloatingSurfaceVisible(getEl('chatFolderContextMenu', 'chatFolderContextMenu'))) positionChatFolderContextMenu();
         if (shouldShowActiveChatFolderBar()) scheduleActiveChatFolderChipCenter({ behavior: 'auto' });
       };
       win.addEventListener('resize', syncChatFolderLayout, { passive: true });
       win.visualViewport?.addEventListener('resize', syncChatFolderLayout);
       win.visualViewport?.addEventListener('scroll', syncChatFolderLayout);
+      chatFolderPicker?.querySelector('.modal-body')?.addEventListener('scroll', (event) => {
+        const anchor = chatFolderContextMenuState?.anchor;
+        if (!isHTMLElement(anchor)) return;
+        const anchorRect = anchor.getBoundingClientRect();
+        const bodyRect = event.currentTarget.getBoundingClientRect();
+        if (anchorRect.bottom <= bodyRect.top || anchorRect.top >= bodyRect.bottom) {
+          hideChatFolderContextMenu({ immediate: true });
+        } else {
+          positionChatFolderContextMenu();
+        }
+      }, { passive: true });
       chatList?.addEventListener('scroll', () => {
-        if (isFloatingSurfaceVisible(getEl('chatFolderPicker', 'chatFolderPicker'))) hideChatFolderPicker({ immediate: true });
-        else if (isFloatingSurfaceVisible(getEl('chatFolderContextMenu', 'chatFolderContextMenu'))) hideChatFolderContextMenu({ immediate: true });
+        if (isFloatingSurfaceVisible(getEl('chatFolderContextMenu', 'chatFolderContextMenu'))) hideChatFolderContextMenu({ immediate: true });
       }, { passive: true });
     }
 

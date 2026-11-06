@@ -25,7 +25,8 @@ function createLegacyScope(deps, win) {
       const value = win[prop];
       if (
         typeof value === 'function'
-        && (prop === 'setTimeout'
+        && (prop === 'fetch'
+          || prop === 'setTimeout'
           || prop === 'clearTimeout'
           || prop === 'requestAnimationFrame'
           || prop === 'cancelAnimationFrame')

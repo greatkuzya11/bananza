@@ -648,12 +648,9 @@
           }
           resetBackButtonNavigationState();
           if (isFloatingSurfaceVisible(chatFolderContextMenu)) {
-            hideChatFolderContextMenu();
-            return;
-          }
-          if (isFloatingSurfaceVisible(chatFolderPicker)) {
-            hideChatFolderPicker();
-            return;
+            hideChatFolderContextMenu({ immediate: true });
+            // The picker owns the history entry; its context menu has none.
+            if (getTopModal()?.id !== 'chatFolderPicker') return;
           }
           if (isFloatingSurfaceVisible(chatContextMenu)) {
             hideChatContextMenu();
@@ -938,11 +935,6 @@
             if (isFloatingSurfaceVisible(chatFolderContextMenu)) {
               e.preventDefault();
               hideChatFolderContextMenu();
-              return;
-            }
-            if (isFloatingSurfaceVisible(chatFolderPicker)) {
-              e.preventDefault();
-              hideChatFolderPicker();
               return;
             }
             if (isFloatingSurfaceVisible(chatContextMenu)) {

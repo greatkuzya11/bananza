@@ -193,6 +193,7 @@
     'Menu': 'Меню',
     'Refresh chats': 'Обновить чаты',
     'Search chats': 'Поиск чатов',
+    'Show folder strip': 'Показывать полосу папок',
     'Chat folders': 'Папки чатов',
     'New chat': 'Новый чат',
     'Search chats...': 'Искать чаты...',

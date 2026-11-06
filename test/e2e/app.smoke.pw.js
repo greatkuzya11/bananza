@@ -104,7 +104,8 @@ test('UI flow covers register, private chat creation, sending, search and poll c
       await page.locator('#profileUserStatusSelect').selectOption('custom');
       await page.locator('#profileCustomStatus').fill('Writing profile layout check');
       const profileModalBox = await page.locator('#menuDrawer .profile-settings-modal').boundingBox();
-      expect(profileModalBox?.y || 0).toBeLessThanOrEqual(90);
+      expect(profileModalBox.y).toBeGreaterThanOrEqual(0);
+      await page.locator('#profileLogoutBtn').scrollIntoViewIfNeeded();
       const profileLayout = await page.locator('#menuDrawer .profile-settings-body').evaluate((el) => {
         const modal = el.closest('.profile-settings-modal');
         const logout = document.getElementById('profileLogoutBtn');

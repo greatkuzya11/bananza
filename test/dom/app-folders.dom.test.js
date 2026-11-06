@@ -112,7 +112,9 @@ test('folder ui renders the active strip, picker, and context menu without ownin
   ], { persist: false });
   store.setActiveFolderId(9, { persist: false });
 
+  const modals = window.BananzaApp.modalManager.createModalManager({ document: window.document, window });
   const ui = window.BananzaApp.folders.ui.createChatFolderUi({
+    modals,
     document: window.document,
     window,
     dom: window.BananzaApp.dom.createDomRefs(),
@@ -144,7 +146,10 @@ test('folder ui renders the active strip, picker, and context menu without ownin
   ui.showChatFolderPicker(window.document.getElementById('chatFoldersBtn'));
   const picker = window.document.getElementById('chatFolderPicker');
   assert.equal(picker.classList.contains('hidden'), false);
-  assert.equal(picker.getAttribute('role'), 'menu');
+  assert.equal(picker.getAttribute('role'), 'dialog');
+  assert.equal(picker.getAttribute('aria-modal'), 'true');
+  assert.equal(modals.getTop().id, 'chatFolderPicker');
+  assert.equal(picker.querySelector('[data-chat-folder-strip-toggle]').closest('[data-folder-id]'), null);
   assert.equal(picker.querySelector('[data-folder-select="0"]')?.getAttribute('type'), 'button');
   assert.equal(picker.querySelector('[data-chat-folder-strip-toggle]')?.getAttribute('aria-pressed'), 'true');
 
@@ -168,6 +173,7 @@ test('folder ui renders the active strip, picker, and context menu without ownin
 
   i18n.setLanguage('en', { persist: false });
   ui.renderChatFolderPicker();
+  assert.equal(picker.querySelector('.chat-folder-picker-strip-toggle-label').textContent, 'Show folder strip');
   const englishMenuAnchor = picker.querySelector('[data-folder-menu="9"]');
   assert.equal(englishMenuAnchor.getAttribute('aria-label'), 'Folder actions');
   assert.equal(ui.refreshVisibleContextMenu(), true);
@@ -186,8 +192,34 @@ test('folder ui renders the active strip, picker, and context menu without ownin
   assert.equal(menu.classList.contains('hidden'), false);
   assert.equal(menu.dataset.folderId, '10');
 
-  await ui.hideChatFolderPicker({ immediate: true });
+  const nested = window.document.getElementById('chatFolderManageModal');
+  const opener = picker.querySelector('[data-folder-menu="10"]');
+  modals.open(nested, { opener });
+  assert.equal(picker.hasAttribute('inert'), true);
+  ui.renderChatFolderPicker();
+  assert.equal(picker.getAttribute('aria-hidden'), 'true', 'refresh must not expose an underlay');
+  modals.closeTop({ immediate: true });
+  assert.equal(modals.getTop().id, 'chatFolderPicker');
+  assert.equal(picker.hasAttribute('inert'), false);
+
+  let closed = false;
+  const closing = ui.hideChatFolderPicker().then(() => { closed = true; });
+  await Promise.resolve();
+  assert.equal(closed, false, 'folder switching waits for the closing transition');
+  assert.equal(menu.classList.contains('hidden'), true);
+  const transitionEnd = new window.Event('transitionend');
+  Object.defineProperty(transitionEnd, 'propertyName', { value: 'opacity' });
+  picker.querySelector('.modal-content').dispatchEvent(transitionEnd);
+  await closing;
   assert.equal(picker.getAttribute('aria-hidden'), 'true');
+  assert.equal(ui.getPickerState(), null);
+  assert.equal(window.document.activeElement.id, 'chatFoldersBtn');
+
+  ui.showChatFolderPicker();
+  modals.closeTop({ immediate: true, fromHistory: true });
+  assert.equal(ui.getPickerState(), null, 'shared close path clears picker state');
+  assert.equal(picker.querySelector('.modal-body').childElementCount, 0);
+  assert.ok(picker.querySelector('.modal-close'), 'static modal shell survives closing');
   dom.window.close();
 });
 

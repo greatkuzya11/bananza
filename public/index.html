@@ -7,7 +7,7 @@
   <title>🍌 BananZa</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍌</text></svg>">
   <link rel="stylesheet" href="/vendor/leaflet/leaflet.css?v=1.9.4">
-  <link rel="stylesheet" href="/css/style.css?v=20261028-chat-tools">
+  <link rel="stylesheet" href="/css/style.css?v=20261106-profile-folder-modals">
   <link rel="stylesheet" href="/css/calls.css?v=20260621-call-mobile-controls">
   <link rel="stylesheet" href="/css/voice.css?v=glass-voice-play-2">
   <link rel="stylesheet" href="/css/telegram-transcription.css?v=20260915-settings-spacing">
@@ -211,8 +211,16 @@
   <div id="reactionEmojiPopover" class="reaction-emoji-popover hidden"></div>
   <div id="chatContextMenuBackdrop" class="chat-context-menu-backdrop hidden"></div>
   <div id="chatContextMenu" class="chat-context-menu hidden" aria-hidden="true"></div>
-  <div id="chatFolderPickerBackdrop" class="chat-context-menu-backdrop hidden"></div>
-  <div id="chatFolderPicker" class="chat-context-menu chat-folder-picker hidden" aria-hidden="true"></div>
+  <div id="chatFolderPickerBackdrop" class="hidden" aria-hidden="true"></div>
+  <div id="chatFolderPicker" class="modal chat-folder-picker hidden" aria-hidden="true" aria-labelledby="chatFolderPickerTitle">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="chatFolderPickerTitle" data-i18n="Chat folders">Chat folders</h3>
+        <button class="modal-close" type="button" aria-label="Close" data-i18n-aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body"></div>
+    </div>
+  </div>
   <div id="chatFolderContextMenuBackdrop" class="chat-context-menu-backdrop hidden"></div>
   <div id="chatFolderContextMenu" class="chat-context-menu hidden" aria-hidden="true"></div>
   <div id="mediaContextMenuBackdrop" class="chat-context-menu-backdrop media-context-menu-backdrop hidden"></div>
@@ -2789,11 +2797,11 @@
     </div>
   </div>
 
-  <!-- Menu Drawer / Profile Editor -->
-  <div id="menuDrawer" class="modal hidden">
+  <!-- Profile Modal -->
+  <div id="menuDrawer" class="modal hidden" aria-labelledby="profileModalTitle">
     <div class="modal-content profile-settings-modal">
       <div class="modal-header">
-        <h3 data-i18n="Profile">Profile</h3>
+        <h3 id="profileModalTitle" data-i18n="Profile">Profile</h3>
         <button class="modal-close" type="button" aria-label="Close" data-i18n-aria-label="Close">&times;</button>
       </div>
       <div class="modal-body menu-body profile-settings-body">
@@ -2983,7 +2991,7 @@
   <script src="/js/sounds.js"></script>
   <script src="/js/messageCache.js"></script>
   <script src="/js/ai-image-risk.js"></script>
-  <script src="/js/i18n.js?v=20261025-telegram-groups"></script>
+  <script src="/js/i18n.js?v=20261106-profile-folder-modals"></script>
   <script src="/vendor/leaflet/leaflet.js?v=1.9.4"></script>
   <script src="/js/document-editor.bundle.js?v=20260620-doc-image-handles1"></script>
   <script src="/js/qip-infium-original.js?v=20260523-qip-infium-original"></script>
@@ -3005,8 +3013,8 @@
     <script src="/js/app/mobile-viewport.js?v=20260531-dom-mobile-shell"></script>
     <script src="/js/app/chat-header-actions.js?v=20260919-header-scroll"></script>
     <script src="/js/app/shell/mobile-composer-guard.js?v=20260621-ios-keyboard1"></script>
-    <script src="/js/app/shell/events.js?v=20261028-clipboard-attachments"></script>
-    <script src="/js/app/shell/ui-runtime.js?v=20261028-remove-chat-image-history"></script>
+    <script src="/js/app/shell/events.js?v=20261106-profile-folder-modals"></script>
+    <script src="/js/app/shell/ui-runtime.js?v=20261106-profile-folder-modals"></script>
     <script src="/js/app/shell/shell-runtime.js?v=20260702-maps2"></script>
     <script src="/js/app/shell/mobile-runtime-adapters.js?v=20260601-runtime-final"></script>
     <script src="/js/app/modal-manager.js?v=20260531-modal-manager"></script>
@@ -3017,7 +3025,7 @@
   <script src="/js/app/settings/sound-settings.js?v=20260531-settings"></script>
   <script src="/js/app/settings/settings-modal.js?v=20260705-api-tokens-glass-spin"></script>
   <script src="/js/app/folders/store.js?v=20260531-folders"></script>
-  <script src="/js/app/folders/ui.js?v=20260919-folder-overlay"></script>
+  <script src="/js/app/folders/ui.js?v=20261106-profile-folder-modals"></script>
   <script src="/js/app/folders/actions.js?v=20260531-folders"></script>
   <script src="/js/app/folders/manage-modal.js?v=20260531-folders"></script>
   <script src="/js/app/folders/new-folder-tab.js?v=20260531-folders"></script>
@@ -3072,7 +3080,7 @@
   <script src="/js/app/boot/composition/ai-admin-composition.js?v=20260614-doc-ai1"></script>
   <script src="/js/app/boot/composition/ui-shell-adapters.js?v=20260601-feature-composition-final"></script>
   <script src="/js/app/boot/composition/admin-settings-composition.js?v=20261003-admin-logs"></script>
-  <script src="/js/app/boot/composition/folders-composition.js?v=20260601-feature-composition-final"></script>
+  <script src="/js/app/boot/composition/folders-composition.js?v=20261106-profile-folder-modals"></script>
   <script src="/js/app/boot/composition/chat-list-composition.js?v=20261001-chat-activity"></script>
   <script src="/js/app/boot/composition/open-chat-composition.js?v=20261024-preview-animation"></script>
   <script src="/js/app/boot/composition/messages-composition.js?v=20261024-media-reply-edit"></script>

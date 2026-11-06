@@ -27,6 +27,7 @@
       let folderActionsController = null;
       let folderManageModalController = null;
       const folderUiController = folderUiFactory({
+        modals: modalManager,
         document,
         window,
         dom: appDom,

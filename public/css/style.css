@@ -2937,8 +2937,8 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
   z-index: 429;
   width: min(240px, calc(100vw - 24px));
 }
-.chat-folder-picker {
-  width: min(320px, calc(100vw - 24px));
+.chat-folder-picker .modal-body {
+  min-height: 0;
 }
 .media-context-menu {
   z-index: 429;
@@ -3040,8 +3040,7 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
 .chat-folder-picker-list {
   display: flex;
   flex-direction: column;
-  max-height: min(58vh, 420px);
-  overflow-y: auto;
+  min-height: 0;
 }
 .chat-folder-picker-row {
   display: flex;
@@ -3072,38 +3071,17 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
   text-align: left;
   cursor: pointer;
 }
-.chat-folder-picker-strip-toggle {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
+.chat-folder-picker .chat-folder-picker-strip-toggle {
+  width: 100%;
   min-width: 0;
-  margin-left: auto;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text-secondary);
   cursor: pointer;
-  white-space: nowrap;
-}
-.chat-folder-picker-strip-toggle:hover,
-.chat-folder-picker-strip-toggle:focus-visible {
-  color: var(--text-primary);
+  text-align: start;
 }
 .chat-folder-picker-strip-toggle-label {
   min-width: 0;
-  max-width: 130px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  overflow: hidden;
-  font-size: 9px;
-  line-height: 1.05;
-  font-weight: 600;
+  font-size: 14px;
+  line-height: 1.4;
   white-space: normal;
-}
-.chat-folder-picker-strip-toggle-label span {
-  display: block;
 }
 .chat-folder-picker-strip-toggle-switch {
   position: relative;
@@ -3111,7 +3089,7 @@ html[data-modal-animation="none"] .chat-context-menu-backdrop {
   height: 24px;
   flex: 0 0 42px;
   border-radius: 999px;
-  background: rgba(255,255,255,.08);
+  background: var(--bg-hover);
   transition: background-color .2s ease, box-shadow .2s ease;
 }
 .chat-folder-picker-strip-toggle-knob {
@@ -7603,37 +7581,14 @@ html[data-visual-mode="rich"] .poll-card {
   box-shadow: 0 3px 8px rgba(0,0,0,.12);
 }
 
-#menuDrawer {
-  --profile-panel-bg: color-mix(in srgb, var(--bg-modal) 92%, #000000 8%);
-  --profile-section-bg: color-mix(in srgb, var(--bg-input) 72%, transparent);
-  --profile-section-border: color-mix(in srgb, var(--border-light) 82%, rgba(255,255,255,.12));
-}
-#menuDrawer .profile-settings-modal {
-  max-width: 456px;
-  max-height: calc(100vh - 40px);
-  max-height: calc(100dvh - 40px);
-  border: 1px solid color-mix(in srgb, var(--border-light) 82%, var(--accent) 18%);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-modal) 96%, var(--accent) 4%), var(--profile-panel-bg));
-}
-#menuDrawer .profile-settings-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-#menuDrawer .profile-settings-body::-webkit-scrollbar {
-  display: none;
-}
-#menuDrawer .modal-header {
-  padding: 14px 18px 10px;
-}
 .profile-settings-body {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 14px 18px 16px;
+  min-height: 0;
+  gap: 16px;
+}
+.profile-settings-body > * {
+  flex-shrink: 0;
 }
 .profile-hero {
   display: grid;
@@ -7657,7 +7612,7 @@ html[data-visual-mode="rich"] .poll-card {
 .profile-avatar-upload {
   width: 28px;
   height: 28px;
-  border: 2px solid var(--profile-panel-bg);
+  border: 2px solid var(--bg-modal);
   box-shadow: 0 6px 14px rgba(0,0,0,.26);
 }
 .profile-avatar-upload:focus-within,
@@ -7709,18 +7664,17 @@ html[data-visual-mode="rich"] .poll-card {
 .profile-form {
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 16px;
   width: 100%;
 }
 .profile-section {
   margin: 0;
-  padding: 11px 12px;
+  padding: 0;
   width: 100%;
   min-inline-size: 0;
   box-sizing: border-box;
-  border: 1px solid var(--profile-section-border);
-  border-radius: 8px;
-  background: var(--profile-section-bg);
+  border: 0;
+  background: transparent;
 }
 .profile-section > .profile-section-title,
 .profile-section > legend.profile-section-title {
@@ -7736,15 +7690,12 @@ html[data-visual-mode="rich"] .poll-card {
   clear: left;
 }
 #menuDrawer .modal-input {
-  min-height: 38px;
-  padding-top: 8px;
-  padding-bottom: 8px;
   margin: 0;
-  background: color-mix(in srgb, var(--bg-input) 86%, #000000 14%);
 }
-#menuDrawer .modal-input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+#menuDrawer .profile-section-title {
+  font-size: 14px;
+  font-weight: 500;
+  text-transform: none;
 }
 
 .profile-user-status-select {
@@ -7919,8 +7870,8 @@ html[data-visual-mode="rich"] .poll-card {
 }
 
 .profile-danger-section {
-  background: color-mix(in srgb, var(--danger) 7%, var(--profile-section-bg));
-  border-color: color-mix(in srgb, var(--danger) 24%, var(--profile-section-border));
+  padding-top: 16px;
+  border-top: 1px solid var(--border-light);
 }
 .profile-logout-btn {
   width: 100%;
@@ -8355,20 +8306,6 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
 @media (max-width: 768px) {
   .resize-handle { display: none; }
   #app { height: 100vh; height: 100dvh; }
-  #menuDrawer {
-    align-items: flex-start;
-    padding: 72px 0 12px;
-  }
-  #menuDrawer .profile-settings-modal {
-    max-width: none;
-    max-height: calc(100dvh - 84px);
-    border-radius: 14px;
-  }
-  .profile-settings-body {
-    flex: 1 1 auto;
-    padding: 12px 14px 14px;
-    gap: 9px;
-  }
   .profile-hero {
     grid-template-columns: auto minmax(0, 1fr);
     gap: 12px;
@@ -8380,9 +8317,6 @@ html.is-ios-webkit .search-panel.is-closing .search-panel-sheet {
   }
   .profile-display-preview {
     font-size: 18px;
-  }
-  .profile-section {
-    padding: 10px 11px;
   }
   .profile-avatar-actions {
     display: grid;
@@ -10705,11 +10639,6 @@ html[data-visual-mode="glass"] .toggle-slider::before { left: 2px; bottom: 2px; 
 
 .login-body { height: auto; min-height: 100dvh; overflow-y: auto; }
 
-html[data-visual-mode="glass"] #menuDrawer .profile-danger-section {
-  flex-shrink: 0; background: var(--glass-dialog);
-}
-html[data-visual-mode="glass"] #menuDrawer .profile-form { flex-shrink: 0; }
-html[data-visual-mode="glass"] #menuDrawer .profile-settings-modal { background: var(--glass-dialog); border-color: var(--glass-line); }
 html[data-visual-mode="glass"] #profileCameraCaptureBtn { border-radius: 16px; }
 html[data-visual-mode="glass"] #adminBotAuditModal .modal-close::before { content: none; }
 html[data-visual-mode="glass"] .login-body :is(.btn, .language-switch button.active) { color: var(--on-accent); }
