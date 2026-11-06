@@ -159,7 +159,7 @@
         const quote = el.closest('.msg-reply');
         const files = root.attachments?.getMessageAttachments(msg) || [];
         quote.querySelector('.quote-attachments')?.remove();
-        quote.insertAdjacentHTML('afterbegin', root.attachments?.renderAttachmentThumbnails(files) || '');
+        quote.insertAdjacentHTML('afterbegin', root.attachments?.renderAttachmentThumbnails(files, msg) || '');
         const row = quote.closest('.msg-row');
         if (row?.__messageData) {
           row.__messageData.reply_attachments = files;

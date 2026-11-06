@@ -873,7 +873,7 @@
         if (msg.reply_to_id && msg.reply_display_name) {
           const replyText = getReplyQuoteText(msg);
           html += `<div class="msg-reply" data-reply-id="${msg.reply_to_id}">
-            ${root.attachments?.renderAttachmentThumbnails(msg.reply_attachments || []) || ''}
+            ${root.attachments?.renderAttachmentThumbnails(msg.reply_attachments || [], { is_voice_note: msg.reply_is_voice_note, note_kind: msg.reply_note_kind }) || ''}
             <div class="msg-reply-name">${esc(msg.reply_display_name)}</div>
             <div class="msg-reply-text">${esc(replyText)}</div>
           </div>`;
@@ -1312,7 +1312,7 @@
       try {
         const d = row.__messageData || {};
         let transfer = row.querySelector('.msg-transfer-status');
-        if (d.client_status && d.client_upload?.total) {
+        if (d.client_status && d.client_upload?.total && !(d.is_voice_note && !d.is_video_note)) {
           if (!transfer) {
             transfer = document.createElement('div');
             transfer.className = 'msg-transfer-status';

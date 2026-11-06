@@ -35,16 +35,18 @@ function makeUser(prefix = 'user') {
 }
 
 class ApiSession {
-  constructor(baseUrl, { token = '', user = null } = {}) {
+  constructor(baseUrl, { token = '', user = null, headers = {} } = {}) {
     this.baseUrl = String(baseUrl).replace(/\/+$/, '');
     this.token = token;
     this.user = user;
+    this.headers = { ...headers };
   }
 
   clone() {
     return new ApiSession(this.baseUrl, {
       token: this.token,
       user: this.user,
+      headers: this.headers,
     });
   }
 
@@ -68,6 +70,7 @@ class ApiSession {
     const init = {
       method,
       headers: {
+        ...this.headers,
         ...headers,
       },
     };
@@ -181,8 +184,8 @@ class ApiSession {
   }
 }
 
-function createSession(baseUrl) {
-  return new ApiSession(baseUrl);
+function createSession(baseUrl, options) {
+  return new ApiSession(baseUrl, options);
 }
 
 function fixturePath(name) {

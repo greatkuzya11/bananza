@@ -323,9 +323,9 @@
       (actions.refreshVoiceComposerState || noop)();
     }
 
-    function renderReplyThumbnails(attachments) {
+    function renderReplyThumbnails(attachments, message = state.replyTo || {}) {
       dom.replyBar?.querySelector('.quote-attachments')?.remove();
-      dom.replyBar?.insertAdjacentHTML('afterbegin', root.attachments?.renderAttachmentThumbnails(attachments) || '');
+      dom.replyBar?.insertAdjacentHTML('afterbegin', root.attachments?.renderAttachmentThumbnails(attachments, message) || '');
     }
 
     function updateReplyPreview(messageId, nextText, message = null) {
@@ -334,7 +334,7 @@
         if (dom.replyBarText) dom.replyBarText.textContent = state.replyTo.text;
         if (message) {
           state.replyTo.attachments = root.attachments?.getMessageAttachments(message) || [];
-          renderReplyThumbnails(state.replyTo.attachments);
+          renderReplyThumbnails(state.replyTo.attachments, message);
         }
       }
     }

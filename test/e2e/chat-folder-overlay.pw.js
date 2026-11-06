@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test');
+const { test, expect } = require('./fixtures');
 const { installMediaMocks, makeUser, loginViaUi, createApiSession } = require('./helpers');
 
 test('folder strip overlays scrolling chats and retains clicks, gestures and adaptive clearance', async ({ page }, testInfo) => {

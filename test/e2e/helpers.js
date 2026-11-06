@@ -1,13 +1,14 @@
 const { expect } = require('@playwright/test');
 const { createSession, makeUser } = require('../support/api');
 const { readContext } = require('./context');
+const { getTestClientHeaders } = require('./fixtures');
 
 function getContext() {
   return readContext();
 }
 
 function createApiSession() {
-  return createSession(getContext().baseUrl);
+  return createSession(getContext().baseUrl, { headers: getTestClientHeaders() });
 }
 
 function isMobileProject(testInfo) {

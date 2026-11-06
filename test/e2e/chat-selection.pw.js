@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test');
+const { test, expect } = require('./fixtures');
 const { installMediaMocks, makeUser, loginViaUi, createApiSession } = require('./helpers');
 
 test('selected chats can be deleted together after one confirmation', async ({ page }) => {

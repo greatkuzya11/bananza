@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test');
+const { test, expect } = require('./fixtures');
 const { installMediaMocks, makeUser, registerViaUi } = require('./helpers');
 
 // Exercise layout with native scrollbar gutters, which headless Chromium normally hides.

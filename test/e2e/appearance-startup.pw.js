@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test');
+const { test, expect } = require('./fixtures');
 const { installMediaMocks, makeUser, registerViaUi, openPrivateChat, getContext } = require('./helpers');
 
 test('saved glass appearance has no legacy icons or underlying welcome scene during slow reload', async ({ page }, testInfo) => {
@@ -61,6 +61,9 @@ test('saved glass appearance has no legacy icons or underlying welcome scene dur
     await page.screenshot({ path: testInfo.outputPath(`loaded-${theme}.png`), animations: 'disabled' });
   }
   await openPrivateChat(page, getContext().bobUser.displayName);
+  // The title appears before the directory's closing animation finishes.
+  // Back handles an open/closing modal first, so wait for the chat-only state.
+  await expect(page.locator('#newChatModal')).toBeHidden();
   await expect(page.locator('#chatView')).toBeVisible();
   await expect(page.locator('#chatArea')).toHaveCSS('visibility', 'visible');
   if (mobile) {

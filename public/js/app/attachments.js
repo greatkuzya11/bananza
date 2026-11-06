@@ -228,11 +228,18 @@
     return Array.isArray(message.attachments) ? message.attachments : (message.file_id ? [message] : []);
   }
 
-  function renderAttachmentThumbnails(files = []) {
+  function renderAttachmentThumbnails(files = [], message = {}) {
     if (!files.length) return '';
     const esc = root.formatters.esc;
     return `<span class="quote-attachments">${files.slice(0, 4).map((file, index) => {
       const name = file.file_name || file.name || '';
+      const isVoice = Boolean(message.is_voice_note || file.is_voice_note)
+        && !message.is_video_note && message.note_kind !== 'video_note'
+        && !file.is_video_note && file.note_kind !== 'video_note';
+      if (isVoice) {
+        const title = window.BananzaI18n.t('Voice message');
+        return `<span class="quote-attachment" title="${esc(title)}" role="img" aria-label="${esc(title)}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg></span>`;
+      }
       const src = file.file_type === 'image' ? getAttachmentPreviewUrl(file)
         : file.file_type === 'video' ? getAttachmentPosterUrl(file) : '';
       const label = (name.split('.').pop() || window.BananzaI18n?.t('File') || '').slice(0, 5).toUpperCase();

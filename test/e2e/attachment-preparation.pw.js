@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test');
+const { test, expect } = require('./fixtures');
 const fs = require('fs');
 const { registerViaUi, openPrivateChat, makeUser, getContext } = require('./helpers');
 
@@ -100,6 +100,8 @@ test('individual preview cards animate and the scrollbar only appears while scro
   const panel = page.locator('#pendingFile');
   const strip = panel.locator('.pending-file-strip');
   const indicatorOpacity = () => panel.locator('.pending-file-scrollbar').evaluate(el => getComputedStyle(el).opacity);
+  // Six cards fit on a full desktop panel; exercise actual overflow on both projects.
+  await panel.evaluate(el => { el.style.maxWidth = '360px'; });
   await page.locator('#fileInputDocs').setInputFiles(files(0));
   await expect(panel).toHaveAttribute('aria-busy', 'false');
   await expect(panel).toHaveCSS('opacity', '1');
@@ -131,6 +133,7 @@ test('individual preview cards animate and the scrollbar only appears while scro
   await expect(strip).toHaveClass(/has-many-attachments/);
   await expect(strip).not.toHaveClass(/is-scrolling/);
   expect(await indicatorOpacity()).toBe('0');
+  expect(await strip.evaluate(el => el.scrollWidth - el.clientWidth)).toBeGreaterThan(0);
   await strip.evaluate(el => { el.scrollLeft = el.scrollWidth; });
   await expect(strip).toHaveClass(/is-scrolling/);
   expect(await indicatorOpacity()).toBe('1');
@@ -213,6 +216,8 @@ test('removing attachments preserves the preview strip scroll position', async (
   })));
   const panel = page.locator('#pendingFile');
   const strip = panel.locator('.pending-file-strip');
+  // Keep overflow after removal so preserving a nonzero position is possible.
+  await panel.evaluate(el => { el.style.maxWidth = '360px'; });
   await expect(panel).toHaveAttribute('aria-busy', 'false');
   await expect(panel).toHaveCSS('opacity', '1');
   const before = await strip.evaluate(el => {
@@ -223,11 +228,14 @@ test('removing attachments preserves the preview strip scroll position', async (
   expect(before).toBeGreaterThan(0);
   await panel.locator('.pending-file-card').nth(2).locator('.pending-file-remove').click();
   await expect(panel.locator('.pending-file-card')).toHaveCount(9);
+  expect(await strip.evaluate(el => el.scrollWidth - el.clientWidth)).toBeGreaterThan(before);
   expect(await strip.evaluate(el => el.scrollLeft)).toBeCloseTo(before, 0);
   await panel.locator('.pending-file-card').nth(2).locator('.pending-file-remove').click();
+  await expect(panel.locator('.pending-file-card')).toHaveCount(8);
   expect(await strip.evaluate(el => el.scrollLeft)).toBeCloseTo(before, 0);
   await strip.evaluate(el => { el.scrollLeft = el.scrollWidth; });
   await panel.locator('.pending-file-card').last().locator('.pending-file-remove').click();
+  await expect(panel.locator('.pending-file-card')).toHaveCount(7);
   const end = await strip.evaluate(el => ({ left: el.scrollLeft, max: el.scrollWidth - el.clientWidth }));
   expect(end.left).toBeGreaterThan(0);
   expect(end.left).toBeCloseTo(end.max, 0);

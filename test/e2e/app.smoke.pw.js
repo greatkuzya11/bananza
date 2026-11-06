@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test');
+const { test, expect } = require('./fixtures');
 
 const {
   createApiSession,
@@ -142,7 +142,7 @@ test('UI flow covers register, private chat creation, sending, search and poll c
   }
 });
 
-test('realtime chat flow and media-note ui hooks work with mocked browser media APIs', async ({ browser, page }) => {
+test('realtime chat flow and media-note ui hooks work with mocked browser media APIs', async ({ browser, page, extraHTTPHeaders }) => {
   await installMediaMocks(page);
 
   const { baseUrl, adminUser, bobUser, bobUserId } = getContext();
@@ -166,7 +166,7 @@ test('realtime chat flow and media-note ui hooks work with mocked browser media 
   await loginViaUi(page, adminUser);
   await openExistingChat(page, bobUser.displayName);
 
-  const secondContext = await browser.newContext();
+  const secondContext = await browser.newContext({ extraHTTPHeaders });
   const secondPage = await secondContext.newPage();
   await installMediaMocks(secondPage);
   await loginViaUi(secondPage, bobUser);

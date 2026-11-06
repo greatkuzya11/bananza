@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { test, expect } = require('@playwright/test');
+const { test, expect } = require('./fixtures');
 const { getContext, loginViaUi, createApiSession } = require('./helpers');
 
 test('admin can read live logs, pause, filter and download on desktop and mobile', async ({ page }, testInfo) => {

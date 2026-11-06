@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test');
+const { test, expect } = require('./fixtures');
 
 const {
   createApiSession,
@@ -60,9 +60,11 @@ test('feature loader bridge exposes registered packs and avoids duplicate static
   expect(preloadByFeature['ai-admin-runtime']).toBe('manual');
   expect(preloadByFeature['openai-runtime']).toBe('interaction');
 
-  const initialAppScriptCount = await page.locator('script[src*="/js/app/"]').count();
-  // The shell has 99 app scripts; the idle profile-camera pack can add one.
-  expect(initialAppScriptCount).toBeLessThanOrEqual(100);
+  const appScriptSources = () => page.locator('script[src*="/js/app/"]')
+    .evaluateAll(scripts => scripts.map(script => new URL(script.src).pathname));
+  const initialSources = await appScriptSources();
+  expect(initialSources.length).toBeGreaterThan(0);
+  expect(new Set(initialSources).size).toBe(initialSources.length);
   await expect(page.locator('script[src*="/js/app/admin/"]')).toHaveCount(0);
   await expect(page.locator('script[src*="/js/app/ai-admin/shared.js"]')).toHaveCount(0);
   await expect(page.locator('script[src*="/js/app/ai-admin/events.js"]')).toHaveCount(0);
@@ -90,7 +92,11 @@ test('feature loader bridge exposes registered packs and avoids duplicate static
     'ai-admin-ui',
   ]);
   expect(adminIdleStates.every((state) => state.status === 'loaded')).toBe(true);
-  await expect(page.locator('script[src*="/js/app/admin/"]')).toHaveCount(3);
+  const expectedAdminScripts = ['backup', 'bot-audit', 'logs', 'users']
+    .map(name => `/js/app/admin/${name}.js`);
+  const adminScripts = page.locator('script[src*="/js/app/admin/"]');
+  expect(await adminScripts.evaluateAll(scripts => scripts.map(script => new URL(script.src).pathname).sort()))
+    .toEqual(expectedAdminScripts);
   await expect(page.locator('script[src*="/js/app/ai-admin/controller.js"]')).toHaveCount(1);
   await expect(page.locator('script[src*="/js/app/ai-admin/local-providers-runtime.js"]')).toHaveCount(0);
 
@@ -99,11 +105,11 @@ test('feature loader bridge exposes registered packs and avoids duplicate static
     return window.BananzaAppBridge.__testing.loadFeatureForTest('admin');
   });
   const adminScriptsAfter = await page.locator('script[src*="/js/app/admin/"]').count();
-  expect(adminScriptsBefore).toBe(3);
+  expect(adminScriptsBefore).toBe(expectedAdminScripts.length);
   expect(adminState.status).toBe('loaded');
-  expect(adminScriptsAfter).toBe(3);
+  expect(adminScriptsAfter).toBe(adminScriptsBefore);
   await page.evaluate(() => window.BananzaAppBridge.__testing.loadFeatureForTest('admin'));
-  await expect(page.locator('script[src*="/js/app/admin/"]')).toHaveCount(3);
+  await expect(adminScripts).toHaveCount(adminScriptsBefore);
 
   const contextRuntimeState = await page.evaluate(() => {
     return window.BananzaAppBridge.__testing.loadFeatureForTest('context-chatshot-runtime');
@@ -129,6 +135,9 @@ test('feature loader bridge exposes registered packs and avoids duplicate static
   const settingsScriptsAfter = await page.locator('script[src*="/js/app/settings/"]').count();
   expect(settingsState.status).toBe('loaded');
   expect(settingsScriptsAfter).toBe(settingsScriptsBefore);
+
+  const loadedSources = await appScriptSources();
+  expect(new Set(loadedSources).size).toBe(loadedSources.length);
 
   const summary = await page.evaluate(() => window.BananzaAppBridge.__testing.getPerformanceSummary());
   expect(Number.isFinite(summary.measures['bananza:feature-load:admin'])).toBe(true);

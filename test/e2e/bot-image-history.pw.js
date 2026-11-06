@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const Database = require('better-sqlite3');
-const { test, expect } = require('@playwright/test');
+const { test, expect } = require('./fixtures');
 const { getContext, createApiSession, loginViaUi, isDesktopProject } = require('./helpers');
 
 test('admin image history pages and fullscreen gallery work above settings on desktop and mobile', async ({ page }, testInfo) => {

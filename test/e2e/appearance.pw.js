@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test');
+const { test, expect } = require('./fixtures');
 const { installMediaMocks, makeUser, registerViaUi, loginViaUi, getContext, createApiSession, openPrivateChat, sendComposerMessage } = require('./helpers');
 const catalog = require('../../public/js/appearance');
 
@@ -10,7 +10,11 @@ test('light chat text and reply previews retain contrast on every surface', asyn
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openPrivateChat(page, getContext().bobUser.displayName);
   await sendComposerMessage(page, 'Original message with a long quotation that should stay readable and truncate inside the reply preview.');
-  const sourceId = Number(await page.locator('.msg-row.own').last().getAttribute('data-msg-id'));
+  const source = page.locator('.msg-row.own').last();
+  // The optimistic row has a c-... ID until the server confirms the send.
+  await expect(source).toHaveAttribute('data-msg-id', /^[1-9]\d*$/);
+  await expect(source).not.toHaveAttribute('data-outbox', '1');
+  const sourceId = Number(await source.getAttribute('data-msg-id'));
   // Exercise the production renderer with deterministic incoming/outgoing payloads.
   await page.evaluate(({ sourceId, bobId }) => {
     const bridge = window.BananzaAppBridge;
@@ -279,7 +283,7 @@ test('chat header icons are distinct in glass and keep legacy symbols in older d
   await expect(page.locator('#callVoiceStartBtn')).toBeVisible();
   for (const mode of ['glass', 'classic', 'rich', 'glass']) {
     await page.evaluate(mode => window.BananzaAppearance.apply(document, { theme: 'lavender', mode }), mode);
-    for (const [id, icon] of Object.entries({ chatInfoBtn: 'settings', chatSettingsActionBtn: 'ellipsis', callVoiceStartBtn: 'phone', callStartBtn: 'video' })) {
+    for (const [id, icon] of Object.entries({ chatInfoBtn: 'settings', chatSettingsActionBtn: 'wrench', callVoiceStartBtn: 'phone', callStartBtn: 'video' })) {
       const button = page.locator(`#${id}`);
       await expect(button.locator('> .ui-glyph')).toHaveAttribute('data-icon', icon);
       if (mode === 'glass') {
