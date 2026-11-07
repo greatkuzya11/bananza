@@ -29,6 +29,9 @@ struct AccountSession: Codable, Equatable {
     var server: URL
     var token: String
     var userID: Int
+    func acceptsPush(accountID: Int?, deviceID: String?, currentDeviceID: String) -> Bool {
+        userID == accountID && !currentDeviceID.isEmpty && deviceID == currentDeviceID
+    }
 }
 struct PendingRevocation: Codable, Equatable {
     var session: AccountSession
@@ -47,6 +50,7 @@ struct PendingRevocation: Codable, Equatable {
         if let id = UserDefaults.standard.string(forKey: "deviceID") { return id }
         let id = UUID().uuidString.lowercased(); UserDefaults.standard.set(id, forKey: "deviceID"); return id
     }
+    func rotateDeviceID() { UserDefaults.standard.set(UUID().uuidString.lowercased(), forKey: "deviceID") }
     init() {
         if let data = read("session") { session = try? JSONDecoder().decode(AccountSession.self, from: data) }
         if let data = read("revocations") { pending = (try? JSONDecoder().decode([PendingRevocation].self, from: data)) ?? [] }

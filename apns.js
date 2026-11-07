@@ -33,13 +33,13 @@ function makeApnsRequest(device, payload) {
     type: payload.type, chatId: payload.chatId || null, messageId: payload.messageId || null,
     callId: payload.callId || null, tag: payload.tag || '', forceShow: !!payload.forceShow,
     // Scope pushes to the signed-in account even during an offline account switch.
-    accountId: device.user_id,
+    accountId: device.user_id, deviceId: device.device_id,
   };
   let aps;
   if (voip) {
     if (!Number.isSafeInteger(payload.callId) || payload.callId <= 0) return null;
     // Stable across duplicate deliveries to this device; no unrelated VoIP notifications.
-    const bytes = crypto.createHash('sha256').update(`${device.bundle_id}:${device.user_id}:${payload.callId}`).digest().subarray(0, 16);
+    const bytes = crypto.createHash('sha256').update(`${device.bundle_id}:${device.device_id}:${device.user_id}:${payload.callId}`).digest().subarray(0, 16);
     bytes[6] = (bytes[6] & 15) | 80; bytes[8] = (bytes[8] & 63) | 128;
     const hex = bytes.toString('hex');
     data.callUUID = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;

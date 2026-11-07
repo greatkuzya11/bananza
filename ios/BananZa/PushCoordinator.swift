@@ -47,7 +47,11 @@ import UserNotifications
     }
     func sessionWillChange() throws {
         registration = ""
-        if let account = store.session { try store.queueRevocation(account) }
+        if let account = store.session {
+            try store.queueRevocation(account)
+            // User IDs can coincide on different servers. Retire the old registration scope.
+            store.rotateDeviceID()
+        }
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
     }
     func flushRevocations() async throws {
@@ -70,23 +74,25 @@ import UserNotifications
         }
         try await flushRevocations()
         guard enabled, let account = store.session, let token = pushToken else { return }
+        let deviceID = store.deviceID
         let environment = (Bundle.main.object(forInfoDictionaryKey: "APNSEnvironment") as? String) == "development" ? "sandbox" : "production"
-        let key = "\(account.server)|\(account.userID)|\(account.token)|\(token)|\(voipToken ?? "")|\(language)"
+        let key = "\(deviceID)|\(account.server)|\(account.userID)|\(account.token)|\(token)|\(voipToken ?? "")|\(language)"
         guard key != registration else { return }
-        let body: [String: Any] = ["deviceId": store.deviceID, "bundleId": Bundle.main.bundleIdentifier ?? "",
+        let body: [String: Any] = ["deviceId": deviceID, "bundleId": Bundle.main.bundleIdentifier ?? "",
                                   "environment": environment, "pushToken": token, "voipToken": voipToken ?? "", "language": language]
         _ = try await APIClient.request(account, "/api/push/ios/devices", method: "POST", body: body)
-        guard enabled, store.session == account else { needsSync = true; return }
+        guard enabled, store.session == account, store.deviceID == deviceID else { needsSync = true; return }
         registration = key; lastError = ""
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler completion: @escaping (UNNotificationPresentationOptions) -> Void) {
         let data = notification.request.content.userInfo
         let accountID = data["accountId"] as? Int
+        let deviceID = data["deviceId"] as? String
         let chatID = data["chatId"] as? Int
         let forceShow = data["forceShow"] as? Bool == true
         Task { @MainActor in
-            guard enabled, accountID == store.session?.userID else { completion([]); return }
+            guard enabled, store.session?.acceptsPush(accountID: accountID, deviceID: deviceID, currentDeviceID: store.deviceID) == true else { completion([]); return }
             let visible = UIApplication.shared.applicationState == .active && pageVisible
             let suppress = visible && chatID == currentChatID && !forceShow
             // The visible web client already plays incoming sounds; avoid a second APNs sound.
@@ -97,9 +103,11 @@ import UserNotifications
                                 withCompletionHandler completion: @escaping () -> Void) {
         let data = response.notification.request.content.userInfo
         let accountID = data["accountId"] as? Int
+        let deviceID = data["deviceId"] as? String
         let chatID = data["chatId"] as? Int
         Task { @MainActor in
-            if accountID == store.session?.userID, let id = chatID, id > 0 { openChat?(id) }
+            if store.session?.acceptsPush(accountID: accountID, deviceID: deviceID, currentDeviceID: store.deviceID) == true,
+               let id = chatID, id > 0 { openChat?(id) }
             completion()
         }
     }

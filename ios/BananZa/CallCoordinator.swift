@@ -55,19 +55,20 @@ import LiveKit
         let update = CXCallUpdate(); update.remoteHandle = CXHandle(type: .generic, value: data["title"] as? String ?? "BananZa")
         update.localizedCallerName = data["title"] as? String ?? "BananZa"; update.hasVideo = data["video"] as? Bool ?? false
         let id = data["callId"] as? Int ?? 0
-        let valid = id > 0 && store.session != nil && (data["accountId"] as? Int) == store.session?.userID
+        let valid = id > 0 && store.session?.acceptsPush(accountID: data["accountId"] as? Int, deviceID: data["deviceId"] as? String, currentDeviceID: store.deviceID) == true
             && UserDefaults.standard.bool(forKey: "notificationsEnabled")
         let busy = finishing || (uuid != nil && uuid != incomingUUID)
         let chatID = data["chatId"] as? Int ?? 0
         let title = data["title"] as? String ?? "BananZa"
         let hasVideo = update.hasVideo
         let incomingAccount = store.session
+        let incomingDeviceID = store.deviceID
         // Always report promptly, even stale/duplicate/account-mismatched pushes. Finish invalid calls afterward.
         provider.reportNewIncomingCall(with: incomingUUID, update: update) { [weak self] error in
             completion()
             Task { @MainActor in
                 guard let self else { return }
-                if !valid || busy || self.finishing || self.store.session != incomingAccount || (self.uuid != nil && self.uuid != incomingUUID) {
+                if !valid || busy || self.finishing || self.store.session != incomingAccount || self.store.deviceID != incomingDeviceID || (self.uuid != nil && self.uuid != incomingUUID) {
                     if error == nil { self.provider.reportCall(with: incomingUUID, endedAt: Date(), reason: .failed) }
                     return
                 }

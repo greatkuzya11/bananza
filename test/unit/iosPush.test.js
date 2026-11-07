@@ -40,6 +40,7 @@ test('ordinary pushes cannot use the VoIP topic and preserve routing and silent 
   assert.equal(request.token, device.pushToken);
   const payload = JSON.parse(request.body);
   assert.equal(payload.chatId, 7); assert.equal(payload.messageId, 19); assert.equal(payload.accountId, 1);
+  assert.equal(payload.deviceId, device.deviceId);
   assert.equal(payload.aps.sound, undefined);
   assert.equal(request.headers['apns-collapse-id'].length, 64);
   assert.equal(makeApnsRequest({ ...row(), push_token: null }, { type: 'message' }), null);
@@ -52,8 +53,10 @@ test('call invites use short-lived VoIP pushes and stable call UUIDs', () => {
   assert.equal(request.headers['apns-expiration'], '0');
   assert.equal(request.token, device.voipToken);
   const body = JSON.parse(request.body);
+  assert.equal(body.deviceId, device.deviceId);
   assert.equal(body.video, false);
   assert.equal(body.callUUID, JSON.parse(makeApnsRequest(row(), payload).body).callUUID);
+  assert.notEqual(body.callUUID, JSON.parse(makeApnsRequest({ ...row(), device_id: 'other-registration' }, payload).body).callUUID);
   assert.notEqual(body.callUUID, JSON.parse(makeApnsRequest(row(), { ...payload, callId: 43 }).body).callUUID);
   assert.equal(makeApnsRequest(row(), { type: 'call_invite', callId: 0 }), null);
   assert.equal(makeApnsRequest({ ...row(), voip_token: null }, payload), null);
