@@ -1,0 +1,9 @@
+BananZa.xcodeproj/
+build/
+DerivedData/
+*.ipa
+*.xcarchive
+*.p12
+*.p8
+*.mobileprovision
+ExportOptions.plist

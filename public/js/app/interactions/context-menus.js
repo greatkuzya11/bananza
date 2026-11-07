@@ -284,6 +284,13 @@ async function rasterizeImageBlobToPng(blob) {
 function notifyAndroidMediaAction(context, action) {
   if (!hasAndroidNativeBridge()) return false;
   try {
+    if (window.BananzaIOS) {
+      window.BananzaIOS.request('media_action', {
+        action, url: context.absoluteUrl, filename: context.filename || 'attachment',
+        mime: context.mime || 'application/octet-stream', mediaKind: context.mediaKind || 'file',
+      }).catch((error) => window.alert(error.message || error));
+      return true;
+    }
     window.BananzaAndroid.postMessage(JSON.stringify({
       type: 'media_action',
       payload: {

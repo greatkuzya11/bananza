@@ -8,12 +8,17 @@
   }
 
   function hasAndroidNativeBridge(win = getWindow()) {
-    return Boolean(win?.BananzaAndroid && typeof win.BananzaAndroid.postMessage === 'function');
+    // Compatibility facade used by existing settings and media controllers.
+    return Boolean(win?.BananzaIOS || (win?.BananzaAndroid && typeof win.BananzaAndroid.postMessage === 'function'));
   }
 
   function postAndroidMessage(message, win = getWindow()) {
     if (!hasAndroidNativeBridge(win)) return false;
     try {
+      if (win.BananzaIOS) {
+        win.BananzaIOS.request(message.type, message.payload || {}).catch(() => {});
+        return true;
+      }
       win.BananzaAndroid.postMessage(JSON.stringify(message));
       return true;
     } catch {
@@ -45,5 +50,11 @@
     hasAndroidNativeBridge,
     notifyAndroidScreenRotationPreference,
     notifyAndroidMobileFontSize,
+  };
+  root.nativeBridge = {
+    isIOS: () => Boolean(getWindow()?.BananzaIOS),
+    hasNativeBridge: hasAndroidNativeBridge,
+    postMessage: postAndroidMessage,
+    request: (type, payload = {}) => getWindow()?.BananzaIOS?.request(type, payload),
   };
 })();

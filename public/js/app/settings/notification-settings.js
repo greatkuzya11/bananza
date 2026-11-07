@@ -26,6 +26,9 @@
     };
     let notificationSettingsLoaded = false;
     let pushDeviceSubscribed = false;
+    let nativePermission = 'default';
+    const native = () => win.BananzaIOS;
+    const t = (key, values) => win.BananzaI18n?.t(key, values) || key;
 
     function byId(id) {
       return doc.getElementById(id);
@@ -56,6 +59,7 @@
     }
 
     function isPushSupported() {
+      if (native()) return true;
       return Boolean(
         'serviceWorker' in win.navigator &&
         'PushManager' in win &&
@@ -65,6 +69,7 @@
     }
 
     function notificationPermissionLabel() {
+      if (native()) return t(nativePermission === 'granted' ? 'Allowed' : nativePermission === 'denied' ? 'Denied in iOS Settings' : 'Not requested');
       if (!('Notification' in win)) return '\u043D\u0435 \u043F\u043E\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044F';
       if (win.Notification.permission === 'granted') return '\u0440\u0430\u0437\u0440\u0435\u0448\u0435\u043D\u044B';
       if (win.Notification.permission === 'denied') return '\u0437\u0430\u043F\u0440\u0435\u0449\u0435\u043D\u044B \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435';
@@ -86,7 +91,7 @@
       if (!supportEl || !enabledInput || !messagesInput || !invitesInput || !reactionsInput) return;
 
       const supported = isPushSupported();
-      const permission = 'Notification' in win ? win.Notification.permission : '';
+      const permission = native() ? nativePermission : ('Notification' in win ? win.Notification.permission : '');
       supportEl.classList.toggle('is-ready', supported && permission === 'granted' && pushDeviceSubscribed);
       supportEl.classList.toggle('is-error', !supported || permission === 'denied');
       supportEl.textContent = supported
@@ -104,6 +109,12 @@
       if (enableBtn) enableBtn.disabled = !supported || permission === 'denied';
       if (disableBtn) disableBtn.disabled = !supported || !pushDeviceSubscribed;
       if (testBtn) testBtn.disabled = !supported || !pushDeviceSubscribed;
+      if (native()) {
+        supportEl.textContent = t('iOS notifications: {permission}. Device: {state}', {
+          permission: notificationPermissionLabel(), state: t(pushDeviceSubscribed ? 'Subscribed' : 'Not subscribed'),
+        });
+        if (enableBtn) enableBtn.disabled = false;
+      }
     }
 
     function urlBase64ToUint8Array(base64String) {
@@ -121,6 +132,15 @@
     }
 
     async function refreshPushDeviceState() {
+      if (native()) {
+        try {
+          const status = await native().request('notification_status');
+          nativePermission = status.permission;
+          pushDeviceSubscribed = Boolean(status.subscribed);
+        } catch { pushDeviceSubscribed = false; }
+        renderNotificationSettingsForm();
+        return pushDeviceSubscribed;
+      }
       if (!isPushSupported()) {
         pushDeviceSubscribed = false;
         renderNotificationSettingsForm();
@@ -180,6 +200,15 @@
     }
 
     async function enablePushNotifications() {
+      if (native()) {
+        try {
+          const result = await native().request('notifications_enable');
+          if (result.permission === 'granted') await saveNotificationSettings({ push_enabled: true });
+          await refreshPushDeviceState();
+          setNotificationStatus(t(pushDeviceSubscribed ? 'Subscribed' : 'Notification registration pending'), pushDeviceSubscribed ? 'success' : '');
+        } catch (error) { setNotificationStatus(error.message || t('Could not enable notifications'), 'error'); }
+        return;
+      }
       if (!isPushSupported()) {
         setNotificationStatus('Web Push \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D: \u043D\u0443\u0436\u0435\u043D HTTPS \u0438 \u043F\u043E\u0434\u0434\u0435\u0440\u0436\u043A\u0430 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430', 'error');
         renderNotificationSettingsForm();
@@ -218,6 +247,11 @@
     }
 
     async function disablePushOnThisDevice() {
+      if (native()) {
+        try { await native().request('notifications_disable'); await refreshPushDeviceState(); }
+        catch (error) { setNotificationStatus(error.message || t('Could not disable notifications'), 'error'); }
+        return;
+      }
       if (!isPushSupported()) return;
       try {
         setNotificationStatus('\u041E\u0442\u043A\u043B\u044E\u0447\u0430\u044E \u0443\u0441\u0442\u0440\u043E\u0439\u0441\u0442\u0432\u043E...');
@@ -264,7 +298,7 @@
         if (e.target.checked && !pushDeviceSubscribed) {
           if (!isPushSupported()) {
             setNotificationStatus('\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u044B, \u043D\u043E \u043D\u0430 \u044D\u0442\u043E\u043C \u0443\u0441\u0442\u0440\u043E\u0439\u0441\u0442\u0432\u0435 Web Push \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D.', 'success');
-          } else if (win.Notification.permission === 'denied') {
+          } else if ((native() ? nativePermission : win.Notification.permission) === 'denied') {
             setNotificationStatus('\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u044B, \u043D\u043E \u0431\u0440\u0430\u0443\u0437\u0435\u0440 \u0437\u0430\u043F\u0440\u0435\u0442\u0438\u043B \u0443\u0432\u0435\u0434\u043E\u043C\u043B\u0435\u043D\u0438\u044F. \u0420\u0430\u0437\u0440\u0435\u0448\u0438\u0442\u0435 \u0438\u0445 \u0432 \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0430\u0445 \u0441\u0430\u0439\u0442\u0430.', 'success');
           } else {
             setNotificationStatus('\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u044B. \u0427\u0442\u043E\u0431\u044B \u043F\u043E\u043B\u0443\u0447\u0430\u0442\u044C push \u043D\u0430 \u044D\u0442\u043E\u043C \u0443\u0441\u0442\u0440\u043E\u0439\u0441\u0442\u0432\u0435, \u043D\u0430\u0436\u043C\u0438\u0442\u0435 \u00AB\u0412\u043A\u043B\u044E\u0447\u0438\u0442\u044C \u043D\u0430 \u044D\u0442\u043E\u043C \u0443\u0441\u0442\u0440\u043E\u0439\u0441\u0442\u0432\u0435\u00BB.', 'success');

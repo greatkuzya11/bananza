@@ -1,0 +1,5 @@
+"NSCameraUsageDescription" = "Record video messages, take photos and make video calls.";
+"NSMicrophoneUsageDescription" = "Record voice messages and participate in calls.";
+"NSPhotoLibraryAddUsageDescription" = "Save chat photos and videos to your library.";
+"NSPhotoLibraryUsageDescription" = "Attach photos and videos to messages.";
+"NSLocationWhenInUseUsageDescription" = "Share your location and show local weather.";

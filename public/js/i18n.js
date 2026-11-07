@@ -1877,6 +1877,20 @@
   };
 
   const CATALOG = { ru: RU, en: EN };
+  Object.assign(RU, {
+    'Allowed': 'Разрешены',
+    'Denied in iOS Settings': 'Запрещены в настройках iOS',
+    'Not requested': 'Ещё не запрошены',
+    'Subscribed': 'Подписано',
+    'Not subscribed': 'Не подписано',
+    'Notification registration pending': 'Ожидается регистрация уведомлений',
+    'iOS notifications: {permission}. Device: {state}': 'Уведомления iOS: {permission}. Устройство: {state}',
+    'Could not enable notifications': 'Не удалось включить уведомления',
+    'Could not disable notifications': 'Не удалось отключить уведомления',
+  });
+  ['Allowed', 'Denied in iOS Settings', 'Not requested', 'Subscribed', 'Not subscribed',
+    'Notification registration pending', 'iOS notifications: {permission}. Device: {state}',
+    'Could not enable notifications', 'Could not disable notifications'].forEach(key => { EN[key] = key; });
   const literalToKey = new Map();
 
   function normalizeLanguage(language) {
