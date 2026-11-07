@@ -346,7 +346,17 @@ test('chat header actions shell preserves aria, dynamic actions and focus state'
   assert.equal(refs.searchBtn.getAttribute('tabindex'), null);
 
   refs.searchBtn.focus();
+  assert.deepEqual(scrollCalls, []);
+  for (const button of [refs.searchBtn, refs.chatSettingsActionBtn]) {
+    Object.defineProperty(button, 'offsetWidth', { value: 44 });
+  }
+  refs.chatHeaderActions.getBoundingClientRect = () => ({ width: 44 });
+  shell.syncChatHeaderActionsAccessibility();
+  assert.equal(refs.chatHeaderActions.classList.contains('is-overflowing'), true);
   assert.deepEqual(scrollCalls, [{ block: 'nearest', inline: 'nearest' }]);
+  refs.chatHeaderActions.getBoundingClientRect = () => ({ width: 88 });
+  shell.syncChatHeaderActionsAccessibility();
+  assert.equal(refs.chatHeaderActions.classList.contains('is-overflowing'), false);
 
   assert.equal(shell.closeChatHeaderActions(), false);
   assert.equal(window.document.activeElement, refs.chatInfoBtn);

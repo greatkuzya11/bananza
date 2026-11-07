@@ -317,6 +317,12 @@ test('chat header icons are distinct in glass and keep legacy symbols in older d
       await expect(toggle).toHaveCSS('animation-name', 'none');
       await expect(toggle.locator('.chat-actions-close')).toHaveCSS('opacity', '1');
       await expect(toggle.locator('.chat-actions-gear').first()).toHaveCSS('opacity', '0');
+      const actions = page.locator('#chatHeaderActions');
+      await expect(actions).toHaveCSS('overflow-x', width === 584 ? 'clip' : 'auto');
+      const scrollLeft = await actions.evaluate(el => { el.scrollLeft = 1000; return el.scrollLeft; });
+      if (width === 584) expect(scrollLeft).toBe(0);
+      else expect(scrollLeft).toBeGreaterThan(0);
+      await actions.evaluate(el => { el.scrollLeft = 0; });
       if (mode === 'classic') await expect(toggle.locator('.ui-icon-legacy')).toHaveCSS('display', 'flex');
       await expect.poll(() => capsule.evaluate(el => {
         const rect = el.getBoundingClientRect();

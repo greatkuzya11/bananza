@@ -27,7 +27,7 @@ test('public/index.html keeps expected stylesheet and script order', () => {
 
   assert.deepEqual(styles, [
     '/vendor/leaflet/leaflet.css?v=1.9.4',
-    '/css/style.css?v=20261107-action-hints',
+    '/css/style.css?v=20261107-capsule-overflow',
     '/css/calls.css?v=20260621-call-mobile-controls',
     '/css/voice.css?v=glass-voice-play-2',
     '/css/telegram-transcription.css?v=20260915-settings-spacing',
@@ -61,9 +61,9 @@ test('public/index.html keeps expected stylesheet and script order', () => {
     '/js/app/dom.js?v=20260531-dom-mobile-shell',
     '/js/app/android-bridge.js?v=20260531-dom-mobile-shell',
     '/js/app/mobile-viewport.js?v=20260531-dom-mobile-shell',
-    '/js/app/chat-header-actions.js?v=20261107-chat-capsule',
+    '/js/app/chat-header-actions.js?v=20261107-capsule-overflow',
     '/js/app/shell/mobile-composer-guard.js?v=20260621-ios-keyboard1',
-    '/js/app/shell/events.js?v=20261107-action-hints',
+    '/js/app/shell/events.js?v=20261107-capsule-overflow',
     '/js/app/shell/ui-runtime.js?v=20261107-chat-capsule',
     '/js/app/shell/shell-runtime.js?v=20260702-maps2',
     '/js/app/shell/mobile-runtime-adapters.js?v=20260601-runtime-final',

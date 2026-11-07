@@ -109,7 +109,7 @@
       win.clearTimeout(timer);
       hold = null;
       if (!blocked) return;
-      event.preventDefault();
+      if (event.cancelable) event.preventDefault();
       event.stopImmediatePropagation();
       win.clearTimeout(dismissTimer);
       dismissTimer = win.setTimeout(hide, 1800);

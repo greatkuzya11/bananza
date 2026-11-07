@@ -1426,8 +1426,8 @@ html[data-visual-mode="glass"] #settingsBtn.is-spinning {
   height: 44px;
   gap: 0;
   border-radius: 24px 0 0 24px;
-  overflow-x: auto;
-  overflow-y: hidden;
+  /* A closed capsule must not retain a zero-width composited scroll surface. */
+  overflow: clip;
   overscroll-behavior-x: contain;
   scrollbar-width: none;
   pointer-events: none;
@@ -1438,6 +1438,10 @@ html[data-visual-mode="glass"] #settingsBtn.is-spinning {
   pointer-events: auto;
   visibility: visible;
   transition-delay: 0s;
+}
+.chat-header-actions.is-open.is-overflowing {
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 .chat-header-actions::-webkit-scrollbar { display: none; }
 .chat-header .chat-actions-capsule .icon-btn {

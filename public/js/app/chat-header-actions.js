@@ -29,6 +29,21 @@
       if (element && element.style.getPropertyValue(name) !== value) element.style.setProperty(name, value);
     }
 
+    function syncOverflow() {
+      if (!panel || !capsule) return;
+      // Entry transforms temporarily enlarge scrollWidth. Measure layout widths
+      // only, and do not create a scroll surface while the capsule is resizing.
+      const resizing = capsule.getAnimations?.().some(animation =>
+        animation.transitionProperty === 'width' && animation.playState === 'running');
+      const required = visibleButtons().reduce((width, button) => width + button.offsetWidth, 0);
+      const overflowing = getOpen() && !resizing && required > panel.getBoundingClientRect().width + 0.5;
+      const changed = panel.classList.contains('is-overflowing') !== overflowing;
+      panel.classList.toggle('is-overflowing', overflowing);
+      if (changed && overflowing && panel.contains(doc.activeElement)) {
+        doc.activeElement.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+      }
+    }
+
     function getRef(name) {
       return dom[name] || null;
     }
@@ -110,6 +125,7 @@
           button.tabIndex = -1;
         }
       });
+      syncOverflow();
     }
 
     function setChatHeaderActionsOpen(open) {
@@ -133,13 +149,19 @@
     }
 
     getRef('chatHeaderActions')?.addEventListener('focusin', (event) => {
-      if (!getOpen()) return;
+      if (!getOpen() || !panel?.classList.contains('is-overflowing')) return;
       const button = event.target?.closest?.('button');
       if (!button || !getRef('chatHeaderActions').contains(button)) return;
       button.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
     });
 
     // Dynamic call/ChatShot controls can change while the capsule is open.
+    if (panel && win?.ResizeObserver) new win.ResizeObserver(syncOverflow).observe(panel);
+    for (const type of ['transitionend', 'transitioncancel']) {
+      capsule?.addEventListener(type, event => {
+        if (event.target === capsule && event.propertyName === 'width') syncOverflow();
+      });
+    }
     if (panel && win?.MutationObserver) {
       new win.MutationObserver(records => {
         if (records.some(record => record.type === 'childList'
