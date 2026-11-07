@@ -42,8 +42,8 @@ import UserNotifications
     func disable() async throws {
         enabled = false; registration = ""
         if let account = store.session { try store.queueRevocation(account) }
-        try await flushRevocations()
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        try await flushRevocations()
     }
     func sessionWillChange() throws {
         registration = ""
@@ -72,7 +72,9 @@ import UserNotifications
             synchronizing = false
             if needsSync { needsSync = false; Task { try? await synchronize() } }
         }
-        try await flushRevocations()
+        // An unreachable previous server must not prevent registration on the new server.
+        // Failed revocations stay in Keychain; retired device IDs reject their stale pushes.
+        try? await flushRevocations()
         guard enabled, let account = store.session, let token = pushToken else { return }
         let deviceID = store.deviceID
         let environment = (Bundle.main.object(forInfoDictionaryKey: "APNSEnvironment") as? String) == "development" ? "sandbox" : "production"

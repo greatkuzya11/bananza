@@ -78,7 +78,11 @@ struct PendingRevocation: Codable, Equatable {
     }
     private func write(_ key: String, _ value: Data?) throws {
         let q = query(key)
-        guard let value else { SecItemDelete(q as CFDictionary); return }
+        guard let value else {
+            let status = SecItemDelete(q as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else { throw AppError.message(L("secure_storage_error")) }
+            return
+        }
         let attributes: [String: Any] = [kSecValueData as String: value, kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
         var status = SecItemUpdate(q as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound { status = SecItemAdd(q.merging(attributes) { _, new in new } as CFDictionary, nil) }
