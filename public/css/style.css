@@ -10976,6 +10976,13 @@ html[data-visual-mode="glass"] .pending-file-card { background: var(--glass-cont
 
 /* Keep the normal header in layout so selection never moves the chat list. */
 #sidebar .sidebar-header { position: relative; }
+/* Raise the isolated header itself so the menu can cover the list. */
+#sidebar .sidebar-header.is-selecting-chats { z-index: 30; }
+/* Let the menu sample the chat list instead of nesting inside a backdrop filter. */
+html[data-visual-mode="glass"] #sidebar:has(.chat-selection-actions) {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
 #sidebar .sidebar-header.is-selecting-chats > :not(.chat-selection-panel) { visibility: hidden; }
 .chat-selection-panel {
   position: absolute;
