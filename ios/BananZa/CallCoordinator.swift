@@ -61,12 +61,13 @@ import LiveKit
         let chatID = data["chatId"] as? Int ?? 0
         let title = data["title"] as? String ?? "BananZa"
         let hasVideo = update.hasVideo
+        let incomingAccount = store.session
         // Always report promptly, even stale/duplicate/account-mismatched pushes. Finish invalid calls afterward.
         provider.reportNewIncomingCall(with: incomingUUID, update: update) { [weak self] error in
             completion()
             Task { @MainActor in
                 guard let self else { return }
-                if !valid || busy {
+                if !valid || busy || self.finishing || self.store.session != incomingAccount || (self.uuid != nil && self.uuid != incomingUUID) {
                     if error == nil { self.provider.reportCall(with: incomingUUID, endedAt: Date(), reason: .failed) }
                     return
                 }
@@ -95,6 +96,8 @@ import LiveKit
         desiredCamera = next["media_kind"] as? String != "voice" && payload["cameraEnabled"] as? Bool != false
         desiredMicrophone = payload["micEnabled"] as? Bool != false
         if desiredCamera { desiredCamera = await AVCaptureDevice.requestAccess(for: .video) }
+        // Permission sheets suspend this task: an incoming call or logout may happen meanwhile.
+        guard callID == nil, !joining, !finishing, store.session == account else { throw AppError.message(L("call_busy")) }
         self.account = account; call = next; uuid = UUID(); outgoing = true
         let action = CXStartCallAction(call: uuid!, handle: CXHandle(type: .generic, value: next["chat_name"] as? String ?? "BananZa"))
         action.isVideo = desiredCamera
