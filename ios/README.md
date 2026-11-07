@@ -61,6 +61,8 @@ Backups include device rows in SQLite. APNs environment/key material and CI sign
 
 ## Release and installation
 
+Deploy the matching server revision before testing: the native client loads its bridge, notification settings and call handoff from that server's web assets. Configure the APNs variables on the server and restart it. A simulator build does not deploy the server automatically.
+
 1. Run the workflow on the intended branch with `release=false`; require a successful simulator build/test result.
 2. Complete the physical-device acceptance matrix in `ACCEPTANCE.md` using a development or TestFlight build. APNs, locked-screen calls, Bluetooth and real camera/microphone behavior cannot be established by simulator tests.
 3. Run **Actions → iOS build and TestFlight → Run workflow → release=true**. The workflow imports signing material into a temporary keychain, archives, exports the IPA, uploads to App Store Connect, then removes the credentials. Build numbers use the workflow run number and attempt.

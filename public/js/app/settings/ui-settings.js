@@ -761,7 +761,9 @@
     function applyMobileFontSize(size, persist = true) {
       const nextSize = normalizeMobileFontSize(size);
       setCurrentMobileFontSize(nextSize);
-      setMobileFontAdjustPercent(hasAndroidNativeBridge() ? 100 : (actions.isMobileLayoutViewport?.() ? getMobileFontAdjustPercent(nextSize) : 100));
+      // Android applies native WebView textZoom; iOS keeps the shared CSS font scale.
+      const nativeTextZoom = hasAndroidNativeBridge() && !win.BananzaIOS;
+      setMobileFontAdjustPercent(nativeTextZoom ? 100 : (actions.isMobileLayoutViewport?.() ? getMobileFontAdjustPercent(nextSize) : 100));
       if (getCurrentUser() && persist) updateCurrentUserPatch({ ui_mobile_font_size: nextSize }, true);
       syncMobileFontSettingsButton();
       renderMobileFontSizeControl();

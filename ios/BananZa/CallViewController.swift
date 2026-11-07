@@ -15,11 +15,15 @@ import LiveKit
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func viewDidLoad() {
         super.viewDidLoad(); view.backgroundColor = .systemBackground
+        let page = UIScrollView(); page.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(page)
+        NSLayoutConstraint.activate([page.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor), page.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor), page.leadingAnchor.constraint(equalTo: view.leadingAnchor), page.trailingAnchor.constraint(equalTo: view.trailingAnchor)])
         let root = UIStackView(); root.axis = .vertical; root.spacing = 12; root.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(root)
-        NSLayoutConstraint.activate([root.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12), root.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12), root.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16), root.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16)])
+        page.addSubview(root)
+        // Keep controls reachable in landscape and with larger accessibility text.
+        NSLayoutConstraint.activate([root.topAnchor.constraint(equalTo: page.contentLayoutGuide.topAnchor, constant: 12), root.bottomAnchor.constraint(equalTo: page.contentLayoutGuide.bottomAnchor, constant: -12), root.leadingAnchor.constraint(equalTo: page.contentLayoutGuide.leadingAnchor, constant: 16), root.trailingAnchor.constraint(equalTo: page.contentLayoutGuide.trailingAnchor, constant: -16), root.widthAnchor.constraint(equalTo: page.frameLayoutGuide.widthAnchor, constant: -32), root.heightAnchor.constraint(greaterThanOrEqualTo: page.frameLayoutGuide.heightAnchor, constant: -24)])
         status.textAlignment = .center; status.numberOfLines = 0; root.addArrangedSubview(status)
         let scroll = UIScrollView(); root.addArrangedSubview(scroll)
+        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 160).isActive = true
         tiles.axis = .vertical; tiles.spacing = 12; tiles.translatesAutoresizingMaskIntoConstraints = false; scroll.addSubview(tiles)
         NSLayoutConstraint.activate([tiles.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor), tiles.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor), tiles.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor), tiles.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor), tiles.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor)])
         let controls = UIStackView(); controls.distribution = .fillEqually; controls.spacing = 8

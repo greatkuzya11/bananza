@@ -153,6 +153,7 @@ import SafariServices
             if token != (store.session?.token ?? "") {
                 sessionRevision += 1; let revision = sessionRevision
                 if token.isEmpty {
+                    pendingChatID = nil
                     await calls.finish(sendLeave: true); try push.sessionWillChange(); try store.set(nil)
                 } else if let server = store.server {
                     var candidate = AccountSession(server: server, token: token, userID: 0)
@@ -160,7 +161,7 @@ import SafariServices
                     guard revision == sessionRevision, server == store.server else { return [:] }
                     guard let user = data["user"] as? [String: Any], let id = user["id"] as? Int, id > 0 else { throw AppError.message(L("session_expired")) }
                     candidate.userID = id
-                    if store.session?.userID != id { await calls.finish(sendLeave: true); try push.sessionWillChange() }
+                    if let previous = store.session, previous.userID != id { pendingChatID = nil; await calls.finish(sendLeave: true); try push.sessionWillChange() }
                     try store.set(candidate)
                 }
                 installScripts(restore: false)

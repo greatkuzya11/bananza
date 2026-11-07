@@ -28,7 +28,7 @@
 "audio_route" = "Audio output";
 "speaker" = "Speaker";
 "ai_notes" = "Start AI notes";
-"stop_ai_notes" = "Stop AI notes";
+"stop_ai_notes" = "Cancel AI notes";
 "chat" = "Back to chat";
 "leave_call" = "Leave call";
 "end_call" = "End call for everyone";
