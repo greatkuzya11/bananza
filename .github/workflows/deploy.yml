@@ -16,6 +16,8 @@ jobs:
           tar \
             --exclude=.git \
             --exclude=node_modules \
+            --exclude=ios \
+            --exclude=android-local \
             --exclude=test \
             --exclude=coverage \
             --exclude=playwright-report \

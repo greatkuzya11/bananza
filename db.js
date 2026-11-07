@@ -6,6 +6,7 @@ const { initAiSchema } = require('./ai/schema');
 const { initVideoNoteSchema } = require('./videoNotes/schema');
 const { initCallSchema } = require('./calls/schema');
 const { initTelegramTranscriptionSchema } = require('./telegramTranscription/schema');
+const { initIosPushSchema } = require('./iosPushSchema');
 
 const db = new Database(path.join(__dirname, 'bananza.db'));
 
@@ -1000,6 +1001,7 @@ initVideoNoteSchema(db);
 initCallSchema(db);
 initAiSchema(db);
 initTelegramTranscriptionSchema(db);
+initIosPushSchema(db);
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS chat_folders (

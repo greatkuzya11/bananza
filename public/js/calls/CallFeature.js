@@ -10,6 +10,8 @@
   const MEDIA = window.BananzaCallMedia || {};
   const NOTIFICATIONS = window.BananzaCallNotifications || {};
   const EXTERNAL_CONFIG = window.BananzaExternalCall || null;
+  const nativeCalls = () => !EXTERNAL_CONFIG && Boolean(window.BananzaIOS?.capabilities?.calls);
+  let nativeCallConnected = false;
   const MINIMIZED_DRAG_HOLD_MS = 260;
   const MINIMIZED_DRAG_MARGIN = 12;
   const CALL_LAYOUT_FIT_ALL = 'fit-all';
@@ -1063,6 +1065,7 @@
 
   async function joinVoiceCallDirectly(call) {
     if (!call?.id) return;
+    if (nativeCalls()) return joinNativeCall(call);
     ensureUi();
     await openHostChatForCall(call);
     recoverHostChatViewport('call_prejoin_open');
@@ -1548,6 +1551,7 @@
 
   async function openPrejoin(call, options = {}) {
     if (!call?.id) return;
+    if (nativeCalls()) return joinNativeCall(call);
     ensureUi();
     if (options.mode !== 'devices') await openHostChatForCall(call);
     recoverHostChatViewport('call_prejoin_open');
@@ -1774,6 +1778,7 @@
   }
 
   async function joinCall(call) {
+    if (nativeCalls()) return joinNativeCall(call);
     if (state.externalMode) return joinExternalCall(call);
     if (call?.id && isCurrentCall(call) && state.room) return revealCurrentCallSurface();
     if (!call?.id || state.joining) return;
@@ -2089,6 +2094,7 @@
   }
 
   function localMicrophoneTrackId() {
+    if (nativeCalls()) return state.nativeMicrophoneTrackId || '';
     const publications = state.room?.localParticipant?.audioTrackPublications;
     if (!publications?.values) return '';
     for (const publication of publications.values()) {
@@ -2450,6 +2456,13 @@
   }
 
   async function leaveCall(endForEveryone) {
+    if (nativeCalls()) {
+      await window.BananzaIOS.request('call_leave', { endForEveryone: Boolean(endForEveryone) });
+      state.currentCall = null;
+      nativeCallConnected = false;
+      await loadActiveCalls().catch(() => {});
+      return;
+    }
     const call = state.currentCall;
     state.leaveSentForCallId = 0;
     await disconnectRoom({ intentional: true });
@@ -3735,6 +3748,7 @@
 
   hooks.handleWSMessage = (msg) => {
     if (!msg || typeof msg !== 'object') return;
+    if (nativeCalls()) window.BananzaIOS.request('call_event', msg).catch(() => {});
     if (msg.type === 'call_settings_updated') {
       mergePublicSettings(msg.settings || {});
       if (!state.settings.calls_enabled) {
@@ -3768,8 +3782,8 @@
     }
     if (msg.type === 'call_invite' && msg.call && Number(msg.call.started_by) !== Number(currentUser()?.id || 0)) {
       state.incomingCall = msg.call;
-      NOTIFICATIONS.startRingtone?.(state.settings.ringtone_enabled);
-      NOTIFICATIONS.notifyIncoming?.(
+      if (!nativeCalls()) NOTIFICATIONS.startRingtone?.(state.settings.ringtone_enabled);
+      if (!nativeCalls()) NOTIFICATIONS.notifyIncoming?.(
         isVoiceCall(msg.call) ? t('Incoming voice call') : t('Incoming call'),
         msg.call.chat_name
           ? t('{name} is calling in {chat}', { name: msg.call.started_by_name || t('Someone'), chat: msg.call.chat_name })
@@ -3795,6 +3809,36 @@
     return isVoiceCall(call) ? joinVoiceCallDirectly(call) : openPrejoin(call);
   };
   hooks.isCurrentCall = (callId) => Boolean(Number(callId || 0) && state.room && Number(state.currentCall?.id || 0) === Number(callId || 0));
+  if (nativeCalls()) {
+    hooks.isCurrentCall = (callId) => Boolean(nativeCallConnected && Number(state.currentCall?.id) === Number(callId));
+    window.addEventListener('bananza:ios-call-state', (event) => {
+      const data = event.detail || {};
+      nativeCallConnected = Boolean(data.connected);
+      state.nativeMicrophoneTrackId = data.trackId || '';
+      state.currentCall = data.call?.id ? data.call : null;
+      state.pendingJoinCall = null;
+      state.incomingCall = null;
+      NOTIFICATIONS.stopRingtone?.();
+      if (state.currentCall) upsertCall(state.currentCall);
+      renderAll();
+      document.getElementById('callSurface')?.classList.add('hidden');
+      document.getElementById('callPrejoin')?.classList.add('hidden');
+      if (!state.currentCall) loadActiveCalls().catch(() => {});
+    });
+    window.addEventListener('bananza:ios-resume', () => loadActiveCalls().catch(() => {}));
+  }
+
+  async function joinNativeCall(call) {
+    if (!call?.id) return;
+    MEDIA.stopStream?.(state.previewStream);
+    state.previewStream = null;
+    state.pendingJoinCall = null;
+    state.incomingCall = null;
+    NOTIFICATIONS.stopRingtone?.();
+    await window.BananzaIOS.request('call_join', { call, micEnabled: true, cameraEnabled: !isVoiceCall(call) });
+    document.getElementById('callPrejoin')?.classList.add('hidden');
+    document.getElementById('callSurface')?.classList.add('hidden');
+  }
   hooks.openTranscript = (callId) => openTranscript(callId);
   hooks.openTranscriptRun = (runId) => openTranscript(0, runId);
   hooks.getActiveCallForChat = (chatId) => state.activeCalls.get(Number(chatId || 0)) || null;
@@ -3828,6 +3872,7 @@
   }
 
   function handlePageLeaving() {
+    if (nativeCalls()) return;
     if (!state.currentCall?.id) return;
     notifyLeaveCurrentCall({ fireAndForget: true }).catch(() => {});
   }

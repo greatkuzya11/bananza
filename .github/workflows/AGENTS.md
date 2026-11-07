@@ -2,6 +2,8 @@
 
 ## Purpose
 - This file documents the invariants for workflow files in this subtree.
+- `ios.yml` builds/tests the iOS client on macOS for `ios/**` branches and relevant PRs. Signed TestFlight uploads require an explicit workflow dispatch with `release=true` and Apple secrets. It never deploys the server.
+- Keep iOS sources/build artifacts out of the production server bundle. Xcode and XcodeGen versions are pinned in the iOS workflow.
 - Read the root `AGENTS.md` first, then `.github/AGENTS.md`, then this file.
 
 ## What lives here

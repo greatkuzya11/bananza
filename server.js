@@ -49,6 +49,7 @@ const { createMapFeature, locationPayload, normalizeMessageLocation } = require(
 const { createForwardingFeature } = require('./forwarding');
 const { createMessageCopyService } = require('./messageCopy');
 const { createPushFeature } = require('./push');
+const { createIosPushFeature } = require('./iosPush');
 const { createSoundSettingsFeature } = require('./soundSettings');
 const { createAiBotFeature } = require('./ai');
 const { createAiInitiativeFeature } = require('./ai/initiative');
@@ -371,6 +372,7 @@ function auth(req, res, next) {
       writable: true,
     });
     req.user = user;
+    req.authExpiresAt = payload.exp;
     next();
   } catch { res.status(401).json({ error: 'Invalid token' }); }
 }
@@ -418,6 +420,7 @@ const pushFeature = createPushFeature({
   db,
   auth,
   rateLimit,
+  iosPush: createIosPushFeature({ app, db, auth, rateLimit }),
 });
 
 const pollFeature = createPollService({

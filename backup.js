@@ -536,6 +536,12 @@ function buildBackupManifest({
     },
     optional_components: optionalComponents,
     external_dependencies: {
+      apple_push: {
+        manual: true,
+        included: false,
+        settings: 'iOS device registrations are included in bananza.db; expired sessions do not receive pushes.',
+        credentials: 'Restore APNS_TEAM_ID, APNS_KEY_ID, APNS_BUNDLE_ID and APNS_PRIVATE_KEY_BASE64 separately. Apple signing certificates, provisioning profiles and App Store Connect keys are external CI secrets. Device Keychain and WKWebView data are device-local.',
+      },
       local_image_server: {
         manual: true,
         included: false,

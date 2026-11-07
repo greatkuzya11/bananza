@@ -140,12 +140,18 @@ test('ui settings controller applies theme, language, font and rotation contract
   controller.applyMobileFontSize(8, false);
   assert.equal(window.document.documentElement.style.getPropertyValue('-webkit-text-size-adjust'), '112%');
 
+  window.BananzaIOS = { request: async () => ({}) };
+  controller.applyMobileFontSize(8, false);
+  assert.equal(window.document.documentElement.style.getPropertyValue('-webkit-text-size-adjust'), '112%', 'iOS must retain CSS scaling');
+  delete window.BananzaIOS;
+
   window.BananzaAndroid = {
     postMessage(payload) {
       androidMessages.push(JSON.parse(payload));
     },
   };
   controller.applyMobileFontSize(7, false);
+  assert.equal(window.document.documentElement.style.getPropertyValue('-webkit-text-size-adjust'), '100%', 'Android still uses native textZoom');
   assert.deepEqual(androidMessages.at(-1), {
     type: 'mobile_font_size',
     payload: { size: 7, mobileLayout: true },

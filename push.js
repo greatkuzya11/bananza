@@ -211,7 +211,7 @@ function subscriptionFromRow(row) {
   };
 }
 
-function createPushFeature({ app, db, auth, rateLimit }) {
+function createPushFeature({ app, db, auth, rateLimit, iosPush = null }) {
   const vapidConfig = readVapidConfig();
   const isConfigured = Boolean(vapidConfig?.publicKey && vapidConfig?.privateKey);
   if (isConfigured) {
@@ -378,16 +378,28 @@ function createPushFeature({ app, db, auth, rateLimit }) {
 
   async function sendUserNotification(userId, type, payload, options = {}) {
     const subscriptions = getSubscriptionsForType(userId, type, options);
-    if (subscriptions.length === 0) return { sent: 0, failed: 0, skipped: true };
+    const settings = getSettings(userId);
+    const allowed = options.ignoreSettings || (settings.push_enabled &&
+      (!TYPE_FLAGS[type] || settings[TYPE_FLAGS[type]]) &&
+      (!options.chatId || isChatNotificationEnabled(userId, options.chatId)));
+    let chatSilent = false;
+    if (iosPush && options.chatId) {
+      chatSilent = db.prepare('SELECT sounds_enabled FROM chat_members WHERE chat_id=? AND user_id=?')
+        .get(options.chatId, userId)?.sounds_enabled === 0;
+    }
     const userPayload = {
       ...payload,
       silent: payload.silent ?? shouldUseSilentPush(userId, type),
     };
-    const results = await Promise.all(subscriptions.map(row => sendToSubscription(row, userPayload)));
+    const [webResults, nativeResults] = await Promise.all([
+      Promise.all(subscriptions.map(row => sendToSubscription(row, userPayload))),
+      allowed && iosPush ? iosPush.send(userId, { ...userPayload, silent: userPayload.silent || chatSilent }) : [],
+    ]);
+    const results = [...webResults, ...nativeResults];
     return {
       sent: results.filter(r => r.ok).length,
       failed: results.filter(r => !r.ok).length,
-      skipped: false,
+      skipped: results.length === 0,
     };
   }
 
@@ -475,6 +487,7 @@ function createPushFeature({ app, db, auth, rateLimit }) {
     const isPrivate = resolvedChat.type === 'private';
     queueUserNotification(userId, 'calls', {
       type: 'call_invite',
+      mediaKind: call?.media_kind || 'video',
       callId: Number(call?.id || 0) || null,
       chatId,
       title: isPrivate ? resolvedActorName : (resolvedChat.name || pushText(language, 'incomingCall')),
@@ -545,6 +558,8 @@ function createPushFeature({ app, db, auth, rateLimit }) {
     res.json({
       settings: getSettings(req.user.id),
       push_server_ready: isConfigured,
+      ios_push_server_ready: Boolean(iosPush?.ready),
+      ios_active_devices: iosPush?.count(req.user.id) || 0,
       active_subscriptions: activeCount,
     });
   });
@@ -579,7 +594,7 @@ function createPushFeature({ app, db, auth, rateLimit }) {
   });
 
   app.post('/api/push/test', auth, pushLimiter, async (req, res) => {
-    if (!isConfigured) return res.status(503).json({ error: 'Push server keys are not configured' });
+    if (!isConfigured && !iosPush?.ready) return res.status(503).json({ error: 'Push server keys are not configured' });
     const language = getUserLanguage(req.user.id);
     const result = await sendUserNotification(req.user.id, 'test', {
       type: 'test',

@@ -31,6 +31,9 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
     const { admin, bob } = scenario;
     const liveDb = new Database(path.join(sandbox.appDir, 'bananza.db'));
     liveDb.prepare("UPDATE users SET ui_theme='pearl', ui_visual_mode='glass'").run();
+    liveDb.prepare(`INSERT INTO ios_push_devices(device_id,user_id,bundle_id,environment,push_token,session_expires_at)
+      VALUES('0191699a-1111-4444-8888-123456789abc',?,'app.bananza.ios','production',?,?)`)
+      .run(admin.user.id, 'a'.repeat(64), Math.floor(Date.now() / 1000) + 3600);
     let initiativeRuleId;
     let telegramBotId;
     const telegramImageUpdateId = 987654;
@@ -170,6 +173,8 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
     });
     assert.match(preview.data.restore_id, /^[a-f0-9]{32}$/);
     assert.equal(preview.data.manifest.included.database, 'bananza.db');
+    assert.equal(preview.data.manifest.external_dependencies.apple_push.manual, true);
+    assert.equal(preview.data.manifest.external_dependencies.apple_push.included, false);
     assert.equal(preview.data.includes.database, true);
     assert.equal(preview.data.includes.uploads, true);
     assert.equal(preview.data.database.users >= 2, true);
@@ -308,6 +313,8 @@ test('admin backup restore previews archives, stays admin-only, and applies reco
       assert.deepEqual(appearance, { ui_theme: 'pearl', ui_visual_mode: 'glass' });
       assert.ok(restoredDb.prepare('SELECT 1 FROM schema_migrations WHERE name=?').get('2026-10-04-glass-interface'));
       assert.equal(restoredDb.pragma('integrity_check', { simple: true }), 'ok');
+      assert.equal(restoredDb.prepare('SELECT push_token FROM ios_push_devices WHERE device_id=?')
+        .get('0191699a-1111-4444-8888-123456789abc').push_token, 'a'.repeat(64));
     } finally {
       restoredDb.close();
     }
