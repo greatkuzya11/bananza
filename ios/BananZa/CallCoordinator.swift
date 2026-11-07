@@ -93,11 +93,12 @@ import LiveKit
         }
         guard callID == nil, !joining, !finishing else { throw AppError.message(L("call_busy")) }
         guard await AVCaptureDevice.requestAccess(for: .audio) else { throw AppError.message(L("microphone_denied")) }
-        desiredCamera = next["media_kind"] as? String != "voice" && payload["cameraEnabled"] as? Bool != false
-        desiredMicrophone = payload["micEnabled"] as? Bool != false
-        if desiredCamera { desiredCamera = await AVCaptureDevice.requestAccess(for: .video) }
+        var nextCamera = next["media_kind"] as? String != "voice" && payload["cameraEnabled"] as? Bool != false
+        let nextMicrophone = payload["micEnabled"] as? Bool != false
+        if nextCamera { nextCamera = await AVCaptureDevice.requestAccess(for: .video) }
         // Permission sheets suspend this task: an incoming call or logout may happen meanwhile.
         guard callID == nil, !joining, !finishing, store.session == account else { throw AppError.message(L("call_busy")) }
+        desiredCamera = nextCamera; desiredMicrophone = nextMicrophone
         self.account = account; call = next; uuid = UUID(); outgoing = true
         let action = CXStartCallAction(call: uuid!, handle: CXHandle(type: .generic, value: next["chat_name"] as? String ?? "BananZa"))
         action.isVideo = desiredCamera
