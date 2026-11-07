@@ -31,7 +31,12 @@ import UserNotifications
             return await status()
         }
         enabled = try await center.requestAuthorization(options: [.alert, .sound, .badge])
-        if enabled { UIApplication.shared.registerForRemoteNotifications(); try await synchronize() }
+        if enabled {
+            if let account = store.session {
+                _ = try await APIClient.request(account, "/api/notification-settings", method: "PUT", body: ["push_enabled": true])
+            }
+            UIApplication.shared.registerForRemoteNotifications(); try await synchronize()
+        }
         return await status()
     }
     func disable() async throws {
@@ -74,18 +79,28 @@ import UserNotifications
         guard enabled, store.session == account else { needsSync = true; return }
         registration = key; lastError = ""
     }
-    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler completion: @escaping (UNNotificationPresentationOptions) -> Void) {
         let data = notification.request.content.userInfo
-        guard enabled, (data["accountId"] as? Int) == store.session?.userID else { completion([]); return }
-        let visible = UIApplication.shared.applicationState == .active && pageVisible
-        let suppress = visible && (data["chatId"] as? Int) == currentChatID && data["forceShow"] as? Bool != true
-        completion(suppress ? [] : [.banner, .list, .sound])
+        let accountID = data["accountId"] as? Int
+        let chatID = data["chatId"] as? Int
+        let forceShow = data["forceShow"] as? Bool == true
+        Task { @MainActor in
+            guard enabled, accountID == store.session?.userID else { completion([]); return }
+            let visible = UIApplication.shared.applicationState == .active && pageVisible
+            let suppress = visible && chatID == currentChatID && !forceShow
+            // The visible web client already plays incoming sounds; avoid a second APNs sound.
+            completion(suppress ? [] : (visible ? [.banner, .list] : [.banner, .list, .sound]))
+        }
     }
-    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completion: @escaping () -> Void) {
         let data = response.notification.request.content.userInfo
-        if (data["accountId"] as? Int) == store.session?.userID, let id = data["chatId"] as? Int, id > 0 { openChat?(id) }
-        completion()
+        let accountID = data["accountId"] as? Int
+        let chatID = data["chatId"] as? Int
+        Task { @MainActor in
+            if accountID == store.session?.userID, let id = chatID, id > 0 { openChat?(id) }
+            completion()
+        }
     }
 }

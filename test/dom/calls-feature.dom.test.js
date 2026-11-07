@@ -176,6 +176,7 @@ async function bootCallFeature(state) {
   const dom = createAppDom();
   if (state.layoutMode) dom.window.localStorage.setItem('bananza.call.layoutMode.v1', state.layoutMode);
   installCallBridge(dom, state);
+  if (state.nativeBridge) dom.window.BananzaIOS = state.nativeBridge;
   loadBrowserScript(dom, 'public/js/i18n.js');
   loadBrowserScript(dom, 'public/js/calls/CallStore.js');
   loadBrowserScript(dom, 'public/js/calls/CallMedia.js');
@@ -453,6 +454,26 @@ function installMockLiveKitRoom(dom, { localVideo = null, remoteVideos = [] } = 
     isDisconnected: () => disconnected,
   };
 }
+
+test('iOS call handoff never requests a browser LiveKit token or leaves on pagehide', async (t) => {
+  const commands = [];
+  const state = defaultState({
+    features: { calls_enabled: true, livekit_ready: true, allow_private_calls: true, allow_group_calls: true },
+    nativeBridge: { capabilities: { calls: true }, request: async (type, payload) => { commands.push({ type, payload }); return {}; } },
+  });
+  const dom = await bootCallFeature(state); t.after(() => dom.window.close());
+  const call = { id: 91, chat_id: state.chat.id, status: 'active', media_kind: 'video', started_by: 2 };
+  await dom.window.BananzaCallHooks.joinCallFromMessage(call);
+  assert.equal(commands.at(-1).type, 'call_join');
+  assert.equal(commands.at(-1).payload.call.id, 91);
+  assert.equal(state.requests.some(request => request.url === '/api/calls/91/token'), false);
+  dom.window.dispatchEvent(new dom.window.CustomEvent('bananza:ios-call-state', { detail: { call, connected: true, trackId: 'TR_native' } }));
+  assert.equal(dom.window.BananzaCallHooks.isCurrentCall(91), true);
+  dom.window.dispatchEvent(new dom.window.Event('pagehide'));
+  assert.equal(state.requests.some(request => request.url === '/api/calls/91/leave'), false);
+  dom.window.BananzaCallHooks.handleWSMessage({ type: 'call_updated', call });
+  assert.equal(commands.at(-1).type, 'call_event');
+});
 
 test('CallFeature hides the header button until calls and LiveKit are enabled', async (t) => {
   const state = defaultState();

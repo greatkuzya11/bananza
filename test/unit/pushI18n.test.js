@@ -114,6 +114,36 @@ test('push text helpers localize fallback previews', () => {
   assert.equal(messagePreviewForLanguage({ text: 'User text' }, 'ru'), 'User text');
 });
 
+test('native push honors category settings, muted chats and per-chat sound without a web subscription', async () => {
+  const db = createPushDb();
+  db.exec(`ALTER TABLE chat_members ADD COLUMN sounds_enabled INTEGER DEFAULT 1;
+    INSERT INTO users(id,ui_language) VALUES(1,'en');
+    INSERT INTO chats(id,name,type) VALUES(10,'Team','group');
+    INSERT INTO chat_members(chat_id,user_id,notify_enabled,sounds_enabled) VALUES(10,1,1,0);
+    INSERT INTO user_notification_settings(user_id,push_enabled,notify_messages,notify_mentions,notify_calls)
+      VALUES(1,1,1,1,1);`);
+  const deliveries = [];
+  const feature = createPushFeature({ app: createAppStub(), db, auth() {}, iosPush: {
+    ready: true, count: () => 1,
+    send: async (id, payload) => { deliveries.push({ id, payload }); return [{ ok: true }]; },
+  } });
+  try {
+    let result = await feature.sendUserNotification(1, 'messages', { type: 'message', chatId: 10 }, { chatId: 10 });
+    assert.equal(result.sent, 1); assert.equal(deliveries[0].payload.silent, true);
+    db.prepare('UPDATE chat_members SET notify_enabled=0').run();
+    for (const category of ['messages', 'mentions', 'calls', 'pins', 'reactions']) {
+      result = await feature.sendUserNotification(1, category, { type: category, chatId: 10 }, { chatId: 10 });
+      assert.equal(result.sent, 0, category);
+    }
+    db.prepare('UPDATE chat_members SET notify_enabled=1').run();
+    db.prepare('UPDATE user_notification_settings SET notify_mentions=0').run();
+    assert.equal((await feature.sendUserNotification(1, 'mentions', { type: 'mention' }, { chatId: 10 })).sent, 0);
+    db.prepare('UPDATE user_notification_settings SET push_enabled=0').run();
+    assert.equal((await feature.sendUserNotification(1, 'messages', { type: 'message' }, { chatId: 10 })).sent, 0);
+    assert.equal((await feature.sendUserNotification(1, 'test', { type: 'test' }, { ignoreSettings: true })).sent, 1);
+  } finally { db.close(); }
+});
+
 test('message push payload is localized per recipient and keeps routing ids', async () => {
   const db = createPushDb();
   const captured = [];

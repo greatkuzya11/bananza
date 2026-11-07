@@ -15,13 +15,16 @@ function validateDevice(input, bundleId) {
 
 function createIosPushFeature({ app, db, auth, rateLimit, transport = createApnsTransport() }) {
   const limiter = rateLimit ? rateLimit({ windowMs: 60000, max: 90 }) : (_req, _res, next) => next();
-  const active = db.prepare('SELECT * FROM ios_push_devices WHERE user_id=? AND session_expires_at>?');
+  const active = db.prepare(`SELECT d.* FROM ios_push_devices d JOIN users u ON u.id=d.user_id
+    WHERE d.user_id=? AND d.session_expires_at>? AND COALESCE(u.is_blocked,0)=0
+      AND (d.push_token IS NOT NULL OR d.voip_token IS NOT NULL)`);
   const remove = db.prepare('DELETE FROM ios_push_devices WHERE user_id=? AND device_id=?');
   const save = db.transaction((userId, device, expiresAt) => {
     // APNs tokens identify an installation. Rebinding must stop delivery to the previous account.
-    db.prepare(`DELETE FROM ios_push_devices WHERE environment=? AND bundle_id=? AND
-      (device_id=? OR (push_token IS NOT NULL AND push_token=?) OR (voip_token IS NOT NULL AND voip_token=?))`)
-      .run(device.environment, device.bundleId, device.deviceId, device.pushToken, device.voipToken);
+    db.prepare(`DELETE FROM ios_push_devices WHERE device_id=? OR (environment=? AND bundle_id=? AND
+      ((push_token IS NOT NULL AND push_token=?) OR (voip_token IS NOT NULL AND voip_token=?)))`)
+      .run(device.deviceId, device.environment, device.bundleId, device.pushToken, device.voipToken);
+    db.prepare('DELETE FROM ios_push_devices WHERE session_expires_at<=?').run(Math.floor(Date.now() / 1000));
     db.prepare(`INSERT INTO ios_push_devices
       (device_id,user_id,bundle_id,environment,push_token,voip_token,language,session_expires_at)
       VALUES (?,?,?,?,?,?,?,?)`).run(device.deviceId, userId, device.bundleId, device.environment,

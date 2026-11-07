@@ -4,7 +4,8 @@ import PushKit
 import AVFoundation
 import LiveKit
 
-@MainActor final class CallCoordinator: NSObject, CXProviderDelegate, PKPushRegistryDelegate, RoomDelegate {
+// Both system delegates are explicitly registered on the main queue below.
+@MainActor final class CallCoordinator: NSObject, @preconcurrency CXProviderDelegate, @preconcurrency PKPushRegistryDelegate, RoomDelegate {
     let store: SessionStore
     weak var browser: BrowserController?
     let room = Room(roomOptions: RoomOptions(adaptiveStream: true, dynacast: true))
@@ -17,6 +18,8 @@ import LiveKit
     private var account: AccountSession?
     private(set) var connected = false
     private var joining = false
+    private var finishing = false
+    private var outgoing = false
     private var desiredCamera = false
     private var desiredMicrophone = true
     private var socket: URLSessionWebSocketTask?
@@ -54,7 +57,10 @@ import LiveKit
         let id = data["callId"] as? Int ?? 0
         let valid = id > 0 && store.session != nil && (data["accountId"] as? Int) == store.session?.userID
             && UserDefaults.standard.bool(forKey: "notificationsEnabled")
-        let busy = uuid != nil && uuid != incomingUUID
+        let busy = finishing || (uuid != nil && uuid != incomingUUID)
+        let chatID = data["chatId"] as? Int ?? 0
+        let title = data["title"] as? String ?? "BananZa"
+        let hasVideo = update.hasVideo
         // Always report promptly, even stale/duplicate/account-mismatched pushes. Finish invalid calls afterward.
         provider.reportNewIncomingCall(with: incomingUUID, update: update) { [weak self] error in
             completion()
@@ -66,9 +72,9 @@ import LiveKit
                 }
                 if self.uuid == incomingUUID { return }
                 guard error == nil else { return }
-                self.uuid = incomingUUID; self.account = self.store.session
-                self.call = ["id": id, "chat_id": data["chatId"] as? Int ?? 0, "chat_name": data["title"] as? String ?? "BananZa", "media_kind": update.hasVideo ? "video" : "voice"]
-                self.desiredCamera = update.hasVideo; self.beginSocket()
+                self.uuid = incomingUUID; self.account = self.store.session; self.outgoing = false
+                self.call = ["id": id, "chat_id": chatID, "chat_name": title, "media_kind": hasVideo ? "video" : "voice"]
+                self.desiredCamera = hasVideo; self.desiredMicrophone = true; self.beginSocket()
                 self.ringTimeout = Task {
                     try? await Task.sleep(nanoseconds: 60_000_000_000)
                     guard !Task.isCancelled, self.uuid == incomingUUID, !self.connected, !self.joining else { return }
@@ -84,12 +90,12 @@ import LiveKit
             if !connected && !joining { try await controller.request(CXTransaction(action: CXAnswerCallAction(call: uuid))) }
             show(); return
         }
-        guard callID == nil else { throw AppError.message(L("call_busy")) }
+        guard callID == nil, !joining, !finishing else { throw AppError.message(L("call_busy")) }
         guard await AVCaptureDevice.requestAccess(for: .audio) else { throw AppError.message(L("microphone_denied")) }
         desiredCamera = next["media_kind"] as? String != "voice" && payload["cameraEnabled"] as? Bool != false
         desiredMicrophone = payload["micEnabled"] as? Bool != false
         if desiredCamera { desiredCamera = await AVCaptureDevice.requestAccess(for: .video) }
-        self.account = account; call = next; uuid = UUID()
+        self.account = account; call = next; uuid = UUID(); outgoing = true
         let action = CXStartCallAction(call: uuid!, handle: CXHandle(type: .generic, value: next["chat_name"] as? String ?? "BananZa"))
         action.isVideo = desiredCamera
         do { try await controller.request(CXTransaction(action: action)); show() }
@@ -110,12 +116,14 @@ import LiveKit
         try await room.connect(url: url, token: token)
         guard uuid == expectedUUID else { await room.disconnect(); return }
         _ = try await room.localParticipant.setMicrophone(enabled: desiredMicrophone)
+        guard uuid == expectedUUID else { await room.disconnect(); return }
         // A locked phone cannot show a camera prompt. Video starts when the app becomes active.
         if desiredCamera && UIApplication.shared.applicationState == .active { _ = try await room.localParticipant.setCamera(enabled: true) }
         let joined = try await APIClient.request(account, "/api/calls/\(id)/joined", method: "POST", body: [:])
         guard uuid == expectedUUID else { await room.disconnect(); return }
         if let updated = joined["call"] as? [String: Any] { call = updated }
-        connected = true; ringTimeout?.cancel(); provider.reportOutgoingCall(with: expectedUUID, connectedAt: Date())
+        connected = true; ringTimeout?.cancel()
+        if outgoing { provider.reportOutgoingCall(with: expectedUUID, connectedAt: Date()) }
         beginSocket(); await notifyAiTrack(); publishState(); show()
     }
     func show() {
@@ -134,9 +142,10 @@ import LiveKit
     }
     func finish(sendLeave: Bool, endForEveryone: Bool = false, reason: CXCallEndedReason = .remoteEnded) async {
         guard let oldUUID = uuid else { return }
+        finishing = true; defer { finishing = false }
         let id = callID; let oldAccount = account; let wasConnected = connected
         uuid = nil; connected = false; call = [:]; account = nil; aiTrackNotified = ""
-        ringTimeout?.cancel(); socketTask?.cancel(); socket?.cancel(with: .normalClosure, reason: nil); socket = nil
+        ringTimeout?.cancel(); socketTask?.cancel(); socketTask = nil; socket?.cancel(with: .normalClosure, reason: nil); socket = nil
         provider.reportCall(with: oldUUID, endedAt: Date(), reason: reason)
         screen?.dismiss(animated: true); screen = nil; publishState()
         await room.disconnect(); try? AudioManager.shared.setEngineAvailability(.none)
@@ -174,7 +183,7 @@ import LiveKit
         catch { /* Reconnect may recover; a transient network error is not a remote hangup. */ }
     }
     private func beginSocket() {
-        guard socket == nil, let account else { return }
+        guard socketTask == nil, let account else { return }
         socketTask = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled, self.account == account, self.callID != nil {

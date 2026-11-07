@@ -44,6 +44,7 @@ with open('build/ExportOptions.plist', 'wb') as f:
 PY
 build_number="${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
 xcodebuild archive -project BananZa.xcodeproj -scheme BananZa -configuration Release \
+  -onlyUsePackageVersionsFromResolvedFile \
   -destination 'generic/platform=iOS' -archivePath build/BananZa.xcarchive \
   CURRENT_PROJECT_VERSION="$build_number" DEVELOPMENT_TEAM="$IOS_TEAM_ID" \
   CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY='Apple Distribution' \

@@ -3,7 +3,7 @@ import WebKit
 import AVFoundation
 import SafariServices
 
-@MainActor final class BrowserController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandlerWithReply {
+@MainActor final class BrowserController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandlerWithReply, WKDownloadDelegate {
     let store: SessionStore
     let push: PushCoordinator
     let calls: CallCoordinator
@@ -12,6 +12,7 @@ import SafariServices
     private var pendingChatID: Int?
     private var restoredSession = false
     private var errorLabel = UILabel()
+    private var downloadFiles: [ObjectIdentifier: URL] = [:]
 
     init(store: SessionStore, push: PushCoordinator, calls: CallCoordinator) {
         self.store = store; self.push = push; self.calls = calls
@@ -190,6 +191,13 @@ import SafariServices
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
+        if navigationAction.shouldPerformDownload || url.scheme == "blob" {
+            if ServerAddress.matches(navigationAction.sourceFrame.request.url, store.server),
+               (ServerAddress.matches(url, store.server) || url.absoluteString.hasPrefix("blob:\(store.server?.absoluteString ?? "__invalid__")/")) {
+                decisionHandler(.download)
+            } else { decisionHandler(.cancel) }
+            return
+        }
         if ServerAddress.matches(url, store.server) { decisionHandler(.allow); return }
         if url.scheme == "blob" && navigationAction.targetFrame?.isMainFrame != true { decisionHandler(.allow); return }
         decisionHandler(.cancel)
@@ -202,6 +210,27 @@ import SafariServices
         } else { decisionHandler(.allow) }
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { errorLabel.isHidden = true; installScripts(restore: false); deliverPendingChat() }
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) { download.delegate = self }
+    func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String, completionHandler: @escaping (URL?) -> Void) {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let name = URL(fileURLWithPath: suggestedFilename).lastPathComponent
+            let file = directory.appendingPathComponent(name.isEmpty || name == "." || name == ".." ? "attachment" : String(name.prefix(180)))
+            downloadFiles[ObjectIdentifier(download)] = file; completionHandler(file)
+        } catch { completionHandler(nil); showError(error) }
+    }
+    func downloadDidFinish(_ download: WKDownload) {
+        guard let file = downloadFiles.removeValue(forKey: ObjectIdentifier(download)) else { return }
+        let sheet = UIActivityViewController(activityItems: [file], applicationActivities: nil)
+        sheet.popoverPresentationController?.sourceView = view
+        sheet.completionWithItemsHandler = { _, _, _, _ in try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        present(sheet, animated: true)
+    }
+    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        if let file = downloadFiles.removeValue(forKey: ObjectIdentifier(download)) { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        showError(error)
+    }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         if (error as NSError).code == NSURLErrorCancelled { return }
         errorLabel.text = L("connection_failed"); errorLabel.isHidden = false

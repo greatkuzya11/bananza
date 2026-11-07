@@ -3,11 +3,11 @@ import Foundation
 
 // Vector artwork rendered at build time, with no font or network dependency.
 let destination = CommandLine.arguments[1]
-let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1024, pixelsHigh: 1024,
-                             bitsPerSample: 8, samplesPerPixel: 3, hasAlpha: false, isPlanar: false,
-                             colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+let context = CGContext(data: nil, width: 1024, height: 1024, bitsPerComponent: 8,
+                        bytesPerRow: 4096, space: CGColorSpaceCreateDeviceRGB(),
+                        bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
 NSGraphicsContext.saveGraphicsState()
-NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
 NSColor(calibratedRed: 0.10, green: 0.13, blue: 0.20, alpha: 1).setFill()
 NSBezierPath(rect: NSRect(x: 0, y: 0, width: 1024, height: 1024)).fill()
 let banana = NSBezierPath()
@@ -26,4 +26,5 @@ NSColor(calibratedRed: 0.54, green: 0.68, blue: 0.25, alpha: 1).setFill()
 NSBezierPath(roundedRect: NSRect(x: 160, y: 640, width: 52, height: 100), xRadius: 18, yRadius: 18).fill()
 NSBezierPath(roundedRect: NSRect(x: 774, y: 679, width: 52, height: 80), xRadius: 18, yRadius: 18).fill()
 NSGraphicsContext.restoreGraphicsState()
+let bitmap = NSBitmapImageRep(cgImage: context.makeImage()!)
 try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: destination))
