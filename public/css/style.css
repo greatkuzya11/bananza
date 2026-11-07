@@ -1647,8 +1647,21 @@ html[data-modal-animation="none"] #chatInfoBtn .chat-actions-gear { transition: 
   background-image: var(--bg-panel-gradient);
   border-bottom: 1px solid var(--border);
 }
-.chat-header-info { flex: 1; min-width: 48px; }
-.chat-title { font-weight: 600; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-header-info { flex: 1; min-width: 48px; margin-inline-end: -8px; }
+/* Mirror the closed gear's inset on the back-arrow side of the header. */
+.chat-header .icon-btn.chat-back-btn {
+  width: 44px;
+  height: 44px;
+  margin-inline-end: -16px;
+  padding-inline: 0 8px;
+}
+.chat-title { font-weight: 600; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: margin-inline-end .32s cubic-bezier(.22, 1, .36, 1); }
+/* Use the closed toggle's empty leading inset without moving its 44px hit area. */
+.chat-header-info:has(+ .chat-actions-capsule:not(.is-open)) .chat-title { margin-inline-end: -8px; }
+@media (prefers-reduced-motion: reduce) {
+  .chat-title { transition: none; }
+}
+html[data-modal-animation="none"] .chat-title { transition: none; }
 .chat-status {
   max-width: 100%;
   min-width: 0;
