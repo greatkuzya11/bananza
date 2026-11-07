@@ -21,6 +21,8 @@
     const actions = objectOrDefault(opts.actions);
     const api = typeof opts.api === 'function' ? opts.api : (() => Promise.resolve({}));
     const config = objectOrDefault(opts.config);
+    const t = (key, params = {}) => win.BananzaI18n?.t(key, params)
+      || key.replace(/\{(\w+)\}/g, (_, name) => String(params[name] ?? ''));
     const formatters = objectOrDefault(opts.formatters || root.formatters);
     const esc = typeof opts.esc === 'function'
       ? opts.esc
@@ -62,13 +64,14 @@
       state.pollComposerOptions = pollComposerOptions;
       dom.pollOptionsList.innerHTML = pollComposerOptions.map((value, index) => `
         <div class="poll-option-editor" data-poll-option-row="${index}">
-          <span class="poll-option-index">${index + 1}</span>
+          <span class="poll-option-index" aria-hidden="true">${index + 1}</span>
           <input
             type="text"
             class="modal-input"
             maxlength="160"
             data-poll-option-index="${index}"
-            placeholder="Option ${index + 1}"
+            placeholder="${esc(t('Option {number}', { number: index + 1 }))}"
+            aria-label="${esc(t('Option {number}', { number: index + 1 }))}"
             value="${esc(value)}"
           >
           <button
@@ -76,10 +79,39 @@
             class="poll-option-remove"
             data-poll-option-remove="${index}"
             ${pollComposerOptions.length <= POLL_MIN_OPTIONS ? 'disabled' : ''}
-            title="Remove option"
-          >\u2715</button>
+            title="${esc(t('Remove option {number}', { number: index + 1 }))}"
+            aria-label="${esc(t('Remove option {number}', { number: index + 1 }))}"
+          ><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
         </div>
       `).join('');
+      const addButton = doc.getElementById('pollAddOptionBtn');
+      if (addButton) addButton.disabled = pollComposerOptions.length >= POLL_MAX_OPTIONS;
+      const count = doc.getElementById('pollOptionsCount');
+      if (count) count.textContent = `${pollComposerOptions.length}/${POLL_MAX_OPTIONS}`;
+    }
+
+    function syncPollPreviewDisclosure(width) {
+      const toggle = doc.getElementById('pollPreviewToggle');
+      if (!toggle || !dom.pollComposerPreview) return;
+      const container = dom.pollComposerModal?.querySelector('.modal-content');
+      const wide = (width ?? container?.clientWidth ?? 0) >= 720;
+      const expanded = wide || toggle.dataset.expanded === 'true';
+      toggle.setAttribute('aria-expanded', String(expanded));
+      dom.pollComposerPreview.hidden = !expanded;
+    }
+
+    function refreshPollComposerLanguage() {
+      dom.pollOptionsList?.querySelectorAll('input[data-poll-option-index]').forEach((input, index) => {
+        const label = t('Option {number}', { number: index + 1 });
+        input.placeholder = label;
+        input.setAttribute('aria-label', label);
+      });
+      dom.pollOptionsList?.querySelectorAll('[data-poll-option-remove]').forEach((button, index) => {
+        const label = t('Remove option {number}', { number: index + 1 });
+        button.title = label;
+        button.setAttribute('aria-label', label);
+      });
+      refreshPollComposerPreview();
     }
 
     function refreshPollComposerActionState() {
@@ -99,9 +131,9 @@
     function buildPollComposerPreviewMessage() {
       const form = readPollComposerForm();
       const currentUser = getCurrentUser() || {};
-      const fallbackOptions = ['Friday night', 'Saturday brunch', 'Sunday reset', 'Next week'];
+      const fallbackOptions = ['Friday night', 'Saturday brunch', 'Sunday reset', 'Next week'].map((key) => t(key));
       const optionTexts = [...form.options];
-      while (optionTexts.length < 3) optionTexts.push(fallbackOptions[optionTexts.length] || `Option ${optionTexts.length + 1}`);
+      while (optionTexts.length < 3) optionTexts.push(fallbackOptions[optionTexts.length] || t('Option {number}', { number: optionTexts.length + 1 }));
       const previewTexts = optionTexts.slice(0, Math.min(Math.max(optionTexts.length, 3), 5));
       const previewVotes = previewTexts.map((_, index) => Math.max(2, previewTexts.length * 4 - index * 2));
       const myOptionIds = form.allows_multiple
@@ -115,7 +147,7 @@
         id: -1,
         chat_id: getCurrentChatId() || 0,
         user_id: currentUser.id || 0,
-        text: form.question || 'Where should we go this weekend?',
+        text: form.question || t('Where should we go this weekend?'),
         poll: {
           created_by: currentUser.id || 0,
           closed_by: null,
@@ -143,26 +175,29 @@
     function refreshPollComposerPreview() {
       if (!dom.pollComposerPreview) return;
       const previewMessage = buildPollComposerPreviewMessage();
-      const styleMeta = (actions.pollStyleMeta || (() => ({ name: previewMessage.poll?.style || 'Pulse', note: '' })))(previewMessage.poll?.style);
       const questionClass = (actions.isPulsePoll || (() => false))(previewMessage.poll)
         ? 'poll-composer-preview-question poll-question-block'
         : 'poll-composer-preview-question';
       dom.pollComposerPreview.innerHTML = `
         <div class="poll-composer-preview-shell">
-          <div class="poll-composer-preview-meta">
-            <span class="poll-composer-preview-style">${esc(styleMeta.name)} style</span>
-            <span class="poll-composer-preview-note">${esc(styleMeta.note)}</span>
-          </div>
           <div class="poll-composer-preview-message">
-            <div class="${questionClass}">${esc(previewMessage.text || '')}</div>
+            <div class="${questionClass}" data-i18n-skip>${esc(previewMessage.text || '')}</div>
             ${(actions.renderPollCard || (() => ''))(previewMessage, { preview: true })}
           </div>
         </div>
       `;
+      // Localize demo counts without changing message rendering or user option text.
+      dom.pollComposerPreview.querySelectorAll('.poll-pulse-voter-count, .poll-stat-chip, .poll-orbit-option-copy small').forEach((label) => {
+        const match = label.textContent.trim().match(/^(\d+) (vote|voter)s?$/);
+        if (match) label.textContent = t(match[2] === 'voter' ? 'Voters: {count}' : 'Votes: {count}', { count: match[1] });
+      });
     }
 
     function resetPollComposer() {
       state.pollComposerOptions = ['', ''];
+      const previewToggle = doc.getElementById('pollPreviewToggle');
+      if (previewToggle) previewToggle.dataset.expanded = 'false';
+      syncPollPreviewDisclosure();
       (actions.setPollComposerStyle || noop)('pulse');
       if (dom.pollQuestionInput) dom.pollQuestionInput.value = '';
       const allowMultiple = doc.getElementById('pollAllowMultiple');
@@ -258,6 +293,20 @@
     function bindPollComposerEvents() {
       if (dom.pollComposerModal?.__composerPollBound) return;
       if (dom.pollComposerModal) dom.pollComposerModal.__composerPollBound = true;
+      const previewToggle = doc.getElementById('pollPreviewToggle');
+      previewToggle?.addEventListener('click', () => {
+        previewToggle.dataset.expanded = String(previewToggle.dataset.expanded !== 'true');
+        syncPollPreviewDisclosure();
+      });
+      const container = dom.pollComposerModal?.querySelector('.modal-content');
+      if (container && typeof win.ResizeObserver === 'function') {
+        const observer = new win.ResizeObserver((entries) => {
+          syncPollPreviewDisclosure(entries[0]?.contentRect.width);
+        });
+        observer.observe(container);
+      }
+      win.BananzaI18n?.onChange(refreshPollComposerLanguage);
+      syncPollPreviewDisclosure();
       dom.pollBtn?.addEventListener('click', openPollComposer);
       doc.getElementById('pollAddOptionBtn')?.addEventListener('click', () => {
         if (state.pollComposerOptions.length >= POLL_MAX_OPTIONS) return;
@@ -284,6 +333,8 @@
         state.pollComposerOptions.splice(index, 1);
         renderPollComposerOptionInputs();
         refreshPollComposerPreview();
+        const nextIndex = Math.min(index, state.pollComposerOptions.length - 1);
+        dom.pollOptionsList?.querySelector(`input[data-poll-option-index="${nextIndex}"]`)?.focus();
       });
       dom.pollQuestionInput?.addEventListener('input', () => {
         setPollComposerStatus('');

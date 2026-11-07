@@ -458,7 +458,7 @@
       const btnEl = byId('pollComposerStyleBtn');
       if (nameEl) nameEl.textContent = meta.name;
       if (noteEl) noteEl.textContent = meta.note;
-      if (btnEl) btnEl.textContent = `Poll Style: ${meta.name}`;
+      if (btnEl) btnEl.setAttribute('aria-describedby', 'pollComposerStyleName');
       renderPollStylePicker();
     }
 

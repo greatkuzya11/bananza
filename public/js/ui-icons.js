@@ -57,7 +57,7 @@
     return el;
   }
   function decorate(el) {
-    if (el.closest(excluded) || el.querySelector(':scope > .ui-glyph')) return;
+    if (el.closest(excluded) || el.querySelector(':scope > .ui-glyph, :scope > svg')) return;
     const fixed = byId[el.id] || (el.classList.contains('modal-close') ? 'x' : null);
     if (fixed) {
       if (el.classList.contains('modal-close') && !el.hasAttribute('aria-label')) {

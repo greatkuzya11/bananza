@@ -293,7 +293,7 @@ function createComposerHarness(options = {}) {
     api,
     config: {
       POLL_MIN_OPTIONS: 2,
-      POLL_MAX_OPTIONS: 5,
+      POLL_MAX_OPTIONS: 10,
       POLL_CLOSE_PRESET_MS: { hour: 3600000 },
     },
     esc: root.formatters.esc,
@@ -958,6 +958,86 @@ test('poll composer adds/removes options and submits poll payload', async (t) =>
   assert.equal(call.init.method, 'POST');
   assert.deepEqual(plain(call.init.body.poll.options), ['Pizza', 'Sushi']);
   assert.equal(call.init.body.text, 'Lunch?');
+});
+
+test('poll options enforce limits, keep values and move focus after removal', (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+  h.poll.resetPollComposer();
+  h.poll.bindPollComposerEvents();
+  const add = h.document.getElementById('pollAddOptionBtn');
+  const count = h.document.getElementById('pollOptionsCount');
+  const inputs = () => [...h.appDom.pollOptionsList.querySelectorAll('input')];
+  const remove = (index) => h.appDom.pollOptionsList.querySelector(`[data-poll-option-remove="${index}"]`);
+  assert.equal(remove(0).disabled, true);
+  for (let i = 2; i < 10; i += 1) add.click();
+  inputs().forEach((input, index) => {
+    input.value = `Answer ${index}`;
+    input.dispatchEvent(new h.window.Event('input', { bubbles: true }));
+  });
+  assert.equal(inputs().length, 10);
+  assert.equal(add.disabled, true);
+  assert.equal(count.textContent, '10/10');
+  add.click();
+  assert.equal(inputs().length, 10);
+  remove(4).click();
+  assert.equal(add.disabled, false);
+  assert.equal(count.textContent, '9/10');
+  assert.equal(h.document.activeElement, inputs()[4]);
+  assert.equal(inputs()[4].value, 'Answer 5');
+  remove(8).click();
+  assert.equal(h.document.activeElement, inputs()[7]);
+  while (inputs().length > 2) remove(0).click();
+  assert.equal(count.textContent, '2/10');
+  assert.equal(remove(0).disabled, true);
+  assert.equal(remove(1).disabled, true);
+});
+
+test('poll preview disclosure follows container width and resets without losing draft on resize', (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+  let resize;
+  h.window.ResizeObserver = class {
+    constructor(callback) { resize = callback; }
+    observe() {}
+  };
+  h.poll.resetPollComposer();
+  h.poll.bindPollComposerEvents();
+  const toggle = h.document.getElementById('pollPreviewToggle');
+  const preview = h.appDom.pollComposerPreview;
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(preview.hidden, true);
+  toggle.click();
+  assert.equal(preview.hidden, false);
+  toggle.click();
+  h.appDom.pollQuestionInput.value = 'Keep this question';
+  resize([{ contentRect: { width: 720 } }]);
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+  assert.equal(preview.hidden, false);
+  resize([{ contentRect: { width: 719 } }]);
+  assert.equal(preview.hidden, true);
+  assert.equal(h.appDom.pollQuestionInput.value, 'Keep this question');
+  toggle.click();
+  h.poll.resetPollComposer();
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+});
+
+test('poll option labels and demo text follow language changes without replacing focused input', (t) => {
+  const h = createComposerHarness();
+  t.after(() => h.window.close());
+  loadBrowserScript(h.dom, 'public/js/i18n.js');
+  h.poll.resetPollComposer();
+  h.poll.bindPollComposerEvents();
+  const input = h.appDom.pollOptionsList.querySelector('input');
+  assert.equal(input.placeholder, '\u0412\u0430\u0440\u0438\u0430\u043d\u0442 1');
+  input.value = 'My own answer';
+  input.focus();
+  h.window.BananzaI18n.setLanguage('en');
+  assert.equal(input.placeholder, 'Option 1');
+  assert.equal(h.document.activeElement, input);
+  assert.equal(input.value, 'My own answer');
+  assert.equal(h.appDom.pollOptionsList.querySelector('button').getAttribute('aria-label'), 'Remove option 1');
+  assert.match(h.poll.buildPollComposerPreviewMessage().text, /Where should we go/);
 });
 
 function installFullAppStubs(dom, { fetchHandler = null } = {}) {
