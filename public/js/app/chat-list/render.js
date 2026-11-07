@@ -259,10 +259,10 @@
         ? `<span class="unread-badge${isActive ? ' unread-badge--active-chat' : ''}" data-unread-count="${unreadCount}">${unreadCount > 99 ? '99+' : unreadCount}</span>`
         : '';
       const pinIndicator = pinned ? `<span class="chat-item-state-indicator chat-item-pin-indicator" aria-hidden="true" title="${esc(t('Pinned'))}">&#128204;</span>` : '';
-      const notifyDisabledIndicator = pinned && !localChatPreferenceEnabled(chat && chat.notify_enabled)
+      const notifyDisabledIndicator = !localChatPreferenceEnabled(chat && chat.notify_enabled)
         ? '<span class="chat-item-state-indicator chat-item-muted-indicator" aria-hidden="true" title="Notifications off">&#128277;</span>'
         : '';
-      const soundDisabledIndicator = pinned && !localChatPreferenceEnabled(chat && chat.sounds_enabled)
+      const soundDisabledIndicator = !localChatPreferenceEnabled(chat && chat.sounds_enabled)
         ? '<span class="chat-item-state-indicator chat-item-muted-indicator" aria-hidden="true" title="Sound off">&#128263;</span>'
         : '';
       const contextConvertIndicator = Number(chat && chat.context_transform_enabled || 0) !== 0
